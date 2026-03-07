@@ -36,6 +36,9 @@ export interface PlanningImageData {
   id: string
   name: string
   url: string
+  imageHash?: string
+  filename?: string | null
+  mimeType?: string | null
   sizeLabel: string
   width: number
   height: number

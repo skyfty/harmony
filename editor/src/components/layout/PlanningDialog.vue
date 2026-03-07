@@ -30,6 +30,13 @@ import type {
   PlanningTerrainNoiseMode,
   PlanningTerrainRidgeValleyLine,
 } from '@/types/planning-scene-data'
+import {
+  createPlanningImageUrlFromHash,
+  deletePlanningImageFromIndexedDB as deletePlanningImageFromStorage,
+  loadPlanningImagesFromIndexedDB as loadPlanningImagesFromStorage,
+  persistPlanningImageLayersToIndexedDB,
+  savePlanningImageToIndexedDB as savePlanningImageToStorage,
+} from '@/utils/planningImageStorage'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -170,6 +177,8 @@ interface PlanningImage {
   url: string
   /** Content hash (SHA-256 hex) used to reference blob in IndexedDB */
   imageHash?: string
+  filename?: string | null
+  mimeType?: string | null
   sizeLabel: string
   width: number
   height: number
@@ -189,27 +198,6 @@ interface PlanningGuide {
   axis: PlanningGuideAxis
   /** World coordinate in meters. Can be negative. */
   value: number
-}
-
-interface PlanningImageBlobRecord {
-  hash: string
-  blob: Blob
-}
-
-interface PlanningImageLayerRecord {
-  id: string
-  sceneId: string | null
-  name: string
-  imageHash: string | null
-  sizeLabel: string
-  width: number
-  height: number
-  visible: boolean
-  locked: boolean
-  opacity: number
-  position: { x: number; y: number }
-  scale: number
-  alignMarker: { x: number; y: number } | null
 }
 
 type PlanningTerrainGridInput = Partial<{ cellSize: unknown }>
@@ -1429,7 +1417,10 @@ function buildPlanningSnapshot(): PlanningSceneData {
     images: planningImages.value.map((img) => ({
       id: img.id,
       name: img.name,
-      url: img.url,
+      url: img.imageHash ? '' : img.url,
+      imageHash: img.imageHash,
+      filename: img.filename ?? null,
+      mimeType: img.mimeType ?? null,
       sizeLabel: img.sizeLabel,
       width: img.width,
       height: img.height,
@@ -1895,6 +1886,9 @@ function loadPlanningFromScene() {
       id: img.id,
       name: img.name,
       url: img.url,
+      imageHash: img.imageHash,
+      filename: img.filename ?? null,
+      mimeType: img.mimeType ?? null,
       sizeLabel: img.sizeLabel,
       width: img.width,
       height: img.height,
@@ -2579,6 +2573,7 @@ watch(
       persistPlanningToSceneIfDirty({ force: true })
     }
     loadPlanningFromScene()
+    void hydratePlanningImageUrls()
   },
   { immediate: true },
 )
@@ -4957,6 +4952,8 @@ function loadPlanningImage(file: File) {
       id: createId('img'),
       name: file.name,
       url,
+      filename: file.name,
+      mimeType: file.type || null,
       sizeLabel: `${image.naturalWidth} x ${image.naturalHeight}`,
       width: image.naturalWidth,
       height: image.naturalHeight,
@@ -4973,13 +4970,9 @@ function loadPlanningImage(file: File) {
     activeImageId.value = newImage.id
 
     // persist the uploaded image to IndexedDB so it survives page reloads
-    try {
-      savePlanningImageToIndexedDB(newImage, file)
-    } catch (err) {
-      // non-fatal: keep running even if persistence fails
-      // eslint-disable-next-line no-console
+    void savePlanningImageToIndexedDB(newImage, file).catch((err) => {
       console.warn('Failed to persist planning image to IndexedDB', err)
-    }
+    })
 
     markPlanningDirty()
   }
@@ -4990,230 +4983,14 @@ function loadPlanningImage(file: File) {
   image.src = url
 }
 
-// IndexedDB helpers: images stored by content hash; layer metadata stored separately and reference image hash.
-function hexFromBuffer(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer)
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-async function computeSha256Hex(buffer: ArrayBuffer) {
-  const hash = await crypto.subtle.digest('SHA-256', buffer)
-  return hexFromBuffer(hash)
-}
-
-function openPlanningImageDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    try {
-      const req = indexedDB.open('harmony-planning-images', 2)
-      req.onupgradeneeded = () => {
-        const db = req.result
-          if (!db.objectStoreNames.contains('images')) {
-            db.createObjectStore('images', { keyPath: 'hash' })
-          }
-          if (!db.objectStoreNames.contains('layers')) {
-            const layersStore = db.createObjectStore('layers', { keyPath: 'id' })
-            layersStore.createIndex('by_scene', 'sceneId', { unique: false })
-          }
-      }
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    } catch (e) {
-      reject(e)
-    }
-  })
-}
-
-function getImageByHash(db: IDBDatabase, hash: string) {
-  return new Promise<PlanningImageBlobRecord | undefined>((resolve, reject) => {
-    const tx = db.transaction('images', 'readonly')
-    const req = tx.objectStore('images').get(hash)
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
-}
-
-function putImageBlob(db: IDBDatabase, hash: string, blob: Blob) {
-  return new Promise<void>((resolve, reject) => {
-    const tx = db.transaction('images', 'readwrite')
-    const store = tx.objectStore('images')
-    const keyPath = store.keyPath
-    const value = keyPath ? (typeof keyPath === 'string' ? { [keyPath]: hash, blob } : { hash, blob }) : { hash, blob }
-    try {
-      if (keyPath) {
-        store.put(value)
-      } else {
-        store.put(value, hash)
-      }
-    } catch (err) {
-      tx.abort()
-      reject(err)
-      return
-    }
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
-
-function putLayerRecord(db: IDBDatabase, record: PlanningImageLayerRecord) {
-  return new Promise<void>((resolve, reject) => {
-    const tx = db.transaction('layers', 'readwrite')
-    tx.objectStore('layers').put(record)
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
-
-function getAllLayerRecords(db: IDBDatabase, sceneId?: string | null) {
-  return new Promise<PlanningImageLayerRecord[]>((resolve, reject) => {
-    const tx = db.transaction('layers', 'readonly')
-    const store = tx.objectStore('layers')
-    if (sceneId) {
-      const idx = store.index('by_scene')
-      const req = idx.getAll(sceneId)
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    } else {
-      const req = store.getAll()
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    }
-  })
-}
-
 async function savePlanningImageToIndexedDB(image: PlanningImage, file: File) {
-  const db = await openPlanningImageDB()
-  const buffer = await file.arrayBuffer()
-  const hash = await computeSha256Hex(buffer)
-  // store blob only if not already present
-  const existing = await getImageByHash(db, hash)
-  if (!existing) {
-    const blob = new Blob([buffer], { type: file.type })
-    await putImageBlob(db, hash, blob)
-  }
-  image.imageHash = hash
-  // store layer metadata referencing hash
-  const layerRecord = {
-    id: image.id,
-    sceneId: currentSceneId.value ?? null,
-    name: image.name,
-    imageHash: hash,
-    sizeLabel: image.sizeLabel,
-    width: image.width,
-    height: image.height,
-    visible: image.visible,
-    locked: image.locked,
-    opacity: image.opacity,
-    position: image.position,
-    scale: image.scale,
-    alignMarker: image.alignMarker ?? null,
-  }
-  await putLayerRecord(db, layerRecord)
-  db.close()
+  await savePlanningImageToStorage(image, file, currentSceneId.value ?? null)
+  image.filename = file.name || image.filename || null
+  image.mimeType = file.type || image.mimeType || null
 }
 
 async function persistLayersToIndexedDB() {
-  try {
-    const db = await openPlanningImageDB()
-    const tx = db.transaction('layers', 'readwrite')
-    const store = tx.objectStore('layers')
-    for (const img of planningImages.value) {
-      // only persist if we have an imageHash (uploaded or previously loaded)
-      // otherwise skip (no blob stored)
-      const record: PlanningImageLayerRecord = {
-        id: img.id,
-        sceneId: currentSceneId.value ?? null,
-        name: img.name,
-        imageHash: img.imageHash ?? null,
-        sizeLabel: img.sizeLabel,
-        width: img.width,
-        height: img.height,
-        visible: img.visible,
-        locked: img.locked,
-        opacity: img.opacity,
-        // Deep clone position to avoid Proxy/Ref issues
-        position: img.position ? { x: img.position.x, y: img.position.y } : { x: 0, y: 0 },
-        // Scale is a number, but ensure primitive
-        scale: typeof img.scale === 'number' ? img.scale : 1,
-        alignMarker: img.alignMarker ? { ...img.alignMarker } : null,
-      }
-      store.put(record)
-    }
-    tx.oncomplete = () => db.close()
-    tx.onerror = () => db.close()
-  } catch (e) {
-    // non-fatal
-    // eslint-disable-next-line no-console
-    console.warn('Failed to persist layer metadata to IndexedDB', e)
-  }
-}
-
-async function loadPlanningImagesFromIndexedDB(sceneId?: string | null) {
-  const db = await openPlanningImageDB()
-  const layers = await getAllLayerRecords(db, sceneId)
-  const results: PlanningImage[] = []
-  for (const rec of layers) {
-    try {
-      if (!rec.imageHash) continue
-      const imgRec = await getImageByHash(db, rec.imageHash)
-      if (!imgRec || !imgRec.blob) continue
-      const url = URL.createObjectURL(imgRec.blob)
-      // ensure image decodes
-      await new Promise<void>((res, rej) => {
-        const img = new Image()
-        img.onload = () => res()
-        img.onerror = () => rej(new Error('Image decode error'))
-        img.src = url
-      })
-      const item: PlanningImage = {
-        id: rec.id,
-        name: rec.name,
-        url,
-        imageHash: rec.imageHash ?? undefined,
-        sizeLabel: rec.sizeLabel ?? `${rec.width} x ${rec.height}`,
-        width: rec.width,
-        height: rec.height,
-        visible: rec.visible ?? true,
-        locked: rec.locked ?? false,
-        opacity: typeof rec.opacity === 'number' ? rec.opacity : 1,
-        position: rec.position ?? { x: 0, y: 0 },
-        scale: typeof rec.scale === 'number' ? rec.scale : 1,
-        alignMarker: rec.alignMarker ?? undefined,
-      }
-      results.push(item)
-    } catch (e) {
-      // skip corrupted record
-      // eslint-disable-next-line no-console
-      console.warn('Skipping corrupted planning image record', rec?.id, e)
-    }
-  }
-  db.close()
-  return results
-}
-
-async function deletePlanningImageFromIndexedDB(id: string) {
-  const db = await openPlanningImageDB()
-  // find layer record to get hash
-  const tx = db.transaction(['layers', 'images'], 'readwrite')
-  const layersStore = tx.objectStore('layers')
-  const imagesStore = tx.objectStore('images')
-  const getReq = layersStore.get(id)
-  await new Promise((res, rej) => { getReq.onsuccess = () => res(null); getReq.onerror = () => rej(getReq.error) })
-  const rec = getReq.result
-  if (rec) {
-    const hash = rec.imageHash
-    layersStore.delete(id)
-    // check if any other layer references this hash
-    const allLayersReq = layersStore.getAll()
-    const otherLayers = await new Promise<PlanningImageLayerRecord[]>((res, rej) => { allLayersReq.onsuccess = () => res(allLayersReq.result as PlanningImageLayerRecord[]); allLayersReq.onerror = () => rej(allLayersReq.error) })
-    const stillUsed = otherLayers.some((l) => l.imageHash === hash)
-    if (!stillUsed) {
-      imagesStore.delete(hash)
-    }
-  }
-  return new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => { db.close(); resolve() }
-    tx.onerror = () => { db.close(); reject(tx.error) }
-  })
+  await persistPlanningImageLayersToIndexedDB(currentSceneId.value ?? null, planningImages.value)
 }
 
 function handleResetView() {
@@ -5255,7 +5032,7 @@ async function handleImageLayerDelete(imageId: string) {
     activeImageId.value = planningImages.value[0]?.id ?? null
   }
   try {
-    await deletePlanningImageFromIndexedDB(imageId)
+    await deletePlanningImageFromStorage(imageId)
   } catch (e) {
     // non-fatal
     // eslint-disable-next-line no-console
@@ -5697,7 +5474,7 @@ void updateTerrainLine
 void removeTerrainLine
 void addTerrainLineFromSelected
 
-const imagesLoaded = ref(false)
+const imageHydrationToken = ref(0)
 
 onMounted(() => {
   // Do NOT load persisted images here; defer until the dialog is opened to avoid slowing scene load.
@@ -5708,24 +5485,52 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 })
 
-// Load persisted images the first time the Planning Dialog is opened.
+async function hydratePlanningImageUrls() {
+  const token = imageHydrationToken.value + 1
+  imageHydrationToken.value = token
+  const snapshot = [...planningImages.value]
+
+  if (!snapshot.length) {
+    try {
+      const persisted = await loadPlanningImagesFromStorage(currentSceneId.value ?? null)
+      if (imageHydrationToken.value !== token || !persisted.length) {
+        return
+      }
+      planningImages.value = persisted as PlanningImage[]
+      activeImageId.value = planningImages.value[0]?.id ?? null
+    } catch (error) {
+      console.warn('Failed to load planning images from IndexedDB', error)
+    }
+    return
+  }
+
+  await Promise.all(snapshot.map(async (image) => {
+    const hash = typeof image.imageHash === 'string' ? image.imageHash.trim() : ''
+    if (!hash) {
+      return
+    }
+    try {
+      const nextUrl = await createPlanningImageUrlFromHash(hash)
+      if (!nextUrl || imageHydrationToken.value !== token) {
+        return
+      }
+      if (image.url && image.url !== nextUrl) {
+        try { URL.revokeObjectURL(image.url) } catch {}
+      }
+      image.url = nextUrl
+    } catch (error) {
+      console.warn('Failed to hydrate planning image from IndexedDB', hash, error)
+    }
+  }))
+}
+
 watch(
   () => dialogOpen.value,
   async (open) => {
-    if (!open || imagesLoaded.value) return
-    imagesLoaded.value = true
-    try {
-      const sceneId = currentSceneId.value ?? null
-      const persisted = await loadPlanningImagesFromIndexedDB(sceneId)
-      if (persisted && persisted.length) {
-        planningImages.value = persisted
-        activeImageId.value = planningImages.value[0]?.id ?? null
-      }
-    } catch (e) {
-      // ignore DB errors (non-fatal)
-      // eslint-disable-next-line no-console
-      console.warn('Failed to load planning images from IndexedDB', e)
+    if (!open) {
+      return
     }
+    await hydratePlanningImageUrls()
   },
 )
 

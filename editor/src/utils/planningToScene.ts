@@ -41,6 +41,7 @@ import {
 } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
+import { getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 
 
 export type PlanningConversionProgress = {
@@ -57,10 +58,18 @@ export type ConvertPlanningToSceneOptions = {
 }
 
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
-const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
+export const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 const PLANNING_PIXELS_PER_METER = 10
 const PLANNING_IMAGE_HEIGHT_OFFSET_M = 0.02
 const PLANNING_IMAGE_STACK_OFFSET_M = 0.002
+
+export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
+  if (!node || typeof node !== 'object') {
+    return false
+  }
+  const userData = node.userData as Record<string, unknown> | undefined
+  return userData?.source === PLANNING_CONVERSION_SOURCE && userData?.kind === 'image'
+}
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -627,17 +636,27 @@ async function ensurePlanningImageAsset(
   sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
   image: PlanningImageData,
 ): Promise<{ assetId: string; name: string } | null> {
-  const url = typeof image.url === 'string' ? image.url.trim() : ''
-  if (!url) {
-    return null
+  const imageHash = typeof image.imageHash === 'string' ? image.imageHash.trim() : ''
+  let blob: Blob | null = null
+
+  if (imageHash) {
+    blob = await getPlanningImageBlobByHash(imageHash)
   }
 
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Failed to load planning image: ${response.status}`)
+  if (!blob) {
+    const url = typeof image.url === 'string' ? image.url.trim() : ''
+    if (!url) {
+      return null
+    }
+
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to load planning image: ${response.status}`)
+    }
+
+    blob = await response.blob()
   }
 
-  const blob = await response.blob()
   const mimeType = blob.type?.trim() || 'image/png'
   const displayName = image.name?.trim() || image.sizeLabel?.trim() || `Planning Image ${image.id}`
   const fileName = ensureFilenameHasExtension(displayName, inferImageExtensionFromMimeType(mimeType))
@@ -1548,7 +1567,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           },
           rotation: { x: -Math.PI / 2, y: 0, z: 0 },
           scale: { x: width, y: height, z: 1 },
-          sourceAssetId: assetRef.assetId,
           userData: {
             source: PLANNING_CONVERSION_SOURCE,
             kind: 'image',

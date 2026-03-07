@@ -8,6 +8,9 @@ import {
 } from '@schema'
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import type { PlanningSceneData } from '@/types/planning-scene-data'
+import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
+import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   BUILTIN_WATER_NORMAL_FILENAME,
@@ -17,6 +20,7 @@ import {
 export type ScenePackageExportScene = {
   id: string
   document: SceneJsonExportDocument
+  planningData?: PlanningSceneData | null
 }
 
 // inferExtFromMimeType moved to @schema (assetTypeConversion)
@@ -140,10 +144,117 @@ function countSceneCheckpoints(document: SceneJsonExportDocument | null | undefi
   return computed.length
 }
 
+async function resolvePlanningImageBlob(image: {
+  imageHash?: string | null
+  url?: string | null
+  mimeType?: string | null
+  filename?: string | null
+}): Promise<{ blob: Blob; imageHash: string; mimeType: string; filename: string | null } | null> {
+  const hash = typeof image.imageHash === 'string' ? image.imageHash.trim() : ''
+  if (hash) {
+    const blob = await getPlanningImageBlobByHash(hash)
+    if (!blob) {
+      throw new Error(`Missing planning image resource (imageHash=${hash}); please reopen the planning image before exporting.`)
+    }
+    return {
+      blob,
+      imageHash: hash,
+      mimeType: image.mimeType ?? blob.type ?? 'application/octet-stream',
+      filename: image.filename ?? null,
+    }
+  }
+
+  const url = typeof image.url === 'string' ? image.url.trim() : ''
+  if (!url) {
+    return null
+  }
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to read planning image from local URL (${response.status})`)
+  }
+  const blob = await response.blob()
+  const buffer = await blob.arrayBuffer()
+  const resolvedHash = await computeSha256Hex(buffer)
+  return {
+    blob: new Blob([buffer], { type: blob.type || image.mimeType || 'application/octet-stream' }),
+    imageHash: resolvedHash,
+    mimeType: image.mimeType ?? blob.type ?? 'application/octet-stream',
+    filename: image.filename ?? null,
+  }
+}
+
+async function buildPlanningSidecar(
+  sceneId: string,
+  planningData: PlanningSceneData,
+  files: Record<string, Uint8Array>,
+  resources: ScenePackageResourceEntry[],
+): Promise<{ planningPath: string; sidecar: PlanningScenePackageSidecar }> {
+  const encodedSceneId = encodeURIComponent(sceneId)
+  const nextPlanningData = JSON.parse(JSON.stringify(planningData)) as PlanningSceneData
+  const images: PlanningScenePackageImageEntry[] = []
+  const resourcePathByHash = new Map<string, string>()
+
+  for (const image of nextPlanningData.images ?? []) {
+    const resolved = await resolvePlanningImageBlob(image)
+    if (!resolved) {
+      images.push({
+        imageId: image.id,
+        imageHash: typeof image.imageHash === 'string' ? image.imageHash : null,
+        resourcePath: null,
+        filename: image.filename ?? null,
+        mimeType: image.mimeType ?? null,
+      })
+      continue
+    }
+
+    image.imageHash = resolved.imageHash
+    image.filename = image.filename ?? resolved.filename ?? null
+    image.mimeType = image.mimeType ?? resolved.mimeType
+    image.url = ''
+
+    let resourcePath = resourcePathByHash.get(resolved.imageHash) ?? null
+    if (!resourcePath) {
+      const ext = inferExtFromFilename(image.filename) ?? inferExtFromMimeType(image.mimeType ?? resolved.mimeType) ?? 'bin'
+      const safeName = resolved.imageHash.length > 16 ? resolved.imageHash.slice(0, 16) : resolved.imageHash
+      resourcePath = `scenes/${encodedSceneId}/planning-resources/${safeName}.${ext}`
+      files[resourcePath] = new Uint8Array(await resolved.blob.arrayBuffer())
+      resourcePathByHash.set(resolved.imageHash, resourcePath)
+      resources.push({
+        logicalId: `planningImage::${sceneId}::${image.id}`,
+        resourceType: 'planningImage',
+        path: resourcePath,
+        ext,
+        mimeType: image.mimeType ?? resolved.mimeType,
+        size: resolved.blob.size,
+        hash: resolved.imageHash,
+      })
+    }
+
+    images.push({
+      imageId: image.id,
+      imageHash: resolved.imageHash,
+      resourcePath,
+      filename: image.filename ?? resolved.filename ?? null,
+      mimeType: image.mimeType ?? resolved.mimeType,
+    })
+  }
+
+  const planningPath = `scenes/${encodedSceneId}/planning.json`
+  return {
+    planningPath,
+    sidecar: {
+      version: 1,
+      planningData: nextPlanningData,
+      images,
+    },
+  }
+}
+
 export async function exportScenePackageZip(payload: {
   project: ProjectExportBundleProjectConfig
   scenes: ScenePackageExportScene[]
   embedAssets?: boolean
+  includePlanningData?: boolean
   updateProgress?: (value: number, message?: string) => void
 }): Promise<Blob> {
   const createdAt = new Date().toISOString()
@@ -236,6 +347,7 @@ export async function exportScenePackageZip(payload: {
   for (let sIndex = 0; sIndex < payload.scenes.length; sIndex += 1) {
     const scene = payload.scenes[sIndex]!
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
+    let planningPath: string | undefined
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
     const indexMap = (scene.document as SceneJsonExportDocument).assetIndex ?? {}
@@ -308,7 +420,12 @@ export async function exportScenePackageZip(payload: {
 
     // Add the (possibly modified) scene JSON to files and manifest
     files[scenePath] = jsonBytes(docClone)
-    manifestScenes.push({ sceneId: scene.id, path: scenePath })
+    if (payload.includePlanningData && scene.planningData) {
+      const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
+      planningPath = planningSidecar.planningPath
+      files[planningPath] = jsonBytes(planningSidecar.sidecar)
+    }
+    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath })
   }
 
   const manifest: ScenePackageManifestV1 = {

@@ -1,0 +1,138 @@
+import { readTextFileFromScenePackage, unzipScenePackage, type ScenePackageSceneEntry } from '@schema'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import type { PlanningSceneData } from '@/types/planning-scene-data'
+import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
+import { storePlanningImageBlobByHash } from '@/utils/planningImageStorage'
+
+export type LoadedScenePackageProject = Record<string, unknown>
+
+export type LoadedStoredScenePackage = {
+  project: LoadedScenePackageProject
+  scenes: StoredSceneDocument[]
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizePlanningPackageImageEntry(raw: unknown): PlanningScenePackageImageEntry | null {
+  if (!isPlainObject(raw)) {
+    return null
+  }
+  const imageId = typeof raw.imageId === 'string' ? raw.imageId.trim() : ''
+  if (!imageId) {
+    return null
+  }
+  return {
+    imageId,
+    imageHash: typeof raw.imageHash === 'string' && raw.imageHash.trim().length ? raw.imageHash.trim() : null,
+    resourcePath: typeof raw.resourcePath === 'string' && raw.resourcePath.trim().length ? raw.resourcePath.trim() : null,
+    filename: typeof raw.filename === 'string' ? raw.filename : null,
+    mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : null,
+  }
+}
+
+function normalizePlanningSidecar(raw: unknown): PlanningScenePackageSidecar | null {
+  if (!isPlainObject(raw)) {
+    return null
+  }
+  const version = Number(raw.version)
+  if (version !== 1) {
+    return null
+  }
+  const planningData = isPlainObject(raw.planningData) ? (raw.planningData as unknown as PlanningSceneData) : null
+  const images = Array.isArray(raw.images)
+    ? raw.images.map((entry) => normalizePlanningPackageImageEntry(entry)).filter((entry): entry is PlanningScenePackageImageEntry => !!entry)
+    : []
+  return {
+    version: 1,
+    planningData,
+    images,
+  }
+}
+
+async function restoreRuntimeResourcesFromPackage(zip: ReturnType<typeof unzipScenePackage>): Promise<void> {
+  const assetCache = useAssetCacheStore()
+  for (const entry of zip.manifest.resources ?? []) {
+    if (entry.resourceType === 'planningImage') {
+      continue
+    }
+    const bytes = zip.files[entry.path]
+    if (!bytes) {
+      throw new Error(`Missing resource file in scene bundle: ${entry.path}`)
+    }
+    const mimeType = entry.mimeType || 'application/octet-stream'
+    const filename = `${entry.logicalId}.${entry.ext}`
+    const blob = new Blob([new Uint8Array(bytes)], { type: mimeType })
+    await assetCache.storeAssetBlob(entry.logicalId, { blob, mimeType, filename })
+  }
+}
+
+async function applyPlanningSidecarToScene(
+  zip: ReturnType<typeof unzipScenePackage>,
+  sceneEntry: ScenePackageSceneEntry,
+  rawScene: StoredSceneDocument,
+): Promise<StoredSceneDocument> {
+  if (!sceneEntry.planningPath) {
+    return rawScene
+  }
+
+  const sidecarText = readTextFileFromScenePackage(zip, sceneEntry.planningPath)
+  const rawSidecar = JSON.parse(sidecarText) as unknown
+  const sidecar = normalizePlanningSidecar(rawSidecar)
+  if (!sidecar?.planningData) {
+    return rawScene
+  }
+
+  const imageEntryById = new Map(sidecar.images.map((entry) => [entry.imageId, entry]))
+  const nextPlanningData = JSON.parse(JSON.stringify(sidecar.planningData)) as PlanningSceneData
+
+  for (const image of nextPlanningData.images ?? []) {
+    const entry = imageEntryById.get(image.id)
+    if (!entry) {
+      image.url = image.imageHash ? '' : image.url
+      continue
+    }
+    image.imageHash = entry.imageHash ?? image.imageHash
+    image.filename = entry.filename ?? image.filename ?? null
+    image.mimeType = entry.mimeType ?? image.mimeType ?? null
+    image.url = image.imageHash ? '' : image.url
+
+    if (!entry.imageHash || !entry.resourcePath) {
+      continue
+    }
+
+    const bytes = zip.files[entry.resourcePath]
+    if (!bytes) {
+      throw new Error(`Missing planning image resource in scene bundle: ${entry.resourcePath}`)
+    }
+    const blob = new Blob([new Uint8Array(bytes)], { type: entry.mimeType ?? image.mimeType ?? 'application/octet-stream' })
+    await storePlanningImageBlobByHash(entry.imageHash, blob)
+  }
+
+  return {
+    ...rawScene,
+    planningData: nextPlanningData,
+  }
+}
+
+export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): Promise<LoadedStoredScenePackage> {
+  const zip = unzipScenePackage(zipBytes)
+  await restoreRuntimeResourcesFromPackage(zip)
+
+  const projectText = readTextFileFromScenePackage(zip, zip.manifest.project.path)
+  const project = (JSON.parse(projectText) as LoadedScenePackageProject) ?? {}
+  const scenes: StoredSceneDocument[] = []
+
+  for (const sceneEntry of zip.manifest.scenes ?? []) {
+    const rawScene = JSON.parse(readTextFileFromScenePackage(zip, sceneEntry.path)) as unknown
+    if (!isPlainObject(rawScene)) {
+      throw new Error(`Invalid scene document in scene bundle: ${sceneEntry.path}`)
+    }
+    const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, rawScene as unknown as StoredSceneDocument)
+    scenes.push(withPlanning)
+  }
+
+  return { project, scenes }
+}

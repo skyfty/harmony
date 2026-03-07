@@ -3,6 +3,7 @@ export const SCENE_PACKAGE_VERSION = 1 as const;
 
 export type ScenePackageResourceType =
   | 'localAsset'
+  | 'planningImage'
   | 'terrainWeightmap'
   | 'lightmap'
   | 'navmesh'
@@ -13,6 +14,8 @@ export interface ScenePackageSceneEntry {
   sceneId: string;
   /** Path within ZIP, e.g. `scenes/<sceneId>/scene.json` */
   path: string;
+  /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
+  planningPath?: string;
 }
 
 export interface ScenePackageProjectEntry {
