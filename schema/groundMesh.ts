@@ -211,6 +211,8 @@ function clampVertexIndex(value: number, max: number): number {
 }
 
 function getManualVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
+  // manualHeightMap 保存的是“手工雕刻层”的绝对高度。
+  // 当某个顶点没有手工覆盖值时，说明该点仍然使用程序化生成出来的基础高度。
   const key = groundVertexKey(row, column)
   const raw = definition.manualHeightMap[key]
   if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -220,6 +222,9 @@ function getManualVertexHeight(definition: GroundDynamicMesh, row: number, colum
 }
 
 function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
+  // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
+  // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
+  // 如果没有显式记录，则回退到基础高度，表示规划层对该点没有额外改动。
   const key = groundVertexKey(row, column)
   const raw = definition.planningHeightMap[key]
   if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -228,13 +233,46 @@ function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, col
   return computeGroundBaseHeightAtVertex(definition, row, column)
 }
 
+/**
+ * 计算某个顶点的“最终有效高度”。
+ *
+ * 这里的地形高度不是单一来源，而是由三层概念叠加得到：
+ * 1. base: 纯程序化生成得到的基础高度，代表未做任何额外编辑时的原始地形。
+ * 2. planning: 规划层高度，代表生成/规划流程想要得到的目标地形。
+ * 3. manual: 手工层高度，代表用户雕刻后保存下来的绝对高度。
+ *
+ * 当前实现并不是简单地在 planning 与 manual 之间二选一，而是保留“手工层相对 base 的偏移量”：
+ * manual - base = 用户相对原始地形做出的雕刻量。
+ *
+ * 最终把这段雕刻量叠加到 planning 上：
+ * effective = planning + (manual - base)
+ *
+ * 这样做的目的，是当规划层重新生成或被调整后，用户之前的雕刻结果仍能尽量保持：
+ * 用户修改的是“相对地形的局部塑形”，而不是把规划层完全覆盖掉。
+ */
 export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
+  // 原始程序化地形高度。
   const base = computeGroundBaseHeightAtVertex(definition, row, column)
+  // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
   const manual = getManualVertexHeight(definition, row, column)
+  // 规划/自动生成层的绝对高度；若无规划覆盖则同样退回 base。
   const planning = getPlanningVertexHeight(definition, row, column)
+  // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
   return planning + (manual - base)
 }
 
+/**
+ * 已知某个顶点期望达到的“最终有效高度”，反推出 manualHeightMap 中应写入的手工层绝对高度。
+ *
+ * 由 resolveGroundEffectiveHeightAtVertex 的公式：
+ * effective = planning + (manual - base)
+ * 可推导出：
+ * manual = base + (effective - planning)
+ *
+ * 这个函数用于雕刻、平滑、压低等编辑操作。
+ * 编辑工具面对的是用户看到的最终地形高度，因此先在 effective 空间里算出目标值，
+ * 再通过这里把目标值转换回 manual 层保存，避免直接破坏规划层数据。
+ */
 export function resolveGroundManualHeightForEffectiveTarget(
   definition: GroundDynamicMesh,
   row: number,
@@ -243,6 +281,7 @@ export function resolveGroundManualHeightForEffectiveTarget(
 ): number {
   const base = computeGroundBaseHeightAtVertex(definition, row, column)
   const planning = getPlanningVertexHeight(definition, row, column)
+  // 把“最终想看到的高度”换算为 manual 层需要记录的绝对高度。
   return base + (effectiveHeight - planning)
 }
 
@@ -275,6 +314,8 @@ function setManualHeightOverrideForEffectiveValue(
   column: number,
   effectiveHeight: number,
 ): void {
+  // 外部编辑逻辑通常基于最终效果高度进行运算，
+  // 这里统一把 effective 高度反解到 manual 层，再复用普通写入逻辑。
   const manualHeight = resolveGroundManualHeightForEffectiveTarget(definition, row, column, effectiveHeight)
   setManualHeightOverrideValue(definition, map, row, column, manualHeight)
 }
@@ -290,6 +331,8 @@ function sampleNeighborAverage(
   let count = 0
   for (let r = Math.max(0, row - 1); r <= Math.min(maxRow, row + 1); r += 1) {
     for (let c = Math.max(0, column - 1); c <= Math.min(maxColumn, column + 1); c += 1) {
+      // 平滑操作必须基于最终有效高度采样邻域，
+      // 否则会忽略 planning 与 manual 两层叠加后的真实地表形态。
       sum += resolveGroundEffectiveHeightAtVertex(definition, r, c)
       count += 1
     }

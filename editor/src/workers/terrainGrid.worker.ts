@@ -15,9 +15,11 @@ type BuildTerrainGridRequest = {
 	maxRow: number
 	minColumn: number
 	maxColumn: number
-	heightIndices: ArrayBuffer
+	sampleMinRow: number
+	sampleMaxRow: number
+	sampleMinColumn: number
+	sampleMaxColumn: number
 	heightValues: ArrayBuffer
-	heightEntryCount: number
 }
 
 type BuildTerrainGridResponse = {
@@ -25,9 +27,20 @@ type BuildTerrainGridResponse = {
 	requestId: number
 	minor: ArrayBuffer
 	major: ArrayBuffer
-	heightMin: number
-	heightMax: number
 	error?: string
+}
+
+type NormalizedWorkerRange = {
+	minRow: number
+	maxRow: number
+	minColumn: number
+	maxColumn: number
+	sampleMinRow: number
+	sampleMaxRow: number
+	sampleMinColumn: number
+	sampleMaxColumn: number
+	cellRows: number
+	cellColumns: number
 }
 
 function isAligned(coord: number, spacing: number): boolean {
@@ -37,6 +50,40 @@ function isAligned(coord: number, spacing: number): boolean {
 	const nearest = Math.round(coord / spacing) * spacing
 	const distance = Math.abs(coord - nearest)
 	return distance < Math.max(spacing * 0.01, 1e-3)
+}
+
+function normalizeWorkerRange(message: BuildTerrainGridRequest, rows: number, columns: number): NormalizedWorkerRange | null {
+	const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)))
+	const minRow = clampInt(message.minRow, 0, rows)
+	const maxRow = clampInt(message.maxRow, 0, rows)
+	const minColumn = clampInt(message.minColumn, 0, columns)
+	const maxColumn = clampInt(message.maxColumn, 0, columns)
+	const sampleMinRow = clampInt(message.sampleMinRow, 0, rows)
+	const sampleMaxRow = clampInt(message.sampleMaxRow, 0, rows)
+	const sampleMinColumn = clampInt(message.sampleMinColumn, 0, columns)
+	const sampleMaxColumn = clampInt(message.sampleMaxColumn, 0, columns)
+	const cellRows = Math.max(0, maxRow - minRow)
+	const cellColumns = Math.max(0, maxColumn - minColumn)
+
+	if (cellRows === 0 || cellColumns === 0) {
+		return null
+	}
+	if (sampleMinRow > minRow || sampleMaxRow < maxRow || sampleMinColumn > minColumn || sampleMaxColumn < maxColumn) {
+		throw new Error('terrain-grid-sample-range-does-not-cover-visible-range')
+	}
+
+	return {
+		minRow,
+		maxRow,
+		minColumn,
+		maxColumn,
+		sampleMinRow,
+		sampleMaxRow,
+		sampleMinColumn,
+		sampleMaxColumn,
+		cellRows,
+		cellColumns,
+	}
 }
 
 function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: Float32Array; major: Float32Array } {
@@ -50,42 +97,43 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	const stepX = columns > 0 ? width / columns : 0
 	const stepZ = rows > 0 ? depth / rows : 0
 
-	const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)))
-	const minRow = clampInt(message.minRow, 0, rows)
-	const maxRow = clampInt(message.maxRow, 0, rows)
-	const minColumn = clampInt(message.minColumn, 0, columns)
-	const maxColumn = clampInt(message.maxColumn, 0, columns)
-	const cellRows = Math.max(0, maxRow - minRow)
-	const cellColumns = Math.max(0, maxColumn - minColumn)
-	if (cellRows === 0 || cellColumns === 0) {
+	const range = normalizeWorkerRange(message, rows, columns)
+	if (!range) {
 		return { minor: new Float32Array(0), major: new Float32Array(0) }
 	}
+	const {
+		minRow,
+		maxRow,
+		minColumn,
+		maxColumn,
+		sampleMinRow,
+		sampleMaxRow,
+		sampleMinColumn,
+		sampleMaxColumn,
+		cellRows,
+		cellColumns,
+	} = range
+	const sampledColumnCount = sampleMaxColumn - sampleMinColumn + 1
+	const sampledRowCount = sampleMaxRow - sampleMinRow + 1
 
-	const xCoords = new Float32Array(columns + 1)
-	const zCoords = new Float32Array(rows + 1)
-	for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
-		xCoords[columnIndex] = -halfWidth + columnIndex * stepX
+	const xCoords = new Float32Array(sampledColumnCount)
+	const zCoords = new Float32Array(sampledRowCount)
+	for (let columnIndex = sampleMinColumn; columnIndex <= sampleMaxColumn; columnIndex += 1) {
+		xCoords[columnIndex - sampleMinColumn] = -halfWidth + columnIndex * stepX
 	}
-	for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
-		zCoords[rowIndex] = -halfDepth + rowIndex * stepZ
+	for (let rowIndex = sampleMinRow; rowIndex <= sampleMaxRow; rowIndex += 1) {
+		zCoords[rowIndex - sampleMinRow] = -halfDepth + rowIndex * stepZ
 	}
 
-	const stride = columns + 1
-	const heightGrid = new Float32Array((rows + 1) * stride)
-	const indices = new Uint32Array(message.heightIndices)
-	const values = new Float32Array(message.heightValues)
-	const count = Math.max(0, Math.min(message.heightEntryCount, indices.length, values.length))
-	let heightMin = 0
-	let heightMax = 0
-	for (let i = 0; i < count; i += 1) {
-		const idx = indices[i]!
-		const value = values[i]!
-		if (idx < heightGrid.length) {
-			heightGrid[idx] = value
-		}
-		// 地形未编辑的点隐含为 0，因此初始 min/max 从 0 开始即可。
-		heightMin = Math.min(heightMin, value)
-		heightMax = Math.max(heightMax, value)
+	const stride = sampledColumnCount
+	const heightGrid = new Float32Array(message.heightValues)
+	if (heightGrid.length !== sampledRowCount * sampledColumnCount) {
+		throw new Error('terrain-grid-height-buffer-size-mismatch')
+	}
+	const getHeight = (rowIndex: number, columnIndex: number) => {
+		const localRow = rowIndex - sampleMinRow
+		const localColumn = columnIndex - sampleMinColumn
+		return heightGrid[localRow * stride + localColumn]!
 	}
 
 	const majorRows: number[] = []
@@ -94,7 +142,7 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	const minorColumns: number[] = []
 
 	for (let rowIndex = minRow; rowIndex <= maxRow; rowIndex += 1) {
-		const z = zCoords[rowIndex]!
+		const z = zCoords[rowIndex - sampleMinRow]!
 		if (isAligned(z, message.majorSpacing)) {
 			majorRows.push(rowIndex)
 		} else if (isAligned(z, message.minorSpacing)) {
@@ -103,7 +151,7 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	}
 
 	for (let columnIndex = minColumn; columnIndex <= maxColumn; columnIndex += 1) {
-		const x = xCoords[columnIndex]!
+		const x = xCoords[columnIndex - sampleMinColumn]!
 		if (isAligned(x, message.majorSpacing)) {
 			majorColumns.push(columnIndex)
 		} else if (isAligned(x, message.minorSpacing)) {
@@ -140,13 +188,12 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 
 	for (let i = 0; i < majorRows.length; i += 1) {
 		const rowIndex = majorRows[i]!
-		const z = zCoords[rowIndex]!
-		const base = rowIndex * stride
+		const z = zCoords[rowIndex - sampleMinRow]!
 		for (let columnIndex = minColumn; columnIndex < maxColumn; columnIndex += 1) {
-			const ax = xCoords[columnIndex]!
-			const bx = xCoords[columnIndex + 1]!
-			const ay = heightGrid[base + columnIndex]! + lineOffset
-			const by = heightGrid[base + columnIndex + 1]! + lineOffset
+			const ax = xCoords[columnIndex - sampleMinColumn]!
+			const bx = xCoords[columnIndex + 1 - sampleMinColumn]!
+			const ay = getHeight(rowIndex, columnIndex) + lineOffset
+			const by = getHeight(rowIndex, columnIndex + 1) + lineOffset
 			writeSegment(major, majorOffset, ax, ay, z, bx, by, z)
 			majorOffset += 6
 		}
@@ -154,13 +201,12 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 
 	for (let i = 0; i < minorRows.length; i += 1) {
 		const rowIndex = minorRows[i]!
-		const z = zCoords[rowIndex]!
-		const base = rowIndex * stride
+		const z = zCoords[rowIndex - sampleMinRow]!
 		for (let columnIndex = minColumn; columnIndex < maxColumn; columnIndex += 1) {
-			const ax = xCoords[columnIndex]!
-			const bx = xCoords[columnIndex + 1]!
-			const ay = heightGrid[base + columnIndex]! + lineOffset
-			const by = heightGrid[base + columnIndex + 1]! + lineOffset
+			const ax = xCoords[columnIndex - sampleMinColumn]!
+			const bx = xCoords[columnIndex + 1 - sampleMinColumn]!
+			const ay = getHeight(rowIndex, columnIndex) + lineOffset
+			const by = getHeight(rowIndex, columnIndex + 1) + lineOffset
 			writeSegment(minor, minorOffset, ax, ay, z, bx, by, z)
 			minorOffset += 6
 		}
@@ -168,12 +214,12 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 
 	for (let i = 0; i < majorColumns.length; i += 1) {
 		const columnIndex = majorColumns[i]!
-		const x = xCoords[columnIndex]!
+		const x = xCoords[columnIndex - sampleMinColumn]!
 		for (let rowIndex = minRow; rowIndex < maxRow; rowIndex += 1) {
-			const az = zCoords[rowIndex]!
-			const bz = zCoords[rowIndex + 1]!
-			const ay = heightGrid[rowIndex * stride + columnIndex]! + lineOffset
-			const by = heightGrid[(rowIndex + 1) * stride + columnIndex]! + lineOffset
+			const az = zCoords[rowIndex - sampleMinRow]!
+			const bz = zCoords[rowIndex + 1 - sampleMinRow]!
+			const ay = getHeight(rowIndex, columnIndex) + lineOffset
+			const by = getHeight(rowIndex + 1, columnIndex) + lineOffset
 			writeSegment(major, majorOffset, x, ay, az, x, by, bz)
 			majorOffset += 6
 		}
@@ -181,31 +227,18 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 
 	for (let i = 0; i < minorColumns.length; i += 1) {
 		const columnIndex = minorColumns[i]!
-		const x = xCoords[columnIndex]!
+		const x = xCoords[columnIndex - sampleMinColumn]!
 		for (let rowIndex = minRow; rowIndex < maxRow; rowIndex += 1) {
-			const az = zCoords[rowIndex]!
-			const bz = zCoords[rowIndex + 1]!
-			const ay = heightGrid[rowIndex * stride + columnIndex]! + lineOffset
-			const by = heightGrid[(rowIndex + 1) * stride + columnIndex]! + lineOffset
+			const az = zCoords[rowIndex - sampleMinRow]!
+			const bz = zCoords[rowIndex + 1 - sampleMinRow]!
+			const ay = getHeight(rowIndex, columnIndex) + lineOffset
+			const by = getHeight(rowIndex + 1, columnIndex) + lineOffset
 			writeSegment(minor, minorOffset, x, ay, az, x, by, bz)
 			minorOffset += 6
 		}
 	}
 
 	return { minor, major }
-}
-
-function computeHeightRange(message: BuildTerrainGridRequest): { heightMin: number; heightMax: number } {
-	const values = new Float32Array(message.heightValues)
-	const count = Math.max(0, Math.min(message.heightEntryCount, values.length))
-	let heightMin = 0
-	let heightMax = 0
-	for (let i = 0; i < count; i += 1) {
-		const value = values[i]!
-		heightMin = Math.min(heightMin, value)
-		heightMax = Math.max(heightMax, value)
-	}
-	return { heightMin, heightMax }
 }
 
 self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
@@ -215,15 +248,12 @@ self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
 	}
 
 	try {
-		const { heightMin, heightMax } = computeHeightRange(message)
 		const { minor, major } = buildGridSegmentsInWorker(message)
 		const response: BuildTerrainGridResponse = {
 			kind: 'build-terrain-grid-result',
 			requestId: message.requestId,
 			minor: minor.buffer as ArrayBuffer,
 			major: major.buffer as ArrayBuffer,
-			heightMin,
-			heightMax,
 		}
 		self.postMessage(response, [response.minor, response.major])
 	} catch (error) {
@@ -232,8 +262,6 @@ self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
 			requestId: message.requestId,
 			minor: new ArrayBuffer(0),
 			major: new ArrayBuffer(0),
-			heightMin: 0,
-			heightMax: 0,
 			error: error instanceof Error ? error.message : String(error),
 		}
 		self.postMessage(response)
