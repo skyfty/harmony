@@ -2716,11 +2716,107 @@ type InstancedBoundsPayload = {
   max: [number, number, number]
 }
 
+const boundsTransformCorners = [
+  new Vector3(),
+  new Vector3(),
+  new Vector3(),
+  new Vector3(),
+  new Vector3(),
+  new Vector3(),
+  new Vector3(),
+  new Vector3(),
+] as [Vector3, Vector3, Vector3, Vector3, Vector3, Vector3, Vector3, Vector3]
+const boundsTransformPoint = new Vector3()
+
 function serializeBoundingBox(box: Box3): InstancedBoundsPayload {
   return {
     min: [box.min.x, box.min.y, box.min.z],
     max: [box.max.x, box.max.y, box.max.z],
   }
+}
+
+function deserializeBoundingBox(payload: unknown): Box3 | null {
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+  const rawMin = (payload as InstancedBoundsPayload).min
+  const rawMax = (payload as InstancedBoundsPayload).max
+  if (!Array.isArray(rawMin) || !Array.isArray(rawMax) || rawMin.length < 3 || rawMax.length < 3) {
+    return null
+  }
+  const minX = Number(rawMin[0])
+  const minY = Number(rawMin[1])
+  const minZ = Number(rawMin[2])
+  const maxX = Number(rawMax[0])
+  const maxY = Number(rawMax[1])
+  const maxZ = Number(rawMax[2])
+  if (![minX, minY, minZ, maxX, maxY, maxZ].every((value) => Number.isFinite(value))) {
+    return null
+  }
+  return new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ))
+}
+
+function expandBoxByTransformedBounds(target: Box3, bounds: Box3, matrix: Matrix4): void {
+  if (bounds.isEmpty()) {
+    return
+  }
+  const { min, max } = bounds
+  boundsTransformCorners[0].set(min.x, min.y, min.z)
+  boundsTransformCorners[1].set(min.x, min.y, max.z)
+  boundsTransformCorners[2].set(min.x, max.y, min.z)
+  boundsTransformCorners[3].set(min.x, max.y, max.z)
+  boundsTransformCorners[4].set(max.x, min.y, min.z)
+  boundsTransformCorners[5].set(max.x, min.y, max.z)
+  boundsTransformCorners[6].set(max.x, max.y, min.z)
+  boundsTransformCorners[7].set(max.x, max.y, max.z)
+  boundsTransformCorners.forEach((corner) => {
+    boundsTransformPoint.copy(corner).applyMatrix4(matrix)
+    target.expandByPoint(boundsTransformPoint)
+  })
+}
+
+function resolveWallDefinitionLocalBounds(mesh: WallDynamicMesh): Box3 | null {
+  const chains = Array.isArray(mesh.chains) ? mesh.chains : []
+  if (!chains.length) {
+    return null
+  }
+  const width = Number.isFinite(mesh.dimensions?.width) ? mesh.dimensions.width : DEFAULT_WALL_WIDTH
+  const thickness = Number.isFinite(mesh.dimensions?.thickness) ? mesh.dimensions.thickness : DEFAULT_WALL_THICKNESS
+  const height = Number.isFinite(mesh.dimensions?.height) ? mesh.dimensions.height : DEFAULT_WALL_HEIGHT
+  const lateralPadding = Math.max(Math.abs(width), Math.abs(thickness), DEFAULT_SPAWN_RADIUS * 0.1) * 0.5
+  const verticalPadding = Math.max(Math.abs(height), 0)
+
+  const bounds = new Box3()
+  let initialized = false
+  chains.forEach((chain) => {
+    const points = Array.isArray(chain.points) ? chain.points : []
+    points.forEach((point) => {
+      const x = Number(point?.x)
+      const y = Number(point?.y)
+      const z = Number(point?.z)
+      if (![x, y, z].every((value) => Number.isFinite(value))) {
+        return
+      }
+      if (!initialized) {
+        bounds.makeEmpty()
+        initialized = true
+      }
+      bounds.expandByPoint(new Vector3(x - lateralPadding, y, z - lateralPadding))
+      bounds.expandByPoint(new Vector3(x + lateralPadding, y + verticalPadding, z + lateralPadding))
+    })
+  })
+  return initialized && !bounds.isEmpty() ? bounds : null
+}
+
+function resolveNodeLocalBounds(node: SceneNode, runtimeObject: Object3D | null): Box3 | null {
+  const runtimeBounds = deserializeBoundingBox(runtimeObject?.userData?.instancedBounds)
+  if (runtimeBounds && !runtimeBounds.isEmpty()) {
+    return runtimeBounds
+  }
+  if (node.dynamicMesh?.type === 'Wall') {
+    return resolveWallDefinitionLocalBounds(node.dynamicMesh)
+  }
+  return null
 }
 
 function createInstancedPlaceholderObject(name: string | undefined, group: ModelInstanceGroup): Object3D {
@@ -3311,10 +3407,16 @@ function collectNodeBoundingInfo(nodes: SceneNode[]): Map<string, NodeBoundingIn
       const worldMatrix = new Matrix4().multiplyMatrices(parentMatrix, nodeMatrix)
 
       let nodeBounds: Box3 | null = null
+      const runtimeObject = getRuntimeObject(node.id)
+      const explicitLocalBounds = resolveNodeLocalBounds(node, runtimeObject)
 
-  if (!node.isPlaceholder && node.nodeType !== 'Light') {
-        const runtimeObject = getRuntimeObject(node.id)
-  if (runtimeObject && node.dynamicMesh?.type !== 'Ground') {
+      if (explicitLocalBounds && !explicitLocalBounds.isEmpty()) {
+        nodeBounds = new Box3()
+        expandBoxByTransformedBounds(nodeBounds, explicitLocalBounds, worldMatrix)
+      }
+
+      if (!nodeBounds && !node.isPlaceholder && node.nodeType !== 'Light') {
+        if (runtimeObject && node.dynamicMesh?.type !== 'Ground') {
           runtimeObject.updateMatrixWorld(true)
           const localBounds = new Box3().setFromObject(runtimeObject)
           if (!localBounds.isEmpty()) {

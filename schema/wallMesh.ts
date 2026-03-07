@@ -303,6 +303,81 @@ type InstancedAssetTemplate = {
   baseSize: THREE.Vector3
 }
 
+const wallInstancedBoundsPoint = new THREE.Vector3()
+const wallInstancedBoundsCorners = [
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+] as [
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+]
+
+function expandBoxByTransformedBounds(target: THREE.Box3, bounds: THREE.Box3, matrix: THREE.Matrix4): void {
+  if (bounds.isEmpty()) {
+    return
+  }
+
+  const { min, max } = bounds
+  wallInstancedBoundsCorners[0].set(min.x, min.y, min.z)
+  wallInstancedBoundsCorners[1].set(min.x, min.y, max.z)
+  wallInstancedBoundsCorners[2].set(min.x, max.y, min.z)
+  wallInstancedBoundsCorners[3].set(min.x, max.y, max.z)
+  wallInstancedBoundsCorners[4].set(max.x, min.y, min.z)
+  wallInstancedBoundsCorners[5].set(max.x, min.y, max.z)
+  wallInstancedBoundsCorners[6].set(max.x, max.y, min.z)
+  wallInstancedBoundsCorners[7].set(max.x, max.y, max.z)
+
+  for (const corner of wallInstancedBoundsCorners) {
+    wallInstancedBoundsPoint.copy(corner).applyMatrix4(matrix)
+    target.expandByPoint(wallInstancedBoundsPoint)
+  }
+}
+
+function applyInstancedMeshBounds(
+  instanced: THREE.InstancedMesh,
+  templateBounds: THREE.Box3,
+  matrices: THREE.Matrix4[],
+): THREE.Box3 | null {
+  if (templateBounds.isEmpty() || !matrices.length) {
+    return null
+  }
+
+  const combinedBounds = new THREE.Box3()
+  combinedBounds.makeEmpty()
+  for (const matrix of matrices) {
+    expandBoxByTransformedBounds(combinedBounds, templateBounds, matrix)
+  }
+  if (combinedBounds.isEmpty()) {
+    return null
+  }
+
+  instanced.boundingBox = combinedBounds.clone()
+  instanced.boundingSphere = combinedBounds.getBoundingSphere(new THREE.Sphere())
+  return combinedBounds
+}
+
+function serializeBounds(bounds: THREE.Box3 | null): { min: [number, number, number]; max: [number, number, number] } | null {
+  if (!bounds || bounds.isEmpty()) {
+    return null
+  }
+  return {
+    min: [bounds.min.x, bounds.min.y, bounds.min.z],
+    max: [bounds.max.x, bounds.max.y, bounds.max.z],
+  }
+}
+
 function findFirstInstancableMesh(root: THREE.Object3D): THREE.Mesh | null {
   let found: THREE.Mesh | null = null
   root.traverse((child) => {
@@ -589,6 +664,7 @@ function createWallInstancedMesh(
     instanced.setMatrixAt(i, matrices[i]!)
   }
   instanced.instanceMatrix.needsUpdate = true
+  applyInstancedMeshBounds(instanced, template.bounds, matrices)
   return instanced
 }
 
@@ -1489,9 +1565,20 @@ function rebuildWallGroup(
   options: WallRenderOptions = {},
 ) {
   clearGroupContent(group)
+  const wallAssetBounds = new THREE.Box3()
+  wallAssetBounds.makeEmpty()
+
+  const mergeAssetBounds = (bounds: THREE.Box3 | null) => {
+    if (!bounds || bounds.isEmpty()) {
+      return
+    }
+    wallAssetBounds.union(bounds)
+  }
 
   const chainDefinitions = buildWallChainDefinitions(definition)
   if (!chainDefinitions.length) {
+    const userData = group.userData ?? (group.userData = {})
+    delete userData.instancedBounds
     return
   }
 
@@ -1619,6 +1706,7 @@ function rebuildWallGroup(
         bucket.repeatScale,
       )
       if (instanced) {
+        mergeAssetBounds(instanced.boundingBox ?? null)
         group.add(instanced)
       }
     }
@@ -1642,6 +1730,7 @@ function rebuildWallGroup(
         bucket.repeatScale,
       )
       if (instanced) {
+        mergeAssetBounds(instanced.boundingBox ?? null)
         group.add(instanced)
       }
     }
@@ -1665,6 +1754,7 @@ function rebuildWallGroup(
         bucket.repeatScale,
       )
       if (instanced) {
+        mergeAssetBounds(instanced.boundingBox ?? null)
         group.add(instanced)
       }
     }
@@ -1684,6 +1774,7 @@ function rebuildWallGroup(
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
       instanced.instanceMatrix.needsUpdate = true
+      mergeAssetBounds(applyInstancedMeshBounds(instanced, bodyEndCapTemplate.bounds, localMatrices))
       group.add(instanced)
     }
   }
@@ -1702,6 +1793,7 @@ function rebuildWallGroup(
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
       instanced.instanceMatrix.needsUpdate = true
+      mergeAssetBounds(applyInstancedMeshBounds(instanced, headEndCapTemplate.bounds, localMatrices))
       group.add(instanced)
     }
   }
@@ -1720,6 +1812,7 @@ function rebuildWallGroup(
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
       instanced.instanceMatrix.needsUpdate = true
+      mergeAssetBounds(applyInstancedMeshBounds(instanced, footEndCapTemplate.bounds, localMatrices))
       group.add(instanced)
     }
   }
@@ -1774,6 +1867,7 @@ function rebuildWallGroup(
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
       instanced.instanceMatrix.needsUpdate = true
+      mergeAssetBounds(applyInstancedMeshBounds(instanced, template.bounds, localMatrices))
       group.add(instanced)
     }
   }
@@ -1807,6 +1901,7 @@ function rebuildWallGroup(
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
       instanced.instanceMatrix.needsUpdate = true
+      mergeAssetBounds(applyInstancedMeshBounds(instanced, template.bounds, localMatrices))
       group.add(instanced)
     }
   }
@@ -1840,8 +1935,17 @@ function rebuildWallGroup(
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
       instanced.instanceMatrix.needsUpdate = true
+      mergeAssetBounds(applyInstancedMeshBounds(instanced, template.bounds, localMatrices))
       group.add(instanced)
     }
+  }
+
+  const serializedBounds = serializeBounds(wallAssetBounds.isEmpty() ? null : wallAssetBounds)
+  const userData = group.userData ?? (group.userData = {})
+  if (serializedBounds) {
+    userData.instancedBounds = serializedBounds
+  } else {
+    delete userData.instancedBounds
   }
 }
 
