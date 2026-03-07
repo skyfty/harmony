@@ -3,6 +3,7 @@ import type {
   GroundDynamicMesh,
   SceneNode,
 } from '@schema'
+import { createPrimitiveMesh } from '@schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -28,7 +29,7 @@ import {
 } from '@/utils/scatterSampling'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
-import type { PlanningPolygonData, PlanningPolylineData, PlanningSceneData } from '@/types/planning-scene-data'
+import type { PlanningImageData, PlanningPolygonData, PlanningPolylineData, PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -58,6 +59,8 @@ export type ConvertPlanningToSceneOptions = {
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 const PLANNING_PIXELS_PER_METER = 10
+const PLANNING_IMAGE_HEIGHT_OFFSET_M = 0.02
+const PLANNING_IMAGE_STACK_OFFSET_M = 0.002
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -510,8 +513,33 @@ function resolvePlanningUnitsToMeters(planningData: PlanningSceneData, groundWid
     }
   }
 
+  const scanImages = (images: PlanningImageData[] | undefined) => {
+    if (!Array.isArray(images)) return
+    for (const image of images) {
+      if (!image) continue
+      const x = Number(image.position?.x)
+      const y = Number(image.position?.y)
+      const width = Number(image.width)
+      const height = Number(image.height)
+      const scale = Number(image.scale)
+      if (Number.isFinite(x)) {
+        maxCoordinate = Math.max(maxCoordinate, Math.abs(x))
+      }
+      if (Number.isFinite(y)) {
+        maxCoordinate = Math.max(maxCoordinate, Math.abs(y))
+      }
+      if (Number.isFinite(x) && Number.isFinite(width) && Number.isFinite(scale)) {
+        maxCoordinate = Math.max(maxCoordinate, Math.abs(x + width * scale))
+      }
+      if (Number.isFinite(y) && Number.isFinite(height) && Number.isFinite(scale)) {
+        maxCoordinate = Math.max(maxCoordinate, Math.abs(y + height * scale))
+      }
+    }
+  }
+
   planningData.polygons.forEach((poly) => scanPoints(poly.points))
   planningData.polylines.forEach((line) => scanPoints(line.points))
+  scanImages(planningData.images)
 
   if (maxCoordinate <= 0 || !Number.isFinite(referenceSize) || referenceSize <= 0) {
     return 1
@@ -541,6 +569,92 @@ function normalizePlanningPoints(points: PlanningPoint[] | undefined, unitsToMet
       y: Number.isFinite(y) ? y * scale : 0,
     }
   })
+}
+
+function normalizePlanningImages(images: PlanningImageData[] | undefined, unitsToMeters: number): PlanningImageData[] {
+  const scaleFactor = Number.isFinite(unitsToMeters) && unitsToMeters > 0 ? unitsToMeters : 1
+  if (!Array.isArray(images) || images.length === 0) return []
+  return images.map((image) => ({
+    ...image,
+    position: {
+      x: Number.isFinite(Number(image.position?.x)) ? Number(image.position.x) * scaleFactor : 0,
+      y: Number.isFinite(Number(image.position?.y)) ? Number(image.position.y) * scaleFactor : 0,
+    },
+    scale: Number.isFinite(Number(image.scale)) ? Number(image.scale) * scaleFactor : scaleFactor,
+  }))
+}
+
+function clamp01(value: number, fallback = 1): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  return Math.min(1, Math.max(0, numeric))
+}
+
+function inferImageExtensionFromMimeType(mimeType: string | null | undefined): string {
+  switch ((mimeType ?? '').toLowerCase()) {
+    case 'image/jpeg':
+      return '.jpg'
+    case 'image/webp':
+      return '.webp'
+    case 'image/gif':
+      return '.gif'
+    case 'image/svg+xml':
+      return '.svg'
+    case 'image/bmp':
+      return '.bmp'
+    case 'image/avif':
+      return '.avif'
+    case 'image/png':
+    default:
+      return '.png'
+  }
+}
+
+function ensureFilenameHasExtension(name: string, extension: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) {
+    return `planning-image${extension}`
+  }
+  if (/\.[a-z0-9]+$/i.test(trimmed)) {
+    return trimmed
+  }
+  return `${trimmed}${extension}`
+}
+
+async function ensurePlanningImageAsset(
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
+  image: PlanningImageData,
+): Promise<{ assetId: string; name: string } | null> {
+  const url = typeof image.url === 'string' ? image.url.trim() : ''
+  if (!url) {
+    return null
+  }
+
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to load planning image: ${response.status}`)
+  }
+
+  const blob = await response.blob()
+  const mimeType = blob.type?.trim() || 'image/png'
+  const displayName = image.name?.trim() || image.sizeLabel?.trim() || `Planning Image ${image.id}`
+  const fileName = ensureFilenameHasExtension(displayName, inferImageExtensionFromMimeType(mimeType))
+  const file = new File([blob], fileName, { type: mimeType, lastModified: Date.now() })
+  const ensured = await sceneStore.ensureLocalAssetFromFile(file, {
+    type: 'image',
+    name: displayName,
+    description: `Planning reference image: ${displayName}`,
+    previewColor: '#ffffff',
+    gleaned: true,
+    commitOptions: { updateNodes: false },
+  })
+
+  return {
+    assetId: ensured.asset.id,
+    name: ensured.asset.name,
+  }
 }
 
 function toWorldPoint(
@@ -1293,6 +1407,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     waypoints: Array.isArray(line.waypoints) ? line.waypoints : undefined,
   }))
 
+  const images = normalizePlanningImages(planningData.images, planningUnitsToMeters)
+
   const referencedScatterAssetIds = new Set<string>()
   for (const poly of polygons) {
     const id = extractScatterAssetId(poly.scatter)
@@ -1323,7 +1439,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     if (featuresByLayer.has(line.layerId)) featuresByLayer.get(line.layerId)!.polylines.push(line)
   })
 
-  const totalUnits = polygons.length + polylines.length
+  const totalUnits = polygons.length + polylines.length + images.length
   let doneUnits = 0
 
   // Terrain scatter preparation
@@ -1387,6 +1503,92 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     doneUnits += 1
     emitUnitProgress(label, 0)
     await yieldController.maybeYield()
+  }
+
+  if (images.length) {
+    for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
+      throwIfAborted(options.signal)
+      const image = images[imageIndex]!
+      const unitLabel = `Converting planning image: ${image.name?.trim() || image.id}`
+      emitUnitProgress(unitLabel, 0)
+      try {
+        const width = Math.max(1e-3, Math.abs(Number(image.width) * Number(image.scale)))
+        const height = Math.max(1e-3, Math.abs(Number(image.height) * Number(image.scale)))
+        if (!Number.isFinite(width) || !Number.isFinite(height)) {
+          continue
+        }
+
+        const assetRef = await ensurePlanningImageAsset(sceneStore, image)
+        if (!assetRef) {
+          continue
+        }
+
+        const center = {
+          x: Number(image.position?.x) + width * 0.5,
+          y: Number(image.position?.y) + height * 0.5,
+        }
+        const worldCenter = toWorldPoint(center, groundWidth, groundDepth, 0)
+        const groundY = groundHeightAt(worldCenter.x, worldCenter.z)
+        const nodeId = await stableUuidV5(`planning:image:${image.id}`)
+        const nodeName = image.name?.trim() || `Planning Image ${imageIndex + 1}`
+        const runtime = createPrimitiveMesh('Plane', { color: 0xffffff, doubleSided: true, name: `${nodeName} Visual` })
+        runtime.castShadow = false
+        runtime.receiveShadow = false
+
+        const planeNode = sceneStore.addSceneNode({
+          nodeId,
+          nodeType: 'Plane',
+          object: runtime,
+          name: nodeName,
+          parentId: root.id,
+          position: {
+            x: worldCenter.x,
+            y: groundY + PLANNING_IMAGE_HEIGHT_OFFSET_M + imageIndex * PLANNING_IMAGE_STACK_OFFSET_M,
+            z: worldCenter.z,
+          },
+          rotation: { x: -Math.PI / 2, y: 0, z: 0 },
+          scale: { x: width, y: height, z: 1 },
+          sourceAssetId: assetRef.assetId,
+          userData: {
+            source: PLANNING_CONVERSION_SOURCE,
+            kind: 'image',
+            planningImageId: image.id,
+            planningImageName: nodeName,
+          },
+        })
+
+        if (!planeNode) {
+          continue
+        }
+
+        const material = planeNode.materials?.[0] ?? null
+        if (material) {
+          sceneStore.updateNodeMaterialType(planeNode.id, material.id, 'MeshBasicMaterial')
+          sceneStore.updateNodeMaterialProps(planeNode.id, material.id, {
+            color: '#ffffff',
+            transparent: true,
+            opacity: clamp01(image.opacity, 1),
+            side: 'double',
+            wireframe: false,
+            metalness: 0,
+            roughness: 1,
+            emissive: '#000000',
+            emissiveIntensity: 0,
+          })
+        }
+
+        sceneStore.setNodePrimaryTexture(planeNode.id, {
+          assetId: assetRef.assetId,
+          name: assetRef.name,
+        })
+        sceneStore.setNodeVisibility(planeNode.id, image.visible !== false)
+        sceneStore.setNodeLocked(planeNode.id, image.locked === true)
+      } catch (error) {
+        console.warn('Failed to convert planning image to scene plane', image, error)
+      } finally {
+        await updateProgressForUnit(unitLabel)
+      }
+    }
   }
 
   // Convert layer-by-layer
