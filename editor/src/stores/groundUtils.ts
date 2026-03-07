@@ -81,6 +81,7 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
     manualHeightMap: { ...(definition.manualHeightMap ?? {}) },
     planningHeightMap: { ...(definition.planningHeightMap ?? {}) },
+    surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
     planningMetadata: manualDeepCloneLocal(definition.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
     terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
@@ -157,6 +158,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     chunkStreamingEnabled: overrides.chunkStreamingEnabled !== false,
     manualHeightMap: { ...(manualHeightMapOverrides ?? {}) },
     planningHeightMap: { ...(planningHeightMapOverrides ?? {}) },
+    surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
       mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',
       policyVersion: overrides.heightComposition?.policyVersion,

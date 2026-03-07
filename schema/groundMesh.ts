@@ -215,17 +215,6 @@ function clampVertexIndex(value: number, max: number): number {
   return value
 }
 
-function getManualVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
-  // manualHeightMap 保存的是“手工雕刻层”的绝对高度。
-  // 当某个顶点没有手工覆盖值时，说明该点仍然使用程序化生成出来的基础高度。
-  const key = groundVertexKey(row, column)
-  const raw = definition.manualHeightMap[key]
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw
-  }
-  return computeGroundBaseHeightAtVertex(definition, row, column)
-}
-
 function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
   // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
   // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
@@ -256,12 +245,15 @@ function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, col
  * 用户修改的是“相对地形的局部塑形”，而不是把规划层完全覆盖掉。
  */
 export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
+  const key = groundVertexKey(row, column)
   // 原始程序化地形高度。
   const base = computeGroundBaseHeightAtVertex(definition, row, column)
   // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
-  const manual = getManualVertexHeight(definition, row, column)
+  const manualRaw = definition.manualHeightMap[key]
+  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
   // 规划/自动生成层的绝对高度；若无规划覆盖则同样退回 base。
-  const planning = getPlanningVertexHeight(definition, row, column)
+  const planningRaw = definition.planningHeightMap[key]
+  const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
   // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
   return planning + (manual - base)
 }
@@ -447,13 +439,17 @@ function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometr
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const cellSize = definition.cellSize
+  const heightRegion = sampleGroundEffectiveHeightRegion(definition, 0, rows, 0, columns)
+  const heightValues = heightRegion.values
+  const heightStride = heightRegion.stride
 
   let vertexIndex = 0
   for (let row = 0; row <= rows; row += 1) {
     const z = -halfDepth + row * cellSize
+    const heightOffset = row * heightStride
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
-      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
+      const height = heightValues[heightOffset + column] ?? 0
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -515,15 +511,25 @@ function buildGroundChunkGeometry(definition: GroundDynamicMesh, spec: GroundChu
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const cellSize = definition.cellSize
+  const heightRegion = sampleGroundEffectiveHeightRegion(
+    definition,
+    spec.startRow,
+    spec.startRow + chunkRows,
+    spec.startColumn,
+    spec.startColumn + chunkColumns,
+  )
+  const heightValues = heightRegion.values
+  const heightStride = heightRegion.stride
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
     const row = spec.startRow + localRow
     const z = -halfDepth + row * cellSize
+    const heightOffset = localRow * heightStride
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const column = spec.startColumn + localColumn
       const x = -halfWidth + column * cellSize
-      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
+      const height = heightValues[heightOffset + localColumn] ?? 0
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -937,13 +943,17 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const cellSize = definition.cellSize
+  const heightRegion = sampleGroundEffectiveHeightRegion(definition, 0, rows, 0, columns)
+  const heightValues = heightRegion.values
+  const heightStride = heightRegion.stride
 
   let vertexIndex = 0
   for (let row = 0; row <= rows; row += 1) {
     const z = -halfDepth + row * cellSize
+    const heightOffset = row * heightStride
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
-      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
+      const height = heightValues[heightOffset + column] ?? 0
 
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columns === 0 ? 0 : column / columns, rows === 0 ? 0 : 1 - row / rows)
@@ -1061,15 +1071,25 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundD
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const cellSize = definition.cellSize
+  const heightRegion = sampleGroundEffectiveHeightRegion(
+    definition,
+    spec.startRow,
+    spec.startRow + chunkRows,
+    spec.startColumn,
+    spec.startColumn + chunkColumns,
+  )
+  const heightValues = heightRegion.values
+  const heightStride = heightRegion.stride
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
     const row = spec.startRow + localRow
     const z = -halfDepth + row * cellSize
+    const heightOffset = localRow * heightStride
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const column = spec.startColumn + localColumn
       const x = -halfWidth + column * cellSize
-      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
+      const height = heightValues[heightOffset + localColumn] ?? 0
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columns === 0 ? 0 : column / columns, rows === 0 ? 0 : 1 - row / rows)
       vertexIndex += 1
@@ -1107,15 +1127,19 @@ function updateChunkGeometryRegion(
   const endRow = clampInclusive(region.maxRow, spec.startRow, spec.startRow + chunkRows)
   const startColumn = clampInclusive(region.minColumn, spec.startColumn, spec.startColumn + chunkColumns)
   const endColumn = clampInclusive(region.maxColumn, spec.startColumn, spec.startColumn + chunkColumns)
+  const heightRegion = sampleGroundEffectiveHeightRegion(definition, startRow, endRow, startColumn, endColumn)
+  const heightValues = heightRegion.values
+  const heightStride = heightRegion.stride
 
   for (let row = startRow; row <= endRow; row += 1) {
     const z = -halfDepth + row * cellSize
     const localRow = row - spec.startRow
+    const heightOffset = (row - startRow) * heightStride
     for (let column = startColumn; column <= endColumn; column += 1) {
       const x = -halfWidth + column * cellSize
       const localColumn = column - spec.startColumn
       const vertexIndex = localRow * vertexColumns + localColumn
-      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
+      const height = heightValues[heightOffset + (column - startColumn)] ?? 0
       positionAttr.setXYZ(vertexIndex, x, height, z)
     }
   }
@@ -1728,6 +1752,7 @@ export function stitchGroundChunkNormals(
   target: THREE.Object3D,
   definition: GroundDynamicMesh,
   region: GroundGeometryUpdateRegion | null = null,
+  touchedChunkKeys: Iterable<string> | null = null,
 ): boolean {
   const group = resolveGroundRuntimeGroup(target)
   if (!group) {
@@ -1742,6 +1767,63 @@ export function stitchGroundChunkNormals(
   const columns = Math.max(1, Math.trunc(definition.columns))
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
   const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
+
+  const filteredChunkKeys = touchedChunkKeys ? Array.from(touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0) : []
+  if (filteredChunkKeys.length) {
+    const visitedEdges = new Set<string>()
+    const stitchEdge = (anchorRow: number, anchorColumn: number, mode: 'right' | 'down'): boolean => {
+      const edgeKey = `${mode}:${anchorRow}:${anchorColumn}`
+      if (visitedEdges.has(edgeKey)) {
+        return false
+      }
+      visitedEdges.add(edgeKey)
+
+      const current = state.chunks.get(groundChunkKey(anchorRow, anchorColumn))
+      if (!current || !(current.mesh.geometry instanceof THREE.BufferGeometry)) {
+        return false
+      }
+
+      const neighbor = mode === 'right'
+        ? state.chunks.get(groundChunkKey(anchorRow, anchorColumn + 1))
+        : state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn))
+      if (!neighbor || !(neighbor.mesh.geometry instanceof THREE.BufferGeometry)) {
+        return false
+      }
+
+      return averageNormalsOnEdge({
+        geometryA: current.mesh.geometry,
+        specA: current.spec,
+        geometryB: neighbor.mesh.geometry,
+        specB: neighbor.spec,
+        mode,
+      })
+    }
+
+    let stitched = false
+    for (const key of filteredChunkKeys) {
+      const parts = key.split(':')
+      if (parts.length !== 2) {
+        continue
+      }
+      const chunkRow = Number(parts[0])
+      const chunkColumn = Number(parts[1])
+      if (!Number.isFinite(chunkRow) || !Number.isFinite(chunkColumn)) {
+        continue
+      }
+      const row = clampInclusive(Math.trunc(chunkRow), 0, maxChunkRowIndex)
+      const column = clampInclusive(Math.trunc(chunkColumn), 0, maxChunkColumnIndex)
+
+      stitched = stitchEdge(row, column, 'right') || stitched
+      stitched = stitchEdge(row, column, 'down') || stitched
+      if (column > 0) {
+        stitched = stitchEdge(row, column - 1, 'right') || stitched
+      }
+      if (row > 0) {
+        stitched = stitchEdge(row - 1, column, 'down') || stitched
+      }
+    }
+    return stitched
+  }
 
   let minChunkRow = 0
   let maxChunkRow = maxChunkRowIndex

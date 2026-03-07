@@ -1312,12 +1312,36 @@ function refreshEffectRuntimeTickers(): void {
 }
 
 const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
+const GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY = '__harmonyGroundSculptSkipRefreshSignature'
+
+function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
+  const runtimeGroundObject = object.userData?.groundMesh as THREE.Object3D | undefined
+  return runtimeGroundObject ?? object
+}
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
+  const surfaceRevision = Number.isFinite(definition.surfaceRevision)
+    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
+    : null
+  const shapeSignature = {
+    rows: Math.max(1, Math.trunc(definition.rows)),
+    columns: Math.max(1, Math.trunc(definition.columns)),
+    cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1,
+    width: Number.isFinite(definition.width) ? definition.width : 0,
+    depth: Number.isFinite(definition.depth) ? definition.depth : 0,
+    generation: definition.generation ?? null,
+    heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
+  }
+  if (surfaceRevision !== null) {
+    return hashString(stableSerialize({
+      ...shapeSignature,
+      surfaceRevision,
+    }))
+  }
   const serialized = stableSerialize({
+    ...shapeSignature,
     manualHeightMap: definition.manualHeightMap ?? {},
     planningHeightMap: definition.planningHeightMap ?? {},
-    heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
   })
   return hashString(serialized)
 }
@@ -2665,6 +2689,14 @@ function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
   return resolveDynamicGroundStreamingRadiusMeters(groundObject)
 }
 
+function resolveGroundScatterChunkStreamingEnabled(): boolean {
+  const node = findGroundNodeInTree(sceneStore.nodes)
+  if (!node || node.dynamicMesh?.type !== 'Ground') {
+    return false
+  }
+  return isGroundChunkStreamingEnabled(node.dynamicMesh)
+}
+
 const groundEditor = createGroundEditor({
   sceneStore,
   getSceneNodes: () => props.sceneNodes,
@@ -2692,12 +2724,19 @@ const groundEditor = createGroundEditor({
   scatterEraseModeActive,
   lockScatterLodToBaseAsset: true,
   scatterChunkStreaming: {
-    enabled: true,
+    enabled: resolveGroundScatterChunkStreamingEnabled,
     getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
   },
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
+  onSculptCommitApplied: ({ groundObject, definition }) => {
+    const signature = computeGroundDynamicMeshSignature(definition)
+    const signatureTarget = resolveGroundSignatureTarget(groundObject)
+    const userData = signatureTarget.userData ?? (signatureTarget.userData = {})
+    userData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] = signature
+    userData[DYNAMIC_MESH_SIGNATURE_KEY] = signature
+  },
   onScatterEraseStart: () => {
     scatterEraseMenuOpen.value = false
   },
@@ -14136,13 +14175,21 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       const groundData = groundObject.userData ?? (groundObject.userData = {})
       const nextSignature = computeGroundDynamicMeshSignature(node.dynamicMesh)
       if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateGroundMesh(groundObject, node.dynamicMesh)
+        const shouldSkipSculptRefresh = groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature
+        if (!shouldSkipSculptRefresh) {
+          updateGroundMesh(groundObject, node.dynamicMesh)
+        }
         groundData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+        if (shouldSkipSculptRefresh) {
+          delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
+        }
 
         // The Skybox sun (Sky.js) uses a DirectionalLight for shadows. Re-fit it when the ground changes.
         if (skySunLight) {
           tryFitDirectionalLightShadowsToGround(skySunLight)
         }
+      } else if (groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature) {
+        delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
     }
   } else if (node.dynamicMesh?.type === 'Wall') {

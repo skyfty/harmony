@@ -1154,6 +1154,7 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
     manualHeightMap: { ...(definition.manualHeightMap ?? {}) },
     planningHeightMap: { ...(definition.planningHeightMap ?? {}) },
+    surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' }) },
     planningMetadata: planningMetadata ?? null,
     terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
@@ -1171,6 +1172,30 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     result.terrainPaint = terrainPaint
   }
   return result
+}
+
+function normalizeGroundSurfaceRevision(value: unknown): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  return Math.max(0, Math.trunc(value as number))
+}
+
+function shouldBumpGroundSurfaceRevision(incoming: Record<string, any>): boolean {
+  return Object.prototype.hasOwnProperty.call(incoming, 'manualHeightMap')
+    || Object.prototype.hasOwnProperty.call(incoming, 'planningHeightMap')
+    || Object.prototype.hasOwnProperty.call(incoming, 'generation')
+    || Object.prototype.hasOwnProperty.call(incoming, 'heightComposition')
+}
+
+function prepareGroundDynamicMeshRevision(existing: Record<string, any> | null, incoming: Record<string, any>): number {
+  const currentRevision = normalizeGroundSurfaceRevision(existing?.surfaceRevision)
+  const incomingRevision = normalizeGroundSurfaceRevision(incoming.surfaceRevision)
+  const nextRevision = shouldBumpGroundSurfaceRevision(incoming)
+    ? Math.max(currentRevision, incomingRevision) + 1
+    : Math.max(currentRevision, incomingRevision)
+  incoming.surfaceRevision = nextRevision
+  return nextRevision
 }
 
 import * as groundUtils from './groundUtils'
@@ -5586,6 +5611,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
       node.dynamicMesh = {
         ...definition,
         manualHeightMap: nextHeightMap,
+        surfaceRevision: normalizeGroundSurfaceRevision(definition.surfaceRevision) + 1,
       }
       store.nodes = [...store.nodes]
       break
@@ -7721,6 +7747,11 @@ export const useSceneStore = defineStore('scene', {
 
         const incomingType = typeof incoming.type === 'string' ? incoming.type : null
         const existingType = typeof existingRecord.type === 'string' ? existingRecord.type : null
+        const isGroundDynamicMesh = incomingType === 'Ground' || existingType === 'Ground'
+
+        if (isGroundDynamicMesh) {
+          prepareGroundDynamicMeshRevision(existingRecord, incoming)
+        }
 
         // Type mismatch: replace reference (shallow) to keep semantics correct.
         if (incomingType && existingType && incomingType !== existingType) {

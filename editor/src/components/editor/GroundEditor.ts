@@ -116,7 +116,7 @@ export type GroundEditorOptions = {
 	lockScatterLodToBaseAsset?: boolean
 	// Optional: enable chunk-based scatter streaming for large grounds.
 	scatterChunkStreaming?: {
-		enabled?: boolean
+		enabled?: boolean | (() => boolean)
 		radiusMeters?: number
 		getDynamicRadiusMeters?: () => number | null | undefined
 		unloadPaddingMeters?: number
@@ -126,6 +126,12 @@ export type GroundEditorOptions = {
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
+	onSculptCommitApplied?: (params: {
+		nodeId: string
+		groundObject: THREE.Object3D
+		definition: GroundDynamicMesh
+		region: GroundGeometryUpdateRegion | null
+	}) => void
 }
 
 export type GroundEditorHandle = ReturnType<typeof createGroundEditor>
@@ -808,6 +814,26 @@ function mergeRegions(
 	}
 }
 
+function addTouchedGroundChunkKeys(
+	keys: Set<string>,
+	definition: GroundDynamicMesh,
+	region: GroundGeometryUpdateRegion,
+): void {
+	if (!keys) {
+		return
+	}
+	const chunkCells = Math.max(1, resolveGroundChunkCells(definition))
+	const minChunkRow = Math.floor(Math.max(0, region.minRow) / chunkCells)
+	const maxChunkRow = Math.floor(Math.max(0, region.maxRow) / chunkCells)
+	const minChunkColumn = Math.floor(Math.max(0, region.minColumn) / chunkCells)
+	const maxChunkColumn = Math.floor(Math.max(0, region.maxColumn) / chunkCells)
+	for (let chunkRow = minChunkRow; chunkRow <= maxChunkRow; chunkRow += 1) {
+		for (let chunkColumn = minChunkColumn; chunkColumn <= maxChunkColumn; chunkColumn += 1) {
+			keys.add(`${chunkRow}:${chunkColumn}`)
+		}
+	}
+}
+
 function resolveChunkCellsForDefinition(definition: GroundDynamicMesh): number {
 	// Keep in sync with schema/groundMesh.ts (DEFAULT_GROUND_CHUNK_CELLS / cellSize).
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
@@ -934,6 +960,34 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		touchedChunkKeys?: Set<string> | null
 	}): Promise<void> {
 		const worker = getGroundNormalsWorker()
+		const chunkCells = resolveChunkCellsForDefinition(params.definition)
+		const filterKeys = params.touchedChunkKeys && params.touchedChunkKeys.size ? params.touchedChunkKeys : null
+		const chunkMatchesNormalFilter = (mesh: THREE.Mesh): boolean => {
+			const chunk = mesh.userData?.groundChunk as
+				| { startRow: number; startColumn: number; rows: number; columns: number }
+				| undefined
+			if (!chunk) {
+				return false
+			}
+			if (filterKeys) {
+				const cr = Math.floor(Math.max(0, chunk.startRow) / chunkCells)
+				const cc = Math.floor(Math.max(0, chunk.startColumn) / chunkCells)
+				return filterKeys.has(`${cr}:${cc}`)
+			}
+			if (params.region) {
+				const chunkMinRow = chunk.startRow
+				const chunkMaxRow = chunk.startRow + chunk.rows
+				const chunkMinColumn = chunk.startColumn
+				const chunkMaxColumn = chunk.startColumn + chunk.columns
+				return !(
+					params.region.maxRow < chunkMinRow ||
+					params.region.minRow > chunkMaxRow ||
+					params.region.maxColumn < chunkMinColumn ||
+					params.region.minColumn > chunkMaxColumn
+				)
+			}
+			return true
+		}
 		if (!worker) {
 			// Worker not available; fall back.
 			params.groundObject.traverse((child) => {
@@ -941,14 +995,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
 					return
 				}
+				if (!chunkMatchesNormalFilter(mesh)) {
+					return
+				}
 				mesh.geometry.computeVertexNormals()
 			})
-			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null, filterKeys)
 			return
 		}
 
-		const chunkCells = resolveChunkCellsForDefinition(params.definition)
-		const filterKeys = params.touchedChunkKeys && params.touchedChunkKeys.size ? params.touchedChunkKeys : null
 		const chunks: GroundNormalsComputeRequest['chunks'] = []
 		const meshesByKey = new Map<string, THREE.Mesh>()
 		params.groundObject.traverse((child) => {
@@ -975,29 +1030,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				| { startRow: number; startColumn: number; rows: number; columns: number }
 				| undefined
 
-			// Prefer touched-chunk filtering (more precise than a bounding rectangle).
-			if (filterKeys && chunk) {
-				const cr = Math.floor(Math.max(0, chunk.startRow) / chunkCells)
-				const cc = Math.floor(Math.max(0, chunk.startColumn) / chunkCells)
-				const ck = `${cr}:${cc}`
-				if (!filterKeys.has(ck)) {
-					return
-				}
-			} else if (params.region && chunk) {
-				// Fall back to region overlap filtering.
-				const chunkMinRow = chunk.startRow
-				const chunkMaxRow = chunk.startRow + chunk.rows
-				const chunkMinColumn = chunk.startColumn
-				const chunkMaxColumn = chunk.startColumn + chunk.columns
-				const overlaps = !(
-					params.region.maxRow < chunkMinRow ||
-					params.region.minRow > chunkMaxRow ||
-					params.region.maxColumn < chunkMinColumn ||
-					params.region.minColumn > chunkMaxColumn
-				)
-				if (!overlaps) {
-					return
-				}
+			if (chunk && !chunkMatchesNormalFilter(mesh)) {
+				return
 			}
 
 			const positionsCopy = cloneTypedArrayForTransfer(positions)
@@ -1053,7 +1087,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
 			}
 		}
-		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null, filterKeys)
 	}
 
 	const assetCacheStore = useAssetCacheStore()
@@ -1131,7 +1165,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterSnapshotUpdatedAt: number | null = null
 	const scatterRuntimeAssetIdByNodeId = new Map<string, string>()
 
-	const scatterChunkStreamingEnabled = Boolean(options.scatterChunkStreaming?.enabled)
+	function resolveScatterChunkStreamingEnabled(): boolean {
+		const enabled = options.scatterChunkStreaming?.enabled
+		return typeof enabled === 'function' ? Boolean(enabled()) : Boolean(enabled)
+	}
+
+	let scatterChunkStreamingEnabled = resolveScatterChunkStreamingEnabled()
 	const lockScatterLodToBaseAsset = Boolean(options.lockScatterLodToBaseAsset)
 	const scatterChunkStreamingRadiusOverride = clampFinite(options.scatterChunkStreaming?.radiusMeters, Number.NaN)
 	const scatterChunkStreamingDynamicRadiusResolver = options.scatterChunkStreaming?.getDynamicRadiusMeters
@@ -1179,6 +1218,54 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let terrainPaintStreamingSyncTimer: number | null = null
 	let lastVisibleTerrainPaintChunkKeys = new Set<string>()
 	let lastTerrainPaintSceneSwitchToken: number | null = null
+
+	function clearScatterChunkStreamingState(reason: string): void {
+		scatterChunkIndexDirty = true
+		scatterChunkIndex = new Map()
+		scatterChunkEntryByNodeId = new Map()
+		scatterActiveChunkKeys = new Set()
+		scatterChunkStreamingToken += 1
+		pendingScatterChunkBindings.clear()
+		scatterChunkStreamingGroupPromises.clear()
+		scatterChunkStreamingBindingResolutionCache.clear()
+		scatterChunkStreamingPendingBindIds.clear()
+		scatterChunkStreamingAllocatedNodeIds.clear()
+		scatterChunkStreamingLastVisibleAt.clear()
+		scatterChunkStreamingLastFrustumVisibleIds = new Set<string>()
+		lastScatterChunkStreamingVisibilityUpdateAt = 0
+		lastScatterChunkStreamingUpdateAt = 0
+		lastScatterLodUpdateAt = 0
+		scatterLodImmediateSyncNeeded = true
+
+		if (!scatterStore) {
+			return
+		}
+
+		try {
+			for (const layer of Array.from(scatterStore.layers.values())) {
+				for (const instance of layer.instances ?? []) {
+					scatterRuntimeAssetIdByNodeId.delete(buildScatterNodeId(layer.id, instance.id))
+					releaseScatterInstance(instance)
+				}
+			}
+		} catch (error) {
+			console.warn('清理地面散布流式状态失败', reason, error)
+		}
+	}
+
+	function syncScatterChunkStreamingMode(): void {
+		const nextEnabled = resolveScatterChunkStreamingEnabled()
+		if (nextEnabled === scatterChunkStreamingEnabled) {
+			return
+		}
+		clearScatterChunkStreamingState('mode-changed')
+		scatterChunkStreamingEnabled = nextEnabled
+		if (scatterStore?.layers.size) {
+			void restoreGroupdScatter().catch((error) => {
+				console.warn('切换地面散布流式模式失败', error)
+			})
+		}
+	}
 
 	function getActiveBrushShape(): TerrainBrushShape {
 		const value = options.brushShape.value
@@ -1417,21 +1504,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function resetScatterStoreState(reason: string) {
-		scatterChunkIndexDirty = true
-		scatterChunkIndex = new Map()
-		scatterChunkEntryByNodeId = new Map()
-		scatterActiveChunkKeys = new Set()
-		scatterChunkStreamingToken += 1
-		pendingScatterChunkBindings.clear()
-		scatterChunkStreamingGroupPromises.clear()
-		scatterChunkStreamingBindingResolutionCache.clear()
-		scatterChunkStreamingPendingBindIds.clear()
-		scatterChunkStreamingAllocatedNodeIds.clear()
-		scatterChunkStreamingLastVisibleAt.clear()
-		scatterChunkStreamingLastFrustumVisibleIds = new Set<string>()
-		lastScatterChunkStreamingVisibilityUpdateAt = 0
-		lastScatterChunkStreamingUpdateAt = 0
-		lastScatterLodUpdateAt = 0
+		clearScatterChunkStreamingState(reason)
 		scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
 
 		try {
@@ -2012,6 +2085,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundMesh || !definition || store.layers.size === 0) {
 			return
 		}
+		const shouldUseScatterChunkStreaming = resolveScatterChunkStreamingEnabled()
+		if (shouldUseScatterChunkStreaming !== scatterChunkStreamingEnabled) {
+			clearScatterChunkStreamingState('restore-mode-sync')
+			scatterChunkStreamingEnabled = shouldUseScatterChunkStreaming
+		}
 		syncGroundChunkLoadingMode(groundMesh, definition, options.getCamera())
 
 		if (scatterChunkStreamingEnabled) {
@@ -2395,6 +2473,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function updateScatterChunkStreamingVisibilityAndGrace(): void {
+		syncScatterChunkStreamingMode()
 		if (!scatterChunkStreamingEnabled) {
 			return
 		}
@@ -2483,6 +2562,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function updateScatterChunkStreaming(force = false): void {
+		syncScatterChunkStreamingMode()
 		if (!scatterChunkStreamingEnabled) {
 			return
 		}
@@ -3748,6 +3828,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function updateScatterLod({ force = false }: { force?: boolean } = {}): void {
+		syncScatterChunkStreamingMode()
 		const camera = options.getCamera()
 		if (!camera) {
 			return
@@ -3822,7 +3903,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		const scatterCandidateIds: string[] = []
 		const scatterCandidateByNodeId = new Map<string, { layer: TerrainScatterLayer; instance: TerrainScatterInstance; preset: any }>()
 		for (const layer of store.layers.values()) {
 			const presetId = getScatterLayerLodPresetId(layer)
@@ -3835,37 +3915,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			for (const instance of layer.instances) {
 				const nodeId = buildScatterNodeId(layer.id, instance.id)
-				scatterCandidateIds.push(nodeId)
 				scatterCandidateByNodeId.set(nodeId, { layer, instance, preset })
 			}
 		}
 
-		scatterCandidateIds.sort()
-		scatterFrustumCuller.setIds(scatterCandidateIds)
-		const visibleScatterIds = scatterFrustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
-			const entry = scatterCandidateByNodeId.get(nodeId)
-			if (!entry) {
-				return null
-			}
-			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
-			centerTarget.copy(worldPos)
-			const baseBindingAssetId = resolveLodBindingAssetId(entry.preset)
-			const boundAssetId = lockScatterLodToBaseAsset
-				? (baseBindingAssetId ?? scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null)
-				: (scatterRuntimeAssetIdByNodeId.get(nodeId) ?? baseBindingAssetId)
-			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
-			const scale = entry.instance.localScale
-			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
-			const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
-			return { radius }
-		})
-
 		for (const [nodeId, entry] of scatterCandidateByNodeId.entries()) {
 			const instance = entry.instance
-			if (!visibleScatterIds.has(nodeId)) {
-				releaseScatterInstance(instance)
-				continue
-			}
 			const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 			const distance = worldPos.distanceTo(scatterLodCameraPosition)
 			const desired = lockScatterLodToBaseAsset
@@ -4438,16 +4493,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState.dirty = true
 		}
 		updateGroundMeshRegion(groundObject, definition, mergedRegion)
-		// Stitch normals across chunk boundaries to prevent visible seams.
-		const padded: GroundGeometryUpdateRegion = {
-			minRow: Math.max(0, mergedRegion.minRow - 2),
-			maxRow: Math.min(definition.rows, mergedRegion.maxRow + 2),
-			minColumn: Math.max(0, mergedRegion.minColumn - 2),
-			maxColumn: Math.min(definition.columns, mergedRegion.maxColumn + 2),
-		}
-		stitchGroundChunkNormals(groundObject, definition, padded)
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
+			addTouchedGroundChunkKeys(sculptSessionState.touchedChunkKeys, definition, mergedRegion)
+			stitchGroundChunkNormals(groundObject, definition, mergedRegion, sculptSessionState.touchedChunkKeys)
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
+		} else {
+			stitchGroundChunkNormals(groundObject, definition, mergedRegion)
 		}
 	}
 
@@ -4652,20 +4703,40 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}).catch((error) => {
 					console.warn('地形法线异步构建失败，回退到主线程：', error)
 					try {
+						const filteredChunkKeys = touchedChunkKeys && touchedChunkKeys.size ? touchedChunkKeys : null
+						const chunkCells = resolveChunkCellsForDefinition(groundNode.dynamicMesh as GroundDynamicMesh)
 						groundObject.traverse((child) => {
 							const mesh = child as THREE.Mesh
 							if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
 								return
 							}
+							const chunk = mesh.userData?.groundChunk as
+								| { startRow: number; startColumn: number; rows: number; columns: number }
+								| undefined
+							if (filteredChunkKeys && chunk) {
+								const cr = Math.floor(Math.max(0, chunk.startRow) / chunkCells)
+								const cc = Math.floor(Math.max(0, chunk.startColumn) / chunkCells)
+								if (!filteredChunkKeys.has(`${cr}:${cc}`)) {
+									return
+								}
+							}
 							mesh.geometry.computeVertexNormals()
 						})
-						stitchGroundChunkNormals(groundObject, groundNode.dynamicMesh as GroundDynamicMesh, region ?? null)
+						stitchGroundChunkNormals(groundObject, groundNode.dynamicMesh as GroundDynamicMesh, region ?? null, filteredChunkKeys)
 					} catch (_error) {
 						/* noop */
 					}
 				})
 			}
-			commitSculptSession(groundNode)
+			const committed = commitSculptSession(groundNode)
+			if (committed && groundObject) {
+				options.onSculptCommitApplied?.({
+					nodeId: groundNode.id,
+					groundObject,
+					definition: groundNode.dynamicMesh as GroundDynamicMesh,
+					region,
+				})
+			}
 		} else {
 			sculptSessionState = null
 		}

@@ -1136,6 +1136,8 @@ export interface GroundDynamicMesh {
   chunkStreamingEnabled?: boolean
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
+  /** Monotonic revision for changes that affect rendered ground surface heights. */
+  surfaceRevision?: number
   heightComposition: {
     mode: GroundHeightCompositionMode
     policyVersion?: number

@@ -174,7 +174,16 @@ export type GroundBaseHeightRegion = {
   values: Float32Array
 }
 
+type GroundBaseHeightGridCacheEntry = {
+  signature: string
+  rows: number
+  columns: number
+  values: Float32Array
+}
+
 const generationRuntimeCache = new Map<string, GenerationRuntime>()
+const groundBaseHeightGridCache = new Map<string, GroundBaseHeightGridCacheEntry>()
+const MAX_GROUND_BASE_HEIGHT_GRID_CACHE_ENTRIES = 4
 
 function buildGenerationSignature(settings: GroundGenerationSettings): string {
   const seed = settings.seed ?? ''
@@ -214,6 +223,97 @@ function getGenerationRuntime(settings: GroundGenerationSettings): GenerationRun
   }
   generationRuntimeCache.set(signature, runtime)
   return runtime
+}
+
+function buildGroundBaseHeightGridSignature(
+  mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
+): string {
+  const generation = mesh.generation ? normalizeGroundGenerationSettings(mesh.generation) : null
+  const generationSignature = generation ? buildGenerationSignature(generation) : 'none'
+  const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
+  const columns = Math.max(1, Math.trunc(mesh.columns))
+  const rows = Math.max(1, Math.trunc(mesh.rows))
+  const width = Number.isFinite(mesh.width) && mesh.width > 0 ? mesh.width : columns * cellSize
+  const depth = Number.isFinite(mesh.depth) && mesh.depth > 0 ? mesh.depth : rows * cellSize
+  return `${rows}|${columns}|${cellSize}|${width}|${depth}|${generationSignature}`
+}
+
+function getOrCreateGroundBaseHeightGrid(
+  mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
+): GroundBaseHeightGridCacheEntry {
+  const columns = Math.max(1, Math.trunc(mesh.columns))
+  const rows = Math.max(1, Math.trunc(mesh.rows))
+  const signature = buildGroundBaseHeightGridSignature(mesh)
+  const cached = groundBaseHeightGridCache.get(signature)
+  if (cached) {
+    groundBaseHeightGridCache.delete(signature)
+    groundBaseHeightGridCache.set(signature, cached)
+    return cached
+  }
+
+  const stride = columns + 1
+  const values = new Float32Array((rows + 1) * stride)
+  const entry: GroundBaseHeightGridCacheEntry = { signature, rows, columns, values }
+
+  const generation = mesh.generation
+  if (!generation) {
+    groundBaseHeightGridCache.set(signature, entry)
+    trimGroundBaseHeightGridCache()
+    return entry
+  }
+
+  const normalized = normalizeGroundGenerationSettings(generation)
+  const strength = normalized.noiseStrength ?? 1
+  if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0 || strength === 0) {
+    groundBaseHeightGridCache.set(signature, entry)
+    trimGroundBaseHeightGridCache()
+    return entry
+  }
+
+  const runtime = getGenerationRuntime(normalized)
+  const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
+  const width = Number.isFinite(mesh.width) && mesh.width > 0 ? mesh.width : columns * cellSize
+  const depth = Number.isFinite(mesh.depth) && mesh.depth > 0 ? mesh.depth : rows * cellSize
+  const halfWidth = width * 0.5
+  const halfDepth = depth * 0.5
+
+  for (let row = 0; row <= rows; row += 1) {
+    const baseOffset = row * stride
+    const z = -halfDepth + row * cellSize
+    const edgeRowFactor = normalized.edgeFalloff && normalized.edgeFalloff > 0
+      ? Math.pow(1 - Math.min(1, Math.abs((row / rows) * 2 - 1)), normalized.edgeFalloff)
+      : 1
+
+    for (let column = 0; column <= columns; column += 1) {
+      const x = -halfWidth + column * cellSize
+      let height = sampleBaseValue(runtime, x, z) * (normalized.noiseAmplitude ?? 0)
+      if (runtime.useDetail && runtime.detailNoise) {
+        height += runtime.detailNoise(x / runtime.detailScale, z / runtime.detailScale, 0.5) * runtime.detailAmplitude
+      }
+      height *= runtime.strength
+
+      if (normalized.edgeFalloff && normalized.edgeFalloff > 0) {
+        const edgeColumnFactor = Math.pow(1 - Math.min(1, Math.abs((column / columns) * 2 - 1)), normalized.edgeFalloff)
+        height *= Math.min(edgeRowFactor, edgeColumnFactor)
+      }
+
+      values[baseOffset + column] = height
+    }
+  }
+
+  groundBaseHeightGridCache.set(signature, entry)
+  trimGroundBaseHeightGridCache()
+  return entry
+}
+
+function trimGroundBaseHeightGridCache(): void {
+  while (groundBaseHeightGridCache.size > MAX_GROUND_BASE_HEIGHT_GRID_CACHE_ENTRIES) {
+    const oldestKey = groundBaseHeightGridCache.keys().next().value
+    if (!oldestKey) {
+      break
+    }
+    groundBaseHeightGridCache.delete(oldestKey)
+  }
 }
 
 function sampleBaseValue(runtime: GenerationRuntime, x: number, z: number): number {
@@ -276,47 +376,13 @@ export function computeGroundBaseHeightRegion(
     return { minRow, maxRow, minColumn, maxColumn, stride, values }
   }
 
-  const generation = mesh.generation
-  if (!generation) {
-    return { minRow, maxRow, minColumn, maxColumn, stride, values }
-  }
-
-  const normalized = normalizeGroundGenerationSettings(generation)
-  const strength = normalized.noiseStrength ?? 1
-  if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0 || strength === 0) {
-    return { minRow, maxRow, minColumn, maxColumn, stride, values }
-  }
-
-  const runtime = getGenerationRuntime(normalized)
-  const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
-  const width = Number.isFinite(mesh.width) && mesh.width > 0 ? mesh.width : columns * cellSize
-  const depth = Number.isFinite(mesh.depth) && mesh.depth > 0 ? mesh.depth : rows * cellSize
-  const halfWidth = width * 0.5
-  const halfDepth = depth * 0.5
-
+  const cachedGrid = getOrCreateGroundBaseHeightGrid(mesh)
+  const cachedStride = cachedGrid.columns + 1
   for (let row = minRow; row <= maxRow; row += 1) {
-    const localRow = row - minRow
-    const baseOffset = localRow * stride
-    const z = -halfDepth + row * cellSize
-    const edgeRowFactor = normalized.edgeFalloff && normalized.edgeFalloff > 0
-      ? Math.pow(1 - Math.min(1, Math.abs((row / rows) * 2 - 1)), normalized.edgeFalloff)
-      : 1
-
-    for (let column = minColumn; column <= maxColumn; column += 1) {
-      const x = -halfWidth + column * cellSize
-      let height = sampleBaseValue(runtime, x, z) * (normalized.noiseAmplitude ?? 0)
-      if (runtime.useDetail && runtime.detailNoise) {
-        height += runtime.detailNoise(x / runtime.detailScale, z / runtime.detailScale, 0.5) * runtime.detailAmplitude
-      }
-      height *= runtime.strength
-
-      if (normalized.edgeFalloff && normalized.edgeFalloff > 0) {
-        const edgeColumnFactor = Math.pow(1 - Math.min(1, Math.abs((column / columns) * 2 - 1)), normalized.edgeFalloff)
-        height *= Math.min(edgeRowFactor, edgeColumnFactor)
-      }
-
-      values[baseOffset + (column - minColumn)] = height
-    }
+    const sourceOffset = row * cachedStride + minColumn
+    const targetOffset = (row - minRow) * stride
+    const slice = cachedGrid.values.subarray(sourceOffset, sourceOffset + stride)
+    values.set(slice, targetOffset)
   }
 
   return { minRow, maxRow, minColumn, maxColumn, stride, values }
