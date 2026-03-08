@@ -350,7 +350,7 @@ async function createTerrainWaterSurface(options: {
   }
 
   const worldCenter = toWorldPoint(centroid2d, options.groundWidth, options.groundDepth, 0)
-  const surfaceY = 0 - PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
+  const surfaceY = options.groundHeightAt(worldCenter.x, worldCenter.z) - PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
   const expandedContour = expandWorldPolygonRadially(contour, PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M)
   const points = expandedContour.map((point) => ({ x: point.x, y: surfaceY, z: point.z }))
 

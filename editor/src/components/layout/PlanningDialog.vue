@@ -6457,6 +6457,10 @@ onBeforeUnmount(() => {
                 label="Water Type"
                 :disabled="propertyPanelDisabled || !terrainContourWaterPresetEnabled"
               />
+            </div>
+
+            <!-- Air Wall control block (separate) -->
+            <div v-if="selectedTerrainContourPolygon || propertyPanelLayerKind === 'green'" class="property-panel__block">
               <v-switch
                 v-model="airWallEnabledModel"
                 density="compact"
@@ -6464,8 +6468,7 @@ onBeforeUnmount(() => {
                 label="Air Wall"
               />
             </div>
-
-            <template v-else-if="propertyPanelLayerKind === 'green'">
+            <template v-if="propertyPanelLayerKind === 'green'">
               <div class="property-panel__density">
                 <div class="property-panel__density-row">
                   <v-switch
