@@ -696,9 +696,7 @@ function composeNodeMatrix(node: SceneNode): THREE.Matrix4 {
   const position = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
   const rotation = new THREE.Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ')
   const quaternion = new THREE.Quaternion().setFromEuler(rotation)
-  const transform = new THREE.Object3D()
-  applyMirroredScaleToObject(transform, node.scale, node.mirror)
-  const scale = transform.scale.clone()
+  const scale = new THREE.Vector3(node.scale.x, node.scale.y, node.scale.z)
   return new THREE.Matrix4().compose(position, quaternion, scale)
 }
 
