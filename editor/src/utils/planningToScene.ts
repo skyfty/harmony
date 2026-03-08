@@ -349,7 +349,6 @@ async function createTerrainWaterSurface(options: {
     return null
   }
 
-  const worldCenter = toWorldPoint(centroid2d, options.groundWidth, options.groundDepth, 0)
   const surfaceY = 0 - PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
   const expandedContour = expandWorldPolygonRadially(contour, PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M)
   const points = expandedContour.map((point) => ({ x: point.x, y: surfaceY, z: point.z }))
@@ -541,6 +540,25 @@ export function findPlanningConversionRootIds(nodes: SceneNode[]): string[] {
   return ids
 }
 
+function findPlanningConversionRoot(nodes: SceneNode[]): SceneNode | null {
+  const visit = (list: SceneNode[]): SceneNode | null => {
+    for (const node of list) {
+      const userData = node.userData ?? {}
+      if (userData[PLANNING_CONVERSION_ROOT_TAG] === true) {
+        return node
+      }
+      if (node.children?.length) {
+        const child = visit(node.children)
+        if (child) {
+          return child
+        }
+      }
+    }
+    return null
+  }
+  return visit(nodes)
+}
+
 export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningToSceneOptions['sceneStore']) {
   // 1) Remove previously converted scene nodes (walls/roads/floors/etc.).
   // Remove both:
@@ -585,6 +603,113 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
     }
     sceneStore.updateNodeDynamicMesh(groundNode.id, next)
   }
+}
+
+async function clearPlanningGeneratedContentIncremental(options: {
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore']
+  activeLayerIds: Set<string>
+  currentLayerIds: Set<string>
+  currentPolygonIds: Set<string>
+  currentPolylineIds: Set<string>
+  removeImages?: boolean
+}) {
+  const idsToRemove: string[] = []
+
+  const visit = (list: SceneNode[]) => {
+    for (const node of list) {
+      if (!node) continue
+      const userData = node.userData && typeof node.userData === 'object' && !Array.isArray(node.userData)
+        ? node.userData as Record<string, unknown>
+        : {}
+
+      if (userData[PLANNING_CONVERSION_ROOT_TAG] === true) {
+        if (node.children?.length) {
+          visit(node.children)
+        }
+        continue
+      }
+
+      if (userData.source === PLANNING_CONVERSION_SOURCE) {
+        const kind = typeof userData.kind === 'string' ? userData.kind : ''
+        const planningLayerId = typeof userData.planningLayerId === 'string' ? userData.planningLayerId : null
+        const planningFeatureId = typeof userData.planningFeatureId === 'string'
+          ? userData.planningFeatureId
+          : (typeof userData.ownerFeatureId === 'string' ? userData.ownerFeatureId : null)
+        const featureStillExists = planningFeatureId
+          ? (kind === 'guide-route'
+            ? options.currentPolylineIds.has(planningFeatureId)
+            : options.currentPolygonIds.has(planningFeatureId))
+          : true
+        const layerRemoved = planningLayerId ? !options.currentLayerIds.has(planningLayerId) : false
+        const layerRebuild = planningLayerId ? options.activeLayerIds.has(planningLayerId) : false
+        const shouldRemoveImage = options.removeImages === true && kind === 'image'
+
+        if (shouldRemoveImage || layerRemoved || layerRebuild || !featureStillExists) {
+          idsToRemove.push(node.id)
+          continue
+        }
+      }
+
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    }
+  }
+
+  visit(options.sceneStore.nodes)
+  if (idsToRemove.length) {
+    options.sceneStore.removeSceneNodes(idsToRemove)
+  }
+
+  const groundNode = findGroundNode(options.sceneStore.nodes)
+  if (!groundNode?.dynamicMesh || groundNode.dynamicMesh.type !== 'Ground') {
+    return
+  }
+
+  const previousSnapshot = groundNode.dynamicMesh.terrainScatter ?? null
+  const store = ensureScatterStore(groundNode.id, previousSnapshot)
+  const currentFeatureIds = new Set<string>([
+    ...options.currentPolygonIds,
+    ...options.currentPolylineIds,
+  ])
+
+  store.layers.forEach((layer) => {
+    const payload = layer.params?.payload
+    if (payload?.source !== PLANNING_CONVERSION_SOURCE) {
+      return
+    }
+
+    const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
+    const nextInstances = existingRaw.filter((instance) => {
+      const meta = instance.metadata as Record<string, unknown> | null | undefined
+      if (!meta || meta.source !== PLANNING_CONVERSION_SOURCE) {
+        return true
+      }
+
+      const planningLayerId = typeof meta.planningLayerId === 'string' ? meta.planningLayerId : null
+      const featureId = typeof meta.featureId === 'string' ? meta.featureId : null
+      const layerRemoved = planningLayerId ? !options.currentLayerIds.has(planningLayerId) : false
+      const layerRebuild = planningLayerId ? options.activeLayerIds.has(planningLayerId) : false
+      const featureRemoved = featureId ? !currentFeatureIds.has(featureId) : false
+      const shouldRemove = layerRemoved || layerRebuild || featureRemoved
+
+      if (shouldRemove) {
+        releaseScatterInstance(instance)
+      }
+      return !shouldRemove
+    })
+
+    if (nextInstances.length !== existingRaw.length) {
+      replaceTerrainScatterInstances(store, layer.id, nextInstances)
+    }
+  })
+
+  const snapshot = serializeTerrainScatterStore(store)
+  snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
+  options.sceneStore.updateNodeDynamicMesh(groundNode.id, {
+    ...groundNode.dynamicMesh,
+    terrainScatter: snapshot,
+  })
 }
 
 function resetGroundPlanningContours(definition: GroundDynamicMesh): { definition: GroundDynamicMesh; changed: boolean } {
@@ -1519,30 +1644,54 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     await yieldController.maybeYield(true)
   }
 
-  if (options.overwriteExisting) {
-    emitProgress(options, 'Removing existing converted content…', 10)
-    await clearPlanningGeneratedContent(sceneStore)
-    await yieldController.maybeYield(true)
-  }
-
-  emitProgress(options, 'Creating root group…', 15)
-  const root = sceneStore.addSceneNode({
-    nodeType: 'Group',
-    object: new THREE.Group(),
-    name: 'Planning 3D Scene',
-    canPrefab: false,
-    userData: {
-      [PLANNING_CONVERSION_ROOT_TAG]: true,
-      source: PLANNING_CONVERSION_SOURCE,
-      createdAt: Date.now(),
-    },
-  })
-  sceneStore.setNodeLocked(root.id, true)
-  await yieldController.maybeYield(true)
+  const activeLayerIds = planningData.layers
+    .filter((layer) => layer.conversionEnabled !== false)
+    .map((layer) => layer.id)
+  const activeLayerIdSet = new Set(activeLayerIds)
 
   // Collect features
   const rawPolygons = planningData.polygons as PlanningPolygonAny[]
   const rawPolylines = planningData.polylines as PlanningPolylineAny[]
+
+  if (options.overwriteExisting) {
+    emitProgress(options, 'Removing existing converted content…', 10)
+    await clearPlanningGeneratedContent(sceneStore)
+    await yieldController.maybeYield(true)
+  } else {
+    emitProgress(options, 'Preparing converted content…', 10)
+    await clearPlanningGeneratedContentIncremental({
+      sceneStore,
+      activeLayerIds: activeLayerIdSet,
+      currentLayerIds: new Set(planningData.layers.map((layer) => layer.id)),
+      currentPolygonIds: new Set(rawPolygons.map((poly) => poly.id)),
+      currentPolylineIds: new Set(rawPolylines.map((line) => line.id)),
+      removeImages: true,
+    })
+    await yieldController.maybeYield(true)
+  }
+
+  emitProgress(options, 'Preparing root group…', 15)
+  let root = findPlanningConversionRoot(sceneStore.nodes)
+  if (!root) {
+    const rootNodeId = await stableUuidV5('planning:root')
+    root = sceneStore.addSceneNode({
+      nodeId: rootNodeId,
+      nodeType: 'Group',
+      object: new THREE.Group(),
+      name: 'Planning 3D Scene',
+      canPrefab: false,
+      userData: {
+        [PLANNING_CONVERSION_ROOT_TAG]: true,
+        source: PLANNING_CONVERSION_SOURCE,
+        createdAt: Date.now(),
+      },
+    })
+  }
+  if (!root) {
+    throw new Error('Failed to create planning conversion root.')
+  }
+  sceneStore.setNodeLocked(root.id, true)
+  await yieldController.maybeYield(true)
 
   const polygons = rawPolygons.map((poly) => ({
     ...poly,
@@ -1562,10 +1711,16 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   const referencedScatterAssetIds = new Set<string>()
   for (const poly of polygons) {
+    if (!activeLayerIdSet.has(poly.layerId)) {
+      continue
+    }
     const id = extractScatterAssetId(poly.scatter)
     if (id) referencedScatterAssetIds.add(id)
   }
   for (const line of polylines) {
+    if (!activeLayerIdSet.has(line.layerId)) {
+      continue
+    }
     const id = extractScatterAssetId(line.scatter)
     if (id) referencedScatterAssetIds.add(id)
   }
@@ -1590,7 +1745,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     if (featuresByLayer.has(line.layerId)) featuresByLayer.get(line.layerId)!.polylines.push(line)
   })
 
-  const totalUnits = polygons.length + polylines.length + images.length
+  const totalUnits = polygons.filter((poly) => activeLayerIdSet.has(poly.layerId)).length
+    + polylines.filter((line) => activeLayerIdSet.has(line.layerId)).length
+    + images.length
   let doneUnits = 0
 
   // Terrain scatter preparation
@@ -1599,6 +1756,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const groundNode = findGroundNode(sceneStore.nodes)
   const groundDynamicMesh = groundNode?.dynamicMesh
   let groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
+  previousSnapshot = groundDefinition?.terrainScatter ?? null
 
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
@@ -1745,6 +1903,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Convert layer-by-layer
   for (const layerId of layerOrder) {
     throwIfAborted(options.signal)
+    if (!activeLayerIdSet.has(layerId)) {
+      continue
+    }
     const kind = resolveLayerKindFromPlanningData(planningData, layerId)
     if (!kind) continue
 
@@ -2163,6 +2324,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
                   metadata: {
                     source: PLANNING_CONVERSION_SOURCE,
                     featureId: poly.id,
+                    planningLayerId: layerId,
                   },
                 })
 

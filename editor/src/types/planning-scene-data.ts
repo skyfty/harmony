@@ -63,6 +63,7 @@ export interface PlanningLayerState {
   color: string
   visible: boolean
   locked: boolean
+  conversionEnabled?: boolean
 }
 
 export interface PlanningSceneData {

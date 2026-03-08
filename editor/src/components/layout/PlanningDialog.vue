@@ -111,6 +111,7 @@ interface PlanningLayer {
   visible: boolean
   color: string
   locked: boolean
+  conversionEnabled: boolean
 }
 
 interface PlanningPoint {
@@ -295,9 +296,9 @@ interface LineDraft {
 }
 
 const layerPresets: PlanningLayer[] = [
-  { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#6D4C41', locked: false },
-  { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
-  { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
+  { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#6D4C41', locked: false, conversionEnabled: true },
+  { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false, conversionEnabled: true },
+  { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false, conversionEnabled: true },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -1300,6 +1301,36 @@ function markPlanningDirty() {
   planningDirty = true
 }
 
+function setLayerConversionEnabled(layerId: string | null | undefined, enabled: boolean, options?: { markDirty?: boolean }) {
+  if (!layerId) {
+    return false
+  }
+  const layer = layers.value.find((item) => item.id === layerId)
+  if (!layer || layer.conversionEnabled === enabled) {
+    return false
+  }
+  layer.conversionEnabled = enabled
+  if (options?.markDirty !== false) {
+    markPlanningDirty()
+  }
+  return true
+}
+
+function enableLayerConversion(layerId: string | null | undefined) {
+  return setLayerConversionEnabled(layerId, true)
+}
+
+function setLayersConversionEnabled(layerIds: Iterable<string>, enabled: boolean) {
+  let changed = false
+  for (const layerId of layerIds) {
+    changed = setLayerConversionEnabled(layerId, enabled, { markDirty: false }) || changed
+  }
+  if (changed) {
+    markPlanningDirty()
+  }
+  return changed
+}
+
 type RulerGuideDragPhase = 'start' | 'move' | 'end' | 'cancel'
 type RulerGuideDragEvent = {
   phase: RulerGuideDragPhase
@@ -1348,6 +1379,7 @@ function buildPlanningSnapshot(): PlanningSceneData {
       color: layer.color,
       visible: layer.visible,
       locked: layer.locked,
+      conversionEnabled: layer.conversionEnabled !== false,
     })),
     viewTransform: {
       scale: viewTransform.scale,
@@ -1529,15 +1561,14 @@ async function handleConvertTo3DScene() {
   persistPlanningToSceneIfDirty({ force: true })
 
   const planningData = sceneStore.planningData
+  const convertedLayerIds = planningData?.layers
+    .filter((layer) => layer.conversionEnabled !== false)
+    .map((layer) => layer.id) ?? []
   convertingTo3DScene.value = true
 
   const abortController = new AbortController()
 
   try {
-    // Conversion uses stable feature ids as node ids and will re-use/update existing nodes.
-    // We still keep overwriteExisting=true so conversion can prune orphaned generated nodes.
-    const overwriteExisting = true
-
     uiStore.showLoadingOverlay({
       mode: 'determinate',
       progress: 0,
@@ -1567,7 +1598,7 @@ async function handleConvertTo3DScene() {
       await convertPlanningTo3DScene({
         sceneStore,
         planningData,
-        overwriteExisting,
+        overwriteExisting: false,
         signal: abortController.signal,
         onProgress: ({ step, progress }) => {
           if (abortController.signal.aborted) return
@@ -1580,6 +1611,11 @@ async function handleConvertTo3DScene() {
           })
         },
       })
+
+      if (convertedLayerIds.length) {
+        setLayersConversionEnabled(convertedLayerIds, false)
+        persistPlanningToSceneIfDirty({ force: true })
+      }
     }
 
     uiStore.updateLoadingOverlay({
@@ -1594,17 +1630,10 @@ async function handleConvertTo3DScene() {
   } catch (error) {
     const isAbort = isAbortError(error)
     if (isAbort) {
-      // Best-effort cleanup of partial conversion output.
-      try {
-        await clearPlanningGeneratedContent(sceneStore)
-      } catch {
-        // ignore
-      }
-
       uiStore.updateLoadingOverlay({
         mode: 'determinate',
         progress: 100,
-        message: '已取消',
+        message: '已取消，现有生成内容已保留。',
         closable: true,
         cancelable: false,
         autoClose: true,
@@ -1803,6 +1832,7 @@ function loadPlanningFromScene() {
     visible: layer.visible,
     color: layer.color,
     locked: layer.locked,
+    conversionEnabled: layer.conversionEnabled !== false,
   }))
 
   if (!layers.value.find((l) => l.id === activeLayerId.value)) {
@@ -2155,6 +2185,7 @@ const guideRouteWaypointNameModel = computed<string>({
     if (!info) return
     ensureGuideRouteWaypoints(info.line)
     info.line.waypoints![info.vertexIndex]!.name = value
+    enableLayerConversion(info.line.layerId)
     markPlanningDirty()
   },
 })
@@ -2171,6 +2202,7 @@ const guideRouteWaypointDockModel = computed<boolean>({
     if (!info) return
     ensureGuideRouteWaypoints(info.line)
     info.line.waypoints![info.vertexIndex]!.dock = value === true
+    enableLayerConversion(info.line.layerId)
     markPlanningDirty()
   },
 })
@@ -2219,6 +2251,7 @@ const terrainContourHeightModel = computed<number>({
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return
     poly.terrainHeightMeters = Math.round(clampNumberInput(value, 0, -1000, 1000) * 100) / 100
+    enableLayerConversion(poly.layerId)
     markPlanningDirty()
   },
 })
@@ -2235,6 +2268,7 @@ const terrainContourBlendModel = computed<number>({
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return
     poly.terrainBlendMeters = Math.round(clampNumberInput(value, 2, 0, 20) * 100) / 100
+    enableLayerConversion(poly.layerId)
     markPlanningDirty()
   },
 })
@@ -2258,6 +2292,7 @@ const terrainContourWaterPresetModel = computed<WaterPresetId | null>({
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return
     poly.terrainWaterPresetId = normalizeTerrainWaterPresetId(value)
+    enableLayerConversion(poly.layerId)
     markPlanningDirty()
   },
 })
@@ -2468,6 +2503,7 @@ const airWallEnabledModel = computed<boolean>({
       return
     }
     target.shape.airWallEnabled = Boolean(value)
+    enableLayerConversion(target.shape.layerId)
     markPlanningDirty()
   },
 })
@@ -2571,6 +2607,7 @@ function commitSelectedName(value: string) {
   const shape = selectedScatterTarget.value.shape
   shape.name = value
   selectedName.value = value
+  enableLayerConversion(shape.layerId)
   markPlanningDirty()
 }
 
@@ -2917,6 +2954,7 @@ function addPlanningLayer(kind: LayerKind) {
     visible: true,
     color: getDefaultLayerColor(kind),
     locked: false,
+    conversionEnabled: true,
   }
 
   // Newly created layers are placed on top (earlier in list)
@@ -2992,6 +3030,7 @@ function commitLayerRename(layerId: string) {
   const nextName = renamingLayerDraft.value.trim()
   if (nextName) {
     layer.name = nextName
+    enableLayerConversion(layerId)
     markPlanningDirty()
   }
   cancelLayerRename()
@@ -3532,6 +3571,8 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
     terrainWaterPresetId: targetKind === 'terrain' ? null : undefined,
   })
 
+  enableLayerConversion(targetLayerId)
+
   // Select the newly created polygon so its properties appear immediately
   selectFeature({ type: 'polygon', id: newId })
 }
@@ -3618,6 +3659,7 @@ function startLineDraft(point: PlanningPoint) {
         lineDraft.value = { lineId: newLine.id, layerId: sourceLine.layerId }
         lineDraftHoverPoint.value = null
         pendingLineHoverClient = null
+        enableLayerConversion(sourceLine.layerId)
         markPlanningDirty()
         return
       }
@@ -3646,6 +3688,7 @@ function startLineDraft(point: PlanningPoint) {
     lineDraft.value = { lineId: newLine.id, layerId: targetLayerId }
     lineDraftHoverPoint.value = null
     pendingLineHoverClient = null
+    enableLayerConversion(targetLayerId)
     markPlanningDirty()
     return
   }
@@ -3677,6 +3720,7 @@ function startLineDraft(point: PlanningPoint) {
   }
   lineDraftHoverPoint.value = null
   pendingLineHoverClient = null
+  enableLayerConversion(draftLine.layerId)
   markPlanningDirty()
 }
 
@@ -3703,6 +3747,7 @@ function beginLineDraftFromPoint(point: PlanningPoint, layerId: string) {
   pendingLineHoverClient = null
   selectFeature({ type: 'polyline', id: newLine.id })
   selectedVertex.value = { feature: 'polyline', targetId: newLine.id, vertexIndex: 0 }
+  enableLayerConversion(layerId)
   markPlanningDirty()
 }
 
@@ -3813,6 +3858,7 @@ function deleteSelectedFeature() {
     polygons.value = polygons.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
     selectedVertex.value = null
+    enableLayerConversion(layerIdBefore)
     markPlanningDirty()
     // Persist immediately so scene updates (e.g. clearing planning terrain) take effect
     persistPlanningToSceneIfDirty({ force: true })
@@ -3823,6 +3869,7 @@ function deleteSelectedFeature() {
     polylines.value = polylines.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
     selectedVertex.value = null
+    enableLayerConversion(layerIdBefore)
     markPlanningDirty()
     persistPlanningToSceneIfDirty({ force: true })
     return
@@ -3836,6 +3883,7 @@ function deleteSelectedFeature() {
     polylines.value = polylines.value.filter((item) => item.id !== feature.lineId)
     selectedFeature.value = null
     selectedVertex.value = null
+    enableLayerConversion(layerIdBefore)
     markPlanningDirty()
     persistPlanningToSceneIfDirty({ force: true })
     return
@@ -3851,6 +3899,7 @@ function deleteSelectedFeature() {
   // Deleting a road segment can split a component; re-normalize.
   normalizeRoadLayerIfNeeded(layerIdBefore)
 
+  enableLayerConversion(layerIdBefore)
   markPlanningDirty()
   // Persist so the scene reflects the edit immediately
   persistPlanningToSceneIfDirty({ force: true })
@@ -3873,12 +3922,8 @@ function handleToolSelect(tool: PlanningTool) {
   currentTool.value = tool
 }
 
-function handleLayerToggle(layerId: string) {
-  const layer = layers.value.find((item) => item.id === layerId)
-  if (layer) {
-    layer.visible = !layer.visible
-    markPlanningDirty()
-  }
+function handleLayerConversionToggle(layerId: string, enabled: boolean) {
+  setLayerConversionEnabled(layerId, enabled)
 }
 
 function handleLayerLockToggle(layerId: string) {
@@ -3986,6 +4031,7 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
   }
 
   // Mark the planning as changed so it will be persisted or converted later
+  enableLayerConversion(target.shape.layerId)
   markPlanningDirty()
 }
 
@@ -4004,6 +4050,7 @@ const scatterDensityPercentModel = computed<number>({
       return
     }
     target.shape.scatter.densityPercent = clampDensityPercent(value)
+    enableLayerConversion(target.shape.layerId)
     markPlanningDirty()
   },
 })
@@ -4432,6 +4479,22 @@ async function handlePointerUp(event: PointerEvent) {
         // eslint-disable-next-line no-console
         console.warn('Failed to persist planning layers after pointer up', e)
       }
+      if (state.type === 'move-polygon') {
+        const polygon = polygons.value.find((item) => item.id === state.polygonId)
+        enableLayerConversion(polygon?.layerId)
+      } else if (state.type === 'move-polyline') {
+        const line = polylines.value.find((item) => item.id === state.lineId)
+        enableLayerConversion(line?.layerId)
+      } else if (state.type === 'drag-vertex') {
+        if (state.feature === 'polygon') {
+          const polygon = polygons.value.find((item) => item.id === state.targetId)
+          enableLayerConversion(polygon?.layerId)
+        } else if (didMovePolylineVertex) {
+          const line = polylines.value.find((item) => item.id === state.targetId)
+          enableLayerConversion(line?.layerId)
+        }
+      }
+
       markPlanningDirty()
 
       // Road drags can create/remove connections; normalize when an edit ends.
@@ -5776,10 +5839,22 @@ onBeforeUnmount(() => {
                     />
                     <template v-else>
                       {{ layer.name }}
+                      <span v-if="layer.conversionEnabled === false" class="layer-conversion-chip">Cached</span>
                     </template>
                   </div>
                 </div>
                 <template #append>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    :color="layer.conversionEnabled ? 'primary' : 'grey'"
+                    class="layer-conversion-toggle"
+                    :title="layer.conversionEnabled ? 'Disable layer conversion' : 'Enable layer conversion'"
+                    @click.stop="handleLayerConversionToggle(layer.id, !layer.conversionEnabled)"
+                  >
+                    <v-icon>{{ layer.conversionEnabled ? 'mdi-refresh-auto' : 'mdi-check-circle-outline' }}</v-icon>
+                  </v-btn>
                   <v-btn
                     icon
                     size="small"
@@ -5798,15 +5873,6 @@ onBeforeUnmount(() => {
                     @click.stop="handleLayerLockToggle(layer.id)"
                   >
                     <v-icon>{{ layer.locked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline' }}</v-icon>
-                  </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    :color="layer.visible ? 'primary' : 'grey'"
-                    @click.stop="handleLayerToggle(layer.id)"
-                  >
-                    <v-icon>{{ layer.visible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
                   </v-btn>
                 </template>
               </v-list-item>
@@ -6469,16 +6535,6 @@ onBeforeUnmount(() => {
               />
             </div>
             <template v-if="propertyPanelLayerKind === 'green'">
-              <div class="property-panel__density">
-                <div class="property-panel__density-row">
-                  <v-switch
-                    v-model="airWallEnabledModel"
-                    density="compact"
-                    hide-details
-                    label="Air Wall"
-                  />
-                </div>
-              </div>
 
 
               <div class="property-panel__density">
@@ -6649,6 +6705,24 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+.layer-conversion-toggle {
+  margin-inline-end: 4px;
+}
+
+.layer-conversion-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .property-panel__density {
   margin-top: 12px;
   padding: 10px 12px;
@@ -6663,6 +6737,9 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .property-panel__density-title {
