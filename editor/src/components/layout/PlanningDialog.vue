@@ -21,6 +21,7 @@ import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
 
 import type {
   PlanningGuideData,
+  PlanningScatterAssignmentData,
   PlanningPolygonData,
   PlanningPolylineData,
   PlanningSceneData,
@@ -129,19 +130,7 @@ type RectResizeConstraint = {
   cornerKeyByIndex: Record<number, RectCornerKey>
 }
 
-interface PlanningScatterAssignment {
-  providerAssetId: string
-  assetId: string
-  category: TerrainScatterCategory
-  name: string
-  thumbnail: string | null
-  /** 0-100. Default is 19 for green polygons, otherwise 50. Used to scale generated scatter count. */
-  densityPercent: number
-  /** Model bounding-box footprint area (m^2), used for capacity estimation. */
-  footprintAreaM2: number
-  /** Model bounding-box max side length (m), used to avoid overlap in dot preview. */
-  footprintMaxSizeM: number
-}
+type PlanningScatterAssignment = PlanningScatterAssignmentData
 
 interface PlanningPolygon {
   id: string
@@ -165,6 +154,63 @@ function normalizeTerrainWaterPresetId(value: unknown): WaterPresetId | null {
   return typeof value === 'string' && terrainWaterPresetIds.has(value as WaterPresetId)
     ? value as WaterPresetId
     : null
+}
+
+function normalizePlanningScatterAssignment(raw: PlanningScatterAssignmentData | null | undefined): PlanningScatterAssignment | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined
+  }
+
+  const assetId = typeof raw.assetId === 'string' ? raw.assetId.trim() : ''
+  const providerAssetId = typeof raw.providerAssetId === 'string' ? raw.providerAssetId.trim() : ''
+  const category = raw.category
+  if (!assetId || !providerAssetId || !(category in terrainScatterPresets)) {
+    return undefined
+  }
+
+  const footprintAreaM2 = clampFootprintAreaM2(assetId, category, raw.footprintAreaM2)
+  const footprintMaxSizeM = clampFootprintMaxSizeM(
+    assetId,
+    category,
+    raw.footprintMaxSizeM,
+    footprintAreaM2,
+  )
+
+  return {
+    providerAssetId,
+    assetId,
+    category,
+    name: typeof raw.name === 'string' ? raw.name : '',
+    thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : null,
+    densityPercent: clampDensityPercent(raw.densityPercent),
+    footprintAreaM2,
+    footprintMaxSizeM,
+  }
+}
+
+function serializePlanningScatterAssignment(scatter: PlanningScatterAssignment | null | undefined): PlanningScatterAssignmentData | undefined {
+  if (!scatter) {
+    return undefined
+  }
+
+  const footprintAreaM2 = clampFootprintAreaM2(scatter.assetId, scatter.category, scatter.footprintAreaM2)
+  const footprintMaxSizeM = clampFootprintMaxSizeM(
+    scatter.assetId,
+    scatter.category,
+    scatter.footprintMaxSizeM,
+    footprintAreaM2,
+  )
+
+  return {
+    providerAssetId: scatter.providerAssetId,
+    assetId: scatter.assetId,
+    category: scatter.category,
+    name: scatter.name,
+    thumbnail: scatter.thumbnail,
+    densityPercent: clampDensityPercent(scatter.densityPercent),
+    footprintAreaM2,
+    footprintMaxSizeM,
+  }
 }
 
 interface PlanningPolyline {
@@ -1402,27 +1448,7 @@ function buildPlanningSnapshot(): PlanningSceneData {
         ? normalizeTerrainWaterPresetId(poly.terrainWaterPresetId)
         : undefined,
       airWallEnabled: poly.airWallEnabled ? true : undefined,
-      scatter: poly.scatter
-        ? (() => {
-          const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.assetId, poly.scatter.category, poly.scatter.footprintAreaM2)
-          const footprintMaxSizeM = clampFootprintMaxSizeM(
-            poly.scatter.assetId,
-            poly.scatter.category,
-            poly.scatter.footprintMaxSizeM,
-            footprintAreaM2,
-          )
-          return {
-            providerAssetId: poly.scatter.providerAssetId,
-            assetId: poly.scatter.assetId,
-            category: poly.scatter.category,
-            name: poly.scatter.name,
-            thumbnail: poly.scatter.thumbnail,
-            densityPercent: clampDensityPercent(poly.scatter.densityPercent),
-            footprintAreaM2,
-            footprintMaxSizeM,
-          }
-        })()
-        : undefined,
+      scatter: serializePlanningScatterAssignment(poly.scatter),
     })),
     polylines: polylines.value.map((line) => ({
       id: line.id,
@@ -1438,27 +1464,7 @@ function buildPlanningSnapshot(): PlanningSceneData {
           : undefined)
         : undefined,
       airWallEnabled: line.airWallEnabled ? true : undefined,
-      scatter: line.scatter
-        ? (() => {
-          const footprintAreaM2 = clampFootprintAreaM2(line.scatter.assetId, line.scatter.category, line.scatter.footprintAreaM2)
-          const footprintMaxSizeM = clampFootprintMaxSizeM(
-            line.scatter.assetId,
-            line.scatter.category,
-            line.scatter.footprintMaxSizeM,
-            footprintAreaM2,
-          )
-          return {
-            providerAssetId: line.scatter.providerAssetId,
-            assetId: line.scatter.assetId,
-            category: line.scatter.category,
-            name: line.scatter.name,
-            thumbnail: line.scatter.thumbnail,
-            densityPercent: clampDensityPercent(line.scatter.densityPercent),
-            footprintAreaM2,
-            footprintMaxSizeM,
-          }
-        })()
-        : undefined,
+      scatter: undefined,
     })),
     images: planningImages.value.map((img) => ({
       id: img.id,
@@ -1556,6 +1562,8 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
 
 async function handleConvertTo3DScene() {
   if (convertingTo3DScene.value) return
+
+  endScatterControlsInteraction()
 
   // Ensure latest edits are persisted before conversion.
   persistPlanningToSceneIfDirty({ force: true })
@@ -1822,6 +1830,8 @@ function loadPlanningFromScene() {
     planningGuides.value = data.guides.map((guide: PlanningGuideData) => normalizeGuide(guide)).filter((g): g is PlanningGuide => !!g)
   }
 
+  planningTerrain.value = normalizePlanningTerrain(data.terrain)
+
   if (data.activeLayerId) {
     activeLayerId.value = data.activeLayerId
   }
@@ -1874,7 +1884,7 @@ function loadPlanningFromScene() {
       })(),
       terrainWaterPresetId: normalizeTerrainWaterPresetId(poly.terrainWaterPresetId),
       airWallEnabled: Boolean(poly.airWallEnabled),
-      scatter: undefined,
+      scatter: normalizePlanningScatterAssignment(poly.scatter),
     }))
     : []
 
@@ -2130,6 +2140,14 @@ const selectedScatterTarget = computed<ScatterTarget | null>(() => {
   return null
 })
 
+const selectedGreenScatterTarget = computed<Extract<ScatterTarget, { type: 'polygon' }> | null>(() => {
+  const target = selectedScatterTarget.value
+  if (!target || target.type !== 'polygon' || target.layer?.kind !== 'green') {
+    return null
+  }
+  return target
+})
+
 function isGuideRoutePolyline(line: PlanningPolyline | null | undefined): boolean {
   if (!line) return false
   return getLayerKind(line.layerId) === 'guide-route'
@@ -2207,7 +2225,7 @@ const guideRouteWaypointDockModel = computed<boolean>({
   },
 })
 
-const selectedScatterAssignment = computed(() => selectedScatterTarget.value?.shape.scatter ?? null)
+const selectedScatterAssignment = computed(() => selectedGreenScatterTarget.value?.shape.scatter ?? null)
 
 const selectedImage = computed<PlanningImage | null>(() => {
   return planningImages.value.find((img) => img.id === activeImageId.value) ?? null
@@ -2579,6 +2597,7 @@ watch(dialogOpen, (open) => {
       requestAnimationFrame(() => updateEditorRect())
     })
   } else {
+    endScatterControlsInteraction()
     cancelActiveDrafts()
     selectedFeature.value = null
     // Persist on close even if some edits forgot to mark dirty.
@@ -3952,8 +3971,7 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
     return
   }
 
-  // Target must be a polygon or polyline and must exist to proceed
-  const target = selectedScatterTarget.value
+  const target = selectedGreenScatterTarget.value
   if (!target) {
     return
   }
@@ -3967,9 +3985,9 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
   // Thumbnail may be used for UI preview (null if the asset doesn't have one)
   const thumbnail = payload.asset.thumbnail ?? null
 
-  // If the target already has a density set, try to preserve it; otherwise use a default (green polygons default to lower density)
+  // If the target already has a density set, preserve it; otherwise use the green-polygon default.
   const existingDensity = target.shape.scatter?.densityPercent
-  const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 100 : 50
+  const defaultDensity = 100
 
   // Ensure model bounds are cached (may trigger async download/parse) so footprint can be inferred from the bounding box
   await ensureModelBoundsCachedForAsset(payload.asset)
@@ -4015,7 +4033,7 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
     footprintAreaM2,
   )
 
-  // Write scatter assignment object into the selected shape's (polygon or polyline) scatter field.
+  // Write scatter assignment object into the selected green polygon's scatter field.
   // Field meanings: providerAssetId/assetId locate the model during conversion; category specifies the scatter preset type,
   // name/thumbnail used for UI display; densityPercent controls generation proportion; footprint* used for capacity estimation to avoid overlaps.
   target.shape.scatter = {
@@ -4041,12 +4059,8 @@ const scatterDensityPercentModel = computed<number>({
     if (propertyPanelDisabled.value) {
       return
     }
-    const target = selectedScatterTarget.value
+    const target = selectedGreenScatterTarget.value
     if (!target?.shape.scatter) {
-      return
-    }
-    // Only meaningful for green polygons (planning -> terrain scatter).
-    if (target.type !== 'polygon' || target.layer?.kind !== 'green') {
       return
     }
     target.shape.scatter.densityPercent = clampDensityPercent(value)
@@ -4069,11 +4083,9 @@ const scatterDensityPercentSliderModel = computed<number>({
 })
 
 const scatterDensityEnabled = computed(() => {
-  const target = selectedScatterTarget.value
+  const target = selectedGreenScatterTarget.value
   return !propertyPanelDisabled.value
     && !!target
-    && target.type === 'polygon'
-    && target.layer?.kind === 'green'
     && !!target.shape.scatter
 })
 
@@ -6534,7 +6546,7 @@ onBeforeUnmount(() => {
                 label="Air Wall"
               />
             </div>
-            <template v-if="propertyPanelLayerKind === 'green'">
+            <template v-if="selectedGreenScatterTarget">
 
 
               <div class="property-panel__density">

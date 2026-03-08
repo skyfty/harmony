@@ -28,7 +28,13 @@ import {
 } from '@/utils/scatterSampling'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
-import type { PlanningImageData, PlanningPolygonData, PlanningPolylineData, PlanningSceneData } from '@/types/planning-scene-data'
+import type {
+  PlanningImageData,
+  PlanningPolygonData,
+  PlanningPolylineData,
+  PlanningSceneData,
+  PlanningScatterAssignmentData,
+} from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -147,27 +153,8 @@ type SnapshotWithUpdatedAt = {
   } | null
 }
 
-type RawScatterPayload = {
-  providerAssetId?: string
-  assetId?: string
-  category?: TerrainScatterCategory
-  name?: string
-  thumbnail?: string | null
-  densityPercent?: number
-  footprintAreaM2?: number
-  footprintMaxSizeM?: number
-}
-
 type NodeComponentWithId = {
   id?: string
-}
-
-type PlanningPolygonAny = PlanningPolygonData & {
-  scatter?: RawScatterPayload
-}
-
-type PlanningPolylineAny = PlanningPolylineData & {
-  scatter?: RawScatterPayload
 }
 
 function getNodeComponent(node: SceneNode, componentType: string): NodeComponentWithId | undefined {
@@ -185,6 +172,12 @@ function monotonicUpdatedAt(previousSnapshot: SnapshotWithUpdatedAt | null | und
     return prev + 1
   }
   return next <= prev ? prev + 1 : next
+}
+
+function bumpTerrainScatterInstancesUpdatedAt(previousUpdatedAt: number | null | undefined): number {
+  const prev = Number(previousUpdatedAt)
+  const now = Date.now()
+  return Number.isFinite(prev) ? Math.max(now, prev + 1) : now
 }
 
 // Safety cap to avoid runaway instance generation on huge polygons.
@@ -321,7 +314,7 @@ async function createTerrainWaterSurface(options: {
   sceneStore: ConvertPlanningToSceneOptions['sceneStore']
   rootNodeId: string
   planningLayerId: string
-  poly: PlanningPolygonAny
+  poly: PlanningPolygonData
   groundWidth: number
   groundDepth: number
   groundHeightAt: (x: number, z: number) => number
@@ -600,6 +593,7 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
     const next = {
       ...nextGroundDynamicMesh,
       terrainScatter: snapshot,
+      terrainScatterInstancesUpdatedAt: bumpTerrainScatterInstancesUpdatedAt(nextGroundDynamicMesh.terrainScatterInstancesUpdatedAt),
     }
     sceneStore.updateNodeDynamicMesh(groundNode.id, next)
   }
@@ -709,6 +703,7 @@ async function clearPlanningGeneratedContentIncremental(options: {
   options.sceneStore.updateNodeDynamicMesh(groundNode.id, {
     ...groundNode.dynamicMesh,
     terrainScatter: snapshot,
+    terrainScatterInstancesUpdatedAt: bumpTerrainScatterInstancesUpdatedAt(groundNode.dynamicMesh.terrainScatterInstancesUpdatedAt),
   })
 }
 
@@ -912,7 +907,7 @@ function expandWorldPolygonRadially(
   })
 }
 
-function normalizeScatter(raw: RawScatterPayload | null | undefined): ScatterAssignment | null {
+function normalizeScatter(raw: PlanningScatterAssignmentData | null | undefined): ScatterAssignment | null {
   if (!raw) return null
   const assetId = typeof raw.assetId === 'string' ? raw.assetId.trim() : ''
   const category = raw.category ?? null
@@ -927,7 +922,7 @@ function normalizeScatter(raw: RawScatterPayload | null | undefined): ScatterAss
   return { assetId, category, name, densityPercent: normalizedDensity, footprintAreaM2, footprintMaxSizeM }
 }
 
-function extractScatterAssetId(raw: RawScatterPayload | null | undefined): string | null {
+function extractScatterAssetId(raw: PlanningScatterAssignmentData | null | undefined): string | null {
   const assetId = typeof raw?.assetId === 'string' ? raw.assetId.trim() : ''
   return assetId.length ? assetId : null
 }
@@ -1328,7 +1323,7 @@ async function blurHeightGrid(
 
 async function applyPlanningTerrainContoursToGround(options: {
   definition: GroundDynamicMesh
-  contourPolygons: PlanningPolygonAny[]
+  contourPolygons: PlanningPolygonData[]
   signal?: AbortSignal
   yieldController: ReturnType<typeof createYieldController>
   blendMeters?: number
@@ -1650,8 +1645,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const activeLayerIdSet = new Set(activeLayerIds)
 
   // Collect features
-  const rawPolygons = planningData.polygons as PlanningPolygonAny[]
-  const rawPolylines = planningData.polylines as PlanningPolylineAny[]
+  const rawPolygons = planningData.polygons
+  const rawPolylines = planningData.polylines
 
   if (options.overwriteExisting) {
     emitProgress(options, 'Removing existing converted content…', 10)
@@ -1735,7 +1730,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   const layerOrder: string[] = resolveLayerOrderFromPlanningData(planningData)
 
-  const featuresByLayer = new Map<string, { polygons: PlanningPolygonAny[]; polylines: PlanningPolylineAny[] }>()
+  const featuresByLayer = new Map<string, { polygons: PlanningPolygonData[]; polylines: PlanningPolylineData[] }>()
   layerOrder.forEach((id) => featuresByLayer.set(id, { polygons: [], polylines: [] }))
 
   polygons.forEach((poly) => {
@@ -2353,6 +2348,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const next = {
         ...finalGround.dynamicMesh,
         terrainScatter: snapshot,
+        terrainScatterInstancesUpdatedAt: bumpTerrainScatterInstancesUpdatedAt(finalGround.dynamicMesh.terrainScatterInstancesUpdatedAt),
       }
       sceneStore.updateNodeDynamicMesh(finalGround.id, next)
     }

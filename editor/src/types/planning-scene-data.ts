@@ -1,10 +1,22 @@
 import type { WaterPresetId } from '@schema/components'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 
 export interface PlanningPoint {
   /** Optional stable vertex id; used to reconstruct shared vertices across polylines. */
   id?: string
   x: number
   y: number
+}
+
+export interface PlanningScatterAssignmentData {
+  providerAssetId: string
+  assetId: string
+  category: TerrainScatterCategory
+  name: string
+  thumbnail: string | null
+  densityPercent: number
+  footprintAreaM2: number
+  footprintMaxSizeM: number
 }
 
 export interface PlanningPolygonData {
@@ -20,6 +32,8 @@ export interface PlanningPolygonData {
   terrainWaterPresetId?: WaterPresetId | null
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
+  /** Optional green-layer scatter assignment metadata used during planning -> 3D conversion. */
+  scatter?: PlanningScatterAssignmentData
 }
 
 export interface PlanningPolylineData {
@@ -34,6 +48,8 @@ export interface PlanningPolylineData {
   }>
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
+  /** Optional legacy scatter assignment metadata. Current conversion support is polygon-only. */
+  scatter?: PlanningScatterAssignmentData
 }
 
 export interface PlanningImageData {
