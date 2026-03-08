@@ -27,6 +27,7 @@ import AutoTourPanel from '@/components/inspector/AutoTourPanel.vue'
 import PurePursuitPanel from '@/components/inspector/PurePursuitPanel.vue'
 import PreloadablePanel from '@/components/inspector/PreloadablePanel.vue'
 import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
+import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
 import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema'
@@ -42,6 +43,7 @@ import {
   PROTAGONIST_COMPONENT_TYPE,
   PRELOADABLE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
+  PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
@@ -550,6 +552,7 @@ watch(
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />
               <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />
+              <PlanningImagesPanel v-else-if="component.type === PLANNING_IMAGES_COMPONENT_TYPE" />
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />
               <RigidbodyPanel

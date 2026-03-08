@@ -212,6 +212,7 @@ import { rebuildProceduralRuntimeObjects } from '@/utils/proceduralRuntime'
 import { resetScatterInstanceBinding } from '@/utils/terrainScatterRuntime'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { persistPlanningImageLayersToIndexedDB } from '@/utils/planningImageStorage'
+import { installPlanningImagesResolver } from '@/utils/planningImageComponentResolver'
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
@@ -227,6 +228,7 @@ import type {
   WallComponentProps,
   RoadComponentProps,
   FloorComponentProps,
+  PlanningImagesComponentProps,
   WarpGateComponentProps,
   WaterComponentProps,
 } from '@schema/components'
@@ -280,6 +282,9 @@ import {
   WATER_COMPONENT_TYPE,
   clampWaterComponentProps,
   cloneWaterComponentProps,
+  PLANNING_IMAGES_COMPONENT_TYPE,
+  clampPlanningImagesComponentProps,
+  clonePlanningImagesComponentProps,
 } from '@schema/components'
 import {
   LOD_COMPONENT_TYPE,
@@ -302,6 +307,7 @@ type NodeComponentPropsByType = {
   [VIEW_POINT_COMPONENT_TYPE]: ViewPointComponentProps
   [WARP_GATE_COMPONENT_TYPE]: WarpGateComponentProps
   [DISPLAY_BOARD_COMPONENT_TYPE]: DisplayBoardComponentProps
+  [PLANNING_IMAGES_COMPONENT_TYPE]: PlanningImagesComponentProps
   [EFFECT_COMPONENT_TYPE]: EffectComponentProps
   [PROTAGONIST_COMPONENT_TYPE]: ProtagonistComponentProps
   [ONLINE_COMPONENT_TYPE]: OnlineComponentProps
@@ -320,6 +326,8 @@ type AddNodeComponentResult<T extends NodeComponentType> = {
   component: SceneNodeComponentState<NodeComponentPropsOf<T>>
   created: boolean
 }
+
+installPlanningImagesResolver()
 
 function inferVehicleWheelsFromNode(
   chassisNode: SceneNode,
@@ -408,7 +416,8 @@ function isPrefabDependencyPlaceholderAsset(asset: ProjectAsset): boolean {
 type AssetRegistrationOptions = {
   categoryIdForAsset: (asset: ProjectAsset) => string
   sourceForAsset: (asset: ProjectAsset) => AssetSourceMetadata | undefined
-  internalForAsset: (asset: ProjectAsset) => boolean
+  internalForAsset: (asset: ProjectAsset) => boolean | undefined
+  editorOnlyForAsset: (asset: ProjectAsset) => boolean | undefined
 }
 
 function upsertAssetsIntoCatalogAndIndex(
@@ -436,10 +445,10 @@ function upsertAssetsIntoCatalogAndIndex(
     seen.add(assetId)
 
     const categoryId = options.categoryIdForAsset(asset)
-    const source = options.sourceForAsset(asset)
-    const internal = options.internalForAsset(asset)
-
     const existingEntry = nextIndex[assetId]
+    const source = options.sourceForAsset(asset) ?? existingEntry?.source
+    const internal = options.internalForAsset(asset) ?? existingEntry?.internal
+    const isEditorOnly = options.editorOnlyForAsset(asset) ?? existingEntry?.isEditorOnly
     if (existingEntry?.categoryId && nextCatalog[existingEntry.categoryId]) {
       nextCatalog[existingEntry.categoryId] = nextCatalog[existingEntry.categoryId]!.filter((item) => item.id !== assetId)
     }
@@ -452,6 +461,7 @@ function upsertAssetsIntoCatalogAndIndex(
       categoryId,
       source,
       internal,
+      isEditorOnly,
     }
 
     registeredAssets.push(registeredAsset)
@@ -3950,6 +3960,8 @@ function replaceAssetIdReferences(scene: StoredSceneDocument, previousId: string
       scene.assetIndex[nextId] = {
         categoryId: previousIndex.categoryId,
         source: { type: 'local' },
+        internal: previousIndex.internal,
+        isEditorOnly: previousIndex.isEditorOnly,
       }
     } else if (extracted) {
       scene.assetIndex[nextId] = {
@@ -4806,6 +4818,7 @@ function filterAssetIndexByUsage(
       categoryId: entry.categoryId,
       source: entry.source ? { ...entry.source } : undefined,
       internal: entry.internal,
+      isEditorOnly: entry.isEditorOnly,
     }
   })
   return filtered
@@ -4848,6 +4861,7 @@ function buildAssetIndexSubsetForPrefab(
     subset[assetId] = {
       categoryId: entry.categoryId,
       source: entry.source ? { ...entry.source } : undefined,
+      isEditorOnly: entry.isEditorOnly,
     }
   }
   return Object.keys(subset).length ? subset : undefined
@@ -4905,6 +4919,8 @@ function mergeAssetIndexEntries(
       next[assetId] = {
         categoryId: entry.categoryId,
         source: entry.source ? { ...entry.source } : undefined,
+        internal: entry.internal,
+        isEditorOnly: entry.isEditorOnly,
       }
       changed = true
       return
@@ -4917,6 +4933,18 @@ function mergeAssetIndexEntries(
       updated = {
         ...(updated ?? existing),
         source: { ...entry.source },
+      }
+    }
+    if (existing.internal !== true && entry.internal === true) {
+      updated = {
+        ...(updated ?? existing),
+        internal: true,
+      }
+    }
+    if (existing.isEditorOnly !== true && entry.isEditorOnly === true) {
+      updated = {
+        ...(updated ?? existing),
+        isEditorOnly: true,
       }
     }
     if (updated) {
@@ -5116,6 +5144,8 @@ function cloneAssetIndex(index: Record<string, AssetIndexEntry>): Record<string,
     clone[assetId] = {
       categoryId: entry.categoryId,
       source: entry.source ? { ...entry.source } : undefined,
+      internal: entry.internal,
+      isEditorOnly: entry.isEditorOnly,
     }
   })
   return clone
@@ -9302,6 +9332,7 @@ export const useSceneStore = defineStore('scene', {
         description?: string
         previewColor?: string
         gleaned?: boolean
+        isEditorOnly?: boolean
         commitOptions?: { updateNodes?: boolean }
       },
     ): Promise<{ asset: ProjectAsset; isNew: boolean }> {
@@ -9344,6 +9375,7 @@ export const useSceneStore = defineStore('scene', {
       const registered = this.registerAsset(projectAsset, {
         categoryId: determineAssetCategoryId(projectAsset),
         source: { type: 'local' },
+        isEditorOnly: metadata.isEditorOnly,
         commitOptions: metadata.commitOptions ?? { updateNodes: false },
       })
 
@@ -9356,6 +9388,7 @@ export const useSceneStore = defineStore('scene', {
         categoryId?: string | ((asset: ProjectAsset) => string)
         source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
         internal?: boolean | ((asset: ProjectAsset) => boolean)
+        isEditorOnly?: boolean | ((asset: ProjectAsset) => boolean)
         commitOptions?: { updateNodes?: boolean }
       } = {},
     ): ProjectAsset[] {
@@ -9381,18 +9414,31 @@ export const useSceneStore = defineStore('scene', {
         return options.source
       }
 
-      const internalForAsset = (asset: ProjectAsset): boolean => {
+      const internalForAsset = (asset: ProjectAsset): boolean | undefined => {
+        if (typeof options.internal === 'undefined') {
+          return undefined
+        }
         if (typeof options.internal === 'function') {
           return Boolean(options.internal(asset))
         }
         return Boolean(options.internal)
       }
 
+      const editorOnlyForAsset = (asset: ProjectAsset): boolean | undefined => {
+        if (typeof options.isEditorOnly === 'undefined') {
+          return undefined
+        }
+        if (typeof options.isEditorOnly === 'function') {
+          return Boolean(options.isEditorOnly(asset))
+        }
+        return Boolean(options.isEditorOnly)
+      }
+
       const { nextCatalog, nextIndex, registeredAssets, sourceByAssetId } = upsertAssetsIntoCatalogAndIndex(
         this.assetCatalog,
         this.assetIndex,
         normalizedAssets,
-        { categoryIdForAsset, sourceForAsset, internalForAsset },
+        { categoryIdForAsset, sourceForAsset, internalForAsset, editorOnlyForAsset },
       )
 
       if (!registeredAssets.length) {
@@ -9410,13 +9456,20 @@ export const useSceneStore = defineStore('scene', {
 
     registerAsset(
       asset: ProjectAsset,
-      options: { categoryId?: string; source?: AssetSourceMetadata; internal?: boolean; commitOptions?: { updateNodes?: boolean } } = {},
+      options: {
+        categoryId?: string
+        source?: AssetSourceMetadata
+        internal?: boolean
+        isEditorOnly?: boolean
+        commitOptions?: { updateNodes?: boolean }
+      } = {},
     ) {
       const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
       const registered = this.registerAssets([asset], {
         categoryId,
         source: options.source,
         internal: options.internal,
+        isEditorOnly: options.isEditorOnly,
         commitOptions: options.commitOptions,
       })
       return registered[0] ?? { ...asset }
@@ -12563,6 +12616,7 @@ export const useSceneStore = defineStore('scene', {
         | WallComponentProps
         | RoadComponentProps
         | DisplayBoardComponentProps
+        | PlanningImagesComponentProps
         | WarpGateComponentProps
         | FloorComponentProps
         | EffectComponentProps
@@ -12856,6 +12910,17 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneDisplayBoardComponentProps(merged)
+      } else if (type === PLANNING_IMAGES_COMPONENT_TYPE) {
+        const currentProps = clampPlanningImagesComponentProps(component.props as PlanningImagesComponentProps)
+        const typedPatch = patch as Partial<PlanningImagesComponentProps>
+        const merged = clampPlanningImagesComponentProps({
+          images: Array.isArray(typedPatch.images) ? typedPatch.images : currentProps.images,
+        })
+        const unchanged = JSON.stringify(currentProps) === JSON.stringify(merged)
+        if (unchanged) {
+          return false
+        }
+        nextProps = clonePlanningImagesComponentProps(merged)
       } else if (type === WARP_GATE_COMPONENT_TYPE) {
         const currentProps = clampWarpGateComponentProps(component.props as WarpGateComponentProps)
         const typedPatch = patch as Partial<WarpGateComponentProps>

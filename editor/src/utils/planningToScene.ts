@@ -3,7 +3,6 @@ import type {
   GroundDynamicMesh,
   SceneNode,
 } from '@schema'
-import { createPrimitiveMesh } from '@schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -36,12 +35,13 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import {
   GUIDE_ROUTE_COMPONENT_TYPE,
+  PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
+  clampPlanningImagesComponentProps,
 } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
-import { getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 
 
 export type PlanningConversionProgress = {
@@ -586,81 +586,6 @@ function clamp01(value: number, fallback = 1): number {
     return fallback
   }
   return Math.min(1, Math.max(0, numeric))
-}
-
-function inferImageExtensionFromMimeType(mimeType: string | null | undefined): string {
-  switch ((mimeType ?? '').toLowerCase()) {
-    case 'image/jpeg':
-      return '.jpg'
-    case 'image/webp':
-      return '.webp'
-    case 'image/gif':
-      return '.gif'
-    case 'image/svg+xml':
-      return '.svg'
-    case 'image/bmp':
-      return '.bmp'
-    case 'image/avif':
-      return '.avif'
-    case 'image/png':
-    default:
-      return '.png'
-  }
-}
-
-function ensureFilenameHasExtension(name: string, extension: string): string {
-  const trimmed = name.trim()
-  if (!trimmed) {
-    return `planning-image${extension}`
-  }
-  if (/\.[a-z0-9]+$/i.test(trimmed)) {
-    return trimmed
-  }
-  return `${trimmed}${extension}`
-}
-
-async function ensurePlanningImageAsset(
-  sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
-  image: PlanningImageData,
-): Promise<{ assetId: string; name: string } | null> {
-  const imageHash = typeof image.imageHash === 'string' ? image.imageHash.trim() : ''
-  let blob: Blob | null = null
-
-  if (imageHash) {
-    blob = await getPlanningImageBlobByHash(imageHash)
-  }
-
-  if (!blob) {
-    const url = typeof image.url === 'string' ? image.url.trim() : ''
-    if (!url) {
-      return null
-    }
-
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new Error(`Failed to load planning image: ${response.status}`)
-    }
-
-    blob = await response.blob()
-  }
-
-  const mimeType = blob.type?.trim() || 'image/png'
-  const displayName = image.name?.trim() || image.sizeLabel?.trim() || `Planning Image ${image.id}`
-  const fileName = ensureFilenameHasExtension(displayName, inferImageExtensionFromMimeType(mimeType))
-  const file = new File([blob], fileName, { type: mimeType, lastModified: Date.now() })
-  const ensured = await sceneStore.ensureLocalAssetFromFile(file, {
-    type: 'image',
-    name: displayName,
-    description: `Planning reference image: ${displayName}`,
-    previewColor: '#ffffff',
-    gleaned: true,
-    commitOptions: { updateNodes: false },
-  })
-
-  return {
-    assetId: ensured.asset.id,
-    name: ensured.asset.name,
-  }
 }
 
 function toWorldPoint(
@@ -1515,6 +1440,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   }
 
   if (images.length) {
+    const imageEntries: Array<Record<string, unknown>> = []
     for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
       throwIfAborted(options.signal)
       const image = images[imageIndex]!
@@ -1527,74 +1453,74 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           continue
         }
 
-        const assetRef = await ensurePlanningImageAsset(sceneStore, image)
-        if (!assetRef) {
-          continue
-        }
-
         const center = {
           x: Number(image.position?.x) + width * 0.5,
           y: Number(image.position?.y) + height * 0.5,
         }
         const worldCenter = toWorldPoint(center, groundWidth, groundDepth, 0)
         const groundY = groundHeightAt(worldCenter.x, worldCenter.z)
-        const nodeId = await stableUuidV5(`planning:image:${image.id}`)
-        const nodeName = image.name?.trim() || `Planning Image ${imageIndex + 1}`
-        const runtime = createPrimitiveMesh('Plane', { color: 0xffffff, doubleSided: true, name: `${nodeName} Visual` })
-        runtime.castShadow = false
-        runtime.receiveShadow = false
-
-        const planeNode = sceneStore.addSceneNode({
-          nodeId,
-          nodeType: 'Plane',
-          object: runtime,
-          name: nodeName,
-          parentId: root.id,
+        imageEntries.push({
+          id: image.id,
+          name: image.name?.trim() || `Planning Image ${imageIndex + 1}`,
+          imageHash: typeof image.imageHash === 'string' ? image.imageHash.trim() : '',
+          sourceUrl: typeof image.url === 'string' ? image.url.trim() : '',
+          mimeType: image.mimeType ?? undefined,
+          filename: image.filename ?? undefined,
           position: {
             x: worldCenter.x,
             y: groundY + PLANNING_IMAGE_HEIGHT_OFFSET_M + imageIndex * PLANNING_IMAGE_STACK_OFFSET_M,
             z: worldCenter.z,
           },
-          rotation: { x: -Math.PI / 2, y: 0, z: 0 },
-          scale: { x: width, y: height, z: 1 },
-          userData: {
-            source: PLANNING_CONVERSION_SOURCE,
-            kind: 'image',
-            planningImageId: image.id,
-            planningImageName: nodeName,
+          size: {
+            width,
+            height,
           },
+          visible: image.visible !== false,
+          opacity: clamp01(image.opacity, 1),
         })
-
-        if (!planeNode) {
-          continue
-        }
-
-        const material = planeNode.materials?.[0] ?? null
-        if (material) {
-          sceneStore.updateNodeMaterialType(planeNode.id, material.id, 'MeshBasicMaterial')
-          sceneStore.updateNodeMaterialProps(planeNode.id, material.id, {
-            color: '#ffffff',
-            transparent: true,
-            opacity: clamp01(image.opacity, 1),
-            side: 'double',
-            wireframe: false,
-            metalness: 0,
-            roughness: 1,
-            emissive: '#000000',
-            emissiveIntensity: 0,
-          })
-        }
-
-        sceneStore.setNodePrimaryTexture(planeNode.id, {
-          assetId: assetRef.assetId,
-          name: assetRef.name,
-        })
-        sceneStore.setNodeVisibility(planeNode.id, image.visible !== false)
-        sceneStore.setNodeLocked(planeNode.id, image.locked === true)
       } catch (error) {
-        console.warn('Failed to convert planning image to scene plane', image, error)
+        console.warn('Failed to convert planning image to planning image component entry', image, error)
       } finally {
         await updateProgressForUnit(unitLabel)
+      }
+    }
+
+    const normalizedImageProps = clampPlanningImagesComponentProps({ images: imageEntries as any })
+    if (normalizedImageProps.images.length) {
+      const nodeId = await stableUuidV5('planning:images')
+      const runtime = new THREE.Group()
+      runtime.name = 'Planning Images'
+      runtime.userData = {
+        ...(runtime.userData ?? {}),
+        editorOnly: true,
+      }
+      const componentId = generateUuid()
+      const imageNode = sceneStore.addSceneNode({
+        nodeId,
+        nodeType: 'Group',
+        object: runtime,
+        name: 'Planning Images',
+        parentId: root.id,
+        editorFlags: {
+          editorOnly: true,
+          ignoreGridSnapping: true,
+        },
+        userData: {
+          source: PLANNING_CONVERSION_SOURCE,
+          kind: 'image',
+          planningImageCount: normalizedImageProps.images.length,
+        },
+        components: {
+          [PLANNING_IMAGES_COMPONENT_TYPE]: {
+            id: componentId,
+            type: PLANNING_IMAGES_COMPONENT_TYPE,
+            enabled: true,
+            props: normalizedImageProps,
+          },
+        },
+      })
+      if (imageNode) {
+        sceneStore.setNodeLocked(imageNode.id, true)
       }
     }
   }

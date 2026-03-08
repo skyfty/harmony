@@ -17,6 +17,22 @@ import {
   isBuiltinWaterNormalAsset,
 } from '@/constants/builtinAssets'
 
+function extractAssetIdFromPackageMapKey(key: string): string | null {
+  const normalized = typeof key === 'string' ? key.trim() : ''
+  if (!normalized) {
+    return null
+  }
+  if (normalized.startsWith('local::')) {
+    const assetId = normalized.slice('local::'.length).trim()
+    return assetId || null
+  }
+  if (normalized.startsWith('url::')) {
+    const assetId = normalized.slice('url::'.length).trim()
+    return assetId || null
+  }
+  return null
+}
+
 export type ScenePackageExportScene = {
   id: string
   document: SceneJsonExportDocument
@@ -70,31 +86,89 @@ type ResolvedEmbedAsset = {
   filenameHint?: string | null
 }
 
+type SceneResourceSummaryAsset = {
+  assetId?: string | null
+  downloadUrl?: string | null
+  mimeType?: string | null
+  filename?: string | null
+}
+
+type SceneResourceSummary = {
+  assets?: SceneResourceSummaryAsset[] | null
+}
+
+type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
+  assetUrlOverrides?: Record<string, string>
+  resourceSummary?: SceneResourceSummary
+  planningData?: unknown
+}
+
+function stripEditorOnlySceneFields(
+  document: SceneExportDocumentWithEditorFields,
+): void {
+  if ('assetUrlOverrides' in document) {
+    delete document.assetUrlOverrides
+  }
+  if ('resourceSummary' in document) {
+    delete document.resourceSummary
+  }
+  if ('planningData' in document) {
+    delete document.planningData
+  }
+
+  if (document.assetIndex && typeof document.assetIndex === 'object') {
+    const nextAssetIndex: NonNullable<SceneJsonExportDocument['assetIndex']> = {}
+    Object.entries(document.assetIndex).forEach(([assetId, entry]) => {
+      if (!entry || entry.isEditorOnly) {
+        return
+      }
+      nextAssetIndex[assetId] = {
+        categoryId: entry.categoryId,
+        source: entry.source ? { ...entry.source } : undefined,
+        internal: entry.internal,
+      }
+    })
+    document.assetIndex = nextAssetIndex
+  }
+
+  if (document.packageAssetMap && typeof document.packageAssetMap === 'object') {
+    const retainedAssetIds = new Set(Object.keys(document.assetIndex ?? {}))
+    const nextPackageAssetMap: Record<string, string> = {}
+    Object.entries(document.packageAssetMap).forEach(([key, value]) => {
+      const normalizedValue = typeof value === 'string' ? value.trim() : ''
+      const derivedAssetId = extractAssetIdFromPackageMapKey(key)
+      if (normalizedValue && retainedAssetIds.has(normalizedValue)) {
+        nextPackageAssetMap[key] = value
+        return
+      }
+      if (derivedAssetId && retainedAssetIds.has(derivedAssetId)) {
+        nextPackageAssetMap[key] = value
+      }
+    })
+    document.packageAssetMap = nextPackageAssetMap
+  }
+}
+
 function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<string, ResolvedEmbedAsset> {
   const out = new Map<string, ResolvedEmbedAsset>()
 
   for (const scene of scenes) {
-    const doc = scene?.document as SceneJsonExportDocument | null | undefined
+    const doc = scene?.document as SceneExportDocumentWithEditorFields | null | undefined
     if (!doc || typeof doc !== 'object') {
       continue
     }
 
-    const indexMap: Record<string, unknown> = (doc.assetIndex as Record<string, unknown>) ?? {}
-    const resourceAssets: unknown[] = Array.isArray((doc as any)?.resourceSummary?.assets) ? (doc as any).resourceSummary.assets : []
+    const indexMap: NonNullable<SceneJsonExportDocument['assetIndex']> = doc.assetIndex ?? {}
+    const resourceAssets = Array.isArray(doc.resourceSummary?.assets) ? doc.resourceSummary.assets : []
 
     // Prefer resourceSummary entries (they often include downloadUrl).
-    const entryHasLocalSource = (entry: unknown): boolean => {
-      if (!entry || typeof entry !== 'object') return false
-      const e = entry as Record<string, unknown>
-      const src = e.source as Record<string, unknown> | undefined
-      return Boolean(src && typeof src.type === 'string' && src.type === 'local')
-    }
+    const entryHasLocalSource = (entry: NonNullable<SceneJsonExportDocument['assetIndex']>[string] | undefined): boolean =>
+      entry?.source?.type === 'local'
 
     for (const item of resourceAssets) {
-      const it = item as Record<string, unknown> | null | undefined
-      const assetId = typeof it?.assetId === 'string' ? it.assetId.trim() : ''
+      const assetId = typeof item?.assetId === 'string' ? item.assetId.trim() : ''
       if (!assetId) continue
-      const downloadUrl = typeof it?.downloadUrl === 'string' ? it.downloadUrl.trim() : ''
+      const downloadUrl = typeof item?.downloadUrl === 'string' ? item.downloadUrl.trim() : ''
       if (!downloadUrl) continue
 
       // Skip already-known local assets.
@@ -106,8 +180,8 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
         out.set(assetId, {
           assetId,
           downloadUrl,
-          mimeTypeHint: typeof it?.mimeType === 'string' ? it.mimeType : null,
-          filenameHint: typeof it?.filename === 'string' ? it.filename : null,
+          mimeTypeHint: typeof item?.mimeType === 'string' ? item.mimeType : null,
+          filenameHint: typeof item?.filename === 'string' ? item.filename : null,
         })
       }
     }
@@ -350,30 +424,16 @@ export async function exportScenePackageZip(payload: {
     let planningPath: string | undefined
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
-    const indexMap = (scene.document as SceneJsonExportDocument).assetIndex ?? {}
-    const localAssetIds: string[] = Object.keys(indexMap).filter((assetId) => {
-      try {
-        return indexMap[assetId]?.source?.type === 'local'
-      } catch (e) {
-        return false
-      }
-    })
+    const docClone = JSON.parse(JSON.stringify(scene.document)) as SceneExportDocumentWithEditorFields
+    stripEditorOnlySceneFields(docClone)
 
-    // Prepare a clone of the scene document and ensure assetUrlOverrides exists
-    const docClone = JSON.parse(JSON.stringify(scene.document)) as SceneJsonExportDocument & { assetUrlOverrides?: Record<string, string> }
-    docClone.assetUrlOverrides = docClone.assetUrlOverrides ?? {}
+    const indexMap = docClone.assetIndex ?? {}
+    const localAssetIds: string[] = Object.keys(indexMap).filter((assetId) => indexMap[assetId]?.source?.type === 'local')
+
     if (!Array.isArray(docClone.punchPoints) || docClone.punchPoints.length === 0) {
       const computedPunchPoints = collectPunchPointsFromNodes(docClone.nodes)
       if (computedPunchPoints.length) {
         docClone.punchPoints = computedPunchPoints
-      }
-    }
-
-    // Apply shared embedded asset overrides (paths within ZIP). These are informational today,
-    // but also allow runtimes to redirect by key if they consult this field.
-    if (sharedAssetPathById.size > 0) {
-      for (const [assetId, resourcePath] of sharedAssetPathById.entries()) {
-        docClone.assetUrlOverrides[assetId] = resourcePath
       }
     }
 
@@ -413,9 +473,6 @@ export async function exportScenePackageZip(payload: {
         size: blob.size,
         hash,
       })
-
-      // update scene document mapping to point to the packaged path
-      ;(docClone as any).assetUrlOverrides[assetId] = resourcePath
     }
 
     // Add the (possibly modified) scene JSON to files and manifest

@@ -405,6 +405,8 @@ export interface AssetIndexEntry {
   source?: AssetSourceMetadata
   /** Internal assets are managed by the editor/runtime and should not be shown in user-facing asset lists. */
   internal?: boolean
+  /** Editor-only assets are used by authoring workflows and should not be emitted as editor-only metadata in runtime scene exports. */
+  isEditorOnly?: boolean
 }
 
 export interface SceneOutlineMesh {

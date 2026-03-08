@@ -72,6 +72,9 @@ function sanitizeAssetIndex(value: unknown): Record<string, AssetIndexEntry> | u
     if (clonedEntry.source && typeof clonedEntry.source === 'object') {
       normalized.source = clonedEntry.source as AssetIndexEntry['source']
     }
+    if (clonedEntry.isEditorOnly === true) {
+      normalized.isEditorOnly = true
+    }
     result[assetId] = normalized
   })
   return Object.keys(result).length ? result : undefined

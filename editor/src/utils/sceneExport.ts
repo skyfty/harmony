@@ -3,7 +3,7 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
+import { createPrimitiveGeometry, type AssetIndexEntry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'
@@ -379,6 +379,28 @@ type RigidbodyExportCandidate = {
   component: SceneNodeComponentState<RigidbodyComponentProps>
 }
 
+function sanitizeAssetIndexForJsonExport(
+  assetIndex: Record<string, AssetIndexEntry> | undefined,
+): Record<string, AssetIndexEntry> | undefined {
+  if (!assetIndex || typeof assetIndex !== 'object') {
+    return assetIndex
+  }
+
+  const sanitized: Record<string, AssetIndexEntry> = {}
+  Object.entries(assetIndex).forEach(([assetId, entry]) => {
+    if (!entry || typeof entry.categoryId !== 'string') {
+      return
+    }
+    sanitized[assetId] = {
+      categoryId: entry.categoryId,
+      source: entry.source ? { ...entry.source } : undefined,
+      internal: entry.internal,
+    }
+  })
+
+  return sanitized
+}
+
 async function sanitizeSceneDocumentForJsonExport(
   document: SceneJsonExportDocument,
   options: SceneExportOptions,
@@ -406,6 +428,7 @@ async function sanitizeSceneDocumentForJsonExport(
     ...document,
     materials: sanitizedMaterials,
     nodes: sanitizedNodes,
+    assetIndex: sanitizeAssetIndexForJsonExport(document.assetIndex),
   }
   const assetPreload = buildSceneAssetPreloadInfo(sanitizedNodes, options)
   if (assetPreload) {

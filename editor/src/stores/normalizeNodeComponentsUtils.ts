@@ -41,6 +41,9 @@ import {
   EFFECT_COMPONENT_TYPE,
   clampEffectComponentProps,
   cloneEffectComponentProps,
+  PLANNING_IMAGES_COMPONENT_TYPE,
+  clampPlanningImagesComponentProps,
+  clonePlanningImagesComponentProps,
 } from '@schema/components'
 
 const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
@@ -279,6 +282,21 @@ export function normalizeNodeComponents(
       id: existingEffect.id && existingEffect.id.trim().length ? existingEffect.id : generateUuid(),
       type: EFFECT_COMPONENT_TYPE,
       enabled: existingEffect.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  }
+
+  const existingPlanningImages = normalized[PLANNING_IMAGES_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
+  if (existingPlanningImages) {
+    const nextProps = clonePlanningImagesComponentProps(
+      clampPlanningImagesComponentProps(existingPlanningImages.props as any),
+    )
+    const clonedMetadata: Record<string, unknown> | undefined = existingPlanningImages.metadata
+    normalized[PLANNING_IMAGES_COMPONENT_TYPE] = {
+      id: existingPlanningImages.id && existingPlanningImages.id.trim().length ? existingPlanningImages.id : generateUuid(),
+      type: PLANNING_IMAGES_COMPONENT_TYPE,
+      enabled: existingPlanningImages.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
     }
