@@ -331,6 +331,7 @@ export interface SceneMaterialTextureSettings {
   wrapR: SceneTextureWrapMode;
   offset: Vector2Like;
   repeat: Vector2Like;
+  tileSizeMeters: Vector2Like;
   rotation: number;
   center: Vector2Like;
   matrixAutoUpdate: boolean;
@@ -1188,6 +1189,8 @@ export interface WallDynamicMesh {
    * Sorted and non-overlapping per chain after every write.
    */
   openings: WallOpening[]
+  /** Material config id used for the wall body mesh (editor-defined). */
+  bodyMaterialConfigId?: string | null
   /** Shared dimensions applied to every chain segment. */
   dimensions: { height: number; width: number; thickness: number }
 }

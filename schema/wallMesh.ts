@@ -1,6 +1,12 @@
 import * as THREE from 'three'
 import type { WallDynamicMesh } from './index'
-import { MATERIAL_CONFIG_ID_KEY } from './material'
+import {
+  createAutoTiledMaterialVariant,
+  MATERIAL_CONFIG_ID_KEY,
+  MATERIAL_TEXTURE_REPEAT_INFO_KEY,
+  WALL_REPEAT_SCALE_KEY,
+  WALL_REPEAT_UV_AXIS_KEY,
+} from './material'
 import { compileWallSegmentsFromDefinition, resolveWallDimensionsFromDefinition, type WallRenderSegment } from './wallLayout'
 
 export type WallRenderAssetObjects = {
@@ -71,6 +77,7 @@ type WallResolvedUvAxis = 'u' | 'v'
 export type WallRenderOptions = {
   smoothing?: number
   materialConfigId?: string | null
+  bodyMaterialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
 
   // Per-part UV repeat axis for stretched wall tiling.
@@ -87,6 +94,17 @@ export type WallRenderOptions = {
   footEndCapOrientation?: WallModelOrientation
 }
 
+function normalizeWallMaterialConfigId(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  return raw.length ? raw : null
+}
+
+function applyWallMeshMaterialConfigId(meshes: THREE.Mesh[], materialConfigId: string | null): void {
+  meshes.forEach((mesh) => {
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialConfigId
+  })
+}
+
 const WALL_DEFAULT_COLOR = 0xcfd2d6
 const WALL_MIN_HEIGHT = 0.5
 const WALL_MIN_WIDTH = 0.1
@@ -99,8 +117,10 @@ const WALL_MAX_SAMPLE_POINTS = 512
 const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
 const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
-const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
-const WALL_INSTANCING_REPEAT_BUCKETS_MAX = 6
+const WALL_REPEAT_SCALE_CACHE_PRECISION = 1e5
+const WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY = '__harmonySkipGeometryDispose'
+const WALL_SKIP_MATERIAL_DISPOSE_USERDATA_KEY = '__harmonySkipMaterialDispose'
+const WALL_OWNED_TEXTURES_USERDATA_KEY = '__harmonyOwnedTextures'
 const WALL_REPEAT_U_TEXTURE_SLOTS = [
   'map',
   'alphaMap',
@@ -266,13 +286,22 @@ function disposeObject3D(object: THREE.Object3D) {
     }
 
     const userData = (mesh.userData ?? {}) as Record<string, unknown>
-    if (userData[WALL_SKIP_DISPOSE_USERDATA_KEY]) {
+    if (mesh.geometry && !userData[WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY]) {
+      mesh.geometry.dispose()
+    }
+    const ownedTextures = userData[WALL_OWNED_TEXTURES_USERDATA_KEY]
+    if (Array.isArray(ownedTextures)) {
+      ownedTextures.forEach((entry) => {
+        if ((entry as THREE.Texture | null | undefined)?.isTexture) {
+          ;(entry as THREE.Texture).dispose()
+        }
+      })
+    }
+
+    if (userData[WALL_SKIP_MATERIAL_DISPOSE_USERDATA_KEY]) {
       return
     }
 
-    if (mesh.geometry) {
-      mesh.geometry.dispose()
-    }
     const material = mesh.material
     if (Array.isArray(material)) {
       material.forEach((entry) => entry?.dispose())
@@ -345,8 +374,7 @@ function expandBoxByTransformedBounds(target: THREE.Box3, bounds: THREE.Box3, ma
   }
 }
 
-function applyInstancedMeshBounds(
-  instanced: THREE.InstancedMesh,
+function computeWallAssetBounds(
   templateBounds: THREE.Box3,
   matrices: THREE.Matrix4[],
 ): THREE.Box3 | null {
@@ -362,9 +390,6 @@ function applyInstancedMeshBounds(
   if (combinedBounds.isEmpty()) {
     return null
   }
-
-  instanced.boundingBox = combinedBounds.clone()
-  instanced.boundingSphere = combinedBounds.getBoundingSphere(new THREE.Sphere())
   return combinedBounds
 }
 
@@ -445,18 +470,28 @@ function sanitizeWallRepeatScale(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
 }
 
+function quantizeWallRepeatScale(value: number): number {
+  const safe = sanitizeWallRepeatScale(value)
+  return Math.round(safe * WALL_REPEAT_SCALE_CACHE_PRECISION) / WALL_REPEAT_SCALE_CACHE_PRECISION
+}
+
 /**
  * Clone wall material and scale the selected UV axis repeat at material level.
- * This avoids relying on shader patching for per-instance UV scaling.
+ * This keeps texture tiling aligned with the current mesh stretch factor.
  */
-function createWallInstancedMaterial(
+function createWallRepeatedMaterial(
   original: THREE.Material,
   uvAxis: WallResolvedUvAxis = 'u',
   repeatScale = 1,
-): THREE.Material {
-  const cloned = original.clone() as THREE.Material & Record<string, unknown>
+): { material: THREE.Material; ownedTextures: THREE.Texture[]; shared: boolean } {
   const safeRepeatScale = sanitizeWallRepeatScale(repeatScale)
+  if (Math.abs(safeRepeatScale - 1) <= WALL_EPSILON) {
+    return { material: original, ownedTextures: [], shared: true }
+  }
+
+  const cloned = original.clone() as THREE.Material & Record<string, unknown>
   let changed = false
+  const ownedTextures: THREE.Texture[] = []
   for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
     const texture = cloned[slot] as THREE.Texture | null | undefined
     if (!texture) {
@@ -472,16 +507,127 @@ function createWallInstancedMaterial(
     }
     clonedTexture.needsUpdate = true
     cloned[slot] = clonedTexture
+    ownedTextures.push(clonedTexture)
     changed = true
   }
-  if (changed) {
-    cloned.needsUpdate = true
+  if (!changed) {
+    cloned.dispose()
+    return { material: original, ownedTextures: [], shared: true }
   }
-  return cloned
+
+  cloned.userData = {
+    ...(cloned.userData ?? {}),
+    [WALL_REPEAT_SCALE_KEY]: safeRepeatScale,
+    [WALL_REPEAT_UV_AXIS_KEY]: uvAxis,
+  }
+  cloned.needsUpdate = true
+  return { material: cloned, ownedTextures, shared: false }
 }
+
+type WallRepeatedMaterialSet = {
+  material: THREE.Material | THREE.Material[]
+  ownedTextures: THREE.Texture[]
+  shared: boolean
+}
+
+function createWallRepeatedMaterialSet(
+  original: THREE.Material | THREE.Material[],
+  uvAxis: WallResolvedUvAxis = 'u',
+  repeatScale = 1,
+): WallRepeatedMaterialSet {
+  if (Array.isArray(original)) {
+    const variants = original.map((entry) => createWallRepeatedMaterial(entry, uvAxis, repeatScale))
+    const shared = variants.every((entry) => entry.shared)
+    return {
+      material: shared ? original : variants.map((entry) => entry.material),
+      ownedTextures: variants.flatMap((entry) => entry.ownedTextures),
+      shared,
+    }
+  }
+  return createWallRepeatedMaterial(original, uvAxis, repeatScale)
+}
+
+type WallMaterialVariantCacheEntry = WallRepeatedMaterialSet & {
+  ownerClaimed: boolean
+}
+
+type WallMaterialVariantCache = Map<string, WallMaterialVariantCacheEntry>
+
+const wallMaterialIdentityIds = new WeakMap<THREE.Material, number>()
+let wallMaterialIdentityCounter = 1
+
+function getWallMaterialIdentityId(material: THREE.Material): number {
+  const cached = wallMaterialIdentityIds.get(material)
+  if (cached) {
+    return cached
+  }
+  const next = wallMaterialIdentityCounter
+  wallMaterialIdentityCounter += 1
+  wallMaterialIdentityIds.set(material, next)
+  return next
+}
+
+function buildWallMaterialVariantCacheKey(
+  original: THREE.Material | THREE.Material[],
+  repeatKey: string,
+): string {
+  const materialKey = Array.isArray(original)
+    ? original.map((entry) => `${getWallMaterialIdentityId(entry)}`).join(',')
+    : `${getWallMaterialIdentityId(original)}`
+  return `${repeatKey}|${materialKey}`
+}
+
+function getOrCreateWallAutoTiledMaterialSet(
+  cache: WallMaterialVariantCache,
+  original: THREE.Material | THREE.Material[],
+  repeatInfo: {
+    uvMetersPerUnit: { x: number; y: number }
+    repeatScale?: { x: number; y: number }
+  } | null,
+): WallRepeatedMaterialSet & { owner: boolean } {
+  if (!repeatInfo) {
+    return { material: original, ownedTextures: [], shared: true, owner: false }
+  }
+
+  const cacheKey = buildWallMaterialVariantCacheKey(original, JSON.stringify(repeatInfo))
+  let cached = cache.get(cacheKey)
+  if (!cached) {
+    const variant = createAutoTiledMaterialVariant(original, repeatInfo)
+    cached = {
+      material: variant.material,
+      ownedTextures: variant.ownedTextures,
+      shared: variant.shared,
+      ownerClaimed: false,
+    }
+    cache.set(cacheKey, cached)
+  }
+
+  if (cached.shared) {
+    return { material: cached.material, ownedTextures: [], shared: true, owner: false }
+  }
+
+  if (!cached.ownerClaimed) {
+    cached.ownerClaimed = true
+    return {
+      material: cached.material,
+      ownedTextures: cached.ownedTextures,
+      shared: false,
+      owner: true,
+    }
+  }
+
+  return {
+    material: cached.material,
+    ownedTextures: [],
+    shared: false,
+    owner: false,
+  }
+}
+
 type StretchedWallInstance = {
   matrix: THREE.Matrix4
-  repeatScale: number
+  repeatScaleU: number
+  repeatScaleV: number
 }
 
 /**
@@ -577,95 +723,140 @@ function buildStretchedWallInstancesForSegs(
 
     instances.push({
       matrix: new THREE.Matrix4().copy(localMatrix),
-      repeatScale: sanitizeWallRepeatScale(stretchFactor),
+      repeatScaleU: sanitizeWallRepeatScale(stretchFactor),
+      repeatScaleV: sanitizeWallRepeatScale(scaleY),
     })
   }
   return instances
 }
 
-type WallInstancedBucket = {
-  repeatScale: number
-  matrices: THREE.Matrix4[]
+function applyWallShadowSide(
+  material: THREE.Material | THREE.Material[],
+  shadowSide: THREE.Side = THREE.FrontSide,
+): THREE.Material | THREE.Material[] {
+  const applyOne = (entry: THREE.Material) => {
+    const typed = entry as THREE.Material & { shadowSide?: THREE.Side }
+    typed.shadowSide = shadowSide
+  }
+
+  if (Array.isArray(material)) {
+    material.forEach((entry) => applyOne(entry))
+    return material
+  }
+
+  applyOne(material)
+  return material
 }
 
-function bucketizeWallInstancesByRepeatScale(
-  instances: StretchedWallInstance[],
-  maxBuckets = WALL_INSTANCING_REPEAT_BUCKETS_MAX,
-): WallInstancedBucket[] {
-  if (!instances.length) {
-    return []
-  }
-  if (instances.length === 1 || maxBuckets <= 1) {
-    return [{ repeatScale: instances[0]!.repeatScale, matrices: instances.map((entry) => entry.matrix) }]
-  }
-
-  const safeBuckets = Math.max(1, Math.min(maxBuckets, instances.length))
-  const minScale = Math.max(WALL_EPSILON, Math.min(...instances.map((entry) => entry.repeatScale)))
-  const maxScale = Math.max(minScale, Math.max(...instances.map((entry) => entry.repeatScale)))
-  if (!Number.isFinite(minScale) || !Number.isFinite(maxScale) || maxScale - minScale <= WALL_EPSILON) {
-    const average = instances.reduce((sum, entry) => sum + entry.repeatScale, 0) / instances.length
-    return [{ repeatScale: sanitizeWallRepeatScale(average), matrices: instances.map((entry) => entry.matrix) }]
-  }
-
-  const minLog = Math.log(minScale)
-  const maxLog = Math.log(maxScale)
-  const bucketCount = Math.max(1, Math.min(safeBuckets, instances.length))
-  const buckets = Array.from({ length: bucketCount }, () => ({
-    sumScale: 0,
-    count: 0,
-    matrices: [] as THREE.Matrix4[],
-  }))
-
-  for (const instance of instances) {
-    const scale = sanitizeWallRepeatScale(instance.repeatScale)
-    let index = 0
-    if (maxLog - minLog > WALL_EPSILON) {
-      const normalized = (Math.log(scale) - minLog) / (maxLog - minLog)
-      index = Math.round(THREE.MathUtils.clamp(normalized, 0, 1) * (bucketCount - 1))
-    }
-    const bucket = buckets[index]!
-    bucket.sumScale += scale
-    bucket.count += 1
-    bucket.matrices.push(instance.matrix)
-  }
-
-  return buckets
-    .filter((bucket) => bucket.count > 0 && bucket.matrices.length > 0)
-    .map((bucket) => ({
-      repeatScale: sanitizeWallRepeatScale(bucket.sumScale / bucket.count),
-      matrices: bucket.matrices,
-    }))
-}
-
-function createWallInstancedMesh(
+function createWallAssetMesh(
   name: string,
   template: InstancedAssetTemplate,
-  matrices: THREE.Matrix4[],
+  matrix: THREE.Matrix4,
+  material: THREE.Material | THREE.Material[],
+  options: {
+    skipMaterialDispose?: boolean
+    ownedTextures?: THREE.Texture[]
+    shadowSide?: THREE.Side
+    repeatInfo?: {
+      uvMetersPerUnit: { x: number; y: number }
+      repeatScale?: { x: number; y: number }
+    }
+  } = {},
+): THREE.Mesh {
+  const resolvedMaterial = applyWallShadowSide(material, options.shadowSide)
+  const mesh = new THREE.Mesh(template.geometry, resolvedMaterial)
+  mesh.name = name
+  mesh.userData.dynamicMeshType = 'WallAsset'
+  mesh.userData[WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY] = true
+  if (options.skipMaterialDispose) {
+    mesh.userData[WALL_SKIP_MATERIAL_DISPOSE_USERDATA_KEY] = true
+  }
+  if (options.ownedTextures?.length) {
+    mesh.userData[WALL_OWNED_TEXTURES_USERDATA_KEY] = options.ownedTextures
+  }
+  if (options.repeatInfo) {
+    mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = options.repeatInfo
+  }
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  mesh.frustumCulled = false
+  matrix.decompose(mesh.position, mesh.quaternion, mesh.scale)
+  mesh.updateMatrix()
+  mesh.updateMatrixWorld(false)
+  return mesh
+}
+
+function createWallRepeatedAssetMeshes(
+  namePrefix: string,
+  template: InstancedAssetTemplate,
+  instances: StretchedWallInstance[],
+  materialVariantCache: WallMaterialVariantCache,
+  orientation: WallModelOrientation,
   uvAxis: WallResolvedUvAxis = 'u',
-  repeatScale = 1,
-): THREE.InstancedMesh | null {
+  shadowSide: THREE.Side = THREE.FrontSide,
+): { meshes: THREE.Mesh[]; bounds: THREE.Box3 | null } {
+  if (!instances.length) {
+    return { meshes: [], bounds: null }
+  }
+
+  const { tileLengthLocal } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+  const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
+
+  const meshes = instances.map((instance, index) => {
+    const repeatInfo = uvAxis === 'v'
+      ? {
+          uvMetersPerUnit: { x: templateHeight, y: tileLengthLocal },
+          repeatScale: { x: instance.repeatScaleV, y: instance.repeatScaleU },
+        }
+      : {
+          uvMetersPerUnit: { x: tileLengthLocal, y: templateHeight },
+          repeatScale: { x: instance.repeatScaleU, y: instance.repeatScaleV },
+        }
+    const materialVariant = getOrCreateWallAutoTiledMaterialSet(
+      materialVariantCache,
+      template.material,
+      repeatInfo,
+    )
+    return createWallAssetMesh(
+      `${namePrefix}:${index}`,
+      template,
+      instance.matrix,
+      materialVariant.material,
+      {
+        skipMaterialDispose: materialVariant.shared || !materialVariant.owner,
+        ownedTextures: materialVariant.owner ? materialVariant.ownedTextures : [],
+        shadowSide,
+        repeatInfo,
+      },
+    )
+  })
+
+  return {
+    meshes,
+    bounds: computeWallAssetBounds(template.bounds, instances.map((entry) => entry.matrix)),
+  }
+}
+
+function createWallStaticAssetMeshes(
+  namePrefix: string,
+  template: InstancedAssetTemplate,
+  matrices: THREE.Matrix4[],
+  shadowSide: THREE.Side = THREE.FrontSide,
+): { meshes: THREE.Mesh[]; bounds: THREE.Box3 | null } {
   if (!matrices.length) {
-    return null
+    return { meshes: [], bounds: null }
   }
 
-  const geometry = template.geometry.clone()
-
-  const material = Array.isArray(template.material)
-    ? template.material.map((entry) => createWallInstancedMaterial(entry, uvAxis, repeatScale))
-    : createWallInstancedMaterial(template.material, uvAxis, repeatScale)
-
-  const instanced = new THREE.InstancedMesh(geometry, material, matrices.length)
-  instanced.name = name
-  instanced.userData.dynamicMeshType = 'WallAsset'
-  instanced.castShadow = true
-  instanced.receiveShadow = true
-  instanced.frustumCulled = false
-  for (let i = 0; i < matrices.length; i += 1) {
-    instanced.setMatrixAt(i, matrices[i]!)
+  return {
+    meshes: matrices.map((matrix, index) => createWallAssetMesh(
+      `${namePrefix}:${index}`,
+      template,
+      matrix,
+      template.material,
+      { skipMaterialDispose: true, shadowSide },
+    )),
+    bounds: computeWallAssetBounds(template.bounds, matrices),
   }
-  instanced.instanceMatrix.needsUpdate = true
-  applyInstancedMeshBounds(instanced, template.bounds, matrices)
-  return instanced
 }
 
 function pickWallCornerRule(
@@ -1087,6 +1278,7 @@ function createWallMaterial(): THREE.MeshStandardMaterial {
   material.name = 'WallMaterial'
   // Keep walls single-sided; geometry winding/normals must face outward.
   material.side = THREE.FrontSide
+  material.shadowSide = THREE.FrontSide
   material.transparent = false
   material.opacity = 1
   material.depthWrite = true
@@ -1455,7 +1647,6 @@ function collectWallPath(segments: WallRenderSeg[]): WallPath | null {
 
     const positions: number[] = []
     const uvs: number[] = []
-    const indices: number[] = []
 
     const center = new THREE.Vector3()
     const tangent = new THREE.Vector3()
@@ -1464,6 +1655,43 @@ function collectWallPath(segments: WallRenderSeg[]): WallPath | null {
     const hasPrevLateral = { value: false }
     const leftPos = new THREE.Vector3()
     const rightPos = new THREE.Vector3()
+    const currentLeftBottom = new THREE.Vector3()
+    const currentRightBottom = new THREE.Vector3()
+    const currentLeftTop = new THREE.Vector3()
+    const currentRightTop = new THREE.Vector3()
+    const nextLeftBottom = new THREE.Vector3()
+    const nextRightBottom = new THREE.Vector3()
+    const nextLeftTop = new THREE.Vector3()
+    const nextRightTop = new THREE.Vector3()
+
+    const leftSamples: THREE.Vector3[] = []
+    const rightSamples: THREE.Vector3[] = []
+
+    const pushVertex = (vertex: THREE.Vector3, u: number, v: number) => {
+      positions.push(vertex.x, vertex.y, vertex.z)
+      uvs.push(u, v)
+    }
+
+    const pushQuad = (
+      a: THREE.Vector3,
+      b: THREE.Vector3,
+      c: THREE.Vector3,
+      d: THREE.Vector3,
+      uvA: [number, number],
+      uvB: [number, number],
+      uvC: [number, number],
+      uvD: [number, number],
+    ) => {
+      pushVertex(a, uvA[0], uvA[1])
+      pushVertex(b, uvB[0], uvB[1])
+      pushVertex(c, uvC[0], uvC[1])
+
+      pushVertex(c, uvC[0], uvC[1])
+      pushVertex(b, uvB[0], uvB[1])
+      pushVertex(d, uvD[0], uvD[1])
+    }
+
+    const cumulativeDistances: number[] = [0]
 
     const sampleCount = centers.length
     for (let i = 0; i < sampleCount; i += 1) {
@@ -1497,59 +1725,121 @@ function collectWallPath(segments: WallRenderSeg[]): WallPath | null {
 
       leftPos.copy(center).addScaledVector(lateral, halfWidth)
       rightPos.copy(center).addScaledVector(lateral, -halfWidth)
-      const baseY = center.y
-      const topY = baseY + heightValue
+      leftSamples.push(leftPos.clone())
+      rightSamples.push(rightPos.clone())
 
-      // Vertex order per sample: lb, rb, lt, rt (interleaved).
-      positions.push(leftPos.x, baseY, leftPos.z)
-      positions.push(rightPos.x, baseY, rightPos.z)
-      positions.push(leftPos.x, topY, leftPos.z)
-      positions.push(rightPos.x, topY, rightPos.z)
+      if (i < sampleCount - 1) {
+        cumulativeDistances.push(cumulativeDistances[i]! + center.distanceTo(centers[i + 1]!))
+      }
+    }
 
-      uvs.push(
-        0, 0,
-        1, 0,
-        0, 1,
-        1, 1,
-      )
-  }
+    const totalLength = closed
+      ? cumulativeDistances[sampleCount - 1]! + centers[sampleCount - 1]!.distanceTo(centers[0]!)
+      : cumulativeDistances[sampleCount - 1]!
 
     const loopCount = closed ? sampleCount : sampleCount - 1
     for (let i = 0; i < loopCount; i += 1) {
       const next = (i + 1) % sampleCount
+      const segmentLength = centers[i]!.distanceTo(centers[next]!)
+      if (segmentLength <= WALL_EPSILON) {
+        continue
+      }
 
-      const base = i * 4
-      const baseNext = next * 4
+      const u0 = cumulativeDistances[i]!
+      const u1 = closed && next === 0 ? totalLength : cumulativeDistances[next]!
 
-      const lb = base
-      const rb = base + 1
-      const lt = base + 2
-      const rt = base + 3
+      currentLeftBottom.copy(leftSamples[i]!)
+      currentRightBottom.copy(rightSamples[i]!)
+      nextLeftBottom.copy(leftSamples[next]!)
+      nextRightBottom.copy(rightSamples[next]!)
 
-      const lbNext = baseNext
-      const rbNext = baseNext + 1
-      const ltNext = baseNext + 2
-      const rtNext = baseNext + 3
+      currentLeftTop.copy(currentLeftBottom).setY(currentLeftBottom.y + heightValue)
+      currentRightTop.copy(currentRightBottom).setY(currentRightBottom.y + heightValue)
+      nextLeftTop.copy(nextLeftBottom).setY(nextLeftBottom.y + heightValue)
+      nextRightTop.copy(nextRightBottom).setY(nextRightBottom.y + heightValue)
 
-      // Left side
-      indices.push(lb, lbNext, lt)
-      indices.push(lt, lbNext, ltNext)
+      // Left exterior face.
+      pushQuad(
+        currentLeftBottom,
+        nextLeftBottom,
+        currentLeftTop,
+        nextLeftTop,
+        [u0, 0],
+        [u1, 0],
+        [u0, heightValue],
+        [u1, heightValue],
+      )
 
-      // Right side
-      indices.push(rb, rt, rbNext)
-      indices.push(rt, rtNext, rbNext)
+      // Right exterior face.
+      pushQuad(
+        currentRightBottom,
+        currentRightTop,
+        nextRightBottom,
+        nextRightTop,
+        [u0, 0],
+        [u0, heightValue],
+        [u1, 0],
+        [u1, heightValue],
+      )
 
-      // Top face
-      indices.push(lt, ltNext, rt)
-      indices.push(rt, ltNext, rtNext)
+      // Top face.
+      pushQuad(
+        currentLeftTop,
+        nextLeftTop,
+        currentRightTop,
+        nextRightTop,
+        [u0, 0],
+        [u1, 0],
+        [u0, width],
+        [u1, width],
+      )
 
-      // Bottom face
-      indices.push(rb, rbNext, lb)
-      indices.push(lb, rbNext, lbNext)
+      // Bottom face.
+      pushQuad(
+        currentRightBottom,
+        nextRightBottom,
+        currentLeftBottom,
+        nextLeftBottom,
+        [u0, 0],
+        [u1, 0],
+        [u0, width],
+        [u1, width],
+      )
+    }
+
+    if (!closed) {
+      currentLeftBottom.copy(leftSamples[0]!)
+      currentRightBottom.copy(rightSamples[0]!)
+      currentLeftTop.copy(currentLeftBottom).setY(currentLeftBottom.y + heightValue)
+      currentRightTop.copy(currentRightBottom).setY(currentRightBottom.y + heightValue)
+      pushQuad(
+        currentRightBottom,
+        currentLeftBottom,
+        currentRightTop,
+        currentLeftTop,
+        [0, 0],
+        [width, 0],
+        [0, heightValue],
+        [width, heightValue],
+      )
+
+      nextLeftBottom.copy(leftSamples[sampleCount - 1]!)
+      nextRightBottom.copy(rightSamples[sampleCount - 1]!)
+      nextLeftTop.copy(nextLeftBottom).setY(nextLeftBottom.y + heightValue)
+      nextRightTop.copy(nextRightBottom).setY(nextRightBottom.y + heightValue)
+      pushQuad(
+        nextLeftBottom,
+        nextRightBottom,
+        nextLeftTop,
+        nextRightTop,
+        [0, 0],
+        [width, 0],
+        [0, heightValue],
+        [width, heightValue],
+      )
     }
 
     const geometry = new THREE.BufferGeometry()
-    geometry.setIndex(indices)
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
     geometry.computeVertexNormals()
@@ -1607,7 +1897,10 @@ function rebuildWallGroup(
   const bodyUvAxis = normalizeWallUvAxis(options.bodyUvAxis, 'auto')
   const headUvAxis = normalizeWallUvAxis(options.headUvAxis, bodyUvAxis)
   const footUvAxis = normalizeWallUvAxis(options.footUvAxis, bodyUvAxis)
-  const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
+  const bodyMaterialConfigId = normalizeWallMaterialConfigId(options.bodyMaterialConfigId)
+    ?? normalizeWallMaterialConfigId(options.materialConfigId)
+    ?? normalizeWallMaterialConfigId(definition.bodyMaterialConfigId)
+  const materialVariantCache: WallMaterialVariantCache = new Map()
 
   for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
     const chainDef = chainDefinitions[chainIndex]!
@@ -1633,7 +1926,11 @@ function rebuildWallGroup(
     const mesh = new THREE.Mesh(geometry, createWallMaterial())
     mesh.name = chainDefinitions.length > 1 ? `WallMesh:${chainIndex}` : 'WallMesh'
     mesh.userData.dynamicMeshType = 'Wall'
-    mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = bodyMaterialConfigId
+    mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = {
+      uvMetersPerUnit: { x: 1, y: 1 },
+      repeatScale: { x: 1, y: 1 },
+    }
     mesh.castShadow = true
     mesh.receiveShadow = true
     mesh.visible = !modelModeEnabled
@@ -1695,20 +1992,11 @@ function rebuildWallGroup(
     for (const chainDef of chainDefinitions) {
       instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
-    const buckets = bucketizeWallInstancesByRepeatScale(instances)
-    for (let i = 0; i < buckets.length; i += 1) {
-      const bucket = buckets[i]!
-      const instanced = createWallInstancedMesh(
-        buckets.length > 1 ? `WallBodyInstances:${i}` : 'WallBodyInstances',
-        bodyTemplate,
-        bucket.matrices,
-        resolvedBodyUvAxis,
-        bucket.repeatScale,
-      )
-      if (instanced) {
-        mergeAssetBounds(instanced.boundingBox ?? null)
-        group.add(instanced)
-      }
+    const bodyAssets = createWallRepeatedAssetMeshes('WallBodyMesh', bodyTemplate, instances, materialVariantCache, bodyOrientation, resolvedBodyUvAxis)
+    applyWallMeshMaterialConfigId(bodyAssets.meshes, bodyMaterialConfigId)
+    mergeAssetBounds(bodyAssets.bounds)
+    for (const mesh of bodyAssets.meshes) {
+      group.add(mesh)
     }
   }
 
@@ -1719,20 +2007,10 @@ function rebuildWallGroup(
     for (const chainDef of chainDefinitions) {
       instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
-    const buckets = bucketizeWallInstancesByRepeatScale(instances)
-    for (let i = 0; i < buckets.length; i += 1) {
-      const bucket = buckets[i]!
-      const instanced = createWallInstancedMesh(
-        buckets.length > 1 ? `WallHeadInstances:${i}` : 'WallHeadInstances',
-        headTemplate,
-        bucket.matrices,
-        resolvedHeadUvAxis,
-        bucket.repeatScale,
-      )
-      if (instanced) {
-        mergeAssetBounds(instanced.boundingBox ?? null)
-        group.add(instanced)
-      }
+    const headAssets = createWallRepeatedAssetMeshes('WallHeadMesh', headTemplate, instances, materialVariantCache, headOrientation, resolvedHeadUvAxis)
+    mergeAssetBounds(headAssets.bounds)
+    for (const mesh of headAssets.meshes) {
+      group.add(mesh)
     }
   }
 
@@ -1743,20 +2021,10 @@ function rebuildWallGroup(
     for (const chainDef of chainDefinitions) {
       instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
-    const buckets = bucketizeWallInstancesByRepeatScale(instances)
-    for (let i = 0; i < buckets.length; i += 1) {
-      const bucket = buckets[i]!
-      const instanced = createWallInstancedMesh(
-        buckets.length > 1 ? `WallFootInstances:${i}` : 'WallFootInstances',
-        footTemplate,
-        bucket.matrices,
-        resolvedFootUvAxis,
-        bucket.repeatScale,
-      )
-      if (instanced) {
-        mergeAssetBounds(instanced.boundingBox ?? null)
-        group.add(instanced)
-      }
+    const footAssets = createWallRepeatedAssetMeshes('WallFootMesh', footTemplate, instances, materialVariantCache, footOrientation, resolvedFootUvAxis)
+    mergeAssetBounds(footAssets.bounds)
+    for (const mesh of footAssets.meshes) {
+      group.add(mesh)
     }
   }
 
@@ -1764,18 +2032,9 @@ function rebuildWallGroup(
     const bodyEndCapOrientation = requireWallOrientation(options.bodyEndCapOrientation, 'bodyEndCapOrientation')
     const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, bodyEndCapTemplate, 'body', bodyEndCapOrientation))
     if (localMatrices.length > 0) {
-      const instanced = new THREE.InstancedMesh(bodyEndCapTemplate.geometry, bodyEndCapTemplate.material, localMatrices.length)
-      instanced.name = 'WallBodyEndCapInstances'
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
-      }
-      instanced.instanceMatrix.needsUpdate = true
-      mergeAssetBounds(applyInstancedMeshBounds(instanced, bodyEndCapTemplate.bounds, localMatrices))
-      group.add(instanced)
+      const bodyEndCapAssets = createWallStaticAssetMeshes('WallBodyEndCapMesh', bodyEndCapTemplate, localMatrices)
+      mergeAssetBounds(bodyEndCapAssets.bounds)
+      bodyEndCapAssets.meshes.forEach((mesh) => group.add(mesh))
     }
   }
 
@@ -1783,18 +2042,9 @@ function rebuildWallGroup(
     const headEndCapOrientation = requireWallOrientation(options.headEndCapOrientation, 'headEndCapOrientation')
     const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, headEndCapTemplate, 'head', headEndCapOrientation))
     if (localMatrices.length > 0) {
-      const instanced = new THREE.InstancedMesh(headEndCapTemplate.geometry, headEndCapTemplate.material, localMatrices.length)
-      instanced.name = 'WallHeadEndCapInstances'
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
-      }
-      instanced.instanceMatrix.needsUpdate = true
-      mergeAssetBounds(applyInstancedMeshBounds(instanced, headEndCapTemplate.bounds, localMatrices))
-      group.add(instanced)
+      const headEndCapAssets = createWallStaticAssetMeshes('WallHeadEndCapMesh', headEndCapTemplate, localMatrices)
+      mergeAssetBounds(headEndCapAssets.bounds)
+      headEndCapAssets.meshes.forEach((mesh) => group.add(mesh))
     }
   }
 
@@ -1802,18 +2052,9 @@ function rebuildWallGroup(
     const footEndCapOrientation = requireWallOrientation(options.footEndCapOrientation, 'footEndCapOrientation')
     const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, footEndCapTemplate, 'foot', footEndCapOrientation))
     if (localMatrices.length > 0) {
-      const instanced = new THREE.InstancedMesh(footEndCapTemplate.geometry, footEndCapTemplate.material, localMatrices.length)
-      instanced.name = 'WallFootEndCapInstances'
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
-      }
-      instanced.instanceMatrix.needsUpdate = true
-      mergeAssetBounds(applyInstancedMeshBounds(instanced, footEndCapTemplate.bounds, localMatrices))
-      group.add(instanced)
+      const footEndCapAssets = createWallStaticAssetMeshes('WallFootEndCapMesh', footEndCapTemplate, localMatrices)
+      mergeAssetBounds(footEndCapAssets.bounds)
+      footEndCapAssets.meshes.forEach((mesh) => group.add(mesh))
     }
   }
 
@@ -1857,18 +2098,9 @@ function rebuildWallGroup(
       if (!template || !localMatrices.length) {
         continue
       }
-      const instanced = new THREE.InstancedMesh(template.geometry, template.material, localMatrices.length)
-      instanced.name = `WallCornerInstances:${assetId}`
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
-      }
-      instanced.instanceMatrix.needsUpdate = true
-      mergeAssetBounds(applyInstancedMeshBounds(instanced, template.bounds, localMatrices))
-      group.add(instanced)
+      const cornerAssets = createWallStaticAssetMeshes(`WallCornerMesh:${assetId}`, template, localMatrices)
+      mergeAssetBounds(cornerAssets.bounds)
+      cornerAssets.meshes.forEach((mesh) => group.add(mesh))
     }
   }
 
@@ -1891,18 +2123,9 @@ function rebuildWallGroup(
       if (!template || !localMatrices.length) {
         continue
       }
-      const instanced = new THREE.InstancedMesh(template.geometry, template.material, localMatrices.length)
-      instanced.name = `WallHeadCornerInstances:${assetId}`
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
-      }
-      instanced.instanceMatrix.needsUpdate = true
-      mergeAssetBounds(applyInstancedMeshBounds(instanced, template.bounds, localMatrices))
-      group.add(instanced)
+      const headCornerAssets = createWallStaticAssetMeshes(`WallHeadCornerMesh:${assetId}`, template, localMatrices)
+      mergeAssetBounds(headCornerAssets.bounds)
+      headCornerAssets.meshes.forEach((mesh) => group.add(mesh))
     }
   }
 
@@ -1925,18 +2148,9 @@ function rebuildWallGroup(
       if (!template || !localMatrices.length) {
         continue
       }
-      const instanced = new THREE.InstancedMesh(template.geometry, template.material, localMatrices.length)
-      instanced.name = `WallFootCornerInstances:${assetId}`
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
-      }
-      instanced.instanceMatrix.needsUpdate = true
-      mergeAssetBounds(applyInstancedMeshBounds(instanced, template.bounds, localMatrices))
-      group.add(instanced)
+      const footCornerAssets = createWallStaticAssetMeshes(`WallFootCornerMesh:${assetId}`, template, localMatrices)
+      mergeAssetBounds(footCornerAssets.bounds)
+      footCornerAssets.meshes.forEach((mesh) => group.add(mesh))
     }
   }
 

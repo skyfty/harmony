@@ -217,6 +217,7 @@ export function buildWallDynamicMeshFromWorldSegments(
     type: 'Wall',
     chains,
     openings: [],
+    bodyMaterialConfigId: null,
     dimensions: normalizedDims,
   }
 
@@ -246,6 +247,7 @@ export function applyWallComponentPropsToNode(
 
   node.dynamicMesh = {
     ...node.dynamicMesh,
+    bodyMaterialConfigId: normalized.bodyMaterialConfigId,
     dimensions: {
       height: normalized.height,
       width: normalized.width,

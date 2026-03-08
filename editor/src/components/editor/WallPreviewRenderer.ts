@@ -30,6 +30,9 @@ export type WallPreviewRenderer = {
 }
 
 const WALL_PREVIEW_SIGNATURE_PRECISION = 1000
+const WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY = '__harmonySkipGeometryDispose'
+const WALL_SKIP_MATERIAL_DISPOSE_USERDATA_KEY = '__harmonySkipMaterialDispose'
+const WALL_OWNED_TEXTURES_USERDATA_KEY = '__harmonyOwnedTextures'
 
 function encodeWallPreviewNumber(value: number): string {
   return `${Math.round(value * WALL_PREVIEW_SIGNATURE_PRECISION)}`
@@ -69,9 +72,21 @@ function disposeWallPreviewGroup(group: THREE.Group) {
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (mesh?.isMesh) {
+      const userData = (mesh.userData ?? {}) as Record<string, unknown>
       const geometry = mesh.geometry
-      if (geometry) {
+      if (geometry && !userData[WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY]) {
         geometry.dispose()
+      }
+      const ownedTextures = userData[WALL_OWNED_TEXTURES_USERDATA_KEY]
+      if (Array.isArray(ownedTextures)) {
+        ownedTextures.forEach((entry) => {
+          if ((entry as THREE.Texture | null | undefined)?.isTexture) {
+            ;(entry as THREE.Texture).dispose()
+          }
+        })
+      }
+      if (userData[WALL_SKIP_MATERIAL_DISPOSE_USERDATA_KEY]) {
+        return
       }
       const material = mesh.material
       if (Array.isArray(material)) {

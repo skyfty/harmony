@@ -741,6 +741,36 @@ function ensureTextureAssetCached(asset: ProjectAsset) {
   })
 }
 
+function resolveDefaultTileSizeMeters(asset: ProjectAsset): { x: number; y: number } | null {
+  const imageWidth = typeof asset.imageWidth === 'number' ? asset.imageWidth : Number.NaN
+  const imageHeight = typeof asset.imageHeight === 'number' ? asset.imageHeight : Number.NaN
+  if (!Number.isFinite(imageWidth) || !Number.isFinite(imageHeight) || imageWidth <= 0 || imageHeight <= 0) {
+    return null
+  }
+  return {
+    x: 1,
+    y: Math.max(1e-6, imageHeight / imageWidth),
+  }
+}
+
+function applyDefaultTileSizeMeters(
+  settings: SceneMaterialTextureSettings,
+  asset: ProjectAsset,
+): SceneMaterialTextureSettings {
+  const nextSettings = cloneTextureSettings(settings)
+  const defaults = resolveDefaultTileSizeMeters(asset)
+  if (!defaults) {
+    return nextSettings
+  }
+  const currentX = Number(nextSettings.tileSizeMeters?.x)
+  const currentY = Number(nextSettings.tileSizeMeters?.y)
+  const currentLooksDefault = Math.abs(currentX - 1) <= 1e-6 && Math.abs(currentY - 1) <= 1e-6
+  if (currentLooksDefault) {
+    nextSettings.tileSizeMeters = defaults
+  }
+  return nextSettings
+}
+
 function handleTextureThumbClick(slot: SceneMaterialTextureSlot, event?: MouseEvent) {
   if (isUiDisabled.value) {
     return
@@ -757,7 +787,8 @@ function handleTextureThumbClick(slot: SceneMaterialTextureSlot, event?: MouseEv
 
 function applyTextureAsset(slot: SceneMaterialTextureSlot, asset: ProjectAsset) {
   const current = formTextures[slot]
-  const nextSettings = current?.settings ? cloneTextureSettings(current.settings) : createTextureSettings()
+  const baseSettings = current?.settings ? cloneTextureSettings(current.settings) : createTextureSettings()
+  const nextSettings = applyDefaultTileSizeMeters(baseSettings, asset)
   assignTexture(slot, { assetId: asset.id, name: asset.name, settings: nextSettings })
   ensureTextureAssetCached(asset)
 }
@@ -810,7 +841,11 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
   event.stopPropagation()
   draggingSlot.value = null
   ensureTextureAssetCached(asset)
-  assignTexture(slot, { assetId: asset.id, name: asset.name, settings: createTextureSettings() })
+  assignTexture(slot, {
+    assetId: asset.id,
+    name: asset.name,
+    settings: applyDefaultTileSizeMeters(createTextureSettings(), asset),
+  })
 }
 
 function handleTextureRemove(slot: SceneMaterialTextureSlot) {

@@ -72,6 +72,8 @@ export interface WallComponentProps {
   width: number
   thickness: number
   smoothing: number
+  /** Material config id used for the wall body mesh (editor-defined). */
+  bodyMaterialConfigId: string | null
   /**
    * When enabled, the wall is rendered as an invisible "air wall".
    * The mesh structure should still exist for rigidbody collision generation.
@@ -141,6 +143,18 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
       throw new Error(`WallComponentProps missing/invalid asset id: ${String(key)}`)
     }
     return raw.trim()
+  }
+
+  const optionalMaterialConfigId = (key: keyof WallComponentProps): string | null => {
+    const raw = (props as any)?.[key]
+    if (raw == null) {
+      return null
+    }
+    if (typeof raw !== 'string') {
+      return null
+    }
+    const trimmed = raw.trim()
+    return trimmed.length ? trimmed : null
   }
 
   const requiredForwardAxis = (value: unknown, label: string): WallForwardAxis => {
@@ -297,6 +311,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     width,
     thickness,
     smoothing,
+    bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     isAirWall: normalizedIsAirWall,
     bodyAssetId,
     bodyOrientation,
@@ -324,6 +339,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
       smoothing: WALL_DEFAULT_SMOOTHING,
+      bodyMaterialConfigId: null,
       isAirWall: false,
       bodyAssetId: null,
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
@@ -349,6 +365,9 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     width: base?.width,
     thickness: base?.thickness,
     smoothing: WALL_DEFAULT_SMOOTHING,
+    bodyMaterialConfigId: typeof mesh.bodyMaterialConfigId === 'string' && mesh.bodyMaterialConfigId.trim().length
+      ? mesh.bodyMaterialConfigId.trim()
+      : null,
     isAirWall: false,
     bodyAssetId: null,
     headAssetId: null,
@@ -375,6 +394,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     width: props.width,
     thickness: props.thickness,
     smoothing: props.smoothing,
+    bodyMaterialConfigId: props.bodyMaterialConfigId ?? null,
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
     bodyOrientation: {
@@ -507,6 +527,7 @@ export function createWallComponentState(
     width: overrides?.width ?? defaults.width,
     thickness: overrides?.thickness ?? defaults.thickness,
     smoothing: overrides?.smoothing ?? defaults.smoothing,
+    bodyMaterialConfigId: overrides?.bodyMaterialConfigId ?? defaults.bodyMaterialConfigId,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
