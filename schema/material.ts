@@ -85,9 +85,16 @@ const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal';
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots';
 const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides';
 const MATERIAL_OVERRIDE_STATE_KEY = '__harmonyMaterialOverrideState';
+const TEXTURE_SETTINGS_USERDATA_KEY = '__harmonyTextureSettings';
 export const MATERIAL_CONFIG_ID_KEY = '__harmonyMaterialConfigId';
 export const WALL_REPEAT_SCALE_KEY = '__harmonyWallRepeatScale';
 export const WALL_REPEAT_UV_AXIS_KEY = '__harmonyWallRepeatUvAxis';
+export const MATERIAL_TEXTURE_REPEAT_INFO_KEY = '__harmonyTextureRepeatInfo';
+
+export type MaterialTextureRepeatInfo = {
+  uvMetersPerUnit: { x: number; y: number };
+  repeatScale?: { x: number; y: number };
+};
 
 type MaterialOverrideState = {
   signature: string;
@@ -101,6 +108,7 @@ export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   wrapR: 'ClampToEdgeWrapping',
   offset: { x: 0, y: 0 },
   repeat: { x: 1, y: 1 },
+  tileSizeMeters: { x: 1, y: 1 },
   rotation: 0,
   center: { x: 0, y: 0 },
   matrixAutoUpdate: true,
@@ -158,6 +166,8 @@ export function createTextureSettings(
 ): SceneMaterialTextureSettings {
   const base = DEFAULT_TEXTURE_SETTINGS;
   const candidate = overrides ?? null;
+  const tileSizeX = typeof candidate?.tileSizeMeters?.x === 'number' ? candidate.tileSizeMeters.x : Number.NaN;
+  const tileSizeY = typeof candidate?.tileSizeMeters?.y === 'number' ? candidate.tileSizeMeters.y : Number.NaN;
   return {
     wrapS: candidate?.wrapS ?? base.wrapS,
     wrapT: candidate?.wrapT ?? base.wrapT,
@@ -169,6 +179,10 @@ export function createTextureSettings(
     repeat: {
       x: candidate?.repeat?.x ?? base.repeat.x,
       y: candidate?.repeat?.y ?? base.repeat.y,
+    },
+    tileSizeMeters: {
+      x: Number.isFinite(tileSizeX) && tileSizeX > 1e-6 ? tileSizeX : base.tileSizeMeters.x,
+      y: Number.isFinite(tileSizeY) && tileSizeY > 1e-6 ? tileSizeY : base.tileSizeMeters.y,
     },
     rotation: candidate?.rotation ?? base.rotation,
     center: {
@@ -200,6 +214,8 @@ export function textureSettingsSignature(
     resolved.offset.y,
     resolved.repeat.x,
     resolved.repeat.y,
+    resolved.tileSizeMeters.x,
+    resolved.tileSizeMeters.y,
     resolved.rotation,
     resolved.center.x,
     resolved.center.y,
@@ -211,6 +227,182 @@ export function textureSettingsSignature(
 }
 
 export const DEFAULT_TEXTURE_SETTINGS_SIGNATURE = textureSettingsSignature();
+
+function sanitizeAutoRepeatAxisValue(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 1e-6) {
+    return fallback;
+  }
+  return numeric;
+}
+
+export function resolveMaterialTextureRepeatInfo(value: unknown): MaterialTextureRepeatInfo | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const record = value as {
+    uvMetersPerUnit?: { x?: unknown; y?: unknown } | null;
+    repeatScale?: { x?: unknown; y?: unknown } | null;
+  };
+  const uvMetersPerUnit = {
+    x: sanitizeAutoRepeatAxisValue(record.uvMetersPerUnit?.x, Number.NaN),
+    y: sanitizeAutoRepeatAxisValue(record.uvMetersPerUnit?.y, Number.NaN),
+  };
+  if (!Number.isFinite(uvMetersPerUnit.x) || !Number.isFinite(uvMetersPerUnit.y)) {
+    return null;
+  }
+  const repeatScale = record.repeatScale
+    ? {
+        x: sanitizeAutoRepeatAxisValue(record.repeatScale.x, 1),
+        y: sanitizeAutoRepeatAxisValue(record.repeatScale.y, 1),
+      }
+    : undefined;
+  return { uvMetersPerUnit, repeatScale };
+}
+
+function computeTextureAxisRepeat(
+  settings: SceneMaterialTextureSettings,
+  repeatInfo: MaterialTextureRepeatInfo | null,
+  axis: 'x' | 'y',
+): number {
+  const manualRepeat = axis === 'x' ? settings.repeat.x : settings.repeat.y;
+  if (!repeatInfo) {
+    return manualRepeat;
+  }
+  const tileSize = axis === 'x' ? settings.tileSizeMeters.x : settings.tileSizeMeters.y;
+  const uvMetersPerUnit = axis === 'x' ? repeatInfo.uvMetersPerUnit.x : repeatInfo.uvMetersPerUnit.y;
+  const repeatScale = axis === 'x'
+    ? repeatInfo.repeatScale?.x ?? 1
+    : repeatInfo.repeatScale?.y ?? 1;
+  return manualRepeat * repeatScale * (uvMetersPerUnit / Math.max(1e-6, tileSize));
+}
+
+function shouldForceTextureRepeatWrap(
+  settings: SceneMaterialTextureSettings,
+  repeatInfo: MaterialTextureRepeatInfo | null,
+  axis: 'x' | 'y',
+): boolean {
+  if (!repeatInfo) {
+    return false;
+  }
+  const tileSize = axis === 'x' ? settings.tileSizeMeters.x : settings.tileSizeMeters.y;
+  const uvMetersPerUnit = axis === 'x' ? repeatInfo.uvMetersPerUnit.x : repeatInfo.uvMetersPerUnit.y;
+  if (tileSize > 1e-6 && uvMetersPerUnit > 1e-6) {
+    return true;
+  }
+  const repeatScale = axis === 'x'
+    ? repeatInfo.repeatScale?.x ?? 1
+    : repeatInfo.repeatScale?.y ?? 1;
+  return Math.abs(repeatScale - 1) > 1e-6;
+}
+
+export function syncTextureRepeatFromAutoInfo(texture: THREE.Texture): void {
+  const settings = createTextureSettings(texture.userData?.[TEXTURE_SETTINGS_USERDATA_KEY] ?? null);
+  const repeatInfo = resolveMaterialTextureRepeatInfo(texture.userData?.[MATERIAL_TEXTURE_REPEAT_INFO_KEY] ?? null);
+  texture.repeat.set(
+    computeTextureAxisRepeat(settings, repeatInfo, 'x'),
+    computeTextureAxisRepeat(settings, repeatInfo, 'y'),
+  );
+  if (shouldForceTextureRepeatWrap(settings, repeatInfo, 'x')) {
+    texture.wrapS = THREE.RepeatWrapping;
+  }
+  if (shouldForceTextureRepeatWrap(settings, repeatInfo, 'y')) {
+    texture.wrapT = THREE.RepeatWrapping;
+  }
+  texture.needsUpdate = true;
+}
+
+export function applyMaterialTextureRepeatInfo(
+  material: THREE.Material,
+  repeatInfo: MaterialTextureRepeatInfo | null | undefined,
+): void {
+  const resolvedRepeatInfo = resolveMaterialTextureRepeatInfo(repeatInfo ?? null);
+  if (!resolvedRepeatInfo) {
+    if (material.userData && MATERIAL_TEXTURE_REPEAT_INFO_KEY in material.userData) {
+      delete material.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY];
+    }
+  } else {
+    material.userData = {
+      ...(material.userData ?? {}),
+      [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: resolvedRepeatInfo,
+    };
+  }
+  const typed = material as THREE.MeshStandardMaterial & Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>;
+  STANDARD_TEXTURE_KEYS.forEach((key) => {
+    const texture = typed[key];
+    if (!texture) {
+      return;
+    }
+    if (resolvedRepeatInfo) {
+      texture.userData = {
+        ...(texture.userData ?? {}),
+        [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: resolvedRepeatInfo,
+      };
+    } else if (texture.userData && MATERIAL_TEXTURE_REPEAT_INFO_KEY in texture.userData) {
+      delete texture.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY];
+    }
+    syncTextureRepeatFromAutoInfo(texture);
+  });
+}
+
+function createAutoTiledMaterialVariantOne(
+  source: THREE.Material,
+  repeatInfo: MaterialTextureRepeatInfo | null,
+): { material: THREE.Material; ownedTextures: THREE.Texture[]; shared: boolean } {
+  const resolvedRepeatInfo = resolveMaterialTextureRepeatInfo(repeatInfo);
+  if (!resolvedRepeatInfo) {
+    return { material: source, ownedTextures: [], shared: true };
+  }
+
+  const typedSource = source as THREE.MeshStandardMaterial & Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>;
+  const cloned = source.clone() as THREE.Material & Record<string, unknown>;
+  const ownedTextures: THREE.Texture[] = [];
+  let changed = false;
+
+  STANDARD_TEXTURE_KEYS.forEach((key) => {
+    const texture = typedSource[key];
+    if (!texture) {
+      return;
+    }
+    const clonedTexture = texture.clone();
+    clonedTexture.userData = {
+      ...(texture.userData ?? {}),
+      [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: resolvedRepeatInfo,
+    };
+    syncTextureRepeatFromAutoInfo(clonedTexture);
+    cloned[key] = clonedTexture;
+    ownedTextures.push(clonedTexture);
+    changed = true;
+  });
+
+  if (!changed) {
+    cloned.dispose();
+    return { material: source, ownedTextures: [], shared: true };
+  }
+
+  applyMaterialTextureRepeatInfo(cloned as THREE.Material, resolvedRepeatInfo);
+  return { material: cloned as THREE.Material, ownedTextures, shared: false };
+}
+
+export function createAutoTiledMaterialVariant(
+  source: THREE.Material | THREE.Material[],
+  repeatInfo: unknown,
+): { material: THREE.Material | THREE.Material[]; ownedTextures: THREE.Texture[]; shared: boolean } {
+  const resolvedRepeatInfo = resolveMaterialTextureRepeatInfo(repeatInfo);
+  if (!resolvedRepeatInfo) {
+    return { material: source, ownedTextures: [], shared: true };
+  }
+  if (Array.isArray(source)) {
+    const variants = source.map((entry) => createAutoTiledMaterialVariantOne(entry, resolvedRepeatInfo));
+    const shared = variants.every((entry) => entry.shared);
+    return {
+      material: shared ? source : variants.map((entry) => entry.material),
+      ownedTextures: variants.flatMap((entry) => entry.ownedTextures),
+      shared,
+    };
+  }
+  return createAutoTiledMaterialVariantOne(source, resolvedRepeatInfo);
+}
 
 export const DEFAULT_SCENE_MATERIAL_ID = '__scene_default_material__';
 
@@ -798,8 +990,9 @@ function assignTextureToMaterial(
   const settingsSignature = textureSettingsSignature(ref.settings);
   const defaultSignature = options.defaultTextureSettingsSignature ?? textureSettingsSignature();
   const wallRepeatInfo = resolveWallRepeatInfo(material);
+  const materialRepeatInfo = resolveMaterialTextureRepeatInfo(material.userData?.[MATERIAL_TEXTURE_REPEAT_INFO_KEY] ?? null);
   const stateKey = `${ref.assetId}|${settingsSignature}`;
-  const needsClone = settingsSignature !== defaultSignature || Boolean(wallRepeatInfo);
+  const needsClone = settingsSignature !== defaultSignature || Boolean(wallRepeatInfo) || Boolean(materialRepeatInfo);
 
   if (slotState[slot] === stateKey) {
     const current = typed[assignment.key] ?? null;
@@ -830,6 +1023,13 @@ function assignTextureToMaterial(
     if (needsClone) {
       instance = texture.clone();
       applyTextureSettings(instance, ref.settings ?? null);
+      if (materialRepeatInfo) {
+        instance.userData = {
+          ...(instance.userData ?? {}),
+          [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: materialRepeatInfo,
+        };
+        syncTextureRepeatFromAutoInfo(instance);
+      }
       if (wallRepeatInfo) {
         applyWallRepeatToTexture(instance, wallRepeatInfo);
       }
@@ -1098,6 +1298,7 @@ export function applyMaterialOverrides(
     }
 
     const materials = Array.isArray(resolvedMaterial) ? resolvedMaterial : [resolvedMaterial];
+    const meshRepeatInfo = resolveMaterialTextureRepeatInfo(mesh.userData?.[MATERIAL_TEXTURE_REPEAT_INFO_KEY] ?? null);
     const configById = requestedSelectorId
       ? (configs.find((entry) => typeof entry?.id === 'string' && entry.id === requestedSelectorId) ?? null)
       : null;
@@ -1114,8 +1315,10 @@ export function applyMaterialOverrides(
           replaced = true;
           disposables.push(dispose);
         }
+        applyMaterialTextureRepeatInfo(materials[index]!, meshRepeatInfo);
         applyMaterialConfigToMaterial(materials[index]!, config, options);
       } else {
+        applyMaterialTextureRepeatInfo(materials[index]!, meshRepeatInfo);
         restoreMaterialFromBaseline(materials[index]!);
       }
     });
@@ -1205,6 +1408,10 @@ function applyTextureSettings(
   overrides: Partial<SceneMaterialTextureSettings> | null,
 ): void {
   const settings = createTextureSettings(overrides);
+  texture.userData = {
+    ...(texture.userData ?? {}),
+    [TEXTURE_SETTINGS_USERDATA_KEY]: cloneTextureSettings(settings),
+  };
   texture.wrapS = resolveWrapMode(settings.wrapS);
   texture.wrapT = resolveWrapMode(settings.wrapT);
   if ('wrapR' in texture) {
@@ -1212,7 +1419,6 @@ function applyTextureSettings(
   }
 
   texture.offset.set(settings.offset.x, settings.offset.y);
-  texture.repeat.set(settings.repeat.x, settings.repeat.y);
   texture.center.set(settings.center.x, settings.center.y);
   texture.rotation = settings.rotation;
   texture.matrixAutoUpdate = settings.matrixAutoUpdate;
@@ -1222,7 +1428,7 @@ function applyTextureSettings(
   texture.generateMipmaps = settings.generateMipmaps;
   texture.premultiplyAlpha = settings.premultiplyAlpha;
   texture.flipY = settings.flipY;
-  texture.needsUpdate = true;
+  syncTextureRepeatFromAutoInfo(texture);
 }
 
 function resolveWrapMode(mode: string): THREE.Wrapping {

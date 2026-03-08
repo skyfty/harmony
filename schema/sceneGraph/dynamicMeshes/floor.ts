@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { FloorDynamicMesh, SceneNodeMaterial } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
 import { createFloorRenderGroup } from '../../floorMesh';
-import { MATERIAL_CONFIG_ID_KEY } from '../../material';
+import { createAutoTiledMaterialVariant, MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from '../../material';
 import { buildMaterialConfigMap } from '../materialAssignment';
 
 function isUnlitDefaultMaterial(material: THREE.Material | THREE.Material[]): boolean {
@@ -20,6 +20,26 @@ function applyFloorMaterialConfigAssignment(
 ): void {
   const selectorKey = options.selectorKey ?? MATERIAL_CONFIG_ID_KEY;
   const canFallbackToDefault = !isUnlitDefaultMaterial(options.defaultMaterial);
+  const materialVariantCache = new Map<string, THREE.Material | THREE.Material[]>();
+
+  const resolveAssignedMaterial = (
+    source: THREE.Material | THREE.Material[],
+    repeatInfo: unknown,
+  ): THREE.Material | THREE.Material[] => {
+    const materialKey = Array.isArray(source)
+      ? source.map((entry) => entry.uuid).join(',')
+      : source.uuid;
+    const repeatKey = repeatInfo ? JSON.stringify(repeatInfo) : '';
+    const cacheKey = `${materialKey}|${repeatKey}`;
+    const cached = materialVariantCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const variant = createAutoTiledMaterialVariant(source, repeatInfo);
+    const assigned = variant.shared ? source : variant.material;
+    materialVariantCache.set(cacheKey, assigned);
+    return assigned;
+  };
 
   root.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
@@ -27,10 +47,11 @@ function applyFloorMaterialConfigAssignment(
       return;
     }
 
+    const repeatInfo = mesh.userData?.[MATERIAL_TEXTURE_REPEAT_INFO_KEY] as unknown;
     const selectorRaw = mesh.userData?.[selectorKey] as unknown;
     const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
     if (selectorId && options.materialByConfigId.has(selectorId)) {
-      mesh.material = options.materialByConfigId.get(selectorId)!;
+      mesh.material = resolveAssignedMaterial(options.materialByConfigId.get(selectorId)!, repeatInfo);
       return;
     }
 
@@ -41,7 +62,7 @@ function applyFloorMaterialConfigAssignment(
       return;
     }
 
-    mesh.material = options.defaultMaterial;
+    mesh.material = resolveAssignedMaterial(options.defaultMaterial, repeatInfo);
   });
 }
 

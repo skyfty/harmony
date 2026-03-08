@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { FloorDynamicMesh } from './index'
-import { MATERIAL_CONFIG_ID_KEY } from './material'
+import { MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from './material'
 
 export type FloorRenderAssetObjects = {
   bodyObject?: THREE.Object3D | null
@@ -224,33 +224,17 @@ function buildFloorShape(definition: FloorDynamicMesh): { shape: THREE.Shape; po
   return { shape, points }
 }
 
-function buildPlanarUvAttribute(geometry: THREE.BufferGeometry): void {
+function buildWorldUnitPlanarUvAttribute(geometry: THREE.BufferGeometry): void {
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
   if (!position || position.count <= 0) {
     return
   }
-
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-  for (let i = 0; i < position.count; i += 1) {
-    const x = position.getX(i)
-    const z = position.getZ(i)
-    if (x < minX) minX = x
-    if (x > maxX) maxX = x
-    if (z < minZ) minZ = z
-    if (z > maxZ) maxZ = z
-  }
-
-  const sizeX = Math.max(maxX - minX, FLOOR_EPSILON)
-  const sizeZ = Math.max(maxZ - minZ, FLOOR_EPSILON)
   const uvs = new Float32Array(position.count * 2)
   for (let i = 0; i < position.count; i += 1) {
     const x = position.getX(i)
     const z = position.getZ(i)
-    uvs[i * 2] = (x - minX) / sizeX
-    uvs[i * 2 + 1] = (z - minZ) / sizeZ
+    uvs[i * 2] = x
+    uvs[i * 2 + 1] = z
   }
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
 }
@@ -319,7 +303,7 @@ function buildFloorTopBottomGeometry(definition: FloorDynamicMesh, shape: THREE.
   if (thickness <= FLOOR_EPSILON) {
     const geometry = new THREE.ShapeGeometry(shape).toNonIndexed()
     geometry.rotateX(-Math.PI / 2)
-    buildPlanarUvAttribute(geometry)
+    buildWorldUnitPlanarUvAttribute(geometry)
 
     const position = geometry.getAttribute('position') as THREE.BufferAttribute
     geometry.setAttribute('normal', buildFlatNormalAttribute(position.count, 1))
@@ -331,7 +315,7 @@ function buildFloorTopBottomGeometry(definition: FloorDynamicMesh, shape: THREE.
   // Thickness > 0: top + bottom faces.
   const base = new THREE.ShapeGeometry(shape).toNonIndexed()
   base.rotateX(-Math.PI / 2)
-  buildPlanarUvAttribute(base)
+  buildWorldUnitPlanarUvAttribute(base)
   const basePos = base.getAttribute('position') as THREE.BufferAttribute
   // Bottom face at y=0 (points down).
   base.setAttribute('normal', buildFlatNormalAttribute(basePos.count, -1))
@@ -362,8 +346,6 @@ function buildFloorSideGeometry(definition: FloorDynamicMesh, shape: THREE.Shape
   if (thickness <= FLOOR_EPSILON) {
     return null
   }
-
-  const sideUvScale = resolveSideUvScale((definition as any).sideUvScale)
 
   const extracted = shape.extractPoints(96)
   const raw = Array.isArray(extracted?.shape) && extracted.shape.length ? extracted.shape : fallback
@@ -429,10 +411,10 @@ function buildFloorSideGeometry(definition: FloorDynamicMesh, shape: THREE.Shape
       uvs.push(u, vv)
     }
 
-    const uA = sA * sideUvScale.u
-    const uB = sB * sideUvScale.u
-    const v0 = 0 * sideUvScale.v
-    const v1 = thickness * sideUvScale.v
+    const uA = sA
+    const uB = sB
+    const v0 = 0
+    const v1 = thickness
 
     if (isCcw) {
       // Outward normals for CCW contour.
@@ -478,6 +460,7 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
   }
 
   const { topBottom, side } = resolveFloorMaterialConfigIds(definition)
+  const sideUvScale = resolveSideUvScale((definition as any).sideUvScale)
 
   const topBottomGeometry = buildFloorTopBottomGeometry(definition, shapeInfo.shape)
   if (!topBottomGeometry) {
@@ -489,6 +472,10 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
   topBottomMesh.castShadow = false
   topBottomMesh.receiveShadow = true
   topBottomMesh.userData[MATERIAL_CONFIG_ID_KEY] = topBottom
+  topBottomMesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = {
+    uvMetersPerUnit: { x: 1, y: 1 },
+    repeatScale: { x: 1, y: 1 },
+  }
   group.add(topBottomMesh)
 
   const sideGeometry = buildFloorSideGeometry(definition, shapeInfo.shape, shapeInfo.points)
@@ -498,6 +485,10 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
     sideMesh.castShadow = true
     sideMesh.receiveShadow = true
     sideMesh.userData[MATERIAL_CONFIG_ID_KEY] = side
+    sideMesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = {
+      uvMetersPerUnit: { x: 1, y: 1 },
+      repeatScale: { x: sideUvScale.u, y: sideUvScale.v },
+    }
     group.add(sideMesh)
   }
 }
@@ -611,6 +602,10 @@ export function createFloorRenderGroup(definition: FloorDynamicMesh, assets: Flo
       }
       const { topBottom } = resolveFloorMaterialConfigIds(definition)
       mesh.userData[MATERIAL_CONFIG_ID_KEY] = topBottom
+      mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = {
+        uvMetersPerUnit: { x: 1, y: 1 },
+        repeatScale: { x: 1, y: 1 },
+      }
     })
   }
 

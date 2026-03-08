@@ -64,7 +64,7 @@ function coerceNumber(value: unknown, fallback: number): number {
 }
 
 function handleVectorChange(
-  key: 'offset' | 'repeat' | 'center',
+  key: 'offset' | 'repeat' | 'center' | 'tileSizeMeters',
   axis: 'x' | 'y',
   value: string | number,
 ) {
@@ -143,6 +143,31 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
         <div class="section-title">Filtering &amp; Sampling</div>
         <div class="vector-grid">
           <div class="vector-group">
+            <div class="vector-label">Tile Size (m)</div>
+            <div class="vector-inputs">
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="W"
+                :model-value="localSettings.tileSizeMeters.x"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('tileSizeMeters', 'x', value as string | number)"
+              />
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="H"
+                :model-value="localSettings.tileSizeMeters.y"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('tileSizeMeters', 'y', value as string | number)"
+              />
+            </div>
+          </div>
+          <div class="vector-group">
             <div class="vector-label">Offset</div>
             <div class="vector-inputs">
               <v-text-field
@@ -168,7 +193,7 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             </div>
           </div>
           <div class="vector-group">
-            <div class="vector-label">Repeat</div>
+            <div class="vector-label">Repeat Multiplier</div>
             <div class="vector-inputs">
               <v-text-field
                 type="number"

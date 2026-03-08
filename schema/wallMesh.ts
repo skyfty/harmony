@@ -1,6 +1,12 @@
 import * as THREE from 'three'
 import type { WallDynamicMesh } from './index'
-import { MATERIAL_CONFIG_ID_KEY, WALL_REPEAT_SCALE_KEY, WALL_REPEAT_UV_AXIS_KEY } from './material'
+import {
+  createAutoTiledMaterialVariant,
+  MATERIAL_CONFIG_ID_KEY,
+  MATERIAL_TEXTURE_REPEAT_INFO_KEY,
+  WALL_REPEAT_SCALE_KEY,
+  WALL_REPEAT_UV_AXIS_KEY,
+} from './material'
 import { compileWallSegmentsFromDefinition, resolveWallDimensionsFromDefinition, type WallRenderSegment } from './wallLayout'
 
 export type WallRenderAssetObjects = {
@@ -563,31 +569,34 @@ function getWallMaterialIdentityId(material: THREE.Material): number {
 
 function buildWallMaterialVariantCacheKey(
   original: THREE.Material | THREE.Material[],
-  uvAxis: WallResolvedUvAxis,
-  quantizedRepeatScale: number,
+  repeatKey: string,
 ): string {
   const materialKey = Array.isArray(original)
     ? original.map((entry) => `${getWallMaterialIdentityId(entry)}`).join(',')
     : `${getWallMaterialIdentityId(original)}`
-  return `${uvAxis}|${Math.round(quantizedRepeatScale * WALL_REPEAT_SCALE_CACHE_PRECISION)}|${materialKey}`
+  return `${repeatKey}|${materialKey}`
 }
 
-function getOrCreateWallRepeatedMaterialSet(
+function getOrCreateWallAutoTiledMaterialSet(
   cache: WallMaterialVariantCache,
   original: THREE.Material | THREE.Material[],
-  uvAxis: WallResolvedUvAxis,
-  repeatScale: number,
+  repeatInfo: {
+    uvMetersPerUnit: { x: number; y: number }
+    repeatScale?: { x: number; y: number }
+  } | null,
 ): WallRepeatedMaterialSet & { owner: boolean } {
-  const quantizedRepeatScale = quantizeWallRepeatScale(repeatScale)
-  if (Math.abs(quantizedRepeatScale - 1) <= WALL_EPSILON) {
+  if (!repeatInfo) {
     return { material: original, ownedTextures: [], shared: true, owner: false }
   }
 
-  const cacheKey = buildWallMaterialVariantCacheKey(original, uvAxis, quantizedRepeatScale)
+  const cacheKey = buildWallMaterialVariantCacheKey(original, JSON.stringify(repeatInfo))
   let cached = cache.get(cacheKey)
   if (!cached) {
+    const variant = createAutoTiledMaterialVariant(original, repeatInfo)
     cached = {
-      ...createWallRepeatedMaterialSet(original, uvAxis, quantizedRepeatScale),
+      material: variant.material,
+      ownedTextures: variant.ownedTextures,
+      shared: variant.shared,
       ownerClaimed: false,
     }
     cache.set(cacheKey, cached)
@@ -617,7 +626,8 @@ function getOrCreateWallRepeatedMaterialSet(
 
 type StretchedWallInstance = {
   matrix: THREE.Matrix4
-  repeatScale: number
+  repeatScaleU: number
+  repeatScaleV: number
 }
 
 /**
@@ -713,7 +723,8 @@ function buildStretchedWallInstancesForSegs(
 
     instances.push({
       matrix: new THREE.Matrix4().copy(localMatrix),
-      repeatScale: sanitizeWallRepeatScale(stretchFactor),
+      repeatScaleU: sanitizeWallRepeatScale(stretchFactor),
+      repeatScaleV: sanitizeWallRepeatScale(scaleY),
     })
   }
   return instances
@@ -726,6 +737,10 @@ function createWallAssetMesh(
   options: {
     skipMaterialDispose?: boolean
     ownedTextures?: THREE.Texture[]
+    repeatInfo?: {
+      uvMetersPerUnit: { x: number; y: number }
+      repeatScale?: { x: number; y: number }
+    }
   } = {},
 ): THREE.Mesh {
   const mesh = new THREE.Mesh(template.geometry, material)
@@ -737,6 +752,9 @@ function createWallAssetMesh(
   }
   if (options.ownedTextures?.length) {
     mesh.userData[WALL_OWNED_TEXTURES_USERDATA_KEY] = options.ownedTextures
+  }
+  if (options.repeatInfo) {
+    mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = options.repeatInfo
   }
   mesh.castShadow = true
   mesh.receiveShadow = true
@@ -752,18 +770,30 @@ function createWallRepeatedAssetMeshes(
   template: InstancedAssetTemplate,
   instances: StretchedWallInstance[],
   materialVariantCache: WallMaterialVariantCache,
+  orientation: WallModelOrientation,
   uvAxis: WallResolvedUvAxis = 'u',
 ): { meshes: THREE.Mesh[]; bounds: THREE.Box3 | null } {
   if (!instances.length) {
     return { meshes: [], bounds: null }
   }
 
+  const { tileLengthLocal } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+  const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
+
   const meshes = instances.map((instance, index) => {
-    const materialVariant = getOrCreateWallRepeatedMaterialSet(
+    const repeatInfo = uvAxis === 'v'
+      ? {
+          uvMetersPerUnit: { x: templateHeight, y: tileLengthLocal },
+          repeatScale: { x: instance.repeatScaleV, y: instance.repeatScaleU },
+        }
+      : {
+          uvMetersPerUnit: { x: tileLengthLocal, y: templateHeight },
+          repeatScale: { x: instance.repeatScaleU, y: instance.repeatScaleV },
+        }
+    const materialVariant = getOrCreateWallAutoTiledMaterialSet(
       materialVariantCache,
       template.material,
-      uvAxis,
-      instance.repeatScale,
+      repeatInfo,
     )
     return createWallAssetMesh(
       `${namePrefix}:${index}`,
@@ -773,6 +803,7 @@ function createWallRepeatedAssetMeshes(
       {
         skipMaterialDispose: materialVariant.shared || !materialVariant.owner,
         ownedTextures: materialVariant.owner ? materialVariant.ownedTextures : [],
+        repeatInfo,
       },
     )
   })
@@ -1871,6 +1902,10 @@ function rebuildWallGroup(
     mesh.name = chainDefinitions.length > 1 ? `WallMesh:${chainIndex}` : 'WallMesh'
     mesh.userData.dynamicMeshType = 'Wall'
     mesh.userData[MATERIAL_CONFIG_ID_KEY] = bodyMaterialConfigId
+    mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = {
+      uvMetersPerUnit: { x: 1, y: 1 },
+      repeatScale: { x: 1, y: 1 },
+    }
     mesh.castShadow = true
     mesh.receiveShadow = true
     mesh.visible = !modelModeEnabled
@@ -1932,7 +1967,7 @@ function rebuildWallGroup(
     for (const chainDef of chainDefinitions) {
       instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
-    const bodyAssets = createWallRepeatedAssetMeshes('WallBodyMesh', bodyTemplate, instances, materialVariantCache, resolvedBodyUvAxis)
+    const bodyAssets = createWallRepeatedAssetMeshes('WallBodyMesh', bodyTemplate, instances, materialVariantCache, bodyOrientation, resolvedBodyUvAxis)
     applyWallMeshMaterialConfigId(bodyAssets.meshes, bodyMaterialConfigId)
     mergeAssetBounds(bodyAssets.bounds)
     for (const mesh of bodyAssets.meshes) {
@@ -1947,7 +1982,7 @@ function rebuildWallGroup(
     for (const chainDef of chainDefinitions) {
       instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
-    const headAssets = createWallRepeatedAssetMeshes('WallHeadMesh', headTemplate, instances, materialVariantCache, resolvedHeadUvAxis)
+    const headAssets = createWallRepeatedAssetMeshes('WallHeadMesh', headTemplate, instances, materialVariantCache, headOrientation, resolvedHeadUvAxis)
     mergeAssetBounds(headAssets.bounds)
     for (const mesh of headAssets.meshes) {
       group.add(mesh)
@@ -1961,7 +1996,7 @@ function rebuildWallGroup(
     for (const chainDef of chainDefinitions) {
       instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
-    const footAssets = createWallRepeatedAssetMeshes('WallFootMesh', footTemplate, instances, materialVariantCache, resolvedFootUvAxis)
+    const footAssets = createWallRepeatedAssetMeshes('WallFootMesh', footTemplate, instances, materialVariantCache, footOrientation, resolvedFootUvAxis)
     mergeAssetBounds(footAssets.bounds)
     for (const mesh of footAssets.meshes) {
       group.add(mesh)

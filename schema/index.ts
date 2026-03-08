@@ -331,6 +331,7 @@ export interface SceneMaterialTextureSettings {
   wrapR: SceneTextureWrapMode;
   offset: Vector2Like;
   repeat: Vector2Like;
+  tileSizeMeters: Vector2Like;
   rotation: number;
   center: Vector2Like;
   matrixAutoUpdate: boolean;
