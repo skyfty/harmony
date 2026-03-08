@@ -218,6 +218,18 @@ const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 const VEHICLE_FOLLOW_DISTANCE_MIN = 1
 // 跟随相机最大距离
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
+// 跟随相机基于转向输入的即时偏航反馈上限
+const VEHICLE_FOLLOW_STEER_LOOK_MAX = THREE.MathUtils.degToRad(14)
+// 低于该速度时基本不施加转向视觉偏航
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD = 0.75
+// 达到该速度后使用完整的转向视觉偏航
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 5.5
+// 转向视觉偏航建立速度（越大越接近即时）
+const VEHICLE_FOLLOW_STEER_LOOK_CATCH_SPEED = 18
+// 松开转向后的回正时间常数（秒）；值越小回正越快
+const VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT = 0.22
+// 非零目标转向时的跟随时间常数（秒）；值越小越跟手
+const VEHICLE_FOLLOW_STEER_LOOK_TRACK_TIME_CONSTANT = 0.08
 // 跟随相机高度比例（调高让车辆在画面中更靠下）
 const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.7 // 降低相机高度比例
 const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0   // 降低相机最小高度
@@ -281,6 +293,7 @@ export class VehicleDriveController {
   private readonly followCameraVelocity = new THREE.Vector3()
   private readonly followCameraVelocityScratch = new THREE.Vector3()
   private readonly followCameraLastAnchor = new THREE.Vector3()
+  private followCameraSteerLookAngle = 0
 
   private readonly temp = {
     box: new THREE.Box3(),
@@ -359,7 +372,7 @@ export class VehicleDriveController {
     if (typeof resolved !== 'number' || !Number.isFinite(resolved)) {
       return 8
     }
-    return Math.max(0.5, Math.min(30, resolved))
+    return Math.max(0, Math.min(30, resolved))
   }
 
   private getFollowCameraTuning(): Partial<CameraFollowTuning> | undefined {
@@ -566,6 +579,7 @@ export class VehicleDriveController {
     this.bindings.exitBusy.value = false
     this.cameraMode = 'follow'
     this.bindings.cameraFollowState.initialized = false
+    this.followCameraSteerLookAngle = 0
     this.resetFollowCameraOffset()
     this.resetInputs()
     if (this.deps.setCameraViewState) {
@@ -649,6 +663,7 @@ export class VehicleDriveController {
     this.clearSmoothStop()
     this.followCameraVelocityHasSample = false
     this.followCameraVelocity.set(0, 0, 0)
+    this.followCameraSteerLookAngle = 0
     this.bindings.exitBusy.value = false
     this.cameraMode = 'first-person'
     if (this.deps.setCameraCaging) {
@@ -996,8 +1011,8 @@ export class VehicleDriveController {
 
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
 
-    // Camera velocity: use anchor differencing (planar) + smoothing instead of raw chassis velocity.
-    // Physics velocity can include wheel-contact noise which becomes visible as camera micro-jitter.
+    // Camera velocity: prefer a single stable source for all platforms.
+    // Use physics velocity when the host can supply it; otherwise fall back to anchor differencing.
     if (options.immediate) {
       this.followCameraVelocityHasSample = false
       this.followCameraVelocity.set(0, 0, 0)
@@ -1010,8 +1025,8 @@ export class VehicleDriveController {
       const resolvedNodeId = nodeId ?? null
       const resolveVelocity = resolvedNodeId && chassisBody ? this.deps.resolveChassisWorldVelocity : undefined
 
-      if (isWeChatMiniProgram && resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
-        // Use host-provided velocity (often more stable than per-frame differencing).
+      if (resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
+        // Use host-provided velocity when available to keep sampling consistent across platforms.
       } else {
         this.followCameraVelocityScratch
           .copy(temp.followAnchor)
@@ -1027,6 +1042,47 @@ export class VehicleDriveController {
     }
     this.followCameraLastAnchor.copy(temp.followAnchor)
 
+    const desiredFollowForward = temp.cameraForward.copy(temp.seatForward)
+    desiredFollowForward.y = 0
+    if (desiredFollowForward.lengthSq() < 1e-6) {
+      desiredFollowForward.set(0, 0, 1)
+    } else {
+      desiredFollowForward.normalize()
+    }
+
+    const steeringInput = THREE.MathUtils.clamp(this.input.steering, -1, 1)
+    const planarSpeed = Math.sqrt(this.followCameraVelocity.x * this.followCameraVelocity.x + this.followCameraVelocity.z * this.followCameraVelocity.z)
+    const steerLookRange = Math.max(1e-3, VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL - VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD)
+    const steerLookBlend = planarSpeed <= VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD
+      ? 0
+      : Math.min(1, (planarSpeed - VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD) / steerLookRange)
+    const targetSteerLookAngle = steeringInput * VEHICLE_FOLLOW_STEER_LOOK_MAX * steerLookBlend
+    if (options.immediate || deltaSeconds <= 0) {
+      this.followCameraSteerLookAngle = targetSteerLookAngle
+    } else {
+      // Use exponential responses so feel is consistent across variable frame times.
+      if (Math.abs(targetSteerLookAngle) <= 1e-5) {
+        const releaseAlpha = 1 - Math.exp(-deltaSeconds / Math.max(1e-4, VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT))
+        this.followCameraSteerLookAngle += (0 - this.followCameraSteerLookAngle) * releaseAlpha
+      } else {
+        const trackTime = Math.max(1e-4, VEHICLE_FOLLOW_STEER_LOOK_TRACK_TIME_CONSTANT)
+        const trackAlpha = 1 - Math.exp(-deltaSeconds / trackTime)
+        this.followCameraSteerLookAngle += (targetSteerLookAngle - this.followCameraSteerLookAngle) * trackAlpha
+      }
+
+      // Tiny residuals near center can look like jitter; snap them to zero.
+      if (Math.abs(this.followCameraSteerLookAngle) < THREE.MathUtils.degToRad(0.2)) {
+        this.followCameraSteerLookAngle = 0
+      }
+    }
+
+    if (Math.abs(this.followCameraSteerLookAngle) > 1e-4) {
+      desiredFollowForward.applyAxisAngle(VEHICLE_CAMERA_WORLD_UP, this.followCameraSteerLookAngle)
+      if (desiredFollowForward.lengthSq() > 1e-6) {
+        desiredFollowForward.normalize()
+      }
+    }
+
     const updateOrbitLookTween = this.deps.updateOrbitLookTween
     const tuning = this.getFollowCameraTuning()
 
@@ -1034,7 +1090,7 @@ export class VehicleDriveController {
       follow,
       placement,
       anchorWorld: temp.followAnchor,
-      desiredForwardWorld: temp.seatForward,
+      desiredForwardWorld: desiredFollowForward,
       velocityWorld: this.followCameraVelocity,
       deltaSeconds,
       ctx,

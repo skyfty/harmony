@@ -279,7 +279,6 @@
         class="viewer-drive-console viewer-drive-console--mobile"
       >
         <view class="viewer-drive-cluster viewer-drive-cluster--actions">
-   
           <button
             class="viewer-drive-icon-button"
             :class="{ 'is-busy': vehicleDriveResetBusy }"
@@ -2376,18 +2375,24 @@ const vehicleDriveController = new VehicleDriveController(
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
     onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
 
-    // WeChat-specific follow camera tuning to reduce visible micro-jitter.
-    followCameraVelocityLerpSpeed: () => (isWeChatMiniProgram ? 4.5 : 8),
-    followCameraTuning: () => (
-      isWeChatMiniProgram
-        ? {
-          lookaheadTime: 0.12,
-          lookaheadDistanceMax: 2,
-          lookaheadMinSpeedSq: 1.6,
-          lookaheadBlendStart: 0.35,
-        }
-        : {}
-    ),
+    // Use one shared follow-camera tuning profile across platforms.
+    followCameraVelocityLerpSpeed: () => 0,
+    followCameraTuning: () => ({
+      positionLerpSpeed: 0,
+      targetLerpSpeed: 0,
+      headingLerpSpeed: 0,
+      anchorLerpSpeed: 0,
+      lookaheadTime: 0,
+      lookaheadDistanceMax: 0,
+      lookaheadMinSpeedSq: 1,
+      lookaheadBlendStart: 99,
+      lookaheadBlendSpeed: 0,
+      motionSpeedThreshold: 99,
+      motionSpeedFull: 7,
+      motionBlendSpeed: 0,
+      motionDistanceBoost: 0,
+      motionHeightBoost: 0,
+    }),
 
     // Provide interpolated chassis position for camera anchor (when physics interpolation is enabled).
     resolveChassisWorldPosition: (nodeId, chassisBody, target) => {
@@ -7479,10 +7484,16 @@ function updateVehicleDriveCamera(
   deltaSeconds = 0,
   options: VehicleDriveCameraUpdateOptions = {},
 ): boolean {
+  const disableOrbitControlsForDriveFollow = vehicleDriveCameraMode.value === 'follow';
   const ctx = renderContext
-    ? { camera: renderContext.camera, mapControls: renderContext.controls }
+    ? {
+      camera: renderContext.camera,
+      mapControls: disableOrbitControlsForDriveFollow ? undefined : renderContext.controls,
+    }
     : { camera: null as THREE.PerspectiveCamera | null };
-  return vehicleDriveController.updateCamera(deltaSeconds, ctx, options);
+  return runWithProgrammaticCameraMutationAndAnchor(() =>
+    vehicleDriveController.updateCamera(deltaSeconds, ctx, options),
+  );
 }
 
 function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?: boolean } = {}): boolean {
@@ -7594,7 +7605,6 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   );
 
   autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
-  autoTourCameraFollowHasSample = true;
 
   return updated;
 }
