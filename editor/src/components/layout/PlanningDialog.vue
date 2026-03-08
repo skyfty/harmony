@@ -2455,7 +2455,7 @@ const airWallEnabledModel = computed<boolean>({
   get: () => {
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || kind !== 'green') {
+    if (!target || (kind !== 'green' && kind !== 'terrain')) {
       return false
     }
     return Boolean(target.shape.airWallEnabled)
@@ -2464,7 +2464,7 @@ const airWallEnabledModel = computed<boolean>({
     if (propertyPanelDisabled.value) return
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || kind !== 'green') {
+    if (!target || (kind !== 'green' && kind !== 'terrain')) {
       return
     }
     target.shape.airWallEnabled = Boolean(value)
@@ -6456,6 +6456,12 @@ onBeforeUnmount(() => {
                 hide-details
                 label="Water Type"
                 :disabled="propertyPanelDisabled || !terrainContourWaterPresetEnabled"
+              />
+              <v-switch
+                v-model="airWallEnabledModel"
+                density="compact"
+                hide-details
+                label="Air Wall"
               />
             </div>
 

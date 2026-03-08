@@ -65,7 +65,9 @@ export const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 const PLANNING_PIXELS_PER_METER = 10
 const PLANNING_IMAGE_HEIGHT_OFFSET_M = 0.02
 const PLANNING_IMAGE_STACK_OFFSET_M = 0.002
-const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.3
+const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.5
+const PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M = 0.35
+const PLANNING_TERRAIN_AIR_WALL_OUTSET_M = 0.35
 const WATER_OPACITY_EPSILON = 1e-3
 
 export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
@@ -215,7 +217,7 @@ async function createAirWallFromSegments(options: {
   name: string
   planningLayerId: string
   ownerFeatureId: string
-  ownerFeatureKind: 'green'
+  ownerFeatureKind: 'green' | 'terrain'
   segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
 }) {
   const { sceneStore, rootNodeId, name, planningLayerId, ownerFeatureId, ownerFeatureKind, segments } = options
@@ -348,8 +350,9 @@ async function createTerrainWaterSurface(options: {
   }
 
   const worldCenter = toWorldPoint(centroid2d, options.groundWidth, options.groundDepth, 0)
-  const surfaceY = 0- PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
-  const points = contour.map((point) => ({ x: point.x, y: surfaceY, z: point.z }))
+  const surfaceY = 0 - PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
+  const expandedContour = expandWorldPolygonRadially(contour, PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M)
+  const points = expandedContour.map((point) => ({ x: point.x, y: surfaceY, z: point.z }))
 
   const nodeId = await stableUuidV5(`planning:terrain-water:${options.poly.id}`)
   const waterNode = options.sceneStore.createWaterSurfaceMeshNode({
@@ -751,6 +754,39 @@ function polygonEdges(points: PlanningPoint[]): Array<{ start: PlanningPoint; en
   return edges
 }
 
+function expandWorldPolygonRadially(
+  points: Array<{ x: number; y: number; z: number }>,
+  expandMeters: number,
+): Array<{ x: number; y: number; z: number }> {
+  if (!Array.isArray(points) || points.length < 3 || !(expandMeters > 0)) {
+    return points
+  }
+
+  let centroidX = 0
+  let centroidZ = 0
+  for (const point of points) {
+    centroidX += point.x
+    centroidZ += point.z
+  }
+  centroidX /= points.length
+  centroidZ /= points.length
+
+  return points.map((point) => {
+    const dx = point.x - centroidX
+    const dz = point.z - centroidZ
+    const length = Math.hypot(dx, dz)
+    if (length <= 1e-6) {
+      return { ...point }
+    }
+    const scale = (length + expandMeters) / length
+    return {
+      x: centroidX + dx * scale,
+      y: point.y,
+      z: centroidZ + dz * scale,
+    }
+  })
+}
+
 function normalizeScatter(raw: RawScatterPayload | null | undefined): ScatterAssignment | null {
   if (!raw) return null
   const assetId = typeof raw.assetId === 'string' ? raw.assetId.trim() : ''
@@ -787,9 +823,9 @@ const PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX = 20
 const PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT = 1000
 const PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES = 3
 const PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS = 2
-const PLANNING_TERRAIN_WATER_CONTOUR_OUTER_SHOULDER_RATIO = 0.35
-const PLANNING_TERRAIN_WATER_CONTOUR_INNER_RAMP_RATIO = 0.6
-const PLANNING_TERRAIN_WATER_CONTOUR_MAX_RAMP_TO_RADIUS_RATIO = 0.45
+const PLANNING_TERRAIN_WATER_CONTOUR_OUTER_SHOULDER_RATIO = 0.95
+const PLANNING_TERRAIN_WATER_CONTOUR_INNER_RAMP_RATIO = 1.5
+const PLANNING_TERRAIN_WATER_CONTOUR_MAX_RAMP_TO_RADIUS_RATIO = 0.9
 type GroundContourBounds = { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
 
 type TerrainContourProfile = 'default' | 'water'
@@ -1715,9 +1751,44 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     const group = featuresByLayer.get(layerId)!
 
     if (kind === 'terrain') {
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) {
         throwIfAborted(options.signal)
         await yieldController.maybeYield()
+
+        if (Boolean(poly.airWallEnabled)) {
+          const baseName = poly.name?.trim()
+            ? poly.name.trim()
+            : (layerName ? `${layerName} Terrain` : 'Planning Terrain')
+          const terrainBoundary = poly.points
+            .map((point) => toWorldPoint(point, groundWidth, groundDepth, 0))
+            .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
+          const expandedBoundary = expandWorldPolygonRadially(terrainBoundary, PLANNING_TERRAIN_AIR_WALL_OUTSET_M)
+          const segments = expandedBoundary.map((start, index) => {
+            const end = expandedBoundary[(index + 1) % expandedBoundary.length]!
+            const startPoint = {
+              x: start.x,
+              y: groundHeightAt(start.x, start.z),
+              z: start.z,
+            }
+            const endPoint = {
+              x: end.x,
+              y: groundHeightAt(end.x, end.z),
+              z: end.z,
+            }
+            return { start: startPoint, end: endPoint }
+          })
+          await createAirWallFromSegments({
+            sceneStore,
+            rootNodeId: root.id,
+            name: `${baseName} (Air Wall)`,
+            planningLayerId: layerId,
+            ownerFeatureId: poly.id,
+            ownerFeatureKind: 'terrain',
+            segments,
+          })
+        }
+
         await createTerrainWaterSurface({
           sceneStore,
           rootNodeId: root.id,
