@@ -2455,7 +2455,7 @@ const airWallEnabledModel = computed<boolean>({
   get: () => {
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || kind !== 'green') {
+    if (!target || (kind !== 'green' && kind !== 'terrain')) {
       return false
     }
     return Boolean(target.shape.airWallEnabled)
@@ -2464,7 +2464,7 @@ const airWallEnabledModel = computed<boolean>({
     if (propertyPanelDisabled.value) return
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || kind !== 'green') {
+    if (!target || (kind !== 'green' && kind !== 'terrain')) {
       return
     }
     target.shape.airWallEnabled = Boolean(value)
@@ -6459,7 +6459,16 @@ onBeforeUnmount(() => {
               />
             </div>
 
-            <template v-else-if="propertyPanelLayerKind === 'green'">
+            <!-- Air Wall control block (separate) -->
+            <div v-if="selectedTerrainContourPolygon || propertyPanelLayerKind === 'green'" class="property-panel__block">
+              <v-switch
+                v-model="airWallEnabledModel"
+                density="compact"
+                hide-details
+                label="Air Wall"
+              />
+            </div>
+            <template v-if="propertyPanelLayerKind === 'green'">
               <div class="property-panel__density">
                 <div class="property-panel__density-row">
                   <v-switch
