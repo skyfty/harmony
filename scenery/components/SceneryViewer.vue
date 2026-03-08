@@ -3614,46 +3614,6 @@ function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
 }
 
-const previewNodeWorldMatrixPosition = new THREE.Vector3();
-const previewNodeWorldMatrixQuaternion = new THREE.Quaternion();
-const previewNodeWorldMatrixScale = new THREE.Vector3();
-const previewNodeWorldMatrixLocal = new THREE.Matrix4();
-const previewNodeWorldMatrixParentInverse = new THREE.Matrix4();
-
-function composePreviewNodeMatrix(node: SceneNode): THREE.Matrix4 {
-  const position = new THREE.Vector3(node.position.x, node.position.y, node.position.z);
-  const rotation = new THREE.Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ');
-  const quaternion = new THREE.Quaternion().setFromEuler(rotation);
-  const transform = new THREE.Object3D();
-  applyMirroredScaleToObject(transform, node.scale ?? null, node.mirror);
-  const scale = transform.scale.clone();
-  return new THREE.Matrix4().compose(position, quaternion, scale);
-}
-
-function computePreviewNodeWorldMatrix(nodeId: string): THREE.Matrix4 | null {
-  const lineage: SceneNode[] = [];
-  const visited = new Set<string>();
-  let currentId: string | null = nodeId;
-  while (currentId) {
-    if (visited.has(currentId)) {
-      return null;
-    }
-    visited.add(currentId);
-    const currentNode = resolveNodeById(currentId);
-    if (!currentNode) {
-      return null;
-    }
-    lineage.push(currentNode);
-    currentId = resolveParentNodeId(currentId);
-  }
-
-  const worldMatrix = new THREE.Matrix4().identity();
-  for (let index = lineage.length - 1; index >= 0; index -= 1) {
-    worldMatrix.multiply(composePreviewNodeMatrix(lineage[index]!));
-  }
-  return worldMatrix;
-}
-
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
   if (!Array.isArray(nodes)) {
     return null;
@@ -4251,18 +4211,7 @@ function indexSceneObjects(root: THREE.Object3D) {
   root.traverse((object) => {
     const nodeId = object.userData?.nodeId as string | undefined;
     if (nodeId) {
-      let ancestor = object.parent;
-      let hasTaggedAncestor = false;
-      while (ancestor) {
-        if ((ancestor.userData?.nodeId as string | undefined) === nodeId) {
-          hasTaggedAncestor = true;
-          break;
-        }
-        ancestor = ancestor.parent;
-      }
-      if (hasTaggedAncestor) {
-        return;
-      }
+
       nodeObjectMap.set(nodeId, object);
       attachRuntimeForNode(nodeId, object);
       const nodeState = resolveNodeById(nodeId);
@@ -4287,18 +4236,6 @@ function registerSceneSubtree(root: THREE.Object3D): void {
   root.traverse((object) => {
     const nodeId = object.userData?.nodeId as string | undefined;
     if (!nodeId) {
-      return;
-    }
-    let ancestor = object.parent;
-    let hasTaggedAncestor = false;
-    while (ancestor) {
-      if ((ancestor.userData?.nodeId as string | undefined) === nodeId) {
-        hasTaggedAncestor = true;
-        break;
-      }
-      ancestor = ancestor.parent;
-    }
-    if (hasTaggedAncestor) {
       return;
     }
     const existing = nodeObjectMap.get(nodeId) ?? null;
@@ -5955,31 +5892,14 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
   const skipTransformSync = Boolean(autoTour) && !vehicleInstances.has(node.id);
-  if (!skipTransformSync) {
-    const worldMatrix = computePreviewNodeWorldMatrix(node.id);
-    if (worldMatrix) {
-      if (object.parent) {
-        object.parent.updateMatrixWorld(true);
-        previewNodeWorldMatrixParentInverse.copy(object.parent.matrixWorld).invert();
-        previewNodeWorldMatrixLocal.multiplyMatrices(previewNodeWorldMatrixParentInverse, worldMatrix);
-      } else {
-        previewNodeWorldMatrixLocal.copy(worldMatrix);
-      }
-      previewNodeWorldMatrixLocal.decompose(
-        previewNodeWorldMatrixPosition,
-        previewNodeWorldMatrixQuaternion,
-        previewNodeWorldMatrixScale,
-      );
-      object.position.copy(previewNodeWorldMatrixPosition);
-      object.quaternion.copy(previewNodeWorldMatrixQuaternion);
-      object.rotation.setFromQuaternion(previewNodeWorldMatrixQuaternion);
-    } else {
-      if (node.position) {
-        object.position.set(node.position.x, node.position.y, node.position.z);
-      }
-      if (node.rotation) {
-        object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
-      }
+  if (node.position) {
+    if (!skipTransformSync) {
+      object.position.set(node.position.x, node.position.y, node.position.z);
+    }
+  }
+  if (node.rotation) {
+    if (!skipTransformSync) {
+      object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
     }
   }
   applyMirroredScaleToObject(object, node.scale ?? null, node.mirror);

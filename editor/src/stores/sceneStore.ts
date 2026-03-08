@@ -3356,9 +3356,7 @@ function composeNodeMatrix(node: SceneNode): Matrix4 {
   const position = new Vector3(node.position.x, node.position.y, node.position.z)
   const rotation = new Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ')
   const quaternion = new Quaternion().setFromEuler(rotation)
-  const transform = new Object3D()
-  applyMirroredScaleToObject(transform, node.scale, node.mirror)
-  const scale = transform.scale.clone()
+  const scale = new Vector3(node.scale.x, node.scale.y, node.scale.z)
   return new Matrix4().compose(position, quaternion, scale)
 }
 
