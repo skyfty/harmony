@@ -6519,6 +6519,22 @@ type PendingNodePatch = {
   fields: string[]
 }
 
+function isMaterialOnlyNodePatch(patch: PendingNodePatch): boolean {
+  return patch.fields.length === 1 && patch.fields[0] === 'materials'
+}
+
+function applyNodeMaterialsOnly(object: THREE.Object3D, node: SceneNode): void {
+  const userData = object.userData ?? (object.userData = {})
+  userData.nodeId = node.id
+  userData.nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
+  userData.dynamicMeshType = node.dynamicMesh?.type ?? userData.dynamicMeshType ?? null
+  if (node.materials && node.materials.length) {
+    applyMaterialOverrides(object, node.materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(object)
+  }
+}
+
 function shouldRefreshPlaceholderOverlaysFromPatches(patches: Array<{ type: string }>): boolean {
   return patches.some((patch) => {
     if (patch.type === 'structure' || patch.type === 'remove') {
@@ -6561,6 +6577,10 @@ function applyNodePatchesFast(nodePatches: PendingNodePatch[], removedIds: Set<s
     const node = findSceneNode(sceneStore.nodes, nodeId)
     const object = objectMap.get(nodeId) ?? null
     if (!node || !object) {
+      continue
+    }
+    if (isMaterialOnlyNodePatch(patch)) {
+      applyNodeMaterialsOnly(object, node)
       continue
     }
     updateNodeObject(object, node)
@@ -6618,12 +6638,16 @@ function applyNodePatchesWithTopology(
       refreshPlacementSurfaceTargetsForNode(nodeId)
       continue
     }
-    if (shouldRecreateNode(object, node)) {
+    if (!isMaterialOnlyNodePatch(patch) && shouldRecreateNode(object, node)) {
       if (!recreateNodeSubtree(nodeId, node, parentIdMap)) {
         syncSceneGraph()
         return true
       }
       refreshPlacementSurfaceTargetsForNode(nodeId)
+      continue
+    }
+    if (isMaterialOnlyNodePatch(patch)) {
+      applyNodeMaterialsOnly(object, node)
       continue
     }
     updateNodeObject(object, node)
@@ -6645,7 +6669,7 @@ function applyNodePatchesIncrementally(nodePatches: PendingNodePatch[], removedI
       continue
     }
     const object = objectMap.get(nodeId) ?? null
-    if (!object || shouldRecreateNode(object, node)) {
+    if (!object || (!isMaterialOnlyNodePatch(patch) && shouldRecreateNode(object, node))) {
       needsTopology = true
       break
     }
