@@ -480,11 +480,13 @@ export class FollowCameraController {
       follow.initialized = true
     } else {
       const positionAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.positionLerpSpeed)
-      const targetAlpha = pureProgrammaticFollow
-        ? positionAlpha
-        : computeFollowLerpAlpha(deltaSeconds, tuning.targetLerpSpeed)
       follow.currentPosition.lerp(follow.desiredPosition, positionAlpha)
-      follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
+      if (pureProgrammaticFollow) {
+        follow.currentTarget.copy(follow.desiredTarget)
+      } else {
+        const targetAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.targetLerpSpeed)
+        follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
+      }
     }
 
     camera.position.copy(follow.currentPosition)

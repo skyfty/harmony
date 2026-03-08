@@ -218,6 +218,12 @@ const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 const VEHICLE_FOLLOW_DISTANCE_MIN = 1
 // 跟随相机最大距离
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
+// 跟随相机基于转向输入的即时偏航反馈上限
+const VEHICLE_FOLLOW_STEER_LOOK_MAX = THREE.MathUtils.degToRad(14)
+// 低于该速度时基本不施加转向视觉偏航
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD = 0.75
+// 达到该速度后使用完整的转向视觉偏航
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 5.5
 // 跟随相机高度比例（调高让车辆在画面中更靠下）
 const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.7 // 降低相机高度比例
 const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0   // 降低相机最小高度
@@ -359,7 +365,7 @@ export class VehicleDriveController {
     if (typeof resolved !== 'number' || !Number.isFinite(resolved)) {
       return 8
     }
-    return Math.max(0.5, Math.min(30, resolved))
+    return Math.max(0, Math.min(30, resolved))
   }
 
   private getFollowCameraTuning(): Partial<CameraFollowTuning> | undefined {
@@ -1027,6 +1033,28 @@ export class VehicleDriveController {
     }
     this.followCameraLastAnchor.copy(temp.followAnchor)
 
+    const desiredFollowForward = temp.cameraForward.copy(temp.seatForward)
+    desiredFollowForward.y = 0
+    if (desiredFollowForward.lengthSq() < 1e-6) {
+      desiredFollowForward.set(0, 0, 1)
+    } else {
+      desiredFollowForward.normalize()
+    }
+
+    const steeringInput = THREE.MathUtils.clamp(this.input.steering, -1, 1)
+    const planarSpeed = Math.sqrt(this.followCameraVelocity.x * this.followCameraVelocity.x + this.followCameraVelocity.z * this.followCameraVelocity.z)
+    const steerLookRange = Math.max(1e-3, VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL - VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD)
+    const steerLookBlend = planarSpeed <= VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD
+      ? 0
+      : Math.min(1, (planarSpeed - VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD) / steerLookRange)
+    const steerLookAngle = steeringInput * VEHICLE_FOLLOW_STEER_LOOK_MAX * steerLookBlend
+    if (Math.abs(steerLookAngle) > 1e-4) {
+      desiredFollowForward.applyAxisAngle(VEHICLE_CAMERA_WORLD_UP, steerLookAngle)
+      if (desiredFollowForward.lengthSq() > 1e-6) {
+        desiredFollowForward.normalize()
+      }
+    }
+
     const updateOrbitLookTween = this.deps.updateOrbitLookTween
     const tuning = this.getFollowCameraTuning()
 
@@ -1034,7 +1062,7 @@ export class VehicleDriveController {
       follow,
       placement,
       anchorWorld: temp.followAnchor,
-      desiredForwardWorld: temp.seatForward,
+      desiredForwardWorld: desiredFollowForward,
       velocityWorld: this.followCameraVelocity,
       deltaSeconds,
       ctx,
