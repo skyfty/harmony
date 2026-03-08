@@ -65,7 +65,7 @@ export const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 const PLANNING_PIXELS_PER_METER = 10
 const PLANNING_IMAGE_HEIGHT_OFFSET_M = 0.02
 const PLANNING_IMAGE_STACK_OFFSET_M = 0.002
-const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.1
+const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.3
 const WATER_OPACITY_EPSILON = 1e-3
 
 export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
@@ -348,7 +348,7 @@ async function createTerrainWaterSurface(options: {
   }
 
   const worldCenter = toWorldPoint(centroid2d, options.groundWidth, options.groundDepth, 0)
-  const surfaceY = options.groundHeightAt(worldCenter.x, worldCenter.z) - PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
+  const surfaceY = 0- PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
   const points = contour.map((point) => ({ x: point.x, y: surfaceY, z: point.z }))
 
   const nodeId = await stableUuidV5(`planning:terrain-water:${options.poly.id}`)
@@ -787,7 +787,12 @@ const PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX = 20
 const PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT = 1000
 const PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES = 3
 const PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS = 2
+const PLANNING_TERRAIN_WATER_CONTOUR_OUTER_SHOULDER_RATIO = 0.35
+const PLANNING_TERRAIN_WATER_CONTOUR_INNER_RAMP_RATIO = 0.6
+const PLANNING_TERRAIN_WATER_CONTOUR_MAX_RAMP_TO_RADIUS_RATIO = 0.45
 type GroundContourBounds = { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
+
+type TerrainContourProfile = 'default' | 'water'
 
 function clampFiniteNumber(raw: number | null | undefined, fallback: number, min: number, max: number): number {
   const num = typeof raw === 'number' ? raw : Number.NaN
@@ -937,6 +942,32 @@ function contourSmoothstep(edge0: number, edge1: number, x: number): number {
   let t = (x - edge0) / (edge1 - edge0)
   t = Math.max(0, Math.min(1, t))
   return t * t * (3 - 2 * t)
+}
+
+function computeTerrainContourBlendFactor(options: {
+  sdf: number
+  outerBlend: number
+  maxSDF: number
+  cellSize: number
+  profile: TerrainContourProfile
+}): number {
+  if (options.profile === 'water') {
+    const outerShoulder = Math.min(
+      options.outerBlend,
+      Math.max(options.cellSize * 0.25, options.outerBlend * PLANNING_TERRAIN_WATER_CONTOUR_OUTER_SHOULDER_RATIO),
+    )
+    const rampEnd = Math.min(
+      options.maxSDF,
+      Math.min(
+        Math.max(options.cellSize * 0.25, options.outerBlend * PLANNING_TERRAIN_WATER_CONTOUR_INNER_RAMP_RATIO),
+        options.maxSDF * PLANNING_TERRAIN_WATER_CONTOUR_MAX_RAMP_TO_RADIUS_RATIO,
+      ),
+    )
+    return contourSmoothstep(-outerShoulder, rampEnd, options.sdf)
+  }
+
+  const innerBlend = Math.max(options.outerBlend, options.maxSDF)
+  return contourSmoothstep(-options.outerBlend, innerBlend, options.sdf)
 }
 
 function sanitizePlanningContourPoints(points: PlanningPoint[]): PlanningPoint[] {
@@ -1146,13 +1177,19 @@ async function applyPlanningTerrainContoursToGround(options: {
   const defaultBlendMeters = normalizeContourBlendMeters(options.blendMeters, PLANNING_TERRAIN_CONTOUR_BLEND_METERS)
   const definition = options.definition
   const polygons = (Array.isArray(options.contourPolygons) ? options.contourPolygons : [])
-    .map((poly) => ({
-      poly,
-      points: sanitizePlanningContourPoints(poly?.points ?? []),
-      blendMeters: normalizeContourBlendMeters(poly.terrainBlendMeters, defaultBlendMeters),
-      height: normalizeContourHeightMeters(poly.terrainHeightMeters),
-      area: 0,
-    }))
+    .map((poly) => {
+      const height = normalizeContourHeightMeters(poly.terrainHeightMeters)
+      return {
+        poly,
+        points: sanitizePlanningContourPoints(poly?.points ?? []),
+        blendMeters: normalizeContourBlendMeters(poly.terrainBlendMeters, defaultBlendMeters),
+        height,
+        profile: normalizePlanningWaterPresetId(poly.terrainWaterPresetId) && height < 0
+          ? 'water' as TerrainContourProfile
+          : 'default' as TerrainContourProfile,
+        area: 0,
+      }
+    })
     .filter((item) => item.points.length >= 3)
 
   // Compute area and sort: larger (outer) polygons first, then by height ascending.
@@ -1249,12 +1286,17 @@ async function applyPlanningTerrainContoursToGround(options: {
     }
 
     // Pass 2: convert SDF to blend factors.
-    // The blend ramps from 0 (at outerBlend distance outside the edge) to 1 (at the deepest
-    // interior point), producing a smooth mountain shape instead of a flat plateau with steep walls.
-    const innerBlend = Math.max(outerBlend, maxSDF)
+    // Default terrain keeps the broad, smooth bowl/profile. Water-enabled terrain depressions
+    // use a steeper shoulder and an earlier full-depth plateau so the bottom stays flatter.
     const blendGrid = new Float32Array(localRows * localCols)
     for (let i = 0; i < sdfGrid.length; i += 1) {
-      blendGrid[i] = contourSmoothstep(-outerBlend, innerBlend, sdfGrid[i]!)
+      blendGrid[i] = computeTerrainContourBlendFactor({
+        sdf: sdfGrid[i]!,
+        outerBlend,
+        maxSDF,
+        cellSize: cell,
+        profile: polygons[polyIndex]!.profile,
+      })
     }
 
     polyGrids.push({ blendGrid, height, r0, r1, c0, c1, localCols })

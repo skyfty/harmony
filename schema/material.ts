@@ -13,6 +13,7 @@ import type {
 } from './index';
 import type { AssetCacheEntry } from './assetCache';
 import type ResourceCache from './ResourceCache';
+import { inferAssetTypeOrNull } from './assetTypeConversion';
 import { hashString, stableSerialize } from './stableSerialize';
 import { getDefaultUvDebugTexture } from './debugTextures';
 
@@ -777,6 +778,18 @@ export class SceneMaterialFactory {
     return this.ensureTexture(assetId, settings)
   }
 
+  private isHdrTextureAsset(assetId: string, asset: AssetCacheEntry): boolean {
+    const resourceEntry = this.resourceEntrys.find((entry) => entry.assetId === assetId);
+    if (resourceEntry?.type) {
+      return resourceEntry.type === 'hdri';
+    }
+    const inferredType = inferAssetTypeOrNull({
+      mimeType: asset.mimeType,
+      nameOrUrl: asset.filename ?? asset.downloadUrl ?? assetId,
+    });
+    return inferredType === 'hdri';
+  }
+
   private async createTextureInstance(
     assetId: string,
     settings: Partial<SceneMaterialTextureSettings> | null,
@@ -784,12 +797,9 @@ export class SceneMaterialFactory {
     let texture: THREE.Texture | null = null;
     const entry = await this.provider.acquireAssetEntry(assetId);
     if (entry) {
-        const resourceEntry = this.resourceEntrys.find((entry) => entry.assetId === assetId);
-        if (resourceEntry) {
-          texture = await this.loadTextureFromEntry(entry, {
-            hdr: resourceEntry?.type === 'hdri'
-          });
-        }
+      texture = await this.loadTextureFromEntry(entry, {
+        hdr: this.isHdrTextureAsset(assetId, entry),
+      });
     }
     if (texture !== null) {
       applyTextureSettings(texture, settings);

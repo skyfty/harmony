@@ -499,7 +499,7 @@ import {
 } from '@harmony/schema/physicsEngine';
 import { loadNodeObject } from '@harmony/schema/modelAssetLoader';
 
-import { inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
+import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -555,6 +555,8 @@ import {
   type LanternSlideDefinition,
   type SceneMaterialTextureRef,
   type GroundDynamicMesh,
+  type SceneResourceSummary,
+  type SceneResourceSummaryEntry,
   type Vector3Like,
 } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
@@ -9207,6 +9209,94 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
   const projectConfig: ScenePackageProjectConfig =
     projectConfigRaw && typeof projectConfigRaw === 'object' ? (projectConfigRaw as ScenePackageProjectConfig) : {};
 
+  const buildDocumentResourceSummary = (document: SceneJsonExportDocument): SceneResourceSummary | undefined => {
+    const existingSummary = document.resourceSummary;
+    const existingAssets = Array.isArray(existingSummary?.assets) ? existingSummary.assets : [];
+    const sceneAssetIds = new Set<string>();
+
+    Object.keys(document.assetIndex ?? {}).forEach((assetId) => {
+      const normalized = assetId.trim();
+      if (normalized) {
+        sceneAssetIds.add(normalized);
+      }
+    });
+    existingAssets.forEach((entry) => {
+      const assetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : '';
+      if (assetId) {
+        sceneAssetIds.add(assetId);
+      }
+    });
+
+    const mergedAssets = new Map<string, SceneResourceSummaryEntry>();
+    existingAssets.forEach((entry) => {
+      const assetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : '';
+      if (!assetId) {
+        return;
+      }
+      mergedAssets.set(assetId, { ...entry, assetId });
+    });
+
+    pkg.manifest.resources.forEach((resourceEntry) => {
+      if (resourceEntry.resourceType === 'planningImage') {
+        return;
+      }
+      const assetId = resourceEntry.logicalId?.trim();
+      if (!assetId) {
+        return;
+      }
+      if (sceneAssetIds.size > 0 && !sceneAssetIds.has(assetId)) {
+        return;
+      }
+      const fileBytes = pkg.files[resourceEntry.path];
+      const byteSize = typeof resourceEntry.size === 'number' && Number.isFinite(resourceEntry.size)
+        ? resourceEntry.size
+        : (fileBytes?.byteLength ?? 0);
+      const filename = `${assetId}.${resourceEntry.ext}`;
+      mergedAssets.set(assetId, {
+        ...(mergedAssets.get(assetId) ?? {}),
+        assetId,
+        bytes: Math.max(0, byteSize),
+        embedded: true,
+        source: 'embedded',
+        downloadUrl: null,
+        type: inferAssetTypeOrNull({
+          mimeType: resourceEntry.mimeType,
+          nameOrUrl: filename,
+        }) ?? undefined,
+        name: filename,
+      });
+    });
+
+    const assets = Array.from(mergedAssets.values());
+    if (!assets.length) {
+      return existingSummary;
+    }
+
+    let totalBytes = 0;
+    let embeddedBytes = 0;
+    let externalBytes = 0;
+    assets.forEach((entry) => {
+      const bytes = typeof entry.bytes === 'number' && Number.isFinite(entry.bytes) ? Math.max(0, entry.bytes) : 0;
+      totalBytes += bytes;
+      if (entry.embedded || entry.source === 'embedded') {
+        embeddedBytes += bytes;
+      } else {
+        externalBytes += bytes;
+      }
+    });
+
+    return {
+      totalBytes,
+      embeddedBytes,
+      externalBytes,
+      computedAt: existingSummary?.computedAt ?? new Date().toISOString(),
+      assets,
+      unknownAssetIds: existingSummary?.unknownAssetIds,
+      textureBytes: existingSummary?.textureBytes,
+      meshTextureUsage: existingSummary?.meshTextureUsage,
+    };
+  };
+
   const scenes: ScenePackageSceneEntry[] = [];
   pkg.manifest.scenes.forEach((sceneEntry) => {
     const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path);
@@ -9216,6 +9306,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     }
     const document = sceneRaw as SceneJsonExportDocument;
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
+    document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
     scenes.push({
       kind: 'embedded',
