@@ -1,3 +1,5 @@
+import type { WaterPresetId } from '@schema/components'
+
 export interface PlanningPoint {
   /** Optional stable vertex id; used to reconstruct shared vertices across polylines. */
   id?: string
@@ -14,6 +16,8 @@ export interface PlanningPolygonData {
   terrainHeightMeters?: number
   /** Optional; only meaningful when the polygon belongs to a terrain layer. Edge blend radius in meters. */
   terrainBlendMeters?: number
+  /** Optional; only meaningful when the polygon belongs to a terrain layer. Null/undefined means no pond water preset. */
+  terrainWaterPresetId?: WaterPresetId | null
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
 }

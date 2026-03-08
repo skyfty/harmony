@@ -37,8 +37,11 @@ import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
+  WATER_COMPONENT_TYPE,
+  WATER_PRESETS,
   WALL_COMPONENT_TYPE,
   clampPlanningImagesComponentProps,
+  type WaterPresetId,
 } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
@@ -62,6 +65,8 @@ export const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 const PLANNING_PIXELS_PER_METER = 10
 const PLANNING_IMAGE_HEIGHT_OFFSET_M = 0.02
 const PLANNING_IMAGE_STACK_OFFSET_M = 0.002
+const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.1
+const WATER_OPACITY_EPSILON = 1e-3
 
 export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
   if (!node || typeof node !== 'object') {
@@ -188,6 +193,14 @@ type LayerKind = 'terrain' | 'guide-route' | 'green'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
+const planningWaterPresetIds = new Set<WaterPresetId>(WATER_PRESETS.map((preset) => preset.id))
+
+function normalizePlanningWaterPresetId(value: unknown): WaterPresetId | null {
+  return typeof value === 'string' && planningWaterPresetIds.has(value as WaterPresetId)
+    ? value as WaterPresetId
+    : null
+}
+
 function ensureAirWall(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode) {
   const component = getNodeComponent(node, WALL_COMPONENT_TYPE)
   if (component?.id) {
@@ -247,6 +260,132 @@ function ensureStaticRigidbody(sceneStore: ConvertPlanningToSceneOptions['sceneS
   if (created?.id) {
     sceneStore.updateNodeComponentProps(node.id, created.id, { bodyType: 'STATIC', mass: 0 })
   }
+}
+
+function toCssHex(color: number): string {
+  const normalized = Number.isFinite(color) ? Math.max(0, Math.min(0xffffff, Math.floor(color))) : 0
+  return `#${normalized.toString(16).padStart(6, '0')}`
+}
+
+function ensurePrimaryMaterialId(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode): string | null {
+  const primary = node.materials?.[0] ?? sceneStore.addNodeMaterial(node.id)
+  return primary?.id ?? null
+}
+
+function applyWaterPresetAppearance(
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
+  node: SceneNode,
+  presetId: WaterPresetId,
+): Record<string, unknown> {
+  const preset = WATER_PRESETS.find((entry) => entry.id === presetId)
+  if (!preset) {
+    return {}
+  }
+
+  const component = getNodeComponent(node, WATER_COMPONENT_TYPE)
+  if (component?.id) {
+    sceneStore.updateNodeComponentProps(node.id, component.id, {
+      implementationMode: 'static',
+      distortionScale: preset.distortionScale,
+      size: preset.size,
+      flowSpeed: preset.flowSpeed,
+      waveStrength: preset.waveStrength,
+    })
+  }
+
+  const materialId = ensurePrimaryMaterialId(sceneStore, node)
+  if (materialId) {
+    sceneStore.updateNodeMaterialProps(node.id, materialId, {
+      color: toCssHex(preset.waterColor),
+      opacity: preset.alpha,
+      transparent: preset.alpha < 1 - WATER_OPACITY_EPSILON,
+    })
+  }
+
+  return {
+    waterPresetId: preset.id,
+    waterPresetParams: {
+      distortionScale: preset.distortionScale,
+      size: preset.size,
+      flowSpeed: preset.flowSpeed,
+      waveStrength: preset.waveStrength,
+      waterColor: preset.waterColor,
+      alpha: preset.alpha,
+    },
+  }
+}
+
+async function createTerrainWaterSurface(options: {
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore']
+  rootNodeId: string
+  planningLayerId: string
+  poly: PlanningPolygonAny
+  groundWidth: number
+  groundDepth: number
+  groundHeightAt: (x: number, z: number) => number
+}): Promise<SceneNode | null> {
+  const presetId = normalizePlanningWaterPresetId(options.poly.terrainWaterPresetId)
+  const terrainHeight = Number(options.poly.terrainHeightMeters)
+  if (!presetId || !Number.isFinite(terrainHeight) || terrainHeight >= 0) {
+    return null
+  }
+
+  const contour = options.poly.points
+    .map((point) => toWorldPoint(point, options.groundWidth, options.groundDepth, 0))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
+
+  if (contour.length < 3) {
+    return null
+  }
+
+  const bounds = getPointsBounds(options.poly.points)
+  const centroid2d = polygonCentroid(options.poly.points)
+    ?? (bounds
+      ? { x: bounds.minX + bounds.width * 0.5, y: bounds.minY + bounds.height * 0.5 }
+      : null)
+  if (!centroid2d) {
+    return null
+  }
+
+  const worldCenter = toWorldPoint(centroid2d, options.groundWidth, options.groundDepth, 0)
+  const surfaceY = options.groundHeightAt(worldCenter.x, worldCenter.z) - PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M
+  const points = contour.map((point) => ({ x: point.x, y: surfaceY, z: point.z }))
+
+  const nodeId = await stableUuidV5(`planning:terrain-water:${options.poly.id}`)
+  const waterNode = options.sceneStore.createWaterSurfaceMeshNode({
+    nodeId,
+    points,
+    buildShape: 'polygon',
+    name: `${options.poly.name?.trim() || 'Terrain'} Water`,
+  })
+
+  if (!waterNode) {
+    return null
+  }
+
+  options.sceneStore.moveNode({
+    nodeId: waterNode.id,
+    targetId: options.rootNodeId,
+    position: 'inside',
+    recenterSkipGroupIds: [options.rootNodeId],
+  })
+  options.sceneStore.setNodeLocked(waterNode.id, true)
+
+  const presetUserData = applyWaterPresetAppearance(options.sceneStore, waterNode, presetId)
+  const previousUserData = waterNode.userData && typeof waterNode.userData === 'object' && !Array.isArray(waterNode.userData)
+    ? waterNode.userData as Record<string, unknown>
+    : {}
+
+  options.sceneStore.updateNodeUserData(waterNode.id, {
+    ...previousUserData,
+    ...presetUserData,
+    source: PLANNING_CONVERSION_SOURCE,
+    planningLayerId: options.planningLayerId,
+    kind: 'terrainWater',
+    planningFeatureId: options.poly.id,
+  })
+
+  return waterNode
 }
 
 type ScatterAssignment = {
@@ -1533,7 +1672,21 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
     const group = featuresByLayer.get(layerId)!
 
-    if (kind === 'guide-route') {
+    if (kind === 'terrain') {
+      for (const poly of group.polygons) {
+        throwIfAborted(options.signal)
+        await yieldController.maybeYield()
+        await createTerrainWaterSurface({
+          sceneStore,
+          rootNodeId: root.id,
+          planningLayerId: layerId,
+          poly,
+          groundWidth,
+          groundDepth,
+          groundHeightAt,
+        })
+      }
+    } else if (kind === 'guide-route') {
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
 
       for (const line of group.polylines) {

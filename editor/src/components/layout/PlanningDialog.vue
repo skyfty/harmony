@@ -9,6 +9,7 @@ import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import PlanningRulers from '@/components/layout/PlanningRulers.vue'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
+import { WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 import { generateFpsScatterPointsInPolygon, buildRandom, hashSeedFromString, getPointsBounds, polygonCentroid } from '@/utils/scatterSampling'
@@ -150,9 +151,19 @@ interface PlanningPolygon {
   terrainHeightMeters?: number
   /** Edge blend radius in meters (only meaningful when layer kind is 'terrain'). */
   terrainBlendMeters?: number
+  /** Optional pond water preset (only meaningful when layer kind is 'terrain'). */
+  terrainWaterPresetId?: WaterPresetId | null
   scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
+}
+
+const terrainWaterPresetIds = new Set<WaterPresetId>(WATER_PRESETS.map((preset) => preset.id))
+
+function normalizeTerrainWaterPresetId(value: unknown): WaterPresetId | null {
+  return typeof value === 'string' && terrainWaterPresetIds.has(value as WaterPresetId)
+    ? value as WaterPresetId
+    : null
 }
 
 interface PlanningPolyline {
@@ -1355,6 +1366,9 @@ function buildPlanningSnapshot(): PlanningSceneData {
       terrainBlendMeters: getLayerKind(poly.layerId) === 'terrain'
         ? roundTerrainBlend(poly.terrainBlendMeters)
         : undefined,
+      terrainWaterPresetId: getLayerKind(poly.layerId) === 'terrain'
+        ? normalizeTerrainWaterPresetId(poly.terrainWaterPresetId)
+        : undefined,
       airWallEnabled: poly.airWallEnabled ? true : undefined,
       scatter: poly.scatter
         ? (() => {
@@ -1828,6 +1842,7 @@ function loadPlanningFromScene() {
         if (!Number.isFinite(raw)) return 2
         return Math.min(20, Math.max(0, Math.round(raw * 100) / 100))
       })(),
+      terrainWaterPresetId: normalizeTerrainWaterPresetId(poly.terrainWaterPresetId),
       airWallEnabled: Boolean(poly.airWallEnabled),
       scatter: undefined,
     }))
@@ -2220,6 +2235,29 @@ const terrainContourBlendModel = computed<number>({
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return
     poly.terrainBlendMeters = Math.round(clampNumberInput(value, 2, 0, 20) * 100) / 100
+    markPlanningDirty()
+  },
+})
+
+const terrainWaterPresetOptions = computed<Array<{ value: WaterPresetId | null; label: string }>>(() => [
+  { value: null, label: 'Unset' },
+  ...WATER_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
+])
+
+const terrainContourWaterPresetEnabled = computed(() => {
+  const poly = selectedTerrainContourPolygon.value
+  if (!poly) return false
+  const raw = Number(poly.terrainHeightMeters)
+  return Number.isFinite(raw) && raw < 0
+})
+
+const terrainContourWaterPresetModel = computed<WaterPresetId | null>({
+  get: () => normalizeTerrainWaterPresetId(selectedTerrainContourPolygon.value?.terrainWaterPresetId),
+  set: (value: WaterPresetId | null) => {
+    if (propertyPanelDisabled.value) return
+    const poly = selectedTerrainContourPolygon.value
+    if (!poly) return
+    poly.terrainWaterPresetId = normalizeTerrainWaterPresetId(value)
     markPlanningDirty()
   },
 })
@@ -3491,6 +3529,7 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
     points: clonePoints(points),
     terrainHeightMeters: targetKind === 'terrain' ? 0 : undefined,
     terrainBlendMeters: targetKind === 'terrain' ? 2 : undefined,
+    terrainWaterPresetId: targetKind === 'terrain' ? null : undefined,
   })
 
   // Select the newly created polygon so its properties appear immediately
@@ -6406,6 +6445,17 @@ onBeforeUnmount(() => {
                 hide-details
                 suffix="m"
                 label="Smoothing"
+              />
+              <v-select
+                v-model="terrainContourWaterPresetModel"
+                :items="terrainWaterPresetOptions"
+                item-title="label"
+                item-value="value"
+                density="compact"
+                variant="underlined"
+                hide-details
+                label="Water Type"
+                :disabled="propertyPanelDisabled || !terrainContourWaterPresetEnabled"
               />
             </div>
 
