@@ -86,6 +86,8 @@ const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots';
 const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides';
 const MATERIAL_OVERRIDE_STATE_KEY = '__harmonyMaterialOverrideState';
 export const MATERIAL_CONFIG_ID_KEY = '__harmonyMaterialConfigId';
+export const WALL_REPEAT_SCALE_KEY = '__harmonyWallRepeatScale';
+export const WALL_REPEAT_UV_AXIS_KEY = '__harmonyWallRepeatUvAxis';
 
 type MaterialOverrideState = {
   signature: string;
@@ -740,6 +742,32 @@ function disposeOverrideTexture(
   }
 }
 
+function resolveWallRepeatInfo(material: THREE.Material): { repeatScale: number; uvAxis: 'u' | 'v' } | null {
+  const userData = material.userData ?? {};
+  const repeatScaleRaw = userData[WALL_REPEAT_SCALE_KEY] as unknown;
+  const uvAxisRaw = userData[WALL_REPEAT_UV_AXIS_KEY] as unknown;
+  const repeatScale = typeof repeatScaleRaw === 'number' ? repeatScaleRaw : Number(repeatScaleRaw);
+  const uvAxis = uvAxisRaw === 'v' ? 'v' : uvAxisRaw === 'u' ? 'u' : null;
+  if (!uvAxis || !Number.isFinite(repeatScale) || Math.abs(repeatScale - 1) <= 1e-6) {
+    return null;
+  }
+  return {
+    repeatScale: Math.max(1e-6, repeatScale),
+    uvAxis,
+  };
+}
+
+function applyWallRepeatToTexture(texture: THREE.Texture, repeatInfo: { repeatScale: number; uvAxis: 'u' | 'v' }): void {
+  if (repeatInfo.uvAxis === 'v') {
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.y *= repeatInfo.repeatScale;
+  } else {
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.repeat.x *= repeatInfo.repeatScale;
+  }
+  texture.needsUpdate = true;
+}
+
 function assignTextureToMaterial(
   material: THREE.Material,
   slot: SceneMaterialTextureSlot,
@@ -769,8 +797,9 @@ function assignTextureToMaterial(
 
   const settingsSignature = textureSettingsSignature(ref.settings);
   const defaultSignature = options.defaultTextureSettingsSignature ?? textureSettingsSignature();
+  const wallRepeatInfo = resolveWallRepeatInfo(material);
   const stateKey = `${ref.assetId}|${settingsSignature}`;
-  const needsClone = settingsSignature !== defaultSignature;
+  const needsClone = settingsSignature !== defaultSignature || Boolean(wallRepeatInfo);
 
   if (slotState[slot] === stateKey) {
     const current = typed[assignment.key] ?? null;
@@ -801,6 +830,9 @@ function assignTextureToMaterial(
     if (needsClone) {
       instance = texture.clone();
       applyTextureSettings(instance, ref.settings ?? null);
+      if (wallRepeatInfo) {
+        applyWallRepeatToTexture(instance, wallRepeatInfo);
+      }
       overrideState[slot] = instance;
     } else {
       overrideState[slot] = null;
@@ -1019,15 +1051,6 @@ export function applyMaterialOverrides(
       return;
     }
 
-    // WallAsset meshes use a custom instanced shader patch for UV repeat scaling.
-    // Global overrides would replace those materials and break tiled rendering.
-    if (mesh.userData?.dynamicMeshType === 'WallAsset') {
-      if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
-        delete mesh.userData[MATERIAL_OVERRIDE_STATE_KEY];
-      }
-      return;
-    }
-
     // Never apply material overrides to the invisible instanced pick proxy.
     // It is an editor interaction helper and should remain non-rendered.
     if (mesh.userData?.instancedPickProxy) {
@@ -1053,6 +1076,7 @@ export function applyMaterialOverrides(
     const previousState = (mesh.userData?.[MATERIAL_OVERRIDE_STATE_KEY] ?? null) as MaterialOverrideState | null;
     const requestedSelectorIdRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
     const requestedSelectorId = typeof requestedSelectorIdRaw === 'string' ? requestedSelectorIdRaw.trim() : '';
+    const isWallAsset = mesh.userData?.dynamicMeshType === 'WallAsset';
     const currentMaterialUUIDs = collectMaterialUUIDs(currentMaterial);
     if (
       previousState &&
@@ -1080,7 +1104,9 @@ export function applyMaterialOverrides(
     const disposables: Array<(() => void) | undefined> = [];
     let replaced = false;
     materials.forEach((materialRef, index) => {
-      const config = configById ?? (configs.length === 1 ? configs[0] : configs[index] ?? null);
+      const config = configById ?? (!requestedSelectorId && !isWallAsset
+        ? (configs.length === 1 ? configs[0] : configs[index] ?? null)
+        : null);
       if (config) {
         const { material: ensured, replaced: didReplace, dispose } = ensureMaterialType(materialRef, config.type);
         if (didReplace) {

@@ -4,6 +4,129 @@ import type { SceneNodeWithExtras } from '../types';
 import type { WallComponentProps } from '../../components/definitions/wallComponent';
 import { WALL_COMPONENT_TYPE, clampWallProps } from '../../components/definitions/wallComponent';
 import { createWallRenderGroup } from '../../wallMesh';
+import { MATERIAL_CONFIG_ID_KEY, WALL_REPEAT_SCALE_KEY, WALL_REPEAT_UV_AXIS_KEY } from '../../material';
+import { buildMaterialConfigMap } from '../materialAssignment';
+
+function resolveWallRepeatInfo(mesh: THREE.Mesh): { repeatScale: number; uvAxis: 'u' | 'v' } | null {
+  const material = Array.isArray(mesh.material) ? mesh.material[0] ?? null : mesh.material;
+  const userData = material?.userData ?? {};
+  const repeatScaleRaw = userData[WALL_REPEAT_SCALE_KEY] as unknown;
+  const uvAxisRaw = userData[WALL_REPEAT_UV_AXIS_KEY] as unknown;
+  const repeatScale = typeof repeatScaleRaw === 'number' ? repeatScaleRaw : Number(repeatScaleRaw);
+  const uvAxis = uvAxisRaw === 'v' ? 'v' : uvAxisRaw === 'u' ? 'u' : null;
+  if (!uvAxis || !Number.isFinite(repeatScale) || Math.abs(repeatScale - 1) <= 1e-6) {
+    return null;
+  }
+  return { repeatScale: Math.max(1e-6, repeatScale), uvAxis };
+}
+
+function createWallRepeatedAssignedMaterial(
+  source: THREE.Material | THREE.Material[],
+  repeatInfo: { repeatScale: number; uvAxis: 'u' | 'v' } | null,
+  cache: Map<string, THREE.Material | THREE.Material[]>,
+): THREE.Material | THREE.Material[] {
+  if (!repeatInfo) {
+    return source;
+  }
+
+  const materialKey = Array.isArray(source)
+    ? source.map((entry) => entry.uuid).join(',')
+    : source.uuid;
+  const cacheKey = `${repeatInfo.uvAxis}|${repeatInfo.repeatScale}|${materialKey}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const cloneOne = (material: THREE.Material): THREE.Material => {
+    const cloned = material.clone() as THREE.Material & Record<string, unknown>;
+    cloned.userData = {
+      ...(cloned.userData ?? {}),
+      [WALL_REPEAT_SCALE_KEY]: repeatInfo.repeatScale,
+      [WALL_REPEAT_UV_AXIS_KEY]: repeatInfo.uvAxis,
+    };
+    const textureSlots = [
+      'map',
+      'alphaMap',
+      'lightMap',
+      'aoMap',
+      'bumpMap',
+      'normalMap',
+      'displacementMap',
+      'emissiveMap',
+      'metalnessMap',
+      'roughnessMap',
+      'clearcoatMap',
+      'clearcoatNormalMap',
+      'clearcoatRoughnessMap',
+      'iridescenceMap',
+      'iridescenceThicknessMap',
+      'sheenColorMap',
+      'sheenRoughnessMap',
+      'specularMap',
+      'specularColorMap',
+      'specularIntensityMap',
+      'transmissionMap',
+      'thicknessMap',
+      'anisotropyMap',
+    ] as const;
+    textureSlots.forEach((slot) => {
+      const texture = cloned[slot] as THREE.Texture | null | undefined;
+      if (!texture) {
+        return;
+      }
+      const clonedTexture = texture.clone();
+      if (repeatInfo.uvAxis === 'v') {
+        clonedTexture.wrapT = THREE.RepeatWrapping;
+        clonedTexture.repeat.y *= repeatInfo.repeatScale;
+      } else {
+        clonedTexture.wrapS = THREE.RepeatWrapping;
+        clonedTexture.repeat.x *= repeatInfo.repeatScale;
+      }
+      clonedTexture.needsUpdate = true;
+      cloned[slot] = clonedTexture;
+    });
+    cloned.needsUpdate = true;
+    return cloned;
+  };
+
+  const variant = Array.isArray(source) ? source.map((entry) => cloneOne(entry)) : cloneOne(source);
+  cache.set(cacheKey, variant);
+  return variant;
+}
+
+function resolveWallBodyMaterialConfigId(node: SceneNodeWithExtras, meshInfo: WallDynamicMesh): string | null {
+  const meshValue = typeof meshInfo.bodyMaterialConfigId === 'string' ? meshInfo.bodyMaterialConfigId.trim() : '';
+  if (meshValue) {
+    return meshValue;
+  }
+  const first = node.materials?.[0];
+  const nodeValue = typeof first?.id === 'string' ? first.id.trim() : '';
+  return nodeValue || null;
+}
+
+function applyWallMaterialConfigAssignment(
+  root: THREE.Object3D,
+  materialByConfigId: Map<string, THREE.Material>,
+): void {
+  const repeatedMaterialCache = new Map<string, THREE.Material | THREE.Material[]>();
+  root.traverse((child: THREE.Object3D) => {
+    const mesh = child as THREE.Mesh & { isMesh?: boolean };
+    if (!mesh?.isMesh) {
+      return;
+    }
+
+    const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
+    const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
+    if (!selectorId) {
+      return;
+    }
+    const material = materialByConfigId.get(selectorId);
+    if (material) {
+      mesh.material = createWallRepeatedAssignedMaterial(material, resolveWallRepeatInfo(mesh), repeatedMaterialCache);
+    }
+  });
+}
 
 export async function buildWallMesh(
   deps: {
@@ -99,6 +222,7 @@ export async function buildWallMesh(
     },
     {
       smoothing: wallProps.smoothing,
+      bodyMaterialConfigId: resolveWallBodyMaterialConfigId(node, meshInfo),
       cornerModels,
       bodyUvAxis: wallProps.bodyUvAxis,
       headUvAxis: wallProps.headUvAxis,
@@ -113,20 +237,11 @@ export async function buildWallMesh(
   );
   group.name = node.name ?? (group.name || 'Wall');
 
-  const materials = await deps.resolveNodeMaterials(node);
-  const materialAssignment = deps.pickMaterialAssignment(materials);
-  if (materialAssignment) {
-    group.traverse((child: THREE.Object3D) => {
-      const mesh = child as THREE.Mesh;
-      if (!(mesh as any)?.isMesh) {
-        return;
-      }
-      const tag = (mesh.userData as any)?.dynamicMeshType;
-      // Only override the procedural wall mesh material; asset instances should keep their own materials.
-      if (tag === 'Wall') {
-        mesh.material = materialAssignment;
-      }
-    });
+  const nodeMaterialConfigs = Array.isArray(node.materials) ? node.materials : [];
+  const resolvedMaterials = await deps.resolveNodeMaterials(node);
+  if (resolvedMaterials.length) {
+    const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
+    applyWallMaterialConfigAssignment(group, materialByConfigId);
   }
 
   // When a body asset is configured, the wall should be rendered only via the specified model asset.

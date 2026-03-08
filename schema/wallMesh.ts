@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { WallDynamicMesh } from './index'
-import { MATERIAL_CONFIG_ID_KEY } from './material'
+import { MATERIAL_CONFIG_ID_KEY, WALL_REPEAT_SCALE_KEY, WALL_REPEAT_UV_AXIS_KEY } from './material'
 import { compileWallSegmentsFromDefinition, resolveWallDimensionsFromDefinition, type WallRenderSegment } from './wallLayout'
 
 export type WallRenderAssetObjects = {
@@ -71,6 +71,7 @@ type WallResolvedUvAxis = 'u' | 'v'
 export type WallRenderOptions = {
   smoothing?: number
   materialConfigId?: string | null
+  bodyMaterialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
 
   // Per-part UV repeat axis for stretched wall tiling.
@@ -85,6 +86,17 @@ export type WallRenderOptions = {
   bodyEndCapOrientation?: WallModelOrientation
   headEndCapOrientation?: WallModelOrientation
   footEndCapOrientation?: WallModelOrientation
+}
+
+function normalizeWallMaterialConfigId(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  return raw.length ? raw : null
+}
+
+function applyWallMeshMaterialConfigId(meshes: THREE.Mesh[], materialConfigId: string | null): void {
+  meshes.forEach((mesh) => {
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialConfigId
+  })
 }
 
 const WALL_DEFAULT_COLOR = 0xcfd2d6
@@ -497,6 +509,11 @@ function createWallRepeatedMaterial(
     return { material: original, ownedTextures: [], shared: true }
   }
 
+  cloned.userData = {
+    ...(cloned.userData ?? {}),
+    [WALL_REPEAT_SCALE_KEY]: safeRepeatScale,
+    [WALL_REPEAT_UV_AXIS_KEY]: uvAxis,
+  }
   cloned.needsUpdate = true
   return { material: cloned, ownedTextures, shared: false }
 }
@@ -1574,7 +1591,6 @@ function collectWallPath(segments: WallRenderSeg[]): WallPath | null {
 
     const positions: number[] = []
     const uvs: number[] = []
-    const indices: number[] = []
 
     const center = new THREE.Vector3()
     const tangent = new THREE.Vector3()
@@ -1583,6 +1599,43 @@ function collectWallPath(segments: WallRenderSeg[]): WallPath | null {
     const hasPrevLateral = { value: false }
     const leftPos = new THREE.Vector3()
     const rightPos = new THREE.Vector3()
+    const currentLeftBottom = new THREE.Vector3()
+    const currentRightBottom = new THREE.Vector3()
+    const currentLeftTop = new THREE.Vector3()
+    const currentRightTop = new THREE.Vector3()
+    const nextLeftBottom = new THREE.Vector3()
+    const nextRightBottom = new THREE.Vector3()
+    const nextLeftTop = new THREE.Vector3()
+    const nextRightTop = new THREE.Vector3()
+
+    const leftSamples: THREE.Vector3[] = []
+    const rightSamples: THREE.Vector3[] = []
+
+    const pushVertex = (vertex: THREE.Vector3, u: number, v: number) => {
+      positions.push(vertex.x, vertex.y, vertex.z)
+      uvs.push(u, v)
+    }
+
+    const pushQuad = (
+      a: THREE.Vector3,
+      b: THREE.Vector3,
+      c: THREE.Vector3,
+      d: THREE.Vector3,
+      uvA: [number, number],
+      uvB: [number, number],
+      uvC: [number, number],
+      uvD: [number, number],
+    ) => {
+      pushVertex(a, uvA[0], uvA[1])
+      pushVertex(b, uvB[0], uvB[1])
+      pushVertex(c, uvC[0], uvC[1])
+
+      pushVertex(c, uvC[0], uvC[1])
+      pushVertex(b, uvB[0], uvB[1])
+      pushVertex(d, uvD[0], uvD[1])
+    }
+
+    const cumulativeDistances: number[] = [0]
 
     const sampleCount = centers.length
     for (let i = 0; i < sampleCount; i += 1) {
@@ -1616,59 +1669,121 @@ function collectWallPath(segments: WallRenderSeg[]): WallPath | null {
 
       leftPos.copy(center).addScaledVector(lateral, halfWidth)
       rightPos.copy(center).addScaledVector(lateral, -halfWidth)
-      const baseY = center.y
-      const topY = baseY + heightValue
+      leftSamples.push(leftPos.clone())
+      rightSamples.push(rightPos.clone())
 
-      // Vertex order per sample: lb, rb, lt, rt (interleaved).
-      positions.push(leftPos.x, baseY, leftPos.z)
-      positions.push(rightPos.x, baseY, rightPos.z)
-      positions.push(leftPos.x, topY, leftPos.z)
-      positions.push(rightPos.x, topY, rightPos.z)
+      if (i < sampleCount - 1) {
+        cumulativeDistances.push(cumulativeDistances[i]! + center.distanceTo(centers[i + 1]!))
+      }
+    }
 
-      uvs.push(
-        0, 0,
-        1, 0,
-        0, 1,
-        1, 1,
-      )
-  }
+    const totalLength = closed
+      ? cumulativeDistances[sampleCount - 1]! + centers[sampleCount - 1]!.distanceTo(centers[0]!)
+      : cumulativeDistances[sampleCount - 1]!
 
     const loopCount = closed ? sampleCount : sampleCount - 1
     for (let i = 0; i < loopCount; i += 1) {
       const next = (i + 1) % sampleCount
+      const segmentLength = centers[i]!.distanceTo(centers[next]!)
+      if (segmentLength <= WALL_EPSILON) {
+        continue
+      }
 
-      const base = i * 4
-      const baseNext = next * 4
+      const u0 = cumulativeDistances[i]!
+      const u1 = closed && next === 0 ? totalLength : cumulativeDistances[next]!
 
-      const lb = base
-      const rb = base + 1
-      const lt = base + 2
-      const rt = base + 3
+      currentLeftBottom.copy(leftSamples[i]!)
+      currentRightBottom.copy(rightSamples[i]!)
+      nextLeftBottom.copy(leftSamples[next]!)
+      nextRightBottom.copy(rightSamples[next]!)
 
-      const lbNext = baseNext
-      const rbNext = baseNext + 1
-      const ltNext = baseNext + 2
-      const rtNext = baseNext + 3
+      currentLeftTop.copy(currentLeftBottom).setY(currentLeftBottom.y + heightValue)
+      currentRightTop.copy(currentRightBottom).setY(currentRightBottom.y + heightValue)
+      nextLeftTop.copy(nextLeftBottom).setY(nextLeftBottom.y + heightValue)
+      nextRightTop.copy(nextRightBottom).setY(nextRightBottom.y + heightValue)
 
-      // Left side
-      indices.push(lb, lbNext, lt)
-      indices.push(lt, lbNext, ltNext)
+      // Left exterior face.
+      pushQuad(
+        currentLeftBottom,
+        nextLeftBottom,
+        currentLeftTop,
+        nextLeftTop,
+        [u0, 0],
+        [u1, 0],
+        [u0, heightValue],
+        [u1, heightValue],
+      )
 
-      // Right side
-      indices.push(rb, rt, rbNext)
-      indices.push(rt, rtNext, rbNext)
+      // Right exterior face.
+      pushQuad(
+        currentRightBottom,
+        currentRightTop,
+        nextRightBottom,
+        nextRightTop,
+        [u0, 0],
+        [u0, heightValue],
+        [u1, 0],
+        [u1, heightValue],
+      )
 
-      // Top face
-      indices.push(lt, ltNext, rt)
-      indices.push(rt, ltNext, rtNext)
+      // Top face.
+      pushQuad(
+        currentLeftTop,
+        nextLeftTop,
+        currentRightTop,
+        nextRightTop,
+        [u0, 0],
+        [u1, 0],
+        [u0, width],
+        [u1, width],
+      )
 
-      // Bottom face
-      indices.push(rb, rbNext, lb)
-      indices.push(lb, rbNext, lbNext)
+      // Bottom face.
+      pushQuad(
+        currentRightBottom,
+        nextRightBottom,
+        currentLeftBottom,
+        nextLeftBottom,
+        [u0, 0],
+        [u1, 0],
+        [u0, width],
+        [u1, width],
+      )
+    }
+
+    if (!closed) {
+      currentLeftBottom.copy(leftSamples[0]!)
+      currentRightBottom.copy(rightSamples[0]!)
+      currentLeftTop.copy(currentLeftBottom).setY(currentLeftBottom.y + heightValue)
+      currentRightTop.copy(currentRightBottom).setY(currentRightBottom.y + heightValue)
+      pushQuad(
+        currentRightBottom,
+        currentLeftBottom,
+        currentRightTop,
+        currentLeftTop,
+        [0, 0],
+        [width, 0],
+        [0, heightValue],
+        [width, heightValue],
+      )
+
+      nextLeftBottom.copy(leftSamples[sampleCount - 1]!)
+      nextRightBottom.copy(rightSamples[sampleCount - 1]!)
+      nextLeftTop.copy(nextLeftBottom).setY(nextLeftBottom.y + heightValue)
+      nextRightTop.copy(nextRightBottom).setY(nextRightBottom.y + heightValue)
+      pushQuad(
+        nextLeftBottom,
+        nextRightBottom,
+        nextLeftTop,
+        nextRightTop,
+        [0, 0],
+        [width, 0],
+        [0, heightValue],
+        [width, heightValue],
+      )
     }
 
     const geometry = new THREE.BufferGeometry()
-    geometry.setIndex(indices)
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
     geometry.computeVertexNormals()
@@ -1726,7 +1841,9 @@ function rebuildWallGroup(
   const bodyUvAxis = normalizeWallUvAxis(options.bodyUvAxis, 'auto')
   const headUvAxis = normalizeWallUvAxis(options.headUvAxis, bodyUvAxis)
   const footUvAxis = normalizeWallUvAxis(options.footUvAxis, bodyUvAxis)
-  const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
+  const bodyMaterialConfigId = normalizeWallMaterialConfigId(options.bodyMaterialConfigId)
+    ?? normalizeWallMaterialConfigId(options.materialConfigId)
+    ?? normalizeWallMaterialConfigId(definition.bodyMaterialConfigId)
   const materialVariantCache: WallMaterialVariantCache = new Map()
 
   for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
@@ -1753,7 +1870,7 @@ function rebuildWallGroup(
     const mesh = new THREE.Mesh(geometry, createWallMaterial())
     mesh.name = chainDefinitions.length > 1 ? `WallMesh:${chainIndex}` : 'WallMesh'
     mesh.userData.dynamicMeshType = 'Wall'
-    mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = bodyMaterialConfigId
     mesh.castShadow = true
     mesh.receiveShadow = true
     mesh.visible = !modelModeEnabled
@@ -1816,6 +1933,7 @@ function rebuildWallGroup(
       instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
     const bodyAssets = createWallRepeatedAssetMeshes('WallBodyMesh', bodyTemplate, instances, materialVariantCache, resolvedBodyUvAxis)
+    applyWallMeshMaterialConfigId(bodyAssets.meshes, bodyMaterialConfigId)
     mergeAssetBounds(bodyAssets.bounds)
     for (const mesh of bodyAssets.meshes) {
       group.add(mesh)

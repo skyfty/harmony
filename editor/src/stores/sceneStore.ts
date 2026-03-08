@@ -115,6 +115,7 @@ export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NOD
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
+import { createWallNodeMaterials } from '@/utils/wallNodeMaterials'
 import type {
   SceneMaterial,
   SceneMaterialProps,
@@ -178,6 +179,7 @@ import { type FloorPresetData } from '@/utils/floorPreset'
 import { createWallPresetActions } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
+import { createSceneStoreWallHelpers } from './sceneStoreWall'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import {
@@ -603,6 +605,11 @@ const floorHelpers = createSceneStoreFloorHelpers({
   createNodeMaterial,
   getRuntimeObject,
   updateFloorGroup,
+})
+
+const wallHelpers = createSceneStoreWallHelpers({
+  createWallNodeMaterials,
+  createNodeMaterial,
 })
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -1280,6 +1287,9 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         openings: Array.isArray(wallMesh.openings)
           ? wallMesh.openings.map((o) => ({ chainIndex: o.chainIndex, start: o.start, end: o.end }))
           : [],
+        bodyMaterialConfigId: typeof wallMesh.bodyMaterialConfigId === 'string' && wallMesh.bodyMaterialConfigId.trim().length
+          ? wallMesh.bodyMaterialConfigId.trim()
+          : null,
         dimensions: {
           height: Number.isFinite(wallMesh.dimensions?.height) ? wallMesh.dimensions.height : DEFAULT_WALL_HEIGHT,
           width: Number.isFinite(wallMesh.dimensions?.width) ? wallMesh.dimensions.width : DEFAULT_WALL_WIDTH,
@@ -7890,6 +7900,15 @@ export const useSceneStore = defineStore('scene', {
         for (const [key, value] of Object.entries(incoming)) {
           existingRecord[key] = value
         }
+
+        const floorConvention = floorHelpers.ensureFloorMaterialConvention(node)
+        const wallConvention = wallHelpers.ensureWallMaterialConvention(node)
+        if (floorConvention.materialsChanged || wallConvention.materialsChanged) {
+          this.queueSceneNodePatch(nodeId, ['materials'])
+        }
+        if (floorConvention.meshChanged || wallConvention.meshChanged) {
+          this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+        }
       })
       this.nodes = [...this.nodes]
 
@@ -7957,6 +7976,7 @@ export const useSceneStore = defineStore('scene', {
         : createMaterialProps(options.props ?? null)
 
       let created: SceneNodeMaterial | null = null
+      let requiresDynamicMeshPatch = false
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node)) {
@@ -7969,6 +7989,11 @@ export const useSceneStore = defineStore('scene', {
           type: shared?.type ?? options.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
         })
         node.materials = [...(node.materials ?? []), entry]
+        const floorConvention = floorHelpers.ensureFloorMaterialConvention(node)
+        const wallConvention = wallHelpers.ensureWallMaterialConvention(node)
+        if (floorConvention.meshChanged || wallConvention.meshChanged) {
+          requiresDynamicMeshPatch = true
+        }
         created = entry
       })
 
@@ -7977,6 +8002,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
       return created
     },
@@ -8052,8 +8080,9 @@ export const useSceneStore = defineStore('scene', {
           }
           removed = true
 
-          const { meshChanged } = floorHelpers.ensureFloorMaterialConvention(node)
-          if (meshChanged) {
+          const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
+          const wallResult = wallHelpers.ensureWallMaterialConvention(node)
+          if (floorResult.meshChanged || wallResult.meshChanged) {
             requiresDynamicMeshPatch = true
           }
         }
@@ -8142,6 +8171,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       let updated = false
+      let requiresDynamicMeshPatch = false
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
@@ -8167,6 +8197,11 @@ export const useSceneStore = defineStore('scene', {
             type: entry.type,
           })
         })
+        const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
+        const wallResult = wallHelpers.ensureWallMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged) {
+          requiresDynamicMeshPatch = true
+        }
       })
 
       if (!updated) {
@@ -8174,6 +8209,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
       return true
     },
@@ -8191,8 +8229,9 @@ export const useSceneStore = defineStore('scene', {
           return
         }
         node.materials = clones
-        const { meshChanged } = floorHelpers.ensureFloorMaterialConvention(node)
-        if (meshChanged) {
+        const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
+        const wallResult = wallHelpers.ensureWallMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged) {
           requiresDynamicMeshPatch = true
         }
         updated = true
@@ -11599,7 +11638,14 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const wallGroup = createWallGroup(build.definition, { smoothing: WALL_DEFAULT_SMOOTHING })
+      const defaultMaterials = createWallNodeMaterials({ bodyName: 'Body' })
+      const defaultBodyMaterialConfigId = defaultMaterials[0]?.id ?? null
+      const defaultMesh: WallDynamicMesh = {
+        ...build.definition,
+        bodyMaterialConfigId: defaultBodyMaterialConfigId,
+      }
+
+      const wallGroup = createWallGroup(defaultMesh, { smoothing: WALL_DEFAULT_SMOOTHING })
       const nodeName = payload.name ?? this.generateWallNodeName()
 
       this.captureHistorySnapshot()
@@ -11618,10 +11664,28 @@ export const useSceneStore = defineStore('scene', {
             rotation: createVector(0, 0, 0),
             scale: createVector(1, 1, 1),
           })
-          this.updateNodeDynamicMesh(desiredId, build.definition)
+          this.updateNodeDynamicMesh(desiredId, defaultMesh)
           if (payload.editorFlags) {
             existing.editorFlags = cloneEditorFlags(payload.editorFlags)
             this.queueSceneNodePatch(desiredId, ['visibility'])
+          }
+
+          let materialsChanged = false
+          let meshChanged = false
+          visitNode(this.nodes, desiredId, (node) => {
+            const result = wallHelpers.ensureWallMaterialConvention(node)
+            materialsChanged ||= result.materialsChanged
+            meshChanged ||= result.meshChanged
+          })
+          if (materialsChanged) {
+            this.queueSceneNodePatch(desiredId, ['materials'])
+          }
+          if (meshChanged) {
+            this.queueSceneNodePatch(desiredId, ['dynamicMesh'])
+          }
+          if (materialsChanged || meshChanged) {
+            this.nodes = [...this.nodes]
+            commitSceneSnapshot(this)
           }
 
           const wallComponent = (findNodeById(this.nodes, desiredId)?.components?.[WALL_COMPONENT_TYPE] as
@@ -11646,10 +11710,12 @@ export const useSceneStore = defineStore('scene', {
           position: createVector(build.center.x, build.center.y, build.center.z),
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
-          dynamicMesh: build.definition,
+          dynamicMesh: defaultMesh,
           editorFlags: payload.editorFlags,
         })
         if (node) {
+          this.setNodeMaterials(node.id, defaultMaterials)
+
           const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
             ? payload.bodyAssetId
             : null
@@ -12129,6 +12195,14 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      const currentBodyMaterialConfigId = typeof (node.dynamicMesh as any)?.bodyMaterialConfigId === 'string'
+        && (node.dynamicMesh as any).bodyMaterialConfigId.trim().length
+        ? (node.dynamicMesh as any).bodyMaterialConfigId.trim()
+        : null
+      if (currentBodyMaterialConfigId) {
+        build.definition.bodyMaterialConfigId = currentBodyMaterialConfigId
+      }
+
       const parentMap = buildParentMap(this.nodes)
       const parentId = parentMap.get(nodeId) ?? null
 
@@ -12150,6 +12224,7 @@ export const useSceneStore = defineStore('scene', {
         bodyEndCapOrientation: previousProps?.bodyEndCapOrientation ?? meshProps.bodyEndCapOrientation,
         headEndCapOrientation: previousProps?.headEndCapOrientation ?? meshProps.headEndCapOrientation,
         footEndCapOrientation: previousProps?.footEndCapOrientation ?? meshProps.footEndCapOrientation,
+        bodyMaterialConfigId: previousProps?.bodyMaterialConfigId ?? meshProps.bodyMaterialConfigId,
         height: meshProps.height,
         width: meshProps.width,
         thickness: meshProps.thickness,
@@ -12497,6 +12572,7 @@ export const useSceneStore = defineStore('scene', {
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = clampWallProps(component.props as WallComponentProps)
         const typedPatch = patch as Partial<WallComponentProps>
+        const hasBodyMaterialConfigId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyMaterialConfigId')
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
         const hasFootAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footAssetId')
@@ -12646,6 +12722,9 @@ export const useSceneStore = defineStore('scene', {
           smoothing: hasSmoothing
             ? (typedPatch.smoothing as number | undefined)
             : currentProps.smoothing,
+          bodyMaterialConfigId: hasBodyMaterialConfigId
+            ? (typedPatch.bodyMaterialConfigId as string | null | undefined)
+            : currentProps.bodyMaterialConfigId,
           isAirWall: hasIsAirWall
             ? (typedPatch.isAirWall as boolean | undefined)
             : currentProps.isAirWall,
@@ -12704,6 +12783,7 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
+          (currentProps.bodyMaterialConfigId ?? null) === (merged.bodyMaterialConfigId ?? null) &&
           currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
