@@ -281,19 +281,6 @@
         <view class="viewer-drive-cluster viewer-drive-cluster--actions">
           <button
             class="viewer-drive-icon-button"
-            :class="{ 'is-active': vehicleDriveDiagnosticCameraMode === 'fixed-debug' }"
-            type="button"
-            hover-class="none"
-            :aria-label="vehicleDriveDiagnosticCameraButtonAriaLabel"
-            @tap="handleVehicleDriveDiagnosticCameraToggleTap"
-          >
-            <view class="viewer-drive-icon" aria-hidden="true">
-              <text class="viewer-drive-icon-text">{{ vehicleDriveDiagnosticCameraButtonLabel }}</text>
-            </view>
-          </button>
-   
-          <button
-            class="viewer-drive-icon-button"
             :class="{ 'is-busy': vehicleDriveResetBusy }"
             type="button"
             hover-class="none"
@@ -2160,8 +2147,6 @@ const vehicleDriveInput = reactive<VehicleDriveInputState>({
 });
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('follow');
 const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow');
-type VehicleDriveDiagnosticCameraMode = 'follow' | 'fixed-debug';
-const vehicleDriveDiagnosticCameraMode = ref<VehicleDriveDiagnosticCameraMode>('follow');
 const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   desiredPosition: new THREE.Vector3(),
   currentPosition: new THREE.Vector3(),
@@ -2210,18 +2195,6 @@ const joystickKnobStyle = computed(() => {
   };
 });
 const vehicleDriveResetBusy = ref(false);
-const vehicleDriveDiagnosticCameraButtonLabel = computed(() => (
-  vehicleDriveDiagnosticCameraMode.value === 'fixed-debug' ? '跟' : '固'
-));
-const vehicleDriveDiagnosticCameraButtonAriaLabel = computed(() => (
-  vehicleDriveDiagnosticCameraMode.value === 'fixed-debug' ? '切换到跟随相机' : '切换到固定调试相机'
-));
-const vehicleDriveDiagnosticCameraPose = {
-  hasSnapshot: false,
-  position: new THREE.Vector3(),
-  up: new THREE.Vector3(),
-};
-const vehicleDriveDiagnosticCameraTarget = new THREE.Vector3();
 
 type CameraViewMode = 'level' | 'watching';
 const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
@@ -2523,40 +2496,10 @@ watch(vehicleDriveCameraMode, (mode) => {
   }
 });
 
-watch(vehicleDriveDiagnosticCameraMode, (mode) => {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  if (mode === 'fixed-debug') {
-    captureVehicleDriveDiagnosticCameraPose();
-    const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
-    if (nodeId) {
-      setCameraViewState('watching', nodeId);
-    }
-    setCameraCaging(true);
-    setVehicleDriveUiOverride('show');
-    updateVehicleDriveCamera(0, { immediate: true });
-    return;
-  }
-
-  resetVehicleDriveDiagnosticCameraPose();
-  if (vehicleDriveCameraMode.value === 'follow') {
-    const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
-    if (nodeId) {
-      setCameraViewState('watching', nodeId);
-      setCameraCaging(true);
-    }
-    setVehicleDriveUiOverride('show');
-    updateVehicleDriveCamera(0, { immediate: true });
-  }
-});
-
 watch(vehicleDriveActive, (active) => {
   if (!active) {
     vehicleDriveCameraMode.value = 'follow';
-    vehicleDriveDiagnosticCameraMode.value = 'follow';
     vehicleDriveCameraFollowState.initialized = false;
-    resetVehicleDriveDiagnosticCameraPose();
     vehicleSpeed.value = 0;
   }
 });
@@ -7531,96 +7474,6 @@ function resetActiveVehiclePose(): boolean {
   return vehicleDriveController.resetPose();
 }
 
-function resetVehicleDriveDiagnosticCameraPose(): void {
-  vehicleDriveDiagnosticCameraPose.hasSnapshot = false;
-  vehicleDriveDiagnosticCameraPose.position.set(0, 0, 0);
-  vehicleDriveDiagnosticCameraPose.up.set(0, 1, 0);
-}
-
-function resolveActiveVehicleDiagnosticFocusTarget(target: THREE.Vector3): boolean {
-  const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
-  if (!nodeId) {
-    return false;
-  }
-  const instance = vehicleInstances.get(nodeId) ?? null;
-  const chassisBody = instance?.vehicle?.chassisBody as CANNON.Body | null;
-  if (chassisBody) {
-    if (physicsInterpolationEnabled) {
-      resolveInterpolatedBodyPosition(chassisBody, target);
-    } else {
-      target.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z);
-    }
-  } else {
-    const focusPoint = resolveNodeFocusPoint(nodeId);
-    if (!focusPoint) {
-      return false;
-    }
-    target.copy(focusPoint);
-  }
-
-  const object = nodeObjectMap.get(nodeId) ?? null;
-  if (!object) {
-    target.y += 1.2;
-    return true;
-  }
-  tempBox.makeEmpty();
-  tempBox.setFromObject(object);
-  if (tempBox.isEmpty()) {
-    target.y += 1.2;
-    return true;
-  }
-  tempBox.getSize(tempVector);
-  target.y += Math.max(0.9, tempVector.y * 0.32);
-  return true;
-}
-
-function captureVehicleDriveDiagnosticCameraPose(): boolean {
-  const context = renderContext;
-  if (!context?.camera) {
-    return false;
-  }
-  vehicleDriveDiagnosticCameraPose.position.copy(context.camera.position);
-  vehicleDriveDiagnosticCameraPose.up.copy(context.camera.up);
-  vehicleDriveDiagnosticCameraPose.hasSnapshot = true;
-  return true;
-}
-
-function handleVehicleDriveDiagnosticCameraToggleTap(): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  vehicleDriveDiagnosticCameraMode.value = vehicleDriveDiagnosticCameraMode.value === 'fixed-debug'
-    ? 'follow'
-    : 'fixed-debug';
-}
-
-function updateVehicleDriveFixedDebugCamera(options: VehicleDriveCameraUpdateOptions = {}): boolean {
-  const context = renderContext;
-  if (!vehicleDriveActive.value || !context?.camera) {
-    return false;
-  }
-  if (!resolveActiveVehicleDiagnosticFocusTarget(vehicleDriveDiagnosticCameraTarget)) {
-    return false;
-  }
-  if (options.immediate || !vehicleDriveDiagnosticCameraPose.hasSnapshot) {
-    const captured = captureVehicleDriveDiagnosticCameraPose();
-    if (!captured) {
-      return false;
-    }
-  }
-  return runWithProgrammaticCameraMutationAndAnchor(() => {
-    context.camera.position.copy(vehicleDriveDiagnosticCameraPose.position);
-    context.camera.up.copy(vehicleDriveDiagnosticCameraPose.up);
-    context.controls.target.copy(vehicleDriveDiagnosticCameraTarget);
-    context.camera.lookAt(vehicleDriveDiagnosticCameraTarget);
-    context.controls.update();
-    context.camera.position.copy(vehicleDriveDiagnosticCameraPose.position);
-    context.camera.up.copy(vehicleDriveDiagnosticCameraPose.up);
-    context.camera.lookAt(vehicleDriveDiagnosticCameraTarget);
-    return true;
-  });
-}
-
 
 type VehicleDriveCameraUpdateOptions = {
   immediate?: boolean;
@@ -7631,9 +7484,6 @@ function updateVehicleDriveCamera(
   deltaSeconds = 0,
   options: VehicleDriveCameraUpdateOptions = {},
 ): boolean {
-  if (vehicleDriveDiagnosticCameraMode.value === 'fixed-debug' && vehicleDriveCameraMode.value === 'follow') {
-    return updateVehicleDriveFixedDebugCamera(options);
-  }
   const disableOrbitControlsForDriveFollow = vehicleDriveCameraMode.value === 'follow';
   const ctx = renderContext
     ? {
@@ -11383,12 +11233,6 @@ onUnmounted(() => {
 
 .viewer-drive-icon-button:active {
   transform: scale(0.95);
-}
-
-.viewer-drive-icon-button.is-active {
-  background-color: rgba(23, 86, 78, 0.72);
-  border-color: rgba(119, 243, 219, 0.6);
-  color: #eafffb;
 }
 
 /* Tooltip from aria-label on hover (desktop/H5) */

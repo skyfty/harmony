@@ -224,6 +224,10 @@ const VEHICLE_FOLLOW_STEER_LOOK_MAX = THREE.MathUtils.degToRad(14)
 const VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD = 0.75
 // 达到该速度后使用完整的转向视觉偏航
 const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 5.5
+// 转向视觉偏航建立速度（越大越接近即时）
+const VEHICLE_FOLLOW_STEER_LOOK_CATCH_SPEED = 18
+// 松开转向后回正速度；仅作用于转向反馈角，避免瞬间回正
+const VEHICLE_FOLLOW_STEER_LOOK_RELEASE_SPEED = 5.5
 // 跟随相机高度比例（调高让车辆在画面中更靠下）
 const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.7 // 降低相机高度比例
 const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0   // 降低相机最小高度
@@ -287,6 +291,7 @@ export class VehicleDriveController {
   private readonly followCameraVelocity = new THREE.Vector3()
   private readonly followCameraVelocityScratch = new THREE.Vector3()
   private readonly followCameraLastAnchor = new THREE.Vector3()
+  private followCameraSteerLookAngle = 0
 
   private readonly temp = {
     box: new THREE.Box3(),
@@ -572,6 +577,7 @@ export class VehicleDriveController {
     this.bindings.exitBusy.value = false
     this.cameraMode = 'follow'
     this.bindings.cameraFollowState.initialized = false
+    this.followCameraSteerLookAngle = 0
     this.resetFollowCameraOffset()
     this.resetInputs()
     if (this.deps.setCameraViewState) {
@@ -655,6 +661,7 @@ export class VehicleDriveController {
     this.clearSmoothStop()
     this.followCameraVelocityHasSample = false
     this.followCameraVelocity.set(0, 0, 0)
+    this.followCameraSteerLookAngle = 0
     this.bindings.exitBusy.value = false
     this.cameraMode = 'first-person'
     if (this.deps.setCameraCaging) {
@@ -1047,9 +1054,26 @@ export class VehicleDriveController {
     const steerLookBlend = planarSpeed <= VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD
       ? 0
       : Math.min(1, (planarSpeed - VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD) / steerLookRange)
-    const steerLookAngle = steeringInput * VEHICLE_FOLLOW_STEER_LOOK_MAX * steerLookBlend
-    if (Math.abs(steerLookAngle) > 1e-4) {
-      desiredFollowForward.applyAxisAngle(VEHICLE_CAMERA_WORLD_UP, steerLookAngle)
+    const targetSteerLookAngle = steeringInput * VEHICLE_FOLLOW_STEER_LOOK_MAX * steerLookBlend
+    if (options.immediate || deltaSeconds <= 0) {
+      this.followCameraSteerLookAngle = targetSteerLookAngle
+    } else {
+      const returningToCenter = Math.abs(targetSteerLookAngle) < Math.abs(this.followCameraSteerLookAngle)
+        && Math.sign(targetSteerLookAngle || 0) === Math.sign(this.followCameraSteerLookAngle || 0)
+      const steerLookRate = returningToCenter
+        ? VEHICLE_FOLLOW_STEER_LOOK_RELEASE_SPEED
+        : VEHICLE_FOLLOW_STEER_LOOK_CATCH_SPEED
+      const maxStep = steerLookRate * deltaSeconds
+      const steerLookDelta = targetSteerLookAngle - this.followCameraSteerLookAngle
+      if (Math.abs(steerLookDelta) <= maxStep) {
+        this.followCameraSteerLookAngle = targetSteerLookAngle
+      } else {
+        this.followCameraSteerLookAngle += Math.sign(steerLookDelta) * maxStep
+      }
+    }
+
+    if (Math.abs(this.followCameraSteerLookAngle) > 1e-4) {
+      desiredFollowForward.applyAxisAngle(VEHICLE_CAMERA_WORLD_UP, this.followCameraSteerLookAngle)
       if (desiredFollowForward.lengthSq() > 1e-6) {
         desiredFollowForward.normalize()
       }
