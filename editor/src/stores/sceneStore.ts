@@ -153,6 +153,7 @@ import {
   computeInstanceLayoutGridCenterOffsetLocal,
   resolveInstanceLayoutTemplateAssetId,
 } from '@schema/instanceLayout'
+import { applyMirroredScaleToObject } from '@schema/mirror'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -3345,7 +3346,9 @@ function composeNodeMatrix(node: SceneNode): Matrix4 {
   const position = new Vector3(node.position.x, node.position.y, node.position.z)
   const rotation = new Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ')
   const quaternion = new Quaternion().setFromEuler(rotation)
-  const scale = new Vector3(node.scale.x, node.scale.y, node.scale.z)
+  const transform = new Object3D()
+  applyMirroredScaleToObject(transform, node.scale, node.mirror)
+  const scale = transform.scale.clone()
   return new Matrix4().compose(position, quaternion, scale)
 }
 
@@ -11674,8 +11677,6 @@ export const useSceneStore = defineStore('scene', {
             this.queueSceneNodePatch(desiredId, ['visibility'])
           }
 
-          // Ensure required components exist and are configured.
-          this.ensureStaticRigidbodyComponent(desiredId)
           const wallComponent = (findNodeById(this.nodes, desiredId)?.components?.[WALL_COMPONENT_TYPE] as
             | SceneNodeComponentState<WallComponentProps>
             | undefined)
@@ -11702,8 +11703,6 @@ export const useSceneStore = defineStore('scene', {
           editorFlags: payload.editorFlags,
         })
         if (node) {
-          this.ensureStaticRigidbodyComponent(node.id)
-
           const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
             ? payload.bodyAssetId
             : null
