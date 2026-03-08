@@ -6,7 +6,7 @@ export type FloorRenderAssetObjects = {
   bodyObject?: THREE.Object3D | null
 }
 
-const DEFAULT_COLOR = 0x4b4f55
+const DEFAULT_COLOR = 0xffffff
 
 // Lift the floor surface slightly above the ground plane to avoid z-fighting.
 const FLOOR_SURFACE_Y_OFFSET = 0.01
@@ -47,10 +47,11 @@ function createFloorMaterial(): THREE.MeshStandardMaterial {
   const material = new THREE.MeshStandardMaterial({
     color: DEFAULT_COLOR,
     metalness: 0,
-    roughness: 0.92,
+    roughness: 0.15,
   })
   material.name = 'FloorMaterial'
   material.side = THREE.DoubleSide
+  material.shadowSide = THREE.FrontSide
   return material
 }
 
@@ -485,7 +486,7 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
 
   const topBottomMesh = new THREE.Mesh(topBottomGeometry, materialTemplate.clone())
   topBottomMesh.name = 'FloorTopBottomMesh'
-  topBottomMesh.castShadow = true
+  topBottomMesh.castShadow = false
   topBottomMesh.receiveShadow = true
   topBottomMesh.userData[MATERIAL_CONFIG_ID_KEY] = topBottom
   group.add(topBottomMesh)
