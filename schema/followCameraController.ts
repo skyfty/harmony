@@ -33,7 +33,7 @@ export type CameraFollowOptions = {
 
 export type CameraFollowContext = {
   camera: THREE.PerspectiveCamera | null
-  mapControls?: { target: THREE.Vector3; update: () => void; enablePan?: boolean; minDistance?: number; maxDistance?: number }
+  mapControls?: { target: THREE.Vector3; update: () => void; enabled?: boolean; enablePan?: boolean; minDistance?: number; maxDistance?: number }
 }
 
 type Vector3Like = { x: number; y: number; z: number }
@@ -80,16 +80,16 @@ export const DEFAULT_CAMERA_FOLLOW_TUNING: CameraFollowTuning = {
   distanceMax: 10,
   heightMin: 4,
 
-  positionLerpSpeed: 8,
-  targetLerpSpeed: 10,
-  headingLerpSpeed: 5.5,
-  anchorLerpSpeed: 4.5,
+  positionLerpSpeed: 7.2,
+  targetLerpSpeed: 8,
+  headingLerpSpeed: 4.4,
+  anchorLerpSpeed: 7,
 
-  lookaheadTime: 0.18,
-  lookaheadDistanceMax: 3,
-  lookaheadMinSpeedSq: 0.9,
-  lookaheadBlendStart: 0.25,
-  lookaheadBlendSpeed: 4,
+  lookaheadTime: 0.1,
+  lookaheadDistanceMax: 1.2,
+  lookaheadMinSpeedSq: 1,
+  lookaheadBlendStart: 0.55,
+  lookaheadBlendSpeed: 3.5,
 
   backwardDotThreshold: -0.25,
   forwardReleaseDot: 0.25,
@@ -98,11 +98,11 @@ export const DEFAULT_CAMERA_FOLLOW_TUNING: CameraFollowTuning = {
   collisionDirectionDotThreshold: -0.35,
   collisionHoldTime: 0.8,
 
-  motionSpeedThreshold: 0.7,
-  motionSpeedFull: 6,
-  motionBlendSpeed: 3.2,
-  motionDistanceBoost: 0.28,
-  motionHeightBoost: 0.22,
+  motionSpeedThreshold: 1.2,
+  motionSpeedFull: 7,
+  motionBlendSpeed: 2.4,
+  motionDistanceBoost: 0.14,
+  motionHeightBoost: 0.08,
 
   movingSpeedSq: 0.04,
 }
@@ -303,54 +303,14 @@ export class FollowCameraController {
 
     let planarSpeedSq = 0
     let planarSpeed = 0
-    let lookaheadActive = false
+    let forwardSpeed = 0
 
     if (velocityWorld) {
       temp.planarVelocity.set(velocityWorld.x, 0, velocityWorld.z)
       planarSpeedSq = temp.planarVelocity.lengthSq()
       planarSpeed = Math.sqrt(planarSpeedSq)
-
-      const lookaheadBlendRange = Math.max(1e-3, Math.sqrt(tuning.lookaheadMinSpeedSq) - tuning.lookaheadBlendStart)
-      const lookaheadBlend = planarSpeed > tuning.lookaheadBlendStart
-        ? Math.min(1, (planarSpeed - tuning.lookaheadBlendStart) / lookaheadBlendRange)
-        : 0
-
-      if (lookaheadBlend > 0) {
-        temp.predictionOffset.copy(temp.planarVelocity)
-        temp.predictionOffset.multiplyScalar(tuning.lookaheadTime * lookaheadBlend)
-        const offsetLength = temp.predictionOffset.length()
-        const maxLookahead = Math.max(0, tuning.lookaheadDistanceMax * lookaheadBlend)
-        if (maxLookahead > 1e-4 && offsetLength > maxLookahead) {
-          temp.predictionOffset.multiplyScalar(maxLookahead / offsetLength)
-        }
-        lookaheadActive = maxLookahead > 1e-4 && temp.predictionOffset.lengthSq() > 1e-8
-      } else {
-        temp.predictionOffset.set(0, 0, 0)
-      }
-
-      if (planarSpeedSq > tuning.collisionLockSpeedSq) {
-        const normalizedDir = temp.tempVector.copy(temp.planarVelocity)
-        const dirLength = normalizedDir.length()
-        if (dirLength > 1e-6 && follow.lastVelocityDirection.lengthSq() > 1e-6) {
-          normalizedDir.multiplyScalar(1 / dirLength)
-          if (normalizedDir.dot(follow.lastVelocityDirection) < tuning.collisionDirectionDotThreshold) {
-            follow.anchorHoldSeconds = tuning.collisionHoldTime
-            follow.shouldHoldAnchorForReverse = true
-          }
-        }
-      }
-
-      const movementDot = temp.planarVelocity.dot(follow.heading)
-      if (planarSpeedSq > 1e-6) {
-        temp.tempVector.copy(temp.planarVelocity).normalize()
-        follow.lastVelocityDirection.copy(temp.tempVector)
-        if (movementDot > tuning.forwardReleaseDot) {
-          follow.shouldHoldAnchorForReverse = false
-        }
-      }
     } else {
       temp.planarVelocity.set(0, 0, 0)
-      follow.lastVelocityDirection.set(0, 0, 0)
     }
 
     const motionSpeedRange = Math.max(1e-3, tuning.motionSpeedFull - tuning.motionSpeedThreshold)
@@ -376,10 +336,6 @@ export class FollowCameraController {
     placementWorking.targetLift *= motionHeightScale
     placementWorking.targetForward *= motionDistanceScale
 
-    if (follow.anchorHoldSeconds > 0) {
-      follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
-    }
-
     if (!follow.initialized) {
       follow.heading.copy(desiredForwardWorld)
       follow.heading.y = 0
@@ -388,7 +344,6 @@ export class FollowCameraController {
       } else {
         follow.heading.normalize()
       }
-      follow.anchorHoldSeconds = 0
       follow.lastVelocityDirection.set(0, 0, 0)
       follow.shouldHoldAnchorForReverse = false
       follow.motionDistanceBlend = 0
@@ -413,6 +368,15 @@ export class FollowCameraController {
       desiredHeading.normalize()
     }
 
+    if (planarSpeedSq > 1e-6) {
+      forwardSpeed = temp.planarVelocity.dot(desiredHeading)
+      temp.tempVector.copy(temp.planarVelocity).normalize()
+      follow.lastVelocityDirection.copy(temp.tempVector)
+    } else {
+      forwardSpeed = 0
+      follow.lastVelocityDirection.set(0, 0, 0)
+    }
+
     const headingLerp = follow.initialized ? computeFollowLerpAlpha(deltaSeconds, tuning.headingLerpSpeed) : 1
     follow.heading.lerp(desiredHeading, headingLerp)
     if (follow.heading.lengthSq() < 1e-6) {
@@ -430,29 +394,14 @@ export class FollowCameraController {
     }
     const headingUp = temp.cameraUp.copy(worldUp)
 
-    const movingBackward = velocityWorld
-      ? temp.planarVelocity.dot(follow.heading) < tuning.backwardDotThreshold
-      : false
-    const reversing = movingBackward
-    follow.shouldHoldAnchorForReverse = reversing
-
-    if (lookaheadActive) {
-      if (reversing) {
-        const lookaheadLength = temp.predictionOffset.length()
-        if (lookaheadLength > 1e-6) {
-          temp.tempVector.copy(follow.heading)
-          if (temp.tempVector.lengthSq() < 1e-6) {
-            temp.tempVector.copy(temp.planarVelocity)
-          }
-          if (temp.tempVector.lengthSq() < 1e-6) {
-            temp.tempVector.set(0, 0, 1)
-          }
-          temp.tempVector.normalize().multiplyScalar(-lookaheadLength)
-          temp.predictionOffset.copy(temp.tempVector)
-        } else {
-          temp.predictionOffset.set(0, 0, 0)
-        }
-      }
+    const lookaheadBlendRange = Math.max(1e-3, Math.sqrt(tuning.lookaheadMinSpeedSq) - tuning.lookaheadBlendStart)
+    const lookaheadBlend = planarSpeed > tuning.lookaheadBlendStart
+      ? Math.min(1, (planarSpeed - tuning.lookaheadBlendStart) / lookaheadBlendRange)
+      : 0
+    const forwardLookaheadDistance = Math.max(0, forwardSpeed) * tuning.lookaheadTime * lookaheadBlend
+    if (forwardLookaheadDistance > 1e-4) {
+      temp.predictionOffset.copy(follow.heading)
+      temp.predictionOffset.multiplyScalar(Math.min(tuning.lookaheadDistanceMax * lookaheadBlend, forwardLookaheadDistance))
     } else {
       temp.predictionOffset.set(0, 0, 0)
     }
@@ -469,15 +418,13 @@ export class FollowCameraController {
     temp.followPredictedAnchor.add(follow.lookaheadOffset)
     follow.desiredAnchor.copy(temp.followPredictedAnchor)
 
-    const anchorHoldActive = follow.anchorHoldSeconds > 0
     const baseAnchorAlpha = options.immediate || !follow.initialized
       ? 1
       : computeFollowLerpAlpha(deltaSeconds, tuning.anchorLerpSpeed)
-    const anchorAlpha = anchorHoldActive ? 0 : baseAnchorAlpha
-    if (anchorAlpha >= 1) {
+    if (baseAnchorAlpha >= 1) {
       follow.currentAnchor.copy(follow.desiredAnchor)
-    } else if (anchorAlpha > 0) {
-      follow.currentAnchor.lerp(follow.desiredAnchor, anchorAlpha)
+    } else if (baseAnchorAlpha > 0) {
+      follow.currentAnchor.lerp(follow.desiredAnchor, baseAnchorAlpha)
     }
     const anchorForCamera = follow.currentAnchor
 
@@ -499,15 +446,9 @@ export class FollowCameraController {
     follow.desiredTarget.copy(anchorForCamera).add(temp.followTargetOffsetWorld)
 
     const mapControls = ctx.mapControls
-    if (mapControls) {
-      mapControls.target.copy(follow.desiredTarget)
-      if (options.applyOrbitTween && onUpdateOrbitLookTween) {
-        onUpdateOrbitLookTween(deltaSeconds)
-      }
-      mapControls.update?.()
-    }
-
-    const allowCameraAdjustments = !isTargetMoving
+    const controlsEnabled = Boolean(mapControls?.enabled)
+    const pureProgrammaticFollow = !mapControls || !controlsEnabled
+    const allowCameraAdjustments = !isTargetMoving && controlsEnabled
     let userAdjusted = allowCameraAdjustments && Boolean(options.followControlsDirty)
     if (allowCameraAdjustments && !userAdjusted && follow.initialized) {
       const deltaPosition = camera.position.distanceTo(follow.currentPosition)
@@ -539,14 +480,31 @@ export class FollowCameraController {
       follow.initialized = true
     } else {
       const positionAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.positionLerpSpeed)
-      const targetAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.targetLerpSpeed)
       follow.currentPosition.lerp(follow.desiredPosition, positionAlpha)
-      follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
+      if (pureProgrammaticFollow) {
+        follow.currentTarget.copy(follow.desiredTarget)
+      } else {
+        const targetAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.targetLerpSpeed)
+        follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
+      }
     }
 
     camera.position.copy(follow.currentPosition)
     camera.up.copy(headingUp)
     camera.lookAt(follow.currentTarget)
+
+    if (mapControls) {
+      mapControls.target.copy(follow.currentTarget)
+      if (controlsEnabled) {
+        if (options.applyOrbitTween && onUpdateOrbitLookTween) {
+          onUpdateOrbitLookTween(deltaSeconds)
+        }
+        mapControls.update?.()
+        camera.position.copy(follow.currentPosition)
+        camera.up.copy(headingUp)
+        camera.lookAt(follow.currentTarget)
+      }
+    }
 
     follow.initialized = true
     return true

@@ -1,225 +1,16 @@
-import type { SceneNode, EnvironmentSettings } from '@schema'
+import {
+  cloneEnvironmentSettings,
+  DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
+  DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
+  DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
+  DEFAULT_ENVIRONMENT_SETTINGS,
+  resolveDocumentEnvironment,
+  type SceneNode,
+  type EnvironmentSettings,
+} from '@schema'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
-export const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175'
-export const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
-export const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 3.2
-export const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
-export const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
-export const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
-export const DEFAULT_ENVIRONMENT_FOG_FAR = 50
-export const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
-export const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
-export const DEFAULT_ENVIRONMENT_FRICTION = 0.3
-export const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
-export const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
-
-export const DEFAULT_ENVIRONMENT_GRADIENT_OFFSET = 33
-export const DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT = 0.6
-
-export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
-  background: {
-    mode: 'solidColor',
-    solidColor: '#BECACB',
-    gradientTopColor: '#627897',
-    gradientOffset: DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
-    gradientExponent: DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
-    hdriAssetId: null,
-    skycubeFormat: 'zip',
-    skycubeZipAssetId: null,
-    positiveXAssetId: null,
-    negativeXAssetId: null,
-    positiveYAssetId: null,
-    negativeYAssetId: null,
-    positiveZAssetId: null,
-    negativeZAssetId: null,
-  },
-  environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
-  environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
-  ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
-  ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-  fogMode: 'none',
-  fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
-  fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
-  fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
-  fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
-  gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
-  collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
-  collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
-}
-
-function normalizeHexColor(value: unknown, fallback: string): string {
-  if (typeof value === 'string') {
-    const sanitized = value.trim()
-    if (/^#(?:[0-9a-fA-F]{6})$/.test(sanitized)) {
-      return sanitized
-    }
-  }
-  return fallback
-}
-
-function normalizeNullableHexColor(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const sanitized = value.trim()
-  if (!sanitized) {
-    return null
-  }
-  if (/^#(?:[0-9a-fA-F]{6})$/.test(sanitized)) {
-    return sanitized
-  }
-  return null
-}
-
-function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return fallback
-  }
-  if (numeric < min) return min
-  if (numeric > max) return max
-  return numeric
-}
-
-function normalizeAssetId(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return trimmed.length ? trimmed : null
-}
-
-function hasAnySkycubeFaceAssetId(background: {
-  positiveXAssetId?: string | null
-  negativeXAssetId?: string | null
-  positiveYAssetId?: string | null
-  negativeYAssetId?: string | null
-  positiveZAssetId?: string | null
-  negativeZAssetId?: string | null
-} | null): boolean {
-  if (!background) {
-    return false
-  }
-  const faceAssetIds = [
-    background.positiveXAssetId,
-    background.negativeXAssetId,
-    background.positiveYAssetId,
-    background.negativeYAssetId,
-    background.positiveZAssetId,
-    background.negativeZAssetId,
-  ]
-  return faceAssetIds.some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
-}
-
-function normalizeEnvironmentOrientationPreset(value: unknown): EnvironmentSettings['environmentOrientationPreset'] {
-  if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
-    return value
-  }
-  return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
-}
-
-function normalizeSkycubeFormat(
-  value: unknown,
-  hasFaceAssetIds: boolean,
-): EnvironmentSettings['background']['skycubeFormat'] {
-  if (value === 'zip' || value === 'faces') {
-    return value
-  }
-  return hasFaceAssetIds ? 'faces' : 'zip'
-}
-
-function resolvePresetRotationDegrees(preset: EnvironmentSettings['environmentOrientationPreset']): { x: number; y: number; z: number } {
-  if (preset === 'zUp') {
-    return { x: -90, y: 0, z: 0 }
-  }
-  if (preset === 'xUp') {
-    return { x: 0, y: 0, z: 90 }
-  }
-  return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES }
-}
-
-export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | EnvironmentSettings | null): EnvironmentSettings {
-  const backgroundSource = source?.background ?? null
-
-  let backgroundMode: any = 'skybox'
-  if (backgroundSource?.mode === 'hdri') {
-    backgroundMode = 'hdri'
-  } else if (backgroundSource?.mode === 'skycube') {
-    backgroundMode = 'skycube'
-  } else if (backgroundSource?.mode === 'solidColor') {
-    backgroundMode = 'solidColor'
-  }
-  let fogMode: any = 'none'
-  if (source?.fogMode === 'linear') {
-    fogMode = 'linear'
-  } else if (source?.fogMode === 'exp') {
-    fogMode = 'exp'
-  }
-
-  const fogNear = clampNumber(source?.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR)
-  const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
-  const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
-
-  const skycubeFaceAssetIds = {
-    positiveXAssetId: normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null),
-    negativeXAssetId: normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null),
-    positiveYAssetId: normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null),
-    negativeYAssetId: normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null),
-    positiveZAssetId: normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null),
-    negativeZAssetId: normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null),
-  }
-  const hasSkycubeFaceAssetIds = hasAnySkycubeFaceAssetId(skycubeFaceAssetIds)
-
-  const preset = normalizeEnvironmentOrientationPreset((source as any)?.environmentOrientationPreset)
-  const presetRotation = resolvePresetRotationDegrees(preset)
-  const rotationSource = (source as any)?.environmentRotationDegrees ?? null
-  const environmentRotationDegrees = {
-    x: clampNumber(rotationSource?.x, -360, 360, presetRotation.x),
-    y: clampNumber(rotationSource?.y, -360, 360, presetRotation.y),
-    z: clampNumber(rotationSource?.z, -360, 360, presetRotation.z),
-  }
-
-  return {
-    background: {
-      mode: backgroundMode,
-      solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
-      gradientTopColor: normalizeNullableHexColor((backgroundSource as any)?.gradientTopColor ?? null),
-      gradientOffset: clampNumber(
-        (backgroundSource as any)?.gradientOffset,
-        0,
-        100000,
-        DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
-      ),
-      gradientExponent: clampNumber(
-        (backgroundSource as any)?.gradientExponent,
-        0,
-        10,
-        DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
-      ),
-      hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-      skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat, hasSkycubeFaceAssetIds),
-      skycubeZipAssetId:
-        backgroundMode === 'skycube' ? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null) : null,
-      positiveXAssetId: skycubeFaceAssetIds.positiveXAssetId,
-      negativeXAssetId: skycubeFaceAssetIds.negativeXAssetId,
-      positiveYAssetId: skycubeFaceAssetIds.positiveYAssetId,
-      negativeYAssetId: skycubeFaceAssetIds.negativeYAssetId,
-      positiveZAssetId: skycubeFaceAssetIds.positiveZAssetId,
-      negativeZAssetId: skycubeFaceAssetIds.negativeZAssetId,
-    },
-    environmentOrientationPreset: preset,
-    environmentRotationDegrees,
-    ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
-    ambientLightIntensity: clampNumber(source?.ambientLightIntensity, 0, 10, DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY),
-    fogMode,
-    fogColor: normalizeHexColor(source?.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
-    fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
-    fogNear,
-    fogFar: normalizedFogFar,
-    gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
-    collisionRestitution: clampNumber(source?.collisionRestitution, 0, 1, DEFAULT_ENVIRONMENT_RESTITUTION),
-    collisionFriction: clampNumber(source?.collisionFriction, 0, 1, DEFAULT_ENVIRONMENT_FRICTION),
-  }
-}
+export { cloneEnvironmentSettings, DEFAULT_ENVIRONMENT_SETTINGS }
 
 export function isEnvironmentNode(node: SceneNode, id: string): boolean {
   return node.id === id
@@ -283,7 +74,13 @@ export function ensureEnvironmentNode(
   }
 
   const result = [...others]
-  const groundIndex = result.findIndex((node) => isGroundNodePred(node))
+  let groundIndex = -1
+  for (let index = 0; index < result.length; index += 1) {
+    if (isGroundNodePred(result[index])) {
+      groundIndex = index
+      break
+    }
+  }
   const insertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
   result.splice(insertIndex, 0, environment)
   return result
@@ -331,9 +128,9 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
 }
 
 export function resolveSceneDocumentEnvironment(scene: StoredSceneDocument, findNodeById: (nodes: any[], id: string) => SceneNode | null, envNodeId: string): EnvironmentSettings {
-  if (scene.environment) return cloneEnvironmentSettings(scene.environment)
-  const environmentNode = findNodeById(scene.nodes, envNodeId)
-  return extractEnvironmentSettings(environmentNode)
+  void findNodeById
+  void envNodeId
+  return resolveDocumentEnvironment(scene)
 }
 
 export default {
