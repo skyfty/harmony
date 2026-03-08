@@ -729,6 +729,25 @@ function buildStretchedWallInstancesForSegs(
   }
   return instances
 }
+
+function applyWallShadowSide(
+  material: THREE.Material | THREE.Material[],
+  shadowSide: THREE.Side = THREE.FrontSide,
+): THREE.Material | THREE.Material[] {
+  const applyOne = (entry: THREE.Material) => {
+    const typed = entry as THREE.Material & { shadowSide?: THREE.Side }
+    typed.shadowSide = shadowSide
+  }
+
+  if (Array.isArray(material)) {
+    material.forEach((entry) => applyOne(entry))
+    return material
+  }
+
+  applyOne(material)
+  return material
+}
+
 function createWallAssetMesh(
   name: string,
   template: InstancedAssetTemplate,
@@ -737,13 +756,15 @@ function createWallAssetMesh(
   options: {
     skipMaterialDispose?: boolean
     ownedTextures?: THREE.Texture[]
+    shadowSide?: THREE.Side
     repeatInfo?: {
       uvMetersPerUnit: { x: number; y: number }
       repeatScale?: { x: number; y: number }
     }
   } = {},
 ): THREE.Mesh {
-  const mesh = new THREE.Mesh(template.geometry, material)
+  const resolvedMaterial = applyWallShadowSide(material, options.shadowSide)
+  const mesh = new THREE.Mesh(template.geometry, resolvedMaterial)
   mesh.name = name
   mesh.userData.dynamicMeshType = 'WallAsset'
   mesh.userData[WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY] = true
@@ -772,6 +793,7 @@ function createWallRepeatedAssetMeshes(
   materialVariantCache: WallMaterialVariantCache,
   orientation: WallModelOrientation,
   uvAxis: WallResolvedUvAxis = 'u',
+  shadowSide: THREE.Side = THREE.FrontSide,
 ): { meshes: THREE.Mesh[]; bounds: THREE.Box3 | null } {
   if (!instances.length) {
     return { meshes: [], bounds: null }
@@ -803,6 +825,7 @@ function createWallRepeatedAssetMeshes(
       {
         skipMaterialDispose: materialVariant.shared || !materialVariant.owner,
         ownedTextures: materialVariant.owner ? materialVariant.ownedTextures : [],
+        shadowSide,
         repeatInfo,
       },
     )
@@ -818,6 +841,7 @@ function createWallStaticAssetMeshes(
   namePrefix: string,
   template: InstancedAssetTemplate,
   matrices: THREE.Matrix4[],
+  shadowSide: THREE.Side = THREE.FrontSide,
 ): { meshes: THREE.Mesh[]; bounds: THREE.Box3 | null } {
   if (!matrices.length) {
     return { meshes: [], bounds: null }
@@ -829,7 +853,7 @@ function createWallStaticAssetMeshes(
       template,
       matrix,
       template.material,
-      { skipMaterialDispose: true },
+      { skipMaterialDispose: true, shadowSide },
     )),
     bounds: computeWallAssetBounds(template.bounds, matrices),
   }
@@ -1254,6 +1278,7 @@ function createWallMaterial(): THREE.MeshStandardMaterial {
   material.name = 'WallMaterial'
   // Keep walls single-sided; geometry winding/normals must face outward.
   material.side = THREE.FrontSide
+  material.shadowSide = THREE.FrontSide
   material.transparent = false
   material.opacity = 1
   material.depthWrite = true

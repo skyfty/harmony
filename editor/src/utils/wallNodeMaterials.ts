@@ -13,7 +13,7 @@ function buildMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneMater
     color: '#ffffff',
     transparent: false,
     opacity: 1,
-    side: 'double',
+    side: 'front',
     wireframe: false,
     metalness: 0,
     roughness: 0.92,
@@ -53,7 +53,7 @@ export function createWallNodeMaterials(options: {
       color,
       metalness: 0,
       roughness: 0.92,
-      side: 'double',
+      side: 'front',
     }),
   ]
 }
