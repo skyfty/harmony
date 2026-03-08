@@ -32,6 +32,10 @@ const previewUrls = ref<Record<string, string>>({})
 const previewDisposers = new Map<string, () => void>()
 let previewLoadVersion = 0
 
+const previewSourceSignature = computed(() => localImages.value
+  .map((image) => `${image.id}:${image.imageHash ?? ''}:${image.sourceUrl ?? ''}`)
+  .join('|'))
+
 watch(
   () => planningImagesComponent.value?.props,
   (props) => {
@@ -66,7 +70,7 @@ function previewUrlFor(imageId: string): string | null {
 }
 
 watch(
-  () => localImages.value.map((image) => `${image.id}:${image.imageHash ?? ''}:${image.sourceUrl ?? ''}`),
+  previewSourceSignature,
   async () => {
     const version = ++previewLoadVersion
     clearPreviewDisposers()

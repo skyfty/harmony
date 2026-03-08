@@ -126,30 +126,78 @@ export function clonePlanningImagesComponentProps(props: PlanningImagesComponent
 
 type PendingBuildToken = { cancelled: boolean }
 
+type RuntimeImageEntry = {
+  mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+  geometry: THREE.PlaneGeometry
+  material: THREE.MeshBasicMaterial
+  texture: THREE.Texture
+  disposeMedia?: () => void
+}
+
+function buildEntryStructureSignature(entry: PlanningImageDisplayEntry): string {
+  return JSON.stringify({
+    id: entry.id,
+    name: entry.name,
+    imageHash: entry.imageHash ?? '',
+    sourceUrl: entry.sourceUrl ?? '',
+    mimeType: entry.mimeType ?? '',
+    filename: entry.filename ?? '',
+    position: entry.position,
+    size: entry.size,
+  })
+}
+
+function buildPropsStructureSignature(props: PlanningImagesComponentProps): string {
+  return JSON.stringify(props.images.map((entry) => buildEntryStructureSignature(entry)))
+}
+
 class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
   private readonly textureLoader = new THREE.TextureLoader()
   private artifactGroup: THREE.Group | null = null
-  private cleanupTasks: Array<() => void> = []
   private pendingBuild: PendingBuildToken | null = null
+  private readonly runtimeEntries = new Map<string, RuntimeImageEntry>()
+  private lastStructureSignature = ''
 
   constructor(context: ComponentRuntimeContext<PlanningImagesComponentProps>) {
     super(context)
   }
 
-  onRuntimeAttached(_object: Object3D | null): void {
-    void this.rebuild()
+  onRuntimeAttached(object: Object3D | null): void {
+    if (!object) {
+      this.clearRuntimeArtifacts({ removeGroup: true })
+      return
+    }
+    this.ensureArtifactGroup(object)
+    void this.syncFromProps({ forceStructural: true })
   }
 
-  onPropsUpdated(): void {
-    void this.rebuild()
+  onPropsUpdated(next: Readonly<PlanningImagesComponentProps>, previous: Readonly<PlanningImagesComponentProps>): void {
+    const nextProps = clampPlanningImagesComponentProps(next)
+    const previousProps = clampPlanningImagesComponentProps(previous)
+    const nextSignature = buildPropsStructureSignature(nextProps)
+    const previousSignature = buildPropsStructureSignature(previousProps)
+
+    if (nextSignature !== previousSignature) {
+      void this.syncFromProps({ forceStructural: true, props: nextProps, signature: nextSignature })
+      return
+    }
+
+    this.applyVisualState(nextProps)
   }
 
-  onEnabledChanged(): void {
-    void this.rebuild()
+  onEnabledChanged(enabled: boolean): void {
+    const object = this.context.getRuntimeObject()
+    if (object) {
+      object.visible = enabled
+    }
+    if (!enabled) {
+      return
+    }
+    void this.syncFromProps()
   }
 
   onDestroy(): void {
-    this.clearRuntimeArtifacts()
+    this.clearRuntimeArtifacts({ removeGroup: true })
     const object = this.context.getRuntimeObject()
     if (object) {
       object.visible = false
@@ -164,9 +212,12 @@ class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
     return typeof candidate === 'function' ? candidate : null
   }
 
-  private async rebuild(): Promise<void> {
+  private async syncFromProps(options: {
+    forceStructural?: boolean
+    props?: PlanningImagesComponentProps
+    signature?: string
+  } = {}): Promise<void> {
     const object = this.context.getRuntimeObject()
-    this.clearRuntimeArtifacts()
     if (!object || !this.context.isEnabled()) {
       if (object) {
         object.visible = false
@@ -174,17 +225,32 @@ class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
       return
     }
 
-    const props = clampPlanningImagesComponentProps(this.context.getProps())
+    const props = options.props ? clampPlanningImagesComponentProps(options.props) : clampPlanningImagesComponentProps(this.context.getProps())
+    const nextSignature = options.signature ?? buildPropsStructureSignature(props)
     object.visible = true
+    this.ensureArtifactGroup(object)
+
+    if (!options.forceStructural && nextSignature === this.lastStructureSignature) {
+      this.applyVisualState(props)
+      return
+    }
+
+    await this.rebuildStructure(props, nextSignature)
+  }
+
+  private async rebuildStructure(props: PlanningImagesComponentProps, signature: string): Promise<void> {
+    this.clearRuntimeEntries()
     if (!props.images.length) {
+      this.lastStructureSignature = signature
       return
     }
 
     const token: PendingBuildToken = { cancelled: false }
     this.pendingBuild = token
-    const group = this.createArtifactGroup()
-    this.artifactGroup = group
-    object.add(group)
+    const group = this.artifactGroup
+    if (!group) {
+      return
+    }
 
     const resolver = this.getResolver()
     await Promise.all(props.images.map(async (entry, index) => {
@@ -219,16 +285,54 @@ class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
         mesh.renderOrder = 100 + index
         this.markArtifact(mesh)
         group.add(mesh)
-        this.cleanupTasks.push(() => {
-          geometry.dispose()
-          material.dispose()
-          texture.dispose()
-          resolved.dispose?.()
+        this.runtimeEntries.set(entry.id, {
+          mesh,
+          geometry,
+          material,
+          texture,
+          disposeMedia: resolved.dispose,
         })
       } catch (error) {
         console.warn('[PlanningImagesComponent] Failed to resolve planning image', entry, error)
       }
     }))
+
+    if (this.pendingBuild === token) {
+      this.pendingBuild = null
+    }
+    this.lastStructureSignature = signature
+    this.applyVisualState(props)
+  }
+
+  private applyVisualState(props: PlanningImagesComponentProps): void {
+    const group = this.artifactGroup
+    if (!group) {
+      return
+    }
+
+    const seen = new Set<string>()
+    props.images.forEach((entry, index) => {
+      const runtime = this.runtimeEntries.get(entry.id)
+      if (!runtime) {
+        return
+      }
+      seen.add(entry.id)
+      runtime.mesh.name = entry.name || `Planning Image ${index + 1}`
+      runtime.mesh.visible = entry.visible !== false
+      runtime.mesh.renderOrder = 100 + index
+      runtime.mesh.position.set(entry.position.x, entry.position.y, entry.position.z)
+      runtime.material.opacity = clampOpacity(entry.opacity)
+      runtime.material.transparent = true
+      runtime.material.needsUpdate = true
+    })
+
+    this.runtimeEntries.forEach((runtime, id) => {
+      if (seen.has(id)) {
+        return
+      }
+      runtime.mesh.visible = false
+    })
+    group.visible = true
   }
 
   private async resolveMedia(
@@ -258,6 +362,19 @@ class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
     return group
   }
 
+  private ensureArtifactGroup(object: Object3D): THREE.Group {
+    if (this.artifactGroup && this.artifactGroup.parent !== object) {
+      this.artifactGroup.parent?.remove(this.artifactGroup)
+      object.add(this.artifactGroup)
+      return this.artifactGroup
+    }
+    if (!this.artifactGroup) {
+      this.artifactGroup = this.createArtifactGroup()
+      object.add(this.artifactGroup)
+    }
+    return this.artifactGroup
+  }
+
   private markArtifact(object: THREE.Object3D): void {
     object.userData = {
       ...(object.userData ?? {}),
@@ -268,19 +385,29 @@ class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
     }
   }
 
-  private clearRuntimeArtifacts(): void {
+  private clearRuntimeEntries(): void {
     if (this.pendingBuild) {
       this.pendingBuild.cancelled = true
       this.pendingBuild = null
     }
-    this.cleanupTasks.splice(0).forEach((dispose) => {
+    this.runtimeEntries.forEach((runtime) => {
       try {
-        dispose()
+        runtime.mesh.parent?.remove(runtime.mesh)
+        runtime.geometry.dispose()
+        runtime.material.dispose()
+        runtime.texture.dispose()
+        runtime.disposeMedia?.()
       } catch (error) {
         console.warn('[PlanningImagesComponent] Failed to dispose planning image resource', error)
       }
     })
-    if (this.artifactGroup) {
+    this.runtimeEntries.clear()
+  }
+
+  private clearRuntimeArtifacts(options: { removeGroup?: boolean } = {}): void {
+    this.clearRuntimeEntries()
+    this.lastStructureSignature = ''
+    if (options.removeGroup && this.artifactGroup) {
       this.artifactGroup.parent?.remove(this.artifactGroup)
       this.artifactGroup.clear()
       this.artifactGroup = null
