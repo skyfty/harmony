@@ -996,8 +996,8 @@ export class VehicleDriveController {
 
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
 
-    // Camera velocity: use anchor differencing (planar) + smoothing instead of raw chassis velocity.
-    // Physics velocity can include wheel-contact noise which becomes visible as camera micro-jitter.
+    // Camera velocity: prefer a single stable source for all platforms.
+    // Use physics velocity when the host can supply it; otherwise fall back to anchor differencing.
     if (options.immediate) {
       this.followCameraVelocityHasSample = false
       this.followCameraVelocity.set(0, 0, 0)
@@ -1010,8 +1010,8 @@ export class VehicleDriveController {
       const resolvedNodeId = nodeId ?? null
       const resolveVelocity = resolvedNodeId && chassisBody ? this.deps.resolveChassisWorldVelocity : undefined
 
-      if (isWeChatMiniProgram && resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
-        // Use host-provided velocity (often more stable than per-frame differencing).
+      if (resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
+        // Use host-provided velocity when available to keep sampling consistent across platforms.
       } else {
         this.followCameraVelocityScratch
           .copy(temp.followAnchor)
