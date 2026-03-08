@@ -209,6 +209,7 @@ import { rebuildProceduralRuntimeObjects } from '@/utils/proceduralRuntime'
 import { resetScatterInstanceBinding } from '@/utils/terrainScatterRuntime'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { persistPlanningImageLayersToIndexedDB } from '@/utils/planningImageStorage'
+import { installPlanningImagesResolver } from '@/utils/planningImageComponentResolver'
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
@@ -224,6 +225,7 @@ import type {
   WallComponentProps,
   RoadComponentProps,
   FloorComponentProps,
+  PlanningImagesComponentProps,
   WarpGateComponentProps,
   WaterComponentProps,
 } from '@schema/components'
@@ -277,6 +279,9 @@ import {
   WATER_COMPONENT_TYPE,
   clampWaterComponentProps,
   cloneWaterComponentProps,
+  PLANNING_IMAGES_COMPONENT_TYPE,
+  clampPlanningImagesComponentProps,
+  clonePlanningImagesComponentProps,
 } from '@schema/components'
 import {
   LOD_COMPONENT_TYPE,
@@ -299,6 +304,7 @@ type NodeComponentPropsByType = {
   [VIEW_POINT_COMPONENT_TYPE]: ViewPointComponentProps
   [WARP_GATE_COMPONENT_TYPE]: WarpGateComponentProps
   [DISPLAY_BOARD_COMPONENT_TYPE]: DisplayBoardComponentProps
+  [PLANNING_IMAGES_COMPONENT_TYPE]: PlanningImagesComponentProps
   [EFFECT_COMPONENT_TYPE]: EffectComponentProps
   [PROTAGONIST_COMPONENT_TYPE]: ProtagonistComponentProps
   [ONLINE_COMPONENT_TYPE]: OnlineComponentProps
@@ -317,6 +323,8 @@ type AddNodeComponentResult<T extends NodeComponentType> = {
   component: SceneNodeComponentState<NodeComponentPropsOf<T>>
   created: boolean
 }
+
+installPlanningImagesResolver()
 
 function inferVehicleWheelsFromNode(
   chassisNode: SceneNode,
@@ -12534,6 +12542,7 @@ export const useSceneStore = defineStore('scene', {
         | WallComponentProps
         | RoadComponentProps
         | DisplayBoardComponentProps
+        | PlanningImagesComponentProps
         | WarpGateComponentProps
         | FloorComponentProps
         | EffectComponentProps
@@ -12822,6 +12831,17 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneDisplayBoardComponentProps(merged)
+      } else if (type === PLANNING_IMAGES_COMPONENT_TYPE) {
+        const currentProps = clampPlanningImagesComponentProps(component.props as PlanningImagesComponentProps)
+        const typedPatch = patch as Partial<PlanningImagesComponentProps>
+        const merged = clampPlanningImagesComponentProps({
+          images: Array.isArray(typedPatch.images) ? typedPatch.images : currentProps.images,
+        })
+        const unchanged = JSON.stringify(currentProps) === JSON.stringify(merged)
+        if (unchanged) {
+          return false
+        }
+        nextProps = clonePlanningImagesComponentProps(merged)
       } else if (type === WARP_GATE_COMPONENT_TYPE) {
         const currentProps = clampWarpGateComponentProps(component.props as WarpGateComponentProps)
         const typedPatch = patch as Partial<WarpGateComponentProps>
