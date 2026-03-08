@@ -293,8 +293,11 @@ const planningImagesComponentDefinition: ComponentDefinition<PlanningImagesCompo
   label: 'Planning Images',
   icon: 'mdi-image-multiple',
   order: 52,
-  canAttach(_node: SceneNode) {
-    return true
+  canAttach(node: SceneNode) {
+    const userData = node.userData as Record<string, unknown> | null | undefined
+    return node.editorFlags?.editorOnly === true
+      && userData?.source === 'planning-conversion'
+      && userData?.kind === 'image'
   },
   createDefaultProps(_node: SceneNode) {
     return { images: [] }

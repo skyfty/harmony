@@ -6,7 +6,7 @@ import {
 } from '@schema/components'
 import { getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 
-async function resolvePlanningImageMedia(entry: PlanningImageDisplayEntry): Promise<PlanningImageResolvedMedia | null> {
+export async function resolvePlanningImageMedia(entry: PlanningImageDisplayEntry): Promise<PlanningImageResolvedMedia | null> {
   const imageHash = typeof entry.imageHash === 'string' ? entry.imageHash.trim() : ''
   if (imageHash) {
     const blob = await getPlanningImageBlobByHash(imageHash)
