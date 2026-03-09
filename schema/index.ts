@@ -1052,8 +1052,60 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
 }
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'GuideRoute'
 
-export interface GroundHeightMap {
-  [key: string]: number
+export type GroundHeightMap = Float64Array
+
+export const GROUND_HEIGHT_UNSET_VALUE = Number.NaN
+
+export function getGroundVertexColumns(columns: number): number {
+  return Math.max(1, Math.trunc(columns)) + 1
+}
+
+export function getGroundVertexRows(rows: number): number {
+  return Math.max(1, Math.trunc(rows)) + 1
+}
+
+export function getGroundVertexCount(rows: number, columns: number): number {
+  return getGroundVertexRows(rows) * getGroundVertexColumns(columns)
+}
+
+export function getGroundVertexIndex(columns: number, row: number, column: number): number {
+  return row * getGroundVertexColumns(columns) + column
+}
+
+export function createGroundHeightMap(rows: number, columns: number, fill = GROUND_HEIGHT_UNSET_VALUE): GroundHeightMap {
+  const map = new Float64Array(getGroundVertexCount(rows, columns))
+  map.fill(fill)
+  return map
+}
+
+export function cloneGroundHeightMap(
+  source: ArrayLike<number> | null | undefined,
+  rows: number,
+  columns: number,
+  fill = GROUND_HEIGHT_UNSET_VALUE,
+): GroundHeightMap {
+  const target = createGroundHeightMap(rows, columns, fill)
+  if (!source) {
+    return target
+  }
+  const limit = Math.min(target.length, source.length ?? 0)
+  for (let index = 0; index < limit; index += 1) {
+    target[index] = Number(source[index])
+  }
+  return target
+}
+
+export function ensureGroundHeightMap(
+  source: ArrayLike<number> | null | undefined,
+  rows: number,
+  columns: number,
+  fill = GROUND_HEIGHT_UNSET_VALUE,
+): GroundHeightMap {
+  const expectedLength = getGroundVertexCount(rows, columns)
+  if (source instanceof Float64Array && source.length === expectedLength) {
+    return source
+  }
+  return cloneGroundHeightMap(source, rows, columns, fill)
 }
 
 export type GroundHeightCompositionMode = 'planning_plus_manual'

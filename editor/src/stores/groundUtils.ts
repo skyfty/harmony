@@ -2,7 +2,16 @@
 // These functions use `import type` to reference shared types only at compile time
 // to avoid runtime circular dependencies.
 
-import type { GroundDynamicMesh, GroundGenerationSettings, GroundSettings, SceneNode } from '@schema'
+import {
+  cloneGroundHeightMap,
+  createGroundHeightMap,
+  getGroundVertexIndex,
+  GROUND_HEIGHT_UNSET_VALUE,
+  type GroundDynamicMesh,
+  type GroundGenerationSettings,
+  type GroundSettings,
+  type SceneNode,
+} from '@schema'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import type { Vector3 } from 'three'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
@@ -79,8 +88,8 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     columns: definition.columns,
     cellSize: definition.cellSize,
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
-    manualHeightMap: { ...(definition.manualHeightMap ?? {}) },
-    planningHeightMap: { ...(definition.planningHeightMap ?? {}) },
+    manualHeightMap: cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns),
+    planningHeightMap: cloneGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns),
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
     planningMetadata: manualDeepCloneLocal(definition.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
@@ -156,8 +165,8 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     columns: derivedColumns,
     cellSize,
     chunkStreamingEnabled: overrides.chunkStreamingEnabled !== false,
-    manualHeightMap: { ...(manualHeightMapOverrides ?? {}) },
-    planningHeightMap: { ...(planningHeightMapOverrides ?? {}) },
+    manualHeightMap: cloneGroundHeightMap(manualHeightMapOverrides, derivedRows, derivedColumns),
+    planningHeightMap: cloneGroundHeightMap(planningHeightMapOverrides, derivedRows, derivedColumns),
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
       mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',
@@ -183,14 +192,6 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
   return definition
 }
 
-export function groundVertexKey(row: number, column: number): string {
-  return `${row}:${column}`
-}
-// add explicit typing for groundVertexKey
-export function _groundVertexKeyTyped(row: number, column: number): string {
-  return `${row}:${column}`
-}
-
 export function normalizeGroundBounds(definition: GroundDynamicMesh, bounds: GroundRegionBounds): GroundRegionBounds {
   const minRow = Math.max(0, Math.min(definition.rows, Math.min(bounds.minRow, bounds.maxRow)))
   const maxRow = Math.max(0, Math.min(definition.rows, Math.max(bounds.minRow, bounds.maxRow)))
@@ -206,16 +207,14 @@ export function applyGroundRegionTransform(
 ): { definition: GroundDynamicMesh; changed: boolean } {
   const getBaseHeight = (row: number, column: number): number => computeGroundBaseHeightAtVertex(definition, row, column)
   const getManualHeight = (row: number, column: number): number => {
-    const key = groundVertexKey(row, column)
-    const raw = definition.manualHeightMap[key]
+    const raw = definition.manualHeightMap[getGroundVertexIndex(definition.columns, row, column)]
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       return raw
     }
     return getBaseHeight(row, column)
   }
   const getPlanningHeight = (row: number, column: number): number => {
-    const key = groundVertexKey(row, column)
-    const raw = definition.planningHeightMap[key]
+    const raw = definition.planningHeightMap[getGroundVertexIndex(definition.columns, row, column)]
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       return raw
     }
@@ -238,12 +237,12 @@ export function applyGroundRegionTransform(
   }
 
   const normalized = normalizeGroundBounds(definition, bounds)
-  const nextHeightMap = { ...definition.manualHeightMap }
+  const nextHeightMap = cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns)
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const key = groundVertexKey(row, column)
-      const previousStored = nextHeightMap[key]
+      const heightIndex = getGroundVertexIndex(definition.columns, row, column)
+      const previousStored = nextHeightMap[heightIndex]
       const currentEffective = resolveEffectiveHeight(row, column)
       const nextEffective = transform(currentEffective, row, column)
       if (!Number.isFinite(nextEffective)) {
@@ -255,16 +254,18 @@ export function applyGroundRegionTransform(
       const roundedBase = roundHeight(getBaseHeight(row, column))
 
       if (roundedManual === roundedBase) {
-        delete nextHeightMap[key]
+        nextHeightMap[heightIndex] = GROUND_HEIGHT_UNSET_VALUE
       } else {
-        nextHeightMap[key] = roundedManual
+        nextHeightMap[heightIndex] = roundedManual
       }
 
-      const nextStored = nextHeightMap[key]
-      if (previousStored === undefined && nextStored === undefined) {
+      const nextStored = nextHeightMap[heightIndex]
+      const previousFinite = Number.isFinite(previousStored)
+      const nextFinite = Number.isFinite(nextStored)
+      if (!previousFinite && !nextFinite) {
         continue
       }
-      if (previousStored === undefined || nextStored === undefined) {
+      if (!previousFinite || !nextFinite) {
         changed = true
         continue
       }
@@ -447,7 +448,6 @@ export default {
   normalizeGroundSettings,
   cloneGroundSettings,
   createGroundDynamicMeshDefinition,
-  groundVertexKey,
   normalizeGroundBounds,
   applyGroundRegionTransform,
   isGroundNode,

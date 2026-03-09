@@ -1,6 +1,6 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
-import type { GroundDynamicMesh, GroundSculptOperation, SceneNode, TerrainPaintChannel, TerrainPaintSettings } from '@schema'
+import { cloneGroundHeightMap, type GroundDynamicMesh, type GroundSculptOperation, type SceneNode, type TerrainPaintChannel, type TerrainPaintSettings } from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -2949,9 +2949,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
 			return sculptSessionState.definition
 		}
-		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
-		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
-		const clonedHeightMap = definition.manualHeightMap
+		const clonedHeightMap = cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns)
 		const sessionDefinition: GroundDynamicMesh = {
 			...definition,
 			manualHeightMap: clonedHeightMap,

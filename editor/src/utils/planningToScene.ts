@@ -3,6 +3,7 @@ import type {
   GroundDynamicMesh,
   SceneNode,
 } from '@schema'
+import { cloneGroundHeightMap, createGroundHeightMap, getGroundVertexIndex } from '@schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -714,8 +715,7 @@ async function clearPlanningGeneratedContentIncremental(options: {
 
 function resetGroundPlanningContours(definition: GroundDynamicMesh): { definition: GroundDynamicMesh; changed: boolean } {
   const hadPlanningContours = Boolean(
-    (definition.planningMetadata?.contourBounds && isBoundsValid(definition.planningMetadata?.contourBounds))
-    || Object.keys(definition.planningHeightMap ?? {}).length,
+    definition.planningHeightMap.some((value) => Number.isFinite(value)),
   )
   if (!hadPlanningContours) {
     return { definition, changed: false }
@@ -725,7 +725,7 @@ function resetGroundPlanningContours(definition: GroundDynamicMesh): { definitio
     changed: true,
     definition: {
       ...definition,
-      planningHeightMap: {},
+      planningHeightMap: createGroundHeightMap(definition.rows, definition.columns),
       planningMetadata: {
         ...(definition.planningMetadata ?? {}),
         contourBounds: null,
@@ -733,6 +733,34 @@ function resetGroundPlanningContours(definition: GroundDynamicMesh): { definitio
       },
     },
   }
+}
+
+function derivePlanningContourBounds(definition: GroundDynamicMesh): GroundContourBounds | null {
+  let minRow = Number.POSITIVE_INFINITY
+  let maxRow = Number.NEGATIVE_INFINITY
+  let minColumn = Number.POSITIVE_INFINITY
+  let maxColumn = Number.NEGATIVE_INFINITY
+  let found = false
+
+  for (let row = 0; row <= definition.rows; row += 1) {
+    for (let column = 0; column <= definition.columns; column += 1) {
+      const value = definition.planningHeightMap[getGroundVertexIndex(definition.columns, row, column)]
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        continue
+      }
+      found = true
+      minRow = Math.min(minRow, row)
+      maxRow = Math.max(maxRow, row)
+      minColumn = Math.min(minColumn, column)
+      maxColumn = Math.max(maxColumn, column)
+    }
+  }
+
+  if (!found) {
+    return null
+  }
+
+  return { minRow, maxRow, minColumn, maxColumn }
 }
 
 function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): string[] {
@@ -1216,22 +1244,22 @@ function boundsFromPlanningPolygon(definition: GroundDynamicMesh, polyPoints: Pl
 
 function setHeightOverrideValueForContours(
   definition: GroundDynamicMesh,
-  map: Record<string, number>,
+  map: GroundDynamicMesh['planningHeightMap'],
   row: number,
   column: number,
   value: number,
 ): void {
-  const key = `${row}:${column}`
+  const index = getGroundVertexIndex(definition.columns, row, column)
   const base = computeGroundBaseHeightAtVertex(definition, row, column)
   let rounded = Math.round(value * 100) / 100
   let baseRounded = Math.round(base * 100) / 100
   if (Object.is(rounded, -0)) rounded = 0
   if (Object.is(baseRounded, -0)) baseRounded = 0
   if (rounded === baseRounded) {
-    delete map[key]
+    map[index] = Number.NaN
     return
   }
-  map[key] = rounded
+  map[index] = rounded
 }
 
 /**
@@ -1363,8 +1391,7 @@ async function applyPlanningTerrainContoursToGround(options: {
     return a.height - b.height
   })
 
-  const previousBoundsRaw = definition?.planningMetadata?.contourBounds
-  const previousBounds: GroundContourBounds | null = isBoundsValid(previousBoundsRaw) ? previousBoundsRaw : null
+  const previousBounds = derivePlanningContourBounds(definition)
 
   let nextBounds: GroundContourBounds | null = null
   for (const item of polygons) {
@@ -1375,7 +1402,7 @@ async function applyPlanningTerrainContoursToGround(options: {
   const rewriteBounds = unionBounds(previousBounds, nextBounds)
   if (!rewriteBounds) {
     const cleared = { ...definition }
-    cleared.planningHeightMap = {}
+    cleared.planningHeightMap = createGroundHeightMap(definition.rows, definition.columns)
     cleared.planningMetadata = {
       ...(cleared.planningMetadata ?? {}),
       contourBounds: null,
@@ -1505,7 +1532,7 @@ async function applyPlanningTerrainContoursToGround(options: {
   }
 
   // --- Phase 3: Write final heights into planningHeightMap ---
-  const nextHeightMap = { ...(definition.planningHeightMap ?? {}) }
+  const nextHeightMap = cloneGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns)
   for (let row = minRow; row <= maxRow; row += 1) {
     if ((row & 63) === 0) {
       await options.yieldController.maybeYield()

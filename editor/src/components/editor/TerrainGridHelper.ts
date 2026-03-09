@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh } from '@schema'
+import { cloneGroundHeightMap, type GroundDynamicMesh } from '@schema'
 import { sampleGroundEffectiveHeightRegion, type GroundEffectiveHeightRegion } from '@schema/groundMesh'
 import { toRaw } from 'vue'
 import { GRID_MAJOR_SPACING,GRID_MINOR_SPACING } from './constants'
@@ -336,8 +336,16 @@ function createGroundDefinitionSnapshot(definition: GroundDynamicMesh): GroundDy
   const rawDefinition = toRaw(definition) as GroundDynamicMesh
   return {
     ...rawDefinition,
-    manualHeightMap: (toRaw(rawDefinition.manualHeightMap) ?? rawDefinition.manualHeightMap) as GroundDynamicMesh['manualHeightMap'],
-    planningHeightMap: (toRaw(rawDefinition.planningHeightMap) ?? rawDefinition.planningHeightMap) as GroundDynamicMesh['planningHeightMap'],
+    manualHeightMap: cloneGroundHeightMap(
+      (toRaw(rawDefinition.manualHeightMap) ?? rawDefinition.manualHeightMap) as GroundDynamicMesh['manualHeightMap'],
+      rawDefinition.rows,
+      rawDefinition.columns,
+    ),
+    planningHeightMap: cloneGroundHeightMap(
+      (toRaw(rawDefinition.planningHeightMap) ?? rawDefinition.planningHeightMap) as GroundDynamicMesh['planningHeightMap'],
+      rawDefinition.rows,
+      rawDefinition.columns,
+    ),
     heightComposition: (toRaw(rawDefinition.heightComposition) ?? rawDefinition.heightComposition) as GroundDynamicMesh['heightComposition'],
     planningMetadata: rawDefinition.planningMetadata
       ? (toRaw(rawDefinition.planningMetadata) as GroundDynamicMesh['planningMetadata'])

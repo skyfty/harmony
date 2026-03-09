@@ -536,6 +536,7 @@ import {
   resolveSceneNodeById,
   resolveSceneParentNodeId,
   resolveEnabledComponentState,
+  getGroundVertexCount,
   createGradientBackgroundDome,
   disposeSkyCubeTexture,
   disposeGradientBackgroundDome,
@@ -8947,6 +8948,87 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
+const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32;
+const GROUND_HEIGHTMAP_SIDECAR_VERSION = 2;
+const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 32;
+const EMPTY_GROUND_BOUND = -1;
+
+function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDynamicMesh | null {
+  const stack = [...document.nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.dynamicMesh?.type === 'Ground') {
+      return node.dynamicMesh as GroundDynamicMesh;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return null;
+}
+
+function hydrateGroundSidecarFromPackage(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string },
+  document: SceneJsonExportDocument,
+): SceneJsonExportDocument {
+  const definition = findFirstGroundDynamicMesh(document);
+  if (!definition) {
+    return document;
+  }
+  if (!sceneEntry.groundHeightsPath) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 路径`);
+  }
+  const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath];
+  if (!sidecarBytes) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件`);
+  }
+
+  const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
+  const vertexCount = getGroundVertexCount(definition.rows, definition.columns);
+  const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
+  if (sidecarBuffer.byteLength !== expectedByteLength) {
+    throw new Error(
+      `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
+    );
+  }
+
+  const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
+  const magic = headerView.getUint32(0, true);
+  const version = headerView.getUint32(4, true);
+  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
+  }
+
+  const minRow = headerView.getInt32(8, true);
+  const maxRow = headerView.getInt32(12, true);
+  const minColumn = headerView.getInt32(16, true);
+  const maxColumn = headerView.getInt32(20, true);
+  const generatedAt = headerView.getFloat64(24, true);
+  const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
+  const hasGeneratedAt = Number.isFinite(generatedAt);
+
+  definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
+  definition.planningHeightMap = new Float64Array(
+    sidecarBuffer,
+    GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
+    vertexCount,
+  );
+  definition.planningMetadata = hasBounds || hasGeneratedAt
+    ? {
+        contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
+        generatedAt: hasGeneratedAt ? generatedAt : undefined,
+      }
+    : null;
+  definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
+    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
+    : 0;
+  return document;
+}
+
 function hasSkyNode(nodes: SceneNode[] | undefined | null): boolean {
   if (!Array.isArray(nodes)) {
     return false;
@@ -9234,7 +9316,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     if (!sceneRaw || typeof sceneRaw !== 'object') {
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
-    const document = sceneRaw as SceneJsonExportDocument;
+    const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;

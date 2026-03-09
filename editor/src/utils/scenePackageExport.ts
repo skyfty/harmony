@@ -8,9 +8,15 @@ import {
 } from '@schema'
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
+import {
+  GROUND_HEIGHTMAP_SIDECAR_FILENAME,
+  extractGroundHeightSidecarFromSceneDocument,
+  stripGroundHeightMapsFromSceneDocument,
+} from '@/utils/groundHeightSidecar'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   BUILTIN_WATER_NORMAL_FILENAME,
@@ -422,9 +428,15 @@ export async function exportScenePackageZip(payload: {
     const scene = payload.scenes[sIndex]!
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
     let planningPath: string | undefined
+    let groundHeightsPath: string | undefined
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
-    const docClone = JSON.parse(JSON.stringify(scene.document)) as SceneExportDocumentWithEditorFields
+    const sidecarSource = typeof structuredClone === 'function'
+      ? structuredClone(scene.document)
+      : JSON.parse(JSON.stringify(scene.document))
+    const groundHeightSidecar = extractGroundHeightSidecarFromSceneDocument(sidecarSource as StoredSceneDocument)
+    stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
+    const docClone = sidecarSource as SceneExportDocumentWithEditorFields
     stripEditorOnlySceneFields(docClone)
 
     const indexMap = docClone.assetIndex ?? {}
@@ -477,12 +489,16 @@ export async function exportScenePackageZip(payload: {
 
     // Add the (possibly modified) scene JSON to files and manifest
     files[scenePath] = jsonBytes(docClone)
+    if (groundHeightSidecar) {
+      groundHeightsPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
+      files[groundHeightsPath] = new Uint8Array(groundHeightSidecar)
+    }
     if (payload.includePlanningData && scene.planningData) {
       const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
       planningPath = planningSidecar.planningPath
       files[planningPath] = jsonBytes(planningSidecar.sidecar)
     }
-    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath })
+    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath, groundHeightsPath })
   }
 
   const manifest: ScenePackageManifestV1 = {

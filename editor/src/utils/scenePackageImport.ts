@@ -3,6 +3,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
+import { hydrateGroundHeightMapsInSceneDocument } from '@/utils/groundHeightSidecar'
 import { storePlanningImageBlobByHash } from '@/utils/planningImageStorage'
 
 export type LoadedScenePackageProject = Record<string, unknown>
@@ -117,6 +118,23 @@ async function applyPlanningSidecarToScene(
   }
 }
 
+function applyGroundHeightSidecarToScene(
+  zip: ReturnType<typeof unzipScenePackage>,
+  sceneEntry: ScenePackageSceneEntry,
+  rawScene: StoredSceneDocument,
+): StoredSceneDocument {
+  const sidecarPath = sceneEntry.groundHeightsPath
+  if (!sidecarPath) {
+    throw new Error(`Scene bundle entry ${sceneEntry.sceneId} is missing ground height sidecar path`)
+  }
+  const bytes = zip.files[sidecarPath]
+  if (!bytes) {
+    throw new Error(`Missing ground height sidecar in scene bundle: ${sidecarPath}`)
+  }
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  return hydrateGroundHeightMapsInSceneDocument(rawScene, buffer)
+}
+
 export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): Promise<LoadedStoredScenePackage> {
   const zip = unzipScenePackage(zipBytes)
   await restoreRuntimeResourcesFromPackage(zip)
@@ -130,7 +148,8 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     if (!isPlainObject(rawScene)) {
       throw new Error(`Invalid scene document in scene bundle: ${sceneEntry.path}`)
     }
-    const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, rawScene as unknown as StoredSceneDocument)
+    const withGround = applyGroundHeightSidecarToScene(zip, sceneEntry, rawScene as unknown as StoredSceneDocument)
+    const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, withGround)
     scenes.push(withPlanning)
   }
 

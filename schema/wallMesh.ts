@@ -4,8 +4,6 @@ import {
   createAutoTiledMaterialVariant,
   MATERIAL_CONFIG_ID_KEY,
   MATERIAL_TEXTURE_REPEAT_INFO_KEY,
-  WALL_REPEAT_SCALE_KEY,
-  WALL_REPEAT_UV_AXIS_KEY,
 } from './material'
 import { compileWallSegmentsFromDefinition, resolveWallDimensionsFromDefinition, type WallRenderSegment } from './wallLayout'
 
@@ -117,35 +115,9 @@ const WALL_MAX_SAMPLE_POINTS = 512
 const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
 const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
-const WALL_REPEAT_SCALE_CACHE_PRECISION = 1e5
 const WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY = '__harmonySkipGeometryDispose'
 const WALL_SKIP_MATERIAL_DISPOSE_USERDATA_KEY = '__harmonySkipMaterialDispose'
 const WALL_OWNED_TEXTURES_USERDATA_KEY = '__harmonyOwnedTextures'
-const WALL_REPEAT_U_TEXTURE_SLOTS = [
-  'map',
-  'alphaMap',
-  'lightMap',
-  'aoMap',
-  'bumpMap',
-  'normalMap',
-  'displacementMap',
-  'emissiveMap',
-  'metalnessMap',
-  'roughnessMap',
-  'clearcoatMap',
-  'clearcoatNormalMap',
-  'clearcoatRoughnessMap',
-  'iridescenceMap',
-  'iridescenceThicknessMap',
-  'sheenColorMap',
-  'sheenRoughnessMap',
-  'specularMap',
-  'specularColorMap',
-  'specularIntensityMap',
-  'transmissionMap',
-  'thicknessMap',
-  'anisotropyMap',
-] as const
 
 /** Local alias so all helpers below use the same segment type. */
 type WallRenderSeg = WallRenderSegment
@@ -470,81 +442,11 @@ function sanitizeWallRepeatScale(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
 }
 
-function quantizeWallRepeatScale(value: number): number {
-  const safe = sanitizeWallRepeatScale(value)
-  return Math.round(safe * WALL_REPEAT_SCALE_CACHE_PRECISION) / WALL_REPEAT_SCALE_CACHE_PRECISION
-}
-
-/**
- * Clone wall material and scale the selected UV axis repeat at material level.
- * This keeps texture tiling aligned with the current mesh stretch factor.
- */
-function createWallRepeatedMaterial(
-  original: THREE.Material,
-  uvAxis: WallResolvedUvAxis = 'u',
-  repeatScale = 1,
-): { material: THREE.Material; ownedTextures: THREE.Texture[]; shared: boolean } {
-  const safeRepeatScale = sanitizeWallRepeatScale(repeatScale)
-  if (Math.abs(safeRepeatScale - 1) <= WALL_EPSILON) {
-    return { material: original, ownedTextures: [], shared: true }
-  }
-
-  const cloned = original.clone() as THREE.Material & Record<string, unknown>
-  let changed = false
-  const ownedTextures: THREE.Texture[] = []
-  for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
-    const texture = cloned[slot] as THREE.Texture | null | undefined
-    if (!texture) {
-      continue
-    }
-    const clonedTexture = texture.clone()
-    if (uvAxis === 'v') {
-      clonedTexture.wrapT = THREE.RepeatWrapping
-      clonedTexture.repeat.y *= safeRepeatScale
-    } else {
-      clonedTexture.wrapS = THREE.RepeatWrapping
-      clonedTexture.repeat.x *= safeRepeatScale
-    }
-    clonedTexture.needsUpdate = true
-    cloned[slot] = clonedTexture
-    ownedTextures.push(clonedTexture)
-    changed = true
-  }
-  if (!changed) {
-    cloned.dispose()
-    return { material: original, ownedTextures: [], shared: true }
-  }
-
-  cloned.userData = {
-    ...(cloned.userData ?? {}),
-    [WALL_REPEAT_SCALE_KEY]: safeRepeatScale,
-    [WALL_REPEAT_UV_AXIS_KEY]: uvAxis,
-  }
-  cloned.needsUpdate = true
-  return { material: cloned, ownedTextures, shared: false }
-}
 
 type WallRepeatedMaterialSet = {
   material: THREE.Material | THREE.Material[]
   ownedTextures: THREE.Texture[]
   shared: boolean
-}
-
-function createWallRepeatedMaterialSet(
-  original: THREE.Material | THREE.Material[],
-  uvAxis: WallResolvedUvAxis = 'u',
-  repeatScale = 1,
-): WallRepeatedMaterialSet {
-  if (Array.isArray(original)) {
-    const variants = original.map((entry) => createWallRepeatedMaterial(entry, uvAxis, repeatScale))
-    const shared = variants.every((entry) => entry.shared)
-    return {
-      material: shared ? original : variants.map((entry) => entry.material),
-      ownedTextures: variants.flatMap((entry) => entry.ownedTextures),
-      shared,
-    }
-  }
-  return createWallRepeatedMaterial(original, uvAxis, repeatScale)
 }
 
 type WallMaterialVariantCacheEntry = WallRepeatedMaterialSet & {

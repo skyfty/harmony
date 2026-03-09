@@ -14,7 +14,7 @@ import {createPrimitiveMesh}  from '@schema'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
 import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
-import type { GroundDynamicMesh, GroundGenerationSettings } from '@schema'
+import { createGroundHeightMap, type GroundDynamicMesh, type GroundGenerationSettings } from '@schema'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -1877,8 +1877,8 @@ async function handleConfirmGround() {
     columns,
     cellSize,
     chunkStreamingEnabled: true,
-    manualHeightMap: {},
-    planningHeightMap: {},
+    manualHeightMap: createGroundHeightMap(rows, columns),
+    planningHeightMap: createGroundHeightMap(rows, columns),
     heightComposition: { mode: 'planning_plus_manual' },
     planningMetadata: null,
     terrainScatterInstancesUpdatedAt: Date.now(),

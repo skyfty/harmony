@@ -1,5 +1,13 @@
 import * as THREE from 'three'
-import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap, type GroundSculptOperation } from './index'
+import {
+  createGroundHeightMap,
+  getGroundVertexIndex,
+  GROUND_HEIGHT_UNSET_VALUE,
+  type GroundDynamicMesh,
+  type GroundGenerationSettings,
+  type GroundHeightMap,
+  type GroundSculptOperation,
+} from './index'
 
 import { ensureTerrainPaintPreviewInstalled } from './terrainPaintPreview'
 import {
@@ -127,10 +135,6 @@ function createPerlinNoise(seed?: number) {
   }
 }
 
-function groundVertexKey(row: number, column: number): string {
-  return `${row}:${column}`
-}
-
 function groundChunkKey(chunkRow: number, chunkColumn: number): GroundChunkKey {
   return `${chunkRow}:${chunkColumn}`
 }
@@ -219,8 +223,7 @@ function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, col
   // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
   // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
   // 如果没有显式记录，则回退到基础高度，表示规划层对该点没有额外改动。
-  const key = groundVertexKey(row, column)
-  const raw = definition.planningHeightMap[key]
+  const raw = definition.planningHeightMap[getGroundVertexIndex(definition.columns, row, column)]
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     return raw
   }
@@ -245,14 +248,14 @@ function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, col
  * 用户修改的是“相对地形的局部塑形”，而不是把规划层完全覆盖掉。
  */
 export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
-  const key = groundVertexKey(row, column)
   // 原始程序化地形高度。
   const base = computeGroundBaseHeightAtVertex(definition, row, column)
+  const heightIndex = getGroundVertexIndex(definition.columns, row, column)
   // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
-  const manualRaw = definition.manualHeightMap[key]
+  const manualRaw = definition.manualHeightMap[heightIndex]
   const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
   // 规划/自动生成层的绝对高度；若无规划覆盖则同样退回 base。
-  const planningRaw = definition.planningHeightMap[key]
+  const planningRaw = definition.planningHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
   // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
   return planning + (manual - base)
@@ -284,14 +287,13 @@ export function sampleGroundEffectiveHeightRegion(
   }
 
   for (let row = minRow; row <= maxRow; row += 1) {
-    const rowPrefix = `${row}:`
     const baseOffset = (row - minRow) * stride
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const offset = baseOffset + (column - minColumn)
       const base = baseValues[offset] ?? 0
-      const key = `${rowPrefix}${column}`
-      const manualRaw = manualHeightMap[key]
-      const planningRaw = planningHeightMap[key]
+      const heightIndex = getGroundVertexIndex(definition.columns, row, column)
+      const manualRaw = manualHeightMap[heightIndex]
+      const planningRaw = planningHeightMap[heightIndex]
       const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
       const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
       const effective = planning + (manual - base)
@@ -338,17 +340,17 @@ export function resolveGroundManualHeightForEffectiveTarget(
 }
 
 function setHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
-  const key = groundVertexKey(row, column)
+  const heightIndex = getGroundVertexIndex(definition.columns, row, column)
   const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
   let rounded = Math.round(value * 100) / 100
   let baseRounded = Math.round(baseHeight * 100) / 100
   if (Object.is(rounded, -0)) rounded = 0
   if (Object.is(baseRounded, -0)) baseRounded = 0
   if (rounded === baseRounded) {
-    delete map[key]
+    map[heightIndex] = GROUND_HEIGHT_UNSET_VALUE
     return
   }
-  map[key] = rounded
+  map[heightIndex] = rounded
 }
 
 export function setManualHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
@@ -778,7 +780,7 @@ export function applyGroundGeneration(
   const normalized = normalizeGroundGenerationSettings(settings)
   definition.generation = normalized
   // Generation is evaluated on demand; keep explicit edits as sparse absolute overrides.
-  definition.planningHeightMap = {}
+  definition.planningHeightMap = createGroundHeightMap(definition.rows, definition.columns)
   return normalized
 }
 

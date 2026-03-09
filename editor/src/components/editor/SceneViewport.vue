@@ -1245,10 +1245,7 @@ function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
 }
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
-  const surfaceRevision = Number.isFinite(definition.surfaceRevision)
-    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
-    : null
-  const shapeSignature = {
+  return hashString(stableSerialize({
     rows: Math.max(1, Math.trunc(definition.rows)),
     columns: Math.max(1, Math.trunc(definition.columns)),
     cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1,
@@ -1256,19 +1253,10 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
     depth: Number.isFinite(definition.depth) ? definition.depth : 0,
     generation: definition.generation ?? null,
     heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
-  }
-  if (surfaceRevision !== null) {
-    return hashString(stableSerialize({
-      ...shapeSignature,
-      surfaceRevision,
-    }))
-  }
-  const serialized = stableSerialize({
-    ...shapeSignature,
-    manualHeightMap: definition.manualHeightMap ?? {},
-    planningHeightMap: definition.planningHeightMap ?? {},
-  })
-  return hashString(serialized)
+    surfaceRevision: Number.isFinite(definition.surfaceRevision)
+      ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
+      : 0,
+  }))
 }
 
 function computeRoadDynamicMeshSignature(

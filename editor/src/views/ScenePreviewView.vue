@@ -56,6 +56,7 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { hydrateGroundHeightMapsInSceneDocument } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
@@ -5024,6 +5025,45 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
 
+function packageSceneHasGroundNode(document: SceneJsonExportDocument): boolean {
+	const stack = [...document.nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.dynamicMesh?.type === 'Ground') {
+			return true
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return false
+}
+
+function hydratePackageSceneGroundSidecar(
+	pkg: ReturnType<typeof unzipScenePackage>,
+	sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string },
+	document: SceneJsonExportDocument,
+): SceneJsonExportDocument {
+	if (!packageSceneHasGroundNode(document)) {
+		return document
+	}
+	if (!sceneEntry.groundHeightsPath) {
+		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground height sidecar path`)
+	}
+	const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath]
+	if (!sidecarBytes) {
+		throw new Error(`Missing ground height sidecar in scene package: ${sceneEntry.groundHeightsPath}`)
+	}
+	const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
+	return hydrateGroundHeightMapsInSceneDocument(
+		document as unknown as StoredSceneDocument,
+		sidecarBuffer,
+	) as unknown as SceneJsonExportDocument
+}
+
 async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 	const trimmed = sourceUrl.trim()
 	if (!trimmed) {
@@ -5058,7 +5098,7 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 			if (!isSceneJsonExportDocument(sceneRaw)) {
 				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
 			}
-			const document = sceneRaw as SceneJsonExportDocument
+			const document = hydratePackageSceneGroundSidecar(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument)
 				const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
 			const id = sceneEntry.sceneId
 			const entry: ScenePreviewSceneEntry = {

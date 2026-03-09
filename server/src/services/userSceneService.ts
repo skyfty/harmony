@@ -106,6 +106,12 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   if (sanitizeString(sceneEntry.sceneId) !== expectedSceneId) {
     throw new Error('Scene id mismatch between path and bundle manifest')
   }
+  if (!sanitizeString(sceneEntry.groundHeightsPath)) {
+    throw new Error('Scene bundle missing ground height sidecar path')
+  }
+  if (!pkg.files[sceneEntry.groundHeightsPath]) {
+    throw new Error('Scene bundle missing ground height sidecar file')
+  }
   const sceneRaw = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as any
   const id = sanitizeString(sceneRaw?.id) || expectedSceneId
   if (id !== expectedSceneId) {
