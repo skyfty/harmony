@@ -446,7 +446,7 @@ function applyGroundGenerationPatch(patch: Partial<GroundGenerationSettings>) {
   }
   nextGeneration.worldWidth = definition.width
   nextGeneration.worldDepth = definition.depth
-  sceneStore.updateNodeDynamicMesh(ground.id, { generation: nextGeneration })
+  sceneStore.updateGroundNodeDynamicMesh(ground.id, { generation: nextGeneration })
 }
 
 watch(

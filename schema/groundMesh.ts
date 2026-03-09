@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import {
   createGroundHeightMap,
+  ensureGroundHeightMap,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
   type GroundDynamicMesh,
@@ -220,6 +221,21 @@ function clampVertexIndex(value: number, max: number): number {
   return value
 }
 
+function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRuntimeDynamicMesh {
+  const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  runtimeDefinition.manualHeightMap = ensureGroundHeightMap(
+    runtimeDefinition.manualHeightMap,
+    runtimeDefinition.rows,
+    runtimeDefinition.columns,
+  )
+  runtimeDefinition.planningHeightMap = ensureGroundHeightMap(
+    runtimeDefinition.planningHeightMap,
+    runtimeDefinition.rows,
+    runtimeDefinition.columns,
+  )
+  return runtimeDefinition
+}
+
 function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: number, column: number): number {
   // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
   // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
@@ -248,15 +264,16 @@ function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: numb
  * 这样做的目的，是当规划层重新生成或被调整后，用户之前的雕刻结果仍能尽量保持：
  * 用户修改的是“相对地形的局部塑形”，而不是把规划层完全覆盖掉。
  */
-export function resolveGroundEffectiveHeightAtVertex(definition: GroundRuntimeDynamicMesh, row: number, column: number): number {
+export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   // 原始程序化地形高度。
-  const base = computeGroundBaseHeightAtVertex(definition, row, column)
-  const heightIndex = getGroundVertexIndex(definition.columns, row, column)
+  const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
+  const heightIndex = getGroundVertexIndex(runtimeDefinition.columns, row, column)
   // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
-  const manualRaw = definition.manualHeightMap[heightIndex]
+  const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
   const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
   // 规划/自动生成层的绝对高度；若无规划覆盖则同样退回 base。
-  const planningRaw = definition.planningHeightMap[heightIndex]
+  const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
   // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
   return planning + (manual - base)
@@ -395,14 +412,15 @@ function sampleNeighborAverage(
   return count > 0 ? sum / count : 0
 }
 
-export function sampleGroundHeight(definition: GroundRuntimeDynamicMesh, x: number, z: number): number {
-  const columns = Math.max(1, definition.columns)
-  const rows = Math.max(1, definition.rows)
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const localColumn = clampVertexIndex(Math.round((x + halfWidth) / definition.cellSize), columns)
-  const localRow = clampVertexIndex(Math.round((z + halfDepth) / definition.cellSize), rows)
-  return resolveGroundEffectiveHeightAtVertex(definition, localRow, localColumn)
+export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const columns = Math.max(1, runtimeDefinition.columns)
+  const rows = Math.max(1, runtimeDefinition.rows)
+  const halfWidth = runtimeDefinition.width * 0.5
+  const halfDepth = runtimeDefinition.depth * 0.5
+  const localColumn = clampVertexIndex(Math.round((x + halfWidth) / runtimeDefinition.cellSize), columns)
+  const localRow = clampVertexIndex(Math.round((z + halfDepth) / runtimeDefinition.cellSize), rows)
+  return resolveGroundEffectiveHeightAtVertex(runtimeDefinition, localRow, localColumn)
 }
 
 export function sampleGroundNormal(
@@ -1155,10 +1173,11 @@ function updateChunkGeometryRegion(
   return true
 }
 
-export function createGroundMesh(definition: GroundRuntimeDynamicMesh): THREE.Object3D {
+export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   // Prototype mesh retained for material/metadata defaults.
   if (!cachedPrototypeMesh) {
-    const geometry = buildGroundChunkGeometry(definition, { startRow: 0, startColumn: 0, rows: 1, columns: 1 })
+    const geometry = buildGroundChunkGeometry(runtimeDefinition, { startRow: 0, startColumn: 0, rows: 1, columns: 1 })
     const material = new THREE.MeshStandardMaterial({
       color: '#707070',
       roughness: 0.85,
@@ -1175,13 +1194,13 @@ export function createGroundMesh(definition: GroundRuntimeDynamicMesh): THREE.Ob
   group.name = 'Ground'
   group.userData.dynamicMeshType = 'Ground'
   group.userData.groundChunked = true
-  ensureGroundRuntimeState(group, definition)
+  ensureGroundRuntimeState(group, runtimeDefinition)
   // Seed a small neighborhood around origin so it shows up immediately.
   // Avoid using the default chunk radius here; that can load too many chunks on creation.
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const seedRadius = Math.max(50, resolveChunkCells(definition) * cellSize * 1.5)
-  updateGroundChunks(group, definition, null, { radius: seedRadius })
-  applyGroundTextureToObject(group, definition)
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 0 ? runtimeDefinition.cellSize : 1
+  const seedRadius = Math.max(50, resolveChunkCells(runtimeDefinition) * cellSize * 1.5)
+  updateGroundChunks(group, runtimeDefinition, null, { radius: seedRadius })
+  applyGroundTextureToObject(group, runtimeDefinition)
   return group
 }
 
@@ -1513,19 +1532,20 @@ export function ensureAllGroundChunks(target: THREE.Object3D, definition: Ground
   }
 }
 
-export function updateGroundMesh(target: THREE.Object3D, definition: GroundRuntimeDynamicMesh) {
+export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynamicMesh) {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   if ((target as any)?.isMesh) {
     const mesh = target as THREE.Mesh
     if (!(mesh.geometry instanceof THREE.BufferGeometry)) {
-      mesh.geometry = buildGroundGeometry(definition)
+      mesh.geometry = buildGroundGeometry(runtimeDefinition)
     }
     const bufferGeometry = mesh.geometry as THREE.BufferGeometry
-    const updated = updateGroundGeometry(bufferGeometry, definition)
+    const updated = updateGroundGeometry(bufferGeometry, runtimeDefinition)
     if (!updated) {
       bufferGeometry.dispose()
-      mesh.geometry = buildGroundGeometry(definition)
+      mesh.geometry = buildGroundGeometry(runtimeDefinition)
     }
-    applyGroundTextureToObject(mesh, definition)
+    applyGroundTextureToObject(mesh, runtimeDefinition)
     return
   }
 
@@ -1533,22 +1553,22 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundRunti
   if (!group) {
     return
   }
-  ensureGroundRuntimeState(group, definition)
+  ensureGroundRuntimeState(group, runtimeDefinition)
   // Chunks are created on demand via updateGroundChunks(camera).
   // If we already have chunks, refresh their geometry.
   const state = groundRuntimeStateMap.get(group)
   if (state) {
     state.chunks.forEach((entry) => {
       if (entry.mesh.geometry instanceof THREE.BufferGeometry) {
-        const ok = updateChunkGeometry(entry.mesh.geometry as THREE.BufferGeometry, definition, entry.spec)
+        const ok = updateChunkGeometry(entry.mesh.geometry as THREE.BufferGeometry, runtimeDefinition, entry.spec)
         if (!ok) {
           entry.mesh.geometry.dispose()
-          entry.mesh.geometry = buildGroundChunkGeometry(definition, entry.spec)
+          entry.mesh.geometry = buildGroundChunkGeometry(runtimeDefinition, entry.spec)
         }
       }
     })
   }
-  applyGroundTextureToObject(group, definition)
+  applyGroundTextureToObject(group, runtimeDefinition)
 }
 
 function resolveGroundRuntimeGroup(target: THREE.Object3D): THREE.Group | null {

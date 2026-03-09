@@ -605,7 +605,7 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
       ...nextGroundDynamicMesh,
       terrainScatter: snapshot,
     }
-    sceneStore.updateNodeDynamicMesh(groundNode.id, next)
+    sceneStore.updateGroundNodeDynamicMesh(groundNode.id, next)
   }
 }
 
@@ -710,7 +710,7 @@ async function clearPlanningGeneratedContentIncremental(options: {
 
   const snapshot = serializeTerrainScatterStore(store)
   snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
-  options.sceneStore.updateNodeDynamicMesh(groundNode.id, {
+  options.sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
     ...groundNode.dynamicMesh,
     terrainScatter: snapshot,
   })
@@ -1837,7 +1837,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const clearedPlanning = resetContours.definition
       groundDefinition = clearedPlanning
       syncPlanningHeightState(sceneStore, groundNode, clearedPlanning as GroundRuntimeDynamicMesh)
-      sceneStore.updateNodeDynamicMesh(groundNode.id, clearedPlanning)
+      sceneStore.updateGroundNodeDynamicMesh(groundNode.id, clearedPlanning)
       await yieldController.maybeYield(true)
     }
 
@@ -1861,7 +1861,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         })
         groundDefinition = next
         syncPlanningHeightState(sceneStore, groundNode, next as GroundRuntimeDynamicMesh)
-        sceneStore.updateNodeDynamicMesh(groundNode.id, next)
+        sceneStore.updateGroundNodeDynamicMesh(groundNode.id, next)
         doneUnits += contourPolygons.length
       } catch (err) {
         console.warn('Failed to apply planning terrain contours', err)
@@ -2425,7 +2425,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         ...finalGround.dynamicMesh,
         terrainScatter: snapshot,
       }
-      sceneStore.updateNodeDynamicMesh(finalGround.id, next)
+      sceneStore.updateGroundNodeDynamicMesh(finalGround.id, next)
     }
     await yieldController.maybeYield(true)
   }

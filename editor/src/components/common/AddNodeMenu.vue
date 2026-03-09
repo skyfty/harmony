@@ -1903,7 +1903,7 @@ async function handleConfirmGround() {
 
   if (created) {
     const rigidbodyComponent = sceneStore.ensureStaticRigidbodyComponent(created.id)
-    sceneStore.updateNodeDynamicMesh(created.id, definition)
+    sceneStore.updateGroundNodeDynamicMesh(created.id, definition)
     sceneStore.setNodeSelectionLock(created.id, true)
     sceneStore.selectNode(created.id)
     if (rigidbodyComponent) {

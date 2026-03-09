@@ -1260,6 +1260,141 @@ function isGroundHeightOnlyDynamicMeshUpdate(existing: Record<string, any> | nul
   return existing.planningMetadata !== incoming.planningMetadata
 }
 
+function resolveDynamicMeshType(dynamicMesh: unknown): string | null {
+  if (!dynamicMesh || typeof dynamicMesh !== 'object') {
+    return null
+  }
+  return typeof (dynamicMesh as { type?: unknown }).type === 'string'
+    ? ((dynamicMesh as { type: string }).type)
+    : null
+}
+
+function isGroundDynamicMeshUpdate(existing: unknown, incoming: unknown): boolean {
+  return resolveDynamicMeshType(existing) === 'Ground' || resolveDynamicMeshType(incoming) === 'Ground'
+}
+
+function resolveDynamicMeshRecord(dynamicMesh: unknown): Record<string, any> | null {
+  if (!dynamicMesh || typeof dynamicMesh !== 'object') {
+    return null
+  }
+  return dynamicMesh as Record<string, any>
+}
+
+function isPureGroundHeightDynamicMeshUpdate(previousDynamicMesh: unknown, incomingDynamicMesh: unknown): boolean {
+  const previousRecord = resolveDynamicMeshRecord(previousDynamicMesh)
+  const incomingRecord = resolveDynamicMeshRecord(incomingDynamicMesh)
+  return Boolean(
+    previousRecord
+    && incomingRecord
+    && (previousRecord.type === 'Ground' || incomingRecord.type === 'Ground')
+    && isGroundHeightOnlyDynamicMeshUpdate(previousRecord, incomingRecord),
+  )
+}
+
+function applyDynamicMeshToSceneNode(node: SceneNode, dynamicMesh: any, options: {
+  beforeMerge?: (existing: Record<string, any> | null, incoming: Record<string, any>) => void
+} = {}): { materialsChanged: boolean; meshChanged: boolean } {
+  if (!dynamicMesh || typeof dynamicMesh !== 'object') {
+    node.dynamicMesh = dynamicMesh
+  } else {
+    const incoming = dynamicMesh as Record<string, any>
+    const existing = node.dynamicMesh
+
+    // If we don't have an object mesh to update, fall back to a shallow assignment.
+    if (!existing || typeof existing !== 'object') {
+      ;(node as any).dynamicMesh = { ...incoming }
+    } else {
+      const existingRecord = existing as Record<string, any>
+      options.beforeMerge?.(existingRecord, incoming)
+
+      const incomingType = typeof incoming.type === 'string' ? incoming.type : null
+      const existingType = typeof existingRecord.type === 'string' ? existingRecord.type : null
+
+      // Type mismatch: replace reference (shallow) to keep semantics correct.
+      if (incomingType && existingType && incomingType !== existingType) {
+        ;(node as any).dynamicMesh = { ...incoming }
+      } else {
+        // If incoming has a `type`, treat it as a full definition and sync keys.
+        // Otherwise treat it as a patch and just assign the provided keys.
+        if (incomingType) {
+          for (const key of Object.keys(existingRecord)) {
+            if (!(key in incoming)) {
+              delete existingRecord[key]
+            }
+          }
+        }
+
+        for (const [key, value] of Object.entries(incoming)) {
+          existingRecord[key] = value
+        }
+      }
+    }
+  }
+
+  const floorConvention = floorHelpers.ensureFloorMaterialConvention(node)
+  const wallConvention = wallHelpers.ensureWallMaterialConvention(node)
+  return {
+    materialsChanged: floorConvention.materialsChanged || wallConvention.materialsChanged,
+    meshChanged: floorConvention.meshChanged || wallConvention.meshChanged,
+  }
+}
+
+function applySceneNodeDynamicMeshUpdate(store: {
+  nodes: SceneNode[]
+  queueSceneNodePatch: (nodeId: string, properties: any[]) => boolean
+}, nodeId: string, dynamicMesh: any, options: {
+  beforeMerge?: (existing: Record<string, any> | null, incoming: Record<string, any>) => void
+} = {}): void {
+  visitNode(store.nodes, nodeId, (node) => {
+    // PERF: Avoid JSON stringify/parse deep clones.
+    // Dynamic meshes can be very large and deep cloning can stall the UI.
+    // Instead, update the existing dynamicMesh in-place when possible.
+
+    const result = applyDynamicMeshToSceneNode(node, dynamicMesh, options)
+    if (result.materialsChanged) {
+      store.queueSceneNodePatch(nodeId, ['materials'])
+    }
+    if (result.meshChanged) {
+      store.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+    }
+  })
+  store.nodes = [...store.nodes]
+}
+
+function finalizeDynamicMeshRuntimePatch(store: {
+  queueSceneNodePatch: (nodeId: string, properties: any[]) => boolean
+  bumpSceneNodePropertyVersion: () => void
+}, nodeId: string, updatedMeshType: string | null): void {
+  // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
+  // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
+  if (
+    updatedMeshType === 'Road' ||
+    updatedMeshType === 'Wall' ||
+    updatedMeshType === 'Floor' ||
+    updatedMeshType === 'Ground'
+  ) {
+    const queued = store.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+
+    // `SceneViewport` applies pending patches only when `sceneNodePropertyVersion` bumps.
+    // If an identical patch is already pending, `queueSceneNodePatch` returns false and would not bump,
+    // causing runtime-visible edits (e.g. wall segment erase/split) to appear stale until another change happens.
+    if (!queued) {
+      store.bumpSceneNodePropertyVersion()
+    }
+  }
+}
+
+function persistGroundHeightSidecarForNode(workspaceId: string, sceneId: string | null | undefined, groundNode: SceneNode | null): boolean {
+  if (!sceneId || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return false
+  }
+  const groundHeightmapStore = useGroundHeightmapStore()
+  void groundHeightmapStore.saveSceneDocument(workspaceId, sceneId, groundNode).catch((error: unknown) => {
+    console.warn('[SceneStore] Failed to persist ground height sidecar', error)
+  })
+  return true
+}
+
 import * as groundUtils from './groundUtils'
 import * as vehicleUtils from './vehicleUtils'
 
@@ -7863,115 +7998,42 @@ export const useSceneStore = defineStore('scene', {
       }
       commitSceneSnapshot(this)
     },
+    updateGroundNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) return
+      if (!isGroundDynamicMeshUpdate(target.dynamicMesh, dynamicMesh)) {
+        this.updateNodeDynamicMesh(nodeId, dynamicMesh)
+        return
+      }
+      const isPureGroundHeightUpdate = isPureGroundHeightDynamicMeshUpdate(target.dynamicMesh, dynamicMesh)
+
+      // Ground mesh edits should ideally use region-based history; fall back to a content snapshot for safety.
+      this.captureHistorySnapshot()
+
+      applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh, {
+        beforeMerge: (existingRecord, incoming) => {
+          prepareGroundDynamicMeshRevision(existingRecord, incoming)
+        },
+      })
+      finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
+
+      if (isPureGroundHeightUpdate && persistGroundHeightSidecarForNode(this.workspaceId, this.currentSceneId, target)) {
+        return
+      }
+      commitSceneSnapshot(this)
+    },
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) return
-      const previousDynamicMesh = target.dynamicMesh && typeof target.dynamicMesh === 'object'
-        ? (target.dynamicMesh as Record<string, any>)
-        : null
-      const incomingDynamicMesh = dynamicMesh && typeof dynamicMesh === 'object'
-        ? (dynamicMesh as Record<string, any>)
-        : null
-      const isPureGroundHeightUpdate = Boolean(
-        previousDynamicMesh
-        && incomingDynamicMesh
-        && (previousDynamicMesh.type === 'Ground' || incomingDynamicMesh.type === 'Ground')
-        && isGroundHeightOnlyDynamicMeshUpdate(previousDynamicMesh, incomingDynamicMesh),
-      )
-
-      if (target.dynamicMesh?.type === 'Ground') {
-        // Ground mesh edits should ideally use region-based history; fall back to a content snapshot for safety.
-        this.captureHistorySnapshot()
-      } else {
-        this.captureNodeDynamicMeshHistory(nodeId)
-      }
-
-      visitNode(this.nodes, nodeId, (node) => {
-        // PERF: Avoid JSON stringify/parse deep clones.
-        // Dynamic meshes (especially Ground manual/planning maps) can be very large and deep cloning can stall the UI.
-        // Instead, update the existing dynamicMesh in-place when possible.
-
-        if (!dynamicMesh || typeof dynamicMesh !== 'object') {
-          node.dynamicMesh = dynamicMesh
-          return
-        }
-
-        const incoming = dynamicMesh as Record<string, any>
-        const existing = node.dynamicMesh
-
-        // If we don't have an object mesh to update, fall back to a shallow assignment.
-        if (!existing || typeof existing !== 'object') {
-          ;(node as any).dynamicMesh = { ...incoming }
-          return
-        }
-
-        const existingRecord = existing as Record<string, any>
-
-        const incomingType = typeof incoming.type === 'string' ? incoming.type : null
-        const existingType = typeof existingRecord.type === 'string' ? existingRecord.type : null
-        const isGroundDynamicMesh = incomingType === 'Ground' || existingType === 'Ground'
-
-        if (isGroundDynamicMesh) {
-          prepareGroundDynamicMeshRevision(existingRecord, incoming)
-        }
-
-        // Type mismatch: replace reference (shallow) to keep semantics correct.
-        if (incomingType && existingType && incomingType !== existingType) {
-          ;(node as any).dynamicMesh = { ...incoming }
-          return
-        }
-
-        // If incoming has a `type`, treat it as a full definition and sync keys.
-        // Otherwise treat it as a patch and just assign the provided keys.
-        if (incomingType) {
-          for (const key of Object.keys(existingRecord)) {
-            if (!(key in incoming)) {
-              delete existingRecord[key]
-            }
-          }
-        }
-
-        for (const [key, value] of Object.entries(incoming)) {
-          existingRecord[key] = value
-        }
-
-        const floorConvention = floorHelpers.ensureFloorMaterialConvention(node)
-        const wallConvention = wallHelpers.ensureWallMaterialConvention(node)
-        if (floorConvention.materialsChanged || wallConvention.materialsChanged) {
-          this.queueSceneNodePatch(nodeId, ['materials'])
-        }
-        if (floorConvention.meshChanged || wallConvention.meshChanged) {
-          this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
-        }
-      })
-      this.nodes = [...this.nodes]
-
-      // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
-      // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
-      const updatedMeshType = typeof (target as any)?.dynamicMesh?.type === 'string' ? (target as any).dynamicMesh.type : null
-      if (
-        updatedMeshType === 'Road' ||
-        updatedMeshType === 'Wall' ||
-        updatedMeshType === 'Floor' ||
-        updatedMeshType === 'Ground'
-      ) {
-        const queued = this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
-
-        // `SceneViewport` applies pending patches only when `sceneNodePropertyVersion` bumps.
-        // If an identical patch is already pending, `queueSceneNodePatch` returns false and would not bump,
-        // causing runtime-visible edits (e.g. wall segment erase/split) to appear stale until another change happens.
-        if (!queued) {
-          this.bumpSceneNodePropertyVersion()
-        }
-      }
-      if (isPureGroundHeightUpdate && this.currentSceneId) {
-        const groundHeightmapStore = useGroundHeightmapStore()
-        const snapshot = this.createSceneDocumentSnapshot()
-        void groundHeightmapStore.saveSceneDocument(this.workspaceId, snapshot).catch((error) => {
-          console.warn('[SceneStore] Failed to persist ground height sidecar', error)
-        })
+      if (isGroundDynamicMeshUpdate(target.dynamicMesh, dynamicMesh)) {
+        this.updateGroundNodeDynamicMesh(nodeId, dynamicMesh)
         return
       }
+
+      this.captureNodeDynamicMeshHistory(nodeId)
+
+      applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh)
+      finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
       commitSceneSnapshot(this)
     },
     setNodeLocked(nodeId: string, locked: boolean) {

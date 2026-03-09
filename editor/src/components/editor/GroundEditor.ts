@@ -3012,7 +3012,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			manualHeightMap: sculptSessionState.heightMap,
 		}
 		targetNode.dynamicMesh = nextDynamicMesh
-		options.sceneStore.updateNodeDynamicMesh(targetNode.id, nextDynamicMesh)
+		options.sceneStore.updateGroundNodeDynamicMesh(targetNode.id, nextDynamicMesh)
 		sculptSessionState = null
 		return true
 	}
@@ -3392,7 +3392,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (token !== paintCommitToken) {
 				return false
 			}
-			options.sceneStore.updateNodeDynamicMesh(session.nodeId, {
+			options.sceneStore.updateGroundNodeDynamicMesh(session.nodeId, {
 				terrainPaint: session.settings,
 			})
 			return true

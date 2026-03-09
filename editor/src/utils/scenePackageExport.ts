@@ -110,6 +110,21 @@ type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
   planningData?: unknown
 }
 
+function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExportDocument['nodes'][number] | null {
+  for (const node of nodes) {
+    if (node.dynamicMesh?.type === 'Ground') {
+      return node
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      const nested = findGroundNode(node.children)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return null
+}
+
 function stripEditorOnlySceneFields(
   document: SceneExportDocumentWithEditorFields,
 ): void {
@@ -437,9 +452,11 @@ export async function exportScenePackageZip(payload: {
     const sidecarSource = typeof structuredClone === 'function'
       ? structuredClone(scene.document)
       : JSON.parse(JSON.stringify(scene.document))
+    const groundNode = findGroundNode(sidecarSource.nodes)
     const groundHeightSidecar = groundHeightmapStore.buildSceneDocumentSidecar(
       scenesStore.workspaceId,
-      sidecarSource as StoredSceneDocument,
+      scene.id,
+      groundNode,
     )
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields

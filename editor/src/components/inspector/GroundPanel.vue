@@ -32,7 +32,7 @@ const groundCastShadow = computed({
     if (!node || node.dynamicMesh?.type !== 'Ground') {
       return
     }
-    sceneStore.updateNodeDynamicMesh(node.id, { castShadow: value })
+    sceneStore.updateGroundNodeDynamicMesh(node.id, { castShadow: value })
   },
 })
 
@@ -43,7 +43,7 @@ const groundChunkStreamingEnabled = computed({
     if (!node || node.dynamicMesh?.type !== 'Ground') {
       return
     }
-    sceneStore.updateNodeDynamicMesh(node.id, { chunkStreamingEnabled: value })
+    sceneStore.updateGroundNodeDynamicMesh(node.id, { chunkStreamingEnabled: value })
   },
 })
 </script>

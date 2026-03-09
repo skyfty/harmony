@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import type { SceneNode } from '@schema'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { toRaw, watch } from 'vue'
@@ -102,6 +103,25 @@ function getWorkspaceDbName(workspaceId: string): string {
 
 function prepareSceneDocumentForPersistence(document: StoredSceneDocument): StoredSceneDocument {
   return stripGroundHeightMapsFromSceneDocument(cloneForIndexedDb(document))
+}
+
+function findGroundNode(nodes: SceneNode[]): SceneNode | null {
+  for (const node of nodes) {
+    if (node.dynamicMesh?.type === 'Ground') {
+      return node
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      const nested = findGroundNode(node.children)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return null
+}
+
+function findGroundNodeInDocument(document: StoredSceneDocument): SceneNode | null {
+  return findGroundNode(document.nodes)
 }
 
 // Deeply unwrap Vue proxies so IndexedDB receives cloneable values.
@@ -417,7 +437,9 @@ async function readSceneDocument(workspaceId: string, id: string): Promise<Store
     if (!document) {
       return null
     }
-    return await groundHeightmapStore.hydrateSceneDocument(workspaceId, cloneForIndexedDb(document))
+    const hydrated = cloneForIndexedDb(document)
+    await groundHeightmapStore.hydrateSceneDocument(workspaceId, hydrated.id, findGroundNodeInDocument(hydrated))
+    return stripGroundHeightMapsFromSceneDocument(hydrated)
   }
   const db = await openDatabase(workspaceId)
   const tx = db.transaction(STORE_DOCUMENTS, 'readonly')
@@ -426,7 +448,8 @@ async function readSceneDocument(workspaceId: string, id: string): Promise<Store
   if (!result) {
     return null
   }
-  return await groundHeightmapStore.hydrateSceneDocument(workspaceId, result)
+  await groundHeightmapStore.hydrateSceneDocument(workspaceId, result.id, findGroundNodeInDocument(result))
+  return stripGroundHeightMapsFromSceneDocument(result)
 }
 
 function toMetadata(document: StoredSceneDocument): SceneSummary {
@@ -443,7 +466,7 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
 async function writeSceneDocument(workspaceId: string, document: StoredSceneDocument): Promise<void> {
   const groundHeightmapStore = useGroundHeightmapStore()
   const prepared = prepareSceneDocumentForPersistence(document)
-  await groundHeightmapStore.saveSceneDocument(workspaceId, document)
+  await groundHeightmapStore.saveSceneDocument(workspaceId, document.id, findGroundNodeInDocument(document))
   if (!isIndexedDbAvailable()) {
     getMemoryWorkspace(workspaceId).set(prepared.id, prepared)
     return
@@ -465,7 +488,11 @@ async function writeSceneDocuments(workspaceId: string, documents: StoredSceneDo
   const groundHeightmapStore = useGroundHeightmapStore()
   const preparedDocs = documents.map((doc) => ({ document: prepareSceneDocumentForPersistence(doc), source: doc }))
   for (const prepared of preparedDocs) {
-    await groundHeightmapStore.saveSceneDocument(workspaceId, prepared.source)
+    await groundHeightmapStore.saveSceneDocument(
+      workspaceId,
+      prepared.source.id,
+      findGroundNodeInDocument(prepared.source),
+    )
   }
   if (!isIndexedDbAvailable()) {
     const bucket = getMemoryWorkspace(workspaceId)
@@ -718,7 +745,8 @@ export const useScenesStore = defineStore('scenes', {
     },
     async saveGroundHeightSidecar(document: StoredSceneDocument) {
       const groundHeightmapStore = useGroundHeightmapStore()
-      await groundHeightmapStore.saveSceneDocument(this.workspaceId, cloneForIndexedDb(document))
+      const source = cloneForIndexedDb(document)
+      await groundHeightmapStore.saveSceneDocument(this.workspaceId, source.id, findGroundNodeInDocument(source))
       if (this.workspaceType === 'user') {
         await this.syncSceneToServer(document)
       }

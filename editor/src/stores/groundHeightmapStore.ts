@@ -1,10 +1,8 @@
 import { defineStore } from 'pinia'
 import { createGroundHeightMap, type GroundDynamicMesh, type GroundPlanningMetadata, type SceneNode } from '@schema'
-import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import {
   createGroundRuntimeMeshFromSidecar,
   serializeGroundHeightSidecar,
-  stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
 
 const DB_NAME = 'harmony-editor-ground-heightmaps'
@@ -28,6 +26,14 @@ export type GroundHeightRuntimeState = {
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: Float64Array
   planningHeightMap: Float64Array
+}
+
+function asGroundDynamicMesh(node: SceneNode | null | undefined): GroundDynamicMesh | null {
+  const definition = node?.dynamicMesh
+  if (definition?.type !== 'Ground') {
+    return null
+  }
+  return definition
 }
 
 function getWorkspaceDbName(workspaceId: string): string {
@@ -68,15 +74,6 @@ function getSceneRuntimeGroundHeightmaps(workspaceId: string, sceneId: string): 
     workspaceBucket.set(sceneId, sceneBucket)
   }
   return sceneBucket
-}
-
-function visitNodes(nodes: SceneNode[], visitor: (node: SceneNode) => void): void {
-  for (const node of nodes) {
-    visitor(node)
-    if (Array.isArray(node.children) && node.children.length) {
-      visitNodes(node.children, visitor)
-    }
-  }
 }
 
 function clonePlanningMetadata(metadata: GroundPlanningMetadata | null | undefined): GroundPlanningMetadata | null {
@@ -128,45 +125,44 @@ function ensureNodeRuntimeState(
   return created
 }
 
-function cacheSceneDocumentGroundHeightmapsFromSidecar(workspaceId: string, document: StoredSceneDocument, sidecar: ArrayBuffer | null): void {
+function cacheSceneGroundHeightmapsFromSidecar(
+  workspaceId: string,
+  sceneId: string,
+  groundNode: SceneNode | null,
+  sidecar: ArrayBuffer | null,
+): void {
   const sceneBucket = new Map<string, GroundHeightRuntimeState>()
-  visitNodes(document.nodes, (node) => {
-    if (node.dynamicMesh?.type !== 'Ground') {
-      return
-    }
-    const runtimeDefinition = createGroundRuntimeMeshFromSidecar(node.dynamicMesh, sidecar)
-    sceneBucket.set(node.id, {
-      nodeId: node.id,
+  const definition = asGroundDynamicMesh(groundNode)
+  if (groundNode && definition) {
+    const runtimeDefinition = createGroundRuntimeMeshFromSidecar(definition, sidecar)
+    sceneBucket.set(groundNode.id, {
+      nodeId: groundNode.id,
       rows: runtimeDefinition.rows,
       columns: runtimeDefinition.columns,
       manualHeightMap: new Float64Array(runtimeDefinition.manualHeightMap),
       planningHeightMap: new Float64Array(runtimeDefinition.planningHeightMap),
       planningMetadata: clonePlanningMetadata(runtimeDefinition.planningMetadata ?? null),
     })
-  })
-  getRuntimeWorkspaceGroundHeightmaps(workspaceId).set(document.id, sceneBucket)
+  }
+  getRuntimeWorkspaceGroundHeightmaps(workspaceId).set(sceneId, sceneBucket)
 }
 
-function ensureSceneDocumentGroundHeightmaps(workspaceId: string, document: StoredSceneDocument): void {
-  visitNodes(document.nodes, (node) => {
-    if (node.dynamicMesh?.type !== 'Ground') {
-      return
-    }
-    ensureNodeRuntimeState(workspaceId, document.id, node.id, node.dynamicMesh)
-  })
+function ensureSceneGroundHeightmap(workspaceId: string, sceneId: string, groundNode: SceneNode | null): void {
+  const definition = asGroundDynamicMesh(groundNode)
+  if (!groundNode || !definition) {
+    return
+  }
+  ensureNodeRuntimeState(workspaceId, sceneId, groundNode.id, definition)
 }
 
-function buildSceneDocumentSidecar(workspaceId: string, document: StoredSceneDocument): ArrayBuffer | null {
-  let sidecar: ArrayBuffer | null = null
-  visitNodes(document.nodes, (node) => {
-    if (sidecar || node.dynamicMesh?.type !== 'Ground') {
-      return
-    }
-    sidecar = serializeGroundHeightSidecar(
-      useGroundHeightmapStore().resolveGroundRuntimeMesh(workspaceId, document.id, node.id, node.dynamicMesh),
-    )
-  })
-  return sidecar
+function buildSceneGroundSidecar(workspaceId: string, sceneId: string, groundNode: SceneNode | null): ArrayBuffer | null {
+  const definition = asGroundDynamicMesh(groundNode)
+  if (!groundNode || !definition) {
+    return null
+  }
+  return serializeGroundHeightSidecar(
+    useGroundHeightmapStore().resolveGroundRuntimeMesh(workspaceId, sceneId, groundNode.id, definition),
+  )
 }
 
 function openDatabase(workspaceId: string): Promise<IDBDatabase> {
@@ -268,19 +264,18 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
 
 export const useGroundHeightmapStore = defineStore('groundHeightmap', {
   actions: {
-    async hydrateSceneDocument(workspaceId: string, document: StoredSceneDocument): Promise<StoredSceneDocument> {
-      const sidecar = await readGroundHeightSidecar(workspaceId, document.id)
-      cacheSceneDocumentGroundHeightmapsFromSidecar(workspaceId, document, sidecar)
-      return stripGroundHeightMapsFromSceneDocument(document)
+    async hydrateSceneDocument(workspaceId: string, sceneId: string, groundNode: SceneNode | null): Promise<void> {
+      const sidecar = await readGroundHeightSidecar(workspaceId, sceneId)
+      cacheSceneGroundHeightmapsFromSidecar(workspaceId, sceneId, groundNode, sidecar)
     },
-    async saveSceneDocument(workspaceId: string, document: StoredSceneDocument): Promise<void> {
-      ensureSceneDocumentGroundHeightmaps(workspaceId, document)
-      const sidecar = this.buildSceneDocumentSidecar(workspaceId, document)
-      await writeGroundHeightSidecar(workspaceId, document.id, sidecar)
+    async saveSceneDocument(workspaceId: string, sceneId: string, groundNode: SceneNode | null): Promise<void> {
+      ensureSceneGroundHeightmap(workspaceId, sceneId, groundNode)
+      const sidecar = this.buildSceneDocumentSidecar(workspaceId, sceneId, groundNode)
+      await writeGroundHeightSidecar(workspaceId, sceneId, sidecar)
     },
-    buildSceneDocumentSidecar(workspaceId: string, document: StoredSceneDocument): ArrayBuffer | null {
-      ensureSceneDocumentGroundHeightmaps(workspaceId, document)
-      return buildSceneDocumentSidecar(workspaceId, document)
+    buildSceneDocumentSidecar(workspaceId: string, sceneId: string, groundNode: SceneNode | null): ArrayBuffer | null {
+      ensureSceneGroundHeightmap(workspaceId, sceneId, groundNode)
+      return buildSceneGroundSidecar(workspaceId, sceneId, groundNode)
     },
     async saveSceneSidecar(workspaceId: string, sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
       await writeGroundHeightSidecar(workspaceId, sceneId, sidecar)
