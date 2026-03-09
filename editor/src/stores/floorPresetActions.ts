@@ -126,7 +126,7 @@ function assertStrictFloorPresetMaterialConfig(value: unknown, materialOrder: st
   return { topBottomMaterialConfigId, sideMaterialConfigId }
 }
 
-function parseFloorPresetData(text: string): FloorPresetData {
+export function parseFloorPresetData(text: string): FloorPresetData {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)

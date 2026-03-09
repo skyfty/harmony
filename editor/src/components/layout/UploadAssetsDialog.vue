@@ -29,6 +29,7 @@ import {
   ASSET_THUMBNAIL_WIDTH,
   createThumbnailFromCanvas,
 } from '@/utils/assetThumbnail'
+import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
@@ -791,6 +792,9 @@ function getAssetTypeLabel(asset: ProjectAsset): string {
 }
 
 function isModelAsset(asset: ProjectAsset): boolean {
+  if (detectAssetPreviewPresetKind(asset)) {
+    return true
+  }
   if (['model', 'mesh', 'prefab', 'hdri'].includes(asset.type)) {
     return true
   }

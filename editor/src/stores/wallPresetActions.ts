@@ -249,7 +249,7 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
   }
 }
 
-function parseWallPresetData(text: string): WallPresetData {
+export function parseWallPresetData(text: string): WallPresetData {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
