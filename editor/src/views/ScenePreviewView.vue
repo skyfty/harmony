@@ -5074,7 +5074,9 @@ async function buildPreviewRuntimeDocument(
 	}
 	const sidecar = options.groundHeightSidecar !== undefined
 		? options.groundHeightSidecar
-		: await useGroundHeightmapStore().loadSceneSidecar(useScenesStore().workspaceId, cloned.id)
+		: (cloned.id === sceneStore.currentSceneId
+			? useGroundHeightmapStore().buildSceneDocumentSidecar(findGroundNode(cloned.nodes))
+			: null)
 	const groundNode = findGroundNode(cloned.nodes)
 	if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 		return cloned

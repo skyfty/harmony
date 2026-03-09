@@ -1385,12 +1385,11 @@ function finalizeDynamicMeshRuntimePatch(store: {
   }
 }
 
-function persistGroundHeightSidecarForNode(workspaceId: string, sceneId: string | null | undefined, groundNode: SceneNode | null): boolean {
-  if (!sceneId || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+function persistGroundHeightSidecarForNode(groundNode: SceneNode | null): boolean {
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return false
   }
-  const groundHeightmapStore = useGroundHeightmapStore()
-  void groundHeightmapStore.saveSceneDocument(workspaceId, sceneId, groundNode).catch((error: unknown) => {
+  void useScenesStore().saveGroundHeightSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
     console.warn('[SceneStore] Failed to persist ground height sidecar', error)
   })
   return true
@@ -1692,11 +1691,10 @@ function resolveGroundRuntimeDefinition(
   }
   const definition = node.dynamicMesh as GroundDynamicMesh
   const sceneId = typeof store.currentSceneId === 'string' && store.currentSceneId.length ? store.currentSceneId : null
-  const workspaceId = typeof store.workspaceId === 'string' && store.workspaceId.length ? store.workspaceId : null
-  if (!sceneId || !workspaceId) {
+  if (!sceneId) {
     return null
   }
-  return useGroundHeightmapStore().resolveGroundRuntimeMesh(workspaceId, sceneId, nodeId, definition)
+  return useGroundHeightmapStore().resolveGroundRuntimeMesh(nodeId, definition)
 }
 
 function applyGroundRegionTransform(
@@ -7389,8 +7387,6 @@ export const useSceneStore = defineStore('scene', {
       delete (nextDefinition as GroundDynamicMesh & { planningHeightMap?: Float64Array }).planningHeightMap
       if (this.currentSceneId) {
         useGroundHeightmapStore().replaceManualHeightMap(
-          this.workspaceId,
-          this.currentSceneId,
           groundNode.id,
           nextDefinition,
           result.definition.manualHeightMap,
@@ -8036,7 +8032,7 @@ export const useSceneStore = defineStore('scene', {
         },
       })
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
-      persistGroundHeightSidecarForNode(this.workspaceId, this.currentSceneId, target)
+      persistGroundHeightSidecarForNode(target)
     },
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
@@ -14154,7 +14150,7 @@ export const useSceneStore = defineStore('scene', {
         return true
       }
       const scenesStore = useScenesStore()
-      const scene = await scenesStore.loadSceneDocument(sceneId)
+      const scene = await scenesStore.loadSceneDocument(sceneId, { hydrateGroundRuntime: true })
       if (!scene) {
         return false
       }
@@ -14287,7 +14283,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const scenesStore = useScenesStore()
-      const groundHeightmapStore = useGroundHeightmapStore()
       const projectsStore = useProjectsStore()
       const projectId = projectsStore.activeProjectId
       if (!projectId) {
@@ -14346,14 +14341,14 @@ export const useSceneStore = defineStore('scene', {
         importedGroundHeightSidecars.set(sceneDocument.id, groundHeightSidecars[entry.id] ?? null)
       }
 
-      await scenesStore.saveSceneDocuments(imported)
-      for (const sceneDocument of imported) {
-        await groundHeightmapStore.saveSceneSidecar(
-          scenesStore.workspaceId,
-          sceneDocument.id,
-          importedGroundHeightSidecars.get(sceneDocument.id) ?? null,
-        )
-      }
+      await scenesStore.saveSceneDocuments(
+        imported,
+        {
+          groundHeightSidecars: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedGroundHeightSidecars.get(sceneDocument.id) ?? null]),
+          ),
+        },
+      )
       await scenesStore.refreshMetadata()
 
       return {
@@ -14457,18 +14452,17 @@ export const useSceneStore = defineStore('scene', {
     },
     async ensureCurrentSceneLoaded() {
       this.isSceneReady = false
-      const scenesStore = useScenesStore()
-
       try {
-        if (!scenesStore.metadata.length) {
-          const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
-          await scenesStore.saveSceneDocument(fallback)
-          await scenesStore.refreshMetadata()
-          this.applySceneDocumentToState(fallback)
-          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
-        } else {
-          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
+        if (this.currentSceneId) {
+          try {
+            const scenesStore = useScenesStore()
+            const sidecar = await scenesStore.loadGroundHeightSidecar(this.currentSceneId)
+            await useGroundHeightmapStore().hydrateSceneDocument(findGroundNode(this.nodes), sidecar)
+          } catch (error) {
+            console.warn('[SceneStore] Failed to restore ground height sidecar on scene reload', error)
+          }
         }
+        await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
       } finally {
         this.isSceneReady = true
       }

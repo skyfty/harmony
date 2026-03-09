@@ -2923,13 +2923,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return sculptSessionState.definition
 			}
 			const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
-			const workspaceId = typeof options.sceneStore.workspaceId === 'string' ? options.sceneStore.workspaceId.trim() : ''
-			if (!sceneId || !workspaceId) {
+			if (!sceneId) {
 				return node.dynamicMesh
 			}
 			return useGroundHeightmapStore().resolveGroundRuntimeMesh(
-				workspaceId,
-				sceneId,
 				node.id,
 				node.dynamicMesh,
 			)
@@ -2982,11 +2979,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
-		const workspaceId = typeof options.sceneStore.workspaceId === 'string' ? options.sceneStore.workspaceId.trim() : ''
-		if (sceneId && workspaceId) {
+		if (sceneId) {
 			useGroundHeightmapStore().replaceManualHeightMap(
-				workspaceId,
-				sceneId,
 				targetNode.id,
 				targetNode.dynamicMesh,
 				sculptSessionState.heightMap,
@@ -2994,7 +2988,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const nextDynamicMesh: GroundDynamicMesh = {
 			...(targetNode.dynamicMesh as GroundDynamicMesh),
-			manualHeightMap: sculptSessionState.heightMap,
 		}
 		targetNode.dynamicMesh = nextDynamicMesh
 		options.sceneStore.updateGroundNodeDynamicMesh(targetNode.id, nextDynamicMesh)

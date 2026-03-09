@@ -809,13 +809,10 @@ function resolveGroundRuntimeDefinition(
     throw new Error('Ground runtime state is unavailable because the target node is not a ground node')
   }
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  const workspaceId = typeof sceneStore.workspaceId === 'string' ? sceneStore.workspaceId.trim() : ''
-  if (!sceneId || !workspaceId) {
+  if (!sceneId) {
     throw new Error('Ground runtime state is unavailable because the scene is not persisted yet')
   }
   return useGroundHeightmapStore().resolveGroundRuntimeMesh(
-    workspaceId,
-    sceneId,
     groundNode.id,
     groundNode.dynamicMesh,
   )
@@ -827,15 +824,12 @@ function syncPlanningHeightState(
   definition: GroundRuntimeDynamicMesh,
 ): void {
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  const workspaceId = typeof sceneStore.workspaceId === 'string' ? sceneStore.workspaceId.trim() : ''
-  if (!sceneId || !workspaceId) {
+  if (!sceneId) {
     throw new Error('Planning height runtime state cannot be synchronized before the scene is persisted')
   }
   useGroundHeightmapStore().replacePlanningHeightMap(
-    workspaceId,
-    sceneId,
     groundNode.id,
-    groundNode.dynamicMesh,
+    groundNode.dynamicMesh as GroundDynamicMesh,
     definition.planningHeightMap,
     definition.planningMetadata ?? null,
   )

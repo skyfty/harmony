@@ -6747,8 +6747,6 @@ function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
   const node = getGroundNodeFromStore()
   if (node?.dynamicMesh?.type === 'Ground' && sceneStore.currentSceneId) {
     return useGroundHeightmapStore().resolveGroundRuntimeMesh(
-      sceneStore.workspaceId,
-      sceneStore.currentSceneId,
       node.id,
       node.dynamicMesh,
     )

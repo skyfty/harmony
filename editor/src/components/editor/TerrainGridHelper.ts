@@ -338,11 +338,10 @@ function createGroundDefinitionSnapshot(definition: GroundDynamicMesh): GroundRu
   const rawDefinition = toRaw(definition) as GroundDynamicMesh
   const sceneStore = useSceneStore()
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  const workspaceId = typeof sceneStore.workspaceId === 'string' ? sceneStore.workspaceId.trim() : ''
-  if (!sceneId || !workspaceId) {
+  if (!sceneId) {
     throw new Error('Ground runtime state is unavailable for terrain grid snapshot')
   }
-  const sourceDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(workspaceId, sceneId, GROUND_NODE_ID, rawDefinition)
+  const sourceDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(GROUND_NODE_ID, rawDefinition)
   return {
     ...rawDefinition,
     manualHeightMap: cloneGroundHeightMap(

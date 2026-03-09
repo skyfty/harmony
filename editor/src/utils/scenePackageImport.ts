@@ -137,7 +137,7 @@ function extractGroundHeightSidecarFromPackage(
   if (!bytes) {
     throw new Error(`Missing ground height sidecar in scene bundle: ${sidecarPath}`)
   }
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  return new Uint8Array(bytes).buffer
 }
 
 export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): Promise<LoadedStoredScenePackage> {

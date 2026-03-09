@@ -146,6 +146,7 @@ async function bootstrap() {
     progress.value = 28
     const sceneStore = useSceneStore()
     await waitForPiniaHydration()
+    // sceneStore.initialize()
 
     statusMessage.value = 'Checking scene data…'
     progress.value = 46
@@ -155,7 +156,7 @@ async function bootstrap() {
       statusMessage.value = 'Creating default scene…'
       progress.value = 60
       const newSceneId = await sceneStore.createScene('New Scene')
-      const doc = await scenesStore.loadSceneDocument(newSceneId)
+      const doc = await scenesStore.loadSceneDocument(newSceneId, { hydrateGroundRuntime: true })
       if (!doc) {
         throw new Error('Failed to create default scene')
       }

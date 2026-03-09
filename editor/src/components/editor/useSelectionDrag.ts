@@ -6,7 +6,7 @@ import { sampleGroundHeight } from '@schema/groundMesh'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-viewport-selection-drag'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
-import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON } from './constants'
+import { GROUND_NODE_ID, DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON } from './constants'
 import {
   buildParentIndex,
   filterTopLevelSelection,
@@ -52,8 +52,6 @@ export function useSelectionDrag(
     const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
       ? (sceneStore.currentSceneId
           ? useGroundHeightmapStore().resolveGroundRuntimeMesh(
-              sceneStore.workspaceId,
-              sceneStore.currentSceneId,
               groundNode.id,
               groundNode.dynamicMesh as GroundDynamicMesh,
             )
