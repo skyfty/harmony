@@ -14454,13 +14454,8 @@ export const useSceneStore = defineStore('scene', {
       this.isSceneReady = false
       try {
         if (this.currentSceneId) {
-          try {
-            const scenesStore = useScenesStore()
-            const sidecar = await scenesStore.loadGroundHeightSidecar(this.currentSceneId)
-            await useGroundHeightmapStore().hydrateSceneDocument(findGroundNode(this.nodes), sidecar)
-          } catch (error) {
-            console.warn('[SceneStore] Failed to restore ground height sidecar on scene reload', error)
-          }
+          const sidecar = await useScenesStore().loadGroundHeightSidecar(this.currentSceneId)
+          await useGroundHeightmapStore().hydrateSceneDocument(findGroundNode(this.nodes), sidecar)
         }
         await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
       } finally {
