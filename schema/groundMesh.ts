@@ -3,6 +3,7 @@ import {
   createGroundHeightMap,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
+  type GroundDynamicMesh,
   type GroundGenerationSettings,
   type GroundHeightMap,
   type GroundRuntimeDynamicMesh,
@@ -21,8 +22,6 @@ const textureLoader = new THREE.TextureLoader()
 
 const DEFAULT_GROUND_CHUNK_CELLS = 100
 const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 200
-
-type GroundDynamicMesh = GroundRuntimeDynamicMesh
 
 type GroundChunkKey = string
 
@@ -221,7 +220,7 @@ function clampVertexIndex(value: number, max: number): number {
   return value
 }
 
-function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
+function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: number, column: number): number {
   // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
   // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
   // 如果没有显式记录，则回退到基础高度，表示规划层对该点没有额外改动。
@@ -249,7 +248,7 @@ function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, col
  * 这样做的目的，是当规划层重新生成或被调整后，用户之前的雕刻结果仍能尽量保持：
  * 用户修改的是“相对地形的局部塑形”，而不是把规划层完全覆盖掉。
  */
-export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
+export function resolveGroundEffectiveHeightAtVertex(definition: GroundRuntimeDynamicMesh, row: number, column: number): number {
   // 原始程序化地形高度。
   const base = computeGroundBaseHeightAtVertex(definition, row, column)
   const heightIndex = getGroundVertexIndex(definition.columns, row, column)
@@ -269,7 +268,7 @@ export type GroundEffectiveHeightRegion = GroundBaseHeightRegion & {
 }
 
 export function sampleGroundEffectiveHeightRegion(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   minRowInput: number,
   maxRowInput: number,
   minColumnInput: number,
@@ -330,7 +329,7 @@ export function sampleGroundEffectiveHeightRegion(
  * 再通过这里把目标值转换回 manual 层保存，避免直接破坏规划层数据。
  */
 export function resolveGroundManualHeightForEffectiveTarget(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   row: number,
   column: number,
   effectiveHeight: number,
@@ -341,7 +340,7 @@ export function resolveGroundManualHeightForEffectiveTarget(
   return base + (effectiveHeight - planning)
 }
 
-function setHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
+function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   const heightIndex = getGroundVertexIndex(definition.columns, row, column)
   const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
   let rounded = Math.round(value * 100) / 100
@@ -355,16 +354,16 @@ function setHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeight
   map[heightIndex] = rounded
 }
 
-export function setManualHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
+export function setManualHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   setHeightOverrideValue(definition, map, row, column, value)
 }
 
-export function setPlanningHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
+export function setPlanningHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   setHeightOverrideValue(definition, map, row, column, value)
 }
 
 function setManualHeightOverrideForEffectiveValue(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   map: GroundHeightMap,
   row: number,
   column: number,
@@ -377,7 +376,7 @@ function setManualHeightOverrideForEffectiveValue(
 }
 
 function sampleNeighborAverage(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   row: number,
   column: number,
   maxRow: number,
@@ -396,7 +395,7 @@ function sampleNeighborAverage(
   return count > 0 ? sum / count : 0
 }
 
-export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
+export function sampleGroundHeight(definition: GroundRuntimeDynamicMesh, x: number, z: number): number {
   const columns = Math.max(1, definition.columns)
   const rows = Math.max(1, definition.rows)
   const halfWidth = definition.width * 0.5
@@ -407,7 +406,7 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
 }
 
 export function sampleGroundNormal(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   x: number,
   z: number,
   target?: THREE.Vector3,
@@ -429,7 +428,7 @@ export function sampleGroundNormal(
   return result
 }
 
-function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometry {
+function buildGroundGeometry(definition: GroundRuntimeDynamicMesh): THREE.BufferGeometry {
   const columns = Math.max(1, definition.columns)
   const rows = Math.max(1, definition.rows)
   const vertexColumns = columns + 1
@@ -499,7 +498,7 @@ function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometr
   return geometry
 }
 
-function buildGroundChunkGeometry(definition: GroundDynamicMesh, spec: GroundChunkSpec): THREE.BufferGeometry {
+function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): THREE.BufferGeometry {
   const columns = Math.max(1, definition.columns)
   const rows = Math.max(1, definition.rows)
   const chunkColumns = Math.max(1, spec.columns)
@@ -682,7 +681,7 @@ function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRunti
 function ensureChunkMesh(
   root: THREE.Group,
   state: GroundRuntimeState,
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   chunkRow: number,
   chunkColumn: number,
 ): GroundChunkRuntime {
@@ -776,7 +775,7 @@ type GroundChunkBudget = {
 }
 
 export function applyGroundGeneration(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   settings: GroundGenerationSettings,
 ): GroundGenerationSettings {
   const normalized = normalizeGroundGenerationSettings(settings)
@@ -795,7 +794,7 @@ export interface SculptParams {
   targetHeight?: number
 }
 
-export function sculptGround(definition: GroundDynamicMesh, params: SculptParams): boolean {
+export function sculptGround(definition: GroundRuntimeDynamicMesh, params: SculptParams): boolean {
   const { point, radius, strength, shape, operation, targetHeight } = params
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
@@ -930,7 +929,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
   return modified
 }
 
-export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition: GroundDynamicMesh): boolean {
+export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition: GroundRuntimeDynamicMesh): boolean {
   const columns = Math.max(1, definition.columns)
   const rows = Math.max(1, definition.rows)
   const vertexColumns = columns + 1
@@ -1061,7 +1060,7 @@ export type GroundGeometryUpdateRegion = {
   maxColumn: number
 }
 
-function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundDynamicMesh, spec: GroundChunkSpec): boolean {
+function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): boolean {
   const columns = Math.max(1, Math.trunc(definition.columns))
   const rows = Math.max(1, Math.trunc(definition.rows))
   const chunkColumns = Math.max(1, Math.trunc(spec.columns))
@@ -1109,7 +1108,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundD
 
 function updateChunkGeometryRegion(
   geometry: THREE.BufferGeometry,
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   spec: GroundChunkSpec,
   region: GroundGeometryUpdateRegion,
   options: { computeNormals?: boolean } = {},
@@ -1156,7 +1155,7 @@ function updateChunkGeometryRegion(
   return true
 }
 
-export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D {
+export function createGroundMesh(definition: GroundRuntimeDynamicMesh): THREE.Object3D {
   // Prototype mesh retained for material/metadata defaults.
   if (!cachedPrototypeMesh) {
     const geometry = buildGroundChunkGeometry(definition, { startRow: 0, startColumn: 0, rows: 1, columns: 1 })
@@ -1205,7 +1204,7 @@ export function setGroundMaterial(target: THREE.Object3D, material: THREE.Materi
 
 export function updateGroundChunks(
   target: THREE.Object3D,
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   camera: THREE.Camera | null,
   options: {
     radius?: number
@@ -1495,7 +1494,7 @@ export function updateGroundChunks(
   }
 }
 
-export function ensureAllGroundChunks(target: THREE.Object3D, definition: GroundDynamicMesh): void {
+export function ensureAllGroundChunks(target: THREE.Object3D, definition: GroundRuntimeDynamicMesh): void {
   const root = resolveGroundRuntimeGroup(target)
   if (!root) {
     return
@@ -1514,7 +1513,7 @@ export function ensureAllGroundChunks(target: THREE.Object3D, definition: Ground
   }
 }
 
-export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynamicMesh) {
+export function updateGroundMesh(target: THREE.Object3D, definition: GroundRuntimeDynamicMesh) {
   if ((target as any)?.isMesh) {
     const mesh = target as THREE.Mesh
     if (!(mesh.geometry instanceof THREE.BufferGeometry)) {
@@ -1607,7 +1606,7 @@ function resolveGroundRuntimeGroup(target: THREE.Object3D): THREE.Group | null {
 
 export function updateGroundMeshRegion(
   target: THREE.Object3D,
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   region: GroundGeometryUpdateRegion,
   options: { computeNormals?: boolean } = {},
 ): boolean {
@@ -1754,7 +1753,7 @@ function averageNormalsOnEdge(params: {
 
 export function stitchGroundChunkNormals(
   target: THREE.Object3D,
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   region: GroundGeometryUpdateRegion | null = null,
   touchedChunkKeys: Iterable<string> | null = null,
 ): boolean {

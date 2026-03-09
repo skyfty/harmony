@@ -1206,29 +1206,9 @@ export interface GroundDynamicMesh {
   terrainPaint?: TerrainPaintSettings | null
 }
 
-export interface GroundRuntimeDynamicMesh {
-  type: 'Ground'
-  width: number
-  depth: number
-  rows: number
-  columns: number
-  cellSize: number
-  chunkStreamingEnabled?: boolean
+export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
-  surfaceRevision?: number
-  heightComposition: {
-    mode: GroundHeightCompositionMode
-    policyVersion?: number
-  }
-  planningMetadata?: GroundPlanningMetadata | null
-  castShadow?: boolean
-  terrainScatterInstancesUpdatedAt: number
-  textureDataUrl?: string | null
-  textureName?: string | null
-  generation?: GroundGenerationSettings | null
-  terrainScatter?: TerrainScatterStoreSnapshot | null
-  terrainPaint?: TerrainPaintSettings | null
 }
 
 /**
