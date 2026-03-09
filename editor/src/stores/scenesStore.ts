@@ -8,12 +8,10 @@ import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import {
-  ensureGroundHeightMapsInSceneDocument,
-  extractGroundHeightSidecarFromSceneDocument,
-  hydrateGroundHeightMapsInSceneDocument,
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
+import { useGroundHeightmapStore } from './groundHeightmapStore'
 
 export type SceneWorkspaceType = 'local' | 'user'
 
@@ -78,13 +76,11 @@ function resolveWorkspaceDescriptor(user: SessionUser | null | undefined): Scene
 }
 
 const DB_NAME = 'harmony-editor-scenes'
-const DB_VERSION = 3
+const DB_VERSION = 4
 const STORE_METADATA = 'sceneMetadata'
 const STORE_DOCUMENTS = 'sceneDocuments'
-const STORE_GROUND_HEIGHTMAPS = 'sceneGroundHeightmaps'
 
 const memoryWorkspaceDocuments = new Map<string, Map<string, StoredSceneDocument>>()
-const memoryWorkspaceGroundHeightmaps = new Map<string, Map<string, ArrayBuffer>>()
 const workspaceDbPromises = new Map<string, Promise<IDBDatabase>>()
 const workspaceDbInstances = new Map<string, IDBDatabase>()
 
@@ -100,70 +96,12 @@ function getMemoryWorkspace(workspaceId: string): Map<string, StoredSceneDocumen
   return bucket
 }
 
-function getMemoryGroundHeightmaps(workspaceId: string): Map<string, ArrayBuffer> {
-  let bucket = memoryWorkspaceGroundHeightmaps.get(workspaceId)
-  if (!bucket) {
-    bucket = new Map()
-    memoryWorkspaceGroundHeightmaps.set(workspaceId, bucket)
-  }
-  return bucket
-}
-
 function getWorkspaceDbName(workspaceId: string): string {
   return `${DB_NAME}::${workspaceId}`
 }
 
-function cloneArrayBuffer(value: ArrayBuffer): ArrayBuffer {
-  return value.slice(0)
-}
-
-function prepareSceneDocumentForPersistence(document: StoredSceneDocument): {
-  document: StoredSceneDocument
-  groundHeightSidecar: ArrayBuffer | null
-} {
-  const hydrated = ensureGroundHeightMapsInSceneDocument(cloneForIndexedDb(document))
-  const groundHeightSidecar = extractGroundHeightSidecarFromSceneDocument(hydrated)
-  return {
-    document: stripGroundHeightMapsFromSceneDocument(hydrated),
-    groundHeightSidecar,
-  }
-}
-
-async function readGroundHeightSidecar(workspaceId: string, id: string): Promise<ArrayBuffer | null> {
-  if (!isIndexedDbAvailable()) {
-    const sidecar = getMemoryGroundHeightmaps(workspaceId).get(id)
-    return sidecar ? cloneArrayBuffer(sidecar) : null
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_HEIGHTMAPS, 'readonly')
-  const store = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  const entry = await requestToPromise<{ id: string; buffer: ArrayBuffer } | undefined>(store.get(id))
-  return entry?.buffer ? cloneArrayBuffer(entry.buffer) : null
-}
-
-async function writeGroundHeightSidecarOnly(workspaceId: string, sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
-  if (!isIndexedDbAvailable()) {
-    const bucket = getMemoryGroundHeightmaps(workspaceId)
-    if (sidecar) {
-      bucket.set(sceneId, cloneArrayBuffer(sidecar))
-    } else {
-      bucket.delete(sceneId)
-    }
-    return
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_HEIGHTMAPS, 'readwrite')
-  const store = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  if (sidecar) {
-    store.put({ id: sceneId, buffer: cloneArrayBuffer(sidecar) })
-  } else {
-    store.delete(sceneId)
-  }
-  await new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error ?? new Error('Failed to write ground height sidecar'))
-    tx.onabort = () => reject(tx.error ?? new Error('Ground height sidecar write aborted'))
-  })
+function prepareSceneDocumentForPersistence(document: StoredSceneDocument): StoredSceneDocument {
+  return stripGroundHeightMapsFromSceneDocument(cloneForIndexedDb(document))
 }
 
 // Deeply unwrap Vue proxies so IndexedDB receives cloneable values.
@@ -259,13 +197,12 @@ function openDatabase(workspaceId: string): Promise<IDBDatabase> {
           if (!db.objectStoreNames.contains(STORE_DOCUMENTS)) {
             db.createObjectStore(STORE_DOCUMENTS, { keyPath: 'id' })
           }
-          if (!db.objectStoreNames.contains(STORE_GROUND_HEIGHTMAPS)) {
-            db.createObjectStore(STORE_GROUND_HEIGHTMAPS, { keyPath: 'id' })
+          if (db.objectStoreNames.contains('sceneGroundHeightmaps')) {
+            db.deleteObjectStore('sceneGroundHeightmaps')
           }
           if (request.transaction && oldVersion < 3) {
             request.transaction.objectStore(STORE_METADATA).clear()
             request.transaction.objectStore(STORE_DOCUMENTS).clear()
-            request.transaction.objectStore(STORE_GROUND_HEIGHTMAPS).clear()
           }
         }
         request.onsuccess = () => {
@@ -281,9 +218,10 @@ function openDatabase(workspaceId: string): Promise<IDBDatabase> {
 }
 
 async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
+  const groundHeightmapStore = useGroundHeightmapStore()
   if (!isIndexedDbAvailable()) {
     memoryWorkspaceDocuments.delete(workspaceId)
-    memoryWorkspaceGroundHeightmaps.delete(workspaceId)
+    await groundHeightmapStore.deleteWorkspaceStorage(workspaceId)
     return
   }
   const dbName = getWorkspaceDbName(workspaceId)
@@ -302,7 +240,7 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
     }
   })
   memoryWorkspaceDocuments.delete(workspaceId)
-  memoryWorkspaceGroundHeightmaps.delete(workspaceId)
+  await groundHeightmapStore.deleteWorkspaceStorage(workspaceId)
 }
 
 async function replaceWorkspaceDocuments(workspaceId: string, documents: StoredSceneDocument[]): Promise<void> {
@@ -377,13 +315,16 @@ async function downloadSceneBundleZip(
   return { bytes, etag }
 }
 
-async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<StoredSceneDocument> {
+async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null }> {
   const pkg = await loadStoredScenesFromScenePackage(zipBytes)
   const scene = pkg.scenes[0]
   if (!scene) {
     throw new Error('Scene bundle missing scene entry')
   }
-  return scene
+  return {
+    document: scene,
+    groundHeightSidecar: pkg.groundHeightSidecars[scene.id] ?? null,
+  }
 }
 
 async function uploadSceneToServer(document: StoredSceneDocument, authStore: ReturnType<typeof useAuthStore>): Promise<void> {
@@ -470,12 +411,13 @@ async function readAllMetadata(workspaceId: string): Promise<SceneSummary[]> {
 }
 
 async function readSceneDocument(workspaceId: string, id: string): Promise<StoredSceneDocument | null> {
+  const groundHeightmapStore = useGroundHeightmapStore()
   if (!isIndexedDbAvailable()) {
     const document = getMemoryWorkspace(workspaceId).get(id)
     if (!document) {
       return null
     }
-    return hydrateGroundHeightMapsInSceneDocument(cloneForIndexedDb(document), getMemoryGroundHeightmaps(workspaceId).get(id) ?? null)
+    return await groundHeightmapStore.hydrateSceneDocument(workspaceId, cloneForIndexedDb(document))
   }
   const db = await openDatabase(workspaceId)
   const tx = db.transaction(STORE_DOCUMENTS, 'readonly')
@@ -484,7 +426,7 @@ async function readSceneDocument(workspaceId: string, id: string): Promise<Store
   if (!result) {
     return null
   }
-  return hydrateGroundHeightMapsInSceneDocument(result, await readGroundHeightSidecar(workspaceId, id))
+  return await groundHeightmapStore.hydrateSceneDocument(workspaceId, result)
 }
 
 function toMetadata(document: StoredSceneDocument): SceneSummary {
@@ -499,29 +441,19 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
 }
 
 async function writeSceneDocument(workspaceId: string, document: StoredSceneDocument): Promise<void> {
+  const groundHeightmapStore = useGroundHeightmapStore()
   const prepared = prepareSceneDocumentForPersistence(document)
+  await groundHeightmapStore.saveSceneDocument(workspaceId, document)
   if (!isIndexedDbAvailable()) {
-    getMemoryWorkspace(workspaceId).set(prepared.document.id, prepared.document)
-    const sidecars = getMemoryGroundHeightmaps(workspaceId)
-    if (prepared.groundHeightSidecar) {
-      sidecars.set(prepared.document.id, cloneArrayBuffer(prepared.groundHeightSidecar))
-    } else {
-      sidecars.delete(prepared.document.id)
-    }
+    getMemoryWorkspace(workspaceId).set(prepared.id, prepared)
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS], 'readwrite')
+  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
-  const groundHeightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  docs.put(prepared.document)
-  meta.put(toMetadata(prepared.document))
-  if (prepared.groundHeightSidecar) {
-    groundHeightmaps.put({ id: prepared.document.id, buffer: cloneArrayBuffer(prepared.groundHeightSidecar) })
-  } else {
-    groundHeightmaps.delete(prepared.document.id)
-  }
+  docs.put(prepared)
+  meta.put(toMetadata(prepared))
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene document'))
@@ -530,33 +462,25 @@ async function writeSceneDocument(workspaceId: string, document: StoredSceneDocu
 }
 
 async function writeSceneDocuments(workspaceId: string, documents: StoredSceneDocument[]): Promise<void> {
-  const preparedDocs = documents.map((doc) => prepareSceneDocumentForPersistence(doc))
+  const groundHeightmapStore = useGroundHeightmapStore()
+  const preparedDocs = documents.map((doc) => ({ document: prepareSceneDocumentForPersistence(doc), source: doc }))
+  for (const prepared of preparedDocs) {
+    await groundHeightmapStore.saveSceneDocument(workspaceId, prepared.source)
+  }
   if (!isIndexedDbAvailable()) {
     const bucket = getMemoryWorkspace(workspaceId)
-    const sidecars = getMemoryGroundHeightmaps(workspaceId)
-    preparedDocs.forEach(({ document: prepared, groundHeightSidecar }) => {
+    preparedDocs.forEach(({ document: prepared }) => {
       bucket.set(prepared.id, prepared)
-      if (groundHeightSidecar) {
-        sidecars.set(prepared.id, cloneArrayBuffer(groundHeightSidecar))
-      } else {
-        sidecars.delete(prepared.id)
-      }
     })
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS], 'readwrite')
+  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
-  const groundHeightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  preparedDocs.forEach(({ document: prepared, groundHeightSidecar }) => {
+  preparedDocs.forEach(({ document: prepared }) => {
     docs.put(prepared)
     meta.put(toMetadata(prepared))
-    if (groundHeightSidecar) {
-      groundHeightmaps.put({ id: prepared.id, buffer: cloneArrayBuffer(groundHeightSidecar) })
-    } else {
-      groundHeightmaps.delete(prepared.id)
-    }
   })
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve()
@@ -566,19 +490,18 @@ async function writeSceneDocuments(workspaceId: string, documents: StoredSceneDo
 }
 
 async function removeSceneDocument(workspaceId: string, id: string): Promise<void> {
+  const groundHeightmapStore = useGroundHeightmapStore()
+  await groundHeightmapStore.deleteScene(workspaceId, id)
   if (!isIndexedDbAvailable()) {
     getMemoryWorkspace(workspaceId).delete(id)
-    getMemoryGroundHeightmaps(workspaceId).delete(id)
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS], 'readwrite')
+  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
-  const groundHeightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
   docs.delete(id)
   meta.delete(id)
-  groundHeightmaps.delete(id)
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to delete scene document'))
@@ -794,8 +717,8 @@ export const useScenesStore = defineStore('scenes', {
       }
     },
     async saveGroundHeightSidecar(document: StoredSceneDocument) {
-      const sidecar = extractGroundHeightSidecarFromSceneDocument(ensureGroundHeightMapsInSceneDocument(cloneForIndexedDb(document)))
-      await writeGroundHeightSidecarOnly(this.workspaceId, document.id, sidecar)
+      const groundHeightmapStore = useGroundHeightmapStore()
+      await groundHeightmapStore.saveSceneDocument(this.workspaceId, cloneForIndexedDb(document))
       if (this.workspaceType === 'user') {
         await this.syncSceneToServer(document)
       }
@@ -810,21 +733,27 @@ export const useScenesStore = defineStore('scenes', {
         if (!remoteScenes) {
           return
         }
-        const downloaded: StoredSceneDocument[] = []
+        const downloaded: Array<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null }> = []
         for (const entry of remoteScenes) {
           const bundle = await downloadSceneBundleZip(entry.bundle.url, authStore)
           if (!bundle) {
             continue
           }
-          const doc = await unpackSceneBundleIntoStores(bundle.bytes)
-          downloaded.push(doc)
+          downloaded.push(await unpackSceneBundleIntoStores(bundle.bytes))
         }
 
         if (options.replace) {
-          await replaceWorkspaceDocuments(this.workspaceId, downloaded)
-          this.metadata = downloaded.map((doc) => toMetadata(doc))
+          await replaceWorkspaceDocuments(this.workspaceId, downloaded.map((entry) => entry.document))
         } else {
-          await writeSceneDocuments(this.workspaceId, downloaded)
+          await writeSceneDocuments(this.workspaceId, downloaded.map((entry) => entry.document))
+        }
+        const groundHeightmapStore = useGroundHeightmapStore()
+        for (const entry of downloaded) {
+          await groundHeightmapStore.saveSceneSidecar(this.workspaceId, entry.document.id, entry.groundHeightSidecar)
+        }
+        if (options.replace) {
+          this.metadata = downloaded.map((entry) => toMetadata(entry.document))
+        } else {
           await this.refreshMetadata()
         }
         this.workspaceRevision += 1

@@ -1,10 +1,9 @@
 import {
   cloneGroundHeightMap,
-  createGroundHeightMap,
   getGroundVertexCount,
   type GroundDynamicMesh,
+  type GroundRuntimeDynamicMesh,
   type GroundPlanningMetadata,
-  type SceneNode,
 } from '@schema'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
@@ -17,29 +16,6 @@ const EMPTY_BOUND = -1
 
 type GroundHeightSidecarHeader = {
   planningMetadata: GroundPlanningMetadata | null
-}
-
-function visitNodes(nodes: SceneNode[], visitor: (node: SceneNode) => void): void {
-  for (const node of nodes) {
-    visitor(node)
-    if (Array.isArray(node.children) && node.children.length) {
-      visitNodes(node.children, visitor)
-    }
-  }
-}
-
-function findGroundNode(nodes: SceneNode[]): SceneNode | null {
-  let found: SceneNode | null = null
-  visitNodes(nodes, (node) => {
-    if (!found && node.dynamicMesh?.type === 'Ground') {
-      found = node
-    }
-  })
-  return found
-}
-
-function ensureGroundDefinition(node: SceneNode | null): GroundDynamicMesh | null {
-  return node?.dynamicMesh?.type === 'Ground' ? (node.dynamicMesh as GroundDynamicMesh) : null
 }
 
 export function getGroundHeightSidecarByteLength(definition: GroundDynamicMesh): number {
@@ -110,7 +86,7 @@ function readSidecarHeader(view: DataView): GroundHeightSidecarHeader {
   }
 }
 
-export function serializeGroundHeightSidecar(definition: GroundDynamicMesh): ArrayBuffer {
+export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMesh): ArrayBuffer {
   const vertexCount = getGroundVertexCount(definition.rows, definition.columns)
   const buffer = new ArrayBuffer(getGroundHeightSidecarByteLength(definition))
   const view = new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES)
@@ -123,6 +99,14 @@ export function serializeGroundHeightSidecar(definition: GroundDynamicMesh): Arr
 }
 
 export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocument): StoredSceneDocument {
+  const visitNodes = (nodes: Array<{ dynamicMesh?: unknown; children?: unknown[] }>, visitor: (node: { dynamicMesh?: unknown; children?: unknown[] }) => void): void => {
+    for (const node of nodes) {
+      visitor(node)
+      if (Array.isArray(node.children) && node.children.length) {
+        visitNodes(node.children as Array<{ dynamicMesh?: unknown; children?: unknown[] }>, visitor)
+      }
+    }
+  }
   visitNodes(document.nodes, (node) => {
     if (node.dynamicMesh?.type !== 'Ground') {
       return
@@ -136,58 +120,26 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
   return document
 }
 
-export function extractGroundHeightSidecarFromSceneDocument(document: StoredSceneDocument): ArrayBuffer | null {
-  const definition = ensureGroundDefinition(findGroundNode(document.nodes))
-  return definition ? serializeGroundHeightSidecar(definition) : null
-}
-
-export function hydrateGroundHeightMapsInSceneDocument(
-  document: StoredSceneDocument,
+export function createGroundRuntimeMeshFromSidecar(
+  definition: GroundDynamicMesh,
   sidecar: ArrayBuffer | null | undefined,
-): StoredSceneDocument {
-  const groundNode = findGroundNode(document.nodes)
-  const definition = ensureGroundDefinition(groundNode)
-  if (!definition) {
-    return document
-  }
+): GroundRuntimeDynamicMesh {
   const vertexCount = getGroundVertexCount(definition.rows, definition.columns)
   if (!sidecar) {
-    throw new Error(`Scene ${document.id} is missing ${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`)
+    throw new Error(`Missing ${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`)
   }
   const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2
   if (sidecar.byteLength !== expectedByteLength) {
-    throw new Error(
-      `Scene ${document.id} has invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: expected ${expectedByteLength}, received ${sidecar.byteLength}`,
-    )
+    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: expected ${expectedByteLength}, received ${sidecar.byteLength}`)
   }
 
   const buffer = sidecar.slice(0)
   const header = readSidecarHeader(new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES))
-  definition.manualHeightMap = new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount)
-  definition.planningHeightMap = new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT, vertexCount)
-  definition.planningMetadata = header.planningMetadata
-  definition.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
-  return document
-}
-
-export function ensureGroundHeightMapsInSceneDocument(document: StoredSceneDocument): StoredSceneDocument {
-  const definition = ensureGroundDefinition(findGroundNode(document.nodes))
-  if (!definition) {
-    return document
-  }
-  definition.manualHeightMap = cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns)
-  definition.planningHeightMap = cloneGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns)
-  definition.planningMetadata = normalizePlanningMetadata(definition.planningMetadata)
-  definition.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
-  return document
-}
-
-export function createEmptyGroundHeightSidecar(definition: GroundDynamicMesh): ArrayBuffer {
-  const manual = createGroundHeightMap(definition.rows, definition.columns)
-  const planning = createGroundHeightMap(definition.rows, definition.columns)
-  return serializeGroundHeightSidecar({
+  return {
     ...definition,
-    manualHeightMap: manual,
-    planningHeightMap: planning,
-  })
+    manualHeightMap: new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount),
+    planningHeightMap: new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT, vertexCount),
+    planningMetadata: header.planningMetadata,
+    surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
+  }
 }

@@ -92,6 +92,7 @@ import {
   registerRuntimeObject,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
+import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneCameraState } from '@/types/scene-camera-state'
@@ -6753,10 +6754,15 @@ function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
   return null
 }
 
-function resolveGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
+function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
   const node = findGroundNodeInTree(sceneStore.nodes)
-  if (node?.dynamicMesh?.type === 'Ground') {
-    return node.dynamicMesh
+  if (node?.dynamicMesh?.type === 'Ground' && sceneStore.currentSceneId) {
+    return useGroundHeightmapStore().resolveGroundRuntimeMesh(
+      sceneStore.workspaceId,
+      sceneStore.currentSceneId,
+      node.id,
+      node.dynamicMesh,
+    )
   }
   return null
 }
@@ -14110,11 +14116,15 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     const groundObject = userData.groundMesh as THREE.Object3D | undefined
     if (groundObject) {
       const groundData = groundObject.userData ?? (groundObject.userData = {})
-      const nextSignature = computeGroundDynamicMeshSignature(node.dynamicMesh)
+      const groundDefinition = resolveGroundDynamicMeshDefinition()
+      if (!groundDefinition) {
+        return
+      }
+      const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
       if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         const shouldSkipSculptRefresh = groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature
         if (!shouldSkipSculptRefresh) {
-          updateGroundMesh(groundObject, node.dynamicMesh)
+          updateGroundMesh(groundObject, groundDefinition)
         }
         groundData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
         if (shouldSkipSculptRefresh) {
@@ -14328,9 +14338,13 @@ function updateGroundChunkStreaming() {
 
   const radius = resolveDynamicGroundStreamingRadiusMeters(groundObject)
   const budget = resolveDynamicGroundStreamingBudget(groundObject)
+  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  if (!groundDefinition) {
+    return
+  }
 
-  if (isGroundChunkStreamingEnabled(node.dynamicMesh)) {
-    updateGroundChunks(groundObject, node.dynamicMesh, camera, {
+  if (isGroundChunkStreamingEnabled(groundDefinition)) {
+    updateGroundChunks(groundObject, groundDefinition, camera, {
       radius,
       budget: {
         maxCreatePerUpdate: budget.maxCreatePerUpdate,
@@ -14340,8 +14354,8 @@ function updateGroundChunkStreaming() {
       minIntervalMs: budget.minIntervalMs,
       minCameraMoveMeters: budget.minCameraMoveMeters,
     })
-  } else if (!areAllGroundChunksLoaded(groundObject, node.dynamicMesh)) {
-    ensureAllGroundChunks(groundObject, node.dynamicMesh)
+  } else if (!areAllGroundChunksLoaded(groundObject, groundDefinition)) {
+    ensureAllGroundChunks(groundObject, groundDefinition)
   }
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
@@ -15118,10 +15132,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     containerData.nodeId = node.id
 
     if (node.dynamicMesh?.type === 'Ground') {
-      const groundMesh = createGroundMesh(node.dynamicMesh)
+      const groundDefinition = resolveGroundDynamicMeshDefinition()
+      if (!groundDefinition) {
+        containerData.dynamicMeshType = 'Ground'
+        return container
+      }
+      const groundMesh = createGroundMesh(groundDefinition)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
-      groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(node.dynamicMesh)
+      groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'

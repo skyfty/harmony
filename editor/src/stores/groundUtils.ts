@@ -57,6 +57,7 @@ function manualDeepCloneLocal(source: unknown): unknown {
 
 type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
 type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
+type GroundRuntimeDynamicMesh = GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array }
 
 export function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | null): GroundGenerationSettings | undefined {
   if (!settings) {
@@ -88,8 +89,6 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     columns: definition.columns,
     cellSize: definition.cellSize,
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
-    manualHeightMap: cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns),
-    planningHeightMap: cloneGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns),
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
     planningMetadata: manualDeepCloneLocal(definition.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
@@ -154,8 +153,6 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
   const derivedRows = overrides.rows ?? Math.max(1, Math.round(normalizedDepth / Math.max(cellSize, 1e-6)))
   const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
   const depth = overrides.depth !== undefined ? normalizedDepth : derivedRows * cellSize
-  const manualHeightMapOverrides = overrides.manualHeightMap ?? null
-  const planningHeightMapOverrides = overrides.planningHeightMap ?? null
   const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
   const definition: GroundDynamicMesh = {
     type: 'Ground',
@@ -165,8 +162,6 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     columns: derivedColumns,
     cellSize,
     chunkStreamingEnabled: overrides.chunkStreamingEnabled !== false,
-    manualHeightMap: cloneGroundHeightMap(manualHeightMapOverrides, derivedRows, derivedColumns),
-    planningHeightMap: cloneGroundHeightMap(planningHeightMapOverrides, derivedRows, derivedColumns),
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
       mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',
@@ -185,7 +180,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     definition.castShadow = (o as any).castShadow
   }
 
-  if (initialGeneration && !manualHeightMapOverrides && !planningHeightMapOverrides) {
+  if (initialGeneration) {
     // applyGroundGeneration is editor-specific; caller can apply if needed.
   }
 
@@ -201,10 +196,10 @@ export function normalizeGroundBounds(definition: GroundDynamicMesh, bounds: Gro
 }
 
 export function applyGroundRegionTransform(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   bounds: GroundRegionBounds,
   transform: (current: number, row: number, column: number) => number,
-): { definition: GroundDynamicMesh; changed: boolean } {
+): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
   const getBaseHeight = (row: number, column: number): number => computeGroundBaseHeightAtVertex(definition, row, column)
   const getManualHeight = (row: number, column: number): number => {
     const raw = definition.manualHeightMap[getGroundVertexIndex(definition.columns, row, column)]

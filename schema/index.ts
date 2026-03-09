@@ -1189,8 +1189,6 @@ export interface GroundDynamicMesh {
   cellSize: number
   /** When false, load all terrain chunks eagerly instead of streaming them around the camera. */
   chunkStreamingEnabled?: boolean
-  manualHeightMap: GroundHeightMap
-  planningHeightMap: GroundHeightMap
   /** Monotonic revision for changes that affect rendered ground surface heights. */
   surfaceRevision?: number
   heightComposition: {
@@ -1199,6 +1197,31 @@ export interface GroundDynamicMesh {
   }
   planningMetadata?: GroundPlanningMetadata | null
   /** When true, ground chunk meshes will cast shadows (more expensive on large grounds). */
+  castShadow?: boolean
+  terrainScatterInstancesUpdatedAt: number
+  textureDataUrl?: string | null
+  textureName?: string | null
+  generation?: GroundGenerationSettings | null
+  terrainScatter?: TerrainScatterStoreSnapshot | null
+  terrainPaint?: TerrainPaintSettings | null
+}
+
+export interface GroundRuntimeDynamicMesh {
+  type: 'Ground'
+  width: number
+  depth: number
+  rows: number
+  columns: number
+  cellSize: number
+  chunkStreamingEnabled?: boolean
+  manualHeightMap: GroundHeightMap
+  planningHeightMap: GroundHeightMap
+  surfaceRevision?: number
+  heightComposition: {
+    mode: GroundHeightCompositionMode
+    policyVersion?: number
+  }
+  planningMetadata?: GroundPlanningMetadata | null
   castShadow?: boolean
   terrainScatterInstancesUpdatedAt: number
   textureDataUrl?: string | null

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import type { GroundDynamicMesh, SceneNode } from '@schema'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -65,7 +66,14 @@ export function useSelectionDrag(
     const groundNode = findGroundNodeInTree(sceneStore.nodes)
       ?? findGroundNodeInTree(sceneNodes)
     const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-      ? (groundNode.dynamicMesh as GroundDynamicMesh)
+      ? (sceneStore.currentSceneId
+          ? useGroundHeightmapStore().resolveGroundRuntimeMesh(
+              sceneStore.workspaceId,
+              sceneStore.currentSceneId,
+              groundNode.id,
+              groundNode.dynamicMesh as GroundDynamicMesh,
+            )
+          : (groundNode.dynamicMesh as GroundDynamicMesh))
       : null
     if (!groundDefinition) {
       return 0

@@ -8,13 +8,14 @@ import {
 } from '@schema'
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
+import { useScenesStore } from '@/stores/scenesStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import {
   GROUND_HEIGHTMAP_SIDECAR_FILENAME,
-  extractGroundHeightSidecarFromSceneDocument,
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
 import { collectPunchPointsFromNodes } from './sceneExport'
@@ -356,6 +357,8 @@ export async function exportScenePackageZip(payload: {
   // scenes + per-scene resources (referenced local assets)
   const manifestScenes: ScenePackageManifestV1['scenes'] = []
   const assetCache = useAssetCacheStore()
+  const groundHeightmapStore = useGroundHeightmapStore()
+  const scenesStore = useScenesStore()
   const resources: ScenePackageResourceEntry[] = []
 
   // Shared (project-wide) embedded assets
@@ -434,7 +437,10 @@ export async function exportScenePackageZip(payload: {
     const sidecarSource = typeof structuredClone === 'function'
       ? structuredClone(scene.document)
       : JSON.parse(JSON.stringify(scene.document))
-    const groundHeightSidecar = extractGroundHeightSidecarFromSceneDocument(sidecarSource as StoredSceneDocument)
+    const groundHeightSidecar = groundHeightmapStore.buildSceneDocumentSidecar(
+      scenesStore.workspaceId,
+      sidecarSource as StoredSceneDocument,
+    )
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
     stripEditorOnlySceneFields(docClone)

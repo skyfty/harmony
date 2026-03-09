@@ -3,9 +3,9 @@ import {
   createGroundHeightMap,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
-  type GroundDynamicMesh,
   type GroundGenerationSettings,
   type GroundHeightMap,
+  type GroundRuntimeDynamicMesh,
   type GroundSculptOperation,
 } from './index'
 
@@ -21,6 +21,8 @@ const textureLoader = new THREE.TextureLoader()
 
 const DEFAULT_GROUND_CHUNK_CELLS = 100
 const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 200
+
+type GroundDynamicMesh = GroundRuntimeDynamicMesh
 
 type GroundChunkKey = string
 

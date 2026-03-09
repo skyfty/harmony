@@ -56,8 +56,9 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
-import { hydrateGroundHeightMapsInSceneDocument } from '@/utils/groundHeightSidecar'
+import { createGroundRuntimeMeshFromSidecar, stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -279,6 +280,7 @@ type ScenePreviewSceneEntry =
 			createdAt: string | null
 			updatedAt: string | null
 			document: SceneJsonExportDocument
+			groundHeightSidecar: ArrayBuffer | null
 	  }
 	| {
 			kind: 'external'
@@ -5042,13 +5044,13 @@ function packageSceneHasGroundNode(document: SceneJsonExportDocument): boolean {
 	return false
 }
 
-function hydratePackageSceneGroundSidecar(
+function readPackageSceneGroundSidecar(
 	pkg: ReturnType<typeof unzipScenePackage>,
 	sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string },
 	document: SceneJsonExportDocument,
-): SceneJsonExportDocument {
+): ArrayBuffer | null {
 	if (!packageSceneHasGroundNode(document)) {
-		return document
+		return null
 	}
 	if (!sceneEntry.groundHeightsPath) {
 		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground height sidecar path`)
@@ -5057,11 +5059,28 @@ function hydratePackageSceneGroundSidecar(
 	if (!sidecarBytes) {
 		throw new Error(`Missing ground height sidecar in scene package: ${sceneEntry.groundHeightsPath}`)
 	}
-	const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
-	return hydrateGroundHeightMapsInSceneDocument(
-		document as unknown as StoredSceneDocument,
-		sidecarBuffer,
-	) as unknown as SceneJsonExportDocument
+	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
+}
+
+async function buildPreviewRuntimeDocument(
+	document: SceneJsonExportDocument,
+	options: { groundHeightSidecar?: ArrayBuffer | null } = {},
+): Promise<SceneJsonExportDocument> {
+	const cloned = typeof structuredClone === 'function'
+		? structuredClone(document)
+		: JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
+	if (!packageSceneHasGroundNode(cloned)) {
+		return cloned
+	}
+	const sidecar = options.groundHeightSidecar !== undefined
+		? options.groundHeightSidecar
+		: await useGroundHeightmapStore().loadSceneSidecar(useScenesStore().workspaceId, cloned.id)
+	const groundNode = findGroundNode(cloned.nodes)
+	if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+		return cloned
+	}
+	groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
+	return cloned
 }
 
 async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
@@ -5098,16 +5117,20 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 			if (!isSceneJsonExportDocument(sceneRaw)) {
 				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
 			}
-			const document = hydratePackageSceneGroundSidecar(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument)
-				const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
+			const strippedDocument = stripGroundHeightMapsFromSceneDocument(
+				sceneRaw as unknown as StoredSceneDocument,
+			) as unknown as SceneJsonExportDocument
+			const groundHeightSidecar = readPackageSceneGroundSidecar(pkg, sceneEntry, strippedDocument)
+				const documentMeta = strippedDocument as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
 			const id = sceneEntry.sceneId
 			const entry: ScenePreviewSceneEntry = {
 				kind: 'embedded',
 				id,
-				name: document.name || id,
+				name: strippedDocument.name || id,
 					createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
 					updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
-				document,
+				document: strippedDocument,
+				groundHeightSidecar,
 			}
 			scenes.push(entry)
 			projectSceneIndex.set(id, entry)
@@ -5155,9 +5178,10 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 		if (entry.kind === 'embedded') {
 			cleanupForUnrelatedSceneSwitch()
 			const waitApplied = waitForSnapshotApplied(timestamp, token)
+			const runtimeDocument = await buildPreviewRuntimeDocument(entry.document, { groundHeightSidecar: entry.groundHeightSidecar })
 			applySnapshot({
 				revision: nextSnapshotRevision(),
-				document: entry.document,
+				document: runtimeDocument,
 				timestamp,
 			})
 			await waitApplied
@@ -5227,6 +5251,7 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
+		const runtimeDocument = await buildPreviewRuntimeDocument(exportDocument)
 		if (sceneSwitchToken !== token) {
 			return
 		}
@@ -5235,7 +5260,7 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 		const waitApplied = waitForSnapshotApplied(timestamp, token)
 		applySnapshot({
 			revision: nextSnapshotRevision(),
-			document: exportDocument,
+			document: runtimeDocument,
 			timestamp,
 		})
 		await waitApplied
@@ -5419,6 +5444,7 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
+		const runtimeDocument = await buildPreviewRuntimeDocument(exportDocument)
 		if (sceneSwitchToken !== token) {
 			return
 		}
@@ -5427,7 +5453,7 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 		const waitApplied = waitForSnapshotApplied(timestamp, token)
 		applySnapshot({
 			revision: nextSnapshotRevision(),
-			document: exportDocument,
+			document: runtimeDocument,
 			timestamp,
 		})
 		await waitApplied

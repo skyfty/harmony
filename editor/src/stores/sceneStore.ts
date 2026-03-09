@@ -26,10 +26,7 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
-  cloneGroundHeightMap,
   createPrimitiveMesh,
-  getGroundVertexIndex,
-  GROUND_HEIGHT_UNSET_VALUE,
   WATER_SURFACE_MESH_USERDATA_KEY,
   cloneWaterSurfaceMeshMetadata,
   createWaterSurfaceRuntimeMesh,
@@ -81,8 +78,6 @@ import { getExtensionFromMimeType } from '@schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
   SceneHistoryEntry,
-  SceneHistoryGroundRegionBounds,
-  SceneHistoryGroundManualHeightEntry,
   SceneHistoryNodeLocation,
   SceneHistoryNodeStructureOp,
   SceneHistoryTransformSnapshot,
@@ -145,6 +140,7 @@ import {
 } from '@/stores/skyboxPresets'
 import { cloudSettingsEqual } from '@schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
+import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
@@ -665,7 +661,6 @@ const COLLISION_MARGIN = 0.35
 const GROUND_CONTACT_EPSILON = 1e-4
 // Ground constants moved to groundUtils
 const SEMI_TRANSPARENT_OPACITY = 0.35
-const HEIGHT_EPSILON = 1e-5
 const WALL_DIMENSION_EPSILON = 1e-4
 
 export type ScenePatchField =
@@ -1206,8 +1201,6 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     columns: definition.columns,
     cellSize: definition.cellSize,
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
-    manualHeightMap: cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns),
-    planningHeightMap: cloneGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns),
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' }) },
     planningMetadata: planningMetadata ?? null,
@@ -1236,9 +1229,7 @@ function normalizeGroundSurfaceRevision(value: unknown): number {
 }
 
 function shouldBumpGroundSurfaceRevision(incoming: Record<string, any>): boolean {
-  return Object.prototype.hasOwnProperty.call(incoming, 'manualHeightMap')
-    || Object.prototype.hasOwnProperty.call(incoming, 'planningHeightMap')
-    || Object.prototype.hasOwnProperty.call(incoming, 'generation')
+  return Object.prototype.hasOwnProperty.call(incoming, 'generation')
     || Object.prototype.hasOwnProperty.call(incoming, 'heightComposition')
 }
 
@@ -1256,7 +1247,7 @@ function isGroundHeightOnlyDynamicMeshUpdate(existing: Record<string, any> | nul
   if (!existing) {
     return false
   }
-  const ignoredKeys = new Set(['manualHeightMap', 'planningHeightMap', 'planningMetadata', 'surfaceRevision'])
+  const ignoredKeys = new Set(['planningMetadata', 'surfaceRevision'])
   const keys = new Set([...Object.keys(existing), ...Object.keys(incoming)])
   for (const key of keys) {
     if (ignoredKeys.has(key)) {
@@ -1266,11 +1257,7 @@ function isGroundHeightOnlyDynamicMeshUpdate(existing: Record<string, any> | nul
       return false
     }
   }
-  return (
-    existing.manualHeightMap !== incoming.manualHeightMap
-    || existing.planningHeightMap !== incoming.planningHeightMap
-    || existing.planningMetadata !== incoming.planningMetadata
-  )
+  return existing.planningMetadata !== incoming.planningMetadata
 }
 
 import * as groundUtils from './groundUtils'
@@ -1547,16 +1534,29 @@ type GroundRegionBounds = {
   maxColumn: number
 }
 
-function normalizeGroundBounds(definition: GroundDynamicMesh, bounds: GroundRegionBounds): GroundRegionBounds {
-  return groundUtils.normalizeGroundBounds(definition as any, bounds as any) as GroundRegionBounds
+function resolveGroundRuntimeDefinition(
+  store: Pick<SceneState, 'nodes'> & { workspaceId?: string; currentSceneId?: string | null },
+  nodeId: string,
+): GroundRuntimeDynamicMesh | null {
+  const node = findNodeById(store.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  const definition = node.dynamicMesh as GroundDynamicMesh
+  const sceneId = typeof store.currentSceneId === 'string' && store.currentSceneId.length ? store.currentSceneId : null
+  const workspaceId = typeof store.workspaceId === 'string' && store.workspaceId.length ? store.workspaceId : null
+  if (!sceneId || !workspaceId) {
+    return null
+  }
+  return useGroundHeightmapStore().resolveGroundRuntimeMesh(workspaceId, sceneId, nodeId, definition)
 }
 
 function applyGroundRegionTransform(
-  definition: GroundDynamicMesh,
+  definition: GroundRuntimeDynamicMesh,
   bounds: GroundRegionBounds,
   transform: (current: number, row: number, column: number) => number,
-): { definition: GroundDynamicMesh; changed: boolean } {
-  return groundUtils.applyGroundRegionTransform(definition as any, bounds as any, transform as any) as { definition: GroundDynamicMesh; changed: boolean }
+): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
+  return groundUtils.applyGroundRegionTransform(definition as any, bounds as any, transform as any) as { definition: GroundRuntimeDynamicMesh; changed: boolean }
 }
 
 const initialAssetCatalog = createEmptyAssetCatalog()
@@ -5501,36 +5501,6 @@ function createDynamicMeshHistoryEntry(store: SceneState, nodeId: string): Scene
   }
 }
 
-function createGroundManualHeightRegionEntry(
-  store: SceneState,
-  nodeId: string,
-  bounds: SceneHistoryGroundRegionBounds,
-): SceneHistoryEntry | null {
-  const node = findNodeById(store.nodes, nodeId)
-  if (!node || node.dynamicMesh?.type !== 'Ground') {
-    return null
-  }
-  const definition = node.dynamicMesh as GroundDynamicMesh
-  const normalized = normalizeGroundBounds(definition, bounds)
-  const entries: SceneHistoryGroundManualHeightEntry[] = []
-  const heightMap = definition.manualHeightMap
-  for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
-    for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const value = heightMap[getGroundVertexIndex(definition.columns, row, column)]
-      if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) <= HEIGHT_EPSILON) {
-        continue
-      }
-      entries.push({ row, column, value })
-    }
-  }
-  return {
-    kind: 'ground-manual-height-region',
-    nodeId,
-    bounds: normalized,
-    entries,
-  }
-}
-
 function collectRecenterTransformTargets(
   nodes: SceneNode[],
   startIds: Array<string | null | undefined>,
@@ -5645,8 +5615,6 @@ function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): Scene
       return createTransformHistoryEntry(store, entry.transforms.map((t) => t.id))
     case 'node-dynamic-mesh':
       return createDynamicMeshHistoryEntry(store, entry.nodeId)
-    case 'ground-manual-height-region':
-      return createGroundManualHeightRegionEntry(store, entry.nodeId, entry.bounds)
     default:
       return null
   }
@@ -5768,32 +5736,6 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
       visitNode(store.nodes, entry.nodeId, (node) => {
         ;(node as any).dynamicMesh = manualDeepClone(entry.dynamicMesh as any)
       })
-      store.nodes = [...store.nodes]
-      break
-    }
-    case 'ground-manual-height-region': {
-      const node = findNodeById(store.nodes, entry.nodeId)
-      if (!node) {
-        break
-      }
-      if (node.dynamicMesh?.type !== 'Ground') {
-        node.dynamicMesh = createGroundDynamicMeshDefinition({}, store.groundSettings)
-      }
-      const definition = node.dynamicMesh as GroundDynamicMesh
-      const nextHeightMap = cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns)
-      for (let row = entry.bounds.minRow; row <= entry.bounds.maxRow; row += 1) {
-        for (let column = entry.bounds.minColumn; column <= entry.bounds.maxColumn; column += 1) {
-          nextHeightMap[getGroundVertexIndex(definition.columns, row, column)] = GROUND_HEIGHT_UNSET_VALUE
-        }
-      }
-      entry.entries.forEach((cell) => {
-        nextHeightMap[getGroundVertexIndex(definition.columns, cell.row, cell.column)] = cell.value
-      })
-      node.dynamicMesh = {
-        ...definition,
-        manualHeightMap: nextHeightMap,
-        surfaceRevision: normalizeGroundSurfaceRevision(definition.surfaceRevision) + 1,
-      }
       store.nodes = [...store.nodes]
       break
     }
@@ -7146,18 +7088,6 @@ export const useSceneStore = defineStore('scene', {
       }
       this.appendUndoEntry({ kind: 'node-structure', ops: normalized })
     },
-    captureGroundManualHeightRegionHistory(nodeId: string, bounds: SceneHistoryGroundRegionBounds) {
-      if (this.isRestoringHistory) {
-        return
-      }
-      if (historyCaptureSuppressionDepth > 0) {
-        return
-      }
-      const entry = createGroundManualHeightRegionEntry(this, nodeId, bounds)
-      if (entry) {
-        this.appendUndoEntry(entry)
-      }
-    },
     captureNodeDynamicMeshHistory(nodeId: string) {
       if (this.isRestoringHistory) {
         return
@@ -7281,17 +7211,32 @@ export const useSceneStore = defineStore('scene', {
       if (groundNode.dynamicMesh?.type !== 'Ground') {
         groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, this.groundSettings)
       }
-      const currentDefinition = groundNode.dynamicMesh as GroundDynamicMesh
+      const currentDefinition = resolveGroundRuntimeDefinition(this, groundNode.id)
+      if (!currentDefinition) {
+        return false
+      }
 
       const result = applyGroundRegionTransform(currentDefinition, bounds, transformer)
       if (!result.changed) {
         return false
       }
 
-      // Record a minimal history entry for this region (manual height layer only).
-      this.captureGroundManualHeightRegionHistory(groundNode.id, bounds)
-
-      groundNode.dynamicMesh = result.definition
+      const nextDefinition: GroundDynamicMesh = {
+        ...result.definition,
+        surfaceRevision: normalizeGroundSurfaceRevision(result.definition.surfaceRevision),
+      }
+      delete (nextDefinition as GroundDynamicMesh & { manualHeightMap?: Float64Array }).manualHeightMap
+      delete (nextDefinition as GroundDynamicMesh & { planningHeightMap?: Float64Array }).planningHeightMap
+      if (this.currentSceneId) {
+        useGroundHeightmapStore().replaceManualHeightMap(
+          this.workspaceId,
+          this.currentSceneId,
+          groundNode.id,
+          nextDefinition,
+          result.definition.manualHeightMap,
+        )
+      }
+      groundNode.dynamicMesh = nextDefinition
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
       return true
@@ -8020,9 +7965,9 @@ export const useSceneStore = defineStore('scene', {
         }
       }
       if (isPureGroundHeightUpdate && this.currentSceneId) {
-        const scenesStore = useScenesStore()
+        const groundHeightmapStore = useGroundHeightmapStore()
         const snapshot = this.createSceneDocumentSnapshot()
-        void scenesStore.saveGroundHeightSidecar(snapshot).catch((error) => {
+        void groundHeightmapStore.saveSceneDocument(this.workspaceId, snapshot).catch((error) => {
           console.warn('[SceneStore] Failed to persist ground height sidecar', error)
         })
         return
@@ -11872,7 +11817,7 @@ export const useSceneStore = defineStore('scene', {
 
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-        ? (groundNode.dynamicMesh as GroundDynamicMesh)
+        ? resolveGroundRuntimeDefinition(this, groundNode.id)
         : null
 
       const groundPosition = (groundNode?.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
@@ -14258,12 +14203,13 @@ export const useSceneStore = defineStore('scene', {
       }
     },
     async importScenePackageZip(zipBytes: ArrayBuffer): Promise<SceneImportResult> {
-      const { scenes } = await loadStoredScenesFromScenePackage(zipBytes)
+      const { scenes, groundHeightSidecars } = await loadStoredScenesFromScenePackage(zipBytes)
       if (!Array.isArray(scenes) || !scenes.length) {
         throw new Error('Scene package does not contain any scene data')
       }
 
       const scenesStore = useScenesStore()
+      const groundHeightmapStore = useGroundHeightmapStore()
       const projectsStore = useProjectsStore()
       const projectId = projectsStore.activeProjectId
       if (!projectId) {
@@ -14272,6 +14218,7 @@ export const useSceneStore = defineStore('scene', {
 
       const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
       const imported: StoredSceneDocument[] = []
+  const importedGroundHeightSidecars = new Map<string, ArrayBuffer | null>()
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
 
       for (let index = 0; index < scenes.length; index += 1) {
@@ -14318,9 +14265,17 @@ export const useSceneStore = defineStore('scene', {
         await persistPlanningImageLayersToIndexedDB(sceneDocument.id, sceneDocument.planningData?.images ?? [])
         await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
         imported.push(sceneDocument)
+        importedGroundHeightSidecars.set(sceneDocument.id, groundHeightSidecars[entry.id] ?? null)
       }
 
       await scenesStore.saveSceneDocuments(imported)
+      for (const sceneDocument of imported) {
+        await groundHeightmapStore.saveSceneSidecar(
+          scenesStore.workspaceId,
+          sceneDocument.id,
+          importedGroundHeightSidecars.get(sceneDocument.id) ?? null,
+        )
+      }
       await scenesStore.refreshMetadata()
 
       return {
