@@ -395,12 +395,12 @@ const {
   storeToRefs(terrainStore)
 
 const hasGroundNode = computed(() => {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   return Boolean(ground && ground.dynamicMesh?.type === 'Ground')
 })
 
 const groundDefinition = computed(() => {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
     return null
   }
@@ -435,7 +435,7 @@ function buildGroundGenerationPayload(definition?: GroundDynamicMesh | null): Gr
 }
 
 function applyGroundGenerationPatch(patch: Partial<GroundGenerationSettings>) {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -487,7 +487,7 @@ watch(hasGroundNode, (hasGround, prevHasGround) => {
 }, { flush: 'sync' })
 
 const groundTerrainScatterInstancesUpdatedAt = computed(() => {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
     return null
   }
@@ -1340,7 +1340,7 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const laneLines = resolveRoadLaneLinesEnabled(node)
   const shoulders = resolveRoadShouldersEnabled(node)
   const materialConfigId = resolveRoadMaterialConfigId(node)
-  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundNode = getGroundNodeFromStore()
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
     ? groundNode.dynamicMesh
     : null
@@ -2594,7 +2594,7 @@ function resolveDynamicGroundStreamingBudget(groundObject?: THREE.Object3D | nul
 }
 
 function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
-  const node = findGroundNodeInTree(sceneStore.nodes)
+  const node = getGroundNodeFromStore()
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return resolveDynamicGroundStreamingRadiusMeters(null)
   }
@@ -2604,7 +2604,7 @@ function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
 }
 
 function resolveGroundScatterChunkStreamingEnabled(): boolean {
-  const node = findGroundNodeInTree(sceneStore.nodes)
+  const node = getGroundNodeFromStore()
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return false
   }
@@ -6739,23 +6739,12 @@ terrainGridHelper.name = 'TerrainGridHelper'
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
 
-function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-  for (const node of nodes) {
-    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-      return node
-    }
-    if (node.children && node.children.length > 0) {
-      const nested = findGroundNodeInTree(node.children)
-      if (nested) {
-        return nested
-      }
-    }
-  }
-  return null
+function getGroundNodeFromStore(): SceneNode | null {
+  return sceneStore.groundNode
 }
 
 function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
-  const node = findGroundNodeInTree(sceneStore.nodes)
+  const node = getGroundNodeFromStore()
   if (node?.dynamicMesh?.type === 'Ground' && sceneStore.currentSceneId) {
     return useGroundHeightmapStore().resolveGroundRuntimeMesh(
       sceneStore.workspaceId,
@@ -8079,7 +8068,7 @@ const cameraResetDirectionController = createCameraResetDirectionController({
   getCamera: () => camera,
   getMapControls: () => mapControls,
   getGizmoControls: () => gizmoControls,
-  getSceneNodes: () => sceneStore.nodes,
+  getGroundNode: () => sceneStore.groundNode,
   getFallbackSceneNodes: () => props.sceneNodes,
   getSelectedNodeId: () => sceneStore.selectedNodeId,
   getSceneNodeById: (nodeId) => sceneStore.getNodeById(nodeId),
@@ -12412,7 +12401,7 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } 
 }
 
 function resolveGroundNodeIdForPlacement(): string | null {
-  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundNode = getGroundNodeFromStore()
   return groundNode?.id ?? null
 }
 
@@ -14017,7 +14006,7 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
 
 
 function tryFitDirectionalLightShadowsToGround(light: THREE.DirectionalLight): void {
-  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundNode = getGroundNodeFromStore()
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -14204,7 +14193,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       heightSampler: null,
     }
 
-    const groundNode = findGroundNodeInTree(sceneStore.nodes)
+    const groundNode = getGroundNodeFromStore()
     const heightSamplerSignature = {
       roadPosition: node.position ?? null,
       roadRotation: node.rotation ?? null,
@@ -14325,7 +14314,7 @@ function updateGroundChunkStreaming() {
     return
   }
 
-  const node = findGroundNodeInTree(sceneStore.nodes)
+  const node = getGroundNodeFromStore()
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -15163,7 +15152,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         heightSampler: null,
       }
 
-      const groundNode = findGroundNodeInTree(sceneStore.nodes)
+      const groundNode = getGroundNodeFromStore()
       const heightSamplerSignature = {
         roadPosition: node.position ?? null,
         roadRotation: node.rotation ?? null,

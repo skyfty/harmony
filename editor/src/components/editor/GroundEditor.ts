@@ -2870,23 +2870,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		positionAttribute.needsUpdate = true
 	}
 
-	function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-		for (const node of nodes) {
-			if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-				return node
-			}
-			if (node.children?.length) {
-				const nested = findGroundNodeInTree(node.children)
-				if (nested) {
-					return nested
-				}
-			}
-		}
-		return null
-	}
-
 	function getGroundNodeFromScene(): SceneNode | null {
-		return findGroundNodeInTree(options.sceneStore.nodes)
+		return options.sceneStore.groundNode
 	}
 
 	function getGroundTerrainScatterSnapshot(): TerrainScatterStoreSnapshot | null {

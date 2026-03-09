@@ -6,7 +6,7 @@ import { sampleGroundHeight } from '@schema/groundMesh'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-viewport-selection-drag'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
-import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON, GROUND_NODE_ID } from './constants'
+import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON } from './constants'
 import {
   buildParentIndex,
   filterTopLevelSelection,
@@ -47,24 +47,8 @@ export function useSelectionDrag(
   const alignDeltaHelper = new THREE.Vector3()
   const alignLocalPositionHelper = new THREE.Vector3()
 
-  function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-    for (const node of nodes) {
-      if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-        return node
-      }
-      if (node.children && node.children.length > 0) {
-        const nested = findGroundNodeInTree(node.children)
-        if (nested) {
-          return nested
-        }
-      }
-    }
-    return null
-  }
-
   function resolveGroundHeightAtWorldXZ(worldX: number, worldZ: number): number {
-    const groundNode = findGroundNodeInTree(sceneStore.nodes)
-      ?? findGroundNodeInTree(sceneNodes)
+    const groundNode = sceneStore.groundNode
     const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
       ? (sceneStore.currentSceneId
           ? useGroundHeightmapStore().resolveGroundRuntimeMesh(

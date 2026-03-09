@@ -1341,6 +1341,7 @@ function applyDynamicMeshToSceneNode(node: SceneNode, dynamicMesh: any, options:
 
 function applySceneNodeDynamicMeshUpdate(store: {
   nodes: SceneNode[]
+  groundNode: SceneNode | null
   queueSceneNodePatch: (nodeId: string, properties: any[]) => boolean
 }, nodeId: string, dynamicMesh: any, options: {
   beforeMerge?: (existing: Record<string, any> | null, incoming: Record<string, any>) => void
@@ -1358,7 +1359,7 @@ function applySceneNodeDynamicMeshUpdate(store: {
       store.queueSceneNodePatch(nodeId, ['dynamicMesh'])
     }
   })
-  store.nodes = [...store.nodes]
+  replaceSceneNodes(store, [...store.nodes])
 }
 
 function finalizeDynamicMeshRuntimePatch(store: {
@@ -1660,6 +1661,18 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
     }
   }
   return null
+}
+
+function syncGroundNodeReference(store: Pick<SceneState, 'nodes' | 'groundNode'>): SceneNode | null {
+  const groundNode = findGroundNode(store.nodes)
+  store.groundNode = groundNode
+  return groundNode
+}
+
+function replaceSceneNodes(store: Pick<SceneState, 'nodes' | 'groundNode'>, nodes: SceneNode[]): SceneNode[] {
+  store.nodes = nodes
+  syncGroundNodeReference(store)
+  return nodes
 }
 
 type GroundRegionBounds = {
@@ -5759,7 +5772,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
   const hasOwn = (obj: object, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
   switch (entry.kind) {
     case 'content-snapshot': {
-      store.nodes = cloneSceneNodes(entry.nodes)
+      replaceSceneNodes(store, cloneSceneNodes(entry.nodes))
       store.materials = cloneSceneMaterials(entry.materials)
       store.groundSettings = cloneGroundSettings(entry.groundSettings)
       break
@@ -5810,7 +5823,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
           }
         })
       })
-      store.nodes = [...store.nodes]
+      replaceSceneNodes(store, [...store.nodes])
       break
     }
     case 'node-structure': {
@@ -5832,7 +5845,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
         working = insertSubtreeAtLocationImmutable(working, op.subtree, op.location)
       })
 
-      store.nodes = working
+      replaceSceneNodes(store, working)
       break
     }
     case 'ground-settings': {
@@ -5853,7 +5866,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
         textureDataUrl: entry.dataUrl,
         textureName: entry.name,
       }
-      store.nodes = [...store.nodes]
+      replaceSceneNodes(store, [...store.nodes])
       break
     }
     case 'node-transform': {
@@ -5864,14 +5877,14 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
           node.scale = cloneVector(transform.scale)
         })
       })
-      store.nodes = [...store.nodes]
+      replaceSceneNodes(store, [...store.nodes])
       break
     }
     case 'node-dynamic-mesh': {
       visitNode(store.nodes, entry.nodeId, (node) => {
         ;(node as any).dynamicMesh = manualDeepClone(entry.dynamicMesh as any)
       })
-      store.nodes = [...store.nodes]
+      replaceSceneNodes(store, [...store.nodes])
       break
     }
   }
@@ -6147,7 +6160,9 @@ function commitSceneSnapshot(
 
   const normalizedNodes = ensureEnvironmentNode(store.nodes, store.environment)
   if (normalizedNodes !== store.nodes) {
-    store.nodes = normalizedNodes
+    replaceSceneNodes(store, normalizedNodes)
+  } else {
+    syncGroundNodeReference(store)
   }
 
   normalizeCurrentSceneMeta(store)
@@ -6508,6 +6523,7 @@ export const useSceneStore = defineStore('scene', {
       ensureGroundNode(clonedNodes, initialSceneDocument.groundSettings),
       initialEnvironment,
     )
+    const initialGroundNode = findGroundNode(clonedNodes)
     componentManager.reset()
     componentManager.syncScene(clonedNodes)
     return {
@@ -6520,6 +6536,7 @@ export const useSceneStore = defineStore('scene', {
         projectId: initialSceneDocument.projectId ?? '',
       },
       nodes: clonedNodes,
+      groundNode: initialGroundNode,
       materials: cloneSceneMaterials(initialSceneDocument.materials),
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
@@ -6570,6 +6587,9 @@ export const useSceneStore = defineStore('scene', {
     }
   },
   getters: {
+    currentGroundNode(state): SceneNode | null {
+      return state.groundNode
+    },
     selectedNode(state): SceneNode | null {
       if (!state.selectedNodeId) return null
       let result: SceneNode | null = null
@@ -7103,8 +7123,13 @@ export const useSceneStore = defineStore('scene', {
       this.currentSceneId = scene.id
       applyCurrentSceneMeta(this, scene)
       applySceneAssetState(this, scene)
-      this.nodes = cloneSceneNodes(scene.nodes)
+      replaceSceneNodes(this, cloneSceneNodes(scene.nodes))
       this.environment = resolveSceneDocumentEnvironment(scene)
+      replaceSceneNodes(this, ensureEnvironmentNode(
+        ensureGroundNode(this.nodes, scene.groundSettings),
+        this.environment,
+      )
+      )
       this.rebuildGeneratedMeshRuntimes()
       this.planningData = clonePlanningData(scene.planningData)
       this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
@@ -7339,7 +7364,7 @@ export const useSceneStore = defineStore('scene', {
       this.activeTool = tool
     },
     modifyGroundRegion(bounds: GroundRegionBounds, transformer: (current: number, row: number, column: number) => number) {
-      const groundNode = findGroundNode(this.nodes)
+      const groundNode = this.groundNode
       if (!groundNode) {
         return false
       }
@@ -7448,7 +7473,7 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     setGroundTexture(payload: { dataUrl: string | null; name?: string | null }) {
-      const groundNode = findGroundNode(this.nodes)
+      const groundNode = this.groundNode
       if (!groundNode) {
         return false
       }
@@ -8005,22 +8030,13 @@ export const useSceneStore = defineStore('scene', {
         this.updateNodeDynamicMesh(nodeId, dynamicMesh)
         return
       }
-      const isPureGroundHeightUpdate = isPureGroundHeightDynamicMeshUpdate(target.dynamicMesh, dynamicMesh)
-
-      // Ground mesh edits should ideally use region-based history; fall back to a content snapshot for safety.
-      this.captureHistorySnapshot()
-
       applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh, {
         beforeMerge: (existingRecord, incoming) => {
           prepareGroundDynamicMeshRevision(existingRecord, incoming)
         },
       })
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
-
-      if (isPureGroundHeightUpdate && persistGroundHeightSidecarForNode(this.workspaceId, this.currentSceneId, target)) {
-        return
-      }
-      commitSceneSnapshot(this)
+      persistGroundHeightSidecarForNode(this.workspaceId, this.currentSceneId, target)
     },
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
@@ -10697,12 +10713,12 @@ export const useSceneStore = defineStore('scene', {
         const workingTree = [...this.nodes]
         const inserted = insertNodeMutable(workingTree, parentId, node, 'inside')
         if (inserted) {
-          this.nodes = workingTree
+          replaceSceneNodes(this, workingTree)
         } else {
-          this.nodes = [node, ...this.nodes]
+          replaceSceneNodes(this, [node, ...this.nodes])
         }
       } else {
-        this.nodes = [node, ...this.nodes]
+        replaceSceneNodes(this, [node, ...this.nodes])
       }
       this.setSelection([id])
 
@@ -14023,7 +14039,7 @@ export const useSceneStore = defineStore('scene', {
 
       if (undoOps.length) this.captureNodeStructureHistorySnapshot(undoOps)
 
-      this.nodes = workingTree
+      replaceSceneNodes(this, workingTree)
 
       if (resolvedParentId && !shouldSnapPasteToGroupOrigin) {
         this.recenterGroupAncestry(resolvedParentId, { captureHistory: false })

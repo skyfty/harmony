@@ -587,7 +587,7 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
     sceneStore.removeSceneNodes(idsToRemove)
   }
 
-  const groundNode = findGroundNode(sceneStore.nodes)
+  const groundNode = sceneStore.groundNode
   if (groundNode?.dynamicMesh?.type === 'Ground') {
     let nextGroundDynamicMesh = resolveGroundRuntimeDefinition(sceneStore, groundNode)
     const resetContours = resetGroundPlanningContours(nextGroundDynamicMesh)
@@ -665,7 +665,7 @@ async function clearPlanningGeneratedContentIncremental(options: {
     options.sceneStore.removeSceneNodes(idsToRemove)
   }
 
-  const groundNode = findGroundNode(options.sceneStore.nodes)
+  const groundNode = options.sceneStore.groundNode
   if (!groundNode?.dynamicMesh || groundNode.dynamicMesh.type !== 'Ground') {
     return
   }
@@ -1708,7 +1708,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundWidth, groundDepth)
 
-  if (!findGroundNode(sceneStore.nodes)) {
+  if (!sceneStore.groundNode) {
     emitProgress(options, 'Creating ground…', 5)
     sceneStore.setGroundDimensions({ width: groundWidth, depth: groundDepth })
     await yieldController.maybeYield(true)
@@ -1821,9 +1821,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   let doneUnits = 0
 
   // Terrain scatter preparation
-  let store: TerrainScatterStore = ensureTerrainScatterStore(findGroundNode(sceneStore.nodes)?.id ?? 'ground')
+  let store: TerrainScatterStore = ensureTerrainScatterStore(sceneStore.groundNode?.id ?? 'ground')
   let previousSnapshot: TerrainScatterStoreSnapshot | null = null
-  const groundNode = findGroundNode(sceneStore.nodes)
+  const groundNode = sceneStore.groundNode
   let groundDefinition: GroundDynamicMesh | null = groundNode ? resolveGroundRuntimeDefinition(sceneStore, groundNode) : null
   previousSnapshot = groundDefinition?.terrainScatter ?? null
 
@@ -2414,7 +2414,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     }
   }
 
-  const finalGround = findGroundNode(sceneStore.nodes)
+  const finalGround = sceneStore.groundNode
   if (finalGround?.dynamicMesh?.type === 'Ground') {
     emitProgress(options, 'Applying scatter…', 96)
     await yieldController.maybeYield(true)

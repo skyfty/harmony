@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@schema/index'
-import { GROUND_NODE_ID } from './constants'
 import { findSceneNode, setBoundingBoxFromObject } from './sceneUtils'
 
 export type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
@@ -12,7 +11,7 @@ type CameraResetDependencies = {
   getCamera: () => THREE.PerspectiveCamera | null
   getMapControls: () => { target: THREE.Vector3; update: () => void } | null
   getGizmoControls: () => { cameraUpdate: () => void } | null
-  getSceneNodes: () => SceneNode[]
+  getGroundNode: () => SceneNode | null
   getFallbackSceneNodes: () => SceneNode[]
   getSelectedNodeId: () => string | null
   getSceneNodeById: (nodeId: string) => SceneNode | null | undefined
@@ -28,7 +27,7 @@ type CameraResetDependencies = {
 
 function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
   for (const node of nodes) {
-    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
+    if (node.dynamicMesh?.type === 'Ground') {
       return node
     }
     if (node.children && node.children.length > 0) {
@@ -61,13 +60,17 @@ export function createCameraResetDirectionController(deps: CameraResetDependenci
   const cameraResetFitRotationHelper = new THREE.Euler(0, 0, 0, 'XYZ')
   const cameraResetFitScaleHelper = new THREE.Vector3(1, 1, 1)
 
+  function resolveGroundNode(): SceneNode | null {
+    return deps.getGroundNode() ?? findGroundNodeInTree(deps.getFallbackSceneNodes())
+  }
+
   function resolveGroundPanoramaFitDistanceForDirection(directionVector: THREE.Vector3): GroundPanoramaFitResult | null {
     const camera = deps.getCamera()
     if (!camera) {
       return null
     }
 
-    const groundNode = findGroundNodeInTree(deps.getSceneNodes()) ?? findGroundNodeInTree(deps.getFallbackSceneNodes())
+    const groundNode = resolveGroundNode()
     if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
       return null
     }
@@ -209,7 +212,7 @@ export function createCameraResetDirectionController(deps: CameraResetDependenci
   }
 
   function resolveFallbackFocusTargetForCameraReset(): CameraFocusTarget {
-    const groundNode = findGroundNodeInTree(deps.getSceneNodes()) ?? findGroundNodeInTree(deps.getFallbackSceneNodes())
+    const groundNode = resolveGroundNode()
     if (groundNode) {
       const groundObject = deps.getRuntimeObject(groundNode.id)
       if (groundObject) {

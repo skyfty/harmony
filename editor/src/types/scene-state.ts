@@ -21,6 +21,8 @@ export interface SceneState {
     projectId: string
   } | null
   nodes: SceneNode[]
+  /** Runtime-only cached reference to the current unique ground node derived from nodes. */
+  groundNode: SceneNode | null
   materials: SceneMaterial[]
   selectedNodeId: string | null
   selectedNodeIds: string[]
