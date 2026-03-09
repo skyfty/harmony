@@ -373,6 +373,7 @@ export const IMPORT_TEXTURE_SLOT_MAP: Array<{ slot: SceneMaterialTextureSlot; ke
 ]
 
 const HISTORY_LIMIT = 50
+const MATERIAL_EDIT_HISTORY_WINDOW_MS = 400
 
 // Used to suppress history snapshot creation during bulk operations.
 // Module-scoped because the editor typically has a single scene store instance.
@@ -384,11 +385,39 @@ let scenePatchSuppressionDepth = 0
 let pendingSceneGraphStructureVersionBump = false
 let pendingSceneNodePropertyVersionBump = false
 let pendingSuppressedScenePatchRequiresFullSync = false
+const activeMaterialEditHistoryKeys = new Set<string>()
+const materialEditHistoryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 let builtinWaterNormalBlobPromise: Promise<Blob> | null = null
+
+function buildMaterialEditHistoryKey(nodeId: string, nodeMaterialId: string): string {
+  const normalizedNodeId = typeof nodeId === 'string' ? nodeId.trim() : ''
+  const normalizedMaterialId = typeof nodeMaterialId === 'string' ? nodeMaterialId.trim() : ''
+  return `${normalizedNodeId}:${normalizedMaterialId}`
+}
+
+function clearMaterialEditHistoryWindow(key: string): void {
+  const timer = materialEditHistoryTimers.get(key)
+  if (timer) {
+    clearTimeout(timer)
+    materialEditHistoryTimers.delete(key)
+  }
+  activeMaterialEditHistoryKeys.delete(key)
+}
+
+function scheduleMaterialEditHistoryWindowReset(key: string): void {
+  const existingTimer = materialEditHistoryTimers.get(key)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+  }
+  const timer = setTimeout(() => {
+    clearMaterialEditHistoryWindow(key)
+  }, MATERIAL_EDIT_HISTORY_WINDOW_MS)
+  materialEditHistoryTimers.set(key, timer)
+}
 
 function loadBuiltinWaterNormalBlob(): Promise<Blob> {
   if (!builtinWaterNormalBlobPromise) {
@@ -7049,6 +7078,28 @@ export const useSceneStore = defineStore('scene', {
       const entry = createContentHistoryEntry(this)
       this.appendUndoEntry(entry, options)
     },
+    captureCoalescedMaterialHistorySnapshot(
+      nodeId: string,
+      nodeMaterialId: string,
+      options: { resetRedo?: boolean } = {},
+    ) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
+      const key = buildMaterialEditHistoryKey(nodeId, nodeMaterialId)
+      if (!key || key === ':') {
+        return
+      }
+      if (!activeMaterialEditHistoryKeys.has(key)) {
+        const entry = createContentHistoryEntry(this)
+        this.appendUndoEntry(entry, options)
+        activeMaterialEditHistoryKeys.add(key)
+      }
+      scheduleMaterialEditHistoryWindowReset(key)
+    },
     captureTransformHistorySnapshot(nodeIds: string[]) {
       if (this.isRestoringHistory) {
         return
@@ -8134,7 +8185,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       let updated = false
-      this.captureHistorySnapshot()
+      this.captureCoalescedMaterialHistorySnapshot(nodeId, nodeMaterialId)
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return
@@ -8384,7 +8435,7 @@ export const useSceneStore = defineStore('scene', {
       const trimmedName = typeof rawName === 'string' ? rawName.trim() : rawName
 
       let updated = false
-      this.captureHistorySnapshot()
+      this.captureCoalescedMaterialHistorySnapshot(nodeId, nodeMaterialId)
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return

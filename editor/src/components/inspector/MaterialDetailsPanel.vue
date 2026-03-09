@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -29,6 +29,7 @@ interface MaterialFormState extends Omit<SceneMaterialProps, 'textures'> {
 const SLIDER_FIELDS = ['opacity', 'metalness', 'roughness', 'emissiveIntensity', 'aoStrength', 'envMapIntensity'] as const
 
 const COMMON_SLIDER_FIELDS: readonly SliderField[] = ['opacity', 'metalness', 'roughness']
+const MATERIAL_PROPS_COMMIT_DEBOUNCE_MS = 48
 
 type SliderField = (typeof SLIDER_FIELDS)[number]
 
@@ -173,6 +174,9 @@ const assetDialogSlot = ref<SceneMaterialTextureSlot | null>(null)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const TEXTURE_ASSET_TYPE = 'texture,image,hdri' as const
+let pendingMaterialPropsCommitTimer: ReturnType<typeof setTimeout> | null = null
+let pendingMaterialPropsTarget: { nodeId: string; materialId: string } | null = null
+let pendingMaterialPropsUpdate: Partial<SceneMaterialProps> | null = null
 
 const assetDialogTitle = computed(() => {
   const slot = assetDialogSlot.value
@@ -263,6 +267,7 @@ watch(
   () => props.visible,
   (visible) => {
     if (!visible) {
+      flushPendingMaterialPropsCommit()
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
       saveSharedDialogVisible.value = false
@@ -278,6 +283,17 @@ watch(assetDialogVisible, (open) => {
     assetDialogSelectedId.value = ''
     assetDialogAnchor.value = null
   }
+})
+
+watch(
+  [() => selectedNodeId.value, () => props.nodeMaterialId],
+  () => {
+    flushPendingMaterialPropsCommit()
+  },
+)
+
+onBeforeUnmount(() => {
+  flushPendingMaterialPropsCommit()
 })
 
 watch(
@@ -318,10 +334,6 @@ watch(
   { immediate: true },
 )
 
-function handleClose() {
-  emit('close')
-}
-
 function resetDirtyState() {
   hasPendingChanges.value = false
 }
@@ -334,6 +346,48 @@ function resetTexturePanelExpansion() {
 
 function markMaterialDirty() {
   hasPendingChanges.value = true
+}
+
+function clearPendingMaterialPropsCommitTimer() {
+  if (!pendingMaterialPropsCommitTimer) {
+    return
+  }
+  clearTimeout(pendingMaterialPropsCommitTimer)
+  pendingMaterialPropsCommitTimer = null
+}
+
+function mergeMaterialPropUpdates(
+  current: Partial<SceneMaterialProps> | null,
+  incoming: Partial<SceneMaterialProps>,
+): Partial<SceneMaterialProps> {
+  const merged: Partial<SceneMaterialProps> = {
+    ...(current ?? {}),
+    ...incoming,
+  }
+  if (current?.textures || incoming.textures) {
+    merged.textures = {
+      ...(current?.textures ?? {}),
+      ...(incoming.textures ?? {}),
+    }
+  }
+  return merged
+}
+
+function flushPendingMaterialPropsCommit() {
+  clearPendingMaterialPropsCommitTimer()
+  const target = pendingMaterialPropsTarget
+  const update = pendingMaterialPropsUpdate
+  pendingMaterialPropsTarget = null
+  pendingMaterialPropsUpdate = null
+  if (!target || !update || !Object.keys(update).length) {
+    return
+  }
+  sceneStore.updateNodeMaterialProps(target.nodeId, target.materialId, update)
+}
+
+function handleClose() {
+  flushPendingMaterialPropsCommit()
+  emit('close')
 }
 
 function ensureEditableMaterial(): boolean {
@@ -477,7 +531,22 @@ function commitMaterialProps(update: Partial<SceneMaterialProps>) {
   if (!nodeEntry) {
     return
   }
-  sceneStore.updateNodeMaterialProps(selectedNodeId.value, nodeEntry.id, update)
+  const nextTarget = {
+    nodeId: selectedNodeId.value,
+    materialId: nodeEntry.id,
+  }
+  if (
+    pendingMaterialPropsTarget
+    && (pendingMaterialPropsTarget.nodeId !== nextTarget.nodeId || pendingMaterialPropsTarget.materialId !== nextTarget.materialId)
+  ) {
+    flushPendingMaterialPropsCommit()
+  }
+  pendingMaterialPropsTarget = nextTarget
+  pendingMaterialPropsUpdate = mergeMaterialPropUpdates(pendingMaterialPropsUpdate, update)
+  clearPendingMaterialPropsCommitTimer()
+  pendingMaterialPropsCommitTimer = setTimeout(() => {
+    flushPendingMaterialPropsCommit()
+  }, MATERIAL_PROPS_COMMIT_DEBOUNCE_MS)
   markMaterialDirty()
 }
 
@@ -523,6 +592,7 @@ function handleColorPickerInput(field: 'color' | 'emissive', value: string | nul
 }
 
 function handleSaveMaterial() {
+  flushPendingMaterialPropsCommit()
   if (!canSaveMaterial.value || !selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
@@ -534,6 +604,7 @@ function handleSaveMaterial() {
 }
 
 function saveCurrentMaterialAsShared() {
+  flushPendingMaterialPropsCommit()
   if (!selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
@@ -551,6 +622,7 @@ function saveCurrentMaterialAsShared() {
 }
 
 function handleConfirmSaveShared() {
+  flushPendingMaterialPropsCommit()
   if (!originalSharedMaterialId.value) {
     saveSharedDialogVisible.value = false
     return
