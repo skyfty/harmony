@@ -92,6 +92,7 @@ import {
   registerRuntimeObject,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
+import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneCameraState } from '@/types/scene-camera-state'
@@ -394,12 +395,12 @@ const {
   storeToRefs(terrainStore)
 
 const hasGroundNode = computed(() => {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   return Boolean(ground && ground.dynamicMesh?.type === 'Ground')
 })
 
 const groundDefinition = computed(() => {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
     return null
   }
@@ -434,7 +435,7 @@ function buildGroundGenerationPayload(definition?: GroundDynamicMesh | null): Gr
 }
 
 function applyGroundGenerationPatch(patch: Partial<GroundGenerationSettings>) {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -445,7 +446,7 @@ function applyGroundGenerationPatch(patch: Partial<GroundGenerationSettings>) {
   }
   nextGeneration.worldWidth = definition.width
   nextGeneration.worldDepth = definition.depth
-  sceneStore.updateNodeDynamicMesh(ground.id, { generation: nextGeneration })
+  sceneStore.updateGroundNodeDynamicMesh(ground.id, { generation: nextGeneration })
 }
 
 watch(
@@ -486,7 +487,7 @@ watch(hasGroundNode, (hasGround, prevHasGround) => {
 }, { flush: 'sync' })
 
 const groundTerrainScatterInstancesUpdatedAt = computed(() => {
-  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  const ground = sceneStore.groundNode
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
     return null
   }
@@ -1245,10 +1246,7 @@ function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
 }
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
-  const surfaceRevision = Number.isFinite(definition.surfaceRevision)
-    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
-    : null
-  const shapeSignature = {
+  return hashString(stableSerialize({
     rows: Math.max(1, Math.trunc(definition.rows)),
     columns: Math.max(1, Math.trunc(definition.columns)),
     cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1,
@@ -1256,19 +1254,10 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
     depth: Number.isFinite(definition.depth) ? definition.depth : 0,
     generation: definition.generation ?? null,
     heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
-  }
-  if (surfaceRevision !== null) {
-    return hashString(stableSerialize({
-      ...shapeSignature,
-      surfaceRevision,
-    }))
-  }
-  const serialized = stableSerialize({
-    ...shapeSignature,
-    manualHeightMap: definition.manualHeightMap ?? {},
-    planningHeightMap: definition.planningHeightMap ?? {},
-  })
-  return hashString(serialized)
+    surfaceRevision: Number.isFinite(definition.surfaceRevision)
+      ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
+      : 0,
+  }))
 }
 
 function computeRoadDynamicMeshSignature(
@@ -1351,7 +1340,7 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const laneLines = resolveRoadLaneLinesEnabled(node)
   const shoulders = resolveRoadShouldersEnabled(node)
   const materialConfigId = resolveRoadMaterialConfigId(node)
-  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundNode = getGroundNodeFromStore()
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
     ? groundNode.dynamicMesh
     : null
@@ -2605,7 +2594,7 @@ function resolveDynamicGroundStreamingBudget(groundObject?: THREE.Object3D | nul
 }
 
 function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
-  const node = findGroundNodeInTree(sceneStore.nodes)
+  const node = getGroundNodeFromStore()
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return resolveDynamicGroundStreamingRadiusMeters(null)
   }
@@ -2615,7 +2604,7 @@ function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
 }
 
 function resolveGroundScatterChunkStreamingEnabled(): boolean {
-  const node = findGroundNodeInTree(sceneStore.nodes)
+  const node = getGroundNodeFromStore()
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return false
   }
@@ -6750,25 +6739,17 @@ terrainGridHelper.name = 'TerrainGridHelper'
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
 
-function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-  for (const node of nodes) {
-    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-      return node
-    }
-    if (node.children && node.children.length > 0) {
-      const nested = findGroundNodeInTree(node.children)
-      if (nested) {
-        return nested
-      }
-    }
-  }
-  return null
+function getGroundNodeFromStore(): SceneNode | null {
+  return sceneStore.groundNode
 }
 
-function resolveGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
-  const node = findGroundNodeInTree(sceneStore.nodes)
-  if (node?.dynamicMesh?.type === 'Ground') {
-    return node.dynamicMesh
+function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
+  const node = getGroundNodeFromStore()
+  if (node?.dynamicMesh?.type === 'Ground' && sceneStore.currentSceneId) {
+    return useGroundHeightmapStore().resolveGroundRuntimeMesh(
+      node.id,
+      node.dynamicMesh,
+    )
   }
   return null
 }
@@ -8085,7 +8066,7 @@ const cameraResetDirectionController = createCameraResetDirectionController({
   getCamera: () => camera,
   getMapControls: () => mapControls,
   getGizmoControls: () => gizmoControls,
-  getSceneNodes: () => sceneStore.nodes,
+  getGroundNode: () => sceneStore.groundNode,
   getFallbackSceneNodes: () => props.sceneNodes,
   getSelectedNodeId: () => sceneStore.selectedNodeId,
   getSceneNodeById: (nodeId) => sceneStore.getNodeById(nodeId),
@@ -12418,7 +12399,7 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } 
 }
 
 function resolveGroundNodeIdForPlacement(): string | null {
-  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundNode = getGroundNodeFromStore()
   return groundNode?.id ?? null
 }
 
@@ -14023,7 +14004,7 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
 
 
 function tryFitDirectionalLightShadowsToGround(light: THREE.DirectionalLight): void {
-  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundNode = getGroundNodeFromStore()
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -14122,11 +14103,15 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     const groundObject = userData.groundMesh as THREE.Object3D | undefined
     if (groundObject) {
       const groundData = groundObject.userData ?? (groundObject.userData = {})
-      const nextSignature = computeGroundDynamicMeshSignature(node.dynamicMesh)
+      const groundDefinition = resolveGroundDynamicMeshDefinition()
+      if (!groundDefinition) {
+        return
+      }
+      const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
       if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         const shouldSkipSculptRefresh = groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature
         if (!shouldSkipSculptRefresh) {
-          updateGroundMesh(groundObject, node.dynamicMesh)
+          updateGroundMesh(groundObject, groundDefinition)
         }
         groundData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
         if (shouldSkipSculptRefresh) {
@@ -14206,7 +14191,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       heightSampler: null,
     }
 
-    const groundNode = findGroundNodeInTree(sceneStore.nodes)
+    const groundNode = getGroundNodeFromStore()
     const heightSamplerSignature = {
       roadPosition: node.position ?? null,
       roadRotation: node.rotation ?? null,
@@ -14327,7 +14312,7 @@ function updateGroundChunkStreaming() {
     return
   }
 
-  const node = findGroundNodeInTree(sceneStore.nodes)
+  const node = getGroundNodeFromStore()
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -14340,9 +14325,13 @@ function updateGroundChunkStreaming() {
 
   const radius = resolveDynamicGroundStreamingRadiusMeters(groundObject)
   const budget = resolveDynamicGroundStreamingBudget(groundObject)
+  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  if (!groundDefinition) {
+    return
+  }
 
-  if (isGroundChunkStreamingEnabled(node.dynamicMesh)) {
-    updateGroundChunks(groundObject, node.dynamicMesh, camera, {
+  if (isGroundChunkStreamingEnabled(groundDefinition)) {
+    updateGroundChunks(groundObject, groundDefinition, camera, {
       radius,
       budget: {
         maxCreatePerUpdate: budget.maxCreatePerUpdate,
@@ -14352,8 +14341,8 @@ function updateGroundChunkStreaming() {
       minIntervalMs: budget.minIntervalMs,
       minCameraMoveMeters: budget.minCameraMoveMeters,
     })
-  } else if (!areAllGroundChunksLoaded(groundObject, node.dynamicMesh)) {
-    ensureAllGroundChunks(groundObject, node.dynamicMesh)
+  } else if (!areAllGroundChunksLoaded(groundObject, groundDefinition)) {
+    ensureAllGroundChunks(groundObject, groundDefinition)
   }
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
@@ -15130,10 +15119,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     containerData.nodeId = node.id
 
     if (node.dynamicMesh?.type === 'Ground') {
-      const groundMesh = createGroundMesh(node.dynamicMesh)
+      const groundDefinition = resolveGroundDynamicMeshDefinition()
+      if (!groundDefinition) {
+        containerData.dynamicMeshType = 'Ground'
+        return container
+      }
+      const groundMesh = createGroundMesh(groundDefinition)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
-      groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(node.dynamicMesh)
+      groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'
@@ -15156,7 +15150,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         heightSampler: null,
       }
 
-      const groundNode = findGroundNodeInTree(sceneStore.nodes)
+      const groundNode = getGroundNodeFromStore()
       const heightSamplerSignature = {
         roadPosition: node.position ?? null,
         roadRotation: node.rotation ?? null,

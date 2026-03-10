@@ -1,11 +1,12 @@
 import * as THREE from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import type { GroundDynamicMesh, SceneNode } from '@schema'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-viewport-selection-drag'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
-import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON, GROUND_NODE_ID } from './constants'
+import { GROUND_NODE_ID, DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON } from './constants'
 import {
   buildParentIndex,
   filterTopLevelSelection,
@@ -46,26 +47,15 @@ export function useSelectionDrag(
   const alignDeltaHelper = new THREE.Vector3()
   const alignLocalPositionHelper = new THREE.Vector3()
 
-  function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-    for (const node of nodes) {
-      if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-        return node
-      }
-      if (node.children && node.children.length > 0) {
-        const nested = findGroundNodeInTree(node.children)
-        if (nested) {
-          return nested
-        }
-      }
-    }
-    return null
-  }
-
   function resolveGroundHeightAtWorldXZ(worldX: number, worldZ: number): number {
-    const groundNode = findGroundNodeInTree(sceneStore.nodes)
-      ?? findGroundNodeInTree(sceneNodes)
+    const groundNode = sceneStore.groundNode
     const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-      ? (groundNode.dynamicMesh as GroundDynamicMesh)
+      ? (sceneStore.currentSceneId
+          ? useGroundHeightmapStore().resolveGroundRuntimeMesh(
+              groundNode.id,
+              groundNode.dynamicMesh as GroundDynamicMesh,
+            )
+          : (groundNode.dynamicMesh as GroundDynamicMesh))
       : null
     if (!groundDefinition) {
       return 0

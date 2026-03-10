@@ -8,19 +8,6 @@ export type SceneHistoryTransformSnapshot = {
   scale: Vector3Like
 }
 
-export type SceneHistoryGroundRegionBounds = {
-  minRow: number
-  maxRow: number
-  minColumn: number
-  maxColumn: number
-}
-
-export type SceneHistoryGroundManualHeightEntry = {
-  row: number
-  column: number
-  value: number
-}
-
 export type SceneHistoryNodeBasicsSnapshot = {
   id: string
   name?: string
@@ -85,10 +72,4 @@ export type SceneHistoryEntry =
       kind: 'node-dynamic-mesh'
       nodeId: string
       dynamicMesh: unknown
-    }
-  | {
-      kind: 'ground-manual-height-region'
-      nodeId: string
-      bounds: SceneHistoryGroundRegionBounds
-      entries: SceneHistoryGroundManualHeightEntry[]
     }

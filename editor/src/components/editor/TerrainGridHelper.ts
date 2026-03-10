@@ -1,7 +1,9 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh } from '@schema'
+import { GROUND_NODE_ID, cloneGroundHeightMap, type GroundDynamicMesh, type GroundRuntimeDynamicMesh } from '@schema'
 import { sampleGroundEffectiveHeightRegion, type GroundEffectiveHeightRegion } from '@schema/groundMesh'
 import { toRaw } from 'vue'
+import { useSceneStore } from '@/stores/sceneStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { GRID_MAJOR_SPACING,GRID_MINOR_SPACING } from './constants'
 
 // 网格线的主要配色和宽度配置，确保与地形有足够对比度。
@@ -332,12 +334,26 @@ function makeTerrainHeightBlockKey(baseSignature: string, blockRow: number, bloc
   return `${baseSignature}|h:${blockRow}:${blockColumn}`
 }
 
-function createGroundDefinitionSnapshot(definition: GroundDynamicMesh): GroundDynamicMesh {
+function createGroundDefinitionSnapshot(definition: GroundDynamicMesh): GroundRuntimeDynamicMesh {
   const rawDefinition = toRaw(definition) as GroundDynamicMesh
+  const sceneStore = useSceneStore()
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    throw new Error('Ground runtime state is unavailable for terrain grid snapshot')
+  }
+  const sourceDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(GROUND_NODE_ID, rawDefinition)
   return {
     ...rawDefinition,
-    manualHeightMap: (toRaw(rawDefinition.manualHeightMap) ?? rawDefinition.manualHeightMap) as GroundDynamicMesh['manualHeightMap'],
-    planningHeightMap: (toRaw(rawDefinition.planningHeightMap) ?? rawDefinition.planningHeightMap) as GroundDynamicMesh['planningHeightMap'],
+    manualHeightMap: cloneGroundHeightMap(
+      toRaw(sourceDefinition.manualHeightMap) ?? sourceDefinition.manualHeightMap,
+      sourceDefinition.rows,
+      sourceDefinition.columns,
+    ),
+    planningHeightMap: cloneGroundHeightMap(
+      toRaw(sourceDefinition.planningHeightMap) ?? sourceDefinition.planningHeightMap,
+      sourceDefinition.rows,
+      sourceDefinition.columns,
+    ),
     heightComposition: (toRaw(rawDefinition.heightComposition) ?? rawDefinition.heightComposition) as GroundDynamicMesh['heightComposition'],
     planningMetadata: rawDefinition.planningMetadata
       ? (toRaw(rawDefinition.planningMetadata) as GroundDynamicMesh['planningMetadata'])

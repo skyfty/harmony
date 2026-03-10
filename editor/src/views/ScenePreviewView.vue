@@ -52,11 +52,13 @@ import {
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
-import { subscribeToScenePreview } from '@/utils/previewChannel'
+import { subscribeToScenePreview, decodePreviewGroundHeightSidecar } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { createGroundRuntimeMeshFromSidecar, stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -278,6 +280,7 @@ type ScenePreviewSceneEntry =
 			createdAt: string | null
 			updatedAt: string | null
 			document: SceneJsonExportDocument
+			groundHeightSidecar: ArrayBuffer | null
 	  }
 	| {
 			kind: 'external'
@@ -1551,16 +1554,35 @@ const scenePreviewPerf = createScenePreviewPerfController({
 	wheelVisuals: { lowSpeedIntervalMs: 100 },
 })
 
-function syncGroundCache(document: SceneJsonExportDocument | null): void {
+function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null | undefined): boolean {
+	if (!definition || definition.type !== 'Ground') {
+		return false
+	}
+	return definition.manualHeightMap instanceof Float64Array && definition.planningHeightMap instanceof Float64Array
+}
+
+async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
 	cameraDependentUpdateInitialized = false
 	terrainPaintPreviewLoadToken += 1
+	const loadToken = terrainPaintPreviewLoadToken
 	if (!document) {
 		return
 	}
 	const groundNode = findGroundNode(document.nodes)
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		return
+	}
+	if (hasEmbeddedGroundRuntimeHeightmaps(groundNode.dynamicMesh)) {
+	} else {
+		const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+		if (terrainPaintPreviewLoadToken !== loadToken) {
+			return
+		}
+		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
+	}
+	if (terrainPaintPreviewLoadToken !== loadToken) {
 		return
 	}
 	cachedGroundNodeId = groundNode.id
@@ -5024,77 +5046,52 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
 
-async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
-	const trimmed = sourceUrl.trim()
-	if (!trimmed) {
-		appendWarningMessage('Missing packageUrl')
-		return
+function packageSceneHasGroundNode(document: SceneJsonExportDocument): boolean {
+	const stack = [...document.nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.dynamicMesh?.type === 'Ground') {
+			return true
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
 	}
-	statusMessage.value = 'Loading scene package...'
-	try {
-		const buffer = await fetchArrayBufferFromUrl(trimmed)
-		const pkg = unzipScenePackage(buffer)
-		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg)
+	return false
+}
 
-		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
-		type ScenePackageProjectConfig = {
-			id?: unknown
-			name?: unknown
-			defaultSceneId?: unknown
-			lastEditedSceneId?: unknown
-			sceneOrder?: unknown
-		}
-		const projectConfigRaw: unknown = JSON.parse(projectText)
-		const projectConfig: ScenePackageProjectConfig =
-			projectConfigRaw && typeof projectConfigRaw === 'object'
-				? (projectConfigRaw as ScenePackageProjectConfig)
-				: {}
-
-		const scenes: ScenePreviewSceneEntry[] = []
-		projectSceneIndex.clear()
-		pkg.manifest.scenes.forEach((sceneEntry) => {
-			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
-			const sceneRaw = JSON.parse(sceneText) as unknown
-			if (!isSceneJsonExportDocument(sceneRaw)) {
-				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
-			}
-			const document = sceneRaw as SceneJsonExportDocument
-				const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
-			const id = sceneEntry.sceneId
-			const entry: ScenePreviewSceneEntry = {
-				kind: 'embedded',
-				id,
-				name: document.name || id,
-					createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
-					updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
-				document,
-			}
-			scenes.push(entry)
-			projectSceneIndex.set(id, entry)
-		})
-
-		projectBundle.value = {
-			project: {
-				id: String(projectConfig?.id ?? ''),
-				name: String(projectConfig?.name ?? ''),
-				defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
-				lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
-				sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
-			},
-			scenes,
-		}
-
-		const initialId =
-			(projectBundle.value.project.defaultSceneId || projectBundle.value.project.sceneOrder?.[0] || scenes[0]?.id || '').trim()
-		if (initialId) {
-			await switchToProjectScene(initialId)
-		}
-		statusMessage.value = ''
-	} catch (error) {
-		console.error('[ScenePreview] Failed to load scene package', error)
-		appendWarningMessage('Failed to load scene package.')
-		statusMessage.value = 'Failed to load scene package.'
+function readPackageSceneGroundSidecar(
+	pkg: ReturnType<typeof unzipScenePackage>,
+	sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string },
+	document: SceneJsonExportDocument,
+): ArrayBuffer | null {
+	if (!packageSceneHasGroundNode(document)) {
+		return null
 	}
+	if (!sceneEntry.groundHeightsPath) {
+		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground height sidecar path`)
+	}
+	const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath]
+	if (!sidecarBytes) {
+		throw new Error(`Missing ground height sidecar in scene package: ${sceneEntry.groundHeightsPath}`)
+	}
+	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
+}
+
+
+async function buildPreviewRuntimeDocument(
+	document: SceneJsonExportDocument,
+	options: { groundHeightSidecar?: ArrayBuffer | null } = {},
+): Promise<SceneJsonExportDocument> {
+	const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+	const groundNode = findGroundNode(document.nodes)
+	if (groundNode && groundNode.dynamicMesh && sidecar) {
+		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
+	}
+	return document
 }
 
 async function switchToProjectScene(sceneId: string): Promise<void> {
@@ -5115,9 +5112,10 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 		if (entry.kind === 'embedded') {
 			cleanupForUnrelatedSceneSwitch()
 			const waitApplied = waitForSnapshotApplied(timestamp, token)
+			const runtimeDocument = await buildPreviewRuntimeDocument(entry.document, { groundHeightSidecar: entry.groundHeightSidecar })
 			applySnapshot({
 				revision: nextSnapshotRevision(),
-				document: entry.document,
+				document: runtimeDocument,
 				timestamp,
 			})
 			await waitApplied
@@ -5187,6 +5185,7 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
+		const runtimeDocument = await buildPreviewRuntimeDocument(exportDocument)
 		if (sceneSwitchToken !== token) {
 			return
 		}
@@ -5195,7 +5194,7 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 		const waitApplied = waitForSnapshotApplied(timestamp, token)
 		applySnapshot({
 			revision: nextSnapshotRevision(),
-			document: exportDocument,
+			document: runtimeDocument,
 			timestamp,
 		})
 		await waitApplied
@@ -5379,6 +5378,7 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
+		const runtimeDocument = await buildPreviewRuntimeDocument(exportDocument)
 		if (sceneSwitchToken !== token) {
 			return
 		}
@@ -5387,7 +5387,7 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 		const waitApplied = waitForSnapshotApplied(timestamp, token)
 		applySnapshot({
 			revision: nextSnapshotRevision(),
-			document: exportDocument,
+			document: runtimeDocument,
 			timestamp,
 		})
 		await waitApplied
@@ -7071,7 +7071,7 @@ function stopAnimationLoop() {
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
-	syncGroundCache(null)
+	void syncGroundCache(null)
 	disposeSkySunLight()
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
@@ -10321,7 +10321,7 @@ async function applyInitialDocumentGraph(
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
-	syncGroundCache(document)
+	await syncGroundCache(document)
 	if (skySunLight) {
 		tryFitSkySunLightShadowsToGround(skySunLight)
 	}
@@ -10355,7 +10355,7 @@ async function applyIncrementalDocumentGraph(
 		}
 	}
 
-	syncGroundCache(document)
+	await syncGroundCache(document)
 	if (skySunLight) {
 		tryFitSkySunLightShadowsToGround(skySunLight)
 	}
@@ -10383,6 +10383,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+
 	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
 	const skyNodeActive = shouldUseSkybox(document)
@@ -10393,6 +10394,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	if (!scene || !rootGroup) {
 		return
 	}
+
 	environmentAssetRefreshTick.value += 1
 	const previewRoot = rootGroup
 	resourceProgress.active = true
@@ -10495,7 +10497,8 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 	}
 	isApplyingSnapshot = true
 	statusMessage.value = 'Syncing scene data...'
-	void updateScene(snapshot.document)
+	void buildPreviewRuntimeDocument(snapshot.document)
+		.then((runtimeDocument) => updateScene(runtimeDocument))
 		.then(() => {
 			lastUpdateTime.value = snapshot.timestamp
 			statusMessage.value = ''
@@ -10578,29 +10581,15 @@ onMounted(() => {
 	] = resolveDisplayBoardMediaSource
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
-	let handledInitialPayload = false
-	if (typeof window !== 'undefined') {
-		try {
-			const url = new URL(window.location.href)
-			const packageUrl = url.searchParams.get('packageUrl')
-			if (packageUrl) {
-				liveUpdatesDisabledSourceUrl.value = packageUrl
-				handledInitialPayload = true
-				void loadScenePackageFromUrl(packageUrl)
-			}
-		} catch {
-			// ignore
+
+	livePreviewEnabled = true
+	unsubscribe = subscribeToScenePreview((snapshot) => {
+		if (!livePreviewEnabled) {
+			return
 		}
-	}
-	if (!handledInitialPayload) {
-		livePreviewEnabled = true
-		unsubscribe = subscribeToScenePreview((snapshot) => {
-			if (!livePreviewEnabled) {
-				return
-			}
-			applySnapshot(snapshot)
-		})
-	}
+		applySnapshot(snapshot)
+	})
+
 	updateLanternViewportSize()
 	if (typeof window !== 'undefined') {
 		window.addEventListener('resize', handleLanternViewportResize)

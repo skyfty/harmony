@@ -26,7 +26,7 @@ import type { PresetSceneDocument } from '@/types/preset-scene'
 
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
-import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
+import { broadcastScenePreviewUpdate, encodePreviewGroundHeightSidecar } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
 import {
   useSceneStore,
@@ -38,6 +38,7 @@ import {
   calculateSceneResourceSummary,
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import type { EditorTool } from '@/types/editor-tool'
 import { useUiStore } from '@/stores/uiStore'
@@ -96,6 +97,23 @@ const sceneSummaries = computed(() => {
 })
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
+
+function findGroundNode(nodes: StoredSceneDocument['nodes']): StoredSceneDocument['nodes'][number] | null {
+  const stack = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.dynamicMesh?.type === 'Ground') {
+      return node
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return null
+}
 
 function normalizePanelPlacementState(input?: PanelPlacementState | null): PanelPlacementState {
   return {
@@ -1283,13 +1301,10 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     document.packageAssetMap = packageAssetMap
     document.assetIndex = assetIndex
     document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-
     if (isStale?.()) {
       return
     }
-
     const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
-
     if (isStale?.()) {
       return
     }

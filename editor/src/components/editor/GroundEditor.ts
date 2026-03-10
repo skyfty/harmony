@@ -1,6 +1,6 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
-import type { GroundDynamicMesh, GroundSculptOperation, SceneNode, TerrainPaintChannel, TerrainPaintSettings } from '@schema'
+import { cloneGroundHeightMap, type GroundDynamicMesh, type GroundSculptOperation, type SceneNode, type TerrainPaintChannel, type TerrainPaintSettings } from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -44,6 +44,7 @@ import {
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
+import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
@@ -786,8 +787,8 @@ let scatterEraseState: ScatterEraseState | null = null
 
 type SculptSessionState = {
 	nodeId: string
-	definition: GroundDynamicMesh
-	heightMap: GroundDynamicMesh['manualHeightMap']
+	definition: GroundRuntimeDynamicMesh
+	heightMap: Float64Array
 	dirty: boolean
 	affectedRegion: GroundGeometryUpdateRegion | null
 	touchedChunkKeys: Set<string>
@@ -2869,23 +2870,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		positionAttribute.needsUpdate = true
 	}
 
-	function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-		for (const node of nodes) {
-			if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-				return node
-			}
-			if (node.children?.length) {
-				const nested = findGroundNodeInTree(node.children)
-				if (nested) {
-					return nested
-				}
-			}
-		}
-		return null
-	}
-
 	function getGroundNodeFromScene(): SceneNode | null {
-		return findGroundNodeInTree(options.sceneStore.nodes)
+		return options.sceneStore.groundNode
 	}
 
 	function getGroundTerrainScatterSnapshot(): TerrainScatterStoreSnapshot | null {
@@ -2936,7 +2922,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				return sculptSessionState.definition
 			}
-			return node.dynamicMesh
+			const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
+			if (!sceneId) {
+				return node.dynamicMesh
+			}
+			return useGroundHeightmapStore().resolveGroundRuntimeMesh(
+				node.id,
+				node.dynamicMesh,
+			)
 		}
 		return null
 	}
@@ -2945,15 +2938,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return options.objectMap.get(GROUND_NODE_ID) ?? null
 	}
 
-	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundDynamicMesh {
+	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundRuntimeDynamicMesh {
 		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
 			return sculptSessionState.definition
 		}
-		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
-		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
-		const clonedHeightMap = definition.manualHeightMap
-		const sessionDefinition: GroundDynamicMesh = {
+		const sourceDefinition = getGroundDynamicMeshDefinition() as GroundRuntimeDynamicMesh | null
+		const runtimeDefinition = sourceDefinition && sourceDefinition.type === 'Ground'
+			? sourceDefinition
+			: (definition as GroundRuntimeDynamicMesh)
+		const clonedHeightMap = cloneGroundHeightMap(runtimeDefinition.manualHeightMap, runtimeDefinition.rows, runtimeDefinition.columns)
+		const sessionDefinition: GroundRuntimeDynamicMesh = {
 			...definition,
+			planningHeightMap: runtimeDefinition.planningHeightMap,
 			manualHeightMap: clonedHeightMap,
 		}
 		sculptSessionState = {
@@ -2982,12 +2978,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState = null
 			return false
 		}
+		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
+		if (sceneId) {
+			useGroundHeightmapStore().replaceManualHeightMap(
+				targetNode.id,
+				targetNode.dynamicMesh,
+				sculptSessionState.heightMap,
+			)
+		}
 		const nextDynamicMesh: GroundDynamicMesh = {
 			...(targetNode.dynamicMesh as GroundDynamicMesh),
-			manualHeightMap: sculptSessionState.heightMap,
 		}
 		targetNode.dynamicMesh = nextDynamicMesh
-		options.sceneStore.updateNodeDynamicMesh(targetNode.id, nextDynamicMesh)
+		options.sceneStore.updateGroundNodeDynamicMesh(targetNode.id, nextDynamicMesh)
 		sculptSessionState = null
 		return true
 	}
@@ -3367,7 +3370,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (token !== paintCommitToken) {
 				return false
 			}
-			options.sceneStore.updateNodeDynamicMesh(session.nodeId, {
+			options.sceneStore.updateGroundNodeDynamicMesh(session.nodeId, {
 				terrainPaint: session.settings,
 			})
 			return true

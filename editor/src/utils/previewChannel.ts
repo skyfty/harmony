@@ -302,6 +302,13 @@ function bufferToBase64(buffer: Uint8Array): string {
   return fallback
 }
 
+export function encodePreviewGroundHeightSidecar(sidecar: ArrayBuffer | null | undefined): string | null {
+  if (!sidecar) {
+    return null
+  }
+  return bufferToBase64(new Uint8Array(sidecar))
+}
+
 function base64ToBuffer(value: string): Uint8Array | null {
   try {
     if (typeof atob === 'function') {
@@ -322,6 +329,17 @@ function base64ToBuffer(value: string): Uint8Array | null {
     return null
   }
   return null
+}
+
+export function decodePreviewGroundHeightSidecar(value: string | null | undefined): ArrayBuffer | null {
+  if (!value) {
+    return null
+  }
+  const buffer = base64ToBuffer(value)
+  if (!buffer) {
+    return null
+  }
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
 }
 
 function textEncode(value: string): Uint8Array {

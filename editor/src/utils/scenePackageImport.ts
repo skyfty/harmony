@@ -3,6 +3,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
+import { stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { storePlanningImageBlobByHash } from '@/utils/planningImageStorage'
 
 export type LoadedScenePackageProject = Record<string, unknown>
@@ -10,6 +11,7 @@ export type LoadedScenePackageProject = Record<string, unknown>
 export type LoadedStoredScenePackage = {
   project: LoadedScenePackageProject
   scenes: StoredSceneDocument[]
+  groundHeightSidecars: Record<string, ArrayBuffer | null>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -117,6 +119,27 @@ async function applyPlanningSidecarToScene(
   }
 }
 
+function extractGroundHeightSidecarFromPackage(
+  zip: ReturnType<typeof unzipScenePackage>,
+  sceneEntry: ScenePackageSceneEntry,
+  rawScene: StoredSceneDocument,
+): ArrayBuffer | null {
+  const hasGroundNode = Array.isArray(rawScene.nodes)
+    && rawScene.nodes.some((node) => node?.dynamicMesh?.type === 'Ground')
+  if (!hasGroundNode) {
+    return null
+  }
+  const sidecarPath = sceneEntry.groundHeightsPath
+  if (!sidecarPath) {
+    throw new Error(`Scene bundle entry ${sceneEntry.sceneId} is missing ground height sidecar path`)
+  }
+  const bytes = zip.files[sidecarPath]
+  if (!bytes) {
+    throw new Error(`Missing ground height sidecar in scene bundle: ${sidecarPath}`)
+  }
+  return new Uint8Array(bytes).buffer
+}
+
 export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): Promise<LoadedStoredScenePackage> {
   const zip = unzipScenePackage(zipBytes)
   await restoreRuntimeResourcesFromPackage(zip)
@@ -124,15 +147,18 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const projectText = readTextFileFromScenePackage(zip, zip.manifest.project.path)
   const project = (JSON.parse(projectText) as LoadedScenePackageProject) ?? {}
   const scenes: StoredSceneDocument[] = []
+  const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
 
   for (const sceneEntry of zip.manifest.scenes ?? []) {
     const rawScene = JSON.parse(readTextFileFromScenePackage(zip, sceneEntry.path)) as unknown
     if (!isPlainObject(rawScene)) {
       throw new Error(`Invalid scene document in scene bundle: ${sceneEntry.path}`)
     }
-    const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, rawScene as unknown as StoredSceneDocument)
+    const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
+    groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
+    const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, sceneDocument)
     scenes.push(withPlanning)
   }
 
-  return { project, scenes }
+  return { project, scenes, groundHeightSidecars }
 }

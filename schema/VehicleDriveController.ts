@@ -225,7 +225,6 @@ const VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD = 0.75
 // 达到该速度后使用完整的转向视觉偏航
 const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 5.5
 // 转向视觉偏航建立速度（越大越接近即时）
-const VEHICLE_FOLLOW_STEER_LOOK_CATCH_SPEED = 18
 // 松开转向后的回正时间常数（秒）；值越小回正越快
 const VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT = 0.22
 // 非零目标转向时的跟随时间常数（秒）；值越小越跟手
