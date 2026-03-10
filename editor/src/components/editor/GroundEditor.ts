@@ -3134,13 +3134,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
-		const shouldBumpInstances = syncOptions.bumpInstancesUpdatedAt === true
-		options.sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-			terrainScatter: snapshot,
-			terrainScatterInstancesUpdatedAt: shouldBumpInstances
-				? Date.now()
-				: (groundNode.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt,
-		})
+		void syncOptions
+		options.sceneStore.commitGroundScatterEdit(groundNode.id, snapshot)
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
@@ -3208,17 +3203,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
 		if (sceneId) {
-			useGroundHeightmapStore().replaceManualHeightMap(
+			options.sceneStore.commitGroundHeightMapEdit(
 				targetNode.id,
-				targetNode.dynamicMesh,
+				targetNode.dynamicMesh as GroundDynamicMesh,
 				sculptSessionState.heightMap,
 			)
 		}
-		const nextDynamicMesh: GroundDynamicMesh = {
-			...(targetNode.dynamicMesh as GroundDynamicMesh),
-		}
-		targetNode.dynamicMesh = nextDynamicMesh
-		options.sceneStore.updateGroundNodeDynamicMesh(targetNode.id, nextDynamicMesh)
 		sculptSessionState = null
 		return true
 	}
@@ -3625,10 +3615,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (token !== paintCommitToken) {
 				return false
 			}
-			options.sceneStore.updateGroundNodeDynamicMesh(session.nodeId, {
-				terrainPaint: session.settings,
-			})
-			return true
+			return options.sceneStore.commitGroundPaintEdit(session.nodeId, session.settings)
 		} catch (error) {
 			console.warn('提交地貌权重贴图失败：', error)
 			return false
