@@ -99,9 +99,16 @@ export function attachGroundScatterRuntimeToNode(
 }
 
 export const useGroundScatterStore = defineStore('groundScatter', {
+  state: () => ({
+    sceneRuntimeVersions: {} as Record<string, number>,
+  }),
   actions: {
     async hydrateSceneDocument(sceneId: string, groundNode: SceneNode | null, sidecar: ArrayBuffer | null): Promise<void> {
       replaceRuntimeState(sceneId, groundNode, sidecar ? deserializeGroundScatterSidecar(sidecar) : null)
+      this.sceneRuntimeVersions = {
+        ...this.sceneRuntimeVersions,
+        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
+      }
     },
     clearSceneDocument(sceneId?: string): void {
       if (sceneId) {
@@ -110,12 +117,16 @@ export const useGroundScatterStore = defineStore('groundScatter', {
           deleteTerrainScatterStore(existing.nodeId)
           runtimeGroundScatters.delete(sceneId)
         }
+        const nextVersions = { ...this.sceneRuntimeVersions }
+        delete nextVersions[sceneId]
+        this.sceneRuntimeVersions = nextVersions
         return
       }
       runtimeGroundScatters.forEach((state) => {
         deleteTerrainScatterStore(state.nodeId)
       })
       runtimeGroundScatters.clear()
+      this.sceneRuntimeVersions = {}
     },
     buildSceneDocumentSidecar(sceneId: string, groundNode: SceneNode | null): ArrayBuffer | null {
       const payload = buildPayload(sceneId, groundNode)
@@ -123,6 +134,9 @@ export const useGroundScatterStore = defineStore('groundScatter', {
     },
     getSceneGroundScatter(sceneId: string): GroundScatterRuntimeState | null {
       return runtimeGroundScatters.get(sceneId) ?? null
+    },
+    getSceneRuntimeVersion(sceneId: string): number {
+      return this.sceneRuntimeVersions[sceneId] ?? 0
     },
     replaceTerrainScatter(sceneId: string, nodeId: string, terrainScatter: TerrainScatterStoreSnapshot | null): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
@@ -133,11 +147,19 @@ export const useGroundScatterStore = defineStore('groundScatter', {
       } else {
         deleteTerrainScatterStore(nodeId)
       }
+      this.sceneRuntimeVersions = {
+        ...this.sceneRuntimeVersions,
+        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
+      }
       return state
     },
     captureTerrainScatterSnapshot(sceneId: string, nodeId: string): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
       state.terrainScatter = saveTerrainScatterSnapshot(nodeId) ?? null
+      this.sceneRuntimeVersions = {
+        ...this.sceneRuntimeVersions,
+        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
+      }
       return state
     },
   },

@@ -1405,6 +1405,46 @@ function commitGroundHeightMapRuntimeEdit(
   return true
 }
 
+function commitGroundScatterRuntimeEdit(
+  store: {
+    nodes: SceneNode[]
+    currentSceneId?: string | null
+    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+    bumpSceneNodePropertyVersion: () => void
+  },
+  nodeId: string,
+  terrainScatter: TerrainScatterStoreSnapshot | null,
+): boolean {
+  const target = findNodeById(store.nodes, nodeId)
+  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
+    return false
+  }
+  useGroundScatterStore().replaceTerrainScatter(store.currentSceneId, nodeId, manualDeepClone(terrainScatter) as TerrainScatterStoreSnapshot | null)
+  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
+  persistGroundScatterSidecarForNode(target)
+  return true
+}
+
+function commitGroundPaintRuntimeEdit(
+  store: {
+    nodes: SceneNode[]
+    currentSceneId?: string | null
+    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+    bumpSceneNodePropertyVersion: () => void
+  },
+  nodeId: string,
+  terrainPaint: GroundDynamicMesh['terrainPaint'],
+): boolean {
+  const target = findNodeById(store.nodes, nodeId)
+  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
+    return false
+  }
+  useGroundPaintStore().replaceTerrainPaint(store.currentSceneId, nodeId, manualDeepClone(terrainPaint) as GroundDynamicMesh['terrainPaint'])
+  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
+  persistGroundPaintSidecarForNode(target)
+  return true
+}
+
 function persistGroundScatterSidecarForNode(groundNode: SceneNode | null): boolean {
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return false
@@ -8130,6 +8170,18 @@ export const useSceneStore = defineStore('scene', {
       manualHeightMap: Float64Array,
     ) {
       return commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+    },
+    commitGroundScatterEdit(
+      nodeId: string,
+      terrainScatter: TerrainScatterStoreSnapshot | null,
+    ) {
+      return commitGroundScatterRuntimeEdit(this, nodeId, terrainScatter)
+    },
+    commitGroundPaintEdit(
+      nodeId: string,
+      terrainPaint: GroundDynamicMesh['terrainPaint'],
+    ) {
+      return commitGroundPaintRuntimeEdit(this, nodeId, terrainPaint)
     },
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)

@@ -177,12 +177,6 @@ function monotonicUpdatedAt(previousSnapshot: SnapshotWithUpdatedAt | null | und
   return next <= prev ? prev + 1 : next
 }
 
-function bumpTerrainScatterInstancesUpdatedAt(previousUpdatedAt: number | null | undefined): number {
-  const prev = Number(previousUpdatedAt)
-  const now = Date.now()
-  return Number.isFinite(prev) ? Math.max(now, prev + 1) : now
-}
-
 // Safety cap to avoid runaway instance generation on huge polygons.
 // NOTE: This should be high enough so densityPercent behaves proportionally for common use-cases.
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 20000
@@ -594,12 +588,7 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
     removePlanningScatterLayers(storeLocal)
     const snapshot = serializeTerrainScatterStore(storeLocal)
     snapshot.metadata.updatedAt = monotonicUpdatedAt(prevSnapshot, snapshot.metadata.updatedAt)
-    const next = {
-      ...nextGroundDynamicMesh,
-      terrainScatter: snapshot,
-      terrainScatterInstancesUpdatedAt: bumpTerrainScatterInstancesUpdatedAt(nextGroundDynamicMesh.terrainScatterInstancesUpdatedAt),
-    }
-    sceneStore.updateGroundNodeDynamicMesh(groundNode.id, next)
+    sceneStore.commitGroundScatterEdit(groundNode.id, snapshot)
   }
 }
 
@@ -704,11 +693,7 @@ async function clearPlanningGeneratedContentIncremental(options: {
 
   const snapshot = serializeTerrainScatterStore(store)
   snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
-  options.sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-    ...groundNode.dynamicMesh,
-    terrainScatter: snapshot,
-    terrainScatterInstancesUpdatedAt: bumpTerrainScatterInstancesUpdatedAt(groundNode.dynamicMesh.terrainScatterInstancesUpdatedAt),
-  })
+  options.sceneStore.commitGroundScatterEdit(groundNode.id, snapshot)
 }
 
 function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
@@ -2410,12 +2395,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     if (store) {
       const snapshot = serializeTerrainScatterStore(store)
       snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
-      const next = {
-        ...finalGround.dynamicMesh,
-        terrainScatter: snapshot,
-        terrainScatterInstancesUpdatedAt: bumpTerrainScatterInstancesUpdatedAt(finalGround.dynamicMesh.terrainScatterInstancesUpdatedAt),
-      }
-      sceneStore.updateGroundNodeDynamicMesh(finalGround.id, next)
+      sceneStore.commitGroundScatterEdit(finalGround.id, snapshot)
     }
     await yieldController.maybeYield(true)
   }

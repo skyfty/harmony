@@ -92,6 +92,7 @@ import {
   registerRuntimeObject,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
+import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -486,12 +487,12 @@ watch(hasGroundNode, (hasGround, prevHasGround) => {
   }
 }, { flush: 'sync' })
 
-const groundTerrainScatterInstancesUpdatedAt = computed(() => {
-  const ground = sceneStore.groundNode
-  if (!ground || ground.dynamicMesh?.type !== 'Ground') {
-    return null
+const groundScatterRuntimeVersion = computed(() => {
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return 0
   }
-  return (ground.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt
+  return useGroundScatterStore().getSceneRuntimeVersion(sceneId)
 })
 
 const viewportEl = ref<HTMLDivElement | null>(null)
@@ -7856,15 +7857,15 @@ watch(isSceneReady, (ready) => {
 
 // Rebind scatter instances when terrainScatter snapshot changes (e.g. planning->3D conversion).
 watch(
-  [isSceneReady, groundTerrainScatterInstancesUpdatedAt],
-  ([ready, updatedAt], [prevReady, prevUpdatedAt]) => {
+  [isSceneReady, groundScatterRuntimeVersion],
+  ([ready, version], [prevReady, prevVersion]) => {
     if (!ready) {
       return
     }
-    if (updatedAt == null) {
+    if (version <= 0) {
       return
     }
-    if (prevReady && prevUpdatedAt === updatedAt) {
+    if (prevReady && prevVersion === version) {
       return
     }
     void restoreGroundScatterGuarded()

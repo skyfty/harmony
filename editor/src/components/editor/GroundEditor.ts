@@ -2913,13 +2913,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
-		const shouldBumpInstances = syncOptions.bumpInstancesUpdatedAt === true
-		options.sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-			terrainScatter: snapshot,
-			terrainScatterInstancesUpdatedAt: shouldBumpInstances
-				? Date.now()
-				: (groundNode.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt,
-		})
+		void syncOptions
+		options.sceneStore.commitGroundScatterEdit(groundNode.id, snapshot)
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
@@ -3399,10 +3394,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (token !== paintCommitToken) {
 				return false
 			}
-			options.sceneStore.updateGroundNodeDynamicMesh(session.nodeId, {
-				terrainPaint: session.settings,
-			})
-			return true
+			return options.sceneStore.commitGroundPaintEdit(session.nodeId, session.settings)
 		} catch (error) {
 			console.warn('提交地貌权重贴图失败：', error)
 			return false
