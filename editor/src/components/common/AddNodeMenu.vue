@@ -1876,7 +1876,7 @@ async function handleConfirmGround() {
     rows,
     columns,
     cellSize,
-    chunkStreamingEnabled: true,
+    chunkStreamingEnabled: false,
     heightComposition: { mode: 'planning_plus_manual' },
     planningMetadata: null,
     terrainScatterInstancesUpdatedAt: Date.now(),
