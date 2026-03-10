@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { GroundDynamicMesh, SceneNode, TerrainPaintSettings } from '@schema'
+import type { GroundDynamicMesh, SceneNode } from '@schema'
 import {
   deserializeGroundScatterSidecar,
   serializeGroundScatterSidecar,
@@ -16,7 +16,6 @@ type GroundScatterRuntimeState = {
   sceneId: string
   nodeId: string
   terrainScatter: TerrainScatterStoreSnapshot | null
-  terrainPaint: TerrainPaintSettings | null
 }
 
 const runtimeGroundScatters = new Map<string, GroundScatterRuntimeState>()
@@ -45,7 +44,6 @@ function ensureRuntimeState(sceneId: string, nodeId: string): GroundScatterRunti
     sceneId,
     nodeId,
     terrainScatter: null,
-    terrainPaint: null,
   }
   runtimeGroundScatters.set(sceneId, created)
   return created
@@ -63,7 +61,6 @@ function replaceRuntimeState(
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
   state.terrainScatter = cloneValue(payload?.terrainScatter ?? null)
-  state.terrainPaint = cloneValue(payload?.terrainPaint ?? null)
   if (state.terrainScatter) {
     loadTerrainScatterSnapshot(groundNode.id, state.terrainScatter)
   } else {
@@ -82,7 +79,6 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundScat
   return {
     groundNodeId: groundNode.id,
     terrainScatter,
-    terrainPaint: cloneValue(state.terrainPaint),
   }
 }
 
@@ -98,7 +94,6 @@ export function attachGroundScatterRuntimeToNode(
   groundNode.dynamicMesh = {
     ...definition,
     terrainScatter: cloneValue(state.terrainScatter),
-    terrainPaint: cloneValue(state.terrainPaint),
   }
   return groundNode
 }
@@ -128,11 +123,6 @@ export const useGroundScatterStore = defineStore('groundScatter', {
     },
     getSceneGroundScatter(sceneId: string): GroundScatterRuntimeState | null {
       return runtimeGroundScatters.get(sceneId) ?? null
-    },
-    replaceTerrainPaint(sceneId: string, nodeId: string, terrainPaint: TerrainPaintSettings | null): GroundScatterRuntimeState {
-      const state = ensureRuntimeState(sceneId, nodeId)
-      state.terrainPaint = cloneValue(terrainPaint)
-      return state
     },
     replaceTerrainScatter(sceneId: string, nodeId: string, terrainScatter: TerrainScatterStoreSnapshot | null): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)

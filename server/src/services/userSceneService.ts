@@ -118,6 +118,12 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   if (!pkg.files[sceneEntry.groundScatterPath]) {
     throw new Error('Scene bundle missing ground scatter sidecar file')
   }
+  if (!sanitizeString(sceneEntry.groundPaintPath)) {
+    throw new Error('Scene bundle missing ground paint sidecar path')
+  }
+  if (!pkg.files[sceneEntry.groundPaintPath]) {
+    throw new Error('Scene bundle missing ground paint sidecar file')
+  }
   const sceneRaw = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as any
   const id = sanitizeString(sceneRaw?.id) || expectedSceneId
   if (id !== expectedSceneId) {

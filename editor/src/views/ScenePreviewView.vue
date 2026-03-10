@@ -9,6 +9,7 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
+	deserializeGroundPaintSidecar,
 	deserializeGroundScatterSidecar,
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	DEFAULT_ENVIRONMENT_RESTITUTION,
@@ -59,6 +60,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
 import { createGroundRuntimeMeshFromSidecar, stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
+import { attachGroundPaintRuntimeToNode } from '@/stores/groundPaintStore'
 import { attachGroundScatterRuntimeToNode } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
@@ -284,6 +286,7 @@ type ScenePreviewSceneEntry =
 			document: SceneJsonExportDocument
 			groundHeightSidecar: ArrayBuffer | null
 			groundScatterSidecar: ArrayBuffer | null
+			groundPaintSidecar: ArrayBuffer | null
 	  }
 	| {
 			kind: 'external'
@@ -1589,6 +1592,7 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 		return
 	}
 	attachGroundScatterRuntimeToNode(document.id, groundNode)
+	attachGroundPaintRuntimeToNode(document.id, groundNode)
 	cachedGroundNodeId = groundNode.id
 	cachedGroundDynamicMesh = groundNode.dynamicMesh
 }
@@ -5103,13 +5107,32 @@ function readPackageSceneGroundScatterSidecar(
 	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
 }
 
+function readPackageSceneGroundPaintSidecar(
+	pkg: ReturnType<typeof unzipScenePackage>,
+	sceneEntry: { sceneId: string; path: string; groundPaintPath?: string },
+	document: SceneJsonExportDocument,
+): ArrayBuffer | null {
+	if (!packageSceneHasGroundNode(document)) {
+		return null
+	}
+	if (!sceneEntry.groundPaintPath) {
+		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground paint sidecar path`)
+	}
+	const sidecarBytes = pkg.files[sceneEntry.groundPaintPath]
+	if (!sidecarBytes) {
+		throw new Error(`Missing ground paint sidecar in scene package: ${sceneEntry.groundPaintPath}`)
+	}
+	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
+}
+
 
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
-	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null } = {},
+	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null; groundPaintSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
 	const sidecar = options.groundHeightSidecar ?? await useScenesStore().loadGroundHeightSidecar(document.id)
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
+	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
 	const groundNode = findGroundNode(document.nodes)
 	if (groundNode && groundNode.dynamicMesh && sidecar) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
@@ -5118,8 +5141,14 @@ async function buildPreviewRuntimeDocument(
 		const scatterPayload = deserializeGroundScatterSidecar(scatterSidecar)
 		groundNode.dynamicMesh = {
 			...groundNode.dynamicMesh,
-				terrainScatter: scatterPayload.terrainScatter,
-				terrainPaint: scatterPayload.terrainPaint,
+			terrainScatter: scatterPayload.terrainScatter,
+		} as GroundDynamicMesh
+	}
+	if (groundNode && groundNode.dynamicMesh && paintSidecar) {
+		const paintPayload = deserializeGroundPaintSidecar(paintSidecar)
+		groundNode.dynamicMesh = {
+			...groundNode.dynamicMesh,
+			terrainPaint: paintPayload.terrainPaint,
 		} as GroundDynamicMesh
 	}
 	return document
@@ -5146,6 +5175,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 			const runtimeDocument = await buildPreviewRuntimeDocument(entry.document, {
 				groundHeightSidecar: entry.groundHeightSidecar,
 				groundScatterSidecar: entry.groundScatterSidecar,
+				groundPaintSidecar: entry.groundPaintSidecar,
 			})
 			applySnapshot({
 				revision: nextSnapshotRevision(),

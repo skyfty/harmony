@@ -1,4 +1,3 @@
-import type { TerrainPaintChannel, TerrainPaintSettings } from './index'
 import { TerrainScatterCategories, type TerrainScatterCategory, type TerrainScatterStoreSnapshot } from './terrain-scatter'
 
 export const GROUND_SCATTER_SIDECAR_FILENAME = 'ground-scatter.bin'
@@ -14,27 +13,12 @@ const enum SectionType {
   ScatterMeta = 1,
   ScatterLayers = 2,
   ScatterInstances = 3,
-  PaintMeta = 4,
-  PaintLayers = 5,
-  PaintChunks = 6,
-}
-
-const enum GroundScatterFlags {
-  HasScatter = 1 << 0,
-  HasPaint = 1 << 1,
 }
 
 const enum GroundCoordsFlags {
   HasGroundCoords = 1 << 0,
   HasGroundHeight = 1 << 1,
   HasGroundNormal = 1 << 2,
-}
-
-const enum PaintChannelCode {
-  R = 0,
-  G = 1,
-  B = 2,
-  A = 3,
 }
 
 const CATEGORY_TO_CODE = new Map<TerrainScatterCategory, number>(
@@ -60,7 +44,6 @@ type GroundScatterOpaqueRecord = Record<string, unknown> | null
 export type GroundScatterSidecarPayload = {
   groundNodeId: string
   terrainScatter: TerrainScatterStoreSnapshot | null
-  terrainPaint: TerrainPaintSettings | null
 }
 
 function encodeNullableOpaqueRecord(value: GroundScatterOpaqueRecord): Uint8Array | null {
@@ -182,6 +165,20 @@ function resolveBlob(ref: BlobRef, blobBytes: Uint8Array): Uint8Array | null {
   return blobBytes.slice(ref.offset, end)
 }
 
+function readStringTable(buffer: ArrayBuffer, offset: number, count: number): string[] {
+  const view = new DataView(buffer)
+  const strings: string[] = []
+  let cursor = offset
+  for (let index = 0; index < count; index += 1) {
+    const byteLength = view.getUint32(cursor, true)
+    cursor += 4
+    const bytes = new Uint8Array(buffer, cursor, byteLength)
+    cursor += byteLength
+    strings.push(STRING_DECODER.decode(bytes))
+  }
+  return strings
+}
+
 function encodeCategory(category: TerrainScatterCategory): number {
   return CATEGORY_TO_CODE.get(category) ?? 0
 }
@@ -190,41 +187,10 @@ function decodeCategory(code: number): TerrainScatterCategory {
   return TerrainScatterCategories[code] ?? TerrainScatterCategories[0]!
 }
 
-function encodePaintChannel(channel: TerrainPaintChannel): number {
-  switch (channel) {
-    case 'r':
-      return PaintChannelCode.R
-    case 'g':
-      return PaintChannelCode.G
-    case 'b':
-      return PaintChannelCode.B
-    case 'a':
-      return PaintChannelCode.A
-    default:
-      return PaintChannelCode.G
-  }
-}
-
-function decodePaintChannel(code: number): TerrainPaintChannel {
-  switch (code) {
-    case PaintChannelCode.R:
-      return 'r'
-    case PaintChannelCode.G:
-      return 'g'
-    case PaintChannelCode.B:
-      return 'b'
-    case PaintChannelCode.A:
-      return 'a'
-    default:
-      return 'g'
-  }
-}
-
 function normalizeScatterPayload(payload: GroundScatterSidecarPayload): GroundScatterSidecarPayload {
   return {
     groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
     terrainScatter: payload.terrainScatter ?? null,
-    terrainPaint: payload.terrainPaint ?? null,
   }
 }
 
@@ -330,64 +296,23 @@ function buildScatterInstancesSection(
   return { type: SectionType.ScatterInstances, bytes, recordCount: flattenedInstances.length }
 }
 
-function buildPaintMetaSection(settings: TerrainPaintSettings): SectionBuffer {
-  const bytes = new Uint8Array(8)
-  const view = new DataView(bytes.buffer)
-  view.setUint32(0, Number.isFinite(settings.version) ? Math.trunc(settings.version) : 1, true)
-  view.setUint32(4, Number.isFinite(settings.weightmapResolution) ? Math.trunc(settings.weightmapResolution) : 256, true)
-  return { type: SectionType.PaintMeta, bytes, recordCount: 1 }
-}
-
-function buildPaintLayersSection(settings: TerrainPaintSettings, strings: StringTableBuilder): SectionBuffer {
-  const recordBytes = 8
-  const layers = Array.isArray(settings.layers) ? settings.layers : []
-  const bytes = new Uint8Array(layers.length * recordBytes)
-  const view = new DataView(bytes.buffer)
-  layers.forEach((layer, index) => {
-    const baseOffset = index * recordBytes
-    view.setUint32(baseOffset, encodePaintChannel(layer.channel), true)
-    writeNullableStringIndex(view, baseOffset + 4, strings.add(layer.textureAssetId))
-  })
-  return { type: SectionType.PaintLayers, bytes, recordCount: layers.length }
-}
-
-function buildPaintChunksSection(settings: TerrainPaintSettings, strings: StringTableBuilder): SectionBuffer {
-  const recordBytes = 8
-  const entries = Object.entries(settings.chunks ?? {})
-  const bytes = new Uint8Array(entries.length * recordBytes)
-  const view = new DataView(bytes.buffer)
-  entries.forEach(([chunkKey, ref], index) => {
-    const baseOffset = index * recordBytes
-    writeNullableStringIndex(view, baseOffset, strings.add(chunkKey))
-    writeNullableStringIndex(view, baseOffset + 4, strings.add(ref?.logicalId ?? null))
-  })
-  return { type: SectionType.PaintChunks, bytes, recordCount: entries.length }
-}
-
 export function serializeGroundScatterSidecar(rawPayload: GroundScatterSidecarPayload): ArrayBuffer {
   const payload = normalizeScatterPayload(rawPayload)
   if (!payload.groundNodeId) {
     throw new Error('groundNodeId is required for ground scatter sidecar')
   }
+  if (!payload.terrainScatter) {
+    throw new Error('terrainScatter is required for ground scatter sidecar')
+  }
 
   const strings = new StringTableBuilder()
   const blobs = new BlobPoolBuilder()
-  const sections: SectionBuffer[] = []
-  let flags = 0
   const groundNodeIdIndex = strings.add(payload.groundNodeId)
-
-  if (payload.terrainScatter) {
-    flags |= GroundScatterFlags.HasScatter
-    sections.push(buildScatterMetaSection(payload.terrainScatter))
-    sections.push(buildScatterLayersSection(payload.terrainScatter, strings, blobs))
-    sections.push(buildScatterInstancesSection(payload.terrainScatter, strings, blobs))
-  }
-  if (payload.terrainPaint) {
-    flags |= GroundScatterFlags.HasPaint
-    sections.push(buildPaintMetaSection(payload.terrainPaint))
-    sections.push(buildPaintLayersSection(payload.terrainPaint, strings))
-    sections.push(buildPaintChunksSection(payload.terrainPaint, strings))
-  }
+  const sections: SectionBuffer[] = [
+    buildScatterMetaSection(payload.terrainScatter),
+    buildScatterLayersSection(payload.terrainScatter, strings, blobs),
+    buildScatterInstancesSection(payload.terrainScatter, strings, blobs),
+  ]
 
   const stringBytes = strings.toBytes()
   const blobBytes = blobs.toBytes()
@@ -409,7 +334,7 @@ export function serializeGroundScatterSidecar(rawPayload: GroundScatterSidecarPa
   view.setUint32(24, directoryOffset, true)
   view.setUint32(28, sections.length, true)
   view.setUint32(32, groundNodeIdIndex, true)
-  view.setUint32(36, flags, true)
+  view.setUint32(36, 0, true)
 
   result.set(stringBytes, stringTableOffset)
   result.set(blobBytes, blobOffset)
@@ -425,34 +350,6 @@ export function serializeGroundScatterSidecar(rawPayload: GroundScatterSidecarPa
   })
 
   return result.buffer
-}
-
-function readStringTable(buffer: ArrayBuffer, offset: number, count: number): string[] {
-  const view = new DataView(buffer)
-  const strings: string[] = []
-  let cursor = offset
-  for (let index = 0; index < count; index += 1) {
-    const byteLength = view.getUint32(cursor, true)
-    cursor += 4
-    const bytes = new Uint8Array(buffer, cursor, byteLength)
-    cursor += byteLength
-    strings.push(STRING_DECODER.decode(bytes))
-  }
-  return strings
-}
-
-function readSections(buffer: ArrayBuffer, directoryOffset: number, count: number): Map<number, { offset: number; byteLength: number; recordCount: number }> {
-  const view = new DataView(buffer)
-  const sections = new Map<number, { offset: number; byteLength: number; recordCount: number }>()
-  for (let index = 0; index < count; index += 1) {
-    const baseOffset = directoryOffset + index * SECTION_DIRECTORY_ENTRY_BYTES
-    sections.set(view.getUint32(baseOffset, true), {
-      offset: view.getUint32(baseOffset + 4, true),
-      byteLength: view.getUint32(baseOffset + 8, true),
-      recordCount: view.getUint32(baseOffset + 12, true),
-    })
-  }
-  return sections
 }
 
 export function deserializeGroundScatterSidecar(buffer: ArrayBuffer): GroundScatterSidecarPayload {
@@ -473,107 +370,119 @@ export function deserializeGroundScatterSidecar(buffer: ArrayBuffer): GroundScat
   const directoryOffset = view.getUint32(24, true)
   const sectionCount = view.getUint32(28, true)
   const groundNodeIdIndex = view.getUint32(32, true)
-  const flags = view.getUint32(36, true)
-  const strings = readStringTable(buffer, stringTableOffset, stringCount)
-  const sections = readSections(buffer, directoryOffset, sectionCount)
-  const blobBytes = new Uint8Array(buffer, blobOffset, blobByteLength)
-  const groundNodeId = strings[groundNodeIdIndex] ?? ''
 
-  let terrainScatter: TerrainScatterStoreSnapshot | null = null
-  if (flags & GroundScatterFlags.HasScatter) {
-    const metaSection = sections.get(SectionType.ScatterMeta)
-    const layersSection = sections.get(SectionType.ScatterLayers)
-    const instancesSection = sections.get(SectionType.ScatterInstances)
-    if (!metaSection || !layersSection || !instancesSection) {
-      throw new Error('Ground scatter sidecar is missing scatter sections')
-    }
-    const metaView = new DataView(buffer, metaSection.offset, metaSection.byteLength)
-    const layersView = new DataView(buffer, layersSection.offset, layersSection.byteLength)
-    const instancesView = new DataView(buffer, instancesSection.offset, instancesSection.byteLength)
-    const layers = Array.from({ length: layersSection.recordCount }, (_, index) => {
-      const baseOffset = index * 96
-      const payloadRef = readBlobRef(layersView, baseOffset + 88)
-      return {
-        id: readStringIndex(layersView, baseOffset, strings) ?? `layer-${index}`,
-        label: readStringIndex(layersView, baseOffset + 4, strings) ?? 'Scatter Layer',
-        category: decodeCategory(layersView.getUint8(baseOffset + 8)),
-        assetId: readStringIndex(layersView, baseOffset + 12, strings),
-        profileId: readStringIndex(layersView, baseOffset + 16, strings),
-        params: {
-          alignToNormal: Boolean(layersView.getUint8(baseOffset + 9) & (1 << 0)),
-          randomYaw: Boolean(layersView.getUint8(baseOffset + 9) & (1 << 1)),
-          minSlope: layersView.getFloat32(baseOffset + 24, true),
-          maxSlope: layersView.getFloat32(baseOffset + 28, true),
-          minHeight: layersView.getFloat32(baseOffset + 32, true),
-          maxHeight: layersView.getFloat32(baseOffset + 36, true),
-          minScale: layersView.getFloat32(baseOffset + 40, true),
-          maxScale: layersView.getFloat32(baseOffset + 44, true),
-          density: layersView.getFloat32(baseOffset + 48, true),
-          seed: Number.isFinite(layersView.getFloat64(baseOffset + 52, true)) ? layersView.getFloat64(baseOffset + 52, true) : null,
-          jitter: {
-            position: layersView.getFloat32(baseOffset + 60, true),
-            rotation: layersView.getFloat32(baseOffset + 64, true),
-            scale: layersView.getFloat32(baseOffset + 68, true),
-          },
-          payload: decodeNullableOpaqueRecord(resolveBlob(payloadRef, blobBytes)),
-        },
-        metadata: {
-          createdAt: layersView.getFloat64(baseOffset + 72, true),
-          updatedAt: layersView.getFloat64(baseOffset + 80, true),
-          authorId: readStringIndex(layersView, baseOffset + 20, strings),
-        },
-        instances: [] as TerrainScatterStoreSnapshot['layers'][number]['instances'],
-      }
+  const strings = readStringTable(buffer, stringTableOffset, stringCount)
+  const groundNodeId = strings[groundNodeIdIndex] ?? ''
+  const blobBytes = new Uint8Array(buffer, blobOffset, blobByteLength)
+  const sections = new Map<number, { offset: number; byteLength: number; recordCount: number }>()
+
+  for (let index = 0; index < sectionCount; index += 1) {
+    const offset = directoryOffset + index * SECTION_DIRECTORY_ENTRY_BYTES
+    sections.set(view.getUint32(offset, true), {
+      offset: view.getUint32(offset + 4, true),
+      byteLength: view.getUint32(offset + 8, true),
+      recordCount: view.getUint32(offset + 12, true),
     })
-    const layerById = new Map(layers.map((layer) => [layer.id, layer]))
-    for (let index = 0; index < instancesSection.recordCount; index += 1) {
-      const baseOffset = index * 96
-      const metadataRef = readBlobRef(instancesView, baseOffset + 88)
-      const layerId = readStringIndex(instancesView, baseOffset + 8, strings)
-      const groundFlags = instancesView.getUint32(baseOffset + 60, true)
-      const layer = layerId ? layerById.get(layerId) : null
-      if (!layer) {
-        continue
-      }
-      layer.instances.push({
-        id: readStringIndex(instancesView, baseOffset, strings) ?? `instance-${index}`,
-        assetId: readStringIndex(instancesView, baseOffset + 4, strings),
-        layerId,
-        profileId: readStringIndex(instancesView, baseOffset + 12, strings),
-        seed: Number.isFinite(instancesView.getFloat64(baseOffset + 16, true)) ? instancesView.getFloat64(baseOffset + 16, true) : null,
-        localPosition: {
-          x: instancesView.getFloat32(baseOffset + 24, true),
-          y: instancesView.getFloat32(baseOffset + 28, true),
-          z: instancesView.getFloat32(baseOffset + 32, true),
+  }
+
+  const metaSection = sections.get(SectionType.ScatterMeta)
+  const layersSection = sections.get(SectionType.ScatterLayers)
+  const instancesSection = sections.get(SectionType.ScatterInstances)
+  if (!metaSection || !layersSection || !instancesSection) {
+    throw new Error('Ground scatter sidecar is missing scatter sections')
+  }
+
+  const metaView = new DataView(buffer, metaSection.offset, metaSection.byteLength)
+  const layersView = new DataView(buffer, layersSection.offset, layersSection.byteLength)
+  const instancesView = new DataView(buffer, instancesSection.offset, instancesSection.byteLength)
+  const layers = Array.from({ length: layersSection.recordCount }, (_, index) => {
+    const baseOffset = index * 96
+    const payloadRef = readBlobRef(layersView, baseOffset + 88)
+    return {
+      id: readStringIndex(layersView, baseOffset, strings) ?? `layer-${index}`,
+      label: readStringIndex(layersView, baseOffset + 4, strings) ?? 'Scatter Layer',
+      category: decodeCategory(layersView.getUint8(baseOffset + 8)),
+      assetId: readStringIndex(layersView, baseOffset + 12, strings),
+      profileId: readStringIndex(layersView, baseOffset + 16, strings),
+      params: {
+        alignToNormal: Boolean(layersView.getUint8(baseOffset + 9) & (1 << 0)),
+        randomYaw: Boolean(layersView.getUint8(baseOffset + 9) & (1 << 1)),
+        minSlope: layersView.getFloat32(baseOffset + 24, true),
+        maxSlope: layersView.getFloat32(baseOffset + 28, true),
+        minHeight: layersView.getFloat32(baseOffset + 32, true),
+        maxHeight: layersView.getFloat32(baseOffset + 36, true),
+        minScale: layersView.getFloat32(baseOffset + 40, true),
+        maxScale: layersView.getFloat32(baseOffset + 44, true),
+        density: layersView.getFloat32(baseOffset + 48, true),
+        seed: Number.isFinite(layersView.getFloat64(baseOffset + 52, true)) ? layersView.getFloat64(baseOffset + 52, true) : null,
+        jitter: {
+          position: layersView.getFloat32(baseOffset + 60, true),
+          rotation: layersView.getFloat32(baseOffset + 64, true),
+          scale: layersView.getFloat32(baseOffset + 68, true),
         },
-        localRotation: {
-          x: instancesView.getFloat32(baseOffset + 36, true),
-          y: instancesView.getFloat32(baseOffset + 40, true),
-          z: instancesView.getFloat32(baseOffset + 44, true),
-        },
-        localScale: {
-          x: instancesView.getFloat32(baseOffset + 48, true),
-          y: instancesView.getFloat32(baseOffset + 52, true),
-          z: instancesView.getFloat32(baseOffset + 56, true),
-        },
-        groundCoords: groundFlags & GroundCoordsFlags.HasGroundCoords
-          ? {
-              x: instancesView.getFloat32(baseOffset + 64, true),
-              z: instancesView.getFloat32(baseOffset + 68, true),
-              height: groundFlags & GroundCoordsFlags.HasGroundHeight ? instancesView.getFloat32(baseOffset + 72, true) : null,
-              normal: groundFlags & GroundCoordsFlags.HasGroundNormal
-                ? {
-                    x: instancesView.getFloat32(baseOffset + 76, true),
-                    y: instancesView.getFloat32(baseOffset + 80, true),
-                    z: instancesView.getFloat32(baseOffset + 84, true),
-                  }
-                : null,
-            }
-          : null,
-        metadata: decodeNullableOpaqueRecord(resolveBlob(metadataRef, blobBytes)),
-      })
+        payload: decodeNullableOpaqueRecord(resolveBlob(payloadRef, blobBytes)),
+      },
+      metadata: {
+        createdAt: layersView.getFloat64(baseOffset + 72, true),
+        updatedAt: layersView.getFloat64(baseOffset + 80, true),
+        authorId: readStringIndex(layersView, baseOffset + 20, strings),
+      },
+      instances: [] as TerrainScatterStoreSnapshot['layers'][number]['instances'],
     }
-    terrainScatter = {
+  })
+
+  const layerById = new Map(layers.map((layer) => [layer.id, layer]))
+  for (let index = 0; index < instancesSection.recordCount; index += 1) {
+    const baseOffset = index * 96
+    const metadataRef = readBlobRef(instancesView, baseOffset + 88)
+    const layerId = readStringIndex(instancesView, baseOffset + 8, strings)
+    const groundFlags = instancesView.getUint32(baseOffset + 60, true)
+    const layer = layerId ? layerById.get(layerId) : null
+    if (!layer) {
+      continue
+    }
+    layer.instances.push({
+      id: readStringIndex(instancesView, baseOffset, strings) ?? `instance-${index}`,
+      assetId: readStringIndex(instancesView, baseOffset + 4, strings),
+      layerId,
+      profileId: readStringIndex(instancesView, baseOffset + 12, strings),
+      seed: Number.isFinite(instancesView.getFloat64(baseOffset + 16, true)) ? instancesView.getFloat64(baseOffset + 16, true) : null,
+      localPosition: {
+        x: instancesView.getFloat32(baseOffset + 24, true),
+        y: instancesView.getFloat32(baseOffset + 28, true),
+        z: instancesView.getFloat32(baseOffset + 32, true),
+      },
+      localRotation: {
+        x: instancesView.getFloat32(baseOffset + 36, true),
+        y: instancesView.getFloat32(baseOffset + 40, true),
+        z: instancesView.getFloat32(baseOffset + 44, true),
+      },
+      localScale: {
+        x: instancesView.getFloat32(baseOffset + 48, true),
+        y: instancesView.getFloat32(baseOffset + 52, true),
+        z: instancesView.getFloat32(baseOffset + 56, true),
+      },
+      groundCoords: groundFlags & GroundCoordsFlags.HasGroundCoords
+        ? {
+            x: instancesView.getFloat32(baseOffset + 64, true),
+            z: instancesView.getFloat32(baseOffset + 68, true),
+            height: groundFlags & GroundCoordsFlags.HasGroundHeight ? instancesView.getFloat32(baseOffset + 72, true) : null,
+            normal: groundFlags & GroundCoordsFlags.HasGroundNormal
+              ? {
+                  x: instancesView.getFloat32(baseOffset + 76, true),
+                  y: instancesView.getFloat32(baseOffset + 80, true),
+                  z: instancesView.getFloat32(baseOffset + 84, true),
+                }
+              : null,
+          }
+        : null,
+      metadata: decodeNullableOpaqueRecord(resolveBlob(metadataRef, blobBytes)),
+    })
+  }
+
+  return {
+    groundNodeId,
+    terrainScatter: {
       version: metaView.getUint32(0, true),
       groundNodeId,
       metadata: {
@@ -582,53 +491,6 @@ export function deserializeGroundScatterSidecar(buffer: ArrayBuffer): GroundScat
         version: metaView.getUint32(4, true),
       },
       layers,
-    }
-  }
-
-  let terrainPaint: TerrainPaintSettings | null = null
-  if (flags & GroundScatterFlags.HasPaint) {
-    const metaSection = sections.get(SectionType.PaintMeta)
-    const layersSection = sections.get(SectionType.PaintLayers)
-    const chunksSection = sections.get(SectionType.PaintChunks)
-    if (!metaSection || !layersSection || !chunksSection) {
-      throw new Error('Ground scatter sidecar is missing terrain paint sections')
-    }
-    const metaView = new DataView(buffer, metaSection.offset, metaSection.byteLength)
-    const layersView = new DataView(buffer, layersSection.offset, layersSection.byteLength)
-    const chunksView = new DataView(buffer, chunksSection.offset, chunksSection.byteLength)
-    const layers: TerrainPaintSettings['layers'] = []
-    for (let index = 0; index < layersSection.recordCount; index += 1) {
-      const baseOffset = index * 8
-      const textureAssetId = readStringIndex(layersView, baseOffset + 4, strings)
-      if (!textureAssetId) {
-        continue
-      }
-      layers.push({
-        channel: decodePaintChannel(layersView.getUint32(baseOffset, true)),
-        textureAssetId,
-      })
-    }
-    const chunks: TerrainPaintSettings['chunks'] = {}
-    for (let index = 0; index < chunksSection.recordCount; index += 1) {
-      const baseOffset = index * 8
-      const chunkKey = readStringIndex(chunksView, baseOffset, strings)
-      const logicalId = readStringIndex(chunksView, baseOffset + 4, strings)
-      if (!chunkKey || !logicalId) {
-        continue
-      }
-      chunks[chunkKey] = { logicalId }
-    }
-    terrainPaint = {
-      version: metaView.getUint32(0, true) as 1,
-      weightmapResolution: metaView.getUint32(4, true),
-      layers,
-      chunks,
-    }
-  }
-
-  return {
-    groundNodeId,
-    terrainScatter,
-    terrainPaint,
+    },
   }
 }

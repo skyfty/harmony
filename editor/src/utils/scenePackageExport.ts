@@ -1,6 +1,7 @@
 import { zipSync, strToU8 } from 'fflate'
 import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@schema'
 import {
+  GROUND_PAINT_SIDECAR_FILENAME,
   GROUND_SCATTER_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
@@ -9,6 +10,7 @@ import {
 } from '@schema'
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -452,6 +454,7 @@ export async function exportScenePackageZip(payload: {
     let planningPath: string | undefined
     let groundHeightsPath: string | undefined
     let groundScatterPath: string | undefined
+    let groundPaintPath: string | undefined
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
     const sidecarSource = typeof structuredClone === 'function'
@@ -464,6 +467,9 @@ export async function exportScenePackageZip(payload: {
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
+    const groundPaintSidecar = scene.id === sceneStore.currentSceneId
+      ? useGroundPaintStore().buildSceneDocumentSidecar(scene.id, groundNode)
+      : await scenesStore.loadGroundPaintSidecar(scene.id)
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
     stripEditorOnlySceneFields(docClone)
@@ -526,12 +532,16 @@ export async function exportScenePackageZip(payload: {
       groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SCATTER_SIDECAR_FILENAME}`
       files[groundScatterPath] = new Uint8Array(groundScatterSidecar)
     }
+    if (groundPaintSidecar) {
+      groundPaintPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_PAINT_SIDECAR_FILENAME}`
+      files[groundPaintPath] = new Uint8Array(groundPaintSidecar)
+    }
     if (payload.includePlanningData && scene.planningData) {
       const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
       planningPath = planningSidecar.planningPath
       files[planningPath] = jsonBytes(planningSidecar.sidecar)
     }
-    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath, groundHeightsPath, groundScatterPath })
+    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath, groundHeightsPath, groundScatterPath, groundPaintPath })
   }
 
   const manifest: ScenePackageManifestV1 = {
