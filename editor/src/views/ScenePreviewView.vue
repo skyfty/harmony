@@ -9,6 +9,7 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
+	deserializeGroundDynamicSidecar,
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	DEFAULT_ENVIRONMENT_RESTITUTION,
 	DEFAULT_ENVIRONMENT_FRICTION,
@@ -58,6 +59,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
 import { createGroundRuntimeMeshFromSidecar, stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
+import { attachGroundDynamicRuntimeToNode } from '@/stores/groundDynamicStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
@@ -281,6 +283,7 @@ type ScenePreviewSceneEntry =
 			updatedAt: string | null
 			document: SceneJsonExportDocument
 			groundHeightSidecar: ArrayBuffer | null
+			groundDynamicSidecar: ArrayBuffer | null
 	  }
 	| {
 			kind: 'external'
@@ -1585,6 +1588,7 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	if (terrainPaintPreviewLoadToken !== loadToken) {
 		return
 	}
+	attachGroundDynamicRuntimeToNode(document.id, groundNode)
 	cachedGroundNodeId = groundNode.id
 	cachedGroundDynamicMesh = groundNode.dynamicMesh
 }
@@ -5081,15 +5085,42 @@ function readPackageSceneGroundSidecar(
 	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
 }
 
+function readPackageSceneGroundDynamicSidecar(
+	pkg: ReturnType<typeof unzipScenePackage>,
+	sceneEntry: { sceneId: string; path: string; groundDynamicPath?: string },
+	document: SceneJsonExportDocument,
+): ArrayBuffer | null {
+	if (!packageSceneHasGroundNode(document)) {
+		return null
+	}
+	if (!sceneEntry.groundDynamicPath) {
+		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground dynamic sidecar path`)
+	}
+	const sidecarBytes = pkg.files[sceneEntry.groundDynamicPath]
+	if (!sidecarBytes) {
+		throw new Error(`Missing ground dynamic sidecar in scene package: ${sceneEntry.groundDynamicPath}`)
+	}
+	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
+}
+
 
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
-	options: { groundHeightSidecar?: ArrayBuffer | null } = {},
+	options: { groundHeightSidecar?: ArrayBuffer | null; groundDynamicSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
-	const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+	const sidecar = options.groundHeightSidecar ?? await useScenesStore().loadGroundHeightSidecar(document.id)
+	const dynamicSidecar = options.groundDynamicSidecar ?? await useScenesStore().loadGroundDynamicSidecar(document.id)
 	const groundNode = findGroundNode(document.nodes)
 	if (groundNode && groundNode.dynamicMesh && sidecar) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
+	}
+	if (groundNode && groundNode.dynamicMesh && dynamicSidecar) {
+		const dynamicPayload = deserializeGroundDynamicSidecar(dynamicSidecar)
+		groundNode.dynamicMesh = {
+			...groundNode.dynamicMesh,
+			terrainScatter: dynamicPayload.terrainScatter,
+			terrainPaint: dynamicPayload.terrainPaint,
+		} as GroundDynamicMesh
 	}
 	return document
 }
@@ -5112,7 +5143,10 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 		if (entry.kind === 'embedded') {
 			cleanupForUnrelatedSceneSwitch()
 			const waitApplied = waitForSnapshotApplied(timestamp, token)
-			const runtimeDocument = await buildPreviewRuntimeDocument(entry.document, { groundHeightSidecar: entry.groundHeightSidecar })
+			const runtimeDocument = await buildPreviewRuntimeDocument(entry.document, {
+				groundHeightSidecar: entry.groundHeightSidecar,
+				groundDynamicSidecar: entry.groundDynamicSidecar,
+			})
 			applySnapshot({
 				revision: nextSnapshotRevision(),
 				document: runtimeDocument,

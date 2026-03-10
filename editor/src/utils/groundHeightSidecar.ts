@@ -116,6 +116,8 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
     delete dynamicMesh.planningHeightMap
     delete dynamicMesh.planningMetadata
     delete dynamicMesh.surfaceRevision
+    delete dynamicMesh.terrainScatter
+    delete dynamicMesh.terrainPaint
   })
   return document
 }

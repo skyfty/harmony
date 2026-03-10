@@ -521,6 +521,7 @@ import {
   DEFAULT_ENVIRONMENT_GRAVITY,
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
+  deserializeGroundDynamicSidecar,
   cloneEnvironmentSettings,
   resolveDocumentEnvironment,
   clampSceneNodeInstanceLayout,
@@ -8972,7 +8973,7 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
 
 function hydrateGroundSidecarFromPackage(
   pkg: ScenePackageUnzipped,
-  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string },
+  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundDynamicPath?: string },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
   const definition = findFirstGroundDynamicMesh(document);
@@ -9026,6 +9027,22 @@ function hydrateGroundSidecarFromPackage(
   definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
     ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
     : 0;
+
+  if (!sceneEntry.groundDynamicPath) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 动态 sidecar 路径`);
+  }
+  const dynamicSidecarBytes = pkg.files[sceneEntry.groundDynamicPath];
+  if (!dynamicSidecarBytes) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 动态 sidecar 文件`);
+  }
+  const dynamicSidecarBuffer = dynamicSidecarBytes.buffer.slice(
+    dynamicSidecarBytes.byteOffset,
+    dynamicSidecarBytes.byteOffset + dynamicSidecarBytes.byteLength,
+  );
+  const dynamicPayload = deserializeGroundDynamicSidecar(dynamicSidecarBuffer);
+  definition.terrainScatter = dynamicPayload.terrainScatter;
+  definition.terrainPaint = dynamicPayload.terrainPaint;
+
   return document;
 }
 

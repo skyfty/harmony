@@ -141,6 +141,7 @@ import {
 import { cloudSettingsEqual } from '@schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
+import { useGroundDynamicStore } from './groundDynamicStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
@@ -1190,8 +1191,6 @@ function manualDeepClone<T>(source: T): T {
 }
 
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
-  const terrainScatter = manualDeepClone(definition.terrainScatter)
-  const terrainPaint = manualDeepClone(definition.terrainPaint)
   const planningMetadata = manualDeepClone(definition.planningMetadata)
   const result: GroundDynamicMesh = {
     type: 'Ground',
@@ -1211,12 +1210,6 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   }
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
-  }
-  if (terrainScatter !== undefined) {
-    result.terrainScatter = terrainScatter
-  }
-  if (terrainPaint !== undefined) {
-    result.terrainPaint = terrainPaint
   }
   return result
 }
@@ -1391,6 +1384,16 @@ function persistGroundHeightSidecarForNode(groundNode: SceneNode | null): boolea
   }
   void useScenesStore().saveGroundHeightSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
     console.warn('[SceneStore] Failed to persist ground height sidecar', error)
+  })
+  return true
+}
+
+function persistGroundDynamicSidecarForNode(groundNode: SceneNode | null): boolean {
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return false
+  }
+  void useScenesStore().saveGroundDynamicSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
+    console.warn('[SceneStore] Failed to persist ground dynamic sidecar', error)
   })
   return true
 }
@@ -4837,6 +4840,44 @@ function collectTerrainScatterAssetDependencies(
   })
 }
 
+function collectTerrainPaintAssetDependencies(
+  terrainPaint: GroundDynamicMesh['terrainPaint'] | null | undefined,
+  bucket: Set<string>,
+) {
+  if (!terrainPaint || terrainPaint.version !== 1 || !terrainPaint.chunks || typeof terrainPaint.chunks !== 'object') {
+    return
+  }
+  if (Array.isArray(terrainPaint.layers)) {
+    terrainPaint.layers.forEach((layer) => {
+      collectAssetIdCandidate(bucket, layer?.textureAssetId)
+    })
+  }
+  Object.values(terrainPaint.chunks).forEach((ref: any) => {
+    const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
+    if (logicalId) {
+      bucket.add(logicalId)
+    }
+  })
+}
+
+function collectGroundDynamicAssetDependencies(scene: StoredSceneDocument, bucket: Set<string>) {
+  const groundNode = findGroundNode(scene.nodes ?? [])
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh & {
+    terrainScatter?: TerrainScatterStoreSnapshot | null
+  }
+  const runtimeState = useGroundDynamicStore().getSceneGroundDynamic(scene.id)
+  if (runtimeState?.nodeId === groundNode.id) {
+    collectTerrainScatterAssetDependencies(runtimeState.terrainScatter, bucket)
+    collectTerrainPaintAssetDependencies(runtimeState.terrainPaint, bucket)
+    return
+  }
+  collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
+  collectTerrainPaintAssetDependencies((definition as any)?.terrainPaint, bucket)
+}
+
 function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket: Set<string>) {
   if (!node) {
     return
@@ -4881,21 +4922,7 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
       terrainScatter?: TerrainScatterStoreSnapshot | null
     }
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
-
-    const terrainPaint: any = (definition as any)?.terrainPaint
-    if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
-      if (Array.isArray(terrainPaint.layers)) {
-        terrainPaint.layers.forEach((layer: any) => {
-          collectAssetIdCandidate(bucket, layer?.textureAssetId)
-        })
-      }
-      Object.values(terrainPaint.chunks).forEach((ref: any) => {
-        const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
-        if (logicalId) {
-          bucket.add(logicalId)
-        }
-      })
-    }
+    collectTerrainPaintAssetDependencies((definition as any)?.terrainPaint, bucket)
   }
   if (node.children?.length) {
     node.children.forEach((child) => collectNodeAssetDependencies(child, bucket))
@@ -4935,6 +4962,7 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
   }
 
   traverseNodes(scene.nodes ?? [])
+  collectGroundDynamicAssetDependencies(scene, bucket)
 
   const materialById = new Map<string, SceneMaterial>()
   if (Array.isArray(scene.materials) && scene.materials.length) {
@@ -8026,13 +8054,44 @@ export const useSceneStore = defineStore('scene', {
         this.updateNodeDynamicMesh(nodeId, dynamicMesh)
         return
       }
-      applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh, {
-        beforeMerge: (existingRecord, incoming) => {
-          prepareGroundDynamicMeshRevision(existingRecord, incoming)
-        },
-      })
+      const incoming = dynamicMesh && typeof dynamicMesh === 'object'
+        ? { ...(dynamicMesh as Record<string, unknown>) }
+        : dynamicMesh
+      let shouldPersistDynamicSidecar = false
+      if (incoming && typeof incoming === 'object' && this.currentSceneId) {
+        if (Object.prototype.hasOwnProperty.call(incoming, 'terrainScatter')) {
+          useGroundDynamicStore().replaceTerrainScatter(
+            this.currentSceneId,
+            nodeId,
+            manualDeepClone((incoming as Record<string, unknown>).terrainScatter) as TerrainScatterStoreSnapshot | null,
+          )
+          delete (incoming as Record<string, unknown>).terrainScatter
+          shouldPersistDynamicSidecar = true
+        }
+        if (Object.prototype.hasOwnProperty.call(incoming, 'terrainPaint')) {
+          useGroundDynamicStore().replaceTerrainPaint(
+            this.currentSceneId,
+            nodeId,
+            manualDeepClone((incoming as Record<string, unknown>).terrainPaint) as GroundDynamicMesh['terrainPaint'],
+          )
+          delete (incoming as Record<string, unknown>).terrainPaint
+          shouldPersistDynamicSidecar = true
+        }
+      }
+      this.captureNodeDynamicMeshHistory(nodeId)
+      if (incoming && typeof incoming === 'object') {
+        applySceneNodeDynamicMeshUpdate(this, nodeId, incoming, {
+          beforeMerge: (existingRecord, nextIncoming) => {
+            prepareGroundDynamicMeshRevision(existingRecord, nextIncoming)
+          },
+        })
+      }
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
       persistGroundHeightSidecarForNode(target)
+      if (shouldPersistDynamicSidecar) {
+        persistGroundDynamicSidecarForNode(target)
+      }
+      commitSceneSnapshot(this)
     },
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
@@ -14456,6 +14515,8 @@ export const useSceneStore = defineStore('scene', {
         if (this.currentSceneId) {
           const sidecar = await useScenesStore().loadGroundHeightSidecar(this.currentSceneId)
           await useGroundHeightmapStore().hydrateSceneDocument(findGroundNode(this.nodes), sidecar)
+          const dynamicSidecar = await useScenesStore().loadGroundDynamicSidecar(this.currentSceneId)
+          await useGroundDynamicStore().hydrateSceneDocument(this.currentSceneId, findGroundNode(this.nodes), dynamicSidecar)
         }
         await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
       } finally {

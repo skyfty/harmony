@@ -85,6 +85,14 @@ export type {
 } from './scenePackage'
 
 export {
+  GROUND_DYNAMIC_SIDECAR_FILENAME,
+  GROUND_DYNAMIC_SIDECAR_VERSION,
+  serializeGroundDynamicSidecar,
+  deserializeGroundDynamicSidecar,
+} from './groundDynamicSidecar'
+export type { GroundDynamicSidecarPayload } from './groundDynamicSidecar'
+
+export {
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
   readTextFileFromScenePackage,

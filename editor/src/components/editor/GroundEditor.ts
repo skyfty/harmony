@@ -46,6 +46,7 @@ import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useGroundDynamicStore } from '@/stores/groundDynamicStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import {SCATTER_BRUSH_RADIUS_MAX} from '@/stores/terrainStore'
@@ -263,8 +264,12 @@ function ensureTerrainPaintLayer(settings: TerrainPaintSettings, textureAssetId:
 	return nextChannel
 }
 
-function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh): TerrainPaintSettings {
-	const existing = definition.terrainPaint
+function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintSettings {
+	const sceneId = useSceneStore().currentSceneId
+	const runtimeState = sceneId && nodeId
+		? useGroundDynamicStore().getSceneGroundDynamic(sceneId)
+		: null
+	const existing = runtimeState?.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
 	if (existing && existing.version === 1) {
 		return {
 			version: 1,
@@ -1326,7 +1331,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (groundNode?.dynamicMesh?.type === 'Ground') {
 				const definition = groundNode.dynamicMesh as GroundDynamicMesh
 				const groundObject = getGroundObject()
-				const settings = cloneOrCreateTerrainPaintSettings(definition)
+				const settings = cloneOrCreateTerrainPaintSettings(definition, groundNode.id)
 				if (groundObject) {
 					ensureTerrainPaintPreviewInstalled(groundObject, definition, settings)
 				}
@@ -1968,7 +1973,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const session = ensurePaintSession(definition, groundNode.id)
 		// Ensure we're working off the latest stored settings snapshot.
-		session.settings = cloneOrCreateTerrainPaintSettings(definition)
+		session.settings = cloneOrCreateTerrainPaintSettings(definition, session.nodeId)
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
 		session.terrainPaintPreviewPendingChunkKeys.clear()
@@ -2876,11 +2881,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function getGroundTerrainScatterSnapshot(): TerrainScatterStoreSnapshot | null {
 		const node = getGroundNodeFromScene()
-		if (node?.dynamicMesh?.type !== 'Ground') {
+		const sceneId = useSceneStore().currentSceneId
+		if (node?.dynamicMesh?.type !== 'Ground' || !sceneId) {
 			return null
 		}
-		const definition = node.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
-		return definition.terrainScatter ?? null
+		const runtimeState = useGroundDynamicStore().getSceneGroundDynamic(sceneId)
+		return runtimeState?.nodeId === node.id ? runtimeState.terrainScatter ?? null : null
 	}
 
 	function getScatterSnapshotTimestamp(snapshot: TerrainScatterStoreSnapshot | null | undefined): number | null {
@@ -2893,7 +2899,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function syncTerrainScatterSnapshotToScene(
 		storeOverride?: TerrainScatterStore | null,
-		options: { bumpInstancesUpdatedAt?: boolean } = {},
+		syncOptions: { bumpInstancesUpdatedAt?: boolean } = {},
 	): void {
 		const store = storeOverride ?? scatterStore
 		if (!store) {
@@ -2904,15 +2910,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
-		const shouldBumpInstances = options.bumpInstancesUpdatedAt === true
-		const nextMesh: GroundDynamicMesh = {
-			...(groundNode.dynamicMesh as GroundDynamicMesh),
+		const shouldBumpInstances = syncOptions.bumpInstancesUpdatedAt === true
+		options.sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
 			terrainScatter: snapshot,
 			terrainScatterInstancesUpdatedAt: shouldBumpInstances
 				? Date.now()
 				: (groundNode.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt,
-		}
-		groundNode.dynamicMesh = nextMesh
+		})
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
@@ -3004,7 +3008,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			nodeId,
 			definition,
 			chunkCells,
-			settings: cloneOrCreateTerrainPaintSettings(definition),
+			settings: cloneOrCreateTerrainPaintSettings(definition, groundNode.id),
 			chunkStates: new Map(),
 			hasPendingChanges: false,
 			terrainPaintPreviewPendingChunkKeys: new Map(),

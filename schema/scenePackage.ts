@@ -1,5 +1,5 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 3 as const;
+export const SCENE_PACKAGE_VERSION = 4 as const;
 
 export type ScenePackageResourceType =
   | 'localAsset'
@@ -18,6 +18,8 @@ export interface ScenePackageSceneEntry {
   planningPath?: string;
   /** Required ground height sidecar path, e.g. `scenes/<sceneId>/ground-heightmaps.bin` */
   groundHeightsPath?: string;
+  /** Required ground dynamic sidecar path, e.g. `scenes/<sceneId>/ground-dynamic.bin` */
+  groundDynamicPath?: string;
 }
 
 export interface ScenePackageProjectEntry {

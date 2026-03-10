@@ -12,6 +12,7 @@ export type LoadedStoredScenePackage = {
   project: LoadedScenePackageProject
   scenes: StoredSceneDocument[]
   groundHeightSidecars: Record<string, ArrayBuffer | null>
+  groundDynamicSidecars: Record<string, ArrayBuffer | null>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -140,6 +141,27 @@ function extractGroundHeightSidecarFromPackage(
   return new Uint8Array(bytes).buffer
 }
 
+function extractGroundDynamicSidecarFromPackage(
+  zip: ReturnType<typeof unzipScenePackage>,
+  sceneEntry: ScenePackageSceneEntry,
+  rawScene: StoredSceneDocument,
+): ArrayBuffer | null {
+  const hasGroundNode = Array.isArray(rawScene.nodes)
+    && rawScene.nodes.some((node) => node?.dynamicMesh?.type === 'Ground')
+  if (!hasGroundNode) {
+    return null
+  }
+  const sidecarPath = sceneEntry.groundDynamicPath
+  if (!sidecarPath) {
+    throw new Error(`Scene bundle entry ${sceneEntry.sceneId} is missing ground dynamic sidecar path`)
+  }
+  const bytes = zip.files[sidecarPath]
+  if (!bytes) {
+    throw new Error(`Missing ground dynamic sidecar in scene bundle: ${sidecarPath}`)
+  }
+  return new Uint8Array(bytes).buffer
+}
+
 export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): Promise<LoadedStoredScenePackage> {
   const zip = unzipScenePackage(zipBytes)
   await restoreRuntimeResourcesFromPackage(zip)
@@ -148,6 +170,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const project = (JSON.parse(projectText) as LoadedScenePackageProject) ?? {}
   const scenes: StoredSceneDocument[] = []
   const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
+  const groundDynamicSidecars: Record<string, ArrayBuffer | null> = {}
 
   for (const sceneEntry of zip.manifest.scenes ?? []) {
     const rawScene = JSON.parse(readTextFileFromScenePackage(zip, sceneEntry.path)) as unknown
@@ -156,9 +179,10 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     }
     const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
+    groundDynamicSidecars[sceneEntry.sceneId] = extractGroundDynamicSidecarFromPackage(zip, sceneEntry, sceneDocument)
     const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, sceneDocument)
     scenes.push(withPlanning)
   }
 
-  return { project, scenes, groundHeightSidecars }
+  return { project, scenes, groundHeightSidecars, groundDynamicSidecars }
 }

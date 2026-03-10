@@ -79,8 +79,6 @@ export function cloneGroundGenerationSettings(settings?: GroundGenerationSetting
 }
 
 export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): GroundDynamicMeshResult {
-  const terrainScatter = manualDeepCloneLocal(definition.terrainScatter) as unknown as GroundDynamicMesh['terrainScatter']
-  const terrainPaint = manualDeepCloneLocal(definition.terrainPaint) as unknown as GroundDynamicMesh['terrainPaint']
   const result: GroundDynamicMeshResult = {
     type: 'Ground',
     width: definition.width,
@@ -99,12 +97,6 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
   }
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
-  }
-  if (terrainScatter !== undefined) {
-    result.terrainScatter = terrainScatter
-  }
-  if (terrainPaint !== undefined) {
-    result.terrainPaint = terrainPaint
   }
   return result
 }
@@ -172,8 +164,6 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     textureDataUrl: overrides.textureDataUrl ?? null,
     textureName: overrides.textureName ?? null,
     generation: initialGeneration,
-    terrainScatter: manualDeepCloneLocal(o.terrainScatter) as unknown as GroundDynamicMesh['terrainScatter'],
-    terrainPaint: manualDeepCloneLocal(o.terrainPaint) as unknown as GroundDynamicMesh['terrainPaint'],
   }
 
   if (typeof (o as any).castShadow === 'boolean') {
