@@ -1641,6 +1641,9 @@ const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'water') {
     return 'cursor-water'
   }
+  if (activeBuildTool.value === 'displayBoard') {
+    return 'cursor-display-board'
+  }
   return null
 })
 const scatterEraseModeActive = ref(false)
@@ -16902,6 +16905,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-water,
 .viewport-canvas.cursor-water:active {
   cursor: alias !important;
+}
+
+.viewport-canvas.cursor-display-board,
+.viewport-canvas.cursor-display-board:active {
+  cursor: crosshair !important;
 }
 
 .viewport-canvas.cursor-scatter-erase,
