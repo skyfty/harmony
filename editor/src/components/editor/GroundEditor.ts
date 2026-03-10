@@ -16,15 +16,12 @@ import {
 	type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import {
-	areAllGroundChunksLoaded,
-	ensureAllGroundChunks,
-	isGroundChunkStreamingEnabled,
 	sculptGround,
 	sampleGroundHeight,
 	resolveGroundEffectiveHeightAtVertex,
+	syncGroundChunkLoadingMode,
 	stitchGroundChunkNormals,
 	resolveGroundChunkCells,
-	updateGroundChunks,
 	updateGroundMesh,
 	updateGroundMeshRegion,
 	type GroundGeometryUpdateRegion,
@@ -151,21 +148,6 @@ const brushResultVertexHelper = new THREE.Vector3()
 const groundSelectionCenterHelper = new THREE.Vector3()
 const groundSelectionScreenHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
-
-function syncGroundChunkLoadingMode(
-	groundObject: THREE.Object3D,
-	definition: GroundDynamicMesh,
-	camera: THREE.Camera | null,
-	options: Parameters<typeof updateGroundChunks>[3] = {},
-): void {
-	if (isGroundChunkStreamingEnabled(definition)) {
-		updateGroundChunks(groundObject, definition, camera, options)
-		return
-	}
-	if (!areAllGroundChunksLoaded(groundObject, definition)) {
-		ensureAllGroundChunks(groundObject, definition)
-	}
-}
 const scatterPointerHelper = new THREE.Vector3()
 const scatterDirectionHelper = new THREE.Vector3()
 const scatterPlacementHelper = new THREE.Vector3()

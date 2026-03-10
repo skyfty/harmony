@@ -166,6 +166,7 @@ import {
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
+  syncGroundChunkLoadingMode,
   updateGroundChunks,
   updateGroundMesh,
   releaseGroundMeshCache,
@@ -14123,6 +14124,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         if (shouldSkipSculptRefresh) {
           delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
         }
+        syncGroundChunkLoadingMode(groundObject, groundDefinition, null)
 
         // The Skybox sun (Sky.js) uses a DirectionalLight for shadows. Re-fit it when the ground changes.
         if (skySunLight) {
@@ -14131,6 +14133,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       } else if (groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
+      syncGroundChunkLoadingMode(groundObject, groundDefinition, null)
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
@@ -15134,6 +15137,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
       groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
+      syncGroundChunkLoadingMode(groundMesh, groundDefinition, null)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'
