@@ -135,10 +135,12 @@ export function createGroundRuntimeMeshFromSidecar(
 
   const buffer = sidecar.slice(0)
   const header = readSidecarHeader(new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES))
+  const manualHeightMap = new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount)
+  const planningHeightMap = new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT, vertexCount)
   return {
     ...definition,
-    manualHeightMap: new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount),
-    planningHeightMap: new Float64Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT, vertexCount),
+    manualHeightMap,
+    planningHeightMap,
     planningMetadata: header.planningMetadata,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
   }

@@ -288,7 +288,7 @@ async function readSceneGroundHeightSidecar(workspaceId: string, sceneId: string
   const tx = db.transaction(STORE_GROUND_HEIGHTMAPS, 'readonly')
   const store = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
   const entry = await requestToPromise<{ id: string; buffer: ArrayBuffer } | undefined>(store.get(sceneId))
-  return entry?.buffer ? cloneArrayBuffer(entry.buffer) : null
+  return entry?.buffer
 }
 
 async function writeSceneGroundHeightSidecar(workspaceId: string, sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {

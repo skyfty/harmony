@@ -1554,11 +1554,12 @@ const scenePreviewPerf = createScenePreviewPerfController({
 	wheelVisuals: { lowSpeedIntervalMs: 100 },
 })
 
-function syncGroundCache(document: SceneJsonExportDocument | null): void {
+async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
 	cameraDependentUpdateInitialized = false
 	terrainPaintPreviewLoadToken += 1
+	const loadToken = terrainPaintPreviewLoadToken
 	if (!document) {
 		return
 	}
@@ -1566,6 +1567,11 @@ function syncGroundCache(document: SceneJsonExportDocument | null): void {
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		return
 	}
+	const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+	if (terrainPaintPreviewLoadToken !== loadToken) {
+		return
+	}
+	groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	cachedGroundNodeId = groundNode.id
 	cachedGroundDynamicMesh = groundNode.dynamicMesh
 }
@@ -5062,27 +5068,33 @@ function readPackageSceneGroundSidecar(
 	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
 }
 
+async function resolvePreviewGroundHeightSidecar(
+	document: SceneJsonExportDocument,
+	options: { groundHeightSidecar?: ArrayBuffer | null } = {},
+): Promise<ArrayBuffer | null> {
+	if (!packageSceneHasGroundNode(document)) {
+		return null
+	}
+	if (options.groundHeightSidecar !== undefined) {
+		return options.groundHeightSidecar
+	}
+	if (document.id === sceneStore.currentSceneId) {
+		return useGroundHeightmapStore().buildSceneDocumentSidecar(findGroundNode(document.nodes))
+	}
+	return await useScenesStore().loadGroundHeightSidecar(document.id)
+}
+
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
-	const cloned = typeof structuredClone === 'function'
-		? structuredClone(document)
-		: JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
-	if (!packageSceneHasGroundNode(cloned)) {
-		return cloned
-	}
-	const sidecar = options.groundHeightSidecar !== undefined
-		? options.groundHeightSidecar
-		: (cloned.id === sceneStore.currentSceneId
-			? useGroundHeightmapStore().buildSceneDocumentSidecar(findGroundNode(cloned.nodes))
-			: null)
-	const groundNode = findGroundNode(cloned.nodes)
+	const sidecar = await resolvePreviewGroundHeightSidecar(document, options)
+	const groundNode = findGroundNode(document.nodes)
 	if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-		return cloned
+		return document
 	}
 	groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
-	return cloned
+	return document
 }
 
 async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
@@ -7139,7 +7151,7 @@ function stopAnimationLoop() {
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
-	syncGroundCache(null)
+	void syncGroundCache(null)
 	disposeSkySunLight()
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
@@ -10389,7 +10401,7 @@ async function applyInitialDocumentGraph(
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
-	syncGroundCache(document)
+	await syncGroundCache(document)
 	if (skySunLight) {
 		tryFitSkySunLightShadowsToGround(skySunLight)
 	}
@@ -10423,7 +10435,7 @@ async function applyIncrementalDocumentGraph(
 		}
 	}
 
-	syncGroundCache(document)
+	await syncGroundCache(document)
 	if (skySunLight) {
 		tryFitSkySunLightShadowsToGround(skySunLight)
 	}
