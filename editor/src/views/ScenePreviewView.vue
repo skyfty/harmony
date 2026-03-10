@@ -52,7 +52,7 @@ import {
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
-import { subscribeToScenePreview } from '@/utils/previewChannel'
+import { subscribeToScenePreview, decodePreviewGroundHeightSidecar } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
@@ -1554,6 +1554,13 @@ const scenePreviewPerf = createScenePreviewPerfController({
 	wheelVisuals: { lowSpeedIntervalMs: 100 },
 })
 
+function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null | undefined): boolean {
+	if (!definition || definition.type !== 'Ground') {
+		return false
+	}
+	return definition.manualHeightMap instanceof Float64Array && definition.planningHeightMap instanceof Float64Array
+}
+
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
@@ -1567,11 +1574,17 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		return
 	}
-	const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+	if (hasEmbeddedGroundRuntimeHeightmaps(groundNode.dynamicMesh)) {
+	} else {
+		const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+		if (terrainPaintPreviewLoadToken !== loadToken) {
+			return
+		}
+		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
+	}
 	if (terrainPaintPreviewLoadToken !== loadToken) {
 		return
 	}
-	groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	cachedGroundNodeId = groundNode.id
 	cachedGroundDynamicMesh = groundNode.dynamicMesh
 }
@@ -5079,9 +5092,11 @@ async function resolvePreviewGroundHeightSidecar(
 		return options.groundHeightSidecar
 	}
 	if (document.id === sceneStore.currentSceneId) {
-		return useGroundHeightmapStore().buildSceneDocumentSidecar(findGroundNode(document.nodes))
+		const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(findGroundNode(document.nodes))
+		return sidecar
 	}
-	return await useScenesStore().loadGroundHeightSidecar(document.id)
+	const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+	return sidecar
 }
 
 async function buildPreviewRuntimeDocument(
@@ -10575,7 +10590,13 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 	}
 	isApplyingSnapshot = true
 	statusMessage.value = 'Syncing scene data...'
-	void updateScene(snapshot.document)
+	const runtimeDocumentPromise = snapshot.groundHeightSidecarBase64 === undefined
+		? buildPreviewRuntimeDocument(snapshot.document)
+		: buildPreviewRuntimeDocument(snapshot.document, {
+			groundHeightSidecar: decodePreviewGroundHeightSidecar(snapshot.groundHeightSidecarBase64),
+		})
+	void runtimeDocumentPromise
+		.then((runtimeDocument) => updateScene(runtimeDocument))
 		.then(() => {
 			lastUpdateTime.value = snapshot.timestamp
 			statusMessage.value = ''
