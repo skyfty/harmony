@@ -10474,6 +10474,11 @@ async function handlePointerDown(event: PointerEvent) {
       startY: event.clientY,
       moved: false,
     }
+
+    if (sceneStore.viewportSettings.cameraControlMode === 'map') {
+      event.preventDefault()
+      return
+    }
   }
 
   const selectedAssetId = sceneStore.selectedAssetId
