@@ -50,7 +50,7 @@ function replaceRuntimeState(sceneId: string, groundNode: SceneNode | null, payl
     return
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
-  state.terrainPaint = cloneValue(payload?.terrainPaint ?? null)
+  state.terrainPaint = payload?.terrainPaint ?? null
 }
 
 function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundPaintSidecarPayload | null {
@@ -64,7 +64,7 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundPain
   }
   return {
     groundNodeId: groundNode.id,
-    terrainPaint: cloneValue(state.terrainPaint),
+    terrainPaint: state.terrainPaint,
   }
 }
 
@@ -105,7 +105,8 @@ export const useGroundPaintStore = defineStore('groundPaint', {
     },
     replaceTerrainPaint(sceneId: string, nodeId: string, terrainPaint: TerrainPaintSettings | null): GroundPaintRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
-      state.terrainPaint = cloneValue(terrainPaint)
+      // Callers transfer ownership of terrainPaint into the runtime sidecar store.
+      state.terrainPaint = terrainPaint
       return state
     },
   },

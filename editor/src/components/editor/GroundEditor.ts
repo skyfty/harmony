@@ -3009,7 +3009,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			nodeId,
 			definition,
 			chunkCells,
-			settings: cloneOrCreateTerrainPaintSettings(definition, groundNode.id),
+			settings: cloneOrCreateTerrainPaintSettings(definition, nodeId),
 			chunkStates: new Map(),
 			hasPendingChanges: false,
 			terrainPaintPreviewPendingChunkKeys: new Map(),

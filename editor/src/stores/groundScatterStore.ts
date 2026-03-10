@@ -60,7 +60,7 @@ function replaceRuntimeState(
     return
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
-  state.terrainScatter = cloneValue(payload?.terrainScatter ?? null)
+  state.terrainScatter = payload?.terrainScatter ?? null
   if (state.terrainScatter) {
     loadTerrainScatterSnapshot(groundNode.id, state.terrainScatter)
   } else {
@@ -75,7 +75,7 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundScat
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
   const terrainScatter = saveTerrainScatterSnapshot(groundNode.id) ?? state.terrainScatter ?? null
-  state.terrainScatter = cloneValue(terrainScatter)
+  state.terrainScatter = terrainScatter
   return {
     groundNodeId: groundNode.id,
     terrainScatter,
@@ -126,7 +126,8 @@ export const useGroundScatterStore = defineStore('groundScatter', {
     },
     replaceTerrainScatter(sceneId: string, nodeId: string, terrainScatter: TerrainScatterStoreSnapshot | null): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
-      state.terrainScatter = cloneValue(terrainScatter)
+      // Callers transfer ownership of terrainScatter into the runtime sidecar store.
+      state.terrainScatter = terrainScatter
       if (terrainScatter) {
         loadTerrainScatterSnapshot(nodeId, terrainScatter)
       } else {
@@ -136,7 +137,7 @@ export const useGroundScatterStore = defineStore('groundScatter', {
     },
     captureTerrainScatterSnapshot(sceneId: string, nodeId: string): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
-      state.terrainScatter = cloneValue(saveTerrainScatterSnapshot(nodeId) ?? null)
+      state.terrainScatter = saveTerrainScatterSnapshot(nodeId) ?? null
       return state
     },
   },
