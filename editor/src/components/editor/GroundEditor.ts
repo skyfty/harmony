@@ -540,6 +540,7 @@ type PaintSessionState = {
 
 let paintSessionState: PaintSessionState | null = null
 let paintCommitToken = 0
+let pendingTerrainPaintFlush: Promise<boolean> | null = null
 
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
@@ -1774,6 +1775,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 				// Invalidate any in-flight paint work tied to the previous scene.
 				paintCommitToken += 1
+				pendingTerrainPaintFlush = null
 
 				resetScatterStoreState('scene-changed')
 				paintSessionState = null
@@ -3265,17 +3267,44 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return false
 	}
 
-	async function flushTerrainPaintChanges(): Promise<boolean> {
-		for (let attempts = 0; attempts < 16; attempts += 1) {
-			if (!hasDirtyPaintChunks(paintSessionState)) {
-				return true
-			}
-			const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
-			if (!ok && hasDirtyPaintChunks(paintSessionState)) {
-				return false
-			}
+	function scheduleTerrainPaintFlush(reason: string): void {
+		if (!hasDirtyPaintChunks(paintSessionState)) {
+			return
 		}
-		return !hasDirtyPaintChunks(paintSessionState)
+		void flushTerrainPaintChanges().then((ok) => {
+			if (!ok && hasDirtyPaintChunks(paintSessionState)) {
+				console.warn(`提交地貌涂层失败：${reason}`)
+			}
+		}).catch((error) => {
+			console.warn(`提交地貌涂层失败：${reason}`, error)
+		})
+	}
+
+	function flushTerrainPaintChanges(): Promise<boolean> {
+		if (pendingTerrainPaintFlush) {
+			return pendingTerrainPaintFlush
+		}
+
+		const flushPromise = (async () => {
+			for (let attempts = 0; attempts < 16; attempts += 1) {
+				if (!hasDirtyPaintChunks(paintSessionState)) {
+					return true
+				}
+				const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
+				if (!ok && hasDirtyPaintChunks(paintSessionState)) {
+					return false
+				}
+			}
+			return !hasDirtyPaintChunks(paintSessionState)
+		})()
+
+		pendingTerrainPaintFlush = flushPromise
+		void flushPromise.finally(() => {
+			if (pendingTerrainPaintFlush === flushPromise) {
+				pendingTerrainPaintFlush = null
+			}
+		})
+		return flushPromise
 	}
 
 	async function commitPaintSession(selectedNode: SceneNode | null): Promise<boolean> {
@@ -4672,6 +4701,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		event.preventDefault()
 		event.stopPropagation()
 		event.stopImmediatePropagation()
+		scheduleTerrainPaintFlush('pointerup')
 		return true
 	}
 
@@ -5087,6 +5117,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleActiveBuildToolChange(tool: BuildTool | null) {
+		if (tool !== 'paint') {
+			scheduleTerrainPaintFlush('tool-changed')
+		}
 		if (tool !== 'scatter') {
 			cancelScatterPlacement()
 			scatterPreviewGroup.visible = false
@@ -5117,6 +5150,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundSelectionGroup.clear()
 		scatterPreviewGroup.clear()
 		sculptSessionState = null
+		pendingTerrainPaintFlush = null
 		resetScatterStoreState('dispose')
 	}
 
