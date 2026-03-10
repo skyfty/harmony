@@ -37,7 +37,7 @@ const groundCastShadow = computed({
 })
 
 const groundChunkStreamingEnabled = computed({
-  get: () => groundDefinition.value?.chunkStreamingEnabled !== false,
+  get: () => groundDefinition.value?.chunkStreamingEnabled === true,
   set: (value: boolean) => {
     const node = selectedGroundNode.value
     if (!node || node.dynamicMesh?.type !== 'Ground') {
