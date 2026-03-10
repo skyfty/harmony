@@ -25,7 +25,6 @@
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
               @click="handleGroundButtonClick('terrain')"
-              @contextmenu.prevent.stop="handleGroundTerrainContextMenu"
             />
           </template>
           <v-list density="compact" class="ground-terrain-menu">
@@ -80,7 +79,6 @@
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
               @click="handleGroundButtonClick('paint')"
-              @contextmenu.prevent.stop="handleGroundPaintContextMenu"
             />
           </template>
           <v-list density="compact" class="ground-paint-menu">
@@ -130,7 +128,6 @@
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
               @click="handleGroundButtonClick('scatter')"
-              @contextmenu.prevent.stop="handleGroundScatterContextMenu"
             />
           </template>
           <v-list density="compact" class="ground-scatter-menu">
@@ -235,7 +232,6 @@
               :title="tool.label"
               :disabled="buildToolsDisabled"
               @click="handleBuildToolToggle(tool.id)"
-              @contextmenu.prevent.stop="handleFloorShapeContextMenu"
             />
           </template>
           <v-list density="compact" class="floor-shape-menu">
@@ -310,7 +306,6 @@
               :title="tool.label"
               :disabled="buildToolsDisabled"
               @click="handleBuildToolToggle(tool.id)"
-              @contextmenu.prevent.stop="handleWallShapeContextMenu"
             />
           </template>
           <v-list density="compact" class="wall-shape-menu">
@@ -383,7 +378,6 @@
               :title="tool.label"
               :disabled="buildToolsDisabled"
               @click="handleBuildToolToggle(tool.id)"
-              @contextmenu.prevent.stop="handleWaterShapeContextMenu"
             />
           </template>
           <v-list density="compact" class="water-shape-menu">
@@ -1462,13 +1456,13 @@ function handleRecenterGroupOrigin() {
 }
 
 const buildToolButtons = [
-  { id: 'terrain', icon: 'mdi-image-edit-outline', label: 'Terrain Tool (Left Mouse / Right Click Settings)' },
-  { id: 'paint', icon: 'mdi-brush-variant', label: 'Terrain Paint (Left Mouse / Right Click Settings)' },
-  { id: 'scatter', icon: 'mdi-sprout', label: 'Terrain Scatter (Left Mouse / Right Click Settings)' },
-  { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Left Mouse)' },
-  { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
+  { id: 'terrain', icon: 'mdi-image-edit-outline', label: 'Terrain Tools' },
+  { id: 'paint', icon: 'mdi-brush-variant', label: 'Terrain Paint' },
+  { id: 'scatter', icon: 'mdi-sprout', label: 'Terrain Scatter' },
+  { id: 'wall', icon: 'mdi-wall', label: 'Wall Brush' },
+  { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Brush' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
-  { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
+  { id: 'water', icon: 'mdi-waves', label: 'Water Brush' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
@@ -1542,6 +1536,15 @@ function handleBuildToolToggle(tool: BuildTool) {
     sceneStore.setSelection([])
   }
   emit('change-build-tool', next)
+
+  if (tool === 'wall' || tool === 'floor' || tool === 'water') {
+    if (next) {
+      closeAllMenus()
+      setBuildToolMenuOpen(tool, true)
+      return
+    }
+    setBuildToolMenuOpen(tool, false)
+  }
 }
 
 function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
@@ -1550,7 +1553,6 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
   if (buildToolsDisabled.value) {
     return
   }
-  // default: do nothing here; wall uses its own contextmenu handler to open the embedded menu
   return
 }
 
@@ -1584,10 +1586,26 @@ function handleGroundButtonClick(kind: GroundMenuKind) {
     return
   }
 
+  closeAllMenus()
   const tab = resolveGroundTargetTab(kind, 'button')
   emit('change-build-tool', kind)
   if (tab) {
     emit('activate-ground-tab', tab)
+  }
+  setGroundMenuOpen(kind, true)
+}
+
+function setBuildToolMenuOpen(tool: BuildTool, open: boolean) {
+  if (tool === 'wall') {
+    emit('update:wall-shape-menu-open', open)
+    return
+  }
+  if (tool === 'floor') {
+    emit('update:floor-shape-menu-open', open)
+    return
+  }
+  if (tool === 'water') {
+    emit('update:water-shape-menu-open', open)
   }
 }
 
@@ -1610,17 +1628,6 @@ function activateGroundTabForMenu(kind: GroundMenuKind) {
   }
 }
 
-function handleGroundMenuContextMenu(kind: GroundMenuKind, event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  if (buildToolsDisabled.value || !hasGroundNode.value) {
-    return
-  }
-  activateGroundTabForMenu(kind)
-  closeAllMenus()
-  setGroundMenuOpen(kind, true)
-}
-
 function handleGroundMenuModelUpdate(kind: GroundMenuKind, value: boolean) {
   const open = Boolean(value)
   if (open) {
@@ -1630,24 +1637,12 @@ function handleGroundMenuModelUpdate(kind: GroundMenuKind, value: boolean) {
   setGroundMenuOpen(kind, open)
 }
 
-function handleGroundTerrainContextMenu(event: MouseEvent) {
-  handleGroundMenuContextMenu('terrain', event)
-}
-
 function handleGroundTerrainMenuModelUpdate(value: boolean) {
   handleGroundMenuModelUpdate('terrain', value)
 }
 
-function handleGroundPaintContextMenu(event: MouseEvent) {
-  handleGroundMenuContextMenu('paint', event)
-}
-
 function handleGroundPaintMenuModelUpdate(value: boolean) {
   handleGroundMenuModelUpdate('paint', value)
-}
-
-function handleGroundScatterContextMenu(event: MouseEvent) {
-  handleGroundMenuContextMenu('scatter', event)
 }
 
 function handleGroundScatterMenuModelUpdate(value: boolean) {
@@ -1661,17 +1656,6 @@ function handleGroundScatterAssetSelect(payload: { asset: ProjectAsset; provider
     asset: payload.asset,
     providerAssetId: payload.providerAssetId,
   })
-}
-
-function handleWallShapeContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  if (buildToolsDisabled.value) {
-    return
-  }
-  // Right-click on wall tool only opens the shape menu; it does not auto-switch tools.
-  closeAllMenus()
-  emit('update:wall-shape-menu-open', true)
 }
 
 function handleWallShapeMenuModelUpdate(value: boolean) {
@@ -1700,17 +1684,6 @@ function handleFloorPresetSelect(asset: any) {
   emit('select-floor-preset', asset)
 }
 
-function handleFloorShapeContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  if (buildToolsDisabled.value) {
-    return
-  }
-  // Right-click on floor tool only opens the shape menu; it does not auto-switch tools.
-  closeAllMenus()
-  emit('update:floor-shape-menu-open', true)
-}
-
 function handleFloorShapeMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
   if (open) {
@@ -1725,16 +1698,6 @@ function handleFloorShapeSelect(shape: FloorBuildShape) {
     return
   }
   emit('select-floor-build-shape', shape)
-}
-
-function handleWaterShapeContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  if (buildToolsDisabled.value) {
-    return
-  }
-  closeAllMenus()
-  emit('update:water-shape-menu-open', true)
 }
 
 function handleWaterShapeMenuModelUpdate(value: boolean) {
