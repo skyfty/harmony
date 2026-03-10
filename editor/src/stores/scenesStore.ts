@@ -13,7 +13,7 @@ import {
 } from '@/utils/groundHeightSidecar'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { useGroundHeightmapStore } from './groundHeightmapStore'
-import { useGroundDynamicStore } from './groundDynamicStore'
+import { useGroundScatterStore } from './groundScatterStore'
 import { useSceneStore } from './sceneStore'
 
 export type SceneWorkspaceType = 'local' | 'user'
@@ -83,11 +83,11 @@ const DB_VERSION = 6
 const STORE_METADATA = 'sceneMetadata'
 const STORE_DOCUMENTS = 'sceneDocuments'
 const STORE_GROUND_HEIGHTMAPS = 'sceneGroundHeightmaps'
-const STORE_GROUND_DYNAMICS = 'sceneGroundDynamics'
+const STORE_GROUND_SCATTERS = 'sceneGroundScatters'
 
 const memoryWorkspaceDocuments = new Map<string, Map<string, StoredSceneDocument>>()
 const memoryWorkspaceGroundHeightSidecars = new Map<string, Map<string, ArrayBuffer>>()
-const memoryWorkspaceGroundDynamicSidecars = new Map<string, Map<string, ArrayBuffer>>()
+const memoryWorkspaceGroundScatterSidecars = new Map<string, Map<string, ArrayBuffer>>()
 const workspaceDbPromises = new Map<string, Promise<IDBDatabase>>()
 const workspaceDbInstances = new Map<string, IDBDatabase>()
 
@@ -112,11 +112,11 @@ function getMemoryGroundHeightSidecars(workspaceId: string): Map<string, ArrayBu
   return bucket
 }
 
-function getMemoryGroundDynamicSidecars(workspaceId: string): Map<string, ArrayBuffer> {
-  let bucket = memoryWorkspaceGroundDynamicSidecars.get(workspaceId)
+function getMemoryGroundScatterSidecars(workspaceId: string): Map<string, ArrayBuffer> {
+  let bucket = memoryWorkspaceGroundScatterSidecars.get(workspaceId)
   if (!bucket) {
     bucket = new Map()
-    memoryWorkspaceGroundDynamicSidecars.set(workspaceId, bucket)
+    memoryWorkspaceGroundScatterSidecars.set(workspaceId, bucket)
   }
   return bucket
 }
@@ -248,14 +248,14 @@ function openDatabase(workspaceId: string): Promise<IDBDatabase> {
           if (!db.objectStoreNames.contains(STORE_GROUND_HEIGHTMAPS)) {
             db.createObjectStore(STORE_GROUND_HEIGHTMAPS, { keyPath: 'id' })
           }
-          if (!db.objectStoreNames.contains(STORE_GROUND_DYNAMICS)) {
-            db.createObjectStore(STORE_GROUND_DYNAMICS, { keyPath: 'id' })
+          if (!db.objectStoreNames.contains(STORE_GROUND_SCATTERS)) {
+            db.createObjectStore(STORE_GROUND_SCATTERS, { keyPath: 'id' })
           }
           if (request.transaction && oldVersion < 3) {
             request.transaction.objectStore(STORE_METADATA).clear()
             request.transaction.objectStore(STORE_DOCUMENTS).clear()
             request.transaction.objectStore(STORE_GROUND_HEIGHTMAPS).clear()
-            request.transaction.objectStore(STORE_GROUND_DYNAMICS).clear()
+            request.transaction.objectStore(STORE_GROUND_SCATTERS).clear()
           }
         }
         request.onsuccess = () => {
@@ -274,7 +274,7 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
   if (!isIndexedDbAvailable()) {
     memoryWorkspaceDocuments.delete(workspaceId)
     memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
-    memoryWorkspaceGroundDynamicSidecars.delete(workspaceId)
+    memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
     return
   }
   const dbName = getWorkspaceDbName(workspaceId)
@@ -294,7 +294,7 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
   })
   memoryWorkspaceDocuments.delete(workspaceId)
   memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
-  memoryWorkspaceGroundDynamicSidecars.delete(workspaceId)
+  memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
 }
 
 async function readSceneGroundHeightSidecar(workspaceId: string, sceneId: string): Promise<ArrayBuffer | null> {
@@ -334,21 +334,21 @@ async function writeSceneGroundHeightSidecar(workspaceId: string, sceneId: strin
   })
 }
 
-async function readSceneGroundDynamicSidecar(workspaceId: string, sceneId: string): Promise<ArrayBuffer | null> {
+async function readSceneGroundScatterSidecar(workspaceId: string, sceneId: string): Promise<ArrayBuffer | null> {
   if (!isIndexedDbAvailable()) {
-    const sidecar = getMemoryGroundDynamicSidecars(workspaceId).get(sceneId)
+    const sidecar = getMemoryGroundScatterSidecars(workspaceId).get(sceneId)
     return sidecar ? cloneArrayBuffer(sidecar) : null
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_DYNAMICS, 'readonly')
-  const store = tx.objectStore(STORE_GROUND_DYNAMICS)
+  const tx = db.transaction(STORE_GROUND_SCATTERS, 'readonly')
+  const store = tx.objectStore(STORE_GROUND_SCATTERS)
   const entry = await requestToPromise<{ id: string; buffer: ArrayBuffer } | undefined>(store.get(sceneId))
   return entry?.buffer ?? null
 }
 
-async function writeSceneGroundDynamicSidecar(workspaceId: string, sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
+async function writeSceneGroundScatterSidecar(workspaceId: string, sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
   if (!isIndexedDbAvailable()) {
-    const bucket = getMemoryGroundDynamicSidecars(workspaceId)
+    const bucket = getMemoryGroundScatterSidecars(workspaceId)
     if (sidecar) {
       bucket.set(sceneId, cloneArrayBuffer(sidecar))
     } else {
@@ -357,8 +357,8 @@ async function writeSceneGroundDynamicSidecar(workspaceId: string, sceneId: stri
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_DYNAMICS, 'readwrite')
-  const store = tx.objectStore(STORE_GROUND_DYNAMICS)
+  const tx = db.transaction(STORE_GROUND_SCATTERS, 'readwrite')
+  const store = tx.objectStore(STORE_GROUND_SCATTERS)
   if (sidecar) {
     store.put({ id: sceneId, buffer: cloneArrayBuffer(sidecar) })
   } else {
@@ -366,8 +366,8 @@ async function writeSceneGroundDynamicSidecar(workspaceId: string, sceneId: stri
   }
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground dynamic sidecar'))
-    tx.onabort = () => reject(tx.error ?? new Error('Scene ground dynamic sidecar write aborted'))
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground scatter sidecar'))
+    tx.onabort = () => reject(tx.error ?? new Error('Scene ground scatter sidecar write aborted'))
   })
 }
 
@@ -375,13 +375,13 @@ async function replaceWorkspaceDocuments(
   workspaceId: string,
   documents: StoredSceneDocument[],
   groundHeightSidecars: Record<string, ArrayBuffer | null> = {},
-  groundDynamicSidecars: Record<string, ArrayBuffer | null> = {},
+  groundScatterSidecars: Record<string, ArrayBuffer | null> = {},
 ): Promise<void> {
   await deleteWorkspaceStorage(workspaceId)
   if (!documents.length) {
     return
   }
-  await writeSceneDocuments(workspaceId, documents, groundHeightSidecars, groundDynamicSidecars)
+  await writeSceneDocuments(workspaceId, documents, groundHeightSidecars, groundScatterSidecars)
 }
 
 async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthStore>): Promise<UserSceneBundleSummaryDto[] | null> {
@@ -448,7 +448,7 @@ async function downloadSceneBundleZip(
   return { bytes, etag }
 }
 
-async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundDynamicSidecar: ArrayBuffer | null }> {
+async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null }> {
   const pkg = await loadStoredScenesFromScenePackage(zipBytes)
   const scene = pkg.scenes[0]
   if (!scene) {
@@ -457,7 +457,7 @@ async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ doc
   return {
     document: scene,
     groundHeightSidecar: pkg.groundHeightSidecars[scene.id] ?? null,
-    groundDynamicSidecar: pkg.groundDynamicSidecars[scene.id] ?? null,
+    groundScatterSidecar: pkg.groundScatterSidecars[scene.id] ?? null,
   }
 }
 
@@ -550,7 +550,7 @@ async function readSceneDocument(
   options: { hydrateGroundRuntime?: boolean } = {},
 ): Promise<StoredSceneDocument | null> {
   const groundHeightmapStore = useGroundHeightmapStore()
-  const groundDynamicStore = useGroundDynamicStore()
+  const groundScatterStore = useGroundScatterStore()
   if (!isIndexedDbAvailable()) {
     const document = getMemoryWorkspace(workspaceId).get(id)
     if (!document) {
@@ -560,8 +560,8 @@ async function readSceneDocument(
     if (options.hydrateGroundRuntime) {
       const sidecar = await readSceneGroundHeightSidecar(workspaceId, hydrated.id)
       await groundHeightmapStore.hydrateSceneDocument(findGroundNodeInDocument(hydrated), sidecar)
-      const dynamicSidecar = await readSceneGroundDynamicSidecar(workspaceId, hydrated.id)
-      await groundDynamicStore.hydrateSceneDocument(hydrated.id, findGroundNodeInDocument(hydrated), dynamicSidecar)
+      const scatterSidecar = await readSceneGroundScatterSidecar(workspaceId, hydrated.id)
+      await groundScatterStore.hydrateSceneDocument(hydrated.id, findGroundNodeInDocument(hydrated), scatterSidecar)
     }
     return stripGroundHeightMapsFromSceneDocument(hydrated)
   }
@@ -575,8 +575,8 @@ async function readSceneDocument(
   if (options.hydrateGroundRuntime) {
     const sidecar = await readSceneGroundHeightSidecar(workspaceId, result.id)
     await groundHeightmapStore.hydrateSceneDocument(findGroundNodeInDocument(result), sidecar)
-    const dynamicSidecar = await readSceneGroundDynamicSidecar(workspaceId, result.id)
-    await groundDynamicStore.hydrateSceneDocument(result.id, findGroundNodeInDocument(result), dynamicSidecar)
+    const scatterSidecar = await readSceneGroundScatterSidecar(workspaceId, result.id)
+    await groundScatterStore.hydrateSceneDocument(result.id, findGroundNodeInDocument(result), scatterSidecar)
   }
   return stripGroundHeightMapsFromSceneDocument(result)
 }
@@ -589,12 +589,12 @@ async function resolveSceneGroundHeightSidecarForWrite(workspaceId: string, docu
   return await readSceneGroundHeightSidecar(workspaceId, document.id)
 }
 
-async function resolveSceneGroundDynamicSidecarForWrite(workspaceId: string, document: StoredSceneDocument): Promise<ArrayBuffer | null> {
+async function resolveSceneGroundScatterSidecarForWrite(workspaceId: string, document: StoredSceneDocument): Promise<ArrayBuffer | null> {
   const sceneStore = useSceneStore()
   if (sceneStore.currentSceneId === document.id) {
-    return useGroundDynamicStore().buildSceneDocumentSidecar(document.id, findGroundNodeInDocument(document))
+    return useGroundScatterStore().buildSceneDocumentSidecar(document.id, findGroundNodeInDocument(document))
   }
-  return await readSceneGroundDynamicSidecar(workspaceId, document.id)
+  return await readSceneGroundScatterSidecar(workspaceId, document.id)
 }
 
 function toMetadata(document: StoredSceneDocument): SceneSummary {
@@ -611,19 +611,19 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
 async function writeSceneDocument(workspaceId: string, document: StoredSceneDocument): Promise<void> {
   const prepared = prepareSceneDocumentForPersistence(document)
   const sidecar = await resolveSceneGroundHeightSidecarForWrite(workspaceId, document)
-  const dynamicSidecar = await resolveSceneGroundDynamicSidecarForWrite(workspaceId, document)
+  const scatterSidecar = await resolveSceneGroundScatterSidecarForWrite(workspaceId, document)
   if (!isIndexedDbAvailable()) {
     getMemoryWorkspace(workspaceId).set(prepared.id, prepared)
     await writeSceneGroundHeightSidecar(workspaceId, prepared.id, sidecar)
-    await writeSceneGroundDynamicSidecar(workspaceId, prepared.id, dynamicSidecar)
+    await writeSceneGroundScatterSidecar(workspaceId, prepared.id, scatterSidecar)
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_DYNAMICS], 'readwrite')
+  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_SCATTERS], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
   const heightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  const dynamics = tx.objectStore(STORE_GROUND_DYNAMICS)
+  const dynamics = tx.objectStore(STORE_GROUND_SCATTERS)
   docs.put(prepared)
   meta.put(toMetadata(prepared))
   if (sidecar) {
@@ -631,8 +631,8 @@ async function writeSceneDocument(workspaceId: string, document: StoredSceneDocu
   } else {
     heightmaps.delete(prepared.id)
   }
-  if (dynamicSidecar) {
-    dynamics.put({ id: prepared.id, buffer: cloneArrayBuffer(dynamicSidecar) })
+  if (scatterSidecar) {
+    dynamics.put({ id: prepared.id, buffer: cloneArrayBuffer(scatterSidecar) })
   } else {
     dynamics.delete(prepared.id)
   }
@@ -647,7 +647,7 @@ async function writeSceneDocuments(
   workspaceId: string,
   documents: StoredSceneDocument[],
   groundHeightSidecars: Record<string, ArrayBuffer | null> = {},
-  groundDynamicSidecars: Record<string, ArrayBuffer | null> = {},
+  groundScatterSidecars: Record<string, ArrayBuffer | null> = {},
 ): Promise<void> {
   const preparedDocs = documents.map((doc) => ({ document: prepareSceneDocumentForPersistence(doc), source: doc }))
   if (!isIndexedDbAvailable()) {
@@ -656,38 +656,38 @@ async function writeSceneDocuments(
     preparedDocs.forEach(({ document: prepared }) => {
       bucket.set(prepared.id, prepared)
       const sidecar = groundHeightSidecars[prepared.id] ?? null
-      const dynamicSidecar = groundDynamicSidecars[prepared.id] ?? null
+      const scatterSidecar = groundScatterSidecars[prepared.id] ?? null
       if (sidecar) {
         sidecarBucket.set(prepared.id, cloneArrayBuffer(sidecar))
       } else {
         sidecarBucket.delete(prepared.id)
       }
-      if (dynamicSidecar) {
-        getMemoryGroundDynamicSidecars(workspaceId).set(prepared.id, cloneArrayBuffer(dynamicSidecar))
+      if (scatterSidecar) {
+        getMemoryGroundScatterSidecars(workspaceId).set(prepared.id, cloneArrayBuffer(scatterSidecar))
       } else {
-        getMemoryGroundDynamicSidecars(workspaceId).delete(prepared.id)
+        getMemoryGroundScatterSidecars(workspaceId).delete(prepared.id)
       }
     })
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_DYNAMICS], 'readwrite')
+  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_SCATTERS], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
   const heightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  const dynamics = tx.objectStore(STORE_GROUND_DYNAMICS)
+  const dynamics = tx.objectStore(STORE_GROUND_SCATTERS)
   preparedDocs.forEach(({ document: prepared }) => {
     docs.put(prepared)
     meta.put(toMetadata(prepared))
     const sidecar = groundHeightSidecars[prepared.id] ?? null
-    const dynamicSidecar = groundDynamicSidecars[prepared.id] ?? null
+    const scatterSidecar = groundScatterSidecars[prepared.id] ?? null
     if (sidecar) {
       heightmaps.put({ id: prepared.id, buffer: cloneArrayBuffer(sidecar) })
     } else {
       heightmaps.delete(prepared.id)
     }
-    if (dynamicSidecar) {
-      dynamics.put({ id: prepared.id, buffer: cloneArrayBuffer(dynamicSidecar) })
+    if (scatterSidecar) {
+      dynamics.put({ id: prepared.id, buffer: cloneArrayBuffer(scatterSidecar) })
     } else {
       dynamics.delete(prepared.id)
     }
@@ -703,15 +703,15 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
   if (!isIndexedDbAvailable()) {
     getMemoryWorkspace(workspaceId).delete(id)
     getMemoryGroundHeightSidecars(workspaceId).delete(id)
-    getMemoryGroundDynamicSidecars(workspaceId).delete(id)
+    getMemoryGroundScatterSidecars(workspaceId).delete(id)
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_DYNAMICS], 'readwrite')
+  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_SCATTERS], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
   const heightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  const dynamics = tx.objectStore(STORE_GROUND_DYNAMICS)
+  const dynamics = tx.objectStore(STORE_GROUND_SCATTERS)
   docs.delete(id)
   meta.delete(id)
   heightmaps.delete(id)
@@ -900,10 +900,10 @@ export const useScenesStore = defineStore('scenes', {
     },
     async saveSceneDocuments(
       documents: StoredSceneDocument[],
-      options: { groundHeightSidecars?: Record<string, ArrayBuffer | null>; groundDynamicSidecars?: Record<string, ArrayBuffer | null> } = {},
+      options: { groundHeightSidecars?: Record<string, ArrayBuffer | null>; groundScatterSidecars?: Record<string, ArrayBuffer | null> } = {},
     ) {
       if (!documents.length) return
-      await writeSceneDocuments(this.workspaceId, documents, options.groundHeightSidecars ?? {}, options.groundDynamicSidecars ?? {})
+      await writeSceneDocuments(this.workspaceId, documents, options.groundHeightSidecars ?? {}, options.groundScatterSidecars ?? {})
       documents.forEach((doc) => this.upsertMetadata(toMetadata(doc)))
       if (this.workspaceType === 'user') {
         for (const doc of documents) {
@@ -948,16 +948,16 @@ export const useScenesStore = defineStore('scenes', {
     async loadGroundHeightSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundHeightSidecar(this.workspaceId, sceneId)
     },
-    async saveGroundDynamicSidecar(document: StoredSceneDocument) {
+    async saveGroundScatterSidecar(document: StoredSceneDocument) {
       const source = cloneForIndexedDb(document)
-      const sidecar = useGroundDynamicStore().buildSceneDocumentSidecar(source.id, findGroundNodeInDocument(source))
-      await writeSceneGroundDynamicSidecar(this.workspaceId, source.id, sidecar)
+      const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(source.id, findGroundNodeInDocument(source))
+      await writeSceneGroundScatterSidecar(this.workspaceId, source.id, sidecar)
       if (this.workspaceType === 'user') {
         await this.syncSceneToServer(document)
       }
     },
-    async loadGroundDynamicSidecar(sceneId: string): Promise<ArrayBuffer | null> {
-      return await readSceneGroundDynamicSidecar(this.workspaceId, sceneId)
+    async loadGroundScatterSidecar(sceneId: string): Promise<ArrayBuffer | null> {
+      return await readSceneGroundScatterSidecar(this.workspaceId, sceneId)
     },
     async saveSceneGroundHeightSidecar(sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
       await writeSceneGroundHeightSidecar(this.workspaceId, sceneId, sidecar)
@@ -968,8 +968,8 @@ export const useScenesStore = defineStore('scenes', {
         }
       }
     },
-    async saveSceneGroundDynamicSidecar(sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
-      await writeSceneGroundDynamicSidecar(this.workspaceId, sceneId, sidecar)
+    async saveSceneGroundScatterSidecar(sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
+      await writeSceneGroundScatterSidecar(this.workspaceId, sceneId, sidecar)
       if (this.workspaceType === 'user') {
         const document = await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
         if (document) {
@@ -987,7 +987,7 @@ export const useScenesStore = defineStore('scenes', {
         if (!remoteScenes) {
           return
         }
-        const downloaded: Array<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundDynamicSidecar: ArrayBuffer | null }> = []
+        const downloaded: Array<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null }> = []
         for (const entry of remoteScenes) {
           const bundle = await downloadSceneBundleZip(entry.bundle.url, authStore)
           if (!bundle) {
@@ -1001,14 +1001,14 @@ export const useScenesStore = defineStore('scenes', {
             this.workspaceId,
             downloaded.map((entry) => entry.document),
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundHeightSidecar ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundDynamicSidecar ?? null])),
+            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundScatterSidecar ?? null])),
           )
         } else {
           await writeSceneDocuments(
             this.workspaceId,
             downloaded.map((entry) => entry.document),
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundHeightSidecar ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundDynamicSidecar ?? null])),
+            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundScatterSidecar ?? null])),
           )
         }
         if (options.replace) {

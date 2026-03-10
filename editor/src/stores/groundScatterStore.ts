@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import type { GroundDynamicMesh, SceneNode, TerrainPaintSettings } from '@schema'
 import {
-  deserializeGroundDynamicSidecar,
-  serializeGroundDynamicSidecar,
-  type GroundDynamicSidecarPayload,
+  deserializeGroundScatterSidecar,
+  serializeGroundScatterSidecar,
+  type GroundScatterSidecarPayload,
 } from '@schema'
 import {
   deleteTerrainScatterStore,
@@ -12,14 +12,14 @@ import {
   type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 
-type GroundDynamicRuntimeState = {
+type GroundScatterRuntimeState = {
   sceneId: string
   nodeId: string
   terrainScatter: TerrainScatterStoreSnapshot | null
   terrainPaint: TerrainPaintSettings | null
 }
 
-const runtimeGroundDynamics = new Map<string, GroundDynamicRuntimeState>()
+const runtimeGroundScatters = new Map<string, GroundScatterRuntimeState>()
 
 function asGroundDynamicMesh(node: SceneNode | null | undefined): GroundDynamicMesh | null {
   const dynamicMesh = node?.dynamicMesh
@@ -36,27 +36,27 @@ function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-function ensureRuntimeState(sceneId: string, nodeId: string): GroundDynamicRuntimeState {
-  const existing = runtimeGroundDynamics.get(sceneId)
+function ensureRuntimeState(sceneId: string, nodeId: string): GroundScatterRuntimeState {
+  const existing = runtimeGroundScatters.get(sceneId)
   if (existing && existing.nodeId === nodeId) {
     return existing
   }
-  const created: GroundDynamicRuntimeState = {
+  const created: GroundScatterRuntimeState = {
     sceneId,
     nodeId,
     terrainScatter: null,
     terrainPaint: null,
   }
-  runtimeGroundDynamics.set(sceneId, created)
+  runtimeGroundScatters.set(sceneId, created)
   return created
 }
 
 function replaceRuntimeState(
   sceneId: string,
   groundNode: SceneNode | null,
-  payload: GroundDynamicSidecarPayload | null,
+  payload: GroundScatterSidecarPayload | null,
 ): void {
-  runtimeGroundDynamics.delete(sceneId)
+  runtimeGroundScatters.delete(sceneId)
   const definition = asGroundDynamicMesh(groundNode)
   if (!groundNode || !definition) {
     return
@@ -71,7 +71,7 @@ function replaceRuntimeState(
   }
 }
 
-function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundDynamicSidecarPayload | null {
+function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundScatterSidecarPayload | null {
   const definition = asGroundDynamicMesh(groundNode)
   if (!groundNode || !definition) {
     return null
@@ -86,12 +86,12 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundDyna
   }
 }
 
-export function attachGroundDynamicRuntimeToNode(
+export function attachGroundScatterRuntimeToNode(
   sceneId: string,
   groundNode: SceneNode | null | undefined,
 ): SceneNode | null | undefined {
   const definition = asGroundDynamicMesh(groundNode)
-  const state = runtimeGroundDynamics.get(sceneId)
+  const state = runtimeGroundScatters.get(sceneId)
   if (!groundNode || !definition || !state || state.nodeId !== groundNode.id) {
     return groundNode
   }
@@ -103,38 +103,38 @@ export function attachGroundDynamicRuntimeToNode(
   return groundNode
 }
 
-export const useGroundDynamicStore = defineStore('groundDynamic', {
+export const useGroundScatterStore = defineStore('groundScatter', {
   actions: {
     async hydrateSceneDocument(sceneId: string, groundNode: SceneNode | null, sidecar: ArrayBuffer | null): Promise<void> {
-      replaceRuntimeState(sceneId, groundNode, sidecar ? deserializeGroundDynamicSidecar(sidecar) : null)
+      replaceRuntimeState(sceneId, groundNode, sidecar ? deserializeGroundScatterSidecar(sidecar) : null)
     },
     clearSceneDocument(sceneId?: string): void {
       if (sceneId) {
-        const existing = runtimeGroundDynamics.get(sceneId)
+        const existing = runtimeGroundScatters.get(sceneId)
         if (existing) {
           deleteTerrainScatterStore(existing.nodeId)
-          runtimeGroundDynamics.delete(sceneId)
+          runtimeGroundScatters.delete(sceneId)
         }
         return
       }
-      runtimeGroundDynamics.forEach((state) => {
+      runtimeGroundScatters.forEach((state) => {
         deleteTerrainScatterStore(state.nodeId)
       })
-      runtimeGroundDynamics.clear()
+      runtimeGroundScatters.clear()
     },
     buildSceneDocumentSidecar(sceneId: string, groundNode: SceneNode | null): ArrayBuffer | null {
       const payload = buildPayload(sceneId, groundNode)
-      return payload ? serializeGroundDynamicSidecar(payload) : null
+      return payload ? serializeGroundScatterSidecar(payload) : null
     },
-    getSceneGroundDynamic(sceneId: string): GroundDynamicRuntimeState | null {
-      return runtimeGroundDynamics.get(sceneId) ?? null
+    getSceneGroundScatter(sceneId: string): GroundScatterRuntimeState | null {
+      return runtimeGroundScatters.get(sceneId) ?? null
     },
-    replaceTerrainPaint(sceneId: string, nodeId: string, terrainPaint: TerrainPaintSettings | null): GroundDynamicRuntimeState {
+    replaceTerrainPaint(sceneId: string, nodeId: string, terrainPaint: TerrainPaintSettings | null): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
       state.terrainPaint = cloneValue(terrainPaint)
       return state
     },
-    replaceTerrainScatter(sceneId: string, nodeId: string, terrainScatter: TerrainScatterStoreSnapshot | null): GroundDynamicRuntimeState {
+    replaceTerrainScatter(sceneId: string, nodeId: string, terrainScatter: TerrainScatterStoreSnapshot | null): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
       state.terrainScatter = cloneValue(terrainScatter)
       if (terrainScatter) {
@@ -144,7 +144,7 @@ export const useGroundDynamicStore = defineStore('groundDynamic', {
       }
       return state
     },
-    captureTerrainScatterSnapshot(sceneId: string, nodeId: string): GroundDynamicRuntimeState {
+    captureTerrainScatterSnapshot(sceneId: string, nodeId: string): GroundScatterRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
       state.terrainScatter = cloneValue(saveTerrainScatterSnapshot(nodeId) ?? null)
       return state

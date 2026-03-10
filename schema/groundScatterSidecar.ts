@@ -1,11 +1,11 @@
 import type { TerrainPaintChannel, TerrainPaintSettings } from './index'
 import { TerrainScatterCategories, type TerrainScatterCategory, type TerrainScatterStoreSnapshot } from './terrain-scatter'
 
-export const GROUND_DYNAMIC_SIDECAR_FILENAME = 'ground-dynamic.bin'
-export const GROUND_DYNAMIC_SIDECAR_VERSION = 1
+export const GROUND_SCATTER_SIDECAR_FILENAME = 'ground-scatter.bin'
+export const GROUND_SCATTER_SIDECAR_VERSION = 1
 
-const GROUND_DYNAMIC_SIDECAR_MAGIC = 0x314d4447
-const GROUND_DYNAMIC_SIDECAR_HEADER_BYTES = 40
+const GROUND_SCATTER_SIDECAR_MAGIC = 0x314d4447
+const GROUND_SCATTER_SIDECAR_HEADER_BYTES = 40
 const SECTION_DIRECTORY_ENTRY_BYTES = 16
 const NULL_INDEX = 0xffffffff
 const NULL_OFFSET = 0xffffffff
@@ -19,7 +19,7 @@ const enum SectionType {
   PaintChunks = 6,
 }
 
-const enum GroundDynamicFlags {
+const enum GroundScatterFlags {
   HasScatter = 1 << 0,
   HasPaint = 1 << 1,
 }
@@ -55,22 +55,22 @@ type SectionBuffer = {
   recordCount: number
 }
 
-type GroundDynamicOpaqueRecord = Record<string, unknown> | null
+type GroundScatterOpaqueRecord = Record<string, unknown> | null
 
-export type GroundDynamicSidecarPayload = {
+export type GroundScatterSidecarPayload = {
   groundNodeId: string
   terrainScatter: TerrainScatterStoreSnapshot | null
   terrainPaint: TerrainPaintSettings | null
 }
 
-function encodeNullableOpaqueRecord(value: GroundDynamicOpaqueRecord): Uint8Array | null {
+function encodeNullableOpaqueRecord(value: GroundScatterOpaqueRecord): Uint8Array | null {
   if (!value || typeof value !== 'object') {
     return null
   }
   return STRING_ENCODER.encode(JSON.stringify(value))
 }
 
-function decodeNullableOpaqueRecord(bytes: Uint8Array | null): GroundDynamicOpaqueRecord {
+function decodeNullableOpaqueRecord(bytes: Uint8Array | null): GroundScatterOpaqueRecord {
   if (!bytes || bytes.byteLength === 0) {
     return null
   }
@@ -177,7 +177,7 @@ function resolveBlob(ref: BlobRef, blobBytes: Uint8Array): Uint8Array | null {
   }
   const end = ref.offset + ref.length
   if (end > blobBytes.byteLength) {
-    throw new Error('Invalid ground dynamic sidecar blob reference')
+    throw new Error('Invalid ground scatter sidecar blob reference')
   }
   return blobBytes.slice(ref.offset, end)
 }
@@ -220,7 +220,7 @@ function decodePaintChannel(code: number): TerrainPaintChannel {
   }
 }
 
-function normalizeScatterPayload(payload: GroundDynamicSidecarPayload): GroundDynamicSidecarPayload {
+function normalizeScatterPayload(payload: GroundScatterSidecarPayload): GroundScatterSidecarPayload {
   return {
     groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
     terrainScatter: payload.terrainScatter ?? null,
@@ -248,7 +248,7 @@ function buildScatterLayersSection(
   const view = new DataView(bytes.buffer)
   snapshot.layers.forEach((layer, index) => {
     const baseOffset = index * recordBytes
-    const payloadRef = blobs.add(encodeNullableOpaqueRecord(layer.params?.payload as GroundDynamicOpaqueRecord))
+    const payloadRef = blobs.add(encodeNullableOpaqueRecord(layer.params?.payload as GroundScatterOpaqueRecord))
     writeNullableStringIndex(view, baseOffset, strings.add(layer.id))
     writeNullableStringIndex(view, baseOffset + 4, strings.add(layer.label))
     view.setUint8(baseOffset + 8, encodeCategory(layer.category))
@@ -293,7 +293,7 @@ function buildScatterInstancesSection(
   const view = new DataView(bytes.buffer)
   flattenedInstances.forEach((instance, index) => {
     const baseOffset = index * recordBytes
-    const metadataRef = blobs.add(encodeNullableOpaqueRecord(instance.metadata as GroundDynamicOpaqueRecord))
+    const metadataRef = blobs.add(encodeNullableOpaqueRecord(instance.metadata as GroundScatterOpaqueRecord))
     writeNullableStringIndex(view, baseOffset, strings.add(instance.id))
     writeNullableStringIndex(view, baseOffset + 4, strings.add(instance.assetId))
     writeNullableStringIndex(view, baseOffset + 8, strings.add(instance.layerId))
@@ -364,10 +364,10 @@ function buildPaintChunksSection(settings: TerrainPaintSettings, strings: String
   return { type: SectionType.PaintChunks, bytes, recordCount: entries.length }
 }
 
-export function serializeGroundDynamicSidecar(rawPayload: GroundDynamicSidecarPayload): ArrayBuffer {
+export function serializeGroundScatterSidecar(rawPayload: GroundScatterSidecarPayload): ArrayBuffer {
   const payload = normalizeScatterPayload(rawPayload)
   if (!payload.groundNodeId) {
-    throw new Error('groundNodeId is required for ground dynamic sidecar')
+    throw new Error('groundNodeId is required for ground scatter sidecar')
   }
 
   const strings = new StringTableBuilder()
@@ -377,13 +377,13 @@ export function serializeGroundDynamicSidecar(rawPayload: GroundDynamicSidecarPa
   const groundNodeIdIndex = strings.add(payload.groundNodeId)
 
   if (payload.terrainScatter) {
-    flags |= GroundDynamicFlags.HasScatter
+    flags |= GroundScatterFlags.HasScatter
     sections.push(buildScatterMetaSection(payload.terrainScatter))
     sections.push(buildScatterLayersSection(payload.terrainScatter, strings, blobs))
     sections.push(buildScatterInstancesSection(payload.terrainScatter, strings, blobs))
   }
   if (payload.terrainPaint) {
-    flags |= GroundDynamicFlags.HasPaint
+    flags |= GroundScatterFlags.HasPaint
     sections.push(buildPaintMetaSection(payload.terrainPaint))
     sections.push(buildPaintLayersSection(payload.terrainPaint, strings))
     sections.push(buildPaintChunksSection(payload.terrainPaint, strings))
@@ -391,7 +391,7 @@ export function serializeGroundDynamicSidecar(rawPayload: GroundDynamicSidecarPa
 
   const stringBytes = strings.toBytes()
   const blobBytes = blobs.toBytes()
-  const directoryOffset = GROUND_DYNAMIC_SIDECAR_HEADER_BYTES
+  const directoryOffset = GROUND_SCATTER_SIDECAR_HEADER_BYTES
   const directoryBytes = sections.length * SECTION_DIRECTORY_ENTRY_BYTES
   const stringTableOffset = directoryOffset + directoryBytes
   const blobOffset = stringTableOffset + stringBytes.byteLength
@@ -400,8 +400,8 @@ export function serializeGroundDynamicSidecar(rawPayload: GroundDynamicSidecarPa
   const result = new Uint8Array(totalBytes)
   const view = new DataView(result.buffer)
 
-  view.setUint32(0, GROUND_DYNAMIC_SIDECAR_MAGIC, true)
-  view.setUint32(4, GROUND_DYNAMIC_SIDECAR_VERSION, true)
+  view.setUint32(0, GROUND_SCATTER_SIDECAR_MAGIC, true)
+  view.setUint32(4, GROUND_SCATTER_SIDECAR_VERSION, true)
   view.setUint32(8, stringTableOffset, true)
   view.setUint32(12, strings.count, true)
   view.setUint32(16, blobOffset, true)
@@ -455,15 +455,15 @@ function readSections(buffer: ArrayBuffer, directoryOffset: number, count: numbe
   return sections
 }
 
-export function deserializeGroundDynamicSidecar(buffer: ArrayBuffer): GroundDynamicSidecarPayload {
-  if (buffer.byteLength < GROUND_DYNAMIC_SIDECAR_HEADER_BYTES) {
-    throw new Error('Invalid ground dynamic sidecar size')
+export function deserializeGroundScatterSidecar(buffer: ArrayBuffer): GroundScatterSidecarPayload {
+  if (buffer.byteLength < GROUND_SCATTER_SIDECAR_HEADER_BYTES) {
+    throw new Error('Invalid ground scatter sidecar size')
   }
   const view = new DataView(buffer)
   const magic = view.getUint32(0, true)
   const version = view.getUint32(4, true)
-  if (magic !== GROUND_DYNAMIC_SIDECAR_MAGIC || version !== GROUND_DYNAMIC_SIDECAR_VERSION) {
-    throw new Error('Invalid ground dynamic sidecar header')
+  if (magic !== GROUND_SCATTER_SIDECAR_MAGIC || version !== GROUND_SCATTER_SIDECAR_VERSION) {
+    throw new Error('Invalid ground scatter sidecar header')
   }
 
   const stringTableOffset = view.getUint32(8, true)
@@ -480,12 +480,12 @@ export function deserializeGroundDynamicSidecar(buffer: ArrayBuffer): GroundDyna
   const groundNodeId = strings[groundNodeIdIndex] ?? ''
 
   let terrainScatter: TerrainScatterStoreSnapshot | null = null
-  if (flags & GroundDynamicFlags.HasScatter) {
+  if (flags & GroundScatterFlags.HasScatter) {
     const metaSection = sections.get(SectionType.ScatterMeta)
     const layersSection = sections.get(SectionType.ScatterLayers)
     const instancesSection = sections.get(SectionType.ScatterInstances)
     if (!metaSection || !layersSection || !instancesSection) {
-      throw new Error('Ground dynamic sidecar is missing scatter sections')
+      throw new Error('Ground scatter sidecar is missing scatter sections')
     }
     const metaView = new DataView(buffer, metaSection.offset, metaSection.byteLength)
     const layersView = new DataView(buffer, layersSection.offset, layersSection.byteLength)
@@ -586,12 +586,12 @@ export function deserializeGroundDynamicSidecar(buffer: ArrayBuffer): GroundDyna
   }
 
   let terrainPaint: TerrainPaintSettings | null = null
-  if (flags & GroundDynamicFlags.HasPaint) {
+  if (flags & GroundScatterFlags.HasPaint) {
     const metaSection = sections.get(SectionType.PaintMeta)
     const layersSection = sections.get(SectionType.PaintLayers)
     const chunksSection = sections.get(SectionType.PaintChunks)
     if (!metaSection || !layersSection || !chunksSection) {
-      throw new Error('Ground dynamic sidecar is missing terrain paint sections')
+      throw new Error('Ground scatter sidecar is missing terrain paint sections')
     }
     const metaView = new DataView(buffer, metaSection.offset, metaSection.byteLength)
     const layersView = new DataView(buffer, layersSection.offset, layersSection.byteLength)

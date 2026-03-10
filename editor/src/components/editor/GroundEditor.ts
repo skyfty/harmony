@@ -46,7 +46,7 @@ import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
-import { useGroundDynamicStore } from '@/stores/groundDynamicStore'
+import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import {SCATTER_BRUSH_RADIUS_MAX} from '@/stores/terrainStore'
@@ -267,7 +267,7 @@ function ensureTerrainPaintLayer(settings: TerrainPaintSettings, textureAssetId:
 function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintSettings {
 	const sceneId = useSceneStore().currentSceneId
 	const runtimeState = sceneId && nodeId
-		? useGroundDynamicStore().getSceneGroundDynamic(sceneId)
+		? useGroundScatterStore().getSceneGroundScatter(sceneId)
 		: null
 	const existing = runtimeState?.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
 	if (existing && existing.version === 1) {
@@ -2885,7 +2885,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (node?.dynamicMesh?.type !== 'Ground' || !sceneId) {
 			return null
 		}
-		const runtimeState = useGroundDynamicStore().getSceneGroundDynamic(sceneId)
+		const runtimeState = useGroundScatterStore().getSceneGroundScatter(sceneId)
 		return runtimeState?.nodeId === node.id ? runtimeState.terrainScatter ?? null : null
 	}
 

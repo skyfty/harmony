@@ -1,7 +1,7 @@
 import { zipSync, strToU8 } from 'fflate'
 import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@schema'
 import {
-  GROUND_DYNAMIC_SIDECAR_FILENAME,
+  GROUND_SCATTER_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
   type ScenePackageManifestV1,
@@ -9,7 +9,7 @@ import {
 } from '@schema'
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { useGroundDynamicStore } from '@/stores/groundDynamicStore'
+import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -451,7 +451,7 @@ export async function exportScenePackageZip(payload: {
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
     let planningPath: string | undefined
     let groundHeightsPath: string | undefined
-    let groundDynamicPath: string | undefined
+    let groundScatterPath: string | undefined
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
     const sidecarSource = typeof structuredClone === 'function'
@@ -461,9 +461,9 @@ export async function exportScenePackageZip(payload: {
     const groundHeightSidecar = scene.id === sceneStore.currentSceneId
       ? groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
       : await scenesStore.loadGroundHeightSidecar(scene.id)
-    const groundDynamicSidecar = scene.id === sceneStore.currentSceneId
-      ? useGroundDynamicStore().buildSceneDocumentSidecar(scene.id, groundNode)
-      : await scenesStore.loadGroundDynamicSidecar(scene.id)
+    const groundScatterSidecar = scene.id === sceneStore.currentSceneId
+      ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
+      : await scenesStore.loadGroundScatterSidecar(scene.id)
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
     stripEditorOnlySceneFields(docClone)
@@ -522,16 +522,16 @@ export async function exportScenePackageZip(payload: {
       groundHeightsPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
       files[groundHeightsPath] = new Uint8Array(groundHeightSidecar)
     }
-    if (groundDynamicSidecar) {
-      groundDynamicPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_DYNAMIC_SIDECAR_FILENAME}`
-      files[groundDynamicPath] = new Uint8Array(groundDynamicSidecar)
+    if (groundScatterSidecar) {
+      groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SCATTER_SIDECAR_FILENAME}`
+      files[groundScatterPath] = new Uint8Array(groundScatterSidecar)
     }
     if (payload.includePlanningData && scene.planningData) {
       const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
       planningPath = planningSidecar.planningPath
       files[planningPath] = jsonBytes(planningSidecar.sidecar)
     }
-    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath, groundHeightsPath, groundDynamicPath })
+    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath, groundHeightsPath, groundScatterPath })
   }
 
   const manifest: ScenePackageManifestV1 = {

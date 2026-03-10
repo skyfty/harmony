@@ -521,7 +521,7 @@ import {
   DEFAULT_ENVIRONMENT_GRAVITY,
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
-  deserializeGroundDynamicSidecar,
+  deserializeGroundScatterSidecar,
   cloneEnvironmentSettings,
   resolveDocumentEnvironment,
   clampSceneNodeInstanceLayout,
@@ -8973,7 +8973,7 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
 
 function hydrateGroundSidecarFromPackage(
   pkg: ScenePackageUnzipped,
-  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundDynamicPath?: string },
+  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
   const definition = findFirstGroundDynamicMesh(document);
@@ -9028,20 +9028,20 @@ function hydrateGroundSidecarFromPackage(
     ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
     : 0;
 
-  if (!sceneEntry.groundDynamicPath) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 动态 sidecar 路径`);
+  if (!sceneEntry.groundScatterPath) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 路径`);
   }
-  const dynamicSidecarBytes = pkg.files[sceneEntry.groundDynamicPath];
-  if (!dynamicSidecarBytes) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 动态 sidecar 文件`);
+  const scatterSidecarBytes = pkg.files[sceneEntry.groundScatterPath];
+  if (!scatterSidecarBytes) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
   }
-  const dynamicSidecarBuffer = dynamicSidecarBytes.buffer.slice(
-    dynamicSidecarBytes.byteOffset,
-    dynamicSidecarBytes.byteOffset + dynamicSidecarBytes.byteLength,
+  const scatterSidecarBuffer = scatterSidecarBytes.buffer.slice(
+    scatterSidecarBytes.byteOffset,
+    scatterSidecarBytes.byteOffset + scatterSidecarBytes.byteLength,
   );
-  const dynamicPayload = deserializeGroundDynamicSidecar(dynamicSidecarBuffer);
-  definition.terrainScatter = dynamicPayload.terrainScatter;
-  definition.terrainPaint = dynamicPayload.terrainPaint;
+  const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
+  definition.terrainScatter = scatterPayload.terrainScatter;
+  definition.terrainPaint = scatterPayload.terrainPaint;
 
   return document;
 }

@@ -85,12 +85,12 @@ export type {
 } from './scenePackage'
 
 export {
-  GROUND_DYNAMIC_SIDECAR_FILENAME,
-  GROUND_DYNAMIC_SIDECAR_VERSION,
-  serializeGroundDynamicSidecar,
-  deserializeGroundDynamicSidecar,
-} from './groundDynamicSidecar'
-export type { GroundDynamicSidecarPayload } from './groundDynamicSidecar'
+  GROUND_SCATTER_SIDECAR_FILENAME,
+  GROUND_SCATTER_SIDECAR_VERSION,
+  serializeGroundScatterSidecar,
+  deserializeGroundScatterSidecar,
+} from './groundScatterSidecar'
+export type { GroundScatterSidecarPayload } from './groundScatterSidecar'
 
 export {
   unzipScenePackage,

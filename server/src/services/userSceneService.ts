@@ -112,11 +112,11 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   if (!pkg.files[sceneEntry.groundHeightsPath]) {
     throw new Error('Scene bundle missing ground height sidecar file')
   }
-  if (!sanitizeString(sceneEntry.groundDynamicPath)) {
-    throw new Error('Scene bundle missing ground dynamic sidecar path')
+  if (!sanitizeString(sceneEntry.groundScatterPath)) {
+    throw new Error('Scene bundle missing ground scatter sidecar path')
   }
-  if (!pkg.files[sceneEntry.groundDynamicPath]) {
-    throw new Error('Scene bundle missing ground dynamic sidecar file')
+  if (!pkg.files[sceneEntry.groundScatterPath]) {
+    throw new Error('Scene bundle missing ground scatter sidecar file')
   }
   const sceneRaw = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as any
   const id = sanitizeString(sceneRaw?.id) || expectedSceneId
