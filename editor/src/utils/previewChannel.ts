@@ -5,7 +5,6 @@ export interface ScenePreviewSnapshot {
   revision: number
   document: SceneJsonExportDocument
   timestamp: string
-  groundHeightSidecarBase64?: string | null
 }
 
 type PreviewListener = (snapshot: ScenePreviewSnapshot) => void
@@ -205,13 +204,6 @@ function validateSnapshotPayload(payload: unknown): ScenePreviewSnapshot | null 
   }
   const candidate = payload as ScenePreviewSnapshot
   if (!candidate.document) {
-    return null
-  }
-  if (
-    candidate.groundHeightSidecarBase64 !== undefined
-    && candidate.groundHeightSidecarBase64 !== null
-    && typeof candidate.groundHeightSidecarBase64 !== 'string'
-  ) {
     return null
   }
   return candidate

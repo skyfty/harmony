@@ -1301,21 +1301,10 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     document.packageAssetMap = packageAssetMap
     document.assetIndex = assetIndex
     document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-
     if (isStale?.()) {
       return
     }
-
     const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
-
-    const groundNode = findGroundNode(document.nodes)
-    const groundHeightSidecar = !groundNode
-      ? null
-      : document.id === sceneStore.currentSceneId
-        ? useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
-        : await scenesStore.loadGroundHeightSidecar(document.id)
-    const groundHeightSidecarBase64 = encodePreviewGroundHeightSidecar(groundHeightSidecar)
-
     if (isStale?.()) {
       return
     }
@@ -1329,7 +1318,6 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
       revision,
       document: exportDocument,
       timestamp: new Date().toISOString(),
-      groundHeightSidecarBase64,
     })
   } catch (error) {
     console.warn('[SceneStore] Failed to broadcast preview update', error)

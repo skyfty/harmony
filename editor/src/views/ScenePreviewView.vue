@@ -5081,112 +5081,17 @@ function readPackageSceneGroundSidecar(
 	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
 }
 
-async function resolvePreviewGroundHeightSidecar(
-	document: SceneJsonExportDocument,
-	options: { groundHeightSidecar?: ArrayBuffer | null } = {},
-): Promise<ArrayBuffer | null> {
-	if (!packageSceneHasGroundNode(document)) {
-		return null
-	}
-	if (options.groundHeightSidecar !== undefined) {
-		return options.groundHeightSidecar
-	}
-	if (document.id === sceneStore.currentSceneId) {
-		const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(findGroundNode(document.nodes))
-		return sidecar
-	}
-	const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
-	return sidecar
-}
 
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
-	const sidecar = await resolvePreviewGroundHeightSidecar(document, options)
+	const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
 	const groundNode = findGroundNode(document.nodes)
-	if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-		return document
+	if (groundNode && groundNode.dynamicMesh && sidecar) {
+		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	}
-	groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	return document
-}
-
-async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
-	const trimmed = sourceUrl.trim()
-	if (!trimmed) {
-		appendWarningMessage('Missing packageUrl')
-		return
-	}
-	statusMessage.value = 'Loading scene package...'
-	try {
-		const buffer = await fetchArrayBufferFromUrl(trimmed)
-		const pkg = unzipScenePackage(buffer)
-		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg)
-
-		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
-		type ScenePackageProjectConfig = {
-			id?: unknown
-			name?: unknown
-			defaultSceneId?: unknown
-			lastEditedSceneId?: unknown
-			sceneOrder?: unknown
-		}
-		const projectConfigRaw: unknown = JSON.parse(projectText)
-		const projectConfig: ScenePackageProjectConfig =
-			projectConfigRaw && typeof projectConfigRaw === 'object'
-				? (projectConfigRaw as ScenePackageProjectConfig)
-				: {}
-
-		const scenes: ScenePreviewSceneEntry[] = []
-		projectSceneIndex.clear()
-		pkg.manifest.scenes.forEach((sceneEntry) => {
-			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
-			const sceneRaw = JSON.parse(sceneText) as unknown
-			if (!isSceneJsonExportDocument(sceneRaw)) {
-				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
-			}
-			const strippedDocument = stripGroundHeightMapsFromSceneDocument(
-				sceneRaw as unknown as StoredSceneDocument,
-			) as unknown as SceneJsonExportDocument
-			const groundHeightSidecar = readPackageSceneGroundSidecar(pkg, sceneEntry, strippedDocument)
-				const documentMeta = strippedDocument as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
-			const id = sceneEntry.sceneId
-			const entry: ScenePreviewSceneEntry = {
-				kind: 'embedded',
-				id,
-				name: strippedDocument.name || id,
-					createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
-					updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
-				document: strippedDocument,
-				groundHeightSidecar,
-			}
-			scenes.push(entry)
-			projectSceneIndex.set(id, entry)
-		})
-
-		projectBundle.value = {
-			project: {
-				id: String(projectConfig?.id ?? ''),
-				name: String(projectConfig?.name ?? ''),
-				defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
-				lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
-				sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
-			},
-			scenes,
-		}
-
-		const initialId =
-			(projectBundle.value.project.defaultSceneId || projectBundle.value.project.sceneOrder?.[0] || scenes[0]?.id || '').trim()
-		if (initialId) {
-			await switchToProjectScene(initialId)
-		}
-		statusMessage.value = ''
-	} catch (error) {
-		console.error('[ScenePreview] Failed to load scene package', error)
-		appendWarningMessage('Failed to load scene package.')
-		statusMessage.value = 'Failed to load scene package.'
-	}
 }
 
 async function switchToProjectScene(sceneId: string): Promise<void> {
@@ -10478,6 +10383,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+
 	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
 	const skyNodeActive = shouldUseSkybox(document)
@@ -10488,6 +10394,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	if (!scene || !rootGroup) {
 		return
 	}
+
 	environmentAssetRefreshTick.value += 1
 	const previewRoot = rootGroup
 	resourceProgress.active = true
@@ -10590,12 +10497,7 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 	}
 	isApplyingSnapshot = true
 	statusMessage.value = 'Syncing scene data...'
-	const runtimeDocumentPromise = snapshot.groundHeightSidecarBase64 === undefined
-		? buildPreviewRuntimeDocument(snapshot.document)
-		: buildPreviewRuntimeDocument(snapshot.document, {
-			groundHeightSidecar: decodePreviewGroundHeightSidecar(snapshot.groundHeightSidecarBase64),
-		})
-	void runtimeDocumentPromise
+	void buildPreviewRuntimeDocument(snapshot.document)
 		.then((runtimeDocument) => updateScene(runtimeDocument))
 		.then(() => {
 			lastUpdateTime.value = snapshot.timestamp
@@ -10679,29 +10581,15 @@ onMounted(() => {
 	] = resolveDisplayBoardMediaSource
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
-	let handledInitialPayload = false
-	if (typeof window !== 'undefined') {
-		try {
-			const url = new URL(window.location.href)
-			const packageUrl = url.searchParams.get('packageUrl')
-			if (packageUrl) {
-				liveUpdatesDisabledSourceUrl.value = packageUrl
-				handledInitialPayload = true
-				void loadScenePackageFromUrl(packageUrl)
-			}
-		} catch {
-			// ignore
+
+	livePreviewEnabled = true
+	unsubscribe = subscribeToScenePreview((snapshot) => {
+		if (!livePreviewEnabled) {
+			return
 		}
-	}
-	if (!handledInitialPayload) {
-		livePreviewEnabled = true
-		unsubscribe = subscribeToScenePreview((snapshot) => {
-			if (!livePreviewEnabled) {
-				return
-			}
-			applySnapshot(snapshot)
-		})
-	}
+		applySnapshot(snapshot)
+	})
+
 	updateLanternViewportSize()
 	if (typeof window !== 'undefined') {
 		window.addEventListener('resize', handleLanternViewportResize)
