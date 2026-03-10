@@ -53,7 +53,11 @@ export type {
 
 export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 
-export { TerrainScatterCategories } from './terrain-scatter'
+export {
+  TerrainScatterCategories,
+  appendTerrainScatterInstances,
+  removeTerrainScatterInstancesById,
+} from './terrain-scatter'
 export type { TerrainScatterCategory } from './terrain-scatter'
 export type {
   AssetCategory,

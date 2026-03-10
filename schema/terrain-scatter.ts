@@ -227,10 +227,60 @@ export function replaceTerrainScatterInstances(store: TerrainScatterStore, layer
   if (!layer) {
     return null
   }
-  const nextInstances = Array.isArray(instances) ? instances : []
-  layer.instances = nextInstances.map((entry) => normalizeInstance({ ...entry, layerId: layer.id } as any))
-  touchLayer(layer)
-  touchStore(store)
+  layer.instances = normalizeInstancesForLayer(layer, instances)
+  touchLayerAndStore(layer, store)
+  return layer
+}
+
+export function appendTerrainScatterInstances(
+  store: TerrainScatterStore,
+  layerId: string,
+  instances: TerrainScatterInstance | TerrainScatterInstance[],
+): TerrainScatterLayer | null {
+  if (!store) {
+    throw new Error('store is required')
+  }
+  const layer = store.layers.get(layerId)
+  if (!layer) {
+    return null
+  }
+  const nextEntries = Array.isArray(instances) ? instances : [instances]
+  if (!nextEntries.length) {
+    return layer
+  }
+  const normalized = nextEntries.map((entry) => normalizeInstance({ ...entry, layerId: layer.id } as any))
+  layer.instances.push(...normalized)
+  touchLayerAndStore(layer, store)
+  return layer
+}
+
+export function removeTerrainScatterInstancesById(
+  store: TerrainScatterStore,
+  layerId: string,
+  instanceIds: Iterable<string>,
+): TerrainScatterLayer | null {
+  if (!store) {
+    throw new Error('store is required')
+  }
+  const layer = store.layers.get(layerId)
+  if (!layer) {
+    return null
+  }
+  const idsToRemove = new Set<string>()
+  for (const instanceId of instanceIds) {
+    if (typeof instanceId === 'string' && instanceId.trim()) {
+      idsToRemove.add(instanceId)
+    }
+  }
+  if (!idsToRemove.size) {
+    return layer
+  }
+  const nextInstances = layer.instances.filter((entry) => !idsToRemove.has(entry.id))
+  if (nextInstances.length === layer.instances.length) {
+    return layer
+  }
+  layer.instances = nextInstances
+  touchLayerAndStore(layer, store)
   return layer
 }
 
@@ -340,6 +390,11 @@ function cloneLayerParams(params: Partial<TerrainScatterLayerParams> = DEFAULT_L
       scale: toFiniteNumber((params.jitter as any)?.scale, DEFAULT_LAYER_PARAMS.jitter.scale),
     },
   }
+}
+
+function normalizeInstancesForLayer(layer: TerrainScatterLayer, instances: TerrainScatterInstance[] | null | undefined): TerrainScatterInstance[] {
+  const nextInstances = Array.isArray(instances) ? instances : []
+  return nextInstances.map((entry) => normalizeInstance({ ...entry, layerId: layer.id } as any))
 }
 
 function normalizeLayer(payload: any = {}, target?: TerrainScatterLayer): TerrainScatterLayer {
@@ -592,6 +647,11 @@ function touchLayer(layer: TerrainScatterLayer) {
   if (layer && layer.metadata) {
     layer.metadata.updatedAt = now()
   }
+}
+
+function touchLayerAndStore(layer: TerrainScatterLayer, store: TerrainScatterStore) {
+  touchLayer(layer)
+  touchStore(store)
 }
 
 function selectCategory(category: string): TerrainScatterCategory {
