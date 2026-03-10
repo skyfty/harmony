@@ -153,7 +153,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     rows: derivedRows,
     columns: derivedColumns,
     cellSize,
-    chunkStreamingEnabled: overrides.chunkStreamingEnabled !== false,
+    chunkStreamingEnabled: overrides.chunkStreamingEnabled === true,
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
       mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',

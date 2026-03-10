@@ -180,7 +180,7 @@ export function resolveGroundChunkRadiusMeters(definition: GroundDynamicMesh): n
 }
 
 export function isGroundChunkStreamingEnabled(definition: GroundDynamicMesh | null | undefined): boolean {
-  return definition?.chunkStreamingEnabled !== false
+  return definition?.chunkStreamingEnabled === true
 }
 
 export function areAllGroundChunksLoaded(target: THREE.Object3D, definition: GroundDynamicMesh): boolean {
