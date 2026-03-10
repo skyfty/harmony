@@ -1469,6 +1469,7 @@ const buildToolButtons = [
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
   { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
+  { id: 'displayBoard', icon: 'mdi-billboard', label: 'Display Board Tool (Left Mouse Drag)' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({

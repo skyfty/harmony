@@ -11870,6 +11870,38 @@ export const useSceneStore = defineStore('scene', {
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
 
+    generateDisplayBoardNodeName() {
+      const prefix = 'Display Board '
+      const pattern = /^Display Board\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
+
     ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
@@ -12326,6 +12358,71 @@ export const useSceneStore = defineStore('scene', {
         this.addNodeComponent<typeof WATER_COMPONENT_TYPE>(node.id, WATER_COMPONENT_TYPE)
         this.applyWaterNodeDefaultNormalMap(node.id)
         const updated = findNodeById(this.nodes, node.id)
+        return updated ?? node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    createDisplayBoardNode(payload: {
+      nodeId?: string
+      center: Vector3Like
+      rotation: Vector3Like
+      scale: Vector3Like
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+    }): SceneNode | null {
+      const scaleX = Math.max(1e-3, Math.abs(Number(payload.scale.x)))
+      const scaleY = Math.max(1e-3, Math.abs(Number(payload.scale.y)))
+      const scaleZ = Math.max(1e-3, Math.abs(Number(payload.scale.z ?? 1)))
+      if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || !Number.isFinite(scaleZ)) {
+        return null
+      }
+
+      const runtime = createPrimitiveMesh('Plane', { color: 0xffffff, doubleSided: true })
+      runtime.castShadow = false
+      runtime.receiveShadow = true
+      runtime.userData = {
+        ...(runtime.userData ?? {}),
+        displayBoard: true,
+      }
+
+      const nodeName = payload.name ?? this.generateDisplayBoardNodeName()
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeId: payload.nodeId,
+          nodeType: 'Plane',
+          object: runtime,
+          name: nodeName,
+          position: createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0),
+          rotation: createVector(Number(payload.rotation.x) || 0, Number(payload.rotation.y) || 0, Number(payload.rotation.z) || 0),
+          scale: createVector(scaleX, scaleY, scaleZ),
+          editorFlags: payload.editorFlags,
+          userData: {
+            displayBoard: true,
+          },
+        })
+
+        if (!node) {
+          return null
+        }
+
+        const primaryMaterial = node.materials?.[0] ?? null
+        if (primaryMaterial) {
+          this.updateNodeMaterialProps(node.id, primaryMaterial.id, { side: 'double' })
+        }
+
+        if (!node.components?.[DISPLAY_BOARD_COMPONENT_TYPE]) {
+          this.addNodeComponent<typeof DISPLAY_BOARD_COMPONENT_TYPE>(node.id, DISPLAY_BOARD_COMPONENT_TYPE)
+        }
+
+        const updated = findNodeById(this.nodes, node.id)
+        if (updated) {
+          refreshDisplayBoardGeometry(updated)
+        }
         return updated ?? node
       } finally {
         this.endHistoryCaptureSuppression()
