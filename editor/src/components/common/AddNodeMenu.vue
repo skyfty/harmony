@@ -36,7 +36,6 @@ import {
   BEHAVIOR_COMPONENT_TYPE,
   DEFAULT_RIGIDBODY_FRICTION,
   DEFAULT_RIGIDBODY_RESTITUTION,
-  DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
@@ -61,9 +60,6 @@ import {
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
 const assetCacheStore = useAssetCacheStore()
-
-const DISPLAY_BOARD_INITIAL_HEIGHT = 0.5
-const DISPLAY_BOARD_EPSILON = 1e-4
 
 const VIEW_POINT_COLOR = 0xff8a65
 const VIEW_POINT_SHOW_BEHAVIOR_NAME = 'Show View Point'
@@ -692,39 +688,6 @@ function collectNodeNames(nodes: SceneNode[] | undefined, bucket: Set<string>) {
   })
 }
 
-function composeNodeMatrix(node: SceneNode): THREE.Matrix4 {
-  const position = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
-  const rotation = new THREE.Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ')
-  const quaternion = new THREE.Quaternion().setFromEuler(rotation)
-  const scale = new THREE.Vector3(node.scale.x, node.scale.y, node.scale.z)
-  return new THREE.Matrix4().compose(position, quaternion, scale)
-}
-
-function computeWorldMatrixForNode(nodes: SceneNode[] | undefined, targetId: string): THREE.Matrix4 | null {
-  if (!nodes?.length) {
-    return null
-  }
-
-  const traverse = (list: SceneNode[], parentMatrix: THREE.Matrix4): THREE.Matrix4 | null => {
-    for (const node of list) {
-      const localMatrix = composeNodeMatrix(node)
-      const worldMatrix = new THREE.Matrix4().multiplyMatrices(parentMatrix, localMatrix)
-      if (node.id === targetId) {
-        return worldMatrix
-      }
-      if (node.children?.length) {
-        const nested = traverse(node.children, worldMatrix)
-        if (nested) {
-          return nested
-        }
-      }
-    }
-    return null
-  }
-
-  return traverse(nodes, new THREE.Matrix4())
-}
-
 function getNextEmptyName(): string {
   const names = new Set<string>()
   collectNodeNames(sceneStore.nodes, names)
@@ -756,20 +719,6 @@ function getNextGuideboardName(): string {
   const names = new Set<string>()
   collectNodeNames(sceneStore.nodes, names)
   const base = 'Guideboard'
-  if (!names.has(base)) {
-    return base
-  }
-  let index = 1
-  while (names.has(`${base} ${index}`)) {
-    index += 1
-  }
-  return `${base} ${index}`
-}
-
-function getNextDisplayBoardName(): string {
-  const names = new Set<string>()
-  collectNodeNames(sceneStore.nodes, names)
-  const base = 'Display Board'
   if (!names.has(base)) {
     return base
   }
@@ -1272,60 +1221,6 @@ function handleCreateEmptyNode() {
     name,
     parentId: parentId ?? undefined,
   })
-}
-
-async function handleCreateDisplayBoardNode(): Promise<void> {
-  const parent = resolveTargetParentNode()
-  const resolvedParentId = parent?.id ?? null
-  const name = getNextDisplayBoardName()
-
-  const boardMesh = createPrimitiveMesh("Plane", {color: 0xffffff,doubleSided: true})
-  boardMesh.name = `${name} Visual`
-  boardMesh.castShadow = false
-  boardMesh.receiveShadow = true
-  boardMesh.userData = {
-    ...(boardMesh.userData ?? {}),
-    displayBoard: true,
-  }
-
-  const boardRoot = new THREE.Object3D()
-  boardRoot.name = name
-  boardRoot.add(boardMesh)
-
-  const spawnPosition = new THREE.Vector3(0, -DISPLAY_BOARD_INITIAL_HEIGHT / 2 - DISPLAY_BOARD_EPSILON, 0)
-  if (parent) {
-    const matrix = computeWorldMatrixForNode(sceneStore.nodes, parent.id)
-    if (matrix) {
-      const worldPosition = new THREE.Vector3().setFromMatrixPosition(matrix)
-      spawnPosition.copy(worldPosition)
-      spawnPosition.y += -DISPLAY_BOARD_INITIAL_HEIGHT / 2 - DISPLAY_BOARD_EPSILON
-    }
-  }
-
-
-  const created = await sceneStore.addModelNode({
-    object: boardRoot,
-    nodeType: 'Plane',
-    name,
-    parentId: resolvedParentId ?? undefined,
-    position: spawnPosition,
-    snapToGrid: false,
-  })
-
-  if (!created) {
-    return
-  }
-
-  const primaryMaterial = created.materials?.[0] ?? null
-  if (primaryMaterial) {
-    sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
-  }
-
-  if (!created.components?.[DISPLAY_BOARD_COMPONENT_TYPE]) {
-    sceneStore.addNodeComponent(created.id, DISPLAY_BOARD_COMPONENT_TYPE)
-  }
-
-  sceneStore.selectNode(created.id)
 }
 
 async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
@@ -1989,10 +1884,6 @@ function handleAddLight(type: LightNodeType) {
           />
         </template>
         <v-list class="add-submenu-list">
-          <v-list-item
-            title="Display Board"
-            @click="handleCreateDisplayBoardNode()"
-          />
           <v-list-item title="Visit" @click="handleCreateShowcaseVisit()"  :disabled="!canCreateShowcaseNodes"/>
           <v-divider />
           <v-list-item title="Guideboard" @click="handleCreateGuideboardNode()" />

@@ -5,7 +5,9 @@ import type { useSceneStore } from '@/stores/sceneStore'
 
 const MIN_EDGE_LENGTH = 1e-3
 const MIN_RECT_SIZE = 1e-3
-const SNAP_OFFSET_EPSILON = 1e-4
+const SURFACE_OFFSET_MIN = 5e-3
+const SURFACE_OFFSET_MAX = 3e-2
+const SURFACE_OFFSET_RATIO = 0.02
 const HELPER_NORMAL_SCALE = 0.3
 const HELPER_AXIS_SCALE = 0.35
 const HELPER_MIN_AXIS_LENGTH = 0.08
@@ -431,6 +433,14 @@ function createPreviewRoot(): THREE.Group {
   return group
 }
 
+function computeSurfaceOffset(width: number, height: number): number {
+  const base = Math.min(Math.abs(width), Math.abs(height))
+  if (!isFinite(base) || base <= 0) {
+    return SURFACE_OFFSET_MIN
+  }
+  return THREE.MathUtils.clamp(base * SURFACE_OFFSET_RATIO, SURFACE_OFFSET_MIN, SURFACE_OFFSET_MAX)
+}
+
 function resolvePlacementPoint(
   event: PointerEvent | MouseEvent,
   options: Parameters<typeof createDisplayBoardBuildTool>[0],
@@ -652,7 +662,8 @@ export function createDisplayBoardBuildTool(options: {
       return true
     }
 
-    const center = rectangle.centerWorld.clone().addScaledVector(activeSession.normal, SNAP_OFFSET_EPSILON)
+    const offset = computeSurfaceOffset(rectangle.width, rectangle.height)
+    const center = rectangle.centerWorld.clone().addScaledVector(activeSession.normal, offset)
     const rotation = new THREE.Euler().setFromQuaternion(rectangle.quaternion, 'XYZ')
     options.createDisplayBoardNode({
       center,
