@@ -2987,17 +2987,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
 		if (sceneId) {
-			useGroundHeightmapStore().replaceManualHeightMap(
+			options.sceneStore.commitGroundHeightMapEdit(
 				targetNode.id,
-				targetNode.dynamicMesh,
+				targetNode.dynamicMesh as GroundDynamicMesh,
 				sculptSessionState.heightMap,
 			)
 		}
-		const nextDynamicMesh: GroundDynamicMesh = {
-			...(targetNode.dynamicMesh as GroundDynamicMesh),
-		}
-		targetNode.dynamicMesh = nextDynamicMesh
-		options.sceneStore.updateGroundNodeDynamicMesh(targetNode.id, nextDynamicMesh)
 		sculptSessionState = null
 		return true
 	}

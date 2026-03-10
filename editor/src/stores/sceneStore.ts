@@ -1362,12 +1362,7 @@ function finalizeDynamicMeshRuntimePatch(store: {
 }, nodeId: string, updatedMeshType: string | null): void {
   // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
   // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
-  if (
-    updatedMeshType === 'Road' ||
-    updatedMeshType === 'Wall' ||
-    updatedMeshType === 'Floor' ||
-    updatedMeshType === 'Ground'
-  ) {
+  if ( updatedMeshType === 'Road' ||  updatedMeshType === 'Wall' || updatedMeshType === 'Floor' ) {
     const queued = store.queueSceneNodePatch(nodeId, ['dynamicMesh'])
 
     // `SceneViewport` applies pending patches only when `sceneNodePropertyVersion` bumps.
@@ -1386,6 +1381,27 @@ function persistGroundHeightSidecarForNode(groundNode: SceneNode | null): boolea
   void useScenesStore().saveGroundHeightSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
     console.warn('[SceneStore] Failed to persist ground height sidecar', error)
   })
+  return true
+}
+
+function commitGroundHeightMapRuntimeEdit(
+  store: {
+    nodes: SceneNode[]
+    currentSceneId?: string | null
+    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+    bumpSceneNodePropertyVersion: () => void
+  },
+  nodeId: string,
+  definition: GroundDynamicMesh,
+  manualHeightMap: Float64Array,
+): boolean {
+  const target = findNodeById(store.nodes, nodeId)
+  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
+    return false
+  }
+  useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
+  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
+  persistGroundHeightSidecarForNode(target)
   return true
 }
 
@@ -6123,7 +6139,6 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     throw new Error('Cannot create scene document without an active scene')
   }
 
-  normalizeCurrentSceneMeta(store)
   const now = new Date().toISOString()
   const meta = store.currentSceneMeta!
   const projectId = typeof meta.projectId === 'string' ? meta.projectId : ''
@@ -7194,6 +7209,7 @@ export const useSceneStore = defineStore('scene', {
       this.queueSceneStructurePatch('applySceneDocumentToState')
     },
     createSceneDocumentSnapshot(): StoredSceneDocument {
+      normalizeCurrentSceneMeta(this)
       const snapshot = buildSceneDocumentFromState(this)
       return snapshot
     },
@@ -7429,23 +7445,12 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const nextDefinition: GroundDynamicMesh = {
-        ...result.definition,
-        surfaceRevision: normalizeGroundSurfaceRevision(result.definition.surfaceRevision),
-      }
-      delete (nextDefinition as GroundDynamicMesh & { manualHeightMap?: Float64Array }).manualHeightMap
-      delete (nextDefinition as GroundDynamicMesh & { planningHeightMap?: Float64Array }).planningHeightMap
-      if (this.currentSceneId) {
-        useGroundHeightmapStore().replaceManualHeightMap(
-          groundNode.id,
-          nextDefinition,
-          result.definition.manualHeightMap,
-        )
-      }
-      groundNode.dynamicMesh = nextDefinition
-      this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
-      return true
+      return commitGroundHeightMapRuntimeEdit(
+        this,
+        groundNode.id,
+        currentDefinition,
+        result.definition.manualHeightMap,
+      )
     },
     raiseGroundRegion(bounds: GroundRegionBounds, amount = 1) {
       const delta = Number.isFinite(amount) ? amount : 1
@@ -8119,6 +8124,13 @@ export const useSceneStore = defineStore('scene', {
       }
       commitSceneSnapshot(this)
     },
+    commitGroundHeightMapEdit(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+      manualHeightMap: Float64Array,
+    ) {
+      return commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+    },
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) return
@@ -8469,23 +8481,12 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
       this.queueSceneStructurePatch('resetSharedMaterialAssignments')
-      commitSceneSnapshot(this)
-      return true
-    },
-    saveNodeMaterialAsShared(
-      nodeId: string,
-      nodeMaterialId: string,
-      options: { name?: string; description?: string } = {},
-    ): SceneMaterial | null {
-      const targetNode = findNodeById(this.nodes, nodeId)
-      if (!nodeSupportsMaterials(targetNode) || !targetNode?.materials?.length) {
-        return null
-      }
-
-      const existing = targetNode.materials.find((entry) => entry.id === nodeMaterialId) ?? null
-      if (!existing) {
-        return null
-      }
+      return commitGroundHeightMapRuntimeEdit(
+        this,
+        groundNode.id,
+        currentDefinition,
+        result.definition.manualHeightMap,
+      )
       if (existing.materialId) {
         return this.materials.find((entry) => entry.id === existing.materialId) ?? null
       }
@@ -9650,6 +9651,7 @@ export const useSceneStore = defineStore('scene', {
         return { removedAssetIds: [] }
       }
 
+      normalizeCurrentSceneMeta(this)
       const document = buildSceneDocumentFromState(this)
       const usedAssetIds = collectSceneAssetReferences(document)
       const retainedAssetIds = new Set<string>(usedAssetIds)
