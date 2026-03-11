@@ -156,6 +156,7 @@ import {
   type ViewportPlacementItem,
 } from './viewportPlacementCatalog'
 import { createGroundEditor } from './GroundEditor'
+import { resolveGroundRuntimeObject, resolveGroundRuntimeObjectFromMap } from './groundRuntimeObject'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
 import type { AlignCommand, ArrangeDirection, WorldAlignMode } from '@/types/scene-viewport-align-command'
@@ -178,6 +179,11 @@ import {
   releaseGroundMeshCache,
   sampleGroundHeight,
 } from '@schema/groundMesh'
+import {
+  clearLandformsPreviewForGround,
+  createDefaultLandformsPreviewLoaders,
+  syncLandformsPreviewForGround,
+} from '@schema/landformsPreview'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
@@ -953,6 +959,7 @@ let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
+let landformsPreviewLoadToken = 0
 
 function disposeGradientBackgroundResources() {
   disposeGradientBackgroundDome(gradientBackgroundDome)
@@ -1252,8 +1259,7 @@ const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 const GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY = '__harmonyGroundSculptSkipRefreshSignature'
 
 function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
-  const runtimeGroundObject = object.userData?.groundMesh as THREE.Object3D | undefined
-  return runtimeGroundObject ?? object
+  return resolveGroundRuntimeObject(object) ?? object
 }
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
@@ -2624,8 +2630,7 @@ function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return resolveDynamicGroundStreamingRadiusMeters(null)
   }
-  const container = objectMap.get(node.id)
-  const groundObject = (container?.userData?.groundMesh as THREE.Object3D | undefined) ?? null
+  const groundObject = resolveGroundRuntimeObjectFromMap(objectMap, node.id)
   return resolveDynamicGroundStreamingRadiusMeters(groundObject)
 }
 
@@ -7346,6 +7351,7 @@ function disposeObjectResources(object: THREE.Object3D) {
     const meshChild = child as THREE.Mesh
     if (meshChild?.isMesh) {
       if (meshChild.userData?.dynamicMeshType === 'Ground') {
+        clearGroundLandformsPreview(meshChild)
         return
       }
       if (meshChild.geometry) {
@@ -8499,13 +8505,8 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
 }
 
 async function restoreGroundAllGuarded(): Promise<void> {
-  const tokenSnapshot = sceneStore.sceneSwitchToken
-  await restoreGroupdScatter()
-  await restoreGroundPaint()
-  // If a scene switch happened during restore, don't continue with any follow-up.
-  if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
-    return
-  }
+  restoreGroupdScatter()
+  restoreGroundPaint()
 }
 
 async function restoreGroundScatterGuarded(): Promise<void> {
@@ -9510,6 +9511,49 @@ function normalizeCloudAssetReference(value: string | null | undefined): string 
     return ''
   }
   return trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+}
+
+async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string | null } | null> {
+  const normalized = normalizeCloudAssetReference(assetId)
+  if (!normalized) {
+    return null
+  }
+  const asset = sceneStore.getAsset(normalized)
+  if (!asset) {
+    return { url: normalized }
+  }
+  try {
+    const entry = await assetCacheStore.downloaProjectAsset(asset)
+    const url = entry.blobUrl ?? asset.downloadUrl ?? asset.description ?? null
+    if (!url) {
+      return null
+    }
+    assetCacheStore.touch(asset.id)
+    return { url }
+  } catch (error) {
+    console.warn('[SceneViewport] Failed to resolve asset URL', normalized, error)
+    return null
+  }
+}
+
+const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
+
+function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined, groundNode: SceneNode): void {
+  if (!groundObject) {
+    return
+  }
+  landformsPreviewLoadToken += 1
+  syncLandformsPreviewForGround(
+    groundObject,
+    groundNode,
+    landformsPreviewLoaders,
+    () => landformsPreviewLoadToken,
+  )
+}
+
+function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {
+  landformsPreviewLoadToken += 1
+  clearLandformsPreviewForGround(groundObject)
 }
 
 async function resolveCloudAssetUrl(source: string): Promise<{ url: string; dispose?: () => void } | null> {
@@ -15232,11 +15276,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   }
 
   if (node.dynamicMesh?.type === 'Ground') {
-    const groundObject = userData.groundMesh as THREE.Object3D | undefined
+    const groundObject = resolveGroundRuntimeObject(object)
     if (groundObject) {
       const groundData = groundObject.userData ?? (groundObject.userData = {})
       const groundDefinition = resolveGroundDynamicMeshDefinition()
       if (!groundDefinition) {
+        clearGroundLandformsPreview(groundObject)
         return
       }
       const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
@@ -15259,6 +15304,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
       syncGroundChunkLoadingMode(groundObject, groundDefinition, null)
+      syncGroundLandformsPreview(groundObject, node)
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
@@ -15451,8 +15497,7 @@ function updateGroundChunkStreaming() {
     return
   }
 
-  const container = objectMap.get(node.id)
-  const groundObject = (container?.userData?.groundMesh as THREE.Object3D | undefined) ?? undefined
+  const groundObject = resolveGroundRuntimeObjectFromMap(objectMap, node.id) ?? undefined
   if (!groundObject) {
     return
   }
@@ -15623,6 +15668,7 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
     } else {
       child.removeFromParent()
       if (child.userData?.dynamicMeshType === 'Ground') {
+        clearGroundLandformsPreview(child)
         disposeGroundObjectGeometries(child)
         continue
       }
@@ -16263,6 +16309,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       groundMesh.userData.nodeId = node.id
       groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
       syncGroundChunkLoadingMode(groundMesh, groundDefinition, null)
+      syncGroundLandformsPreview(groundMesh, node)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'

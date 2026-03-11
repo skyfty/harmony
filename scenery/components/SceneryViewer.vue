@@ -481,6 +481,11 @@ import {
   syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
 } from '@harmony/schema/terrainPaintPreview';
 import {
+  createDefaultLandformsPreviewLoaders,
+  clearLandformsPreviewForGround,
+  syncLandformsPreviewForGround,
+} from '@harmony/schema/landformsPreview';
+import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
   syncBodyFromObject as syncSharedBodyFromObject,
@@ -583,6 +588,7 @@ import {
   guideRouteComponentDefinition,
   autoTourComponentDefinition,
   purePursuitComponentDefinition,
+  landformsComponentDefinition,
   sceneStateAnchorComponentDefinition,
   preloadableComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
@@ -1103,10 +1109,17 @@ const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | n
 
 // Use shared loaders and sync logic from schema/terrainPaintPreview
 const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
+const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
 
 // loaders created via createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 
-function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicMesh: GroundDynamicMesh): void {
+function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
+  syncLandformsPreviewForGround(
+    groundObject,
+    groundNode,
+    landformsPreviewLoaders,
+    () => terrainPaintPreviewLoadToken,
+  )
   return syncTerrainPaintPreviewForGroundShared(
     groundObject,
     dynamicMesh,
@@ -1373,7 +1386,7 @@ let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
 let terrainPaintPreviewLoadToken = 0;
-let dynamicGroundCache: { nodeId: string; dynamicMesh: GroundDynamicMesh } | null = null;
+let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundDynamicMesh } | null = null;
 let sceneGraphRoot: THREE.Object3D | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
@@ -1594,6 +1607,7 @@ previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
+previewComponentManager.registerDefinition(landformsComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
@@ -3645,6 +3659,8 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
 }
 
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
+  const previousGroundObject = dynamicGroundCache ? nodeObjectMap.get(dynamicGroundCache.nodeId) ?? null : null;
+  clearLandformsPreviewForGround(previousGroundObject);
   terrainPaintPreviewLoadToken += 1;
   if (!document) {
     dynamicGroundCache = null;
@@ -3652,7 +3668,7 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   }
   const groundNode = findGroundNode(document.nodes);
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    dynamicGroundCache = { nodeId: groundNode.id, dynamicMesh: groundNode.dynamicMesh };
+    dynamicGroundCache = { nodeId: groundNode.id, node: groundNode, dynamicMesh: groundNode.dynamicMesh };
   } else {
     dynamicGroundCache = null;
   }
@@ -10184,7 +10200,7 @@ function startRenderLoop(
             } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
               ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
             }
-            syncTerrainPaintPreviewForGround(groundObject, cachedGround.dynamicMesh);
+            syncTerrainPaintPreviewForGround(groundObject, cachedGround.node, cachedGround.dynamicMesh);
             if (debugEnabled.value) {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }

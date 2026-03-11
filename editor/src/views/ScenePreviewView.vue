@@ -86,6 +86,11 @@ import {
 	createDefaultTerrainPaintLoaders,
 } from '@schema/terrainPaintPreview'
 import {
+	createDefaultLandformsPreviewLoaders,
+	clearLandformsPreviewForGround,
+	syncLandformsPreviewForGround,
+} from '@schema/landformsPreview'
+import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
 	syncBodyFromObject as syncSharedBodyFromObject,
@@ -130,6 +135,7 @@ import {
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
 	floorComponentDefinition,
+	landformsComponentDefinition,
 	wallComponentDefinition,
 	roadComponentDefinition,
 	viewPointComponentDefinition,
@@ -749,6 +755,7 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(floorComponentDefinition)
+previewComponentManager.registerDefinition(landformsComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
@@ -971,12 +978,20 @@ const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | n
 
 // Create loaders via schema factory to centralize terrain paint asset loading logic
 const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
+const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
 
 
 
 
 
-function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicMesh: GroundDynamicMesh): void {
+
+function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
+	syncLandformsPreviewForGround(
+		groundObject,
+		groundNode,
+		landformsPreviewLoaders,
+		() => terrainPaintPreviewLoadToken,
+	)
 	return syncTerrainPaintPreviewForGroundShared(
 		groundObject,
 		dynamicMesh,
@@ -1216,6 +1231,7 @@ let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
+let cachedGroundNode: SceneNode | null = null
 let terrainPaintPreviewLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
@@ -1566,8 +1582,11 @@ function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null
 }
 
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
+	const previousGroundObject = cachedGroundNodeId ? nodeObjectMap.get(cachedGroundNodeId) ?? null : null
+	clearLandformsPreviewForGround(previousGroundObject)
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
+	cachedGroundNode = null
 	cameraDependentUpdateInitialized = false
 	terrainPaintPreviewLoadToken += 1
 	const loadToken = terrainPaintPreviewLoadToken
@@ -1593,6 +1612,7 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	attachGroundPaintRuntimeToNode(document.id, groundNode)
 	cachedGroundNodeId = groundNode.id
 	cachedGroundDynamicMesh = groundNode.dynamicMesh
+	cachedGroundNode = groundNode
 }
 
 function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamera, delta: number): boolean {
@@ -6932,7 +6952,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	}
 	updateBehaviorProximity()
 	// Keep ground chunk meshes in sync with camera position.
-	if (cachedGroundNodeId && cachedGroundDynamicMesh) {
+	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
 			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
@@ -6940,7 +6960,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
 				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
 			}
-			syncTerrainPaintPreviewForGround(groundObject, cachedGroundDynamicMesh)
+			syncTerrainPaintPreviewForGround(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
 					renderHelpers: isGroundChunkStreamingDebugVisible.value,

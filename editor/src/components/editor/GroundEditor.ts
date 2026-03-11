@@ -65,6 +65,7 @@ import {
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
+import { resolveGroundRuntimeObjectFromMap } from './groundRuntimeObject'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -3140,7 +3141,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function getGroundObject(): THREE.Object3D | null {
-		return options.objectMap.get(GROUND_NODE_ID) ?? null
+		return resolveGroundRuntimeObjectFromMap(options.objectMap, GROUND_NODE_ID)
 	}
 
 	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundRuntimeDynamicMesh {
