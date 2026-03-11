@@ -301,7 +301,7 @@ function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId
 	const runtimeState = sceneId && nodeId
 		? useGroundPaintStore().getSceneGroundPaint(sceneId)
 		: null
-	const existing = runtimeState?.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
+	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
 	if (existing && existing.version === 1) {
 		return {
 			version: 1,
@@ -1054,7 +1054,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				mesh.geometry.computeVertexNormals()
 			})
-			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null, filterKeys)
+			stitchGroundChunkNormals(params.groundObject, params.definition as GroundRuntimeDynamicMesh, params.region ?? null, filterKeys)
 			return
 		}
 
@@ -1141,7 +1141,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
 			}
 		}
-		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null, filterKeys)
+		stitchGroundChunkNormals(params.groundObject, params.definition as GroundRuntimeDynamicMesh, params.region ?? null, filterKeys)
 	}
 
 	const assetCacheStore = useAssetCacheStore()
@@ -4738,7 +4738,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					? 0
 					: undefined
 
-			const modified = sculptGround(definition, {
+			const modified = sculptGround(definition as GroundRuntimeDynamicMesh, {
 				point,
 				radius,
 				// Damp sculpt speed so height grows more gradually for finer control.
@@ -4776,13 +4776,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			sculptSessionState.dirty = true
 		}
-		updateGroundMeshRegion(groundObject, definition, mergedRegion)
+		updateGroundMeshRegion(groundObject, definition as GroundRuntimeDynamicMesh, mergedRegion)
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			addTouchedGroundChunkKeys(sculptSessionState.touchedChunkKeys, definition, mergedRegion)
-			stitchGroundChunkNormals(groundObject, definition, mergedRegion, sculptSessionState.touchedChunkKeys)
+			stitchGroundChunkNormals(groundObject, definition as GroundRuntimeDynamicMesh, mergedRegion, sculptSessionState.touchedChunkKeys)
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
 		} else {
-			stitchGroundChunkNormals(groundObject, definition, mergedRegion)
+			stitchGroundChunkNormals(groundObject, definition as GroundRuntimeDynamicMesh, mergedRegion)
 		}
 	}
 
@@ -5007,7 +5007,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 							}
 							mesh.geometry.computeVertexNormals()
 						})
-						stitchGroundChunkNormals(groundObject, groundNode.dynamicMesh as GroundDynamicMesh, region ?? null, filteredChunkKeys)
+						stitchGroundChunkNormals(groundObject, groundNode.dynamicMesh as GroundRuntimeDynamicMesh, region ?? null, filteredChunkKeys)
 					} catch (_error) {
 						/* noop */
 					}

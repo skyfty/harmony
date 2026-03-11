@@ -108,16 +108,17 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
     }
   }
   visitNodes(document.nodes, (node) => {
-    if (node.dynamicMesh?.type !== 'Ground') {
+    const dynamicMesh = node.dynamicMesh
+    if (!dynamicMesh || typeof dynamicMesh !== 'object' || (dynamicMesh as { type?: unknown }).type !== 'Ground') {
       return
     }
-    const dynamicMesh = node.dynamicMesh as GroundDynamicMesh & Record<string, unknown>
-    delete dynamicMesh.manualHeightMap
-    delete dynamicMesh.planningHeightMap
-    delete dynamicMesh.planningMetadata
-    delete dynamicMesh.surfaceRevision
-    delete dynamicMesh.terrainScatter
-    delete dynamicMesh.terrainPaint
+    const groundDynamicMesh = dynamicMesh as GroundDynamicMesh & Record<string, unknown>
+    delete groundDynamicMesh.manualHeightMap
+    delete groundDynamicMesh.planningHeightMap
+    delete groundDynamicMesh.planningMetadata
+    delete groundDynamicMesh.surfaceRevision
+    delete groundDynamicMesh.terrainScatter
+    delete groundDynamicMesh.terrainPaint
   })
   return document
 }

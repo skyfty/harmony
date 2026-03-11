@@ -764,23 +764,6 @@ function resolveLayerNameFromPlanningData(planningData: PlanningSceneData, layer
 
 // resolveLayerColorFromPlanningData removed (unused)
 
-function findGroundNode(nodes: SceneNode[]): SceneNode | null {
-  const visit = (list: SceneNode[]): SceneNode | null => {
-    for (const node of list) {
-      if (node?.dynamicMesh?.type === 'Ground') {
-        return node
-      }
-      const child = visit(Array.isArray(node.children) ? node.children : [])
-      if (child) {
-        return child
-      }
-    }
-    return null
-  }
-
-  return visit(nodes)
-}
-
 function resolveGroundRuntimeDefinition(
   sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
   groundNode: SceneNode,
@@ -1033,18 +1016,6 @@ function unionBounds(a: GroundContourBounds | null, b: GroundContourBounds | nul
     minColumn: Math.min(a.minColumn, b.minColumn),
     maxColumn: Math.max(a.maxColumn, b.maxColumn),
   }
-}
-
-function isBoundsValid(b: GroundContourBounds | null | undefined): b is GroundContourBounds {
-  return Boolean(
-    b
-    && Number.isFinite(b.minRow)
-    && Number.isFinite(b.maxRow)
-    && Number.isFinite(b.minColumn)
-    && Number.isFinite(b.maxColumn)
-    && b.maxRow >= b.minRow
-    && b.maxColumn >= b.minColumn,
-  )
 }
 
 function isPointOnSegment2D(
@@ -1373,7 +1344,7 @@ async function blurHeightGrid(
 
 async function applyPlanningTerrainContoursToGround(options: {
   definition: GroundRuntimeDynamicMesh
-  contourPolygons: PlanningPolygonAny[]
+  contourPolygons: PlanningPolygonData[]
   signal?: AbortSignal
   yieldController: ReturnType<typeof createYieldController>
   blendMeters?: number
@@ -1804,7 +1775,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
   if (groundNode && groundDefinition) {
-    const resetContours = resetGroundPlanningContours(groundDefinition)
+    const resetContours = resetGroundPlanningContours(groundDefinition as GroundRuntimeDynamicMesh)
     const hadPlanningContours = resetContours.changed
 
     if (hadPlanningContours) {
@@ -1825,7 +1796,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       await yieldController.maybeYield(true)
       try {
         const next = await applyPlanningTerrainContoursToGround({
-          definition: groundDefinition,
+          definition: groundDefinition as GroundRuntimeDynamicMesh,
           contourPolygons,
           signal: options.signal,
           yieldController,
@@ -2334,7 +2305,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
                 if (height < minHeight || height > maxHeight) {
                   continue
                 }
-                const normal = groundDefinition ? sampleGroundNormal(groundDefinition, localXZ.x, localXZ.z) : null
+                const normal = groundDefinition
+                  ? sampleGroundNormal(groundDefinition as GroundRuntimeDynamicMesh, localXZ.x, localXZ.z)
+                  : null
                 const slopeDeg = normal ? (Math.acos(THREE.MathUtils.clamp(normal.y, -1, 1)) * (180 / Math.PI)) : 0
                 if (slopeDeg < minSlope || slopeDeg > maxSlope) {
                   continue

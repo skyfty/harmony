@@ -155,7 +155,6 @@ import {
   computeInstanceLayoutGridCenterOffsetLocal,
   resolveInstanceLayoutTemplateAssetId,
 } from '@schema/instanceLayout'
-import { applyMirroredScaleToObject } from '@schema/mirror'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -1242,23 +1241,6 @@ function prepareGroundDynamicMeshRevision(existing: Record<string, any> | null, 
   return nextRevision
 }
 
-function isGroundHeightOnlyDynamicMeshUpdate(existing: Record<string, any> | null, incoming: Record<string, any>): boolean {
-  if (!existing) {
-    return false
-  }
-  const ignoredKeys = new Set(['planningMetadata', 'surfaceRevision'])
-  const keys = new Set([...Object.keys(existing), ...Object.keys(incoming)])
-  for (const key of keys) {
-    if (ignoredKeys.has(key)) {
-      continue
-    }
-    if (existing[key] !== incoming[key]) {
-      return false
-    }
-  }
-  return existing.planningMetadata !== incoming.planningMetadata
-}
-
 function resolveDynamicMeshType(dynamicMesh: unknown): string | null {
   if (!dynamicMesh || typeof dynamicMesh !== 'object') {
     return null
@@ -1270,24 +1252,6 @@ function resolveDynamicMeshType(dynamicMesh: unknown): string | null {
 
 function isGroundDynamicMeshUpdate(existing: unknown, incoming: unknown): boolean {
   return resolveDynamicMeshType(existing) === 'Ground' || resolveDynamicMeshType(incoming) === 'Ground'
-}
-
-function resolveDynamicMeshRecord(dynamicMesh: unknown): Record<string, any> | null {
-  if (!dynamicMesh || typeof dynamicMesh !== 'object') {
-    return null
-  }
-  return dynamicMesh as Record<string, any>
-}
-
-function isPureGroundHeightDynamicMeshUpdate(previousDynamicMesh: unknown, incomingDynamicMesh: unknown): boolean {
-  const previousRecord = resolveDynamicMeshRecord(previousDynamicMesh)
-  const incomingRecord = resolveDynamicMeshRecord(incomingDynamicMesh)
-  return Boolean(
-    previousRecord
-    && incomingRecord
-    && (previousRecord.type === 'Ground' || incomingRecord.type === 'Ground')
-    && isGroundHeightOnlyDynamicMeshUpdate(previousRecord, incomingRecord),
-  )
 }
 
 function applyDynamicMeshToSceneNode(node: SceneNode, dynamicMesh: any, options: {
@@ -1444,7 +1408,10 @@ function commitGroundPaintRuntimeEdit(
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
-  useGroundPaintStore().replaceTerrainPaint(store.currentSceneId, nodeId, manualDeepClone(terrainPaint) as GroundDynamicMesh['terrainPaint'])
+  const nextTerrainPaint = manualDeepClone(terrainPaint ?? null) as Parameters<
+    ReturnType<typeof useGroundPaintStore>['replaceTerrainPaint']
+  >[2]
+  useGroundPaintStore().replaceTerrainPaint(store.currentSceneId, nodeId, nextTerrainPaint)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundPaintSidecarForNode(target)
   return true
@@ -8146,10 +8113,13 @@ export const useSceneStore = defineStore('scene', {
           shouldPersistScatterSidecar = true
         }
         if (Object.prototype.hasOwnProperty.call(incoming, 'terrainPaint')) {
+          const nextTerrainPaint = manualDeepClone((incoming as Record<string, unknown>).terrainPaint ?? null) as Parameters<
+            ReturnType<typeof useGroundPaintStore>['replaceTerrainPaint']
+          >[2]
           useGroundPaintStore().replaceTerrainPaint(
             this.currentSceneId,
             nodeId,
-            manualDeepClone((incoming as Record<string, unknown>).terrainPaint) as GroundDynamicMesh['terrainPaint'],
+            nextTerrainPaint,
           )
           delete (incoming as Record<string, unknown>).terrainPaint
           shouldPersistPaintSidecar = true
@@ -8542,27 +8512,38 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
       this.queueSceneStructurePatch('resetSharedMaterialAssignments')
-      return commitGroundHeightMapRuntimeEdit(
-        this,
-        groundNode.id,
-        currentDefinition,
-        result.definition.manualHeightMap,
-      )
-      if (existing.materialId) {
-        return this.materials.find((entry) => entry.id === existing.materialId) ?? null
+      commitSceneSnapshot(this)
+      return true
+    },
+    saveNodeMaterialAsShared(
+      nodeId: string,
+      nodeMaterialId: string,
+      options: { name?: string; description?: string } = {},
+    ): SceneMaterial | null {
+      const targetNode = findNodeById(this.nodes, nodeId)
+      if (!targetNode || !nodeSupportsMaterials(targetNode) || !targetNode.materials?.length) {
+        return null
+      }
+      const existingMaterial = (targetNode.materials as SceneNodeMaterial[]).find((entry) => entry.id === nodeMaterialId)
+      if (!existingMaterial) {
+        return null
       }
 
-      const props = extractMaterialProps(existing)
+      if (existingMaterial.materialId) {
+        return this.materials.find((entry) => entry.id === existingMaterial.materialId) ?? null
+      }
+
+      const props = extractMaterialProps(existingMaterial)
       const nameCandidates = [
         typeof options.name === 'string' ? options.name.trim() : '',
-        typeof existing.name === 'string' ? existing.name.trim() : '',
+        typeof existingMaterial.name === 'string' ? existingMaterial.name.trim() : '',
       ]
       const fallbackName = `Material ${this.materials.length + 1}`
       const resolvedName = nameCandidates.find((value) => value && value.length) ?? fallbackName
       const normalizedDescription =
         typeof options.description === 'string' ? options.description.trim() : undefined
 
-      const material = createSceneMaterial(resolvedName, props, { type:existing.type ?? DEFAULT_SCENE_MATERIAL_TYPE })
+      const material = createSceneMaterial(resolvedName, props, { type: existingMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE })
       if (normalizedDescription && normalizedDescription.length) {
         material.description = normalizedDescription
       }
@@ -12946,6 +12927,7 @@ export const useSceneStore = defineStore('scene', {
         | Record<string, unknown>
         | WallComponentProps
         | RoadComponentProps
+        | LandformsComponentProps
         | DisplayBoardComponentProps
         | PlanningImagesComponentProps
         | WarpGateComponentProps

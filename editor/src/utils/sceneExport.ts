@@ -3,7 +3,7 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type AssetIndexEntry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
+import { createPrimitiveGeometry, type AssetIndexEntry, type EnvironmentSettings, type GroundDynamicMesh, type GroundRuntimeDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'
@@ -872,7 +872,7 @@ function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): 
     case 'Ground':
       {
         const ground = createGroundMesh(mesh)
-        ensureAllGroundChunks(ground, mesh)
+          ensureAllGroundChunks(ground, mesh as GroundRuntimeDynamicMesh)
         ground.updateMatrixWorld(true)
         return ground
       }

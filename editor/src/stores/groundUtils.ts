@@ -4,7 +4,6 @@
 
 import {
   cloneGroundHeightMap,
-  createGroundHeightMap,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
   type GroundDynamicMesh,
@@ -230,7 +229,7 @@ export function applyGroundRegionTransform(
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
       const heightIndex = getGroundVertexIndex(definition.columns, row, column)
-      const previousStored = nextHeightMap[heightIndex]
+      const previousStored = nextHeightMap[heightIndex] ?? Number.NaN
       const currentEffective = resolveEffectiveHeight(row, column)
       const nextEffective = transform(currentEffective, row, column)
       if (!Number.isFinite(nextEffective)) {
