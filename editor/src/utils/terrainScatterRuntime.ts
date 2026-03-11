@@ -18,8 +18,12 @@ export function composeScatterMatrix(
   instance: TerrainScatterInstance,
   groundMesh: THREE.Object3D,
   target?: THREE.Matrix4,
+  groundWorldMatrix?: THREE.Matrix4,
 ): THREE.Matrix4 {
-  groundMesh.updateMatrixWorld(true)
+  const sourceGroundMatrix = groundWorldMatrix ?? (() => {
+    groundMesh.updateMatrixWorld(true)
+    return groundMesh.matrixWorld
+  })()
   localPositionHelper.set(
     instance.localPosition?.x ?? 0,
     instance.localPosition?.y ?? 0,
@@ -39,15 +43,16 @@ export function composeScatterMatrix(
   )
   instanceMatrixHelper.compose(localPositionHelper, quaternionHelper, localScaleHelper)
   const output = target ?? new THREE.Matrix4()
-  return output.copy(groundMesh.matrixWorld).multiply(instanceMatrixHelper)
+  return output.copy(sourceGroundMatrix).multiply(instanceMatrixHelper)
 }
 
 export function getScatterInstanceWorldPosition(
   instance: TerrainScatterInstance,
   groundMesh: THREE.Object3D,
   target?: THREE.Vector3,
+  groundWorldMatrix?: THREE.Matrix4,
 ): THREE.Vector3 {
-  const matrix = composeScatterMatrix(instance, groundMesh, groundMatrixHelper)
+  const matrix = composeScatterMatrix(instance, groundMesh, groundMatrixHelper, groundWorldMatrix)
   const output = target ?? new THREE.Vector3()
   return output.setFromMatrixPosition(matrix)
 }
@@ -83,12 +88,13 @@ export function updateScatterInstanceMatrix(
   instance: TerrainScatterInstance,
   groundMesh: THREE.Object3D,
   target?: THREE.Matrix4,
+  groundWorldMatrix?: THREE.Matrix4,
 ): THREE.Matrix4 | null {
   const nodeId = instance.binding?.nodeId
   if (!nodeId) {
     return null
   }
-  const matrix = composeScatterMatrix(instance, groundMesh, target)
+  const matrix = composeScatterMatrix(instance, groundMesh, target, groundWorldMatrix)
   updateModelInstanceMatrix(nodeId, matrix)
   return matrix
 }

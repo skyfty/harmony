@@ -41,5 +41,7 @@ export class CameraControlsMap extends MapControls {
       ONE: THREE.TOUCH.PAN,
       TWO: THREE.TOUCH.DOLLY_ROTATE,
     }
+
+    this.mouseButtons.MIDDLE = THREE.MOUSE.PAN
   }
 }

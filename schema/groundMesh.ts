@@ -1532,6 +1532,22 @@ export function ensureAllGroundChunks(target: THREE.Object3D, definition: Ground
   }
 }
 
+export function syncGroundChunkLoadingMode(
+  target: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null,
+  options: Parameters<typeof updateGroundChunks>[3] = {},
+): void {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  if (isGroundChunkStreamingEnabled(runtimeDefinition)) {
+    updateGroundChunks(target, runtimeDefinition, camera, options)
+    return
+  }
+  if (!areAllGroundChunksLoaded(target, runtimeDefinition)) {
+    ensureAllGroundChunks(target, runtimeDefinition)
+  }
+}
+
 export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynamicMesh) {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   if ((target as any)?.isMesh) {
