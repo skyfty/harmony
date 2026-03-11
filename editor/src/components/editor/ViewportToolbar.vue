@@ -103,6 +103,7 @@
                   v-model:brush-radius="groundBrushRadiusModel"
                   v-model:smoothness="groundPaintSmoothnessModel"
                   v-model:asset="groundPaintAssetModel"
+                   v-model:settings="groundPaintSettingsModel"
                   :has-ground="hasGroundNode"
                 />
               </div>
@@ -951,6 +952,7 @@ import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
+import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { PROTAGONIST_NODE_ID, type CameraControlMode } from '@schema'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
@@ -1018,6 +1020,7 @@ const props = withDefaults(
   groundNoiseMode: GroundGenerationMode
   groundPaintSmoothness: number
   groundPaintAsset: ProjectAsset | null
+  groundPaintSettings: TerrainPaintBrushSettings
   groundScatterCategory: TerrainScatterCategory
   groundScatterBrushRadius: number
   groundScatterDensityPercent: number
@@ -1066,6 +1069,7 @@ const emit = defineEmits<{
   (event: 'update:ground-noise-mode', value: GroundGenerationMode): void
   (event: 'update:ground-paint-smoothness', value: number): void
   (event: 'update:ground-paint-asset', value: ProjectAsset | null): void
+  (event: 'update:ground-paint-settings', value: TerrainPaintBrushSettings): void
   (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
   (event: 'update:ground-scatter-brush-radius', value: number): void
   (event: 'update:ground-scatter-density-percent', value: number): void
@@ -1114,6 +1118,7 @@ const {
   groundNoiseMode,
   groundPaintSmoothness,
   groundPaintAsset,
+  groundPaintSettings,
   groundScatterCategory,
   groundScatterBrushRadius,
   groundScatterDensityPercent,
@@ -1284,6 +1289,11 @@ const groundPaintSmoothnessModel = computed({
 const groundPaintAssetModel = computed<ProjectAsset | null>({
   get: () => groundPaintAsset.value,
   set: (value) => emit('update:ground-paint-asset', value),
+})
+
+const groundPaintSettingsModel = computed<TerrainPaintBrushSettings>({
+  get: () => groundPaintSettings.value,
+  set: (value) => emit('update:ground-paint-settings', value),
 })
 
 const groundScatterCategoryModel = computed<TerrainScatterCategory>({

@@ -1,13 +1,23 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { useUiStore } from './uiStore'
-import type { GroundSculptOperation } from '@schema'
+import {
+  clampTerrainPaintLayerStyle,
+  type GroundSculptOperation,
+  type TerrainPaintLayerStyle,
+} from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 export type GroundPanelTab = 'terrain' | 'paint' | TerrainScatterCategory
 export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
+
+export type TerrainPaintBrushSettings = TerrainPaintLayerStyle
+
+function createDefaultTerrainPaintBrushSettings(): TerrainPaintBrushSettings {
+  return clampTerrainPaintLayerStyle(null)
+}
 
 export const useTerrainStore = defineStore('terrain', () => {
   const brushRadius = ref(3)
@@ -20,6 +30,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   const paintSelectedAsset = ref<ProjectAsset | null>(null)
   // 0..1 - maps to neighbor-average smoothing strength/iterations.
   const paintSmoothness = ref(0.25)
+  const paintBrushSettings = ref<TerrainPaintBrushSettings>(createDefaultTerrainPaintBrushSettings())
 
   const scatterCategory = ref<TerrainScatterCategory>('flora')
   const scatterSelectedAsset = ref<ProjectAsset | null>(null)
@@ -65,6 +76,13 @@ export const useTerrainStore = defineStore('terrain', () => {
   function setPaintSmoothness(value: number) {
     const num = Number(value)
     paintSmoothness.value = Number.isFinite(num) ? Math.min(1, Math.max(0, num)) : 0.25
+  }
+
+  function setPaintBrushSettings(value: Partial<TerrainPaintBrushSettings> | TerrainPaintBrushSettings) {
+    paintBrushSettings.value = clampTerrainPaintLayerStyle({
+      ...paintBrushSettings.value,
+      ...value,
+    })
   }
 
   // Keep UI activeSelectionContext in sync: when the user activates terrain sculpt
@@ -122,6 +140,7 @@ export const useTerrainStore = defineStore('terrain', () => {
 
     paintSelectedAsset,
     paintSmoothness,
+    paintBrushSettings,
     paintModeActive,
 
     scatterCategory,
@@ -138,6 +157,7 @@ export const useTerrainStore = defineStore('terrain', () => {
     setScatterSelection,
     setPaintSelection,
     setPaintSmoothness,
+    setPaintBrushSettings,
     setScatterBrushRadius,
     setScatterEraseRadius,
     setScatterDensityPercent,

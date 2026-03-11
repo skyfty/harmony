@@ -1,4 +1,9 @@
-import type { TerrainPaintChannel, TerrainPaintSettings } from './index'
+import {
+  clampTerrainPaintLayerDefinition,
+  type TerrainPaintBlendMode,
+  type TerrainPaintChannel,
+  type TerrainPaintSettings,
+} from './index'
 
 export const GROUND_PAINT_SIDECAR_FILENAME = 'ground-paint.bin'
 export const GROUND_PAINT_SIDECAR_VERSION = 1
@@ -19,6 +24,16 @@ const PaintChannelCode = {
   B: 2,
   A: 3,
 } as const
+
+const PaintBlendModeCode = {
+  Normal: 0,
+  Multiply: 1,
+  Screen: 2,
+  Overlay: 3,
+} as const
+
+const LEGACY_LAYER_RECORD_BYTES = 8
+const LAYER_RECORD_BYTES = 40
 
 const STRING_ENCODER = new TextEncoder()
 const STRING_DECODER = new TextDecoder()
@@ -55,6 +70,32 @@ function decodePaintChannel(code: number): TerrainPaintChannel {
       return 'a'
     default:
       return 'g'
+  }
+}
+
+function encodePaintBlendMode(mode: TerrainPaintBlendMode): number {
+  switch (mode) {
+    case 'multiply':
+      return PaintBlendModeCode.Multiply
+    case 'screen':
+      return PaintBlendModeCode.Screen
+    case 'overlay':
+      return PaintBlendModeCode.Overlay
+    default:
+      return PaintBlendModeCode.Normal
+  }
+}
+
+function decodePaintBlendMode(code: number): TerrainPaintBlendMode {
+  switch (code) {
+    case PaintBlendModeCode.Multiply:
+      return 'multiply'
+    case PaintBlendModeCode.Screen:
+      return 'screen'
+    case PaintBlendModeCode.Overlay:
+      return 'overlay'
+    default:
+      return 'normal'
   }
 }
 
@@ -152,12 +193,21 @@ export function serializeGroundPaintSidecar(rawPayload: GroundPaintSidecarPayloa
   metaView.setUint32(0, Number.isFinite(payload.terrainPaint.version) ? Math.trunc(payload.terrainPaint.version) : 1, true)
   metaView.setUint32(4, Number.isFinite(payload.terrainPaint.weightmapResolution) ? Math.trunc(payload.terrainPaint.weightmapResolution) : 256, true)
 
-  const layerBytes = new Uint8Array(layers.length * 8)
+  const layerBytes = new Uint8Array(layers.length * LAYER_RECORD_BYTES)
   const layerView = new DataView(layerBytes.buffer)
-  layers.forEach((layer, index) => {
-    const offset = index * 8
+  layers.forEach((rawLayer, index) => {
+    const layer = clampTerrainPaintLayerDefinition(rawLayer)
+    const offset = index * LAYER_RECORD_BYTES
     layerView.setUint32(offset, encodePaintChannel(layer.channel), true)
     writeNullableStringIndex(layerView, offset + 4, strings.add(layer.textureAssetId))
+    layerView.setFloat32(offset + 8, layer.tileScale.x, true)
+    layerView.setFloat32(offset + 12, layer.tileScale.y, true)
+    layerView.setFloat32(offset + 16, layer.offset.x, true)
+    layerView.setFloat32(offset + 20, layer.offset.y, true)
+    layerView.setFloat32(offset + 24, layer.rotationDeg, true)
+    layerView.setFloat32(offset + 28, layer.opacity, true)
+    layerView.setUint32(offset + 32, encodePaintBlendMode(layer.blendMode), true)
+    layerView.setUint32(offset + 36, layer.worldSpace ? 1 : 0, true)
   })
 
   const chunkBytes = new Uint8Array(chunks.length * 8)
@@ -245,16 +295,37 @@ export function deserializeGroundPaintSidecar(buffer: ArrayBuffer): GroundPaintS
   const chunksView = new DataView(buffer, chunksSection.offset, chunksSection.byteLength)
 
   const layers: TerrainPaintSettings['layers'] = []
+  const layerRecordBytes = layersSection.recordCount > 0
+    ? Math.floor(layersSection.byteLength / layersSection.recordCount)
+    : LEGACY_LAYER_RECORD_BYTES
   for (let index = 0; index < layersSection.recordCount; index += 1) {
-    const offset = index * 8
+    const offset = index * layerRecordBytes
     const textureAssetId = readStringIndex(layersView, offset + 4, strings)
     if (!textureAssetId) {
       continue
     }
-    layers.push({
-      channel: decodePaintChannel(layersView.getUint32(offset, true)),
-      textureAssetId,
-    })
+    const nextLayer = layerRecordBytes >= LAYER_RECORD_BYTES
+      ? clampTerrainPaintLayerDefinition({
+          channel: decodePaintChannel(layersView.getUint32(offset, true)),
+          textureAssetId,
+          tileScale: {
+            x: layersView.getFloat32(offset + 8, true),
+            y: layersView.getFloat32(offset + 12, true),
+          },
+          offset: {
+            x: layersView.getFloat32(offset + 16, true),
+            y: layersView.getFloat32(offset + 20, true),
+          },
+          rotationDeg: layersView.getFloat32(offset + 24, true),
+          opacity: layersView.getFloat32(offset + 28, true),
+          blendMode: decodePaintBlendMode(layersView.getUint32(offset + 32, true)),
+          worldSpace: layersView.getUint32(offset + 36, true) === 1,
+        })
+      : clampTerrainPaintLayerDefinition({
+          channel: decodePaintChannel(layersView.getUint32(offset, true)),
+          textureAssetId,
+        })
+    layers.push(nextLayer)
   }
 
   const chunks: TerrainPaintSettings['chunks'] = {}

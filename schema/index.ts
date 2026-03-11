@@ -1170,12 +1170,100 @@ export interface GroundGenerationSettings {
 export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' | 'flatten-zero'
 
 export type TerrainPaintChannel = 'r' | 'g' | 'b' | 'a'
+export type TerrainPaintBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay'
 
-export interface TerrainPaintLayerDefinition {
+export const TERRAIN_PAINT_DEFAULT_OPACITY = 1
+export const TERRAIN_PAINT_DEFAULT_ROTATION_DEG = 0
+export const TERRAIN_PAINT_DEFAULT_TILE_SCALE = { x: 1, y: 1 } as const
+export const TERRAIN_PAINT_DEFAULT_OFFSET = { x: 0, y: 0 } as const
+export const TERRAIN_PAINT_DEFAULT_WORLD_SPACE = true
+
+export interface TerrainPaintLayerStyle {
+  opacity: number
+  tileScale: { x: number; y: number }
+  offset: { x: number; y: number }
+  rotationDeg: number
+  blendMode: TerrainPaintBlendMode
+  worldSpace: boolean
+}
+
+function clampTerrainPaintFinite(value: unknown, fallback = 0): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function clampTerrainPaintBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function clampTerrainPaintVector2(
+  value: Vector2Like | null | undefined,
+  fallback: { x: number; y: number },
+  min?: number,
+): { x: number; y: number } {
+  const x = clampTerrainPaintFinite(value?.x, fallback.x)
+  const y = clampTerrainPaintFinite(value?.y, fallback.y)
+  return {
+    x: min === undefined ? x : Math.max(min, x),
+    y: min === undefined ? y : Math.max(min, y),
+  }
+}
+
+export function clampTerrainPaintBlendMode(value: unknown): TerrainPaintBlendMode {
+  if (value === 'multiply' || value === 'screen' || value === 'overlay') {
+    return value
+  }
+  return 'normal'
+}
+
+export function clampTerrainPaintLayerStyle(
+  style: Partial<TerrainPaintLayerStyle> | null | undefined,
+): TerrainPaintLayerStyle {
+  return {
+    opacity: Math.min(1, Math.max(0, clampTerrainPaintFinite(style?.opacity, TERRAIN_PAINT_DEFAULT_OPACITY))),
+    tileScale: clampTerrainPaintVector2(style?.tileScale as Vector2Like | null | undefined, TERRAIN_PAINT_DEFAULT_TILE_SCALE, 0.001),
+    offset: clampTerrainPaintVector2(style?.offset as Vector2Like | null | undefined, TERRAIN_PAINT_DEFAULT_OFFSET),
+    rotationDeg: Math.min(360, Math.max(-360, clampTerrainPaintFinite(style?.rotationDeg, TERRAIN_PAINT_DEFAULT_ROTATION_DEG))),
+    blendMode: clampTerrainPaintBlendMode(style?.blendMode),
+    worldSpace: clampTerrainPaintBoolean(style?.worldSpace, TERRAIN_PAINT_DEFAULT_WORLD_SPACE),
+  }
+}
+
+export function cloneTerrainPaintLayerStyle(style: TerrainPaintLayerStyle): TerrainPaintLayerStyle {
+  return {
+    opacity: style.opacity,
+    tileScale: { x: style.tileScale.x, y: style.tileScale.y },
+    offset: { x: style.offset.x, y: style.offset.y },
+    rotationDeg: style.rotationDeg,
+    blendMode: style.blendMode,
+    worldSpace: style.worldSpace,
+  }
+}
+
+export interface TerrainPaintLayerDefinition extends TerrainPaintLayerStyle {
   /** Which RGBA channel this layer occupies in the weightmap. */
   channel: TerrainPaintChannel
   /** Texture/image asset id to blend for this layer. */
   textureAssetId: string
+}
+
+export function clampTerrainPaintLayerDefinition(
+  layer: Partial<TerrainPaintLayerDefinition> | null | undefined,
+): TerrainPaintLayerDefinition {
+  const style = clampTerrainPaintLayerStyle(layer)
+  return {
+    channel: layer?.channel === 'r' || layer?.channel === 'b' || layer?.channel === 'a' ? layer.channel : 'g',
+    textureAssetId: typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : '',
+    ...style,
+  }
+}
+
+export function cloneTerrainPaintLayerDefinition(layer: TerrainPaintLayerDefinition): TerrainPaintLayerDefinition {
+  return {
+    channel: layer.channel,
+    textureAssetId: layer.textureAssetId,
+    ...cloneTerrainPaintLayerStyle(layer),
+  }
 }
 
 export interface TerrainPaintChunkWeightmapRef {

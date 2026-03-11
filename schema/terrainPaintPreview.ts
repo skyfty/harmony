@@ -1,5 +1,11 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh, TerrainPaintChannel, TerrainPaintSettings } from './index'
+import type {
+	GroundDynamicMesh,
+	TerrainPaintBlendMode,
+	TerrainPaintChannel,
+	TerrainPaintLayerDefinition,
+	TerrainPaintSettings,
+} from './index'
 import { getLandformsPreviewTexture } from './landformsPreview'
 
 // Debug helpers removed: keep implementation minimal and focused on preview functionality.
@@ -11,6 +17,8 @@ type TerrainPaintShaderState = {
 	chunkBounds: THREE.Vector4
 	landformsBounds: THREE.Vector4
 	layerTextures: Partial<Record<TerrainPaintChannel, THREE.Texture>>
+	layerParamsA: Record<'g' | 'b' | 'a', THREE.Vector4>
+	layerParamsB: Record<'g' | 'b' | 'a', THREE.Vector4>
 	weightmaps: Map<string, THREE.Texture>
 	defaultWeightmap: THREE.DataTexture
 	defaultWhite: THREE.DataTexture
@@ -60,6 +68,16 @@ function createShaderState(): TerrainPaintShaderState {
 		chunkBounds: new THREE.Vector4(0, 0, 1, 1),
 		landformsBounds: new THREE.Vector4(-0.5, -0.5, 1, 1),
 		layerTextures: {},
+		layerParamsA: {
+			g: new THREE.Vector4(1, 1, 0, 0),
+			b: new THREE.Vector4(1, 1, 0, 0),
+			a: new THREE.Vector4(1, 1, 0, 0),
+		},
+		layerParamsB: {
+			g: new THREE.Vector4(0, 1, 1, 0),
+			b: new THREE.Vector4(0, 1, 1, 0),
+			a: new THREE.Vector4(0, 1, 1, 0),
+		},
 		weightmaps: new Map(),
 		defaultWeightmap: createDefaultWeightmapTexture(),
 		defaultWhite: createDefaultWhiteTexture(),
@@ -84,7 +102,7 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 		return state
 	}
 
-	material.customProgramCacheKey = () => `harmony-terrain-paint-v2`
+	material.customProgramCacheKey = () => `harmony-terrain-paint-v3`
 	material.onBeforeCompile = (shader) => {
 		state.shader = shader
 		shader.uniforms.uLandformsEnabled = { value: 0 }
@@ -93,9 +111,16 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 		shader.uniforms.uTerrainPaintEnabled = { value: 0 }
 		shader.uniforms.uTerrainPaintWeightmap = { value: state.defaultWeightmap }
 		shader.uniforms.uTerrainPaintChunkBounds = { value: state.chunkBounds }
+		shader.uniforms.uTerrainPaintGroundBounds = { value: state.landformsBounds }
 		shader.uniforms.uTerrainPaintLayerG = { value: state.defaultWhite }
 		shader.uniforms.uTerrainPaintLayerB = { value: state.defaultWhite }
 		shader.uniforms.uTerrainPaintLayerA = { value: state.defaultWhite }
+		shader.uniforms.uTerrainPaintLayerGParamsA = { value: state.layerParamsA.g }
+		shader.uniforms.uTerrainPaintLayerBParamsA = { value: state.layerParamsA.b }
+		shader.uniforms.uTerrainPaintLayerAParamsA = { value: state.layerParamsA.a }
+		shader.uniforms.uTerrainPaintLayerGParamsB = { value: state.layerParamsB.g }
+		shader.uniforms.uTerrainPaintLayerBParamsB = { value: state.layerParamsB.b }
+		shader.uniforms.uTerrainPaintLayerAParamsB = { value: state.layerParamsB.a }
 		shader.uniforms.uTerrainPaintHasG = { value: 0 }
 		shader.uniforms.uTerrainPaintHasB = { value: 0 }
 		shader.uniforms.uTerrainPaintHasA = { value: 0 }
@@ -114,13 +139,44 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 					'uniform float uTerrainPaintEnabled;',
 					'uniform sampler2D uTerrainPaintWeightmap;',
 					'uniform vec4 uTerrainPaintChunkBounds;',
+					'uniform vec4 uTerrainPaintGroundBounds;',
 					'uniform sampler2D uTerrainPaintLayerG;',
 					'uniform sampler2D uTerrainPaintLayerB;',
 					'uniform sampler2D uTerrainPaintLayerA;',
+					'uniform vec4 uTerrainPaintLayerGParamsA;',
+					'uniform vec4 uTerrainPaintLayerBParamsA;',
+					'uniform vec4 uTerrainPaintLayerAParamsA;',
+					'uniform vec4 uTerrainPaintLayerGParamsB;',
+					'uniform vec4 uTerrainPaintLayerBParamsB;',
+					'uniform vec4 uTerrainPaintLayerAParamsB;',
 					'uniform float uTerrainPaintHasG;',
 					'uniform float uTerrainPaintHasB;',
 					'uniform float uTerrainPaintHasA;',
 					'varying vec2 vTerrainPaintLocalXZ;',
+					'vec3 terrainPaintBlendColor(vec3 baseColor, vec3 layerColor, float blendMode) {',
+					'  if (blendMode < 0.5) return layerColor;',
+					'  if (blendMode < 1.5) return baseColor * layerColor;',
+					'  if (blendMode < 2.5) return 1.0 - (1.0 - baseColor) * (1.0 - layerColor);',
+					'  vec3 low = 2.0 * baseColor * layerColor;',
+					'  vec3 high = 1.0 - 2.0 * (1.0 - baseColor) * (1.0 - layerColor);',
+					'  return mix(low, high, step(vec3(0.5), baseColor));',
+					'}',
+					'vec2 terrainPaintTransformUv(vec2 meshUv, vec2 worldUv, vec4 paramsA, vec4 paramsB) {',
+					'  vec2 baseUv = mix(meshUv, worldUv, step(0.5, paramsB.z));',
+					'  float rotation = paramsB.x;',
+					'  float s = sin(rotation);',
+					'  float c = cos(rotation);',
+					'  vec2 centeredUv = baseUv - vec2(0.5);',
+					'  vec2 rotatedUv = vec2(c * centeredUv.x - s * centeredUv.y, s * centeredUv.x + c * centeredUv.y);',
+					'  return rotatedUv * paramsA.xy + vec2(0.5) + paramsA.zw;',
+					'}',
+					'vec3 terrainPaintSampleLayer(vec3 baseColor, sampler2D layerTexture, vec2 meshUv, vec2 worldUv, vec4 paramsA, vec4 paramsB) {',
+					'  vec2 layerUv = terrainPaintTransformUv(meshUv, worldUv, paramsA, paramsB);',
+					'  vec4 layerSample = texture2D(layerTexture, layerUv);',
+					'  vec3 blendedColor = terrainPaintBlendColor(baseColor, layerSample.rgb, paramsB.w);',
+					'  float alpha = clamp(paramsB.y, 0.0, 1.0) * layerSample.a;',
+					'  return mix(baseColor, blendedColor, alpha);',
+					'}',
 					'void main() {',
 				].join('\n'),
 			)
@@ -140,16 +196,19 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 					'if (uTerrainPaintEnabled > 0.5) {',
 					'  vec2 minXZ = uTerrainPaintChunkBounds.xy;',
 					'  vec2 sizeXZ = max(uTerrainPaintChunkBounds.zw, vec2(0.000001));',
+					'  vec2 groundMinXZ = uTerrainPaintGroundBounds.xy;',
+					'  vec2 groundSizeXZ = max(uTerrainPaintGroundBounds.zw, vec2(0.000001));',
 					'  vec2 wmUv = clamp((vTerrainPaintLocalXZ - minXZ) / sizeXZ, 0.0, 1.0);',
-					'  vec2 layerUv = wmUv;',
+					'  vec2 meshUv = wmUv;',
 					'#ifdef USE_UV',
-					'  layerUv = vUv;',
+					'  meshUv = vUv;',
 					'#endif',
+					'  vec2 groundUv = clamp((vTerrainPaintLocalXZ - groundMinXZ) / groundSizeXZ, 0.0, 1.0);',
 					'  vec4 w = texture2D(uTerrainPaintWeightmap, wmUv);',
 					'  vec3 baseCol = terrainBaseCol;',
-					'  vec3 gCol = mix(baseCol, texture2D(uTerrainPaintLayerG, layerUv).rgb, uTerrainPaintHasG);',
-					'  vec3 bCol = mix(baseCol, texture2D(uTerrainPaintLayerB, layerUv).rgb, uTerrainPaintHasB);',
-					'  vec3 aCol = mix(baseCol, texture2D(uTerrainPaintLayerA, layerUv).rgb, uTerrainPaintHasA);',
+					'  vec3 gCol = mix(baseCol, terrainPaintSampleLayer(baseCol, uTerrainPaintLayerG, meshUv, groundUv, uTerrainPaintLayerGParamsA, uTerrainPaintLayerGParamsB), uTerrainPaintHasG);',
+					'  vec3 bCol = mix(baseCol, terrainPaintSampleLayer(baseCol, uTerrainPaintLayerB, meshUv, groundUv, uTerrainPaintLayerBParamsA, uTerrainPaintLayerBParamsB), uTerrainPaintHasB);',
+					'  vec3 aCol = mix(baseCol, terrainPaintSampleLayer(baseCol, uTerrainPaintLayerA, meshUv, groundUv, uTerrainPaintLayerAParamsA, uTerrainPaintLayerAParamsB), uTerrainPaintHasA);',
 					'  diffuseColor.rgb = baseCol * w.r + gCol * w.g + bCol * w.b + aCol * w.a;',
 					'}',
 				].join('\n'),
@@ -174,6 +233,43 @@ function computeGroundBounds(definition: GroundDynamicMesh): THREE.Vector4 {
 	const width = Math.max(1e-6, definition.width)
 	const depth = Math.max(1e-6, definition.depth)
 	return new THREE.Vector4(-width * 0.5, -depth * 0.5, width, depth)
+}
+
+function encodeTerrainPaintBlendMode(mode: TerrainPaintBlendMode | null | undefined): number {
+	if (mode === 'multiply') {
+		return 1
+	}
+	if (mode === 'screen') {
+		return 2
+	}
+	if (mode === 'overlay') {
+		return 3
+	}
+	return 0
+}
+
+function resolveTerrainPaintLayerByChannel(
+	settings: TerrainPaintSettings | null | undefined,
+	channel: 'g' | 'b' | 'a',
+): TerrainPaintLayerDefinition | null {
+	const layers = Array.isArray(settings?.layers) ? settings.layers : []
+	return layers.find((layer) => layer?.channel === channel) ?? null
+}
+
+function applyTerrainPaintLayerUniforms(
+	state: TerrainPaintShaderState,
+	channel: 'g' | 'b' | 'a',
+	layer: TerrainPaintLayerDefinition | null,
+): void {
+	const paramsA = state.layerParamsA[channel]
+	const paramsB = state.layerParamsB[channel]
+	if (!layer) {
+		paramsA.set(1, 1, 0, 0)
+		paramsB.set(0, 1, 1, 0)
+		return
+	}
+	paramsA.set(layer.tileScale.x, layer.tileScale.y, layer.offset.x, layer.offset.y)
+	paramsB.set((layer.rotationDeg * Math.PI) / 180, layer.opacity, layer.worldSpace ? 1 : 0, encodeTerrainPaintBlendMode(layer.blendMode))
 }
 
 function computeChunkBounds(definition: GroundDynamicMesh, mesh: THREE.Object3D): THREE.Vector4 | null {
@@ -272,15 +368,25 @@ export function ensureTerrainPaintPreviewInstalled(
 			const key = resolveChunkKeyFromMesh(mesh)
 			const weightmap = key ? state.weightmaps.get(key) ?? state.defaultWeightmap : state.defaultWeightmap
 			const landformsTexture = getLandformsPreviewTexture(root)
+			applyTerrainPaintLayerUniforms(state, 'g', resolveTerrainPaintLayerByChannel(currentSettings, 'g'))
+			applyTerrainPaintLayerUniforms(state, 'b', resolveTerrainPaintLayerByChannel(currentSettings, 'b'))
+			applyTerrainPaintLayerUniforms(state, 'a', resolveTerrainPaintLayerByChannel(currentSettings, 'a'))
 			state.shader.uniforms.uLandformsEnabled.value = landformsTexture ? 1 : 0
 			state.shader.uniforms.uLandformsTexture.value = landformsTexture ?? state.defaultTransparent
 			state.shader.uniforms.uLandformsBounds.value = state.landformsBounds
 			state.shader.uniforms.uTerrainPaintEnabled.value = currentSettings && currentSettings.version === 1 ? 1 : 0
 			state.shader.uniforms.uTerrainPaintWeightmap.value = weightmap
 			state.shader.uniforms.uTerrainPaintChunkBounds.value = state.chunkBounds
+			state.shader.uniforms.uTerrainPaintGroundBounds.value = state.landformsBounds
 			state.shader.uniforms.uTerrainPaintLayerG.value = state.layerTextures.g ?? state.defaultWhite
 			state.shader.uniforms.uTerrainPaintLayerB.value = state.layerTextures.b ?? state.defaultWhite
 			state.shader.uniforms.uTerrainPaintLayerA.value = state.layerTextures.a ?? state.defaultWhite
+			state.shader.uniforms.uTerrainPaintLayerGParamsA.value = state.layerParamsA.g
+			state.shader.uniforms.uTerrainPaintLayerBParamsA.value = state.layerParamsA.b
+			state.shader.uniforms.uTerrainPaintLayerAParamsA.value = state.layerParamsA.a
+			state.shader.uniforms.uTerrainPaintLayerGParamsB.value = state.layerParamsB.g
+			state.shader.uniforms.uTerrainPaintLayerBParamsB.value = state.layerParamsB.b
+			state.shader.uniforms.uTerrainPaintLayerAParamsB.value = state.layerParamsB.a
 			state.shader.uniforms.uTerrainPaintHasG.value = state.layerTextures.g ? 1 : 0
 			state.shader.uniforms.uTerrainPaintHasB.value = state.layerTextures.b ? 1 : 0
 			state.shader.uniforms.uTerrainPaintHasA.value = state.layerTextures.a ? 1 : 0

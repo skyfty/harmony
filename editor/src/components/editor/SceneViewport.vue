@@ -187,7 +187,7 @@ import {
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
-import { useTerrainStore, type GroundPanelTab } from '@/stores/terrainStore'
+import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -402,6 +402,7 @@ const {
   groundPanelTab,
   paintSelectedAsset,
   paintSmoothness,
+  paintBrushSettings,
   scatterCategory,
   scatterSelectedAsset,
   scatterProviderAssetId,
@@ -2660,6 +2661,7 @@ const groundEditor = createGroundEditor({
   groundPanelTab,
   paintAsset: paintSelectedAsset,
   paintSmoothness,
+  paintLayerStyle: paintBrushSettings,
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
   scatterBrushRadius,
@@ -5672,6 +5674,10 @@ function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
     activateGroundBuildToolFromPanel('paint')
   }
   terrainStore.setPaintSelection(value)
+}
+
+function handleGroundPaintSettingsUpdate(value: TerrainPaintBrushSettings) {
+  terrainStore.setPaintBrushSettings(value)
 }
 
 function handleGroundScatterCategoryUpdate(value: TerrainScatterCategory) {
@@ -17213,6 +17219,7 @@ defineExpose<SceneViewportHandle>({
         :ground-noise-mode="groundNoiseMode"
         :ground-paint-smoothness="paintSmoothness"
         :ground-paint-asset="paintSelectedAsset"
+        :ground-paint-settings="paintBrushSettings"
         :ground-scatter-category="scatterCategory"
         :ground-scatter-brush-radius="scatterBrushRadius"
         :ground-scatter-density-percent="scatterDensityPercent"
@@ -17252,6 +17259,7 @@ defineExpose<SceneViewportHandle>({
           @update:ground-noise-mode="handleGroundNoiseModeUpdate"
           @update:ground-paint-smoothness="handleGroundPaintSmoothnessUpdate"
           @update:ground-paint-asset="handleGroundPaintAssetUpdate"
+          @update:ground-paint-settings="handleGroundPaintSettingsUpdate"
           @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
           @update:ground-scatter-brush-radius="handleGroundScatterBrushRadiusUpdate"
           @update:ground-scatter-density-percent="handleGroundScatterDensityPercentUpdate"

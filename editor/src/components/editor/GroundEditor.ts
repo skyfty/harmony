@@ -1,6 +1,17 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
-import { cloneGroundHeightMap, type GroundDynamicMesh, type GroundSculptOperation, type SceneNode, type TerrainPaintChannel, type TerrainPaintSettings } from '@schema'
+import {
+	clampTerrainPaintLayerDefinition,
+	cloneGroundHeightMap,
+	cloneTerrainPaintLayerDefinition,
+	type GroundDynamicMesh,
+	type GroundSculptOperation,
+	type SceneNode,
+	type TerrainPaintChannel,
+	type TerrainPaintLayerDefinition,
+	type TerrainPaintLayerStyle,
+	type TerrainPaintSettings,
+} from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -106,6 +117,7 @@ export type GroundEditorOptions = {
 	groundPanelTab: Ref<GroundPanelTab>
 	paintAsset: Ref<ProjectAsset | null>
 	paintSmoothness: Ref<number>
+	paintLayerStyle: Ref<TerrainPaintLayerStyle>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
@@ -232,12 +244,44 @@ function chooseAvailablePaintChannel(settings: TerrainPaintSettings): TerrainPai
 	return null
 }
 
-function ensureTerrainPaintLayer(settings: TerrainPaintSettings, textureAssetId: string): TerrainPaintChannel | null {
+function createTerrainPaintLayerDefinition(
+	textureAssetId: string,
+	style: TerrainPaintLayerStyle,
+	channel: TerrainPaintChannel = 'g',
+): TerrainPaintLayerDefinition | null {
 	const trimmed = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
 	if (!trimmed) {
 		return null
 	}
-	const existing = settings.layers.find((layer) => layer.textureAssetId === trimmed)
+	return clampTerrainPaintLayerDefinition({
+		channel,
+		textureAssetId: trimmed,
+		...style,
+	})
+}
+
+function areTerrainPaintLayersEquivalent(a: TerrainPaintLayerDefinition, b: TerrainPaintLayerDefinition): boolean {
+	return a.textureAssetId === b.textureAssetId
+		&& a.opacity === b.opacity
+		&& a.rotationDeg === b.rotationDeg
+		&& a.blendMode === b.blendMode
+		&& a.worldSpace === b.worldSpace
+		&& a.tileScale.x === b.tileScale.x
+		&& a.tileScale.y === b.tileScale.y
+		&& a.offset.x === b.offset.x
+		&& a.offset.y === b.offset.y
+}
+
+function ensureTerrainPaintLayer(
+	settings: TerrainPaintSettings,
+	textureAssetId: string,
+	style: TerrainPaintLayerStyle,
+): TerrainPaintChannel | null {
+	const requestedLayer = createTerrainPaintLayerDefinition(textureAssetId, style)
+	if (!requestedLayer) {
+		return null
+	}
+	const existing = settings.layers.find((layer) => areTerrainPaintLayersEquivalent(layer, requestedLayer))
 	if (existing) {
 		return existing.channel
 	}
@@ -245,7 +289,10 @@ function ensureTerrainPaintLayer(settings: TerrainPaintSettings, textureAssetId:
 	if (!nextChannel) {
 		return null
 	}
-	settings.layers.push({ channel: nextChannel, textureAssetId: trimmed })
+	settings.layers.push({
+		...requestedLayer,
+		channel: nextChannel,
+	})
 	return nextChannel
 }
 
@@ -261,7 +308,7 @@ function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId
 			weightmapResolution: Number.isFinite(existing.weightmapResolution)
 				? Math.max(8, Math.min(2048, Math.round(existing.weightmapResolution)))
 				: 256,
-			layers: Array.isArray(existing.layers) ? existing.layers.map((layer) => ({ ...layer })) : [],
+			layers: Array.isArray(existing.layers) ? existing.layers.map((layer) => cloneTerrainPaintLayerDefinition(clampTerrainPaintLayerDefinition(layer))) : [],
 			chunks: existing.chunks ? { ...existing.chunks } : {},
 		}
 	}
@@ -4783,7 +4830,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const paintAsset = options.paintAsset.value
 		let channelIndex = 0
 		if (paintAsset) {
-			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id)
+			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id, options.paintLayerStyle.value)
 			if (!channel) {
 				// No available channel slot (G/B/A) for new layers.
 				return
