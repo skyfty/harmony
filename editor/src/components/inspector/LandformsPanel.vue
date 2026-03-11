@@ -326,7 +326,13 @@ watch(componentEnabled, (enabled) => {
       <div class="landforms-panel__header">
         <span class="landforms-panel__title">Landforms</span>
         <v-spacer />
-        <v-chip size="x-small" variant="outlined">{{ localState.layers.length }}/{{ LANDFORMS_MAX_LAYER_COUNT }}</v-chip>
+        <v-btn
+          icon="mdi-plus"
+          size="small"
+          variant="text"
+          :disabled="!componentEnabled || !canAddLayer"
+          @click.stop="handleAddLayer"
+        />
         <v-menu
           v-if="landformsComponent"
           location="bottom end"
@@ -359,17 +365,6 @@ watch(componentEnabled, (enabled) => {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="landforms-panel">
-        <div class="landforms-panel__toolbar">
-          <v-btn
-            size="small"
-            prepend-icon="mdi-plus"
-            :disabled="!componentEnabled || !canAddLayer"
-            @click="handleAddLayer"
-          >
-            Add Layer
-          </v-btn>
-        </div>
-
         <div v-if="localState.layers.length" class="landforms-layer-list">
           <div
             v-for="(layer, index) in localState.layers"
@@ -385,7 +380,6 @@ watch(componentEnabled, (enabled) => {
             <div class="landforms-layer-card__header">
               <div class="landforms-layer-card__title-wrap">
                 <v-icon size="16" class="drag-handle">mdi-drag</v-icon>
-                <span class="landforms-layer-card__index">{{ index + 1 }}</span>
                 <v-text-field
                   :model-value="layer.name"
                   density="compact"
@@ -401,7 +395,6 @@ watch(componentEnabled, (enabled) => {
                   :model-value="layer.enabled"
                   density="compact"
                   hide-details
-                  inset
                   color="primary"
                   :disabled="!componentEnabled"
                   @update:model-value="(value) => patchLayer(layer.id, { enabled: Boolean(value) })"
@@ -450,6 +443,7 @@ watch(componentEnabled, (enabled) => {
 
             <div class="landforms-grid">
               <v-select
+                class="landforms-grid__full-row"
                 label="Blend"
                 density="compact"
                 variant="underlined"
@@ -462,6 +456,7 @@ watch(componentEnabled, (enabled) => {
                 @update:model-value="(value) => patchLayer(layer.id, { blendMode: value as LandformsBlendMode })"
               />
               <v-text-field
+                class="landforms-grid__half-row"
                 :model-value="layer.opacity"
                 label="Opacity"
                 density="compact"
@@ -475,6 +470,7 @@ watch(componentEnabled, (enabled) => {
                 @update:model-value="(value) => patchLayer(layer.id, { opacity: Number(value) })"
               />
               <v-text-field
+                class="landforms-grid__half-row"
                 :model-value="layer.rotationDeg"
                 label="Rotation"
                 density="compact"
@@ -489,6 +485,7 @@ watch(componentEnabled, (enabled) => {
                 @update:model-value="(value) => patchLayer(layer.id, { rotationDeg: Number(value) })"
               />
               <v-switch
+                class="landforms-grid__full-row"
                 :model-value="layer.worldSpace"
                 density="compact"
                 hide-details
@@ -658,13 +655,6 @@ watch(componentEnabled, (enabled) => {
   font-weight: 600;
 }
 
-.landforms-panel__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .landforms-panel__hint {
   font-size: 12px;
   color: rgba(220, 225, 232, 0.68);
@@ -788,6 +778,14 @@ watch(componentEnabled, (enabled) => {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+.landforms-grid__full-row {
+  grid-column: 1 / -1;
+}
+
+.landforms-grid__half-row {
+  grid-column: span 2;
 }
 
 .landforms-grid--two-col,
