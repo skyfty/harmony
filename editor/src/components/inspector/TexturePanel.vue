@@ -11,10 +11,12 @@ import {
 const props = defineProps<{
   modelValue: SceneMaterialTextureRef | null
   disabled?: boolean
+  canSyncFromAlbedo?: boolean
 }>()
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: SceneMaterialTextureRef | null): void
+  (event: 'syncFromAlbedo'): void
 }>()
 
 const wrapOptions: Array<{ label: string; value: SceneTextureWrapMode }> = [
@@ -27,6 +29,7 @@ const localSettings = reactive<SceneMaterialTextureSettings>(createTextureSettin
 
 const isDisabled = computed(() => props.disabled || !props.modelValue)
 const hasTexture = computed(() => !!props.modelValue)
+const canTriggerSyncFromAlbedo = computed(() => !isDisabled.value && !!props.canSyncFromAlbedo)
 
 watch(
   () => props.modelValue?.settings,
@@ -86,6 +89,13 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
   localSettings[key] = value
   emitSettings()
 }
+
+function handleSyncFromAlbedo() {
+  if (!canTriggerSyncFromAlbedo.value) {
+    return
+  }
+  emit('syncFromAlbedo')
+}
 </script>
 
 <template>
@@ -94,6 +104,17 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
       Assign a texture to configure settings.
     </div>
     <div v-else class="texture-body">
+      <div class="panel-toolbar">
+        <v-btn
+          size="x-small"
+          variant="tonal"
+          prepend-icon="mdi-content-copy"
+          :disabled="!canTriggerSyncFromAlbedo"
+          @click="handleSyncFromAlbedo"
+        >
+          Copy Albedo settings
+        </v-btn>
+      </div>
       <div class="panel-section">
         <div class="section-title">Wrap Mode</div>
         <div class="wrap-grid">
@@ -303,6 +324,11 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .texture-empty {

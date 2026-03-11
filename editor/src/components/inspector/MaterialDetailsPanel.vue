@@ -843,6 +843,43 @@ function applyDefaultTileSizeMeters(
   return nextSettings
 }
 
+function resolveInitialTextureSettings(slot: SceneMaterialTextureSlot): SceneMaterialTextureSettings {
+  const current = formTextures[slot]
+  if (current?.settings) {
+    return cloneTextureSettings(current.settings)
+  }
+  if (slot !== 'albedo') {
+    const albedoSettings = formTextures.albedo?.settings
+    if (albedoSettings) {
+      return cloneTextureSettings(albedoSettings)
+    }
+  }
+  return createTextureSettings()
+}
+
+function canSyncTextureSettingsFromAlbedo(slot: SceneMaterialTextureSlot): boolean {
+  if (slot === 'albedo') {
+    return false
+  }
+  return !!formTextures[slot] && !!formTextures.albedo?.settings
+}
+
+function handleSyncTextureSettingsFromAlbedo(slot: SceneMaterialTextureSlot) {
+  if (slot === 'albedo') {
+    return
+  }
+  const current = formTextures[slot]
+  const albedoSettings = formTextures.albedo?.settings
+  if (!current || !albedoSettings) {
+    return
+  }
+  assignTexture(slot, {
+    assetId: current.assetId,
+    name: current.name,
+    settings: cloneTextureSettings(albedoSettings),
+  })
+}
+
 function handleTextureThumbClick(slot: SceneMaterialTextureSlot, event?: MouseEvent) {
   if (isUiDisabled.value) {
     return
@@ -858,8 +895,7 @@ function handleTextureThumbClick(slot: SceneMaterialTextureSlot, event?: MouseEv
 }
 
 function applyTextureAsset(slot: SceneMaterialTextureSlot, asset: ProjectAsset) {
-  const current = formTextures[slot]
-  const baseSettings = current?.settings ? cloneTextureSettings(current.settings) : createTextureSettings()
+  const baseSettings = resolveInitialTextureSettings(slot)
   const nextSettings = applyDefaultTileSizeMeters(baseSettings, asset)
   assignTexture(slot, { assetId: asset.id, name: asset.name, settings: nextSettings })
   ensureTextureAssetCached(asset)
@@ -913,10 +949,11 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
   event.stopPropagation()
   draggingSlot.value = null
   ensureTextureAssetCached(asset)
+  const baseSettings = resolveInitialTextureSettings(slot)
   assignTexture(slot, {
     assetId: asset.id,
     name: asset.name,
-    settings: applyDefaultTileSizeMeters(createTextureSettings(), asset),
+    settings: applyDefaultTileSizeMeters(baseSettings, asset),
   })
 }
 
@@ -1299,7 +1336,9 @@ async function handleImportFileChange(event: Event) {
                     class="texture-panel-wrapper"
                     :model-value="formTextures[slot]"
                     :disabled="isUiDisabled || !formTextures[slot]"
+                    :can-sync-from-albedo="canSyncTextureSettingsFromAlbedo(slot)"
                     @update:model-value="(value) => handleTexturePanelChange(slot, value)"
+                    @sync-from-albedo="handleSyncTextureSettingsFromAlbedo(slot)"
                   />
                 </div>
               </div>
