@@ -3,12 +3,17 @@ import type { PointerMoveResult } from './types'
 export function handlePointerMoveBuildTools(
   event: PointerEvent,
   ctx: {
+    displayBoardBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     waterBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     floorBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     wallBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     roadBuildToolHandlePointerMove: (event: PointerEvent) => boolean
   },
 ): PointerMoveResult | null {
+  if (ctx.displayBoardBuildToolHandlePointerMove(event)) {
+    return { handled: true }
+  }
+
   if (ctx.waterBuildToolHandlePointerMove(event)) {
     return { handled: true }
   }

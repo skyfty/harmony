@@ -102,6 +102,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
+import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -193,6 +194,7 @@ import {
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
+import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createCameraResetDirectionController, type CameraResetDirection } from './cameraResetDirection'
 import {
   createRoadVertexRenderer,
@@ -208,6 +210,7 @@ import {
 } from './WallEndpointRenderer'
 import { applyWallPreviewStyling, disposeWallPreviewGroup } from './wallPreviewGroupUtils'
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
+import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
 import { createWaterRectangleHandleRenderer, type WaterRectangleHandlePickResult } from './WaterRectangleHandleRenderer'
 import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './WaterVertexRenderer'
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
@@ -1640,6 +1643,12 @@ const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'water') {
     return 'cursor-water'
   }
+  if (activeBuildTool.value === 'displayBoard') {
+    return 'cursor-display-board'
+  }
+  if (activeBuildTool.value === 'warpGate') {
+    return 'cursor-warp-gate'
+  }
   return null
 })
 const scatterEraseModeActive = ref(false)
@@ -1647,7 +1656,8 @@ const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
 const navigationSpeedBoostModifierActive = ref(false)
-const isVertexSnapActiveEffective = computed(() => vertexSnapShiftModifierActive.value)
+const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
+const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
@@ -3452,6 +3462,11 @@ const floorSizeHud = reactive<{ visible: boolean; label: FloorSizeHudLabel }>({
   label: { visible: false, x: 0, y: 0, text: '' },
 })
 
+const displayBoardSizeHud = reactive<{ visible: boolean; label: FloorSizeHudLabel }>({
+  visible: false,
+  label: { visible: false, x: 0, y: 0, text: '' },
+})
+
 const wallLengthHudProjectHelper = new THREE.Vector3()
 const wallLengthHudMidpointHelper = new THREE.Vector3()
 const wallLengthHudMidpointHelper2 = new THREE.Vector3()
@@ -3468,6 +3483,12 @@ function clearFloorSizeHud() {
   floorSizeHud.visible = false
   floorSizeHud.label.visible = false
   floorSizeHud.label.text = ''
+}
+
+function clearDisplayBoardSizeHud() {
+  displayBoardSizeHud.visible = false
+  displayBoardSizeHud.label.visible = false
+  displayBoardSizeHud.label.text = ''
 }
 
 function distanceXZ(a: THREE.Vector3, b: THREE.Vector3): number {
@@ -3760,6 +3781,40 @@ function updateFloorSizeHudFromFloorBuild() {
   }
 }
 
+function updateDisplayBoardSizeHudFromBuild() {
+  clearDisplayBoardSizeHud()
+
+  if (!camera || !overlayContainerRef.value) {
+    return
+  }
+
+  if (activeBuildTool.value !== 'displayBoard') {
+    return
+  }
+
+  const session = displayBoardBuildTool.getSession()
+  if (!session) {
+    return
+  }
+
+  const width = Math.max(0, session.width)
+  const height = Math.max(0, session.height)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 1e-6 || height <= 1e-6) {
+    return
+  }
+
+  const projected = projectWorldToOverlay(session.previewRoot.position)
+  if (!projected.visible) {
+    return
+  }
+
+  displayBoardSizeHud.visible = true
+  displayBoardSizeHud.label.visible = true
+  displayBoardSizeHud.label.x = projected.x
+  displayBoardSizeHud.label.y = projected.y
+  displayBoardSizeHud.label.text = `Width ${formatWallLengthMeters(width)}  Height ${formatWallLengthMeters(height)}`
+}
+
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
 function normalizePanelPlacementState(input?: PanelPlacementState | null): PanelPlacementState {
@@ -3831,6 +3886,15 @@ type AssetPlacementClickSessionState = {
 
 let assetPlacementClickSessionState: AssetPlacementClickSessionState | null = null
 
+type WarpGatePlacementClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+let warpGatePlacementClickSessionState: WarpGatePlacementClickSessionState | null = null
+
 // wall build session moved into `wallBuildTool`
 
 type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
@@ -3887,6 +3951,29 @@ type WaterRectangleDragState = {
 }
 
 let waterRectangleDragState: WaterRectangleDragState | null = null
+
+type DisplayBoardCornerDragState = {
+  pointerId: number
+  nodeId: string
+  cornerIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  runtimeObject: THREE.Object3D
+  parentObject: THREE.Object3D
+  startPosition: THREE.Vector3
+  startScale: THREE.Vector3
+  startRotation: THREE.Euler
+  dragPlane: THREE.Plane
+  draggedSide: { x: 'min' | 'max'; y: 'min' | 'max' }
+  startCenterWorld: THREE.Vector3
+  axisXWorld: THREE.Vector3
+  axisYWorld: THREE.Vector3
+  normalWorld: THREE.Vector3
+  oppositeCornerWorld: THREE.Vector3
+}
+
+let displayBoardCornerDragState: DisplayBoardCornerDragState | null = null
 
 type WaterContourVertexDragState = {
   pointerId: number
@@ -3982,6 +4069,7 @@ const roadVertexRenderer = createRoadVertexRenderer()
 const wallEndpointRenderer = createWallEndpointRenderer()
 const floorVertexRenderer = createFloorVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
+const displayBoardCornerHandleRenderer = createDisplayBoardCornerHandleRenderer()
 const waterRectangleHandleRenderer = createWaterRectangleHandleRenderer()
 const waterVertexRenderer = createWaterVertexRenderer()
 const waterCircleHandleRenderer = createWaterCircleHandleRenderer()
@@ -4026,6 +4114,24 @@ function isSelectedWaterContourEditMode(): boolean {
   }
   const node = findSceneNode(sceneStore.nodes, selectedId)
   return isWaterSurfaceNode(node) && readWaterBuildShapeFromNode(node) === 'polygon'
+}
+
+function isDisplayBoardNode(node: SceneNode | null | undefined): boolean {
+  if (!node || node.nodeType !== 'Plane') {
+    return false
+  }
+  if (node.components?.[DISPLAY_BOARD_COMPONENT_TYPE]) {
+    return true
+  }
+  return node.userData?.displayBoard === true || node.userData?.isDisplayBoard === true
+}
+
+function isSelectedDisplayBoardEditMode(): boolean {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId) {
+    return false
+  }
+  return isDisplayBoardNode(findSceneNode(sceneStore.nodes, selectedId))
 }
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
@@ -4094,6 +4200,37 @@ function pickWallEndpointHandleAtPointer(event: PointerEvent): WallEndpointHandl
 
 function setActiveWallEndpointHandle(active: any | null) {
   wallEndpointRenderer.setActiveHandle(active)
+}
+
+function ensureDisplayBoardCornerHandlesForSelectedNode(options?: { force?: boolean }) {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const active = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode() && !displayBoardBuildTool.getSession()
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveDisplayBoardNode: (nodeId: string) => isDisplayBoardNode(findSceneNode(sceneStore.nodes, nodeId)),
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  }
+  if (options?.force) {
+    displayBoardCornerHandleRenderer.forceRebuild(common)
+  } else {
+    displayBoardCornerHandleRenderer.ensure(common)
+  }
+}
+
+function pickDisplayBoardCornerHandleAtPointer(event: PointerEvent): DisplayBoardCornerHandlePickResult | null {
+  return displayBoardCornerHandleRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function setActiveDisplayBoardCornerHandle(active: { nodeId: string; cornerIndex: number; gizmoPart: any } | null) {
+  displayBoardCornerHandleRenderer.setActiveHandle(active as any)
 }
 
 function ensureWaterRectangleHandlesForSelectedNode(options?: { force?: boolean }) {
@@ -4212,6 +4349,98 @@ function restoreWaterRectanglePreviewTransform(state: WaterRectangleDragState) {
   state.runtimeObject.rotation.set(-Math.PI / 2, 0, 0)
   state.runtimeObject.scale.copy(state.startScale)
   state.runtimeObject.updateMatrixWorld(true)
+}
+
+const displayBoardDragAxisHelper = new THREE.Vector3()
+const displayBoardDragAxisHelper2 = new THREE.Vector3()
+const displayBoardDragCenterHelper = new THREE.Vector3()
+const displayBoardDragPointerHelper = new THREE.Vector3()
+const displayBoardDragLocalCenterHelper = new THREE.Vector3()
+const displayBoardDragQuaternionHelper = new THREE.Quaternion()
+
+function createDisplayBoardDragPlane(runtimeObject: THREE.Object3D): THREE.Plane {
+  runtimeObject.updateMatrixWorld(true)
+  const normal = displayBoardDragAxisHelper.set(0, 0, 1)
+  normal.applyQuaternion(runtimeObject.getWorldQuaternion(displayBoardDragQuaternionHelper)).normalize()
+  const origin = runtimeObject.getWorldPosition(displayBoardDragCenterHelper)
+  return new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin)
+}
+
+function applyDisplayBoardPreviewTransform(
+  runtimeObject: THREE.Object3D,
+  parentObject: THREE.Object3D,
+  centerWorld: THREE.Vector3,
+  width: number,
+  height: number,
+) {
+  parentObject.updateMatrixWorld(true)
+  runtimeObject.position.copy(parentObject.worldToLocal(displayBoardDragLocalCenterHelper.copy(centerWorld)))
+  runtimeObject.scale.set(Math.max(1e-3, width), Math.max(1e-3, height), Math.max(1e-3, runtimeObject.scale.z || 1))
+  runtimeObject.updateMatrixWorld(true)
+}
+
+function restoreDisplayBoardPreviewTransform(state: DisplayBoardCornerDragState) {
+  state.runtimeObject.position.copy(state.startPosition)
+  state.runtimeObject.rotation.copy(state.startRotation)
+  state.runtimeObject.scale.copy(state.startScale)
+  state.runtimeObject.updateMatrixWorld(true)
+}
+
+function tryBeginDisplayBoardCornerDrag(event: PointerEvent): boolean {
+  if (displayBoardCornerDragState) {
+    return false
+  }
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  const runtime = objectMap.get(selectedId) ?? null
+  const parentObject = runtime?.parent ?? null
+  if (!isDisplayBoardNode(node) || !runtime || !parentObject) {
+    return false
+  }
+  const hit = pickDisplayBoardCornerHandleAtPointer(event)
+  if (!hit || hit.nodeId !== selectedId) {
+    return false
+  }
+
+  runtime.updateMatrixWorld(true)
+  const centerWorld = runtime.getWorldPosition(new THREE.Vector3())
+  const axisXWorld = runtime.localToWorld(displayBoardDragAxisHelper.set(1, 0, 0)).sub(centerWorld).normalize()
+  const axisYWorld = runtime.localToWorld(displayBoardDragAxisHelper2.set(0, 1, 0)).sub(centerWorld).normalize()
+  const normalWorld = runtime.localToWorld(new THREE.Vector3(0, 0, 1)).sub(centerWorld).normalize()
+  const halfWidth = Math.abs(runtime.scale.x) * 0.5
+  const halfHeight = Math.abs(runtime.scale.y) * 0.5
+  const signX = hit.xSide === 'max' ? 1 : -1
+  const signY = hit.ySide === 'max' ? 1 : -1
+  const oppositeCornerWorld = centerWorld.clone()
+    .addScaledVector(axisXWorld, -signX * halfWidth)
+    .addScaledVector(axisYWorld, -signY * halfHeight)
+
+  displayBoardCornerDragState = {
+    pointerId: event.pointerId,
+    nodeId: selectedId,
+    cornerIndex: hit.cornerIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    runtimeObject: runtime,
+    parentObject,
+    startPosition: runtime.position.clone(),
+    startScale: runtime.scale.clone(),
+    startRotation: runtime.rotation.clone(),
+    dragPlane: createDisplayBoardDragPlane(runtime),
+    draggedSide: { x: hit.xSide, y: hit.ySide },
+    startCenterWorld: centerWorld.clone(),
+    axisXWorld: axisXWorld.clone(),
+    axisYWorld: axisYWorld.clone(),
+    normalWorld: normalWorld.clone(),
+    oppositeCornerWorld,
+  }
+  setActiveDisplayBoardCornerHandle({ nodeId: selectedId, cornerIndex: hit.cornerIndex, gizmoPart: hit.gizmoPart })
+  pointerInteraction.capture(event.pointerId)
+  return true
 }
 
 function cloneWaterContourPoints(node: SceneNode | null | undefined): Array<[number, number]> {
@@ -4767,13 +4996,13 @@ type BuildToolRightClickCandidate = {
 
 let buildToolRightClickCandidate: BuildToolRightClickCandidate | null = null
 
-type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water'
+type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water' | 'displayBoard' | 'warpGate'
 type GroundBuildTool = 'terrain' | 'paint' | 'scatter'
 
 function isBuildToolBlockedDuringGroundSculptConfig(
   tool: BuildTool | null,
 ): tool is GroundSculptBlockedBuildTool {
-  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water'
+  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water' || tool === 'displayBoard' || tool === 'warpGate'
 }
 
 function isGroundBuildTool(tool: BuildTool | null): tool is GroundBuildTool {
@@ -5036,6 +5265,53 @@ const waterBuildTool = createWaterBuildTool({
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
   isAltOverrideActive: () => isAltOverrideActive,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+})
+
+const displayBoardBuildTool = createDisplayBoardBuildTool({
+  activeBuildTool,
+  sceneStore,
+  rootGroup,
+  isAltOverrideActive: () => isAltOverrideActive,
+  resolveSurfaceAtPointer: resolveBuildSurfaceAtPointer,
+  projectPointerToPlane: (event, plane) => projectPointerToPlane(event, plane),
+  getCameraDirection: () => {
+    const direction = new THREE.Vector3(0, 0, -1)
+    if (camera) {
+      camera.getWorldDirection(direction)
+    }
+    return direction.normalize()
+  },
+  resolveVertexSnapAtPointer,
+  updatePlacementSnap: (event, previewObject) => {
+    const result = snapController.updatePlacementSideSnap({
+      event,
+      previewObject,
+      active: true,
+      pixelThresholdPx: vertexSnapThresholdPx.value,
+      excludeNodeIds: new Set([GROUND_NODE_ID]),
+    })
+    updatePlacementSideSnapMarkers(result)
+    return result?.best?.delta?.clone() ?? null
+  },
+  clearPlacementSnap: () => {
+    snapController.resetPlacementSideSnap()
+    clearPlacementSideSnapMarkers()
+  },
+  showVertexSnap: (snap) => {
+    updateVertexSnapMarkers(
+      snap
+        ? {
+            sourceWorld: snap.sourceWorld.clone(),
+            targetWorld: snap.targetWorld.clone(),
+            delta: snap.targetWorld.clone().sub(snap.sourceWorld),
+            targetNodeId: '',
+          }
+        : null,
+    )
+  },
+  createDisplayBoardNode: (payload) => {
+    sceneStore.createDisplayBoardNode(payload)
+  },
 })
 
 function handleFloorShapeMenuOpen(value: boolean) {
@@ -6815,10 +7091,63 @@ const dragPreview = useDragPreview({
   disposeObjectResources,
 })
 const dragPreviewGroup = dragPreview.group
+const warpGatePlacementPreviewController = createWarpGateEffectInstance(clampWarpGateComponentProps(null))
+const warpGatePlacementPreviewGroup = new THREE.Group()
+warpGatePlacementPreviewGroup.name = 'Warp Gate Preview'
+warpGatePlacementPreviewGroup.visible = false
+warpGatePlacementPreviewGroup.castShadow = false
+warpGatePlacementPreviewGroup.receiveShadow = false
+warpGatePlacementPreviewGroup.userData = {
+  ...(warpGatePlacementPreviewGroup.userData ?? {}),
+  editorOnly: true,
+  warpGate: true,
+  warpGatePreview: true,
+  ignoreGridSnapping: true,
+}
+warpGatePlacementPreviewController.group.removeFromParent()
+warpGatePlacementPreviewGroup.add(warpGatePlacementPreviewController.group)
+warpGatePlacementPreviewGroup.traverse((child) => {
+  child.userData = {
+    ...(child.userData ?? {}),
+    editorOnly: true,
+    warpGate: true,
+    warpGatePreview: true,
+    ignoreGridSnapping: true,
+  }
+})
+ensureUvDebugMaterialsForMissingMeshes(warpGatePlacementPreviewGroup, { tint: 0xffffff })
 
 const dragPreviewBoundingBoxHelper = new THREE.Box3()
 const dragPreviewWorldPositionHelper = new THREE.Vector3()
 const dragPreviewAlignedPointHelper = new THREE.Vector3()
+
+function hideWarpGatePlacementPreview(): void {
+  warpGatePlacementPreviewGroup.visible = false
+}
+
+function updateWarpGatePlacementPreview(event: PointerEvent): void {
+  if (activeBuildTool.value !== 'warpGate') {
+    hideWarpGatePlacementPreview()
+    return
+  }
+
+  if (!isStrictPointOnCanvas(event.clientX, event.clientY)) {
+    hideWarpGatePlacementPreview()
+    return
+  }
+
+  const placement = computePointerDropPlacement(event)
+  const basePoint = computePreviewPointForPlacement(placement)
+  if (!basePoint) {
+    hideWarpGatePlacementPreview()
+    return
+  }
+
+  const aligned = computeWorldAabbBottomAlignedPoint(basePoint, warpGatePlacementPreviewGroup) ?? basePoint
+  warpGatePlacementPreviewGroup.position.copy(aligned)
+  warpGatePlacementPreviewGroup.rotation.set(0, 0, 0)
+  warpGatePlacementPreviewGroup.visible = true
+}
 
 function computeWorldAabbBottomAlignedPoint(
   basePoint: THREE.Vector3 | null,
@@ -8611,6 +8940,7 @@ function initScene() {
   scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
+  scene.add(warpGatePlacementPreviewGroup)
   gridHighlight = createGridHighlight()
   if (gridHighlight) {
     scene.add(gridHighlight)
@@ -9448,6 +9778,7 @@ function animate() {
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
   waterBuildTool.flushPreviewIfNeeded(scene)
+  ensureDisplayBoardCornerHandlesForSelectedNode()
   // Endpoint gizmos: keep a large, click-friendly on-screen size.
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 30 })
   wallEndpointRenderer.updateScreenSize({
@@ -9463,6 +9794,7 @@ function animate() {
     diameterPx: 36,
     freezeCircleFacing: !!floorCircleCenterDragState || !!floorCircleRadiusDragState,
   })
+  displayBoardCornerHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
   waterRectangleHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
   waterVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
   waterCircleHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 36 })
@@ -9667,6 +9999,10 @@ function disposeScene() {
   protagonistPreview.dispose()
   dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
+  hideWarpGatePlacementPreview()
+  warpGatePlacementPreviewController.group.removeFromParent()
+  warpGatePlacementPreviewController.dispose()
+  warpGatePlacementPreviewGroup.removeFromParent()
 
   clearSelectionHighlights()
   disposeNodePickerHighlight()
@@ -10358,6 +10694,171 @@ function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3):
   return raycastGroundPoint(event, result)
 }
 
+function isEditorOnlyIntersectionObject(object: THREE.Object3D | null): boolean {
+  let current: THREE.Object3D | null = object
+  while (current) {
+    const userData = current.userData as Record<string, unknown> | undefined
+    if (userData?.pickableEditorOnly === true) {
+      return false
+    }
+    if (userData?.editorOnly === true) {
+      return true
+    }
+    current = current.parent ?? null
+  }
+  return false
+}
+
+function resolveIntersectionWorldNormal(intersection: THREE.Intersection): THREE.Vector3 | null {
+  const faceNormal = intersection.face?.normal
+  if (!faceNormal) {
+    return null
+  }
+  const worldNormal = faceNormal.clone()
+  const normalMatrix = new THREE.Matrix3().getNormalMatrix(intersection.object.matrixWorld)
+  return worldNormal.applyMatrix3(normalMatrix).normalize()
+}
+
+function resolveBuildSurfaceAtPointer(event: PointerEvent): {
+  point: THREE.Vector3
+  normal: THREE.Vector3
+  nodeId: string | null
+} | null {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
+    return null
+  }
+
+  const intersections = collectSceneIntersections()
+  for (const intersection of intersections) {
+    if (!intersection?.point) {
+      continue
+    }
+    const nodeId = resolveNodeIdFromIntersection(intersection)
+    if (!nodeId) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId) || !sceneStore.isNodeVisible(nodeId)) {
+      continue
+    }
+    const object = objectMap.get(nodeId) ?? null
+    if (!object || !isObjectWorldVisible(object) || isEditorOnlyIntersectionObject(intersection.object as THREE.Object3D)) {
+      continue
+    }
+    return {
+      point: intersection.point.clone(),
+      normal: resolveIntersectionWorldNormal(intersection) ?? new THREE.Vector3(0, 1, 0),
+      nodeId,
+    }
+  }
+
+  const groundPoint = new THREE.Vector3()
+  if (raycastGroundPoint(event, groundPoint)) {
+    return {
+      point: groundPoint.clone(),
+      normal: new THREE.Vector3(0, 1, 0),
+      nodeId: GROUND_NODE_ID,
+    }
+  }
+
+  return null
+}
+
+function resolveVertexSnapTargetNodeAtPointer(event: PointerEvent): {
+  nodeId: string
+  runtimeObject: THREE.Object3D
+} | null {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
+    return null
+  }
+
+  const intersections = collectSceneIntersections()
+  for (const intersection of intersections) {
+    const nodeId = resolveNodeIdFromIntersection(intersection)
+    if (!nodeId) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId) || !sceneStore.isNodeVisible(nodeId)) {
+      continue
+    }
+    if (isEditorOnlyIntersectionObject(intersection.object as THREE.Object3D)) {
+      continue
+    }
+    const runtimeObject = objectMap.get(nodeId) ?? null
+    if (!runtimeObject || !isObjectWorldVisible(runtimeObject)) {
+      continue
+    }
+    return { nodeId, runtimeObject }
+  }
+
+  return null
+}
+
+function resolveVertexSnapAtPointer(
+  event: PointerEvent,
+  sourceWorld: THREE.Vector3,
+  activeNormal: THREE.Vector3,
+): { sourceWorld: THREE.Vector3; targetWorld: THREE.Vector3 } | null {
+  const target = resolveVertexSnapTargetNodeAtPointer(event)
+  if (!target) {
+    return null
+  }
+
+  const maxDistance = GRID_MAJOR_SPACING * 0.5
+  const maxDistanceSq = maxDistance * maxDistance
+  const maxVertexScan = 60000
+  const worldVertex = new THREE.Vector3()
+  const worldDelta = new THREE.Vector3()
+  let best: THREE.Vector3 | null = null
+  let bestDistanceSq = Number.POSITIVE_INFINITY
+
+  target.runtimeObject.updateWorldMatrix(true, true)
+  target.runtimeObject.traverse((child) => {
+    if (bestDistanceSq <= 1e-10) {
+      return
+    }
+    const mesh = child as THREE.Mesh
+    if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
+      return
+    }
+    if ((mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
+      return
+    }
+    if (!mesh.visible || isEditorOnlyIntersectionObject(mesh) || !isObjectWorldVisible(mesh)) {
+      return
+    }
+
+    const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+    const position = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+    if (!position || position.itemSize < 3 || position.count <= 0) {
+      return
+    }
+
+    const step = Math.max(1, Math.ceil(position.count / maxVertexScan))
+    for (let index = 0; index < position.count; index += step) {
+      worldVertex.fromBufferAttribute(position, index).applyMatrix4(mesh.matrixWorld)
+      worldDelta.copy(worldVertex).sub(sourceWorld)
+      const planeDistance = Math.abs(activeNormal.dot(worldDelta))
+      if (planeDistance > maxDistance) {
+        continue
+      }
+      const distanceSq = worldDelta.lengthSq()
+      if (distanceSq <= maxDistanceSq && distanceSq < bestDistanceSq) {
+        bestDistanceSq = distanceSq
+        best = worldVertex.clone()
+      }
+    }
+  })
+
+  if (!best) {
+    return null
+  }
+
+  return {
+    sourceWorld: sourceWorld.clone(),
+    targetWorld: best,
+  }
+}
+
 function raycastPlanePoint(event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3): boolean {
   if (!normalizedPointerGuard.setRayFromEvent(event)) {
     return false
@@ -10482,6 +10983,26 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'warpGate') {
+    if (event.button === 0) {
+      warpGatePlacementClickSessionState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    if (event.button === 2) {
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
+  }
+
   const selectedAssetId = sceneStore.selectedAssetId
   const selectedAsset = selectedAssetId ? sceneStore.getAsset(selectedAssetId) : null
   const canPlaceSelectedAsset =
@@ -10570,6 +11091,31 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (event.button === 0 && activeBuildTool.value === 'water' && waterShapeMenuOpen.value) {
     waterShapeMenuOpen.value = false
+  }
+
+  if (activeBuildTool.value === 'displayBoard') {
+    if (event.button === 0 && !isAltOverrideActive && !displayBoardBuildTool.getSession()) {
+      ensureDisplayBoardCornerHandlesForSelectedNode()
+      if (tryBeginDisplayBoardCornerDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+    }
+    if (event.button === 0 && !isAltOverrideActive) {
+      if (displayBoardBuildTool.handlePointerDown(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+    }
+
+    if (event.button === 2) {
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
   }
 
   if (activeBuildTool.value === 'water') {
@@ -10752,6 +11298,14 @@ function handlePointerMove(event: PointerEvent) {
     }
   }
 
+  if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId && !warpGatePlacementClickSessionState.moved) {
+    const dx = event.clientX - warpGatePlacementClickSessionState.startX
+    const dy = event.clientY - warpGatePlacementClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      warpGatePlacementClickSessionState.moved = true
+    }
+  }
+
   const applyPointerMoveResult = (result: PointerMoveResult) => {
     if (result.preventDefault) {
       event.preventDefault()
@@ -10769,6 +11323,7 @@ function handlePointerMove(event: PointerEvent) {
     event.pointerType === 'mouse' &&
     !roadVertexDragState &&
     !floorVertexDragState &&
+    !displayBoardCornerDragState &&
     !waterContourVertexDragState &&
     !waterRectangleDragState &&
     !waterCircleCenterDragState &&
@@ -10789,6 +11344,7 @@ function handlePointerMove(event: PointerEvent) {
     ensureWallEndpointHandlesForSelectedNode()
     ensureFloorVertexHandlesForSelectedNode()
     ensureFloorCircleHandlesForSelectedNode()
+    ensureDisplayBoardCornerHandlesForSelectedNode()
     ensureWaterRectangleHandlesForSelectedNode()
     ensureWaterVertexHandlesForSelectedNode()
     ensureWaterCircleHandlesForSelectedNode()
@@ -10797,6 +11353,7 @@ function handlePointerMove(event: PointerEvent) {
     wallEndpointRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    displayBoardCornerHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterRectangleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
@@ -10805,6 +11362,7 @@ function handlePointerMove(event: PointerEvent) {
     wallEndpointRenderer.clearHover()
     floorVertexRenderer.clearHover()
     floorCircleHandleRenderer.clearHover()
+    displayBoardCornerHandleRenderer.clearHover()
     waterRectangleHandleRenderer.clearHover()
     waterVertexRenderer.clearHover()
     waterCircleHandleRenderer.clearHover()
@@ -11017,6 +11575,37 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (displayBoardCornerDragState && event.pointerId === displayBoardCornerDragState.pointerId) {
+    const state = displayBoardCornerDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      return
+    }
+    state.moved = true
+
+    if ((event.buttons & 1) === 0) {
+      return
+    }
+    if (!raycastPlanePoint(event, state.dragPlane, displayBoardDragPointerHelper)) {
+      return
+    }
+
+    const offset = displayBoardDragPointerHelper.clone().sub(state.oppositeCornerWorld)
+    const widthRaw = offset.dot(state.axisXWorld)
+    const heightRaw = offset.dot(state.axisYWorld)
+    const width = Math.max(1e-3, state.draggedSide.x === 'max' ? widthRaw : -widthRaw)
+    const height = Math.max(1e-3, state.draggedSide.y === 'max' ? heightRaw : -heightRaw)
+    const signX = state.draggedSide.x === 'max' ? 1 : -1
+    const signY = state.draggedSide.y === 'max' ? 1 : -1
+    const centerWorld = state.oppositeCornerWorld.clone()
+      .addScaledVector(state.axisXWorld, signX * width * 0.5)
+      .addScaledVector(state.axisYWorld, signY * height * 0.5)
+
+    applyDisplayBoardPreviewTransform(state.runtimeObject, state.parentObject, centerWorld, width, height)
+    return
+  }
+
   if (waterEdgeDragState && event.pointerId === waterEdgeDragState.pointerId) {
     const state = waterEdgeDragState
     const dx = event.clientX - state.startX
@@ -11113,6 +11702,7 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   const buildTools = handlePointerMoveBuildTools(event, {
+    displayBoardBuildToolHandlePointerMove: (e) => displayBoardBuildTool.handlePointerMove(e),
     waterBuildToolHandlePointerMove: (e) => waterBuildTool.handlePointerMove(e),
     floorBuildToolHandlePointerMove: (e) => floorBuildTool.handlePointerMove(e),
     wallBuildToolHandlePointerMove: (e) => wallBuildTool.handlePointerMove(e),
@@ -11121,9 +11711,13 @@ function handlePointerMove(event: PointerEvent) {
   if (buildTools) {
     updateWallLengthHudFromWallBuild()
     updateFloorSizeHudFromFloorBuild()
+    updateDisplayBoardSizeHudFromBuild()
     applyPointerMoveResult(buildTools)
     return
   }
+
+  clearDisplayBoardSizeHud()
+  updateWarpGatePlacementPreview(event)
 
   handlePointerMoveSelection(event, {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
@@ -11195,6 +11789,7 @@ async function handlePointerUp(event: PointerEvent) {
       pointerTrackingState?.pointerId === event.pointerId ||
       roadVertexDragState?.pointerId === event.pointerId ||
       floorVertexDragState?.pointerId === event.pointerId ||
+      displayBoardCornerDragState?.pointerId === event.pointerId ||
       waterContourVertexDragState?.pointerId === event.pointerId ||
       waterRectangleDragState?.pointerId === event.pointerId ||
       waterCircleCenterDragState?.pointerId === event.pointerId ||
@@ -11448,6 +12043,45 @@ async function handlePointerUp(event: PointerEvent) {
         return
       }
 
+      if (displayBoardCornerDragState && event.pointerId === displayBoardCornerDragState.pointerId && event.button === 0) {
+        const state = displayBoardCornerDragState
+        displayBoardCornerDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveDisplayBoardCornerHandle(null)
+
+        if (state.moved) {
+          sceneStore.updateNodeTransform({
+            id: state.nodeId,
+            position: {
+              x: state.runtimeObject.position.x,
+              y: state.runtimeObject.position.y,
+              z: state.runtimeObject.position.z,
+            },
+            rotation: {
+              x: state.startRotation.x,
+              y: state.startRotation.y,
+              z: state.startRotation.z,
+            },
+            scale: {
+              x: Math.abs(state.runtimeObject.scale.x),
+              y: Math.abs(state.runtimeObject.scale.y),
+              z: Math.abs(state.startScale.z),
+            },
+          })
+          ensureDisplayBoardCornerHandlesForSelectedNode({ force: true })
+          void nextTick(() => {
+            ensureDisplayBoardCornerHandlesForSelectedNode({ force: true })
+          })
+        } else {
+          restoreDisplayBoardPreviewTransform(state)
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
       const drag = handlePointerUpDrag(event, {
         roadDefaultWidth: ROAD_DEFAULT_WIDTH,
         roadVertexDragState,
@@ -11506,6 +12140,7 @@ async function handlePointerUp(event: PointerEvent) {
       const tools = handlePointerUpTools(event, {
         maybeCancelBuildToolOnRightDoubleClick,
         handleGroundEditorPointerUp,
+        displayBoardBuildToolHandlePointerUp: (e) => displayBoardBuildTool.handlePointerUp(e),
         waterBuildToolHandlePointerUp: (e) => waterBuildTool.handlePointerUp(e),
         wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
         roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
@@ -11513,6 +12148,7 @@ async function handlePointerUp(event: PointerEvent) {
         floorBuildToolHandlePointerUp: (e) => floorBuildTool.handlePointerUp(e),
       })
       if (tools) {
+        clearDisplayBoardSizeHud()
         applyPointerUpResult(tools)
         return
       }
@@ -11576,6 +12212,33 @@ async function handlePointerUp(event: PointerEvent) {
 
     // 资产面板放置：左键点击时在光标位置放置当前选中的模型/网格/预制件。
     // 注意：如果发生拖动（拖拽移动），应当触发摄像机平移而不是放置资产，因此此处仅在点击未移动时处理放置。
+    if (event.button === 0 && warpGatePlacementClickSessionState?.pointerId === event.pointerId) {
+      const session = warpGatePlacementClickSessionState
+      warpGatePlacementClickSessionState = null
+
+      if (!session.moved) {
+        const placement = computePointerDropPlacement(event)
+        const basePoint = computePreviewPointForPlacement(placement)
+        if (basePoint) {
+          const parentGroupId = resolveSelectedGroupDropParent()
+          try {
+            const created = await createWarpGateNode(sceneStore, {
+              parentId: parentGroupId,
+              position: basePoint,
+            })
+            if (created) {
+              sceneStore.selectNode(created.id)
+            }
+          } catch (error) {
+            console.warn('Failed to place Warp Gate from viewport tool', error)
+          }
+        }
+      }
+
+      updateWarpGatePlacementPreview(event)
+      return
+    }
+
     if (event.button === 0 && assetPlacementClickSessionState?.pointerId === event.pointerId) {
       const session = assetPlacementClickSessionState
       // 清除会话状态（click 处理一次后即无效）
@@ -11672,6 +12335,9 @@ async function handlePointerUp(event: PointerEvent) {
     if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
       assetPlacementClickSessionState = null
     }
+    if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId) {
+      warpGatePlacementClickSessionState = null
+    }
   }
 }
 
@@ -11683,6 +12349,7 @@ function handlePointerCancel(event: PointerEvent) {
   stopSelectionPreviewVisibilityMonitor()
   dragPreview.setPosition(null)
   dragPreviewGroup.visible = false
+  hideWarpGatePlacementPreview()
 
   snapController.reset()
   snapController.resetPlacementSideSnap()
@@ -11698,6 +12365,9 @@ function handlePointerCancel(event: PointerEvent) {
   }
   if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
     assetPlacementClickSessionState = null
+  }
+  if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId) {
+    warpGatePlacementClickSessionState = null
   }
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
     const state = roadVertexDragState
@@ -12036,6 +12706,16 @@ function handlePointerCancel(event: PointerEvent) {
     return
   }
 
+  if (activeBuildTool.value === 'displayBoard') {
+    if (displayBoardBuildTool.handlePointerCancel(event)) {
+      clearDisplayBoardSizeHud()
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
   if (activeBuildTool.value === 'floor') {
     if (floorBuildTool.handlePointerCancel(event)) {
       event.preventDefault()
@@ -12060,6 +12740,18 @@ function handlePointerCancel(event: PointerEvent) {
     pointerInteraction.releaseIfCaptured(event.pointerId)
     setActiveWaterRectangleHandle(null)
     restoreWaterRectanglePreviewTransform(state)
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (displayBoardCornerDragState && event.pointerId === displayBoardCornerDragState.pointerId) {
+    const state = displayBoardCornerDragState
+    displayBoardCornerDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveDisplayBoardCornerHandle(null)
+    restoreDisplayBoardPreviewTransform(state)
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -12144,6 +12836,16 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (transformControls?.dragging) {
     return
   }
+
+  if (activeBuildTool.value === 'displayBoard') {
+    if (displayBoardBuildTool.handleDoubleClick(event)) {
+      clearDisplayBoardSizeHud()
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+  }
+
   const hit = pickNodeAtPointer(event)
   if (!hit) {
     return
@@ -12155,6 +12857,8 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   const toolForNode: BuildTool | null =
     isWaterSurfaceNode(hitNode)
       ? 'water'
+      : isDisplayBoardNode(hitNode)
+      ? 'displayBoard'
       : hitDynamicMeshType === 'Wall'
       ? 'wall'
       : hitDynamicMeshType === 'Floor'
@@ -12287,6 +12991,18 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'displayBoard':
+      displayBoardBuildTool.cancel()
+      clearDisplayBoardSizeHud()
+      handleBuildToolChange(null)
+      handled = true
+      break
+    case 'warpGate':
+      warpGatePlacementClickSessionState = null
+      hideWarpGatePlacementPreview()
+      handleBuildToolChange(null)
+      handled = true
+      break
     default:
       return false
   }
@@ -12310,6 +13026,14 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'water' && tool !== 'water') {
     waterBuildTool.cancel()
+  }
+  if (activeBuildTool.value === 'displayBoard' && tool !== 'displayBoard') {
+    displayBoardBuildTool.cancel()
+    clearDisplayBoardSizeHud()
+  }
+  if (activeBuildTool.value === 'warpGate' && tool !== 'warpGate') {
+    warpGatePlacementClickSessionState = null
+    hideWarpGatePlacementPreview()
   }
   if (isGroundBuildTool(tool)) {
     exitScatterEraseMode()
@@ -15695,6 +16419,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  displayBoardBuildTool.dispose()
+  clearDisplayBoardSizeHud()
   stopSelectionPreviewVisibilityMonitor()
   if (nodePickerStore.isActive) {
     nodePickerStore.cancelActivePick('user')
@@ -15919,6 +16645,20 @@ watch(activeBuildTool, (tool, previous) => {
       setActiveWaterRectangleHandle(null)
     }
   }
+  if (tool !== 'displayBoard') {
+    displayBoardBuildTool.cancel()
+    clearDisplayBoardSizeHud()
+    if (displayBoardCornerDragState) {
+      pointerInteraction.releaseIfCaptured(displayBoardCornerDragState.pointerId)
+      restoreDisplayBoardPreviewTransform(displayBoardCornerDragState)
+      displayBoardCornerDragState = null
+      setActiveDisplayBoardCornerHandle(null)
+    }
+  }
+  if (tool !== 'warpGate') {
+    warpGatePlacementClickSessionState = null
+    hideWarpGatePlacementPreview()
+  }
 
   const desiredContext = tool ? `build-tool:${tool}` : null
   if (desiredContext) {
@@ -16111,6 +16851,16 @@ defineExpose<SceneViewportHandle>({
             :style="{ left: floorSizeHud.label.x + 'px', top: floorSizeHud.label.y + 'px' }"
           >
             {{ floorSizeHud.label.text }}
+          </div>
+        </div>
+
+        <div v-if="displayBoardSizeHud.visible" class="floor-size-hud">
+          <div
+            v-if="displayBoardSizeHud.label.visible"
+            class="floor-size-hud__label"
+            :style="{ left: displayBoardSizeHud.label.x + 'px', top: displayBoardSizeHud.label.y + 'px' }"
+          >
+            {{ displayBoardSizeHud.label.text }}
           </div>
         </div>
       </div>
@@ -16313,6 +17063,16 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-water,
 .viewport-canvas.cursor-water:active {
   cursor: alias !important;
+}
+
+.viewport-canvas.cursor-display-board,
+.viewport-canvas.cursor-display-board:active {
+  cursor: crosshair !important;
+}
+
+.viewport-canvas.cursor-warp-gate,
+.viewport-canvas.cursor-warp-gate:active {
+  cursor: copy !important;
 }
 
 .viewport-canvas.cursor-scatter-erase,
