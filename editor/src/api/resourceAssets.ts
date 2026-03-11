@@ -210,6 +210,103 @@ export async function createResourceCategory(payload: CreateResourceCategoryPayl
   return payloadBody
 }
 
+export async function moveResourceCategory(categoryId: string, targetParentId: string | null): Promise<ResourceCategory> {
+  const trimmedCategoryId = categoryId.trim()
+  if (!trimmedCategoryId.length) {
+    throw new Error('categoryId 不能为空')
+  }
+
+  const url = buildServerApiUrl(`/resources/categories/${encodeURIComponent(trimmedCategoryId)}/move`)
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ targetParentId }),
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `移动分类失败（${response.status}）`)
+  }
+
+  const payload = await parseJsonResponse<ResourceCategory>(response)
+  if (!payload || typeof payload.id !== 'string') {
+    throw new Error('服务器返回的分类数据无效')
+  }
+  return payload
+}
+
+export interface BulkMoveAssetsCategoryPayload {
+  assetIds?: string[]
+  fromCategoryId?: string
+  includeDescendants?: boolean
+  targetCategoryId: string
+}
+
+export interface BulkMoveAssetsCategoryResult {
+  matchedCount: number
+  modifiedCount: number
+}
+
+export async function bulkMoveAssetsToCategory(
+  payload: BulkMoveAssetsCategoryPayload,
+): Promise<BulkMoveAssetsCategoryResult> {
+  const targetCategoryId = payload.targetCategoryId.trim()
+  if (!targetCategoryId.length) {
+    throw new Error('targetCategoryId 不能为空')
+  }
+
+  const url = buildServerApiUrl('/resources/assets/bulk-move-category')
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const assetIds = Array.isArray(payload.assetIds)
+    ? payload.assetIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    : undefined
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({
+      assetIds,
+      fromCategoryId: typeof payload.fromCategoryId === 'string' && payload.fromCategoryId.trim().length
+        ? payload.fromCategoryId.trim()
+        : undefined,
+      includeDescendants: payload.includeDescendants,
+      targetCategoryId,
+    }),
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `移动资源失败（${response.status}）`)
+  }
+
+  const result = await parseJsonResponse<BulkMoveAssetsCategoryResult>(response)
+  if (!result || typeof result.modifiedCount !== 'number' || typeof result.matchedCount !== 'number') {
+    throw new Error('服务器返回的移动结果无效')
+  }
+  return result
+}
+
 export async function fetchAssetSeries(): Promise<AssetSeries[]> {
   const url = buildServerApiUrl('/resources/series')
   const authStore = useAuthStore()

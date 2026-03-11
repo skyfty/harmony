@@ -14,10 +14,14 @@ import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { isWallPresetFilename } from '@/utils/wallPreset'
-import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
+import { ASSETS_ROOT_DIRECTORY_ID, PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ResourceCategory } from '@/types/resource-category'
-import { fetchResourceCategories } from '@/api/resourceAssets'
-import { isAssetTypeName, isRootCategoryName } from '@/utils/categoryPath'
+import {
+  bulkMoveAssetsToCategory,
+  createResourceCategory,
+  fetchResourceCategories,
+  moveResourceCategory,
+} from '@/api/resourceAssets'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -81,6 +85,7 @@ watch(projectTree, () => {
 })
 
 const NODE_DRAG_MIME = 'application/x-harmony-node'
+const INTERNAL_ENTRY_DRAG_MIME = 'application/x-harmony-asset-panel-entry'
 let dragPreviewEl: HTMLDivElement | null = null
 let dragImageOffset: { x: number; y: number } | null = null
 let dragSuppressionPreparedAssetId: string | null = null
@@ -319,6 +324,11 @@ interface SplitpanesPaneInfo {
 
 interface SplitpanesResizedEvent {
   panes: SplitpanesPaneInfo[]
+}
+
+interface PanelDragPayload {
+  kind: 'asset' | 'directory'
+  id: string
 }
 
 function handleProjectSplitResized(event: SplitpanesResizedEvent) {
@@ -638,6 +648,7 @@ async function handleAddAsset(asset: ProjectAsset) {
 }
 
 function refreshGallery() {
+  void loadCategoryTree({ force: true })
   const providerId = activeProviderId.value
   if (providerId) {
     void loadPackageDirectory(providerId, { force: true })
@@ -654,6 +665,7 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: preparedAsset.id }))
+    event.dataTransfer.setData(INTERNAL_ENTRY_DRAG_MIME, JSON.stringify({ kind: 'asset', id: asset.id } satisfies PanelDragPayload))
     event.dataTransfer.dropEffect = 'copy'
 
     const isModelOrMesh = asset.type === 'model' || asset.type === 'mesh'
@@ -686,6 +698,176 @@ function handleAssetDragEnd() {
   sceneStore.setDraggingAssetId(null)
   destroyDragPreview()
   detachDragSuppressionListeners()
+}
+
+function handleDirectoryDragStart(event: DragEvent, directory: ProjectDirectory) {
+  if (!event.dataTransfer || directory.kind !== 'resource-category') {
+    return
+  }
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData(INTERNAL_ENTRY_DRAG_MIME, JSON.stringify({ kind: 'directory', id: directory.id } satisfies PanelDragPayload))
+}
+
+function parseInternalDragPayload(event: DragEvent): PanelDragPayload | null {
+  const raw = event.dataTransfer?.getData(INTERNAL_ENTRY_DRAG_MIME)
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<PanelDragPayload>
+    if ((parsed.kind === 'asset' || parsed.kind === 'directory') && typeof parsed.id === 'string' && parsed.id.trim().length) {
+      return { kind: parsed.kind, id: parsed.id.trim() }
+    }
+  } catch (error) {
+    console.warn('Failed to parse internal drag payload', error)
+  }
+  return null
+}
+
+function buildCategoryPathForCategoryId(categoryId: string): Array<{ id: string; name: string }> | undefined {
+  const category = categoryIndex.value.get(categoryId)
+  if (!category) {
+    return undefined
+  }
+  return buildCategoryPathChain(category).map((entry) => ({ id: entry.id, name: entry.name }))
+}
+
+function normalizeAssetForCategory(asset: ProjectAsset, categoryId: string): ProjectAsset {
+  const categoryPath = buildCategoryPathForCategoryId(categoryId)
+  return {
+    ...asset,
+    categoryId,
+    categoryPath,
+  }
+}
+
+function findDirectoryInTree(directories: ProjectDirectory[] | undefined, directoryId: string): ProjectDirectory | null {
+  if (!directories?.length) {
+    return null
+  }
+  for (const directory of directories) {
+    if (directory.id === directoryId) {
+      return directory
+    }
+    const nested = findDirectoryInTree(directory.children, directoryId)
+    if (nested) {
+      return nested
+    }
+  }
+  return null
+}
+
+function findDirectoryById(directoryId: string): ProjectDirectory | null {
+  return findDirectoryInTree(projectTree.value, directoryId)
+}
+
+function isDirectoryAncestorOf(sourceId: string, targetId: string): boolean {
+  const source = findDirectoryById(sourceId)
+  if (!source?.children?.length) {
+    return false
+  }
+  const stack = [...source.children]
+  while (stack.length) {
+    const current = stack.pop()!
+    if (current.id === targetId) {
+      return true
+    }
+    if (current.children?.length) {
+      stack.push(...current.children)
+    }
+  }
+  return false
+}
+
+async function moveAssetEntry(asset: ProjectAsset, targetCategoryId: string): Promise<void> {
+  if (!targetCategoryId || asset.categoryId === targetCategoryId) {
+    return
+  }
+  if (asset.gleaned === false) {
+    await bulkMoveAssetsToCategory({
+      assetIds: [asset.id],
+      targetCategoryId,
+    })
+  }
+  sceneStore.registerAsset(normalizeAssetForCategory(asset, targetCategoryId), {
+    categoryId: targetCategoryId,
+    commitOptions: { updateNodes: false },
+  })
+}
+
+async function moveDirectoryEntry(directory: ProjectDirectory, targetCategoryId: string): Promise<void> {
+  if (directory.kind !== 'resource-category' || directory.id === targetCategoryId || isDirectoryAncestorOf(directory.id, targetCategoryId)) {
+    return
+  }
+  await moveResourceCategory(directory.id, targetCategoryId)
+  await loadCategoryTree({ force: true })
+  ensureDirectoryOpened(targetCategoryId)
+}
+
+function canAcceptInternalDrop(targetDirectory: ProjectDirectory | null | undefined, payload: PanelDragPayload | null): boolean {
+  if (!targetDirectory || !payload) {
+    return false
+  }
+  const targetCategoryId = resolveDirectoryTargetCategoryId(targetDirectory)
+  if (!targetCategoryId) {
+    return false
+  }
+  if (payload.kind === 'asset') {
+    const asset = sceneStore.findAssetInCatalog(payload.id)
+    return Boolean(asset) && asset?.categoryId !== targetCategoryId
+  }
+  const sourceDirectory = findDirectoryById(payload.id)
+  if (!sourceDirectory || sourceDirectory.kind !== 'resource-category') {
+    return false
+  }
+  return sourceDirectory.id !== targetCategoryId && !isDirectoryAncestorOf(sourceDirectory.id, targetCategoryId)
+}
+
+function handleDirectoryDropTargetDragOver(event: DragEvent, directory: ProjectDirectory): void {
+  const payload = parseInternalDragPayload(event)
+  if (!canAcceptInternalDrop(directory, payload)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+}
+
+async function handleDirectoryDropTarget(event: DragEvent, directory: ProjectDirectory): Promise<void> {
+  const payload = parseInternalDragPayload(event)
+  if (!canAcceptInternalDrop(directory, payload)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  const targetCategoryId = resolveDirectoryTargetCategoryId(directory)
+  if (!targetCategoryId || !payload) {
+    return
+  }
+  try {
+    if (payload.kind === 'asset') {
+      const asset = sceneStore.findAssetInCatalog(payload.id)
+      if (!asset) {
+        return
+      }
+      await moveAssetEntry(asset, targetCategoryId)
+      sceneStore.selectAsset(asset.id)
+      selectedAssetIds.value = [asset.id]
+      showDropFeedback('success', `Moved asset to ${directory.name}`)
+      return
+    }
+    const sourceDirectory = findDirectoryById(payload.id)
+    if (!sourceDirectory) {
+      return
+    }
+    await moveDirectoryEntry(sourceDirectory, targetCategoryId)
+    showDropFeedback('success', `Moved folder to ${directory.name}`)
+  } catch (error) {
+    console.error('Failed to move entry', error)
+    showDropFeedback('error', (error as Error).message ?? 'Failed to move entry')
+  }
 }
 
 function ensureHiddenDragImage(): HTMLDivElement | null {
@@ -909,27 +1091,21 @@ interface CategoryBreadcrumbItem {
   children: ResourceCategory[]
 }
 
-function collectDisplayChildren(nodes: ResourceCategory[] | undefined, bucket: ResourceCategory[]): void {
-  if (!Array.isArray(nodes)) {
-    return
+const rootResourceCategory = computed<ResourceCategory | null>(() => {
+  if (categoryTree.value.length === 1) {
+    return categoryTree.value[0] ?? null
   }
-  nodes.forEach((node) => {
-    if (!node) {
-      return
-    }
-    if ((isAssetTypeName(node.name) || isRootCategoryName(node.name)) && Array.isArray(node.children) && node.children.length) {
-      collectDisplayChildren(node.children, bucket)
-    } else {
-      bucket.push(node)
-    }
-  })
-}
+  return null
+})
+
+const rootDisplayCategories = computed<ResourceCategory[]>(() => {
+  const source = rootResourceCategory.value?.children ?? categoryTree.value
+  return [...source].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+})
 
 function getDisplayChildren(category: ResourceCategory | null): ResourceCategory[] {
-  const bucket: ResourceCategory[] = []
-  const source = category ? category.children : categoryTree.value
-  collectDisplayChildren(source, bucket)
-  return bucket.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  const source = category ? (category.children ?? []) : rootDisplayCategories.value
+  return [...source].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
 }
 
 const categoryIndex = computed(() => {
@@ -954,24 +1130,19 @@ const categoryIndex = computed(() => {
 
 const categoryGraph = computed(() => {
   const parentMap = new Map<string, ResourceCategory | null>()
-  const descendantMap = new Map<string, Set<string>>()
 
-  const traverse = (node: ResourceCategory, parent: ResourceCategory | null): Set<string> => {
+  const traverse = (node: ResourceCategory, parent: ResourceCategory | null): void => {
     parentMap.set(node.id, parent)
-    const descendants = new Set<string>([node.id])
     const children = getDisplayChildren(node)
     children.forEach((child) => {
-      const childSet = traverse(child, node)
-      childSet.forEach((id) => descendants.add(id))
+      traverse(child, node)
     })
-    descendantMap.set(node.id, descendants)
-    return descendants
   }
 
   const roots = getDisplayChildren(null)
   roots.forEach((root) => traverse(root, null))
 
-  return { roots, parentMap, descendantMap }
+  return { roots, parentMap }
 })
 
 const categoryBreadcrumbs = computed<CategoryBreadcrumbItem[]>(() => {
@@ -1007,40 +1178,40 @@ function buildCategoryPathChain(category: ResourceCategory): ResourceCategory[] 
     visited.add(current.id)
     current = graph.parentMap.get(current.id) ?? null
   }
-  return chain.length ? chain : [category]
+  if (!chain.length) {
+    return [category]
+  }
+  const hiddenRootId = rootResourceCategory.value?.id ?? null
+  if (hiddenRootId && chain[0]?.id === hiddenRootId) {
+    return chain.slice(1)
+  }
+  return chain
 }
 
-const activeCategoryId = computed(() => {
-  const last = categoryPath.value[categoryPath.value.length - 1]
-  return last?.id ?? null
-})
-
-const activeCategoryDescendants = computed(() => {
-  const id = activeCategoryId.value
-  if (!id) {
+function resolveDirectoryTargetCategoryId(directory: ProjectDirectory | null | undefined): string | null {
+  if (!directory) {
     return null
   }
-  const graph = categoryGraph.value
-  const set = graph.descendantMap.get(id)
-  if (set && set.size) {
-    return set
+  if (directory.kind === 'resource-category') {
+    return directory.id
   }
-  return new Set<string>([id])
-})
+  if (directory.kind === 'assets-root') {
+    return rootResourceCategory.value?.id ?? null
+  }
+  return null
+}
 
-function assetMatchesCategoryFilter(asset: ProjectAsset, allowed: Set<string>): boolean {
-  const pathIds = Array.isArray(asset.categoryPath)
-    ? asset.categoryPath
-        .map((item) => (item && typeof item.id === 'string' ? item.id : null))
-        .filter((id): id is string => !!id)
-    : []
-  if (pathIds.some((id) => allowed.has(id))) {
-    return true
+const currentResourceCategoryId = computed(() => resolveDirectoryTargetCategoryId(currentDirectory.value))
+const canCreateDirectory = computed(() => Boolean(currentResourceCategoryId.value) && authStore.canResourceWrite)
+
+function syncCategoryPathWithActiveDirectory(): void {
+  if (currentDirectory.value?.kind !== 'resource-category') {
+    categoryPath.value = []
+    return
   }
-  if (asset.categoryId && allowed.has(asset.categoryId)) {
-    return true
-  }
-  return false
+  const activeId = activeDirectoryId.value
+  const category = activeId ? categoryIndex.value.get(activeId) : null
+  categoryPath.value = category ? buildCategoryPathChain(category) : []
 }
 
 async function loadCategoryTree(options: { force?: boolean } = {}): Promise<void> {
@@ -1055,6 +1226,8 @@ async function loadCategoryTree(options: { force?: boolean } = {}): Promise<void
     const categories = await fetchResourceCategories()
     categoryTree.value = Array.isArray(categories) ? categories : []
     categoryTreeLoaded.value = true
+    sceneStore.setResourceCategories(categoryTree.value)
+    syncCategoryPathWithActiveDirectory()
   } catch (error) {
     console.error('Failed to load categories', error)
   } finally {
@@ -1064,36 +1237,38 @@ async function loadCategoryTree(options: { force?: boolean } = {}): Promise<void
 
 function handleBreadcrumbClick(index: number): void {
   if (index <= 0) {
-    if (categoryPath.value.length) {
-      categoryPath.value = []
+    if (activeDirectoryId.value !== ASSETS_ROOT_DIRECTORY_ID) {
+      sceneStore.setActiveDirectory(ASSETS_ROOT_DIRECTORY_ID)
     }
     return
   }
-  const next = categoryPath.value.slice(0, index)
-  categoryPath.value = next
+  const target = categoryPath.value[index - 1]
+  if (target?.id) {
+    sceneStore.setActiveDirectory(target.id)
+  }
 }
 
 function handleBreadcrumbChildSelect(_crumbIndex: number, category: ResourceCategory): void {
   if (!category || typeof category.id !== 'string') {
     return
   }
-  categoryPath.value = buildCategoryPathChain(category)
+  sceneStore.setActiveDirectory(category.id)
 }
 
 function isBreadcrumbIndexActive(index: number): boolean {
   if (index === 0) {
-    return categoryPath.value.length === 0
+    return currentDirectory.value?.kind === 'assets-root'
   }
-  return index === categoryPath.value.length
+  return categoryPath.value[index - 1]?.id === activeDirectoryId.value
 }
 
 function isCategoryActive(categoryId: string): boolean {
-  return categoryPath.value.some((entry) => entry.id === categoryId)
+  return activeDirectoryId.value === categoryId
 }
 
 function buildCategoryLabel(category: ResourceCategory | null): string {
   if (!category) {
-  return 'All Assets'
+    return 'Assets'
   }
   return category.name
 }
@@ -1118,30 +1293,39 @@ onMounted(() => {
 })
 
 watch(categoryTree, () => {
-  if (!categoryPath.value.length) {
-    return
-  }
-  const last = categoryPath.value[categoryPath.value.length - 1]
-  if (!last || !last.id) {
-    categoryPath.value = []
-    return
-  }
-  const refreshed = categoryIndex.value.get(last.id)
-  if (!refreshed) {
-    categoryPath.value = []
-    return
-  }
-  const next = buildCategoryPathChain(refreshed)
-  const unchanged =
-    next.length === categoryPath.value.length &&
-    next.every((item, idx) => item.id === categoryPath.value[idx]?.id)
-  if (!unchanged) {
-    categoryPath.value = next
-  }
+  syncCategoryPathWithActiveDirectory()
 })
+
+watch(activeDirectoryId, () => {
+  syncCategoryPathWithActiveDirectory()
+})
+
+async function handleCreateDirectory(): Promise<void> {
+  if (!canCreateDirectory.value || typeof window === 'undefined') {
+    return
+  }
+  const rawName = window.prompt('Folder name')
+  const name = typeof rawName === 'string' ? rawName.trim() : ''
+  if (!name.length) {
+    return
+  }
+  try {
+    const created = await createResourceCategory({
+      name,
+      parentId: currentResourceCategoryId.value,
+    })
+    await loadCategoryTree({ force: true })
+    ensureDirectoryOpened(created.id)
+    sceneStore.setActiveDirectory(created.id)
+  } catch (error) {
+    console.error('Failed to create directory', error)
+    showDropFeedback('error', (error as Error).message ?? 'Failed to create folder')
+  }
+}
 
 const searchQuery = ref<string | null>('')
 const searchResults = ref<ProjectAsset[]>([])
+const searchDirectoryResults = ref<ProjectDirectory[]>([])
 const searchLoaded = ref(false)
 const searchLoading = ref(false)
 const SEARCH_DEBOUNCE_DELAY = 320
@@ -1153,15 +1337,7 @@ const searchFieldRef = ref<unknown>(null)
 const normalizedSearchQuery = computed(() => (searchQuery.value ?? '').trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
-
-const categoryFilteredAssets = computed(() => {
-  const base = baseDisplayedAssets.value
-  const allowed = activeCategoryDescendants.value
-  if (!allowed || !allowed.size) {
-    return base
-  }
-  return base.filter((asset) => assetMatchesCategoryFilter(asset, allowed))
-})
+const categoryFilteredAssets = computed(() => baseDisplayedAssets.value)
 
 const SERIES_ID_PREFIX = 'series:id:'
 const SERIES_NAME_PREFIX = 'series:name:'
@@ -1487,10 +1663,7 @@ watch(tagFilterPanelOpen, (open) => {
 
 const galleryDirectories = computed(() => {
   if (isSearchActive.value) {
-    return []
-  }
-  if (activeDirectoryId.value !== PACKAGES_ROOT_DIRECTORY_ID) {
-    return []
+    return searchDirectoryResults.value
   }
   return currentDirectory.value?.children ?? []
 })
@@ -1721,6 +1894,7 @@ async function importLocalFile(
   const type = options.type ?? inferAssetType({ mimeType: file.type ?? null, nameOrUrl: file.name ?? null, fallbackType: 'file' })
   const fallbackName = options.displayName ?? (file.name && file.name.trim().length ? file.name : 'Dropped Asset')
   const { asset } = await sceneStore.ensureLocalAssetFromFile(file, {
+    categoryId: currentResourceCategoryId.value ?? undefined,
     type,
     name: fallbackName,
     description: fallbackName,
@@ -1755,10 +1929,11 @@ function importRemoteAssetFromUrl(url: string): ProjectAsset {
     gleaned: true,
     extension: extractExtension(name) ?? null,
   }
-  const categoryId = determineAssetCategoryId(asset)
+  const categoryId = currentResourceCategoryId.value ?? rootResourceCategory.value?.id ?? determineAssetCategoryId(asset)
   return sceneStore.registerAsset(asset, {
     categoryId,
     source: { type: 'url' },
+    commitOptions: { updateNodes: false },
   })
 }
 
@@ -1883,7 +2058,7 @@ async function handleGalleryDrop(event: DragEvent) {
     }
     const { assets, errors } = await processAssetDrop(event.dataTransfer)
     if (assets.length) {
-      const categoryOrder = assets.map((asset) => determineAssetCategoryId(asset))
+      const categoryOrder = assets.map((asset) => asset.categoryId ?? determineAssetCategoryId(asset))
       const uniqueCategories = Array.from(new Set(categoryOrder.filter(Boolean)))
       uniqueCategories.forEach((categoryId) => {
         if (categoryId) {
@@ -1981,7 +2156,14 @@ async function handleSceneNodeDrop(nodeId: string): Promise<void> {
   if (!isNormalSceneNode(node)) {
     throw new Error('该节点无法保存为预制件')
   }
-  await sceneStore.saveNodePrefab(nodeId)
+  const asset = await sceneStore.saveNodePrefab(nodeId)
+  const targetCategoryId = currentResourceCategoryId.value
+  if (targetCategoryId && asset.categoryId !== targetCategoryId) {
+    sceneStore.registerAsset(normalizeAssetForCategory(asset, targetCategoryId), {
+      categoryId: targetCategoryId,
+      commitOptions: { updateNodes: false },
+    })
+  }
   const label = node.name?.trim().length ? node.name.trim() : 'Prefab'
   showDropFeedback('success', `Prefab "${label}" saved to assets`)
 }
@@ -2125,6 +2307,7 @@ watch(normalizedSearchQuery, (value) => {
 
   if (!value) {
     searchResults.value = []
+    searchDirectoryResults.value = []
     searchLoaded.value = false
     searchLoading.value = false
     return
@@ -2141,19 +2324,31 @@ watch(projectTree, () => {
   }
 })
 
-function collectAssets(directories: ProjectDirectory[], matches: ProjectAsset[], query: string, seen: Set<string>) {
+function collectSearchMatches(
+  directories: ProjectDirectory[],
+  directoryMatches: ProjectDirectory[],
+  assetMatches: ProjectAsset[],
+  query: string,
+  seenDirectories: Set<string>,
+  seenAssets: Set<string>,
+) {
   for (const directory of directories) {
+    const isSynthetic = directory.kind === 'assets-root' || directory.kind === 'package-root' || directory.kind === 'package-provider'
+    if (!isSynthetic && !seenDirectories.has(directory.id) && directory.name.toLowerCase().includes(query)) {
+      directoryMatches.push(directory)
+      seenDirectories.add(directory.id)
+    }
     if (directory.assets) {
       for (const asset of directory.assets) {
-        if (seen.has(asset.id)) continue
+        if (seenAssets.has(asset.id)) continue
         if (asset.name.toLowerCase().includes(query)) {
-          matches.push(asset)
-          seen.add(asset.id)
+          assetMatches.push(asset)
+          seenAssets.add(asset.id)
         }
       }
     }
     if (directory.children?.length) {
-      collectAssets(directory.children, matches, query, seen)
+      collectSearchMatches(directory.children, directoryMatches, assetMatches, query, seenDirectories, seenAssets)
     }
   }
 }
@@ -2167,17 +2362,22 @@ function searchAsset() {
   const query = normalizedSearchQuery.value.toLowerCase()
   if (!query) {
     searchResults.value = []
+    searchDirectoryResults.value = []
     searchLoaded.value = false
     return
   }
 
   searchLoading.value = true
   try {
-    const matches: ProjectAsset[] = []
-    const seen = new Set<string>()
-    collectAssets(projectTree.value ?? [], matches, query, seen)
-    matches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-    searchResults.value = matches
+    const assetMatches: ProjectAsset[] = []
+    const directoryMatches: ProjectDirectory[] = []
+    const seenDirectories = new Set<string>()
+    const seenAssets = new Set<string>()
+    collectSearchMatches(projectTree.value ?? [], directoryMatches, assetMatches, query, seenDirectories, seenAssets)
+    assetMatches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    directoryMatches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    searchResults.value = assetMatches
+    searchDirectoryResults.value = directoryMatches
     searchLoaded.value = true
   } finally {
     searchLoading.value = false
@@ -2191,6 +2391,7 @@ function handleSearchClear() {
   }
   searchQuery.value = ''
   searchResults.value = []
+  searchDirectoryResults.value = []
   searchLoaded.value = false
   searchLoading.value = false
 }
@@ -2421,7 +2622,11 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               <v-icon>mdi-folder</v-icon>
             </template>
             <template #title="{ item }">
-              <div class="tree-node-title">
+              <div
+                class="tree-node-title"
+                @dragover="handleDirectoryDropTargetDragOver($event, item.raw ?? item)"
+                @drop="handleDirectoryDropTarget($event, item.raw ?? item)"
+              >
                 <span class="tree-node-text">{{ item.name }}</span>
                 <v-progress-circular
                   v-if="isProviderDirectory(item?.id) && isDirectoryLoading(item?.id)"
@@ -2478,13 +2683,22 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               :title="authStore.canResourceWrite ? 'Upload to Server' : 'Missing resource:write permission'"
               @click="openUploadDialog"
             />
+            <v-btn
+              color="primary"
+              variant="text"
+              density="compact"
+              icon="mdi-folder-plus-outline"
+              :disabled="!canCreateDirectory"
+              :title="canCreateDirectory ? 'Create folder in current directory' : 'Select a resource directory first'"
+              @click="handleCreateDirectory"
+            />
             <v-divider vertical class="mx-1" />
             <div class="project-toolbar__search">
               <v-btn
                 icon='mdi-magnify'
                 variant="text"
                 density="compact"
-                :title="isSearchVisible ? 'Close search' : 'Search assets'"
+                :title="isSearchVisible ? 'Close search' : 'Search folders and assets'"
                 @click="handleSearchIconClick"
               />
               <AssetFilterControl
@@ -2519,7 +2733,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               hide-details
               clearable
               single-line
-              placeholder="Search assets"
+              placeholder="Search folders and assets"
               prepend-inner-icon="mdi-magnify"
               @keydown="handleSearchFieldKeydown"
               @click:clear="handleSearchClear"
@@ -2583,7 +2797,11 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 :class="['directory-card', { 'is-active': activeDirectoryId === directory.id }]"
                 elevation="4"
                 tabindex="0"
+                :draggable="directory.kind === 'resource-category'"
                 @dblclick.stop="enterDirectory(directory)"
+                @dragstart="handleDirectoryDragStart($event, directory)"
+                @dragover="handleDirectoryDropTargetDragOver($event, directory)"
+                @drop="handleDirectoryDropTarget($event, directory)"
                 @keyup.enter.prevent="enterDirectory(directory)"
                 @keyup.space.prevent="enterDirectory(directory)"
               >
@@ -2597,7 +2815,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 </div>
               </v-card>
             </div>
-            <div v-else-if="displayedAssets.length" class="gallery-grid">
+            <div v-if="displayedAssets.length" class="gallery-grid">
               <v-card
                 v-for="asset in displayedAssets"
                 :key="asset.id"
@@ -2666,9 +2884,9 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 </div>
               </v-card>
             </div>
-            <div v-else class="placeholder-text">
+            <div v-if="!galleryDirectories.length && !displayedAssets.length" class="placeholder-text">
               <template v-if="isSearchActive">
-                No assets found for "{{ normalizedSearchQuery }}".
+                No folders or assets found for "{{ normalizedSearchQuery }}".
               </template>
               <template v-else-if="activeProviderLoading">
                 Loading package assets…

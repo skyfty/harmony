@@ -74,6 +74,7 @@ import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placemen
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
+import type { ResourceCategory } from '@/types/resource-category'
 import { getExtensionFromMimeType } from '@schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
@@ -206,7 +207,6 @@ import {
   createProjectTreeFromCache,
   defaultDirectoryId,
   determineAssetCategoryId,
-  ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
 import { rebuildProceduralRuntimeObjects } from '@/utils/proceduralRuntime'
@@ -5533,7 +5533,7 @@ function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetIndex = cloneAssetIndex(scene.assetIndex)
   store.packageAssetMap = clonePackageAssetMap(scene.packageAssetMap)
   store.materials = cloneSceneMaterials(Array.isArray(scene.materials) ? scene.materials : initialMaterials)
-  const nextTree = createProjectTreeFromCache(store.assetCatalog, store.packageDirectoryCache)
+  const nextTree = createProjectTreeFromCache(store.assetCatalog, store.resourceCategoryTree, store.packageDirectoryCache)
   store.projectTree = nextTree
   if (store.activeDirectoryId && !findDirectory(nextTree, store.activeDirectoryId)) {
     store.activeDirectoryId = defaultDirectoryId
@@ -6650,7 +6650,8 @@ export const useSceneStore = defineStore('scene', {
       packageAssetMap: {},
       packageDirectoryCache,
       packageDirectoryLoaded: {},
-      projectTree: createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog, assetIndex), packageDirectoryCache),
+        resourceCategoryTree: [],
+        projectTree: createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog, assetIndex), [], packageDirectoryCache),
       activeDirectoryId: defaultDirectoryId,
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
@@ -6720,12 +6721,6 @@ export const useSceneStore = defineStore('scene', {
       }
       if (!directory) {
         return []
-      }
-
-      if (state.activeDirectoryId === ASSETS_ROOT_DIRECTORY_ID) {
-        const collected: ProjectAsset[] = []
-        collectDirectoryAssets(directory, collected)
-        return collected
       }
 
       const path = findDirectoryPathInTree(state.projectTree, state.activeDirectoryId)
@@ -9403,6 +9398,7 @@ export const useSceneStore = defineStore('scene', {
     refreshProjectTree() {
       this.projectTree = createProjectTreeFromCache(
         buildVisibleAssetCatalog(this.assetCatalog, this.assetIndex),
+        this.resourceCategoryTree,
         this.packageDirectoryCache,
       )
     },
@@ -9467,6 +9463,13 @@ export const useSceneStore = defineStore('scene', {
       this.refreshProjectTree()
       this.ensureActiveDirectoryAndSelectionValid()
       this.selectedAssetId = null
+    },
+    setResourceCategories(categories: ResourceCategory[]) {
+      this.resourceCategoryTree = Array.isArray(categories)
+        ? JSON.parse(JSON.stringify(categories)) as ResourceCategory[]
+        : []
+      this.refreshProjectTree()
+      this.ensureActiveDirectoryAndSelectionValid()
     },
     
     getAsset(assetId: string): ProjectAsset | null {
@@ -9554,6 +9557,7 @@ export const useSceneStore = defineStore('scene', {
         type: ProjectAsset['type']
         name: string
         description?: string
+        categoryId?: string
         previewColor?: string
         gleaned?: boolean
         isEditorOnly?: boolean
@@ -9597,7 +9601,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const registered = this.registerAsset(projectAsset, {
-        categoryId: determineAssetCategoryId(projectAsset),
+        categoryId: metadata.categoryId ?? determineAssetCategoryId(projectAsset),
         source: { type: 'local' },
         isEditorOnly: metadata.isEditorOnly,
         commitOptions: metadata.commitOptions ?? { updateNodes: false },

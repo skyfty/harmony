@@ -1,6 +1,7 @@
 import { resourceProviders } from '@/resources/projectProviders'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
+import type { ResourceCategory } from '@/types/resource-category'
 import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@schema'
 
 export interface AssetCategoryDefinition {
@@ -139,10 +140,7 @@ const FALLBACK_ASSET_CATEGORY_ID =
   ASSET_CATEGORY_ID_BY_KEY.others ?? ASSET_CATEGORY_CONFIG[ASSET_CATEGORY_CONFIG.length - 1]!.id
 
 export function createEmptyAssetCatalog(): Record<string, ProjectAsset[]> {
-  return ASSET_CATEGORY_CONFIG.reduce<Record<string, ProjectAsset[]>>((catalog, category) => {
-    catalog[category.id] = []
-    return catalog
-  }, {})
+  return {}
 }
 
 export function cloneAssetList(list: ProjectAsset[]): ProjectAsset[] {
@@ -192,15 +190,59 @@ export function extractProviderIdFromPackageDirectoryId(directoryId: string): st
   return directoryId.slice(PACKAGE_DIRECTORY_PREFIX.length) || null
 }
 
-function createAssetsBranch(catalog: Record<string, ProjectAsset[]>): ProjectDirectory {
+function mapResourceCategoryTree(
+  categories: ResourceCategory[] | undefined,
+  catalog: Record<string, ProjectAsset[]>,
+  parentId: string | null,
+): ProjectDirectory[] {
+  if (!Array.isArray(categories) || !categories.length) {
+    return []
+  }
+
+  return categories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    kind: 'resource-category',
+    parentId,
+    children: mapResourceCategoryTree(category.children, catalog, category.id),
+    assets: cloneAssetList(catalog[category.id] ?? []),
+  }))
+}
+
+function resolveAssetsBranchContents(
+  categories: ResourceCategory[] | undefined,
+  catalog: Record<string, ProjectAsset[]>,
+): { children: ProjectDirectory[]; assets: ProjectAsset[] } {
+  if (!Array.isArray(categories) || !categories.length) {
+    return { children: [], assets: [] }
+  }
+
+  if (categories.length === 1) {
+    const [root] = categories
+    return {
+      children: mapResourceCategoryTree(root?.children, catalog, ASSETS_ROOT_DIRECTORY_ID),
+      assets: cloneAssetList(catalog[root?.id ?? ''] ?? []),
+    }
+  }
+
+  return {
+    children: mapResourceCategoryTree(categories, catalog, ASSETS_ROOT_DIRECTORY_ID),
+    assets: [],
+  }
+}
+
+function createAssetsBranch(
+  catalog: Record<string, ProjectAsset[]>,
+  resourceCategories: ResourceCategory[] = [],
+): ProjectDirectory {
+  const { children, assets } = resolveAssetsBranchContents(resourceCategories, catalog)
   return {
     id: ASSETS_ROOT_DIRECTORY_ID,
     name: 'Assets',
-    children: ASSET_CATEGORY_CONFIG.map((category) => ({
-      id: category.id,
-      name: category.label,
-      assets: cloneAssetList(catalog[category.id] ?? []),
-    })),
+    kind: 'assets-root',
+    parentId: null,
+    children,
+    assets,
   }
 }
 
@@ -208,11 +250,15 @@ function createPackagesBranch(cache: Record<string, ProjectDirectory[]> = {}): P
   return {
     id: PACKAGES_ROOT_DIRECTORY_ID,
     name: 'Packages',
+    kind: 'package-root',
+    parentId: null,
     children: resourceProviders
       .filter((provider) => provider.includeInPackages !== false && (provider.url || provider.load))
       .map((provider) => ({
         id: buildPackageDirectoryId(provider.id),
         name: provider.name,
+        kind: 'package-provider',
+        parentId: PACKAGES_ROOT_DIRECTORY_ID,
         children: cache[provider.id] ? cloneProjectTree(cache[provider.id]!) : [],
       })),
   }
@@ -220,9 +266,10 @@ function createPackagesBranch(cache: Record<string, ProjectDirectory[]> = {}): P
 
 export function createProjectTreeFromCache(
   assetCatalog: Record<string, ProjectAsset[]>,
+  resourceCategories: ResourceCategory[] = [],
   cache: Record<string, ProjectDirectory[]> = {},
 ): ProjectDirectory[] {
-  return [createAssetsBranch(assetCatalog), createPackagesBranch(cache)]
+  return [createAssetsBranch(assetCatalog, resourceCategories), createPackagesBranch(cache)]
 }
 
 export function cloneProjectTree(tree: ProjectDirectory[]): ProjectDirectory[] {

@@ -3,6 +3,7 @@ import type {SceneNode, AssetIndexEntry,GroundSettings, EnvironmentSettings, Sce
 import type { EditorTool } from './editor-tool'
 import type { ProjectAsset } from './project-asset'
 import type { ProjectDirectory } from './project-directory'
+import type { ResourceCategory } from './resource-category'
 import type { SceneCameraState } from './scene-camera-state'
 import type { PanelVisibilityState } from './panel-visibility-state'
 import type { SceneHistoryEntry } from './scene-history-entry'
@@ -33,6 +34,7 @@ export interface SceneState {
   projectTree: ProjectDirectory[]
   assetCatalog: Record<string, ProjectAsset[]>
   assetIndex: Record<string, AssetIndexEntry>
+  resourceCategoryTree: ResourceCategory[]
   packageAssetMap: Record<string, string>
   packageDirectoryCache: Record<string, ProjectDirectory[]>
   packageDirectoryLoaded: Record<string, boolean>
