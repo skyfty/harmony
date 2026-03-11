@@ -12927,6 +12927,7 @@ export const useSceneStore = defineStore('scene', {
         | Record<string, unknown>
         | WallComponentProps
         | RoadComponentProps
+        | LandformsComponentProps
         | DisplayBoardComponentProps
         | PlanningImagesComponentProps
         | WarpGateComponentProps
