@@ -25,6 +25,7 @@
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
               @click="handleGroundButtonClick('terrain')"
+              @contextmenu.prevent.stop="handleGroundButtonCancel('terrain')"
             />
           </template>
           <v-list density="compact" class="ground-terrain-menu">
@@ -79,6 +80,7 @@
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
               @click="handleGroundButtonClick('paint')"
+              @contextmenu.prevent.stop="handleGroundButtonCancel('paint')"
             />
           </template>
           <v-list density="compact" class="ground-paint-menu">
@@ -128,6 +130,7 @@
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
               @click="handleGroundButtonClick('scatter')"
+              @contextmenu.prevent.stop="handleGroundButtonCancel('scatter')"
             />
           </template>
           <v-list density="compact" class="ground-scatter-menu">
@@ -232,6 +235,7 @@
               :title="tool.label"
               :disabled="buildToolsDisabled"
               @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
             />
           </template>
           <v-list density="compact" class="floor-shape-menu">
@@ -306,6 +310,7 @@
               :title="tool.label"
               :disabled="buildToolsDisabled"
               @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
             />
           </template>
           <v-list density="compact" class="wall-shape-menu">
@@ -378,6 +383,7 @@
               :title="tool.label"
               :disabled="buildToolsDisabled"
               @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
             />
           </template>
           <v-list density="compact" class="water-shape-menu">
@@ -1511,7 +1517,8 @@ function handleBuildToolToggle(tool: BuildTool) {
   if (buildToolsDisabled.value) {
     return
   }
-  const next = activeBuildTool.value === tool ? null : tool
+  const reopensMenuOnLeftClick = tool === 'wall' || tool === 'floor' || tool === 'water'
+  const next = activeBuildTool.value === tool && !reopensMenuOnLeftClick ? null : tool
 
   const selectionIds = sceneStore.selectedNodeIds ?? []
   const primaryNode = activeNode.value as any
@@ -1537,7 +1544,7 @@ function handleBuildToolToggle(tool: BuildTool) {
   }
   emit('change-build-tool', next)
 
-  if (tool === 'wall' || tool === 'floor' || tool === 'water') {
+  if (reopensMenuOnLeftClick) {
     if (next) {
       closeAllMenus()
       setBuildToolMenuOpen(tool, true)
@@ -1554,6 +1561,19 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
     return
   }
   return
+}
+
+function handleBuildToolCancel(tool: BuildTool) {
+  if (buildToolsDisabled.value) {
+    return
+  }
+  if (tool !== 'wall' && tool !== 'floor' && tool !== 'water') {
+    return
+  }
+  setBuildToolMenuOpen(tool, false)
+  if (activeBuildTool.value === tool) {
+    emit('change-build-tool', null)
+  }
 }
 
 type GroundMenuKind = 'terrain' | 'paint' | 'scatter'
@@ -1580,19 +1600,25 @@ function handleGroundButtonClick(kind: GroundMenuKind) {
     return
   }
 
-  if (isGroundButtonActive(kind)) {
-    emit('change-build-tool', null)
-    setGroundMenuOpen(kind, false)
-    return
-  }
-
   closeAllMenus()
   const tab = resolveGroundTargetTab(kind, 'button')
-  emit('change-build-tool', kind)
+  if (!isGroundButtonActive(kind)) {
+    emit('change-build-tool', kind)
+  }
   if (tab) {
     emit('activate-ground-tab', tab)
   }
   setGroundMenuOpen(kind, true)
+}
+
+function handleGroundButtonCancel(kind: GroundMenuKind) {
+  if (buildToolsDisabled.value || !hasGroundNode.value) {
+    return
+  }
+  setGroundMenuOpen(kind, false)
+  if (isGroundButtonActive(kind)) {
+    emit('change-build-tool', null)
+  }
 }
 
 function setBuildToolMenuOpen(tool: BuildTool, open: boolean) {
