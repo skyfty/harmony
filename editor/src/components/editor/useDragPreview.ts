@@ -13,6 +13,7 @@ export type DragPreviewController = {
   getLastPoint: () => THREE.Vector3 | null
   setPosition: (point: THREE.Vector3 | null) => void
   prepare: (assetId: string) => void
+  prepareObject: (previewId: string, object: THREE.Object3D) => void
   dispose: (cancelLoad?: boolean) => void
 }
 
@@ -113,6 +114,25 @@ export function useDragPreview(options: Options): DragPreviewController {
   }
 
   const getLastPoint = () => (lastDragPoint ? lastDragPoint.clone() : null)
+
+  const prepareObject = (previewId: string, object: THREE.Object3D) => {
+    pendingPreviewAssetId = null
+    dragPreviewLoadToken += 1
+    clearObject(true)
+
+    const previewObject = object.clone(true)
+    applyPreviewVisualTweaks(previewObject)
+    dragPreviewObject = previewObject
+    dragPreviewAssetId = previewId
+    group.add(previewObject)
+
+    if (lastDragPoint) {
+      group.position.copy(lastDragPoint)
+      group.visible = true
+    } else {
+      group.visible = false
+    }
+  }
 
   const loadForAsset = async (asset: ProjectAsset): Promise<boolean> => {
     if (pendingPreviewAssetId === asset.id) {
@@ -263,6 +283,7 @@ export function useDragPreview(options: Options): DragPreviewController {
     getLastPoint,
     setPosition,
     prepare,
+    prepareObject,
     dispose,
   }
 }

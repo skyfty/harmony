@@ -138,7 +138,7 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
-import { createPrimitiveMesh } from '@schema/index'
+import { createPrimitiveMesh, PROTAGONIST_NODE_ID } from '@schema/index'
 
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -150,6 +150,11 @@ import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import {
+  buildViewportPlacementPreview,
+  getViewportPlacementKey,
+  type ViewportPlacementItem,
+} from './viewportPlacementCatalog'
 import { createGroundEditor } from './GroundEditor'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
@@ -233,6 +238,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  BEHAVIOR_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
@@ -1628,6 +1634,9 @@ const waterShapeMenuOpen = ref(false)
 const groundTerrainMenuOpen = ref(false)
 const groundPaintMenuOpen = ref(false)
 const groundScatterMenuOpen = ref(false)
+const viewportPlacementMenuOpen = ref(false)
+const pendingViewportPlacement = ref<ViewportPlacementItem | null>(null)
+const viewportPlacementActive = computed(() => Boolean(pendingViewportPlacement.value))
 const cameraResetMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
@@ -1758,6 +1767,11 @@ watch(
     }
     if (ctx !== 'terrain-paint' && (terrainStore.paintSelectedAsset ?? null)) {
       terrainStore.setPaintSelection(null)
+    }
+    if (ctx !== 'viewport-add-node' && pendingViewportPlacement.value) {
+      pendingViewportPlacement.value = null
+      nodePlacementClickSessionState = null
+      viewportPlacementMenuOpen.value = false
     }
   },
 )
@@ -3886,6 +3900,16 @@ type AssetPlacementClickSessionState = {
 
 let assetPlacementClickSessionState: AssetPlacementClickSessionState | null = null
 
+type NodePlacementClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+  itemId: string
+}
+
+let nodePlacementClickSessionState: NodePlacementClickSessionState | null = null
+
 type WarpGatePlacementClickSessionState = {
   pointerId: number
   startX: number
@@ -5338,6 +5362,259 @@ function handleGroundScatterMenuOpen(value: boolean) {
   groundScatterMenuOpen.value = Boolean(value)
 }
 
+function handleViewportPlacementMenuOpen(value: boolean) {
+  viewportPlacementMenuOpen.value = Boolean(value)
+}
+
+function collectSceneNodeNames(nodes: SceneNode[] | undefined, bucket: Set<string>): void {
+  if (!nodes?.length) {
+    return
+  }
+  nodes.forEach((node) => {
+    if (node?.name) {
+      bucket.add(node.name)
+    }
+    if (node?.children?.length) {
+      collectSceneNodeNames(node.children, bucket)
+    }
+  })
+}
+
+function getNextViewportPlacementName(base: string): string {
+  const names = new Set<string>()
+  collectSceneNodeNames(sceneStore.nodes, names)
+  if (!names.has(base)) {
+    return base
+  }
+  let index = 1
+  while (names.has(`${base} ${index}`)) {
+    index += 1
+  }
+  return `${base} ${index}`
+}
+
+function ensureBehaviorComponentForNode(nodeId: string): void {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (node?.components?.[BEHAVIOR_COMPONENT_TYPE]) {
+    return
+  }
+  sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+}
+
+function buildViewPointPlacementRoot(name: string): THREE.Object3D {
+  const markerMesh = createPrimitiveMesh('Sphere', { color: 0xff8a65, doubleSided: true })
+  markerMesh.name = `${name} Helper`
+  markerMesh.castShadow = false
+  markerMesh.receiveShadow = false
+  markerMesh.renderOrder = 1000
+  markerMesh.userData = {
+    ...(markerMesh.userData ?? {}),
+    editorOnly: true,
+    ignoreGridSnapping: true,
+    viewPoint: true,
+  }
+
+  const markerRoot = new THREE.Object3D()
+  markerRoot.name = name
+  markerRoot.add(markerMesh)
+  markerRoot.userData = {
+    ...(markerRoot.userData ?? {}),
+    editorOnly: true,
+    ignoreGridSnapping: true,
+    viewPoint: true,
+  }
+  return markerRoot
+}
+
+function buildGuideboardPlacementRoot(name: string): THREE.Object3D {
+  const guideboardMesh = new THREE.Object3D()
+  guideboardMesh.name = `${name} Visual`
+  guideboardMesh.castShadow = false
+  guideboardMesh.receiveShadow = false
+  guideboardMesh.userData = {
+    ...(guideboardMesh.userData ?? {}),
+    ignoreGridSnapping: true,
+    guideboardHelper: true,
+  }
+
+  const guideboardRoot = new THREE.Object3D()
+  guideboardRoot.name = name
+  guideboardRoot.add(guideboardMesh)
+  guideboardRoot.userData = {
+    ...(guideboardRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    guideboard: true,
+  }
+  return guideboardRoot
+}
+
+function buildProtagonistPlacementRoot(name: string): THREE.Object3D {
+  const capsuleMesh = createPrimitiveMesh('Capsule', { color: 0xffffff, doubleSided: true })
+  capsuleMesh.name = `${name} Visual`
+  capsuleMesh.castShadow = true
+  capsuleMesh.receiveShadow = true
+  capsuleMesh.userData = {
+    ...(capsuleMesh.userData ?? {}),
+    editorOnly: true,
+    protagonist: true,
+  }
+
+  const root = new THREE.Object3D()
+  root.name = name
+  root.add(capsuleMesh)
+  root.userData = {
+    ...(root.userData ?? {}),
+    editorOnly: true,
+    protagonist: true,
+  }
+  return root
+}
+
+function handleStartViewportPlacement(item: ViewportPlacementItem): void {
+  viewportPlacementMenuOpen.value = false
+  if (activeBuildTool.value) {
+    cancelActiveBuildOperation()
+  }
+  pendingViewportPlacement.value = item
+  nodePlacementClickSessionState = null
+  sceneStore.selectAsset(null)
+  if (uiStore.activeSelectionContext !== 'viewport-add-node') {
+    uiStore.setActiveSelectionContext('viewport-add-node')
+  }
+}
+
+function handleCancelViewportPlacement(): void {
+  pendingViewportPlacement.value = null
+  nodePlacementClickSessionState = null
+  viewportPlacementMenuOpen.value = false
+  if (uiStore.activeSelectionContext === 'viewport-add-node') {
+    uiStore.setActiveSelectionContext(null)
+  }
+}
+
+function isSingleInstanceViewportPlacementItem(item: ViewportPlacementItem): boolean {
+  return item.tab === 'other' && item.kind === 'protagonist'
+}
+
+function finishViewportPlacementAfterCommit(item: ViewportPlacementItem): void {
+  if (!isSingleInstanceViewportPlacementItem(item)) {
+    return
+  }
+  pendingViewportPlacement.value = null
+  viewportPlacementMenuOpen.value = false
+  if (uiStore.activeSelectionContext === 'viewport-add-node') {
+    uiStore.setActiveSelectionContext(null)
+  }
+}
+
+async function placeViewportItemAtPoint(item: ViewportPlacementItem, basePoint: THREE.Vector3, rotation: THREE.Vector3): Promise<boolean> {
+  const parentId = resolveSelectedGroupDropParent()
+
+  if (item.tab === 'geometry') {
+    const mesh = createPrimitiveMesh(item.geometryType)
+    await sceneStore.addModelNode({
+      object: mesh,
+      nodeType: item.geometryType,
+      name: mesh.name,
+      position: basePoint.clone(),
+      rotation,
+      parentId: parentId ?? undefined,
+    })
+    return true
+  }
+
+  if (item.tab === 'light') {
+    sceneStore.addLightNode(item.lightType, {
+      position: basePoint.clone(),
+      name: item.label,
+    })
+    return true
+  }
+
+  if (item.kind === 'view-point') {
+    const name = getNextViewportPlacementName('View Point')
+    const created = await sceneStore.addModelNode({
+      object: buildViewPointPlacementRoot(name),
+      nodeType: 'Sphere',
+      name,
+      position: basePoint.clone(),
+      rotation,
+      parentId: parentId ?? undefined,
+      snapToGrid: false,
+      editorFlags: {
+        editorOnly: true,
+        ignoreGridSnapping: true,
+      },
+    })
+    if (created) {
+      const primaryMaterial = created.materials?.[0] ?? null
+      if (primaryMaterial) {
+        sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
+      }
+      if (!created.components?.[VIEW_POINT_COMPONENT_TYPE]) {
+        sceneStore.addNodeComponent(created.id, VIEW_POINT_COMPONENT_TYPE)
+      }
+      ensureBehaviorComponentForNode(created.id)
+    }
+    return Boolean(created)
+  }
+
+  if (item.kind === 'guideboard') {
+    const name = getNextViewportPlacementName('Guideboard')
+    const created = await sceneStore.addModelNode({
+      object: buildGuideboardPlacementRoot(name),
+      nodeType: 'Guideboard',
+      name,
+      position: basePoint.clone(),
+      rotation,
+      parentId: parentId ?? undefined,
+      snapToGrid: false,
+      editorFlags: {
+        ignoreGridSnapping: true,
+      },
+    })
+    if (created) {
+      const primaryMaterial = created.materials?.[0] ?? null
+      if (primaryMaterial) {
+        sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
+      }
+      const guideboardComponent = created.components?.[GUIDEBOARD_COMPONENT_TYPE] ?? sceneStore.addNodeComponent(created.id, GUIDEBOARD_COMPONENT_TYPE)?.component
+      if (guideboardComponent && (guideboardComponent.props as { initiallyVisible?: boolean } | undefined)?.initiallyVisible !== false) {
+        sceneStore.updateNodeComponentProps(created.id, guideboardComponent.id, { initiallyVisible: false })
+      }
+      ensureBehaviorComponentForNode(created.id)
+    }
+    return Boolean(created)
+  }
+
+  if (findSceneNode(sceneStore.nodes, PROTAGONIST_NODE_ID)) {
+    finishViewportPlacementAfterCommit(item)
+    return false
+  }
+
+  const name = 'Protagonist'
+  const created = await sceneStore.addModelNode({
+    nodeId: PROTAGONIST_NODE_ID,
+    object: buildProtagonistPlacementRoot(name),
+    nodeType: 'Capsule',
+    name,
+    position: basePoint.clone(),
+    rotation,
+    snapToGrid: false,
+    editorFlags: {
+      editorOnly: true,
+      ignoreGridSnapping: true,
+    },
+  })
+  if (created && !created.components?.[PROTAGONIST_COMPONENT_TYPE]) {
+    sceneStore.addNodeComponent(created.id, PROTAGONIST_COMPONENT_TYPE)
+  }
+  if (created) {
+    finishViewportPlacementAfterCommit(item)
+  }
+  return Boolean(created)
+}
+
 function handleActivateGroundTab(tab: GroundPanelTab) {
   terrainStore.setGroundPanelTab(tab)
 }
@@ -6156,7 +6433,8 @@ function isAssetPlacementActiveForOverride(): boolean {
     isDragHovering.value ||
     sceneStore.draggingAssetId ||
     assetPlacementClickSessionState ||
-    selectionPreviewActive
+    nodePlacementClickSessionState ||
+    hasPlacementPreviewActive()
   )
 }
 
@@ -7256,6 +7534,8 @@ async function spawnAssetFromSelectionClick(params: {
 // Selection-based asset preview state: when a mesh/model/prefab is selected
 let selectionPreviewActive = false
 let selectionPreviewAssetId: string | null = null
+let nodePlacementPreviewActive = false
+let nodePlacementPreviewKey: string | null = null
 let lastSelectionPreviewUpdate = 0
 let lastDragHoverPreviewUpdate = 0
 let placementPreviewYaw = 0
@@ -7264,6 +7544,10 @@ let lastPointerClientX = 0
 let lastPointerClientY = 0
 let lastPointerType: string | null = null
 let selectionPreviewVisibilityRaf: number | null = null
+
+function hasPlacementPreviewActive(): boolean {
+  return selectionPreviewActive || nodePlacementPreviewActive
+}
 
 function isStrictPointOnCanvas(x: number, y: number): boolean {
   const canvas = canvasRef.value
@@ -7316,9 +7600,25 @@ function cancelAssetPlacementInteraction(): boolean {
     cancelled = true
   }
 
+  if (nodePlacementClickSessionState) {
+    nodePlacementClickSessionState = null
+    cancelled = true
+  }
+
   if (selectionPreviewActive || selectionPreviewAssetId) {
     selectionPreviewActive = false
     selectionPreviewAssetId = null
+    placementPreviewYaw = 0
+    dragPreviewGroup.rotation.set(0, 0, 0)
+    dragPreview.dispose()
+    cancelled = true
+  }
+
+  if (nodePlacementPreviewActive || nodePlacementPreviewKey || pendingViewportPlacement.value) {
+    nodePlacementPreviewActive = false
+    nodePlacementPreviewKey = null
+    pendingViewportPlacement.value = null
+    viewportPlacementMenuOpen.value = false
     placementPreviewYaw = 0
     dragPreviewGroup.rotation.set(0, 0, 0)
     dragPreview.dispose()
@@ -7330,6 +7630,11 @@ function cancelAssetPlacementInteraction(): boolean {
     if (uiStore.activeSelectionContext === 'asset-panel') {
       uiStore.setActiveSelectionContext(null)
     }
+    cancelled = true
+  }
+
+  if (uiStore.activeSelectionContext === 'viewport-add-node') {
+    uiStore.setActiveSelectionContext(null)
     cancelled = true
   }
 
@@ -7356,7 +7661,7 @@ function ensureSelectionPreviewVisibilityMonitor(): void {
 
   selectionPreviewVisibilityRaf = requestAnimationFrame(() => {
     selectionPreviewVisibilityRaf = null
-    if (!selectionPreviewActive || isDragHovering.value) {
+    if (!hasPlacementPreviewActive() || isDragHovering.value) {
       return
     }
 
@@ -7493,6 +7798,50 @@ watch(
       }
     } catch (err) {
       console.warn('scatter selection preview watch failed', err)
+    }
+  },
+)
+
+watch(
+  pendingViewportPlacement,
+  (next) => {
+    try {
+      if (!next) {
+        if (nodePlacementPreviewActive || nodePlacementPreviewKey) {
+          nodePlacementPreviewActive = false
+          nodePlacementPreviewKey = null
+          placementPreviewYaw = 0
+          dragPreviewGroup.rotation.set(0, 0, 0)
+          if (selectionPreviewActive && selectionPreviewAssetId) {
+            dragPreview.prepare(selectionPreviewAssetId)
+          } else {
+            dragPreview.dispose()
+          }
+        }
+        return
+      }
+
+      if (sceneStore.draggingAssetId) {
+        nodePlacementPreviewActive = false
+        nodePlacementPreviewKey = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
+        dragPreview.dispose()
+        return
+      }
+
+      const previewKey = getViewportPlacementKey(next)
+      nodePlacementPreviewActive = true
+      nodePlacementPreviewKey = previewKey
+      placementPreviewYaw = 0
+      dragPreviewGroup.rotation.set(0, 0, 0)
+      dragPreview.prepareObject(previewKey, buildViewportPlacementPreview(next))
+    } catch (error) {
+      console.warn('viewport placement preview watch failed', error)
+      nodePlacementPreviewActive = false
+      nodePlacementPreviewKey = null
+      pendingViewportPlacement.value = null
+      dragPreview.dispose()
     }
   },
 )
@@ -11005,6 +11354,7 @@ async function handlePointerDown(event: PointerEvent) {
 
   const selectedAssetId = sceneStore.selectedAssetId
   const selectedAsset = selectedAssetId ? sceneStore.getAsset(selectedAssetId) : null
+  const pendingPlacementItem = pendingViewportPlacement.value
   const canPlaceSelectedAsset =
     Boolean(selectedAssetId) &&
     Boolean(selectedAsset) &&
@@ -11019,6 +11369,17 @@ async function handlePointerDown(event: PointerEvent) {
       startY: event.clientY,
       moved: false,
       assetId: selectedAssetId as string,
+    }
+    return
+  }
+
+  if (event.button === 0 && pendingPlacementItem) {
+    nodePlacementClickSessionState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      itemId: getViewportPlacementKey(pendingPlacementItem),
     }
     return
   }
@@ -11295,6 +11656,14 @@ function handlePointerMove(event: PointerEvent) {
     const dy = event.clientY - assetPlacementClickSessionState.startY
     if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
       assetPlacementClickSessionState.moved = true
+    }
+  }
+
+  if (nodePlacementClickSessionState && nodePlacementClickSessionState.pointerId === event.pointerId && !nodePlacementClickSessionState.moved) {
+    const dx = event.clientX - nodePlacementClickSessionState.startX
+    const dy = event.clientY - nodePlacementClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      nodePlacementClickSessionState.moved = true
     }
   }
 
@@ -11732,7 +12101,7 @@ function handlePointerMove(event: PointerEvent) {
 
   // If selection-based preview is active, update preview position to follow the mouse.
   try {
-    if (selectionPreviewActive && dragPreview && canvasRef.value && camera && !isDragHovering.value) {
+    if (hasPlacementPreviewActive() && dragPreview && canvasRef.value && camera && !isDragHovering.value) {
       ensureSelectionPreviewVisibilityMonitor()
       const hoverPreviewAllowed = event.pointerType === 'mouse' && isStrictPointOnCanvas(event.clientX, event.clientY)
       if (!hoverPreviewAllowed) {
@@ -11773,7 +12142,7 @@ function handlePointerMove(event: PointerEvent) {
     console.warn('Failed to update selection preview position', err)
   }
 
-  if (!selectionPreviewActive || !dragPreview || isDragHovering.value) {
+  if (!hasPlacementPreviewActive() || !dragPreview || isDragHovering.value) {
     snapController.resetPlacementSideSnap()
     clearPlacementSideSnapMarkers()
   }
@@ -11806,7 +12175,8 @@ async function handlePointerUp(event: PointerEvent) {
       pointerInteraction.get()?.pointerId === event.pointerId ||
       middleClickSessionState?.pointerId === event.pointerId ||
       leftEmptyClickSessionState?.pointerId === event.pointerId ||
-      assetPlacementClickSessionState?.pointerId === event.pointerId
+      assetPlacementClickSessionState?.pointerId === event.pointerId ||
+      nodePlacementClickSessionState?.pointerId === event.pointerId
 
     const applyPointerUpResult = (result: PointerUpResult) => {
       if (result.clearPointerTrackingState) {
@@ -12157,7 +12527,7 @@ async function handlePointerUp(event: PointerEvent) {
     // Selection-based asset preview: right click (without moving) rotates the preview.
     // Keep right-drag behavior for orbit controls by only reacting when `moved` is false.
     if (
-      selectionPreviewActive &&
+      hasPlacementPreviewActive() &&
       pointerTrackingState &&
       pointerTrackingState.pointerId === event.pointerId &&
       pointerTrackingState.button === 2 &&
@@ -12276,6 +12646,31 @@ async function handlePointerUp(event: PointerEvent) {
       return
     }
 
+    if (event.button === 0 && nodePlacementClickSessionState?.pointerId === event.pointerId) {
+      const session = nodePlacementClickSessionState
+      nodePlacementClickSessionState = null
+
+      if (!session.moved && pendingViewportPlacement.value && getViewportPlacementKey(pendingViewportPlacement.value) === session.itemId) {
+        const placementSideSnap = (isVertexSnapActiveEffective.value && props.activeTool === 'select')
+          ? snapController.consumePlacementSideSnapResult()
+          : null
+        clearPlacementSideSnapMarkers()
+
+        try {
+          const placement = computePointerDropPlacement(event)
+          const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+          if (placementSideSnap) {
+            basePoint.add(placementSideSnap.delta)
+          }
+          const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
+          await placeViewportItemAtPoint(pendingViewportPlacement.value, basePoint, rotation)
+        } catch (error) {
+          console.warn('Failed to place viewport item from selection click', session.itemId, error)
+        }
+      }
+      return
+    }
+
     // Select mode: left click on empty space clears selection (only if it was a click, not a drag-pan).
     if (event.button === 0 && leftEmptyClickSessionState?.pointerId === event.pointerId) {
       const session = leftEmptyClickSessionState
@@ -12335,6 +12730,9 @@ async function handlePointerUp(event: PointerEvent) {
     if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
       assetPlacementClickSessionState = null
     }
+    if (nodePlacementClickSessionState && nodePlacementClickSessionState.pointerId === event.pointerId) {
+      nodePlacementClickSessionState = null
+    }
     if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId) {
       warpGatePlacementClickSessionState = null
     }
@@ -12365,6 +12763,9 @@ function handlePointerCancel(event: PointerEvent) {
   }
   if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
     assetPlacementClickSessionState = null
+  }
+  if (nodePlacementClickSessionState && nodePlacementClickSessionState.pointerId === event.pointerId) {
+    nodePlacementClickSessionState = null
   }
   if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId) {
     warpGatePlacementClickSessionState = null
@@ -16742,6 +17143,8 @@ defineExpose<SceneViewportHandle>({
         :scatter-erase-repair-active="scatterRepairModifierActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
+          :viewport-placement-menu-open="viewportPlacementMenuOpen"
+          :viewport-placement-active="viewportPlacementActive"
         :camera-reset-menu-open="cameraResetMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
@@ -16780,8 +17183,11 @@ defineExpose<SceneViewportHandle>({
         @select-wall-preset="handleWallPresetDialogUpdate"
         @select-floor-preset="handleFloorPresetDialogUpdate"
         @toggle-scatter-erase="toggleScatterEraseMode"
+        @start-viewport-placement="handleStartViewportPlacement"
+        @cancel-viewport-placement="handleCancelViewportPlacement"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
+          @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
           @update:camera-reset-menu-open="handleCameraResetMenuOpen"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:ground-terrain-menu-open="handleGroundTerrainMenuOpen"
