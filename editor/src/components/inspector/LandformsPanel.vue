@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { generateUuid } from '@/utils/uuid'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
@@ -21,6 +22,7 @@ import {
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const landformsComponent = computed(
@@ -81,6 +83,23 @@ function getActiveAsset(layer: LandformsLayer): ProjectAsset | null {
     return null
   }
   return sceneStore.getAsset(assetId) ?? null
+}
+
+function getActiveAssetThumbnail(layer: LandformsLayer): string | null {
+  const asset = getActiveAsset(layer)
+  if (!asset) {
+    return null
+  }
+  const resolved = assetCacheStore.resolveAssetThumbnail({ asset, assetId: asset.id })
+  if (resolved) {
+    return resolved
+  }
+  const thumbnail = typeof asset.thumbnail === 'string' ? asset.thumbnail.trim() : ''
+  if (thumbnail.length) {
+    return thumbnail
+  }
+  const downloadUrl = typeof asset.downloadUrl === 'string' ? asset.downloadUrl.trim() : ''
+  return downloadUrl.length ? downloadUrl : null
 }
 
 function commitLayers(): void {
@@ -417,28 +436,38 @@ watch(componentEnabled, (enabled) => {
               @dragover="handleAssetDragOver"
               @drop="handleAssetDrop(layer.id, $event)"
             >
-              <button type="button" class="landforms-asset-drop__preview" :disabled="!componentEnabled" @click="openAssetDialog(layer.id, $event)">
+              <button
+                type="button"
+                class="landforms-asset-drop__preview"
+                :disabled="!componentEnabled"
+                @click="openAssetDialog(layer.id, $event)"
+              >
                 <div
-                  v-if="getActiveAsset(layer)?.thumbnail"
+                  v-if="getActiveAssetThumbnail(layer)"
                   class="landforms-asset-drop__thumbnail"
-                  :style="{ backgroundImage: `url(${getActiveAsset(layer)?.thumbnail})` }"
+                  :style="{ backgroundImage: `url(${getActiveAssetThumbnail(layer)})` }"
                 />
                 <div v-else class="landforms-asset-drop__placeholder">
                   <v-icon size="22">mdi-image-outline</v-icon>
                 </div>
+                <v-btn
+                  class="landforms-asset-drop__clear-btn"
+                  icon="mdi-close"
+                  size="x-small"
+                  variant="tonal"
+                  color="error"
+                  :disabled="!componentEnabled || !layer.assetId"
+                  @click.stop="patchLayer(layer.id, { assetId: null })"
+                />
+                <v-tooltip location="top" :open-delay="120">
+                  <template #activator="{ props }">
+                    <div class="landforms-asset-drop__name" v-bind="props">
+                      {{ getActiveAsset(layer)?.name || 'Select Terrain Texture' }}
+                    </div>
+                  </template>
+                  <span>{{ getActiveAsset(layer)?.name || 'Select Terrain Texture' }}</span>
+                </v-tooltip>
               </button>
-              <div class="landforms-asset-drop__meta">
-                <div class="landforms-asset-drop__name">{{ getActiveAsset(layer)?.name || 'Select Terrain Texture' }}</div>
-                <div class="landforms-asset-drop__hint">{{ getActiveAsset(layer)?.id || 'Click or drag an image/texture asset here' }}</div>
-              </div>
-              <v-btn
-                size="small"
-                variant="text"
-                :disabled="!componentEnabled || !layer.assetId"
-                @click="patchLayer(layer.id, { assetId: null })"
-              >
-                Clear
-              </v-btn>
             </div>
 
             <div class="landforms-grid">
@@ -714,10 +743,9 @@ watch(componentEnabled, (enabled) => {
 }
 
 .landforms-asset-drop {
-  display: grid;
-  grid-template-columns: 52px 1fr auto;
-  gap: 10px;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 8px;
   border-radius: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.12);
@@ -729,9 +757,10 @@ watch(componentEnabled, (enabled) => {
 }
 
 .landforms-asset-drop__preview {
-  width: 52px;
-  height: 52px;
-  border: none;
+  position: relative;
+  width: 100%;
+  height: 76px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.05);
   overflow: hidden;
@@ -748,14 +777,19 @@ watch(componentEnabled, (enabled) => {
   justify-content: center;
   background-size: cover;
   background-position: center;
+  background-repeat: no-repeat;
 }
 
 .landforms-asset-drop__placeholder {
   color: rgba(220, 225, 232, 0.58);
 }
 
-.landforms-asset-drop__meta {
-  min-width: 0;
+.landforms-asset-drop__clear-btn {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 2;
+  backdrop-filter: blur(2px);
 }
 
 .landforms-asset-drop__name,
@@ -766,12 +800,23 @@ watch(componentEnabled, (enabled) => {
 }
 
 .landforms-asset-drop__name {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 52px);
+  padding: 4px 8px;
+  border-radius: 8px;
   font-size: 13px;
+  color: rgba(245, 248, 252, 0.96);
+  background: rgba(17, 19, 24, 0.72);
+  backdrop-filter: blur(2px);
+  z-index: 2;
 }
 
 .landforms-asset-drop__hint {
   font-size: 11px;
   color: rgba(220, 225, 232, 0.62);
+  padding-inline: 2px;
 }
 
 .landforms-grid {

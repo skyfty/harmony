@@ -1671,7 +1671,9 @@ function createGroundSceneNode(
     createMaterialProps,
     generateUuid,
     clampRigidbodyComponentProps,
+    clampLandformsComponentProps,
     RIGIDBODY_COMPONENT_TYPE,
+    LANDFORMS_COMPONENT_TYPE,
     GROUND_NODE_ID,
   }, overrides, settings) as SceneNode
 }
@@ -1699,7 +1701,9 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
     createMaterialProps,
     generateUuid,
     clampRigidbodyComponentProps,
+    clampLandformsComponentProps,
     RIGIDBODY_COMPONENT_TYPE,
+    LANDFORMS_COMPONENT_TYPE,
     GROUND_NODE_ID,
     getPrimaryNodeMaterial,
     cloneNode,

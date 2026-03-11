@@ -12,6 +12,7 @@ import {
   type GroundSettings,
   type SceneNode,
 } from '@schema'
+import { LANDFORMS_COMPONENT_TYPE, clampLandformsComponentProps } from '@schema/components'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import type { Vector3 } from 'three'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
@@ -36,6 +37,8 @@ export type GroundDeps = {
   generateUuid: () => string
   clampRigidbodyComponentProps: (p: any) => any
   RIGIDBODY_COMPONENT_TYPE: string
+  clampLandformsComponentProps: (p: any) => any
+  LANDFORMS_COMPONENT_TYPE: string
   GROUND_NODE_ID?: string
   getPrimaryNodeMaterial?: (node: SceneNode) => SceneNodeMaterial | null
   cloneNode?: (node: SceneNode) => SceneNode
@@ -307,6 +310,7 @@ export function ensureGroundNode(nodes: SceneNode[], settings?: GroundSettings):
 // Fallback creator used when ensureGroundNode is called without access to sceneStore's createVector/createNodeMaterial.
 function createGroundSceneNodeFallback(settings?: GroundSettings): SceneNode {
   const dynamicMesh = createGroundDynamicMeshDefinition({}, settings)
+  const fallbackLandformsProps = clampLandformsComponentProps(null)
   return {
     id: 'ground',
     name: 'Ground',
@@ -321,7 +325,14 @@ function createGroundSceneNodeFallback(settings?: GroundSettings): SceneNode {
     visible: true,
     locked: true,
     dynamicMesh,
-    components: {},
+    components: {
+      [LANDFORMS_COMPONENT_TYPE]: {
+        id: 'landforms-default',
+        type: LANDFORMS_COMPONENT_TYPE,
+        enabled: true,
+        props: fallbackLandformsProps,
+      },
+    },
   }
 }
 
@@ -334,6 +345,8 @@ export function createGroundSceneNodeWithDeps(deps: GroundDeps, overrides: { dyn
   const generateUuid = deps.generateUuid
   const clampRigidbodyComponentProps = deps.clampRigidbodyComponentProps
   const RIGIDBODY_COMPONENT_TYPE = deps.RIGIDBODY_COMPONENT_TYPE
+  const clampLandforms = deps.clampLandformsComponentProps
+  const LANDFORMS_COMPONENT_TYPE = deps.LANDFORMS_COMPONENT_TYPE
   const GROUND_NODE_ID = deps.GROUND_NODE_ID ?? 'ground'
 
   return {
@@ -364,6 +377,12 @@ export function createGroundSceneNodeWithDeps(deps: GroundDeps, overrides: { dyn
         enabled: true,
         props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
       },
+      [LANDFORMS_COMPONENT_TYPE]: {
+        id: generateUuid(),
+        type: LANDFORMS_COMPONENT_TYPE,
+        enabled: true,
+        props: clampLandforms(null),
+      },
     },
   }
 }
@@ -380,6 +399,8 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
     const createMaterialProps = deps.createMaterialProps
     const generateUuid = deps.generateUuid
     const clampRigidbodyComponentProps = deps.clampRigidbodyComponentProps
+    const clampLandforms = deps.clampLandformsComponentProps
+    const LANDFORMS_COMPONENT_TYPE = deps.LANDFORMS_COMPONENT_TYPE
     const GROUND_NODE_ID = deps.GROUND_NODE_ID ?? 'ground'
 
     const primaryMaterial = getPrimaryNodeMaterial ? getPrimaryNodeMaterial(node) : null
@@ -392,6 +413,14 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
           type: deps.RIGIDBODY_COMPONENT_TYPE,
           enabled: true,
           props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
+        }
+      }
+      if (!base[LANDFORMS_COMPONENT_TYPE]) {
+        base[LANDFORMS_COMPONENT_TYPE] = {
+          id: generateUuid(),
+          type: LANDFORMS_COMPONENT_TYPE,
+          enabled: true,
+          props: clampLandforms(null),
         }
       }
       return Object.keys(base).length ? base : undefined
