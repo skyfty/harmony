@@ -438,7 +438,85 @@
           @contextmenu.prevent.stop="handleBuildToolContextMenu(tool.id, $event)"
         />
       </template>
-         <v-menu
+      <v-menu
+        :model-value="viewportPlacementMenuOpen"
+        location="bottom"
+        :offset="6"
+        :open-on-click="false"
+        :close-on-content-click="false"
+        @update:modelValue="handleViewportPlacementMenuModelUpdate"
+      >
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            icon="mdi-shape-plus"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            :color="viewportPlacementActive || viewportPlacementMenuOpen ? 'primary' : undefined"
+            :variant="viewportPlacementActive || viewportPlacementMenuOpen ? 'flat' : 'text'"
+            title="Add Node"
+            @click="emit('update:viewport-placement-menu-open', true)"
+            @contextmenu.prevent.stop="handleViewportPlacementButtonContextMenu"
+          />
+        </template>
+        <v-list density="compact" class="viewport-placement-menu">
+          <div
+            class="popup-menu-card viewport-placement-menu__card"
+            @pointerdown.stop
+            @pointerup.stop
+            @mousedown.stop
+            @mouseup.stop
+          >
+            <v-toolbar density="compact" class="menu-toolbar" height="36px">
+              <div class="toolbar-text">
+                <div class="menu-title">Add Node</div>
+              </div>
+              <v-spacer />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:viewport-placement-menu-open', false)" />
+            </v-toolbar>
+
+            <div class="viewport-placement-menu__content">
+              <v-tabs v-model="viewportPlacementTab" density="compact" :transition="false" class="viewport-placement-tabs">
+                <v-tab
+                  v-for="tab in viewportPlacementTabs"
+                  :key="tab.value"
+                  :value="tab.value"
+                  :title="tab.label"
+                >
+                  <v-icon :icon="tab.icon" size="16" />
+                  <span class="viewport-placement-tabs__label">{{ tab.label }}</span>
+                </v-tab>
+              </v-tabs>
+
+              <div v-if="viewportPlacementTab === 'geometry'" class="viewport-placement-grid">
+                <button
+                  v-for="item in viewportGeometryItems"
+                  :key="item.id"
+                  type="button"
+                  class="viewport-placement-grid__tile"
+                  @click="handleViewportPlacementSelect(item)"
+                >
+                  <span class="viewport-placement-grid__preview" v-html="item.thumbnailSvg" />
+                  <span class="viewport-placement-grid__label">{{ item.label }}</span>
+                </button>
+              </div>
+
+              <div v-else class="viewport-placement-list">
+                <v-list-item
+                  v-for="item in viewportPlacementTab === 'light' ? viewportLightItems : viewportOtherItems"
+                  :key="item.id"
+                  :title="item.label"
+                  :prepend-icon="item.icon"
+                  :disabled="isViewportPlacementItemDisabled(item)"
+                  @click="handleViewportPlacementSelect(item)"
+                />
+              </div>
+            </div>
+          </div>
+        </v-list>
+      </v-menu>
+      <v-menu
         :model-value="scatterEraseMenuOpen"
         location="bottom"
         :offset="6"
@@ -873,7 +951,7 @@ import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
-import type { CameraControlMode } from '@schema'
+import { PROTAGONIST_NODE_ID, type CameraControlMode } from '@schema'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
@@ -890,6 +968,14 @@ import { SCATTER_BRUSH_RADIUS_MAX, type GroundPanelTab } from '@/stores/terrainS
 import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
+import {
+  VIEWPORT_GEOMETRY_ITEMS,
+  VIEWPORT_LIGHT_ITEMS,
+  VIEWPORT_OTHER_ITEMS,
+  VIEWPORT_PLACEMENT_TABS,
+  type ViewportPlacementItem,
+  type ViewportPlacementTab,
+} from './viewportPlacementCatalog'
 
 const props = withDefaults(
   defineProps<{
@@ -909,6 +995,8 @@ const props = withDefaults(
   scatterEraseRepairActive?: boolean
   scatterEraseRadius: number
   scatterEraseMenuOpen: boolean
+  viewportPlacementMenuOpen: boolean
+  viewportPlacementActive: boolean
   cameraResetMenuOpen: boolean
   floorShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
@@ -959,6 +1047,7 @@ const emit = defineEmits<{
   (event: 'reset-camera-direction', direction: CameraResetDirection): void
   (event: 'update:camera-reset-menu-open', value: boolean): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
+  (event: 'update:viewport-placement-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
   (event: 'update:wall-shape-menu-open', value: boolean): void
   (event: 'update:water-shape-menu-open', value: boolean): void
@@ -981,6 +1070,8 @@ const emit = defineEmits<{
   (event: 'update:ground-scatter-brush-radius', value: number): void
   (event: 'update:ground-scatter-density-percent', value: number): void
   (event: 'ground-scatter-asset-select', payload: { category: TerrainScatterCategory; asset: ProjectAsset; providerAssetId: string }): void
+  (event: 'start-viewport-placement', item: ViewportPlacementItem): void
+  (event: 'cancel-viewport-placement'): void
 }>()
 
 const {
@@ -1000,6 +1091,8 @@ const {
   buildToolsDisabled,
   scatterEraseRadius,
   scatterEraseMenuOpen,
+  viewportPlacementMenuOpen,
+  viewportPlacementActive,
   cameraResetMenuOpen,
   floorShapeMenuOpen,
   wallShapeMenuOpen,
@@ -1053,6 +1146,12 @@ const SCATTER_DENSITY_STEP = 1
 const groundScatterBrushRadiusInput = ref(groundScatterBrushRadius.value.toFixed(2))
 const groundScatterDensityInput = ref(Math.round(groundScatterDensityPercent.value).toString())
 const scatterEraseRadiusInput = ref(scatterEraseRadius.value.toFixed(2))
+const viewportPlacementTab = ref<ViewportPlacementTab>('geometry')
+
+const viewportPlacementTabs = VIEWPORT_PLACEMENT_TABS
+const viewportGeometryItems = VIEWPORT_GEOMETRY_ITEMS
+const viewportLightItems = VIEWPORT_LIGHT_ITEMS
+const viewportOtherItems = VIEWPORT_OTHER_ITEMS
 
 function clampValue(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -1330,6 +1429,7 @@ function closeExternalMenus() {
   emit('update:ground-paint-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
   emit('update:scatter-erase-menu-open', false)
+  emit('update:viewport-placement-menu-open', false)
   emit('update:camera-reset-menu-open', false)
   emit('update:floor-shape-menu-open', false)
   emit('update:wall-shape-menu-open', false)
@@ -1415,6 +1515,42 @@ const canRecenterGroupOrigin = computed(() => {
   }
   return Array.isArray(node.children) && node.children.length > 0
 })
+
+function hasNodeByPredicate(predicate: (node: any) => boolean, nodes: any[] | undefined = sceneStore.nodes): boolean {
+  if (!nodes?.length) {
+    return false
+  }
+
+  const queue = [...nodes]
+  const visited = new Set<string>()
+
+  while (queue.length > 0) {
+    const node = queue.shift()
+    if (!node) {
+      continue
+    }
+
+    const nodeId = typeof node.id === 'string' ? node.id : null
+    if (nodeId) {
+      if (visited.has(nodeId)) {
+        continue
+      }
+      visited.add(nodeId)
+    }
+
+    if (predicate(node)) {
+      return true
+    }
+
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      queue.push(...node.children)
+    }
+  }
+
+  return false
+}
+
+const canAddViewportProtagonist = computed(() => !hasNodeByPredicate((node) => node.id === PROTAGONIST_NODE_ID))
 
 function handleGroupSelection() {
   if ((selectionCount.value ?? 0) < 1) return
@@ -1686,6 +1822,31 @@ function handleGroundScatterAssetSelect(payload: { asset: ProjectAsset; provider
   })
 }
 
+function handleViewportPlacementMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+  }
+  emit('update:viewport-placement-menu-open', open)
+}
+
+function isViewportPlacementItemDisabled(item: ViewportPlacementItem): boolean {
+  return item.tab === 'other' && item.kind === 'protagonist' && !canAddViewportProtagonist.value
+}
+
+function handleViewportPlacementSelect(item: ViewportPlacementItem) {
+  if (isViewportPlacementItemDisabled(item)) {
+    return
+  }
+  emit('start-viewport-placement', item)
+  emit('update:viewport-placement-menu-open', false)
+}
+
+function handleViewportPlacementButtonContextMenu() {
+  emit('update:viewport-placement-menu-open', false)
+  emit('cancel-viewport-placement')
+}
+
 function handleWallShapeMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
   if (open) {
@@ -1824,6 +1985,12 @@ function handleClearScatterMenuAction() {
 .scatter-erase-menu {
   min-width: 220px;
   padding: 0;
+}
+
+.viewport-placement-menu {
+  width: 356px;
+  max-width: min(356px, 92vw);
+  padding: 6px;
 }
 
 .ground-terrain-menu,
@@ -1975,6 +2142,78 @@ function handleClearScatterMenuAction() {
 
 .popup-menu-card__content {
   padding: 4px 0;
+}
+
+.viewport-placement-menu__card {
+  width: 100%;
+}
+
+.viewport-placement-menu__content {
+  padding: 6px 8px 10px;
+}
+
+.viewport-placement-tabs {
+  margin-bottom: 10px;
+}
+
+.viewport-placement-tabs :deep(.v-tab) {
+  min-height: 30px;
+  min-width: 0;
+  padding: 0 10px;
+  gap: 6px;
+}
+
+.viewport-placement-tabs__label {
+  font-size: 12px;
+}
+
+.viewport-placement-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.viewport-placement-grid__tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  min-height: 84px;
+  padding: 10px 8px;
+  color: rgba(233, 236, 241, 0.94);
+  transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.viewport-placement-grid__tile:hover {
+  background: rgba(77, 208, 225, 0.1);
+  border-color: rgba(77, 208, 225, 0.32);
+  transform: translateY(-1px);
+}
+
+.viewport-placement-grid__preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  color: #7be0ec;
+}
+
+.viewport-placement-grid__preview :deep(svg) {
+  display: block;
+}
+
+.viewport-placement-grid__label {
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.viewport-placement-list {
+  padding-bottom: 4px;
 }
 
 .floor-shape-menu__card,
