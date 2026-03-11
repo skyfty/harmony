@@ -156,6 +156,7 @@ import {
   type ViewportPlacementItem,
 } from './viewportPlacementCatalog'
 import { createGroundEditor } from './GroundEditor'
+import { resolveGroundRuntimeObject, resolveGroundRuntimeObjectFromMap } from './groundRuntimeObject'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
 import type { AlignCommand, ArrangeDirection, WorldAlignMode } from '@/types/scene-viewport-align-command'
@@ -1258,8 +1259,7 @@ const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 const GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY = '__harmonyGroundSculptSkipRefreshSignature'
 
 function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
-  const runtimeGroundObject = object.userData?.groundMesh as THREE.Object3D | undefined
-  return runtimeGroundObject ?? object
+  return resolveGroundRuntimeObject(object) ?? object
 }
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
@@ -2630,8 +2630,7 @@ function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return resolveDynamicGroundStreamingRadiusMeters(null)
   }
-  const container = objectMap.get(node.id)
-  const groundObject = (container?.userData?.groundMesh as THREE.Object3D | undefined) ?? null
+  const groundObject = resolveGroundRuntimeObjectFromMap(objectMap, node.id)
   return resolveDynamicGroundStreamingRadiusMeters(groundObject)
 }
 
@@ -15277,7 +15276,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   }
 
   if (node.dynamicMesh?.type === 'Ground') {
-    const groundObject = userData.groundMesh as THREE.Object3D | undefined
+    const groundObject = resolveGroundRuntimeObject(object)
     if (groundObject) {
       const groundData = groundObject.userData ?? (groundObject.userData = {})
       const groundDefinition = resolveGroundDynamicMeshDefinition()
@@ -15498,8 +15497,7 @@ function updateGroundChunkStreaming() {
     return
   }
 
-  const container = objectMap.get(node.id)
-  const groundObject = (container?.userData?.groundMesh as THREE.Object3D | undefined) ?? undefined
+  const groundObject = resolveGroundRuntimeObjectFromMap(objectMap, node.id) ?? undefined
   if (!groundObject) {
     return
   }
