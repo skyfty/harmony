@@ -18,6 +18,7 @@ import { type GroundDynamicMesh, type GroundGenerationSettings } from '@schema'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/utils/uuid'
 import {
@@ -28,7 +29,6 @@ import {
   type SceneNode,
   type Vector3Like,
 } from '@schema'
-import { applyMirroredScaleToObject } from '@schema/mirror'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
 import { extractExtension } from '@/utils/blob'
@@ -40,13 +40,11 @@ import {
   ONLINE_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
-  WARP_GATE_COMPONENT_TYPE,
 } from '@schema/components'
 import type {
   GuideboardComponentProps,
   ProtagonistComponentProps,
   ViewPointComponentProps,
-  WarpGateComponentProps,
 } from '@schema/components'
 import {
   NAMED_BEHAVIOR_SEQUENCES_KEY,
@@ -729,20 +727,6 @@ function getNextGuideboardName(): string {
   return `${base} ${index}`
 }
 
-function getNextWarpGateName(): string {
-  const names = new Set<string>()
-  collectNodeNames(sceneStore.nodes, names)
-  const base = 'Warp Gate'
-  if (!names.has(base)) {
-    return base
-  }
-  let index = 1
-  while (names.has(`${base} ${index}`)) {
-    index += 1
-  }
-  return `${base} ${index}`
-}
-
 function resolveSelectedSceneNode(): SceneNode | null {
   const candidate = sceneStore.selectedNode
   if (!candidate || candidate.isPlaceholder) {
@@ -1358,55 +1342,15 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
 
 async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
-  const name = getNextWarpGateName()
-  const warpGateMesh = new THREE.Object3D()
-  warpGateMesh.name = `${name} Visual`
-  warpGateMesh.castShadow = false
-  warpGateMesh.receiveShadow = false
-  warpGateMesh.userData = {
-    ...(warpGateMesh.userData ?? {}),
-    ignoreGridSnapping: true,
-    warpGate: true,
-  }
-
-  const warpGateRoot = new THREE.Object3D()
-  warpGateRoot.name = name
-  warpGateRoot.add(warpGateMesh)
-  warpGateRoot.userData = {
-    ...(warpGateRoot.userData ?? {}),
-    ignoreGridSnapping: true,
-    warpGate: true,
-  }
-
   const parent = resolveTargetParentNode(parentId)
   const resolvedParentId = parent?.id
 
-  const created = await sceneStore.addModelNode({
-    object: warpGateRoot,
-    nodeType: 'WarpGate',
-    name,
-    baseY: 0,
-    position: new THREE.Vector3(0, 0, 0),
+  const created = await createWarpGateNode(sceneStore, {
     parentId: resolvedParentId,
-    snapToGrid: false,
-    editorFlags: {
-      ignoreGridSnapping: true,
-    },
+    position: new THREE.Vector3(0, 0, 0),
   })
 
   if (created) {
-    // Ensure the default material is double-sided for better visibility
-    const primaryMaterial = created.materials?.[0] ?? null
-    if (primaryMaterial) {
-      sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
-    }
-    let warpGateComponent = created.components?.[WARP_GATE_COMPONENT_TYPE] as
-      | SceneNodeComponentState<WarpGateComponentProps>
-      | undefined
-    if (!warpGateComponent) {
-      const added = sceneStore.addNodeComponent<typeof WARP_GATE_COMPONENT_TYPE>(created.id, WARP_GATE_COMPONENT_TYPE)
-      warpGateComponent = added?.component
-    }
     ensureBehaviorComponent(created.id)
     if (autoBehaviors) {
       initializeWarpGateBehavior(created.id)

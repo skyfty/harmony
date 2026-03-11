@@ -102,6 +102,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
+import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -1643,6 +1644,9 @@ const buildToolCursorClass = computed(() => {
   }
   if (activeBuildTool.value === 'displayBoard') {
     return 'cursor-display-board'
+  }
+  if (activeBuildTool.value === 'warpGate') {
+    return 'cursor-warp-gate'
   }
   return null
 })
@@ -3881,6 +3885,15 @@ type AssetPlacementClickSessionState = {
 
 let assetPlacementClickSessionState: AssetPlacementClickSessionState | null = null
 
+type WarpGatePlacementClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+let warpGatePlacementClickSessionState: WarpGatePlacementClickSessionState | null = null
+
 // wall build session moved into `wallBuildTool`
 
 type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
@@ -4982,13 +4995,13 @@ type BuildToolRightClickCandidate = {
 
 let buildToolRightClickCandidate: BuildToolRightClickCandidate | null = null
 
-type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water' | 'displayBoard'
+type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water' | 'displayBoard' | 'warpGate'
 type GroundBuildTool = 'terrain' | 'paint' | 'scatter'
 
 function isBuildToolBlockedDuringGroundSculptConfig(
   tool: BuildTool | null,
 ): tool is GroundSculptBlockedBuildTool {
-  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water' || tool === 'displayBoard'
+  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water' || tool === 'displayBoard' || tool === 'warpGate'
 }
 
 function isGroundBuildTool(tool: BuildTool | null): tool is GroundBuildTool {
@@ -7077,10 +7090,63 @@ const dragPreview = useDragPreview({
   disposeObjectResources,
 })
 const dragPreviewGroup = dragPreview.group
+const warpGatePlacementPreviewController = createWarpGateEffectInstance(clampWarpGateComponentProps(null))
+const warpGatePlacementPreviewGroup = new THREE.Group()
+warpGatePlacementPreviewGroup.name = 'Warp Gate Preview'
+warpGatePlacementPreviewGroup.visible = false
+warpGatePlacementPreviewGroup.castShadow = false
+warpGatePlacementPreviewGroup.receiveShadow = false
+warpGatePlacementPreviewGroup.userData = {
+  ...(warpGatePlacementPreviewGroup.userData ?? {}),
+  editorOnly: true,
+  warpGate: true,
+  warpGatePreview: true,
+  ignoreGridSnapping: true,
+}
+warpGatePlacementPreviewController.group.removeFromParent()
+warpGatePlacementPreviewGroup.add(warpGatePlacementPreviewController.group)
+warpGatePlacementPreviewGroup.traverse((child) => {
+  child.userData = {
+    ...(child.userData ?? {}),
+    editorOnly: true,
+    warpGate: true,
+    warpGatePreview: true,
+    ignoreGridSnapping: true,
+  }
+})
+ensureUvDebugMaterialsForMissingMeshes(warpGatePlacementPreviewGroup, { tint: 0xffffff })
 
 const dragPreviewBoundingBoxHelper = new THREE.Box3()
 const dragPreviewWorldPositionHelper = new THREE.Vector3()
 const dragPreviewAlignedPointHelper = new THREE.Vector3()
+
+function hideWarpGatePlacementPreview(): void {
+  warpGatePlacementPreviewGroup.visible = false
+}
+
+function updateWarpGatePlacementPreview(event: PointerEvent): void {
+  if (activeBuildTool.value !== 'warpGate') {
+    hideWarpGatePlacementPreview()
+    return
+  }
+
+  if (!isStrictPointOnCanvas(event.clientX, event.clientY)) {
+    hideWarpGatePlacementPreview()
+    return
+  }
+
+  const placement = computePointerDropPlacement(event)
+  const basePoint = computePreviewPointForPlacement(placement)
+  if (!basePoint) {
+    hideWarpGatePlacementPreview()
+    return
+  }
+
+  const aligned = computeWorldAabbBottomAlignedPoint(basePoint, warpGatePlacementPreviewGroup) ?? basePoint
+  warpGatePlacementPreviewGroup.position.copy(aligned)
+  warpGatePlacementPreviewGroup.rotation.set(0, 0, 0)
+  warpGatePlacementPreviewGroup.visible = true
+}
 
 function computeWorldAabbBottomAlignedPoint(
   basePoint: THREE.Vector3 | null,
@@ -8873,6 +8939,7 @@ function initScene() {
   scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
+  scene.add(warpGatePlacementPreviewGroup)
   gridHighlight = createGridHighlight()
   if (gridHighlight) {
     scene.add(gridHighlight)
@@ -9931,6 +9998,10 @@ function disposeScene() {
   protagonistPreview.dispose()
   dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
+  hideWarpGatePlacementPreview()
+  warpGatePlacementPreviewController.group.removeFromParent()
+  warpGatePlacementPreviewController.dispose()
+  warpGatePlacementPreviewGroup.removeFromParent()
 
   clearSelectionHighlights()
   disposeNodePickerHighlight()
@@ -10906,6 +10977,26 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'warpGate') {
+    if (event.button === 0) {
+      warpGatePlacementClickSessionState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    if (event.button === 2) {
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
+  }
+
   const selectedAssetId = sceneStore.selectedAssetId
   const selectedAsset = selectedAssetId ? sceneStore.getAsset(selectedAssetId) : null
   const canPlaceSelectedAsset =
@@ -11198,6 +11289,14 @@ function handlePointerMove(event: PointerEvent) {
     const dy = event.clientY - assetPlacementClickSessionState.startY
     if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
       assetPlacementClickSessionState.moved = true
+    }
+  }
+
+  if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId && !warpGatePlacementClickSessionState.moved) {
+    const dx = event.clientX - warpGatePlacementClickSessionState.startX
+    const dy = event.clientY - warpGatePlacementClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      warpGatePlacementClickSessionState.moved = true
     }
   }
 
@@ -11612,6 +11711,7 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   clearDisplayBoardSizeHud()
+  updateWarpGatePlacementPreview(event)
 
   handlePointerMoveSelection(event, {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
@@ -12106,6 +12206,33 @@ async function handlePointerUp(event: PointerEvent) {
 
     // 资产面板放置：左键点击时在光标位置放置当前选中的模型/网格/预制件。
     // 注意：如果发生拖动（拖拽移动），应当触发摄像机平移而不是放置资产，因此此处仅在点击未移动时处理放置。
+    if (event.button === 0 && warpGatePlacementClickSessionState?.pointerId === event.pointerId) {
+      const session = warpGatePlacementClickSessionState
+      warpGatePlacementClickSessionState = null
+
+      if (!session.moved) {
+        const placement = computePointerDropPlacement(event)
+        const basePoint = computePreviewPointForPlacement(placement)
+        if (basePoint) {
+          const parentGroupId = resolveSelectedGroupDropParent()
+          try {
+            const created = await createWarpGateNode(sceneStore, {
+              parentId: parentGroupId,
+              position: basePoint,
+            })
+            if (created) {
+              sceneStore.selectNode(created.id)
+            }
+          } catch (error) {
+            console.warn('Failed to place Warp Gate from viewport tool', error)
+          }
+        }
+      }
+
+      updateWarpGatePlacementPreview(event)
+      return
+    }
+
     if (event.button === 0 && assetPlacementClickSessionState?.pointerId === event.pointerId) {
       const session = assetPlacementClickSessionState
       // 清除会话状态（click 处理一次后即无效）
@@ -12202,6 +12329,9 @@ async function handlePointerUp(event: PointerEvent) {
     if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
       assetPlacementClickSessionState = null
     }
+    if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId) {
+      warpGatePlacementClickSessionState = null
+    }
   }
 }
 
@@ -12213,6 +12343,7 @@ function handlePointerCancel(event: PointerEvent) {
   stopSelectionPreviewVisibilityMonitor()
   dragPreview.setPosition(null)
   dragPreviewGroup.visible = false
+  hideWarpGatePlacementPreview()
 
   snapController.reset()
   snapController.resetPlacementSideSnap()
@@ -12228,6 +12359,9 @@ function handlePointerCancel(event: PointerEvent) {
   }
   if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
     assetPlacementClickSessionState = null
+  }
+  if (warpGatePlacementClickSessionState && warpGatePlacementClickSessionState.pointerId === event.pointerId) {
+    warpGatePlacementClickSessionState = null
   }
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
     const state = roadVertexDragState
@@ -12857,6 +12991,12 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'warpGate':
+      warpGatePlacementClickSessionState = null
+      hideWarpGatePlacementPreview()
+      handleBuildToolChange(null)
+      handled = true
+      break
     default:
       return false
   }
@@ -12884,6 +13024,10 @@ function handleBuildToolChange(tool: BuildTool | null) {
   if (activeBuildTool.value === 'displayBoard' && tool !== 'displayBoard') {
     displayBoardBuildTool.cancel()
     clearDisplayBoardSizeHud()
+  }
+  if (activeBuildTool.value === 'warpGate' && tool !== 'warpGate') {
+    warpGatePlacementClickSessionState = null
+    hideWarpGatePlacementPreview()
   }
   if (isGroundBuildTool(tool)) {
     exitScatterEraseMode()
@@ -16502,6 +16646,10 @@ watch(activeBuildTool, (tool, previous) => {
       setActiveDisplayBoardCornerHandle(null)
     }
   }
+  if (tool !== 'warpGate') {
+    warpGatePlacementClickSessionState = null
+    hideWarpGatePlacementPreview()
+  }
 
   const desiredContext = tool ? `build-tool:${tool}` : null
   if (desiredContext) {
@@ -16911,6 +17059,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-display-board,
 .viewport-canvas.cursor-display-board:active {
   cursor: crosshair !important;
+}
+
+.viewport-canvas.cursor-warp-gate,
+.viewport-canvas.cursor-warp-gate:active {
+  cursor: copy !important;
 }
 
 .viewport-canvas.cursor-scatter-erase,
