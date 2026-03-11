@@ -103,25 +103,29 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
     throw new Error('User scene bundle must contain exactly one scene')
   }
   const sceneEntry = pkg.manifest.scenes[0]!
+  const sceneEntryRecord = sceneEntry as unknown as Record<string, unknown>
+  const groundHeightsPath = sanitizeString(sceneEntryRecord.groundHeightsPath)
+  const groundScatterPath = sanitizeString(sceneEntryRecord.groundScatterPath)
+  const groundPaintPath = sanitizeString(sceneEntryRecord.groundPaintPath)
   if (sanitizeString(sceneEntry.sceneId) !== expectedSceneId) {
     throw new Error('Scene id mismatch between path and bundle manifest')
   }
-  if (!sanitizeString(sceneEntry.groundHeightsPath)) {
+  if (!groundHeightsPath) {
     throw new Error('Scene bundle missing ground height sidecar path')
   }
-  if (!pkg.files[sceneEntry.groundHeightsPath]) {
+  if (!pkg.files[groundHeightsPath]) {
     throw new Error('Scene bundle missing ground height sidecar file')
   }
-  if (!sanitizeString(sceneEntry.groundScatterPath)) {
+  if (!groundScatterPath) {
     throw new Error('Scene bundle missing ground scatter sidecar path')
   }
-  if (!pkg.files[sceneEntry.groundScatterPath]) {
+  if (!pkg.files[groundScatterPath]) {
     throw new Error('Scene bundle missing ground scatter sidecar file')
   }
-  if (!sanitizeString(sceneEntry.groundPaintPath)) {
+  if (!groundPaintPath) {
     throw new Error('Scene bundle missing ground paint sidecar path')
   }
-  if (!pkg.files[sceneEntry.groundPaintPath]) {
+  if (!pkg.files[groundPaintPath]) {
     throw new Error('Scene bundle missing ground paint sidecar file')
   }
   const sceneRaw = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as any
