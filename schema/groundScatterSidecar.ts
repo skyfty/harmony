@@ -9,17 +9,18 @@ const SECTION_DIRECTORY_ENTRY_BYTES = 16
 const NULL_INDEX = 0xffffffff
 const NULL_OFFSET = 0xffffffff
 
-const enum SectionType {
-  ScatterMeta = 1,
-  ScatterLayers = 2,
-  ScatterInstances = 3,
-}
+const SectionType = {
+  ScatterMeta: 1,
+  ScatterLayers: 2,
+  ScatterInstances: 3,
+} as const
+type SectionType = (typeof SectionType)[keyof typeof SectionType]
 
-const enum GroundCoordsFlags {
-  HasGroundCoords = 1 << 0,
-  HasGroundHeight = 1 << 1,
-  HasGroundNormal = 1 << 2,
-}
+const GroundCoordsFlags = {
+  HasGroundCoords: 1 << 0,
+  HasGroundHeight: 1 << 1,
+  HasGroundNormal: 1 << 2,
+} as const
 
 const CATEGORY_TO_CODE = new Map<TerrainScatterCategory, number>(
   TerrainScatterCategories.map((category, index) => [category, index]),

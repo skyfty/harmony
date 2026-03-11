@@ -7,18 +7,18 @@ const GROUND_PAINT_SIDECAR_MAGIC = 0x31545047
 const GROUND_PAINT_SIDECAR_HEADER_BYTES = 32
 const NULL_INDEX = 0xffffffff
 
-const enum SectionType {
-  PaintMeta = 1,
-  PaintLayers = 2,
-  PaintChunks = 3,
-}
+const SectionType = {
+  PaintMeta: 1,
+  PaintLayers: 2,
+  PaintChunks: 3,
+} as const
 
-const enum PaintChannelCode {
-  R = 0,
-  G = 1,
-  B = 2,
-  A = 3,
-}
+const PaintChannelCode = {
+  R: 0,
+  G: 1,
+  B: 2,
+  A: 3,
+} as const
 
 const STRING_ENCODER = new TextEncoder()
 const STRING_DECODER = new TextDecoder()
