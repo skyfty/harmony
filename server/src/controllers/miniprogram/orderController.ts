@@ -4,7 +4,7 @@ import { OrderModel } from '@/models/Order'
 import { ProductModel } from '@/models/Product'
 import { VehicleModel } from '@/models/Vehicle'
 import { AppUserModel } from '@/models/AppUser'
-import { ensureUserId } from './utils'
+import { ensureMiniCheckoutUser, ensureUserId } from './utils'
 import { createOrderPayment } from '@/services/paymentService'
 import { generateOrderNumber } from '@/utils/orderNumber'
 
@@ -268,7 +268,8 @@ export async function getOrder(ctx: Context): Promise<void> {
 }
 
 export async function createOrder(ctx: Context): Promise<void> {
-  const userId = ensureUserId(ctx)
+  const checkoutUser = await ensureMiniCheckoutUser(ctx)
+  const userId = checkoutUser.id
   const body = (ctx.request.body ?? {}) as CreateOrderBody
   const inputItems = Array.isArray(body.items) ? body.items : []
   if (!inputItems.length) {
@@ -340,7 +341,8 @@ export async function createOrder(ctx: Context): Promise<void> {
 }
 
 export async function payOrder(ctx: Context): Promise<void> {
-  const userId = ensureUserId(ctx)
+  const checkoutUser = await ensureMiniCheckoutUser(ctx)
+  const userId = checkoutUser.id
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid order id')
@@ -361,19 +363,14 @@ export async function payOrder(ctx: Context): Promise<void> {
     ctx.throw(400, 'Order already paid')
   }
 
-  const appUser = await AppUserModel.findById(userId).lean().exec()
-  if (!appUser?.wxOpenId) {
-    ctx.throw(400, 'Current user has no bound WeChat openId')
-  }
-
   const description = (order.items[0]?.name || 'Harmony商品支付').slice(0, 120)
   const paymentResult = await createOrderPayment({
     channel: 'wechat',
-    miniAppId: appUser.miniAppId,
+    miniAppId: checkoutUser.miniAppId,
     orderNumber: order.orderNumber,
     description,
     amount: order.totalAmount,
-    openId: appUser.wxOpenId,
+    openId: checkoutUser.wxOpenId,
     attach: JSON.stringify({ orderId: order._id.toString(), userId }),
   })
 

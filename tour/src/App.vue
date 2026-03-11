@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
+import { initializeMiniAuth, prewarmMiniAuth } from '@/api/mini/session';
 
 onLaunch(() => {
+  initializeMiniAuth();
   console.log("App Launch");
 });
 onShow(() => {
+  void prewarmMiniAuth();
   console.log("App Show");
 });
 onHide(() => {

@@ -18,6 +18,7 @@ export interface WechatMiniIdentity {
   miniAppId: string
   openId: string
   unionId?: string
+  sessionKey?: string
 }
 
 async function getWechatMiniConfig(miniAppId?: string) {
@@ -98,5 +99,6 @@ export async function exchangeMiniProgramCode(code: string, miniAppId?: string):
     miniAppId: config.miniAppId,
     openId: parsed.openid,
     unionId: parsed.unionid,
+    sessionKey: parsed.session_key,
   }
 }

@@ -1,6 +1,7 @@
 import type { Context } from 'koa'
 import { AppUserModel } from '@/models/AppUser'
 import {
+  miniBindPhone,
   miniGetProfile,
   miniLoginWithOpenId,
   miniLoginWithPassword,
@@ -174,6 +175,37 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
   }
 }
 
+export async function miniBindWechatPhone(ctx: Context): Promise<void> {
+  const userId = ctx.state.miniAuthUser?.id
+  if (!userId) {
+    ctx.throw(401, 'Unauthorized')
+  }
+
+  const { code, miniAppId } = ctx.request.body as {
+    code?: string
+    miniAppId?: string
+  }
+  if (!code) {
+    ctx.throw(400, 'code is required')
+  }
+
+  const requestedMiniAppId =
+    (typeof miniAppId === 'string' && miniAppId.trim()) ||
+    (typeof ctx.get === 'function' ? ctx.get('X-Mini-App-Id') : '') ||
+    ctx.state.miniAuthUser?.miniAppId ||
+    undefined
+
+  try {
+    ctx.body = await miniBindPhone({
+      userId,
+      code,
+      miniAppId: requestedMiniAppId,
+    })
+  } catch (error) {
+    ctx.throw(400, error instanceof Error ? error.message : 'Bind phone failed')
+  }
+}
+
 export async function miniProfile(ctx: Context): Promise<void> {
   const userId = ctx.state.miniAuthUser?.id
   if (!userId) {
@@ -201,6 +233,7 @@ export async function miniUpdateProfile(ctx: Context): Promise<void> {
   }
   if (typeof phone === 'string') {
     updatePayload.phone = phone
+    updatePayload.phoneBoundAt = phone.trim() ? new Date() : null
   }
   if (typeof bio === 'string') {
     updatePayload.bio = bio

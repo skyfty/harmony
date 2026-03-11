@@ -17,6 +17,12 @@
         <view class="footer">
           <text class="amount">¥ {{ order.totalAmount }}</text>
           <view class="footer-action">
+            <button
+              v-if="showPayAction(order)"
+              class="pay-btn"
+              :disabled="payingOrderId === order.id"
+              @tap.stop="submitPayment(order.id)"
+            >{{ payingOrderId === order.id ? '支付中...' : '立即支付' }}</button>
             <button class="detail-btn" @tap.stop="openDetail(order.id)">详情</button>
             <text class="link">查看详情 ›</text>
           </view>
@@ -29,12 +35,19 @@
 <script setup lang="ts">
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
-import { listOrders } from '@/api/mini';
+import { listOrders, payOrder } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
 import type { OrderListItem, OrderStatus } from '@/types/order';
 import type { PaymentStatus } from '@/types/order';
+import {
+  isPhoneBindingRequiredError,
+  promptBindPhoneBeforeCheckout,
+  requestMiniProgramPayment,
+  toCheckoutErrorMessage,
+} from '@/utils/checkout';
 
 const orders = ref<OrderListItem[]>([]);
+const payingOrderId = ref('');
 
 onShow(() => {
   void reload();
@@ -54,6 +67,11 @@ function itemCount(order: OrderListItem) {
 
 function openDetail(id: string) {
   uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(id)}` });
+}
+
+function showPayAction(order: OrderListItem) {
+  const status = order.orderStatus || order.status;
+  return status === 'pending' && ['unpaid', 'failed', 'closed'].includes(order.paymentStatus);
 }
 
 function statusText(status: OrderStatus) {
@@ -78,6 +96,33 @@ function formatDate(value: string) {
   const mm = `${d.getMonth() + 1}`.padStart(2, '0');
   const dd = `${d.getDate()}`.padStart(2, '0');
   return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+async function submitPayment(orderId: string) {
+  if (!orderId || payingOrderId.value) {
+    return;
+  }
+
+  payingOrderId.value = orderId;
+  void uni.showLoading({ title: '发起支付...' });
+  try {
+    const result = await payOrder(orderId);
+    if (result.payParams) {
+      await requestMiniProgramPayment(result.payParams);
+      void uni.showToast({ title: '支付成功', icon: 'none' });
+    } else {
+      void uni.showToast({ title: '支付请求已提交', icon: 'none' });
+    }
+  } catch (error) {
+    if (isPhoneBindingRequiredError(error)) {
+      await promptBindPhoneBeforeCheckout();
+    }
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '支付失败'), icon: 'none' });
+  } finally {
+    payingOrderId.value = '';
+    void uni.hideLoading();
+    await reload();
+  }
 }
 </script>
 
@@ -146,6 +191,17 @@ function formatDate(value: string) {
   margin: 0;
   background: rgba(31, 122, 236, 0.1);
   color: #1f7aec;
+  border-radius: 999px;
+  height: 28px;
+  line-height: 28px;
+  font-size: 12px;
+  padding: 0 12px;
+}
+
+.pay-btn {
+  margin: 0;
+  background: linear-gradient(135deg, #1f7aec, #43a2ff);
+  color: #ffffff;
   border-radius: 999px;
   height: 28px;
   line-height: 28px;

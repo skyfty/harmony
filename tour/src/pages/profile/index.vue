@@ -20,6 +20,18 @@
           <text class="label">订单中心</text>
           <text class="arrow">›</text>
         </view>
+        <view class="row phone-row">
+          <text class="label">手机号</text>
+          <view class="phone-cell">
+            <text class="phone-value">{{ maskedPhone }}</text>
+            <button
+              v-if="!profile.hasBoundPhone"
+              class="phone-action"
+              open-type="getPhoneNumber"
+              @getphonenumber="handleGetPhoneNumber"
+            >绑定</button>
+          </view>
+        </view>
       </view>
 
       <view class="card">
@@ -51,8 +63,8 @@ import { computed, ref, reactive } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
-import { getProfile } from '@/api/mini';
-import { setAccessToken } from '@/api/mini/session';
+import { bindWechatPhone, getProfile } from '@/api/mini';
+import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
@@ -65,6 +77,7 @@ const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 const profile = ref<UserProfile>({
   id: '',
   displayName: '游客',
+  hasBoundPhone: false,
   gender: 'other',
   birthDate: '',
 });
@@ -72,6 +85,7 @@ const profile = ref<UserProfile>({
 const defaultProfile: UserProfile = {
   id: '',
   displayName: '游客',
+  hasBoundPhone: false,
   gender: 'other',
   birthDate: '',
 };
@@ -106,6 +120,17 @@ const initials = computed(() => {
   return name.slice(0, 1);
 });
 
+const maskedPhone = computed(() => {
+  const phone = String(profile.value.phone || '').trim();
+  if (!phone) {
+    return '未绑定';
+  }
+  if (phone.length < 7) {
+    return phone;
+  }
+  return `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+});
+
 function openProfileEdit() {
   uni.navigateTo({ url: '/pages/profile/edit' });
 }
@@ -119,9 +144,24 @@ function show(message: string) {
 }
 
 function logout() {
-  setAccessToken('');
+  resetMiniAuthSession();
   profile.value = { ...defaultProfile };
   uni.showToast({ title: '已退出登录', icon: 'none' });
+}
+
+async function handleGetPhoneNumber(event: { detail?: { code?: string; errMsg?: string } }) {
+  const code = String(event?.detail?.code || '').trim();
+  if (!code) {
+    uni.showToast({ title: '未获取到手机号授权', icon: 'none' });
+    return;
+  }
+
+  try {
+    profile.value = await bindWechatPhone(code);
+    uni.showToast({ title: '手机号已绑定', icon: 'none' });
+  } catch {
+    uni.showToast({ title: '手机号绑定失败', icon: 'none' });
+  }
 }
 
 function handleNavigate(key: NavKey) {
@@ -255,6 +295,33 @@ function handleNavigate(key: NavKey) {
   justify-content: space-between;
   padding: 14px;
   border-bottom: 1px solid #f2f4f7;
+}
+
+.phone-row {
+  align-items: center;
+}
+
+.phone-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.phone-value {
+  font-size: 13px;
+  color: #1a1f2e;
+}
+
+.phone-action {
+  margin: 0;
+  min-width: 68px;
+  height: 28px;
+  line-height: 28px;
+  border-radius: 999px;
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f7aec;
+  font-size: 12px;
+  padding: 0 12px;
 }
 
 .row:last-child {

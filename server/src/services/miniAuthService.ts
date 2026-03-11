@@ -1,23 +1,33 @@
 import { appConfig } from '@/config/env'
 import { AppUserModel } from '@/models/AppUser'
 import { resolveMiniAppConfig } from '@/services/miniAppService'
+import { exchangeMiniProgramPhoneCode } from '@/services/wechatMiniUserService'
 import { signMiniAuthToken } from '@/utils/domainJwt'
 import { hashPassword, verifyPassword } from '@/utils/password'
+
+type AuthProvider = 'wechat-mini-program' | 'password'
 
 type AppUserLean = {
   _id: { toString(): string }
   miniAppId?: string
   username?: string
   password?: string
+  authProvider: AuthProvider
   wxOpenId?: string
   wxUnionId?: string
   displayName?: string
   email?: string
   avatarUrl?: string
   phone?: string
+  phoneCountryCode?: string
+  phoneBoundAt?: Date
   bio?: string
   gender?: 'male' | 'female' | 'other'
   birthDate?: Date
+  lastLoginAt?: Date
+  lastLoginSource?: string
+  wechatProfileSyncedAt?: Date
+  wechatIdentitySyncedAt?: Date
   status: 'active' | 'disabled'
   workShareCount?: number
   exhibitionShareCount?: number
@@ -29,15 +39,23 @@ export interface MiniSessionUser {
   id: string
   miniAppId?: string
   username?: string
+  authProvider: AuthProvider
   wxOpenId?: string
   wxUnionId?: string
   displayName?: string
   email?: string
   avatarUrl?: string
   phone?: string
+  phoneCountryCode?: string
+  phoneBoundAt?: string
+  hasBoundPhone: boolean
   bio?: string
   gender?: 'male' | 'female' | 'other'
   birthDate?: string
+  lastLoginAt?: string
+  lastLoginSource?: string
+  wechatProfileSyncedAt?: string
+  wechatIdentitySyncedAt?: string
   status: 'active' | 'disabled'
   workShareCount: number
   exhibitionShareCount: number
@@ -50,20 +68,36 @@ export interface MiniSessionResponse {
   user: MiniSessionUser
 }
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const trimmed = value.trim()
+  return trimmed || undefined
+}
+
 function buildMiniUser(user: AppUserLean): MiniSessionUser {
   return {
     id: user._id.toString(),
     miniAppId: user.miniAppId ?? undefined,
     username: user.username ?? undefined,
+    authProvider: user.authProvider,
     wxOpenId: user.wxOpenId ?? undefined,
     wxUnionId: user.wxUnionId ?? undefined,
     displayName: user.displayName ?? undefined,
     email: user.email ?? undefined,
     avatarUrl: user.avatarUrl ?? undefined,
     phone: user.phone ?? undefined,
+    phoneCountryCode: user.phoneCountryCode ?? undefined,
+    phoneBoundAt: user.phoneBoundAt?.toISOString(),
+    hasBoundPhone: Boolean(user.phone),
     bio: user.bio ?? undefined,
     gender: user.gender ?? undefined,
     birthDate: user.birthDate?.toISOString(),
+    lastLoginAt: user.lastLoginAt?.toISOString(),
+    lastLoginSource: user.lastLoginSource ?? undefined,
+    wechatProfileSyncedAt: user.wechatProfileSyncedAt?.toISOString(),
+    wechatIdentitySyncedAt: user.wechatIdentitySyncedAt?.toISOString(),
     status: user.status,
     workShareCount: user.workShareCount ?? 0,
     exhibitionShareCount: user.exhibitionShareCount ?? 0,
@@ -82,6 +116,65 @@ function issueMiniToken(user: MiniSessionUser): string {
   })
 }
 
+function markLogin(user: {
+  authProvider: AuthProvider
+  lastLoginAt?: Date
+  lastLoginSource?: string
+}): void {
+  user.lastLoginAt = new Date()
+  user.lastLoginSource = user.authProvider === 'password' ? 'mini-password-login' : 'mini-wechat-login'
+}
+
+function syncWechatProfile(
+  user: {
+    displayName?: string
+    avatarUrl?: string
+    wechatProfileSyncedAt?: Date
+  },
+  displayName?: string,
+  avatarUrl?: string,
+): void {
+  let changed = false
+  const nextDisplayName = normalizeOptionalString(displayName)
+  const nextAvatarUrl = normalizeOptionalString(avatarUrl)
+
+  if (nextDisplayName && user.displayName !== nextDisplayName) {
+    user.displayName = nextDisplayName
+    changed = true
+  }
+  if (nextAvatarUrl && user.avatarUrl !== nextAvatarUrl) {
+    user.avatarUrl = nextAvatarUrl
+    changed = true
+  }
+
+  if (changed) {
+    user.wechatProfileSyncedAt = new Date()
+  }
+}
+
+async function pickCanonicalWechatUser(input: {
+  miniAppId: string
+  openId: string
+  unionId?: string
+}) {
+  const orFilters: Array<Record<string, string>> = [{ miniAppId: input.miniAppId, wxOpenId: input.openId }]
+  if (input.unionId) {
+    orFilters.push({ miniAppId: input.miniAppId, wxUnionId: input.unionId })
+  }
+
+  const matches = await AppUserModel.find({ $or: orFilters }).sort({ createdAt: 1, _id: 1 }).exec()
+  if (!matches.length) {
+    return null
+  }
+
+  const [canonical, ...duplicates] = matches
+  if (duplicates.length) {
+    await AppUserModel.deleteMany({ _id: { $in: duplicates.map((item) => item._id) } }).exec()
+  }
+
+  return canonical
+}
+
 export async function miniRegisterWithPassword(input: {
   username: string
   password: string
@@ -93,19 +186,26 @@ export async function miniRegisterWithPassword(input: {
   if (!username) {
     throw new Error('Username is required')
   }
+
   const existing = await AppUserModel.findOne({ username }).lean().exec()
   if (existing) {
     throw new Error('Username already exists')
   }
+
   const hashed = await hashPassword(input.password)
   const created = await AppUserModel.create({
     username,
     password: hashed,
+    authProvider: 'password',
     displayName: input.displayName ?? username,
     email: input.email,
     phone: input.phone,
+    phoneBoundAt: input.phone ? new Date() : undefined,
+    lastLoginAt: new Date(),
+    lastLoginSource: 'mini-password-register',
     status: 'active',
   })
+
   const user = buildMiniUser(created.toObject() as AppUserLean)
   return {
     token: issueMiniToken(user),
@@ -115,7 +215,7 @@ export async function miniRegisterWithPassword(input: {
 
 export async function miniLoginWithPassword(username: string, password: string): Promise<MiniSessionResponse> {
   const safeUsername = username.trim()
-  const user = await AppUserModel.findOne({ username: safeUsername }).lean<AppUserLean>().exec()
+  const user = await AppUserModel.findOne({ username: safeUsername }).exec()
   if (!user) {
     throw new Error('Invalid credentials')
   }
@@ -125,11 +225,17 @@ export async function miniLoginWithPassword(username: string, password: string):
   if (!user.password) {
     throw new Error('Password login unavailable')
   }
+
   const ok = await verifyPassword(password, user.password)
   if (!ok) {
     throw new Error('Invalid credentials')
   }
-  const sessionUser = buildMiniUser(user)
+
+  user.authProvider = 'password'
+  markLogin(user)
+  await user.save()
+
+  const sessionUser = buildMiniUser(user.toObject() as AppUserLean)
   return {
     token: issueMiniToken(sessionUser),
     user: sessionUser,
@@ -147,23 +253,44 @@ export async function miniLoginWithOpenId(input: {
   if (!miniAppId) {
     throw new Error('miniAppId is required')
   }
+
   const openId = input.openId.trim()
   if (!openId) {
     throw new Error('openId is required')
   }
 
-  let user = await AppUserModel.findOne({ miniAppId, wxOpenId: openId }).exec()
+  const unionId = normalizeOptionalString(input.unionId)
+  let user = await pickCanonicalWechatUser({ miniAppId, openId, unionId })
+
   if (!user) {
     user = await AppUserModel.create({
       miniAppId,
+      authProvider: 'wechat-mini-program',
       wxOpenId: openId,
-      wxUnionId: input.unionId,
-      displayName: input.displayName ?? appConfig.miniAuth.defaultDisplayName,
-      avatarUrl: input.avatarUrl,
+      wxUnionId: unionId,
+      displayName: normalizeOptionalString(input.displayName) ?? appConfig.miniAuth.defaultDisplayName,
+      avatarUrl: normalizeOptionalString(input.avatarUrl),
+      lastLoginAt: new Date(),
+      lastLoginSource: 'mini-wechat-login',
+      wechatIdentitySyncedAt: new Date(),
+      wechatProfileSyncedAt: input.displayName || input.avatarUrl ? new Date() : undefined,
       status: 'active',
     })
-  } else if (!user.wxUnionId && input.unionId) {
-    user.wxUnionId = input.unionId
+  } else {
+    user.miniAppId = miniAppId
+    user.authProvider = 'wechat-mini-program'
+    if (user.wxOpenId !== openId) {
+      user.wxOpenId = openId
+    }
+    if (unionId && user.wxUnionId !== unionId) {
+      user.wxUnionId = unionId
+      user.wechatIdentitySyncedAt = new Date()
+    }
+    if (!user.displayName) {
+      user.displayName = appConfig.miniAuth.defaultDisplayName
+    }
+    syncWechatProfile(user, input.displayName, input.avatarUrl)
+    markLogin(user)
     await user.save()
   }
 
@@ -178,11 +305,41 @@ export async function miniLoginWithOpenId(input: {
   }
 }
 
+export async function miniBindPhone(input: {
+  userId: string
+  code: string
+  miniAppId?: string
+}): Promise<MiniSessionResponse> {
+  const user = await AppUserModel.findById(input.userId).exec()
+  if (!user) {
+    throw new Error('User not found')
+  }
+
+  const miniAppId = normalizeOptionalString(input.miniAppId) ?? normalizeOptionalString(user.miniAppId)
+  if (!miniAppId) {
+    throw new Error('miniAppId is required')
+  }
+
+  const phone = await exchangeMiniProgramPhoneCode(input.code, miniAppId)
+  user.miniAppId = miniAppId
+  user.phone = phone.purePhoneNumber || phone.phoneNumber
+  user.phoneCountryCode = phone.countryCode
+  user.phoneBoundAt = new Date()
+  await user.save()
+
+  const sessionUser = buildMiniUser(user.toObject() as AppUserLean)
+  return {
+    token: issueMiniToken(sessionUser),
+    user: sessionUser,
+  }
+}
+
 export async function miniGetProfile(userId: string): Promise<MiniSessionResponse> {
   const user = await AppUserModel.findById(userId).lean<AppUserLean>().exec()
   if (!user) {
     throw new Error('User not found')
   }
+
   return {
     user: buildMiniUser(user),
   }
@@ -205,7 +362,9 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
       miniAppId,
       username,
       password: await hashPassword(password),
+      authProvider: 'password',
       displayName: displayName || username,
+      lastLoginSource: 'mini-test-bootstrap',
       status: 'active',
     })
     return
@@ -221,6 +380,11 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
       existing.password = await hashPassword(password)
       shouldSave = true
     }
+  }
+
+  if (existing.authProvider !== 'password') {
+    existing.authProvider = 'password'
+    shouldSave = true
   }
 
   if (existing.status !== 'active') {

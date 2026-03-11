@@ -172,6 +172,27 @@
           />
         </view>
       </view>
+
+      <view
+        v-if="showPayAction"
+        class="pay-bar"
+      >
+        <view class="pay-summary">
+          <text class="pay-summary-label">
+            待支付金额
+          </text>
+          <text class="pay-summary-value">
+            ¥ {{ order?.totalAmount ?? 0 }}
+          </text>
+        </view>
+        <button
+          class="pay-button"
+          :disabled="paying"
+          @tap="submitPayment"
+        >
+          {{ paying ? '支付中...' : '立即支付' }}
+        </button>
+      </view>
     </view>
   </view>
 </template>
@@ -179,19 +200,33 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
-import { getOrderDetail } from '@/api/mini';
+import { getOrderDetail, payOrder } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
 import type { OrderDetail, OrderItem, OrderStatus, PaymentStatus } from '@/types/order';
+import {
+  isPhoneBindingRequiredError,
+  promptBindPhoneBeforeCheckout,
+  requestMiniProgramPayment,
+  toCheckoutErrorMessage,
+} from '@/utils/checkout';
 
 defineOptions({
   name: 'OrderDetailPage',
 });
 
 const order = ref<OrderDetail | null>(null);
+const currentOrderId = ref('');
+const paying = ref(false);
 
 const vehicleItems = computed<OrderItem[]>(() => {
   if (!order.value) return [];
   return order.value.items.filter((item) => item.vehicle);
+});
+
+const showPayAction = computed(() => {
+  if (!order.value) return false;
+  const status = order.value.orderStatus || order.value.status;
+  return status === 'pending' && ['unpaid', 'failed', 'closed'].includes(order.value.paymentStatus);
 });
 
 onLoad((query) => {
@@ -200,6 +235,7 @@ onLoad((query) => {
     order.value = null;
     return;
   }
+  currentOrderId.value = id;
   void loadOrder(id);
 });
 
@@ -237,6 +273,35 @@ function formatDateTime(value: string) {
   const mi = `${date.getMinutes()}`.padStart(2, '0');
   return `${date.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
 }
+
+async function submitPayment() {
+  if (!currentOrderId.value || paying.value) {
+    return;
+  }
+
+  paying.value = true;
+  void uni.showLoading({ title: '发起支付...' });
+  try {
+    const result = await payOrder(currentOrderId.value);
+    if (result.payParams) {
+      await requestMiniProgramPayment(result.payParams);
+      void uni.showToast({ title: '支付成功', icon: 'none' });
+    } else {
+      void uni.showToast({ title: '支付请求已提交', icon: 'none' });
+    }
+  } catch (error) {
+    if (isPhoneBindingRequiredError(error)) {
+      await promptBindPhoneBeforeCheckout();
+    }
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '支付失败'), icon: 'none' });
+  } finally {
+    paying.value = false;
+    void uni.hideLoading();
+    if (currentOrderId.value) {
+      await loadOrder(currentOrderId.value);
+    }
+  }
+}
 </script>
 
 <style scoped lang="scss">
@@ -249,6 +314,50 @@ function formatDateTime(value: string) {
   padding: 12px 16px 24px;
   display: grid;
   gap: 12px;
+}
+
+.pay-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 12px 30px rgba(17, 31, 56, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.pay-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pay-summary-label {
+  font-size: 11px;
+  color: #8a94a6;
+}
+
+.pay-summary-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f7aec;
+}
+
+.pay-button {
+  margin: 0;
+  min-width: 120px;
+  height: 42px;
+  line-height: 42px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #1f7aec, #43a2ff);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0 18px;
 }
 
 .card {
