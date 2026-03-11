@@ -134,7 +134,7 @@ function buildGridSegments(
   // 构建紧凑的一维高度数组（使用合成后的有效高度）。
   // 这里使用一维数组而不是二维数组，既减少对象分配，也更便于 Worker 传输。
   const heightRegion = sampledHeights ?? sampleGroundEffectiveHeightRegion(
-    definition,
+    definition as GroundRuntimeDynamicMesh,
     sampleMinRow,
     sampleMaxRow,
     sampleMinColumn,
@@ -501,7 +501,7 @@ export class TerrainGridHelper extends THREE.Object3D {
           ? this.heightBlockCache.get(makeTerrainHeightBlockKey(baseSignature, blockRow, blockColumn)) ?? null
           : null
         const block = cacheEntry ?? sampleGroundEffectiveHeightRegion(
-          definition,
+          definition as GroundRuntimeDynamicMesh,
           blockStartRow,
           blockEndRow,
           blockStartColumn,

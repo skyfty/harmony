@@ -34,11 +34,9 @@ import {
 	disposeGradientBackgroundDome,
 	type GradientBackgroundDome,
 	type GroundDynamicMesh,
+	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
-	unzipScenePackage,
-	buildAssetOverridesFromScenePackage,
-	readTextFileFromScenePackage,
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
@@ -54,15 +52,14 @@ import {
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
-import { subscribeToScenePreview, decodePreviewGroundHeightSidecar } from '@/utils/previewChannel'
+import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
-import { createGroundRuntimeMeshFromSidecar, stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
+import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
 import { attachGroundPaintRuntimeToNode } from '@/stores/groundPaintStore'
 import { attachGroundScatterRuntimeToNode } from '@/stores/groundScatterStore'
-import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -1564,7 +1561,8 @@ function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null
 	if (!definition || definition.type !== 'Ground') {
 		return false
 	}
-	return definition.manualHeightMap instanceof Float64Array && definition.planningHeightMap instanceof Float64Array
+	const runtime = definition as GroundDynamicMesh & { manualHeightMap?: unknown; planningHeightMap?: unknown }
+	return runtime.manualHeightMap instanceof Float64Array && runtime.planningHeightMap instanceof Float64Array
 }
 
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
@@ -4077,14 +4075,6 @@ async function fetchTextFromUrl(source: string): Promise<string> {
 	return await response.text()
 }
 
-async function fetchArrayBufferFromUrl(source: string): Promise<ArrayBuffer> {
-	const response = await fetch(source)
-	if (!response.ok) {
-		throw new Error(`Failed to fetch binary asset (${response.status})`)
-	}
-	return await response.arrayBuffer()
-}
-
 async function loadTextAssetContent(assetId: string): Promise<string | null> {
 	const trimmed = assetId.trim()
 	if (!trimmed.length) {
@@ -5054,78 +5044,6 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
 
-function packageSceneHasGroundNode(document: SceneJsonExportDocument): boolean {
-	const stack = [...document.nodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (node.dynamicMesh?.type === 'Ground') {
-			return true
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return false
-}
-
-function readPackageSceneGroundSidecar(
-	pkg: ReturnType<typeof unzipScenePackage>,
-	sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string },
-	document: SceneJsonExportDocument,
-): ArrayBuffer | null {
-	if (!packageSceneHasGroundNode(document)) {
-		return null
-	}
-	if (!sceneEntry.groundHeightsPath) {
-		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground height sidecar path`)
-	}
-	const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath]
-	if (!sidecarBytes) {
-		throw new Error(`Missing ground height sidecar in scene package: ${sceneEntry.groundHeightsPath}`)
-	}
-	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
-}
-
-function readPackageSceneGroundScatterSidecar(
-	pkg: ReturnType<typeof unzipScenePackage>,
-	sceneEntry: { sceneId: string; path: string; groundScatterPath?: string },
-	document: SceneJsonExportDocument,
-): ArrayBuffer | null {
-	if (!packageSceneHasGroundNode(document)) {
-		return null
-	}
-	if (!sceneEntry.groundScatterPath) {
-		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground scatter sidecar path`)
-	}
-	const sidecarBytes = pkg.files[sceneEntry.groundScatterPath]
-	if (!sidecarBytes) {
-		throw new Error(`Missing ground scatter sidecar in scene package: ${sceneEntry.groundScatterPath}`)
-	}
-	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
-}
-
-function readPackageSceneGroundPaintSidecar(
-	pkg: ReturnType<typeof unzipScenePackage>,
-	sceneEntry: { sceneId: string; path: string; groundPaintPath?: string },
-	document: SceneJsonExportDocument,
-): ArrayBuffer | null {
-	if (!packageSceneHasGroundNode(document)) {
-		return null
-	}
-	if (!sceneEntry.groundPaintPath) {
-		throw new Error(`Scene package entry ${sceneEntry.sceneId} is missing ground paint sidecar path`)
-	}
-	const sidecarBytes = pkg.files[sceneEntry.groundPaintPath]
-	if (!sidecarBytes) {
-		throw new Error(`Missing ground paint sidecar in scene package: ${sceneEntry.groundPaintPath}`)
-	}
-	return sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength)
-}
-
-
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null; groundPaintSidecar?: ArrayBuffer | null } = {},
@@ -5134,7 +5052,7 @@ async function buildPreviewRuntimeDocument(
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
 	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
 	const groundNode = findGroundNode(document.nodes)
-	if (groundNode && groundNode.dynamicMesh && sidecar) {
+	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	}
 	if (groundNode && groundNode.dynamicMesh && scatterSidecar) {
@@ -7018,9 +6936,9 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
 			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
-				updateGroundChunks(groundObject, cachedGroundDynamicMesh, activeCamera)
+				updateGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
-				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh)
+				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
 			}
 			syncTerrainPaintPreviewForGround(groundObject, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {

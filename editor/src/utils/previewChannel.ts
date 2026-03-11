@@ -339,7 +339,9 @@ export function decodePreviewGroundHeightSidecar(value: string | null | undefine
   if (!buffer) {
     return null
   }
-  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+  const bytes = new Uint8Array(buffer.byteLength)
+  bytes.set(buffer)
+  return bytes.buffer
 }
 
 function textEncode(value: string): Uint8Array {

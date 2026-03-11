@@ -76,7 +76,8 @@ export function ensureEnvironmentNode(
   const result = [...others]
   let groundIndex = -1
   for (let index = 0; index < result.length; index += 1) {
-    if (isGroundNodePred(result[index])) {
+    const candidate = result[index]
+    if (candidate && isGroundNodePred(candidate)) {
       groundIndex = index
       break
     }

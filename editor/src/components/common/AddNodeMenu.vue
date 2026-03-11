@@ -14,7 +14,7 @@ import {createPrimitiveMesh}  from '@schema'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
 import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
-import { type GroundDynamicMesh, type GroundGenerationSettings } from '@schema'
+import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundRuntimeDynamicMesh } from '@schema'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -1725,7 +1725,7 @@ async function handleConfirmGround() {
   if (definition.generation) {
     definition.generation.worldWidth = width
     definition.generation.worldDepth = depth
-    applyGroundGeneration(definition, definition.generation)
+    applyGroundGeneration(definition as GroundRuntimeDynamicMesh, definition.generation)
   }
 
   const mesh = createGroundMesh(definition)
