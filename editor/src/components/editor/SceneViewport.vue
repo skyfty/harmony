@@ -1812,14 +1812,8 @@ watch(
   () => uiStore.activeSelectionContext,
   (ctx) => {
     const keepBuildToolContext = Boolean(
-      ctx
-      && (
-        ctx.startsWith('build-tool')
-        || ctx === 'terrain-sculpt'
-        || ctx === 'terrain-paint'
-        || ctx === 'scatter'
-        || ctx === 'scatter-erase'
-      ),
+      isManagedBuildToolContext(ctx)
+      || (!ctx && isGroundBuildTool(activeBuildTool.value)),
     )
     if (!keepBuildToolContext) {
       if (activeBuildTool.value) {
@@ -1833,16 +1827,16 @@ watch(
     if (ctx !== 'asset-panel' && sceneStore.selectedAssetId) {
       sceneStore.selectAsset(null)
     }
-    if (ctx !== 'scatter' && ctx !== 'scatter-erase' && (terrainStore.scatterSelectedAsset ?? null)) {
+    if (!isGroundScatterContext(ctx) && activeBuildTool.value !== 'scatter' && (terrainStore.scatterSelectedAsset ?? null)) {
       terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
     }
-    if (ctx !== 'scatter' && ctx !== 'scatter-erase' && scatterEraseModeActive.value) {
+    if (!isGroundScatterContext(ctx) && activeBuildTool.value !== 'scatter' && scatterEraseModeActive.value) {
       exitScatterEraseMode()
     }
-    if (ctx !== 'terrain-sculpt' && (terrainStore.brushOperation ?? null)) {
+    if (!isGroundSculptContext(ctx) && activeBuildTool.value !== 'terrain' && (terrainStore.brushOperation ?? null)) {
       terrainStore.setBrushOperation(null)
     }
-    if (ctx !== 'terrain-paint' && (terrainStore.paintSelectedAsset ?? null)) {
+    if (!isGroundPaintContext(ctx) && activeBuildTool.value !== 'paint' && (terrainStore.paintSelectedAsset ?? null)) {
       terrainStore.setPaintSelection(null)
     }
     if (ctx !== 'viewport-add-node' && pendingViewportPlacement.value) {
@@ -5654,6 +5648,46 @@ function isBuildToolBlockedDuringGroundSculptConfig(
 
 function isGroundBuildTool(tool: BuildTool | null): tool is GroundBuildTool {
   return tool === 'terrain' || tool === 'paint' || tool === 'scatter'
+}
+
+function isGroundSculptContext(context: string | null): boolean {
+  return context === 'terrain-sculpt' || context === 'build-tool:terrain'
+}
+
+function isGroundPaintContext(context: string | null): boolean {
+  return context === 'terrain-paint' || context === 'build-tool:paint'
+}
+
+function isGroundScatterContext(context: string | null): boolean {
+  return context === 'scatter' || context === 'scatter-erase' || context === 'build-tool:scatter'
+}
+
+function isManagedBuildToolContext(context: string | null): boolean {
+  return Boolean(
+    context
+    && (
+      context.startsWith('build-tool')
+      || isGroundSculptContext(context)
+      || isGroundPaintContext(context)
+      || isGroundScatterContext(context)
+    ),
+  )
+}
+
+function resolveSelectionContextForBuildTool(tool: BuildTool | null): string | null {
+  if (tool === 'terrain') {
+    return terrainStore.brushOperation ? 'terrain-sculpt' : 'build-tool:terrain'
+  }
+  if (tool === 'paint') {
+    return terrainStore.paintSelectedAsset ? 'terrain-paint' : 'build-tool:paint'
+  }
+  if (tool === 'scatter') {
+    if (scatterEraseModeActive.value) {
+      return 'scatter-erase'
+    }
+    return terrainStore.scatterSelectedAsset ? 'scatter' : 'build-tool:scatter'
+  }
+  return tool ? `build-tool:${tool}` : null
 }
 
 function resolveGroundToolFromTab(tab: GroundPanelTab): GroundBuildTool {
@@ -14206,9 +14240,10 @@ function handleBuildToolChange(tool: BuildTool | null) {
   if (!accepted) {
     return
   }
-  if (tool) {
-    uiStore.setActiveSelectionContext(`build-tool:${tool}`)
-  } else if (uiStore.activeSelectionContext?.startsWith('build-tool')) {
+  const desiredContext = resolveSelectionContextForBuildTool(tool)
+  if (desiredContext) {
+    uiStore.setActiveSelectionContext(desiredContext)
+  } else if (isManagedBuildToolContext(uiStore.activeSelectionContext)) {
     uiStore.setActiveSelectionContext(null)
   }
   if (tool !== 'terrain' && (terrainStore.brushOperation ?? null)) {
@@ -17882,12 +17917,12 @@ watch(activeBuildTool, (tool, previous) => {
     hideWarpGatePlacementPreview()
   }
 
-  const desiredContext = tool ? `build-tool:${tool}` : null
+  const desiredContext = resolveSelectionContextForBuildTool(tool)
   if (desiredContext) {
     if (uiStore.activeSelectionContext !== desiredContext) {
       uiStore.setActiveSelectionContext(desiredContext)
     }
-  } else if (uiStore.activeSelectionContext?.startsWith('build-tool')) {
+  } else if (isManagedBuildToolContext(uiStore.activeSelectionContext)) {
     uiStore.setActiveSelectionContext(null)
   }
 })
