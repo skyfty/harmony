@@ -62,6 +62,12 @@ export type WallCornerModelRule = {
   footYawDeg: number
 }
 
+export type WallOffsetLocal = {
+  x: number
+  y: number
+  z: number
+}
+
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 
 export type WallModelOrientation = {
@@ -89,8 +95,11 @@ export type WallRenderOptions = {
   bodyOrientation?: WallModelOrientation
   headOrientation?: WallModelOrientation
   footOrientation?: WallModelOrientation
+  bodyEndCapOffsetLocal?: WallOffsetLocal
   bodyEndCapOrientation?: WallModelOrientation
+  headEndCapOffsetLocal?: WallOffsetLocal
   headEndCapOrientation?: WallModelOrientation
+  footEndCapOffsetLocal?: WallOffsetLocal
   footEndCapOrientation?: WallModelOrientation
 }
 
@@ -1248,6 +1257,7 @@ function computeWallEndCapInstanceMatrices(
   template: InstancedAssetTemplate,
   mode: 'body' | 'head' | 'foot',
   orientation: WallModelOrientation,
+  offsetLocalValue?: WallOffsetLocal,
 ): THREE.Matrix4[] {
   const matrices: THREE.Matrix4[] = []
   if (!segments.length || closed) {
@@ -1268,9 +1278,22 @@ function computeWallEndCapInstanceMatrices(
   const quat = new THREE.Quaternion()
   const yawQuat = new THREE.Quaternion()
   const offset = new THREE.Vector3()
+  const offsetLocal = new THREE.Vector3()
+  const offsetWorld = new THREE.Vector3()
   const pos = new THREE.Vector3()
   const scale = new THREE.Vector3(1, 1, 1)
   const localMatrix = new THREE.Matrix4()
+
+  const readOffsetLocal = (value: WallOffsetLocal | undefined): THREE.Vector3 => {
+    const record = value && typeof value === 'object' ? value : null
+    const read = (key: 'x' | 'y' | 'z'): number => {
+      const raw = record ? record[key] : 0
+      const num = typeof raw === 'number' ? raw : Number(raw)
+      return Number.isFinite(num) ? num : 0
+    }
+    offsetLocal.set(read('x'), read('y'), read('z'))
+    return offsetLocal
+  }
 
   const pushCap = (point: { x: number; y: number; z: number }, outwardDir: THREE.Vector3, bodyHeight: number) => {
     if (outwardDir.lengthSq() <= WALL_INSTANCING_DIR_EPSILON) {
@@ -1294,6 +1317,8 @@ function computeWallEndCapInstanceMatrices(
       anchoredY = point.y - templateMinY
     }
     pos.y = anchoredY
+    offsetWorld.copy(readOffsetLocal(offsetLocalValue)).applyQuaternion(quat)
+    pos.add(offsetWorld)
     scale.set(1, scaleY, 1)
 
     localMatrix.compose(pos, quat, scale)
@@ -2127,7 +2152,14 @@ function rebuildWallGroup(
 
   if (bodyEndCapTemplate) {
     const bodyEndCapOrientation = requireWallOrientation(options.bodyEndCapOrientation, 'bodyEndCapOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, bodyEndCapTemplate, 'body', bodyEndCapOrientation))
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(
+      entry.segs,
+      entry.closed,
+      bodyEndCapTemplate,
+      'body',
+      bodyEndCapOrientation,
+      options.bodyEndCapOffsetLocal,
+    ))
     if (localMatrices.length > 0) {
       const bodyEndCapAssets = createWallStaticAssetMeshes('WallBodyEndCapMesh', bodyEndCapTemplate, localMatrices)
       mergeAssetBounds(bodyEndCapAssets.bounds)
@@ -2137,7 +2169,14 @@ function rebuildWallGroup(
 
   if (headEndCapTemplate) {
     const headEndCapOrientation = requireWallOrientation(options.headEndCapOrientation, 'headEndCapOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, headEndCapTemplate, 'head', headEndCapOrientation))
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(
+      entry.segs,
+      entry.closed,
+      headEndCapTemplate,
+      'head',
+      headEndCapOrientation,
+      options.headEndCapOffsetLocal,
+    ))
     if (localMatrices.length > 0) {
       const headEndCapAssets = createWallStaticAssetMeshes('WallHeadEndCapMesh', headEndCapTemplate, localMatrices)
       mergeAssetBounds(headEndCapAssets.bounds)
@@ -2147,7 +2186,14 @@ function rebuildWallGroup(
 
   if (footEndCapTemplate) {
     const footEndCapOrientation = requireWallOrientation(options.footEndCapOrientation, 'footEndCapOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, footEndCapTemplate, 'foot', footEndCapOrientation))
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(
+      entry.segs,
+      entry.closed,
+      footEndCapTemplate,
+      'foot',
+      footEndCapOrientation,
+      options.footEndCapOffsetLocal,
+    ))
     if (localMatrices.length > 0) {
       const footEndCapAssets = createWallStaticAssetMeshes('WallFootEndCapMesh', footEndCapTemplate, localMatrices)
       mergeAssetBounds(footEndCapAssets.bounds)

@@ -13082,6 +13082,9 @@ export const useSceneStore = defineStore('scene', {
         const hasBodyEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapAssetId')
         const hasHeadEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapAssetId')
         const hasFootEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapAssetId')
+        const hasBodyEndCapOffsetLocal = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapOffsetLocal')
+        const hasHeadEndCapOffsetLocal = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapOffsetLocal')
+        const hasFootEndCapOffsetLocal = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapOffsetLocal')
         const hasBodyOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyOrientation')
         const hasBodyUvAxis = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyUvAxis')
         const hasHeadOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headOrientation')
@@ -13219,6 +13222,20 @@ export const useSceneStore = defineStore('scene', {
           return true
         }
 
+        const offsetLocalEqual = (a: unknown, b: unknown): boolean => {
+          const read = (value: unknown, key: 'x' | 'y' | 'z'): number => {
+            const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+            const raw = record ? record[key] : 0
+            const num = typeof raw === 'number' ? raw : Number(raw)
+            return Number.isFinite(num) ? num : 0
+          }
+          return (
+            Math.abs(read(a, 'x') - read(b, 'x')) <= 1e-6
+            && Math.abs(read(a, 'y') - read(b, 'y')) <= 1e-6
+            && Math.abs(read(a, 'z') - read(b, 'z')) <= 1e-6
+          )
+        }
+
         const merged = clampWallProps({
           height: (typedPatch.height as number | undefined) ?? currentProps.height,
           width: (typedPatch.width as number | undefined) ?? currentProps.width,
@@ -13247,12 +13264,21 @@ export const useSceneStore = defineStore('scene', {
           bodyEndCapAssetId: hasBodyEndCapAssetId
             ? (typedPatch.bodyEndCapAssetId as string | null | undefined)
             : currentProps.bodyEndCapAssetId,
+          bodyEndCapOffsetLocal: hasBodyEndCapOffsetLocal
+            ? (typedPatch.bodyEndCapOffsetLocal as any)
+            : currentProps.bodyEndCapOffsetLocal,
           headEndCapAssetId: hasHeadEndCapAssetId
             ? (typedPatch.headEndCapAssetId as string | null | undefined)
             : currentProps.headEndCapAssetId,
+          headEndCapOffsetLocal: hasHeadEndCapOffsetLocal
+            ? (typedPatch.headEndCapOffsetLocal as any)
+            : currentProps.headEndCapOffsetLocal,
           footEndCapAssetId: hasFootEndCapAssetId
             ? (typedPatch.footEndCapAssetId as string | null | undefined)
             : currentProps.footEndCapAssetId,
+          footEndCapOffsetLocal: hasFootEndCapOffsetLocal
+            ? (typedPatch.footEndCapOffsetLocal as any)
+            : currentProps.footEndCapOffsetLocal,
           bodyOrientation: hasBodyOrientation
             ? (typedPatch.bodyOrientation as any)
             : currentProps.bodyOrientation,
@@ -13297,8 +13323,11 @@ export const useSceneStore = defineStore('scene', {
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
           (currentProps.footAssetId ?? null) === (merged.footAssetId ?? null) &&
           (currentProps.bodyEndCapAssetId ?? null) === (merged.bodyEndCapAssetId ?? null) &&
+          offsetLocalEqual(currentProps.bodyEndCapOffsetLocal, merged.bodyEndCapOffsetLocal) &&
           (currentProps.headEndCapAssetId ?? null) === (merged.headEndCapAssetId ?? null) &&
+          offsetLocalEqual(currentProps.headEndCapOffsetLocal, merged.headEndCapOffsetLocal) &&
           (currentProps.footEndCapAssetId ?? null) === (merged.footEndCapAssetId ?? null) &&
+          offsetLocalEqual(currentProps.footEndCapOffsetLocal, merged.footEndCapOffsetLocal) &&
           orientationsEqual(currentProps.bodyOrientation, merged.bodyOrientation) &&
           (currentProps.bodyUvAxis ?? 'auto') === (merged.bodyUvAxis ?? 'auto') &&
           orientationsEqual(currentProps.headOrientation, merged.headOrientation) &&

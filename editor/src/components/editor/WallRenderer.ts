@@ -590,7 +590,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyEndCapAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation)
+          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation, wallProps.bodyEndCapOffsetLocal)
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -607,7 +607,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headEndCapAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation)
+          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation, wallProps.headEndCapOffsetLocal)
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -624,7 +624,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footEndCapAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
+          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation, wallProps.footEndCapOffsetLocal)
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -1351,6 +1351,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     bounds: THREE.Box3,
     mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
+    offsetLocalValue?: { x: number; y: number; z: number } | null,
   ): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
     const _compiledSegsForCap = compileWallSegmentsFromDefinition(definition)
@@ -1365,6 +1366,11 @@ export function createWallRenderer(options: WallRendererOptions) {
     const { minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
     const templateHeight = resolveWallModelHeight(bounds)
     const minY = bounds.min.y
+    const endCapOffsetLocal = new THREE.Vector3(
+      Number((offsetLocalValue as any)?.x) || 0,
+      Number((offsetLocalValue as any)?.y) || 0,
+      Number((offsetLocalValue as any)?.z) || 0,
+    )
 
     const findDirectionForSegment = (segment: WallRenderSegment | null, fallback: THREE.Vector3): THREE.Vector3 => {
       if (!segment) {
@@ -1413,6 +1419,8 @@ export function createWallRenderer(options: WallRendererOptions) {
             : (baselineY - minY)
         wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
         wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
+        wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
+        wallSyncPosHelper.add(wallSyncStartHelper)
         wallSyncScaleHelper.set(1, scaleY, 1)
         wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
         matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
@@ -1439,6 +1447,8 @@ export function createWallRenderer(options: WallRendererOptions) {
             : (baselineY - minY)
         wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
         wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
+        wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
+        wallSyncPosHelper.add(wallSyncStartHelper)
         wallSyncScaleHelper.set(1, scaleY, 1)
         wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
         matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
@@ -1524,8 +1534,11 @@ export function createWallRenderer(options: WallRendererOptions) {
         headUvAxis: source.headUvAxis ?? (baseProps as any).headUvAxis,
         footUvAxis: source.footUvAxis ?? (baseProps as any).footUvAxis,
         bodyEndCapAssetId: source.bodyEndCapAssetId ?? baseProps.bodyEndCapAssetId,
+        bodyEndCapOffsetLocal: source.bodyEndCapOffsetLocal ?? baseProps.bodyEndCapOffsetLocal,
         headEndCapAssetId: source.headEndCapAssetId ?? baseProps.headEndCapAssetId,
+        headEndCapOffsetLocal: source.headEndCapOffsetLocal ?? baseProps.headEndCapOffsetLocal,
         footEndCapAssetId: source.footEndCapAssetId ?? baseProps.footEndCapAssetId,
+        footEndCapOffsetLocal: source.footEndCapOffsetLocal ?? baseProps.footEndCapOffsetLocal,
         bodyOrientation: source.bodyOrientation ?? baseProps.bodyOrientation,
         headOrientation: source.headOrientation ?? baseProps.headOrientation,
         footOrientation: source.footOrientation ?? baseProps.footOrientation,
@@ -1587,8 +1600,11 @@ export function createWallRenderer(options: WallRendererOptions) {
         bodyOrientation: normalizedProps.bodyOrientation,
         headOrientation: normalizedProps.headOrientation,
         footOrientation: normalizedProps.footOrientation,
+        bodyEndCapOffsetLocal: normalizedProps.bodyEndCapOffsetLocal,
         bodyEndCapOrientation: normalizedProps.bodyEndCapOrientation,
+        headEndCapOffsetLocal: normalizedProps.headEndCapOffsetLocal,
         headEndCapOrientation: normalizedProps.headEndCapOrientation,
+        footEndCapOffsetLocal: normalizedProps.footEndCapOffsetLocal,
         footEndCapOrientation: normalizedProps.footEndCapOrientation,
       }
       : { smoothing: 0 }
@@ -2155,7 +2171,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         const group = getCachedModelObject(bodyEndCapAssetId)
         if (group) {
           const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation)
+            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation, wallProps.bodyEndCapOffsetLocal)
             : []
           if (localMatrices.length > 0) {
             for (const localMatrix of localMatrices) {
@@ -2180,7 +2196,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         const group = getCachedModelObject(headEndCapAssetId)
         if (group) {
           const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation)
+            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation, wallProps.headEndCapOffsetLocal)
             : []
           if (localMatrices.length > 0) {
             for (const localMatrix of localMatrices) {
@@ -2204,7 +2220,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         const group = getCachedModelObject(footEndCapAssetId)
         if (group) {
           const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
+            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation, wallProps.footEndCapOffsetLocal)
             : []
           if (localMatrices.length > 0) {
             for (const localMatrix of localMatrices) {
