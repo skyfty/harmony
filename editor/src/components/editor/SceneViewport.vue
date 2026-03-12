@@ -400,6 +400,8 @@ const {
   brushShape,
   brushOperation,
   groundPanelTab,
+  paintSelectedLayerId,
+  paintSelectedLayerSlotIndex,
   paintSelectedAsset,
   paintSmoothness,
   paintBrushSettings,
@@ -499,7 +501,7 @@ watch(hasGroundNode, (hasGround, prevHasGround) => {
   if (prevHasGround && !hasGround) {
     terrainStore.setBrushOperation(null)
     terrainStore.setGroundPanelTab('terrain')
-    terrainStore.setPaintSelection(null)
+    terrainStore.clearPaintSelection()
     terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
   }
 }, { flush: 'sync' })
@@ -1772,8 +1774,8 @@ watch(
     if (ctx !== 'terrain-sculpt' && (terrainStore.brushOperation ?? null)) {
       terrainStore.setBrushOperation(null)
     }
-    if (ctx !== 'terrain-paint' && (terrainStore.paintSelectedAsset ?? null)) {
-      terrainStore.setPaintSelection(null)
+    if (ctx !== 'terrain-paint' && ((terrainStore.paintSelectedLayerSlotIndex ?? null) !== null || (terrainStore.paintSelectedAsset ?? null))) {
+      terrainStore.clearPaintSelection()
     }
     if (ctx !== 'viewport-add-node' && pendingViewportPlacement.value) {
       pendingViewportPlacement.value = null
@@ -2659,6 +2661,8 @@ const groundEditor = createGroundEditor({
   brushShape,
   brushOperation,
   groundPanelTab,
+  paintLayerId: paintSelectedLayerId,
+  paintLayerSlotIndex: paintSelectedLayerSlotIndex,
   paintAsset: paintSelectedAsset,
   paintSmoothness,
   paintLayerStyle: paintBrushSettings,
