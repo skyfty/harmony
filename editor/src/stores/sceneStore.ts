@@ -1333,7 +1333,7 @@ function finalizeDynamicMeshRuntimePatch(store: {
 }, nodeId: string, updatedMeshType: string | null): void {
   // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
   // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
-  if ( updatedMeshType === 'Road' ||  updatedMeshType === 'Wall' || updatedMeshType === 'Floor' ) {
+  if ( updatedMeshType === 'Road' ||  updatedMeshType === 'Wall' || updatedMeshType === 'Floor' || updatedMeshType === 'Ground' ) {
     const queued = store.queueSceneNodePatch(nodeId, ['dynamicMesh'])
 
     // `SceneViewport` applies pending patches only when `sceneNodePropertyVersion` bumps.
