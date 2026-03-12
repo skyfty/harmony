@@ -150,6 +150,7 @@ export async function buildWallMesh(
     },
     {
       smoothing: wallProps.smoothing,
+      wallRenderMode: wallProps.wallRenderMode,
       bodyMaterialConfigId: resolveWallBodyMaterialConfigId(node, meshInfo),
       cornerModels,
       bodyUvAxis: wallProps.bodyUvAxis,

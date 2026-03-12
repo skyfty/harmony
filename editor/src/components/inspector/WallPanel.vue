@@ -35,8 +35,6 @@ const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
 
-const jointTrimFeedbackMessage = ref<string | null>(null)
-
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
 const isAutoFittingBodyAsset = ref(false)
@@ -582,8 +580,6 @@ function recommendJointTrimForCorner(index: number): void {
   if (!component) {
     return
   }
-  jointTrimFeedbackMessage.value = null
-
   const target = cornerModels.value[index]
   if (!target) {
     return
@@ -604,7 +600,6 @@ function recommendJointTrimForCorner(index: number): void {
   }
 
   if (cornerAssetIds.size === 0) {
-    jointTrimFeedbackMessage.value = `Corner #${index + 1}: no model asset configured; nothing to recommend.`
     return
   }
 
@@ -633,10 +628,6 @@ function recommendJointTrimForCorner(index: number): void {
   recommended = Math.round(recommended * 100) / 100
 
   updateCornerModel(index, { jointTrim: { start: recommended, end: recommended } } as any)
-
-  jointTrimFeedbackMessage.value = cachedCount > 0
-    ? `Corner #${index + 1}: recommended from ${cachedCount} cached model(s).`
-    : `Corner #${index + 1}: models not loaded; used a conservative fallback.`
 }
 
 watch(selectedNode, () => {
@@ -654,7 +645,6 @@ watch(selectedNode, () => {
   headCapDropProcessing.value = false
   footCapDropProcessing.value = false
   wallPresetFeedbackMessage.value = null
-  jointTrimFeedbackMessage.value = null
   bodyFeedbackMessage.value = null
   capFeedbackMessage.value = null
   headFeedbackMessage.value = null
@@ -1874,7 +1864,6 @@ function applyRenderModeUpdate(rawValue: unknown) {
                     </v-btn>
                   </div>
                 </div>
-                <p v-if="jointTrimFeedbackMessage" class="asset-feedback">{{ jointTrimFeedbackMessage }}</p>
               </div>
             </div>
             <div class="wall-corner-model-row wall-corner-model-row--body">

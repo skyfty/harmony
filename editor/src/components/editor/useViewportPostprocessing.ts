@@ -21,12 +21,19 @@ type Options = {
 }
 
 function configureOutlinePassAppearance(pass: OutlinePass) {
-  pass.edgeStrength = 5.5
-  pass.edgeGlow = 0.8
-  pass.edgeThickness = 2.75
+  // 边缘强度：控制描边的明显程度，数值越大描边越明显
+  pass.edgeStrength = 3.2
+  // 边缘光晕：控制描边的发光/柔化效果，值越大越柔和
+  pass.edgeGlow = 0.18
+  // 边缘厚度：控制描边的宽度
+  pass.edgeThickness = 1.0
+  // 脉冲周期：描边脉动效果的周期（0 表示不脉动）
   pass.pulsePeriod = 0
-  pass.visibleEdgeColor.setHex(0xffffff)
-  pass.hiddenEdgeColor.setHex(0x66d9ff)
+  // 可见边缘颜色：设置没有被遮挡部分的描边颜色
+  pass.visibleEdgeColor.setHex(0xd9ecff)
+  // 隐藏边缘颜色：设置被遮挡或在对象背后的描边颜色
+  pass.hiddenEdgeColor.setHex(0x86b6d8)
+  // 是否使用模式纹理：开启后会使用纹理作为描边样式，这里禁用
   pass.usePatternTexture = false
 }
 

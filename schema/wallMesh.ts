@@ -563,7 +563,6 @@ function buildStretchedWallInstancesForSegs(
   orientation: WallModelOrientation,
   rules: WallCornerModelRule[] = [],
 ): StretchedWallInstance[] {
-  console.log('Building stretched wall instances for segments:', segs, 'with template:', template, 'mode:', mode, 'orientation:', orientation, 'and rules:', rules)
   const instances: StretchedWallInstance[] = []
   const trims = computeWallSegmentJointTrimForChain(segs, rules, mode)
   const repeatSlotByChain = new Map<number, number>()
