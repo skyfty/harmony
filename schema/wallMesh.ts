@@ -1903,7 +1903,6 @@ function rebuildWallGroup(
   assets: WallRenderAssetObjects = {},
   options: WallRenderOptions = {},
 ) {
-  console.log('Rebuilding wall group with definition:', definition, 'and options:', options, 'and assets:', assets)
   clearGroupContent(group)
   const wallAssetBounds = new THREE.Box3()
   wallAssetBounds.makeEmpty()

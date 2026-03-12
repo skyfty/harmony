@@ -1,11 +1,19 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
-import type { GroundDynamicMesh, GroundSculptOperation, SceneNode, TerrainPaintSettings } from '@schema'
+import type {
+	GroundDynamicMesh,
+	GroundHeightMap,
+	GroundRuntimeDynamicMesh,
+	GroundSculptOperation,
+	SceneNode,
+	TerrainPaintChannel,
+	TerrainPaintLayerDefinition,
+	TerrainPaintLayerStyle,
+	TerrainPaintSettings,
+} from '@schema'
 import {
-	clampTerrainPaintSettings,
-	getTerrainPaintChunkPageLogicalId,
-	TERRAIN_PAINT_MAX_LAYER_COUNT,
-	TERRAIN_PAINT_PAGE_COUNT,
+	clampTerrainPaintLayerDefinition,
+	cloneTerrainPaintLayerDefinition,
 } from '@schema'
 import {
 	deleteTerrainScatterStore,
@@ -50,7 +58,8 @@ import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
-import {SCATTER_BRUSH_RADIUS_MAX} from '@/stores/terrainStore'
+import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
+import { useGroundPaintStore } from '@/stores/groundPaintStore'
 
 import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -107,6 +116,7 @@ export type GroundEditorOptions = {
 	groundPanelTab: Ref<GroundPanelTab>
 	paintAsset: Ref<ProjectAsset | null>
 	paintSmoothness: Ref<number>
+	paintLayerStyle: Ref<TerrainPaintBrushSettings>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
@@ -120,11 +130,13 @@ export type GroundEditorOptions = {
 	// Optional: enable chunk-based scatter streaming for large grounds.
 	scatterChunkStreaming?: {
 		enabled?: boolean
+		getDynamicRadiusMeters?: () => number
 		radiusMeters?: number
 		unloadPaddingMeters?: number
 		maxChunkChangesPerUpdate?: number
 		maxBindingChangesPerUpdate?: number
 	}
+	onSculptCommitApplied?: (payload: { groundObject: THREE.Object3D; definition: GroundRuntimeDynamicMesh }) => void
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
@@ -807,8 +819,8 @@ let scatterEraseState: ScatterEraseState | null = null
 
 type SculptSessionState = {
 	nodeId: string
-	definition: GroundDynamicMesh
-	heightMap: GroundDynamicMesh['manualHeightMap']
+	definition: GroundRuntimeDynamicMesh
+	heightMap: GroundHeightMap
 	dirty: boolean
 	affectedRegion: GroundGeometryUpdateRegion | null
 	touchedChunkKeys: Set<string>
@@ -955,7 +967,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	async function recomputeGroundChunkNormalsInWorker(params: {
 		groundObject: THREE.Object3D
-		definition: GroundDynamicMesh
+		definition: GroundRuntimeDynamicMesh
 		region: GroundGeometryUpdateRegion | null
 		jobToken: number
 		touchedChunkKeys?: Set<string> | null
@@ -1284,7 +1296,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 									terrainPaintPreviewPendingChunkKeys: new Map(),
 									terrainPaintPreviewFlushRafId: null,
 							},
-							layer.slotIndex,
+							layer.channel,
 							asset,
 						)
 					}
@@ -2868,13 +2880,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
-	function getGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
+	function getGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
 		const node = getGroundNodeFromScene()
 		if (node?.dynamicMesh?.type === 'Ground') {
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				return sculptSessionState.definition
 			}
-			return node.dynamicMesh
+			return node.dynamicMesh as GroundRuntimeDynamicMesh
 		}
 		return null
 	}
@@ -2883,17 +2895,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return options.objectMap.get(GROUND_NODE_ID) ?? null
 	}
 
-	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundDynamicMesh {
+	function ensureSculptSession(definition: GroundRuntimeDynamicMesh, nodeId: string): GroundRuntimeDynamicMesh {
 		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
 			return sculptSessionState.definition
 		}
 		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
 		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
-		const clonedHeightMap = definition.manualHeightMap
-		const sessionDefinition: GroundDynamicMesh = {
-			...definition,
-			manualHeightMap: clonedHeightMap,
-		}
+		const sessionDefinition = definition
+		const clonedHeightMap = sessionDefinition.manualHeightMap
 		sculptSessionState = {
 			nodeId,
 			definition: sessionDefinition,
@@ -2920,12 +2929,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState = null
 			return false
 		}
-		const nextDynamicMesh: GroundDynamicMesh = {
-			...(targetNode.dynamicMesh as GroundDynamicMesh),
-			manualHeightMap: sculptSessionState.heightMap,
-		}
-		targetNode.dynamicMesh = nextDynamicMesh
-		options.sceneStore.updateNodeDynamicMesh(targetNode.id, nextDynamicMesh)
+		targetNode.dynamicMesh = sculptSessionState.definition
+		options.sceneStore.updateNodeDynamicMesh(targetNode.id, sculptSessionState.definition)
 		sculptSessionState = null
 		return true
 	}
@@ -3193,19 +3198,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		}
 		return false
-	}
-
-	function scheduleTerrainPaintFlush(reason: string): void {
-		if (!hasDirtyPaintChunks(paintSessionState)) {
-			return
-		}
-		void flushTerrainPaintChanges().then((ok) => {
-			if (!ok && hasDirtyPaintChunks(paintSessionState)) {
-				console.warn(`提交地貌涂层失败：${reason}`)
-			}
-		}).catch((error) => {
-			console.warn(`提交地貌涂层失败：${reason}`, error)
-		})
 	}
 
 	function flushTerrainPaintChanges(): Promise<boolean> {
@@ -4379,7 +4371,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') return
 		if (!sculptSessionState || sculptSessionState.nodeId !== groundNode.id) {
-			ensureSculptSession(groundNode.dynamicMesh as GroundDynamicMesh, groundNode.id)
+			ensureSculptSession(groundNode.dynamicMesh as GroundRuntimeDynamicMesh, groundNode.id)
 		}
 
 		const definition = getGroundDynamicMeshDefinition()
@@ -4564,7 +4556,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		paintStrokeLastLocalPoint = localPoint.clone()
 	}
 
-	function refreshGroundMesh(definition: GroundDynamicMesh | null = getGroundDynamicMeshDefinition()) {
+	function refreshGroundMesh(definition: GroundRuntimeDynamicMesh | null = getGroundDynamicMeshDefinition()) {
 		if (!definition) {
 			return
 		}
@@ -4608,7 +4600,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 
-		const definition = groundNode.dynamicMesh as GroundDynamicMesh
+		const definition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
 		ensureSculptSession(definition, groundNode.id)
 
 		isSculpting.value = true
@@ -4673,7 +4665,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const jobToken = (groundNormalsJobToken += 1)
 				void recomputeGroundChunkNormalsInWorker({
 					groundObject,
-					definition: selectedNode.dynamicMesh as GroundDynamicMesh,
+					definition: selectedNode.dynamicMesh as GroundRuntimeDynamicMesh,
 					region,
 						touchedChunkKeys,
 					jobToken,
@@ -4687,7 +4679,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 							}
 							mesh.geometry.computeVertexNormals()
 						})
-						stitchGroundChunkNormals(groundObject, selectedNode.dynamicMesh as GroundDynamicMesh, region ?? null)
+						stitchGroundChunkNormals(groundObject, selectedNode.dynamicMesh as GroundRuntimeDynamicMesh, region ?? null)
 					} catch (_error) {
 						/* noop */
 					}
@@ -4701,7 +4693,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleGroundToolPointerDown(event: PointerEvent): boolean {
-		if (options.activeBuildTool.value !== 'ground') {
+		if (options.activeBuildTool.value !== 'terrain') {
 			return false
 		}
 
@@ -5027,7 +5019,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleActiveBuildToolChange(tool: BuildTool | null) {
-		if (tool !== 'ground') {
+		if (tool !== 'terrain') {
 			groundSelectionDragState = null
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()

@@ -9,8 +9,6 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
-	deserializeGroundPaintSidecar,
-	deserializeGroundScatterSidecar,
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	DEFAULT_ENVIRONMENT_RESTITUTION,
 	DEFAULT_ENVIRONMENT_FRICTION,
@@ -37,10 +35,6 @@ import {
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
-	unzipScenePackage,
-	buildAssetOverridesFromScenePackage,
-	applyGroundPaintSidecarsToSceneDocument,
-	readTextFileFromScenePackage,
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
@@ -62,8 +56,8 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
-import { attachGroundPaintRuntimeToNode } from '@/stores/groundPaintStore'
-import { attachGroundScatterRuntimeToNode } from '@/stores/groundScatterStore'
+import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from '@/stores/groundPaintStore'
+import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -5079,73 +5073,11 @@ async function buildPreviewRuntimeDocument(
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	}
-	statusMessage.value = 'Loading scene package...'
-	try {
-		const buffer = await fetchArrayBufferFromUrl(trimmed)
-		const pkg = unzipScenePackage(buffer)
-		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg)
-
-		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
-		type ScenePackageProjectConfig = {
-			id?: unknown
-			name?: unknown
-			defaultSceneId?: unknown
-			lastEditedSceneId?: unknown
-			sceneOrder?: unknown
-		}
-		const projectConfigRaw: unknown = JSON.parse(projectText)
-		const projectConfig: ScenePackageProjectConfig =
-			projectConfigRaw && typeof projectConfigRaw === 'object'
-				? (projectConfigRaw as ScenePackageProjectConfig)
-				: {}
-
-		const scenes: ScenePreviewSceneEntry[] = []
-		projectSceneIndex.clear()
-		pkg.manifest.scenes.forEach((sceneEntry) => {
-			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
-			const sceneRaw = applyGroundPaintSidecarsToSceneDocument(
-				pkg,
-				JSON.parse(sceneText) as Record<string, any>,
-			) as unknown
-			if (!isSceneJsonExportDocument(sceneRaw)) {
-				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
-			}
-			const document = sceneRaw as SceneJsonExportDocument
-				const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
-			const id = sceneEntry.sceneId
-			const entry: ScenePreviewSceneEntry = {
-				kind: 'embedded',
-				id,
-				name: document.name || id,
-					createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
-					updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
-				document,
-			}
-			scenes.push(entry)
-			projectSceneIndex.set(id, entry)
-		})
-
-		projectBundle.value = {
-			project: {
-				id: String(projectConfig?.id ?? ''),
-				name: String(projectConfig?.name ?? ''),
-				defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
-				lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
-				sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
-			},
-			scenes,
-		}
-
-		const initialId =
-			(projectBundle.value.project.defaultSceneId || projectBundle.value.project.sceneOrder?.[0] || scenes[0]?.id || '').trim()
-		if (initialId) {
-			await switchToProjectScene(initialId)
-		}
-		statusMessage.value = ''
-	} catch (error) {
-		console.error('[ScenePreview] Failed to load scene package', error)
-		appendWarningMessage('Failed to load scene package.')
-		statusMessage.value = 'Failed to load scene package.'
+	if (groundNode) {
+		await useGroundScatterStore().hydrateSceneDocument(document.id, groundNode, scatterSidecar)
+		await useGroundPaintStore().hydrateSceneDocument(document.id, groundNode, paintSidecar)
+		attachGroundScatterRuntimeToNode(document.id, groundNode)
+		attachGroundPaintRuntimeToNode(document.id, groundNode)
 	}
 	return document
 }

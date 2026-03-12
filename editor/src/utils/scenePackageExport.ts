@@ -1,6 +1,7 @@
 import { zipSync, strToU8 } from 'fflate'
 import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@schema'
 import {
+  GROUND_SCATTER_SIDECAR_FILENAME,
   GROUND_PAINT_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,

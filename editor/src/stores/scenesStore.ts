@@ -7,8 +7,6 @@ import type { WatchStopHandle } from 'vue'
 import type { SessionUser } from '@/types/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
-import { unzipScenePackage, applyGroundPaintSidecarsToSceneDocument, readTextFileFromScenePackage } from '@schema'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import {
   stripGroundHeightMapsFromSceneDocument,
@@ -512,24 +510,11 @@ async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ doc
   if (!scene) {
     throw new Error('Scene bundle missing scene entry')
   }
-  const rawScene = applyGroundPaintSidecarsToSceneDocument(
-    pkg,
-    JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as Record<string, any>,
-  ) as unknown
-  if (!rawScene || typeof rawScene !== 'object') {
-    throw new Error('Invalid scene.json in scene bundle')
-  }
-
-  const assetCache = useAssetCacheStore()
-  for (const entry of pkg.manifest.resources ?? []) {
-    const bytes = pkg.files[entry.path]
-    if (!bytes) {
-      throw new Error(`Missing resource file in scene bundle: ${entry.path}`)
-    }
-    const mimeType = entry.mimeType || 'application/octet-stream'
-    const filename = `${entry.logicalId}.${entry.ext}`
-    const blob = new Blob([new Uint8Array(bytes)], { type: mimeType })
-    await assetCache.storeAssetBlob(entry.logicalId, { blob, mimeType, filename })
+  return {
+    document: scene,
+    groundHeightSidecar: pkg.groundHeightSidecars[scene.id] ?? null,
+    groundScatterSidecar: pkg.groundScatterSidecars[scene.id] ?? null,
+    groundPaintSidecar: pkg.groundPaintSidecars[scene.id] ?? null,
   }
 }
 

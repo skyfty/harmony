@@ -182,6 +182,10 @@ import {
   sampleGroundHeight,
 } from '@schema/groundMesh'
 import {
+  syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
+  createDefaultTerrainPaintLoaders,
+} from '@schema/terrainPaintPreview'
+import {
   clearLandformsPreviewForGround,
   createDefaultLandformsPreviewLoaders,
   syncLandformsPreviewForGround,
@@ -2737,13 +2741,13 @@ const groundEditor = createGroundEditor({
   scatterEraseModeActive,
   lockScatterLodToBaseAsset: true,
   scatterChunkStreaming: {
-    enabled: resolveGroundScatterChunkStreamingEnabled,
+    enabled: resolveGroundScatterChunkStreamingEnabled(),
     getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
   },
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
-  onSculptCommitApplied: ({ groundObject, definition }) => {
+  onSculptCommitApplied: ({ groundObject, definition }: { groundObject: THREE.Object3D; definition: GroundRuntimeDynamicMesh }) => {
     const signature = computeGroundDynamicMeshSignature(definition)
     const signatureTarget = resolveGroundSignatureTarget(groundObject)
     const userData = signatureTarget.userData ?? (signatureTarget.userData = {})
@@ -3336,6 +3340,9 @@ function clearWallDoorSelectionPayload(): void {
 function clearWallDoorSelectionHighlight(): void {
   while (wallDoorSelectionHighlightGroup.children.length > 0) {
     const child = wallDoorSelectionHighlightGroup.children[wallDoorSelectionHighlightGroup.children.length - 1]
+    if (!child) {
+      break
+    }
     const line = child as THREE.Line
     if (line?.isLine) {
       line.geometry?.dispose?.()
@@ -3494,7 +3501,8 @@ function collectWallDoorStretchIntervals(
     }
     const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
     const segStart = Number(seg.chainArcStart ?? 0)
-    const segEnd = Number(seg.chainArcEnd ?? segStart)
+    const segLengthXZ = Math.hypot(seg.end.x - seg.start.x, seg.end.z - seg.start.z)
+    const segEnd = segStart + segLengthXZ
     const segLen = Math.max(0, segEnd - segStart)
     if (segLen <= 1e-6) {
       return
@@ -3546,7 +3554,7 @@ function collectWallDoorRepeatSlots(
       return
     }
 
-    const corners = [
+    const corners: [number, number, number][] = [
       [box.min.x, box.min.y, box.min.z],
       [box.min.x, box.min.y, box.max.z],
       [box.min.x, box.max.y, box.min.z],
@@ -3636,7 +3644,8 @@ function rebuildWallDoorSelectionHighlight(): void {
             return
           }
           const segStart = Number(seg.chainArcStart ?? 0)
-          const segEnd = Number(seg.chainArcEnd ?? segStart)
+          const segLengthXZ = Math.hypot(seg.end.x - seg.start.x, seg.end.z - seg.start.z)
+          const segEnd = segStart + segLengthXZ
           const segLength = Math.max(0, segEnd - segStart)
           if (!Number.isFinite(segStart) || !Number.isFinite(segEnd) || segLength <= 1e-6) {
             return
@@ -10164,12 +10173,24 @@ async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string 
 }
 
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
+const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 
 function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined, groundNode: SceneNode): void {
   if (!groundObject) {
     return
   }
   landformsPreviewLoadToken += 1
+  if (groundNode.dynamicMesh?.type === 'Ground') {
+    syncTerrainPaintPreviewForGroundShared(
+      groundObject,
+      groundNode.dynamicMesh,
+      {
+        loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
+        loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
+      },
+      () => landformsPreviewLoadToken,
+    )
+  }
   syncLandformsPreviewForGround(
     groundObject,
     groundNode,
