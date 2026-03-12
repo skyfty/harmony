@@ -262,6 +262,7 @@ export function applyWallComponentPropsToNode(
         if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
           deps.updateWallGroup(child, node.dynamicMesh, {
             smoothing: resolveWallSmoothing(node),
+            wallRenderMode: normalized.wallRenderMode,
           } as any)
         }
         return

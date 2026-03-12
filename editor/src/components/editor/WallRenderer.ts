@@ -97,13 +97,14 @@ export function applyAirWallVisualToWallGroup(group: THREE.Group, isAirWall: boo
 
 export function computeWallDynamicMeshSignature(
   definition: WallDynamicMesh,
-  options: { smoothing?: number } = {},
+  options: { smoothing?: number; wallRenderMode?: 'stretch' | 'repeatInstances' } = {},
 ): string {
   const serialized = stableSerialize({
     chains: definition.chains ?? [],
     openings: definition.openings ?? [],
     dimensions: definition.dimensions ?? { height: 3, width: 0.2, thickness: 0.1 },
     smoothing: Number.isFinite(options.smoothing) ? options.smoothing : 0,
+    wallRenderMode: options.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
   })
   return hashString(serialized)
 }
@@ -1392,6 +1393,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         thickness: source.thickness ?? baseProps.thickness,
         smoothing: source.smoothing ?? baseProps.smoothing,
         isAirWall: source.isAirWall ?? baseProps.isAirWall,
+        wallRenderMode: source.wallRenderMode ?? (baseProps as any).wallRenderMode,
         bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
         headAssetId: source.headAssetId ?? baseProps.headAssetId,
         footAssetId: source.footAssetId ?? baseProps.footAssetId,
@@ -1455,6 +1457,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       ? {
         smoothing: normalizedProps.smoothing,
         cornerModels,
+        wallRenderMode: normalizedProps.wallRenderMode,
         bodyUvAxis: normalizedProps.bodyUvAxis,
         headUvAxis: normalizedProps.headUvAxis,
         footUvAxis: normalizedProps.footUvAxis,
@@ -1585,7 +1588,10 @@ export function createWallRenderer(options: WallRendererOptions) {
     options: WallRenderOptions = {},
   ): void {
     const groupData = wallGroup.userData ?? (wallGroup.userData = {})
-      const nextSignature = computeWallDynamicMeshSignature(definition, { smoothing: options.smoothing })
+      const nextSignature = computeWallDynamicMeshSignature(definition, {
+        smoothing: options.smoothing,
+        wallRenderMode: options.wallRenderMode as any,
+      })
     if (groupData[signatureKey] !== nextSignature) {
       updateWallGroup(wallGroup, definition, options)
       groupData[signatureKey] = nextSignature

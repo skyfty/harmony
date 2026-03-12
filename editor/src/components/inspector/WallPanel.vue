@@ -20,6 +20,7 @@ import {
   type WallForwardAxis,
   type WallModelOrientation,
   type WallUvAxis,
+  type WallRenderMode,
   type WallComponentProps,
 } from '@schema/components'
 import { getCachedModelObject } from '@schema/modelObjectCache'
@@ -158,6 +159,11 @@ const UV_AXIS_ITEMS: Array<{ title: string; value: WallUvAxis }> = [
   { title: 'Auto', value: 'auto' },
   { title: 'U', value: 'u' },
   { title: 'V', value: 'v' },
+]
+
+const WALL_RENDER_MODE_ITEMS: Array<{ title: string; value: WallRenderMode }> = [
+  { title: 'Stretch', value: 'stretch' },
+  { title: 'Repeat Instances', value: 'repeatInstances' },
 ]
 
 const cornerModels = computed<WallCornerModelRow[]>(() => {
@@ -1036,6 +1042,23 @@ function applyAirWallUpdate(rawValue: unknown) {
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { isAirWall: nextValue } as any)
 }
+
+function applyRenderModeUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextValue: WallRenderMode = rawValue === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+  const current = (component.props as any)?.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+  if (nextValue === current) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { wallRenderMode: nextValue } as any)
+}
 </script>
 
 <template>
@@ -1164,6 +1187,18 @@ function applyAirWallUpdate(rawValue: unknown) {
             density="compact"
             hide-details
             @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
+          />
+
+          <v-select
+            density="compact"
+            variant="underlined"
+            label="Render Mode"
+            :items="WALL_RENDER_MODE_ITEMS"
+            item-title="title"
+            item-value="value"
+            hide-details
+            :model-value="(wallComponent?.props as any)?.wallRenderMode ?? 'stretch'"
+            @update:modelValue="applyRenderModeUpdate"
           />
 
         </div>

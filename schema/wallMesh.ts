@@ -71,12 +71,14 @@ export type WallModelOrientation = {
 
 export type WallUvAxis = 'auto' | 'u' | 'v'
 type WallResolvedUvAxis = 'u' | 'v'
+export type WallRenderMode = 'stretch' | 'repeatInstances'
 
 export type WallRenderOptions = {
   smoothing?: number
   materialConfigId?: string | null
   bodyMaterialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
+  wallRenderMode?: WallRenderMode
 
   // Per-part UV repeat axis for stretched wall tiling.
   bodyUvAxis?: WallUvAxis
@@ -113,6 +115,7 @@ const WALL_MAX_ADAPTIVE_DEPTH = 10
 const WALL_MAX_SAMPLE_POINTS = 512
 
 const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
+const WALL_REPEAT_INSTANCE_STEP_M = 0.5
 const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY = '__harmonySkipGeometryDispose'
@@ -442,6 +445,10 @@ function sanitizeWallRepeatScale(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
 }
 
+function normalizeWallRenderMode(value: unknown): WallRenderMode {
+  return value === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+}
+
 
 type WallRepeatedMaterialSet = {
   material: THREE.Material | THREE.Material[]
@@ -530,6 +537,10 @@ type StretchedWallInstance = {
   matrix: THREE.Matrix4
   repeatScaleU: number
   repeatScaleV: number
+  chainIndex: number
+  chainArcStart: number
+  chainArcEnd: number
+  repeatSlotIndex: number
 }
 
 /**
@@ -545,6 +556,7 @@ function buildStretchedWallInstancesForSegs(
 ): StretchedWallInstance[] {
   const instances: StretchedWallInstance[] = []
   const trims = computeWallSegmentJointTrimForChain(segs, rules, mode)
+  const repeatSlotByChain = new Map<number, number>()
 
   const localForward = writeWallLocalForward(new THREE.Vector3(), orientation.forwardAxis)
   const { tileLengthLocal, minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
@@ -627,8 +639,130 @@ function buildStretchedWallInstancesForSegs(
       matrix: new THREE.Matrix4().copy(localMatrix),
       repeatScaleU: sanitizeWallRepeatScale(stretchFactor),
       repeatScaleV: sanitizeWallRepeatScale(scaleY),
+      chainIndex: Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0))),
+      chainArcStart: Number(seg.chainArcStart ?? 0) + trimStart,
+      chainArcEnd: Number(seg.chainArcStart ?? 0) + trimStart + trimmedLength,
+      repeatSlotIndex: (() => {
+        const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
+        const next = (repeatSlotByChain.get(chainIndex) ?? 0) + 1
+        repeatSlotByChain.set(chainIndex, next)
+        return next - 1
+      })(),
     })
   }
+  return instances
+}
+
+function buildRepeatedWallInstancesForSegs(
+  segs: WallRenderSeg[],
+  template: InstancedAssetTemplate,
+  mode: 'body' | 'head' | 'foot',
+  orientation: WallModelOrientation,
+  erasedSlotSet: Set<string>,
+  rules: WallCornerModelRule[] = [],
+): StretchedWallInstance[] {
+  const instances: StretchedWallInstance[] = []
+  const trims = computeWallSegmentJointTrimForChain(segs, rules, mode)
+  const repeatSlotByChain = new Map<number, number>()
+
+  const localForward = writeWallLocalForward(new THREE.Vector3(), orientation.forwardAxis)
+  const { tileLengthLocal, minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+  const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
+  const templateMinY = template.bounds.min.y
+
+  const start = new THREE.Vector3()
+  const end = new THREE.Vector3()
+  const dir = new THREE.Vector3()
+  const unitDir = new THREE.Vector3()
+  const quat = new THREE.Quaternion()
+  const yawQuat = new THREE.Quaternion()
+  const scale = new THREE.Vector3(1, 1, 1)
+  const offset = new THREE.Vector3()
+  const pos = new THREE.Vector3()
+  const localMatrix = new THREE.Matrix4()
+
+  for (let segmentIndex = 0; segmentIndex < segs.length; segmentIndex += 1) {
+    const seg = segs[segmentIndex]!
+    const trim = trims[segmentIndex] ?? { start: 0, end: 0 }
+    start.set(seg.start.x, seg.start.y, seg.start.z)
+    end.set(seg.end.x, seg.end.y, seg.end.z)
+    dir.subVectors(end, start)
+    dir.y = 0
+    const length = dir.length()
+    if (length <= WALL_INSTANCING_DIR_EPSILON) continue
+
+    const trimStart = Math.max(0, trim.start)
+    const trimEnd = Math.max(0, trim.end)
+    const trimmedLength = Math.max(0, length - trimStart - trimEnd)
+    if (trimmedLength <= WALL_INSTANCING_DIR_EPSILON) continue
+
+    const bodyHeight = resolveWallBodyHeight(seg)
+    const scaleY = mode === 'body' ? bodyHeight / templateHeight : 1
+
+    unitDir.copy(dir).multiplyScalar(1 / length)
+    if (trimStart > WALL_EPSILON) {
+      start.addScaledVector(unitDir, trimStart)
+    }
+
+    quat.setFromUnitVectors(localForward, unitDir)
+    if (orientation.yawDeg) {
+      yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(orientation.yawDeg))
+      quat.multiply(yawQuat)
+    }
+
+    scale.set(1, scaleY, 1)
+
+    let anchoredY: number
+    if (mode === 'body') {
+      anchoredY = start.y - scaleY * templateMinY
+    } else if (mode === 'head') {
+      anchoredY = start.y + bodyHeight - templateMinY
+    } else {
+      anchoredY = start.y - templateMinY
+    }
+
+    const maxLocalStart = trimmedLength - tileLengthLocal
+    if (maxLocalStart < -WALL_EPSILON) {
+      continue
+    }
+
+    for (
+      let localStart = 0;
+      localStart <= maxLocalStart + WALL_EPSILON;
+      localStart += WALL_REPEAT_INSTANCE_STEP_M
+    ) {
+      const snappedLocalStart = Math.max(0, Math.min(maxLocalStart, localStart))
+      offset.copy(unitDir).multiplyScalar(minAlongAxis)
+      pos.copy(start).addScaledVector(unitDir, snappedLocalStart)
+      pos.y = anchoredY
+      pos.sub(offset)
+
+      localMatrix.compose(pos, quat, scale)
+      localMatrix.multiply(template.meshToRoot)
+
+      const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
+      const repeatSlotIndex = (() => {
+        const next = (repeatSlotByChain.get(chainIndex) ?? 0) + 1
+        repeatSlotByChain.set(chainIndex, next)
+        return next - 1
+      })()
+      const erasedKey = `${chainIndex}:${repeatSlotIndex}`
+      if (erasedSlotSet.has(erasedKey)) {
+        continue
+      }
+
+      instances.push({
+        matrix: new THREE.Matrix4().copy(localMatrix),
+        repeatScaleU: 1,
+        repeatScaleV: sanitizeWallRepeatScale(scaleY),
+        chainIndex,
+        chainArcStart: Number(seg.chainArcStart ?? 0) + trimStart + snappedLocalStart,
+        chainArcEnd: Number(seg.chainArcStart ?? 0) + trimStart + snappedLocalStart + tileLengthLocal,
+        repeatSlotIndex,
+      })
+    }
+  }
+
   return instances
 }
 
@@ -731,6 +865,18 @@ function createWallRepeatedAssetMeshes(
         repeatInfo,
       },
     )
+  }).map((mesh, index) => {
+    const instance = instances[index]
+    if (!instance) {
+      return mesh
+    }
+    mesh.userData.wallInstanceMeta = {
+      chainIndex: instance.chainIndex,
+      chainArcStart: instance.chainArcStart,
+      chainArcEnd: instance.chainArcEnd,
+      repeatSlotIndex: instance.repeatSlotIndex,
+    }
+    return mesh
   })
 
   return {
@@ -1756,6 +1902,7 @@ function rebuildWallGroup(
   assets: WallRenderAssetObjects = {},
   options: WallRenderOptions = {},
 ) {
+  console.log('Rebuilding wall group with definition:', definition, 'and options:', options)
   clearGroupContent(group)
   const wallAssetBounds = new THREE.Box3()
   wallAssetBounds.makeEmpty()
@@ -1796,6 +1943,21 @@ function rebuildWallGroup(
   const totalHeight = bodyHeight + headHeightExtra
 
   const smoothing = normalizeWallSmoothing(options.smoothing)
+  const wallRenderMode = normalizeWallRenderMode(options.wallRenderMode)
+  const repeatErasedSlotSet = new Set(
+    Array.isArray((definition as any).repeatErasedSlots)
+      ? ((definition as any).repeatErasedSlots as Array<{ chainIndex?: unknown; slotIndex?: unknown }>)
+          .map((entry) => {
+            const chainIndex = Math.max(0, Math.trunc(Number(entry?.chainIndex ?? 0)))
+            const slotIndex = Math.max(0, Math.trunc(Number(entry?.slotIndex ?? -1)))
+            if (!Number.isFinite(chainIndex) || !Number.isFinite(slotIndex) || slotIndex < 0) {
+              return null
+            }
+            return `${chainIndex}:${slotIndex}`
+          })
+          .filter((value): value is string => Boolean(value))
+      : [],
+  )
   const bodyUvAxis = normalizeWallUvAxis(options.bodyUvAxis, 'auto')
   const headUvAxis = normalizeWallUvAxis(options.headUvAxis, bodyUvAxis)
   const footUvAxis = normalizeWallUvAxis(options.footUvAxis, bodyUvAxis)
@@ -1892,7 +2054,18 @@ function rebuildWallGroup(
     const resolvedBodyUvAxis = resolveWallUvAxisForTemplate(bodyTemplate, bodyOrientation, bodyUvAxis)
     const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
+      instances.push(...(
+        wallRenderMode === 'repeatInstances'
+          ? buildRepeatedWallInstancesForSegs(
+              chainDef.segs,
+              bodyTemplate,
+              'body',
+              bodyOrientation,
+              repeatErasedSlotSet,
+              Array.isArray(options.cornerModels) ? options.cornerModels : [],
+            )
+          : buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : [])
+      ))
     }
     const bodyAssets = createWallRepeatedAssetMeshes('WallBodyMesh', bodyTemplate, instances, materialVariantCache, bodyOrientation, resolvedBodyUvAxis)
     applyWallMeshMaterialConfigId(bodyAssets.meshes, bodyMaterialConfigId)
@@ -1907,7 +2080,18 @@ function rebuildWallGroup(
     const resolvedHeadUvAxis = resolveWallUvAxisForTemplate(headTemplate, headOrientation, headUvAxis)
     const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
+      instances.push(...(
+        wallRenderMode === 'repeatInstances'
+          ? buildRepeatedWallInstancesForSegs(
+              chainDef.segs,
+              headTemplate,
+              'head',
+              headOrientation,
+              repeatErasedSlotSet,
+              Array.isArray(options.cornerModels) ? options.cornerModels : [],
+            )
+          : buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : [])
+      ))
     }
     const headAssets = createWallRepeatedAssetMeshes('WallHeadMesh', headTemplate, instances, materialVariantCache, headOrientation, resolvedHeadUvAxis)
     mergeAssetBounds(headAssets.bounds)
@@ -1921,7 +2105,18 @@ function rebuildWallGroup(
     const resolvedFootUvAxis = resolveWallUvAxisForTemplate(footTemplate, footOrientation, footUvAxis)
     const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
+      instances.push(...(
+        wallRenderMode === 'repeatInstances'
+          ? buildRepeatedWallInstancesForSegs(
+              chainDef.segs,
+              footTemplate,
+              'foot',
+              footOrientation,
+              repeatErasedSlotSet,
+              Array.isArray(options.cornerModels) ? options.cornerModels : [],
+            )
+          : buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : [])
+      ))
     }
     const footAssets = createWallRepeatedAssetMeshes('WallFootMesh', footTemplate, instances, materialVariantCache, footOrientation, resolvedFootUvAxis)
     mergeAssetBounds(footAssets.bounds)

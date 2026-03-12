@@ -10,6 +10,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
   const wallBrushPresetAssetId = ref<string | null>(null)
   const floorBrushPresetAssetId = ref<string | null>(null)
   const wallBuildShape = ref<WallBuildShape>('polygon')
+  const wallDoorSelectModeActive = ref(false)
   const floorBuildShape = ref<FloorBuildShape>('polygon')
   const waterBuildShape = ref<WaterBuildShape>('rectangle')
 
@@ -65,6 +66,10 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     return true
   }
 
+  function setWallDoorSelectModeActive(active: boolean): void {
+    wallDoorSelectModeActive.value = Boolean(active)
+  }
+
   function setWaterBuildShape(shape: WaterBuildShape, options: { activate?: boolean } = {}): boolean {
     waterBuildShape.value = shape
     if (options.activate) {
@@ -78,6 +83,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     wallBrushPresetAssetId,
     floorBrushPresetAssetId,
     wallBuildShape,
+    wallDoorSelectModeActive,
     floorBuildShape,
     waterBuildShape,
     buildToolsDisabled,
@@ -87,6 +93,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     setFloorBrushPresetAssetId,
     setFloorBuildShape,
     setWallBuildShape,
+    setWallDoorSelectModeActive,
     setWaterBuildShape,
   }
 })

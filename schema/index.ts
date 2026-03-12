@@ -1342,6 +1342,13 @@ export type WallOpening = {
   end: number
 }
 
+export type WallRepeatErasedSlot = {
+  /** Zero-based index into WallDynamicMesh.chains. */
+  chainIndex: number
+  /** Zero-based repeated instance slot index within the chain. */
+  slotIndex: number
+}
+
 export interface WallDynamicMesh {
   type: 'Wall'
   /** One or more polyline chains that together form this wall node. */
@@ -1352,6 +1359,11 @@ export interface WallDynamicMesh {
    * Sorted and non-overlapping per chain after every write.
    */
   openings: WallOpening[]
+  /**
+   * repeatInstances mode only: instance slots removed by editor door selection.
+   * This is intentionally separated from `openings` (stretch mode).
+   */
+  repeatErasedSlots?: WallRepeatErasedSlot[]
   /** Material config id used for the wall body mesh (editor-defined). */
   bodyMaterialConfigId?: string | null
   /** Shared dimensions applied to every chain segment. */

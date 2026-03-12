@@ -1452,6 +1452,14 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
 }
 
 const resolveWallSmoothing = resolveWallSmoothingImported
+
+function resolveWallRenderMode(node: SceneNode | null | undefined): 'stretch' | 'repeatInstances' {
+  const component = node?.components?.[WALL_COMPONENT_TYPE] as
+    | { props?: Partial<WallComponentProps> | null }
+    | undefined
+  const value = (component?.props as any)?.wallRenderMode
+  return value === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+}
 import { buildRoadDynamicMeshFromWorldPoints } from './roadUtils'
 
 // Floor dynamic mesh builders moved to ./sceneStoreFloor.ts
@@ -1513,6 +1521,18 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           : [],
         openings: Array.isArray(wallMesh.openings)
           ? wallMesh.openings.map((o) => ({ chainIndex: o.chainIndex, start: o.start, end: o.end }))
+          : [],
+        repeatErasedSlots: Array.isArray((wallMesh as any).repeatErasedSlots)
+          ? (wallMesh as any).repeatErasedSlots
+            .map((entry: any) => ({
+              chainIndex: Number(entry?.chainIndex),
+              slotIndex: Number(entry?.slotIndex),
+            }))
+            .filter((entry: any) => Number.isFinite(entry.chainIndex) && Number.isFinite(entry.slotIndex))
+            .map((entry: any) => ({
+              chainIndex: Math.max(0, Math.trunc(entry.chainIndex)),
+              slotIndex: Math.max(0, Math.trunc(entry.slotIndex)),
+            }))
           : [],
         bodyMaterialConfigId: typeof wallMesh.bodyMaterialConfigId === 'string' && wallMesh.bodyMaterialConfigId.trim().length
           ? wallMesh.bodyMaterialConfigId.trim()
@@ -2751,7 +2771,10 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
     } else if (meshType === 'GuideRoute') {
       runtime = createGuideRouteGroup(meshDefinition as GuideRouteDynamicMesh)
     } else {
-      runtime = createWallGroup(meshDefinition as WallDynamicMesh, { smoothing: resolveWallSmoothing(node) });
+      runtime = createWallGroup(meshDefinition as WallDynamicMesh, {
+        smoothing: resolveWallSmoothing(node),
+        wallRenderMode: resolveWallRenderMode(node),
+      });
     }
 
     runtime.name = node.name ?? runtime.name
@@ -12621,6 +12644,7 @@ export const useSceneStore = defineStore('scene', {
       if (runtime) {
         updateWallGroup(runtime, build.definition, {
           smoothing: resolveWallSmoothing(node),
+          wallRenderMode: resolveWallRenderMode(node),
         } as any)
       }
       return true
@@ -12957,6 +12981,7 @@ export const useSceneStore = defineStore('scene', {
         const hasFootEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapOrientation')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
+        const hasWallRenderMode = Object.prototype.hasOwnProperty.call(typedPatch, 'wallRenderMode')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
 
         const orientationsEqual = (a: any, b: any): boolean => {
@@ -13095,6 +13120,9 @@ export const useSceneStore = defineStore('scene', {
           isAirWall: hasIsAirWall
             ? (typedPatch.isAirWall as boolean | undefined)
             : currentProps.isAirWall,
+          wallRenderMode: hasWallRenderMode
+            ? (typedPatch.wallRenderMode as any)
+            : currentProps.wallRenderMode,
           bodyAssetId: hasBodyAssetId
             ? (typedPatch.bodyAssetId as string | null | undefined)
             : currentProps.bodyAssetId,
@@ -13152,6 +13180,7 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
           (currentProps.bodyMaterialConfigId ?? null) === (merged.bodyMaterialConfigId ?? null) &&
           currentProps.isAirWall === merged.isAirWall &&
+          currentProps.wallRenderMode === merged.wallRenderMode &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
           (currentProps.footAssetId ?? null) === (merged.footAssetId ?? null) &&

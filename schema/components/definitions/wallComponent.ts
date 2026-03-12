@@ -29,6 +29,7 @@ export type WallModelOrientation = {
 }
 
 export type WallUvAxis = 'auto' | 'u' | 'v'
+export type WallRenderMode = 'stretch' | 'repeatInstances'
 
 export type WallCornerModelRule = {
   /** Asset id of the lower wall body corner/joint model to be instanced. */
@@ -79,6 +80,8 @@ export interface WallComponentProps {
    * The mesh structure should still exist for rigidbody collision generation.
    */
   isAirWall: boolean
+  /** Wall render mode for model placement. */
+  wallRenderMode: WallRenderMode
   /** Lower wall body model asset id (required to enable model mode). */
   bodyAssetId: string | null
   /** Orientation overrides for the body model. */
@@ -171,6 +174,13 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     throw new Error(`WallComponentProps missing/invalid uvAxis: ${label}`)
   }
 
+  const requiredRenderMode = (value: unknown, label: string): WallRenderMode => {
+    if (value === 'stretch' || value === 'repeatInstances') {
+      return value
+    }
+    throw new Error(`WallComponentProps missing/invalid render mode: ${label}`)
+  }
+
   const requiredYawDeg = (value: unknown, label: string): number => {
     const num = typeof value === 'number' ? value : Number(value)
     if (!Number.isFinite(num)) {
@@ -195,11 +205,6 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const width = Math.max(WALL_MIN_WIDTH, requiredNumber('width'))
   const thickness = Math.max(WALL_MIN_THICKNESS, requiredNumber('thickness'))
   const smoothing = Math.min(1, Math.max(0, requiredNumber('smoothing')))
-
-  const legacyModelPlacementMode = (props as any)?.modelPlacementMode
-  if (legacyModelPlacementMode === 'repeatInstances') {
-    throw new Error('WallComponentProps legacy modelPlacementMode "repeatInstances" is no longer supported')
-  }
 
   const requiredJointTrim = (value: unknown, label: string): WallJointTrim => {
     if (!value || typeof value !== 'object') {
@@ -313,6 +318,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     smoothing,
     bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     isAirWall: normalizedIsAirWall,
+    wallRenderMode: requiredRenderMode((props as any).wallRenderMode, 'wallRenderMode'),
     bodyAssetId,
     bodyOrientation,
     bodyUvAxis,
@@ -341,6 +347,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       smoothing: WALL_DEFAULT_SMOOTHING,
       bodyMaterialConfigId: null,
       isAirWall: false,
+      wallRenderMode: 'stretch',
       bodyAssetId: null,
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       bodyUvAxis: 'auto',
@@ -369,6 +376,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       ? mesh.bodyMaterialConfigId.trim()
       : null,
     isAirWall: false,
+    wallRenderMode: 'stretch',
     bodyAssetId: null,
     headAssetId: null,
     footAssetId: null,
@@ -396,6 +404,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     smoothing: props.smoothing,
     bodyMaterialConfigId: props.bodyMaterialConfigId ?? null,
     isAirWall: Boolean(props.isAirWall),
+    wallRenderMode: props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
     bodyAssetId: props.bodyAssetId ?? null,
     bodyOrientation: {
       forwardAxis: props.bodyOrientation.forwardAxis,
@@ -529,6 +538,7 @@ export function createWallComponentState(
     smoothing: overrides?.smoothing ?? defaults.smoothing,
     bodyMaterialConfigId: overrides?.bodyMaterialConfigId ?? defaults.bodyMaterialConfigId,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
+    wallRenderMode: overrides?.wallRenderMode ?? defaults.wallRenderMode,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     bodyUvAxis: (overrides as any)?.bodyUvAxis ?? defaults.bodyUvAxis,

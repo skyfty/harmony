@@ -351,6 +351,15 @@
 
               <v-divider class="floor-shape-menu__divider" />
 
+              <v-list-item class="wall-shape-menu__action" @click="handleToggleWallDoorSelectMode">
+                <template #prepend>
+                  <v-icon :icon="wallDoorSelectModeActive ? 'mdi-checkbox-marked' : 'mdi-checkbox-blank-outline'" size="18" />
+                </template>
+                <v-list-item-title>Wall Rectangle Door Selection</v-list-item-title>
+              </v-list-item>
+
+              <v-divider class="floor-shape-menu__divider" />
+
               <AssetPickerList
                 :active="true"
                 assetType="prefab"
@@ -1002,6 +1011,7 @@ const props = withDefaults(
   cameraResetMenuOpen: boolean
   floorShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
+  wallDoorSelectModeActive?: boolean
   waterShapeMenuOpen: boolean
   groundTerrainMenuOpen: boolean
   groundPaintMenuOpen: boolean
@@ -1030,6 +1040,7 @@ const props = withDefaults(
     buildToolsDisabled: false,
     vertexSnapEnabled: false,
     scatterEraseRepairActive: false,
+    wallDoorSelectModeActive: false,
   },
 )
 
@@ -1059,6 +1070,7 @@ const emit = defineEmits<{
   (event: 'update:ground-scatter-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
   (event: 'select-wall-build-shape', shape: WallBuildShape): void
+  (event: 'toggle-wall-door-select-mode'): void
   (event: 'select-water-build-shape', shape: WaterBuildShape): void
   (event: 'activate-ground-tab', tab: GroundPanelTab): void
   (event: 'update:ground-brush-radius', value: number): void
@@ -1100,6 +1112,7 @@ const {
   cameraResetMenuOpen,
   floorShapeMenuOpen,
   wallShapeMenuOpen,
+  wallDoorSelectModeActive,
   waterShapeMenuOpen,
   groundTerrainMenuOpen,
   groundPaintMenuOpen,
@@ -1876,6 +1889,10 @@ function handleWallShapeSelect(shape: WallBuildShape) {
     return
   }
   emit('select-wall-build-shape', shape)
+}
+
+function handleToggleWallDoorSelectMode() {
+  emit('toggle-wall-door-select-mode')
 }
 
 function handleFloorPresetSelect(asset: any) {
