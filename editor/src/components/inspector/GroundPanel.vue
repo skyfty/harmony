@@ -3,7 +3,18 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore,SCATTER_BRUSH_RADIUS_MAX } from '@/stores/terrainStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { GroundDynamicMesh, GroundGenerationMode, GroundGenerationSettings, GroundSculptOperation } from '@schema'
+import {
+  clampTerrainPaintLayerDefinition,
+  clampTerrainPaintSettings,
+  getTerrainPaintChunkPageLogicalId,
+  TERRAIN_PAINT_MAX_LAYER_COUNT,
+  TERRAIN_PAINT_PAGE_COUNT,
+  type TerrainPaintLayerDefinition,
+  type TerrainPaintSettings,
+} from '@schema'
+import { decodeWeightmapToData, encodeWeightmapToBinary } from '@schema/terrainPaintPreview.ts'
 import TerrainSculptPanel from './TerrainSculptPanel.vue'
 import TerrainPaintPanel from './TerrainPaintPanel.vue'
 import GroundAssetPainter from './GroundAssetPainter.vue'
@@ -11,9 +22,12 @@ import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import type { ProjectAsset } from '@/types/project-asset'
+import { assetProvider } from '@/resources/projectProviders/asset'
+import { computeBlobHash } from '@/utils/blob'
 
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
+const assetCacheStore = useAssetCacheStore()
 const { selectedNode } = storeToRefs(sceneStore)
 const {
   brushRadius,
@@ -21,6 +35,8 @@ const {
   brushShape,
   brushOperation,
   groundPanelTab,
+  paintSelectedLayerId,
+  paintSelectedLayerSlotIndex,
   paintSelectedAsset,
   paintSmoothness,
   scatterBrushRadius,
@@ -80,11 +96,6 @@ const isScatterTabActive = computed(() => groundPanelTabModel.value !== 'terrain
 const paintSmoothnessModel = computed({
   get: () => paintSmoothness.value,
   set: (value: number) => terrainStore.setPaintSmoothness(value),
-})
-
-const paintSelectedAssetModel = computed<ProjectAsset | null>({
-  get: () => paintSelectedAsset.value,
-  set: (asset) => terrainStore.setPaintSelection(asset),
 })
 
 const scatterBrushRadiusModel = computed({
@@ -190,6 +201,379 @@ function handleScatterAssetSelect(
   }
   terrainStore.setScatterCategory(category)
   terrainStore.setScatterSelection(payload)
+}
+
+function chooseAvailablePaintSlot(settings: TerrainPaintSettings): number | null {
+  const used = new Set(settings.layers.map((layer) => Math.max(0, Math.min(TERRAIN_PAINT_MAX_LAYER_COUNT - 1, Math.trunc(layer.slotIndex ?? 0)))))
+  for (let slotIndex = 1; slotIndex < TERRAIN_PAINT_MAX_LAYER_COUNT; slotIndex += 1) {
+    if (!used.has(slotIndex)) {
+      return slotIndex
+    }
+  }
+  return null
+}
+
+function createBlankWeightmapPage(resolution: number, pageIndex: number): Uint8ClampedArray {
+  const res = Math.max(1, Math.round(resolution))
+  const data = new Uint8ClampedArray(res * res * 4)
+  if (pageIndex === 0) {
+    for (let i = 0; i < res * res; i += 1) {
+      const offset = i * 4
+      data[offset] = 255
+    }
+  }
+  return data
+}
+
+function readPixelWeightsFromPages(pages: Uint8ClampedArray[], pixelIndex: number): number[] {
+  const weights = new Array(TERRAIN_PAINT_PAGE_COUNT * 4).fill(0)
+  for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+    const page = pages[pageIndex]
+    if (!page) {
+      continue
+    }
+    const offset = pixelIndex * 4
+    for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
+      weights[pageIndex * 4 + channelIndex] = page[offset + channelIndex] ?? 0
+    }
+  }
+  return weights
+}
+
+function writePixelWeightsToPages(pages: Uint8ClampedArray[], pixelIndex: number, weights: number[]): void {
+  for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+    const page = pages[pageIndex]
+    if (!page) {
+      continue
+    }
+    const offset = pixelIndex * 4
+    for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
+      page[offset + channelIndex] = weights[pageIndex * 4 + channelIndex] ?? 0
+    }
+  }
+}
+
+function isWeightmapPageEmpty(page: Uint8ClampedArray, pageIndex: number): boolean {
+  for (let offset = 0; offset < page.length; offset += 4) {
+    const r = page[offset] ?? 0
+    const g = page[offset + 1] ?? 0
+    const b = page[offset + 2] ?? 0
+    const a = page[offset + 3] ?? 0
+    if (pageIndex === 0) {
+      if (r !== 255 || g !== 0 || b !== 0 || a !== 0) {
+        return false
+      }
+    } else if (r !== 0 || g !== 0 || b !== 0 || a !== 0) {
+      return false
+    }
+  }
+  return true
+}
+
+function createTerrainPaintLayerId(slotIndex: number): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `terrain-paint-layer-${slotIndex}-${crypto.randomUUID()}`
+  }
+  return `terrain-paint-layer-${slotIndex}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function resolvePaintLayerAsset(assetId: string | null | undefined): ProjectAsset | null {
+  const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedId) {
+    return null
+  }
+  return sceneStore.getAsset(normalizedId) ?? (paintSelectedAsset.value?.id === normalizedId ? paintSelectedAsset.value : null)
+}
+
+function buildTerrainPaintSettings(): TerrainPaintSettings {
+  return clampTerrainPaintSettings(groundDefinition.value?.terrainPaint as Partial<TerrainPaintSettings> | null | undefined)
+}
+
+const terrainPaintSettings = computed(() => buildTerrainPaintSettings())
+
+const paintLayers = computed(() =>
+  terrainPaintSettings.value.layers.slice().sort((left, right) => left.slotIndex - right.slotIndex),
+)
+
+const canAddPaintLayer = computed(() => paintLayers.value.length < TERRAIN_PAINT_MAX_LAYER_COUNT - 1)
+
+const selectedPaintLayer = computed(() => {
+  const selectedId = paintSelectedLayerId.value
+  if (!selectedId) {
+    return null
+  }
+  return paintLayers.value.find((layer) => layer.id === selectedId) ?? null
+})
+
+const selectedPaintLayerAsset = computed(() => resolvePaintLayerAsset(selectedPaintLayer.value?.textureAssetId))
+
+function applyTerrainPaintSettings(settings: TerrainPaintSettings): void {
+  const node = selectedGroundNode.value
+  if (!node || node.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  sceneStore.updateNodeDynamicMesh(node.id, { terrainPaint: settings })
+}
+
+async function ensurePaintAssetRegistered(asset: ProjectAsset | null): Promise<void> {
+  if (!asset?.id) {
+    return
+  }
+  const existing = sceneStore.findAssetInCatalog(asset.id)
+  if (existing) {
+    return
+  }
+  sceneStore.registerAssets([asset], {
+    source: { type: 'package', providerId: assetProvider.id, originalAssetId: asset.id },
+    commitOptions: { updateNodes: false },
+  })
+}
+
+async function loadWeightmapPageData(
+  ref: TerrainPaintSettings['chunks'][string] | undefined,
+  pageIndex: number,
+  resolution: number,
+): Promise<Uint8ClampedArray> {
+  const logicalId = getTerrainPaintChunkPageLogicalId(ref, pageIndex)
+  if (!logicalId) {
+    return createBlankWeightmapPage(resolution, pageIndex)
+  }
+
+  let entry = await assetCacheStore.loadFromIndexedDb(logicalId)
+  if (!entry?.blob) {
+    const asset = sceneStore.getAsset(logicalId)
+    if (asset) {
+      entry = await assetCacheStore.downloaProjectAsset(asset)
+    }
+  }
+
+  if (!entry?.blob) {
+    return createBlankWeightmapPage(resolution, pageIndex)
+  }
+
+  try {
+    return await decodeWeightmapToData(entry.blob, resolution)
+  } catch (error) {
+    console.warn('Failed to decode terrain paint page while removing layer', error)
+    return createBlankWeightmapPage(resolution, pageIndex)
+  }
+}
+
+async function clearTerrainPaintLayerWeights(settings: TerrainPaintSettings, layer: TerrainPaintLayerDefinition): Promise<void> {
+  const slotIndex = Math.max(1, Math.min(TERRAIN_PAINT_MAX_LAYER_COUNT - 1, Math.trunc(layer.slotIndex ?? 0)))
+  const resolution = Math.max(8, Math.round(settings.weightmapResolution || 256))
+  const pixelCount = resolution * resolution
+
+  for (const [chunkKey, ref] of Object.entries(settings.chunks ?? {})) {
+    const pages = await Promise.all(
+      Array.from({ length: TERRAIN_PAINT_PAGE_COUNT }, (_, pageIndex) => loadWeightmapPageData(ref, pageIndex, resolution)),
+    )
+
+    let changed = false
+    for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex += 1) {
+      const weights = readPixelWeightsFromPages(pages, pixelIndex)
+      const removedWeight = weights[slotIndex] ?? 0
+      if (removedWeight <= 0) {
+        continue
+      }
+      weights[slotIndex] = 0
+      weights[0] = (weights[0] ?? 0) + removedWeight
+      writePixelWeightsToPages(pages, pixelIndex, weights)
+      changed = true
+    }
+
+    if (!changed) {
+      continue
+    }
+
+    const nextPages = Array.from({ length: TERRAIN_PAINT_PAGE_COUNT }, () => null as { logicalId: string } | null)
+    for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+      const page = pages[pageIndex] ?? createBlankWeightmapPage(resolution, pageIndex)
+      if (isWeightmapPageEmpty(page, pageIndex)) {
+        nextPages[pageIndex] = null
+        continue
+      }
+
+      const blob = encodeWeightmapToBinary(page, resolution)
+      const logicalId = await computeBlobHash(blob)
+      const filename = `terrain-weightmap_${selectedGroundNode.value?.id ?? 'ground'}_${chunkKey}_p${pageIndex}.bin`
+      await assetCacheStore.storeAssetBlob(logicalId, {
+        blob,
+        mimeType: 'application/octet-stream',
+        filename,
+      })
+      sceneStore.registerAsset(
+        {
+          id: logicalId,
+          name: filename,
+          type: 'file',
+          downloadUrl: logicalId,
+          previewColor: '#ffffff',
+          thumbnail: null,
+          description: `Terrain weightmap (${selectedGroundNode.value?.id ?? 'ground'}:${chunkKey}:page${pageIndex})`,
+          gleaned: true,
+        },
+        {
+          source: { type: 'local' },
+          internal: true,
+          commitOptions: { updateNodes: false },
+        },
+      )
+      nextPages[pageIndex] = { logicalId }
+    }
+
+    if (nextPages.some((page) => page?.logicalId)) {
+      settings.chunks[chunkKey] = {
+        logicalId: nextPages[0]?.logicalId ?? null,
+        pages: nextPages,
+      }
+    } else {
+      delete settings.chunks[chunkKey]
+    }
+  }
+}
+
+function setPaintBaseSelection(): void {
+  terrainStore.setPaintLayerSelection({ layerId: null, slotIndex: 0, asset: null })
+}
+
+function setPaintLayerSelection(layer: TerrainPaintLayerDefinition | null): void {
+  if (!layer) {
+    setPaintBaseSelection()
+    return
+  }
+  terrainStore.setPaintLayerSelection({
+    layerId: layer.id,
+    slotIndex: layer.slotIndex,
+    asset: resolvePaintLayerAsset(layer.textureAssetId),
+  })
+}
+
+function syncSelectedPaintLayer(): void {
+  if (!hasGround.value) {
+    terrainStore.clearPaintSelection()
+    return
+  }
+  if (paintSelectedLayerSlotIndex.value === 0 && !paintSelectedLayerId.value) {
+    setPaintBaseSelection()
+    return
+  }
+  const current = selectedPaintLayer.value
+  if (current) {
+    setPaintLayerSelection(current)
+    return
+  }
+  const firstLayer = paintLayers.value[0] ?? null
+  if (firstLayer) {
+    setPaintLayerSelection(firstLayer)
+    return
+  }
+  setPaintBaseSelection()
+}
+
+watch([groundDefinition, paintLayers], () => {
+  syncSelectedPaintLayer()
+}, { immediate: true })
+
+function handleCreatePaintLayer(): void {
+  if (!hasGround.value) {
+    return
+  }
+  const settings = buildTerrainPaintSettings()
+  const slotIndex = chooseAvailablePaintSlot(settings)
+  if (slotIndex === null) {
+    return
+  }
+  const layer = clampTerrainPaintLayerDefinition({
+    id: createTerrainPaintLayerId(slotIndex),
+    slotIndex,
+    textureAssetId: '',
+    enabled: true,
+  })
+  settings.layers.push(layer)
+  applyTerrainPaintSettings(settings)
+  setPaintLayerSelection(layer)
+}
+
+function handlePaintLayerSelect(layerId: string): void {
+  const layer = paintLayers.value.find((entry) => entry.id === layerId) ?? null
+  setPaintLayerSelection(layer)
+}
+
+function handlePaintLayerEnabled(layerId: string, enabled: boolean): void {
+  const settings = buildTerrainPaintSettings()
+  const index = settings.layers.findIndex((layer) => layer.id === layerId)
+  if (index < 0) {
+    return
+  }
+  settings.layers[index] = clampTerrainPaintLayerDefinition({
+    ...settings.layers[index],
+    enabled,
+  })
+  applyTerrainPaintSettings(settings)
+  if (settings.layers[index]) {
+    setPaintLayerSelection(settings.layers[index])
+  }
+}
+
+async function handlePaintLayerRemove(layerId: string): Promise<void> {
+  const settings = buildTerrainPaintSettings()
+  const layer = settings.layers.find((entry) => entry.id === layerId) ?? null
+  if (!layer) {
+    return
+  }
+  await clearTerrainPaintLayerWeights(settings, layer)
+  settings.layers = settings.layers.filter((entry) => entry.id !== layerId)
+  applyTerrainPaintSettings(settings)
+  if (paintSelectedLayerId.value === layerId) {
+    const nextLayer = settings.layers.slice().sort((left, right) => left.slotIndex - right.slotIndex)[0] ?? null
+    if (nextLayer) {
+      setPaintLayerSelection(nextLayer)
+    } else {
+      setPaintBaseSelection()
+    }
+  }
+}
+
+async function handleSelectedPaintLayerAssetUpdate(asset: ProjectAsset | null): Promise<void> {
+  const currentLayer = selectedPaintLayer.value
+  if (!currentLayer) {
+    return
+  }
+  await ensurePaintAssetRegistered(asset)
+  const settings = buildTerrainPaintSettings()
+  const index = settings.layers.findIndex((layer) => layer.id === currentLayer.id)
+  if (index < 0) {
+    return
+  }
+  settings.layers[index] = clampTerrainPaintLayerDefinition({
+    ...settings.layers[index],
+    textureAssetId: asset?.id ?? '',
+  })
+  applyTerrainPaintSettings(settings)
+  terrainStore.setPaintLayerSelection({
+    layerId: settings.layers[index].id,
+    slotIndex: settings.layers[index].slotIndex,
+    asset,
+  })
+}
+
+function handleSelectedPaintLayerStylePatch(patch: Partial<TerrainPaintLayerDefinition>): void {
+  const currentLayer = selectedPaintLayer.value
+  if (!currentLayer) {
+    return
+  }
+  const settings = buildTerrainPaintSettings()
+  const index = settings.layers.findIndex((layer) => layer.id === currentLayer.id)
+  if (index < 0) {
+    return
+  }
+  settings.layers[index] = clampTerrainPaintLayerDefinition({
+    ...settings.layers[index],
+    ...patch,
+  })
+  applyTerrainPaintSettings(settings)
+  setPaintLayerSelection(settings.layers[index])
 }
 
 </script>
@@ -320,8 +704,19 @@ function handleScatterAssetSelect(
               <TerrainPaintPanel
                 v-model:brush-radius="brushRadius"
                 v-model:smoothness="paintSmoothnessModel"
-                v-model:asset="paintSelectedAssetModel"
                 :has-ground="hasGround"
+                :layers="paintLayers"
+                :selected-layer-id="paintSelectedLayerId"
+                :selected-layer-slot-index="paintSelectedLayerSlotIndex"
+                :selected-layer-asset="selectedPaintLayerAsset"
+                :can-add-layer="canAddPaintLayer"
+                @add-layer="handleCreatePaintLayer"
+                @select-base="setPaintBaseSelection"
+                @select-layer="handlePaintLayerSelect"
+                @toggle-layer-enabled="handlePaintLayerEnabled"
+                @remove-layer="handlePaintLayerRemove"
+                @update:selected-layer-asset="handleSelectedPaintLayerAssetUpdate"
+                @update:selected-layer-style="handleSelectedPaintLayerStylePatch"
               />
             </v-window-item>
 

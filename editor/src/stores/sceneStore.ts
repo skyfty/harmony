@@ -24,6 +24,7 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
+  listTerrainPaintChunkLogicalIds,
 } from '@schema'
 import type {
   AssetIndexEntry,
@@ -4398,17 +4399,14 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
 
     const terrainPaint: any = (definition as any)?.terrainPaint
-    if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
+    if (terrainPaint && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
       if (Array.isArray(terrainPaint.layers)) {
         terrainPaint.layers.forEach((layer: any) => {
           collectAssetIdCandidate(bucket, layer?.textureAssetId)
         })
       }
       Object.values(terrainPaint.chunks).forEach((ref: any) => {
-        const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
-        if (logicalId) {
-          bucket.add(logicalId)
-        }
+        listTerrainPaintChunkLogicalIds(ref).forEach((logicalId) => bucket.add(logicalId))
       })
     }
   }
@@ -8561,15 +8559,13 @@ export const useSceneStore = defineStore('scene', {
         if (dynamicMesh && dynamicMesh.type === 'Ground') {
           const groundMesh = dynamicMesh as GroundDynamicMesh
           const terrainPaint = groundMesh.terrainPaint ?? null
-          if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks) {
+          if (terrainPaint && terrainPaint.chunks) {
             Object.values(terrainPaint.chunks).forEach((ref) => {
-              if (!ref || typeof (ref as any).logicalId !== 'string' || !String((ref as any).logicalId).trim().length) {
-                return
-              }
-              const logicalId = String((ref as any).logicalId).trim()
-              if (!terrainPaintRefs.has(logicalId)) {
-                terrainPaintRefs.set(logicalId, null)
-              }
+              listTerrainPaintChunkLogicalIds(ref as any).forEach((logicalId) => {
+                if (!terrainPaintRefs.has(logicalId)) {
+                  terrainPaintRefs.set(logicalId, null)
+                }
+              })
             })
           }
         }

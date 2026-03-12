@@ -6,7 +6,7 @@ import type { WatchStopHandle } from 'vue'
 import type { SessionUser } from '@/types/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
-import { unzipScenePackage, readTextFileFromScenePackage } from '@schema'
+import { unzipScenePackage, applyGroundPaintSidecarsToSceneDocument, readTextFileFromScenePackage } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 
@@ -303,7 +303,10 @@ async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<Store
   if (!sceneEntry?.path) {
     throw new Error('Scene bundle missing scene entry')
   }
-  const rawScene = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as unknown
+  const rawScene = applyGroundPaintSidecarsToSceneDocument(
+    pkg,
+    JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as Record<string, any>,
+  ) as unknown
   if (!rawScene || typeof rawScene !== 'object') {
     throw new Error('Invalid scene.json in scene bundle')
   }

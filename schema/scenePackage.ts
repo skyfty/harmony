@@ -3,6 +3,7 @@ export const SCENE_PACKAGE_VERSION = 1 as const;
 
 export type ScenePackageResourceType =
   | 'localAsset'
+  | 'groundPaintSidecar'
   | 'terrainWeightmap'
   | 'lightmap'
   | 'navmesh'

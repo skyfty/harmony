@@ -36,6 +36,7 @@ import {
 	type SceneJsonExportDocument,
 	unzipScenePackage,
 	buildAssetOverridesFromScenePackage,
+	applyGroundPaintSidecarsToSceneDocument,
 	readTextFileFromScenePackage,
 	type SceneNode,
 	type SceneNodeComponentState,
@@ -5047,7 +5048,10 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 		projectSceneIndex.clear()
 		pkg.manifest.scenes.forEach((sceneEntry) => {
 			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
-			const sceneRaw = JSON.parse(sceneText) as unknown
+			const sceneRaw = applyGroundPaintSidecarsToSceneDocument(
+				pkg,
+				JSON.parse(sceneText) as Record<string, any>,
+			) as unknown
 			if (!isSceneJsonExportDocument(sceneRaw)) {
 				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
 			}

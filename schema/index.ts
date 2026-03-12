@@ -85,8 +85,17 @@ export type {
 } from './scenePackage'
 
 export {
+  GROUND_PAINT_SIDECAR_FILENAME,
+  GROUND_PAINT_SIDECAR_VERSION,
+  serializeGroundPaintSidecar,
+  deserializeGroundPaintSidecar,
+} from './groundPaintSidecar'
+export type { GroundPaintSidecarPayload } from './groundPaintSidecar'
+
+export {
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
+  applyGroundPaintSidecarsToSceneDocument,
   readTextFileFromScenePackage,
 } from './scenePackageZip'
 export type { AssetOverrideBytes, AssetOverrideValue, ScenePackageUnzipped } from './scenePackageZip'
@@ -839,6 +848,7 @@ export interface SceneJsonExportDocument {
   assetIndex?: Record<string, AssetIndexEntry>;
   packageAssetMap?: Record<string, string>;
   resourceSummary?: SceneResourceSummary;
+  groundPaintSidecars?: Record<string, string>;
   lazyLoadMeshes?: boolean;
   assetPreload?: SceneAssetPreloadInfo;
   punchPoints?: ScenePunchPoint[];
@@ -1084,33 +1094,251 @@ export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' |
 
 export type TerrainPaintChannel = 'r' | 'g' | 'b' | 'a'
 
-export interface TerrainPaintLayerDefinition {
-  /** Which RGBA channel this layer occupies in the weightmap. */
+export const TERRAIN_PAINT_MAX_LAYER_COUNT = 16
+export const TERRAIN_PAINT_PAGE_COUNT = 4
+export const TERRAIN_PAINT_DEFAULT_OPACITY = 1
+export const TERRAIN_PAINT_DEFAULT_ROTATION_DEG = 0
+export const TERRAIN_PAINT_DEFAULT_TILE_SCALE = { x: 1, y: 1 } as const
+export const TERRAIN_PAINT_DEFAULT_OFFSET = { x: 0, y: 0 } as const
+export const TERRAIN_PAINT_DEFAULT_WORLD_SPACE = true
+
+export type TerrainPaintBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay'
+
+export interface TerrainPaintLayerStyle {
+  opacity: number
+  tileScale: { x: number; y: number }
+  offset: { x: number; y: number }
+  rotationDeg: number
+  blendMode: TerrainPaintBlendMode
+  worldSpace: boolean
+}
+
+function clampTerrainPaintFinite(value: unknown, fallback = 0): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function clampTerrainPaintBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function clampTerrainPaintString(value: unknown, fallback = ''): string {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized.length ? normalized : fallback
+}
+
+function clampTerrainPaintVector2(
+  value: Vector2Like | null | undefined,
+  fallback: { x: number; y: number },
+  min?: number,
+): { x: number; y: number } {
+  const x = clampTerrainPaintFinite(value?.x, fallback.x)
+  const y = clampTerrainPaintFinite(value?.y, fallback.y)
+  return {
+    x: min === undefined ? x : Math.max(min, x),
+    y: min === undefined ? y : Math.max(min, y),
+  }
+}
+
+function slotIndexToTerrainPaintChannel(slotIndex: number): TerrainPaintChannel {
+  const channelIndex = Math.max(0, Math.min(3, Math.trunc(slotIndex) % 4))
+  if (channelIndex === 0) {
+    return 'r'
+  }
+  if (channelIndex === 1) {
+    return 'g'
+  }
+  if (channelIndex === 2) {
+    return 'b'
+  }
+  return 'a'
+}
+
+export function clampTerrainPaintBlendMode(value: unknown): TerrainPaintBlendMode {
+  if (value === 'multiply' || value === 'screen' || value === 'overlay') {
+    return value
+  }
+  return 'normal'
+}
+
+export function clampTerrainPaintLayerStyle(
+  style: Partial<TerrainPaintLayerStyle> | null | undefined,
+): TerrainPaintLayerStyle {
+  return {
+    opacity: Math.min(1, Math.max(0, clampTerrainPaintFinite(style?.opacity, TERRAIN_PAINT_DEFAULT_OPACITY))),
+    tileScale: clampTerrainPaintVector2(style?.tileScale as Vector2Like | null | undefined, TERRAIN_PAINT_DEFAULT_TILE_SCALE, 0.001),
+    offset: clampTerrainPaintVector2(style?.offset as Vector2Like | null | undefined, TERRAIN_PAINT_DEFAULT_OFFSET),
+    rotationDeg: Math.min(360, Math.max(-360, clampTerrainPaintFinite(style?.rotationDeg, TERRAIN_PAINT_DEFAULT_ROTATION_DEG))),
+    blendMode: clampTerrainPaintBlendMode(style?.blendMode),
+    worldSpace: clampTerrainPaintBoolean(style?.worldSpace, TERRAIN_PAINT_DEFAULT_WORLD_SPACE),
+  }
+}
+
+export function cloneTerrainPaintLayerStyle(style: TerrainPaintLayerStyle): TerrainPaintLayerStyle {
+  return {
+    opacity: style.opacity,
+    tileScale: { x: style.tileScale.x, y: style.tileScale.y },
+    offset: { x: style.offset.x, y: style.offset.y },
+    rotationDeg: style.rotationDeg,
+    blendMode: style.blendMode,
+    worldSpace: style.worldSpace,
+  }
+}
+
+export interface TerrainPaintLayerDefinition extends TerrainPaintLayerStyle {
+  /** Stable layer identifier for explicit layer management. */
+  id: string
+  /** Fixed slot index in the 16-slot V2 layout. Slot 0 is reserved for base. */
+  slotIndex: number
+  /** Legacy alias retained while the runtime preview migrates away from channel-based addressing. */
   channel: TerrainPaintChannel
   /** Texture/image asset id to blend for this layer. */
   textureAssetId: string
+  /** Disabled layers remain in the slot table but are skipped during preview and export. */
+  enabled: boolean
+}
+
+export function clampTerrainPaintLayerDefinition(
+  layer: Partial<TerrainPaintLayerDefinition> | null | undefined,
+): TerrainPaintLayerDefinition {
+  const slotIndex = Math.max(0, Math.min(TERRAIN_PAINT_MAX_LAYER_COUNT - 1, Math.trunc(clampTerrainPaintFinite(layer?.slotIndex, 1))))
+  const style = clampTerrainPaintLayerStyle(layer)
+  const textureAssetId = clampTerrainPaintString(layer?.textureAssetId)
+  return {
+    id: clampTerrainPaintString(layer?.id, textureAssetId ? `terrain-paint-${textureAssetId}-${slotIndex}` : `terrain-paint-slot-${slotIndex}`),
+    slotIndex,
+    channel: layer?.channel === 'r' || layer?.channel === 'g' || layer?.channel === 'b' || layer?.channel === 'a'
+      ? layer.channel
+      : slotIndexToTerrainPaintChannel(slotIndex),
+    textureAssetId,
+    enabled: clampTerrainPaintBoolean(layer?.enabled, true),
+    ...style,
+  }
+}
+
+export function cloneTerrainPaintLayerDefinition(layer: TerrainPaintLayerDefinition): TerrainPaintLayerDefinition {
+  return {
+    id: layer.id,
+    slotIndex: layer.slotIndex,
+    channel: layer.channel,
+    textureAssetId: layer.textureAssetId,
+    enabled: layer.enabled,
+    ...cloneTerrainPaintLayerStyle(layer),
+  }
+}
+
+export interface TerrainPaintChunkWeightmapPageRef {
+  /** Stable content id (recommended: `sha256-...`) of a single RGBA weightmap page stored as a private resource. */
+  logicalId: string
 }
 
 export interface TerrainPaintChunkWeightmapRef {
-  /** Stable content id (recommended: `sha256-...`) of the chunk RGBA weightmap PNG stored as a private resource. */
-  logicalId: string
+  /** Fixed 4-page layout covering slots [0..15]. */
+  pages: Array<TerrainPaintChunkWeightmapPageRef | null>
+  /** Legacy alias retained during migration; when present it mirrors page 0. */
+  logicalId?: string | null
+}
+
+export function clampTerrainPaintChunkWeightmapRef(
+  ref: Partial<TerrainPaintChunkWeightmapRef> | null | undefined,
+): TerrainPaintChunkWeightmapRef {
+  const rawPages = Array.isArray(ref?.pages) ? ref.pages : []
+  const pages: Array<TerrainPaintChunkWeightmapPageRef | null> = []
+  for (let index = 0; index < TERRAIN_PAINT_PAGE_COUNT; index += 1) {
+    const logicalId = clampTerrainPaintString(rawPages[index]?.logicalId)
+    pages.push(logicalId ? { logicalId } : null)
+  }
+  const legacyLogicalId = clampTerrainPaintString(ref?.logicalId)
+  if (legacyLogicalId && !pages[0]) {
+    pages[0] = { logicalId: legacyLogicalId }
+  }
+  return {
+    pages,
+    logicalId: pages[0]?.logicalId ?? null,
+  }
+}
+
+export function getTerrainPaintChunkPageLogicalId(
+  ref: Partial<TerrainPaintChunkWeightmapRef> | null | undefined,
+  pageIndex = 0,
+): string {
+  const normalizedPageIndex = Math.max(0, Math.min(TERRAIN_PAINT_PAGE_COUNT - 1, Math.trunc(pageIndex)))
+  const candidate = normalizedPageIndex === 0
+    ? ref?.pages?.[0]?.logicalId ?? ref?.logicalId
+    : ref?.pages?.[normalizedPageIndex]?.logicalId
+  return clampTerrainPaintString(candidate)
+}
+
+export function listTerrainPaintChunkLogicalIds(
+  ref: Partial<TerrainPaintChunkWeightmapRef> | null | undefined,
+): string[] {
+  const logicalIds: string[] = []
+  for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+    const logicalId = getTerrainPaintChunkPageLogicalId(ref, pageIndex)
+    if (logicalId && !logicalIds.includes(logicalId)) {
+      logicalIds.push(logicalId)
+    }
+  }
+  return logicalIds
 }
 
 export type TerrainPaintChunkWeightmapMap = Record<string, TerrainPaintChunkWeightmapRef>
 
 export interface TerrainPaintSettings {
   /** Versioned payload to allow schema migrations later. */
-  version: 1
+  version: 2
   /** Weightmap resolution per chunk (pixels per side). */
   weightmapResolution: number
-  /** Non-base paint layers. Base is always the ground material color. */
+  /** Non-base paint layers stored in a fixed 16-slot layout. Base always occupies slot 0. */
   layers: TerrainPaintLayerDefinition[]
   /**
-   * Weightmap asset references keyed by chunk key (e.g., "0:0").
-   * Each chunk has one 4-channel texture mapping [Base, LayerG, LayerB, LayerA].
-   * The actual image data is stored in the project's private asset storage (or similar).
+   * Weightmap page references keyed by chunk key (e.g., "0:0").
+   * Each chunk always stores 4 RGBA pages covering slots [0..15].
    */
   chunks: TerrainPaintChunkWeightmapMap
+}
+
+export function clampTerrainPaintSettings(
+  settings: Partial<TerrainPaintSettings> | null | undefined,
+): TerrainPaintSettings {
+  const rawLayers = Array.isArray(settings?.layers) ? settings.layers : []
+  const nextLayers = rawLayers
+    .map((layer) => clampTerrainPaintLayerDefinition(layer))
+    .filter((layer, index, array) => index === array.findIndex((entry) => entry.id === layer.id || entry.slotIndex === layer.slotIndex))
+    .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT - 1)
+  const chunkEntries = Object.entries(settings?.chunks ?? {})
+  const chunks: TerrainPaintChunkWeightmapMap = {}
+  chunkEntries.forEach(([chunkKey, ref]) => {
+    const normalizedKey = clampTerrainPaintString(chunkKey)
+    if (!normalizedKey) {
+      return
+    }
+    chunks[normalizedKey] = clampTerrainPaintChunkWeightmapRef(ref)
+  })
+  return {
+    version: 2,
+    weightmapResolution: Number.isFinite(settings?.weightmapResolution)
+      ? Math.max(8, Math.min(2048, Math.round(settings?.weightmapResolution ?? 256)))
+      : 256,
+    layers: nextLayers,
+    chunks,
+  }
+}
+
+export function cloneTerrainPaintSettings(settings: TerrainPaintSettings): TerrainPaintSettings {
+  const chunks: TerrainPaintChunkWeightmapMap = {}
+  Object.entries(settings.chunks ?? {}).forEach(([chunkKey, ref]) => {
+    chunks[chunkKey] = {
+      logicalId: ref.logicalId ?? null,
+      pages: ref.pages.map((page) => (page?.logicalId ? { logicalId: page.logicalId } : null)),
+    }
+  })
+  return {
+    version: 2,
+    weightmapResolution: settings.weightmapResolution,
+    layers: settings.layers.map((layer) => cloneTerrainPaintLayerDefinition(layer)),
+    chunks,
+  }
 }
 
 export interface GroundDynamicMesh {
