@@ -1171,6 +1171,7 @@ export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' |
 
 export type TerrainPaintChannel = 'r' | 'g' | 'b' | 'a'
 export type TerrainPaintBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay'
+export const TERRAIN_PAINT_VERSION = 2 as const
 
 export const TERRAIN_PAINT_DEFAULT_OPACITY = 1
 export const TERRAIN_PAINT_DEFAULT_ROTATION_DEG = 0
@@ -1241,7 +1242,11 @@ export function cloneTerrainPaintLayerStyle(style: TerrainPaintLayerStyle): Terr
 }
 
 export interface TerrainPaintLayerDefinition extends TerrainPaintLayerStyle {
-  /** Which RGBA channel this layer occupies in the weightmap. */
+  /** Stable layer id used by editor/runtime state. */
+  id: string
+  /** Which weightmap page this layer occupies. */
+  pageIndex: number
+  /** Which RGBA channel this layer occupies within its page. */
   channel: TerrainPaintChannel
   /** Texture/image asset id to blend for this layer. */
   textureAssetId: string
@@ -1252,6 +1257,8 @@ export function clampTerrainPaintLayerDefinition(
 ): TerrainPaintLayerDefinition {
   const style = clampTerrainPaintLayerStyle(layer)
   return {
+    id: typeof layer?.id === 'string' ? layer.id.trim() : '',
+    pageIndex: Math.max(0, Math.trunc(clampTerrainPaintFinite(layer?.pageIndex, 0))),
     channel: layer?.channel === 'r' || layer?.channel === 'b' || layer?.channel === 'a' ? layer.channel : 'g',
     textureAssetId: typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : '',
     ...style,
@@ -1260,6 +1267,8 @@ export function clampTerrainPaintLayerDefinition(
 
 export function cloneTerrainPaintLayerDefinition(layer: TerrainPaintLayerDefinition): TerrainPaintLayerDefinition {
   return {
+    id: layer.id,
+    pageIndex: layer.pageIndex,
     channel: layer.channel,
     textureAssetId: layer.textureAssetId,
     ...cloneTerrainPaintLayerStyle(layer),
@@ -1267,24 +1276,24 @@ export function cloneTerrainPaintLayerDefinition(layer: TerrainPaintLayerDefinit
 }
 
 export interface TerrainPaintChunkWeightmapRef {
-  /** Stable content id (recommended: `sha256-...`) of the chunk RGBA weightmap PNG stored as a private resource. */
+  /** Stable content id of the chunk RGBA weightmap binary stored as a private resource. */
   logicalId: string
 }
 
-export type TerrainPaintChunkWeightmapMap = Record<string, TerrainPaintChunkWeightmapRef>
+export interface TerrainPaintChunkWeightmapPages {
+  pages: TerrainPaintChunkWeightmapRef[]
+}
+
+export type TerrainPaintChunkWeightmapMap = Record<string, TerrainPaintChunkWeightmapPages>
 
 export interface TerrainPaintSettings {
-  /** Versioned payload to allow schema migrations later. */
-  version: 1
+  /** Versioned payload for paged terrain paint state. */
+  version: typeof TERRAIN_PAINT_VERSION
   /** Weightmap resolution per chunk (pixels per side). */
   weightmapResolution: number
-  /** Non-base paint layers. Base is always the ground material color. */
+  /** Ordered paint layers. Base is the ground material where total paint weight is below 1. */
   layers: TerrainPaintLayerDefinition[]
-  /**
-   * Weightmap asset references keyed by chunk key (e.g., "0:0").
-   * Each chunk has one 4-channel texture mapping [Base, LayerG, LayerB, LayerA].
-   * The actual image data is stored in the project's private asset storage (or similar).
-   */
+  /** Weightmap asset references keyed by chunk key (e.g., "0:0"). */
   chunks: TerrainPaintChunkWeightmapMap
 }
 
@@ -1312,6 +1321,7 @@ export interface GroundDynamicMesh {
   generation?: GroundGenerationSettings | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
   terrainPaint?: TerrainPaintSettings | null
+  terrainPaintBakedTextureAssetId?: string | null
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {

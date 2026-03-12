@@ -86,6 +86,7 @@ import {
 import {
 	createDefaultLandformsPreviewLoaders,
 	clearLandformsPreviewForGround,
+	setLandformsPreviewTexture,
 	syncLandformsPreviewForGround,
 } from '@schema/landformsPreview'
 import {
@@ -973,10 +974,51 @@ const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const textureLoader = new THREE.TextureLoader()
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
+const bakedGroundTextureCache = new Map<string, THREE.Texture | null>()
+const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
 // Create loaders via schema factory to centralize terrain paint asset loading logic
 const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
+
+async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
+	const normalizedId = assetId.trim()
+	if (!normalizedId) {
+		return null
+	}
+	const cached = bakedGroundTextureCache.get(normalizedId)
+	if (cached !== undefined) {
+		return cached
+	}
+	const pending = bakedGroundTextureRequests.get(normalizedId)
+	if (pending) {
+		return pending
+	}
+	const request = (async () => {
+		const resolved = await resolveAssetUrlFromCache(normalizedId)
+		if (!resolved?.url) {
+			return null
+		}
+		try {
+			const texture = await textureLoader.loadAsync(resolved.url)
+			;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
+			texture.needsUpdate = true
+			return texture
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to load baked ground texture', normalizedId, error)
+			return null
+		}
+	})()
+	bakedGroundTextureRequests.set(normalizedId, request)
+	request.then((texture) => {
+		bakedGroundTextureRequests.delete(normalizedId)
+		bakedGroundTextureCache.set(normalizedId, texture)
+	}).catch(() => {
+		bakedGroundTextureRequests.delete(normalizedId)
+		bakedGroundTextureCache.set(normalizedId, null)
+	})
+	return await request
+}
 
 
 
@@ -984,6 +1026,36 @@ const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAsse
 
 
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
+	const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
+		? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
+		: ''
+	if (bakedAssetId) {
+		const token = terrainPaintPreviewLoadToken
+		void loadBakedGroundTexture(bakedAssetId).then((texture) => {
+			if (terrainPaintPreviewLoadToken !== token) {
+				return
+			}
+			if (texture) {
+				setLandformsPreviewTexture(groundObject, `ground-baked:${bakedAssetId}`, texture)
+				return
+			}
+			syncLandformsPreviewForGround(
+				groundObject,
+				groundNode,
+				landformsPreviewLoaders,
+				() => terrainPaintPreviewLoadToken,
+			)
+		})
+		return syncTerrainPaintPreviewForGroundShared(
+			groundObject,
+			{ ...dynamicMesh, terrainPaint: null },
+			{
+				loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
+				loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
+			},
+			() => terrainPaintPreviewLoadToken,
+		)
+	}
 	syncLandformsPreviewForGround(
 		groundObject,
 		groundNode,
