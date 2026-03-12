@@ -749,10 +749,13 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         footOrientation: (wallProps as any).footOrientation,
         footUvAxis: (wallProps as any).footUvAxis,
         bodyEndCapAssetId: wallProps.bodyEndCapAssetId ?? null,
+        bodyEndCapOffsetLocal: (wallProps as any).bodyEndCapOffsetLocal,
         bodyEndCapOrientation: (wallProps as any).bodyEndCapOrientation,
         headEndCapAssetId: wallProps.headEndCapAssetId ?? null,
+        headEndCapOffsetLocal: (wallProps as any).headEndCapOffsetLocal,
         headEndCapOrientation: (wallProps as any).headEndCapOrientation,
         footEndCapAssetId: wallProps.footEndCapAssetId ?? null,
+        footEndCapOffsetLocal: (wallProps as any).footEndCapOffsetLocal,
         footEndCapOrientation: (wallProps as any).footEndCapOrientation,
         cornerModels: wallProps.cornerModels ?? [],
       } as unknown as Partial<Record<string, unknown>>)

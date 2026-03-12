@@ -158,8 +158,11 @@ export async function buildWallMesh(
       bodyOrientation: wallProps.bodyOrientation,
       headOrientation: wallProps.headOrientation,
       footOrientation: wallProps.footOrientation,
+      bodyEndCapOffsetLocal: wallProps.bodyEndCapOffsetLocal,
       bodyEndCapOrientation: wallProps.bodyEndCapOrientation,
+      headEndCapOffsetLocal: wallProps.headEndCapOffsetLocal,
       headEndCapOrientation: wallProps.headEndCapOrientation,
+      footEndCapOffsetLocal: wallProps.footEndCapOffsetLocal,
       footEndCapOrientation: wallProps.footEndCapOrientation,
     },
   );

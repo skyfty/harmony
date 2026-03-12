@@ -150,6 +150,7 @@ const footCapAsset = computed(() => {
 })
 
 type WallCornerModelRow = NonNullable<WallComponentProps['cornerModels']>[number]
+type WallEndCapOffsetKey = 'bodyEndCapOffsetLocal' | 'headEndCapOffsetLocal' | 'footEndCapOffsetLocal'
 type WallDimensionValues = {
   height: number
   width: number
@@ -223,6 +224,16 @@ function normalizeOrientation(value: unknown, fallback: WallModelOrientation): W
   }
 }
 
+function normalizeOffsetLocal(value: unknown): { x: number; y: number; z: number } {
+  const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+  const read = (key: 'x' | 'y' | 'z'): number => {
+    const raw = record ? record[key] : 0
+    const num = typeof raw === 'number' ? raw : Number(raw)
+    return Number.isFinite(num) ? num : 0
+  }
+  return { x: read('x'), y: read('y'), z: read('z') }
+}
+
 function writeWallForwardVector(out: Vector3, forwardAxis: WallForwardAxis): Vector3 {
   switch (forwardAxis) {
     case '+x':
@@ -263,6 +274,20 @@ function updateWallUvAxis(
   sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: next } as any)
 }
 
+function updateWallEndCapOffset(
+  key: WallEndCapOffsetKey,
+  patch: Partial<{ x: number; y: number; z: number }>,
+): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const current = (component.props as any)?.[key]
+  const next = normalizeOffsetLocal({ ...(current ?? { x: 0, y: 0, z: 0 }), ...patch })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: next } as any)
+}
+
 function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undefined): WallCornerModelRow {
   const bodyAssetId = typeof (row as any)?.bodyAssetId === 'string' && (row as any).bodyAssetId.trim().length
     ? (row as any).bodyAssetId
@@ -282,16 +307,6 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
   const headYawDeg = clampYawDeg((row as any)?.headYawDeg, 0)
   const footForwardAxis = normalizeForwardAxis((row as any)?.footForwardAxis, '+z')
   const footYawDeg = clampYawDeg((row as any)?.footYawDeg, 0)
-
-  const normalizeOffsetLocal = (value: unknown): { x: number; y: number; z: number } => {
-    const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
-    const read = (key: 'x' | 'y' | 'z'): number => {
-      const raw = record ? record[key] : 0
-      const num = typeof raw === 'number' ? raw : Number(raw)
-      return Number.isFinite(num) ? num : 0
-    }
-    return { x: read('x'), y: read('y'), z: read('z') }
-  }
 
   const bodyOffsetLocal = normalizeOffsetLocal((row as any)?.bodyOffsetLocal)
   const headOffsetLocal = normalizeOffsetLocal((row as any)?.headOffsetLocal)
@@ -1538,6 +1553,42 @@ function applyRenderModeUpdate(rawValue: unknown) {
                         @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { yawDeg: Number(value) })"
                       />
                     </div>
+
+                    <div v-if="wallComponent" class="wall-corner-offset-grid">
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset X"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).bodyEndCapOffsetLocal?.x ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('bodyEndCapOffsetLocal', { x: Number(value) })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset Y"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).bodyEndCapOffsetLocal?.y ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('bodyEndCapOffsetLocal', { y: Number(value) })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset Z"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).bodyEndCapOffsetLocal?.z ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('bodyEndCapOffsetLocal', { z: Number(value) })"
+                      />
+                    </div>
                   </div>
 
                   <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
@@ -1590,6 +1641,42 @@ function applyRenderModeUpdate(rawValue: unknown) {
                         @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { yawDeg: Number(value) })"
                       />
                     </div>
+
+                    <div v-if="wallComponent" class="wall-corner-offset-grid">
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset X"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).headEndCapOffsetLocal?.x ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('headEndCapOffsetLocal', { x: Number(value) })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset Y"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).headEndCapOffsetLocal?.y ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('headEndCapOffsetLocal', { y: Number(value) })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset Z"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).headEndCapOffsetLocal?.z ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('headEndCapOffsetLocal', { z: Number(value) })"
+                      />
+                    </div>
                   </div>
 
                   <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
@@ -1640,6 +1727,42 @@ function applyRenderModeUpdate(rawValue: unknown) {
                         max="180"
                         :model-value="(wallComponent.props as any).footEndCapOrientation.yawDeg"
                         @update:modelValue="(value) => updateWallOrientation('footEndCapOrientation', { yawDeg: Number(value) })"
+                      />
+                    </div>
+
+                    <div v-if="wallComponent" class="wall-corner-offset-grid">
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset X"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).footEndCapOffsetLocal?.x ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('footEndCapOffsetLocal', { x: Number(value) })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset Y"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).footEndCapOffsetLocal?.y ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('footEndCapOffsetLocal', { y: Number(value) })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Offset Z"
+                        hide-details
+                        step="0.01"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).footEndCapOffsetLocal?.z ?? 0"
+                        @update:modelValue="(value) => updateWallEndCapOffset('footEndCapOffsetLocal', { z: Number(value) })"
                       />
                     </div>
                   </div>
