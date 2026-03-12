@@ -1719,6 +1719,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const wantsInstancing = Boolean(
       bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints,
     )
+    const hasProceduralBodyFallback = !bodyAssetId
 
     const userData = container.userData ?? (container.userData = {})
 
@@ -2127,10 +2128,22 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     // ============================
-    // 6) 实例化生效：移除程序墙体，更新 bounds 与 pick proxy
+    // 6) 实例化生效：有 body 资产时移除程序墙体；否则保留程序 body 作为回退显示。
     // ============================
-    // 注意：这里移除的是“程序生成的 wallGroup”，不是模型资源实例。
-    removeWallGroup(container)
+    if (hasProceduralBodyFallback) {
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
+      wallGroup.visible = true
+      updateWallGroupIfNeeded(
+        wallGroup,
+        effectiveDefinition,
+        signatureKey,
+        { smoothing, wallRenderMode },
+      )
+      applyAirWallVisualToWallGroup(wallGroup, false)
+    } else {
+      // 注意：这里移除的是“程序生成的 wallGroup”，不是模型资源实例。
+      removeWallGroup(container)
+    }
 
     // 将 bounds 写入 userData，供外部（拾取、框选、Gizmo 等）快速读取。
     if (hasWallBounds && !wallInstancedBoundsBox.isEmpty()) {
