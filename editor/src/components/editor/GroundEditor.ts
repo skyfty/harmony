@@ -212,6 +212,8 @@ function clamp01(value: number): number {
 	return Math.max(0, Math.min(1, value))
 }
 
+const TERRAIN_PAINT_PAGE_CHANNELS: TerrainPaintChannel[] = ['r', 'g', 'b', 'a']
+
 function channelToIndex(channel: TerrainPaintChannel): number {
 	switch (channel) {
 		case 'r':
@@ -227,28 +229,49 @@ function channelToIndex(channel: TerrainPaintChannel): number {
 	}
 }
 
-function chooseAvailablePaintChannel(settings: TerrainPaintSettings): TerrainPaintChannel | null {
-	const used = new Set<TerrainPaintChannel>(settings.layers.map((layer) => layer.channel))
-	const candidates: TerrainPaintChannel[] = ['g', 'b', 'a']
-	for (const candidate of candidates) {
-		if (!used.has(candidate)) {
-			return candidate
-		}
+function channelFromIndex(index: number): TerrainPaintChannel {
+	return TERRAIN_PAINT_PAGE_CHANNELS[THREE.MathUtils.clamp(Math.floor(index), 0, 3)] ?? 'r'
+}
+
+function buildTerrainPaintLayerPlacement(slotIndex: number): {
+	pageIndex: number
+	channel: TerrainPaintChannel
+	channelIndex: number
+} {
+	const normalizedIndex = Math.max(0, Math.floor(slotIndex))
+	const channelIndex = normalizedIndex % 4
+	return {
+		pageIndex: Math.floor(normalizedIndex / 4),
+		channel: channelFromIndex(channelIndex),
+		channelIndex,
 	}
-	return null
+}
+
+function getTerrainPaintLayerSlotIndex(layer: TerrainPaintLayerDefinition): number {
+	return Math.max(0, Math.floor(layer.pageIndex)) * 4 + channelToIndex(layer.channel)
+}
+
+function createTerrainPaintLayerId(): string {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+		return crypto.randomUUID()
+	}
+	return `terrain-paint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 function createTerrainPaintLayerDefinition(
 	textureAssetId: string,
 	style: TerrainPaintLayerStyle,
-	channel: TerrainPaintChannel = 'g',
+	slotIndex: number,
 ): TerrainPaintLayerDefinition | null {
 	const trimmed = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
 	if (!trimmed) {
 		return null
 	}
+	const placement = buildTerrainPaintLayerPlacement(slotIndex)
 	return clampTerrainPaintLayerDefinition({
-		channel,
+		id: createTerrainPaintLayerId(),
+		pageIndex: placement.pageIndex,
+		channel: placement.channel,
 		textureAssetId: trimmed,
 		...style,
 	})
@@ -270,24 +293,21 @@ function ensureTerrainPaintLayer(
 	settings: TerrainPaintSettings,
 	textureAssetId: string,
 	style: TerrainPaintLayerStyle,
-): TerrainPaintChannel | null {
-	const requestedLayer = createTerrainPaintLayerDefinition(textureAssetId, style)
+): TerrainPaintLayerDefinition | null {
+	const nextSlotIndex = settings.layers.reduce((maxSlotIndex, layer) => {
+		return Math.max(maxSlotIndex, getTerrainPaintLayerSlotIndex(layer))
+	}, -1) + 1
+	const requestedLayer = createTerrainPaintLayerDefinition(textureAssetId, style, nextSlotIndex)
 	if (!requestedLayer) {
 		return null
 	}
 	const existing = settings.layers.find((layer) => areTerrainPaintLayersEquivalent(layer, requestedLayer))
 	if (existing) {
-		return existing.channel
+		return existing
 	}
-	const nextChannel = chooseAvailablePaintChannel(settings)
-	if (!nextChannel) {
-		return null
-	}
-	settings.layers.push({
-		...requestedLayer,
-		channel: nextChannel,
-	})
-	return nextChannel
+	settings.layers.push(requestedLayer)
+	settings.layers.sort((a, b) => getTerrainPaintLayerSlotIndex(a) - getTerrainPaintLayerSlotIndex(b))
+	return requestedLayer
 }
 
 function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintSettings {
@@ -296,18 +316,26 @@ function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId
 		? useGroundPaintStore().getSceneGroundPaint(sceneId)
 		: null
 	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
-	if (existing && existing.version === 1) {
+	if (existing && existing.version === 2) {
 		return {
-			version: 1,
+			version: 2,
 			weightmapResolution: Number.isFinite(existing.weightmapResolution)
 				? Math.max(8, Math.min(2048, Math.round(existing.weightmapResolution)))
 				: 256,
-			layers: Array.isArray(existing.layers) ? existing.layers.map((layer) => cloneTerrainPaintLayerDefinition(clampTerrainPaintLayerDefinition(layer))) : [],
-			chunks: existing.chunks ? { ...existing.chunks } : {},
+			layers: Array.isArray(existing.layers)
+				? existing.layers.map((layer) => cloneTerrainPaintLayerDefinition(clampTerrainPaintLayerDefinition(layer)))
+				: [],
+			chunks: existing.chunks
+				? Object.fromEntries(
+					Object.entries(existing.chunks).map(([chunkKey, chunkValue]) => [chunkKey, {
+						pages: Array.isArray(chunkValue?.pages) ? chunkValue.pages.map((page) => ({ logicalId: page.logicalId })) : [],
+					}]),
+				)
+				: {},
 		}
 	}
 	return {
-		version: 1,
+		version: 2,
 		weightmapResolution: 256,
 		layers: [],
 		chunks: {},
@@ -316,110 +344,96 @@ function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId
 
 function createBlankWeightmap(resolution: number): Uint8ClampedArray {
 	const res = Math.max(1, Math.round(resolution))
-	const data = new Uint8ClampedArray(res * res * 4)
-	for (let i = 0; i < res * res; i += 1) {
-		const offset = i * 4
-		data[offset] = 255
-		data[offset + 1] = 0
-		data[offset + 2] = 0
-		data[offset + 3] = 0
-	}
-	return data
+	return new Uint8ClampedArray(res * res * 4)
 }
 
-function normalizeWeightsTo255(weights: [number, number, number, number]): [number, number, number, number] {
-	let total = weights[0] + weights[1] + weights[2] + weights[3]
-	if (total <= 0) {
-		return [255, 0, 0, 0]
+function getTerrainPaintWeight(pages: Uint8ClampedArray[], slotIndex: number, baseOffset: number): number {
+	const placement = buildTerrainPaintLayerPlacement(slotIndex)
+	const page = pages[placement.pageIndex]
+	if (!page) {
+		return 0
 	}
-	if (total === 255) {
-		return weights
-	}
-	const scale = 255 / total
-	let r = Math.round(weights[0] * scale)
-	let g = Math.round(weights[1] * scale)
-	let b = Math.round(weights[2] * scale)
-	let a = Math.round(weights[3] * scale)
-	let sum = r + g + b + a
-	if (sum !== 255) {
-		const diff = 255 - sum
-		r = THREE.MathUtils.clamp(r + diff, 0, 255)
-		sum = r + g + b + a
-		if (sum !== 255) {
-			r = THREE.MathUtils.clamp(r, 0, 255)
-			g = THREE.MathUtils.clamp(g, 0, 255)
-			b = THREE.MathUtils.clamp(b, 0, 255)
-			a = THREE.MathUtils.clamp(a, 0, 255)
-			const fallbackSum = r + g + b + a
-			if (fallbackSum !== 255) {
-				r = THREE.MathUtils.clamp(r + (255 - fallbackSum), 0, 255)
-			}
-		}
-	}
-	return [r, g, b, a]
+	return page[baseOffset + placement.channelIndex] ?? 0
 }
 
-function addWeightToPixel(data: Uint8ClampedArray, baseOffset: number, targetChannelIndex: number, amount: number): boolean {
+function setTerrainPaintWeight(pages: Uint8ClampedArray[], slotIndex: number, baseOffset: number, value: number): void {
+	const placement = buildTerrainPaintLayerPlacement(slotIndex)
+	const page = pages[placement.pageIndex]
+	if (!page) {
+		return
+	}
+	page[baseOffset + placement.channelIndex] = THREE.MathUtils.clamp(Math.round(value), 0, 255)
+}
+
+function addWeightToPixel(pages: Uint8ClampedArray[], baseOffset: number, targetSlotIndex: number, amount: number): boolean {
 	if (!Number.isFinite(amount) || amount <= 0) {
 		return false
 	}
-	const weights: [number, number, number, number] = [
-		data[baseOffset] ?? 0,
-		data[baseOffset + 1] ?? 0,
-		data[baseOffset + 2] ?? 0,
-		data[baseOffset + 3] ?? 0,
-	]
-	const normalized = normalizeWeightsTo255(weights)
-	let r = normalized[0]
-	let g = normalized[1]
-	let b = normalized[2]
-	let a = normalized[3]
-	const idx = THREE.MathUtils.clamp(Math.floor(targetChannelIndex), 0, 3)
-	const get = (i: number) => (i === 0 ? r : i === 1 ? g : i === 2 ? b : a)
-	const set = (i: number, value: number) => {
-		if (i === 0) r = value
-		else if (i === 1) g = value
-		else if (i === 2) b = value
-		else a = value
-	}
-	const available = 255 - get(idx)
-	const delta = Math.min(available, Math.max(0, Math.round(amount)))
-	if (delta <= 0) {
+	const slotCount = pages.length * 4
+	if (slotCount <= 0) {
 		return false
 	}
-	set(idx, get(idx) + delta)
-	let remaining = delta
-	const otherTotal = 255 - get(idx) + remaining
-	if (otherTotal > 0) {
-		for (let c = 0; c < 4; c += 1) {
-			if (c === idx) {
-				continue
-			}
-			const current = get(c)
-			const take = Math.min(current, Math.floor((delta * current) / otherTotal))
-			set(c, current - take)
-			remaining -= take
+	const normalizedTargetSlot = THREE.MathUtils.clamp(Math.floor(targetSlotIndex), 0, slotCount - 1)
+	const beforeValues = new Array<number>(slotCount)
+	let total = 0
+	for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) {
+		const value = getTerrainPaintWeight(pages, slotIndex, baseOffset)
+		beforeValues[slotIndex] = value
+		total += value
+	}
+	const current = beforeValues[normalizedTargetSlot] ?? 0
+	const target = Math.min(255, current + amount)
+	const otherTotal = Math.max(0, total - current)
+	const allowedOtherTotal = Math.max(0, 255 - target)
+	const otherScale = otherTotal > allowedOtherTotal && otherTotal > 0 ? allowedOtherTotal / otherTotal : 1
+	let changed = false
+	for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) {
+		const nextValue = slotIndex === normalizedTargetSlot
+			? target
+			: Math.round((beforeValues[slotIndex] ?? 0) * otherScale)
+		if (nextValue !== beforeValues[slotIndex]) {
+			changed = true
+		}
+		setTerrainPaintWeight(pages, slotIndex, baseOffset, nextValue)
+	}
+	return changed
+}
+
+function eraseWeightFromPixel(pages: Uint8ClampedArray[], baseOffset: number, amount: number): boolean {
+	if (!Number.isFinite(amount) || amount <= 0) {
+		return false
+	}
+	const slotCount = pages.length * 4
+	let changed = false
+	for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) {
+		const current = getTerrainPaintWeight(pages, slotIndex, baseOffset)
+		if (current <= 0) {
+			continue
+		}
+		const nextValue = Math.max(0, current - amount)
+		if (nextValue !== current) {
+			changed = true
+			setTerrainPaintWeight(pages, slotIndex, baseOffset, nextValue)
 		}
 	}
-	if (remaining > 0) {
-		for (let c = 0; c < 4; c += 1) {
-			if (c === idx) {
-				continue
-			}
-			if (remaining <= 0) {
-				break
-			}
-			const current = get(c)
-			const take = Math.min(current, remaining)
-			set(c, current - take)
-			remaining -= take
-		}
+	return changed
+}
+
+function normalizeWeightsTo255(weights: [number, number, number, number]): [number, number, number, number] {
+	const total = weights[0] + weights[1] + weights[2] + weights[3]
+	if (total <= 0) {
+		return [0, 0, 0, 0]
 	}
-	data[baseOffset] = r
-	data[baseOffset + 1] = g
-	data[baseOffset + 2] = b
-	data[baseOffset + 3] = a
-	return true
+	if (total <= 255) {
+		return weights
+	}
+	const scale = 255 / total
+	return [
+		Math.round(weights[0] * scale),
+		Math.round(weights[1] * scale),
+		Math.round(weights[2] * scale),
+		Math.round(weights[3] * scale),
+	]
 }
 
 function resolvePaintChunkBounds(
@@ -530,7 +544,7 @@ type TerrainPaintStampRequest = {
 	localZ: number
 	radius: number
 	strength: number
-	channelIndex: number
+	targetLayerSlotIndex: number | null
 }
 
 type TerrainPaintChunkBounds = {
@@ -545,7 +559,7 @@ type PaintChunkState = {
 	chunkRow: number
 	chunkColumn: number
 	resolution: number
-	data: Uint8ClampedArray
+	pages: Uint8ClampedArray[]
 	status: 'loading' | 'ready'
 	loadPromise: Promise<void> | null
 	pendingStamps: TerrainPaintStampRequest[]
@@ -1296,7 +1310,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 									terrainPaintPreviewPendingChunkKeys: new Map(),
 									terrainPaintPreviewFlushRafId: null,
 							},
-							layer.channel,
+								getTerrainPaintLayerSlotIndex(layer),
 							asset,
 						)
 					}
@@ -1784,11 +1798,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		// Always clear first to avoid stale textures leaking across scene switches.
+		const clearLimit = Math.max(4, session.settings.layers.length)
 		materials.forEach((material) => {
-			updateTerrainPaintPreviewLayerTexture(material, 'g', null)
-			updateTerrainPaintPreviewLayerTexture(material, 'b', null)
-			updateTerrainPaintPreviewLayerTexture(material, 'a', null)
+			for (let slotIndex = 0; slotIndex < clearLimit; slotIndex += 1) {
+				updateTerrainPaintPreviewLayerTexture(material, slotIndex, null)
+			}
 		})
 
 		for (const layer of session.settings.layers ?? []) {
@@ -1798,7 +1812,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const textureAssetId = typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
 			if (!textureAssetId) {
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+					updateTerrainPaintPreviewLayerTexture(material, getTerrainPaintLayerSlotIndex(layer), null)
 				})
 				continue
 			}
@@ -1806,7 +1820,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!asset) {
 				// Silent skip (and clear the channel so it doesn't keep stale data).
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+					updateTerrainPaintPreviewLayerTexture(material, getTerrainPaintLayerSlotIndex(layer), null)
 				})
 				continue
 			}
@@ -1817,12 +1831,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!texture) {
 				// Silent skip
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+					updateTerrainPaintPreviewLayerTexture(material, getTerrainPaintLayerSlotIndex(layer), null)
 				})
 				continue
 			}
 			materials.forEach((material) => {
-				updateTerrainPaintPreviewLayerTexture(material, layer.channel, texture)
+				updateTerrainPaintPreviewLayerTexture(material, getTerrainPaintLayerSlotIndex(layer), texture)
 			})
 		}
 	}
@@ -1915,9 +1929,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function applyTerrainPaintForChunkKey(session: PaintSessionState, chunk: { key: string; chunkRow: number; chunkColumn: number }): void {
 		const ref = session.settings.chunks?.[chunk.key] ?? null
-		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
+		const hasPages = Array.isArray(ref?.pages) && ref.pages.some((page) => typeof page?.logicalId === 'string' && page.logicalId.trim().length > 0)
 		const state = ensurePaintChunkState(session, chunk)
-		if (!logicalId) {
+		if (!hasPages) {
 			// Ensure stale cached textures don't leak into this scene.
 			pushTerrainPaintPreviewWeightmap(session, state)
 		}
@@ -3048,7 +3062,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			materials.forEach((material) => {
-				updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
+				for (let pageIndex = 0; pageIndex < chunk.pages.length; pageIndex += 1) {
+					updateTerrainPaintPreviewWeightmap(material, `${chunk.key}@${pageIndex}`, chunk.pages[pageIndex] ?? createBlankWeightmap(chunk.resolution), chunk.resolution)
+				}
 			})
 		}
 	}
@@ -3057,7 +3073,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		enqueueTerrainPaintPreviewChunkKey(session, chunk.key)
 	}
 
-	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, channel: TerrainPaintChannel, asset: ProjectAsset): Promise<void> {
+	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, slotIndex: number, asset: ProjectAsset): Promise<void> {
 		const groundObject = getGroundObject()
 		if (!groundObject) {
 			return
@@ -3072,7 +3088,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		materials.forEach((material) => {
-			updateTerrainPaintPreviewLayerTexture(material, channel, texture)
+			updateTerrainPaintPreviewLayerTexture(material, slotIndex, texture)
 		})
 	}
 
@@ -3082,12 +3098,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return existing
 		}
 		const resolution = session.settings.weightmapResolution
+		const requiredPageCount = Math.max(1, session.settings.layers.reduce((maxPageCount, layer) => {
+			return Math.max(maxPageCount, Math.floor(layer.pageIndex) + 1)
+		}, 0))
 		const state: PaintChunkState = {
 			key: payload.key,
 			chunkRow: payload.chunkRow,
 			chunkColumn: payload.chunkColumn,
 			resolution,
-			data: createBlankWeightmap(resolution),
+			pages: Array.from({ length: requiredPageCount }, () => createBlankWeightmap(resolution)),
 			status: 'ready',
 			loadPromise: null,
 			pendingStamps: [],
@@ -3096,24 +3115,31 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.chunkStates.set(payload.key, state)
 
 		const ref = session.settings.chunks?.[payload.key] ?? null
-		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
-		if (logicalId) {
+		const pages = Array.isArray(ref?.pages) ? ref.pages : []
+		if (pages.length) {
 			state.status = 'loading'
 			state.loadPromise = (async () => {
 				try {
 					const cache = useAssetCacheStore()
-					let entry = cache.getEntry(logicalId)
-					let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
-					if (!blob) {
-						entry = (await cache.loadFromIndexedDb(logicalId)) ?? entry
-						blob = entry.status === 'cached' ? (entry.blob ?? null) : null
+					const loadedPages: Uint8ClampedArray[] = []
+					for (const pageRef of pages) {
+						const logicalId = typeof pageRef?.logicalId === 'string' ? pageRef.logicalId.trim() : ''
+						if (!logicalId) {
+							loadedPages.push(createBlankWeightmap(state.resolution))
+							continue
+						}
+						let entry = cache.getEntry(logicalId)
+						let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
+						if (!blob) {
+							entry = (await cache.loadFromIndexedDb(logicalId)) ?? entry
+							blob = entry.status === 'cached' ? (entry.blob ?? null) : null
+						}
+						loadedPages.push(blob ? await decodeWeightmapToData(blob, state.resolution) : createBlankWeightmap(state.resolution))
 					}
-					if (blob) {
-						state.data = await decodeWeightmapToData(blob, state.resolution)
-					}
+					state.pages = loadedPages.length ? loadedPages : [createBlankWeightmap(state.resolution)]
 				} catch (error) {
 					console.warn('加载地貌权重贴图失败，回退到空白贴图：', error)
-					state.data = createBlankWeightmap(state.resolution)
+					state.pages = [createBlankWeightmap(state.resolution)]
 				} finally {
 					pushTerrainPaintPreviewWeightmap(session, state)
 					state.status = 'ready'
@@ -3158,6 +3184,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const strength255 = strength * 255
+		const requiredPageCount = Math.max(
+			1,
+			stamp.targetLayerSlotIndex === null ? chunk.pages.length : buildTerrainPaintLayerPlacement(stamp.targetLayerSlotIndex).pageIndex + 1,
+		)
+		while (chunk.pages.length < requiredPageCount) {
+			chunk.pages.push(createBlankWeightmap(chunk.resolution))
+		}
 		let any = false
 		for (let y = minY; y <= maxY; y += 1) {
 			for (let x = minX; x <= maxX; x += 1) {
@@ -3173,7 +3206,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const falloff = (1 - t) * (1 - t)
 				const amount = strength255 * falloff
 				const offset = (y * res + x) * 4
-				if (addWeightToPixel(chunk.data, offset, stamp.channelIndex, amount)) {
+				const changed = stamp.targetLayerSlotIndex === null
+					? eraseWeightFromPixel(chunk.pages, offset, amount)
+					: addWeightToPixel(chunk.pages, offset, stamp.targetLayerSlotIndex, amount)
+				if (changed) {
 					any = true
 				}
 			}
@@ -3276,7 +3312,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const smoothIterations = Math.max(0, Math.min(6, Math.round(smoothness * 4)))
 			if (smoothIterations > 0) {
 				dirtyChunks.forEach((chunk) => {
-					chunk.data = blurWeightmap(chunk.data, chunk.resolution, smoothIterations)
+					chunk.pages = chunk.pages.map((page) => blurWeightmap(page, chunk.resolution, smoothIterations))
 					pushTerrainPaintPreviewWeightmap(session, chunk)
 				})
 			}
@@ -3291,33 +3327,37 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (token !== paintCommitToken) {
 					return false
 				}
-				const weightmapBlob = encodeWeightmapToBinary(chunk.data, chunk.resolution)
-				const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}.bin`
-				const logicalId = await computeBlobHash(weightmapBlob)
-				await cache.storeAssetBlob(logicalId, {
-					blob: weightmapBlob,
-					mimeType: 'application/octet-stream',
-					filename,
-				})
-				options.sceneStore.registerAsset(
-					{
-						id: logicalId,
-						name: filename,
-						type: 'file',
-						downloadUrl: logicalId,
-						previewColor: '#ffffff',
-						thumbnail: null,
-						description: `Terrain weightmap (${session.nodeId}:${chunk.key})`,
-						gleaned: true,
-					},
-					{
-						source: { type: 'local' },
-						internal: true,
-						commitOptions: { updateNodes: false },
-					},
-				)
+				const pageRefs: Array<{ logicalId: string }> = []
+				for (let pageIndex = 0; pageIndex < chunk.pages.length; pageIndex += 1) {
+					const weightmapBlob = encodeWeightmapToBinary(chunk.pages[pageIndex] ?? createBlankWeightmap(chunk.resolution), chunk.resolution)
+					const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}_p${pageIndex}.bin`
+					const logicalId = await computeBlobHash(weightmapBlob)
+					await cache.storeAssetBlob(logicalId, {
+						blob: weightmapBlob,
+						mimeType: 'application/octet-stream',
+						filename,
+					})
+					options.sceneStore.registerAsset(
+						{
+							id: logicalId,
+							name: filename,
+							type: 'file',
+							downloadUrl: logicalId,
+							previewColor: '#ffffff',
+							thumbnail: null,
+							description: `Terrain weightmap (${session.nodeId}:${chunk.key}:page${pageIndex})`,
+							gleaned: true,
+						},
+						{
+							source: { type: 'local' },
+							internal: true,
+							commitOptions: { updateNodes: false },
+						},
+					)
+					pageRefs.push({ logicalId })
+				}
 				session.settings.chunks[chunk.key] = {
-					logicalId,
+					pages: pageRefs,
 				}
 				chunk.dirty = false
 			}
@@ -4516,16 +4556,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const session = ensurePaintSession(definition, groundNode.id)
 		const paintAsset = options.paintAsset.value
-		let channelIndex = 0
+		let targetLayerSlotIndex: number | null = null
 		if (paintAsset) {
-			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id, options.paintLayerStyle.value)
-			if (!channel) {
-				// No available channel slot (G/B/A) for new layers.
+			const layer = ensureTerrainPaintLayer(session.settings, paintAsset.id, options.paintLayerStyle.value)
+			if (!layer) {
 				return
 			}
-			channelIndex = channelToIndex(channel)
+			targetLayerSlotIndex = getTerrainPaintLayerSlotIndex(layer)
 			// Best-effort: ensure the layer texture is visible during painting.
-			void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
+			void pushTerrainPaintPreviewLayer(session, targetLayerSlotIndex, paintAsset)
 		}
 
 		for (let i = 0; i < steps; i += 1) {
@@ -4538,8 +4577,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				localZ: point.z,
 				radius,
 				strength: clamp01(options.brushStrength.value),
-				// If no layer is selected ("empty" tile), paint into base channel (R) to erase.
-				channelIndex,
+				targetLayerSlotIndex,
 			}
 			const chunks = collectPaintChunksOverlappedByBrush(definition, session.chunkCells, point.x, point.z, radius)
 			for (const chunkInfo of chunks) {

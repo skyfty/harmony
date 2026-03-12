@@ -213,6 +213,7 @@ import { resetScatterInstanceBinding } from '@/utils/terrainScatterRuntime'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { persistPlanningImageLayersToIndexedDB } from '@/utils/planningImageStorage'
 import { installPlanningImagesResolver } from '@/utils/planningImageComponentResolver'
+import { bakeGroundSurfaceTexture } from '@/utils/groundBake'
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
@@ -396,6 +397,7 @@ const materialEditHistoryTimers = new Map<string, ReturnType<typeof setTimeout>>
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
+const GENERATED_GROUND_BAKE_ASSET_CATEGORY_ID = '__generated_ground_bakes__'
 let builtinWaterNormalBlobPromise: Promise<Blob> | null = null
 
 function buildMaterialEditHistoryKey(nodeId: string, nodeMaterialId: string): string {
@@ -4284,10 +4286,88 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
+function removeGeneratedGroundBakeAsset(scene: StoredSceneDocument, assetId: string | null | undefined): void {
+  const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedId) {
+    return
+  }
+  const indexEntry = scene.assetIndex?.[normalizedId]
+  if (!indexEntry || indexEntry.source?.type !== 'local' || indexEntry.internal !== true) {
+    return
+  }
+  delete scene.assetIndex[normalizedId]
+  delete scene.packageAssetMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${normalizedId}`]
+  extractAssetFromCatalog(scene.assetCatalog, normalizedId)
+}
+
+async function ensureGroundBakedTexturePrepared(scene: StoredSceneDocument): Promise<void> {
+  const groundNode = findGroundNode(scene.nodes)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  const definition = groundNode.dynamicMesh
+  const previousId = typeof definition.terrainPaintBakedTextureAssetId === 'string'
+    ? definition.terrainPaintBakedTextureAssetId.trim()
+    : ''
+  const baked = await bakeGroundSurfaceTexture(scene, { maxResolution: 2048 })
+  if (!baked) {
+    if (previousId) {
+      removeGeneratedGroundBakeAsset(scene, previousId)
+    }
+    definition.terrainPaintBakedTextureAssetId = null
+    return
+  }
+
+  const assetCache = useAssetCacheStore()
+  let entry = assetCache.getEntry(baked.assetId)
+  if (entry.status !== 'cached' || !entry.blob) {
+    const indexed = await assetCache.loadFromIndexedDb(baked.assetId)
+    if (indexed) {
+      entry = indexed
+    }
+  }
+  if (entry.status !== 'cached' || !entry.blob) {
+    await assetCache.storeAssetBlob(baked.assetId, {
+      blob: baked.blob,
+      mimeType: baked.mimeType,
+      filename: baked.filename,
+      downloadUrl: baked.assetId,
+    })
+  }
+  assetCache.touch(baked.assetId)
+
+  if (previousId && previousId !== baked.assetId) {
+    removeGeneratedGroundBakeAsset(scene, previousId)
+  }
+
+  const nextAsset: ProjectAsset = {
+    id: baked.assetId,
+    name: baked.filename,
+    extension: 'png',
+    categoryId: GENERATED_GROUND_BAKE_ASSET_CATEGORY_ID,
+    type: 'texture',
+    description: 'Generated baked ground surface texture',
+    downloadUrl: baked.assetId,
+    previewColor: '#6f8a5b',
+    thumbnail: null,
+    gleaned: false,
+  }
+
+  insertAssetIntoCatalog(scene.assetCatalog, GENERATED_GROUND_BAKE_ASSET_CATEGORY_ID, nextAsset)
+  scene.assetIndex[baked.assetId] = {
+    categoryId: GENERATED_GROUND_BAKE_ASSET_CATEGORY_ID,
+    source: { type: 'local' },
+    internal: true,
+  }
+  scene.packageAssetMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${baked.assetId}`] = baked.assetId
+  definition.terrainPaintBakedTextureAssetId = baked.assetId
+}
+
 export async function buildPackageAssetMapForExport(
   scene: StoredSceneDocument,
   _options?: { embedResources?: boolean },
 ): Promise<{ packageAssetMap: Record<string, string>; assetIndex: Record<string, AssetIndexEntry> }> {
+  await ensureGroundBakedTexturePrepared(scene)
   const usedAssetIds = collectSceneAssetReferences(scene)
   let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap)),usedAssetIds)
   const assetIndex = filterAssetIndexByUsage(scene.assetIndex, usedAssetIds)
@@ -4931,9 +5011,11 @@ function collectTerrainScatterAssetDependencies(
 
 function collectTerrainPaintAssetDependencies(
   terrainPaint: GroundDynamicMesh['terrainPaint'] | null | undefined,
+  bakedTextureAssetId: string | null | undefined,
   bucket: Set<string>,
 ) {
-  if (!terrainPaint || terrainPaint.version !== 1 || !terrainPaint.chunks || typeof terrainPaint.chunks !== 'object') {
+  collectAssetIdCandidate(bucket, bakedTextureAssetId)
+  if (!terrainPaint || terrainPaint.version !== 2 || !terrainPaint.chunks || typeof terrainPaint.chunks !== 'object') {
     return
   }
   if (Array.isArray(terrainPaint.layers)) {
@@ -4941,11 +5023,14 @@ function collectTerrainPaintAssetDependencies(
       collectAssetIdCandidate(bucket, layer?.textureAssetId)
     })
   }
-  Object.values(terrainPaint.chunks).forEach((ref: any) => {
-    const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
-    if (logicalId) {
-      bucket.add(logicalId)
-    }
+  Object.values(terrainPaint.chunks).forEach((chunkRef: any) => {
+    const pages = Array.isArray(chunkRef?.pages) ? chunkRef.pages : []
+    pages.forEach((pageRef: any) => {
+      const logicalId = typeof pageRef?.logicalId === 'string' ? pageRef.logicalId.trim() : ''
+      if (logicalId) {
+        bucket.add(logicalId)
+      }
+    })
   })
 }
 
@@ -4972,10 +5057,10 @@ function collectGroundPaintAssetDependencies(scene: StoredSceneDocument, bucket:
   }
   const runtimeState = useGroundPaintStore().getSceneGroundPaint(scene.id)
   if (runtimeState?.nodeId === groundNode.id) {
-    collectTerrainPaintAssetDependencies(runtimeState.terrainPaint, bucket)
+    collectTerrainPaintAssetDependencies(runtimeState.terrainPaint, (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId, bucket)
     return
   }
-  collectTerrainPaintAssetDependencies((groundNode.dynamicMesh as any)?.terrainPaint, bucket)
+  collectTerrainPaintAssetDependencies((groundNode.dynamicMesh as any)?.terrainPaint, (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId, bucket)
 }
 
 function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket: Set<string>) {
@@ -9189,15 +9274,18 @@ export const useSceneStore = defineStore('scene', {
         if (dynamicMesh && dynamicMesh.type === 'Ground') {
           const groundMesh = dynamicMesh as GroundDynamicMesh
           const terrainPaint = groundMesh.terrainPaint ?? null
-          if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks) {
-            Object.values(terrainPaint.chunks).forEach((ref) => {
-              if (!ref || typeof (ref as any).logicalId !== 'string' || !String((ref as any).logicalId).trim().length) {
-                return
-              }
-              const logicalId = String((ref as any).logicalId).trim()
-              if (!terrainPaintRefs.has(logicalId)) {
-                terrainPaintRefs.set(logicalId, null)
-              }
+          if (terrainPaint && terrainPaint.version === 2 && terrainPaint.chunks) {
+            Object.values(terrainPaint.chunks).forEach((chunkRef) => {
+              const pages = Array.isArray((chunkRef as any)?.pages) ? (chunkRef as any).pages : []
+              pages.forEach((pageRef: any) => {
+                if (!pageRef || typeof pageRef.logicalId !== 'string' || !pageRef.logicalId.trim().length) {
+                  return
+                }
+                const logicalId = pageRef.logicalId.trim()
+                if (!terrainPaintRefs.has(logicalId)) {
+                  terrainPaintRefs.set(logicalId, null)
+                }
+              })
             })
           }
         }

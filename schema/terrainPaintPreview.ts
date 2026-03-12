@@ -357,7 +357,7 @@ export function ensureTerrainPaintPreviewInstalled(
 			if (!def) {
 				return
 			}
-			if (currentSettings && currentSettings.version !== 1) {
+			if (currentSettings && currentSettings.version !== 2) {
 				// Unsupported settings version; disable preview by not enabling the shader uniforms below.
 			}
 			state.landformsBounds.copy(computeGroundBounds(def))
@@ -374,7 +374,7 @@ export function ensureTerrainPaintPreviewInstalled(
 			state.shader.uniforms.uLandformsEnabled.value = landformsTexture ? 1 : 0
 			state.shader.uniforms.uLandformsTexture.value = landformsTexture ?? state.defaultTransparent
 			state.shader.uniforms.uLandformsBounds.value = state.landformsBounds
-			state.shader.uniforms.uTerrainPaintEnabled.value = currentSettings && currentSettings.version === 1 ? 1 : 0
+			state.shader.uniforms.uTerrainPaintEnabled.value = currentSettings && currentSettings.version === 2 ? 1 : 0
 			state.shader.uniforms.uTerrainPaintWeightmap.value = weightmap
 			state.shader.uniforms.uTerrainPaintChunkBounds.value = state.chunkBounds
 			state.shader.uniforms.uTerrainPaintGroundBounds.value = state.landformsBounds
@@ -443,11 +443,14 @@ export function updateTerrainPaintPreviewWeightmap(
 
 export function updateTerrainPaintPreviewLayerTexture(
 	material: THREE.Material,
-	channel: TerrainPaintChannel,
+	channel: TerrainPaintChannel | number,
 	texture: THREE.Texture | null,
 ): void {
 	const state = getOrCreateShaderState(material)
-	if (channel === 'r') {
+	const normalizedChannel = typeof channel === 'number'
+		? (['r', 'g', 'b', 'a'][Math.max(0, Math.min(3, Math.floor(channel) % 4))] as TerrainPaintChannel)
+		: channel
+	if (normalizedChannel === 'r') {
 		return
 	}
 	if (texture) {
@@ -455,10 +458,10 @@ export function updateTerrainPaintPreviewLayerTexture(
 		texture.wrapT = THREE.RepeatWrapping
 		;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
 		texture.needsUpdate = true
-		;(state.layerTextures as any)[channel] = texture
+		;(state.layerTextures as any)[normalizedChannel] = texture
 		return
 	}
-	delete (state.layerTextures as any)[channel]
+	delete (state.layerTextures as any)[normalizedChannel]
 }
 
 export async function decodeWeightmapToData(blob: Blob, resolution: number): Promise<Uint8ClampedArray> {
@@ -551,7 +554,7 @@ export async function loadTerrainPaintAssets(
 	// Load chunks
 	if (settings.chunks) {
 		const promises = Object.entries(settings.chunks).map(async ([key, chunkRef]) => {
-			const logicalId = (chunkRef as any)?.logicalId
+			const logicalId = (chunkRef as any)?.pages?.[0]?.logicalId
 			if (typeof logicalId !== 'string') return
 			const blob = await assetLoader(logicalId)
 			if (blob) {
@@ -794,7 +797,7 @@ export function syncTerrainPaintPreviewForGround(
 
 	for (const [chunkKey, chunkTargets] of visibleChunkMaterials) {
 		const ref = (chunks as any)[chunkKey]
-		const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
+		const logicalId = typeof ref?.pages?.[0]?.logicalId === 'string' ? ref.pages[0].logicalId.trim() : ''
 		if (!logicalId.length) {
 			terrainPaintChunkRefKeys.delete(chunkKey)
 			chunkTargets.forEach((target) => {
