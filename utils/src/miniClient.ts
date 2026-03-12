@@ -68,10 +68,25 @@ export class MiniApiError extends Error {
   }
 }
 
+export type MiniAuthRecoveryContext = {
+  path: string;
+  target: string;
+  method: string;
+  status?: number;
+};
+
+type MiniAuthRecoveryHandler = (context: MiniAuthRecoveryContext) => Promise<boolean> | boolean;
+
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const GET_RETRY_LIMIT = 2;
 const GET_RETRY_BASE_DELAY_MS = 250;
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
+let miniAuthRecoveryHandler: MiniAuthRecoveryHandler | null = null;
+let pendingMiniAuthRecovery: Promise<boolean> | null = null;
+
+export function setMiniAuthRecoveryHandler(handler: MiniAuthRecoveryHandler | null): void {
+  miniAuthRecoveryHandler = handler;
+}
 
 function isMiniApiEnvelope<T>(value: unknown): value is MiniApiEnvelope<T> {
   if (!value || typeof value !== 'object') {
@@ -114,6 +129,7 @@ function buildQueryString(query?: Record<string, string | number | boolean | nul
 async function requestWithUni<R>(target: string, options: HttpRequestOptions): Promise<R> {
   const method = options.method === 'PATCH' ? 'POST' : (options.method ?? 'GET');
   const extraHeaders = options.method === 'PATCH' ? { 'X-HTTP-Method-Override': 'PATCH' } : {};
+  const authHeader = options.auth === false || !getAuthToken() ? {} : { Authorization: `Bearer ${getAuthToken()}` };
   return await new Promise<R>((resolve, reject) => {
     uni.request({
       url: `${target}${buildQueryString(options.query)}`,
@@ -124,7 +140,7 @@ async function requestWithUni<R>(target: string, options: HttpRequestOptions): P
         'Content-Type': 'application/json',
         ...(options.headers ?? {}),
         ...extraHeaders,
-        ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
+        ...authHeader,
       },
       success: (response: { statusCode?: number; data?: unknown }) => {
         const statusCode = response.statusCode ?? 0;
@@ -146,12 +162,13 @@ async function requestWithUni<R>(target: string, options: HttpRequestOptions): P
 }
 
 async function requestWithFetch<R>(target: string, options: HttpRequestOptions): Promise<R> {
+  const authHeader = options.auth === false || !getAuthToken() ? {} : { Authorization: `Bearer ${getAuthToken()}` };
   const response = await fetch(`${target}${buildQueryString(options.query)}`, {
     method: options.method ?? 'GET',
     headers: {
       'Content-Type': 'application/json',
       ...(options.headers ?? {}),
-      ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
+      ...authHeader,
     },
     ...(options.body === undefined
       ? {}
@@ -270,6 +287,39 @@ async function executeWithRetry<T>(target: string, options: HttpRequestOptions):
   throw new MiniApiError('Request failed', { kind: 'unknown' });
 }
 
+async function executeWithAuthRecovery<T>(path: string, target: string, options: HttpRequestOptions): Promise<T> {
+  try {
+    return await executeWithRetry<T>(target, options);
+  } catch (rawError) {
+    const error = mapRequestError(rawError);
+    if (error.kind !== 'auth' || options.auth === false || !miniAuthRecoveryHandler) {
+      throw error;
+    }
+
+    if (!pendingMiniAuthRecovery) {
+      pendingMiniAuthRecovery = Promise.resolve(
+        miniAuthRecoveryHandler({
+          path,
+          target,
+          method: options.method ?? 'GET',
+          status: error.status,
+        }),
+      )
+        .catch(() => false)
+        .finally(() => {
+          pendingMiniAuthRecovery = null;
+        });
+    }
+
+    const recovered = await pendingMiniAuthRecovery;
+    if (!recovered) {
+      throw error;
+    }
+
+    return await executeWithRetry<T>(target, options);
+  }
+}
+
 export async function miniRequest<T>(path: string, options: HttpRequestOptions = {}): Promise<T> {
   const method = options.method ?? 'GET';
   const target = resolveRequestTarget(path);
@@ -281,7 +331,7 @@ export async function miniRequest<T>(path: string, options: HttpRequestOptions =
       return await inFlight;
     }
 
-    const pending = executeWithRetry<T>(target, { ...options, method: 'GET' });
+    const pending = executeWithAuthRecovery<T>(path, target, { ...options, method: 'GET' });
     inFlightGetRequests.set(requestKey, pending);
 
     try {
@@ -291,7 +341,7 @@ export async function miniRequest<T>(path: string, options: HttpRequestOptions =
     }
   }
 
-  return await executeWithRetry<T>(target, options);
+  return await executeWithAuthRecovery<T>(path, target, options);
 }
 
 export function trackAnalyticsEvent(payload: TrackAnalyticsEventPayload): Promise<{ success: boolean }> {

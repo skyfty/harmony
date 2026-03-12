@@ -1,5 +1,6 @@
 import { watch, type WatchStopHandle } from 'vue'
 import { Box3, Euler, Matrix4, Quaternion, Vector3, Object3D } from 'three'
+import { listTerrainPaintChunkLogicalIds } from '@schema'
 import type {
   AssetIndexEntry,
   BehaviorComponentProps,
@@ -313,13 +314,12 @@ function collectNodeAssetDependenciesLocal(node: SceneNode | null | undefined, b
     const definition = (node as any).dynamicMesh as any
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
     const terrainPaint: any = definition?.terrainPaint
-    if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
+    if (terrainPaint && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
       if (Array.isArray(terrainPaint.layers)) {
         terrainPaint.layers.forEach((layer: any) => collectAssetIdCandidate(bucket, layer?.textureAssetId))
       }
       Object.values(terrainPaint.chunks).forEach((ref: any) => {
-        const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
-        if (logicalId) bucket.add(logicalId)
+        listTerrainPaintChunkLogicalIds(ref).forEach((logicalId) => bucket.add(logicalId))
       })
     }
   }

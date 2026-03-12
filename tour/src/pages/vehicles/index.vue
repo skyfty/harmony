@@ -35,6 +35,12 @@ import VehicleCard from '@/components/VehicleCard.vue';
 import { listVehicles, purchaseVehicleByProduct, selectCurrentVehicle } from '@/api/mini/vehicles';
 import type { Vehicle } from '@/types/vehicle';
 import type { VehicleStatus } from '@/types/vehicle';
+import {
+  isPhoneBindingRequiredError,
+  promptBindPhoneBeforeCheckout,
+  requestMiniProgramPayment,
+  toCheckoutErrorMessage,
+} from '@/utils/checkout';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 const VEHICLE_SELECTION_STORAGE_KEY = 'tour:selectedVehicleId';
@@ -47,13 +53,6 @@ function getSelectedVehicleId(): string | null {
   } catch {
     return null;
   }
-}
-
-function toErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return fallback;
 }
 
 function setSelectedVehicleId(id: string | null): void {
@@ -146,13 +145,7 @@ async function select(id: string, status: VehicleStatus) {
         };
       };
       if (result.payParams) {
-        await new Promise<void>((resolve, reject) => {
-          uni.requestPayment({
-            ...result.payParams,
-            success: () => resolve(),
-            fail: (err) => reject(err),
-          });
-        });
+        await requestMiniProgramPayment(result.payParams);
       }
       await reload();
       void uni.showToast({ title: '购买成功', icon: 'none' });
@@ -160,7 +153,10 @@ async function select(id: string, status: VehicleStatus) {
         uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` });
       }
     } catch (error: unknown) {
-      void uni.showToast({ title: toErrorMessage(error, '购买失败'), icon: 'none' });
+      if (isPhoneBindingRequiredError(error)) {
+        await promptBindPhoneBeforeCheckout();
+      }
+      void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });
     } finally {
       loading.value = false;
       void uni.hideLoading();
@@ -179,7 +175,7 @@ async function select(id: string, status: VehicleStatus) {
     setSelectedVehicle(latestVehicle);
     void uni.showToast({ title: '已设为当前车辆', icon: 'none' });
   } catch (error: unknown) {
-    void uni.showToast({ title: toErrorMessage(error, '设置失败'), icon: 'none' });
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '设置失败'), icon: 'none' });
   } finally {
     loading.value = false;
     void uni.hideLoading();

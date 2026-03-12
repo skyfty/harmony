@@ -37,6 +37,10 @@ import {
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
+	unzipScenePackage,
+	buildAssetOverridesFromScenePackage,
+	applyGroundPaintSidecarsToSceneDocument,
+	readTextFileFromScenePackage,
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
@@ -5075,19 +5079,73 @@ async function buildPreviewRuntimeDocument(
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	}
-	if (groundNode && groundNode.dynamicMesh && scatterSidecar) {
-		const scatterPayload = deserializeGroundScatterSidecar(scatterSidecar)
-		groundNode.dynamicMesh = {
-			...groundNode.dynamicMesh,
-			terrainScatter: scatterPayload.terrainScatter,
-		} as GroundDynamicMesh
-	}
-	if (groundNode && groundNode.dynamicMesh && paintSidecar) {
-		const paintPayload = deserializeGroundPaintSidecar(paintSidecar)
-		groundNode.dynamicMesh = {
-			...groundNode.dynamicMesh,
-			terrainPaint: paintPayload.terrainPaint,
-		} as GroundDynamicMesh
+	statusMessage.value = 'Loading scene package...'
+	try {
+		const buffer = await fetchArrayBufferFromUrl(trimmed)
+		const pkg = unzipScenePackage(buffer)
+		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg)
+
+		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
+		type ScenePackageProjectConfig = {
+			id?: unknown
+			name?: unknown
+			defaultSceneId?: unknown
+			lastEditedSceneId?: unknown
+			sceneOrder?: unknown
+		}
+		const projectConfigRaw: unknown = JSON.parse(projectText)
+		const projectConfig: ScenePackageProjectConfig =
+			projectConfigRaw && typeof projectConfigRaw === 'object'
+				? (projectConfigRaw as ScenePackageProjectConfig)
+				: {}
+
+		const scenes: ScenePreviewSceneEntry[] = []
+		projectSceneIndex.clear()
+		pkg.manifest.scenes.forEach((sceneEntry) => {
+			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
+			const sceneRaw = applyGroundPaintSidecarsToSceneDocument(
+				pkg,
+				JSON.parse(sceneText) as Record<string, any>,
+			) as unknown
+			if (!isSceneJsonExportDocument(sceneRaw)) {
+				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
+			}
+			const document = sceneRaw as SceneJsonExportDocument
+				const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
+			const id = sceneEntry.sceneId
+			const entry: ScenePreviewSceneEntry = {
+				kind: 'embedded',
+				id,
+				name: document.name || id,
+					createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
+					updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
+				document,
+			}
+			scenes.push(entry)
+			projectSceneIndex.set(id, entry)
+		})
+
+		projectBundle.value = {
+			project: {
+				id: String(projectConfig?.id ?? ''),
+				name: String(projectConfig?.name ?? ''),
+				defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
+				lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
+				sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
+			},
+			scenes,
+		}
+
+		const initialId =
+			(projectBundle.value.project.defaultSceneId || projectBundle.value.project.sceneOrder?.[0] || scenes[0]?.id || '').trim()
+		if (initialId) {
+			await switchToProjectScene(initialId)
+		}
+		statusMessage.value = ''
+	} catch (error) {
+		console.error('[ScenePreview] Failed to load scene package', error)
+		appendWarningMessage('Failed to load scene package.')
+		statusMessage.value = 'Failed to load scene package.'
 	}
 	return document
 }

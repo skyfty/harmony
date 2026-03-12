@@ -1,23 +1,17 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
+import type { GroundDynamicMesh, GroundSculptOperation, SceneNode, TerrainPaintSettings } from '@schema'
 import {
-	clampTerrainPaintLayerDefinition,
-	cloneGroundHeightMap,
-	cloneTerrainPaintLayerDefinition,
-	type GroundDynamicMesh,
-	type GroundSculptOperation,
-	type SceneNode,
-	type TerrainPaintChannel,
-	type TerrainPaintLayerDefinition,
-	type TerrainPaintLayerStyle,
-	type TerrainPaintSettings,
+	clampTerrainPaintSettings,
+	getTerrainPaintChunkPageLogicalId,
+	TERRAIN_PAINT_MAX_LAYER_COUNT,
+	TERRAIN_PAINT_PAGE_COUNT,
 } from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
 	upsertTerrainScatterLayer,
-	appendTerrainScatterInstances,
-	removeTerrainScatterInstancesById,
+	replaceTerrainScatterInstances,
 	loadTerrainScatterSnapshot,
 	serializeTerrainScatterStore,
 	type TerrainScatterCategory,
@@ -30,9 +24,9 @@ import {
 	sculptGround,
 	sampleGroundHeight,
 	resolveGroundEffectiveHeightAtVertex,
-	syncGroundChunkLoadingMode,
 	stitchGroundChunkNormals,
 	resolveGroundChunkCells,
+	updateGroundChunks,
 	updateGroundMesh,
 	updateGroundMeshRegion,
 	type GroundGeometryUpdateRegion,
@@ -53,10 +47,7 @@ import {
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
-import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
-import { useGroundScatterStore } from '@/stores/groundScatterStore'
-import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import {SCATTER_BRUSH_RADIUS_MAX} from '@/stores/terrainStore'
@@ -72,11 +63,10 @@ import {
 	updateTerrainPaintPreviewWeightmap,
 	decodeWeightmapToData,
 	encodeWeightmapToBinary,
-} from '@schema/terrainPaintPreview'
+} from '@schema/terrainPaintPreview.ts'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
-import { resolveGroundRuntimeObjectFromMap } from './groundRuntimeObject'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -115,9 +105,10 @@ export type GroundEditorOptions = {
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
+	paintLayerId: Ref<string | null>
+	paintLayerSlotIndex: Ref<number | null>
 	paintAsset: Ref<ProjectAsset | null>
 	paintSmoothness: Ref<number>
-	paintLayerStyle: Ref<TerrainPaintLayerStyle>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
@@ -130,9 +121,8 @@ export type GroundEditorOptions = {
 	lockScatterLodToBaseAsset?: boolean
 	// Optional: enable chunk-based scatter streaming for large grounds.
 	scatterChunkStreaming?: {
-		enabled?: boolean | (() => boolean)
+		enabled?: boolean
 		radiusMeters?: number
-		getDynamicRadiusMeters?: () => number | null | undefined
 		unloadPaddingMeters?: number
 		maxChunkChangesPerUpdate?: number
 		maxBindingChangesPerUpdate?: number
@@ -140,12 +130,6 @@ export type GroundEditorOptions = {
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
-	onSculptCommitApplied?: (params: {
-		nodeId: string
-		groundObject: THREE.Object3D
-		definition: GroundDynamicMesh
-		region: GroundGeometryUpdateRegion | null
-	}) => void
 }
 
 export type GroundEditorHandle = ReturnType<typeof createGroundEditor>
@@ -218,213 +202,121 @@ function clamp01(value: number): number {
 	return Math.max(0, Math.min(1, value))
 }
 
-function channelToIndex(channel: TerrainPaintChannel): number {
-	switch (channel) {
-		case 'r':
-			return 0
-		case 'g':
-			return 1
-		case 'b':
-			return 2
-		case 'a':
-			return 3
-		default:
-			return 1
-	}
+function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh): TerrainPaintSettings {
+	return clampTerrainPaintSettings(definition.terrainPaint as Partial<TerrainPaintSettings> | null | undefined)
 }
 
-function chooseAvailablePaintChannel(settings: TerrainPaintSettings): TerrainPaintChannel | null {
-	const used = new Set<TerrainPaintChannel>(settings.layers.map((layer) => layer.channel))
-	const candidates: TerrainPaintChannel[] = ['g', 'b', 'a']
-	for (const candidate of candidates) {
-		if (!used.has(candidate)) {
-			return candidate
-		}
-	}
-	return null
-}
-
-function createTerrainPaintLayerDefinition(
-	textureAssetId: string,
-	style: TerrainPaintLayerStyle,
-	channel: TerrainPaintChannel = 'g',
-): TerrainPaintLayerDefinition | null {
-	const trimmed = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
-	if (!trimmed) {
-		return null
-	}
-	return clampTerrainPaintLayerDefinition({
-		channel,
-		textureAssetId: trimmed,
-		...style,
-	})
-}
-
-function areTerrainPaintLayersEquivalent(a: TerrainPaintLayerDefinition, b: TerrainPaintLayerDefinition): boolean {
-	return a.textureAssetId === b.textureAssetId
-		&& a.opacity === b.opacity
-		&& a.rotationDeg === b.rotationDeg
-		&& a.blendMode === b.blendMode
-		&& a.worldSpace === b.worldSpace
-		&& a.tileScale.x === b.tileScale.x
-		&& a.tileScale.y === b.tileScale.y
-		&& a.offset.x === b.offset.x
-		&& a.offset.y === b.offset.y
-}
-
-function ensureTerrainPaintLayer(
-	settings: TerrainPaintSettings,
-	textureAssetId: string,
-	style: TerrainPaintLayerStyle,
-): TerrainPaintChannel | null {
-	const requestedLayer = createTerrainPaintLayerDefinition(textureAssetId, style)
-	if (!requestedLayer) {
-		return null
-	}
-	const existing = settings.layers.find((layer) => areTerrainPaintLayersEquivalent(layer, requestedLayer))
-	if (existing) {
-		return existing.channel
-	}
-	const nextChannel = chooseAvailablePaintChannel(settings)
-	if (!nextChannel) {
-		return null
-	}
-	settings.layers.push({
-		...requestedLayer,
-		channel: nextChannel,
-	})
-	return nextChannel
-}
-
-function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintSettings {
-	const sceneId = useSceneStore().currentSceneId
-	const runtimeState = sceneId && nodeId
-		? useGroundPaintStore().getSceneGroundPaint(sceneId)
-		: null
-	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
-	if (existing && existing.version === 1) {
-		return {
-			version: 1,
-			weightmapResolution: Number.isFinite(existing.weightmapResolution)
-				? Math.max(8, Math.min(2048, Math.round(existing.weightmapResolution)))
-				: 256,
-			layers: Array.isArray(existing.layers) ? existing.layers.map((layer) => cloneTerrainPaintLayerDefinition(clampTerrainPaintLayerDefinition(layer))) : [],
-			chunks: existing.chunks ? { ...existing.chunks } : {},
-		}
-	}
-	return {
-		version: 1,
-		weightmapResolution: 256,
-		layers: [],
-		chunks: {},
-	}
-}
-
-function createBlankWeightmap(resolution: number): Uint8ClampedArray {
+function createBlankWeightmapPage(resolution: number, pageIndex: number): Uint8ClampedArray {
 	const res = Math.max(1, Math.round(resolution))
 	const data = new Uint8ClampedArray(res * res * 4)
-	for (let i = 0; i < res * res; i += 1) {
-		const offset = i * 4
-		data[offset] = 255
-		data[offset + 1] = 0
-		data[offset + 2] = 0
-		data[offset + 3] = 0
+	if (pageIndex === 0) {
+		for (let i = 0; i < res * res; i += 1) {
+			const offset = i * 4
+			data[offset] = 255
+			data[offset + 1] = 0
+			data[offset + 2] = 0
+			data[offset + 3] = 0
+		}
 	}
 	return data
 }
 
-function normalizeWeightsTo255(weights: [number, number, number, number]): [number, number, number, number] {
-	let total = weights[0] + weights[1] + weights[2] + weights[3]
+function createBlankWeightmapPages(resolution: number): Uint8ClampedArray[] {
+	const pages: Uint8ClampedArray[] = []
+	for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+		pages.push(createBlankWeightmapPage(resolution, pageIndex))
+	}
+	return pages
+}
+
+function normalizeWeightVectorTo255(weights: number[], baseSlotIndex = 0): number[] {
+	let total = weights.reduce((sum, value) => sum + value, 0)
 	if (total <= 0) {
-		return [255, 0, 0, 0]
+		const normalized = new Array(weights.length).fill(0)
+		normalized[Math.max(0, Math.min(weights.length - 1, Math.trunc(baseSlotIndex)))] = 255
+		return normalized
 	}
 	if (total === 255) {
 		return weights
 	}
 	const scale = 255 / total
-	let r = Math.round(weights[0] * scale)
-	let g = Math.round(weights[1] * scale)
-	let b = Math.round(weights[2] * scale)
-	let a = Math.round(weights[3] * scale)
-	let sum = r + g + b + a
+	const normalized = weights.map((value) => Math.round(value * scale))
+	let sum = normalized.reduce((acc, value) => acc + value, 0)
 	if (sum !== 255) {
-		const diff = 255 - sum
-		r = THREE.MathUtils.clamp(r + diff, 0, 255)
-		sum = r + g + b + a
-		if (sum !== 255) {
-			r = THREE.MathUtils.clamp(r, 0, 255)
-			g = THREE.MathUtils.clamp(g, 0, 255)
-			b = THREE.MathUtils.clamp(b, 0, 255)
-			a = THREE.MathUtils.clamp(a, 0, 255)
-			const fallbackSum = r + g + b + a
-			if (fallbackSum !== 255) {
-				r = THREE.MathUtils.clamp(r + (255 - fallbackSum), 0, 255)
-			}
-		}
+		const baseIndex = Math.max(0, Math.min(normalized.length - 1, Math.trunc(baseSlotIndex)))
+		normalized[baseIndex] = THREE.MathUtils.clamp((normalized[baseIndex] ?? 0) + (255 - sum), 0, 255)
 	}
-	return [r, g, b, a]
+	return normalized
 }
 
-function addWeightToPixel(data: Uint8ClampedArray, baseOffset: number, targetChannelIndex: number, amount: number): boolean {
+function readPixelWeightsFromPages(pages: Uint8ClampedArray[], pixelIndex: number): number[] {
+	const weights = new Array(TERRAIN_PAINT_PAGE_COUNT * 4).fill(0)
+	for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+		const page = pages[pageIndex]
+		if (!page) {
+			continue
+		}
+		const offset = pixelIndex * 4
+		for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
+			weights[pageIndex * 4 + channelIndex] = page[offset + channelIndex] ?? 0
+		}
+	}
+	return weights
+}
+
+function writePixelWeightsToPages(pages: Uint8ClampedArray[], pixelIndex: number, weights: number[]): void {
+	for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+		const page = pages[pageIndex]
+		if (!page) {
+			continue
+		}
+		const offset = pixelIndex * 4
+		for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
+			page[offset + channelIndex] = weights[pageIndex * 4 + channelIndex] ?? 0
+		}
+	}
+}
+
+function addWeightToPixelPages(pages: Uint8ClampedArray[], pixelIndex: number, targetSlotIndex: number, amount: number): boolean {
 	if (!Number.isFinite(amount) || amount <= 0) {
 		return false
 	}
-	const weights: [number, number, number, number] = [
-		data[baseOffset] ?? 0,
-		data[baseOffset + 1] ?? 0,
-		data[baseOffset + 2] ?? 0,
-		data[baseOffset + 3] ?? 0,
-	]
-	const normalized = normalizeWeightsTo255(weights)
-	let r = normalized[0]
-	let g = normalized[1]
-	let b = normalized[2]
-	let a = normalized[3]
-	const idx = THREE.MathUtils.clamp(Math.floor(targetChannelIndex), 0, 3)
-	const get = (i: number) => (i === 0 ? r : i === 1 ? g : i === 2 ? b : a)
-	const set = (i: number, value: number) => {
-		if (i === 0) r = value
-		else if (i === 1) g = value
-		else if (i === 2) b = value
-		else a = value
-	}
-	const available = 255 - get(idx)
+	const weights = normalizeWeightVectorTo255(readPixelWeightsFromPages(pages, pixelIndex), 0)
+	const idx = THREE.MathUtils.clamp(Math.floor(targetSlotIndex), 0, TERRAIN_PAINT_MAX_LAYER_COUNT - 1)
+	const available = 255 - (weights[idx] ?? 0)
 	const delta = Math.min(available, Math.max(0, Math.round(amount)))
 	if (delta <= 0) {
 		return false
 	}
-	set(idx, get(idx) + delta)
+	weights[idx] = (weights[idx] ?? 0) + delta
 	let remaining = delta
-	const otherTotal = 255 - get(idx) + remaining
+	const otherTotal = 255 - (weights[idx] ?? 0) + remaining
 	if (otherTotal > 0) {
-		for (let c = 0; c < 4; c += 1) {
+		for (let c = 0; c < weights.length; c += 1) {
 			if (c === idx) {
 				continue
 			}
-			const current = get(c)
+			const current = weights[c] ?? 0
 			const take = Math.min(current, Math.floor((delta * current) / otherTotal))
-			set(c, current - take)
+			weights[c] = current - take
 			remaining -= take
 		}
 	}
 	if (remaining > 0) {
-		for (let c = 0; c < 4; c += 1) {
+		for (let c = 0; c < weights.length; c += 1) {
 			if (c === idx) {
 				continue
 			}
 			if (remaining <= 0) {
 				break
 			}
-			const current = get(c)
+			const current = weights[c] ?? 0
 			const take = Math.min(current, remaining)
-			set(c, current - take)
+			weights[c] = current - take
 			remaining -= take
 		}
 	}
-	data[baseOffset] = r
-	data[baseOffset + 1] = g
-	data[baseOffset + 2] = b
-	data[baseOffset + 3] = a
+	writePixelWeightsToPages(pages, pixelIndex, weights)
 	return true
 }
 
@@ -479,7 +371,7 @@ function blurWeightmap(data: Uint8ClampedArray, resolution: number, iterations: 
 				const g = Math.round(sums[1] / Math.max(1, count))
 				const b = Math.round(sums[2] / Math.max(1, count))
 				const a = Math.round(sums[3] / Math.max(1, count))
-				const normalized = normalizeWeightsTo255([r, g, b, a])
+				const normalized = normalizeWeightVectorTo255([r, g, b, a]) as [number, number, number, number]
 				dst[base] = normalized[0]
 				dst[base + 1] = normalized[1]
 				dst[base + 2] = normalized[2]
@@ -491,6 +383,32 @@ function blurWeightmap(data: Uint8ClampedArray, resolution: number, iterations: 
 		dst = swap
 	}
 	return src
+}
+
+function blurWeightmapPages(pages: Uint8ClampedArray[], resolution: number, iterations: number): Uint8ClampedArray[] {
+	const blurredPages = pages.map((page) => blurWeightmap(page, resolution, iterations))
+	const res = Math.max(1, Math.round(resolution))
+	for (let pixelIndex = 0; pixelIndex < res * res; pixelIndex += 1) {
+		writePixelWeightsToPages(blurredPages, pixelIndex, normalizeWeightVectorTo255(readPixelWeightsFromPages(blurredPages, pixelIndex), 0))
+	}
+	return blurredPages
+}
+
+function isWeightmapPageEmpty(page: Uint8ClampedArray, pageIndex: number): boolean {
+	for (let offset = 0; offset < page.length; offset += 4) {
+		const r = page[offset] ?? 0
+		const g = page[offset + 1] ?? 0
+		const b = page[offset + 2] ?? 0
+		const a = page[offset + 3] ?? 0
+		if (pageIndex === 0) {
+			if (r !== 255 || g !== 0 || b !== 0 || a !== 0) {
+				return false
+			}
+		} else if (r !== 0 || g !== 0 || b !== 0 || a !== 0) {
+			return false
+		}
+	}
+	return true
 }
 
 function clampScatterBrushRadius(value: unknown): number {
@@ -536,7 +454,7 @@ type TerrainPaintStampRequest = {
 	localZ: number
 	radius: number
 	strength: number
-	channelIndex: number
+	slotIndex: number
 }
 
 type TerrainPaintChunkBounds = {
@@ -552,6 +470,7 @@ type PaintChunkState = {
 	chunkColumn: number
 	resolution: number
 	data: Uint8ClampedArray
+	pages: Uint8ClampedArray[]
 	status: 'loading' | 'ready'
 	loadPromise: Promise<void> | null
 	pendingStamps: TerrainPaintStampRequest[]
@@ -571,7 +490,6 @@ type PaintSessionState = {
 
 let paintSessionState: PaintSessionState | null = null
 let paintCommitToken = 0
-let pendingTerrainPaintFlush: Promise<boolean> | null = null
 
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
@@ -739,21 +657,6 @@ function buildScatterNeighborIndex(layer: TerrainScatterLayer, definition: Groun
 	return map
 }
 
-function removeScatterInstanceFromNeighborIndex(session: ScatterSessionState, instanceId: string): void {
-	for (const [key, bucket] of Array.from(session.neighborIndex.entries())) {
-		const nextBucket = bucket.filter((entry) => entry.id !== instanceId)
-		if (nextBucket.length === bucket.length) {
-			continue
-		}
-		if (nextBucket.length) {
-			session.neighborIndex.set(key, nextBucket)
-		} else {
-			session.neighborIndex.delete(key)
-		}
-		return
-	}
-}
-
 function addScatterInstanceToNeighborIndex(session: ScatterSessionState, instance: TerrainScatterInstance): void {
 	const local = instance.localPosition
 	const { key } = getScatterChunkKeyFromLocal(session.definition, session.chunkCells, local?.x ?? 0, local?.z ?? 0)
@@ -840,8 +743,8 @@ let scatterEraseState: ScatterEraseState | null = null
 
 type SculptSessionState = {
 	nodeId: string
-	definition: GroundRuntimeDynamicMesh
-	heightMap: Float64Array
+	definition: GroundDynamicMesh
+	heightMap: GroundDynamicMesh['manualHeightMap']
 	dirty: boolean
 	affectedRegion: GroundGeometryUpdateRegion | null
 	touchedChunkKeys: Set<string>
@@ -865,26 +768,6 @@ function mergeRegions(
 		maxRow: Math.max(current.maxRow, next.maxRow),
 		minColumn: Math.min(current.minColumn, next.minColumn),
 		maxColumn: Math.max(current.maxColumn, next.maxColumn),
-	}
-}
-
-function addTouchedGroundChunkKeys(
-	keys: Set<string>,
-	definition: GroundDynamicMesh,
-	region: GroundGeometryUpdateRegion,
-): void {
-	if (!keys) {
-		return
-	}
-	const chunkCells = Math.max(1, resolveGroundChunkCells(definition))
-	const minChunkRow = Math.floor(Math.max(0, region.minRow) / chunkCells)
-	const maxChunkRow = Math.floor(Math.max(0, region.maxRow) / chunkCells)
-	const minChunkColumn = Math.floor(Math.max(0, region.minColumn) / chunkCells)
-	const maxChunkColumn = Math.floor(Math.max(0, region.maxColumn) / chunkCells)
-	for (let chunkRow = minChunkRow; chunkRow <= maxChunkRow; chunkRow += 1) {
-		for (let chunkColumn = minChunkColumn; chunkColumn <= maxChunkColumn; chunkColumn += 1) {
-			keys.add(`${chunkRow}:${chunkColumn}`)
-		}
 	}
 }
 
@@ -1014,34 +897,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		touchedChunkKeys?: Set<string> | null
 	}): Promise<void> {
 		const worker = getGroundNormalsWorker()
-		const chunkCells = resolveChunkCellsForDefinition(params.definition)
-		const filterKeys = params.touchedChunkKeys && params.touchedChunkKeys.size ? params.touchedChunkKeys : null
-		const chunkMatchesNormalFilter = (mesh: THREE.Mesh): boolean => {
-			const chunk = mesh.userData?.groundChunk as
-				| { startRow: number; startColumn: number; rows: number; columns: number }
-				| undefined
-			if (!chunk) {
-				return false
-			}
-			if (filterKeys) {
-				const cr = Math.floor(Math.max(0, chunk.startRow) / chunkCells)
-				const cc = Math.floor(Math.max(0, chunk.startColumn) / chunkCells)
-				return filterKeys.has(`${cr}:${cc}`)
-			}
-			if (params.region) {
-				const chunkMinRow = chunk.startRow
-				const chunkMaxRow = chunk.startRow + chunk.rows
-				const chunkMinColumn = chunk.startColumn
-				const chunkMaxColumn = chunk.startColumn + chunk.columns
-				return !(
-					params.region.maxRow < chunkMinRow ||
-					params.region.minRow > chunkMaxRow ||
-					params.region.maxColumn < chunkMinColumn ||
-					params.region.minColumn > chunkMaxColumn
-				)
-			}
-			return true
-		}
 		if (!worker) {
 			// Worker not available; fall back.
 			params.groundObject.traverse((child) => {
@@ -1049,15 +904,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
 					return
 				}
-				if (!chunkMatchesNormalFilter(mesh)) {
-					return
-				}
 				mesh.geometry.computeVertexNormals()
 			})
-			stitchGroundChunkNormals(params.groundObject, params.definition as GroundRuntimeDynamicMesh, params.region ?? null, filterKeys)
+			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
 			return
 		}
 
+		const chunkCells = resolveChunkCellsForDefinition(params.definition)
+		const filterKeys = params.touchedChunkKeys && params.touchedChunkKeys.size ? params.touchedChunkKeys : null
 		const chunks: GroundNormalsComputeRequest['chunks'] = []
 		const meshesByKey = new Map<string, THREE.Mesh>()
 		params.groundObject.traverse((child) => {
@@ -1084,8 +938,29 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				| { startRow: number; startColumn: number; rows: number; columns: number }
 				| undefined
 
-			if (chunk && !chunkMatchesNormalFilter(mesh)) {
-				return
+			// Prefer touched-chunk filtering (more precise than a bounding rectangle).
+			if (filterKeys && chunk) {
+				const cr = Math.floor(Math.max(0, chunk.startRow) / chunkCells)
+				const cc = Math.floor(Math.max(0, chunk.startColumn) / chunkCells)
+				const ck = `${cr}:${cc}`
+				if (!filterKeys.has(ck)) {
+					return
+				}
+			} else if (params.region && chunk) {
+				// Fall back to region overlap filtering.
+				const chunkMinRow = chunk.startRow
+				const chunkMaxRow = chunk.startRow + chunk.rows
+				const chunkMinColumn = chunk.startColumn
+				const chunkMaxColumn = chunk.startColumn + chunk.columns
+				const overlaps = !(
+					params.region.maxRow < chunkMinRow ||
+					params.region.minRow > chunkMaxRow ||
+					params.region.maxColumn < chunkMinColumn ||
+					params.region.minColumn > chunkMaxColumn
+				)
+				if (!overlaps) {
+					return
+				}
 			}
 
 			const positionsCopy = cloneTypedArrayForTransfer(positions)
@@ -1141,7 +1016,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
 			}
 		}
-		stitchGroundChunkNormals(params.groundObject, params.definition as GroundRuntimeDynamicMesh, params.region ?? null, filterKeys)
+		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
 	}
 
 	const assetCacheStore = useAssetCacheStore()
@@ -1218,18 +1093,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterAssetLoadToken = 0
 	let scatterSnapshotUpdatedAt: number | null = null
 	const scatterRuntimeAssetIdByNodeId = new Map<string, string>()
-	const scatterLodCandidatesByNodeId = new Map<string, { layer: TerrainScatterLayer; instance: TerrainScatterInstance; presetId: string }>()
-	const scatterLodCandidateNodeIdsByLayerId = new Map<string, Set<string>>()
 
-	function resolveScatterChunkStreamingEnabled(): boolean {
-		const enabled = options.scatterChunkStreaming?.enabled
-		return typeof enabled === 'function' ? Boolean(enabled()) : Boolean(enabled)
-	}
-
-	let scatterChunkStreamingEnabled = resolveScatterChunkStreamingEnabled()
+	const scatterChunkStreamingEnabled = Boolean(options.scatterChunkStreaming?.enabled)
 	const lockScatterLodToBaseAsset = Boolean(options.lockScatterLodToBaseAsset)
 	const scatterChunkStreamingRadiusOverride = clampFinite(options.scatterChunkStreaming?.radiusMeters, Number.NaN)
-	const scatterChunkStreamingDynamicRadiusResolver = options.scatterChunkStreaming?.getDynamicRadiusMeters
 	const scatterChunkStreamingPaddingOverride = clampFinite(options.scatterChunkStreaming?.unloadPaddingMeters, Number.NaN)
 	const scatterChunkStreamingMaxChunkChangesPerUpdate =
 		Number.isFinite(options.scatterChunkStreaming?.maxChunkChangesPerUpdate) && (options.scatterChunkStreaming?.maxChunkChangesPerUpdate as number) > 0
@@ -1274,54 +1141,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let terrainPaintStreamingSyncTimer: number | null = null
 	let lastVisibleTerrainPaintChunkKeys = new Set<string>()
 	let lastTerrainPaintSceneSwitchToken: number | null = null
-
-	function clearScatterChunkStreamingState(reason: string): void {
-		scatterChunkIndexDirty = true
-		scatterChunkIndex = new Map()
-		scatterChunkEntryByNodeId = new Map()
-		scatterActiveChunkKeys = new Set()
-		scatterChunkStreamingToken += 1
-		pendingScatterChunkBindings.clear()
-		scatterChunkStreamingGroupPromises.clear()
-		scatterChunkStreamingBindingResolutionCache.clear()
-		scatterChunkStreamingPendingBindIds.clear()
-		scatterChunkStreamingAllocatedNodeIds.clear()
-		scatterChunkStreamingLastVisibleAt.clear()
-		scatterChunkStreamingLastFrustumVisibleIds = new Set<string>()
-		lastScatterChunkStreamingVisibilityUpdateAt = 0
-		lastScatterChunkStreamingUpdateAt = 0
-		lastScatterLodUpdateAt = 0
-		scatterLodImmediateSyncNeeded = true
-
-		if (!scatterStore) {
-			return
-		}
-
-		try {
-			for (const layer of Array.from(scatterStore.layers.values())) {
-				for (const instance of layer.instances ?? []) {
-					scatterRuntimeAssetIdByNodeId.delete(buildScatterNodeId(layer.id, instance.id))
-					releaseScatterInstance(instance)
-				}
-			}
-		} catch (error) {
-			console.warn('清理地面散布流式状态失败', reason, error)
-		}
-	}
-
-	function syncScatterChunkStreamingMode(): void {
-		const nextEnabled = resolveScatterChunkStreamingEnabled()
-		if (nextEnabled === scatterChunkStreamingEnabled) {
-			return
-		}
-		clearScatterChunkStreamingState('mode-changed')
-		scatterChunkStreamingEnabled = nextEnabled
-		if (scatterStore?.layers.size) {
-			void restoreGroupdScatter().catch((error) => {
-				console.warn('切换地面散布流式模式失败', error)
-			})
-		}
-	}
 
 	function getActiveBrushShape(): TerrainBrushShape {
 		const value = options.brushShape.value
@@ -1377,11 +1196,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			cancelScatterErase()
 		}
 		if (tab === 'paint') {
-			const groundNode = getGroundNodeFromScene()
-			if (groundNode?.dynamicMesh?.type === 'Ground') {
-				const definition = groundNode.dynamicMesh as GroundDynamicMesh
+			const selectedNode = options.sceneStore.selectedNode
+			if (selectedNode?.dynamicMesh?.type === 'Ground') {
+				const definition = selectedNode.dynamicMesh as GroundDynamicMesh
 				const groundObject = getGroundObject()
-				const settings = cloneOrCreateTerrainPaintSettings(definition, groundNode.id)
+				const settings = cloneOrCreateTerrainPaintSettings(definition)
 				if (groundObject) {
 					ensureTerrainPaintPreviewInstalled(groundObject, definition, settings)
 				}
@@ -1392,7 +1211,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					if (asset) {
 						void pushTerrainPaintPreviewLayer(
 							{
-								nodeId: groundNode.id,
+								nodeId: selectedNode.id,
 								definition,
 								chunkCells: resolveGroundChunkCells(definition),
 								settings,
@@ -1401,13 +1220,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 									terrainPaintPreviewPendingChunkKeys: new Map(),
 									terrainPaintPreviewFlushRafId: null,
 							},
-							layer.channel,
+							layer.slotIndex,
 							asset,
 						)
 					}
 				})
 				// Warm currently loaded chunk weightmaps.
-				const session = ensurePaintSession(definition, groundNode.id)
+				const session = ensurePaintSession(definition, selectedNode.id)
 				settings.chunks && Object.entries(settings.chunks).forEach(([key]) => {
 					const parts = key.split(':')
 					const chunkRow = Number.parseInt(parts[0] ?? '', 10)
@@ -1560,10 +1379,22 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function resetScatterStoreState(reason: string) {
-		clearScatterChunkStreamingState(reason)
+		scatterChunkIndexDirty = true
+		scatterChunkIndex = new Map()
+		scatterChunkEntryByNodeId = new Map()
+		scatterActiveChunkKeys = new Set()
+		scatterChunkStreamingToken += 1
+		pendingScatterChunkBindings.clear()
+		scatterChunkStreamingGroupPromises.clear()
+		scatterChunkStreamingBindingResolutionCache.clear()
+		scatterChunkStreamingPendingBindIds.clear()
+		scatterChunkStreamingAllocatedNodeIds.clear()
+		scatterChunkStreamingLastVisibleAt.clear()
+		scatterChunkStreamingLastFrustumVisibleIds = new Set<string>()
+		lastScatterChunkStreamingVisibilityUpdateAt = 0
+		lastScatterChunkStreamingUpdateAt = 0
+		lastScatterLodUpdateAt = 0
 		scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
-		scatterLodCandidatesByNodeId.clear()
-		scatterLodCandidateNodeIdsByLayerId.clear()
 
 		try {
 			cancelScatterPlacement()
@@ -1613,68 +1444,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return assetId
 		}
 		return null
-	}
-
-	function removeScatterLodCandidate(nodeId: string, layerId?: string | null): void {
-		const existing = scatterLodCandidatesByNodeId.get(nodeId)
-		scatterLodCandidatesByNodeId.delete(nodeId)
-		const targetLayerId = typeof layerId === 'string' && layerId.length ? layerId : existing?.layer.id
-		if (!targetLayerId) {
-			return
-		}
-		const bucket = scatterLodCandidateNodeIdsByLayerId.get(targetLayerId)
-		if (!bucket) {
-			return
-		}
-		bucket.delete(nodeId)
-		if (!bucket.size) {
-			scatterLodCandidateNodeIdsByLayerId.delete(targetLayerId)
-		}
-	}
-
-	function upsertScatterLodCandidate(layer: TerrainScatterLayer, instance: TerrainScatterInstance): void {
-		const nodeId = buildScatterNodeId(layer.id, instance.id)
-		const presetId = getScatterLayerLodPresetId(layer)
-		if (!presetId) {
-			removeScatterLodCandidate(nodeId, layer.id)
-			return
-		}
-		scatterLodCandidatesByNodeId.set(nodeId, { layer, instance, presetId })
-		const bucket = scatterLodCandidateNodeIdsByLayerId.get(layer.id) ?? new Set<string>()
-		bucket.add(nodeId)
-		scatterLodCandidateNodeIdsByLayerId.set(layer.id, bucket)
-	}
-
-	function syncScatterLodCandidatesForLayer(layer: TerrainScatterLayer): void {
-		const previousNodeIds = scatterLodCandidateNodeIdsByLayerId.get(layer.id)
-		if (previousNodeIds?.size) {
-			Array.from(previousNodeIds).forEach((nodeId) => scatterLodCandidatesByNodeId.delete(nodeId))
-		}
-		scatterLodCandidateNodeIdsByLayerId.delete(layer.id)
-		if (!layer.instances?.length) {
-			return
-		}
-		const presetId = getScatterLayerLodPresetId(layer)
-		if (!presetId) {
-			return
-		}
-		const nextIds = new Set<string>()
-		for (const instance of layer.instances) {
-			const nodeId = buildScatterNodeId(layer.id, instance.id)
-			nextIds.add(nodeId)
-			scatterLodCandidatesByNodeId.set(nodeId, { layer, instance, presetId })
-		}
-		if (nextIds.size) {
-			scatterLodCandidateNodeIdsByLayerId.set(layer.id, nextIds)
-		}
-	}
-
-	function rebuildScatterLodCandidatesForStore(store: TerrainScatterStore): void {
-		scatterLodCandidatesByNodeId.clear()
-		scatterLodCandidateNodeIdsByLayerId.clear()
-		for (const layer of store.layers.values()) {
-			syncScatterLodCandidatesForLayer(layer)
-		}
 	}
 
 	async function ensureScatterLodPresetCached(presetAssetId: string): Promise<void> {
@@ -1887,7 +1656,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 				// Invalidate any in-flight paint work tied to the previous scene.
 				paintCommitToken += 1
-				pendingTerrainPaintFlush = null
 
 				resetScatterStoreState('scene-changed')
 				paintSessionState = null
@@ -1941,9 +1709,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		// Always clear first to avoid stale textures leaking across scene switches.
 		materials.forEach((material) => {
-			updateTerrainPaintPreviewLayerTexture(material, 'g', null)
-			updateTerrainPaintPreviewLayerTexture(material, 'b', null)
-			updateTerrainPaintPreviewLayerTexture(material, 'a', null)
+			for (let slotIndex = 1; slotIndex < TERRAIN_PAINT_MAX_LAYER_COUNT; slotIndex += 1) {
+				updateTerrainPaintPreviewLayerTexture(material, slotIndex, null)
+			}
 		})
 
 		for (const layer of session.settings.layers ?? []) {
@@ -1953,7 +1721,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const textureAssetId = typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
 			if (!textureAssetId) {
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+					updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, null)
 				})
 				continue
 			}
@@ -1961,7 +1729,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!asset) {
 				// Silent skip (and clear the channel so it doesn't keep stale data).
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+					updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, null)
 				})
 				continue
 			}
@@ -1972,12 +1740,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!texture) {
 				// Silent skip
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+					updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, null)
 				})
 				continue
 			}
 			materials.forEach((material) => {
-				updateTerrainPaintPreviewLayerTexture(material, layer.channel, texture)
+				updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, texture)
 			})
 		}
 	}
@@ -2014,7 +1782,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			groundMesh,
 			definition,
 			subsetSettings,
-			async (assetId) => {
+			async (assetId: string) => {
 				const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
 				if (!trimmed) {
 					return null
@@ -2040,7 +1808,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				return null
 			},
-			async (assetId) => {
+			async (assetId: string) => {
 				const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
 				if (!trimmed) {
 					return null
@@ -2070,7 +1838,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function applyTerrainPaintForChunkKey(session: PaintSessionState, chunk: { key: string; chunkRow: number; chunkColumn: number }): void {
 		const ref = session.settings.chunks?.[chunk.key] ?? null
-		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
+		const logicalId = getTerrainPaintChunkPageLogicalId(ref, 0)
 		const state = ensurePaintChunkState(session, chunk)
 		if (!logicalId) {
 			// Ensure stale cached textures don't leak into this scene.
@@ -2088,7 +1856,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const session = ensurePaintSession(definition, groundNode.id)
 		// Ensure we're working off the latest stored settings snapshot.
-		session.settings = cloneOrCreateTerrainPaintSettings(definition, session.nodeId)
+		session.settings = cloneOrCreateTerrainPaintSettings(definition)
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
 		session.terrainPaintPreviewPendingChunkKeys.clear()
@@ -2203,16 +1971,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const store = ensureScatterStoreRef()
 		const groundMesh = getGroundObject()
 		const definition = getGroundDynamicMeshDefinition()
-		const tokenSnapshot = options.sceneStore.sceneSwitchToken
 		if (!groundMesh || !definition || store.layers.size === 0) {
 			return
 		}
-		const shouldUseScatterChunkStreaming = resolveScatterChunkStreamingEnabled()
-		if (shouldUseScatterChunkStreaming !== scatterChunkStreamingEnabled) {
-			clearScatterChunkStreamingState('restore-mode-sync')
-			scatterChunkStreamingEnabled = shouldUseScatterChunkStreaming
-		}
-		syncGroundChunkLoadingMode(groundMesh, definition, options.getCamera())
+		updateGroundChunks(groundMesh, definition, options.getCamera())
 
 		if (scatterChunkStreamingEnabled) {
 			// Prepare/normalize LOD preset payloads once; binding is handled by chunk streaming.
@@ -2229,12 +1991,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					if (payload.lodPresetAssetId !== lodPresetId) {
 						payload.lodPresetAssetId = lodPresetId
 						upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
-						syncScatterLodCandidatesForLayer(layer)
 					}
 				}
 			}
 			updateScatterChunkStreaming(true)
 			return
+		}
+
+		const resolveSelectionAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
+			return resolveScatterSelectionAssetId(instance, layer)
 		}
 
 		const resolveBindingAssetId = async (selectionAssetId: string): Promise<{ bindingAssetId: string | null; lodPresetAssetId: string | null }> => {
@@ -2283,33 +2048,28 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return groupPromises.get(assetId) as Promise<ModelInstanceGroup | null>
 		}
 
-		type ScatterRestoreBindingTask = {
-			layer: TerrainScatterLayer
-			instance: TerrainScatterInstance
-			bindingAssetId: string
-		}
-
-		const bindingTasks: ScatterRestoreBindingTask[] = []
-		const layers = Array.from(store.layers.values()).filter((layer) => layer.instances?.length)
-		await Promise.all(layers.map(async (layer) => {
+		for (const layer of store.layers.values()) {
+			if (!layer.instances?.length) {
+				continue
+			}
 			const lodPresetId = getScatterLayerLodPresetId(layer)
 			if (lodPresetId) {
 				await ensureScatterLodPresetCached(lodPresetId)
 				if (scatterLodPresetCache.get(lodPresetId)) {
+					// Normalize payload so future runtime updates can detect the preset quickly.
 					const payload = (layer.params?.payload && typeof layer.params.payload === 'object')
 						? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
 						: ({} as Record<string, unknown>)
 					if (payload.lodPresetAssetId !== lodPresetId) {
 						payload.lodPresetAssetId = lodPresetId
 						upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
-						syncScatterLodCandidatesForLayer(layer)
 					}
 				}
 			}
-			const resolvedBindings = await Promise.all(layer.instances.map(async (instance) => {
-				const selectionAssetId = resolveScatterSelectionAssetId(instance, layer)
+			for (const instance of layer.instances) {
+				const selectionAssetId = resolveSelectionAssetId(instance, layer)
 				if (!selectionAssetId) {
-					return null
+					continue
 				}
 				instance.assetId = instance.assetId ?? selectionAssetId
 				instance.layerId = instance.layerId ?? layer.id
@@ -2318,49 +2078,25 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				resetScatterInstanceBinding(instance)
 				const resolved = await resolveBindingAssetId(selectionAssetId)
-				if (!resolved.bindingAssetId) {
-					return null
+				const bindingAssetId = resolved.bindingAssetId
+				if (!bindingAssetId) {
+					continue
 				}
-				return { layer, instance, bindingAssetId: resolved.bindingAssetId }
-			}))
-			resolvedBindings.forEach((entry) => {
-				if (entry) {
-					bindingTasks.push(entry)
+				const group = await ensureModelGroup(bindingAssetId)
+				if (!group) {
+					continue
 				}
-			})
-		}))
-		if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
-			return
-		}
-
-		const uniqueBindingAssetIds = Array.from(new Set(bindingTasks.map((entry) => entry.bindingAssetId)))
-		await Promise.all(uniqueBindingAssetIds.map((assetId) => ensureModelGroup(assetId)))
-		if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
-			return
-		}
-
-		groundMesh.updateMatrixWorld(true)
-		const groundWorldMatrix = groundMesh.matrixWorld
-		scatterChunkIndex = new Map()
-		scatterChunkEntryByNodeId = new Map()
-		scatterChunkIndexDirty = false
-		const chunkCells = resolveChunkCellsForDefinition(definition)
-		for (const entry of bindingTasks) {
-			const group = await ensureModelGroup(entry.bindingAssetId)
-			if (!group) {
-				continue
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+				if (!bindScatterInstance(instance, matrix, group.assetId)) {
+					console.warn('绑定地面散布实例失败', {
+						layerId: layer.id,
+						instanceId: instance.id,
+						assetId: bindingAssetId,
+					})
+					continue
+				}
+				scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(layer.id, instance.id), group.assetId)
 			}
-			const matrix = composeScatterMatrix(entry.instance, groundMesh, scatterWorldMatrixHelper, groundWorldMatrix)
-			if (!bindScatterInstance(entry.instance, matrix, group.assetId)) {
-				console.warn('绑定地面散布实例失败', {
-					layerId: entry.layer.id,
-					instanceId: entry.instance.id,
-					assetId: entry.bindingAssetId,
-				})
-				continue
-			}
-			addScatterChunkEntry(definition, chunkCells, entry.layer, entry.instance)
-			scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(entry.layer.id, entry.instance.id), group.assetId)
 		}
 	}
 
@@ -2393,7 +2129,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			try {
 				scatterStore = loadTerrainScatterSnapshot(GROUND_NODE_ID, snapshot)
 				scatterSnapshotUpdatedAt = snapshotUpdatedAt
-				rebuildScatterLodCandidatesForStore(scatterStore)
 				scatterChunkIndexDirty = true
 				scatterChunkIndex = new Map()
 				scatterChunkEntryByNodeId = new Map()
@@ -2411,13 +2146,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			} catch (error) {
 				console.warn('载入地面散布快照失败', error)
 				scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
-				rebuildScatterLodCandidatesForStore(scatterStore)
 				scatterChunkIndexDirty = true
 			}
 		}
 		if (!scatterStore) {
 			scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
-			rebuildScatterLodCandidatesForStore(scatterStore)
 			scatterChunkIndexDirty = true
 		}
 		return scatterStore
@@ -2551,7 +2284,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!entry) {
 				return null
 			}
-			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper, groundMesh.matrixWorld)
+			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
 			centerTarget.copy(worldPos)
 			const boundAssetId = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null
 			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
@@ -2615,8 +2348,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterChunkStreamingLastFrustumVisibleIds.has(nodeId)) {
 			return
 		}
-		groundMesh.updateMatrixWorld(true)
-		const matrix = composeScatterMatrix(entry.instance, groundMesh, scatterWorldMatrixHelper, groundMesh.matrixWorld)
+		const matrix = composeScatterMatrix(entry.instance, groundMesh, scatterWorldMatrixHelper)
 		if (!bindScatterInstance(entry.instance, matrix, group.assetId)) {
 			return
 		}
@@ -2625,7 +2357,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function updateScatterChunkStreamingVisibilityAndGrace(): void {
-		syncScatterChunkStreamingMode()
 		if (!scatterChunkStreamingEnabled) {
 			return
 		}
@@ -2714,7 +2445,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function updateScatterChunkStreaming(force = false): void {
-		syncScatterChunkStreamingMode()
 		if (!scatterChunkStreamingEnabled) {
 			return
 		}
@@ -2739,27 +2469,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 		const chunkWorldSize = Math.max(1, Math.round(chunkCells)) * cellSize
-		let resolvedDynamicRadius = Number.NaN
-		if (typeof scatterChunkStreamingDynamicRadiusResolver === 'function') {
-			try {
-				resolvedDynamicRadius = clampFinite(scatterChunkStreamingDynamicRadiusResolver(), Number.NaN)
-			} catch (_error) {
-				resolvedDynamicRadius = Number.NaN
-			}
-		}
-		const radius = Number.isFinite(resolvedDynamicRadius)
-			? Math.max(0, resolvedDynamicRadius)
-			: Number.isFinite(scatterChunkStreamingRadiusOverride)
-				? Math.max(0, scatterChunkStreamingRadiusOverride)
-				: resolveScatterChunkStreamingRadiusMeters(definition)
+		const radius = Number.isFinite(scatterChunkStreamingRadiusOverride)
+			? Math.max(0, scatterChunkStreamingRadiusOverride)
+			: resolveScatterChunkStreamingRadiusMeters(definition)
 		const padding = Number.isFinite(scatterChunkStreamingPaddingOverride)
 			? Math.max(0, scatterChunkStreamingPaddingOverride)
 			: chunkWorldSize
 
-		if (typeof (camera as any)?.getWorldPosition !== 'function') {
+		const cameraPosition = (camera as any)?.position as THREE.Vector3 | undefined
+		if (!cameraPosition) {
 			return
 		}
-		camera.getWorldPosition(scatterChunkStreamingWorldCameraHelper)
+		scatterChunkStreamingWorldCameraHelper.copy(cameraPosition)
 		groundMesh.updateMatrixWorld(true)
 		scatterChunkStreamingMatrixHelper.copy(groundMesh.matrixWorld).invert()
 		scatterChunkStreamingLocalCameraHelper.copy(scatterChunkStreamingWorldCameraHelper).applyMatrix4(scatterChunkStreamingMatrixHelper)
@@ -2859,7 +2580,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			category,
 			profileId: asset.id,
 		})
-		syncScatterLodCandidatesForLayer(layer)
 		syncTerrainScatterSnapshotToScene(store)
 		return layer
 	}
@@ -2930,9 +2650,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					if (payload.lodPresetAssetId !== asset.id) {
 						payload.lodPresetAssetId = asset.id
 						scatterLayer = upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
-						if (scatterLayer) {
-							syncScatterLodCandidatesForLayer(scatterLayer)
-						}
 						syncTerrainScatterSnapshotToScene(store)
 					}
 				}
@@ -2948,122 +2665,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterModelGroup = group
 	}
 
-	type ScatterChunkIndexEntry = { layer: TerrainScatterLayer; instance: TerrainScatterInstance }
-
-	function addScatterChunkEntry(definition: GroundDynamicMesh, chunkCells: number, layer: TerrainScatterLayer, instance: TerrainScatterInstance): void {
-		const local = instance.localPosition
-		const { key } = getScatterChunkKeyFromLocal(definition, chunkCells, local?.x ?? 0, local?.z ?? 0)
-		const nodeId = buildScatterNodeId(layer.id, instance.id)
-		const previous = scatterChunkEntryByNodeId.get(nodeId)
-		if (previous?.chunkKey === key) {
-			previous.layer = layer
-			previous.instance = instance
-			const sameBucket = scatterChunkIndex.get(key)
-			if (sameBucket) {
-				const found = sameBucket.find((entry: ScatterChunkIndexEntry) => entry.instance.id === instance.id && entry.layer.id === layer.id)
-				if (found) {
-					found.layer = layer
-					found.instance = instance
-				}
-			}
-			return
-		}
-		if (previous) {
-			removeScatterChunkEntryByNodeId(nodeId)
-		}
-		const bucket = scatterChunkIndex.get(key)
-		const nextEntry: ScatterChunkIndexEntry = { layer, instance }
-		if (bucket) {
-			bucket.push(nextEntry)
-		} else {
-			scatterChunkIndex.set(key, [nextEntry])
-		}
-		scatterChunkEntryByNodeId.set(nodeId, { chunkKey: key, layer, instance })
-	}
-
-	function removeScatterChunkEntryByNodeId(nodeId: string): void {
-		const entry = scatterChunkEntryByNodeId.get(nodeId)
-		if (!entry) {
-			return
-		}
-		const bucket = scatterChunkIndex.get(entry.chunkKey)
-		if (bucket?.length) {
-			const nextBucket = bucket.filter((candidate: ScatterChunkIndexEntry) => buildScatterNodeId(candidate.layer.id, candidate.instance.id) !== nodeId)
-			if (nextBucket.length) {
-				scatterChunkIndex.set(entry.chunkKey, nextBucket)
-			} else {
-				scatterChunkIndex.delete(entry.chunkKey)
-			}
-		}
-		scatterChunkEntryByNodeId.delete(nodeId)
-		scatterChunkStreamingPendingBindIds.delete(nodeId)
-		scatterChunkStreamingAllocatedNodeIds.delete(nodeId)
-		scatterChunkStreamingLastVisibleAt.delete(nodeId)
-		scatterRuntimeAssetIdByNodeId.delete(nodeId)
-	}
-
-	function ensureScatterChunkIndexReady(definition: GroundDynamicMesh): number {
-		const chunkCells = resolveChunkCellsForDefinition(definition)
-		if (scatterChunkIndexDirty) {
-			const store = scatterStore ?? ensureScatterStoreRef()
-			rebuildScatterChunkIndexForStore(store, definition, chunkCells)
-		}
-		return chunkCells
-	}
-
-	function appendScatterInstance(
+	function persistScatterInstances(
 		layer: TerrainScatterLayer,
-		instance: TerrainScatterInstance,
-		definitionOverride?: GroundDynamicMesh | null,
+		instances: TerrainScatterInstance[],
 	): TerrainScatterLayer | null {
 		const store = ensureScatterStoreRef()
-		const result = appendTerrainScatterInstances(store, layer.id, instance)
+		const result = replaceTerrainScatterInstances(store, layer.id, instances)
 		if (result && scatterLayer && scatterLayer.id === layer.id) {
 			scatterLayer = result
 		}
 		if (result) {
-			const stored = result.instances[result.instances.length - 1] ?? null
-			if (stored) {
-				upsertScatterLodCandidate(result, stored)
-			}
-			const definition = definitionOverride ?? getGroundDynamicMeshDefinition()
-			if (definition) {
-				const chunkCells = ensureScatterChunkIndexReady(definition)
-				if (stored) {
-					addScatterChunkEntry(definition, chunkCells, result, stored)
-				}
-			} else {
-				scatterChunkIndexDirty = true
-			}
 			syncTerrainScatterSnapshotToScene(store, { bumpInstancesUpdatedAt: true })
-		}
-		return result
-	}
-
-	function removeScatterInstancesById(
-		layer: TerrainScatterLayer,
-		instanceIds: Iterable<string>,
-		definitionOverride?: GroundDynamicMesh | null,
-	): TerrainScatterLayer | null {
-		const ids = Array.from(instanceIds).filter((entry) => typeof entry === 'string' && entry.length)
-		if (!ids.length) {
-			return layer
-		}
-		const store = ensureScatterStoreRef()
-		const result = removeTerrainScatterInstancesById(store, layer.id, ids)
-		if (result && scatterLayer && scatterLayer.id === layer.id) {
-			scatterLayer = result
-		}
-		if (result) {
-			ids.forEach((id) => removeScatterLodCandidate(buildScatterNodeId(layer.id, id), layer.id))
-			const definition = definitionOverride ?? getGroundDynamicMeshDefinition()
-			if (definition) {
-				ensureScatterChunkIndexReady(definition)
-				ids.forEach((id) => removeScatterChunkEntryByNodeId(buildScatterNodeId(layer.id, id)))
-			} else {
-				scatterChunkIndexDirty = true
-			}
-			syncTerrainScatterSnapshotToScene(store, { bumpInstancesUpdatedAt: true })
+			scatterChunkIndexDirty = true
 		}
 		return result
 	}
@@ -3129,18 +2742,32 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		positionAttribute.needsUpdate = true
 	}
 
+	function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
+		for (const node of nodes) {
+			if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
+				return node
+			}
+			if (node.children?.length) {
+				const nested = findGroundNodeInTree(node.children)
+				if (nested) {
+					return nested
+				}
+			}
+		}
+		return null
+	}
+
 	function getGroundNodeFromScene(): SceneNode | null {
-		return options.sceneStore.groundNode
+		return findGroundNodeInTree(options.sceneStore.nodes)
 	}
 
 	function getGroundTerrainScatterSnapshot(): TerrainScatterStoreSnapshot | null {
 		const node = getGroundNodeFromScene()
-		const sceneId = useSceneStore().currentSceneId
-		if (node?.dynamicMesh?.type !== 'Ground' || !sceneId) {
+		if (node?.dynamicMesh?.type !== 'Ground') {
 			return null
 		}
-		const runtimeState = useGroundScatterStore().getSceneGroundScatter(sceneId)
-		return runtimeState?.nodeId === node.id ? runtimeState.terrainScatter ?? null : null
+		const definition = node.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
+		return definition.terrainScatter ?? null
 	}
 
 	function getScatterSnapshotTimestamp(snapshot: TerrainScatterStoreSnapshot | null | undefined): number | null {
@@ -3153,7 +2780,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function syncTerrainScatterSnapshotToScene(
 		storeOverride?: TerrainScatterStore | null,
-		syncOptions: { bumpInstancesUpdatedAt?: boolean } = {},
+		options: { bumpInstancesUpdatedAt?: boolean } = {},
 	): void {
 		const store = storeOverride ?? scatterStore
 		if (!store) {
@@ -3164,8 +2791,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
-		void syncOptions
-		options.sceneStore.commitGroundScatterEdit(groundNode.id, snapshot)
+		const shouldBumpInstances = options.bumpInstancesUpdatedAt === true
+		const nextMesh: GroundDynamicMesh = {
+			...(groundNode.dynamicMesh as GroundDynamicMesh),
+			terrainScatter: snapshot,
+			terrainScatterInstancesUpdatedAt: shouldBumpInstances
+				? Date.now()
+				: (groundNode.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt,
+		}
+		groundNode.dynamicMesh = nextMesh
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
@@ -3175,34 +2809,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				return sculptSessionState.definition
 			}
-			const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
-			if (!sceneId) {
-				return node.dynamicMesh
-			}
-			return useGroundHeightmapStore().resolveGroundRuntimeMesh(
-				node.id,
-				node.dynamicMesh,
-			)
+			return node.dynamicMesh
 		}
 		return null
 	}
 
 	function getGroundObject(): THREE.Object3D | null {
-		return resolveGroundRuntimeObjectFromMap(options.objectMap, GROUND_NODE_ID)
+		return options.objectMap.get(GROUND_NODE_ID) ?? null
 	}
 
-	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundRuntimeDynamicMesh {
+	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundDynamicMesh {
 		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
 			return sculptSessionState.definition
 		}
-		const sourceDefinition = getGroundDynamicMeshDefinition() as GroundRuntimeDynamicMesh | null
-		const runtimeDefinition = sourceDefinition && sourceDefinition.type === 'Ground'
-			? sourceDefinition
-			: (definition as GroundRuntimeDynamicMesh)
-		const clonedHeightMap = cloneGroundHeightMap(runtimeDefinition.manualHeightMap, runtimeDefinition.rows, runtimeDefinition.columns)
-		const sessionDefinition: GroundRuntimeDynamicMesh = {
+		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
+		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
+		const clonedHeightMap = definition.manualHeightMap
+		const sessionDefinition: GroundDynamicMesh = {
 			...definition,
-			planningHeightMap: runtimeDefinition.planningHeightMap,
 			manualHeightMap: clonedHeightMap,
 		}
 		sculptSessionState = {
@@ -3231,14 +2855,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState = null
 			return false
 		}
-		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
-		if (sceneId) {
-			options.sceneStore.commitGroundHeightMapEdit(
-				targetNode.id,
-				targetNode.dynamicMesh as GroundDynamicMesh,
-				sculptSessionState.heightMap,
-			)
+		const nextDynamicMesh: GroundDynamicMesh = {
+			...(targetNode.dynamicMesh as GroundDynamicMesh),
+			manualHeightMap: sculptSessionState.heightMap,
 		}
+		targetNode.dynamicMesh = nextDynamicMesh
+		options.sceneStore.updateNodeDynamicMesh(targetNode.id, nextDynamicMesh)
 		sculptSessionState = null
 		return true
 	}
@@ -3252,7 +2874,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			nodeId,
 			definition,
 			chunkCells,
-			settings: cloneOrCreateTerrainPaintSettings(definition, nodeId),
+			settings: cloneOrCreateTerrainPaintSettings(definition),
 			chunkStates: new Map(),
 			hasPendingChanges: false,
 			terrainPaintPreviewPendingChunkKeys: new Map(),
@@ -3356,7 +2978,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			materials.forEach((material) => {
-				updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
+				for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+					updateTerrainPaintPreviewWeightmap(
+						material,
+						chunk.key,
+						chunk.pages[pageIndex] ?? new Uint8ClampedArray(chunk.resolution * chunk.resolution * 4),
+						chunk.resolution,
+						pageIndex,
+					)
+				}
 			})
 		}
 	}
@@ -3365,7 +2995,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		enqueueTerrainPaintPreviewChunkKey(session, chunk.key)
 	}
 
-	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, channel: TerrainPaintChannel, asset: ProjectAsset): Promise<void> {
+	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, slotIndex: number, asset: ProjectAsset): Promise<void> {
 		const groundObject = getGroundObject()
 		if (!groundObject) {
 			return
@@ -3380,7 +3010,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		materials.forEach((material) => {
-			updateTerrainPaintPreviewLayerTexture(material, channel, texture)
+			updateTerrainPaintPreviewLayerTexture(material, slotIndex, texture)
 		})
 	}
 
@@ -3395,33 +3025,44 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			chunkRow: payload.chunkRow,
 			chunkColumn: payload.chunkColumn,
 			resolution,
-			data: createBlankWeightmap(resolution),
+			data: createBlankWeightmapPage(resolution, 0),
+			pages: createBlankWeightmapPages(resolution),
 			status: 'ready',
 			loadPromise: null,
 			pendingStamps: [],
 			dirty: false,
 		}
+		state.data = state.pages[0] ?? state.data
 		session.chunkStates.set(payload.key, state)
 
 		const ref = session.settings.chunks?.[payload.key] ?? null
-		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
-		if (logicalId) {
+		const logicalIds = Array.from({ length: TERRAIN_PAINT_PAGE_COUNT }, (_, pageIndex) => getTerrainPaintChunkPageLogicalId(ref, pageIndex))
+		if (logicalIds.some((logicalId) => logicalId.length > 0)) {
 			state.status = 'loading'
 			state.loadPromise = (async () => {
 				try {
 					const cache = useAssetCacheStore()
-					let entry = cache.getEntry(logicalId)
-					let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
-					if (!blob) {
-						entry = (await cache.loadFromIndexedDb(logicalId)) ?? entry
-						blob = entry.status === 'cached' ? (entry.blob ?? null) : null
+					for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+						const logicalId = logicalIds[pageIndex] ?? ''
+						if (!logicalId) {
+							state.pages[pageIndex] = createBlankWeightmapPage(state.resolution, pageIndex)
+							continue
+						}
+						let entry = cache.getEntry(logicalId)
+						let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
+						if (!blob) {
+							entry = (await cache.loadFromIndexedDb(logicalId)) ?? entry
+							blob = entry.status === 'cached' ? (entry.blob ?? null) : null
+						}
+						state.pages[pageIndex] = blob
+							? await decodeWeightmapToData(blob, state.resolution)
+							: createBlankWeightmapPage(state.resolution, pageIndex)
 					}
-					if (blob) {
-						state.data = await decodeWeightmapToData(blob, state.resolution)
-					}
+					state.data = state.pages[0] ?? createBlankWeightmapPage(state.resolution, 0)
 				} catch (error) {
 					console.warn('加载地貌权重贴图失败，回退到空白贴图：', error)
-					state.data = createBlankWeightmap(state.resolution)
+					state.pages = createBlankWeightmapPages(state.resolution)
+					state.data = state.pages[0] ?? createBlankWeightmapPage(state.resolution, 0)
 				} finally {
 					pushTerrainPaintPreviewWeightmap(session, state)
 					state.status = 'ready'
@@ -3480,8 +3121,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const t = dist / Math.max(1e-6, radius)
 				const falloff = (1 - t) * (1 - t)
 				const amount = strength255 * falloff
-				const offset = (y * res + x) * 4
-				if (addWeightToPixel(chunk.data, offset, stamp.channelIndex, amount)) {
+				const pixelIndex = y * res + x
+				if (addWeightToPixelPages(chunk.pages, pixelIndex, stamp.slotIndex, amount)) {
 					any = true
 				}
 			}
@@ -3508,44 +3149,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return false
 	}
 
-	function scheduleTerrainPaintFlush(reason: string): void {
-		if (!hasDirtyPaintChunks(paintSessionState)) {
-			return
-		}
-		void flushTerrainPaintChanges().then((ok) => {
+	async function flushTerrainPaintChanges(): Promise<boolean> {
+		for (let attempts = 0; attempts < 16; attempts += 1) {
+			if (!hasDirtyPaintChunks(paintSessionState)) {
+				return true
+			}
+			const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
 			if (!ok && hasDirtyPaintChunks(paintSessionState)) {
-				console.warn(`提交地貌涂层失败：${reason}`)
+				return false
 			}
-		}).catch((error) => {
-			console.warn(`提交地貌涂层失败：${reason}`, error)
-		})
-	}
-
-	function flushTerrainPaintChanges(): Promise<boolean> {
-		if (pendingTerrainPaintFlush) {
-			return pendingTerrainPaintFlush
 		}
-
-		const flushPromise = (async () => {
-			for (let attempts = 0; attempts < 16; attempts += 1) {
-				if (!hasDirtyPaintChunks(paintSessionState)) {
-					return true
-				}
-				const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
-				if (!ok && hasDirtyPaintChunks(paintSessionState)) {
-					return false
-				}
-			}
-			return !hasDirtyPaintChunks(paintSessionState)
-		})()
-
-		pendingTerrainPaintFlush = flushPromise
-		void flushPromise.finally(() => {
-			if (pendingTerrainPaintFlush === flushPromise) {
-				pendingTerrainPaintFlush = null
-			}
-		})
-		return flushPromise
+		return !hasDirtyPaintChunks(paintSessionState)
 	}
 
 	async function commitPaintSession(selectedNode: SceneNode | null): Promise<boolean> {
@@ -3597,7 +3211,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const smoothIterations = Math.max(0, Math.min(6, Math.round(smoothness * 4)))
 			if (smoothIterations > 0) {
 				dirtyChunks.forEach((chunk) => {
-					chunk.data = blurWeightmap(chunk.data, chunk.resolution, smoothIterations)
+					chunk.pages = blurWeightmapPages(chunk.pages, chunk.resolution, smoothIterations)
+					chunk.data = chunk.pages[0] ?? createBlankWeightmapPage(chunk.resolution, 0)
 					pushTerrainPaintPreviewWeightmap(session, chunk)
 				})
 			}
@@ -3612,40 +3227,54 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (token !== paintCommitToken) {
 					return false
 				}
-				const weightmapBlob = encodeWeightmapToBinary(chunk.data, chunk.resolution)
-				const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}.bin`
-				const logicalId = await computeBlobHash(weightmapBlob)
-				await cache.storeAssetBlob(logicalId, {
-					blob: weightmapBlob,
-					mimeType: 'application/octet-stream',
-					filename,
-				})
-				options.sceneStore.registerAsset(
-					{
-						id: logicalId,
-						name: filename,
-						type: 'file',
-						downloadUrl: logicalId,
-						previewColor: '#ffffff',
-						thumbnail: null,
-						description: `Terrain weightmap (${session.nodeId}:${chunk.key})`,
-						gleaned: true,
-					},
-					{
-						source: { type: 'local' },
-						internal: true,
-						commitOptions: { updateNodes: false },
-					},
-				)
+				const existingRef = session.settings.chunks[chunk.key]
+				const pages = Array.from({ length: TERRAIN_PAINT_PAGE_COUNT }, () => null as { logicalId: string } | null)
+				for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
+					const pageData = chunk.pages[pageIndex] ?? createBlankWeightmapPage(chunk.resolution, pageIndex)
+					if (isWeightmapPageEmpty(pageData, pageIndex)) {
+						pages[pageIndex] = null
+						continue
+					}
+					const weightmapBlob = encodeWeightmapToBinary(pageData, chunk.resolution)
+					const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}_p${pageIndex}.bin`
+					const logicalId = await computeBlobHash(weightmapBlob)
+					await cache.storeAssetBlob(logicalId, {
+						blob: weightmapBlob,
+						mimeType: 'application/octet-stream',
+						filename,
+					})
+					options.sceneStore.registerAsset(
+						{
+							id: logicalId,
+							name: filename,
+							type: 'file',
+							downloadUrl: logicalId,
+							previewColor: '#ffffff',
+							thumbnail: null,
+							description: `Terrain weightmap (${session.nodeId}:${chunk.key}:page${pageIndex})`,
+							gleaned: true,
+						},
+						{
+							source: { type: 'local' },
+							internal: true,
+							commitOptions: { updateNodes: false },
+						},
+					)
+					pages[pageIndex] = { logicalId }
+				}
 				session.settings.chunks[chunk.key] = {
-					logicalId,
+					logicalId: pages[0]?.logicalId ?? existingRef?.logicalId ?? null,
+					pages,
 				}
 				chunk.dirty = false
 			}
 			if (token !== paintCommitToken) {
 				return false
 			}
-			return options.sceneStore.commitGroundPaintEdit(session.nodeId, session.settings)
+			options.sceneStore.updateNodeDynamicMesh(session.nodeId, {
+				terrainPaint: session.settings,
+			})
+			return true
 		} catch (error) {
 			console.warn('提交地貌权重贴图失败：', error)
 			return false
@@ -3686,9 +3315,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function scatterModeEnabled(): boolean {
-		if (options.activeBuildTool.value !== 'scatter') {
-			return false
-		}
 		if (options.scatterEraseModeActive.value) {
 			return false
 		}
@@ -3698,22 +3324,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!options.scatterAsset.value) {
 			return false
 		}
-		const groundNode = getGroundNodeFromScene()
-		return groundNode?.dynamicMesh?.type === 'Ground'
+		const selectedNode = options.sceneStore.selectedNode
+		return selectedNode?.dynamicMesh?.type === 'Ground'
 	}
 
 	function paintModeEnabled(): boolean {
-		if (options.activeBuildTool.value !== 'paint') {
-			return false
-		}
 		if (options.scatterEraseModeActive.value) {
 			return false
 		}
 		if (options.groundPanelTab.value !== 'paint') {
 			return false
 		}
-		const groundNode = getGroundNodeFromScene()
-		return groundNode?.dynamicMesh?.type === 'Ground'
+		const selectedNode = options.sceneStore.selectedNode
+		return selectedNode?.dynamicMesh?.type === 'Ground'
 	}
 
 	function getScatterPreset(category: TerrainScatterCategory) {
@@ -3816,7 +3439,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			binding: null,
 			metadata: null,
 		}
-		const nextLayer = appendScatterInstance(scatterSession.layer, draft, scatterSession.definition)
+		const nextLayer = persistScatterInstances(scatterSession.layer, [...scatterSession.layer.instances, draft])
 		if (!nextLayer) {
 			return false
 		}
@@ -3828,8 +3451,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const matrix = composeScatterMatrix(stored, scatterSession.groundMesh, scatterWorldMatrixHelper)
 		const bound = bindScatterInstance(stored, matrix, scatterSession.bindingAssetId)
 		if (!bound) {
-			removeScatterInstanceFromNeighborIndex(scatterSession, stored.id)
-			removeScatterInstancesById(nextLayer, [stored.id], scatterSession.definition)
+			persistScatterInstances(nextLayer, nextLayer.instances.filter((entry) => entry.id !== stored.id))
 			return false
 		}
 		scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(nextLayer.id, stored.id), scatterSession.bindingAssetId)
@@ -4010,7 +3632,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		syncGroundChunkLoadingMode(groundMesh, definition, options.getCamera(), { force: true })
+		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -4104,7 +3726,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function updateScatterLod({ force = false }: { force?: boolean } = {}): void {
-		syncScatterChunkStreamingMode()
 		const camera = options.getCamera()
 		if (!camera) {
 			return
@@ -4125,8 +3746,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterLodCameraPosition.copy(camera.position)
 
 		camera.updateMatrixWorld(true)
-		groundMesh.updateMatrixWorld(true)
-		const groundWorldMatrix = groundMesh.matrixWorld
 		scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
 		scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
 
@@ -4135,11 +3754,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			// updateScatterChunkStreamingVisibilityAndGrace(). Only do LOD switching for
 			// instances that are currently frustum-visible.
 			for (const nodeId of scatterChunkStreamingLastFrustumVisibleIds.values()) {
-				const lodEntry = scatterLodCandidatesByNodeId.get(nodeId)
-				if (!lodEntry) {
+				const entry = scatterChunkEntryByNodeId.get(nodeId)
+				if (!entry) {
 					continue
 				}
-				const { presetId, instance } = lodEntry
+				const layer = entry.layer
+				const presetId = getScatterLayerLodPresetId(layer)
+				if (!presetId) {
+					continue
+				}
 				if (!scatterLodPresetCache.has(presetId)) {
 					void ensureScatterLodPresetCached(presetId)
 					continue
@@ -4148,10 +3771,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (!preset) {
 					continue
 				}
+				const instance = entry.instance
 				if (!instance.binding?.nodeId) {
 					continue
 				}
-				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper, groundWorldMatrix)
+				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 				const distance = worldPos.distanceTo(scatterLodCameraPosition)
 				const desired = lockScatterLodToBaseAsset
 					? resolveLodBindingAssetId(preset)
@@ -4167,7 +3791,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					continue
 				}
 				releaseScatterInstance(instance)
-				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, groundWorldMatrix)
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
 				if (!bindScatterInstance(instance, matrix, desired)) {
 					continue
 				}
@@ -4176,21 +3800,55 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		for (const [nodeId, entry] of scatterLodCandidatesByNodeId.entries()) {
-			if (!scatterLodPresetCache.has(entry.presetId)) {
-				void ensureScatterLodPresetCached(entry.presetId)
+		const scatterCandidateIds: string[] = []
+		const scatterCandidateByNodeId = new Map<string, { layer: TerrainScatterLayer; instance: TerrainScatterInstance; preset: any }>()
+		for (const layer of store.layers.values()) {
+			const presetId = getScatterLayerLodPresetId(layer)
+			if (!presetId) {
 				continue
 			}
-			const preset = scatterLodPresetCache.get(entry.presetId)
-			if (!preset) {
+			const preset = scatterLodPresetCache.get(presetId)
+			if (!preset || !layer.instances?.length) {
 				continue
 			}
+			for (const instance of layer.instances) {
+				const nodeId = buildScatterNodeId(layer.id, instance.id)
+				scatterCandidateIds.push(nodeId)
+				scatterCandidateByNodeId.set(nodeId, { layer, instance, preset })
+			}
+		}
+
+		scatterCandidateIds.sort()
+		scatterFrustumCuller.setIds(scatterCandidateIds)
+		const visibleScatterIds = scatterFrustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
+			const entry = scatterCandidateByNodeId.get(nodeId)
+			if (!entry) {
+				return null
+			}
+			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
+			centerTarget.copy(worldPos)
+			const baseBindingAssetId = resolveLodBindingAssetId(entry.preset)
+			const boundAssetId = lockScatterLodToBaseAsset
+				? (baseBindingAssetId ?? scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null)
+				: (scatterRuntimeAssetIdByNodeId.get(nodeId) ?? baseBindingAssetId)
+			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
+			const scale = entry.instance.localScale
+			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+			const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
+			return { radius }
+		})
+
+		for (const [nodeId, entry] of scatterCandidateByNodeId.entries()) {
 			const instance = entry.instance
-			const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper, groundWorldMatrix)
+			if (!visibleScatterIds.has(nodeId)) {
+				releaseScatterInstance(instance)
+				continue
+			}
+			const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 			const distance = worldPos.distanceTo(scatterLodCameraPosition)
 			const desired = lockScatterLodToBaseAsset
-				? resolveLodBindingAssetId(preset)
-				: chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
+				? resolveLodBindingAssetId(entry.preset)
+				: chooseLodModelAssetId(entry.preset, distance) ?? resolveLodBindingAssetId(entry.preset)
 			if (!desired) {
 				continue
 			}
@@ -4205,7 +3863,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (current !== desired) {
 				releaseScatterInstance(instance)
 			}
-			const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, groundWorldMatrix)
+			const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
 			if (!bindScatterInstance(instance, matrix, desired)) {
 				continue
 			}
@@ -4215,11 +3873,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function updateScatterPlacement(event: PointerEvent): boolean {
 		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
-			return false
-		}
-		if (!scatterModeEnabled()) {
-			cancelScatterPlacement()
-			scatterPreviewGroup.visible = false
 			return false
 		}
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
@@ -4289,38 +3942,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterEraseLocalPointHelper.copy(worldPoint)
 		groundMesh.updateMatrixWorld(true)
 		groundMesh.worldToLocal(scatterEraseLocalPointHelper)
-		const definition = getGroundDynamicMeshDefinition()
-		const chunkCells = definition ? ensureScatterChunkIndexReady(definition) : null
-		const candidateChunkKeys = definition && chunkCells != null
-			? computeScatterChunkKeysInRadius(
-				definition,
-				chunkCells,
-				scatterEraseLocalPointHelper.x,
-				scatterEraseLocalPointHelper.z,
-				radius,
-			)
-			: null
 		for (const layer of layers) {
 			if (!layer.instances.length) {
 				continue
 			}
+			const survivors: TerrainScatterInstance[] = []
 			const removedInstances: TerrainScatterInstance[] = []
-			const candidates = candidateChunkKeys && candidateChunkKeys.size
-				? Array.from(candidateChunkKeys).flatMap((key) => scatterChunkIndex.get(key) ?? [])
-					.filter((entry) => entry.layer.id === layer.id)
-					.map((entry) => entry.instance)
-				: layer.instances
-			const seen = new Set<string>()
-			for (const instance of candidates) {
-				if (seen.has(instance.id)) {
-					continue
-				}
-				seen.add(instance.id)
+			for (const instance of layer.instances) {
 				const local = instance.localPosition
 				const dx = (local?.x ?? 0) - scatterEraseLocalPointHelper.x
 				const dz = (local?.z ?? 0) - scatterEraseLocalPointHelper.z
 				if (dx * dx + dz * dz <= radiusSq) {
 					removedInstances.push(instance)
+				} else {
+					survivors.push(instance)
 				}
 			}
 			if (!removedInstances.length) {
@@ -4328,7 +3963,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			removed = true
 			removedInstances.forEach((instance) => releaseScatterInstance(instance))
-			removeScatterInstancesById(layer, removedInstances.map((instance) => instance.id), definition)
+			persistScatterInstances(layer, survivors)
 		}
 		return removed
 	}
@@ -4345,14 +3980,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function clearScatterInstances(): boolean {
 		const store = ensureScatterStoreRef()
-		const definition = getGroundDynamicMeshDefinition()
 		let removed = false
 		for (const layer of Array.from(store.layers.values())) {
 			if (!layer.instances.length) {
 				continue
 			}
 			layer.instances.forEach((instance) => releaseScatterInstance(instance))
-			removeScatterInstancesById(layer, layer.instances.map((instance) => instance.id), definition)
+			persistScatterInstances(layer, [])
 			removed = true
 		}
 		return removed
@@ -4376,7 +4010,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		syncGroundChunkLoadingMode(groundMesh, definition, options.getCamera(), { force: true })
+		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -4644,7 +4278,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
 		const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
-		const groundNode = getGroundNodeFromScene()
+		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') {
 			brushMesh.visible = false
 			return
@@ -4660,7 +4294,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		syncGroundChunkLoadingMode(groundObject, definition, options.getCamera(), { force: true })
+		updateGroundChunks(groundObject, definition, options.getCamera(), { force: true })
 
 		options.pointer.set(x, y)
 		options.raycaster.setFromCamera(options.pointer, camera)
@@ -4684,7 +4318,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function performSculpt(event: PointerEvent) {
 		if (!brushMesh.visible) return
 
-		const groundNode = getGroundNodeFromScene()
+		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') return
 		if (!sculptSessionState || sculptSessionState.nodeId !== groundNode.id) {
 			ensureSculptSession(groundNode.dynamicMesh as GroundDynamicMesh, groundNode.id)
@@ -4695,7 +4329,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const groundObject = getGroundObject()
 		if (!groundObject) return
-		syncGroundChunkLoadingMode(groundObject, definition, options.getCamera())
+		updateGroundChunks(groundObject, definition, options.getCamera())
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
@@ -4738,7 +4372,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					? 0
 					: undefined
 
-			const modified = sculptGround(definition as GroundRuntimeDynamicMesh, {
+			const modified = sculptGround(definition, {
 				point,
 				radius,
 				// Damp sculpt speed so height grows more gradually for finer control.
@@ -4776,13 +4410,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			sculptSessionState.dirty = true
 		}
-		updateGroundMeshRegion(groundObject, definition as GroundRuntimeDynamicMesh, mergedRegion)
+		updateGroundMeshRegion(groundObject, definition, mergedRegion)
+		// Stitch normals across chunk boundaries to prevent visible seams.
+		const padded: GroundGeometryUpdateRegion = {
+			minRow: Math.max(0, mergedRegion.minRow - 2),
+			maxRow: Math.min(definition.rows, mergedRegion.maxRow + 2),
+			minColumn: Math.max(0, mergedRegion.minColumn - 2),
+			maxColumn: Math.min(definition.columns, mergedRegion.maxColumn + 2),
+		}
+		stitchGroundChunkNormals(groundObject, definition, padded)
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
-			addTouchedGroundChunkKeys(sculptSessionState.touchedChunkKeys, definition, mergedRegion)
-			stitchGroundChunkNormals(groundObject, definition as GroundRuntimeDynamicMesh, mergedRegion, sculptSessionState.touchedChunkKeys)
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
-		} else {
-			stitchGroundChunkNormals(groundObject, definition as GroundRuntimeDynamicMesh, mergedRegion)
 		}
 	}
 
@@ -4794,7 +4432,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		const groundNode = getGroundNodeFromScene()
+		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') {
 			return
 		}
@@ -4806,7 +4444,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundObject) {
 			return
 		}
-		syncGroundChunkLoadingMode(groundObject, definition, options.getCamera())
+		updateGroundChunks(groundObject, definition, options.getCamera())
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
@@ -4827,17 +4465,30 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 
 		const session = ensurePaintSession(definition, groundNode.id)
+		const selectedLayerId = typeof options.paintLayerId.value === 'string' ? options.paintLayerId.value.trim() : ''
+		const selectedSlotIndex = Number.isFinite(options.paintLayerSlotIndex.value)
+			? Math.max(0, Math.min(TERRAIN_PAINT_MAX_LAYER_COUNT - 1, Math.trunc(options.paintLayerSlotIndex.value as number)))
+			: null
 		const paintAsset = options.paintAsset.value
-		let channelIndex = 0
-		if (paintAsset) {
-			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id, options.paintLayerStyle.value)
-			if (!channel) {
-				// No available channel slot (G/B/A) for new layers.
+		if (selectedSlotIndex === null) {
+			return
+		}
+
+		let slotIndex = selectedSlotIndex
+		if (slotIndex > 0) {
+			if (!paintAsset?.id) {
 				return
 			}
-			channelIndex = channelToIndex(channel)
-			// Best-effort: ensure the layer texture is visible during painting.
-			void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
+			const layer = session.settings.layers.find((entry) => entry.id === selectedLayerId)
+				?? session.settings.layers.find((entry) => entry.slotIndex === slotIndex)
+			if (!layer || !layer.enabled) {
+				return
+			}
+			if (layer.textureAssetId !== paintAsset.id) {
+				layer.textureAssetId = paintAsset.id
+			}
+			slotIndex = layer.slotIndex
+			void pushTerrainPaintPreviewLayer(session, layer.slotIndex, paintAsset)
 		}
 
 		for (let i = 0; i < steps; i += 1) {
@@ -4850,8 +4501,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				localZ: point.z,
 				radius,
 				strength: clamp01(options.brushStrength.value),
-				// If no layer is selected ("empty" tile), paint into base channel (R) to erase.
-				channelIndex,
+				slotIndex,
 			}
 			const chunks = collectPaintChunksOverlappedByBrush(definition, session.chunkCells, point.x, point.z, radius)
 			for (const chunkInfo of chunks) {
@@ -4874,7 +4524,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const mesh = getGroundObject()
 		if (mesh) {
-			syncGroundChunkLoadingMode(mesh, definition, options.getCamera())
+			updateGroundChunks(mesh, definition, options.getCamera())
 			updateGroundMesh(mesh, definition)
 		}
 	}
@@ -4883,7 +4533,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!paintModeEnabled()) {
 			return false
 		}
-		const groundNode = getGroundNodeFromScene()
+		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 0) {
 			return false
 		}
@@ -4904,13 +4554,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginSculpt(event: PointerEvent): boolean {
-		if (options.activeBuildTool.value !== 'terrain') {
-			return false
-		}
 		if (options.groundPanelTab.value !== 'terrain') {
 			return false
 		}
-		const groundNode = getGroundNodeFromScene()
+		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 0) {
 			return false
 		}
@@ -4948,7 +4595,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		event.preventDefault()
 		event.stopPropagation()
 		event.stopImmediatePropagation()
-		scheduleTerrainPaintFlush('pointerup')
 		return true
 	}
 
@@ -4966,9 +4612,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			/* noop */
 		}
 
-		const groundNode = getGroundNodeFromScene()
-		if (groundNode?.dynamicMesh?.type === 'Ground') {
-			const session = sculptSessionState?.nodeId === groundNode.id ? sculptSessionState : null
+		const selectedNode = options.sceneStore.selectedNode
+		if (selectedNode?.dynamicMesh?.type === 'Ground') {
+			const session = sculptSessionState?.nodeId === selectedNode.id ? sculptSessionState : null
 			const region = session?.affectedRegion ?? null
 				const touchedChunkKeys = session?.touchedChunkKeys ?? null
 			const dirty = Boolean(session?.dirty)
@@ -4981,47 +4627,27 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const jobToken = (groundNormalsJobToken += 1)
 				void recomputeGroundChunkNormalsInWorker({
 					groundObject,
-					definition: groundNode.dynamicMesh as GroundDynamicMesh,
+					definition: selectedNode.dynamicMesh as GroundDynamicMesh,
 					region,
 						touchedChunkKeys,
 					jobToken,
 				}).catch((error) => {
 					console.warn('地形法线异步构建失败，回退到主线程：', error)
 					try {
-						const filteredChunkKeys = touchedChunkKeys && touchedChunkKeys.size ? touchedChunkKeys : null
-						const chunkCells = resolveChunkCellsForDefinition(groundNode.dynamicMesh as GroundDynamicMesh)
 						groundObject.traverse((child) => {
 							const mesh = child as THREE.Mesh
 							if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
 								return
 							}
-							const chunk = mesh.userData?.groundChunk as
-								| { startRow: number; startColumn: number; rows: number; columns: number }
-								| undefined
-							if (filteredChunkKeys && chunk) {
-								const cr = Math.floor(Math.max(0, chunk.startRow) / chunkCells)
-								const cc = Math.floor(Math.max(0, chunk.startColumn) / chunkCells)
-								if (!filteredChunkKeys.has(`${cr}:${cc}`)) {
-									return
-								}
-							}
 							mesh.geometry.computeVertexNormals()
 						})
-						stitchGroundChunkNormals(groundObject, groundNode.dynamicMesh as GroundRuntimeDynamicMesh, region ?? null, filteredChunkKeys)
+						stitchGroundChunkNormals(groundObject, selectedNode.dynamicMesh as GroundDynamicMesh, region ?? null)
 					} catch (_error) {
 						/* noop */
 					}
 				})
 			}
-			const committed = commitSculptSession(groundNode)
-			if (committed && groundObject) {
-				options.onSculptCommitApplied?.({
-					nodeId: groundNode.id,
-					groundObject,
-					definition: groundNode.dynamicMesh as GroundDynamicMesh,
-					region,
-				})
-			}
+			commitSculptSession(selectedNode)
 		} else {
 			sculptSessionState = null
 		}
@@ -5029,11 +4655,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleGroundToolPointerDown(event: PointerEvent): boolean {
-		if (
-			options.activeBuildTool.value !== 'terrain'
-			&& options.activeBuildTool.value !== 'paint'
-			&& options.activeBuildTool.value !== 'scatter'
-		) {
+		if (options.activeBuildTool.value !== 'ground') {
 			return false
 		}
 
@@ -5043,18 +4665,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (hasSelection) {
 				const canceled = cancelGroundSelection()
 				if (canceled) {
-					// If we actually canceled a ground selection, consume the event so
-					// it doesn't trigger other handlers.
 					event.preventDefault()
 					event.stopPropagation()
 					event.stopImmediatePropagation()
-					return true
 				}
+			} else {
+				options.activeBuildTool.value = null
 			}
-			// No selection to cancel — do not prevent or stop propagation so camera
-			// controls bound to right-click can still operate. Keep the active build
-			// tool unchanged (do not clear `options.activeBuildTool`).
-			return false
+			event.preventDefault()
+			event.stopPropagation()
+			event.stopImmediatePropagation()
+			return true
 		}
 
 		if (event.button !== 0) {
@@ -5139,20 +4760,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handlePointerMove(event: PointerEvent): boolean {
-		const activeTool = options.activeBuildTool.value
-		const showBrush = Boolean(getGroundDynamicMeshDefinition()) && (
-			options.scatterEraseModeActive.value
-			|| activeTool === 'terrain'
-			|| activeTool === 'paint'
-			|| activeTool === 'scatter'
-		)
+		const selectedNodeIsGround = options.sceneStore.selectedNode?.dynamicMesh?.type === 'Ground'
+		const showBrush = selectedNodeIsGround &&
+			(options.groundPanelTab.value === 'terrain' || options.groundPanelTab.value === 'paint' || options.scatterEraseModeActive.value || scatterModeEnabled())
 		if (showBrush) {
 			updateBrush(event)
 			updateScatterHoverPreview(event)
-			if (activeTool === 'paint' && options.groundPanelTab.value === 'paint' && isPainting.value && paintStrokePointerId === event.pointerId) {
+			if (options.groundPanelTab.value === 'paint' && isPainting.value && paintStrokePointerId === event.pointerId) {
 				performPaint(event)
 			}
-			if (activeTool === 'terrain' && options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
+			if (options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
 				performSculpt(event)
 			}
 		} else {
@@ -5364,21 +4981,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleActiveBuildToolChange(tool: BuildTool | null) {
-		if (tool !== 'paint') {
-			scheduleTerrainPaintFlush('tool-changed')
-		}
-		if (tool !== 'scatter') {
-			cancelScatterPlacement()
-			scatterPreviewGroup.visible = false
-		}
-		if (tool !== 'terrain' && tool !== 'paint' && tool !== 'scatter') {
+		if (tool !== 'ground') {
 			groundSelectionDragState = null
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()
-			brushMesh.visible = false
-			scatterPreviewGroup.visible = false
 			if (sculptSessionState) {
-				commitSculptSession(getGroundNodeFromScene())
+				commitSculptSession(options.sceneStore.selectedNode ?? null)
 			}
 		}
 	}
@@ -5397,7 +5005,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundSelectionGroup.clear()
 		scatterPreviewGroup.clear()
 		sculptSessionState = null
-		pendingTerrainPaintFlush = null
 		resetScatterStoreState('dispose')
 	}
 

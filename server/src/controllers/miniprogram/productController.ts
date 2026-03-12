@@ -3,8 +3,7 @@ import { Types } from 'mongoose'
 import { ProductModel } from '@/models/Product'
 import { OrderModel } from '@/models/Order'
 import { UserProductModel } from '@/models/UserProduct'
-import { AppUserModel } from '@/models/AppUser'
-import { ensureUserId, getOptionalUserId } from './utils'
+import { ensureMiniCheckoutUser, ensureUserId, getOptionalUserId } from './utils'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import type { ProductUsageConfig, UserProductState } from '@/types/models'
 import { createOrderPayment } from '@/services/paymentService'
@@ -153,7 +152,8 @@ export async function getProduct(ctx: Context): Promise<void> {
 }
 
 export async function purchaseProduct(ctx: Context): Promise<void> {
-  const userId = ensureUserId(ctx)
+  const checkoutUser = await ensureMiniCheckoutUser(ctx)
+  const userId = checkoutUser.id
   const { id } = ctx.params as { id: string }
   const { paymentMethod, shippingAddress, metadata } = ctx.request.body as PurchaseBody
   if (!Types.ObjectId.isValid(id)) {
@@ -163,11 +163,6 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
   if (!product) {
     ctx.throw(404, 'Product not found')
     return
-  }
-
-  const appUser = await AppUserModel.findById(userId).lean().exec()
-  if (!appUser?.wxOpenId) {
-    ctx.throw(400, 'Current user has no bound WeChat openId')
   }
 
   const orderMetadata: Record<string, unknown> = metadata ? { ...metadata } : {}
@@ -196,11 +191,11 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
 
   const paymentResult = await createOrderPayment({
     channel: 'wechat',
-    miniAppId: appUser.miniAppId,
+    miniAppId: checkoutUser.miniAppId,
     orderNumber,
     description: product.name,
     amount: product.price,
-    openId: appUser.wxOpenId,
+    openId: checkoutUser.wxOpenId,
     attach: JSON.stringify({ orderId: order._id.toString(), userId, productId: product._id.toString() }),
   })
 

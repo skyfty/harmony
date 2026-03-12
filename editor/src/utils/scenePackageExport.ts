@@ -2,9 +2,9 @@ import { zipSync, strToU8 } from 'fflate'
 import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@schema'
 import {
   GROUND_PAINT_SIDECAR_FILENAME,
-  GROUND_SCATTER_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  serializeGroundPaintSidecar,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
 } from '@schema'
@@ -64,6 +64,60 @@ function inferExtFromFilename(filename: string | null | undefined): string | nul
 
 function jsonBytes(value: unknown): Uint8Array {
   return strToU8(JSON.stringify(value, null, 2))
+}
+
+function visitSceneNodes(nodes: unknown, visitor: (node: Record<string, any>) => void): void {
+  if (!Array.isArray(nodes)) {
+    return
+  }
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') {
+      continue
+    }
+    const candidate = node as Record<string, any>
+    visitor(candidate)
+    visitSceneNodes(candidate.children, visitor)
+  }
+}
+
+function appendGroundPaintSidecarsToScenePackage(
+  sceneId: string,
+  document: SceneJsonExportDocument & { groundPaintSidecars?: Record<string, string> },
+  files: Record<string, Uint8Array>,
+  resources: ScenePackageResourceEntry[],
+): void {
+  const sidecarMap: Record<string, string> = {}
+  visitSceneNodes(document.nodes, (node) => {
+    const nodeId = typeof node.id === 'string' ? node.id.trim() : ''
+    const dynamicMesh = node.dynamicMesh as Record<string, any> | undefined
+    if (!nodeId || !dynamicMesh || dynamicMesh.type !== 'Ground' || !dynamicMesh.terrainPaint) {
+      return
+    }
+
+    const logicalId = `ground-paint-sidecar:${sceneId}:${nodeId}`
+    const bytes = new Uint8Array(serializeGroundPaintSidecar({
+      groundNodeId: nodeId,
+      terrainPaint: dynamicMesh.terrainPaint,
+    }))
+    const resourcePath = `scenes/${encodeURIComponent(sceneId)}/ground-paint/${encodeURIComponent(nodeId)}-${GROUND_PAINT_SIDECAR_FILENAME}`
+    files[resourcePath] = bytes
+    resources.push({
+      logicalId,
+      resourceType: 'groundPaintSidecar',
+      path: resourcePath,
+      ext: 'bin',
+      mimeType: 'application/octet-stream',
+      size: bytes.byteLength,
+    })
+    sidecarMap[nodeId] = logicalId
+    delete dynamicMesh.terrainPaint
+  })
+
+  if (Object.keys(sidecarMap).length > 0) {
+    document.groundPaintSidecars = sidecarMap
+  } else if ('groundPaintSidecars' in document) {
+    delete document.groundPaintSidecars
+  }
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -521,6 +575,8 @@ export async function exportScenePackageZip(payload: {
         hash,
       })
     }
+
+    appendGroundPaintSidecarsToScenePackage(scene.id, docClone, files, resources)
 
     // Add the (possibly modified) scene JSON to files and manifest
     files[scenePath] = jsonBytes(docClone)

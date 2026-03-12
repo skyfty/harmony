@@ -100,15 +100,22 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   miniAppId?: string
   username?: string
   password?: string
+  authProvider: 'wechat-mini-program' | 'password'
   wxOpenId?: string
   wxUnionId?: string
   displayName?: string
   email?: string
   avatarUrl?: string
   phone?: string
+  phoneCountryCode?: string
+  phoneBoundAt?: Date
   bio?: string
   gender?: 'male' | 'female' | 'other'
   birthDate?: Date
+  lastLoginAt?: Date
+  lastLoginSource?: string
+  wechatProfileSyncedAt?: Date
+  wechatIdentitySyncedAt?: Date
   status: 'active' | 'disabled'
   currentVehicleId?: Types.ObjectId | null
   workShareCount?: number
