@@ -9360,10 +9360,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
   const scenes: ScenePackageSceneEntry[] = [];
   pkg.manifest.scenes.forEach((sceneEntry) => {
     const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path);
-    const sceneRaw = applyGroundPaintSidecarsToSceneDocument(
-      pkg,
-      JSON.parse(sceneText) as Record<string, any>,
-    ) as unknown;
+    const sceneRaw = JSON.parse(sceneText) as unknown;
     if (!sceneRaw || typeof sceneRaw !== 'object') {
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }

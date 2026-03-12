@@ -105,8 +105,6 @@ export type GroundEditorOptions = {
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
-	paintLayerId: Ref<string | null>
-	paintLayerSlotIndex: Ref<number | null>
 	paintAsset: Ref<ProjectAsset | null>
 	paintSmoothness: Ref<number>
 	scatterCategory: Ref<TerrainScatterCategory>
@@ -202,121 +200,213 @@ function clamp01(value: number): number {
 	return Math.max(0, Math.min(1, value))
 }
 
-function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh): TerrainPaintSettings {
-	return clampTerrainPaintSettings(definition.terrainPaint as Partial<TerrainPaintSettings> | null | undefined)
+function channelToIndex(channel: TerrainPaintChannel): number {
+	switch (channel) {
+		case 'r':
+			return 0
+		case 'g':
+			return 1
+		case 'b':
+			return 2
+		case 'a':
+			return 3
+		default:
+			return 1
+	}
 }
 
-function createBlankWeightmapPage(resolution: number, pageIndex: number): Uint8ClampedArray {
+function chooseAvailablePaintChannel(settings: TerrainPaintSettings): TerrainPaintChannel | null {
+	const used = new Set<TerrainPaintChannel>(settings.layers.map((layer) => layer.channel))
+	const candidates: TerrainPaintChannel[] = ['g', 'b', 'a']
+	for (const candidate of candidates) {
+		if (!used.has(candidate)) {
+			return candidate
+		}
+	}
+	return null
+}
+
+function createTerrainPaintLayerDefinition(
+	textureAssetId: string,
+	style: TerrainPaintLayerStyle,
+	channel: TerrainPaintChannel = 'g',
+): TerrainPaintLayerDefinition | null {
+	const trimmed = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
+	if (!trimmed) {
+		return null
+	}
+	return clampTerrainPaintLayerDefinition({
+		channel,
+		textureAssetId: trimmed,
+		...style,
+	})
+}
+
+function areTerrainPaintLayersEquivalent(a: TerrainPaintLayerDefinition, b: TerrainPaintLayerDefinition): boolean {
+	return a.textureAssetId === b.textureAssetId
+		&& a.opacity === b.opacity
+		&& a.rotationDeg === b.rotationDeg
+		&& a.blendMode === b.blendMode
+		&& a.worldSpace === b.worldSpace
+		&& a.tileScale.x === b.tileScale.x
+		&& a.tileScale.y === b.tileScale.y
+		&& a.offset.x === b.offset.x
+		&& a.offset.y === b.offset.y
+}
+
+function ensureTerrainPaintLayer(
+	settings: TerrainPaintSettings,
+	textureAssetId: string,
+	style: TerrainPaintLayerStyle,
+): TerrainPaintChannel | null {
+	const requestedLayer = createTerrainPaintLayerDefinition(textureAssetId, style)
+	if (!requestedLayer) {
+		return null
+	}
+	const existing = settings.layers.find((layer) => areTerrainPaintLayersEquivalent(layer, requestedLayer))
+	if (existing) {
+		return existing.channel
+	}
+	const nextChannel = chooseAvailablePaintChannel(settings)
+	if (!nextChannel) {
+		return null
+	}
+	settings.layers.push({
+		...requestedLayer,
+		channel: nextChannel,
+	})
+	return nextChannel
+}
+
+function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintSettings {
+	const sceneId = useSceneStore().currentSceneId
+	const runtimeState = sceneId && nodeId
+		? useGroundPaintStore().getSceneGroundPaint(sceneId)
+		: null
+	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
+	if (existing && existing.version === 1) {
+		return {
+			version: 1,
+			weightmapResolution: Number.isFinite(existing.weightmapResolution)
+				? Math.max(8, Math.min(2048, Math.round(existing.weightmapResolution)))
+				: 256,
+			layers: Array.isArray(existing.layers) ? existing.layers.map((layer) => cloneTerrainPaintLayerDefinition(clampTerrainPaintLayerDefinition(layer))) : [],
+			chunks: existing.chunks ? { ...existing.chunks } : {},
+		}
+	}
+	return {
+		version: 1,
+		weightmapResolution: 256,
+		layers: [],
+		chunks: {},
+	}
+}
+
+function createBlankWeightmap(resolution: number): Uint8ClampedArray {
 	const res = Math.max(1, Math.round(resolution))
 	const data = new Uint8ClampedArray(res * res * 4)
-	if (pageIndex === 0) {
-		for (let i = 0; i < res * res; i += 1) {
-			const offset = i * 4
-			data[offset] = 255
-			data[offset + 1] = 0
-			data[offset + 2] = 0
-			data[offset + 3] = 0
-		}
+	for (let i = 0; i < res * res; i += 1) {
+		const offset = i * 4
+		data[offset] = 255
+		data[offset + 1] = 0
+		data[offset + 2] = 0
+		data[offset + 3] = 0
 	}
 	return data
 }
 
-function createBlankWeightmapPages(resolution: number): Uint8ClampedArray[] {
-	const pages: Uint8ClampedArray[] = []
-	for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
-		pages.push(createBlankWeightmapPage(resolution, pageIndex))
-	}
-	return pages
-}
-
-function normalizeWeightVectorTo255(weights: number[], baseSlotIndex = 0): number[] {
-	let total = weights.reduce((sum, value) => sum + value, 0)
+function normalizeWeightsTo255(weights: [number, number, number, number]): [number, number, number, number] {
+	let total = weights[0] + weights[1] + weights[2] + weights[3]
 	if (total <= 0) {
-		const normalized = new Array(weights.length).fill(0)
-		normalized[Math.max(0, Math.min(weights.length - 1, Math.trunc(baseSlotIndex)))] = 255
-		return normalized
+		return [255, 0, 0, 0]
 	}
 	if (total === 255) {
 		return weights
 	}
 	const scale = 255 / total
-	const normalized = weights.map((value) => Math.round(value * scale))
-	let sum = normalized.reduce((acc, value) => acc + value, 0)
+	let r = Math.round(weights[0] * scale)
+	let g = Math.round(weights[1] * scale)
+	let b = Math.round(weights[2] * scale)
+	let a = Math.round(weights[3] * scale)
+	let sum = r + g + b + a
 	if (sum !== 255) {
-		const baseIndex = Math.max(0, Math.min(normalized.length - 1, Math.trunc(baseSlotIndex)))
-		normalized[baseIndex] = THREE.MathUtils.clamp((normalized[baseIndex] ?? 0) + (255 - sum), 0, 255)
-	}
-	return normalized
-}
-
-function readPixelWeightsFromPages(pages: Uint8ClampedArray[], pixelIndex: number): number[] {
-	const weights = new Array(TERRAIN_PAINT_PAGE_COUNT * 4).fill(0)
-	for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
-		const page = pages[pageIndex]
-		if (!page) {
-			continue
-		}
-		const offset = pixelIndex * 4
-		for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
-			weights[pageIndex * 4 + channelIndex] = page[offset + channelIndex] ?? 0
+		const diff = 255 - sum
+		r = THREE.MathUtils.clamp(r + diff, 0, 255)
+		sum = r + g + b + a
+		if (sum !== 255) {
+			r = THREE.MathUtils.clamp(r, 0, 255)
+			g = THREE.MathUtils.clamp(g, 0, 255)
+			b = THREE.MathUtils.clamp(b, 0, 255)
+			a = THREE.MathUtils.clamp(a, 0, 255)
+			const fallbackSum = r + g + b + a
+			if (fallbackSum !== 255) {
+				r = THREE.MathUtils.clamp(r + (255 - fallbackSum), 0, 255)
+			}
 		}
 	}
-	return weights
+	return [r, g, b, a]
 }
 
-function writePixelWeightsToPages(pages: Uint8ClampedArray[], pixelIndex: number, weights: number[]): void {
-	for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
-		const page = pages[pageIndex]
-		if (!page) {
-			continue
-		}
-		const offset = pixelIndex * 4
-		for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
-			page[offset + channelIndex] = weights[pageIndex * 4 + channelIndex] ?? 0
-		}
-	}
-}
-
-function addWeightToPixelPages(pages: Uint8ClampedArray[], pixelIndex: number, targetSlotIndex: number, amount: number): boolean {
+function addWeightToPixel(data: Uint8ClampedArray, baseOffset: number, targetChannelIndex: number, amount: number): boolean {
 	if (!Number.isFinite(amount) || amount <= 0) {
 		return false
 	}
-	const weights = normalizeWeightVectorTo255(readPixelWeightsFromPages(pages, pixelIndex), 0)
-	const idx = THREE.MathUtils.clamp(Math.floor(targetSlotIndex), 0, TERRAIN_PAINT_MAX_LAYER_COUNT - 1)
-	const available = 255 - (weights[idx] ?? 0)
+	const weights: [number, number, number, number] = [
+		data[baseOffset] ?? 0,
+		data[baseOffset + 1] ?? 0,
+		data[baseOffset + 2] ?? 0,
+		data[baseOffset + 3] ?? 0,
+	]
+	const normalized = normalizeWeightsTo255(weights)
+	let r = normalized[0]
+	let g = normalized[1]
+	let b = normalized[2]
+	let a = normalized[3]
+	const idx = THREE.MathUtils.clamp(Math.floor(targetChannelIndex), 0, 3)
+	const get = (i: number) => (i === 0 ? r : i === 1 ? g : i === 2 ? b : a)
+	const set = (i: number, value: number) => {
+		if (i === 0) r = value
+		else if (i === 1) g = value
+		else if (i === 2) b = value
+		else a = value
+	}
+	const available = 255 - get(idx)
 	const delta = Math.min(available, Math.max(0, Math.round(amount)))
 	if (delta <= 0) {
 		return false
 	}
-	weights[idx] = (weights[idx] ?? 0) + delta
+	set(idx, get(idx) + delta)
 	let remaining = delta
-	const otherTotal = 255 - (weights[idx] ?? 0) + remaining
+	const otherTotal = 255 - get(idx) + remaining
 	if (otherTotal > 0) {
-		for (let c = 0; c < weights.length; c += 1) {
+		for (let c = 0; c < 4; c += 1) {
 			if (c === idx) {
 				continue
 			}
-			const current = weights[c] ?? 0
+			const current = get(c)
 			const take = Math.min(current, Math.floor((delta * current) / otherTotal))
-			weights[c] = current - take
+			set(c, current - take)
 			remaining -= take
 		}
 	}
 	if (remaining > 0) {
-		for (let c = 0; c < weights.length; c += 1) {
+		for (let c = 0; c < 4; c += 1) {
 			if (c === idx) {
 				continue
 			}
 			if (remaining <= 0) {
 				break
 			}
-			const current = weights[c] ?? 0
+			const current = get(c)
 			const take = Math.min(current, remaining)
-			weights[c] = current - take
+			set(c, current - take)
 			remaining -= take
 		}
 	}
-	writePixelWeightsToPages(pages, pixelIndex, weights)
+	data[baseOffset] = r
+	data[baseOffset + 1] = g
+	data[baseOffset + 2] = b
+	data[baseOffset + 3] = a
 	return true
 }
 
@@ -371,7 +461,7 @@ function blurWeightmap(data: Uint8ClampedArray, resolution: number, iterations: 
 				const g = Math.round(sums[1] / Math.max(1, count))
 				const b = Math.round(sums[2] / Math.max(1, count))
 				const a = Math.round(sums[3] / Math.max(1, count))
-				const normalized = normalizeWeightVectorTo255([r, g, b, a]) as [number, number, number, number]
+				const normalized = normalizeWeightsTo255([r, g, b, a])
 				dst[base] = normalized[0]
 				dst[base + 1] = normalized[1]
 				dst[base + 2] = normalized[2]
@@ -383,32 +473,6 @@ function blurWeightmap(data: Uint8ClampedArray, resolution: number, iterations: 
 		dst = swap
 	}
 	return src
-}
-
-function blurWeightmapPages(pages: Uint8ClampedArray[], resolution: number, iterations: number): Uint8ClampedArray[] {
-	const blurredPages = pages.map((page) => blurWeightmap(page, resolution, iterations))
-	const res = Math.max(1, Math.round(resolution))
-	for (let pixelIndex = 0; pixelIndex < res * res; pixelIndex += 1) {
-		writePixelWeightsToPages(blurredPages, pixelIndex, normalizeWeightVectorTo255(readPixelWeightsFromPages(blurredPages, pixelIndex), 0))
-	}
-	return blurredPages
-}
-
-function isWeightmapPageEmpty(page: Uint8ClampedArray, pageIndex: number): boolean {
-	for (let offset = 0; offset < page.length; offset += 4) {
-		const r = page[offset] ?? 0
-		const g = page[offset + 1] ?? 0
-		const b = page[offset + 2] ?? 0
-		const a = page[offset + 3] ?? 0
-		if (pageIndex === 0) {
-			if (r !== 255 || g !== 0 || b !== 0 || a !== 0) {
-				return false
-			}
-		} else if (r !== 0 || g !== 0 || b !== 0 || a !== 0) {
-			return false
-		}
-	}
-	return true
 }
 
 function clampScatterBrushRadius(value: unknown): number {
@@ -454,7 +518,7 @@ type TerrainPaintStampRequest = {
 	localZ: number
 	radius: number
 	strength: number
-	slotIndex: number
+	channelIndex: number
 }
 
 type TerrainPaintChunkBounds = {
@@ -470,7 +534,6 @@ type PaintChunkState = {
 	chunkColumn: number
 	resolution: number
 	data: Uint8ClampedArray
-	pages: Uint8ClampedArray[]
 	status: 'loading' | 'ready'
 	loadPromise: Promise<void> | null
 	pendingStamps: TerrainPaintStampRequest[]
@@ -490,6 +553,7 @@ type PaintSessionState = {
 
 let paintSessionState: PaintSessionState | null = null
 let paintCommitToken = 0
+let pendingTerrainPaintFlush: Promise<boolean> | null = null
 
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
@@ -1656,6 +1720,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 				// Invalidate any in-flight paint work tied to the previous scene.
 				paintCommitToken += 1
+				pendingTerrainPaintFlush = null
 
 				resetScatterStoreState('scene-changed')
 				paintSessionState = null
@@ -1709,9 +1774,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		// Always clear first to avoid stale textures leaking across scene switches.
 		materials.forEach((material) => {
-			for (let slotIndex = 1; slotIndex < TERRAIN_PAINT_MAX_LAYER_COUNT; slotIndex += 1) {
-				updateTerrainPaintPreviewLayerTexture(material, slotIndex, null)
-			}
+			updateTerrainPaintPreviewLayerTexture(material, 'g', null)
+			updateTerrainPaintPreviewLayerTexture(material, 'b', null)
+			updateTerrainPaintPreviewLayerTexture(material, 'a', null)
 		})
 
 		for (const layer of session.settings.layers ?? []) {
@@ -1721,7 +1786,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const textureAssetId = typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
 			if (!textureAssetId) {
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, null)
+					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
 				})
 				continue
 			}
@@ -1729,7 +1794,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!asset) {
 				// Silent skip (and clear the channel so it doesn't keep stale data).
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, null)
+					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
 				})
 				continue
 			}
@@ -1740,12 +1805,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!texture) {
 				// Silent skip
 				materials.forEach((material) => {
-					updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, null)
+					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
 				})
 				continue
 			}
 			materials.forEach((material) => {
-				updateTerrainPaintPreviewLayerTexture(material, layer.slotIndex, texture)
+				updateTerrainPaintPreviewLayerTexture(material, layer.channel, texture)
 			})
 		}
 	}
@@ -1838,7 +1903,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function applyTerrainPaintForChunkKey(session: PaintSessionState, chunk: { key: string; chunkRow: number; chunkColumn: number }): void {
 		const ref = session.settings.chunks?.[chunk.key] ?? null
-		const logicalId = getTerrainPaintChunkPageLogicalId(ref, 0)
+		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
 		const state = ensurePaintChunkState(session, chunk)
 		if (!logicalId) {
 			// Ensure stale cached textures don't leak into this scene.
@@ -1856,7 +1921,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const session = ensurePaintSession(definition, groundNode.id)
 		// Ensure we're working off the latest stored settings snapshot.
-		session.settings = cloneOrCreateTerrainPaintSettings(definition)
+		session.settings = cloneOrCreateTerrainPaintSettings(definition, session.nodeId)
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
 		session.terrainPaintPreviewPendingChunkKeys.clear()
@@ -2874,7 +2939,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			nodeId,
 			definition,
 			chunkCells,
-			settings: cloneOrCreateTerrainPaintSettings(definition),
+			settings: cloneOrCreateTerrainPaintSettings(definition, nodeId),
 			chunkStates: new Map(),
 			hasPendingChanges: false,
 			terrainPaintPreviewPendingChunkKeys: new Map(),
@@ -2978,15 +3043,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			materials.forEach((material) => {
-				for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
-					updateTerrainPaintPreviewWeightmap(
-						material,
-						chunk.key,
-						chunk.pages[pageIndex] ?? new Uint8ClampedArray(chunk.resolution * chunk.resolution * 4),
-						chunk.resolution,
-						pageIndex,
-					)
-				}
+				updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
 			})
 		}
 	}
@@ -2995,7 +3052,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		enqueueTerrainPaintPreviewChunkKey(session, chunk.key)
 	}
 
-	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, slotIndex: number, asset: ProjectAsset): Promise<void> {
+	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, channel: TerrainPaintChannel, asset: ProjectAsset): Promise<void> {
 		const groundObject = getGroundObject()
 		if (!groundObject) {
 			return
@@ -3010,7 +3067,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		materials.forEach((material) => {
-			updateTerrainPaintPreviewLayerTexture(material, slotIndex, texture)
+			updateTerrainPaintPreviewLayerTexture(material, channel, texture)
 		})
 	}
 
@@ -3025,44 +3082,33 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			chunkRow: payload.chunkRow,
 			chunkColumn: payload.chunkColumn,
 			resolution,
-			data: createBlankWeightmapPage(resolution, 0),
-			pages: createBlankWeightmapPages(resolution),
+			data: createBlankWeightmap(resolution),
 			status: 'ready',
 			loadPromise: null,
 			pendingStamps: [],
 			dirty: false,
 		}
-		state.data = state.pages[0] ?? state.data
 		session.chunkStates.set(payload.key, state)
 
 		const ref = session.settings.chunks?.[payload.key] ?? null
-		const logicalIds = Array.from({ length: TERRAIN_PAINT_PAGE_COUNT }, (_, pageIndex) => getTerrainPaintChunkPageLogicalId(ref, pageIndex))
-		if (logicalIds.some((logicalId) => logicalId.length > 0)) {
+		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
+		if (logicalId) {
 			state.status = 'loading'
 			state.loadPromise = (async () => {
 				try {
 					const cache = useAssetCacheStore()
-					for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
-						const logicalId = logicalIds[pageIndex] ?? ''
-						if (!logicalId) {
-							state.pages[pageIndex] = createBlankWeightmapPage(state.resolution, pageIndex)
-							continue
-						}
-						let entry = cache.getEntry(logicalId)
-						let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
-						if (!blob) {
-							entry = (await cache.loadFromIndexedDb(logicalId)) ?? entry
-							blob = entry.status === 'cached' ? (entry.blob ?? null) : null
-						}
-						state.pages[pageIndex] = blob
-							? await decodeWeightmapToData(blob, state.resolution)
-							: createBlankWeightmapPage(state.resolution, pageIndex)
+					let entry = cache.getEntry(logicalId)
+					let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
+					if (!blob) {
+						entry = (await cache.loadFromIndexedDb(logicalId)) ?? entry
+						blob = entry.status === 'cached' ? (entry.blob ?? null) : null
 					}
-					state.data = state.pages[0] ?? createBlankWeightmapPage(state.resolution, 0)
+					if (blob) {
+						state.data = await decodeWeightmapToData(blob, state.resolution)
+					}
 				} catch (error) {
 					console.warn('加载地貌权重贴图失败，回退到空白贴图：', error)
-					state.pages = createBlankWeightmapPages(state.resolution)
-					state.data = state.pages[0] ?? createBlankWeightmapPage(state.resolution, 0)
+					state.data = createBlankWeightmap(state.resolution)
 				} finally {
 					pushTerrainPaintPreviewWeightmap(session, state)
 					state.status = 'ready'
@@ -3121,8 +3167,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const t = dist / Math.max(1e-6, radius)
 				const falloff = (1 - t) * (1 - t)
 				const amount = strength255 * falloff
-				const pixelIndex = y * res + x
-				if (addWeightToPixelPages(chunk.pages, pixelIndex, stamp.slotIndex, amount)) {
+				const offset = (y * res + x) * 4
+				if (addWeightToPixel(chunk.data, offset, stamp.channelIndex, amount)) {
 					any = true
 				}
 			}
@@ -3149,17 +3195,44 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return false
 	}
 
-	async function flushTerrainPaintChanges(): Promise<boolean> {
-		for (let attempts = 0; attempts < 16; attempts += 1) {
-			if (!hasDirtyPaintChunks(paintSessionState)) {
-				return true
-			}
-			const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
-			if (!ok && hasDirtyPaintChunks(paintSessionState)) {
-				return false
-			}
+	function scheduleTerrainPaintFlush(reason: string): void {
+		if (!hasDirtyPaintChunks(paintSessionState)) {
+			return
 		}
-		return !hasDirtyPaintChunks(paintSessionState)
+		void flushTerrainPaintChanges().then((ok) => {
+			if (!ok && hasDirtyPaintChunks(paintSessionState)) {
+				console.warn(`提交地貌涂层失败：${reason}`)
+			}
+		}).catch((error) => {
+			console.warn(`提交地貌涂层失败：${reason}`, error)
+		})
+	}
+
+	function flushTerrainPaintChanges(): Promise<boolean> {
+		if (pendingTerrainPaintFlush) {
+			return pendingTerrainPaintFlush
+		}
+
+		const flushPromise = (async () => {
+			for (let attempts = 0; attempts < 16; attempts += 1) {
+				if (!hasDirtyPaintChunks(paintSessionState)) {
+					return true
+				}
+				const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
+				if (!ok && hasDirtyPaintChunks(paintSessionState)) {
+					return false
+				}
+			}
+			return !hasDirtyPaintChunks(paintSessionState)
+		})()
+
+		pendingTerrainPaintFlush = flushPromise
+		void flushPromise.finally(() => {
+			if (pendingTerrainPaintFlush === flushPromise) {
+				pendingTerrainPaintFlush = null
+			}
+		})
+		return flushPromise
 	}
 
 	async function commitPaintSession(selectedNode: SceneNode | null): Promise<boolean> {
@@ -3211,8 +3284,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const smoothIterations = Math.max(0, Math.min(6, Math.round(smoothness * 4)))
 			if (smoothIterations > 0) {
 				dirtyChunks.forEach((chunk) => {
-					chunk.pages = blurWeightmapPages(chunk.pages, chunk.resolution, smoothIterations)
-					chunk.data = chunk.pages[0] ?? createBlankWeightmapPage(chunk.resolution, 0)
+					chunk.data = blurWeightmap(chunk.data, chunk.resolution, smoothIterations)
 					pushTerrainPaintPreviewWeightmap(session, chunk)
 				})
 			}
@@ -3227,54 +3299,40 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (token !== paintCommitToken) {
 					return false
 				}
-				const existingRef = session.settings.chunks[chunk.key]
-				const pages = Array.from({ length: TERRAIN_PAINT_PAGE_COUNT }, () => null as { logicalId: string } | null)
-				for (let pageIndex = 0; pageIndex < TERRAIN_PAINT_PAGE_COUNT; pageIndex += 1) {
-					const pageData = chunk.pages[pageIndex] ?? createBlankWeightmapPage(chunk.resolution, pageIndex)
-					if (isWeightmapPageEmpty(pageData, pageIndex)) {
-						pages[pageIndex] = null
-						continue
-					}
-					const weightmapBlob = encodeWeightmapToBinary(pageData, chunk.resolution)
-					const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}_p${pageIndex}.bin`
-					const logicalId = await computeBlobHash(weightmapBlob)
-					await cache.storeAssetBlob(logicalId, {
-						blob: weightmapBlob,
-						mimeType: 'application/octet-stream',
-						filename,
-					})
-					options.sceneStore.registerAsset(
-						{
-							id: logicalId,
-							name: filename,
-							type: 'file',
-							downloadUrl: logicalId,
-							previewColor: '#ffffff',
-							thumbnail: null,
-							description: `Terrain weightmap (${session.nodeId}:${chunk.key}:page${pageIndex})`,
-							gleaned: true,
-						},
-						{
-							source: { type: 'local' },
-							internal: true,
-							commitOptions: { updateNodes: false },
-						},
-					)
-					pages[pageIndex] = { logicalId }
-				}
+				const weightmapBlob = encodeWeightmapToBinary(chunk.data, chunk.resolution)
+				const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}.bin`
+				const logicalId = await computeBlobHash(weightmapBlob)
+				await cache.storeAssetBlob(logicalId, {
+					blob: weightmapBlob,
+					mimeType: 'application/octet-stream',
+					filename,
+				})
+				options.sceneStore.registerAsset(
+					{
+						id: logicalId,
+						name: filename,
+						type: 'file',
+						downloadUrl: logicalId,
+						previewColor: '#ffffff',
+						thumbnail: null,
+						description: `Terrain weightmap (${session.nodeId}:${chunk.key})`,
+						gleaned: true,
+					},
+					{
+						source: { type: 'local' },
+						internal: true,
+						commitOptions: { updateNodes: false },
+					},
+				)
 				session.settings.chunks[chunk.key] = {
-					logicalId: pages[0]?.logicalId ?? existingRef?.logicalId ?? null,
-					pages,
+					logicalId,
 				}
 				chunk.dirty = false
 			}
 			if (token !== paintCommitToken) {
 				return false
 			}
-			options.sceneStore.updateNodeDynamicMesh(session.nodeId, {
-				terrainPaint: session.settings,
-			})
-			return true
+			return options.sceneStore.commitGroundPaintEdit(session.nodeId, session.settings)
 		} catch (error) {
 			console.warn('提交地貌权重贴图失败：', error)
 			return false
@@ -4465,30 +4523,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 
 		const session = ensurePaintSession(definition, groundNode.id)
-		const selectedLayerId = typeof options.paintLayerId.value === 'string' ? options.paintLayerId.value.trim() : ''
-		const selectedSlotIndex = Number.isFinite(options.paintLayerSlotIndex.value)
-			? Math.max(0, Math.min(TERRAIN_PAINT_MAX_LAYER_COUNT - 1, Math.trunc(options.paintLayerSlotIndex.value as number)))
-			: null
 		const paintAsset = options.paintAsset.value
-		if (selectedSlotIndex === null) {
-			return
-		}
-
-		let slotIndex = selectedSlotIndex
-		if (slotIndex > 0) {
-			if (!paintAsset?.id) {
+		let channelIndex = 0
+		if (paintAsset) {
+			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id, options.paintLayerStyle.value)
+			if (!channel) {
+				// No available channel slot (G/B/A) for new layers.
 				return
 			}
-			const layer = session.settings.layers.find((entry) => entry.id === selectedLayerId)
-				?? session.settings.layers.find((entry) => entry.slotIndex === slotIndex)
-			if (!layer || !layer.enabled) {
-				return
-			}
-			if (layer.textureAssetId !== paintAsset.id) {
-				layer.textureAssetId = paintAsset.id
-			}
-			slotIndex = layer.slotIndex
-			void pushTerrainPaintPreviewLayer(session, layer.slotIndex, paintAsset)
+			channelIndex = channelToIndex(channel)
+			// Best-effort: ensure the layer texture is visible during painting.
+			void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
 		}
 
 		for (let i = 0; i < steps; i += 1) {
@@ -4501,7 +4546,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				localZ: point.z,
 				radius,
 				strength: clamp01(options.brushStrength.value),
-				slotIndex,
+				// If no layer is selected ("empty" tile), paint into base channel (R) to erase.
+				channelIndex,
 			}
 			const chunks = collectPaintChunksOverlappedByBrush(definition, session.chunkCells, point.x, point.z, radius)
 			for (const chunkInfo of chunks) {
@@ -5005,6 +5051,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundSelectionGroup.clear()
 		scatterPreviewGroup.clear()
 		sculptSessionState = null
+		pendingTerrainPaintFlush = null
 		resetScatterStoreState('dispose')
 	}
 

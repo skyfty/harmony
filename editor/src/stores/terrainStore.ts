@@ -27,8 +27,6 @@ export const useTerrainStore = defineStore('terrain', () => {
   const groundPanelTab = ref<GroundPanelTab>('terrain')
 
   // Terrain paint (ground material painting) state.
-  const paintSelectedLayerId = ref<string | null>(null)
-  const paintSelectedLayerSlotIndex = ref<number | null>(null)
   const paintSelectedAsset = ref<ProjectAsset | null>(null)
   // 0..1 - maps to neighbor-average smoothing strength/iterations.
   const paintSmoothness = ref(0.25)
@@ -48,12 +46,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   const scatterModeActive = computed(() =>
     groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint' && !!scatterSelectedAsset.value,
   )
-  const paintModeActive = computed(() => {
-    if (groundPanelTab.value !== 'paint' || paintSelectedLayerSlotIndex.value === null) {
-      return false
-    }
-    return paintSelectedLayerSlotIndex.value === 0 || !!paintSelectedAsset.value
-  })
+  const paintModeActive = computed(() => groundPanelTab.value === 'paint' && !!paintSelectedAsset.value)
 
   function setGroundPanelTab(tab: GroundPanelTab) {
     groundPanelTab.value = tab
@@ -76,30 +69,8 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterProviderAssetId.value = payload.providerAssetId ?? null
   }
 
-  function setPaintLayerSelection(payload: {
-    layerId: string | null
-    slotIndex?: number | null
-    asset?: ProjectAsset | null
-  }) {
-    const normalizedLayerId = typeof payload.layerId === 'string' && payload.layerId.trim().length
-      ? payload.layerId.trim()
-      : null
-    const rawSlotIndex = payload.slotIndex
-    paintSelectedLayerId.value = normalizedLayerId
-    paintSelectedLayerSlotIndex.value = Number.isFinite(rawSlotIndex)
-      ? Math.max(0, Math.trunc(rawSlotIndex as number))
-      : null
-    paintSelectedAsset.value = payload.asset ?? null
-  }
-
   function setPaintSelection(asset: ProjectAsset | null) {
     paintSelectedAsset.value = asset
-  }
-
-  function clearPaintSelection() {
-    paintSelectedLayerId.value = null
-    paintSelectedLayerSlotIndex.value = null
-    paintSelectedAsset.value = null
   }
 
   function setPaintSmoothness(value: number) {
@@ -136,9 +107,9 @@ export const useTerrainStore = defineStore('terrain', () => {
     }
   })
 
-  watch([paintSelectedLayerId, paintSelectedLayerSlotIndex, paintSelectedAsset], ([layerId, slotIndex, asset]) => {
+  watch(paintSelectedAsset, (next) => {
     const ui = useUiStore()
-    if (layerId || slotIndex !== null || asset) {
+    if (next) {
       ui.setActiveSelectionContext('terrain-paint')
     } else if (ui.activeSelectionContext === 'terrain-paint') {
       ui.setActiveSelectionContext(null)
@@ -167,8 +138,6 @@ export const useTerrainStore = defineStore('terrain', () => {
     isDigging,
     groundPanelTab,
 
-    paintSelectedLayerId,
-    paintSelectedLayerSlotIndex,
     paintSelectedAsset,
     paintSmoothness,
     paintBrushSettings,
@@ -186,9 +155,7 @@ export const useTerrainStore = defineStore('terrain', () => {
     setGroundPanelTab,
     setScatterCategory,
     setScatterSelection,
-    setPaintLayerSelection,
     setPaintSelection,
-    clearPaintSelection,
     setPaintSmoothness,
     setPaintBrushSettings,
     setScatterBrushRadius,
