@@ -216,6 +216,16 @@ const wallInstancedBoundsCorners = [
 const WALL_SYNC_EPSILON = 1e-6
 const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
 const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
+const WALL_SYNC_REPEAT_INSTANCE_STEP_M = 0.5
+const WALL_RENDER_DEBUG_PREFIX = '[WallRenderMode]'
+
+function debugWallRenderFlow(message: string, details?: Record<string, unknown>): void {
+  if (details) {
+    console.debug(WALL_RENDER_DEBUG_PREFIX, message, details)
+    return
+  }
+  console.debug(WALL_RENDER_DEBUG_PREFIX, message)
+}
 
 function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   const dx = a.x - b.x
@@ -464,7 +474,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.wallRenderMode, wallProps.bodyOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -492,7 +502,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.wallRenderMode, wallProps.headOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -520,7 +530,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.wallRenderMode, wallProps.footOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -754,6 +764,14 @@ export function createWallRenderer(options: WallRendererOptions) {
     uvScaleU: number
   }
 
+  const buildRepeatErasedSlotSet = (definition: WallDynamicMesh): Set<string> => {
+    const source = definition as unknown as { repeatErasedSlots?: Array<{ chainIndex?: unknown; slotIndex?: unknown }> }
+    const slots = Array.isArray(source.repeatErasedSlots) ? source.repeatErasedSlots : []
+    return new Set(
+      slots.map((entry) => `${Math.max(0, Math.trunc(Number(entry?.chainIndex ?? 0)))}:${Math.max(0, Math.trunc(Number(entry?.slotIndex ?? -1)))}`),
+    )
+  }
+
   function computeWallBodyLocalPlacementsStretchTiledUv(
     definition: WallDynamicMesh,
     bounds: THREE.Box3,
@@ -847,13 +865,127 @@ export function createWallRenderer(options: WallRendererOptions) {
     return placements
   }
 
-  function computeWallBodyLocalPlacements(
+  function computeWallBodyLocalPlacementsRepeated(
     definition: WallDynamicMesh,
     bounds: THREE.Box3,
     mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
+    repeatErasedSlotSet: Set<string>,
     cornerModels: WallCornerModelRule[] = [],
   ): WallLocalPlacement[] {
+    const placements: WallLocalPlacement[] = []
+    const segments = compileWallSegmentsFromDefinition(definition)
+    if (!segments.length) {
+      return placements
+    }
+
+    const localForward = new THREE.Vector3()
+    writeWallLocalForward(localForward, orientation.forwardAxis)
+    const { tileLengthLocal, minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
+
+    const templateHeight = resolveWallModelHeight(bounds)
+    const minY = bounds.min.y
+    const trims = computeWallSegmentJointTrims(segments, cornerModels, mode)
+    const repeatSlotByChain = new Map<number, number>()
+
+    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+      const segment = segments[segmentIndex] as any
+      wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
+      wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
+      wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
+      wallSyncLocalDirHelper.y = 0
+      const lengthLocal = wallSyncLocalDirHelper.length()
+      if (lengthLocal <= WALL_SYNC_EPSILON) {
+        continue
+      }
+
+      const trim = trims[segmentIndex] ?? { start: 0, end: 0 }
+      const trimStart = Math.max(0, trim.start)
+      const trimEnd = Math.max(0, trim.end)
+      const trimmedLengthLocal = Math.max(0, lengthLocal - trimStart - trimEnd)
+      if (trimmedLengthLocal <= WALL_SYNC_EPSILON) {
+        continue
+      }
+
+      wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
+      if (trimStart > WALL_SYNC_EPSILON) {
+        wallSyncLocalStartHelper.addScaledVector(wallSyncLocalUnitDirHelper, trimStart)
+      }
+
+      const quatLocal = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalUnitDirHelper)
+      if (orientation.yawDeg) {
+        wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(orientation.yawDeg))
+        quatLocal.multiply(wallSyncYawQuatHelper)
+      }
+
+      const bodyHeight = resolveWallBodyHeightForSegment(segment)
+      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
+      const maxLocalStart = trimmedLengthLocal - tileLengthLocal
+      if (maxLocalStart < -WALL_SYNC_EPSILON) {
+        continue
+      }
+
+      wallSyncScaleHelper.set(1, scaleY, 1)
+
+      const chainIndex = Math.max(0, Math.trunc(Number(segment.chainIndex ?? 0)))
+      for (
+        let localStart = 0;
+        localStart <= maxLocalStart + WALL_SYNC_EPSILON;
+        localStart += WALL_SYNC_REPEAT_INSTANCE_STEP_M
+      ) {
+        const repeatSlotIndex = (() => {
+          const next = (repeatSlotByChain.get(chainIndex) ?? 0) + 1
+          repeatSlotByChain.set(chainIndex, next)
+          return next - 1
+        })()
+        if (repeatErasedSlotSet.has(`${chainIndex}:${repeatSlotIndex}`)) {
+          continue
+        }
+
+        const snappedLocalStart = Math.max(0, Math.min(maxLocalStart, localStart))
+        wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis)
+        wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
+        wallSyncPosHelper.copy(wallSyncLocalStartHelper)
+        wallSyncPosHelper.addScaledVector(wallSyncLocalUnitDirHelper, snappedLocalStart)
+        wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
+
+        const baselineY = wallSyncPosHelper.y
+        const posY = mode === 'body'
+          ? (baselineY - scaleY * minY)
+          : mode === 'head'
+            ? (baselineY + bodyHeight - minY)
+            : (baselineY - minY)
+        wallSyncPosHelper.y = posY
+
+        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
+        placements.push({
+          matrix: new THREE.Matrix4().copy(wallSyncLocalMatrixHelper),
+          uvScaleU: 1,
+        })
+      }
+    }
+
+    return placements
+  }
+
+  function computeWallBodyLocalPlacements(
+    definition: WallDynamicMesh,
+    bounds: THREE.Box3,
+    mode: 'body' | 'head' | 'foot',
+    wallRenderMode: 'stretch' | 'repeatInstances',
+    orientation: WallModelOrientation,
+    cornerModels: WallCornerModelRule[] = [],
+  ): WallLocalPlacement[] {
+    if (wallRenderMode === 'repeatInstances') {
+      return computeWallBodyLocalPlacementsRepeated(
+        definition,
+        bounds,
+        mode,
+        orientation,
+        buildRepeatErasedSlotSet(definition),
+        cornerModels,
+      )
+    }
     return computeWallBodyLocalPlacementsStretchTiledUv(definition, bounds, mode, orientation, cornerModels)
   }
 
@@ -1719,6 +1851,19 @@ export function createWallRenderer(options: WallRendererOptions) {
     const wantsInstancing = Boolean(
       bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints,
     )
+    debugWallRenderFlow('syncWallContainer', {
+      nodeId: node.id,
+      wallRenderMode,
+      wantsInstancing,
+      bodyAssetId,
+      headAssetId,
+      footAssetId,
+      bodyEndCapAssetId,
+      headEndCapAssetId,
+      footEndCapAssetId,
+      hasCornerModels: cornerModels.length > 0,
+      canHaveCornerJoints,
+    })
     const hasProceduralBodyFallback = !bodyAssetId
 
     const userData = container.userData ?? (container.userData = {})
@@ -1814,6 +1959,16 @@ export function createWallRenderer(options: WallRendererOptions) {
     // - 立即回退到程序墙体，让用户可见并可继续编辑
     // - 等加载完成后由 scheduleWallResync 在同一帧批量刷新等待的 node
     if (needsBodyLoad || needsHeadLoad || needsFootLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsFootCornerLoad || needsBodyCapLoad || needsHeadCapLoad || needsFootCapLoad) {
+      debugWallRenderFlow('fallback to procedural wall while instanced assets load', {
+        nodeId: node.id,
+        wallRenderMode,
+        needsBodyLoad,
+        needsHeadLoad,
+        needsFootLoad,
+        needsBodyCornerLoad,
+        needsHeadCornerLoad,
+        needsFootCornerLoad,
+      })
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
       delete userData.instancedBounds
@@ -1865,8 +2020,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // body：沿每段墙铺 tile，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallRenderMode, wallProps.bodyOrientation, cornerModels)
           : []
+        debugWallRenderFlow('computed wall body placements', {
+          nodeId: node.id,
+          wallRenderMode,
+          placementCount: placements.length,
+        })
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
           const bucket = buckets[i]!
@@ -1901,8 +2061,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // head：沿墙段铺设，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallRenderMode, wallProps.headOrientation, cornerModels)
           : []
+        debugWallRenderFlow('computed wall head placements', {
+          nodeId: node.id,
+          wallRenderMode,
+          placementCount: placements.length,
+        })
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
           const bucket = buckets[i]!
@@ -1936,8 +2101,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallRenderMode, wallProps.footOrientation, cornerModels)
           : []
+        debugWallRenderFlow('computed wall foot placements', {
+          nodeId: node.id,
+          wallRenderMode,
+          placementCount: placements.length,
+        })
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
           const bucket = buckets[i]!
