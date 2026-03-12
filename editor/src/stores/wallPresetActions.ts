@@ -1,5 +1,12 @@
 import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
-import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
+import {
+  WALL_COMPONENT_TYPE,
+  WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_SMOOTHING,
+  WALL_DEFAULT_THICKNESS,
+  WALL_DEFAULT_WIDTH,
+  type WallComponentProps,
+} from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { determineAssetCategoryId } from './assetCatalog'
@@ -60,6 +67,57 @@ export type WallPresetActionsDeps = {
   isAssetIndex: (value: unknown) => boolean
   isPackageAssetMap: (value: unknown) => boolean
 }
+
+export const BUILTIN_AIR_WALL_PRESET_ASSET_ID = 'builtin:wall-preset:air-wall'
+
+const BUILTIN_AIR_WALL_PRESET_NAME = '空气墙'
+const BUILTIN_AIR_WALL_PRESET_FILENAME = buildWallPresetFilename(BUILTIN_AIR_WALL_PRESET_NAME)
+const BUILTIN_AIR_WALL_PRESET_PREVIEW_COLOR = '#7986CB'
+
+export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
+  kind: 'wall-preset',
+  formatVersion: WALL_PRESET_FORMAT_VERSION,
+  name: BUILTIN_AIR_WALL_PRESET_NAME,
+  wallProps: {
+    height: WALL_DEFAULT_HEIGHT,
+    width: WALL_DEFAULT_WIDTH,
+    thickness: WALL_DEFAULT_THICKNESS,
+    smoothing: WALL_DEFAULT_SMOOTHING,
+    isAirWall: true,
+    bodyAssetId: null,
+    bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    bodyUvAxis: 'auto',
+    headAssetId: null,
+    headOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    headUvAxis: 'auto',
+    footAssetId: null,
+    footOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    footUvAxis: 'auto',
+    bodyEndCapAssetId: null,
+    bodyEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    headEndCapAssetId: null,
+    headEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    footEndCapAssetId: null,
+    footEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    cornerModels: [],
+  },
+  materialOrder: [],
+  materialPatches: {},
+}
+
+export const BUILTIN_WALL_PRESET_ASSETS: ProjectAsset[] = [
+  {
+    id: BUILTIN_AIR_WALL_PRESET_ASSET_ID,
+    name: BUILTIN_AIR_WALL_PRESET_NAME,
+    type: 'prefab',
+    downloadUrl: BUILTIN_AIR_WALL_PRESET_ASSET_ID,
+    previewColor: BUILTIN_AIR_WALL_PRESET_PREVIEW_COLOR,
+    thumbnail: null,
+    description: BUILTIN_AIR_WALL_PRESET_FILENAME,
+    gleaned: true,
+    extension: 'wall',
+  },
+]
 
 function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
@@ -368,6 +426,9 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       store: WallPresetStoreLike,
       payload: { name: string; nodeId?: string | null; assetId?: string | null; select?: boolean },
     ): Promise<ProjectAsset> {
+      if (payload.assetId === BUILTIN_AIR_WALL_PRESET_ASSET_ID) {
+        throw new Error('内置空气墙预设不可覆盖')
+      }
       const nodeId = (payload.nodeId ?? store.selectedNodeId ?? '').trim()
       if (!nodeId) {
         throw new Error('未选择墙体节点')
@@ -545,6 +606,9 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
     },
 
     async loadWallPreset(store: WallPresetStoreLike, assetId: string): Promise<WallPresetData> {
+      if (assetId === BUILTIN_AIR_WALL_PRESET_ASSET_ID) {
+        return BUILTIN_AIR_WALL_PRESET
+      }
       const asset = store.getAsset(assetId)
       if (!asset) {
         throw new Error('墙体预设资源不存在')

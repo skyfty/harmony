@@ -554,6 +554,7 @@ function buildStretchedWallInstancesForSegs(
   orientation: WallModelOrientation,
   rules: WallCornerModelRule[] = [],
 ): StretchedWallInstance[] {
+  console.log('Building stretched wall instances for segments:', segs, 'with template:', template, 'mode:', mode, 'orientation:', orientation, 'and rules:', rules)
   const instances: StretchedWallInstance[] = []
   const trims = computeWallSegmentJointTrimForChain(segs, rules, mode)
   const repeatSlotByChain = new Map<number, number>()
@@ -1902,7 +1903,7 @@ function rebuildWallGroup(
   assets: WallRenderAssetObjects = {},
   options: WallRenderOptions = {},
 ) {
-  console.log('Rebuilding wall group with definition:', definition, 'and options:', options)
+  console.log('Rebuilding wall group with definition:', definition, 'and options:', options, 'and assets:', assets)
   clearGroupContent(group)
   const wallAssetBounds = new THREE.Box3()
   wallAssetBounds.makeEmpty()
@@ -1926,16 +1927,16 @@ function rebuildWallGroup(
   const bodyHeight = Math.max(WALL_MIN_HEIGHT, _dimHeight)
 
   const bodyTemplate = assets.bodyObject ? extractInstancedAssetTemplate(assets.bodyObject) : null
-  const modelModeEnabled = !!bodyTemplate
-  const headTemplate = modelModeEnabled && assets.headObject ? extractInstancedAssetTemplate(assets.headObject) : null
-  const footTemplate = modelModeEnabled && assets.footObject ? extractInstancedAssetTemplate(assets.footObject) : null
-  const bodyEndCapTemplate = modelModeEnabled && assets.bodyEndCapObject
+  const proceduralBodyVisible = !bodyTemplate
+  const headTemplate = assets.headObject ? extractInstancedAssetTemplate(assets.headObject) : null
+  const footTemplate = assets.footObject ? extractInstancedAssetTemplate(assets.footObject) : null
+  const bodyEndCapTemplate = assets.bodyEndCapObject
     ? extractInstancedAssetTemplate(assets.bodyEndCapObject)
     : null
-  const headEndCapTemplate = bodyEndCapTemplate && assets.headEndCapObject
+  const headEndCapTemplate = assets.headEndCapObject
     ? extractInstancedAssetTemplate(assets.headEndCapObject)
     : null
-  const footEndCapTemplate = bodyEndCapTemplate && assets.footEndCapObject
+  const footEndCapTemplate = assets.footEndCapObject
     ? extractInstancedAssetTemplate(assets.footEndCapObject)
     : null
 
@@ -1982,7 +1983,7 @@ function rebuildWallGroup(
       centers = computeAdaptiveWallSamplePoints(curve, totalHeight, smoothing, path.closed)
     }
 
-    const geometry = buildWallGeometryFromPoints(centers, width, totalHeight, path.closed)
+    const geometry = buildWallGeometryFromPoints(centers, width, bodyHeight, path.closed)
     if (!geometry) {
       continue
     }
@@ -1997,14 +1998,14 @@ function rebuildWallGroup(
     }
     mesh.castShadow = true
     mesh.receiveShadow = true
-    mesh.visible = !modelModeEnabled
+    mesh.visible = proceduralBodyVisible
     group.add(mesh)
   }
 
   const rawBodyCornerMap = assets.bodyCornerObjectsByAssetId ?? null
   const bodyCornerObjectsByAssetId = rawBodyCornerMap && typeof rawBodyCornerMap === 'object' ? rawBodyCornerMap : null
   const bodyCornerTemplatesByAssetId = new Map<string, InstancedAssetTemplate>()
-  if (modelModeEnabled && bodyCornerObjectsByAssetId) {
+  if (bodyCornerObjectsByAssetId) {
     Object.entries(bodyCornerObjectsByAssetId).forEach(([assetId, object]) => {
       const id = typeof assetId === 'string' ? assetId.trim() : ''
       if (!id || !object) {
@@ -2020,7 +2021,7 @@ function rebuildWallGroup(
   const rawHeadCornerMap = assets.headCornerObjectsByAssetId ?? null
   const headCornerObjectsByAssetId = rawHeadCornerMap && typeof rawHeadCornerMap === 'object' ? rawHeadCornerMap : null
   const headCornerTemplatesByAssetId = new Map<string, InstancedAssetTemplate>()
-  if (modelModeEnabled && headCornerObjectsByAssetId) {
+  if (headCornerObjectsByAssetId) {
     Object.entries(headCornerObjectsByAssetId).forEach(([assetId, object]) => {
       const id = typeof assetId === 'string' ? assetId.trim() : ''
       if (!id || !object) {
@@ -2036,7 +2037,7 @@ function rebuildWallGroup(
   const rawFootCornerMap = assets.footCornerObjectsByAssetId ?? null
   const footCornerObjectsByAssetId = rawFootCornerMap && typeof rawFootCornerMap === 'object' ? rawFootCornerMap : null
   const footCornerTemplatesByAssetId = new Map<string, InstancedAssetTemplate>()
-  if (modelModeEnabled && footCornerObjectsByAssetId) {
+  if (footCornerObjectsByAssetId) {
     Object.entries(footCornerObjectsByAssetId).forEach(([assetId, object]) => {
       const id = typeof assetId === 'string' ? assetId.trim() : ''
       if (!id || !object) {
@@ -2075,7 +2076,7 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && headTemplate) {
+  if (headTemplate) {
     const headOrientation = requireWallOrientation(options.headOrientation, 'headOrientation')
     const resolvedHeadUvAxis = resolveWallUvAxisForTemplate(headTemplate, headOrientation, headUvAxis)
     const instances: StretchedWallInstance[] = []
@@ -2100,7 +2101,7 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && footTemplate) {
+  if (footTemplate) {
     const footOrientation = requireWallOrientation(options.footOrientation, 'footOrientation')
     const resolvedFootUvAxis = resolveWallUvAxisForTemplate(footTemplate, footOrientation, footUvAxis)
     const instances: StretchedWallInstance[] = []
@@ -2125,7 +2126,7 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && bodyEndCapTemplate) {
+  if (bodyEndCapTemplate) {
     const bodyEndCapOrientation = requireWallOrientation(options.bodyEndCapOrientation, 'bodyEndCapOrientation')
     const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, bodyEndCapTemplate, 'body', bodyEndCapOrientation))
     if (localMatrices.length > 0) {
@@ -2135,7 +2136,7 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && bodyEndCapTemplate && headEndCapTemplate) {
+  if (headEndCapTemplate) {
     const headEndCapOrientation = requireWallOrientation(options.headEndCapOrientation, 'headEndCapOrientation')
     const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, headEndCapTemplate, 'head', headEndCapOrientation))
     if (localMatrices.length > 0) {
@@ -2145,7 +2146,7 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && bodyEndCapTemplate && footEndCapTemplate) {
+  if (footEndCapTemplate) {
     const footEndCapOrientation = requireWallOrientation(options.footEndCapOrientation, 'footEndCapOrientation')
     const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, footEndCapTemplate, 'foot', footEndCapOrientation))
     if (localMatrices.length > 0) {
@@ -2176,7 +2177,7 @@ function rebuildWallGroup(
   }
   const mergedSegsPerChain = Array.from(cornerSegsByChainIndex.values())
 
-  if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && bodyCornerTemplatesByAssetId.size) {
+  if (Array.isArray(cornerRules) && cornerRules.length && bodyCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const mergedSegs of mergedSegsPerChain) {
       const local = computeWallCornerInstanceMatricesByAsset(mergedSegs, bodyCornerTemplatesByAssetId, cornerRules, 'body')
@@ -2201,7 +2202,7 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && headCornerTemplatesByAssetId.size) {
+  if (Array.isArray(cornerRules) && cornerRules.length && headCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const mergedSegs of mergedSegsPerChain) {
       const local = computeWallCornerInstanceMatricesByAsset(mergedSegs, headCornerTemplatesByAssetId, cornerRules, 'head')
@@ -2226,7 +2227,7 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && footCornerTemplatesByAssetId.size) {
+  if (Array.isArray(cornerRules) && cornerRules.length && footCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const mergedSegs of mergedSegsPerChain) {
       const local = computeWallCornerInstanceMatricesByAsset(mergedSegs, footCornerTemplatesByAssetId, cornerRules, 'foot')

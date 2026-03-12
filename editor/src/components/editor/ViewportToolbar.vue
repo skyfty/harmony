@@ -364,6 +364,7 @@
                 :active="true"
                 assetType="prefab"
                 :extensions="['wall']"
+                :assets="wallPresetPickerAssets"
                 :asset-id="wallBrushPresetAssetId"
                 :thumbnailSize="30"
                 :showSearch="true"
@@ -979,6 +980,7 @@ import { SCATTER_BRUSH_RADIUS_MAX, type GroundPanelTab } from '@/stores/terrainS
 import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { BUILTIN_AIR_WALL_PRESET_ASSET_ID } from '@/stores/wallPresetActions'
 import {
   VIEWPORT_GEOMETRY_ITEMS,
   VIEWPORT_LIGHT_ITEMS,
@@ -1138,6 +1140,10 @@ const {
   groundScatterProviderAssetId,
 } = toRefs(props)
 const sceneStore = useSceneStore()
+const wallPresetPickerAssets = computed<ProjectAsset[]>(() => {
+  const builtinAirWallPreset = sceneStore.getAsset(BUILTIN_AIR_WALL_PRESET_ASSET_ID)
+  return builtinAirWallPreset ? [builtinAirWallPreset] : []
+})
 
 const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraControlMode)
 

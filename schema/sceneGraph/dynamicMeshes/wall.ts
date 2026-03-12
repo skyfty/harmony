@@ -77,19 +77,14 @@ export async function buildWallMesh(
     | undefined;
   const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
 
-  const bodyObject = wallProps.bodyAssetId ? await deps.loadAssetMesh(wallProps.bodyAssetId) : null;
-  const headObject = bodyObject && wallProps.headAssetId ? await deps.loadAssetMesh(wallProps.headAssetId) : null;
-  const footObject = bodyObject && wallProps.footAssetId ? await deps.loadAssetMesh(wallProps.footAssetId) : null;
-
-  const bodyEndCapObject = bodyObject && wallProps.bodyEndCapAssetId
-    ? await deps.loadAssetMesh(wallProps.bodyEndCapAssetId)
-    : null;
-  const headEndCapObject = bodyEndCapObject && wallProps.headEndCapAssetId
-    ? await deps.loadAssetMesh(wallProps.headEndCapAssetId)
-    : null;
-  const footEndCapObject = bodyEndCapObject && wallProps.footEndCapAssetId
-    ? await deps.loadAssetMesh(wallProps.footEndCapAssetId)
-    : null;
+  const [bodyObject, headObject, footObject, bodyEndCapObject, headEndCapObject, footEndCapObject] = await Promise.all([
+    wallProps.bodyAssetId ? deps.loadAssetMesh(wallProps.bodyAssetId) : Promise.resolve(null),
+    wallProps.headAssetId ? deps.loadAssetMesh(wallProps.headAssetId) : Promise.resolve(null),
+    wallProps.footAssetId ? deps.loadAssetMesh(wallProps.footAssetId) : Promise.resolve(null),
+    wallProps.bodyEndCapAssetId ? deps.loadAssetMesh(wallProps.bodyEndCapAssetId) : Promise.resolve(null),
+    wallProps.headEndCapAssetId ? deps.loadAssetMesh(wallProps.headEndCapAssetId) : Promise.resolve(null),
+    wallProps.footEndCapAssetId ? deps.loadAssetMesh(wallProps.footEndCapAssetId) : Promise.resolve(null),
+  ]);
 
   const cornerModels = Array.isArray(wallProps.cornerModels) ? wallProps.cornerModels : []
 

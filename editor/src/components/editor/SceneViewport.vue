@@ -16008,9 +16008,30 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       | SceneNodeComponentState<WallComponentProps>
       | undefined
     const wallProps = clampWallProps(wallComponent?.props as Partial<WallComponentProps> | null | undefined)
-    const bodyAssetId = wallProps.bodyAssetId ?? null
-    if (bodyAssetId && !getCachedModelObject(bodyAssetId)) {
-      void ensureModelObjectCached(bodyAssetId)
+    const preloadAssetIds = new Set<string>()
+    ;[
+      wallProps.bodyAssetId,
+      wallProps.headAssetId,
+      wallProps.footAssetId,
+      wallProps.bodyEndCapAssetId,
+      wallProps.headEndCapAssetId,
+      wallProps.footEndCapAssetId,
+    ].forEach((assetId) => {
+      if (typeof assetId === 'string' && assetId.trim().length) {
+        preloadAssetIds.add(assetId.trim())
+      }
+    })
+    ;(wallProps.cornerModels ?? []).forEach((entry) => {
+      ;[entry?.bodyAssetId, entry?.headAssetId, entry?.footAssetId].forEach((assetId) => {
+        if (typeof assetId === 'string' && assetId.trim().length) {
+          preloadAssetIds.add(assetId.trim())
+        }
+      })
+    })
+    for (const assetId of preloadAssetIds) {
+      if (!getCachedModelObject(assetId)) {
+        void ensureModelObjectCached(assetId)
+      }
     }
     object.updateMatrixWorld(true)
     wallRenderer.syncWallContainer(object, node, DYNAMIC_MESH_SIGNATURE_KEY)

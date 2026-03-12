@@ -176,7 +176,7 @@ import {
 import { createLodPresetActions } from './lodPresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
-import { createWallPresetActions } from './wallPresetActions'
+import { BUILTIN_WALL_PRESET_ASSETS, createWallPresetActions } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
@@ -1774,6 +1774,29 @@ function applyGroundRegionTransform(
 const initialAssetCatalog = createEmptyAssetCatalog()
 
 const initialAssetIndex: Record<string, AssetIndexEntry> = {}
+
+function ensureBuiltinWallPresetAssets(
+  assetCatalog: Record<string, ProjectAsset[]>,
+  assetIndex: Record<string, AssetIndexEntry>,
+): void {
+  BUILTIN_WALL_PRESET_ASSETS.forEach((asset) => {
+    const categoryId = determineAssetCategoryId(asset)
+    const existingCategoryId = assetIndex[asset.id]?.categoryId
+    if (existingCategoryId && assetCatalog[existingCategoryId]) {
+      assetCatalog[existingCategoryId] = assetCatalog[existingCategoryId]!.filter((entry) => entry.id !== asset.id)
+    }
+    const currentList = assetCatalog[categoryId] ?? []
+    assetCatalog[categoryId] = [...currentList.filter((entry) => entry.id !== asset.id), asset]
+    assetIndex[asset.id] = {
+      ...assetIndex[asset.id],
+      categoryId,
+      internal: true,
+      isEditorOnly: true,
+    }
+  })
+}
+
+ensureBuiltinWallPresetAssets(initialAssetCatalog, initialAssetIndex)
 
 function createLightNode(options: {
   name: string
@@ -5530,6 +5553,7 @@ function migrateScenePersistedState(
 function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetCatalog = cloneAssetCatalog(scene.assetCatalog)
   store.assetIndex = cloneAssetIndex(scene.assetIndex)
+  ensureBuiltinWallPresetAssets(store.assetCatalog, store.assetIndex)
   store.packageAssetMap = clonePackageAssetMap(scene.packageAssetMap)
   store.materials = cloneSceneMaterials(Array.isArray(scene.materials) ? scene.materials : initialMaterials)
   const nextTree = createProjectTreeFromCache(store.assetCatalog, store.packageDirectoryCache)
@@ -13562,6 +13586,46 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return changed
+    },
+    async measureModelAssetBoundingBox(assetId: string | null): Promise<Box3 | null> {
+      const rawId = typeof assetId === 'string' ? assetId.trim() : ''
+      const normalizedId = rawId.startsWith('asset://') ? rawId.slice('asset://'.length) : rawId
+      if (!normalizedId) {
+        return null
+      }
+
+      const asset = this.getAsset(normalizedId)
+      if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+        return null
+      }
+
+      const cached = getCachedModelObject(normalizedId)
+      if (cached?.boundingBox && !cached.boundingBox.isEmpty()) {
+        return cached.boundingBox.clone()
+      }
+
+      const assetCache = useAssetCacheStore()
+      const file = await ensureAssetFileForMeasurement(normalizedId, asset)
+      if (!file) {
+        return null
+      }
+
+      try {
+        const loaded = await getOrLoadModelObject(
+          normalizedId,
+          () => loadObjectFromFile(file, asset.extension ?? undefined),
+        )
+        const bounds = loaded?.boundingBox
+        if (!bounds || bounds.isEmpty()) {
+          return null
+        }
+        return bounds.clone()
+      } catch (error) {
+        console.warn('Failed to measure model asset bounding box', normalizedId, error)
+        return null
+      } finally {
+        assetCache.releaseInMemoryBlob(normalizedId)
+      }
     },
     hasRuntimeObject(id: string) {
       return runtimeObjectRegistry.has(id)

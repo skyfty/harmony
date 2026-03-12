@@ -1565,6 +1565,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     signatureKey: string,
     wallDefinition: WallDynamicMesh,
     smoothing: number,
+    wallRenderMode: 'stretch' | 'repeatInstances',
   ): THREE.Group {
     const userData = container.userData ?? (container.userData = {})
     let wallGroup = userData.wallGroup as THREE.Group | undefined
@@ -1572,9 +1573,9 @@ export function createWallRenderer(options: WallRendererOptions) {
       return wallGroup
     }
 
-    wallGroup = createWallGroup(wallDefinition, { smoothing })
+    wallGroup = createWallGroup(wallDefinition, { smoothing, wallRenderMode })
     wallGroup.userData.nodeId = node.id
-    wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, { smoothing })
+    wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, { smoothing, wallRenderMode })
     container.add(wallGroup)
     userData.wallGroup = wallGroup
     userData.dynamicMeshType = 'Wall'
@@ -1588,10 +1589,10 @@ export function createWallRenderer(options: WallRendererOptions) {
     options: WallRenderOptions = {},
   ): void {
     const groupData = wallGroup.userData ?? (wallGroup.userData = {})
-      const nextSignature = computeWallDynamicMeshSignature(definition, {
-        smoothing: options.smoothing,
-        wallRenderMode: options.wallRenderMode as any,
-      })
+    const nextSignature = computeWallDynamicMeshSignature(definition, {
+      smoothing: options.smoothing,
+      wallRenderMode: options.wallRenderMode,
+    })
     if (groupData[signatureKey] !== nextSignature) {
       updateWallGroup(wallGroup, definition, options)
       groupData[signatureKey] = nextSignature
@@ -1666,6 +1667,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
       : null
     const smoothing = wallProps?.smoothing ?? resolveWallSmoothingFromNode(node)
+    const wallRenderMode = wallProps?.wallRenderMode ?? 'stretch'
 
     // 各类实例化模型资源：
     // - body/head：沿墙段平铺的主体模型（可以按段高度进行 Y 方向缩放）。
@@ -1727,40 +1729,23 @@ export function createWallRenderer(options: WallRendererOptions) {
     // 因此：
     // - 不渲染任何实例化模型
     // - 始终保留程序墙体，且以半透明方式显示
-    if (isAirWall) {
-      releaseModelInstancesForNode(node.id)
-      delete userData.instancedAssetId
-      delete userData.instancedBounds
-      options.removeInstancedPickProxy(container)
-
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
-      wallGroup.visible = true
-      updateWallGroupIfNeeded(
-        wallGroup,
-        effectiveDefinition,
-        signatureKey,
-        { smoothing },
-      )
-      applyAirWallVisualToWallGroup(wallGroup, true)
-      return
-    }
-
     // ============================
     // 2) 完全不需要实例化：使用程序墙体
     // ============================
-    if (!wantsInstancing) {
+    if (!wantsInstancing || isAirWall) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
       wallGroup.visible = true
+      const optionsForUpdate: WallRenderOptions = { smoothing, wallRenderMode }
       updateWallGroupIfNeeded(
         wallGroup,
         effectiveDefinition,
         signatureKey,
-        { smoothing },
+        optionsForUpdate,
       )
 
       // Editor-only visual: air walls are semi-transparent so they can be distinguished.
@@ -1833,13 +1818,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
         effectiveDefinition,
         signatureKey,
-        { smoothing },
+        { smoothing, wallRenderMode },
       )
       applyAirWallVisualToWallGroup(wallGroup, false)
       return
@@ -2129,13 +2114,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
         effectiveDefinition,
         signatureKey,
-        { smoothing },
+        { smoothing, wallRenderMode },
       )
       applyAirWallVisualToWallGroup(wallGroup, false)
       return

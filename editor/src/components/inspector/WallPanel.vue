@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { MathUtils, Vector3 } from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { buildWallPresetFilename, isWallPresetFilename } from '@/utils/wallPreset'
+import { computeBoxExtentsAlongBasis } from '@schema/instancedMeshTiling'
 
 import {
   WALL_COMPONENT_TYPE,
@@ -32,12 +34,12 @@ const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
-const localIsAirWall = ref<boolean>(false)
 
 const jointTrimFeedbackMessage = ref<string | null>(null)
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
+const isAutoFittingBodyAsset = ref(false)
 
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
@@ -61,6 +63,7 @@ const assetDialogTitle = computed(() => {
 const wallComponent = computed(
   () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
 )
+const isAirWallNode = computed(() => Boolean(wallComponent.value?.props?.isAirWall))
 
 const panelDropAreaRef = ref<HTMLElement | null>(null)
 const wallPresetDropActive = ref(false)
@@ -147,6 +150,13 @@ const footCapAsset = computed(() => {
 })
 
 type WallCornerModelRow = NonNullable<WallComponentProps['cornerModels']>[number]
+type WallDimensionValues = {
+  height: number
+  width: number
+  thickness: number
+}
+
+const WALL_UP_AXIS = new Vector3(0, 1, 0)
 
 const FORWARD_AXIS_ITEMS: Array<{ title: string; value: WallForwardAxis }> = [
   { title: '+Z', value: '+z' },
@@ -210,6 +220,19 @@ function normalizeOrientation(value: unknown, fallback: WallModelOrientation): W
   return {
     forwardAxis: normalizeForwardAxis(record.forwardAxis, fallback.forwardAxis),
     yawDeg: clampYawDeg(record.yawDeg, fallback.yawDeg),
+  }
+}
+
+function writeWallForwardVector(out: Vector3, forwardAxis: WallForwardAxis): Vector3 {
+  switch (forwardAxis) {
+    case '+x':
+      return out.set(1, 0, 0)
+    case '-x':
+      return out.set(-1, 0, 0)
+    case '+z':
+      return out.set(0, 0, 1)
+    case '-z':
+      return out.set(0, 0, -1)
   }
 }
 
@@ -364,7 +387,6 @@ watch(
       localHeight.value = Number(((props.height ?? WALL_DEFAULT_HEIGHT)).toFixed(1))
     localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
     localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
-    localIsAirWall.value = Boolean((props as any).isAirWall)
     localSmoothing.value = Number.isFinite(props.smoothing)
       ? Math.min(1, Math.max(0, props.smoothing))
       : WALL_DEFAULT_SMOOTHING
@@ -374,6 +396,148 @@ watch(
   },
   { immediate: true, deep: true },
 )
+
+function resolveClampedWallDimensions(raw: WallDimensionValues, props: Partial<WallComponentProps>): WallDimensionValues {
+  return {
+    height: clampDimension(Number(raw.height), props.height ?? WALL_DEFAULT_HEIGHT, WALL_MIN_HEIGHT),
+    width: clampDimension(Number(raw.width), props.width ?? WALL_DEFAULT_WIDTH, WALL_MIN_WIDTH),
+    thickness: clampDimension(Number(raw.thickness), props.thickness ?? WALL_DEFAULT_THICKNESS, WALL_MIN_THICKNESS),
+  }
+}
+
+function commitWallDimensions(raw: WallDimensionValues) {
+  if (isApplyingDimensions.value) {
+    return
+  }
+
+  const component = wallComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+
+  isApplyingDimensions.value = true
+  const props = (component.props ?? {}) as Partial<WallComponentProps>
+
+  try {
+    const nextDimensions = resolveClampedWallDimensions(raw, props)
+    const hasChanges =
+      props.height !== nextDimensions.height ||
+      props.width !== nextDimensions.width ||
+      props.thickness !== nextDimensions.thickness
+
+    if (localHeight.value !== nextDimensions.height) {
+      localHeight.value = nextDimensions.height
+    }
+    if (localWidth.value !== nextDimensions.width) {
+      localWidth.value = nextDimensions.width
+    }
+    if (localThickness.value !== nextDimensions.thickness) {
+      localThickness.value = nextDimensions.thickness
+    }
+
+    if (hasChanges) {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, nextDimensions)
+    }
+  } finally {
+    nextTick(() => {
+      isApplyingDimensions.value = false
+    })
+  }
+}
+
+async function resolveBodyAssetAutoFitDimensions(
+  assetId: string,
+  orientation: WallModelOrientation,
+): Promise<WallDimensionValues | null> {
+  const bounds = await sceneStore.measureModelAssetBoundingBox(assetId)
+  if (!bounds) {
+    return null
+  }
+
+  const forward = writeWallForwardVector(new Vector3(), orientation.forwardAxis)
+  if (Math.abs(orientation.yawDeg) > 1e-6) {
+    forward.applyAxisAngle(WALL_UP_AXIS, MathUtils.degToRad(orientation.yawDeg))
+  }
+  forward.y = 0
+  if (forward.lengthSq() <= 1e-6) {
+    writeWallForwardVector(forward, orientation.forwardAxis)
+  }
+  forward.normalize()
+
+  const lateral = new Vector3(-forward.z, 0, forward.x)
+  if (lateral.lengthSq() <= 1e-6) {
+    lateral.set(1, 0, 0)
+  }
+  lateral.normalize()
+
+  const extents = computeBoxExtentsAlongBasis(bounds, {
+    xAxis: lateral,
+    yAxis: WALL_UP_AXIS,
+    zAxis: forward,
+  })
+
+  return {
+    height: extents.y,
+    width: extents.x,
+    thickness: extents.z,
+  }
+}
+
+async function autoFitBodyAssetDimensions(assetId?: string | null): Promise<boolean> {
+  const component = wallComponent.value
+  if (!component) {
+    return false
+  }
+
+  const normalizedId = typeof assetId === 'string' && assetId.trim().length
+    ? assetId.trim()
+    : component.props?.bodyAssetId ?? ''
+  if (!normalizedId) {
+    bodyFeedbackMessage.value = 'Assign a wall body model first.'
+    return false
+  }
+  if (isAutoFittingBodyAsset.value) {
+    return false
+  }
+
+  isAutoFittingBodyAsset.value = true
+  try {
+    const orientation = normalizeOrientation(component.props?.bodyOrientation, { forwardAxis: '+z', yawDeg: 0 })
+    const nextDimensions = await resolveBodyAssetAutoFitDimensions(normalizedId, orientation)
+    if (!nextDimensions) {
+      bodyFeedbackMessage.value = 'Assigned body model could not be measured.'
+      return false
+    }
+    bodyFeedbackMessage.value = null
+    commitWallDimensions(nextDimensions)
+    return true
+  } catch (error) {
+    console.error('Failed to auto-fit wall body dimensions', error)
+    bodyFeedbackMessage.value = (error as Error).message ?? 'Failed to auto-fit body dimensions.'
+    return false
+  } finally {
+    isAutoFittingBodyAsset.value = false
+  }
+}
+
+async function applyBodyAssetAndAutofit(assetId: string): Promise<void> {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+
+  bodyFeedbackMessage.value = null
+  if (component.props?.bodyAssetId !== assetId) {
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: assetId })
+  }
+  await autoFitBodyAssetDimensions(assetId)
+}
+
+async function handleAutoFitBodyDimensions(): Promise<void> {
+  await autoFitBodyAssetDimensions()
+}
 
 function computeCachedAssetHorizontalRadius(assetId: string): number | null {
   const cached = getCachedModelObject(assetId)
@@ -683,7 +847,7 @@ function openWallCornerModelDialog(index: number, mode: 'body' | 'head' | 'foot'
   assetDialogVisible.value = true
 }
 
-function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
+async function handleWallAssetDialogUpdate(asset: ProjectAsset | null): Promise<void> {
   const nodeId = selectedNodeId.value
   const component = wallComponent.value
   const target = assetDialogTarget.value
@@ -731,8 +895,7 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
   }
 
   if (target === 'body') {
-    bodyFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: asset.id })
+    await applyBodyAssetAndAutofit(asset.id)
   } else if (target === 'head') {
     headFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: asset.id } as any)
@@ -793,23 +956,6 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'foot
   const nodeId = selectedNodeId.value
   const component = wallComponent.value
   if (!nodeId || !component) {
-    return
-  }
-
-  if (target === 'head' && !component.props?.bodyAssetId) {
-    headFeedbackMessage.value = 'Assign a wall body model first.'
-    return
-  }
-  if (target === 'foot' && !component.props?.bodyAssetId) {
-    footFeedbackMessage.value = 'Assign a wall body model first.'
-    return
-  }
-  if (target === 'headCap' && !component.props?.bodyEndCapAssetId) {
-    headCapFeedbackMessage.value = 'Assign a body end cap first.'
-    return
-  }
-  if (target === 'footCap' && !component.props?.bodyEndCapAssetId) {
-    footCapFeedbackMessage.value = 'Assign a body end cap first.'
     return
   }
 
@@ -876,7 +1022,7 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'foot
   processing.value = true
   try {
     if (target === 'body') {
-      sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: assetId })
+      await applyBodyAssetAndAutofit(assetId)
     } else if (target === 'head') {
       sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: assetId } as any)
     } else if (target === 'foot') {
@@ -950,51 +1096,11 @@ function clampDimension(value: number, fallback: number, min: number): number {
 }
 
 function applyDimensions() {
-  if (isApplyingDimensions.value) {
-    return
-  }
-
-  const component = wallComponent.value
-  const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
-    return
-  }
-
-  isApplyingDimensions.value = true
-  const props = (component.props ?? {}) as Partial<WallComponentProps>
-
-  try {
-    const nextHeight = clampDimension(Number(localHeight.value), props.height ?? WALL_DEFAULT_HEIGHT, WALL_MIN_HEIGHT)
-    const nextWidth = clampDimension(Number(localWidth.value), props.width ?? WALL_DEFAULT_WIDTH, WALL_MIN_WIDTH)
-    const nextThickness = clampDimension(Number(localThickness.value), props.thickness ?? WALL_DEFAULT_THICKNESS, WALL_MIN_THICKNESS)
-
-    const hasChanges =
-      props.height !== nextHeight ||
-      props.width !== nextWidth ||
-      props.thickness !== nextThickness
-
-    if (localHeight.value !== nextHeight) {
-      localHeight.value = nextHeight
-    }
-    if (localWidth.value !== nextWidth) {
-      localWidth.value = nextWidth
-    }
-    if (localThickness.value !== nextThickness) {
-      localThickness.value = nextThickness
-    }
-
-    if (hasChanges) {
-      sceneStore.updateNodeComponentProps(nodeId, component.id, {
-        height: nextHeight,
-        width: nextWidth,
-        thickness: nextThickness,
-      })
-    }
-  } finally {
-    nextTick(() => {
-      isApplyingDimensions.value = false
-    })
-  }
+  commitWallDimensions({
+    height: Number(localHeight.value),
+    width: Number(localWidth.value),
+    thickness: Number(localThickness.value),
+  })
 }
 
 function applySmoothingUpdate(rawValue: unknown) {
@@ -1021,26 +1127,6 @@ function applySmoothingUpdate(rawValue: unknown) {
     localSmoothing.value = clamped
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothing: clamped })
-}
-
-function applyAirWallUpdate(rawValue: unknown) {
-  if (isSyncingFromScene.value) {
-    return
-  }
-  const nodeId = selectedNodeId.value
-  const component = wallComponent.value
-  if (!nodeId || !component) {
-    return
-  }
-  const nextValue = Boolean(rawValue)
-  const current = Boolean((component.props as any)?.isAirWall)
-  if (nextValue === current) {
-    return
-  }
-  if (localIsAirWall.value !== nextValue) {
-    localIsAirWall.value = nextValue
-  }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { isAirWall: nextValue } as any)
 }
 
 function applyRenderModeUpdate(rawValue: unknown) {
@@ -1140,56 +1226,65 @@ function applyRenderModeUpdate(rawValue: unknown) {
             color="primary"
             @update:modelValue="(value) => { localSmoothing = Number(value); applySmoothingUpdate(value) }"
           />
-          <div class="wall-dimension-row">
-            <v-text-field
-              v-model.number="localHeight"
-              label="Height (m)"
-              type="number"
-              density="compact"
-              variant="underlined"
-              class="slider-input"
-              step="0.1"
-              min="0.5"
-              @blur="applyDimensions"
-              inputmode="decimal"
-              @keydown.enter.prevent="applyDimensions"
-            />
-            <v-text-field
-              v-model.number="localWidth"
-              label="Width (m)"
-              type="number"
-              density="compact"
-              variant="underlined"
-              class="slider-input"
-              step="0.05"
-              min="0.1"
-              @blur="applyDimensions"
-              inputmode="decimal"
-              @keydown.enter.prevent="applyDimensions"
-            />
-            <v-text-field
-              v-model.number="localThickness"
-              label="Thickness (m)"
-              type="number"
-              class="slider-input"
-              density="compact"
-              inputmode="decimal"
-              variant="underlined"
-              step="0.05"
-              min="0.05"
-              @blur="applyDimensions"
-              @keydown.enter.prevent="applyDimensions"
-            />
+          <div class="wall-dimension-block">
+            <div class="wall-dimension-row">
+              <v-text-field
+                v-model.number="localHeight"
+                label="Height (m)"
+                type="number"
+                density="compact"
+                variant="underlined"
+                class="slider-input"
+                step="0.1"
+                min="0.5"
+                @blur="applyDimensions"
+                inputmode="decimal"
+                @keydown.enter.prevent="applyDimensions"
+              />
+              <v-text-field
+                v-model.number="localWidth"
+                label="Width (m)"
+                type="number"
+                density="compact"
+                variant="underlined"
+                class="slider-input"
+                step="0.05"
+                min="0.1"
+                @blur="applyDimensions"
+                inputmode="decimal"
+                @keydown.enter.prevent="applyDimensions"
+              />
+              <v-text-field
+                v-model.number="localThickness"
+                label="Thickness (m)"
+                type="number"
+                class="slider-input"
+                density="compact"
+                inputmode="decimal"
+                variant="underlined"
+                step="0.05"
+                min="0.05"
+                @blur="applyDimensions"
+                @keydown.enter.prevent="applyDimensions"
+              />
+            </div>
+            <div class="wall-dimension-actions">
+              <v-btn
+                class="wall-dimension-action-button"
+                density="comfortable"
+                variant="tonal"
+                size="default"
+                prepend-icon="mdi-auto-fix"
+                text="自动适配尺寸"
+                title="自动适配尺寸"
+                :disabled="!wallComponent?.props?.bodyAssetId || isAutoFittingBodyAsset"
+                :loading="isAutoFittingBodyAsset"
+                @click="handleAutoFitBodyDimensions"
+              />
+            </div>
           </div>
-          <v-switch
-            :model-value="localIsAirWall"
-            label="Air Wall"
-            density="compact"
-            hide-details
-            @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
-          />
-
           <v-select
+            v-if="!isAirWallNode"
             density="compact"
             variant="underlined"
             label="Render Mode"
@@ -1203,7 +1298,7 @@ function applyRenderModeUpdate(rawValue: unknown) {
 
         </div>
 
-        <div class="wall-asset-section">
+        <div v-if="!isAirWallNode" class="wall-asset-section">
           <div class="asset-model-panel asset-model-panel--no-border">
             <div class="asset-pair-panel">
               <div class="asset-pair-grid asset-pair-grid--stacked">
@@ -1273,11 +1368,11 @@ function applyRenderModeUpdate(rawValue: unknown) {
                 <div
                   class="asset-pair-item"
                   ref="headDropAreaRef"
-                  :class="{ 'is-active': headDropActive, 'is-processing': headDropProcessing, 'is-disabled': !wallComponent?.props?.bodyAssetId }"
-                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
-                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
+                  :class="{ 'is-active': headDropActive, 'is-processing': headDropProcessing }"
+                  @dragenter.prevent="headDropActive = true"
+                  @dragover.prevent="headDropActive = true"
                   @dragleave="(e) => { if (shouldDeactivateDropArea(headDropAreaRef, e)) headDropActive = false }"
-                  @drop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; assignWallAsset(e, 'head') }"
+                  @drop="(e) => assignWallAsset(e, 'head')"
                 >
                   <div class="asset-pair-label">Head</div>
                   <div class="wall-asset-model-row">
@@ -1288,7 +1383,7 @@ function applyRenderModeUpdate(rawValue: unknown) {
                         :style="headAsset
                           ? (headAsset.thumbnail?.trim() ? { backgroundImage: `url(${headAsset.thumbnail})` } : (headAsset.previewColor ? { backgroundColor: headAsset.previewColor } : undefined))
                           : undefined"
-                        @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('head', e) }"
+                        @click.stop="(e) => openWallAssetDialog('head', e)"
                       />
                     </div>
 
@@ -1336,11 +1431,11 @@ function applyRenderModeUpdate(rawValue: unknown) {
                 <div
                   class="asset-pair-item"
                   ref="footDropAreaRef"
-                  :class="{ 'is-active': footDropActive, 'is-processing': footDropProcessing, 'is-disabled': !wallComponent?.props?.bodyAssetId }"
-                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; footDropActive = true }"
-                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; footDropActive = true }"
+                  :class="{ 'is-active': footDropActive, 'is-processing': footDropProcessing }"
+                  @dragenter.prevent="footDropActive = true"
+                  @dragover.prevent="footDropActive = true"
                   @dragleave="(e) => { if (shouldDeactivateDropArea(footDropAreaRef, e)) footDropActive = false }"
-                  @drop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; assignWallAsset(e, 'foot') }"
+                  @drop="(e) => assignWallAsset(e, 'foot')"
                 >
                   <div class="asset-pair-label">Foot</div>
                   <div class="wall-asset-model-row">
@@ -1351,7 +1446,7 @@ function applyRenderModeUpdate(rawValue: unknown) {
                         :style="footAsset
                           ? (footAsset.thumbnail?.trim() ? { backgroundImage: `url(${footAsset.thumbnail})` } : (footAsset.previewColor ? { backgroundColor: footAsset.previewColor } : undefined))
                           : undefined"
-                        @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('foot', e) }"
+                        @click.stop="(e) => openWallAssetDialog('foot', e)"
                       />
                     </div>
 
@@ -1451,11 +1546,11 @@ function applyRenderModeUpdate(rawValue: unknown) {
                 <div
                   class="asset-pair-item"
                   ref="headCapDropAreaRef"
-                  :class="{ 'is-active': headCapDropActive, 'is-processing': headCapDropProcessing, 'is-disabled': !wallComponent?.props?.bodyEndCapAssetId }"
-                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
-                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
+                  :class="{ 'is-active': headCapDropActive, 'is-processing': headCapDropProcessing }"
+                  @dragenter.prevent="headCapDropActive = true"
+                  @dragover.prevent="headCapDropActive = true"
                   @dragleave="(e) => { if (shouldDeactivateDropArea(headCapDropAreaRef, e)) headCapDropActive = false }"
-                  @drop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; assignWallAsset(e, 'headCap') }"
+                  @drop="(e) => assignWallAsset(e, 'headCap')"
                 >
                   <div class="asset-pair-label">End Cap (Head)</div>
                   <div class="wall-asset-model-row">
@@ -1466,7 +1561,7 @@ function applyRenderModeUpdate(rawValue: unknown) {
                         :style="headCapAsset
                           ? (headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined))
                           : undefined"
-                        @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
+                        @click.stop="(e) => openWallAssetDialog('headCap', e)"
                       />
                     </div>
 
@@ -1503,11 +1598,11 @@ function applyRenderModeUpdate(rawValue: unknown) {
                 <div
                   class="asset-pair-item"
                   ref="footCapDropAreaRef"
-                  :class="{ 'is-active': footCapDropActive, 'is-processing': footCapDropProcessing, 'is-disabled': !wallComponent?.props?.bodyEndCapAssetId }"
-                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; footCapDropActive = true }"
-                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; footCapDropActive = true }"
+                  :class="{ 'is-active': footCapDropActive, 'is-processing': footCapDropProcessing }"
+                  @dragenter.prevent="footCapDropActive = true"
+                  @dragover.prevent="footCapDropActive = true"
                   @dragleave="(e) => { if (shouldDeactivateDropArea(footCapDropAreaRef, e)) footCapDropActive = false }"
-                  @drop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; assignWallAsset(e, 'footCap') }"
+                  @drop="(e) => assignWallAsset(e, 'footCap')"
                 >
                   <div class="asset-pair-label">End Cap (Foot)</div>
                   <div class="wall-asset-model-row">
@@ -1518,7 +1613,7 @@ function applyRenderModeUpdate(rawValue: unknown) {
                         :style="footCapAsset
                           ? (footCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${footCapAsset.thumbnail})` } : (footCapAsset.previewColor ? { backgroundColor: footCapAsset.previewColor } : undefined))
                           : undefined"
-                        @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('footCap', e) }"
+                        @click.stop="(e) => openWallAssetDialog('footCap', e)"
                       />
                     </div>
 
@@ -1555,7 +1650,7 @@ function applyRenderModeUpdate(rawValue: unknown) {
             </div>
           </div>
 
-        <div class="corner-models-panel">
+  <div v-if="!isAirWallNode" class="corner-models-panel">
         <div class="wall-corner-models">
           <div class="wall-corner-header">
             <div class="wall-corner-title">Corner Models</div>
@@ -1753,11 +1848,10 @@ function applyRenderModeUpdate(rawValue: unknown) {
 
             <div
               class="wall-corner-model-row wall-corner-model-row--head"
-              :class="{ 'is-disabled': !wallComponent?.props?.bodyAssetId }"
             >
               <div
                 class="wall-corner-model-picker"
-                @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallCornerModelDialog(index, 'head', e) }"
+                @click.stop="(e) => openWallCornerModelDialog(index, 'head', e)"
               >
                 <template v-if="resolveCornerModelAsset((entry as any).headAssetId)">
                   <div
@@ -1848,11 +1942,10 @@ function applyRenderModeUpdate(rawValue: unknown) {
 
             <div
               class="wall-corner-model-row"
-              :class="{ 'is-disabled': !wallComponent?.props?.bodyAssetId }"
             >
               <div
                 class="wall-corner-model-picker"
-                @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallCornerModelDialog(index, 'foot', e) }"
+                @click.stop="(e) => openWallCornerModelDialog(index, 'foot', e)"
               >
                 <template v-if="resolveCornerModelAsset((entry as any).footAssetId)">
                   <div
@@ -2407,10 +2500,30 @@ function applyRenderModeUpdate(rawValue: unknown) {
 .wall-dimension-row {
   display: flex;
   gap: 0.5rem;
+  align-items: flex-end;
 }
 
 .wall-dimension-row .slider-input {
   flex: 1;
+}
+
+.wall-dimension-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.wall-dimension-actions {
+  display: flex;
+  width: 100%;
+}
+
+.wall-dimension-action-button {
+  width: 100%;
+  min-height: 20px;
 }
 
 .wall-panel-drop-surface.is-wall-preset-active {

@@ -88,27 +88,27 @@ export interface WallComponentProps {
   bodyOrientation: WallModelOrientation
   /** UV repeat axis for the body model stretch-tiling. */
   bodyUvAxis: WallUvAxis
-  /** Upper wall head model asset id (optional; only valid when bodyAssetId is set). */
+  /** Upper wall head model asset id (optional; rendered independently when set). */
   headAssetId: string | null
   /** Orientation overrides for the head model. */
   headOrientation: WallModelOrientation
   /** UV repeat axis for the head model stretch-tiling. */
   headUvAxis: WallUvAxis
-  /** Lower wall foot model asset id (optional; only valid when bodyAssetId is set). */
+  /** Lower wall foot model asset id (optional; rendered independently when set). */
   footAssetId: string | null
   /** Orientation overrides for the foot model. */
   footOrientation: WallModelOrientation
   /** UV repeat axis for the foot model stretch-tiling. */
   footUvAxis: WallUvAxis
-  /** Lower wall end-cap model asset id (optional; only valid when bodyAssetId is set; not used for closed loops). */
+  /** Lower wall end-cap model asset id (optional; rendered independently when set; not used for closed loops). */
   bodyEndCapAssetId: string | null
   /** Orientation overrides for the body end-cap model. */
   bodyEndCapOrientation: WallModelOrientation
-  /** Upper wall head end-cap model asset id (optional; only valid when bodyEndCapAssetId is set; not used for closed loops). */
+  /** Upper wall head end-cap model asset id (optional; rendered independently when set; not used for closed loops). */
   headEndCapAssetId: string | null
   /** Orientation overrides for the head end-cap model. */
   headEndCapOrientation: WallModelOrientation
-  /** Lower wall foot end-cap model asset id (optional; only valid when bodyEndCapAssetId is set; not used for closed loops). */
+  /** Lower wall foot end-cap model asset id (optional; rendered independently when set; not used for closed loops). */
   footEndCapAssetId: string | null
   /** Orientation overrides for the foot end-cap model. */
   footEndCapOrientation: WallModelOrientation
@@ -294,12 +294,12 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const normalizedIsAirWall = requiredBoolean('isAirWall')
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
-  const headAssetId = bodyAssetId ? requiredAssetIdOrNull('headAssetId') : null
-  const footAssetId = bodyAssetId ? requiredAssetIdOrNull('footAssetId') : null
+  const headAssetId = requiredAssetIdOrNull('headAssetId')
+  const footAssetId = requiredAssetIdOrNull('footAssetId')
 
-  const bodyEndCapAssetId = bodyAssetId ? requiredAssetIdOrNull('bodyEndCapAssetId') : null
-  const headEndCapAssetId = bodyEndCapAssetId ? requiredAssetIdOrNull('headEndCapAssetId') : null
-  const footEndCapAssetId = bodyEndCapAssetId ? requiredAssetIdOrNull('footEndCapAssetId') : null
+  const bodyEndCapAssetId = requiredAssetIdOrNull('bodyEndCapAssetId')
+  const headEndCapAssetId = requiredAssetIdOrNull('headEndCapAssetId')
+  const footEndCapAssetId = requiredAssetIdOrNull('footEndCapAssetId')
 
   const bodyOrientation = requiredOrientation((props as any).bodyOrientation, 'bodyOrientation')
   const bodyUvAxis = requiredUvAxis((props as any).bodyUvAxis, 'bodyUvAxis')
@@ -495,13 +495,6 @@ const wallComponentDefinition: ComponentDefinition<WallComponentProps> = {
   icon: 'mdi-wall',
   order: 50,
   inspector: [
-    {
-      id: 'rendering',
-      label: 'Rendering',
-      fields: [
-        { kind: 'boolean', key: 'isAirWall', label: 'Air Wall (invisible)' },
-      ],
-    },
     {
       id: 'dimensions',
       label: 'Dimensions',
