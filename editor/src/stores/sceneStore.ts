@@ -13225,15 +13225,6 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
 
-        if (hasWallRenderMode && currentProps.wallRenderMode !== merged.wallRenderMode) {
-          console.debug('[WallRenderMode]', 'sceneStore updateNodeComponentProps', {
-            nodeId,
-            componentId: component.id,
-            previous: currentProps.wallRenderMode,
-            next: merged.wallRenderMode,
-          })
-        }
-
         nextProps = cloneWallComponentProps(merged)
       } else if (type === ROAD_COMPONENT_TYPE) {
         const currentProps = component.props as RoadComponentProps

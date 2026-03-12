@@ -1143,12 +1143,6 @@ function applyRenderModeUpdate(rawValue: unknown) {
   if (nextValue === current) {
     return
   }
-  console.debug('[WallRenderMode]', 'inspector update', {
-    nodeId,
-    componentId: component.id,
-    previous: current,
-    next: nextValue,
-  })
   sceneStore.updateNodeComponentProps(nodeId, component.id, { wallRenderMode: nextValue } as any)
 }
 </script>

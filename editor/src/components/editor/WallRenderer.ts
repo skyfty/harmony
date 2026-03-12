@@ -217,15 +217,6 @@ const WALL_SYNC_EPSILON = 1e-6
 const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
 const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
 const WALL_SYNC_REPEAT_INSTANCE_STEP_M = 0.5
-const WALL_RENDER_DEBUG_PREFIX = '[WallRenderMode]'
-
-function debugWallRenderFlow(message: string, details?: Record<string, unknown>): void {
-  if (details) {
-    console.debug(WALL_RENDER_DEBUG_PREFIX, message, details)
-    return
-  }
-  console.debug(WALL_RENDER_DEBUG_PREFIX, message)
-}
 
 function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   const dx = a.x - b.x
@@ -1851,19 +1842,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     const wantsInstancing = Boolean(
       bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints,
     )
-    debugWallRenderFlow('syncWallContainer', {
-      nodeId: node.id,
-      wallRenderMode,
-      wantsInstancing,
-      bodyAssetId,
-      headAssetId,
-      footAssetId,
-      bodyEndCapAssetId,
-      headEndCapAssetId,
-      footEndCapAssetId,
-      hasCornerModels: cornerModels.length > 0,
-      canHaveCornerJoints,
-    })
     const hasProceduralBodyFallback = !bodyAssetId
 
     const userData = container.userData ?? (container.userData = {})
@@ -1959,16 +1937,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     // - 立即回退到程序墙体，让用户可见并可继续编辑
     // - 等加载完成后由 scheduleWallResync 在同一帧批量刷新等待的 node
     if (needsBodyLoad || needsHeadLoad || needsFootLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsFootCornerLoad || needsBodyCapLoad || needsHeadCapLoad || needsFootCapLoad) {
-      debugWallRenderFlow('fallback to procedural wall while instanced assets load', {
-        nodeId: node.id,
-        wallRenderMode,
-        needsBodyLoad,
-        needsHeadLoad,
-        needsFootLoad,
-        needsBodyCornerLoad,
-        needsHeadCornerLoad,
-        needsFootCornerLoad,
-      })
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
       delete userData.instancedBounds
@@ -2022,11 +1990,6 @@ export function createWallRenderer(options: WallRendererOptions) {
         const placements = wallProps
           ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallRenderMode, wallProps.bodyOrientation, cornerModels)
           : []
-        debugWallRenderFlow('computed wall body placements', {
-          nodeId: node.id,
-          wallRenderMode,
-          placementCount: placements.length,
-        })
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
           const bucket = buckets[i]!
@@ -2063,11 +2026,6 @@ export function createWallRenderer(options: WallRendererOptions) {
         const placements = wallProps
           ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallRenderMode, wallProps.headOrientation, cornerModels)
           : []
-        debugWallRenderFlow('computed wall head placements', {
-          nodeId: node.id,
-          wallRenderMode,
-          placementCount: placements.length,
-        })
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
           const bucket = buckets[i]!
@@ -2103,11 +2061,6 @@ export function createWallRenderer(options: WallRendererOptions) {
         const placements = wallProps
           ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallRenderMode, wallProps.footOrientation, cornerModels)
           : []
-        debugWallRenderFlow('computed wall foot placements', {
-          nodeId: node.id,
-          wallRenderMode,
-          placementCount: placements.length,
-        })
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
           const bucket = buckets[i]!
