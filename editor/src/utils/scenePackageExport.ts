@@ -13,7 +13,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
-import { useSceneStore } from '@/stores/sceneStore'
+import { buildPackageAssetMapForExport, calculateSceneResourceSummary, useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
@@ -113,6 +113,30 @@ type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
   assetUrlOverrides?: Record<string, string>
   resourceSummary?: SceneResourceSummary
   planningData?: unknown
+}
+
+function cloneSceneExportDocument<T>(document: T): T {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(document)
+  }
+  return JSON.parse(JSON.stringify(document)) as T
+}
+
+async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDocument): Promise<SceneJsonExportDocument> {
+  const cloned = cloneSceneExportDocument(document) as SceneExportDocumentWithEditorFields
+  if (!cloned || typeof cloned !== 'object') {
+    return document
+  }
+  const looksEditableScene = 'assetIndex' in cloned && 'packageAssetMap' in cloned
+  if (!looksEditableScene) {
+    return cloned
+  }
+  const editable = cloned as StoredSceneDocument
+  const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(editable)
+  editable.packageAssetMap = packageAssetMap
+  editable.assetIndex = assetIndex
+  editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
+  return editable
 }
 
 function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExportDocument['nodes'][number] | null {
@@ -450,6 +474,7 @@ export async function exportScenePackageZip(payload: {
 
   for (let sIndex = 0; sIndex < payload.scenes.length; sIndex += 1) {
     const scene = payload.scenes[sIndex]!
+    const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document)
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
     let planningPath: string | undefined
     let groundHeightsPath: string | undefined
@@ -458,8 +483,8 @@ export async function exportScenePackageZip(payload: {
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
     const sidecarSource = typeof structuredClone === 'function'
-      ? structuredClone(scene.document)
-      : JSON.parse(JSON.stringify(scene.document))
+      ? structuredClone(preparedDocument)
+      : JSON.parse(JSON.stringify(preparedDocument))
     const groundNode = findGroundNode(sidecarSource.nodes)
     const groundHeightSidecar = scene.id === sceneStore.currentSceneId
       ? groundHeightmapStore.buildSceneDocumentSidecar(groundNode)

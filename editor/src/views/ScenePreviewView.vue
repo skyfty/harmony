@@ -83,6 +83,7 @@ import {
 	syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
 	createDefaultTerrainPaintLoaders,
 } from '@schema/terrainPaintPreview'
+import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
 	createDefaultLandformsPreviewLoaders,
 	clearLandformsPreviewForGround,
@@ -980,6 +981,9 @@ const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>
 // Create loaders via schema factory to centralize terrain paint asset loading logic
 const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
+const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
+const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
+const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = false
 
 async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
 	const normalizedId = assetId.trim()
@@ -1026,10 +1030,29 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
 
 
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
+	console.debug('[ScenePreview] syncTerrainPaintPreviewForGround input', {
+		groundNodeId: groundNode.id,
+		bakedAssetId: typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
+			? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
+			: null,
+		terrainPaint: dynamicMesh.terrainPaint
+			? {
+				version: dynamicMesh.terrainPaint.version,
+				weightmapResolution: dynamicMesh.terrainPaint.weightmapResolution,
+				layers: dynamicMesh.terrainPaint.layers.map((layer) => ({
+					id: layer.id,
+					pageIndex: layer.pageIndex,
+					channel: layer.channel,
+					textureAssetId: layer.textureAssetId,
+				})),
+				chunkKeys: Object.keys(dynamicMesh.terrainPaint.chunks ?? {}),
+			}
+			: null,
+	})
 	const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
 		? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
 		: ''
-	if (bakedAssetId) {
+	if (ENABLE_SCENE_PREVIEW_BAKED_GROUND && bakedAssetId) {
 		const token = terrainPaintPreviewLoadToken
 		void loadBakedGroundTexture(bakedAssetId).then((texture) => {
 			if (terrainPaintPreviewLoadToken !== token) {
@@ -1046,6 +1069,26 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
 				() => terrainPaintPreviewLoadToken,
 			)
 		})
+		return syncTerrainPaintPreviewForGroundShared(
+			groundObject,
+			{ ...dynamicMesh, terrainPaint: null },
+			{
+				loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
+				loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
+			},
+			() => terrainPaintPreviewLoadToken,
+		)
+	}
+	const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
+		? syncGroundSurfacePreviewForGround(
+			groundObject,
+			groundNode,
+			dynamicMesh,
+			groundSurfacePreviewLoaders,
+			() => terrainPaintPreviewLoadToken,
+		)
+		: false
+	if (usesSurfacePreview) {
 		return syncTerrainPaintPreviewForGroundShared(
 			groundObject,
 			{ ...dynamicMesh, terrainPaint: null },
@@ -5119,9 +5162,11 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
-	const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document)
-	document.packageAssetMap = packageAssetMap
-	document.assetIndex = assetIndex
+	if (ENABLE_SCENE_PREVIEW_BAKED_GROUND) {
+		const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document)
+		document.packageAssetMap = packageAssetMap
+		document.assetIndex = assetIndex
+	}
 	document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
 	return await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
 }

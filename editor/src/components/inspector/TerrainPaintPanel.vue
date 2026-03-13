@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { TerrainPaintBlendMode } from '@schema'
+import { TERRAIN_PAINT_MAX_LAYER_COUNT, type TerrainPaintBlendMode } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
+import type { TerrainPaintBrushSettings, TerrainPaintLayerDraft } from '@/stores/terrainStore'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 
 const BRUSH_RADIUS_MIN = 0.1
@@ -46,6 +46,8 @@ const props = defineProps<{
   hasGround: boolean
   brushRadius: number
   smoothness: number
+  layers: TerrainPaintLayerDraft[]
+  selectedLayerId: string | null
   asset: ProjectAsset | null
   settings: TerrainPaintBrushSettings
 }>()
@@ -53,9 +55,22 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'update:brushRadius', value: number): void
   (event: 'update:smoothness', value: number): void
+  (event: 'update:selectedLayerId', value: string | null): void
   (event: 'update:asset', value: ProjectAsset | null): void
   (event: 'update:settings', value: TerrainPaintBrushSettings): void
+  (event: 'add-layer'): void
 }>()
+
+const canAddLayer = computed(() => props.layers.length < TERRAIN_PAINT_MAX_LAYER_COUNT)
+const activeLayer = computed(() => props.layers.find((layer) => layer.id === props.selectedLayerId) ?? null)
+const selectedLayerLabel = computed(() => {
+  const layer = activeLayer.value
+  if (!layer) {
+    return 'No active layer'
+  }
+  const slotNumber = layer.slotIndex + 1
+  return layer.asset?.name?.trim()?.length ? `Layer ${slotNumber}: ${layer.asset.name}` : `Layer ${slotNumber}`
+})
 
 const brushRadiusModel = computed({
   get: () => props.brushRadius,
@@ -94,6 +109,12 @@ const rotationInput = ref(formatNumericValue(props.settings.rotationDeg, ROTATIO
 const opacityInput = ref(formatNumericValue(props.settings.opacity, OPACITY_PRECISION))
 
 const selectedAssetId = computed(() => props.asset?.id ?? '')
+
+function getLayerLabel(layer: TerrainPaintLayerDraft): string {
+  const slotNumber = layer.slotIndex + 1
+  const assetName = typeof layer.asset?.name === 'string' ? layer.asset.name.trim() : ''
+  return assetName ? `L${slotNumber} · ${assetName}` : `Layer ${slotNumber}`
+}
 
 watch(
   () => props.brushRadius,
@@ -277,6 +298,38 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
 
 <template>
   <div class="terrain-paint-panel">
+    <div class="control-group">
+      <div class="terrain-paint-panel__layer-header">
+        <div class="text-caption">Paint Layers</div>
+        <v-btn
+          size="x-small"
+          variant="outlined"
+          density="comfortable"
+          :disabled="!props.hasGround || !canAddLayer"
+          @click="emit('add-layer')"
+        >
+          Add Layer
+        </v-btn>
+      </div>
+      <div class="terrain-paint-panel__layer-list">
+        <v-btn
+          v-for="layer in props.layers"
+          :key="layer.id"
+          size="small"
+          :variant="layer.id === props.selectedLayerId ? 'flat' : 'outlined'"
+          :color="layer.id === props.selectedLayerId ? 'primary' : undefined"
+          class="terrain-paint-panel__layer-chip"
+          :disabled="!props.hasGround"
+          @click="emit('update:selectedLayerId', layer.id)"
+        >
+          {{ getLayerLabel(layer) }}
+        </v-btn>
+      </div>
+      <div class="hint-text">
+        {{ props.layers.length }} / {{ TERRAIN_PAINT_MAX_LAYER_COUNT }} layers
+      </div>
+    </div>
+
     <div class="control-row">
       <div class="control-group control-group--compact">
         <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
@@ -319,13 +372,14 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
       </div>
     </div>
     <div class="control-group">
-      <div class="text-caption mb-1">Terrain Texture</div>
+      <div class="text-caption mb-1">{{ selectedLayerLabel }}</div>
       <AssetPickerList
         :active="true"
         :asset-id="selectedAssetId"
         asset-type="image,texture"
         :show-search="true"
         :thumbnail-size="52"
+        :disabled="!props.hasGround || !activeLayer"
         @update:asset="(next) => emit('update:asset', next)"
       />
     </div>
@@ -480,6 +534,24 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.terrain-paint-panel__layer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.terrain-paint-panel__layer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.terrain-paint-panel__layer-chip {
+  max-width: 100%;
+  text-transform: none;
 }
 
 .control-group {

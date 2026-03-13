@@ -10,6 +10,8 @@ import { getLandformsPreviewTexture } from './landformsPreview'
 
 // Debug helpers removed: keep implementation minimal and focused on preview functionality.
 
+const DEBUG_TERRAIN_PAINT_PREVIEW = true
+
 const terrainPaintShaderStateByMaterial = new WeakMap<THREE.Material, TerrainPaintShaderState>()
 
 type TerrainPaintShaderState = {
@@ -17,8 +19,8 @@ type TerrainPaintShaderState = {
 	chunkBounds: THREE.Vector4
 	landformsBounds: THREE.Vector4
 	layerTextures: Partial<Record<TerrainPaintChannel, THREE.Texture>>
-	layerParamsA: Record<'g' | 'b' | 'a', THREE.Vector4>
-	layerParamsB: Record<'g' | 'b' | 'a', THREE.Vector4>
+	layerParamsA: Record<TerrainPaintChannel, THREE.Vector4>
+	layerParamsB: Record<TerrainPaintChannel, THREE.Vector4>
 	weightmaps: Map<string, THREE.Texture>
 	defaultWeightmap: THREE.DataTexture
 	defaultWhite: THREE.DataTexture
@@ -38,8 +40,7 @@ function createDefaultWhiteTexture(): THREE.DataTexture {
 }
 
 function createDefaultWeightmapTexture(): THREE.DataTexture {
-	// Base-only: R=1, others=0
-	const data = new Uint8Array([255, 0, 0, 0])
+	const data = new Uint8Array([0, 0, 0, 0])
 	const texture = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat)
 	texture.needsUpdate = true
 	texture.magFilter = THREE.NearestFilter
@@ -69,11 +70,13 @@ function createShaderState(): TerrainPaintShaderState {
 		landformsBounds: new THREE.Vector4(-0.5, -0.5, 1, 1),
 		layerTextures: {},
 		layerParamsA: {
+			r: new THREE.Vector4(1, 1, 0, 0),
 			g: new THREE.Vector4(1, 1, 0, 0),
 			b: new THREE.Vector4(1, 1, 0, 0),
 			a: new THREE.Vector4(1, 1, 0, 0),
 		},
 		layerParamsB: {
+			r: new THREE.Vector4(0, 1, 1, 0),
 			g: new THREE.Vector4(0, 1, 1, 0),
 			b: new THREE.Vector4(0, 1, 1, 0),
 			a: new THREE.Vector4(0, 1, 1, 0),
@@ -112,15 +115,19 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 		shader.uniforms.uTerrainPaintWeightmap = { value: state.defaultWeightmap }
 		shader.uniforms.uTerrainPaintChunkBounds = { value: state.chunkBounds }
 		shader.uniforms.uTerrainPaintGroundBounds = { value: state.landformsBounds }
+		shader.uniforms.uTerrainPaintLayerR = { value: state.defaultWhite }
 		shader.uniforms.uTerrainPaintLayerG = { value: state.defaultWhite }
 		shader.uniforms.uTerrainPaintLayerB = { value: state.defaultWhite }
 		shader.uniforms.uTerrainPaintLayerA = { value: state.defaultWhite }
+		shader.uniforms.uTerrainPaintLayerRParamsA = { value: state.layerParamsA.r }
 		shader.uniforms.uTerrainPaintLayerGParamsA = { value: state.layerParamsA.g }
 		shader.uniforms.uTerrainPaintLayerBParamsA = { value: state.layerParamsA.b }
 		shader.uniforms.uTerrainPaintLayerAParamsA = { value: state.layerParamsA.a }
+		shader.uniforms.uTerrainPaintLayerRParamsB = { value: state.layerParamsB.r }
 		shader.uniforms.uTerrainPaintLayerGParamsB = { value: state.layerParamsB.g }
 		shader.uniforms.uTerrainPaintLayerBParamsB = { value: state.layerParamsB.b }
 		shader.uniforms.uTerrainPaintLayerAParamsB = { value: state.layerParamsB.a }
+		shader.uniforms.uTerrainPaintHasR = { value: 0 }
 		shader.uniforms.uTerrainPaintHasG = { value: 0 }
 		shader.uniforms.uTerrainPaintHasB = { value: 0 }
 		shader.uniforms.uTerrainPaintHasA = { value: 0 }
@@ -140,15 +147,19 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 					'uniform sampler2D uTerrainPaintWeightmap;',
 					'uniform vec4 uTerrainPaintChunkBounds;',
 					'uniform vec4 uTerrainPaintGroundBounds;',
+					'uniform sampler2D uTerrainPaintLayerR;',
 					'uniform sampler2D uTerrainPaintLayerG;',
 					'uniform sampler2D uTerrainPaintLayerB;',
 					'uniform sampler2D uTerrainPaintLayerA;',
+					'uniform vec4 uTerrainPaintLayerRParamsA;',
 					'uniform vec4 uTerrainPaintLayerGParamsA;',
 					'uniform vec4 uTerrainPaintLayerBParamsA;',
 					'uniform vec4 uTerrainPaintLayerAParamsA;',
+					'uniform vec4 uTerrainPaintLayerRParamsB;',
 					'uniform vec4 uTerrainPaintLayerGParamsB;',
 					'uniform vec4 uTerrainPaintLayerBParamsB;',
 					'uniform vec4 uTerrainPaintLayerAParamsB;',
+					'uniform float uTerrainPaintHasR;',
 					'uniform float uTerrainPaintHasG;',
 					'uniform float uTerrainPaintHasB;',
 					'uniform float uTerrainPaintHasA;',
@@ -206,10 +217,13 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 					'  vec2 groundUv = clamp((vTerrainPaintLocalXZ - groundMinXZ) / groundSizeXZ, 0.0, 1.0);',
 					'  vec4 w = texture2D(uTerrainPaintWeightmap, wmUv);',
 					'  vec3 baseCol = terrainBaseCol;',
+					'  vec3 rCol = mix(baseCol, terrainPaintSampleLayer(baseCol, uTerrainPaintLayerR, meshUv, groundUv, uTerrainPaintLayerRParamsA, uTerrainPaintLayerRParamsB), uTerrainPaintHasR);',
 					'  vec3 gCol = mix(baseCol, terrainPaintSampleLayer(baseCol, uTerrainPaintLayerG, meshUv, groundUv, uTerrainPaintLayerGParamsA, uTerrainPaintLayerGParamsB), uTerrainPaintHasG);',
 					'  vec3 bCol = mix(baseCol, terrainPaintSampleLayer(baseCol, uTerrainPaintLayerB, meshUv, groundUv, uTerrainPaintLayerBParamsA, uTerrainPaintLayerBParamsB), uTerrainPaintHasB);',
 					'  vec3 aCol = mix(baseCol, terrainPaintSampleLayer(baseCol, uTerrainPaintLayerA, meshUv, groundUv, uTerrainPaintLayerAParamsA, uTerrainPaintLayerAParamsB), uTerrainPaintHasA);',
-					'  diffuseColor.rgb = baseCol * w.r + gCol * w.g + bCol * w.b + aCol * w.a;',
+					'  float totalWeight = clamp(w.r + w.g + w.b + w.a, 0.0, 1.0);',
+					'  float baseWeight = max(0.0, 1.0 - totalWeight);',
+					'  diffuseColor.rgb = baseCol * baseWeight + rCol * w.r + gCol * w.g + bCol * w.b + aCol * w.a;',
 					'}',
 				].join('\n'),
 			)
@@ -250,7 +264,7 @@ function encodeTerrainPaintBlendMode(mode: TerrainPaintBlendMode | null | undefi
 
 function resolveTerrainPaintLayerByChannel(
 	settings: TerrainPaintSettings | null | undefined,
-	channel: 'g' | 'b' | 'a',
+	channel: TerrainPaintChannel,
 ): TerrainPaintLayerDefinition | null {
 	const layers = Array.isArray(settings?.layers) ? settings.layers : []
 	return layers.find((layer) => layer?.channel === channel) ?? null
@@ -258,7 +272,7 @@ function resolveTerrainPaintLayerByChannel(
 
 function applyTerrainPaintLayerUniforms(
 	state: TerrainPaintShaderState,
-	channel: 'g' | 'b' | 'a',
+	channel: TerrainPaintChannel,
 	layer: TerrainPaintLayerDefinition | null,
 ): void {
 	const paramsA = state.layerParamsA[channel]
@@ -368,6 +382,7 @@ export function ensureTerrainPaintPreviewInstalled(
 			const key = resolveChunkKeyFromMesh(mesh)
 			const weightmap = key ? state.weightmaps.get(key) ?? state.defaultWeightmap : state.defaultWeightmap
 			const landformsTexture = getLandformsPreviewTexture(root)
+			applyTerrainPaintLayerUniforms(state, 'r', resolveTerrainPaintLayerByChannel(currentSettings, 'r'))
 			applyTerrainPaintLayerUniforms(state, 'g', resolveTerrainPaintLayerByChannel(currentSettings, 'g'))
 			applyTerrainPaintLayerUniforms(state, 'b', resolveTerrainPaintLayerByChannel(currentSettings, 'b'))
 			applyTerrainPaintLayerUniforms(state, 'a', resolveTerrainPaintLayerByChannel(currentSettings, 'a'))
@@ -378,15 +393,19 @@ export function ensureTerrainPaintPreviewInstalled(
 			state.shader.uniforms.uTerrainPaintWeightmap.value = weightmap
 			state.shader.uniforms.uTerrainPaintChunkBounds.value = state.chunkBounds
 			state.shader.uniforms.uTerrainPaintGroundBounds.value = state.landformsBounds
+			state.shader.uniforms.uTerrainPaintLayerR.value = state.layerTextures.r ?? state.defaultWhite
 			state.shader.uniforms.uTerrainPaintLayerG.value = state.layerTextures.g ?? state.defaultWhite
 			state.shader.uniforms.uTerrainPaintLayerB.value = state.layerTextures.b ?? state.defaultWhite
 			state.shader.uniforms.uTerrainPaintLayerA.value = state.layerTextures.a ?? state.defaultWhite
+			state.shader.uniforms.uTerrainPaintLayerRParamsA.value = state.layerParamsA.r
 			state.shader.uniforms.uTerrainPaintLayerGParamsA.value = state.layerParamsA.g
 			state.shader.uniforms.uTerrainPaintLayerBParamsA.value = state.layerParamsA.b
 			state.shader.uniforms.uTerrainPaintLayerAParamsA.value = state.layerParamsA.a
+			state.shader.uniforms.uTerrainPaintLayerRParamsB.value = state.layerParamsB.r
 			state.shader.uniforms.uTerrainPaintLayerGParamsB.value = state.layerParamsB.g
 			state.shader.uniforms.uTerrainPaintLayerBParamsB.value = state.layerParamsB.b
 			state.shader.uniforms.uTerrainPaintLayerAParamsB.value = state.layerParamsB.a
+			state.shader.uniforms.uTerrainPaintHasR.value = state.layerTextures.r ? 1 : 0
 			state.shader.uniforms.uTerrainPaintHasG.value = state.layerTextures.g ? 1 : 0
 			state.shader.uniforms.uTerrainPaintHasB.value = state.layerTextures.b ? 1 : 0
 			state.shader.uniforms.uTerrainPaintHasA.value = state.layerTextures.a ? 1 : 0
@@ -450,9 +469,6 @@ export function updateTerrainPaintPreviewLayerTexture(
 	const normalizedChannel = typeof channel === 'number'
 		? (['r', 'g', 'b', 'a'][Math.max(0, Math.min(3, Math.floor(channel) % 4))] as TerrainPaintChannel)
 		: channel
-	if (normalizedChannel === 'r') {
-		return
-	}
 	if (texture) {
 		texture.wrapS = THREE.RepeatWrapping
 		texture.wrapT = THREE.RepeatWrapping
@@ -665,6 +681,17 @@ export type TerrainPaintLoaders = {
 	loadTerrainPaintWeightmapDataFromAssetId: (assetId: string, resolution: number) => Promise<Uint8ClampedArray | null>
 }
 
+function debugTerrainPaintPreview(message: string, details?: unknown): void {
+	if (!DEBUG_TERRAIN_PAINT_PREVIEW) {
+		return
+	}
+	if (details === undefined) {
+		console.debug(`[terrainPaintPreview] ${message}`)
+		return
+	}
+	console.debug(`[terrainPaintPreview] ${message}`, details)
+}
+
 // Create default loaders using a provided `resolveAssetUrlFromCache` function.
 export function createDefaultTerrainPaintLoaders(
 	resolveAssetUrlFromCache: (assetId: string) => Promise<{ url: string | null } | null>,
@@ -730,31 +757,48 @@ export function syncTerrainPaintPreviewForGround(
 
 	const { visibleChunkMaterials, visibleMaterials } = collectVisibleChunkMaterials(groundObject)
 	if (!visibleMaterials.size) {
+		debugTerrainPaintPreview('No visible ground materials found for terrain paint preview')
 		return
 	}
 	const targets = Array.from(visibleMaterials)
 	const token = getToken()
+	const layers = Array.isArray(settings?.layers) ? settings.layers : []
+	debugTerrainPaintPreview('Sync start', {
+		token,
+		visibleChunkKeys: Array.from(visibleChunkMaterials.keys()),
+		visibleMaterialCount: targets.length,
+		weightmapResolution: settings?.weightmapResolution ?? null,
+		layers: layers.map((layer: any) => ({
+			id: typeof layer?.id === 'string' ? layer.id : null,
+			pageIndex: typeof layer?.pageIndex === 'number' ? layer.pageIndex : null,
+			channel: typeof layer?.channel === 'string' ? layer.channel : null,
+			textureAssetId: typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : null,
+		})),
+	})
 
+	const layerR = (function () {
+		const match = layers.find((layer: any) => layer?.channel === 'r')
+		const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
+		return candidate.length ? candidate : null
+	})()
 	const layerG = (function () {
-		const layers = Array.isArray(settings?.layers) ? settings.layers : []
 		const match = layers.find((layer: any) => layer?.channel === 'g')
 		const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
 		return candidate.length ? candidate : null
 	})()
 	const layerB = (function () {
-		const layers = Array.isArray(settings?.layers) ? settings.layers : []
 		const match = layers.find((layer: any) => layer?.channel === 'b')
 		const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
 		return candidate.length ? candidate : null
 	})()
 	const layerA = (function () {
-		const layers = Array.isArray(settings?.layers) ? settings.layers : []
 		const match = layers.find((layer: any) => layer?.channel === 'a')
 		const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
 		return candidate.length ? candidate : null
 	})()
 
-	const layerPairs: Array<{ channel: 'g' | 'b' | 'a'; assetId: string | null }> = [
+	const layerPairs: Array<{ channel: 'r' | 'g' | 'b' | 'a'; assetId: string | null }> = [
+		{ channel: 'r', assetId: layerR },
 		{ channel: 'g', assetId: layerG },
 		{ channel: 'b', assetId: layerB },
 		{ channel: 'a', assetId: layerA },
@@ -762,6 +806,7 @@ export function syncTerrainPaintPreviewForGround(
 
 	for (const pair of layerPairs) {
 		if (!pair.assetId) {
+			debugTerrainPaintPreview('Clearing preview layer texture because no asset is configured', { channel: pair.channel })
 			targets.forEach((target) => {
 				updateTerrainPaintPreviewLayerTexture(target, pair.channel, null)
 			})
@@ -769,6 +814,11 @@ export function syncTerrainPaintPreviewForGround(
 		}
 		const cachedTexture = terrainPaintLayerTextureCache.get(pair.assetId)
 		if (cachedTexture !== undefined) {
+			debugTerrainPaintPreview('Applying cached preview layer texture', {
+				channel: pair.channel,
+				assetId: pair.assetId,
+				loaded: Boolean(cachedTexture),
+			})
 			targets.forEach((target) => {
 				updateTerrainPaintPreviewLayerTexture(target, pair.channel, cachedTexture)
 			})
@@ -776,11 +826,17 @@ export function syncTerrainPaintPreviewForGround(
 		}
 		let pending = terrainPaintLayerTextureRequests.get(pair.assetId)
 		if (!pending) {
+			debugTerrainPaintPreview('Requesting preview layer texture', { channel: pair.channel, assetId: pair.assetId })
 			pending = loaders.loadTerrainPaintTextureFromAssetId(pair.assetId, { colorSpace: 'srgb' })
 			terrainPaintLayerTextureRequests.set(pair.assetId, pending)
 		}
 		pending.then((texture) => {
 			terrainPaintLayerTextureCache.set(pair.assetId as string, texture)
+			debugTerrainPaintPreview('Preview layer texture resolved', {
+				channel: pair.channel,
+				assetId: pair.assetId,
+				loaded: Boolean(texture),
+			})
 			if (getToken() !== token) {
 				return
 			}
@@ -792,14 +848,22 @@ export function syncTerrainPaintPreviewForGround(
 
 	const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : null
 	if (!chunks) {
+		debugTerrainPaintPreview('No terrain paint chunks found in preview settings')
 		return
 	}
 
 	for (const [chunkKey, chunkTargets] of visibleChunkMaterials) {
 		const ref = (chunks as any)[chunkKey]
 		const logicalId = typeof ref?.pages?.[0]?.logicalId === 'string' ? ref.pages[0].logicalId.trim() : ''
+		debugTerrainPaintPreview('Inspecting visible chunk preview data', {
+			chunkKey,
+			pageCount: Array.isArray(ref?.pages) ? ref.pages.length : 0,
+			logicalId: logicalId || null,
+			targetCount: chunkTargets.length,
+		})
 		if (!logicalId.length) {
 			terrainPaintChunkRefKeys.delete(chunkKey)
+			debugTerrainPaintPreview('Clearing preview weightmap because chunk has no logical id', { chunkKey })
 			chunkTargets.forEach((target) => {
 				setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
 			})
@@ -816,6 +880,11 @@ export function syncTerrainPaintPreviewForGround(
 
 		const cachedData = terrainPaintChunkWeightmapDataCache.get(refKey)
 		if (cachedData !== undefined) {
+			debugTerrainPaintPreview('Applying cached preview weightmap data', {
+				chunkKey,
+				logicalId: refKey,
+				loaded: Boolean(cachedData),
+			})
 			if (cachedData) {
 				chunkTargets.forEach((target) => {
 					updateTerrainPaintPreviewWeightmap(target, chunkKey, cachedData, settings.weightmapResolution)
@@ -830,11 +899,22 @@ export function syncTerrainPaintPreviewForGround(
 
 		let pending = terrainPaintChunkWeightmapRequests.get(refKey)
 		if (!pending) {
+			debugTerrainPaintPreview('Requesting preview weightmap data', {
+				chunkKey,
+				logicalId,
+				resolution: settings.weightmapResolution,
+			})
 			pending = loaders.loadTerrainPaintWeightmapDataFromAssetId(logicalId, settings.weightmapResolution)
 			terrainPaintChunkWeightmapRequests.set(refKey, pending)
 		}
 		pending.then((data) => {
 			terrainPaintChunkWeightmapDataCache.set(refKey, data)
+			debugTerrainPaintPreview('Preview weightmap resolved', {
+				chunkKey,
+				logicalId: refKey,
+				loaded: Boolean(data),
+				byteLength: data?.byteLength ?? 0,
+			})
 			if (getToken() !== token) {
 				return
 			}

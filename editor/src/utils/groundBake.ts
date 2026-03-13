@@ -385,6 +385,12 @@ async function renderBaseTexture(
   height: number,
 ): Promise<void> {
   context.clearRect(0, 0, width, height)
+  context.save()
+  context.globalCompositeOperation = 'source-over'
+  context.globalAlpha = 1
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, width, height)
+  context.restore()
   if (!definition.textureDataUrl) {
     return
   }
@@ -633,7 +639,6 @@ async function renderTerrainPaint(
           (outputData[pixelOffset + 1] ?? 255) / 255,
           (outputData[pixelOffset + 2] ?? 255) / 255,
         ]
-        let alpha = (outputData[pixelOffset + 3] ?? 0) / 255
         for (const layer of sortedLayers) {
           const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
           const texture = assetId ? layerImages.get(assetId) : null
@@ -657,23 +662,16 @@ async function renderTerrainPaint(
           if (layerAlpha <= 0) {
             continue
           }
-          const nextAlpha = layerAlpha + alpha * (1 - layerAlpha)
-          if (nextAlpha <= 0) {
-            color = [0, 0, 0]
-            alpha = 0
-            continue
-          }
           color = [
-            (blended[0] * layerAlpha + color[0] * alpha * (1 - layerAlpha)) / nextAlpha,
-            (blended[1] * layerAlpha + color[1] * alpha * (1 - layerAlpha)) / nextAlpha,
-            (blended[2] * layerAlpha + color[2] * alpha * (1 - layerAlpha)) / nextAlpha,
+            blended[0] * layerAlpha + color[0] * (1 - layerAlpha),
+            blended[1] * layerAlpha + color[1] * (1 - layerAlpha),
+            blended[2] * layerAlpha + color[2] * (1 - layerAlpha),
           ]
-          alpha = nextAlpha
         }
         outputData[pixelOffset] = Math.round(clamp01(color[0]) * 255)
         outputData[pixelOffset + 1] = Math.round(clamp01(color[1]) * 255)
         outputData[pixelOffset + 2] = Math.round(clamp01(color[2]) * 255)
-        outputData[pixelOffset + 3] = Math.round(clamp01(alpha) * 255)
+        outputData[pixelOffset + 3] = 255
       }
     }
   }
