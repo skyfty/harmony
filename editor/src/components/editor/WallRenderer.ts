@@ -217,7 +217,15 @@ const wallInstancedBoundsCorners = [
 const WALL_SYNC_EPSILON = 1e-6
 const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
 const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
-const WALL_SYNC_REPEAT_INSTANCE_STEP_M = 0.5
+const WALL_SYNC_REPEAT_INSTANCE_STEP_M_DEFAULT = 0.5
+
+function normalizeWallRepeatInstanceStep(value: unknown): number {
+  const raw = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(raw)) {
+    return WALL_SYNC_REPEAT_INSTANCE_STEP_M_DEFAULT
+  }
+  return Math.max(WALL_SYNC_MIN_TILE_LENGTH, raw)
+}
 
 function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   const dx = a.x - b.x
@@ -466,7 +474,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.wallRenderMode, wallProps.bodyOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.wallRenderMode, wallProps.bodyOrientation, wallProps.repeatInstanceStep, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -494,7 +502,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.wallRenderMode, wallProps.headOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.wallRenderMode, wallProps.headOrientation, wallProps.repeatInstanceStep, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -522,7 +530,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.wallRenderMode, wallProps.footOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.wallRenderMode, wallProps.footOrientation, wallProps.repeatInstanceStep, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -862,6 +870,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     bounds: THREE.Box3,
     mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
+    repeatInstanceStep: number,
     repeatErasedSlotSet: Set<string>,
     cornerModels: WallCornerModelRule[] = [],
   ): WallLocalPlacement[] {
@@ -923,7 +932,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       for (
         let localStart = 0;
         localStart <= maxLocalStart + WALL_SYNC_EPSILON;
-        localStart += WALL_SYNC_REPEAT_INSTANCE_STEP_M
+        localStart += repeatInstanceStep
       ) {
         const repeatSlotIndex = (() => {
           const next = (repeatSlotByChain.get(chainIndex) ?? 0) + 1
@@ -966,6 +975,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     mode: 'body' | 'head' | 'foot',
     wallRenderMode: 'stretch' | 'repeatInstances',
     orientation: WallModelOrientation,
+    repeatInstanceStep: number,
     cornerModels: WallCornerModelRule[] = [],
   ): WallLocalPlacement[] {
     if (wallRenderMode === 'repeatInstances') {
@@ -974,6 +984,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         bounds,
         mode,
         orientation,
+        normalizeWallRepeatInstanceStep(repeatInstanceStep),
         buildRepeatErasedSlotSet(definition),
         cornerModels,
       )
@@ -1529,6 +1540,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         bodyMaterialConfigId: source.bodyMaterialConfigId ?? baseProps.bodyMaterialConfigId,
         isAirWall: source.isAirWall ?? baseProps.isAirWall,
         wallRenderMode: source.wallRenderMode ?? (baseProps as any).wallRenderMode,
+        repeatInstanceStep: source.repeatInstanceStep ?? (baseProps as any).repeatInstanceStep,
         bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
         headAssetId: source.headAssetId ?? baseProps.headAssetId,
         footAssetId: source.footAssetId ?? baseProps.footAssetId,
@@ -1597,6 +1609,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(params.definition, normalizedProps),
         cornerModels,
         wallRenderMode: normalizedProps.wallRenderMode,
+        repeatInstanceStep: normalizedProps.repeatInstanceStep,
         bodyUvAxis: normalizedProps.bodyUvAxis,
         headUvAxis: normalizedProps.headUvAxis,
         footUvAxis: normalizedProps.footUvAxis,
@@ -1892,6 +1905,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const wallRenderOptions: WallRenderOptions = {
         smoothing,
         wallRenderMode,
+        repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
       }
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
@@ -1976,6 +1990,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const wallRenderOptions: WallRenderOptions = {
         smoothing,
         wallRenderMode,
+        repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
       }
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
@@ -2024,7 +2039,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // body：沿每段墙铺 tile，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallRenderMode, wallProps.bodyOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallRenderMode, wallProps.bodyOrientation, wallProps.repeatInstanceStep, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -2060,7 +2075,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // head：沿墙段铺设，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallRenderMode, wallProps.headOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallRenderMode, wallProps.headOrientation, wallProps.repeatInstanceStep, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -2095,7 +2110,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallRenderMode, wallProps.footOrientation, cornerModels)
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallRenderMode, wallProps.footOrientation, wallProps.repeatInstanceStep, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -2277,6 +2292,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const wallRenderOptions: WallRenderOptions = {
         smoothing,
         wallRenderMode,
+        repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
       }
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
@@ -2298,6 +2314,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const wallRenderOptions: WallRenderOptions = {
         smoothing,
         wallRenderMode,
+        repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
       }
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)

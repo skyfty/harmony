@@ -47,6 +47,7 @@ export type StrictWallPresetWallProps = {
   width: number
   thickness: number
   smoothing: number
+  repeatInstanceStep: number
   isAirWall: boolean
   bodyAssetId: string | null
   bodyOrientation: WallModelOrientation

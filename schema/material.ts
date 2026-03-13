@@ -81,6 +81,32 @@ export const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
 
 export const MATERIAL_TEXTURE_SLOTS = Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[];
 
+const WALL_REPEAT_U_TEXTURE_SLOTS = [
+  'map',
+  'alphaMap',
+  'lightMap',
+  'aoMap',
+  'bumpMap',
+  'normalMap',
+  'displacementMap',
+  'emissiveMap',
+  'metalnessMap',
+  'roughnessMap',
+  'clearcoatMap',
+  'clearcoatNormalMap',
+  'clearcoatRoughnessMap',
+  'iridescenceMap',
+  'iridescenceThicknessMap',
+  'sheenColorMap',
+  'sheenRoughnessMap',
+  'specularMap',
+  'specularColorMap',
+  'specularIntensityMap',
+  'transmissionMap',
+  'thicknessMap',
+  'anisotropyMap',
+] as const;
+
 const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned';
 const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal';
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots';
@@ -235,6 +261,82 @@ function sanitizeAutoRepeatAxisValue(value: unknown, fallback: number): number {
     return fallback;
   }
   return numeric;
+}
+
+function sanitizeWallRepeatScaleU(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+export function ensureWallMaterialRepeatWrapU(material: THREE.Material): void {
+  const candidate = material as THREE.Material & Record<string, unknown>;
+  let changed = false;
+  WALL_REPEAT_U_TEXTURE_SLOTS.forEach((slot) => {
+    const texture = candidate[slot] as THREE.Texture | null | undefined;
+    if (!texture) {
+      return;
+    }
+    if (texture.wrapS !== THREE.RepeatWrapping) {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.needsUpdate = true;
+      changed = true;
+    }
+  });
+  if (changed) {
+    candidate.needsUpdate = true;
+  }
+}
+
+function createWallRepeatScaleMaterialVariantOne(
+  source: THREE.Material,
+  repeatScaleU: number,
+): { material: THREE.Material; ownedTextures: THREE.Texture[]; shared: boolean } {
+  const safeScale = sanitizeWallRepeatScaleU(repeatScaleU);
+  if (Math.abs(safeScale - 1) <= 1e-6) {
+    return { material: source, ownedTextures: [], shared: true };
+  }
+
+  const typedSource = source as THREE.MeshStandardMaterial & Record<string, unknown>;
+  const cloned = source.clone() as THREE.Material & Record<string, unknown>;
+  const ownedTextures: THREE.Texture[] = [];
+  let changed = false;
+
+  WALL_REPEAT_U_TEXTURE_SLOTS.forEach((slot) => {
+    const texture = typedSource[slot] as THREE.Texture | null | undefined;
+    if (!texture) {
+      return;
+    }
+    const clonedTexture = texture.clone();
+    clonedTexture.wrapS = THREE.RepeatWrapping;
+    clonedTexture.repeat.x *= safeScale;
+    clonedTexture.needsUpdate = true;
+    cloned[slot] = clonedTexture;
+    ownedTextures.push(clonedTexture);
+    changed = true;
+  });
+
+  if (!changed) {
+    cloned.dispose();
+    return { material: source, ownedTextures: [], shared: true };
+  }
+
+  cloned.needsUpdate = true;
+  return { material: cloned as THREE.Material, ownedTextures, shared: false };
+}
+
+export function createWallRepeatScaleMaterialVariant(
+  source: THREE.Material | THREE.Material[],
+  repeatScaleU: number,
+): { material: THREE.Material | THREE.Material[]; ownedTextures: THREE.Texture[]; shared: boolean } {
+  if (Array.isArray(source)) {
+    const variants = source.map((entry) => createWallRepeatScaleMaterialVariantOne(entry, repeatScaleU));
+    const shared = variants.every((entry) => entry.shared);
+    return {
+      material: shared ? source : variants.map((entry) => entry.material),
+      ownedTextures: variants.flatMap((entry) => entry.ownedTextures),
+      shared,
+    };
+  }
+  return createWallRepeatScaleMaterialVariantOne(source, repeatScaleU);
 }
 
 export function resolveMaterialTextureRepeatInfo(value: unknown): MaterialTextureRepeatInfo | null {

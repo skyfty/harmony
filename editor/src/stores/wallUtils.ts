@@ -263,6 +263,7 @@ export function applyWallComponentPropsToNode(
           deps.updateWallGroup(child, node.dynamicMesh, {
             smoothing: resolveWallSmoothing(node),
             wallRenderMode: normalized.wallRenderMode,
+            repeatInstanceStep: normalized.repeatInstanceStep,
           } as any)
         }
         return

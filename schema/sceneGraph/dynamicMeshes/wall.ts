@@ -7,8 +7,13 @@ import {
   clampWallProps,
   resolveWallBodyMaterialConfigIdForRender,
 } from '../../components/definitions/wallComponent';
-import { createWallRenderGroup } from '../../wallMesh';
-import { createAutoTiledMaterialVariant, MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from '../../material';
+import { createWallRenderGroup, WALL_ASSET_REPEAT_VARIANT_INFO_KEY } from '../../wallMesh';
+import {
+  createAutoTiledMaterialVariant,
+  createWallRepeatScaleMaterialVariant,
+  MATERIAL_CONFIG_ID_KEY,
+  MATERIAL_TEXTURE_REPEAT_INFO_KEY,
+} from '../../material';
 import { buildMaterialConfigMap } from '../materialAssignment';
 
 function applyWallMaterialConfigAssignment(
@@ -20,17 +25,26 @@ function applyWallMaterialConfigAssignment(
   const resolveAssignedMaterial = (
     source: THREE.Material | THREE.Material[],
     repeatInfo: unknown,
+    repeatVariantInfo: unknown,
+    isWallAsset: boolean,
   ): THREE.Material | THREE.Material[] => {
+    const wallRepeatScaleU = isWallAsset && repeatVariantInfo && typeof repeatVariantInfo === 'object'
+      ? Number((repeatVariantInfo as { repeatScaleU?: unknown }).repeatScaleU)
+      : Number.NaN;
     const materialKey = Array.isArray(source)
       ? source.map((entry) => entry.uuid).join(',')
       : source.uuid;
-    const repeatKey = repeatInfo ? JSON.stringify(repeatInfo) : '';
+    const repeatKey = Number.isFinite(wallRepeatScaleU) && wallRepeatScaleU > 0
+      ? `wall-u:${wallRepeatScaleU}`
+      : repeatInfo ? JSON.stringify(repeatInfo) : '';
     const cacheKey = `${materialKey}|${repeatKey}`;
     const cached = repeatedMaterialCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    const variant = createAutoTiledMaterialVariant(source, repeatInfo);
+    const variant = Number.isFinite(wallRepeatScaleU) && wallRepeatScaleU > 0
+      ? createWallRepeatScaleMaterialVariant(source, wallRepeatScaleU)
+      : createAutoTiledMaterialVariant(source, repeatInfo);
     const assigned = variant.shared ? source : variant.material;
     repeatedMaterialCache.set(cacheKey, assigned);
     return assigned;
@@ -45,12 +59,14 @@ function applyWallMaterialConfigAssignment(
     const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
     const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
     const repeatInfo = mesh.userData?.[MATERIAL_TEXTURE_REPEAT_INFO_KEY] as unknown;
+    const repeatVariantInfo = mesh.userData?.[WALL_ASSET_REPEAT_VARIANT_INFO_KEY] as unknown;
+    const isWallAsset = mesh.userData?.dynamicMeshType === 'WallAsset';
     if (!selectorId) {
       return;
     }
     const material = materialByConfigId.get(selectorId);
     if (material) {
-      mesh.material = resolveAssignedMaterial(material, repeatInfo);
+      mesh.material = resolveAssignedMaterial(material, repeatInfo, repeatVariantInfo, isWallAsset);
     }
   });
 }
@@ -145,6 +161,7 @@ export async function buildWallMesh(
     {
       smoothing: wallProps.smoothing,
       wallRenderMode: wallProps.wallRenderMode,
+      repeatInstanceStep: wallProps.repeatInstanceStep,
       bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps),
       cornerModels,
       bodyUvAxis: wallProps.bodyUvAxis,

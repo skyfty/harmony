@@ -11,6 +11,8 @@ export const WALL_MIN_HEIGHT = 0.0
 export const WALL_MIN_WIDTH = 0.0
 export const WALL_MIN_THICKNESS = 0.0
 export const WALL_DEFAULT_SMOOTHING = 0.05
+export const WALL_DEFAULT_REPEAT_INSTANCE_STEP = 0.5
+export const WALL_MIN_REPEAT_INSTANCE_STEP = 0.01
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 
@@ -88,6 +90,8 @@ export interface WallComponentProps {
   isAirWall: boolean
   /** Wall render mode for model placement. */
   wallRenderMode: WallRenderMode
+  /** Step length (meters) used when `wallRenderMode` is `repeatInstances`. */
+  repeatInstanceStep: number
   /** Lower wall body model asset id (required to enable model mode). */
   bodyAssetId: string | null
   /** Orientation overrides for the body model. */
@@ -304,6 +308,13 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   })
 
   const normalizedIsAirWall = requiredBoolean('isAirWall')
+  const normalizeRepeatInstanceStep = (value: unknown): number => {
+    const raw = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(raw)) {
+      return WALL_DEFAULT_REPEAT_INSTANCE_STEP
+    }
+    return Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, raw)
+  }
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
   const headAssetId = requiredAssetIdOrNull('headAssetId')
@@ -334,6 +345,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     isAirWall: normalizedIsAirWall,
     wallRenderMode: requiredRenderMode((props as any).wallRenderMode, 'wallRenderMode'),
+    repeatInstanceStep: normalizeRepeatInstanceStep((props as any).repeatInstanceStep),
     bodyAssetId,
     bodyOrientation,
     bodyUvAxis,
@@ -366,6 +378,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       bodyMaterialConfigId: null,
       isAirWall: false,
       wallRenderMode: 'stretch',
+      repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
       bodyAssetId: null,
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       bodyUvAxis: 'auto',
@@ -398,6 +411,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       : null,
     isAirWall: false,
     wallRenderMode: 'stretch',
+    repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     bodyAssetId: null,
     headAssetId: null,
     footAssetId: null,
@@ -446,6 +460,9 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     bodyMaterialConfigId: props.bodyMaterialConfigId ?? null,
     isAirWall: Boolean(props.isAirWall),
     wallRenderMode: props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
+    repeatInstanceStep: Number.isFinite(props.repeatInstanceStep)
+      ? Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, Number(props.repeatInstanceStep))
+      : WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     bodyAssetId: props.bodyAssetId ?? null,
     bodyOrientation: {
       forwardAxis: props.bodyOrientation.forwardAxis,
@@ -588,6 +605,7 @@ export function createWallComponentState(
     bodyMaterialConfigId: overrides?.bodyMaterialConfigId ?? defaults.bodyMaterialConfigId,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     wallRenderMode: overrides?.wallRenderMode ?? defaults.wallRenderMode,
+    repeatInstanceStep: overrides?.repeatInstanceStep ?? defaults.repeatInstanceStep,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     bodyUvAxis: (overrides as any)?.bodyUvAxis ?? defaults.bodyUvAxis,
