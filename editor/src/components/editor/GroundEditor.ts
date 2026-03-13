@@ -3062,9 +3062,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			materials.forEach((material) => {
-				for (let pageIndex = 0; pageIndex < chunk.pages.length; pageIndex += 1) {
-					updateTerrainPaintPreviewWeightmap(material, `${chunk.key}@${pageIndex}`, chunk.pages[pageIndex] ?? createBlankWeightmap(chunk.resolution), chunk.resolution)
-				}
+				// The terrain paint shader resolves chunk weightmaps by the plain chunk key.
+				// Keep editor live preview aligned with the shared preview pipeline by
+				// updating page 0 on that key so paint strokes render immediately.
+				updateTerrainPaintPreviewWeightmap(
+					material,
+					chunk.key,
+					chunk.pages[0] ?? createBlankWeightmap(chunk.resolution),
+					chunk.resolution,
+				)
 			})
 		}
 	}
