@@ -197,12 +197,14 @@ import {
   syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
   createDefaultTerrainPaintLoaders,
 } from '@schema/terrainPaintPreview'
-import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
+import { createDefaultGroundSurfacePreviewLoaders, restoreGroundSurfacePreviewMaterialMap, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
   clearLandformsPreviewForGround,
   createDefaultLandformsPreviewLoaders,
   syncLandformsPreviewForGround,
 } from '@schema/landformsPreview'
+import { resolveEnabledComponentState } from '@schema/componentRuntimeUtils'
+import { LANDFORMS_COMPONENT_TYPE, clampLandformsComponentProps, type LandformsComponentProps } from '@schema/components'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
@@ -10956,14 +10958,22 @@ function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefi
   if (!groundObject) {
     return
   }
+  restoreGroundSurfacePreviewMaterialMap(groundObject)
   landformsPreviewLoadToken += 1
   if (groundNode.dynamicMesh?.type === 'Ground') {
+    const hasTerrainPaint = Boolean(groundNode.dynamicMesh.terrainPaint?.layers?.length)
+    const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
+    const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
+    const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
     const usesSurfacePreview = syncGroundSurfacePreviewForGround(
       groundObject,
       groundNode,
       groundNode.dynamicMesh,
       groundSurfacePreviewLoaders,
       () => landformsPreviewLoadToken,
+      {
+        applyToMaterialMap: hasTerrainPaint || hasLandforms,
+      },
     )
     syncTerrainPaintPreviewForGroundShared(
       groundObject,
@@ -10975,6 +10985,9 @@ function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefi
       () => landformsPreviewLoadToken,
     )
     if (usesSurfacePreview) {
+      return
+    }
+    if (hasTerrainPaint && !hasLandforms) {
       return
     }
   }
@@ -11000,7 +11013,11 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
     payload.dynamicMesh,
     groundSurfacePreviewLoaders,
     () => landformsPreviewLoadToken,
-    { liveChunkPagesByKey: payload.liveChunkPagesByKey, previewRevision: payload.previewRevision },
+    {
+      liveChunkPagesByKey: payload.liveChunkPagesByKey,
+      previewRevision: payload.previewRevision,
+      applyToMaterialMap: true,
+    },
   )
   syncTerrainPaintPreviewForGroundShared(
     payload.groundObject,
@@ -11010,11 +11027,25 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
       loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
     },
     () => landformsPreviewLoadToken,
+    usesSurfacePreview
+      ? undefined
+      : {
+        liveChunkPagesByKey: payload.liveChunkPagesByKey,
+        previewRevision: payload.previewRevision,
+      },
   )
+  console.log('[SceneViewport] terrain paint preview sync', {
+    nodeId: payload.groundNode.id,
+    previewRevision: payload.previewRevision,
+    liveChunkCount: payload.liveChunkPagesByKey.size,
+    usesSurfacePreview,
+    loadToken: landformsPreviewLoadToken,
+  })
 }
 
 function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {
   landformsPreviewLoadToken += 1
+  restoreGroundSurfacePreviewMaterialMap(groundObject)
   clearLandformsPreviewForGround(groundObject)
 }
 

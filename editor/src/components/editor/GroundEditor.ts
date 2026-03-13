@@ -2074,7 +2074,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				newlyVisible.push(chunk)
 			}
 		}
-
 		for (const chunk of newlyVisible) {
 			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
 				return
@@ -3448,7 +3447,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (token !== paintCommitToken) {
 				return false
 			}
-			return options.sceneStore.commitGroundPaintEdit(session.nodeId, session.settings)
+			const committed = options.sceneStore.commitGroundPaintEdit(session.nodeId, session.settings)
+			return committed
 		} catch (error) {
 			console.warn('提交地貌权重贴图失败：', error)
 			return false
