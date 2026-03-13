@@ -1030,25 +1030,6 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
 
 
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
-	console.debug('[ScenePreview] syncTerrainPaintPreviewForGround input', {
-		groundNodeId: groundNode.id,
-		bakedAssetId: typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
-			? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
-			: null,
-		terrainPaint: dynamicMesh.terrainPaint
-			? {
-				version: dynamicMesh.terrainPaint.version,
-				weightmapResolution: dynamicMesh.terrainPaint.weightmapResolution,
-				layers: dynamicMesh.terrainPaint.layers.map((layer) => ({
-					id: layer.id,
-					pageIndex: layer.pageIndex,
-					channel: layer.channel,
-					textureAssetId: layer.textureAssetId,
-				})),
-				chunkKeys: Object.keys(dynamicMesh.terrainPaint.chunks ?? {}),
-			}
-			: null,
-	})
 	const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
 		? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
 		: ''

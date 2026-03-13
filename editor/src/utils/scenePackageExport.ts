@@ -122,11 +122,23 @@ function cloneSceneExportDocument<T>(document: T): T {
   return JSON.parse(JSON.stringify(document)) as T
 }
 
+function stripGroundBakedTextureAssetIds(nodes: SceneJsonExportDocument['nodes']): void {
+  for (const node of nodes) {
+    if (node.dynamicMesh?.type === 'Ground') {
+      node.dynamicMesh.terrainPaintBakedTextureAssetId = null
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      stripGroundBakedTextureAssetIds(node.children)
+    }
+  }
+}
+
 async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDocument): Promise<SceneJsonExportDocument> {
   const cloned = cloneSceneExportDocument(document) as SceneExportDocumentWithEditorFields
   if (!cloned || typeof cloned !== 'object') {
     return document
   }
+  stripGroundBakedTextureAssetIds(cloned.nodes ?? [])
   const looksEditableScene = 'assetIndex' in cloned && 'packageAssetMap' in cloned
   if (!looksEditableScene) {
     return cloned

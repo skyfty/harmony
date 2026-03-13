@@ -1157,12 +1157,14 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
 
 // loaders created via createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
+const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
+const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = false
 
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
   const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
     ? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
     : '';
-  if (bakedAssetId) {
+  if (ENABLE_SCENE_PREVIEW_BAKED_GROUND && bakedAssetId) {
     const token = terrainPaintPreviewLoadToken;
     void loadBakedGroundTexture(bakedAssetId).then((texture) => {
       if (terrainPaintPreviewLoadToken !== token) {
@@ -1186,13 +1188,15 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
       () => terrainPaintPreviewLoadToken,
     );
   }
-  const usesSurfacePreview = syncGroundSurfacePreviewForGround(
-    groundObject,
-    groundNode,
-    dynamicMesh,
-    groundSurfacePreviewLoaders,
-    () => terrainPaintPreviewLoadToken,
-  );
+  const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
+    ? syncGroundSurfacePreviewForGround(
+      groundObject,
+      groundNode,
+      dynamicMesh,
+      groundSurfacePreviewLoaders,
+      () => terrainPaintPreviewLoadToken,
+    )
+    : false;
   if (usesSurfacePreview) {
     return syncTerrainPaintPreviewForGroundShared(
       groundObject,

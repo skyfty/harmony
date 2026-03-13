@@ -213,7 +213,6 @@ import { resetScatterInstanceBinding } from '@/utils/terrainScatterRuntime'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { persistPlanningImageLayersToIndexedDB } from '@/utils/planningImageStorage'
 import { installPlanningImagesResolver } from '@/utils/planningImageComponentResolver'
-import { bakeGroundSurfaceTexture } from '@/utils/groundBake'
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
@@ -4286,88 +4285,10 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-function removeGeneratedGroundBakeAsset(scene: StoredSceneDocument, assetId: string | null | undefined): void {
-  const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
-  if (!normalizedId) {
-    return
-  }
-  const indexEntry = scene.assetIndex?.[normalizedId]
-  if (!indexEntry || indexEntry.source?.type !== 'local' || indexEntry.internal !== true) {
-    return
-  }
-  delete scene.assetIndex[normalizedId]
-  delete scene.packageAssetMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${normalizedId}`]
-  extractAssetFromCatalog(scene.assetCatalog, normalizedId)
-}
-
-async function ensureGroundBakedTexturePrepared(scene: StoredSceneDocument): Promise<void> {
-  const groundNode = findGroundNode(scene.nodes)
-  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-    return
-  }
-  const definition = groundNode.dynamicMesh
-  const previousId = typeof definition.terrainPaintBakedTextureAssetId === 'string'
-    ? definition.terrainPaintBakedTextureAssetId.trim()
-    : ''
-  const baked = await bakeGroundSurfaceTexture(scene, { maxResolution: 2048 })
-  if (!baked) {
-    if (previousId) {
-      removeGeneratedGroundBakeAsset(scene, previousId)
-    }
-    definition.terrainPaintBakedTextureAssetId = null
-    return
-  }
-
-  const assetCache = useAssetCacheStore()
-  let entry = assetCache.getEntry(baked.assetId)
-  if (entry.status !== 'cached' || !entry.blob) {
-    const indexed = await assetCache.loadFromIndexedDb(baked.assetId)
-    if (indexed) {
-      entry = indexed
-    }
-  }
-  if (entry.status !== 'cached' || !entry.blob) {
-    await assetCache.storeAssetBlob(baked.assetId, {
-      blob: baked.blob,
-      mimeType: baked.mimeType,
-      filename: baked.filename,
-      downloadUrl: baked.assetId,
-    })
-  }
-  assetCache.touch(baked.assetId)
-
-  if (previousId && previousId !== baked.assetId) {
-    removeGeneratedGroundBakeAsset(scene, previousId)
-  }
-
-  const nextAsset: ProjectAsset = {
-    id: baked.assetId,
-    name: baked.filename,
-    extension: 'png',
-    categoryId: GENERATED_GROUND_BAKE_ASSET_CATEGORY_ID,
-    type: 'texture',
-    description: 'Generated baked ground surface texture',
-    downloadUrl: baked.assetId,
-    previewColor: '#6f8a5b',
-    thumbnail: null,
-    gleaned: false,
-  }
-
-  insertAssetIntoCatalog(scene.assetCatalog, GENERATED_GROUND_BAKE_ASSET_CATEGORY_ID, nextAsset)
-  scene.assetIndex[baked.assetId] = {
-    categoryId: GENERATED_GROUND_BAKE_ASSET_CATEGORY_ID,
-    source: { type: 'local' },
-    internal: true,
-  }
-  scene.packageAssetMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${baked.assetId}`] = baked.assetId
-  definition.terrainPaintBakedTextureAssetId = baked.assetId
-}
-
 export async function buildPackageAssetMapForExport(
   scene: StoredSceneDocument,
   _options?: { embedResources?: boolean },
 ): Promise<{ packageAssetMap: Record<string, string>; assetIndex: Record<string, AssetIndexEntry> }> {
-  await ensureGroundBakedTexturePrepared(scene)
   const usedAssetIds = collectSceneAssetReferences(scene)
   let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap)),usedAssetIds)
   const assetIndex = filterAssetIndexByUsage(scene.assetIndex, usedAssetIds)

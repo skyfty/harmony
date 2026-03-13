@@ -10,8 +10,6 @@ import { getLandformsPreviewTexture } from './landformsPreview'
 
 // Debug helpers removed: keep implementation minimal and focused on preview functionality.
 
-const DEBUG_TERRAIN_PAINT_PREVIEW = true
-
 const terrainPaintShaderStateByMaterial = new WeakMap<THREE.Material, TerrainPaintShaderState>()
 
 type TerrainPaintShaderState = {
@@ -681,17 +679,6 @@ export type TerrainPaintLoaders = {
 	loadTerrainPaintWeightmapDataFromAssetId: (assetId: string, resolution: number) => Promise<Uint8ClampedArray | null>
 }
 
-function debugTerrainPaintPreview(message: string, details?: unknown): void {
-	if (!DEBUG_TERRAIN_PAINT_PREVIEW) {
-		return
-	}
-	if (details === undefined) {
-		console.debug(`[terrainPaintPreview] ${message}`)
-		return
-	}
-	console.debug(`[terrainPaintPreview] ${message}`, details)
-}
-
 // Create default loaders using a provided `resolveAssetUrlFromCache` function.
 export function createDefaultTerrainPaintLoaders(
 	resolveAssetUrlFromCache: (assetId: string) => Promise<{ url: string | null } | null>,
@@ -757,24 +744,11 @@ export function syncTerrainPaintPreviewForGround(
 
 	const { visibleChunkMaterials, visibleMaterials } = collectVisibleChunkMaterials(groundObject)
 	if (!visibleMaterials.size) {
-		debugTerrainPaintPreview('No visible ground materials found for terrain paint preview')
 		return
 	}
 	const targets = Array.from(visibleMaterials)
 	const token = getToken()
 	const layers = Array.isArray(settings?.layers) ? settings.layers : []
-	debugTerrainPaintPreview('Sync start', {
-		token,
-		visibleChunkKeys: Array.from(visibleChunkMaterials.keys()),
-		visibleMaterialCount: targets.length,
-		weightmapResolution: settings?.weightmapResolution ?? null,
-		layers: layers.map((layer: any) => ({
-			id: typeof layer?.id === 'string' ? layer.id : null,
-			pageIndex: typeof layer?.pageIndex === 'number' ? layer.pageIndex : null,
-			channel: typeof layer?.channel === 'string' ? layer.channel : null,
-			textureAssetId: typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : null,
-		})),
-	})
 
 	const layerR = (function () {
 		const match = layers.find((layer: any) => layer?.channel === 'r')
@@ -806,7 +780,6 @@ export function syncTerrainPaintPreviewForGround(
 
 	for (const pair of layerPairs) {
 		if (!pair.assetId) {
-			debugTerrainPaintPreview('Clearing preview layer texture because no asset is configured', { channel: pair.channel })
 			targets.forEach((target) => {
 				updateTerrainPaintPreviewLayerTexture(target, pair.channel, null)
 			})
@@ -814,11 +787,6 @@ export function syncTerrainPaintPreviewForGround(
 		}
 		const cachedTexture = terrainPaintLayerTextureCache.get(pair.assetId)
 		if (cachedTexture !== undefined) {
-			debugTerrainPaintPreview('Applying cached preview layer texture', {
-				channel: pair.channel,
-				assetId: pair.assetId,
-				loaded: Boolean(cachedTexture),
-			})
 			targets.forEach((target) => {
 				updateTerrainPaintPreviewLayerTexture(target, pair.channel, cachedTexture)
 			})
@@ -826,17 +794,11 @@ export function syncTerrainPaintPreviewForGround(
 		}
 		let pending = terrainPaintLayerTextureRequests.get(pair.assetId)
 		if (!pending) {
-			debugTerrainPaintPreview('Requesting preview layer texture', { channel: pair.channel, assetId: pair.assetId })
 			pending = loaders.loadTerrainPaintTextureFromAssetId(pair.assetId, { colorSpace: 'srgb' })
 			terrainPaintLayerTextureRequests.set(pair.assetId, pending)
 		}
 		pending.then((texture) => {
 			terrainPaintLayerTextureCache.set(pair.assetId as string, texture)
-			debugTerrainPaintPreview('Preview layer texture resolved', {
-				channel: pair.channel,
-				assetId: pair.assetId,
-				loaded: Boolean(texture),
-			})
 			if (getToken() !== token) {
 				return
 			}
@@ -848,22 +810,14 @@ export function syncTerrainPaintPreviewForGround(
 
 	const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : null
 	if (!chunks) {
-		debugTerrainPaintPreview('No terrain paint chunks found in preview settings')
 		return
 	}
 
 	for (const [chunkKey, chunkTargets] of visibleChunkMaterials) {
 		const ref = (chunks as any)[chunkKey]
 		const logicalId = typeof ref?.pages?.[0]?.logicalId === 'string' ? ref.pages[0].logicalId.trim() : ''
-		debugTerrainPaintPreview('Inspecting visible chunk preview data', {
-			chunkKey,
-			pageCount: Array.isArray(ref?.pages) ? ref.pages.length : 0,
-			logicalId: logicalId || null,
-			targetCount: chunkTargets.length,
-		})
 		if (!logicalId.length) {
 			terrainPaintChunkRefKeys.delete(chunkKey)
-			debugTerrainPaintPreview('Clearing preview weightmap because chunk has no logical id', { chunkKey })
 			chunkTargets.forEach((target) => {
 				setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
 			})
@@ -880,11 +834,6 @@ export function syncTerrainPaintPreviewForGround(
 
 		const cachedData = terrainPaintChunkWeightmapDataCache.get(refKey)
 		if (cachedData !== undefined) {
-			debugTerrainPaintPreview('Applying cached preview weightmap data', {
-				chunkKey,
-				logicalId: refKey,
-				loaded: Boolean(cachedData),
-			})
 			if (cachedData) {
 				chunkTargets.forEach((target) => {
 					updateTerrainPaintPreviewWeightmap(target, chunkKey, cachedData, settings.weightmapResolution)
@@ -899,22 +848,11 @@ export function syncTerrainPaintPreviewForGround(
 
 		let pending = terrainPaintChunkWeightmapRequests.get(refKey)
 		if (!pending) {
-			debugTerrainPaintPreview('Requesting preview weightmap data', {
-				chunkKey,
-				logicalId,
-				resolution: settings.weightmapResolution,
-			})
 			pending = loaders.loadTerrainPaintWeightmapDataFromAssetId(logicalId, settings.weightmapResolution)
 			terrainPaintChunkWeightmapRequests.set(refKey, pending)
 		}
 		pending.then((data) => {
 			terrainPaintChunkWeightmapDataCache.set(refKey, data)
-			debugTerrainPaintPreview('Preview weightmap resolved', {
-				chunkKey,
-				logicalId: refKey,
-				loaded: Boolean(data),
-				byteLength: data?.byteLength ?? 0,
-			})
 			if (getToken() !== token) {
 				return
 			}
