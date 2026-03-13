@@ -14306,9 +14306,6 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } 
     if (!nodeId) {
       continue
     }
-    if (sceneStore.isNodeSelectionLocked(nodeId)) {
-      continue
-    }
 
     const baseObject = objectMap.get(nodeId) ?? null
     if (!baseObject) {
