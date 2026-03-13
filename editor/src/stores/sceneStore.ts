@@ -12688,11 +12688,17 @@ export const useSceneStore = defineStore('scene', {
 
       const runtime = getRuntimeObject(nodeId)
       if (runtime) {
-        updateWallGroup(runtime, build.definition, {
-          smoothing: resolveWallSmoothing(node),
-          wallRenderMode: resolveWallRenderMode(node),
-          repeatInstanceStep: resolveWallRepeatInstanceStep(node),
-        } as any)
+        runtime.traverse((child) => {
+          const group = child as THREE.Group
+          if (!(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')) {
+            return
+          }
+          updateWallGroup(group, build.definition, {
+            smoothing: resolveWallSmoothing(node),
+            wallRenderMode: resolveWallRenderMode(node),
+            repeatInstanceStep: resolveWallRepeatInstanceStep(node),
+          } as any)
+        })
       }
       return true
     },

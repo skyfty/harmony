@@ -1601,25 +1601,49 @@ export function createWallRenderer(options: WallRendererOptions) {
   function removeWallGroup(container: THREE.Object3D): void {
     const userData = container.userData ?? (container.userData = {})
 
-    // Be defensive: remove any procedural wall groups that might have been left behind.
-    // (e.g. after switching to instanced wall models)
-    const candidates = container.children.filter((child) => {
+    // Be defensive: remove any procedural wall nodes that might have been left behind.
+    // This includes legacy direct WallMesh children created by older update paths.
+    const candidateGroups = container.children.filter((child) => {
       const group = child as THREE.Group
       return Boolean(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')
     }) as THREE.Group[]
 
+    const candidateMeshes = container.children.filter((child) => {
+      const mesh = child as THREE.Mesh
+      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
+        return false
+      }
+      const userData = (mesh.userData ?? {}) as Record<string, unknown>
+      const name = typeof mesh.name === 'string' ? mesh.name : ''
+      return userData.dynamicMeshType === 'Wall' && name.startsWith('WallMesh')
+    }) as THREE.Mesh[]
+
     const wallGroup = userData.wallGroup as THREE.Group | undefined
-    if (wallGroup && !candidates.includes(wallGroup)) {
-      candidates.push(wallGroup)
+    if (wallGroup && !candidateGroups.includes(wallGroup)) {
+      candidateGroups.push(wallGroup)
     }
 
-    if (!candidates.length) {
+    if (!candidateGroups.length && !candidateMeshes.length) {
       return
     }
 
-    for (const group of candidates) {
+    for (const group of candidateGroups) {
       disposeWallGroupResources(group)
       group.removeFromParent()
+    }
+
+    for (const mesh of candidateMeshes) {
+      const geometry = (mesh as unknown as { geometry?: THREE.BufferGeometry | null }).geometry
+      if (geometry) {
+        geometry.dispose()
+      }
+      const material = (mesh as unknown as { material?: THREE.Material | THREE.Material[] | null }).material
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry?.dispose())
+      } else if (material) {
+        material.dispose()
+      }
+      mesh.removeFromParent()
     }
 
     delete userData.wallGroup
