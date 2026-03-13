@@ -7,13 +7,19 @@ import {
   clampWallProps,
   resolveWallBodyMaterialConfigIdForRender,
 } from '../../components/definitions/wallComponent';
-import { createWallRenderGroup, WALL_ASSET_REPEAT_VARIANT_INFO_KEY } from '../../wallMesh';
+import { createWallGroup, WALL_ASSET_REPEAT_VARIANT_INFO_KEY } from '../../wallMesh';
 import {
   createAutoTiledMaterialVariant,
   createWallRepeatScaleMaterialVariant,
   MATERIAL_CONFIG_ID_KEY,
   MATERIAL_TEXTURE_REPEAT_INFO_KEY,
 } from '../../material';
+import { getCachedModelObject, getOrLoadModelObject, type ModelInstanceGroup } from '../../modelObjectCache';
+import {
+  applyWallInstancedBindings,
+  buildWallInstancedRenderPlan,
+  setWallInstancedBindingsOnObject,
+} from '../../wallInstancing';
 import { buildMaterialConfigMap } from '../materialAssignment';
 
 function applyWallMaterialConfigAssignment(
@@ -87,13 +93,35 @@ export async function buildWallMesh(
     | undefined;
   const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
 
-  const [bodyObject, headObject, footObject, bodyEndCapObject, headEndCapObject, footEndCapObject] = await Promise.all([
-    wallProps.bodyAssetId ? deps.loadAssetMesh(wallProps.bodyAssetId) : Promise.resolve(null),
-    wallProps.headAssetId ? deps.loadAssetMesh(wallProps.headAssetId) : Promise.resolve(null),
-    wallProps.footAssetId ? deps.loadAssetMesh(wallProps.footAssetId) : Promise.resolve(null),
-    wallProps.bodyEndCapAssetId ? deps.loadAssetMesh(wallProps.bodyEndCapAssetId) : Promise.resolve(null),
-    wallProps.headEndCapAssetId ? deps.loadAssetMesh(wallProps.headEndCapAssetId) : Promise.resolve(null),
-    wallProps.footEndCapAssetId ? deps.loadAssetMesh(wallProps.footEndCapAssetId) : Promise.resolve(null),
+  const ensureModelGroup = async (assetId: string | null | undefined): Promise<ModelInstanceGroup | null> => {
+    const normalized = typeof assetId === 'string' ? assetId.trim() : '';
+    if (!normalized) {
+      return null;
+    }
+    const cached = getCachedModelObject(normalized);
+    if (cached) {
+      return cached;
+    }
+    try {
+      return await getOrLoadModelObject(normalized, async () => {
+        const object = await deps.loadAssetMesh(normalized);
+        if (!object) {
+          throw new Error(`Failed to load wall asset ${normalized}`);
+        }
+        return object;
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const [bodyGroup, headGroup, footGroup, bodyEndCapGroup, headEndCapGroup, footEndCapGroup] = await Promise.all([
+    ensureModelGroup(wallProps.bodyAssetId),
+    ensureModelGroup(wallProps.headAssetId),
+    ensureModelGroup(wallProps.footAssetId),
+    ensureModelGroup(wallProps.bodyEndCapAssetId),
+    ensureModelGroup(wallProps.headEndCapAssetId),
+    ensureModelGroup(wallProps.footEndCapAssetId),
   ]);
 
   const cornerModels = Array.isArray(wallProps.cornerModels) ? wallProps.cornerModels : []
@@ -120,97 +148,119 @@ export async function buildWallMesh(
     ),
   )
 
-  const bodyCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
-  const headCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
-  const footCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
+  const bodyCornerGroups: Array<readonly [string, ModelInstanceGroup | null]> = await Promise.all(
+    uniqueBodyCornerAssetIds.map(async (assetId: string) => [assetId, await ensureModelGroup(assetId)] as const),
+  );
+  const headCornerGroups: Array<readonly [string, ModelInstanceGroup | null]> = await Promise.all(
+    uniqueHeadCornerAssetIds.map(async (assetId: string) => [assetId, await ensureModelGroup(assetId)] as const),
+  );
+  const footCornerGroups: Array<readonly [string, ModelInstanceGroup | null]> = await Promise.all(
+    uniqueFootCornerAssetIds.map(async (assetId: string) => [assetId, await ensureModelGroup(assetId)] as const),
+  );
 
-  const bodyCornerObjectsEntries = await Promise.all(
-    uniqueBodyCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
-  )
-  for (const [assetId, object] of bodyCornerObjectsEntries) {
-    bodyCornerObjectsByAssetId[assetId] = object
-  }
+  const configuredInstancedAssetIds = [
+    wallProps.bodyAssetId,
+    wallProps.headAssetId,
+    wallProps.footAssetId,
+    wallProps.bodyEndCapAssetId,
+    wallProps.headEndCapAssetId,
+    wallProps.footEndCapAssetId,
+    ...uniqueBodyCornerAssetIds,
+    ...uniqueHeadCornerAssetIds,
+    ...uniqueFootCornerAssetIds,
+  ]
+    .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+    .filter((assetId) => assetId.length > 0);
 
-  const headCornerObjectsEntries = await Promise.all(
-    uniqueHeadCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
-  )
-  for (const [assetId, object] of headCornerObjectsEntries) {
-    headCornerObjectsByAssetId[assetId] = object
-  }
+  const loadedAssetIds = new Set<string>();
+  [bodyGroup, headGroup, footGroup, bodyEndCapGroup, headEndCapGroup, footEndCapGroup].forEach((group) => {
+    if (group?.assetId) {
+      loadedAssetIds.add(group.assetId);
+    }
+  });
+  [bodyCornerGroups, headCornerGroups, footCornerGroups].forEach((entries) => {
+    entries.forEach(([assetId, group]) => {
+      if (group?.assetId) {
+        loadedAssetIds.add(assetId);
+      }
+    });
+  });
 
-  const footCornerObjectsEntries = await Promise.all(
-    uniqueFootCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
-  )
-  for (const [assetId, object] of footCornerObjectsEntries) {
-    footCornerObjectsByAssetId[assetId] = object
-  }
-
-  const group = createWallRenderGroup(
-    meshInfo,
-    {
-      bodyObject,
-      headObject,
-      footObject,
-      bodyEndCapObject,
-      headEndCapObject,
-      footEndCapObject,
-      bodyCornerObjectsByAssetId,
-      headCornerObjectsByAssetId,
-      footCornerObjectsByAssetId,
-    },
-    {
+  const bodyMaterialConfigId = resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps);
+  const buildProceduralWallGroup = async (): Promise<THREE.Group> => {
+    const group = createWallGroup(meshInfo, {
       smoothing: wallProps.smoothing,
       wallRenderMode: wallProps.wallRenderMode,
       repeatInstanceStep: wallProps.repeatInstanceStep,
-      bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps),
-      cornerModels,
-      bodyUvAxis: wallProps.bodyUvAxis,
-      headUvAxis: wallProps.headUvAxis,
-      footUvAxis: wallProps.footUvAxis,
-      bodyOrientation: wallProps.bodyOrientation,
-      headOrientation: wallProps.headOrientation,
-      footOrientation: wallProps.footOrientation,
-      bodyEndCapOffsetLocal: wallProps.bodyEndCapOffsetLocal,
-      bodyEndCapOrientation: wallProps.bodyEndCapOrientation,
-      headEndCapOffsetLocal: wallProps.headEndCapOffsetLocal,
-      headEndCapOrientation: wallProps.headEndCapOrientation,
-      footEndCapOffsetLocal: wallProps.footEndCapOffsetLocal,
-      footEndCapOrientation: wallProps.footEndCapOrientation,
-    },
-  );
-  group.name = node.name ?? (group.name || 'Wall');
+      bodyMaterialConfigId,
+    });
+    group.name = node.name ?? (group.name || 'Wall');
+    const nodeMaterialConfigs = Array.isArray(node.materials) ? node.materials : [];
+    const resolvedMaterials = await deps.resolveNodeMaterials(node);
+    if (resolvedMaterials.length) {
+      const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
+      applyWallMaterialConfigAssignment(group, materialByConfigId);
+    }
+    deps.applyTransform(group, node);
+    deps.applyVisibility(group, node);
+    if (wallProps.isAirWall) {
+      group.visible = false;
+    }
+    group.userData = { ...(group.userData ?? {}), isAirWall: Boolean(wallProps.isAirWall), hidden: Boolean(wallProps.isAirWall) };
+    return group;
+  };
 
-  const nodeMaterialConfigs = Array.isArray(node.materials) ? node.materials : [];
-  const resolvedMaterials = await deps.resolveNodeMaterials(node);
-  if (resolvedMaterials.length) {
-    const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
-    applyWallMaterialConfigAssignment(group, materialByConfigId);
+  const hasMissingConfiguredAsset = configuredInstancedAssetIds.some((assetId) => !loadedAssetIds.has(assetId));
+  if (wallProps.isAirWall || hasMissingConfiguredAsset) {
+    return buildProceduralWallGroup();
   }
 
-  // When a body asset is configured, the wall should be rendered only via the specified model asset.
-  // Keep the procedural mesh in the hierarchy for downstream systems, but hide it from rendering.
-  if (wallProps.bodyAssetId) {
-    group.traverse((child: THREE.Object3D) => {
-      const mesh = child as THREE.Mesh;
-      if (!(mesh as any)?.isMesh) {
-        return;
-      }
-      const tag = (mesh.userData as any)?.dynamicMeshType;
-      if (tag === 'Wall') {
-        mesh.visible = false;
+  const assetBoundsById = new Map<string, THREE.Box3>();
+  [bodyGroup, headGroup, footGroup, bodyEndCapGroup, headEndCapGroup, footEndCapGroup].forEach((group) => {
+    if (group?.assetId) {
+      assetBoundsById.set(group.assetId, group.boundingBox.clone());
+    }
+  });
+  [bodyCornerGroups, headCornerGroups, footCornerGroups].forEach((entries) => {
+    entries.forEach(([assetId, group]) => {
+      if (group?.boundingBox) {
+        assetBoundsById.set(assetId, group.boundingBox.clone());
       }
     });
+  });
+
+  const plan = buildWallInstancedRenderPlan({
+    nodeId: node.id,
+    definition: meshInfo,
+    wallProps,
+    getAssetBounds: (assetId: string) => assetBoundsById.get(assetId)?.clone() ?? null,
+  });
+
+  if (!plan.hasBindings) {
+    return buildProceduralWallGroup();
   }
 
-  deps.applyTransform(group, node);
-  deps.applyVisibility(group, node);
+  const container = new THREE.Group();
+  container.name = node.name ?? 'Wall';
+  container.userData = { ...(container.userData ?? {}), dynamicMeshType: 'Wall', isAirWall: false, hidden: false };
 
-  // Air wall: keep mesh hierarchy (for rigidbody generation), but hide it from rendering.
-  if (wallProps.isAirWall) {
-    group.visible = false;
+  if (plan.hasProceduralBodyFallback) {
+    const proceduralGroup = await buildProceduralWallGroup();
+    container.add(proceduralGroup);
   }
 
-  // Tag for downstream systems (physics/debug tooling) if needed.
-  group.userData = { ...(group.userData ?? {}), isAirWall: Boolean(wallProps.isAirWall), hidden: Boolean(wallProps.isAirWall) };
-  return group;
+  setWallInstancedBindingsOnObject(container, plan);
+  deps.applyTransform(container, node);
+  deps.applyVisibility(container, node);
+
+  const applied = applyWallInstancedBindings({
+    nodeId: node.id,
+    object: container,
+    bindings: plan.bindings,
+  });
+  if (!applied) {
+    return buildProceduralWallGroup();
+  }
+
+  return container;
 }

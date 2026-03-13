@@ -29,6 +29,11 @@ import {
   type WallComponentProps,
 } from '@schema/components'
 import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
+import {
+  applyWallInstancedBindings,
+  buildWallInstancedRenderPlan,
+  syncWallDragBindingMatrices,
+} from '@schema/wallInstancing'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
@@ -468,182 +473,32 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (!wantsInstancing) {
       return null
     }
+    const plan = wallProps
+      ? buildWallInstancedRenderPlan({
+          nodeId,
+          definition,
+          wallProps,
+          getAssetBounds: (assetId: string) => getCachedModelObject(assetId)?.boundingBox ?? null,
+        })
+      : null
+
     const bindings: WallDragBindingEntry[] = []
-
-    if (bodyAssetId) {
-      const group = getCachedModelObject(bodyAssetId)
-      if (group) {
-        const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.wallRenderMode, wallProps.bodyOrientation, wallProps.repeatInstanceStep, cornerModels)
-          : []
-        const buckets = bucketWallPlacementsByRepeatScale(placements)
-        for (let i = 0; i < buckets.length; i += 1) {
-          const bucket = buckets[i]!
-          const variantAssetId = buildWallRepeatVariantAssetId(bodyAssetId, 'body', bucket.repeatScaleU)
-          const variant = getOrCreateModelObjectRepeatVariant(bodyAssetId, variantAssetId, bucket.repeatScaleU)
-          if (!variant) {
-            continue
-          }
-          const localMatrices = bucket.placements.map((entry) => entry.matrix)
-          if (!localMatrices.length) {
-            continue
-          }
-          bindings.push({
-            assetId: variantAssetId,
-            localMatrices,
-            bindingIdPrefix: `wall-body:${nodeId}:${i}:`,
-            useNodeIdForIndex0: i === 0,
-          })
-        }
-      }
-    }
-
-    if (headAssetId) {
-      const group = getCachedModelObject(headAssetId)
-      if (group) {
-        const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.wallRenderMode, wallProps.headOrientation, wallProps.repeatInstanceStep, cornerModels)
-          : []
-        const buckets = bucketWallPlacementsByRepeatScale(placements)
-        for (let i = 0; i < buckets.length; i += 1) {
-          const bucket = buckets[i]!
-          const variantAssetId = buildWallRepeatVariantAssetId(headAssetId, 'head', bucket.repeatScaleU)
-          const variant = getOrCreateModelObjectRepeatVariant(headAssetId, variantAssetId, bucket.repeatScaleU)
-          if (!variant) {
-            continue
-          }
-          const localMatrices = bucket.placements.map((entry) => entry.matrix)
-          if (!localMatrices.length) {
-            continue
-          }
-          bindings.push({
-            assetId: variantAssetId,
-            localMatrices,
-            bindingIdPrefix: `wall-head:${nodeId}:${i}:`,
-            useNodeIdForIndex0: false,
-          })
-        }
-      }
-    }
-
-    if (footAssetId) {
-      const group = getCachedModelObject(footAssetId)
-      if (group) {
-        const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.wallRenderMode, wallProps.footOrientation, wallProps.repeatInstanceStep, cornerModels)
-          : []
-        const buckets = bucketWallPlacementsByRepeatScale(placements)
-        for (let i = 0; i < buckets.length; i += 1) {
-          const bucket = buckets[i]!
-          const variantAssetId = buildWallRepeatVariantAssetId(footAssetId, 'foot', bucket.repeatScaleU)
-          const variant = getOrCreateModelObjectRepeatVariant(footAssetId, variantAssetId, bucket.repeatScaleU)
-          if (!variant) {
-            continue
-          }
-          const localMatrices = bucket.placements.map((entry) => entry.matrix)
-          if (!localMatrices.length) {
-            continue
-          }
-          bindings.push({
-            assetId: variantAssetId,
-            localMatrices,
-            bindingIdPrefix: `wall-foot:${nodeId}:${i}:`,
-            useNodeIdForIndex0: false,
-          })
-        }
-      }
-    }
-
-    const getBoundsFromCache = (assetId: string): THREE.Box3 | null => {
-      const group = getCachedModelObject(assetId)
-      return group?.boundingBox ?? null
-    }
-
-    const bodyJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
-      cornerModels,
-      mode: 'body',
-      getAssetBounds: getBoundsFromCache,
-    })
-    const headJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
-      cornerModels,
-      mode: 'head',
-      getAssetBounds: getBoundsFromCache,
-    })
-    const footJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
-      cornerModels,
-      mode: 'foot',
-      getAssetBounds: getBoundsFromCache,
-    })
-    const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId ?? footJointBuckets.primaryAssetId
-
-    for (const jointBuckets of [bodyJointBuckets, headJointBuckets, footJointBuckets] as const) {
-      if (!jointBuckets.matricesByAssetId.size) {
-        continue
-      }
-      const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
-      for (const assetId of sortedAssetIds) {
-        const localMatrices = jointBuckets.matricesByAssetId.get(assetId) ?? []
-        if (!localMatrices.length) {
+    for (const binding of plan?.bindings ?? []) {
+      if (binding.sourceAssetId && binding.repeatScaleU && binding.sourceAssetId !== binding.assetId) {
+        const variant = getOrCreateModelObjectRepeatVariant(binding.sourceAssetId, binding.assetId, binding.repeatScaleU)
+        if (!variant) {
           continue
         }
-        bindings.push({
-          assetId,
-          localMatrices,
-          bindingIdPrefix: `wall-joint-${jointBuckets.mode}:${nodeId}:${assetId}:`,
-          useNodeIdForIndex0: !bodyAssetId && assetId === primaryCornerAssetId,
-        })
       }
-    }
-
-    if (bodyEndCapAssetId) {
-      const group = getCachedModelObject(bodyEndCapAssetId)
-      if (group) {
-        const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation, wallProps.bodyEndCapOffsetLocal)
-          : []
-        if (localMatrices.length > 0) {
-          bindings.push({
-            assetId: bodyEndCapAssetId,
-            localMatrices,
-            bindingIdPrefix: `wall-cap-body:${nodeId}:`,
-            useNodeIdForIndex0: !bodyAssetId && !primaryCornerAssetId,
-          })
-        }
+      if (!binding.localMatrices.length) {
+        continue
       }
-    }
-
-    if (headEndCapAssetId) {
-      const group = getCachedModelObject(headEndCapAssetId)
-      if (group) {
-        const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation, wallProps.headEndCapOffsetLocal)
-          : []
-        if (localMatrices.length > 0) {
-          bindings.push({
-            assetId: headEndCapAssetId,
-            localMatrices,
-            bindingIdPrefix: `wall-cap-head:${nodeId}:`,
-            useNodeIdForIndex0: false,
-          })
-        }
-      }
-    }
-
-    if (footEndCapAssetId) {
-      const group = getCachedModelObject(footEndCapAssetId)
-      if (group) {
-        const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation, wallProps.footEndCapOffsetLocal)
-          : []
-        if (localMatrices.length > 0) {
-          bindings.push({
-            assetId: footEndCapAssetId,
-            localMatrices,
-            bindingIdPrefix: `wall-cap-foot:${nodeId}:`,
-            useNodeIdForIndex0: false,
-          })
-        }
-      }
+      bindings.push({
+        assetId: binding.assetId,
+        localMatrices: binding.localMatrices,
+        bindingIdPrefix: binding.bindingIdPrefix,
+        useNodeIdForIndex0: binding.useNodeIdForIndex0,
+      })
     }
 
     if (!bindings.length) {
@@ -694,30 +549,11 @@ export function createWallRenderer(options: WallRendererOptions) {
       return false
     }
 
-    for (const binding of cache.bindings) {
-      ensureInstancedMeshesRegistered(binding.assetId)
-      const count = binding.localMatrices.length
-      for (let i = 0; i < count; i += 1) {
-        const local = binding.localMatrices[i]
-        if (!local) {
-          continue
-        }
-
-        if (binding.useNodeIdForIndex0 && i === 0) {
-          allocateModelInstance(binding.assetId, nodeId)
-          wallDragInstanceHelper.multiplyMatrices(baseMatrix, local)
-          updateModelInstanceMatrix(nodeId, wallDragInstanceHelper)
-          continue
-        }
-
-        const bindingId = `${binding.bindingIdPrefix}${i}`
-        allocateModelInstanceBinding(binding.assetId, bindingId, nodeId)
-        wallDragInstanceHelper.multiplyMatrices(baseMatrix, local)
-        updateModelInstanceBindingMatrix(bindingId, wallDragInstanceHelper)
-      }
-    }
-
-    return true
+    return syncWallDragBindingMatrices({
+      nodeId,
+      baseMatrix,
+      bindings: cache.bindings,
+    })
   }
 
   function scheduleWallResync(nodeId: string): void {
@@ -2023,258 +1859,15 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     // Rebuild committed wall instances from scratch so bucket/variant changes never leave stale bindings.
     releaseModelInstancesForNode(node.id)
-
-    // 计算实例化整体 bounds（用于编辑器拾取/框选等）。
-    // 这里会将每个实例的局部包围盒（模型 boundingBox）通过 localMatrix 变换后并入大 bbox。
-    wallInstancedBoundsBox.makeEmpty()
-    let hasWallBounds = false
-
-    // hasBindings：只要至少生成了一组实例化绑定（body/head/corner/caps 任意一种），
-    // 就认为实例化渲染“有效”。如果没有任何绑定，说明实例化并不适用（例如：
-    // 只有 cornerModels 但墙段不足/规则未命中等），需要回退显示程序墙体。
-    let hasBindings = false
-
-    if (bodyAssetId) {
-      const group = getCachedModelObject(bodyAssetId)
-      if (group) {
-        // body：沿每段墙铺 tile，并按 repeat 比例分桶到派生资产。
-        const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallRenderMode, wallProps.bodyOrientation, wallProps.repeatInstanceStep, cornerModels)
-          : []
-        const buckets = bucketWallPlacementsByRepeatScale(placements)
-        for (let i = 0; i < buckets.length; i += 1) {
-          const bucket = buckets[i]!
-          const variantAssetId = buildWallRepeatVariantAssetId(bodyAssetId, 'body', bucket.repeatScaleU)
-          const variant = getOrCreateModelObjectRepeatVariant(bodyAssetId, variantAssetId, bucket.repeatScaleU)
-          if (!variant) {
-            continue
-          }
-          const localMatrices = bucket.placements.map((entry) => entry.matrix)
-          if (!localMatrices.length) {
-            continue
-          }
-          for (const localMatrix of localMatrices) {
-            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-            hasWallBounds = true
-          }
-          syncInstancedModelCommittedLocalMatrices({
-            nodeId: node.id,
-            assetId: variantAssetId,
-            object: container,
-            localMatrices,
-            bindingIdPrefix: `wall-body:${node.id}:${i}:`,
-            useNodeIdForIndex0: i === 0,
-          })
-          hasBindings = true
-        }
-      }
-    }
-
-    if (headAssetId) {
-      const group = getCachedModelObject(headAssetId)
-      if (group) {
-        // head：沿墙段铺设，并按 repeat 比例分桶到派生资产。
-        const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallRenderMode, wallProps.headOrientation, wallProps.repeatInstanceStep, cornerModels)
-          : []
-        const buckets = bucketWallPlacementsByRepeatScale(placements)
-        for (let i = 0; i < buckets.length; i += 1) {
-          const bucket = buckets[i]!
-          const variantAssetId = buildWallRepeatVariantAssetId(headAssetId, 'head', bucket.repeatScaleU)
-          const variant = getOrCreateModelObjectRepeatVariant(headAssetId, variantAssetId, bucket.repeatScaleU)
-          if (!variant) {
-            continue
-          }
-          const localMatrices = bucket.placements.map((entry) => entry.matrix)
-          if (!localMatrices.length) {
-            continue
-          }
-          for (const localMatrix of localMatrices) {
-            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-            hasWallBounds = true
-          }
-          syncInstancedModelCommittedLocalMatrices({
-            nodeId: node.id,
-            assetId: variantAssetId,
-            object: container,
-            localMatrices,
-            bindingIdPrefix: `wall-head:${node.id}:${i}:`,
-            useNodeIdForIndex0: false,
-          })
-          hasBindings = true
-        }
-      }
-    }
-
-    if (footAssetId) {
-      const group = getCachedModelObject(footAssetId)
-      if (group) {
-        const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallRenderMode, wallProps.footOrientation, wallProps.repeatInstanceStep, cornerModels)
-          : []
-        const buckets = bucketWallPlacementsByRepeatScale(placements)
-        for (let i = 0; i < buckets.length; i += 1) {
-          const bucket = buckets[i]!
-          const variantAssetId = buildWallRepeatVariantAssetId(footAssetId, 'foot', bucket.repeatScaleU)
-          const variant = getOrCreateModelObjectRepeatVariant(footAssetId, variantAssetId, bucket.repeatScaleU)
-          if (!variant) {
-            continue
-          }
-          const localMatrices = bucket.placements.map((entry) => entry.matrix)
-          if (!localMatrices.length) {
-            continue
-          }
-          for (const localMatrix of localMatrices) {
-            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-            hasWallBounds = true
-          }
-          syncInstancedModelCommittedLocalMatrices({
-            nodeId: node.id,
-            assetId: variantAssetId,
-            object: container,
-            localMatrices,
-            bindingIdPrefix: `wall-foot:${node.id}:${i}:`,
-            useNodeIdForIndex0: false,
-          })
-          hasBindings = true
-        }
-      }
-    }
-
-    {
-      // corner joints（拐角件）与端盖：
-      // - 按 assetId 分桶生成 localMatrices（同一种拐角模型可能出现多次）。
-      // - primaryCornerAssetId 主要用于“没有 bodyAssetId 时，选哪一个实例使用 nodeId 作为 index0”。
-      const getBoundsFromCache = (assetId: string): THREE.Box3 | null => {
-        const group = getCachedModelObject(assetId)
-        return group?.boundingBox ?? null
-      }
-
-      const bodyJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
-        cornerModels,
-        mode: 'body',
-        getAssetBounds: getBoundsFromCache,
-      })
-      const headJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
-        cornerModels,
-        mode: 'head',
-        getAssetBounds: getBoundsFromCache,
-      })
-      const footJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
-        cornerModels,
-        mode: 'foot',
-        getAssetBounds: getBoundsFromCache,
-      })
-      const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId ?? footJointBuckets.primaryAssetId
-
-      for (const jointBuckets of [bodyJointBuckets, headJointBuckets, footJointBuckets] as const) {
-        if (!jointBuckets.matricesByAssetId.size) {
-          continue
-        }
-        const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
-        for (const assetId of sortedAssetIds) {
-          const localMatrices = jointBuckets.matricesByAssetId.get(assetId) ?? []
-          if (!localMatrices.length) {
-            continue
-          }
-
-          const group = getCachedModelObject(assetId)
-          if (group) {
-            for (const localMatrix of localMatrices) {
-              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-              hasWallBounds = true
-            }
-          }
-
-          const useNodeIdForIndex0 = !bodyAssetId && assetId === primaryCornerAssetId
-          // 对每一种拐角模型分别提交实例化矩阵。
-          syncInstancedModelCommittedLocalMatrices({
-            nodeId: node.id,
-            assetId,
-            object: container,
-            localMatrices,
-            bindingIdPrefix: `wall-joint-${jointBuckets.mode}:${node.id}:${assetId}:`,
-            useNodeIdForIndex0,
-          })
-          hasBindings = true
-        }
-      }
-
-      if (bodyEndCapAssetId) {
-        // body 端盖：仅在非闭合路径时才会生成矩阵（computeWallEndCapLocalMatrices 内部判断）。
-        const useNodeIdForIndex0 = !bodyAssetId && !primaryCornerAssetId
-        const group = getCachedModelObject(bodyEndCapAssetId)
-        if (group) {
-          const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation, wallProps.bodyEndCapOffsetLocal)
-            : []
-          if (localMatrices.length > 0) {
-            for (const localMatrix of localMatrices) {
-              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-              hasWallBounds = true
-            }
-            syncInstancedModelCommittedLocalMatrices({
-              nodeId: node.id,
-              assetId: bodyEndCapAssetId,
-              object: container,
-              localMatrices,
-              bindingIdPrefix: `wall-cap-body:${node.id}:`,
-              useNodeIdForIndex0,
-            })
-            hasBindings = hasBindings || localMatrices.length > 0
-          }
-        }
-      }
-
-      if (headEndCapAssetId) {
-        // head 端盖：同上。
-        const group = getCachedModelObject(headEndCapAssetId)
-        if (group) {
-          const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation, wallProps.headEndCapOffsetLocal)
-            : []
-          if (localMatrices.length > 0) {
-            for (const localMatrix of localMatrices) {
-              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-              hasWallBounds = true
-            }
-            syncInstancedModelCommittedLocalMatrices({
-              nodeId: node.id,
-              assetId: headEndCapAssetId,
-              object: container,
-              localMatrices,
-              bindingIdPrefix: `wall-cap-head:${node.id}:`,
-              useNodeIdForIndex0: false,
-            })
-            hasBindings = hasBindings || localMatrices.length > 0
-          }
-        }
-      }
-
-      if (footEndCapAssetId) {
-        const group = getCachedModelObject(footEndCapAssetId)
-        if (group) {
-          const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation, wallProps.footEndCapOffsetLocal)
-            : []
-          if (localMatrices.length > 0) {
-            for (const localMatrix of localMatrices) {
-              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-              hasWallBounds = true
-            }
-            syncInstancedModelCommittedLocalMatrices({
-              nodeId: node.id,
-              assetId: footEndCapAssetId,
-              object: container,
-              localMatrices,
-              bindingIdPrefix: `wall-cap-foot:${node.id}:`,
-              useNodeIdForIndex0: false,
-            })
-            hasBindings = hasBindings || localMatrices.length > 0
-          }
-        }
-      }
-    }
+    const plan = wallProps
+      ? buildWallInstancedRenderPlan({
+          nodeId: node.id,
+          definition,
+          wallProps,
+          getAssetBounds: (assetId: string) => getCachedModelObject(assetId)?.boundingBox ?? null,
+        })
+      : null
+    const hasBindings = Boolean(plan?.hasBindings)
 
     // ============================
     // 5) 没有任何绑定：实例化不适用 → 回退程序墙体
@@ -2282,7 +1875,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     // 例如：
     // - 只有 cornerModels 但规则未命中/段数不足
     // - 动态网格退化（段长度≈0 导致矩阵为空）
-    if (!hasBindings) {
+    if (!hasBindings || !plan) {
       // No instanced geometry applicable (e.g. single segment w/ only corner models): keep procedural wall visible.
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
@@ -2310,6 +1903,37 @@ export function createWallRenderer(options: WallRendererOptions) {
     // ============================
     // 6) 实例化生效：有 body 资产时移除程序墙体；否则保留程序 body 作为回退显示。
     // ============================
+    const applied = applyWallInstancedBindings({
+      nodeId: node.id,
+      object: container,
+      bindings: plan.bindings,
+    })
+    if (!applied) {
+      releaseModelInstancesForNode(node.id)
+      delete userData.instancedAssetId
+      delete userData.instancedBounds
+      options.removeInstancedPickProxy(container)
+
+      const wallRenderOptions: WallRenderOptions = {
+        smoothing,
+        wallRenderMode,
+        repeatInstanceStep: wallProps?.repeatInstanceStep,
+        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      }
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
+      wallGroup.visible = true
+      updateWallGroupIfNeeded(wallGroup, effectiveDefinition, signatureKey, wallRenderOptions)
+      applyAirWallVisualToWallGroup(wallGroup, false)
+      return
+    }
+
+    userData.instancedAssetId = plan.primaryAssetId
+    if (plan.instancedBounds) {
+      userData.instancedBounds = plan.instancedBounds
+    } else {
+      delete userData.instancedBounds
+    }
+
     if (hasProceduralBodyFallback) {
       const wallRenderOptions: WallRenderOptions = {
         smoothing,
@@ -2329,16 +1953,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     } else {
       // 注意：这里移除的是“程序生成的 wallGroup”，不是模型资源实例。
       removeWallGroup(container)
-    }
-
-    // 将 bounds 写入 userData，供外部（拾取、框选、Gizmo 等）快速读取。
-    if (hasWallBounds && !wallInstancedBoundsBox.isEmpty()) {
-      userData.instancedBounds = {
-        min: [wallInstancedBoundsBox.min.x, wallInstancedBoundsBox.min.y, wallInstancedBoundsBox.min.z],
-        max: [wallInstancedBoundsBox.max.x, wallInstancedBoundsBox.max.y, wallInstancedBoundsBox.max.z],
-      }
-    } else {
-      delete userData.instancedBounds
     }
 
     if (hasBindings) {

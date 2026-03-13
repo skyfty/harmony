@@ -523,6 +523,7 @@ import {
 } from '@harmony/schema/modelObjectCache';
 import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker';
 import { syncContinuousInstancedModelCommitted } from '@harmony/schema/continuousInstancedModel';
+import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@harmony/schema/wallInstancing';
 import {
   DEFAULT_ENVIRONMENT_SETTINGS,
   DEFAULT_ENVIRONMENT_GRAVITY,
@@ -5901,6 +5902,16 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
     if (!target.userData?.instancedAssetId) {
       return;
     }
+
+    if (hasWallInstancedBindings(target)) {
+      const nodeId = target.userData?.nodeId as string | undefined;
+      if (nodeId) {
+        removeVehicleInstance(nodeId);
+      }
+      syncWallInstancedBindingsForObject(target);
+      return;
+    }
+
     const nodeId = target.userData?.nodeId as string | undefined;
     if (!nodeId) {
       return;

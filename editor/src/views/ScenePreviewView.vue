@@ -127,6 +127,7 @@ import {
 } from '@schema/modelObjectCache'
 import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
+import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
@@ -8112,6 +8113,11 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		return
 	}
 	targets.forEach((target) => {
+		if (hasWallInstancedBindings(target)) {
+			removeVehicleInstance(target.userData?.nodeId as string | undefined)
+			syncWallInstancedBindingsForObject(target)
+			return
+		}
 		const nodeId = target.userData?.nodeId as string | undefined
 		if (!nodeId) {
 			return
