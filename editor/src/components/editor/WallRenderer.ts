@@ -32,6 +32,8 @@ import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInst
 import {
   applyWallInstancedBindings,
   buildWallInstancedRenderPlan,
+  clearWallInstancedBindingsOnObject,
+  setWallInstancedBindingsOnObject,
   syncWallDragBindingMatrices,
 } from '@schema/wallInstancing'
 
@@ -1758,6 +1760,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     // ============================
     if (!wantsInstancing || isAirWall) {
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1843,6 +1846,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     // - 等加载完成后由 scheduleWallResync 在同一帧批量刷新等待的 node
     if (needsBodyLoad || needsHeadLoad || needsFootLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsFootCornerLoad || needsBodyCapLoad || needsHeadCapLoad || needsFootCapLoad) {
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1902,6 +1906,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (!hasBindings || !plan) {
       // No instanced geometry applicable (e.g. single segment w/ only corner models): keep procedural wall visible.
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1934,6 +1939,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     })
     if (!applied) {
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1951,6 +1957,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
+    setWallInstancedBindingsOnObject(container, plan)
     userData.instancedAssetId = plan.primaryAssetId
     if (plan.instancedBounds) {
       userData.instancedBounds = plan.instancedBounds

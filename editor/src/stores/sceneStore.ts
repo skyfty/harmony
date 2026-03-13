@@ -3134,6 +3134,23 @@ function resolveWallDefinitionLocalBounds(mesh: WallDynamicMesh): Box3 | null {
   return initialized && !bounds.isEmpty() ? bounds : null
 }
 
+function resolveNodeLocalBoundsWithSource(
+  node: SceneNode,
+  runtimeObject: Object3D | null,
+): { bounds: Box3 | null; source: 'instancedBounds' | 'wallDefinition' | 'none' } {
+  const runtimeBounds = deserializeBoundingBox(runtimeObject?.userData?.instancedBounds)
+  if (runtimeBounds && !runtimeBounds.isEmpty()) {
+    return { bounds: runtimeBounds, source: 'instancedBounds' }
+  }
+  if (node.dynamicMesh?.type === 'Wall') {
+    return {
+      bounds: resolveWallDefinitionLocalBounds(node.dynamicMesh),
+      source: 'wallDefinition',
+    }
+  }
+  return { bounds: null, source: 'none' }
+}
+
 function resolveNodeLocalBounds(node: SceneNode, runtimeObject: Object3D | null): Box3 | null {
   const runtimeBounds = deserializeBoundingBox(runtimeObject?.userData?.instancedBounds)
   if (runtimeBounds && !runtimeBounds.isEmpty()) {

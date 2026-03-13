@@ -9147,33 +9147,37 @@ function hydrateGroundSidecarFromPackage(
     ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
     : 0;
 
-  if (!sceneEntry.groundScatterPath) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 路径`);
+  const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
+  if (!scatterSidecarPath) {
+    definition.terrainScatter = null;
+  } else {
+    const scatterSidecarBytes = pkg.files[scatterSidecarPath];
+    if (!scatterSidecarBytes) {
+      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
+    }
+    const scatterSidecarBuffer = scatterSidecarBytes.buffer.slice(
+      scatterSidecarBytes.byteOffset,
+      scatterSidecarBytes.byteOffset + scatterSidecarBytes.byteLength,
+    );
+    const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
+    definition.terrainScatter = scatterPayload.terrainScatter;
   }
-  const scatterSidecarBytes = pkg.files[sceneEntry.groundScatterPath];
-  if (!scatterSidecarBytes) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
-  }
-  const scatterSidecarBuffer = scatterSidecarBytes.buffer.slice(
-    scatterSidecarBytes.byteOffset,
-    scatterSidecarBytes.byteOffset + scatterSidecarBytes.byteLength,
-  );
-  const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
-  definition.terrainScatter = scatterPayload.terrainScatter;
 
-  if (!sceneEntry.groundPaintPath) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 路径`);
+  const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';
+  if (!paintSidecarPath) {
+    definition.terrainPaint = null;
+  } else {
+    const paintSidecarBytes = pkg.files[paintSidecarPath];
+    if (!paintSidecarBytes) {
+      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
+    }
+    const paintSidecarBuffer = paintSidecarBytes.buffer.slice(
+      paintSidecarBytes.byteOffset,
+      paintSidecarBytes.byteOffset + paintSidecarBytes.byteLength,
+    );
+    const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
+    definition.terrainPaint = paintPayload.terrainPaint;
   }
-  const paintSidecarBytes = pkg.files[sceneEntry.groundPaintPath];
-  if (!paintSidecarBytes) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
-  }
-  const paintSidecarBuffer = paintSidecarBytes.buffer.slice(
-    paintSidecarBytes.byteOffset,
-    paintSidecarBytes.byteOffset + paintSidecarBytes.byteLength,
-  );
-  const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
-  definition.terrainPaint = paintPayload.terrainPaint;
 
   return document;
 }
