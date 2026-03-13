@@ -146,6 +146,7 @@ import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending 
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
+import { syncWallInstancedBindingsForObject } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh, PROTAGONIST_NODE_ID } from '@schema/index'
 
@@ -6545,6 +6546,14 @@ const {
     syncInstancedOutlineEntryTransform,
     resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
     syncInstancedTransformOverride: ({ nodeId, object, baseMatrix, assetId }) => {
+      if (wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix)) {
+        return true
+      }
+
+      if (syncWallInstancedBindingsForObject(object)) {
+        return true
+      }
+
       const node = findSceneNode(sceneStore.nodes, nodeId)
       if (node && assetId) {
         const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
@@ -6563,7 +6572,7 @@ const {
         }
       }
 
-      return wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix)
+      return false
     },
   }
 )

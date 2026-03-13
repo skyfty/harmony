@@ -32,11 +32,85 @@ import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInst
 import {
   applyWallInstancedBindings,
   buildWallInstancedRenderPlan,
+  clearWallInstancedBindingsOnObject,
+  setWallInstancedBindingsOnObject,
   syncWallDragBindingMatrices,
 } from '@schema/wallInstancing'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
+
+function wallGroupDebugEnabled(): boolean {
+  return (globalThis as typeof globalThis & { __HARMONY_WALL_GROUP_DEBUG__?: boolean }).__HARMONY_WALL_GROUP_DEBUG__ === true
+}
+
+function wallGroupDebugRound(value: unknown): number | null {
+  const num = Number(value)
+  if (!Number.isFinite(num)) {
+    return null
+  }
+  return Math.round(num * 1000) / 1000
+}
+
+function wallGroupDebugVectorSummary(value: { x?: unknown; y?: unknown; z?: unknown } | null | undefined): [number | null, number | null, number | null] | null {
+  if (!value) {
+    return null
+  }
+  return [
+    wallGroupDebugRound(value.x),
+    wallGroupDebugRound(value.y),
+    wallGroupDebugRound(value.z),
+  ]
+}
+
+function wallGroupDebugMatrixSummary(matrix: THREE.Matrix4 | null | undefined): {
+  position: [number | null, number | null, number | null] | null
+  rotationDeg: [number | null, number | null, number | null] | null
+  scale: [number | null, number | null, number | null] | null
+} | null {
+  if (!matrix) {
+    return null
+  }
+  const position = new THREE.Vector3()
+  const quaternion = new THREE.Quaternion()
+  const scale = new THREE.Vector3()
+  matrix.decompose(position, quaternion, scale)
+  const euler = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ')
+  return {
+    position: wallGroupDebugVectorSummary(position),
+    rotationDeg: [
+      wallGroupDebugRound(THREE.MathUtils.radToDeg(euler.x)),
+      wallGroupDebugRound(THREE.MathUtils.radToDeg(euler.y)),
+      wallGroupDebugRound(THREE.MathUtils.radToDeg(euler.z)),
+    ],
+    scale: wallGroupDebugVectorSummary(scale),
+  }
+}
+
+function wallGroupDebugBoundsSummary(bounds: unknown): { min: [number | null, number | null, number | null] | null; max: [number | null, number | null, number | null] | null } | null {
+  const min = Array.isArray((bounds as any)?.min) ? (bounds as any).min : null
+  const max = Array.isArray((bounds as any)?.max) ? (bounds as any).max : null
+  if (!min || !max) {
+    return null
+  }
+  return {
+    min: [wallGroupDebugRound(min[0]), wallGroupDebugRound(min[1]), wallGroupDebugRound(min[2])],
+    max: [wallGroupDebugRound(max[0]), wallGroupDebugRound(max[1]), wallGroupDebugRound(max[2])],
+  }
+}
+
+function wallGroupDebugLog(message: string, extra?: unknown): void {
+  if (!wallGroupDebugEnabled()) {
+    return
+  }
+  if (extra !== undefined) {
+    // eslint-disable-next-line no-console
+    console.debug(`[wall-group-debug] ${message}`, extra)
+    return
+  }
+  // eslint-disable-next-line no-console
+  console.debug(`[wall-group-debug] ${message}`)
+}
 
 type AirWallMaterialOriginalState = {
   transparent?: boolean
@@ -1746,6 +1820,26 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     const userData = container.userData ?? (container.userData = {})
 
+    wallGroupDebugLog('syncWallContainer start', {
+      nodeId: node.id,
+      signatureKey,
+      parentNodeId: typeof container.parent?.userData?.nodeId === 'string' ? container.parent.userData.nodeId : null,
+      containerLocal: wallGroupDebugVectorSummary(container.position),
+      containerWorld: wallGroupDebugMatrixSummary(container.matrixWorld),
+      wantsInstancing,
+      isAirWall,
+      bodyAssetId,
+      headAssetId,
+      footAssetId,
+      bodyEndCapAssetId,
+      headEndCapAssetId,
+      footEndCapAssetId,
+      cornerBodyCount: bodyCornerAssetIds.length,
+      cornerHeadCount: headCornerAssetIds.length,
+      cornerFootCount: footCornerAssetIds.length,
+      currentInstancedBounds: wallGroupDebugBoundsSummary(userData.instancedBounds),
+    })
+
     // ============================
     // 1) 空气墙：强制使用程序墙体（并应用半透明材质覆盖）
     // ============================
@@ -1758,6 +1852,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     // ============================
     if (!wantsInstancing || isAirWall) {
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1842,7 +1937,20 @@ export function createWallRenderer(options: WallRendererOptions) {
     // - 立即回退到程序墙体，让用户可见并可继续编辑
     // - 等加载完成后由 scheduleWallResync 在同一帧批量刷新等待的 node
     if (needsBodyLoad || needsHeadLoad || needsFootLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsFootCornerLoad || needsBodyCapLoad || needsHeadCapLoad || needsFootCapLoad) {
+      wallGroupDebugLog('syncWallContainer procedural fallback while loading assets', {
+        nodeId: node.id,
+        needsBodyLoad,
+        needsHeadLoad,
+        needsFootLoad,
+        needsBodyCornerLoad,
+        needsHeadCornerLoad,
+        needsFootCornerLoad,
+        needsBodyCapLoad,
+        needsHeadCapLoad,
+        needsFootCapLoad,
+      })
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1893,6 +2001,22 @@ export function createWallRenderer(options: WallRendererOptions) {
       : null
     const hasBindings = Boolean(plan?.hasBindings)
 
+    wallGroupDebugLog('syncWallContainer instanced plan', {
+      nodeId: node.id,
+      hasBindings,
+      primaryAssetId: plan?.primaryAssetId ?? null,
+      bindingCount: plan?.bindings.length ?? 0,
+      bindings: (plan?.bindings ?? []).map((binding) => ({
+        assetId: binding.assetId,
+        sourceAssetId: binding.sourceAssetId ?? null,
+        instanceCount: binding.localMatrices.length,
+        bindingIdPrefix: binding.bindingIdPrefix,
+        useNodeIdForIndex0: binding.useNodeIdForIndex0,
+        firstLocalMatrix: wallGroupDebugMatrixSummary(binding.localMatrices[0] ?? null),
+      })),
+      planInstancedBounds: wallGroupDebugBoundsSummary(plan?.instancedBounds),
+    })
+
     // ============================
     // 5) 没有任何绑定：实例化不适用 → 回退程序墙体
     // ============================
@@ -1902,6 +2026,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (!hasBindings || !plan) {
       // No instanced geometry applicable (e.g. single segment w/ only corner models): keep procedural wall visible.
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1932,8 +2057,14 @@ export function createWallRenderer(options: WallRendererOptions) {
       object: container,
       bindings: plan.bindings,
     })
+    wallGroupDebugLog('syncWallContainer applyWallInstancedBindings result', {
+      nodeId: node.id,
+      applied,
+      objectWorld: wallGroupDebugMatrixSummary(container.matrixWorld),
+    })
     if (!applied) {
       releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
       delete userData.instancedAssetId
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
@@ -1951,12 +2082,20 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
+    setWallInstancedBindingsOnObject(container, plan)
     userData.instancedAssetId = plan.primaryAssetId
     if (plan.instancedBounds) {
       userData.instancedBounds = plan.instancedBounds
     } else {
       delete userData.instancedBounds
     }
+
+    wallGroupDebugLog('syncWallContainer committed instanced bounds', {
+      nodeId: node.id,
+      primaryAssetId: plan.primaryAssetId,
+      committedInstancedBounds: wallGroupDebugBoundsSummary(userData.instancedBounds),
+      hasProceduralBodyFallback,
+    })
 
     if (hasProceduralBodyFallback) {
       const wallRenderOptions: WallRenderOptions = {
