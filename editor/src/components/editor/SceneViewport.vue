@@ -69,8 +69,6 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
   WallDynamicMesh,
-  WallOpening,
-  WallRepeatErasedSlot,
 } from '@schema/index'
 import {
   TERRAIN_PAINT_MAX_LAYER_COUNT,
@@ -217,10 +215,21 @@ import { useTerrainGridController } from './useTerrainGridController'
 import { createGuideRouteWaypointLabelsManager, getGuideRouteWaypointLabelMeshes } from './GuideRouteWaypointLabels'
 import { createWallBuildTool } from './WallBuildTool'
 import {
-  getWallLocalPointAtDefinitionChainDistance,
   computeWallOpeningForLocalHit,
   findContainingWallOpeningIndex,
 } from './wallSegmentUtils'
+import {
+  createWallEraseController,
+  extractWallRepeatInstanceMeta,
+  mergeWallRepeatErasedSlots,
+  resolveSelectedWallRenderMode,
+} from './wallEraseController'
+import { createWallEraseHoverPresenter } from './wallEraseHoverPresenter'
+import {
+  createWallDoorSelectionController,
+  type WallDoorRectangleSelectionState,
+  type WallDoorSelectionPayload,
+} from './wallDoorSelectionController'
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
@@ -654,38 +663,6 @@ const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
 instancedOutlineGroup.name = 'InstancedOutlineGroup'
-const wallDoorSelectionHighlightGroup = new THREE.Group()
-wallDoorSelectionHighlightGroup.name = 'WallDoorSelectionHighlightGroup'
-wallDoorSelectionHighlightGroup.visible = false
-wallDoorSelectionHighlightGroup.renderOrder = 1200
-
-const wallDoorSelectionStretchLineMaterial = new THREE.LineBasicMaterial({
-  color: 0xbbdefb,
-  transparent: true,
-  opacity: 0.9,
-  depthWrite: false,
-  depthTest: false,
-})
-wallDoorSelectionStretchLineMaterial.toneMapped = false
-
-const wallDoorSelectionRepeatFillMaterial = new THREE.MeshBasicMaterial({
-  color: 0x82b1ff,
-  transparent: true,
-  opacity: 0.35,
-  depthWrite: false,
-  depthTest: false,
-})
-wallDoorSelectionRepeatFillMaterial.toneMapped = false
-
-const wallDoorSelectionRepeatWireMaterial = new THREE.MeshBasicMaterial({
-  color: 0xbbdefb,
-  wireframe: true,
-  transparent: true,
-  opacity: 0.9,
-  depthWrite: false,
-  depthTest: false,
-})
-wallDoorSelectionRepeatWireMaterial.toneMapped = false
 
 const PICK_MAX_DISTANCE_DEFAULT = 100
 function getPickMaxDistance() {
@@ -2238,65 +2215,20 @@ const wallEraseUnitLengthM = computed(() => {
   return Math.max(1e-3, Math.abs(value))
 })
 
-// Wall erase hover uses the same visual language as InstanceLayout erase hover:
-// cyan for erase, green for restore; depthTest off so it's always readable.
-const wallEraseHoverEdgeMaterial = new THREE.LineBasicMaterial({
-  color: 0x4dd0e1,
-  transparent: true,
-  opacity: 0.95,
-  depthTest: false,
-  depthWrite: false,
+const wallEraseHoverPresenter = createWallEraseHoverPresenter({
+  instancedHoverMaterial,
+  instancedHoverRestoreMaterial,
+  instancedOutlineSync: {
+    syncProxyMatrixFromSlot: (proxy, mesh, index) => instancedOutlineManager.syncProxyMatrixFromSlot(proxy, mesh, index),
+  },
 })
-wallEraseHoverEdgeMaterial.toneMapped = false
-
-const wallEraseHoverBoxGeometry = new THREE.BoxGeometry(1, 1, 1)
-const wallEraseHoverEdgesGeometry = new THREE.EdgesGeometry(wallEraseHoverBoxGeometry)
-
-const wallEraseHoverGroup = new THREE.Group()
-wallEraseHoverGroup.name = 'WallEraseHover'
-wallEraseHoverGroup.renderOrder = 19996
-wallEraseHoverGroup.visible = false
-wallEraseHoverGroup.frustumCulled = false
-
-const wallEraseHoverFill = new THREE.Mesh(wallEraseHoverBoxGeometry, instancedHoverMaterial)
-wallEraseHoverFill.name = 'WallEraseHoverFill'
-wallEraseHoverFill.renderOrder = 19996
-wallEraseHoverFill.frustumCulled = false
-;(wallEraseHoverFill as any).raycast = () => {}
-
-const wallEraseHoverEdges = new THREE.LineSegments(wallEraseHoverEdgesGeometry, wallEraseHoverEdgeMaterial)
-wallEraseHoverEdges.name = 'WallEraseHoverEdges'
-wallEraseHoverEdges.renderOrder = 19997
-wallEraseHoverEdges.frustumCulled = false
-;(wallEraseHoverEdges as any).raycast = () => {}
-
-const wallEraseRepeatHoverFillMaterial = new THREE.MeshBasicMaterial({
-  color: 0x4dd0e1,
-  transparent: true,
-  opacity: 0.3,
-  depthTest: false,
-  depthWrite: false,
-})
-wallEraseRepeatHoverFillMaterial.toneMapped = false
-
-const wallEraseRepeatHoverWireMaterial = new THREE.MeshBasicMaterial({
-  color: 0x4dd0e1,
-  wireframe: true,
-  transparent: true,
-  opacity: 0.95,
-  depthTest: false,
-  depthWrite: false,
-})
-wallEraseRepeatHoverWireMaterial.toneMapped = false
-
-const wallEraseRepeatHoverGroup = new THREE.Group()
-wallEraseRepeatHoverGroup.name = 'WallEraseRepeatHover'
-wallEraseRepeatHoverGroup.renderOrder = 19996
-wallEraseRepeatHoverGroup.visible = false
-wallEraseRepeatHoverGroup.frustumCulled = false
-
-wallEraseHoverGroup.add(wallEraseHoverFill)
-wallEraseHoverGroup.add(wallEraseHoverEdges)
+const {
+  wallEraseHoverGroup,
+  wallEraseRepeatHoverGroup,
+  clearWallEraseHoverHighlight,
+  updateWallEraseHoverHighlight,
+  dispose: disposeWallEraseHoverPresenter,
+} = wallEraseHoverPresenter
 vertexOverlayGroup.add(wallEraseHoverGroup)
 vertexOverlayGroup.add(wallEraseRepeatHoverGroup)
 
@@ -2308,374 +2240,6 @@ function clearVertexSnapMarkers() {
   vertexOverlayHintBeam.visible = false
   vertexOverlayHintSourceMarker.visible = false
   vertexOverlayHintTargetMarker.visible = false
-}
-
-function clearWallEraseHoverHighlight() {
-  wallEraseHoverGroup.visible = false
-  while (wallEraseRepeatHoverGroup.children.length > 0) {
-    const child = wallEraseRepeatHoverGroup.children[wallEraseRepeatHoverGroup.children.length - 1]
-    if (!child) {
-      break
-    }
-    child.removeFromParent()
-  }
-  wallEraseRepeatHoverGroup.visible = false
-}
-
-function resolveSelectedWallRenderMode(node: SceneNode): 'stretch' | 'repeatInstances' {
-  const component = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
-  try {
-    const props = clampWallProps(component?.props as Partial<WallComponentProps> | null)
-    return props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch'
-  } catch {
-    return 'stretch'
-  }
-}
-
-function extractWallRepeatInstanceMeta(mesh: THREE.Mesh | null | undefined): { chainIndex: number; slotIndex: number } | null {
-  const meta = mesh?.userData?.wallInstanceMeta as { chainIndex?: unknown; repeatSlotIndex?: unknown } | undefined
-  if (!meta) {
-    return null
-  }
-  const chainIndex = Math.max(0, Math.trunc(Number(meta.chainIndex ?? 0)))
-  const slotIndex = Math.max(0, Math.trunc(Number(meta.repeatSlotIndex ?? -1)))
-  if (!Number.isFinite(chainIndex) || !Number.isFinite(slotIndex) || slotIndex < 0) {
-    return null
-  }
-  return { chainIndex, slotIndex }
-}
-
-function extractWallHitArcMeta(mesh: THREE.Mesh | null | undefined): { chainIndex: number; arcStart: number; arcEnd: number } | null {
-  const meta = mesh?.userData?.wallInstanceMeta as {
-    chainIndex?: unknown
-    chainArcStart?: unknown
-    chainArcEnd?: unknown
-  } | undefined
-  if (!meta) {
-    return null
-  }
-  const chainIndex = Math.max(0, Math.trunc(Number(meta.chainIndex ?? 0)))
-  const arcStart = Number(meta.chainArcStart)
-  const arcEnd = Number(meta.chainArcEnd)
-  if (!Number.isFinite(chainIndex) || !Number.isFinite(arcStart) || !Number.isFinite(arcEnd) || arcEnd <= arcStart + 1e-6) {
-    return null
-  }
-  return { chainIndex, arcStart, arcEnd }
-}
-
-function extractWallRepeatInstanceMetaFromHitObject(
-  hitObject: THREE.Object3D,
-  wallRoot: THREE.Object3D,
-): { chainIndex: number; slotIndex: number } | null {
-  let current: THREE.Object3D | null = hitObject
-  while (current) {
-    const mesh = (current as THREE.Mesh).isMesh ? (current as THREE.Mesh) : null
-    const meta = extractWallRepeatInstanceMeta(mesh)
-    if (meta) {
-      return meta
-    }
-    if (current === wallRoot) {
-      break
-    }
-    current = current.parent ?? null
-  }
-  return null
-}
-
-function extractWallHitArcMetaFromHitObject(
-  hitObject: THREE.Object3D,
-  wallRoot: THREE.Object3D,
-): { chainIndex: number; arcStart: number; arcEnd: number } | null {
-  let current: THREE.Object3D | null = hitObject
-  while (current) {
-    const mesh = (current as THREE.Mesh).isMesh ? (current as THREE.Mesh) : null
-    const meta = extractWallHitArcMeta(mesh)
-    if (meta) {
-      return meta
-    }
-    if (current === wallRoot) {
-      break
-    }
-    current = current.parent ?? null
-  }
-  return null
-}
-
-function collectWallMeshesForRepeatSlot(
-  wallObject: THREE.Object3D,
-  chainIndex: number,
-  slotIndex: number,
-): THREE.Mesh[] {
-  const meshes: THREE.Mesh[] = []
-  wallObject.updateWorldMatrix(true, true)
-  wallObject.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-    const meta = extractWallRepeatInstanceMeta(mesh)
-    if (!meta) {
-      return
-    }
-    if (meta.chainIndex !== chainIndex || meta.slotIndex !== slotIndex) {
-      return
-    }
-    meshes.push(mesh)
-  })
-  return meshes
-}
-
-type WallRepeatPreviewSlot = {
-  mesh: THREE.InstancedMesh
-  index: number
-}
-
-type ResolvedWallInstancedBindingMeta = {
-  chainIndex: number
-  arcStart: number | null
-  arcEnd: number | null
-  repeatSlotIndex: number | null
-}
-
-function collectWallInstancedSlotsForRepeatSlot(
-  wallObject: THREE.Object3D,
-  nodeId: string,
-  chainIndex: number,
-  slotIndex: number,
-): WallRepeatPreviewSlot[] {
-  const previewSlots: WallRepeatPreviewSlot[] = []
-  const bindings = getModelInstanceBindingsForNode(nodeId)
-  bindings.forEach((binding) => {
-    const meta = resolveWallInstancedBindingMetaByBindingId(wallObject, binding.bindingId, nodeId)
-    if (!meta) {
-      return
-    }
-    if (meta.chainIndex !== chainIndex || meta.repeatSlotIndex !== slotIndex) {
-      return
-    }
-    binding.slots.forEach((slot) => {
-      previewSlots.push({ mesh: slot.mesh, index: slot.index })
-    })
-  })
-  return previewSlots
-}
-
-function getWallInstancedBindingSpecs(object: THREE.Object3D): WallInstancedBindingSpec[] {
-  const raw = (object.userData as Record<string, unknown> | undefined)?.[WALL_INSTANCED_BINDINGS_USERDATA_KEY]
-  return Array.isArray(raw) ? raw.filter((entry) => Boolean(entry && typeof entry === 'object')) as WallInstancedBindingSpec[] : []
-}
-
-function resolveWallInstancedBindingMetaByBindingId(
-  wallObject: THREE.Object3D,
-  bindingId: string,
-  nodeId: string,
-): ResolvedWallInstancedBindingMeta | null {
-  const specs = getWallInstancedBindingSpecs(wallObject)
-  for (const spec of specs) {
-    const metas = Array.isArray(spec.instanceMetas) ? spec.instanceMetas : []
-    if (!metas.length) {
-      continue
-    }
-    const resolveMeta = (meta: WallInstancedBindingSpec['instanceMetas'][number] | undefined): ResolvedWallInstancedBindingMeta | null => {
-      const chainIndex = Math.max(0, Math.trunc(Number(meta?.chainIndex ?? 0)))
-      const arcStart = Number(meta?.chainArcStart)
-      const arcEnd = Number(meta?.chainArcEnd)
-      const repeatSlotIndex = Number(meta?.repeatSlotIndex)
-      return {
-        chainIndex,
-        arcStart: Number.isFinite(arcStart) ? arcStart : null,
-        arcEnd: Number.isFinite(arcEnd) ? arcEnd : null,
-        repeatSlotIndex: Number.isFinite(repeatSlotIndex) && repeatSlotIndex >= 0
-          ? Math.max(0, Math.trunc(repeatSlotIndex))
-          : null,
-      }
-    }
-    if (spec.useNodeIdForIndex0 && bindingId === nodeId) {
-      return resolveMeta(metas[0])
-    }
-    if (!bindingId.startsWith(spec.bindingIdPrefix)) {
-      continue
-    }
-    const indexRaw = bindingId.slice(spec.bindingIdPrefix.length)
-    const index = Number.parseInt(indexRaw, 10)
-    if (!Number.isFinite(index) || index < 0 || index >= metas.length) {
-      continue
-    }
-    return resolveMeta(metas[index])
-  }
-  return null
-}
-
-type WallInstancedPickHit = {
-  pointWorld: THREE.Vector3
-  hitObject: THREE.Object3D
-  bindingId: string
-  nodeId: string
-  bindingMeta: ResolvedWallInstancedBindingMeta | null
-}
-
-function resolveSelectedWallInstancedPickHitFromCurrentRay(
-  selectedWallId: string,
-  wallObject: THREE.Object3D,
-): WallInstancedPickHit | null {
-  const pickTargets = collectInstancedPickTargets()
-  const intersections = raycaster.intersectObjects(pickTargets, false)
-  intersections.sort((a, b) => a.distance - b.distance)
-
-  for (const intersection of intersections) {
-    if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
-      continue
-    }
-    const mesh = intersection.object as THREE.InstancedMesh
-    const nodeId = findNodeIdForInstance(mesh, intersection.instanceId)
-    if (nodeId !== selectedWallId) {
-      continue
-    }
-    const bindingId = findBindingIdForInstance(mesh, intersection.instanceId)
-    if (!bindingId) {
-      continue
-    }
-    const bindingMeta = resolveWallInstancedBindingMetaByBindingId(wallObject, bindingId, selectedWallId)
-    return {
-      pointWorld: (intersection.point as THREE.Vector3).clone(),
-      hitObject: mesh,
-      bindingId,
-      nodeId,
-      bindingMeta,
-    }
-  }
-  return null
-}
-
-type WallRayHit = {
-  pointWorld: THREE.Vector3
-  object: THREE.Object3D
-}
-
-function resolveWallRayHitFromCurrentRay(
-  wallObject: THREE.Object3D,
-  options?: {
-    allowPlaneFallback?: boolean
-    preferredHitObject?: (object: THREE.Object3D) => boolean
-  },
-): WallRayHit | null {
-  wallObject.updateWorldMatrix(true, true)
-  const wallHits = raycaster.intersectObject(wallObject, true)
-  wallHits.sort((a, b) => a.distance - b.distance)
-  const first = (
-    wallHits.find((hit) => Boolean(hit.point) && (options?.preferredHitObject ? options.preferredHitObject(hit.object) : true))
-    ?? wallHits.find((hit) => Boolean(hit.point))
-    ?? null
-  )
-  if (first?.point) {
-    return {
-      pointWorld: (first.point as THREE.Vector3).clone(),
-      object: first.object,
-    }
-  }
-
-  if (options?.allowPlaneFallback) {
-    const planeHit = new THREE.Vector3()
-    if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-      return {
-        pointWorld: planeHit,
-        object: wallObject,
-      }
-    }
-  }
-  return null
-}
-
-type WallStretchPreviewDescriptor = {
-  kind: 'stretch'
-  worldA: THREE.Vector3
-  worldB: THREE.Vector3
-  height: number
-  width: number
-}
-
-type WallRepeatPreviewDescriptor = {
-  kind: 'repeatInstances'
-  meshes: THREE.Mesh[]
-  instancedSlots: WallRepeatPreviewSlot[]
-}
-
-type SelectedWallEraseTarget =
-  | {
-    kind: 'stretch-erase'
-    nodeId: string
-    opening: WallOpening
-    preview: WallStretchPreviewDescriptor
-    dragKey: string
-  }
-  | {
-    kind: 'stretch-repair'
-    nodeId: string
-    openingIndex: number
-    opening: WallOpening
-    preview: WallStretchPreviewDescriptor
-    dragKey: string
-  }
-  | {
-    kind: 'repeat-erase'
-    nodeId: string
-    slots: WallRepeatErasedSlot[]
-    preview: WallRepeatPreviewDescriptor
-    dragKey: string
-  }
-
-function buildWallStretchPreviewDescriptor(
-  wallMesh: WallDynamicMesh,
-  wallObject: THREE.Object3D,
-  opening: WallOpening,
-): WallStretchPreviewDescriptor | null {
-  const localA = getWallLocalPointAtDefinitionChainDistance(wallMesh, opening.chainIndex, opening.start)
-  const localB = getWallLocalPointAtDefinitionChainDistance(wallMesh, opening.chainIndex, opening.end)
-  if (!localA || !localB) {
-    return null
-  }
-  const heightRaw = Number(wallMesh?.dimensions?.height)
-  const widthRaw = Number(wallMesh?.dimensions?.width)
-  const height = Number.isFinite(heightRaw) && heightRaw > 0 ? heightRaw : WALL_DEFAULT_HEIGHT
-  const width = Number.isFinite(widthRaw) && widthRaw > 0 ? widthRaw : WALL_DEFAULT_WIDTH
-  return {
-    kind: 'stretch',
-    worldA: new THREE.Vector3(localA.x, localA.y, localA.z).applyMatrix4(wallObject.matrixWorld),
-    worldB: new THREE.Vector3(localB.x, localB.y, localB.z).applyMatrix4(wallObject.matrixWorld),
-    height,
-    width,
-  }
-}
-
-function mergeWallRepeatErasedSlots(
-  existing: Array<{ chainIndex?: unknown; slotIndex?: unknown }> | undefined,
-  additions: WallRepeatErasedSlot[],
-): WallRepeatErasedSlot[] {
-  const nextSlotSet = new Set<string>()
-  ;(Array.isArray(existing) ? existing : []).forEach((slot) => {
-    const chainIndex = Math.max(0, Math.trunc(Number(slot?.chainIndex ?? 0)))
-    const slotIndex = Math.max(0, Math.trunc(Number(slot?.slotIndex ?? -1)))
-    if (Number.isFinite(chainIndex) && Number.isFinite(slotIndex) && slotIndex >= 0) {
-      nextSlotSet.add(`${chainIndex}:${slotIndex}`)
-    }
-  })
-  additions.forEach((slot) => {
-    const chainIndex = Math.max(0, Math.trunc(Number(slot.chainIndex ?? 0)))
-    const slotIndex = Math.max(0, Math.trunc(Number(slot.slotIndex ?? -1)))
-    if (Number.isFinite(chainIndex) && Number.isFinite(slotIndex) && slotIndex >= 0) {
-      nextSlotSet.add(`${chainIndex}:${slotIndex}`)
-    }
-  })
-  return Array.from(nextSlotSet.values())
-    .map((key) => {
-      const [chainRaw, slotRaw] = key.split(':')
-      return {
-        chainIndex: Math.max(0, Math.trunc(Number(chainRaw ?? 0))),
-        slotIndex: Math.max(0, Math.trunc(Number(slotRaw ?? -1))),
-      }
-    })
-    .filter((slot) => Number.isFinite(slot.chainIndex) && Number.isFinite(slot.slotIndex) && slot.slotIndex >= 0)
-    .sort((a, b) => (a.chainIndex - b.chainIndex) || (a.slotIndex - b.slotIndex))
 }
 
 function buildRepeatErasedSlotKeySet(
@@ -2691,6 +2255,11 @@ function buildRepeatErasedSlotKeySet(
     keySet.add(`${chainIndex}:${slotIndex}`)
   })
   return keySet
+}
+
+function getWallInstancedBindingSpecs(object: THREE.Object3D): WallInstancedBindingSpec[] {
+  const raw = (object.userData as Record<string, unknown> | undefined)?.[WALL_INSTANCED_BINDINGS_USERDATA_KEY]
+  return Array.isArray(raw) ? raw.filter((entry) => Boolean(entry && typeof entry === 'object')) as WallInstancedBindingSpec[] : []
 }
 
 function collectRepeatRenderableSlotKeySet(
@@ -2770,293 +2339,41 @@ function applyWallMeshEraseResult(node: SceneNode, nodeId: string, nextWallMesh:
   sceneStore.updateNodeDynamicMesh(nodeId, nextWallMesh)
 }
 
-function resolveSelectedWallEraseTargetFromCurrentRay(): SelectedWallEraseTarget | null {
-  const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  if (!selectedWallId) {
-    return null
-  }
-  const wallObject = objectMap.get(selectedWallId) ?? null
-  const wallNode = findSceneNode(sceneStore.nodes, selectedWallId)
-  const wallMesh = wallNode && wallNode.dynamicMesh?.type === 'Wall'
-    ? wallNode.dynamicMesh as WallDynamicMesh
-    : null
-  if (!wallObject || !wallNode || !wallMesh) {
-    return null
-  }
+const wallEraseController = createWallEraseController({
+  getSceneNodes: () => sceneStore.nodes,
+  getSelectedWallId: () => sceneStore.selectedNodeId ?? props.selectedNodeId ?? null,
+  objectMap,
+  raycaster,
+  groundPlane,
+  wallRepairModeActive,
+  wallEraseUnitLengthM,
+  collectInstancedPickTargets,
+  applyWallMeshEraseResult,
+  onAfterApply: () => {
+    clearRepairHoverHighlight(true)
+    updateOutlineSelectionTargets()
+    updateSelectionHighlights()
+    updatePlaceholderOverlayPositions()
+  },
+})
 
-  const renderMode = resolveSelectedWallRenderMode(wallNode)
-  const rayHit = resolveWallRayHitFromCurrentRay(wallObject, {
-    allowPlaneFallback: wallRepairModeActive.value && renderMode === 'stretch',
-    preferredHitObject: renderMode === 'repeatInstances'
-      ? (object) => Boolean(extractWallRepeatInstanceMetaFromHitObject(object, wallObject))
-      : renderMode === 'stretch' && !wallRepairModeActive.value
-        ? (object) => Boolean(extractWallHitArcMetaFromHitObject(object, wallObject))
-        : undefined,
-  })
+const { resolveSelectedWallEraseTargetFromCurrentRay, applySelectedWallEraseTarget } = wallEraseController
 
-  if (renderMode === 'repeatInstances') {
-    if (wallRepairModeActive.value) {
-      return null
-    }
+const wallDoorSelectionController = createWallDoorSelectionController({
+  objectMap,
+  getSceneNodes: () => sceneStore.nodes,
+  getCamera: () => camera,
+  canvasRef,
+  surfaceRef,
+  isObjectWorldVisible,
+  resolveSelectedWallRenderMode,
+  extractWallRepeatInstanceMeta,
+  mergeWallRepeatErasedSlots,
+  setBoundingBoxFromObject,
+  applyWallMeshEraseResult,
+})
 
-    const directMeta = rayHit ? extractWallRepeatInstanceMetaFromHitObject(rayHit.object, wallObject) : null
-    const instancedHit = directMeta ? null : resolveSelectedWallInstancedPickHitFromCurrentRay(selectedWallId, wallObject)
-    const resolvedMeta = directMeta ?? (
-      instancedHit?.bindingMeta && instancedHit.bindingMeta.repeatSlotIndex !== null
-        ? {
-            chainIndex: instancedHit.bindingMeta.chainIndex,
-            slotIndex: instancedHit.bindingMeta.repeatSlotIndex,
-          }
-        : null
-    )
-    if (!resolvedMeta) {
-      return null
-    }
-
-    const meshes = collectWallMeshesForRepeatSlot(wallObject, resolvedMeta.chainIndex, resolvedMeta.slotIndex)
-    const instancedSlots = collectWallInstancedSlotsForRepeatSlot(
-      wallObject,
-      selectedWallId,
-      resolvedMeta.chainIndex,
-      resolvedMeta.slotIndex,
-    )
-    if (!meshes.length && !instancedSlots.length) {
-      return null
-    }
-    return {
-      kind: 'repeat-erase',
-      nodeId: selectedWallId,
-      slots: [{ chainIndex: resolvedMeta.chainIndex, slotIndex: resolvedMeta.slotIndex }],
-      preview: { kind: 'repeatInstances', meshes, instancedSlots },
-      dragKey: `${selectedWallId}:wall-repeat:${resolvedMeta.chainIndex}:${resolvedMeta.slotIndex}`,
-    }
-  }
-
-  if (!rayHit) {
-    if (renderMode === 'stretch' && !wallRepairModeActive.value) {
-      const instancedHit = resolveSelectedWallInstancedPickHitFromCurrentRay(selectedWallId, wallObject)
-      if (instancedHit) {
-        const inv = new THREE.Matrix4().copy(wallObject.matrixWorld).invert()
-        const localPoint = instancedHit.pointWorld.clone().applyMatrix4(inv)
-        const opening = computeWallOpeningForLocalHit(
-          wallMesh,
-          localPoint,
-          wallEraseUnitLengthM.value * 0.5,
-          instancedHit.bindingMeta && instancedHit.bindingMeta.arcStart !== null && instancedHit.bindingMeta.arcEnd !== null
-            ? {
-                preferredChainIndex: instancedHit.bindingMeta.chainIndex,
-                preferredArcStart: instancedHit.bindingMeta.arcStart,
-                preferredArcEnd: instancedHit.bindingMeta.arcEnd,
-              }
-            : undefined,
-        )
-        if (opening) {
-          const preview = buildWallStretchPreviewDescriptor(wallMesh, wallObject, opening)
-          if (preview) {
-            const center = (Number(opening.start) + Number(opening.end)) * 0.5
-            const bucket = Math.round(center / Math.max(1e-6, wallEraseUnitLengthM.value * 0.5))
-            return {
-              kind: 'stretch-erase',
-              nodeId: selectedWallId,
-              opening,
-              preview,
-              dragKey: `${selectedWallId}:wall:${opening.chainIndex}:${bucket}`,
-            }
-          }
-        }
-      }
-    }
-    return null
-  }
-
-  const inv = new THREE.Matrix4().copy(wallObject.matrixWorld).invert()
-  const localPoint = rayHit.pointWorld.clone().applyMatrix4(inv)
-
-  if (wallRepairModeActive.value) {
-    const openingIndex = findContainingWallOpeningIndex(wallMesh, localPoint)
-    if (openingIndex < 0) {
-      return null
-    }
-    const opening = wallMesh.openings?.[openingIndex] ?? null
-    if (!opening) {
-      return null
-    }
-    const preview = buildWallStretchPreviewDescriptor(wallMesh, wallObject, opening)
-    if (!preview) {
-      return null
-    }
-    const center = (Number(opening.start) + Number(opening.end)) * 0.5
-    const bucket = Math.round(center / Math.max(1e-6, wallEraseUnitLengthM.value * 0.5))
-    return {
-      kind: 'stretch-repair',
-      nodeId: selectedWallId,
-      openingIndex,
-      opening,
-      preview,
-      dragKey: `${selectedWallId}:wall-repair:${opening.chainIndex}:${bucket}`,
-    }
-  }
-
-  const hitArcMeta = extractWallHitArcMetaFromHitObject(rayHit.object, wallObject)
-  const opening = computeWallOpeningForLocalHit(
-    wallMesh,
-    localPoint,
-    wallEraseUnitLengthM.value * 0.5,
-    hitArcMeta
-      ? {
-          preferredChainIndex: hitArcMeta.chainIndex,
-          preferredArcStart: hitArcMeta.arcStart,
-          preferredArcEnd: hitArcMeta.arcEnd,
-        }
-      : undefined,
-  )
-  if (!opening) {
-    return null
-  }
-  const preview = buildWallStretchPreviewDescriptor(wallMesh, wallObject, opening)
-  if (!preview) {
-    return null
-  }
-  const center = (Number(opening.start) + Number(opening.end)) * 0.5
-  const bucket = Math.round(center / Math.max(1e-6, wallEraseUnitLengthM.value * 0.5))
-  return {
-    kind: 'stretch-erase',
-    nodeId: selectedWallId,
-    opening,
-    preview,
-    dragKey: `${selectedWallId}:wall:${opening.chainIndex}:${bucket}`,
-  }
-}
-
-function applySelectedWallEraseTarget(target: SelectedWallEraseTarget): boolean {
-  const node = findSceneNode(sceneStore.nodes, target.nodeId)
-  if (!node || node.dynamicMesh?.type !== 'Wall') {
-    return false
-  }
-  const wallMesh = node.dynamicMesh as WallDynamicMesh
-
-  if (target.kind === 'stretch-repair') {
-    const nextOpenings = removeWallOpeningFromDefinition(wallMesh, target.openingIndex)
-    applyWallMeshEraseResult(node, target.nodeId, { ...wallMesh, openings: nextOpenings })
-  } else if (target.kind === 'stretch-erase') {
-    const nextOpenings = addWallOpeningToDefinition(wallMesh, target.opening)
-    applyWallMeshEraseResult(node, target.nodeId, { ...wallMesh, openings: nextOpenings })
-  } else {
-    const repeatErasedSlots = mergeWallRepeatErasedSlots(
-      (wallMesh as unknown as { repeatErasedSlots?: Array<{ chainIndex?: unknown; slotIndex?: unknown }> }).repeatErasedSlots,
-      target.slots,
-    )
-    applyWallMeshEraseResult(node, target.nodeId, { ...wallMesh, repeatErasedSlots })
-  }
-
-  clearRepairHoverHighlight(true)
-  updateOutlineSelectionTargets()
-  updateSelectionHighlights()
-  updatePlaceholderOverlayPositions()
-  return true
-}
-
-function updateWallEraseHoverHighlight(target: SelectedWallEraseTarget): boolean {
-  clearWallEraseHoverHighlight()
-  if (target.kind === 'repeat-erase') {
-    wallEraseRepeatHoverFillMaterial.color.set(0x4dd0e1)
-    wallEraseRepeatHoverWireMaterial.color.set(0x4dd0e1)
-    target.preview.meshes.forEach((mesh) => {
-      const fillProxy = new THREE.Mesh(mesh.geometry, wallEraseRepeatHoverFillMaterial)
-      fillProxy.matrixAutoUpdate = false
-      fillProxy.matrix.copy(mesh.matrixWorld)
-      fillProxy.renderOrder = 19996
-      fillProxy.frustumCulled = false
-      ;(fillProxy as any).raycast = () => {}
-      wallEraseRepeatHoverGroup.add(fillProxy)
-
-      const wireProxy = new THREE.Mesh(mesh.geometry, wallEraseRepeatHoverWireMaterial)
-      wireProxy.matrixAutoUpdate = false
-      wireProxy.matrix.copy(mesh.matrixWorld)
-      wireProxy.renderOrder = 19997
-      wireProxy.frustumCulled = false
-      ;(wireProxy as any).raycast = () => {}
-      wallEraseRepeatHoverGroup.add(wireProxy)
-    })
-    target.preview.instancedSlots.forEach((slot) => {
-      const fillProxy = new THREE.Mesh(slot.mesh.geometry, wallEraseRepeatHoverFillMaterial)
-      fillProxy.matrixAutoUpdate = false
-      instancedOutlineManager.syncProxyMatrixFromSlot(fillProxy, slot.mesh, slot.index)
-      fillProxy.renderOrder = 19996
-      fillProxy.frustumCulled = false
-      ;(fillProxy as any).raycast = () => {}
-      wallEraseRepeatHoverGroup.add(fillProxy)
-
-      const wireProxy = new THREE.Mesh(slot.mesh.geometry, wallEraseRepeatHoverWireMaterial)
-      wireProxy.matrixAutoUpdate = false
-      instancedOutlineManager.syncProxyMatrixFromSlot(wireProxy, slot.mesh, slot.index)
-      wireProxy.renderOrder = 19997
-      wireProxy.frustumCulled = false
-      ;(wireProxy as any).raycast = () => {}
-      wallEraseRepeatHoverGroup.add(wireProxy)
-    })
-    wallEraseRepeatHoverGroup.visible = wallEraseRepeatHoverGroup.children.length > 0
-    return wallEraseRepeatHoverGroup.visible
-  }
-
-  const isRepair = target.kind === 'stretch-repair'
-  const hoverFillMaterial = isRepair ? instancedHoverRestoreMaterial : instancedHoverMaterial
-  if (wallEraseHoverFill.material !== hoverFillMaterial) {
-    wallEraseHoverFill.material = hoverFillMaterial
-  }
-  wallEraseHoverFill.material.opacity = 0.65
-  wallEraseHoverEdgeMaterial.color.set(isRepair ? 0xffc107 : 0x4dd0e1)
-
-  wallEraseHoverDirHelper.copy(target.preview.worldB).sub(target.preview.worldA)
-  wallEraseHoverDirHelper.y = 0
-  const len = wallEraseHoverDirHelper.length()
-  if (!Number.isFinite(len) || len <= 1e-6) {
-    clearWallEraseHoverHighlight()
-    return false
-  }
-
-  wallEraseHoverMidHelper.copy(target.preview.worldA).add(target.preview.worldB).multiplyScalar(0.5)
-  wallEraseHoverDirHelper.multiplyScalar(1 / len)
-
-  const previewHeight = Number.isFinite(target.preview.height) && target.preview.height > 0
-    ? target.preview.height
-    : WALL_DEFAULT_HEIGHT
-  const previewWidth = Number.isFinite(target.preview.width) && target.preview.width > 0
-    ? target.preview.width
-    : WALL_DEFAULT_WIDTH
-  const padW = Math.max(0.03, previewWidth * 0.15)
-  const padH = Math.max(0.05, previewHeight * 0.03)
-  const boxWidth = previewWidth + padW
-  const boxHeight = previewHeight + padH
-
-  wallEraseHoverUpHelper.set(0, 1, 0)
-  wallEraseHoverBasisZHelper.copy(wallEraseHoverDirHelper)
-  wallEraseHoverBasisXHelper.crossVectors(wallEraseHoverUpHelper, wallEraseHoverBasisZHelper)
-  if (wallEraseHoverBasisXHelper.lengthSq() <= 1e-10) {
-    wallEraseHoverBasisXHelper.set(1, 0, 0)
-  } else {
-    wallEraseHoverBasisXHelper.normalize()
-  }
-  wallEraseHoverBasisYHelper.crossVectors(wallEraseHoverBasisZHelper, wallEraseHoverBasisXHelper)
-  if (wallEraseHoverBasisYHelper.lengthSq() <= 1e-10) {
-    wallEraseHoverBasisYHelper.set(0, 1, 0)
-  } else {
-    wallEraseHoverBasisYHelper.normalize()
-  }
-  wallEraseHoverMatHelper.makeBasis(wallEraseHoverBasisXHelper, wallEraseHoverBasisYHelper, wallEraseHoverBasisZHelper)
-  wallEraseHoverGroup.quaternion.setFromRotationMatrix(wallEraseHoverMatHelper)
-  wallEraseHoverGroup.position.copy(wallEraseHoverMidHelper).addScaledVector(wallEraseHoverBasisYHelper, boxHeight * 0.5)
-  wallEraseHoverGroup.scale.set(boxWidth, boxHeight, len)
-  wallEraseHoverGroup.visible = true
-  return true
-}
-const wallEraseHoverDirHelper = new THREE.Vector3()
-const wallEraseHoverMidHelper = new THREE.Vector3()
-const wallEraseHoverUpHelper = new THREE.Vector3()
-const wallEraseHoverBasisXHelper = new THREE.Vector3()
-const wallEraseHoverBasisYHelper = new THREE.Vector3()
-const wallEraseHoverBasisZHelper = new THREE.Vector3()
-const wallEraseHoverMatHelper = new THREE.Matrix4()
+const { wallDoorSelectionHighlightGroup, dispose: disposeWallDoorSelectionController } = wallDoorSelectionController
 
 const placementOverlayHintDirHelper = new THREE.Vector3()
 const placementOverlayHintMidHelper = new THREE.Vector3()
@@ -4012,465 +3329,7 @@ function clearWallDoorRectangleSelectionState(): void {
 
 function clearWallDoorSelectionPayload(): void {
   wallDoorSelectionPayload.value = null
-  clearWallDoorSelectionHighlight()
-}
-
-function clearWallDoorSelectionHighlight(): void {
-  while (wallDoorSelectionHighlightGroup.children.length > 0) {
-    const child = wallDoorSelectionHighlightGroup.children[wallDoorSelectionHighlightGroup.children.length - 1]
-    if (!child) {
-      break
-    }
-    const line = child as THREE.Line
-    if (line?.isLine) {
-      line.geometry?.dispose?.()
-    }
-    child.removeFromParent()
-  }
-  wallDoorSelectionHighlightGroup.visible = false
-}
-
-function computeWallDoorRectangleBounds(state: WallDoorRectangleSelectionState): WallDoorRectangleClientBounds {
-  const left = Math.min(state.startClientX, state.currentClientX)
-  const right = Math.max(state.startClientX, state.currentClientX)
-  const top = Math.min(state.startClientY, state.currentClientY)
-  const bottom = Math.max(state.startClientY, state.currentClientY)
-  return { left, right, top, bottom }
-}
-
-function updateWallDoorSelectionOverlayBox(state: WallDoorRectangleSelectionState): void {
-  const surface = surfaceRef.value
-  if (!surface) {
-    wallDoorSelectionOverlayBox.value = null
-    return
-  }
-  const bounds = computeWallDoorRectangleBounds(state)
-  const rect = surface.getBoundingClientRect()
-  wallDoorSelectionOverlayBox.value = {
-    left: bounds.left - rect.left,
-    top: bounds.top - rect.top,
-    width: Math.max(0, bounds.right - bounds.left),
-    height: Math.max(0, bounds.bottom - bounds.top),
-  }
-}
-
-function projectWorldToClientPoint(worldPoint: THREE.Vector3): THREE.Vector2 | null {
-  if (!camera || !canvasRef.value) {
-    return null
-  }
-  const projected = worldPoint.clone().project(camera)
-  if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
-    return null
-  }
-  const rect = canvasRef.value.getBoundingClientRect()
-  return new THREE.Vector2(
-    rect.left + (projected.x * 0.5 + 0.5) * rect.width,
-    rect.top + (-projected.y * 0.5 + 0.5) * rect.height,
-  )
-}
-
-function clipSegmentToRect(
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-  rect: WallDoorRectangleClientBounds,
-): [number, number] | null {
-  const dx = bx - ax
-  const dy = by - ay
-  let t0 = 0
-  let t1 = 1
-
-  const clip = (p: number, q: number): boolean => {
-    if (Math.abs(p) < 1e-9) {
-      return q >= 0
-    }
-    const t = q / p
-    if (p < 0) {
-      if (t > t1) return false
-      if (t > t0) t0 = t
-    } else {
-      if (t < t0) return false
-      if (t < t1) t1 = t
-    }
-    return true
-  }
-
-  if (!clip(-dx, ax - rect.left)) return null
-  if (!clip(dx, rect.right - ax)) return null
-  if (!clip(-dy, ay - rect.top)) return null
-  if (!clip(dy, rect.bottom - ay)) return null
-  if (t1 < t0) return null
-  return [t0, t1]
-}
-
-function mergeWallOpeningIntervals(intervals: WallOpening[]): WallOpening[] {
-  const byChain = new Map<number, WallOpening[]>()
-  intervals.forEach((entry) => {
-    const chainIndex = Math.max(0, Math.trunc(Number(entry.chainIndex ?? 0)))
-    const start = Number(entry.start)
-    const end = Number(entry.end)
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start <= 1e-6) {
-      return
-    }
-    const bucket = byChain.get(chainIndex) ?? []
-    if (!byChain.has(chainIndex)) {
-      byChain.set(chainIndex, bucket)
-    }
-    bucket.push({ chainIndex, start: Math.min(start, end), end: Math.max(start, end) })
-  })
-
-  const merged: WallOpening[] = []
-  byChain.forEach((bucket, chainIndex) => {
-    bucket.sort((a, b) => a.start - b.start)
-    let current: WallOpening | null = null
-    bucket.forEach((entry) => {
-      if (!current) {
-        current = { ...entry, chainIndex }
-        return
-      }
-      if (entry.start <= current.end + 1e-6) {
-        current.end = Math.max(current.end, entry.end)
-      } else {
-        merged.push(current)
-        current = { ...entry, chainIndex }
-      }
-    })
-    if (current) {
-      merged.push(current)
-    }
-  })
-
-  return merged
-}
-
-function collectWallDoorStretchIntervals(
-  wallNode: SceneNode,
-  wallObject: THREE.Object3D,
-  rect: WallDoorRectangleClientBounds,
-): WallOpening[] {
-  const wallMesh = wallNode.dynamicMesh as WallDynamicMesh
-  const segments = compileWallSegmentsFromDefinition(wallMesh)
-  if (!segments.length) {
-    return []
-  }
-
-  const startWorld = new THREE.Vector3()
-  const endWorld = new THREE.Vector3()
-  const intervals: WallOpening[] = []
-
-  segments.forEach((seg) => {
-    startWorld.set(seg.start.x, seg.start.y, seg.start.z)
-    endWorld.set(seg.end.x, seg.end.y, seg.end.z)
-    wallObject.localToWorld(startWorld)
-    wallObject.localToWorld(endWorld)
-    const startClient = projectWorldToClientPoint(startWorld)
-    const endClient = projectWorldToClientPoint(endWorld)
-    if (!startClient || !endClient) {
-      return
-    }
-    const clipped = clipSegmentToRect(startClient.x, startClient.y, endClient.x, endClient.y, rect)
-    if (!clipped) {
-      return
-    }
-    const [t0, t1] = clipped
-    if (t1 - t0 <= 1e-6) {
-      return
-    }
-    const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
-    const segStart = Number(seg.chainArcStart ?? 0)
-    const segLengthXZ = Math.hypot(seg.end.x - seg.start.x, seg.end.z - seg.start.z)
-    const segEnd = segStart + segLengthXZ
-    const segLen = Math.max(0, segEnd - segStart)
-    if (segLen <= 1e-6) {
-      return
-    }
-    intervals.push({
-      chainIndex,
-      start: segStart + segLen * Math.max(0, Math.min(1, t0)),
-      end: segStart + segLen * Math.max(0, Math.min(1, t1)),
-    })
-  })
-
-  return mergeWallOpeningIntervals(intervals)
-}
-
-function collectWallDoorRepeatSlots(
-  wallObject: THREE.Object3D,
-  rect: WallDoorRectangleClientBounds,
-): WallRepeatErasedSlot[] {
-  const slots = new Set<string>()
-  const box = new THREE.Box3()
-  const corner = new THREE.Vector3()
-
-  wallObject.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-    const meta = extractWallRepeatInstanceMeta(mesh)
-    if (!meta) {
-      return
-    }
-    const { chainIndex, slotIndex } = meta
-
-    setBoundingBoxFromObject(mesh, box)
-    if (box.isEmpty()) {
-      return
-    }
-
-    const corners: [number, number, number][] = [
-      [box.min.x, box.min.y, box.min.z],
-      [box.min.x, box.min.y, box.max.z],
-      [box.min.x, box.max.y, box.min.z],
-      [box.min.x, box.max.y, box.max.z],
-      [box.max.x, box.min.y, box.min.z],
-      [box.max.x, box.min.y, box.max.z],
-      [box.max.x, box.max.y, box.min.z],
-      [box.max.x, box.max.y, box.max.z],
-    ]
-
-    let minX = Number.POSITIVE_INFINITY
-    let minY = Number.POSITIVE_INFINITY
-    let maxX = Number.NEGATIVE_INFINITY
-    let maxY = Number.NEGATIVE_INFINITY
-    let hasProjected = false
-
-    corners.forEach(([x, y, z]) => {
-      corner.set(x, y, z)
-      const projected = projectWorldToClientPoint(corner)
-      if (!projected) {
-        return
-      }
-      hasProjected = true
-      minX = Math.min(minX, projected.x)
-      minY = Math.min(minY, projected.y)
-      maxX = Math.max(maxX, projected.x)
-      maxY = Math.max(maxY, projected.y)
-    })
-
-    if (!hasProjected) {
-      return
-    }
-
-    const intersects = !(maxX < rect.left || minX > rect.right || maxY < rect.top || minY > rect.bottom)
-    if (intersects) {
-      slots.add(`${chainIndex}:${slotIndex}`)
-    }
-  })
-
-  return Array.from(slots.values())
-    .map((key) => {
-      const [chainRaw, slotRaw] = key.split(':')
-      const chainIndex = Math.max(0, Math.trunc(Number(chainRaw ?? 0)))
-      const slotIndex = Math.max(0, Math.trunc(Number(slotRaw ?? -1)))
-      return { chainIndex, slotIndex }
-    })
-    .filter((entry) => Number.isFinite(entry.chainIndex) && Number.isFinite(entry.slotIndex) && entry.slotIndex >= 0)
-    .sort((a, b) => (a.chainIndex - b.chainIndex) || (a.slotIndex - b.slotIndex))
-}
-
-function rebuildWallDoorSelectionHighlight(): void {
-  clearWallDoorSelectionHighlight()
-
-  const payload = wallDoorSelectionPayload.value
-  if (!payload?.length) {
-    return
-  }
-
-  payload.forEach((entry) => {
-    const node = findSceneNode(sceneStore.nodes, entry.nodeId)
-    const wallObject = objectMap.get(entry.nodeId) ?? null
-    if (!node || node.dynamicMesh?.type !== 'Wall' || !wallObject) {
-      return
-    }
-
-    if (entry.kind === 'stretch') {
-      const wallMesh = node.dynamicMesh as WallDynamicMesh
-      const segments = compileWallSegmentsFromDefinition(wallMesh)
-      if (!segments.length || !entry.intervals.length) {
-        return
-      }
-
-      const values: number[] = []
-      const startWorld = new THREE.Vector3()
-      const endWorld = new THREE.Vector3()
-
-      entry.intervals.forEach((interval) => {
-        const intervalStart = Math.min(Number(interval.start), Number(interval.end))
-        const intervalEnd = Math.max(Number(interval.start), Number(interval.end))
-        if (!Number.isFinite(intervalStart) || !Number.isFinite(intervalEnd) || intervalEnd - intervalStart <= 1e-6) {
-          return
-        }
-        const chainIndex = Math.max(0, Math.trunc(Number(interval.chainIndex ?? 0)))
-        segments.forEach((seg) => {
-          const segChainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
-          if (segChainIndex !== chainIndex) {
-            return
-          }
-          const segStart = Number(seg.chainArcStart ?? 0)
-          const segLengthXZ = Math.hypot(seg.end.x - seg.start.x, seg.end.z - seg.start.z)
-          const segEnd = segStart + segLengthXZ
-          const segLength = Math.max(0, segEnd - segStart)
-          if (!Number.isFinite(segStart) || !Number.isFinite(segEnd) || segLength <= 1e-6) {
-            return
-          }
-          const overlapStart = Math.max(intervalStart, segStart)
-          const overlapEnd = Math.min(intervalEnd, segEnd)
-          if (overlapEnd - overlapStart <= 1e-6) {
-            return
-          }
-          const t0 = Math.max(0, Math.min(1, (overlapStart - segStart) / segLength))
-          const t1 = Math.max(0, Math.min(1, (overlapEnd - segStart) / segLength))
-          startWorld.set(
-            seg.start.x + (seg.end.x - seg.start.x) * t0,
-            seg.start.y + (seg.end.y - seg.start.y) * t0,
-            seg.start.z + (seg.end.z - seg.start.z) * t0,
-          )
-          endWorld.set(
-            seg.start.x + (seg.end.x - seg.start.x) * t1,
-            seg.start.y + (seg.end.y - seg.start.y) * t1,
-            seg.start.z + (seg.end.z - seg.start.z) * t1,
-          )
-          wallObject.localToWorld(startWorld)
-          wallObject.localToWorld(endWorld)
-          values.push(
-            startWorld.x, startWorld.y, startWorld.z,
-            endWorld.x, endWorld.y, endWorld.z,
-          )
-        })
-      })
-
-      if (!values.length) {
-        return
-      }
-
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(values, 3))
-      const lines = new THREE.LineSegments(geometry, wallDoorSelectionStretchLineMaterial)
-      lines.frustumCulled = false
-      lines.renderOrder = 1200
-      wallDoorSelectionHighlightGroup.add(lines)
-      return
-    }
-
-    const slotSet = new Set<string>()
-    entry.slots.forEach((slot) => {
-      const chainIndex = Math.max(0, Math.trunc(Number(slot.chainIndex ?? 0)))
-      const slotIndex = Math.max(0, Math.trunc(Number(slot.slotIndex ?? -1)))
-      if (Number.isFinite(chainIndex) && Number.isFinite(slotIndex) && slotIndex >= 0) {
-        slotSet.add(`${chainIndex}:${slotIndex}`)
-      }
-    })
-    if (!slotSet.size) {
-      return
-    }
-
-    wallObject.updateWorldMatrix(true, true)
-    wallObject.traverse((child) => {
-      const mesh = child as THREE.Mesh
-      if (!mesh?.isMesh) {
-        return
-      }
-      const meta = mesh.userData?.wallInstanceMeta as { chainIndex?: unknown; repeatSlotIndex?: unknown } | undefined
-      if (!meta) {
-        return
-      }
-      const chainIndex = Math.max(0, Math.trunc(Number(meta.chainIndex ?? 0)))
-      const slotIndex = Math.max(0, Math.trunc(Number(meta.repeatSlotIndex ?? -1)))
-      if (!Number.isFinite(chainIndex) || !Number.isFinite(slotIndex) || slotIndex < 0) {
-        return
-      }
-      if (!slotSet.has(`${chainIndex}:${slotIndex}`)) {
-        return
-      }
-
-      const fillProxy = new THREE.Mesh(mesh.geometry, wallDoorSelectionRepeatFillMaterial)
-      fillProxy.matrixAutoUpdate = false
-      fillProxy.matrix.copy(mesh.matrixWorld)
-      fillProxy.renderOrder = 1199
-      fillProxy.frustumCulled = false
-      wallDoorSelectionHighlightGroup.add(fillProxy)
-
-      const wireProxy = new THREE.Mesh(mesh.geometry, wallDoorSelectionRepeatWireMaterial)
-      wireProxy.matrixAutoUpdate = false
-      wireProxy.matrix.copy(mesh.matrixWorld)
-      wireProxy.renderOrder = 1200
-      wireProxy.frustumCulled = false
-      wallDoorSelectionHighlightGroup.add(wireProxy)
-    })
-  })
-
-  wallDoorSelectionHighlightGroup.visible = wallDoorSelectionHighlightGroup.children.length > 0
-}
-
-function buildWallDoorSelectionPayloadFromRect(rect: WallDoorRectangleClientBounds): WallDoorSelectionPayload | null {
-  const entries: WallDoorSelectionEntry[] = []
-  for (const [nodeId, wallObject] of objectMap.entries()) {
-    if (!isObjectWorldVisible(wallObject)) {
-      continue
-    }
-    const node = findSceneNode(sceneStore.nodes, nodeId)
-    if (!node || node.dynamicMesh?.type !== 'Wall') {
-      continue
-    }
-
-    const mode = resolveSelectedWallRenderMode(node)
-    if (mode === 'repeatInstances') {
-      const slots = collectWallDoorRepeatSlots(wallObject, rect)
-      if (slots.length) {
-        entries.push({ kind: 'repeatInstances', nodeId, slots })
-      }
-      continue
-    }
-
-    const intervals = collectWallDoorStretchIntervals(node, wallObject, rect)
-    if (intervals.length) {
-      entries.push({ kind: 'stretch', nodeId, intervals })
-    }
-  }
-
-  if (!entries.length) {
-    return null
-  }
-
-  return entries
-}
-
-function applyWallDoorSelectionDelete(): boolean {
-  const payload = wallDoorSelectionPayload.value
-  if (!payload?.length) {
-    return false
-  }
-
-  let applied = false
-  payload.forEach((entry) => {
-    const node = findSceneNode(sceneStore.nodes, entry.nodeId)
-    if (!node || node.dynamicMesh?.type !== 'Wall') {
-      return
-    }
-
-    const wallMesh = node.dynamicMesh as WallDynamicMesh
-    if (entry.kind === 'stretch') {
-      let nextOpenings = Array.isArray(wallMesh.openings) ? wallMesh.openings : []
-      entry.intervals.forEach((interval) => {
-        nextOpenings = addWallOpeningToDefinition({ ...wallMesh, openings: nextOpenings }, interval)
-      })
-      applyWallMeshEraseResult(node, entry.nodeId, { ...wallMesh, openings: nextOpenings })
-      applied = true
-      return
-    }
-
-    const repeatErasedSlots = mergeWallRepeatErasedSlots(
-      (wallMesh as unknown as { repeatErasedSlots?: Array<{ chainIndex?: unknown; slotIndex?: unknown }> }).repeatErasedSlots,
-      entry.slots,
-    )
-    applyWallMeshEraseResult(node, entry.nodeId, { ...wallMesh, repeatErasedSlots })
-    applied = true
-  })
-
-  clearWallDoorSelectionPayload()
-  return applied
+  wallDoorSelectionController.clearWallDoorSelectionHighlight()
 }
 
 function pickSceneInstancedTargetAtPointer(event: PointerEvent): { nodeId: string; bindingId: string } | null {
@@ -5102,27 +3961,6 @@ type WarpGatePlacementClickSessionState = {
 
 let warpGatePlacementClickSessionState: WarpGatePlacementClickSessionState | null = null
 
-type WallDoorRectangleSelectionState = {
-  pointerId: number
-  startClientX: number
-  startClientY: number
-  currentClientX: number
-  currentClientY: number
-  moved: boolean
-}
-
-type WallDoorRectangleClientBounds = {
-  left: number
-  top: number
-  right: number
-  bottom: number
-}
-
-type WallDoorStretchSelectionEntry = { kind: 'stretch'; nodeId: string; intervals: WallOpening[] }
-type WallDoorRepeatSelectionEntry = { kind: 'repeatInstances'; nodeId: string; slots: WallRepeatErasedSlot[] }
-type WallDoorSelectionEntry = WallDoorStretchSelectionEntry | WallDoorRepeatSelectionEntry
-type WallDoorSelectionPayload = WallDoorSelectionEntry[]
-
 let wallDoorRectangleSelectionState: WallDoorRectangleSelectionState | null = null
 const wallDoorSelectionPayload = ref<WallDoorSelectionPayload | null>(null)
 const wallDoorSelectionOverlayBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
@@ -5130,7 +3968,7 @@ const wallDoorSelectionOverlayBox = ref<{ left: number; top: number; width: numb
 watch(
   () => wallDoorSelectionPayload.value,
   () => {
-    rebuildWallDoorSelectionHighlight()
+    wallDoorSelectionController.rebuildWallDoorSelectionHighlight(wallDoorSelectionPayload.value)
   },
   { flush: 'post' },
 )
@@ -11663,7 +10501,7 @@ function disposeScene() {
   instancedMeshGroup.removeFromParent()
   clearInstancedOutlineEntries()
   instancedOutlineGroup.removeFromParent()
-  clearWallDoorSelectionHighlight()
+  wallDoorSelectionController.clearWallDoorSelectionHighlight()
   wallDoorSelectionHighlightGroup.removeFromParent()
 
   directionalLightTargetHandleManager.clear()
@@ -12748,7 +11586,7 @@ async function handlePointerDown(event: PointerEvent) {
       moved: false,
     }
     clearWallDoorSelectionPayload()
-    updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState)
+    wallDoorSelectionController.updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState, wallDoorSelectionOverlayBox)
     pointerInteraction.capture(event.pointerId)
     event.preventDefault()
     event.stopPropagation()
@@ -13123,7 +11961,7 @@ function handlePointerMove(event: PointerEvent) {
         wallDoorRectangleSelectionState.moved = true
       }
     }
-    updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState)
+    wallDoorSelectionController.updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState, wallDoorSelectionOverlayBox)
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13715,12 +12553,12 @@ async function handlePointerUp(event: PointerEvent) {
     if (isPointerUpOnCanvas) {
       if (wallDoorRectangleSelectionState && event.pointerId === wallDoorRectangleSelectionState.pointerId && event.button === 0) {
         const state = wallDoorRectangleSelectionState
-        const bounds = computeWallDoorRectangleBounds(state)
+        const bounds = wallDoorSelectionController.computeWallDoorRectangleBounds(state)
         clearWallDoorRectangleSelectionState()
         const width = bounds.right - bounds.left
         const height = bounds.bottom - bounds.top
         if (state.moved && width >= 2 && height >= 2) {
-          wallDoorSelectionPayload.value = buildWallDoorSelectionPayloadFromRect(bounds)
+          wallDoorSelectionPayload.value = wallDoorSelectionController.buildWallDoorSelectionPayloadFromRect(bounds)
           if (wallDoorSelectionPayload.value?.length) {
             const selectedIds = Array.from(new Set(wallDoorSelectionPayload.value.map((entry) => entry.nodeId)))
             emitSelectionChange(selectedIds)
@@ -18199,7 +17037,10 @@ function handleViewportShortcut(event: KeyboardEvent) {
       case 'Delete':
       case 'Backspace': {
         if (wallDoorSelectModeActive.value && activeBuildTool.value === 'wall' && wallDoorSelectionPayload.value?.length) {
-          handled = applyWallDoorSelectionDelete()
+          handled = wallDoorSelectionController.applyWallDoorSelectionDelete(wallDoorSelectionPayload.value)
+          if (handled) {
+            clearWallDoorSelectionPayload()
+          }
         }
         break
       }
@@ -18365,9 +17206,8 @@ onBeforeUnmount(() => {
   groundTextureInputRef.value = null
   disposeSceneNodes()
   disposeScene()
-  wallDoorSelectionStretchLineMaterial.dispose()
-  wallDoorSelectionRepeatFillMaterial.dispose()
-  wallDoorSelectionRepeatWireMaterial.dispose()
+  disposeWallDoorSelectionController()
+  disposeWallEraseHoverPresenter()
   disposeCachedTextures()
   window.removeEventListener('keydown', handleViewportShortcut, { capture: true })
   window.removeEventListener('keydown', handleVertexSnapShiftKeyDown, { capture: true })
