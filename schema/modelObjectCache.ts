@@ -7,13 +7,12 @@ import {
   Matrix4,
   Mesh,
   Object3D,
-  RepeatWrapping,
-  type Texture,
   Vector3,
   type Material,
 } from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
+import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
 
 const DEFAULT_INSTANCE_CAPACITY = 2048
 
@@ -114,75 +113,6 @@ const derivedAssetIdsBySource = new Map<string, Set<string>>()
 
 const tempMatrix = new Matrix4()
 const tempInstanceMatrix = new Matrix4()
-const WALL_REPEAT_U_TEXTURE_SLOTS = [
-  'map',
-  'alphaMap',
-  'lightMap',
-  'aoMap',
-  'bumpMap',
-  'normalMap',
-  'displacementMap',
-  'emissiveMap',
-  'metalnessMap',
-  'roughnessMap',
-  'clearcoatMap',
-  'clearcoatNormalMap',
-  'clearcoatRoughnessMap',
-  'iridescenceMap',
-  'iridescenceThicknessMap',
-  'sheenColorMap',
-  'sheenRoughnessMap',
-  'specularMap',
-  'specularColorMap',
-  'specularIntensityMap',
-  'transmissionMap',
-  'thicknessMap',
-  'anisotropyMap',
-] as const
-
-function sanitizeWallUvScaleU(value: number): number {
-  return Number.isFinite(value) && value > 0 ? value : 1
-}
-
-function ensureWallMaterialRepeatWrapU(material: Material): void {
-  const candidate = material as Material & Record<string, unknown>
-  let changed = false
-  for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
-    const texture = candidate[slot] as Texture | null | undefined
-    if (!texture) {
-      continue
-    }
-    if (texture.wrapS !== RepeatWrapping) {
-      texture.wrapS = RepeatWrapping
-      texture.needsUpdate = true
-      changed = true
-    }
-  }
-  if (changed) {
-    candidate.needsUpdate = true
-  }
-}
-
-function applyMaterialRepeatScaleU(material: Material, repeatScaleU: number): void {
-  const candidate = material as Material & Record<string, unknown>
-  const safeScale = sanitizeWallUvScaleU(repeatScaleU)
-  let changed = false
-  for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
-    const texture = candidate[slot] as Texture | null | undefined
-    if (!texture) {
-      continue
-    }
-    const clonedTexture = texture.clone()
-    clonedTexture.wrapS = RepeatWrapping
-    clonedTexture.repeat.x *= safeScale
-    clonedTexture.needsUpdate = true
-    candidate[slot] = clonedTexture
-    changed = true
-  }
-  if (changed) {
-    candidate.needsUpdate = true
-  }
-}
 
 function cloneObjectForRepeatVariant(root: Object3D, repeatScaleU: number): Object3D {
   const clonedRoot = root.clone(true)
@@ -191,15 +121,8 @@ function cloneObjectForRepeatVariant(root: Object3D, repeatScaleU: number): Obje
     if (!(mesh as any)?.isMesh || !mesh.material) {
       return
     }
-    if (Array.isArray(mesh.material)) {
-      mesh.material = mesh.material
-        .map((entry) => (entry?.clone ? entry.clone() : entry))
-        .filter((entry): entry is Material => Boolean(entry))
-      mesh.material.forEach((entry) => applyMaterialRepeatScaleU(entry, repeatScaleU))
-      return
-    }
-    mesh.material = mesh.material.clone()
-    applyMaterialRepeatScaleU(mesh.material, repeatScaleU)
+    const variant = createWallRepeatScaleMaterialVariant(mesh.material, repeatScaleU)
+    mesh.material = variant.shared ? mesh.material : variant.material
   })
   return clonedRoot
 }

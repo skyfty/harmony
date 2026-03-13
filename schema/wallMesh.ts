@@ -38,6 +38,8 @@ export type WallRenderAssetObjects = {
   footCornerObjectsByAssetId?: Record<string, THREE.Object3D | null> | null
 }
 
+export const WALL_ASSET_REPEAT_VARIANT_INFO_KEY = '__harmonyWallAssetRepeatVariantInfo'
+
 export type WallCornerModelRule = {
   bodyAssetId: string | null
   headAssetId: string | null
@@ -816,6 +818,11 @@ function createWallAssetMesh(
       uvMetersPerUnit: { x: number; y: number }
       repeatScale?: { x: number; y: number }
     }
+    repeatVariantInfo?: {
+      repeatScaleU: number
+      repeatScaleV: number
+      uvAxis: WallResolvedUvAxis
+    }
   } = {},
 ): THREE.Mesh {
   const resolvedMaterial = applyWallShadowSide(material, options.shadowSide)
@@ -831,6 +838,9 @@ function createWallAssetMesh(
   }
   if (options.repeatInfo) {
     mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = options.repeatInfo
+  }
+  if (options.repeatVariantInfo) {
+    mesh.userData[WALL_ASSET_REPEAT_VARIANT_INFO_KEY] = options.repeatVariantInfo
   }
   mesh.castShadow = true
   mesh.receiveShadow = true
@@ -882,6 +892,11 @@ function createWallRepeatedAssetMeshes(
         ownedTextures: materialVariant.owner ? materialVariant.ownedTextures : [],
         shadowSide,
         repeatInfo,
+        repeatVariantInfo: {
+          repeatScaleU: instance.repeatScaleU,
+          repeatScaleV: instance.repeatScaleV,
+          uvAxis,
+        },
       },
     )
   }).map((mesh, index) => {
