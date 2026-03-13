@@ -185,6 +185,12 @@ export function createWallBuildTool(options: {
     return target.clone()
   }
 
+  const snapPlacementPoint = (point: THREE.Vector3): THREE.Vector3 => {
+    const snapped = options.snapPoint(point)
+    snapped.y = point.y
+    return snapped
+  }
+
   const WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.35
   const WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE_SQ = WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE * WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE
 
@@ -363,7 +369,7 @@ export function createWallBuildTool(options: {
     }
 
     const rawPointer = groundPointerHelper.clone()
-    const start = options.snapPoint(rawPointer.clone())
+    const start = snapPlacementPoint(rawPointer.clone())
     const end = kind === 'circle' ? rawPointer.clone() : start.clone()
 
     const current = ensureSession()
@@ -459,7 +465,7 @@ export function createWallBuildTool(options: {
     const rawPointer = groundPointerHelper.clone()
     const kind = session.shapeDraft.kind
     const start = session.shapeDraft.start.clone()
-    const end = kind === 'circle' ? rawPointer.clone() : options.snapPoint(rawPointer.clone())
+    const end = kind === 'circle' ? rawPointer.clone() : snapPlacementPoint(rawPointer.clone())
 
     const previousEnd = session.shapeDraft.end
     if (previousEnd.equals(end)) {
@@ -484,7 +490,7 @@ export function createWallBuildTool(options: {
     const start = session.shapeDraft.start.clone()
     const end = kind === 'circle'
       ? session.shapeDraft.end.clone()
-      : options.snapPoint(session.shapeDraft.end.clone())
+      : snapPlacementPoint(session.shapeDraft.end.clone())
 
     const segments = kind === 'rectangle'
       ? buildRectangleSegments(start, end)
@@ -625,7 +631,7 @@ export function createWallBuildTool(options: {
     }
 
     const rawPointer = groundPointerHelper.clone()
-    const snappedPoint = options.snapPoint(rawPointer.clone())
+    const snappedPoint = snapPlacementPoint(rawPointer.clone())
 
     const current = ensureSession()
     if (!current.dragStart) {
@@ -662,7 +668,7 @@ export function createWallBuildTool(options: {
     }
 
     const rawPointer = groundPointerHelper.clone()
-    const pointer = options.snapPoint(rawPointer.clone())
+    const pointer = snapPlacementPoint(rawPointer.clone())
     const constrained = constrainWallEndPointForBuild(session.dragStart, pointer, rawPointer)
     const previous = session.dragEnd
     if (previous && previous.equals(constrained)) {
