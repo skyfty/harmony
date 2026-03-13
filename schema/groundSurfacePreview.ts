@@ -17,6 +17,7 @@ import {
   type LandformsPreviewLoaders,
 } from './landformsPreview'
 import type { TerrainPaintLoaders } from './terrainPaintPreview'
+import { resolveGroundChunkCells } from './groundMesh'
 
 const DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION = 1024
 const MIN_GROUND_SURFACE_PREVIEW_RESOLUTION = 256
@@ -46,7 +47,11 @@ export type GroundSurfacePreviewOptions = {
   maxResolution?: number
   liveChunkPagesByKey?: Map<string, Uint8ClampedArray[]>
   previewRevision?: number
+  applyToMaterialMap?: boolean
 }
+
+const GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY = '__groundSurfacePreviewOriginalMap'
+const GROUND_SURFACE_PREVIEW_MAP_ACTIVE_KEY = '__groundSurfacePreviewMapActive'
 
 function normalizeFinite(value: number, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback
@@ -228,6 +233,55 @@ function loadImageDataFromTexture(texture: THREE.Texture | null): LoadedPreviewI
   return { source, imageData }
 }
 
+function forEachGroundPreviewMaterial(root: THREE.Object3D, visitor: (material: THREE.MeshStandardMaterial) => void): void {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+    const material = mesh.material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => {
+        if (entry instanceof THREE.MeshStandardMaterial) {
+          visitor(entry)
+        }
+      })
+      return
+    }
+    if (material instanceof THREE.MeshStandardMaterial) {
+      visitor(material)
+    }
+  })
+}
+
+function applyGroundSurfacePreviewToMaterialMap(root: THREE.Object3D, texture: THREE.Texture): void {
+  forEachGroundPreviewMaterial(root, (material) => {
+    const userData = (material.userData ??= {}) as Record<string, unknown>
+    if (!(GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY in userData)) {
+      userData[GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY] = material.map ?? null
+    }
+    userData[GROUND_SURFACE_PREVIEW_MAP_ACTIVE_KEY] = true
+    material.map = texture
+    material.needsUpdate = true
+  })
+}
+
+export function restoreGroundSurfacePreviewMaterialMap(root: THREE.Object3D | null | undefined): void {
+  if (!root) {
+    return
+  }
+  forEachGroundPreviewMaterial(root, (material) => {
+    const userData = (material.userData ?? {}) as Record<string, unknown>
+    if (!(GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY in userData)) {
+      return
+    }
+    material.map = (userData[GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY] as THREE.Texture | null | undefined) ?? null
+    delete userData[GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY]
+    delete userData[GROUND_SURFACE_PREVIEW_MAP_ACTIVE_KEY]
+    material.needsUpdate = true
+  })
+}
+
 function sampleImageData(image: ImageDataSource, u: number, v: number, wrap: 'repeat' | 'clamp'): [number, number, number, number] {
   if (!(image.width > 0) || !(image.height > 0)) {
     return [1, 1, 1, 1]
@@ -403,7 +457,20 @@ async function composeGroundSurfacePreviewTexture(
     const groundDepth = Math.max(1e-6, normalizeDimension(definition.depth))
     const halfWidth = groundWidth * 0.5
     const halfDepth = groundDepth * 0.5
-    for (const [chunkKey, chunkRef] of Object.entries(terrainPaint.chunks ?? {})) {
+    const persistedChunkEntries = Object.entries(terrainPaint.chunks ?? {})
+    const liveChunkEntries = options.liveChunkPagesByKey
+      ? Array.from(options.liveChunkPagesByKey.keys()).map((chunkKey) => [chunkKey, null] as const)
+      : []
+    const chunkEntries = new Map<string, { pages?: Array<{ logicalId: string }> } | null>()
+    persistedChunkEntries.forEach(([chunkKey, chunkRef]) => {
+      chunkEntries.set(chunkKey, chunkRef)
+    })
+    liveChunkEntries.forEach(([chunkKey]) => {
+      if (!chunkEntries.has(chunkKey)) {
+        chunkEntries.set(chunkKey, null)
+      }
+    })
+    for (const [chunkKey, chunkRef] of chunkEntries.entries()) {
       const [rowText, colText] = chunkKey.split(':')
       const chunkRow = Number.parseInt(rowText ?? '', 10)
       const chunkColumn = Number.parseInt(colText ?? '', 10)
@@ -411,7 +478,7 @@ async function composeGroundSurfacePreviewTexture(
         continue
       }
       const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-      const chunkCells = Math.max(1, Math.round(Math.min(definition.rows, definition.columns, Math.max(1, Math.floor(64 / Math.max(cellSize, 1e-6))))))
+      const chunkCells = Math.max(1, resolveGroundChunkCells(definition))
       const startColumn = chunkColumn * chunkCells
       const startRow = chunkRow * chunkCells
       const effectiveColumns = Math.max(0, Math.min(chunkCells, Math.max(0, definition.columns - startColumn)))
@@ -613,6 +680,7 @@ export function syncGroundSurfacePreviewForGround(
   options: GroundSurfacePreviewOptions = {},
 ): boolean {
   if (!groundObject || !groundNode || dynamicMesh.type !== 'Ground') {
+    restoreGroundSurfacePreviewMaterialMap(groundObject)
     clearLandformsPreviewForGround(groundObject)
     return false
   }
@@ -621,6 +689,7 @@ export function syncGroundSurfacePreviewForGround(
   const landformsProps = component ? clampLandformsComponentProps(component.props) : null
   const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
   if (!hasTerrainPaint && !hasLandforms) {
+    restoreGroundSurfacePreviewMaterialMap(groundObject)
     clearLandformsPreviewForGround(groundObject)
     return false
   }
@@ -642,7 +711,18 @@ export function syncGroundSurfacePreviewForGround(
       return
     }
     if (!texture) {
+      console.log('[groundSurfacePreview] preview missing texture', {
+        previewRevision: options.previewRevision ?? null,
+      })
       return
+    }
+    console.log('[groundSurfacePreview] preview applied', {
+      previewRevision: options.previewRevision ?? null,
+      textureUuid: texture.uuid,
+      liveChunkCount: options.liveChunkPagesByKey?.size ?? 0,
+    })
+    if (options.applyToMaterialMap === true) {
+      applyGroundSurfacePreviewToMaterialMap(groundObject, texture)
     }
     setLandformsPreviewTexture(groundObject, signature, texture)
   }).catch((error) => {
