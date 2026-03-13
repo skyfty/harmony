@@ -1345,8 +1345,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         } else {
           scheduleWallResync(nodeId)
         }
-      } catch (error) {
-        console.warn('Failed to load wall model asset', assetId, error)
+      } catch {
       } finally {
         wallModelRequestCache.delete(assetId)
       }
