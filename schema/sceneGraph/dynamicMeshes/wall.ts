@@ -2,20 +2,14 @@ import * as THREE from 'three';
 import type { SceneNodeComponentState, WallDynamicMesh } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
 import type { WallComponentProps } from '../../components/definitions/wallComponent';
-import { WALL_COMPONENT_TYPE, clampWallProps } from '../../components/definitions/wallComponent';
+import {
+  WALL_COMPONENT_TYPE,
+  clampWallProps,
+  resolveWallBodyMaterialConfigIdForRender,
+} from '../../components/definitions/wallComponent';
 import { createWallRenderGroup } from '../../wallMesh';
 import { createAutoTiledMaterialVariant, MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from '../../material';
 import { buildMaterialConfigMap } from '../materialAssignment';
-
-function resolveWallBodyMaterialConfigId(node: SceneNodeWithExtras, meshInfo: WallDynamicMesh): string | null {
-  const meshValue = typeof meshInfo.bodyMaterialConfigId === 'string' ? meshInfo.bodyMaterialConfigId.trim() : '';
-  if (meshValue) {
-    return meshValue;
-  }
-  const first = node.materials?.[0];
-  const nodeValue = typeof first?.id === 'string' ? first.id.trim() : '';
-  return nodeValue || null;
-}
 
 function applyWallMaterialConfigAssignment(
   root: THREE.Object3D,
@@ -151,7 +145,7 @@ export async function buildWallMesh(
     {
       smoothing: wallProps.smoothing,
       wallRenderMode: wallProps.wallRenderMode,
-      bodyMaterialConfigId: resolveWallBodyMaterialConfigId(node, meshInfo),
+      bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps),
       cornerModels,
       bodyUvAxis: wallProps.bodyUvAxis,
       headUvAxis: wallProps.headUvAxis,

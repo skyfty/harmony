@@ -420,6 +420,23 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
   })
 }
 
+function normalizeWallBodyMaterialConfigId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+export function resolveWallBodyMaterialConfigIdForRender(
+  mesh: Pick<WallDynamicMesh, 'bodyMaterialConfigId'> | undefined | null,
+  props: Pick<WallComponentProps, 'bodyMaterialConfigId'> | Partial<Pick<WallComponentProps, 'bodyMaterialConfigId'>> | undefined | null,
+): string | null {
+  return normalizeWallBodyMaterialConfigId(props?.bodyMaterialConfigId)
+    ?? normalizeWallBodyMaterialConfigId(mesh?.bodyMaterialConfigId)
+    ?? null
+}
+
 export function cloneWallComponentProps(props: WallComponentProps): WallComponentProps {
   return {
     height: props.height,
