@@ -57,7 +57,7 @@ import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { GroundPanelTab } from '@/stores/terrainStore'
+import type { GroundPanelTab, TerrainPaintLayerDraft } from '@/stores/terrainStore'
 import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 
@@ -114,6 +114,8 @@ export type GroundEditorOptions = {
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
+	paintLayers: Ref<TerrainPaintLayerDraft[]>
+	paintSelectedLayerId: Ref<string | null>
 	paintAsset: Ref<ProjectAsset | null>
 	paintSmoothness: Ref<number>
 	paintLayerStyle: Ref<TerrainPaintBrushSettings>
@@ -137,6 +139,13 @@ export type GroundEditorOptions = {
 		maxBindingChangesPerUpdate?: number
 	}
 	onSculptCommitApplied?: (payload: { groundObject: THREE.Object3D; definition: GroundRuntimeDynamicMesh }) => void
+	onTerrainPaintPreviewChanged?: (payload: {
+		groundObject: THREE.Object3D
+		groundNode: SceneNode
+		dynamicMesh: GroundDynamicMesh
+		liveChunkPagesByKey: Map<string, Uint8ClampedArray[]>
+		previewRevision: number
+	}) => void
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
@@ -262,6 +271,7 @@ function createTerrainPaintLayerDefinition(
 	textureAssetId: string,
 	style: TerrainPaintLayerStyle,
 	slotIndex: number,
+	layerId?: string | null,
 ): TerrainPaintLayerDefinition | null {
 	const trimmed = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
 	if (!trimmed) {
@@ -269,7 +279,7 @@ function createTerrainPaintLayerDefinition(
 	}
 	const placement = buildTerrainPaintLayerPlacement(slotIndex)
 	return clampTerrainPaintLayerDefinition({
-		id: createTerrainPaintLayerId(),
+		id: typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : createTerrainPaintLayerId(),
 		pageIndex: placement.pageIndex,
 		channel: placement.channel,
 		textureAssetId: trimmed,
@@ -306,6 +316,40 @@ function ensureTerrainPaintLayer(
 		return existing
 	}
 	settings.layers.push(requestedLayer)
+	settings.layers.sort((a, b) => getTerrainPaintLayerSlotIndex(a) - getTerrainPaintLayerSlotIndex(b))
+	return requestedLayer
+}
+
+function resolveSelectedTerrainPaintLayerDraft(options: GroundEditorOptions): TerrainPaintLayerDraft | null {
+	const selectedId = typeof options.paintSelectedLayerId.value === 'string' ? options.paintSelectedLayerId.value.trim() : ''
+	if (!selectedId) {
+		return null
+	}
+	return options.paintLayers.value.find((layer) => layer.id === selectedId) ?? null
+}
+
+function upsertTerrainPaintLayerFromDraft(
+	settings: TerrainPaintSettings,
+	draft: TerrainPaintLayerDraft,
+): TerrainPaintLayerDefinition | null {
+	const textureAssetId = typeof draft.assetId === 'string' && draft.assetId.trim().length
+		? draft.assetId.trim()
+		: (draft.asset?.id ?? '')
+	const requestedLayer = createTerrainPaintLayerDefinition(
+		textureAssetId,
+		draft.settings,
+		draft.slotIndex,
+		draft.id,
+	)
+	if (!requestedLayer) {
+		return null
+	}
+	const existingIndex = settings.layers.findIndex((layer) => layer.id === requestedLayer.id)
+	if (existingIndex >= 0) {
+		settings.layers.splice(existingIndex, 1, requestedLayer)
+	} else {
+		settings.layers.push(requestedLayer)
+	}
 	settings.layers.sort((a, b) => getTerrainPaintLayerSlotIndex(a) - getTerrainPaintLayerSlotIndex(b))
 	return requestedLayer
 }
@@ -573,6 +617,7 @@ type PaintSessionState = {
 	settings: TerrainPaintSettings
 	chunkStates: Map<string, PaintChunkState>
 	hasPendingChanges: boolean
+	terrainPaintSurfacePreviewRevision: number
 	terrainPaintPreviewPendingChunkKeys: Map<string, true>
 	terrainPaintPreviewFlushRafId: number | null
 }
@@ -1306,9 +1351,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 								chunkCells: resolveGroundChunkCells(definition),
 								settings,
 								chunkStates: new Map(),
-									hasPendingChanges: false,
-									terrainPaintPreviewPendingChunkKeys: new Map(),
-									terrainPaintPreviewFlushRafId: null,
+								hasPendingChanges: false,
+								terrainPaintSurfacePreviewRevision: 0,
+								terrainPaintPreviewPendingChunkKeys: new Map(),
+								terrainPaintPreviewFlushRafId: null,
 							},
 								getTerrainPaintLayerSlotIndex(layer),
 							asset,
@@ -2961,6 +3007,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			settings: cloneOrCreateTerrainPaintSettings(definition, nodeId),
 			chunkStates: new Map(),
 			hasPendingChanges: false,
+			terrainPaintSurfacePreviewRevision: 0,
 			terrainPaintPreviewPendingChunkKeys: new Map(),
 			terrainPaintPreviewFlushRafId: null,
 		}
@@ -3005,6 +3052,35 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return Array.from(found)
 	}
 
+	function buildLiveTerrainPaintChunkPages(session: PaintSessionState): Map<string, Uint8ClampedArray[]> {
+		const liveChunkPagesByKey = new Map<string, Uint8ClampedArray[]>()
+		session.chunkStates.forEach((chunk) => {
+			liveChunkPagesByKey.set(chunk.key, chunk.pages.map((page) => page.slice()))
+		})
+		return liveChunkPagesByKey
+	}
+
+	function emitTerrainPaintSurfacePreview(session: PaintSessionState): void {
+		if (!options.onTerrainPaintPreviewChanged) {
+			return
+		}
+		const groundObject = getGroundObject()
+		const groundNode = getGroundNodeFromScene()
+		if (!groundObject || !groundNode || groundNode.id !== session.nodeId || groundNode.dynamicMesh?.type !== 'Ground') {
+			return
+		}
+		options.onTerrainPaintPreviewChanged({
+			groundObject,
+			groundNode,
+			dynamicMesh: {
+				...session.definition,
+				terrainPaint: session.settings,
+			},
+			liveChunkPagesByKey: buildLiveTerrainPaintChunkPages(session),
+			previewRevision: session.terrainPaintSurfacePreviewRevision,
+		})
+	}
+
 	function scheduleTerrainPaintPreviewFlush(session: PaintSessionState): void {
 		if (session.terrainPaintPreviewFlushRafId !== null) {
 			return
@@ -3012,6 +3088,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.terrainPaintPreviewFlushRafId = window.requestAnimationFrame(() => {
 			session.terrainPaintPreviewFlushRafId = null
 			flushTerrainPaintPreview(session)
+			emitTerrainPaintSurfacePreview(session)
 		})
 	}
 
@@ -3076,6 +3153,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function pushTerrainPaintPreviewWeightmap(session: PaintSessionState, chunk: PaintChunkState): void {
+		session.terrainPaintSurfacePreviewRevision += 1
 		enqueueTerrainPaintPreviewChunkKey(session, chunk.key)
 	}
 
@@ -4562,14 +4640,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const session = ensurePaintSession(definition, groundNode.id)
 		const paintAsset = options.paintAsset.value
+		const selectedLayerDraft = resolveSelectedTerrainPaintLayerDraft(options)
 		let targetLayerSlotIndex: number | null = null
-		if (paintAsset) {
-			const layer = ensureTerrainPaintLayer(session.settings, paintAsset.id, options.paintLayerStyle.value)
+		if (selectedLayerDraft) {
+			const layer = upsertTerrainPaintLayerFromDraft(session.settings, selectedLayerDraft)
 			if (!layer) {
 				return
 			}
 			targetLayerSlotIndex = getTerrainPaintLayerSlotIndex(layer)
 			// Best-effort: ensure the layer texture is visible during painting.
+			if (paintAsset) {
+				void pushTerrainPaintPreviewLayer(session, targetLayerSlotIndex, paintAsset)
+			}
+		} else if (paintAsset) {
+			const layer = ensureTerrainPaintLayer(session.settings, paintAsset.id, options.paintLayerStyle.value)
+			if (!layer) {
+				return
+			}
+			targetLayerSlotIndex = getTerrainPaintLayerSlotIndex(layer)
 			void pushTerrainPaintPreviewLayer(session, targetLayerSlotIndex, paintAsset)
 		}
 

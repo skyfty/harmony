@@ -1172,6 +1172,10 @@ export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' |
 export type TerrainPaintChannel = 'r' | 'g' | 'b' | 'a'
 export type TerrainPaintBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay'
 export const TERRAIN_PAINT_VERSION = 2 as const
+export const TERRAIN_PAINT_PAGE_CHANNELS = ['r', 'g', 'b', 'a'] as const
+export const TERRAIN_PAINT_PAGE_SIZE = TERRAIN_PAINT_PAGE_CHANNELS.length
+export const TERRAIN_PAINT_MAX_PAGE_COUNT = 4 as const
+export const TERRAIN_PAINT_MAX_LAYER_COUNT = TERRAIN_PAINT_PAGE_SIZE * TERRAIN_PAINT_MAX_PAGE_COUNT
 
 export const TERRAIN_PAINT_DEFAULT_OPACITY = 1
 export const TERRAIN_PAINT_DEFAULT_ROTATION_DEG = 0
@@ -1250,6 +1254,41 @@ export interface TerrainPaintLayerDefinition extends TerrainPaintLayerStyle {
   channel: TerrainPaintChannel
   /** Texture/image asset id to blend for this layer. */
   textureAssetId: string
+}
+
+export function terrainPaintChannelToIndex(channel: TerrainPaintChannel): number {
+  switch (channel) {
+    case 'g':
+      return 1
+    case 'b':
+      return 2
+    case 'a':
+      return 3
+    default:
+      return 0
+  }
+}
+
+export function terrainPaintChannelFromIndex(index: number): TerrainPaintChannel {
+  return TERRAIN_PAINT_PAGE_CHANNELS[Math.max(0, Math.min(TERRAIN_PAINT_PAGE_SIZE - 1, Math.floor(index)))] ?? 'r'
+}
+
+export function buildTerrainPaintLayerPlacement(slotIndex: number): {
+  pageIndex: number
+  channel: TerrainPaintChannel
+  channelIndex: number
+} {
+  const normalizedIndex = Math.max(0, Math.min(TERRAIN_PAINT_MAX_LAYER_COUNT - 1, Math.floor(slotIndex)))
+  const channelIndex = normalizedIndex % TERRAIN_PAINT_PAGE_SIZE
+  return {
+    pageIndex: Math.floor(normalizedIndex / TERRAIN_PAINT_PAGE_SIZE),
+    channel: terrainPaintChannelFromIndex(channelIndex),
+    channelIndex,
+  }
+}
+
+export function getTerrainPaintLayerSlotIndex(layer: Pick<TerrainPaintLayerDefinition, 'pageIndex' | 'channel'>): number {
+  return Math.max(0, Math.floor(layer.pageIndex)) * TERRAIN_PAINT_PAGE_SIZE + terrainPaintChannelToIndex(layer.channel)
 }
 
 export function clampTerrainPaintLayerDefinition(

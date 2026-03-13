@@ -480,6 +480,7 @@ import {
   createDefaultTerrainPaintLoaders,
   syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
 } from '@harmony/schema/terrainPaintPreview';
+import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@harmony/schema/groundSurfacePreview';
 import {
   createDefaultLandformsPreviewLoaders,
   clearLandformsPreviewForGround,
@@ -1155,6 +1156,7 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
 }
 
 // loaders created via createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
+const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
 
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
   const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
@@ -1177,6 +1179,21 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
         () => terrainPaintPreviewLoadToken,
       );
     });
+    return syncTerrainPaintPreviewForGroundShared(
+      groundObject,
+      { ...dynamicMesh, terrainPaint: null },
+      terrainPaintLoaders,
+      () => terrainPaintPreviewLoadToken,
+    );
+  }
+  const usesSurfacePreview = syncGroundSurfacePreviewForGround(
+    groundObject,
+    groundNode,
+    dynamicMesh,
+    groundSurfacePreviewLoaders,
+    () => terrainPaintPreviewLoadToken,
+  );
+  if (usesSurfacePreview) {
     return syncTerrainPaintPreviewForGroundShared(
       groundObject,
       { ...dynamicMesh, terrainPaint: null },
