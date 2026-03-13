@@ -18,9 +18,9 @@ export interface ScenePackageSceneEntry {
   planningPath?: string;
   /** Required ground height sidecar path, e.g. `scenes/<sceneId>/ground-heightmaps.bin` */
   groundHeightsPath?: string;
-  /** Required ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
+  /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
   groundScatterPath?: string;
-  /** Required ground paint sidecar path, e.g. `scenes/<sceneId>/ground-paint.bin` */
+  /** Optional ground paint sidecar path, e.g. `scenes/<sceneId>/ground-paint.bin` */
   groundPaintPath?: string;
 }
 

@@ -154,7 +154,7 @@ function extractGroundScatterSidecarFromPackage(
   }
   const sidecarPath = sceneEntry.groundScatterPath
   if (!sidecarPath) {
-    throw new Error(`Scene bundle entry ${sceneEntry.sceneId} is missing ground scatter sidecar path`)
+    return null
   }
   const bytes = zip.files[sidecarPath]
   if (!bytes) {
@@ -175,7 +175,7 @@ function extractGroundPaintSidecarFromPackage(
   }
   const sidecarPath = sceneEntry.groundPaintPath
   if (!sidecarPath) {
-    throw new Error(`Scene bundle entry ${sceneEntry.sceneId} is missing ground paint sidecar path`)
+    return null
   }
   const bytes = zip.files[sidecarPath]
   if (!bytes) {
