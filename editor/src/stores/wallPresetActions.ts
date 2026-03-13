@@ -778,7 +778,6 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         const existing = Array.isArray(target.materials) ? (target.materials as SceneNodeMaterial[]) : []
         const existingById = new Map(existing.map((entry) => [entry.id, entry]))
         const order = Array.isArray(preset.materialOrder) ? preset.materialOrder : []
-        const orderSet = new Set(order)
 
         const nextMaterials: SceneNodeMaterial[] = []
         for (const materialSlotId of order) {
@@ -841,16 +840,6 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           )
         }
 
-        // Preserve existing tail slots not mentioned in the preset.
-        for (const entry of existing) {
-          if (!orderSet.has(entry.id)) {
-            nextMaterials.push(entry)
-          }
-        }
-
-        if (nextMaterials.length) {
-          store.setNodeMaterials(nodeId, nextMaterials)
-        }
       }
 
       return wallProps as unknown as WallComponentProps
