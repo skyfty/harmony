@@ -145,6 +145,7 @@ export async function buildWallMesh(
     {
       smoothing: wallProps.smoothing,
       wallRenderMode: wallProps.wallRenderMode,
+      repeatInstanceStep: wallProps.repeatInstanceStep,
       bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps),
       cornerModels,
       bodyUvAxis: wallProps.bodyUvAxis,

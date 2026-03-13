@@ -85,6 +85,7 @@ export type WallRenderOptions = {
   bodyMaterialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
   wallRenderMode?: WallRenderMode
+  repeatInstanceStep?: number
 
   // Per-part UV repeat axis for stretched wall tiling.
   bodyUvAxis?: WallUvAxis
@@ -124,7 +125,7 @@ const WALL_MAX_ADAPTIVE_DEPTH = 10
 const WALL_MAX_SAMPLE_POINTS = 512
 
 const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
-const WALL_REPEAT_INSTANCE_STEP_M = 0.5
+const WALL_REPEAT_INSTANCE_STEP_M_DEFAULT = 0.5
 const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY = '__harmonySkipGeometryDispose'
@@ -458,6 +459,14 @@ function normalizeWallRenderMode(value: unknown): WallRenderMode {
   return value === 'repeatInstances' ? 'repeatInstances' : 'stretch'
 }
 
+function normalizeWallRepeatInstanceStep(value: unknown): number {
+  const raw = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(raw)) {
+    return WALL_REPEAT_INSTANCE_STEP_M_DEFAULT
+  }
+  return Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, raw)
+}
+
 
 type WallRepeatedMaterialSet = {
   material: THREE.Material | THREE.Material[]
@@ -667,6 +676,7 @@ function buildRepeatedWallInstancesForSegs(
   template: InstancedAssetTemplate,
   mode: 'body' | 'head' | 'foot',
   orientation: WallModelOrientation,
+  repeatInstanceStep: number,
   erasedSlotSet: Set<string>,
   rules: WallCornerModelRule[] = [],
 ): StretchedWallInstance[] {
@@ -738,7 +748,7 @@ function buildRepeatedWallInstancesForSegs(
     for (
       let localStart = 0;
       localStart <= maxLocalStart + WALL_EPSILON;
-      localStart += WALL_REPEAT_INSTANCE_STEP_M
+      localStart += repeatInstanceStep
     ) {
       const snappedLocalStart = Math.max(0, Math.min(maxLocalStart, localStart))
       offset.copy(unitDir).multiplyScalar(minAlongAxis)
@@ -1968,6 +1978,7 @@ function rebuildWallGroup(
 
   const smoothing = normalizeWallSmoothing(options.smoothing)
   const wallRenderMode = normalizeWallRenderMode(options.wallRenderMode)
+  const repeatInstanceStep = normalizeWallRepeatInstanceStep(options.repeatInstanceStep)
   const repeatErasedSlotSet = new Set(
     Array.isArray((definition as any).repeatErasedSlots)
       ? ((definition as any).repeatErasedSlots as Array<{ chainIndex?: unknown; slotIndex?: unknown }>)
@@ -2085,6 +2096,7 @@ function rebuildWallGroup(
               bodyTemplate,
               'body',
               bodyOrientation,
+              repeatInstanceStep,
               repeatErasedSlotSet,
               Array.isArray(options.cornerModels) ? options.cornerModels : [],
             )
@@ -2111,6 +2123,7 @@ function rebuildWallGroup(
               headTemplate,
               'head',
               headOrientation,
+              repeatInstanceStep,
               repeatErasedSlotSet,
               Array.isArray(options.cornerModels) ? options.cornerModels : [],
             )
@@ -2136,6 +2149,7 @@ function rebuildWallGroup(
               footTemplate,
               'foot',
               footOrientation,
+              repeatInstanceStep,
               repeatErasedSlotSet,
               Array.isArray(options.cornerModels) ? options.cornerModels : [],
             )

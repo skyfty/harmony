@@ -132,6 +132,7 @@ export function normalizeNodeComponents(
         smoothing: (existingProps as { smoothing?: number }).smoothing ?? baseProps.smoothing,
         isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
         wallRenderMode: (existingProps as { wallRenderMode?: 'stretch' | 'repeatInstances' }).wallRenderMode ?? (baseProps as any).wallRenderMode,
+        repeatInstanceStep: (existingProps as { repeatInstanceStep?: number }).repeatInstanceStep ?? (baseProps as any).repeatInstanceStep,
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
         headAssetId: (existingProps as { headAssetId?: string | null }).headAssetId ?? baseProps.headAssetId,
         footAssetId: (existingProps as { footAssetId?: string | null }).footAssetId ?? baseProps.footAssetId,

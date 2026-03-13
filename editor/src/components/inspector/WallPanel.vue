@@ -13,8 +13,10 @@ import { computeBoxExtentsAlongBasis } from '@schema/instancedMeshTiling'
 import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_REPEAT_INSTANCE_STEP,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
+  WALL_MIN_REPEAT_INSTANCE_STEP,
   WALL_DEFAULT_SMOOTHING,
   WALL_MIN_HEIGHT,
   WALL_MIN_THICKNESS,
@@ -34,10 +36,13 @@ const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
+const localRepeatInstanceStep = ref<number>(WALL_DEFAULT_REPEAT_INSTANCE_STEP)
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
 const isAutoFittingBodyAsset = ref(false)
+const isAutoFittingRepeatInstanceStep = ref(false)
+const repeatInstanceStepFeedbackMessage = ref<string | null>(null)
 
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
@@ -403,6 +408,9 @@ watch(
     localSmoothing.value = Number.isFinite(props.smoothing)
       ? Math.min(1, Math.max(0, props.smoothing))
       : WALL_DEFAULT_SMOOTHING
+    localRepeatInstanceStep.value = Number.isFinite((props as any).repeatInstanceStep)
+      ? Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, Number((props as any).repeatInstanceStep))
+      : WALL_DEFAULT_REPEAT_INSTANCE_STEP
     nextTick(() => {
       isSyncingFromScene.value = false
     })
@@ -651,6 +659,7 @@ watch(selectedNode, () => {
   footFeedbackMessage.value = null
   headCapFeedbackMessage.value = null
   footCapFeedbackMessage.value = null
+  repeatInstanceStepFeedbackMessage.value = null
 })
 
 watch(assetDialogVisible, (open) => {
@@ -1134,6 +1143,16 @@ function applySmoothingUpdate(rawValue: unknown) {
   sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothing: clamped })
 }
 
+function handleSmoothingModelUpdate(rawValue: unknown): void {
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const clamped = Math.min(1, Math.max(0, value))
+  localSmoothing.value = clamped
+  applySmoothingUpdate(clamped)
+}
+
 function applyRenderModeUpdate(rawValue: unknown) {
   if (isSyncingFromScene.value) {
     return
@@ -1149,6 +1168,85 @@ function applyRenderModeUpdate(rawValue: unknown) {
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { wallRenderMode: nextValue } as any)
+}
+
+function normalizeRepeatInstanceStep(value: unknown): number {
+  const raw = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return WALL_DEFAULT_REPEAT_INSTANCE_STEP
+  }
+  return Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, raw)
+}
+
+function applyRepeatInstanceStepUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextValue = normalizeRepeatInstanceStep(rawValue)
+  const currentValue = normalizeRepeatInstanceStep((component.props as any)?.repeatInstanceStep)
+  if (Math.abs(currentValue - nextValue) <= 1e-6) {
+    if (Math.abs(localRepeatInstanceStep.value - nextValue) > 1e-6) {
+      localRepeatInstanceStep.value = nextValue
+    }
+    return
+  }
+  localRepeatInstanceStep.value = nextValue
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { repeatInstanceStep: nextValue } as any)
+}
+
+function handleRepeatInstanceStepModelUpdate(value: unknown): void {
+  localRepeatInstanceStep.value = normalizeRepeatInstanceStep(value)
+  applyRepeatInstanceStepUpdate(value)
+}
+
+async function resolveBodyAssetAutoFitRepeatInstanceStep(
+  assetId: string,
+  orientation: WallModelOrientation,
+): Promise<number | null> {
+  const dimensions = await resolveBodyAssetAutoFitDimensions(assetId, orientation)
+  if (!dimensions) {
+    return null
+  }
+  const value = normalizeRepeatInstanceStep(dimensions.thickness)
+  return Number.isFinite(value) && value > 0 ? value : null
+}
+
+async function handleAutoFitRepeatInstanceStep(): Promise<void> {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const bodyAssetId = typeof component.props?.bodyAssetId === 'string' ? component.props.bodyAssetId.trim() : ''
+  if (!bodyAssetId) {
+    repeatInstanceStepFeedbackMessage.value = 'Assign a wall body model first.'
+    return
+  }
+  if (isAutoFittingRepeatInstanceStep.value) {
+    return
+  }
+
+  isAutoFittingRepeatInstanceStep.value = true
+  try {
+    const orientation = normalizeOrientation(component.props?.bodyOrientation, { forwardAxis: '+z', yawDeg: 0 })
+    const nextStep = await resolveBodyAssetAutoFitRepeatInstanceStep(bodyAssetId, orientation)
+    if (!nextStep) {
+      repeatInstanceStepFeedbackMessage.value = 'Assigned body model could not be measured.'
+      return
+    }
+    repeatInstanceStepFeedbackMessage.value = null
+    applyRepeatInstanceStepUpdate(nextStep)
+  } catch (error) {
+    console.error('Failed to auto-fit wall repeat instance step', error)
+    repeatInstanceStepFeedbackMessage.value = (error as Error).message ?? 'Failed to auto-fit repeat step.'
+  } finally {
+    isAutoFittingRepeatInstanceStep.value = false
+  }
 }
 </script>
 
@@ -1217,19 +1315,20 @@ function applyRenderModeUpdate(rawValue: unknown) {
         <p v-if="wallPresetFeedbackMessage" class="asset-feedback wall-preset-feedback">{{ wallPresetFeedbackMessage }}</p>
 
         <div class="wall-field-grid">
-          <div class="wall-field-labels">
-            <span>Corner Smoothness</span>
-            <span>{{ smoothingDisplay }}</span>
-          </div>
-          <v-slider
+ 
+          <v-text-field
             :model-value="localSmoothing"
-            :min="0"
-            :max="1"
-            :step="0.01"
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            label="Corner Smoothness"
             density="compact"
-            track-color="rgba(77, 208, 225, 0.4)"
-            color="primary"
-            @update:modelValue="(value) => { localSmoothing = Number(value); applySmoothingUpdate(value) }"
+            variant="underlined"
+            hide-details
+            @update:modelValue="handleSmoothingModelUpdate"
+            @blur="applySmoothingUpdate(localSmoothing)"
+            @keydown.enter.prevent="applySmoothingUpdate(localSmoothing)"
           />
           <div class="wall-dimension-block">
             <div class="wall-dimension-row">
@@ -1288,18 +1387,44 @@ function applyRenderModeUpdate(rawValue: unknown) {
               />
             </div>
           </div>
-          <v-select
-            v-if="!isAirWallNode"
-            density="compact"
-            variant="underlined"
-            label="Render Mode"
-            :items="WALL_RENDER_MODE_ITEMS"
-            item-title="title"
-            item-value="value"
-            hide-details
-            :model-value="(wallComponent?.props as any)?.wallRenderMode ?? 'stretch'"
-            @update:modelValue="applyRenderModeUpdate"
-          />
+          <div v-if="!isAirWallNode" class="wall-render-mode-row">
+            <v-select
+              density="compact"
+              variant="underlined"
+              label="Render Mode"
+              :items="WALL_RENDER_MODE_ITEMS"
+              item-title="title"
+              item-value="value"
+              hide-details
+              :model-value="(wallComponent?.props as any)?.wallRenderMode ?? 'stretch'"
+              @update:modelValue="applyRenderModeUpdate"
+            />
+            <v-text-field
+              density="compact"
+              variant="underlined"
+              type="number"
+              label="Step (m)"
+              hide-details
+              step="0.01"
+              :min="WALL_MIN_REPEAT_INSTANCE_STEP"
+              :disabled="((wallComponent?.props as any)?.wallRenderMode ?? 'stretch') !== 'repeatInstances'"
+              :model-value="localRepeatInstanceStep"
+              @update:modelValue="handleRepeatInstanceStepModelUpdate"
+              @blur="applyRepeatInstanceStepUpdate(localRepeatInstanceStep)"
+              @keydown.enter.prevent="applyRepeatInstanceStepUpdate(localRepeatInstanceStep)"
+            />
+            <v-btn
+              density="comfortable"
+              variant="tonal"
+              size="small"
+              prepend-icon="mdi-auto-fix"
+              text="自动适配"
+              :disabled="!wallComponent?.props?.bodyAssetId || ((wallComponent?.props as any)?.wallRenderMode ?? 'stretch') !== 'repeatInstances' || isAutoFittingRepeatInstanceStep"
+              :loading="isAutoFittingRepeatInstanceStep"
+              @click="handleAutoFitRepeatInstanceStep"
+            />
+          </div>
+          <p v-if="repeatInstanceStepFeedbackMessage" class="asset-feedback">{{ repeatInstanceStepFeedbackMessage }}</p>
 
         </div>
 
@@ -2227,8 +2352,23 @@ function applyRenderModeUpdate(rawValue: unknown) {
 }
 .wall-field-grid {
   display: grid;
-  gap: 0.2rem;
+  gap: 1rem;
   margin: 0px 5px;
+}
+
+.wall-render-mode-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.7fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.wall-render-mode-row > * {
+  min-width: 0;
+}
+
+.wall-render-mode-row :deep(.v-btn) {
+  width: 100%;
 }
 
 .wall-orientation-row {

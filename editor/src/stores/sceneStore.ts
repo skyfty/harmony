@@ -250,6 +250,7 @@ import {
   VEHICLE_COMPONENT_TYPE,
   AUTO_TOUR_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_REPEAT_INSTANCE_STEP,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
   WALL_DEFAULT_SMOOTHING,
@@ -1461,6 +1462,17 @@ function resolveWallRenderMode(node: SceneNode | null | undefined): 'stretch' | 
     | undefined
   const value = (component?.props as any)?.wallRenderMode
   return value === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+}
+
+function resolveWallRepeatInstanceStep(node: SceneNode | null | undefined): number {
+  const component = node?.components?.[WALL_COMPONENT_TYPE] as
+    | { props?: Partial<WallComponentProps> | null }
+    | undefined
+  const value = Number((component?.props as any)?.repeatInstanceStep)
+  if (!Number.isFinite(value) || value <= 0) {
+    return WALL_DEFAULT_REPEAT_INSTANCE_STEP
+  }
+  return value
 }
 import { buildRoadDynamicMeshFromWorldPoints } from './roadUtils'
 
@@ -2799,6 +2811,7 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
       runtime = createWallGroup(meshDefinition as WallDynamicMesh, {
         smoothing: resolveWallSmoothing(node),
         wallRenderMode: resolveWallRenderMode(node),
+        repeatInstanceStep: resolveWallRepeatInstanceStep(node),
       });
     }
 
@@ -12757,6 +12770,7 @@ export const useSceneStore = defineStore('scene', {
         updateWallGroup(runtime, build.definition, {
           smoothing: resolveWallSmoothing(node),
           wallRenderMode: resolveWallRenderMode(node),
+          repeatInstanceStep: resolveWallRepeatInstanceStep(node),
         } as any)
       }
       return true
@@ -13097,6 +13111,7 @@ export const useSceneStore = defineStore('scene', {
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasWallRenderMode = Object.prototype.hasOwnProperty.call(typedPatch, 'wallRenderMode')
+        const hasRepeatInstanceStep = Object.prototype.hasOwnProperty.call(typedPatch, 'repeatInstanceStep')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
 
         const orientationsEqual = (a: any, b: any): boolean => {
@@ -13252,6 +13267,9 @@ export const useSceneStore = defineStore('scene', {
           wallRenderMode: hasWallRenderMode
             ? (typedPatch.wallRenderMode as any)
             : currentProps.wallRenderMode,
+          repeatInstanceStep: hasRepeatInstanceStep
+            ? (typedPatch.repeatInstanceStep as number | undefined)
+            : currentProps.repeatInstanceStep,
           bodyAssetId: hasBodyAssetId
             ? (typedPatch.bodyAssetId as string | null | undefined)
             : currentProps.bodyAssetId,
@@ -13319,6 +13337,7 @@ export const useSceneStore = defineStore('scene', {
           (currentProps.bodyMaterialConfigId ?? null) === (merged.bodyMaterialConfigId ?? null) &&
           currentProps.isAirWall === merged.isAirWall &&
           currentProps.wallRenderMode === merged.wallRenderMode &&
+          Math.abs(currentProps.repeatInstanceStep - merged.repeatInstanceStep) <= 1e-6 &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
           (currentProps.footAssetId ?? null) === (merged.footAssetId ?? null) &&

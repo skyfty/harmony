@@ -2,6 +2,7 @@ import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@sch
 import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_REPEAT_INSTANCE_STEP,
   WALL_DEFAULT_SMOOTHING,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
@@ -83,6 +84,7 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     width: WALL_DEFAULT_WIDTH,
     thickness: WALL_DEFAULT_THICKNESS,
     smoothing: WALL_DEFAULT_SMOOTHING,
+    repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     isAirWall: true,
     bodyAssetId: null,
     bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
@@ -142,6 +144,14 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
       throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}`)
     }
     return raw
+  }
+  const optionalRepeatInstanceStep = (): number => {
+    const raw = record.repeatInstanceStep
+    const num = typeof raw === 'number' ? raw : Number(raw)
+    if (!Number.isFinite(num) || num <= 0) {
+      return WALL_DEFAULT_REPEAT_INSTANCE_STEP
+    }
+    return num
   }
 
   const requiredJointTrim = (raw: unknown, label: string): { start: number; end: number } => {
@@ -287,6 +297,7 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     width: requiredNumber('width'),
     thickness: requiredNumber('thickness'),
     smoothing: requiredNumber('smoothing'),
+    repeatInstanceStep: optionalRepeatInstanceStep(),
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
     bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
@@ -738,6 +749,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         width: wallProps.width,
         thickness: wallProps.thickness,
         smoothing: wallProps.smoothing,
+        repeatInstanceStep: wallProps.repeatInstanceStep,
         isAirWall: wallProps.isAirWall,
         bodyAssetId: wallProps.bodyAssetId ?? null,
         bodyOrientation: (wallProps as any).bodyOrientation,
