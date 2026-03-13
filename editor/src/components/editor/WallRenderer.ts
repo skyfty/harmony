@@ -24,6 +24,7 @@ import { compileWallSegmentsFromDefinition, type WallRenderSegment } from '@sche
 import {
   WALL_COMPONENT_TYPE,
   clampWallProps,
+  resolveWallBodyMaterialConfigIdForRender,
   resolveWallComponentPropsFromMesh,
   type WallComponentProps,
 } from '@schema/components'
@@ -1525,6 +1526,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         width: source.width ?? baseProps.width,
         thickness: source.thickness ?? baseProps.thickness,
         smoothing: source.smoothing ?? baseProps.smoothing,
+        bodyMaterialConfigId: source.bodyMaterialConfigId ?? baseProps.bodyMaterialConfigId,
         isAirWall: source.isAirWall ?? baseProps.isAirWall,
         wallRenderMode: source.wallRenderMode ?? (baseProps as any).wallRenderMode,
         bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
@@ -1592,6 +1594,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const renderOptions: WallRenderOptions = normalizedProps
       ? {
         smoothing: normalizedProps.smoothing,
+        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(params.definition, normalizedProps),
         cornerModels,
         wallRenderMode: normalizedProps.wallRenderMode,
         bodyUvAxis: normalizedProps.bodyUvAxis,
@@ -1703,8 +1706,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     node: SceneNode,
     signatureKey: string,
     wallDefinition: WallDynamicMesh,
-    smoothing: number,
-    wallRenderMode: 'stretch' | 'repeatInstances',
+    renderOptions: WallRenderOptions,
   ): THREE.Group {
     const userData = container.userData ?? (container.userData = {})
     let wallGroup = userData.wallGroup as THREE.Group | undefined
@@ -1712,9 +1714,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       return wallGroup
     }
 
-    wallGroup = createWallGroup(wallDefinition, { smoothing, wallRenderMode })
+    wallGroup = createWallGroup(wallDefinition, renderOptions)
     wallGroup.userData.nodeId = node.id
-    wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, { smoothing, wallRenderMode })
+    wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, {
+      smoothing: renderOptions.smoothing,
+      wallRenderMode: renderOptions.wallRenderMode,
+    })
+    wallGroup.userData.__harmonyWallBodyMaterialConfigId = renderOptions.bodyMaterialConfigId ?? null
     container.add(wallGroup)
     userData.wallGroup = wallGroup
     userData.dynamicMeshType = 'Wall'
@@ -1732,9 +1738,14 @@ export function createWallRenderer(options: WallRendererOptions) {
       smoothing: options.smoothing,
       wallRenderMode: options.wallRenderMode,
     })
-    if (groupData[signatureKey] !== nextSignature) {
+    const nextBodyMaterialConfigId = options.bodyMaterialConfigId ?? null
+    if (
+      groupData[signatureKey] !== nextSignature
+      || groupData.__harmonyWallBodyMaterialConfigId !== nextBodyMaterialConfigId
+    ) {
       updateWallGroup(wallGroup, definition, options)
       groupData[signatureKey] = nextSignature
+      groupData.__harmonyWallBodyMaterialConfigId = nextBodyMaterialConfigId
     }
   }
 
@@ -1878,14 +1889,18 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
+      const wallRenderOptions: WallRenderOptions = {
+        smoothing,
+        wallRenderMode,
+        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      }
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
-      const optionsForUpdate: WallRenderOptions = { smoothing, wallRenderMode }
       updateWallGroupIfNeeded(
         wallGroup,
         effectiveDefinition,
         signatureKey,
-        optionsForUpdate,
+        wallRenderOptions,
       )
 
       // Editor-only visual: air walls are semi-transparent so they can be distinguished.
@@ -1958,13 +1973,18 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
+      const wallRenderOptions: WallRenderOptions = {
+        smoothing,
+        wallRenderMode,
+        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      }
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
         effectiveDefinition,
         signatureKey,
-        { smoothing, wallRenderMode },
+        wallRenderOptions,
       )
       applyAirWallVisualToWallGroup(wallGroup, false)
       return
@@ -2254,13 +2274,18 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
+      const wallRenderOptions: WallRenderOptions = {
+        smoothing,
+        wallRenderMode,
+        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      }
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
         effectiveDefinition,
         signatureKey,
-        { smoothing, wallRenderMode },
+        wallRenderOptions,
       )
       applyAirWallVisualToWallGroup(wallGroup, false)
       return
@@ -2270,13 +2295,18 @@ export function createWallRenderer(options: WallRendererOptions) {
     // 6) 实例化生效：有 body 资产时移除程序墙体；否则保留程序 body 作为回退显示。
     // ============================
     if (hasProceduralBodyFallback) {
-      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing, wallRenderMode)
+      const wallRenderOptions: WallRenderOptions = {
+        smoothing,
+        wallRenderMode,
+        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      }
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
         effectiveDefinition,
         signatureKey,
-        { smoothing, wallRenderMode },
+        wallRenderOptions,
       )
       applyAirWallVisualToWallGroup(wallGroup, false)
     } else {
