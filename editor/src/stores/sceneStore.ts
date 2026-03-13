@@ -2996,86 +2996,6 @@ export function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.clear()
 }
 
-function wallGroupDebugEnabled(): boolean {
-  return true;
-}
-
-function wallGroupDebugRound(value: unknown): number | null {
-  const num = Number(value)
-  if (!Number.isFinite(num)) {
-    return null
-  }
-  return Math.round(num * 1000) / 1000
-}
-
-function wallGroupDebugVectorSummary(value: { x?: unknown; y?: unknown; z?: unknown } | null | undefined): [number | null, number | null, number | null] | null {
-  if (!value) {
-    return null
-  }
-  return [
-    wallGroupDebugRound(value.x),
-    wallGroupDebugRound(value.y),
-    wallGroupDebugRound(value.z),
-  ]
-}
-
-function wallGroupDebugBoundsSummary(bounds: Box3 | null | undefined): { min: [number | null, number | null, number | null] | null; max: [number | null, number | null, number | null] | null } | null {
-  if (!bounds || bounds.isEmpty()) {
-    return null
-  }
-  return {
-    min: wallGroupDebugVectorSummary(bounds.min),
-    max: wallGroupDebugVectorSummary(bounds.max),
-  }
-}
-
-function wallGroupDebugMatrixSummary(matrix: Matrix4 | null | undefined): {
-  position: [number | null, number | null, number | null] | null
-  rotationDeg: [number | null, number | null, number | null] | null
-  scale: [number | null, number | null, number | null] | null
-} | null {
-  if (!matrix) {
-    return null
-  }
-  const position = new Vector3()
-  const quaternion = new Quaternion()
-  const scale = new Vector3()
-  matrix.decompose(position, quaternion, scale)
-  const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
-  return {
-    position: wallGroupDebugVectorSummary(position),
-    rotationDeg: [
-      wallGroupDebugRound(MathUtils.radToDeg(euler.x)),
-      wallGroupDebugRound(MathUtils.radToDeg(euler.y)),
-      wallGroupDebugRound(MathUtils.radToDeg(euler.z)),
-    ],
-    scale: wallGroupDebugVectorSummary(scale),
-  }
-}
-
-function wallGroupDebugLog(message: string, extra?: unknown): void {
-  if (!wallGroupDebugEnabled()) {
-    return
-  }
-  if (extra !== undefined) {
-    // eslint-disable-next-line no-console
-    console.debug(`[wall-group-debug] ${message}`, extra)
-    return
-  }
-  // eslint-disable-next-line no-console
-  console.debug(`[wall-group-debug] ${message}`)
-}
-
-function subtreeContainsWallNode(node: SceneNode | null | undefined): boolean {
-  if (!node) {
-    return false
-  }
-  if (node.dynamicMesh?.type === 'Wall') {
-    return true
-  }
-  return Array.isArray(node.children) ? node.children.some((child) => subtreeContainsWallNode(child)) : false
-}
-
 export function registerRuntimeObject(id: string, object: Object3D) {
   const existing = runtimeObjectRegistry.get(id)
   if (existing && existing !== object) {
@@ -3232,7 +3152,14 @@ function resolveNodeLocalBoundsWithSource(
 }
 
 function resolveNodeLocalBounds(node: SceneNode, runtimeObject: Object3D | null): Box3 | null {
-  return resolveNodeLocalBoundsWithSource(node, runtimeObject).bounds
+  const runtimeBounds = deserializeBoundingBox(runtimeObject?.userData?.instancedBounds)
+  if (runtimeBounds && !runtimeBounds.isEmpty()) {
+    return runtimeBounds
+  }
+  if (node.dynamicMesh?.type === 'Wall') {
+    return resolveWallDefinitionLocalBounds(node.dynamicMesh)
+  }
+  return null
 }
 
 function createInstancedPlaceholderObject(name: string | undefined, group: ModelInstanceGroup): Object3D {
@@ -10568,30 +10495,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const debugChildEntries = wallGroupDebugEnabled()
-        ? group.children
-          .filter((child) => child.dynamicMesh?.type === 'Wall')
-          .map((child) => {
-            const runtimeObject = getRuntimeObject(child.id)
-            const localBoundsInfo = resolveNodeLocalBoundsWithSource(child, runtimeObject)
-            return {
-              id: child.id,
-              localBefore: {
-                position: wallGroupDebugVectorSummary(child.position ?? null),
-                rotationDeg: [
-                  wallGroupDebugRound(MathUtils.radToDeg(Number(child.rotation?.x) || 0)),
-                  wallGroupDebugRound(MathUtils.radToDeg(Number(child.rotation?.y) || 0)),
-                  wallGroupDebugRound(MathUtils.radToDeg(Number(child.rotation?.z) || 0)),
-                ],
-                scale: wallGroupDebugVectorSummary(child.scale ?? null),
-              },
-              worldBefore: wallGroupDebugMatrixSummary(childWorldMatrices.get(child.id) ?? null),
-              boundsSource: localBoundsInfo.source,
-              localBounds: wallGroupDebugBoundsSummary(localBoundsInfo.bounds),
-            }
-          })
-        : []
-
       const boundingInfo = collectNodeBoundingInfo([group])
       const groupInfo = boundingInfo.get(groupId)
       if (!groupInfo || groupInfo.bounds.isEmpty()) {
@@ -10635,33 +10538,6 @@ export const useSceneStore = defineStore('scene', {
 
       if (!childAdjustments.length) {
         return false
-      }
-
-      if (debugChildEntries.length > 0) {
-        const adjustmentById = new Map(childAdjustments.map((entry) => [entry.id, entry]))
-        wallGroupDebugLog('recenterGroupNode wall child transform rewrite', {
-          groupId,
-          parentId,
-          groupWorldBefore: wallGroupDebugMatrixSummary(computeWorldMatrixForNode(this.nodes, groupId)),
-          groupBounds: wallGroupDebugBoundsSummary(groupInfo.bounds),
-          centerWorld: wallGroupDebugVectorSummary(centerWorld),
-          groupLocalBefore: wallGroupDebugVectorSummary(group.position ?? null),
-          groupLocalAfter: wallGroupDebugVectorSummary(newGroupLocalPosition),
-          wallChildren: debugChildEntries.map((entry) => ({
-            ...entry,
-            localAfter: adjustmentById.has(entry.id)
-              ? {
-                  position: wallGroupDebugVectorSummary(adjustmentById.get(entry.id)?.position ?? null),
-                  rotationDeg: [
-                    wallGroupDebugRound(MathUtils.radToDeg(Number(adjustmentById.get(entry.id)?.rotation?.x) || 0)),
-                    wallGroupDebugRound(MathUtils.radToDeg(Number(adjustmentById.get(entry.id)?.rotation?.y) || 0)),
-                    wallGroupDebugRound(MathUtils.radToDeg(Number(adjustmentById.get(entry.id)?.rotation?.z) || 0)),
-                  ],
-                  scale: wallGroupDebugVectorSummary(adjustmentById.get(entry.id)?.scale ?? null),
-                }
-              : null,
-          })),
-        })
       }
 
       if (options.captureHistory !== false) {
@@ -10837,8 +10713,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const shouldDebugMove = wallGroupDebugEnabled() && subtreeContainsWallNode(movingNode)
-
       if (targetId && isDescendantNode(this.nodes, nodeId, targetId)) {
         return false
       }
@@ -10923,27 +10797,6 @@ export const useSceneStore = defineStore('scene', {
         node.position = updatedLocal.position
         node.rotation = updatedLocal.rotation
         node.scale = updatedLocal.scale
-      }
-
-      if (shouldDebugMove) {
-        wallGroupDebugLog('moveNode wall subtree reparent', {
-          nodeId,
-          targetId,
-          position,
-          oldParentId,
-          newParentId,
-          updatedLocal: updatedLocal
-            ? {
-                position: wallGroupDebugVectorSummary(updatedLocal.position),
-                rotationDeg: [
-                  wallGroupDebugRound(MathUtils.radToDeg(updatedLocal.rotation.x)),
-                  wallGroupDebugRound(MathUtils.radToDeg(updatedLocal.rotation.y)),
-                  wallGroupDebugRound(MathUtils.radToDeg(updatedLocal.rotation.z)),
-                ],
-                scale: wallGroupDebugVectorSummary(updatedLocal.scale),
-              }
-            : null,
-        })
       }
 
       const inserted = insertNodeMutable(tree, targetId, node, position)
