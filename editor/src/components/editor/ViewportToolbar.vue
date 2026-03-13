@@ -353,14 +353,6 @@
                 </v-list-item>
               </div>
 
-              <v-divider class="floor-shape-menu__divider" />
-
-              <v-list-item class="wall-shape-menu__action" @click="handleToggleWallDoorSelectMode">
-                <template #prepend>
-                  <v-icon :icon="wallDoorSelectModeActive ? 'mdi-checkbox-marked' : 'mdi-checkbox-blank-outline'" size="18" />
-                </template>
-                <v-list-item-title>Wall Rectangle Door Selection</v-list-item-title>
-              </v-list-item>
 
               <v-divider class="floor-shape-menu__divider" />
 
