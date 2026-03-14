@@ -1378,6 +1378,10 @@ function commitGroundHeightMapRuntimeEdit(
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
+  const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
+  const nextRevision = currentRevision + 1
+  target.dynamicMesh.surfaceRevision = nextRevision
+  definition.surfaceRevision = nextRevision
   useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)

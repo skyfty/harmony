@@ -3075,8 +3075,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState = null
 			return false
 		}
-		targetNode.dynamicMesh = sculptSessionState.definition
-		options.sceneStore.updateNodeDynamicMesh(targetNode.id, sculptSessionState.definition)
+		const committedDefinition = sculptSessionState.definition
+		options.sceneStore.commitGroundHeightMapEdit(
+			targetNode.id,
+			committedDefinition,
+			sculptSessionState.heightMap,
+		)
+		const groundObject = getGroundObject()
+		if (groundObject) {
+			options.onSculptCommitApplied?.({ groundObject, definition: committedDefinition })
+		}
 		sculptSessionState = null
 		return true
 	}
