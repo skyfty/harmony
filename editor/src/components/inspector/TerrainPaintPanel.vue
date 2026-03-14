@@ -35,6 +35,15 @@ const OPACITY_MAX = 1
 const OPACITY_STEP = 0.01
 const OPACITY_PRECISION = 2
 
+const FEATHER_MIN = 0
+const FEATHER_MAX = 1
+const FEATHER_STEP = 0.01
+const FEATHER_PRECISION = 2
+
+const Z_INDEX_MIN = 0
+const Z_INDEX_STEP = 1
+const Z_INDEX_PRECISION = 0
+
 const blendModeOptions: Array<{ value: TerrainPaintBlendMode; label: string }> = [
   { value: 'normal', label: 'Normal' },
   { value: 'multiply', label: 'Multiply' },
@@ -58,6 +67,7 @@ const emit = defineEmits<{
   (event: 'update:selectedLayerId', value: string | null): void
   (event: 'update:asset', value: ProjectAsset | null): void
   (event: 'update:settings', value: TerrainPaintBrushSettings): void
+  (event: 'update:active-layer', value: Partial<Pick<TerrainPaintLayerDraft, 'enabled' | 'zIndex'>>): void
   (event: 'add-layer'): void
 }>()
 
@@ -68,8 +78,9 @@ const selectedLayerLabel = computed(() => {
   if (!layer) {
     return 'No active layer'
   }
-  const slotNumber = layer.slotIndex + 1
-  return layer.asset?.name?.trim()?.length ? `Layer ${slotNumber}: ${layer.asset.name}` : `Layer ${slotNumber}`
+  const orderNumber = layer.zIndex + 1
+  const base = layer.asset?.name?.trim()?.length ? `Layer ${orderNumber}: ${layer.asset.name}` : `Layer ${orderNumber}`
+  return layer.enabled === false ? `${base} (disabled)` : base
 })
 
 const brushRadiusModel = computed({
@@ -107,13 +118,16 @@ const offsetXInput = ref(formatNumericValue(props.settings.offset.x, OFFSET_PREC
 const offsetYInput = ref(formatNumericValue(props.settings.offset.y, OFFSET_PRECISION))
 const rotationInput = ref(formatNumericValue(props.settings.rotationDeg, ROTATION_PRECISION))
 const opacityInput = ref(formatNumericValue(props.settings.opacity, OPACITY_PRECISION))
+const featherInput = ref(formatNumericValue(props.settings.feather, FEATHER_PRECISION))
+const zIndexInput = ref(formatNumericValue(activeLayer.value?.zIndex ?? 0, Z_INDEX_PRECISION))
 
 const selectedAssetId = computed(() => props.asset?.id ?? '')
 
 function getLayerLabel(layer: TerrainPaintLayerDraft): string {
-  const slotNumber = layer.slotIndex + 1
+  const slotNumber = layer.zIndex + 1
   const assetName = typeof layer.asset?.name === 'string' ? layer.asset.name.trim() : ''
-  return assetName ? `L${slotNumber} · ${assetName}` : `Layer ${slotNumber}`
+  const base = assetName ? `L${slotNumber} · ${assetName}` : `Layer ${slotNumber}`
+  return layer.enabled === false ? `${base} · Off` : base
 }
 
 watch(
@@ -169,6 +183,20 @@ watch(
   () => props.settings.opacity,
   (value) => {
     opacityInput.value = formatNumericValue(value, OPACITY_PRECISION)
+  },
+)
+
+watch(
+  () => props.settings.feather,
+  (value) => {
+    featherInput.value = formatNumericValue(value, FEATHER_PRECISION)
+  },
+)
+
+watch(
+  () => activeLayer.value?.zIndex ?? 0,
+  (value) => {
+    zIndexInput.value = formatNumericValue(value, Z_INDEX_PRECISION)
   },
 )
 
@@ -293,6 +321,41 @@ function commitOpacityInput() {
   opacityInput.value = formatNumericValue(normalized, OPACITY_PRECISION)
 }
 
+function commitFeatherInput() {
+  const normalized = parseAndNormalize(
+    featherInput.value,
+    props.settings.feather,
+    FEATHER_MIN,
+    FEATHER_MAX,
+    FEATHER_STEP,
+    FEATHER_PRECISION,
+  )
+  emitSettingsPatch({ feather: normalized })
+  featherInput.value = formatNumericValue(normalized, FEATHER_PRECISION)
+}
+
+function commitZIndexInput() {
+  const active = activeLayer.value
+  if (!active) {
+    return
+  }
+  const normalized = parseAndNormalize(
+    zIndexInput.value,
+    active.zIndex,
+    Z_INDEX_MIN,
+    Math.max(Z_INDEX_MIN, TERRAIN_PAINT_MAX_LAYER_COUNT - 1),
+    Z_INDEX_STEP,
+    Z_INDEX_PRECISION,
+  )
+  emit('update:active-layer', { zIndex: Math.round(normalized) })
+  zIndexInput.value = formatNumericValue(normalized, Z_INDEX_PRECISION)
+}
+
+const activeLayerEnabledModel = computed({
+  get: () => activeLayer.value?.enabled !== false,
+  set: (value: boolean) => emit('update:active-layer', { enabled: value }),
+})
+
 const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ?? 0) * 100)}%`)
 </script>
 
@@ -373,6 +436,38 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
     </div>
     <div class="control-group">
       <div class="text-caption mb-1">{{ selectedLayerLabel }}</div>
+      <div class="control-row">
+        <div class="control-group control-group--compact">
+          <div class="text-caption">Layer Order</div>
+          <v-text-field
+            v-model="zIndexInput"
+            type="number"
+            :min="Z_INDEX_MIN"
+            :max="TERRAIN_PAINT_MAX_LAYER_COUNT - 1"
+            :step="Z_INDEX_STEP"
+            variant="underlined"
+            density="compact"
+            hide-details
+            inputmode="numeric"
+            :disabled="!props.hasGround || !activeLayer"
+            class="numeric-input"
+            @blur="commitZIndexInput"
+            @keydown.enter.prevent="commitZIndexInput"
+          />
+        </div>
+
+        <div class="control-group control-group--compact">
+          <div class="text-caption">Enabled</div>
+          <v-switch
+            v-model="activeLayerEnabledModel"
+            density="compact"
+            hide-details
+            inset
+            color="primary"
+            :disabled="!props.hasGround || !activeLayer"
+          />
+        </div>
+      </div>
       <AssetPickerList
         :active="true"
         :asset-id="selectedAssetId"
@@ -477,6 +572,25 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
           class="numeric-input"
           @blur="commitOpacityInput"
           @keydown.enter.prevent="commitOpacityInput"
+        />
+      </div>
+
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Feather</div>
+        <v-text-field
+          v-model="featherInput"
+          type="number"
+          :min="FEATHER_MIN"
+          :max="FEATHER_MAX"
+          :step="FEATHER_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitFeatherInput"
+          @keydown.enter.prevent="commitFeatherInput"
         />
       </div>
 

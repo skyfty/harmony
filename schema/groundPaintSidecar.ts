@@ -1,11 +1,15 @@
 import {
+  clampTerrainPaintV3Settings,
   clampTerrainPaintLayerDefinition,
+  normalizeGroundSurfaceChunkTextureMap,
   TERRAIN_PAINT_VERSION,
+  type GroundSurfaceChunkTextureMap,
   type TerrainPaintSettings,
+  type TerrainPaintV3Settings,
 } from './index'
 
 export const GROUND_PAINT_SIDECAR_FILENAME = 'ground-paint.bin'
-export const GROUND_PAINT_SIDECAR_VERSION = 2
+export const GROUND_PAINT_SIDECAR_VERSION = 3
 
 const GROUND_PAINT_SIDECAR_MAGIC = 0x32545047
 const GROUND_PAINT_SIDECAR_HEADER_BYTES = 16
@@ -16,6 +20,8 @@ const STRING_DECODER = new TextDecoder()
 export type GroundPaintSidecarPayload = {
   groundNodeId: string
   terrainPaint: TerrainPaintSettings | null
+  terrainPaintV3?: TerrainPaintV3Settings | null
+  groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
 }
 
 function normalizePayload(payload: GroundPaintSidecarPayload): GroundPaintSidecarPayload {
@@ -24,6 +30,8 @@ function normalizePayload(payload: GroundPaintSidecarPayload): GroundPaintSideca
     return {
       groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
       terrainPaint: null,
+      terrainPaintV3: payload.terrainPaintV3 ? clampTerrainPaintV3Settings(payload.terrainPaintV3) : null,
+      groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(payload.groundSurfaceChunks),
     }
   }
 
@@ -53,6 +61,8 @@ function normalizePayload(payload: GroundPaintSidecarPayload): GroundPaintSideca
           .filter(([chunkKey]) => chunkKey.length > 0),
       ),
     },
+    terrainPaintV3: payload.terrainPaintV3 ? clampTerrainPaintV3Settings(payload.terrainPaintV3) : null,
+    groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(payload.groundSurfaceChunks),
   }
 }
 
@@ -61,8 +71,8 @@ export function serializeGroundPaintSidecar(rawPayload: GroundPaintSidecarPayloa
   if (!payload.groundNodeId) {
     throw new Error('groundNodeId is required for ground paint sidecar')
   }
-  if (!payload.terrainPaint) {
-    throw new Error('terrainPaint is required for ground paint sidecar')
+  if (!payload.terrainPaint && !payload.terrainPaintV3) {
+    throw new Error('terrainPaint or terrainPaintV3 is required for ground paint sidecar')
   }
 
   const bodyBytes = STRING_ENCODER.encode(JSON.stringify(payload))
@@ -83,7 +93,7 @@ export function deserializeGroundPaintSidecar(buffer: ArrayBuffer): GroundPaintS
   const view = new DataView(buffer)
   const magic = view.getUint32(0, true)
   const version = view.getUint32(4, true)
-  if (magic !== GROUND_PAINT_SIDECAR_MAGIC || version !== GROUND_PAINT_SIDECAR_VERSION) {
+  if (magic !== GROUND_PAINT_SIDECAR_MAGIC || (version !== 2 && version !== GROUND_PAINT_SIDECAR_VERSION)) {
     throw new Error('Invalid ground paint sidecar header')
   }
 
@@ -95,7 +105,7 @@ export function deserializeGroundPaintSidecar(buffer: ArrayBuffer): GroundPaintS
   const payloadBytes = new Uint8Array(buffer, GROUND_PAINT_SIDECAR_HEADER_BYTES, byteLength)
   const parsed = JSON.parse(STRING_DECODER.decode(payloadBytes)) as GroundPaintSidecarPayload
   const normalized = normalizePayload(parsed)
-  if (!normalized.groundNodeId || !normalized.terrainPaint) {
+  if (!normalized.groundNodeId || (!normalized.terrainPaint && !normalized.terrainPaintV3)) {
     throw new Error('Invalid ground paint sidecar payload')
   }
   return normalized

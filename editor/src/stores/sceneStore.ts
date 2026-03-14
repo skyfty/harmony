@@ -4970,26 +4970,54 @@ function collectTerrainScatterAssetDependencies(
 
 function collectTerrainPaintAssetDependencies(
   terrainPaint: GroundDynamicMesh['terrainPaint'] | null | undefined,
+  terrainPaintV3: GroundDynamicMesh['terrainPaintV3'] | null | undefined,
+  groundSurfaceChunks: GroundDynamicMesh['groundSurfaceChunks'] | null | undefined,
   bakedTextureAssetId: string | null | undefined,
   bucket: Set<string>,
 ) {
   collectAssetIdCandidate(bucket, bakedTextureAssetId)
   if (!terrainPaint || terrainPaint.version !== 2 || !terrainPaint.chunks || typeof terrainPaint.chunks !== 'object') {
-    return
-  }
-  if (Array.isArray(terrainPaint.layers)) {
-    terrainPaint.layers.forEach((layer) => {
-      collectAssetIdCandidate(bucket, layer?.textureAssetId)
+    // Keep scanning V3 payloads even when legacy V2 paint is absent.
+  } else {
+    if (Array.isArray(terrainPaint.layers)) {
+      terrainPaint.layers.forEach((layer) => {
+        collectAssetIdCandidate(bucket, layer?.textureAssetId)
+      })
+    }
+    Object.values(terrainPaint.chunks).forEach((chunkRef: any) => {
+      const pages = Array.isArray(chunkRef?.pages) ? chunkRef.pages : []
+      pages.forEach((pageRef: any) => {
+        const logicalId = typeof pageRef?.logicalId === 'string' ? pageRef.logicalId.trim() : ''
+        if (logicalId) {
+          bucket.add(logicalId)
+        }
+      })
     })
   }
-  Object.values(terrainPaint.chunks).forEach((chunkRef: any) => {
-    const pages = Array.isArray(chunkRef?.pages) ? chunkRef.pages : []
-    pages.forEach((pageRef: any) => {
-      const logicalId = typeof pageRef?.logicalId === 'string' ? pageRef.logicalId.trim() : ''
-      if (logicalId) {
-        bucket.add(logicalId)
-      }
+
+  if (terrainPaintV3?.version === 3) {
+    if (Array.isArray(terrainPaintV3.layers)) {
+      terrainPaintV3.layers.forEach((layer) => {
+        collectAssetIdCandidate(bucket, layer?.textureAssetId)
+      })
+    }
+    Object.values(terrainPaintV3.chunks ?? {}).forEach((chunkState) => {
+      Object.values(chunkState?.layers ?? {}).forEach((layerState) => {
+        Object.values(layerState?.tiles ?? {}).forEach((tileRef) => {
+          const logicalId = typeof tileRef?.logicalId === 'string' ? tileRef.logicalId.trim() : ''
+          if (logicalId) {
+            bucket.add(logicalId)
+          }
+        })
+      })
     })
+  }
+
+  Object.values(groundSurfaceChunks ?? {}).forEach((chunkRef) => {
+    const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
+    if (textureAssetId) {
+      bucket.add(textureAssetId)
+    }
   })
 }
 
@@ -5016,10 +5044,22 @@ function collectGroundPaintAssetDependencies(scene: StoredSceneDocument, bucket:
   }
   const runtimeState = useGroundPaintStore().getSceneGroundPaint(scene.id)
   if (runtimeState?.nodeId === groundNode.id) {
-    collectTerrainPaintAssetDependencies(runtimeState.terrainPaint, (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId, bucket)
+    collectTerrainPaintAssetDependencies(
+      runtimeState.terrainPaint,
+      runtimeState.terrainPaintV3,
+      runtimeState.groundSurfaceChunks,
+      (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId,
+      bucket,
+    )
     return
   }
-  collectTerrainPaintAssetDependencies((groundNode.dynamicMesh as any)?.terrainPaint, (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId, bucket)
+  collectTerrainPaintAssetDependencies(
+    (groundNode.dynamicMesh as any)?.terrainPaint,
+    (groundNode.dynamicMesh as any)?.terrainPaintV3,
+    (groundNode.dynamicMesh as any)?.groundSurfaceChunks,
+    (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId,
+    bucket,
+  )
 }
 
 function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket: Set<string>) {
@@ -8213,6 +8253,30 @@ export const useSceneStore = defineStore('scene', {
             nextTerrainPaint,
           )
           delete (incoming as Record<string, unknown>).terrainPaint
+          shouldPersistPaintSidecar = true
+        }
+        if (Object.prototype.hasOwnProperty.call(incoming, 'terrainPaintV3')) {
+          const nextTerrainPaintV3 = manualDeepClone((incoming as Record<string, unknown>).terrainPaintV3 ?? null) as Parameters<
+            ReturnType<typeof useGroundPaintStore>['replaceTerrainPaintV3']
+          >[2]
+          useGroundPaintStore().replaceTerrainPaintV3(
+            this.currentSceneId,
+            nodeId,
+            nextTerrainPaintV3,
+          )
+          delete (incoming as Record<string, unknown>).terrainPaintV3
+          shouldPersistPaintSidecar = true
+        }
+        if (Object.prototype.hasOwnProperty.call(incoming, 'groundSurfaceChunks')) {
+          const nextGroundSurfaceChunks = manualDeepClone((incoming as Record<string, unknown>).groundSurfaceChunks ?? null) as Parameters<
+            ReturnType<typeof useGroundPaintStore>['replaceGroundSurfaceChunks']
+          >[2]
+          useGroundPaintStore().replaceGroundSurfaceChunks(
+            this.currentSceneId,
+            nodeId,
+            nextGroundSurfaceChunks,
+          )
+          delete (incoming as Record<string, unknown>).groundSurfaceChunks
           shouldPersistPaintSidecar = true
         }
       }
