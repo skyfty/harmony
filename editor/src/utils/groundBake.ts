@@ -495,7 +495,7 @@ function terrainPaintBlendColor(
 function transformTerrainPaintUv(
   meshUv: [number, number],
   worldUv: [number, number],
-  layer: Pick<LegacyTerrainPaintLayerDefinition | TerrainPaintLayerDefinition, 'worldSpace' | 'rotationDeg' | 'tileScale' | 'offset'>,
+  layer: Pick<TerrainPaintLayerDefinition, 'worldSpace' | 'rotationDeg' | 'tileScale' | 'offset'>,
 ): [number, number] {
   const baseUv = layer.worldSpace ? worldUv : meshUv
   const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180

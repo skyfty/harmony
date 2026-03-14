@@ -118,7 +118,6 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
     delete groundDynamicMesh.planningMetadata
     delete groundDynamicMesh.surfaceRevision
     delete groundDynamicMesh.terrainScatter
-    delete groundDynamicMesh.legacyTerrainPaint
   })
   return document
 }

@@ -4,7 +4,6 @@ import type {
   GroundSurfaceChunkTextureRef,
   GroundSurfaceChunkTextureMap,
   SceneNode,
-  LegacyTerrainPaintSettings,
   TerrainPaintMaskTileRef,
   TerrainPaintSettings,
 } from '@schema'
@@ -21,7 +20,6 @@ import {
 type GroundPaintRuntimeState = {
   sceneId: string
   nodeId: string
-  legacyTerrainPaint: LegacyTerrainPaintSettings | null
   terrainPaint: TerrainPaintSettings | null
   groundSurfaceChunks: GroundSurfaceChunkTextureMap | null
 }
@@ -36,13 +34,6 @@ function asGroundDynamicMesh(node: SceneNode | null | undefined): GroundDynamicM
   return dynamicMesh
 }
 
-function cloneValue<T>(value: T): T {
-  if (value == null) {
-    return value
-  }
-  return JSON.parse(JSON.stringify(value)) as T
-}
-
 function ensureRuntimeState(sceneId: string, nodeId: string): GroundPaintRuntimeState {
   const existing = runtimeGroundPaints.get(sceneId)
   if (existing && existing.nodeId === nodeId) {
@@ -51,7 +42,6 @@ function ensureRuntimeState(sceneId: string, nodeId: string): GroundPaintRuntime
   const created: GroundPaintRuntimeState = {
     sceneId,
     nodeId,
-    legacyTerrainPaint: null,
     terrainPaint: null,
     groundSurfaceChunks: null,
   }
@@ -84,7 +74,6 @@ function replaceRuntimeState(sceneId: string, groundNode: SceneNode | null, payl
     return
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
-  state.legacyTerrainPaint = payload?.legacyTerrainPaint ?? null
   state.terrainPaint = payload?.terrainPaint ? cloneTerrainPaintSettings(payload.terrainPaint) : null
   state.groundSurfaceChunks = normalizeGroundSurfaceChunkTextureMap(payload?.groundSurfaceChunks)
 }
@@ -95,12 +84,11 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundPain
     return null
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
-  if (!state.legacyTerrainPaint && !state.terrainPaint && !state.groundSurfaceChunks) {
+  if (!state.terrainPaint && !state.groundSurfaceChunks) {
     return null
   }
   return {
     groundNodeId: groundNode.id,
-    legacyTerrainPaint: state.legacyTerrainPaint,
     terrainPaint: state.terrainPaint,
     groundSurfaceChunks: state.groundSurfaceChunks,
   }
@@ -117,7 +105,6 @@ export function attachGroundPaintRuntimeToNode(
   }
   groundNode.dynamicMesh = {
     ...definition,
-    legacyTerrainPaint: cloneValue(state.legacyTerrainPaint),
     terrainPaint: state.terrainPaint ? cloneTerrainPaintSettings(state.terrainPaint) : null,
     groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(state.groundSurfaceChunks),
   }
@@ -142,11 +129,6 @@ export const useGroundPaintStore = defineStore('groundPaint', {
     },
     getSceneGroundPaint(sceneId: string): GroundPaintRuntimeState | null {
       return runtimeGroundPaints.get(sceneId) ?? null
-    },
-    replaceLegacyTerrainPaint(sceneId: string, nodeId: string, terrainPaint: LegacyTerrainPaintSettings | null): GroundPaintRuntimeState {
-      const state = ensureRuntimeState(sceneId, nodeId)
-      state.legacyTerrainPaint = terrainPaint
-      return state
     },
     replaceTerrainPaint(sceneId: string, nodeId: string, terrainPaint: TerrainPaintSettings | null): GroundPaintRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)

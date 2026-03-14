@@ -1544,7 +1544,6 @@ export interface GroundDynamicMesh {
   textureName?: string | null
   generation?: GroundGenerationSettings | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
-  legacyTerrainPaint?: LegacyTerrainPaintSettings | null
   terrainPaint?: TerrainPaintSettings | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
   terrainPaintBakedTextureAssetId?: string | null

@@ -1,10 +1,7 @@
 import {
   clampTerrainPaintSettings,
-  clampLegacyTerrainPaintLayerDefinition,
   normalizeGroundSurfaceChunkTextureMap,
-  TERRAIN_PAINT_VERSION,
   type GroundSurfaceChunkTextureMap,
-  type LegacyTerrainPaintSettings,
   type TerrainPaintSettings,
 } from './index'
 
@@ -19,77 +16,14 @@ const STRING_DECODER = new TextDecoder()
 
 export type GroundPaintSidecarPayload = {
   groundNodeId: string
-  legacyTerrainPaint?: LegacyTerrainPaintSettings | null
   terrainPaint: TerrainPaintSettings | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
 }
 
 function normalizePayload(payload: GroundPaintSidecarPayload): GroundPaintSidecarPayload {
-  const legacyTerrainPaint = payload.legacyTerrainPaint
-  const terrainPaint = payload.terrainPaint
-  if (!terrainPaint) {
-    return {
-      groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
-      terrainPaint: null,
-      legacyTerrainPaint: legacyTerrainPaint
-        ? {
-          version: TERRAIN_PAINT_VERSION,
-          weightmapResolution: Number.isFinite(legacyTerrainPaint.weightmapResolution)
-            ? Math.max(8, Math.min(2048, Math.round(legacyTerrainPaint.weightmapResolution)))
-            : 256,
-          layers: Array.isArray(legacyTerrainPaint.layers)
-            ? legacyTerrainPaint.layers
-              .map((layer) => clampLegacyTerrainPaintLayerDefinition(layer))
-              .filter((layer) => layer.id.length > 0 && layer.textureAssetId.length > 0)
-            : [],
-          chunks: Object.fromEntries(
-            Object.entries(legacyTerrainPaint.chunks ?? {})
-              .map(([chunkKey, chunkValue]) => {
-                const normalizedKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
-                const pages = Array.isArray(chunkValue?.pages)
-                  ? chunkValue.pages
-                    .map((page) => ({ logicalId: typeof page?.logicalId === 'string' ? page.logicalId.trim() : '' }))
-                    .filter((page) => page.logicalId.length > 0)
-                  : []
-                return [normalizedKey, { pages }] as const
-              })
-              .filter(([chunkKey]) => chunkKey.length > 0),
-          ),
-        }
-        : null,
-      groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(payload.groundSurfaceChunks),
-    }
-  }
-
   return {
     groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
-    legacyTerrainPaint: legacyTerrainPaint
-      ? {
-        version: TERRAIN_PAINT_VERSION,
-        weightmapResolution: Number.isFinite(legacyTerrainPaint.weightmapResolution)
-          ? Math.max(8, Math.min(2048, Math.round(legacyTerrainPaint.weightmapResolution)))
-          : 256,
-        layers: Array.isArray(legacyTerrainPaint.layers)
-          ? legacyTerrainPaint.layers
-            .map((layer) => clampLegacyTerrainPaintLayerDefinition(layer))
-            .filter((layer) => layer.id.length > 0 && layer.textureAssetId.length > 0)
-          : [],
-        chunks: Object.fromEntries(
-          Object.entries(legacyTerrainPaint.chunks ?? {})
-            .map(([chunkKey, chunkValue]) => {
-              const normalizedKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
-              const pages = Array.isArray(chunkValue?.pages)
-                ? chunkValue.pages
-                  .map((page) => ({ logicalId: typeof page?.logicalId === 'string' ? page.logicalId.trim() : '' }))
-                  .filter((page) => page.logicalId.length > 0)
-                : []
-              return [normalizedKey, { pages }] as const
-            })
-            .filter(([chunkKey]) => chunkKey.length > 0),
-        ),
-      }
-      : null,
-    terrainPaint: clampTerrainPaintSettings(terrainPaint),
+    terrainPaint: payload.terrainPaint ? clampTerrainPaintSettings(payload.terrainPaint) : null,
     groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(payload.groundSurfaceChunks),
   }
 }
