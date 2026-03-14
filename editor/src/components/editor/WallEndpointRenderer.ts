@@ -388,7 +388,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       return
     }
     const wallBuildShape = options.resolveWallBuildShape(selectedNodeId)
-    const forceCircleLikeEdit = wallBuildShape === 'circle' || wallBuildShape === 'polygon'
+    const forceCircleLikeEdit = wallBuildShape === 'circle'
 
     const runtimeObject = options.resolveRuntimeObject(selectedNodeId)
     if (!runtimeObject) {

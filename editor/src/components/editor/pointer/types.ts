@@ -104,6 +104,7 @@ export type WallEndpointDragState = {
   dragMode: EndpointGizmoDragMode
   axisWorld: THREE.Vector3 | null
   dragPlane: THREE.Plane
+  startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D
 
@@ -136,6 +137,7 @@ export type WallJointDragState = {
   dragMode: EndpointGizmoDragMode
   axisWorld: THREE.Vector3 | null
   dragPlane: THREE.Plane
+  startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D
 
@@ -227,6 +229,7 @@ export type WallCircleRadiusDragState = {
 
   centerWorld: THREE.Vector3
   startRadius: number
+  radiusGrabOffset: number | null
 
   previewGroup: THREE.Group | null
   previewSignature: string | null

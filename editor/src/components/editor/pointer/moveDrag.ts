@@ -751,36 +751,50 @@ export function handlePointerMoveDrag(
     const rectangleConstraint = state.wallBuildShape === 'rectangle' ? state.rectangleConstraint : null
 
     if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+          return { handled: true }
+        }
+        state.startHitWorld = tmpIntersection.clone()
+      }
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
       const axis = state.axisWorld.clone().normalize()
-      const delta = tmpIntersection.clone().sub(state.startEndpointWorld)
+      const startHit = state.startHitWorld ?? state.startEndpointWorld
+      const delta = tmpIntersection.clone().sub(startHit)
       const t = axis.dot(delta)
       constrained = state.startEndpointWorld.clone().add(axis.multiplyScalar(t))
       if (constrainActive && rectangleConstraint) {
         snapToMajorGridXZ(constrained, state.startEndpointWorld.y)
       }
     } else {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+          return { handled: true }
+        }
+        state.startHitWorld = ctx.groundPointerHelper.clone()
+      }
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
 
-      const rawPointer = ctx.groundPointerHelper.clone()
+      const startHit = state.startHitWorld ?? state.startEndpointWorld
+      const delta = ctx.groundPointerHelper.clone().sub(startHit)
+      delta.y = 0
+      const target = state.startEndpointWorld.clone().add(delta)
+      target.y = state.startEndpointWorld.y
 
       if (rectangleConstraint) {
         constrained = constrainActive
-          ? snapToMajorGridXZ(rawPointer.clone(), state.startEndpointWorld.y)
-          : rawPointer.clone().setY(state.startEndpointWorld.y)
+          ? snapToMajorGridXZ(target.clone(), state.startEndpointWorld.y)
+          : target.clone().setY(state.startEndpointWorld.y)
       } else {
-        const target = rawPointer.clone()
-        target.y = state.startEndpointWorld.y
-
         const anchor = state.anchorPointWorld.clone()
         anchor.y = state.startEndpointWorld.y
 
         if (constrainActive) {
-          constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
+          constrained = constrainWallEndPointSoftSnap(anchor, target, target)
           constrained.y = state.startEndpointWorld.y
         } else {
           constrained = target
@@ -1001,7 +1015,16 @@ export function handlePointerMoveDrag(
       state.startHitWorld = tmpIntersection.clone()
     }
 
-    let newRadius = Math.max(1e-3, Math.hypot(tmpIntersection.x - state.centerWorld.x, tmpIntersection.z - state.centerWorld.z))
+    if (state.radiusGrabOffset == null) {
+      const startDistance = Math.hypot(
+        state.startHitWorld.x - state.centerWorld.x,
+        state.startHitWorld.z - state.centerWorld.z,
+      )
+      state.radiusGrabOffset = startDistance - state.startRadius
+    }
+
+    const currentDistance = Math.hypot(tmpIntersection.x - state.centerWorld.x, tmpIntersection.z - state.centerWorld.z)
+    let newRadius = Math.max(1e-3, currentDistance - (state.radiusGrabOffset ?? 0))
     if (constrainActive) {
       const snappedRadius = Math.round(newRadius / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
       newRadius = Math.max(1e-3, snappedRadius)
@@ -1079,23 +1102,38 @@ export function handlePointerMoveDrag(
     const rectangleConstraint = state.wallBuildShape === 'rectangle' ? state.rectangleConstraint : null
 
     if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+          return { handled: true }
+        }
+        state.startHitWorld = tmpIntersection.clone()
+      }
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
       const axis = state.axisWorld.clone().normalize()
-      const delta = tmpIntersection.clone().sub(state.startJointWorld)
+      const startHit = state.startHitWorld ?? state.startJointWorld
+      const delta = tmpIntersection.clone().sub(startHit)
       const t = axis.dot(delta)
       constrained = state.startJointWorld.clone().add(axis.multiplyScalar(t))
       if (constrainActive && rectangleConstraint) {
         snapToMajorGridXZ(constrained, state.startJointWorld.y)
       }
     } else {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+          return { handled: true }
+        }
+        state.startHitWorld = ctx.groundPointerHelper.clone()
+      }
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
 
-      const rawPointer = ctx.groundPointerHelper.clone()
-      const target = rawPointer.clone()
+      const startHit = state.startHitWorld ?? state.startJointWorld
+      const delta = ctx.groundPointerHelper.clone().sub(startHit)
+      delta.y = 0
+      const target = state.startJointWorld.clone().add(delta)
       target.y = state.startJointWorld.y
 
       if (rectangleConstraint) {
@@ -1115,16 +1153,16 @@ export function handlePointerMoveDrag(
           const candidates: Array<{ point: THREE.Vector3; distSq: number }> = []
           if (prevAnchor) {
             prevAnchor.y = state.startJointWorld.y
-            const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, rawPointer)
+            const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, target)
             snapped.y = state.startJointWorld.y
-            const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+            const dSq = distanceSqXZ(snapped.x, snapped.z, target.x, target.z)
             candidates.push({ point: snapped, distSq: dSq })
           }
           if (nextAnchor) {
             nextAnchor.y = state.startJointWorld.y
-            const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, rawPointer)
+            const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, target)
             snapped.y = state.startJointWorld.y
-            const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+            const dSq = distanceSqXZ(snapped.x, snapped.z, target.x, target.z)
             candidates.push({ point: snapped, distSq: dSq })
           }
 

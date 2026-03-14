@@ -230,6 +230,7 @@ export function handlePointerDownTools(
       gizmoKind: 'center' | 'axis'
       gizmoAxis?: THREE.Vector3
       gizmoPart: any
+      point: THREE.Vector3
     } | null
     setActiveWallEndpointHandle: (active: {
       nodeId: string
@@ -311,7 +312,7 @@ export function handlePointerDownTools(
           const chainEndIndex = Math.max(chainStartIndex, Math.trunc(handleHit.chainEndIndex))
 
           const wallBuildShape = readWallBuildShapeFromNode(node) ?? ctx.wallBuildShape ?? 'line'
-          const isCircleLikeWallEditMode = wallBuildShape === 'circle' || wallBuildShape === 'polygon'
+          const isCircleLikeWallEditMode = wallBuildShape === 'circle'
 
           const handleKind = handleHit.handleKind
           let endpointKind: 'start' | 'end' = 'start'
@@ -358,17 +359,6 @@ export function handlePointerDownTools(
                   Math.abs(effectiveAxisWorld.y) > 0.9 &&
                   Math.abs(effectiveAxisWorld.x) < 0.2 &&
                   Math.abs(effectiveAxisWorld.z) < 0.2
-
-                // Keep circle-like wall center handle dedicated to height only.
-                if (circleKind === 'center' && !isYAxisDrag) {
-                  return {
-                    handled: true,
-                    clearPointerTrackingState: true,
-                    preventDefault: true,
-                    stopPropagation: true,
-                    stopImmediatePropagation: true,
-                  }
-                }
 
                 if (isYAxisDrag) {
                   const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
@@ -505,6 +495,7 @@ export function handlePointerDownTools(
 
                   centerWorld: centerWorld.clone(),
                   startRadius: radius,
+                  radiusGrabOffset: null,
 
                   previewGroup: null,
                   previewSignature: null,
@@ -665,6 +656,7 @@ export function handlePointerDownTools(
                     startPointWorld: startJointWorld,
                     freePlaneNormal: new THREE.Vector3(0, 1, 0),
                   }),
+                  startHitWorld: null,
                   containerObject: runtime,
                   dimensions,
                   baseSegmentsWorld,
@@ -735,6 +727,7 @@ export function handlePointerDownTools(
                 startPointWorld: startEndpointWorld,
                 freePlaneNormal: new THREE.Vector3(0, 1, 0),
               }),
+              startHitWorld: null,
               containerObject: runtime,
               dimensions,
               baseSegmentsWorld,
