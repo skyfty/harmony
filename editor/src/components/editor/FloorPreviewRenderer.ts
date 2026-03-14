@@ -24,6 +24,15 @@ const FLOOR_PREVIEW_SIGNATURE_PRECISION = 1000
 const FLOOR_PREVIEW_Y_OFFSET = 0.01
 const FLOOR_CIRCLE_PREVIEW_SEGMENTS = 32
 
+function normalizeRegularPolygonSides(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  const rounded = Math.round(value)
+  const clamped = Math.min(256, Math.max(0, rounded))
+  return clamped >= 3 ? clamped : 0
+}
+
 function encodePreviewNumber(value: number): string {
   return `${Math.round(value * FLOOR_PREVIEW_SIGNATURE_PRECISION)}`
 }
@@ -46,7 +55,11 @@ function buildRectanglePreviewPoints(first: THREE.Vector3, second: THREE.Vector3
   ]
 }
 
-function buildCirclePreviewPoints(center: THREE.Vector3, previewEnd: THREE.Vector3): THREE.Vector3[] {
+export function buildFloorCircleOrRegularPolygonPoints(
+  center: THREE.Vector3,
+  previewEnd: THREE.Vector3,
+  regularPolygonSides = 0,
+): THREE.Vector3[] {
   const dx = previewEnd.x - center.x
   const dz = previewEnd.z - center.z
   const radius = Math.hypot(dx, dz)
@@ -55,7 +68,10 @@ function buildCirclePreviewPoints(center: THREE.Vector3, previewEnd: THREE.Vecto
   }
 
   const out: THREE.Vector3[] = []
-  const segments = Math.max(8, Math.floor(FLOOR_CIRCLE_PREVIEW_SEGMENTS))
+  const resolvedSides = normalizeRegularPolygonSides(regularPolygonSides)
+  const segments = resolvedSides >= 3
+    ? resolvedSides
+    : Math.max(8, Math.floor(FLOOR_CIRCLE_PREVIEW_SEGMENTS))
   for (let i = 0; i < segments; i += 1) {
     const t = (i / segments) * Math.PI * 2
     out.push(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius))
@@ -99,6 +115,7 @@ function getPreviewVertices(
   shape: FloorBuildShape,
   points: THREE.Vector3[],
   previewEnd: THREE.Vector3 | null,
+  regularPolygonSides = 0,
 ): THREE.Vector3[] {
   if (!points.length) {
     return []
@@ -114,7 +131,7 @@ function getPreviewVertices(
   if (shape === 'circle' && previewEnd) {
     const center = points[0]
     if (center) {
-      return buildCirclePreviewPoints(center, previewEnd)
+      return buildFloorCircleOrRegularPolygonPoints(center, previewEnd, regularPolygonSides)
     }
   }
 
@@ -287,9 +304,13 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
   return { center, definition }
 }
 
-export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }): FloorPreviewRenderer {
+export function createFloorPreviewRenderer(options: {
+  rootGroup: THREE.Group
+  getRegularPolygonSides?: () => number
+}): FloorPreviewRenderer {
   let needsSync = false
   let signature: string | null = null
+  let lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
 
   const clear = (session: FloorPreviewSession | null) => {
     if (session?.previewGroup) {
@@ -303,6 +324,7 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
 
   const flush = (scene: THREE.Scene | null, session: FloorPreviewSession | null) => {
     needsSync = false
+    lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
 
     if (!scene || !session) {
       if (signature !== null) {
@@ -312,7 +334,7 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
       return
     }
 
-    const previewVertices = getPreviewVertices(session.shape, session.points, session.previewEnd)
+    const previewVertices = getPreviewVertices(session.shape, session.points, session.previewEnd, lastRegularPolygonSides)
     if (previewVertices.length < 3) {
       if (session.previewGroup) {
         clear(session)
@@ -370,6 +392,10 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
       needsSync = true
     },
     flushIfNeeded: (scene: THREE.Scene | null, session: FloorPreviewSession | null) => {
+      const currentRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
+      if (currentRegularPolygonSides !== lastRegularPolygonSides) {
+        needsSync = true
+      }
       if (!needsSync) {
         return
       }
@@ -380,11 +406,13 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
     reset: () => {
       needsSync = false
       signature = null
+      lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
     },
     dispose: (session: FloorPreviewSession | null) => {
       clear(session)
       needsSync = false
       signature = null
+      lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
     },
   }
 }

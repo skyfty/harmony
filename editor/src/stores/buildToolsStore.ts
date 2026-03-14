@@ -10,8 +10,10 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
   const wallBrushPresetAssetId = ref<string | null>(null)
   const floorBrushPresetAssetId = ref<string | null>(null)
   const wallBuildShape = ref<WallBuildShape>('line')
+  const wallRegularPolygonSides = ref(0)
   const wallDoorSelectModeActive = ref(false)
   const floorBuildShape = ref<FloorBuildShape>('polygon')
+  const floorRegularPolygonSides = ref(0)
   const waterBuildShape = ref<WaterBuildShape>('rectangle')
 
   // This is a UI gate (e.g. ground sculpt config mode). It should block *activating* build tools,
@@ -58,12 +60,32 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     return true
   }
 
+  function setFloorRegularPolygonSides(sides: number): void {
+    if (!Number.isFinite(sides)) {
+      floorRegularPolygonSides.value = 0
+      return
+    }
+    const rounded = Math.round(sides)
+    const clamped = Math.min(256, Math.max(0, rounded))
+    floorRegularPolygonSides.value = clamped >= 3 ? clamped : 0
+  }
+
   function setWallBuildShape(shape: WallBuildShape, options: { activate?: boolean } = {}): boolean {
     wallBuildShape.value = shape
     if (options.activate) {
       return setActiveBuildTool('wall')
     }
     return true
+  }
+
+  function setWallRegularPolygonSides(sides: number): void {
+    if (!Number.isFinite(sides)) {
+      wallRegularPolygonSides.value = 0
+      return
+    }
+    const rounded = Math.round(sides)
+    const clamped = Math.min(256, Math.max(0, rounded))
+    wallRegularPolygonSides.value = clamped >= 3 ? clamped : 0
   }
 
   function setWallDoorSelectModeActive(active: boolean): void {
@@ -83,8 +105,10 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     wallBrushPresetAssetId,
     floorBrushPresetAssetId,
     wallBuildShape,
+    wallRegularPolygonSides,
     wallDoorSelectModeActive,
     floorBuildShape,
+    floorRegularPolygonSides,
     waterBuildShape,
     buildToolsDisabled,
     setBuildToolsDisabled,
@@ -92,7 +116,9 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     setWallBrushPresetAssetId,
     setFloorBrushPresetAssetId,
     setFloorBuildShape,
+    setFloorRegularPolygonSides,
     setWallBuildShape,
+    setWallRegularPolygonSides,
     setWallDoorSelectModeActive,
     setWaterBuildShape,
   }

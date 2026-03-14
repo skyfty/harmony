@@ -263,18 +263,40 @@
                 <v-list-item
                   v-for="shape in floorShapeOptions"
                   :key="shape.id"
-                  class="floor-shape-item"
-                  @click="() => handleFloorShapeSelect(shape.id)"
+                  :class="['floor-shape-item', shape.id === 'circle' ? 'wall-shape-item--polygon-tool' : '']"
                 >
-                  <v-btn
-                    density="compact"
-                    size="small"
-                    variant="text"
-                    :title="shape.label"
-                    :class="['floor-shape-btn', shape.id === floorBuildShape ? 'floor-shape-selected' : '']"
-                  >
-                    <span v-html="shape.svg" />
-                  </v-btn>
+                  <div :class="shape.id === 'circle' ? 'wall-regular-polygon-control' : undefined">
+                    <v-btn
+                      density="compact"
+                      size="small"
+                      variant="text"
+                      :title="shape.label"
+                      :class="['floor-shape-btn', shape.id === floorBuildShape ? 'floor-shape-selected' : '']"
+                      @click.stop="handleFloorShapeSelect(shape.id)"
+                    >
+                      <span v-html="shape.svg" />
+                    </v-btn>
+                    <v-text-field
+                      v-if="shape.id === 'circle'"
+                      v-model="floorRegularPolygonSidesInput"
+                      type="number"
+                      min="0"
+                      :max="WALL_REGULAR_POLYGON_SIDES_MAX"
+                      step="1"
+                      variant="underlined"
+                      density="compact"
+                      hide-details
+                      inputmode="numeric"
+                      placeholder="0"
+                      class="wall-regular-polygon-input"
+                      :disabled="buildToolsDisabled"
+                      @click.stop
+                      @pointerdown.stop
+                      @mousedown.stop
+                      @blur="commitFloorRegularPolygonSidesInput"
+                      @keydown.enter.prevent="commitFloorRegularPolygonSidesInput"
+                    />
+                  </div>
                 </v-list-item>
               </div>
 
@@ -338,18 +360,40 @@
                 <v-list-item
                   v-for="shape in wallShapeOptions"
                   :key="shape.id"
-                  class="floor-shape-item"
-                  @click="() => handleWallShapeSelect(shape.id)"
+                  :class="['floor-shape-item', shape.id === 'circle' ? 'wall-shape-item--polygon-tool' : '']"
                 >
-                  <v-btn
-                    density="compact"
-                    size="small"
-                    variant="text"
-                    :title="shape.label"
-                    :class="['floor-shape-btn', shape.id === wallBuildShape ? 'floor-shape-selected' : '']"
-                  >
-                    <span v-html="shape.svg" />
-                  </v-btn>
+                  <div :class="shape.id === 'circle' ? 'wall-regular-polygon-control' : undefined">
+                    <v-btn
+                      density="compact"
+                      size="small"
+                      variant="text"
+                      :title="shape.label"
+                      :class="['floor-shape-btn', shape.id === wallBuildShape ? 'floor-shape-selected' : '']"
+                      @click.stop="handleWallShapeSelect(shape.id)"
+                    >
+                      <span v-html="shape.svg" />
+                    </v-btn>
+                    <v-text-field
+                      v-if="shape.id === 'circle'"
+                      v-model="wallRegularPolygonSidesInput"
+                      type="number"
+                      min="0"
+                      :max="WALL_REGULAR_POLYGON_SIDES_MAX"
+                      step="1"
+                      variant="underlined"
+                      density="compact"
+                      hide-details
+                      inputmode="numeric"
+                      placeholder="0"
+                      class="wall-regular-polygon-input"
+                      :disabled="buildToolsDisabled"
+                      @click.stop
+                      @pointerdown.stop
+                      @mousedown.stop
+                      @blur="commitWallRegularPolygonSidesInput"
+                      @keydown.enter.prevent="commitWallRegularPolygonSidesInput"
+                    />
+                  </div>
                 </v-list-item>
               </div>
 
@@ -1015,7 +1059,9 @@ const props = withDefaults(
   groundPaintMenuOpen: boolean
   groundScatterMenuOpen: boolean
   floorBuildShape: FloorBuildShape
+  floorRegularPolygonSides: number
   wallBuildShape: WallBuildShape
+  wallRegularPolygonSides: number
   waterBuildShape: WaterBuildShape
   floorBrushPresetAssetId?: string
   wallBrushPresetAssetId?: string
@@ -1069,7 +1115,9 @@ const emit = defineEmits<{
   (event: 'update:ground-paint-menu-open', value: boolean): void
   (event: 'update:ground-scatter-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
+  (event: 'update:floor-regular-polygon-sides', value: number): void
   (event: 'select-wall-build-shape', shape: WallBuildShape): void
+  (event: 'update:wall-regular-polygon-sides', value: number): void
   (event: 'toggle-wall-door-select-mode'): void
   (event: 'select-water-build-shape', shape: WaterBuildShape): void
   (event: 'activate-ground-tab', tab: GroundPanelTab): void
@@ -1114,13 +1162,14 @@ const {
   cameraResetMenuOpen,
   floorShapeMenuOpen,
   wallShapeMenuOpen,
-  wallDoorSelectModeActive,
   waterShapeMenuOpen,
   groundTerrainMenuOpen,
   groundPaintMenuOpen,
   groundScatterMenuOpen,
   floorBuildShape,
+  floorRegularPolygonSides,
   wallBuildShape,
+  wallRegularPolygonSides,
   waterBuildShape,
   floorBrushPresetAssetId,
   wallBrushPresetAssetId,
@@ -1168,10 +1217,13 @@ const SCATTER_RADIUS_STEP = 0.1
 const SCATTER_DENSITY_MIN = 0
 const SCATTER_DENSITY_MAX = 100
 const SCATTER_DENSITY_STEP = 1
+const WALL_REGULAR_POLYGON_SIDES_MAX = 256
 
 const groundScatterBrushRadiusInput = ref(groundScatterBrushRadius.value.toFixed(2))
 const groundScatterDensityInput = ref(Math.round(groundScatterDensityPercent.value).toString())
 const scatterEraseRadiusInput = ref(scatterEraseRadius.value.toFixed(2))
+const floorRegularPolygonSidesInput = ref(floorRegularPolygonSides.value.toString())
+const wallRegularPolygonSidesInput = ref(wallRegularPolygonSides.value.toString())
 const viewportPlacementTab = ref<ViewportPlacementTab>('geometry')
 
 const viewportPlacementTabs = VIEWPORT_PLACEMENT_TABS
@@ -1243,6 +1295,46 @@ function commitScatterEraseRadiusInput() {
   scatterEraseRadiusInput.value = normalized.toFixed(2)
 }
 
+function normalizeFloorRegularPolygonSides(value: number): number {
+  const rounded = Math.round(value)
+  const clamped = clampValue(rounded, 0, WALL_REGULAR_POLYGON_SIDES_MAX)
+  return clamped >= 3 ? clamped : 0
+}
+
+function commitFloorRegularPolygonSidesInput() {
+  const normalized = parseAndNormalize(
+    floorRegularPolygonSidesInput.value,
+    floorRegularPolygonSides.value,
+    0,
+    WALL_REGULAR_POLYGON_SIDES_MAX,
+    1,
+    0,
+  )
+  const resolved = normalizeFloorRegularPolygonSides(normalized)
+  emit('update:floor-regular-polygon-sides', resolved)
+  floorRegularPolygonSidesInput.value = resolved.toString()
+}
+
+function normalizeWallRegularPolygonSides(value: number): number {
+  const rounded = Math.round(value)
+  const clamped = clampValue(rounded, 0, WALL_REGULAR_POLYGON_SIDES_MAX)
+  return clamped >= 3 ? clamped : 0
+}
+
+function commitWallRegularPolygonSidesInput() {
+  const normalized = parseAndNormalize(
+    wallRegularPolygonSidesInput.value,
+    wallRegularPolygonSides.value,
+    0,
+    WALL_REGULAR_POLYGON_SIDES_MAX,
+    1,
+    0,
+  )
+  const resolved = normalizeWallRegularPolygonSides(normalized)
+  emit('update:wall-regular-polygon-sides', resolved)
+  wallRegularPolygonSidesInput.value = resolved.toString()
+}
+
 watch(groundScatterBrushRadius, (value) => {
   groundScatterBrushRadiusInput.value = value.toFixed(2)
 })
@@ -1253,6 +1345,14 @@ watch(groundScatterDensityPercent, (value) => {
 
 watch(scatterEraseRadius, (value) => {
   scatterEraseRadiusInput.value = value.toFixed(2)
+})
+
+watch(floorRegularPolygonSides, (value) => {
+  floorRegularPolygonSidesInput.value = normalizeFloorRegularPolygonSides(value).toString()
+})
+
+watch(wallRegularPolygonSides, (value) => {
+  wallRegularPolygonSidesInput.value = normalizeWallRegularPolygonSides(value).toString()
 })
 
 const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFixed(2)} m`)
@@ -1653,7 +1753,7 @@ const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildSh
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
       : id === 'rectangle'
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="currentColor" rx="1" ry="1"/></svg>'
-      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
+      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 19.61,8.5 16.71,17.5 7.29,17.5 4.39,8.5"/></svg>',
 }))
 
 const wallShapeOptions = (Object.keys(WALL_BUILD_SHAPE_LABELS) as WallBuildShape[]).map((id) => ({
@@ -1666,7 +1766,7 @@ const wallShapeOptions = (Object.keys(WALL_BUILD_SHAPE_LABELS) as WallBuildShape
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
       : id === 'rectangle'
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="currentColor" rx="1" ry="1"/></svg>'
-      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
+      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 19.61,8.5 16.71,17.5 7.29,17.5 4.39,8.5"/></svg>',
 }))
 
 const waterShapeOptions = (Object.keys(WATER_BUILD_SHAPE_LABELS) as WaterBuildShape[]).map((id) => ({
@@ -1914,10 +2014,6 @@ function handleWallShapeSelect(shape: WallBuildShape) {
     return
   }
   emit('select-wall-build-shape', shape)
-}
-
-function handleToggleWallDoorSelectMode() {
-  emit('toggle-wall-door-select-mode')
 }
 
 function handleFloorPresetSelect(asset: any) {
@@ -2179,6 +2275,24 @@ function handleClearScatterMenuAction() {
 }
 .floor-shape-item span svg {
   display: block;
+}
+
+.wall-shape-item--polygon-tool {
+  grid-column: span 2;
+}
+
+.wall-regular-polygon-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wall-regular-polygon-input {
+  max-width: 92px;
+}
+
+.wall-regular-polygon-input :deep(input) {
+  text-align: center;
 }
 
 .popup-menu-card {

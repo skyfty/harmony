@@ -1744,8 +1744,10 @@ const buildToolsStore = useBuildToolsStore()
 const {
   activeBuildTool,
   floorBuildShape,
+  floorRegularPolygonSides,
   waterBuildShape,
   wallBuildShape,
+  wallRegularPolygonSides,
   wallDoorSelectModeActive,
   wallBrushPresetAssetId,
   floorBrushPresetAssetId,
@@ -5494,6 +5496,7 @@ function resolveBuildToolVertexSnapPoint(
 const wallBuildTool = createWallBuildTool({
   activeBuildTool,
   wallBuildShape,
+  wallRegularPolygonSides,
   sceneStore,
   getWallEditNodeId: () => (isSelectedWallEditMode() ? wallEditNodeId.value : null),
   pointerInteraction,
@@ -5643,6 +5646,7 @@ const roadBuildTool = createRoadBuildTool({
 const floorBuildTool = createFloorBuildTool({
   activeBuildTool,
   floorBuildShape,
+  floorRegularPolygonSides,
   getDefaultCircleRadius: () => GRID_MAJOR_SPACING,
   sceneStore,
   rootGroup,
@@ -6118,6 +6122,14 @@ function handleSelectWallBuildShape(shape: WallBuildShape) {
 
   // Match toolbar behavior: entering a build tool clears selection.
   sceneStore.setSelection([])
+}
+
+function handleWallRegularPolygonSidesUpdate(value: number) {
+  buildToolsStore.setWallRegularPolygonSides(value)
+}
+
+function handleFloorRegularPolygonSidesUpdate(value: number) {
+  buildToolsStore.setFloorRegularPolygonSides(value)
 }
 
 function handleSelectWaterBuildShape(shape: WaterBuildShape) {
@@ -17902,7 +17914,9 @@ defineExpose<SceneViewportHandle>({
         :ground-paint-menu-open="groundPaintMenuOpen"
         :ground-scatter-menu-open="groundScatterMenuOpen"
         :floor-build-shape="floorBuildShape"
+        :floor-regular-polygon-sides="floorRegularPolygonSides"
         :wall-build-shape="wallBuildShape"
+        :wall-regular-polygon-sides="wallRegularPolygonSides"
         :water-build-shape="waterBuildShape"
         :floor-brush-preset-asset-id="floorBrushPresetAssetId ?? ''"
         :wall-brush-preset-asset-id="wallBrushPresetAssetId ?? ''"
@@ -17966,7 +17980,9 @@ defineExpose<SceneViewportHandle>({
           @update:ground-scatter-density-percent="handleGroundScatterDensityPercentUpdate"
           @ground-scatter-asset-select="handleGroundScatterAssetSelect"
           @select-floor-build-shape="handleSelectFloorBuildShape"
+          @update:floor-regular-polygon-sides="handleFloorRegularPolygonSidesUpdate"
           @select-wall-build-shape="handleSelectWallBuildShape"
+            @update:wall-regular-polygon-sides="handleWallRegularPolygonSidesUpdate"
           @select-water-build-shape="handleSelectWaterBuildShape"
       />
     </div>

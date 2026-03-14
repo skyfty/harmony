@@ -70,6 +70,7 @@ export type WallBuildToolSession = WallPreviewSession & {
 export function createWallBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   wallBuildShape: Ref<WallBuildShape>
+  wallRegularPolygonSides?: Ref<number>
   sceneStore: ReturnType<typeof useSceneStore>
   getWallEditNodeId: () => string | null
   pointerInteraction: PointerInteractionApi
@@ -111,6 +112,16 @@ export function createWallBuildTool(options: {
   let session: WallBuildToolSession | null = null
 
   const getShape = (): WallBuildShape => options.wallBuildShape.value ?? 'line'
+
+  const getRegularPolygonSides = (): number => {
+    const raw = options.wallRegularPolygonSides?.value ?? 0
+    if (!Number.isFinite(raw)) {
+      return 0
+    }
+    const rounded = Math.round(raw)
+    const clamped = Math.min(256, Math.max(0, rounded))
+    return clamped >= 3 ? clamped : 0
+  }
 
   const ensureSession = (): WallBuildToolSession => {
     if (session) {
@@ -603,7 +614,11 @@ export function createWallBuildTool(options: {
     ]
   }
 
-  const buildCircleSegments = (center: THREE.Vector3, radiusEnd: THREE.Vector3): WallPreviewSegment[] => {
+  const buildCircleSegments = (
+    center: THREE.Vector3,
+    radiusEnd: THREE.Vector3,
+    requestedSides = 0,
+  ): WallPreviewSegment[] => {
     const dx = radiusEnd.x - center.x
     const dz = radiusEnd.z - center.z
     const radius = Math.sqrt(dx * dx + dz * dz)
@@ -611,7 +626,7 @@ export function createWallBuildTool(options: {
       return []
     }
 
-    const segments = computeAdaptiveCircleSegments(radius)
+    const segments = requestedSides >= 3 ? requestedSides : computeAdaptiveCircleSegments(radius)
     if (segments < 3) {
       return []
     }
@@ -661,9 +676,11 @@ export function createWallBuildTool(options: {
     }
     session.shapeDraft.end.copy(end)
 
+    const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
+
     session.segments = kind === 'rectangle'
       ? buildRectangleSegments(start, end)
-      : buildCircleSegments(start, end)
+      : buildCircleSegments(start, end, regularPolygonSides)
 
     previewRenderer.markDirty()
     return true
@@ -680,9 +697,11 @@ export function createWallBuildTool(options: {
       ? session.shapeDraft.end.clone()
       : session.shapeDraft.end.clone()
 
+    const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
+
     const segments = kind === 'rectangle'
       ? buildRectangleSegments(start, end)
-      : buildCircleSegments(start, end)
+      : buildCircleSegments(start, end, regularPolygonSides)
 
     if (!segments.length) {
       cancelShapeDraft()

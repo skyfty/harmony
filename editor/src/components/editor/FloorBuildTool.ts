@@ -2,7 +2,11 @@ import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { Vector3Like } from '@schema'
-import { createFloorPreviewRenderer, type FloorPreviewSession } from './FloorPreviewRenderer'
+import {
+  buildFloorCircleOrRegularPolygonPoints,
+  createFloorPreviewRenderer,
+  type FloorPreviewSession,
+} from './FloorPreviewRenderer'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
@@ -39,6 +43,7 @@ type VertexSnapResolverOptions = {
 export function createFloorBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   floorBuildShape: Ref<FloorBuildShape>
+  floorRegularPolygonSides?: Ref<number>
   getDefaultCircleRadius: () => number
   sceneStore: ReturnType<typeof useSceneStore>
   rootGroup: THREE.Group
@@ -51,7 +56,10 @@ export function createFloorBuildTool(options: {
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
   clickDragThresholdPx: number
 }): FloorBuildToolHandle {
-  const previewRenderer = createFloorPreviewRenderer({ rootGroup: options.rootGroup })
+  const previewRenderer = createFloorPreviewRenderer({
+    rootGroup: options.rootGroup,
+    getRegularPolygonSides: () => getRegularPolygonSides(),
+  })
 
   const groundPointerHelper = new THREE.Vector3()
 
@@ -93,6 +101,16 @@ export function createFloorBuildTool(options: {
   let leftDragState: LeftDragState | null = null
 
   const getShape = (): FloorBuildShape => options.floorBuildShape.value ?? 'polygon'
+
+  const getRegularPolygonSides = (): number => {
+    const raw = options.floorRegularPolygonSides?.value ?? 0
+    if (!Number.isFinite(raw)) {
+      return 0
+    }
+    const rounded = Math.round(raw)
+    const clamped = Math.min(256, Math.max(0, rounded))
+    return clamped >= 3 ? clamped : 0
+  }
 
   const ensureSession = (): FloorPreviewSession => {
     if (session) {
@@ -443,12 +461,7 @@ export function createFloorBuildTool(options: {
             return true
           }
 
-          const segments = 32
-          const circleVerts: THREE.Vector3[] = []
-          for (let i = 0; i < segments; i += 1) {
-            const t = (i / segments) * Math.PI * 2
-            circleVerts.push(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius))
-          }
+          const circleVerts = buildFloorCircleOrRegularPolygonPoints(center, end, getRegularPolygonSides())
           finalizeFromVertices(circleVerts)
           return true
         }
