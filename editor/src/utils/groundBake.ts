@@ -4,8 +4,8 @@ import {
   type SceneNode,
   type TerrainPaintBlendMode,
   type TerrainPaintChannel,
-  type TerrainPaintLayerDefinition,
-  type TerrainPaintSettings,
+  type LegacyTerrainPaintLayerDefinition,
+  type LegacyTerrainPaintSettings,
 } from '@schema'
 import { resolveGroundChunkCells } from '@schema/groundMesh'
 import { decodeWeightmapToData } from '@schema/terrainPaintPreview'
@@ -100,7 +100,7 @@ function terrainPaintChannelIndex(channel: TerrainPaintChannel): number {
   }
 }
 
-function getTerrainPaintLayerSlotIndex(layer: TerrainPaintLayerDefinition): number {
+function getTerrainPaintLayerSlotIndex(layer: LegacyTerrainPaintLayerDefinition): number {
   return Math.max(0, Math.floor(layer.pageIndex)) * 4 + terrainPaintChannelIndex(layer.channel)
 }
 
@@ -504,7 +504,7 @@ function terrainPaintBlendColor(
 function transformTerrainPaintUv(
   meshUv: [number, number],
   worldUv: [number, number],
-  layer: TerrainPaintLayerDefinition,
+  layer: LegacyTerrainPaintLayerDefinition,
 ): [number, number] {
   const baseUv = layer.worldSpace ? worldUv : meshUv
   const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180
@@ -531,7 +531,7 @@ function readWeightValue(page: Uint8ClampedArray | null, resolution: number, u: 
 async function prepareTerrainPaintChunks(
   scene: StoredSceneDocument,
   definition: GroundDynamicMesh,
-  settings: TerrainPaintSettings,
+  settings: LegacyTerrainPaintSettings,
 ): Promise<Map<string, PreparedPaintChunk>> {
   const chunkCells = resolveGroundChunkCells(definition)
   const prepared = new Map<string, PreparedPaintChunk>()
@@ -578,7 +578,7 @@ async function renderTerrainPaint(
   width: number,
   height: number,
 ): Promise<boolean> {
-  const settings = (definition as any)?.terrainPaint as TerrainPaintSettings | null | undefined
+  const settings = (definition as any)?.terrainPaint as LegacyTerrainPaintSettings | null | undefined
   if (!settings || settings.version !== 2 || !Array.isArray(settings.layers) || !settings.layers.length) {
     return false
   }
@@ -702,7 +702,7 @@ function hasLandformsContent(groundNode: SceneNode): boolean {
 }
 
 function hasTerrainPaintContent(definition: GroundDynamicMesh): boolean {
-  const settings = (definition as any)?.terrainPaint as TerrainPaintSettings | null | undefined
+  const settings = (definition as any)?.terrainPaint as LegacyTerrainPaintSettings | null | undefined
   if (!settings || settings.version !== 2) {
     return false
   }

@@ -8,20 +8,20 @@ import type {
 	GroundSculptOperation,
 	SceneNode,
 	TerrainPaintChannel,
-	TerrainPaintLayerDefinition,
+	LegacyTerrainPaintLayerDefinition,
 	TerrainPaintLayerStyle,
+	LegacyTerrainPaintSettings,
+	TerrainPaintChunkMaskState,
 	TerrainPaintSettings,
-	TerrainPaintV3ChunkMaskState,
-	TerrainPaintV3Settings,
 } from '@schema'
 import {
-	clampTerrainPaintLayerDefinition,
-	clampTerrainPaintV3Settings,
-	cloneTerrainPaintLayerDefinition,
-	formatTerrainPaintV3ChunkKey,
-	formatTerrainPaintV3TileKey,
-	resolveTerrainPaintV3TileWorldBounds,
-	resolveTerrainPaintV3TilesPerAxis,
+	clampLegacyTerrainPaintLayerDefinition,
+	clampTerrainPaintSettings,
+	cloneLegacyTerrainPaintLayerDefinition,
+	formatTerrainPaintChunkKey,
+	formatTerrainPaintTileKey,
+	resolveTerrainPaintTileWorldBounds,
+	resolveTerrainPaintTilesPerAxis,
 } from '@schema'
 import {
 	deleteTerrainScatterStore,
@@ -270,7 +270,7 @@ function buildTerrainPaintLayerPlacement(slotIndex: number): {
 	}
 }
 
-function getTerrainPaintLayerSlotIndex(layer: TerrainPaintLayerDefinition): number {
+function getTerrainPaintLayerSlotIndex(layer: LegacyTerrainPaintLayerDefinition): number {
 	return Math.max(0, Math.floor(layer.pageIndex)) * 4 + channelToIndex(layer.channel)
 }
 
@@ -286,13 +286,13 @@ function createTerrainPaintLayerDefinition(
 	style: TerrainPaintLayerStyle,
 	slotIndex: number,
 	layerId?: string | null,
-): TerrainPaintLayerDefinition | null {
+): LegacyTerrainPaintLayerDefinition | null {
 	const trimmed = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
 	if (!trimmed) {
 		return null
 	}
 	const placement = buildTerrainPaintLayerPlacement(slotIndex)
-	return clampTerrainPaintLayerDefinition({
+	return clampLegacyTerrainPaintLayerDefinition({
 		id: typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : createTerrainPaintLayerId(),
 		pageIndex: placement.pageIndex,
 		channel: placement.channel,
@@ -301,7 +301,7 @@ function createTerrainPaintLayerDefinition(
 	})
 }
 
-function areTerrainPaintLayersEquivalent(a: TerrainPaintLayerDefinition, b: TerrainPaintLayerDefinition): boolean {
+function areTerrainPaintLayersEquivalent(a: LegacyTerrainPaintLayerDefinition, b: LegacyTerrainPaintLayerDefinition): boolean {
 	return a.textureAssetId === b.textureAssetId
 		&& a.opacity === b.opacity
 		&& a.rotationDeg === b.rotationDeg
@@ -314,10 +314,10 @@ function areTerrainPaintLayersEquivalent(a: TerrainPaintLayerDefinition, b: Terr
 }
 
 function ensureTerrainPaintLayer(
-	settings: TerrainPaintSettings,
+	settings: LegacyTerrainPaintSettings,
 	textureAssetId: string,
 	style: TerrainPaintLayerStyle,
-): TerrainPaintLayerDefinition | null {
+): LegacyTerrainPaintLayerDefinition | null {
 	const nextSlotIndex = settings.layers.reduce((maxSlotIndex, layer) => {
 		return Math.max(maxSlotIndex, getTerrainPaintLayerSlotIndex(layer))
 	}, -1) + 1
@@ -343,9 +343,9 @@ function resolveSelectedTerrainPaintLayerDraft(options: GroundEditorOptions): Te
 }
 
 function upsertTerrainPaintLayerFromDraft(
-	settings: TerrainPaintSettings,
+	settings: LegacyTerrainPaintSettings,
 	draft: TerrainPaintLayerDraft,
-): TerrainPaintLayerDefinition | null {
+): LegacyTerrainPaintLayerDefinition | null {
 	const textureAssetId = typeof draft.assetId === 'string' && draft.assetId.trim().length
 		? draft.assetId.trim()
 		: (draft.asset?.id ?? '')
@@ -368,16 +368,16 @@ function upsertTerrainPaintLayerFromDraft(
 	return requestedLayer
 }
 
-function cloneOrCreateTerrainPaintV3Settings(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintV3Settings {
+function cloneOrCreateTerrainPaintSettingsRuntime(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintSettings {
 	const sceneId = useSceneStore().currentSceneId
 	const runtimeState = sceneId && nodeId
 		? useGroundPaintStore().getSceneGroundPaint(sceneId)
 		: null
-	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaintV3 : definition.terrainPaintV3
+	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
 	if (existing?.version === 3) {
-		return clampTerrainPaintV3Settings(existing)
+		return clampTerrainPaintSettings(existing)
 	}
-	return clampTerrainPaintV3Settings({
+	return clampTerrainPaintSettings({
 		version: 3,
 		layers: [],
 		chunks: {},
@@ -396,8 +396,8 @@ function cloneGroundSurfaceChunks(definition: GroundDynamicMesh, nodeId?: string
 	return JSON.parse(JSON.stringify(source)) as GroundSurfaceChunkTextureMap
 }
 
-function buildTerrainPaintV3SettingsFromDrafts(session: PaintSessionState, drafts: TerrainPaintLayerDraft[]): TerrainPaintV3Settings {
-	const next = cloneOrCreateTerrainPaintV3Settings(session.definition, session.nodeId)
+function buildTerrainPaintSettingsFromDrafts(session: PaintSessionState, drafts: TerrainPaintLayerDraft[]): TerrainPaintSettings {
+	const next = cloneOrCreateTerrainPaintSettingsRuntime(session.definition, session.nodeId)
 	next.layers = drafts
 		.slice()
 		.sort((left: TerrainPaintLayerDraft, right: TerrainPaintLayerDraft) => left.zIndex - right.zIndex)
@@ -409,15 +409,15 @@ function buildTerrainPaintV3SettingsFromDrafts(session: PaintSessionState, draft
 			zIndex: Number.isFinite(layer.zIndex) ? Math.max(0, Math.trunc(layer.zIndex)) : Math.max(0, Math.trunc(layer.slotIndex)),
 			...layer.settings,
 		}))
-	return clampTerrainPaintV3Settings(next)
+	return clampTerrainPaintSettings(next)
 }
 
-function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId?: string | null): TerrainPaintSettings {
+function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId?: string | null): LegacyTerrainPaintSettings {
 	const sceneId = useSceneStore().currentSceneId
 	const runtimeState = sceneId && nodeId
 		? useGroundPaintStore().getSceneGroundPaint(sceneId)
 		: null
-	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaint : definition.terrainPaint
+	const existing = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.terrainPaint : definition.legacyTerrainPaint
 	if (existing && existing.version === 2) {
 		return {
 			version: 2,
@@ -425,7 +425,7 @@ function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh, nodeId
 				? Math.max(8, Math.min(2048, Math.round(existing.weightmapResolution)))
 				: 256,
 			layers: Array.isArray(existing.layers)
-				? existing.layers.map((layer) => cloneTerrainPaintLayerDefinition(clampTerrainPaintLayerDefinition(layer)))
+				? existing.layers.map((layer) => cloneLegacyTerrainPaintLayerDefinition(clampLegacyTerrainPaintLayerDefinition(layer)))
 				: [],
 			chunks: existing.chunks
 				? Object.fromEntries(
@@ -632,25 +632,29 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 	dirtyChunks: PaintChunkState[]
 	previewRevision: number
 	groundSurfaceChunks: GroundSurfaceChunkTextureMap | null
+	sceneStore: ReturnType<typeof useSceneStore>
+	groundNode: SceneNode | null
+	liveChunkPagesByKey: Map<string, Uint8ClampedArray[]>
+	registerAsset: typeof useSceneStore extends () => infer T
+		? T extends { registerAsset: infer F }
+			? F
+			: never
+		: never
 }): Promise<GroundSurfaceChunkTextureMap | null> {
-	const { session, dirtyChunks, previewRevision } = params
+	const { session, dirtyChunks, previewRevision, sceneStore, groundNode, liveChunkPagesByKey, registerAsset } = params
 	if (!dirtyChunks.length) {
 		return params.groundSurfaceChunks
 	}
-	const groundNode = options.sceneStore.selectedNode?.id === session.nodeId
-		? options.sceneStore.selectedNode
-		: getGroundNodeFromScene()
 	if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 		return params.groundSurfaceChunks
 	}
-	const loaders = createDefaultGroundSurfacePreviewLoaders((assetId) => resolveEditorAssetUrlFromCache(options.sceneStore, assetId))
-	const liveChunkPagesByKey = buildLiveTerrainPaintChunkPages(session)
+	const loaders = createDefaultGroundSurfacePreviewLoaders((assetId) => resolveEditorAssetUrlFromCache(sceneStore, assetId))
 	const previewCanvasResult = await composeGroundSurfacePreviewCanvas(
 		groundNode,
 		{
 			...session.definition,
-			terrainPaint: session.settings,
-			terrainPaintV3: session.terrainPaintV3,
+			legacyTerrainPaint: session.settings,
+			terrainPaint: session.terrainPaint,
 		},
 		loaders,
 		{
@@ -702,7 +706,7 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 			mimeType: 'image/png',
 			filename,
 		})
-		options.sceneStore.registerAsset(
+		registerAsset(
 			{
 				id: textureAssetId,
 				name: filename,
@@ -843,8 +847,8 @@ type PaintSessionState = {
 	nodeId: string
 	definition: GroundDynamicMesh
 	chunkCells: number
-	settings: TerrainPaintSettings
-	terrainPaintV3: TerrainPaintV3Settings
+	settings: LegacyTerrainPaintSettings
+	terrainPaint: TerrainPaintSettings
 	chunkStates: Map<string, PaintChunkState>
 	hasPendingChanges: boolean
 	terrainPaintSurfacePreviewRevision: number
@@ -1581,7 +1585,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 							definition,
 							chunkCells: resolveGroundChunkCells(definition),
 							settings,
-							terrainPaintV3: cloneOrCreateTerrainPaintV3Settings(definition, selectedNode.id),
+							terrainPaint: cloneOrCreateTerrainPaintSettingsRuntime(definition, selectedNode.id),
 							chunkStates: new Map(),
 							hasPendingChanges: false,
 							terrainPaintSurfacePreviewRevision: 0,
@@ -2136,7 +2140,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	async function loadTerrainPaintAssetsForChunkKeys(
 		groundMesh: THREE.Object3D,
 		definition: GroundDynamicMesh,
-		settings: TerrainPaintSettings,
+		settings: LegacyTerrainPaintSettings,
 		chunkKeys: Iterable<string>,
 		tokenSnapshot: number,
 	): Promise<void> {
@@ -2144,7 +2148,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		const subsetChunks: NonNullable<TerrainPaintSettings['chunks']> = {}
+		const subsetChunks: NonNullable<LegacyTerrainPaintSettings['chunks']> = {}
 		for (const key of chunkKeys) {
 			const trimmed = typeof key === 'string' ? key.trim() : ''
 			if (!trimmed) {
@@ -2156,7 +2160,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		}
 
-		const subsetSettings: TerrainPaintSettings = {
+		const subsetSettings: LegacyTerrainPaintSettings = {
 			...settings,
 			chunks: subsetChunks,
 		}
@@ -3254,7 +3258,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			definition,
 			chunkCells,
 			settings: cloneOrCreateTerrainPaintSettings(definition, nodeId),
-			terrainPaintV3: cloneOrCreateTerrainPaintV3Settings(definition, nodeId),
+			terrainPaint: cloneOrCreateTerrainPaintSettingsRuntime(definition, nodeId),
 			chunkStates: new Map(),
 			hasPendingChanges: false,
 			terrainPaintSurfacePreviewRevision: 0,
@@ -3325,8 +3329,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			groundNode,
 			dynamicMesh: {
 				...session.definition,
-				terrainPaint: session.settings,
-				terrainPaintV3: session.terrainPaintV3,
+				legacyTerrainPaint: session.settings,
+				terrainPaint: session.terrainPaint,
 			},
 			liveChunkPagesByKey: buildLiveTerrainPaintChunkPages(session),
 			previewRevision: session.terrainPaintSurfacePreviewRevision,
@@ -3513,13 +3517,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return state
 	}
 
-	function collectTerrainPaintV3TilesOverlappedByStamp(
+	function collectTerrainPaintTilesOverlappedByStamp(
 		session: PaintSessionState,
 		chunkBounds: TerrainPaintChunkBounds,
 		stamp: TerrainPaintStampRequest,
 	): Array<{ tileKey: string; tileRow: number; tileColumn: number }> {
-		const tilesPerAxisX = resolveTerrainPaintV3TilesPerAxis(chunkBounds.width, session.terrainPaintV3.tileWorldSize)
-		const tilesPerAxisZ = resolveTerrainPaintV3TilesPerAxis(chunkBounds.depth, session.terrainPaintV3.tileWorldSize)
+		const tilesPerAxisX = resolveTerrainPaintTilesPerAxis(chunkBounds.width, session.terrainPaint.tileWorldSize)
+		const tilesPerAxisZ = resolveTerrainPaintTilesPerAxis(chunkBounds.depth, session.terrainPaint.tileWorldSize)
 		const tileWidth = chunkBounds.width / Math.max(1, tilesPerAxisX)
 		const tileDepth = chunkBounds.depth / Math.max(1, tilesPerAxisZ)
 		const minTileColumn = THREE.MathUtils.clamp(
@@ -3546,7 +3550,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		for (let tileRow = minTileRow; tileRow <= maxTileRow; tileRow += 1) {
 			for (let tileColumn = minTileColumn; tileColumn <= maxTileColumn; tileColumn += 1) {
 				results.push({
-					tileKey: formatTerrainPaintV3TileKey(tileRow, tileColumn),
+					tileKey: formatTerrainPaintTileKey(tileRow, tileColumn),
 					tileRow,
 					tileColumn,
 				})
@@ -3555,7 +3559,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return results
 	}
 
-	function buildTerrainPaintV3TileMaskFromChunkPages(params: {
+	function buildTerrainPaintTileMaskFromChunkPages(params: {
 		session: PaintSessionState
 		chunk: PaintChunkState
 		chunkBounds: TerrainPaintChunkBounds
@@ -3564,7 +3568,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		tileColumn: number
 	}): Uint8Array | null {
 		const { session, chunk, chunkBounds, layerId, tileRow, tileColumn } = params
-		const layer = session.terrainPaintV3.layers.find((entry) => entry.id === layerId)
+		const layer = session.terrainPaint.layers.find((entry) => entry.id === layerId)
 		if (!layer?.enabled) {
 			return null
 		}
@@ -3573,8 +3577,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return null
 		}
 		const slotIndex = getTerrainPaintLayerSlotIndex(settingsLayer)
-		const tileBounds = resolveTerrainPaintV3TileWorldBounds(chunkBounds, tileRow, tileColumn, session.terrainPaintV3.tileWorldSize)
-		const tileResolution = Math.max(8, Math.round(session.terrainPaintV3.tileResolution))
+		const tileBounds = resolveTerrainPaintTileWorldBounds(chunkBounds, tileRow, tileColumn, session.terrainPaint.tileWorldSize)
+		const tileResolution = Math.max(8, Math.round(session.terrainPaint.tileResolution))
 		const mask = new Uint8Array(tileResolution * tileResolution)
 		let hasCoverage = false
 		for (let y = 0; y < tileResolution; y += 1) {
@@ -3599,7 +3603,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return hasCoverage ? mask : null
 	}
 
-	function applyTerrainPaintV3TileMaskToPreviewPages(params: {
+	function applyTerrainPaintTileMaskToPreviewPages(params: {
 		session: PaintSessionState
 		chunk: PaintChunkState
 		chunkBounds: TerrainPaintChunkBounds
@@ -3613,8 +3617,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!settingsLayer) {
 			return
 		}
-		const tileResolution = Math.max(8, Math.round(session.terrainPaintV3.tileResolution))
-		const tileBounds = resolveTerrainPaintV3TileWorldBounds(chunkBounds, tileRow, tileColumn, session.terrainPaintV3.tileWorldSize)
+		const tileResolution = Math.max(8, Math.round(session.terrainPaint.tileResolution))
+		const tileBounds = resolveTerrainPaintTileWorldBounds(chunkBounds, tileRow, tileColumn, session.terrainPaint.tileWorldSize)
 		const placement = buildTerrainPaintLayerPlacement(getTerrainPaintLayerSlotIndex(settingsLayer))
 		while (chunk.previewPages.length <= placement.pageIndex) {
 			chunk.previewPages.push(createBlankWeightmap(chunk.resolution))
@@ -3642,7 +3646,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 	}
 
-	function syncTerrainPaintV3TilesFromChunkPages(
+	function syncTerrainPaintTilesFromChunkPages(
 		session: PaintSessionState,
 		chunk: PaintChunkState,
 		stamp: TerrainPaintStampRequest,
@@ -3651,17 +3655,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!chunkBounds) {
 			return
 		}
-		const overlappedTiles = collectTerrainPaintV3TilesOverlappedByStamp(session, chunkBounds, stamp)
+		const overlappedTiles = collectTerrainPaintTilesOverlappedByStamp(session, chunkBounds, stamp)
 		if (!overlappedTiles.length) {
 			return
 		}
-		for (const layer of session.terrainPaintV3.layers) {
+		for (const layer of session.terrainPaint.layers) {
 			if (!layer.enabled) {
 				continue
 			}
 			const layerMutations = chunk.v3TileMutations[layer.id] ?? {}
 			for (const tile of overlappedTiles) {
-				const tileMask = buildTerrainPaintV3TileMaskFromChunkPages({
+				const tileMask = buildTerrainPaintTileMaskFromChunkPages({
 					session,
 					chunk,
 					chunkBounds,
@@ -3670,7 +3674,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					tileColumn: tile.tileColumn,
 				})
 				layerMutations[tile.tileKey] = tileMask
-				applyTerrainPaintV3TileMaskToPreviewPages({
+				applyTerrainPaintTileMaskToPreviewPages({
 					session,
 					chunk,
 					chunkBounds,
@@ -3751,7 +3755,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (any) {
 			const becameDirty = !chunk.dirty
 			chunk.dirty = true
-			syncTerrainPaintV3TilesFromChunkPages(session, chunk, stamp)
+			syncTerrainPaintTilesFromChunkPages(session, chunk, stamp)
 			pushTerrainPaintPreviewWeightmap(session, chunk)
 			if (becameDirty && !session.hasPendingChanges) {
 				session.hasPendingChanges = true
@@ -3759,31 +3763,31 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 	}
 
-	async function persistTerrainPaintV3ChunkTileMutations(params: {
+	async function persistTerrainPaintChunkTileMutations(params: {
 		session: PaintSessionState
 		chunk: PaintChunkState
-		terrainPaintV3: TerrainPaintV3Settings
+		terrainPaint: TerrainPaintSettings
 		nodeId: string
 		cache: ReturnType<typeof useAssetCacheStore>
-	}): Promise<TerrainPaintV3ChunkMaskState | null> {
-		const { chunk, terrainPaintV3, nodeId, cache } = params
-		const chunkKey = formatTerrainPaintV3ChunkKey(chunk.chunkRow, chunk.chunkColumn)
-		const previousRevision = terrainPaintV3.chunks[chunkKey]?.revision ?? 0
+	}): Promise<TerrainPaintChunkMaskState | null> {
+		const { chunk, terrainPaint, nodeId, cache } = params
+		const chunkKey = formatTerrainPaintChunkKey(chunk.chunkRow, chunk.chunkColumn)
+		const previousRevision = terrainPaint.chunks[chunkKey]?.revision ?? 0
 		const nextRevision = previousRevision + 1
-		const layers: TerrainPaintV3ChunkMaskState['layers'] = {}
-		for (const layer of terrainPaintV3.layers) {
+		const layers: TerrainPaintChunkMaskState['layers'] = {}
+		for (const layer of terrainPaint.layers) {
 			if (!layer.enabled) {
 				continue
 			}
 			const tiles: Record<string, { logicalId: string; revision: number }> = {
-				...(terrainPaintV3.chunks[chunkKey]?.layers[layer.id]?.tiles ?? {}),
+				...(terrainPaint.chunks[chunkKey]?.layers[layer.id]?.tiles ?? {}),
 			}
 			for (const [tileKey, tileMask] of Object.entries(chunk.v3TileMutations[layer.id] ?? {})) {
 				if (!tileMask) {
 					delete tiles[tileKey]
 					continue
 				}
-				const tileBlob = encodeTerrainPaintSingleChannelMaskToBinary(tileMask, terrainPaintV3.tileResolution)
+				const tileBlob = encodeTerrainPaintSingleChannelMaskToBinary(tileMask, terrainPaint.tileResolution)
 				const logicalId = await computeBlobHash(tileBlob)
 				const filename = `terrain-masktile_${nodeId}_${chunkKey}_${layer.id}_${tileKey.replace(':', '_')}.bin`
 				await cache.storeAssetBlob(logicalId, {
@@ -3912,16 +3916,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 			const smoothness = clamp01(options.paintSmoothness.value)
 			const smoothIterations = Math.max(0, Math.min(6, Math.round(smoothness * 4)))
-			const nextTerrainPaintV3 = buildTerrainPaintV3SettingsFromDrafts(session, options.paintLayers.value)
-			session.terrainPaintV3 = nextTerrainPaintV3
+			const nextTerrainPaint = buildTerrainPaintSettingsFromDrafts(session, options.paintLayers.value)
+			session.terrainPaint = nextTerrainPaint
 			let nextGroundSurfaceChunks = cloneGroundSurfaceChunks(session.definition, session.nodeId)
+			const groundNodeForBake = selectedNode && selectedNode.id === session.nodeId
+				? selectedNode
+				: getGroundNodeFromScene()
 			if (smoothIterations > 0) {
 				dirtyChunks.forEach((chunk) => {
 					chunk.pages = chunk.pages.map((page) => blurWeightmap(page, chunk.resolution, smoothIterations))
 					chunk.previewPages = chunk.pages.map((page) => page.slice())
 					const chunkBounds = resolvePaintChunkBounds(session.definition, session.chunkCells, chunk.chunkRow, chunk.chunkColumn)
 					if (chunkBounds) {
-						syncTerrainPaintV3TilesFromChunkPages(session, chunk, {
+						syncTerrainPaintTilesFromChunkPages(session, chunk, {
 							localX: chunkBounds.minX + chunkBounds.width * 0.5,
 							localZ: chunkBounds.minZ + chunkBounds.depth * 0.5,
 							radius: Math.max(chunkBounds.width, chunkBounds.depth),
@@ -3977,17 +3984,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					pages: pageRefs,
 				}
 				chunk.previewPages = chunk.pages.map((page) => page.slice())
-				const nextV3ChunkState = await persistTerrainPaintV3ChunkTileMutations({
+				const nextChunkState = await persistTerrainPaintChunkTileMutations({
 					session,
 					chunk,
-					terrainPaintV3: nextTerrainPaintV3,
+					terrainPaint: nextTerrainPaint,
 					nodeId: session.nodeId,
 					cache,
 				})
-				if (nextV3ChunkState) {
-					nextTerrainPaintV3.chunks[chunk.key] = nextV3ChunkState
+				if (nextChunkState) {
+					nextTerrainPaint.chunks[chunk.key] = nextChunkState
 				} else {
-					delete nextTerrainPaintV3.chunks[chunk.key]
+					delete nextTerrainPaint.chunks[chunk.key]
 				}
 				chunk.v3TileMutations = {}
 				chunk.dirty = false
@@ -3997,13 +4004,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				dirtyChunks,
 				previewRevision: session.terrainPaintSurfacePreviewRevision,
 				groundSurfaceChunks: nextGroundSurfaceChunks,
+				sceneStore: options.sceneStore,
+				groundNode: groundNodeForBake,
+				liveChunkPagesByKey: buildLiveTerrainPaintChunkPages(session),
+				registerAsset: options.sceneStore.registerAsset.bind(options.sceneStore),
 			})
 			if (token !== paintCommitToken) {
 				return false
 			}
 			options.sceneStore.updateGroundNodeDynamicMesh(session.nodeId, {
-				terrainPaint: session.settings,
-				terrainPaintV3: nextTerrainPaintV3,
+				legacyTerrainPaint: session.settings,
+				terrainPaint: nextTerrainPaint,
 				groundSurfaceChunks: nextGroundSurfaceChunks,
 			})
 			return true

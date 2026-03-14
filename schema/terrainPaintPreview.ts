@@ -3,8 +3,8 @@ import type {
 	GroundDynamicMesh,
 	TerrainPaintBlendMode,
 	TerrainPaintChannel,
-	TerrainPaintLayerDefinition,
-	TerrainPaintSettings,
+	LegacyTerrainPaintLayerDefinition,
+	LegacyTerrainPaintSettings,
 } from './index'
 import { getLandformsPreviewTexture } from './landformsPreview'
 
@@ -263,9 +263,9 @@ function encodeTerrainPaintBlendMode(mode: TerrainPaintBlendMode | null | undefi
 }
 
 function resolveTerrainPaintLayerByChannel(
-	settings: TerrainPaintSettings | null | undefined,
+	settings: LegacyTerrainPaintSettings | null | undefined,
 	channel: TerrainPaintChannel,
-): TerrainPaintLayerDefinition | null {
+): LegacyTerrainPaintLayerDefinition | null {
 	const layers = Array.isArray(settings?.layers) ? settings.layers : []
 	return layers.find((layer) => layer?.channel === channel) ?? null
 }
@@ -273,7 +273,7 @@ function resolveTerrainPaintLayerByChannel(
 function applyTerrainPaintLayerUniforms(
 	state: TerrainPaintShaderState,
 	channel: TerrainPaintChannel,
-	layer: TerrainPaintLayerDefinition | null,
+	layer: LegacyTerrainPaintLayerDefinition | null,
 ): void {
 	const paramsA = state.layerParamsA[channel]
 	const paramsB = state.layerParamsB[channel]
@@ -308,7 +308,7 @@ function computeChunkBounds(definition: GroundDynamicMesh, mesh: THREE.Object3D)
 export function ensureTerrainPaintPreviewInstalled(
 	root: THREE.Object3D,
 	definition: GroundDynamicMesh,
-	settings: TerrainPaintSettings | null,
+	settings: LegacyTerrainPaintSettings | null,
 ): void {
 	if (!root) {
 		return
@@ -368,7 +368,7 @@ export function ensureTerrainPaintPreviewInstalled(
 				return
 			}
 			const def = (root.userData as any).__terrainPaintDefinition as GroundDynamicMesh | undefined
-			const currentSettings = (root.userData as any).__terrainPaintSettings as TerrainPaintSettings | null | undefined
+			const currentSettings = (root.userData as any).__terrainPaintSettings as LegacyTerrainPaintSettings | null | undefined
 			if (!def) {
 				return
 			}
@@ -543,7 +543,7 @@ export type TextureLoader = (assetId: string) => Promise<THREE.Texture | null>
 export async function loadTerrainPaintAssets(
 	root: THREE.Object3D,
 	definition: GroundDynamicMesh,
-	settings: TerrainPaintSettings,
+	settings: LegacyTerrainPaintSettings,
 	assetLoader: AssetLoader,
 	textureLoader: TextureLoader,
 ): Promise<void> {
