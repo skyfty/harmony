@@ -5439,6 +5439,58 @@ function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
 
 const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
 
+function clearBuildToolVertexSnap() {
+  clearVertexSnapMarkers()
+}
+
+function resolveBuildToolVertexSnapPoint(
+  event: PointerEvent,
+  sourceWorld: THREE.Vector3,
+  options?: {
+    excludeNodeIds?: readonly string[]
+    keepSourceY?: boolean
+  },
+): THREE.Vector3 | null {
+  const active = isVertexSnapActiveEffective.value || event.shiftKey
+  if (!active) {
+    clearBuildToolVertexSnap()
+    return null
+  }
+
+  const excludeNodeIds = new Set<string>([GROUND_NODE_ID])
+  for (const nodeId of options?.excludeNodeIds ?? []) {
+    if (typeof nodeId === 'string' && nodeId.length > 0) {
+      excludeNodeIds.add(nodeId)
+    }
+  }
+
+  const candidate = snapController.findHoverCandidate({
+    event,
+    excludeNodeIds,
+    pixelThresholdPx: vertexSnapThresholdPx.value,
+  })
+  if (!candidate) {
+    clearBuildToolVertexSnap()
+    return null
+  }
+
+  const snapped = candidate.worldPosition.clone()
+  if (options?.keepSourceY) {
+    snapped.y = sourceWorld.y
+  }
+
+  updateVertexSnapMarkers({
+    sourceWorld: sourceWorld.clone(),
+    targetWorld: snapped.clone(),
+    delta: snapped.clone().sub(sourceWorld),
+    targetNodeId: candidate.nodeId,
+    targetMesh: candidate.mesh,
+    targetInstanceId: candidate.instanceId,
+  })
+
+  return snapped
+}
+
 const wallBuildTool = createWallBuildTool({
   activeBuildTool,
   wallBuildShape,
@@ -5449,6 +5501,8 @@ const wallBuildTool = createWallBuildTool({
   raycastGroundPoint,
   resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
   normalizeWallDimensionsForViewport,
   getWallBrush: () => ({
@@ -5569,6 +5623,8 @@ const roadBuildTool = createRoadBuildTool({
   defaultWidth: ROAD_DEFAULT_WIDTH,
   isAltOverrideActive: () => isAltOverrideActive,
   raycastGroundPoint,
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   collectRoadSnapVertices,
   snapRoadPointToVertices,
   vertexSnapDistance: ROAD_VERTEX_SNAP_DISTANCE,
@@ -5593,6 +5649,8 @@ const floorBuildTool = createFloorBuildTool({
   raycastGroundPoint,
   resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
   getFloorBrush: () => ({
     presetAssetId: floorBrushPresetAssetId.value,
@@ -5610,6 +5668,8 @@ const waterBuildTool = createWaterBuildTool({
   raycastGroundPoint,
   resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
@@ -17397,6 +17457,7 @@ function handleVertexSnapShiftKeyUp(event: KeyboardEvent) {
     return
   }
   vertexSnapShiftModifierActive.value = false
+  clearBuildToolVertexSnap()
   if (navigationSpeedBoostModifierActive.value) {
     navigationSpeedBoostModifierActive.value = false
     syncControlsConstraintsAndSpeeds()
@@ -17405,6 +17466,7 @@ function handleVertexSnapShiftKeyUp(event: KeyboardEvent) {
 
 function handleVertexSnapShiftBlur() {
   vertexSnapShiftModifierActive.value = false
+  clearBuildToolVertexSnap()
   if (navigationSpeedBoostModifierActive.value) {
     navigationSpeedBoostModifierActive.value = false
     syncControlsConstraintsAndSpeeds()
@@ -17635,6 +17697,7 @@ watch(
 
 watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
+  clearBuildToolVertexSnap()
 
   // Keep viewport side effects consistent even when the tool is activated via store (e.g. AssetPanel).
   if (isGroundBuildTool(tool)) {

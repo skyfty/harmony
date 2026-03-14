@@ -26,6 +26,11 @@ type PointerInteractionApi = {
   clearIfKind: (kind: PointerInteractionSession['kind']) => boolean
 }
 
+type VertexSnapResolverOptions = {
+  excludeNodeIds?: readonly string[]
+  keepSourceY?: boolean
+}
+
 export type RoadBuildToolHandle = {
   getSession: () => RoadBuildToolSession | null
   flushPreviewIfNeeded: (scene: THREE.Scene | null) => void
@@ -54,6 +59,8 @@ export function createRoadBuildTool(options: {
 
   isAltOverrideActive: () => boolean
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
+  resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
+  clearVertexSnap?: () => void
   collectRoadSnapVertices: () => RoadSnapVertex[]
   snapRoadPointToVertices: (
     point: THREE.Vector3,
@@ -102,6 +109,7 @@ export function createRoadBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    options.clearVertexSnap?.()
     session = null
     options.pointerInteraction.clearIfKind('buildToolRightClick')
     previewRenderer.reset()
@@ -123,6 +131,23 @@ export function createRoadBuildTool(options: {
     return session
   }
 
+  const resolveWorldPoint = (event: PointerEvent, rawPoint: THREE.Vector3): THREE.Vector3 => {
+    const snapped = options.resolveVertexSnapPoint?.(event, rawPoint, {
+      excludeNodeIds: session?.targetNodeId ? [session.targetNodeId] : undefined,
+      keepSourceY: true,
+    })
+    if (snapped) {
+      return snapped.clone()
+    }
+
+    const roadSnap = options.snapRoadPointToVertices(
+      rawPoint,
+      session?.snapVertices ?? options.collectRoadSnapVertices(),
+      options.vertexSnapDistance,
+    )
+    return roadSnap.position.clone()
+  }
+
   const updateCursorPreview = (event: PointerEvent) => {
     if (options.isAltOverrideActive()) {
       return
@@ -138,7 +163,7 @@ export function createRoadBuildTool(options: {
 
     const rawPointer = groundPointerHelper.clone()
     rawPointer.y = 0
-    const { position: next } = options.snapRoadPointToVertices(rawPointer, session.snapVertices, options.vertexSnapDistance)
+    const next = resolveWorldPoint(event, rawPointer)
 
     const previous = session.previewEnd
     if (previous && previous.equals(next)) {
@@ -326,10 +351,15 @@ export function createRoadBuildTool(options: {
 
     current.snapVertices = options.collectRoadSnapVertices()
     const snappedResult = options.snapRoadPointToVertices(snapped, current.snapVertices, options.vertexSnapDistance)
-    let point = snappedResult.position
+    const vertexSnapPoint = options.resolveVertexSnapPoint?.(event, snapped, {
+      excludeNodeIds: current.targetNodeId ? [current.targetNodeId] : undefined,
+      keepSourceY: true,
+    })
+    let point = vertexSnapPoint?.clone() ?? snappedResult.position.clone()
 
     // If starting on an existing road vertex, branch into that road node.
     if (
+      !vertexSnapPoint &&
       current.points.length === 0 &&
       snappedResult.nodeId &&
       typeof snappedResult.vertexIndex === 'number' &&
@@ -553,6 +583,7 @@ export function createRoadBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        options.clearVertexSnap?.()
         return false
       }
       clearSession()
@@ -575,6 +606,7 @@ export function createRoadBuildTool(options: {
     },
 
     dispose: () => {
+      options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession({ disposePreview: false })
     },

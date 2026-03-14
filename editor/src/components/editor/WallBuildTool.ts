@@ -21,6 +21,11 @@ type PointerInteractionApi = {
   ensureMoved: (event: PointerEvent) => boolean
 }
 
+type VertexSnapResolverOptions = {
+  excludeNodeIds?: readonly string[]
+  keepSourceY?: boolean
+}
+
 export type WallBuildToolHandle = {
   getSession: () => WallBuildToolSession | null
   syncBrushPreset: () => void
@@ -72,6 +77,8 @@ export function createWallBuildTool(options: {
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
+  resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
+  clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   getWallBrush: () => { presetAssetId: string | null; presetData: WallPresetData | null }
   normalizeWallDimensionsForViewport: (values: {
@@ -135,6 +142,7 @@ export function createWallBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    options.clearVertexSnap?.()
     session = null
     previewRenderer.reset()
   }
@@ -277,8 +285,29 @@ export function createWallBuildTool(options: {
     return target.clone()
   }
 
-  const snapPlacementPoint = (point: THREE.Vector3): THREE.Vector3 => {
-    const snapped = options.snapPoint(point)
+  const getActiveSnapExcludeNodeId = (): string | null => session?.nodeId ?? options.getWallEditNodeId()
+
+  const snapPlacementPoint = (
+    event: PointerEvent,
+    point: THREE.Vector3,
+    optionsOverride?: {
+      fallback?: 'grid' | 'raw'
+      excludeNodeIds?: readonly string[]
+      keepSourceY?: boolean
+      allowVertexSnap?: boolean
+    },
+  ): THREE.Vector3 => {
+    const fallbackMode = optionsOverride?.fallback ?? (event.shiftKey ? 'grid' : 'raw')
+    const shouldUseVertexSnap = optionsOverride?.allowVertexSnap ?? event.shiftKey
+    if (!shouldUseVertexSnap) {
+      options.clearVertexSnap?.()
+    }
+    const snapped = shouldUseVertexSnap
+      ? (options.resolveVertexSnapPoint?.(event, point, {
+          excludeNodeIds: optionsOverride?.excludeNodeIds,
+          keepSourceY: optionsOverride?.keepSourceY,
+        }) ?? (fallbackMode === 'raw' ? point.clone() : options.snapPoint(point.clone())))
+      : (fallbackMode === 'raw' ? point.clone() : options.snapPoint(point.clone()))
     snapped.y = point.y
     return snapped
   }
@@ -417,7 +446,15 @@ export function createWallBuildTool(options: {
     return hasExistingGeometry
   }
 
-  const constrainWallEndPointForBuild = (start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 => {
+  const constrainWallEndPointForBuild = (
+    start: THREE.Vector3,
+    target: THREE.Vector3,
+    rawTarget: THREE.Vector3 | undefined,
+    constrainActive: boolean,
+  ): THREE.Vector3 => {
+    if (!constrainActive) {
+      return target.clone()
+    }
     const shouldConstrainAngle = shouldConstrainWallAngleForActiveSegment()
     const base = shouldConstrainAngle
       ? constrainWallEndPoint(start, target, rawTarget)
@@ -510,7 +547,10 @@ export function createWallBuildTool(options: {
     }
 
     const rawPointer = groundPointerHelper.clone()
-    const start = snapPlacementPoint(rawPointer.clone())
+    const excludeNodeId = getActiveSnapExcludeNodeId()
+    const start = snapPlacementPoint(event, rawPointer.clone(), {
+      excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+    })
     const end = kind === 'circle' ? rawPointer.clone() : start.clone()
 
     const current = ensureSession()
@@ -607,7 +647,12 @@ export function createWallBuildTool(options: {
     const rawPointer = groundPointerHelper.clone()
     const kind = session.shapeDraft.kind
     const start = session.shapeDraft.start.clone()
-    const end = kind === 'circle' ? rawPointer.clone() : snapPlacementPoint(rawPointer.clone())
+    const excludeNodeId = getActiveSnapExcludeNodeId()
+    const end = kind === 'circle'
+      ? snapPlacementPoint(event, rawPointer.clone(), { fallback: 'raw' })
+      : snapPlacementPoint(event, rawPointer.clone(), {
+          excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+        })
 
     const previousEnd = session.shapeDraft.end
     if (previousEnd.equals(end)) {
@@ -632,7 +677,7 @@ export function createWallBuildTool(options: {
     const start = session.shapeDraft.start.clone()
     const end = kind === 'circle'
       ? session.shapeDraft.end.clone()
-      : snapPlacementPoint(session.shapeDraft.end.clone())
+      : session.shapeDraft.end.clone()
 
     const segments = kind === 'rectangle'
       ? buildRectangleSegments(start, end)
@@ -781,15 +826,19 @@ export function createWallBuildTool(options: {
     }
 
     const rawPointer = groundPointerHelper.clone()
-    const snappedPoint = snapPlacementPoint(rawPointer.clone())
-
     const current = ensureSession()
+    const excludeNodeId = current.nodeId ?? options.getWallEditNodeId()
+    const snappedPoint = snapPlacementPoint(event, rawPointer.clone(), {
+      fallback: event.shiftKey ? 'grid' : 'raw',
+      excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+      allowVertexSnap: event.shiftKey,
+    })
     if (!current.dragStart) {
       beginSegmentDrag(snappedPoint)
       return true
     }
 
-    const constrained = constrainWallEndPointForBuild(current.dragStart, snappedPoint, rawPointer)
+    const constrained = constrainWallEndPointForBuild(current.dragStart, snappedPoint, rawPointer, event.shiftKey)
     const previous = current.dragEnd
     if (!previous || !previous.equals(constrained)) {
       current.dragEnd = constrained
@@ -828,7 +877,10 @@ export function createWallBuildTool(options: {
     current.nodeId = null
     current.committedNewSegmentCount = 0
 
-    const point = alignPointYToPolygonDraft(snapPlacementPoint(groundPointerHelper.clone()), current)
+    const excludeNodeId = current.nodeId ?? options.getWallEditNodeId()
+    const point = alignPointYToPolygonDraft(snapPlacementPoint(event, groundPointerHelper.clone(), {
+      excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+    }), current)
     const firstPoint = current.polygonPoints[0]
     const lastPoint = current.polygonPoints[current.polygonPoints.length - 1]
 
@@ -861,7 +913,10 @@ export function createWallBuildTool(options: {
       return false
     }
 
-    const next = alignPointYToPolygonDraft(snapPlacementPoint(groundPointerHelper.clone()), session)
+    const excludeNodeId = getActiveSnapExcludeNodeId()
+    const next = alignPointYToPolygonDraft(snapPlacementPoint(event, groundPointerHelper.clone(), {
+      excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+    }), session)
     const previous = session.polygonPreviewEnd
     if (previous && previous.equals(next)) {
       return false
@@ -884,8 +939,13 @@ export function createWallBuildTool(options: {
     }
 
     const rawPointer = groundPointerHelper.clone()
-    const pointer = snapPlacementPoint(rawPointer.clone())
-    const constrained = constrainWallEndPointForBuild(session.dragStart, pointer, rawPointer)
+    const excludeNodeId = getActiveSnapExcludeNodeId()
+    const pointer = snapPlacementPoint(event, rawPointer.clone(), {
+      fallback: event.shiftKey ? 'grid' : 'raw',
+      excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+      allowVertexSnap: event.shiftKey,
+    })
+    const constrained = constrainWallEndPointForBuild(session.dragStart, pointer, rawPointer, event.shiftKey)
     const previous = session.dragEnd
     if (previous && previous.equals(constrained)) {
       return
@@ -1079,6 +1139,7 @@ export function createWallBuildTool(options: {
       if (!session) {
         return false
       }
+      options.clearVertexSnap?.()
       cancelShapeDraft()
       cancelDrag()
       event.preventDefault()
@@ -1089,6 +1150,7 @@ export function createWallBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        options.clearVertexSnap?.()
         return false
       }
       cancelShapeDraft()
@@ -1140,6 +1202,7 @@ export function createWallBuildTool(options: {
     },
 
     dispose: () => {
+      options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession(false)
     },

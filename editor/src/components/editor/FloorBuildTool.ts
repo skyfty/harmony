@@ -31,6 +31,11 @@ type LeftDragState = {
   kind: Exclude<FloorBuildShape, 'polygon'>
 }
 
+type VertexSnapResolverOptions = {
+  excludeNodeIds?: readonly string[]
+  keepSourceY?: boolean
+}
+
 export function createFloorBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   floorBuildShape: Ref<FloorBuildShape>
@@ -40,6 +45,8 @@ export function createFloorBuildTool(options: {
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
+  resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
+  clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
   clickDragThresholdPx: number
@@ -61,6 +68,24 @@ export function createFloorBuildTool(options: {
       point.y = baseY
     }
     return point
+  }
+
+  const resolvePlacementPoint = (
+    event: PointerEvent,
+    rawPoint: THREE.Vector3,
+    optionsOverride?: { fallback?: 'grid' | 'raw'; keepSourceY?: boolean; excludeNodeIds?: readonly string[] },
+  ): THREE.Vector3 => {
+    const snapped = options.resolveVertexSnapPoint?.(event, rawPoint, {
+      excludeNodeIds: optionsOverride?.excludeNodeIds,
+      keepSourceY: optionsOverride?.keepSourceY,
+    })
+    if (snapped) {
+      return snapped.clone()
+    }
+    if (optionsOverride?.fallback === 'raw') {
+      return rawPoint.clone()
+    }
+    return options.snapPoint(rawPoint.clone())
   }
 
   let session: FloorPreviewSession | null = null
@@ -88,6 +113,7 @@ export function createFloorBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    options.clearVertexSnap?.()
     session = null
     rightClickState = null
     leftDragState = null
@@ -100,7 +126,7 @@ export function createFloorBuildTool(options: {
     }
 
     const raw = groundPointerHelper.clone()
-    const start = options.snapPoint(raw)
+    const start = resolvePlacementPoint(event, raw)
 
     const current = ensureSession()
     current.shape = 'rectangle'
@@ -117,7 +143,7 @@ export function createFloorBuildTool(options: {
     }
 
     const raw = groundPointerHelper.clone()
-    const center = options.snapPoint(raw)
+    const center = resolvePlacementPoint(event, raw)
 
     const baseRadiusRaw = options.getDefaultCircleRadius()
     const baseRadius = typeof baseRadiusRaw === 'number' && Number.isFinite(baseRadiusRaw) ? Math.max(1e-3, baseRadiusRaw) : 1
@@ -148,7 +174,9 @@ export function createFloorBuildTool(options: {
     const raw = groundPointerHelper.clone()
 
     // Circle radius endpoint should not be snapped to grid.
-    const next = session.shape === 'circle' ? raw : options.snapPoint(raw)
+    const next = session.shape === 'circle'
+      ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
+      : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
 
     const previous = session.previewEnd
@@ -172,7 +200,7 @@ export function createFloorBuildTool(options: {
     }
 
     const raw = groundPointerHelper.clone()
-    const point = options.snapPoint(raw)
+    const point = resolvePlacementPoint(event, raw)
 
     const current = ensureSession()
     alignPointYToSession(point, current)
@@ -363,7 +391,7 @@ export function createFloorBuildTool(options: {
           }
 
           const raw = groundPointerHelper.clone()
-          const end = options.snapPoint(raw)
+          const end = resolvePlacementPoint(event, raw)
           end.y = session.points[0]?.y ?? end.y
           session.previewEnd = end.clone()
           previewRenderer.markDirty()
@@ -402,9 +430,9 @@ export function createFloorBuildTool(options: {
             return true
           }
 
-          const raw = groundPointerHelper.clone()
-          raw.y = session.points[0]?.y ?? raw.y
-          session.previewEnd = raw.clone()
+          const previewEnd = resolvePlacementPoint(event, groundPointerHelper.clone(), { fallback: 'raw' })
+          previewEnd.y = session.points[0]?.y ?? previewEnd.y
+          session.previewEnd = previewEnd.clone()
           previewRenderer.markDirty()
 
           const center = session.points[0]!
@@ -480,6 +508,7 @@ export function createFloorBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        options.clearVertexSnap?.()
         return false
       }
       clearSession(true)
@@ -487,6 +516,7 @@ export function createFloorBuildTool(options: {
     },
 
     dispose: () => {
+      options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession(false)
     },

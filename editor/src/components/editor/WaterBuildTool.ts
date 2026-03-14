@@ -35,6 +35,11 @@ type LeftDragState = {
   kind: Exclude<WaterBuildShape, 'polygon'>
 }
 
+type VertexSnapResolverOptions = {
+  excludeNodeIds?: readonly string[]
+  keepSourceY?: boolean
+}
+
 const WATER_MIN_SIZE = 1e-3
 const WATER_CIRCLE_SEGMENTS = 32
 
@@ -47,6 +52,8 @@ export function createWaterBuildTool(options: {
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
+  resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
+  clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   clickDragThresholdPx: number
 }): WaterBuildToolHandle {
@@ -84,6 +91,7 @@ export function createWaterBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    options.clearVertexSnap?.()
     session = null
     rightClickState = null
     leftDragState = null
@@ -98,6 +106,24 @@ export function createWaterBuildTool(options: {
     return point
   }
 
+  const resolvePlacementPoint = (
+    event: PointerEvent,
+    rawPoint: THREE.Vector3,
+    optionsOverride?: { fallback?: 'grid' | 'raw'; keepSourceY?: boolean; excludeNodeIds?: readonly string[] },
+  ): THREE.Vector3 => {
+    const snapped = options.resolveVertexSnapPoint?.(event, rawPoint, {
+      excludeNodeIds: optionsOverride?.excludeNodeIds,
+      keepSourceY: optionsOverride?.keepSourceY,
+    })
+    if (snapped) {
+      return snapped.clone()
+    }
+    if (optionsOverride?.fallback === 'raw') {
+      return rawPoint.clone()
+    }
+    return options.snapPoint(rawPoint.clone())
+  }
+
   const markPreviewDirty = () => {
     previewRenderer.markDirty()
   }
@@ -106,7 +132,7 @@ export function createWaterBuildTool(options: {
     if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
-    const start = options.snapPoint(groundPointerHelper.clone())
+    const start = resolvePlacementPoint(event, groundPointerHelper.clone())
     const current = ensureSession()
     current.shape = 'rectangle'
     current.points = [start.clone()]
@@ -120,7 +146,7 @@ export function createWaterBuildTool(options: {
     if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
-    const center = options.snapPoint(groundPointerHelper.clone())
+    const center = resolvePlacementPoint(event, groundPointerHelper.clone())
     const baseRadiusRaw = options.getDefaultCircleRadius?.()
     const baseRadius = typeof baseRadiusRaw === 'number' && Number.isFinite(baseRadiusRaw) ? Math.max(1e-3, baseRadiusRaw) : 1
     const initialEnd = center.clone()
@@ -144,7 +170,9 @@ export function createWaterBuildTool(options: {
     }
 
     const raw = groundPointerHelper.clone()
-    const next = session.shape === 'circle' ? raw : options.snapPoint(raw)
+    const next = session.shape === 'circle'
+      ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
+      : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
 
     const previous = session.previewEnd
@@ -164,7 +192,7 @@ export function createWaterBuildTool(options: {
       return false
     }
 
-    const point = options.snapPoint(groundPointerHelper.clone())
+    const point = resolvePlacementPoint(event, groundPointerHelper.clone())
     const current = ensureSession()
     alignPointYToSession(point, current)
     current.shape = 'polygon'
@@ -327,7 +355,7 @@ export function createWaterBuildTool(options: {
             return true
           }
 
-          const end = options.snapPoint(groundPointerHelper.clone())
+          const end = resolvePlacementPoint(event, groundPointerHelper.clone())
           end.y = session.points[0]?.y ?? end.y
           session.previewEnd = end.clone()
           markPreviewDirty()
@@ -368,7 +396,7 @@ export function createWaterBuildTool(options: {
             return true
           }
 
-          const end = groundPointerHelper.clone()
+          const end = resolvePlacementPoint(event, groundPointerHelper.clone(), { fallback: 'raw' })
           end.y = session.points[0]?.y ?? end.y
           session.previewEnd = end.clone()
           markPreviewDirty()
@@ -418,6 +446,7 @@ export function createWaterBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        options.clearVertexSnap?.()
         return false
       }
       clearSession(true)
@@ -425,6 +454,7 @@ export function createWaterBuildTool(options: {
     },
 
     dispose: () => {
+      options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession(false)
     },

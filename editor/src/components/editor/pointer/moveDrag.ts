@@ -735,6 +735,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallEndpointDragState && event.pointerId === ctx.wallEndpointDragState.pointerId) {
     const state = ctx.wallEndpointDragState
+    const constrainActive = Boolean(event.shiftKey)
     const dx = event.clientX - state.startX
     const dy = event.clientY - state.startY
     if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
@@ -757,7 +758,7 @@ export function handlePointerMoveDrag(
       const delta = tmpIntersection.clone().sub(state.startEndpointWorld)
       const t = axis.dot(delta)
       constrained = state.startEndpointWorld.clone().add(axis.multiplyScalar(t))
-      if (rectangleConstraint) {
+      if (constrainActive && rectangleConstraint) {
         snapToMajorGridXZ(constrained, state.startEndpointWorld.y)
       }
     } else {
@@ -768,7 +769,9 @@ export function handlePointerMoveDrag(
       const rawPointer = ctx.groundPointerHelper.clone()
 
       if (rectangleConstraint) {
-        constrained = snapToMajorGridXZ(rawPointer.clone(), state.startEndpointWorld.y)
+        constrained = constrainActive
+          ? snapToMajorGridXZ(rawPointer.clone(), state.startEndpointWorld.y)
+          : rawPointer.clone().setY(state.startEndpointWorld.y)
       } else {
         const target = rawPointer.clone()
         target.y = state.startEndpointWorld.y
@@ -776,12 +779,16 @@ export function handlePointerMoveDrag(
         const anchor = state.anchorPointWorld.clone()
         anchor.y = state.startEndpointWorld.y
 
-        constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
-        constrained.y = state.startEndpointWorld.y
+        if (constrainActive) {
+          constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
+          constrained.y = state.startEndpointWorld.y
+        } else {
+          constrained = target
+        }
       }
     }
 
-    if (constrained) {
+    if (constrained && constrainActive) {
       // Same-node endpoint magnet: help connect different chains by snapping the dragged endpoint
       // to the nearest endpoint of other chains within the same wall node.
       applySameNodeEndpointMagnet({
@@ -882,6 +889,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallCircleCenterDragState && event.pointerId === ctx.wallCircleCenterDragState.pointerId) {
     const state = ctx.wallCircleCenterDragState
+    const constrainActive = Boolean(event.shiftKey)
 
     const dxStart = event.clientX - state.startX
     const dyStart = event.clientY - state.startY
@@ -915,6 +923,13 @@ export function handlePointerMoveDrag(
     const startHit = state.startHitWorld ?? state.startPointWorld
     const delta = tmpIntersection.clone().sub(startHit)
     delta.y = 0
+
+    if (constrainActive) {
+      const desiredCenter = state.startCenterWorld.clone().add(delta)
+      snapToMajorGridXZ(desiredCenter, state.startCenterWorld.y)
+      delta.copy(desiredCenter.sub(state.startCenterWorld))
+      delta.y = 0
+    }
 
     // Reset working to base, then translate only the circle chain.
     for (let i = 0; i < state.workingSegmentsWorld.length; i += 1) {
@@ -964,6 +979,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallCircleRadiusDragState && event.pointerId === ctx.wallCircleRadiusDragState.pointerId) {
     const state = ctx.wallCircleRadiusDragState
+    const constrainActive = Boolean(event.shiftKey)
 
     const dxStart = event.clientX - state.startX
     const dyStart = event.clientY - state.startY
@@ -985,7 +1001,11 @@ export function handlePointerMoveDrag(
       state.startHitWorld = tmpIntersection.clone()
     }
 
-    const newRadius = Math.max(1e-3, Math.hypot(tmpIntersection.x - state.centerWorld.x, tmpIntersection.z - state.centerWorld.z))
+    let newRadius = Math.max(1e-3, Math.hypot(tmpIntersection.x - state.centerWorld.x, tmpIntersection.z - state.centerWorld.z))
+    if (constrainActive) {
+      const snappedRadius = Math.round(newRadius / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+      newRadius = Math.max(1e-3, snappedRadius)
+    }
     const segmentCount = Math.max(3, state.chainEndIndex - state.chainStartIndex + 1)
     const circleSegments = buildCircleSegmentsFixedCount({
       centerWorld: state.centerWorld,
@@ -1043,6 +1063,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallJointDragState && event.pointerId === ctx.wallJointDragState.pointerId) {
     const state = ctx.wallJointDragState
+    const constrainActive = Boolean(event.shiftKey)
     const dx = event.clientX - state.startX
     const dy = event.clientY - state.startY
     if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
@@ -1065,7 +1086,7 @@ export function handlePointerMoveDrag(
       const delta = tmpIntersection.clone().sub(state.startJointWorld)
       const t = axis.dot(delta)
       constrained = state.startJointWorld.clone().add(axis.multiplyScalar(t))
-      if (rectangleConstraint) {
+      if (constrainActive && rectangleConstraint) {
         snapToMajorGridXZ(constrained, state.startJointWorld.y)
       }
     } else {
@@ -1078,37 +1099,43 @@ export function handlePointerMoveDrag(
       target.y = state.startJointWorld.y
 
       if (rectangleConstraint) {
-        constrained = snapToMajorGridXZ(target, state.startJointWorld.y)
+        constrained = constrainActive
+          ? snapToMajorGridXZ(target, state.startJointWorld.y)
+          : target
       } else {
+        if (constrainActive) {
+          const working = state.workingSegmentsWorld
+          const i = state.jointIndex
+          const prevSeg = working[i]
+          const nextSeg = working[i + 1]
 
-        const working = state.workingSegmentsWorld
-        const i = state.jointIndex
-        const prevSeg = working[i]
-        const nextSeg = working[i + 1]
+          const prevAnchor = prevSeg?.start?.clone?.() ?? null
+          const nextAnchor = nextSeg?.end?.clone?.() ?? null
 
-        const prevAnchor = prevSeg?.start?.clone?.() ?? null
-        const nextAnchor = nextSeg?.end?.clone?.() ?? null
+          const candidates: Array<{ point: THREE.Vector3; distSq: number }> = []
+          if (prevAnchor) {
+            prevAnchor.y = state.startJointWorld.y
+            const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, rawPointer)
+            snapped.y = state.startJointWorld.y
+            const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+            candidates.push({ point: snapped, distSq: dSq })
+          }
+          if (nextAnchor) {
+            nextAnchor.y = state.startJointWorld.y
+            const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, rawPointer)
+            snapped.y = state.startJointWorld.y
+            const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+            candidates.push({ point: snapped, distSq: dSq })
+          }
 
-        const candidates: Array<{ point: THREE.Vector3; distSq: number }> = []
-        if (prevAnchor) {
-          prevAnchor.y = state.startJointWorld.y
-          const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, rawPointer)
-          snapped.y = state.startJointWorld.y
-          const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
-          candidates.push({ point: snapped, distSq: dSq })
-        }
-        if (nextAnchor) {
-          nextAnchor.y = state.startJointWorld.y
-          const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, rawPointer)
-          snapped.y = state.startJointWorld.y
-          const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
-          candidates.push({ point: snapped, distSq: dSq })
-        }
-
-        if (candidates.length) {
-          candidates.sort((a, b) => a.distSq - b.distSq)
-          // Stability: if very close, prefer the first candidate (prev anchor if present).
-          constrained = candidates[0]!.point
+          if (candidates.length) {
+            candidates.sort((a, b) => a.distSq - b.distSq)
+            // Stability: if very close, prefer the first candidate (prev anchor if present).
+            constrained = candidates[0]!.point
+          } else {
+            constrained = target.clone()
+            constrained.y = state.startJointWorld.y
+          }
         } else {
           constrained = target.clone()
           constrained.y = state.startJointWorld.y
@@ -1116,7 +1143,7 @@ export function handlePointerMoveDrag(
       }
     }
 
-    if (constrained && rectangleConstraint) {
+    if (constrained && rectangleConstraint && constrainActive) {
       applySameNodeEndpointMagnet({
         constrained,
         y: state.startJointWorld.y,
