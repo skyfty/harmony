@@ -9,7 +9,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
   const activeBuildTool = ref<BuildTool | null>(null)
   const wallBrushPresetAssetId = ref<string | null>(null)
   const floorBrushPresetAssetId = ref<string | null>(null)
-  const wallBuildShape = ref<WallBuildShape>('polygon')
+  const wallBuildShape = ref<WallBuildShape>('line')
   const wallDoorSelectModeActive = ref(false)
   const floorBuildShape = ref<FloorBuildShape>('polygon')
   const waterBuildShape = ref<WaterBuildShape>('rectangle')

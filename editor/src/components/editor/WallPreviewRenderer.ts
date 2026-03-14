@@ -1,7 +1,9 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh, WallChain } from '@schema'
+import type { WallDynamicMesh } from '@schema'
 import { createWallRenderGroup, updateWallGroup } from '@schema/wallMesh'
 import type { WallComponentProps } from '@schema/components'
+import { stableSerialize } from '@schema/stableSerialize'
+import { buildWallDynamicMeshFromWorldSegments } from '@/stores/wallUtils'
 import type { WallPreviewRenderData } from './WallRenderer'
 import { applyAirWallVisualToWallGroup } from './WallRenderer'
 
@@ -114,91 +116,6 @@ function applyWallPreviewStyling(group: THREE.Group) {
   })
 }
 
-function buildWallPreviewDefinition(
-  segments: WallPreviewSegment[],
-  dimensions: { height: number; width: number; thickness: number },
-  normalizeWallDimensionsForViewport: (values: {
-    height?: number
-    width?: number
-    thickness?: number
-  }) => { height: number; width: number; thickness: number },
-): { center: THREE.Vector3; definition: WallDynamicMesh } | null {
-  if (!segments.length) {
-    return null
-  }
-
-  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
-  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
-
-  segments.forEach(({ start, end }) => {
-    min.min(start)
-    min.min(end)
-    max.max(start)
-    max.max(end)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
-    return null
-  }
-
-  const center = new THREE.Vector3((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, (min.z + max.z) * 0.5)
-  const normalized = normalizeWallDimensionsForViewport(dimensions)
-
-  // Convert preview segments to local-space WallChain polylines.
-  const EPS_SQ = 1e-8
-  const chains: WallChain[] = []
-  let currentPoints: WallChain['points'] = []
-
-  for (let i = 0; i < segments.length; i += 1) {
-    const seg = segments[i]!
-    if (currentPoints.length === 0) {
-      currentPoints.push({
-        x: seg.start.x - center.x,
-        y: seg.start.y - center.y,
-        z: seg.start.z - center.z,
-      })
-    }
-    currentPoints.push({
-      x: seg.end.x - center.x,
-      y: seg.end.y - center.y,
-      z: seg.end.z - center.z,
-    })
-
-    const next = segments[i + 1]
-    if (next) {
-      const dx = next.start.x - seg.end.x
-      const dz = next.start.z - seg.end.z
-      if (dx * dx + dz * dz > EPS_SQ) {
-        if (currentPoints.length >= 2) {
-          const fp = currentPoints[0]!; const lp = currentPoints[currentPoints.length - 1]!
-          const cx = fp.x - lp.x; const cz = fp.z - lp.z
-          chains.push({ points: currentPoints, closed: cx * cx + cz * cz <= EPS_SQ })
-        }
-        currentPoints = []
-      }
-    }
-  }
-
-  if (currentPoints.length >= 2) {
-    const fp = currentPoints[0]!; const lp = currentPoints[currentPoints.length - 1]!
-    const dx = fp.x - lp.x; const dz = fp.z - lp.z
-    chains.push({ points: currentPoints, closed: dx * dx + dz * dz <= EPS_SQ })
-  }
-
-  if (!chains.length) {
-    return null
-  }
-
-  const definition: WallDynamicMesh = {
-    type: 'Wall',
-    chains,
-    openings: [],
-    dimensions: { height: normalized.height, width: normalized.width, thickness: normalized.thickness },
-  }
-
-  return { center, definition }
-}
-
 export function createWallPreviewRenderer(options: {
   rootGroup: THREE.Group
   normalizeWallDimensionsForViewport: (values: {
@@ -264,7 +181,8 @@ export function createWallPreviewRenderer(options: {
       return
     }
 
-    const build = buildWallPreviewDefinition(segments, session.dimensions, options.normalizeWallDimensionsForViewport)
+    const normalizedDimensions = options.normalizeWallDimensionsForViewport(session.dimensions)
+    const build = buildWallDynamicMeshFromWorldSegments(segments, normalizedDimensions)
     if (!build) {
       if (session.previewGroup) {
         clear(session)
@@ -283,22 +201,8 @@ export function createWallPreviewRenderer(options: {
       : null
 
     const renderSignature = resolvedRender
-      ? JSON.stringify({
-        isAirWall: resolvedRender.isAirWall,
-        wantsInstancing: resolvedRender.wantsInstancing,
-        hasMissingAssets: resolvedRender.hasMissingAssets,
-        body: Boolean(resolvedRender.assets.bodyObject),
-        head: Boolean(resolvedRender.assets.headObject),
-        foot: Boolean(resolvedRender.assets.footObject),
-        bodyCap: Boolean(resolvedRender.assets.bodyEndCapObject),
-        headCap: Boolean(resolvedRender.assets.headEndCapObject),
-        footCap: Boolean(resolvedRender.assets.footEndCapObject),
-        bodyCorners: Object.keys(resolvedRender.assets.bodyCornerObjectsByAssetId ?? {}).sort(),
-        headCorners: Object.keys(resolvedRender.assets.headCornerObjectsByAssetId ?? {}).sort(),
-        footCorners: Object.keys(resolvedRender.assets.footCornerObjectsByAssetId ?? {}).sort(),
-        smoothing: resolvedRender.renderOptions.smoothing ?? 0,
-      })
-      : 'default'
+      ? resolvedRender.signatureData
+      : stableSerialize({ wallProps: session.wallRenderProps ?? null })
 
     const nextSignature = `${computeWallPreviewSignature(segments, session.dimensions)}|${renderSignature}`
     if (nextSignature === signature) {

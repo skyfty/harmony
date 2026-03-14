@@ -660,20 +660,63 @@ type WallLocalHitOnCompiled = {
   erasableRangeEnd: number
 }
 
+type WallLocalHitPreference = {
+  preferredChainIndex?: number
+  preferredArcStart?: number
+  preferredArcEnd?: number
+}
+
 function resolveWallLocalHitOnCompiledSegments(
   definition: WallDynamicMesh,
   localPoint: THREE.Vector3,
+  preference?: WallLocalHitPreference,
 ): WallLocalHitOnCompiled | null {
   const compiled = compileWallSegmentsFromDefinition(definition)
   if (!compiled.length) {
     return null
   }
 
+  const preferredChainIndex = Number(preference?.preferredChainIndex)
+  const preferredArcStart = Number(preference?.preferredArcStart)
+  const preferredArcEnd = Number(preference?.preferredArcEnd)
+  const hasPreferredRange = Number.isFinite(preferredChainIndex)
+    && Number.isFinite(preferredArcStart)
+    && Number.isFinite(preferredArcEnd)
+    && preferredArcEnd > preferredArcStart + 1e-6
+
+  const candidateIndices = hasPreferredRange
+    ? compiled
+        .map((seg, index) => {
+          const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
+          if (chainIndex !== Math.max(0, Math.trunc(preferredChainIndex))) {
+            return -1
+          }
+          const segStart = Number(seg.chainArcStart ?? NaN)
+          const segLen = Math.sqrt(
+            (Number(seg.end.x) - Number(seg.start.x)) ** 2 +
+            (Number(seg.end.z) - Number(seg.start.z)) ** 2,
+          )
+          const segEnd = segStart + segLen
+          if (!Number.isFinite(segStart) || !Number.isFinite(segLen) || segLen <= 1e-6) {
+            return -1
+          }
+          if (segEnd <= preferredArcStart + 1e-6 || segStart >= preferredArcEnd - 1e-6) {
+            return -1
+          }
+          return index
+        })
+        .filter((index) => index >= 0)
+    : []
+
+  const indicesToSearch = candidateIndices.length
+    ? candidateIndices
+    : compiled.map((_, index) => index)
+
   let bestIndex = -1
   let bestDistSq = Number.POSITIVE_INFINITY
   let bestT = 0
 
-  for (let i = 0; i < compiled.length; i += 1) {
+  for (const i of indicesToSearch) {
     const seg = compiled[i]!
     const ax = Number(seg.start.x)
     const az = Number(seg.start.z)
@@ -768,8 +811,9 @@ export function computeWallOpeningForLocalHit(
   definition: WallDynamicMesh,
   localPoint: THREE.Vector3,
   halfLenM: number,
+  preference?: WallLocalHitPreference,
 ): WallOpening | null {
-  const hit = resolveWallLocalHitOnCompiledSegments(definition, localPoint)
+  const hit = resolveWallLocalHitOnCompiledSegments(definition, localPoint, preference)
   if (!hit) {
     return null
   }

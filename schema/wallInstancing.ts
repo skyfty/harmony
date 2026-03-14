@@ -29,6 +29,12 @@ export type WallInstancedBindingSpec = {
   assetId: string
   sourceAssetId?: string | null
   localMatrices: THREE.Matrix4[]
+  instanceMetas?: Array<{
+    chainIndex: number
+    chainArcStart?: number
+    chainArcEnd?: number
+    repeatSlotIndex?: number
+  }>
   bindingIdPrefix: string
   useNodeIdForIndex0: boolean
   repeatScaleU?: number
@@ -282,6 +288,10 @@ export function buildWallRepeatVariantAssetId(
 type WallLocalPlacement = {
   matrix: THREE.Matrix4
   uvScaleU: number
+  chainIndex?: number
+  chainArcStart?: number
+  chainArcEnd?: number
+  repeatSlotIndex?: number
 }
 
 function buildRepeatErasedSlotSet(definition: WallDynamicMesh): Set<string> {
@@ -520,6 +530,9 @@ function computeWallBodyLocalPlacementsStretchTiledUv(
     placements.push({
       matrix: new THREE.Matrix4().copy(wallSyncLocalMatrixHelper),
       uvScaleU: scaleAlong,
+      chainIndex: Math.max(0, Math.trunc(Number(segment.chainIndex ?? 0))),
+      chainArcStart: Number(segment.arcStart),
+      chainArcEnd: Number(segment.arcEnd),
     })
   }
 
@@ -616,6 +629,10 @@ function computeWallBodyLocalPlacementsRepeated(
       placements.push({
         matrix: new THREE.Matrix4().copy(wallSyncLocalMatrixHelper),
         uvScaleU: 1,
+        chainIndex,
+        chainArcStart: Number(segment.arcStart),
+        chainArcEnd: Number(segment.arcEnd),
+        repeatSlotIndex,
       })
     }
   }
@@ -1002,6 +1019,12 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
           assetId: variantAssetId,
           sourceAssetId: wallProps.bodyAssetId,
           localMatrices,
+          instanceMetas: bucket.placements.map((entry) => ({
+            chainIndex: Math.max(0, Math.trunc(Number(entry.chainIndex ?? 0))),
+            chainArcStart: Number(entry.chainArcStart),
+            chainArcEnd: Number(entry.chainArcEnd),
+            repeatSlotIndex: Number(entry.repeatSlotIndex),
+          })),
           bindingIdPrefix: `wall-body:${params.nodeId}:${i}:`,
           useNodeIdForIndex0: i === 0,
           repeatScaleU: bucket.repeatScaleU,
@@ -1035,6 +1058,12 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
           assetId: variantAssetId,
           sourceAssetId: wallProps.headAssetId,
           localMatrices,
+          instanceMetas: bucket.placements.map((entry) => ({
+            chainIndex: Math.max(0, Math.trunc(Number(entry.chainIndex ?? 0))),
+            chainArcStart: Number(entry.chainArcStart),
+            chainArcEnd: Number(entry.chainArcEnd),
+            repeatSlotIndex: Number(entry.repeatSlotIndex),
+          })),
           bindingIdPrefix: `wall-head:${params.nodeId}:${i}:`,
           useNodeIdForIndex0: false,
           repeatScaleU: bucket.repeatScaleU,
@@ -1068,6 +1097,12 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
           assetId: variantAssetId,
           sourceAssetId: wallProps.footAssetId,
           localMatrices,
+          instanceMetas: bucket.placements.map((entry) => ({
+            chainIndex: Math.max(0, Math.trunc(Number(entry.chainIndex ?? 0))),
+            chainArcStart: Number(entry.chainArcStart),
+            chainArcEnd: Number(entry.chainArcEnd),
+            repeatSlotIndex: Number(entry.repeatSlotIndex),
+          })),
           bindingIdPrefix: `wall-foot:${params.nodeId}:${i}:`,
           useNodeIdForIndex0: false,
           repeatScaleU: bucket.repeatScaleU,

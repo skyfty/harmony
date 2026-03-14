@@ -158,6 +158,26 @@ function worldSegmentsToWallChains(
   })
 }
 
+function computeWallSegmentBounds(segments: WallWorldSegment[]): { min: THREE.Vector3; max: THREE.Vector3 } | null {
+  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
+  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
+
+  segments.forEach(({ start, end }) => {
+    min.x = Math.min(min.x, start.x, end.x)
+    min.y = Math.min(min.y, start.y, end.y)
+    min.z = Math.min(min.z, start.z, end.z)
+    max.x = Math.max(max.x, start.x, end.x)
+    max.y = Math.max(max.y, start.y, end.y)
+    max.z = Math.max(max.z, start.z, end.z)
+  })
+
+  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
+    return null
+  }
+
+  return { min, max }
+}
+
 export function buildWallWorldSegments(segments: Array<{ start: Vector3Like; end: Vector3Like }>): WallWorldSegment[] {
   return segments
     .map((segment) => {
@@ -180,24 +200,20 @@ export function buildWallWorldSegments(segments: Array<{ start: Vector3Like; end
     .filter((entry): entry is WallWorldSegment => !!entry)
 }
 
-export function computeWallCenter(segments: WallWorldSegment[]): THREE.Vector3 {
-  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
-  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
-
-  segments.forEach(({ start, end }) => {
-    min.x = Math.min(min.x, start.x, end.x)
-    min.y = Math.min(min.y, start.y, end.y)
-    min.z = Math.min(min.z, start.z, end.z)
-    max.x = Math.max(max.x, start.x, end.x)
-    max.y = Math.max(max.y, start.y, end.y)
-    max.z = Math.max(max.z, start.z, end.z)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
+export function computeWallCenter(
+  segments: WallWorldSegment[],
+  dimensions: { height?: number; width?: number; thickness?: number } = {},
+): THREE.Vector3 {
+  const bounds = computeWallSegmentBounds(segments)
+  if (!bounds) {
     return new THREE.Vector3(0, 0, 0)
   }
 
-  return new THREE.Vector3((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, (min.z + max.z) * 0.5)
+  const normalized = normalizeWallDimensions(dimensions)
+  const { min, max } = bounds
+  const centerY = min.y + normalized.height * 0.5
+
+  return new THREE.Vector3((min.x + max.x) * 0.5, centerY, (min.z + max.z) * 0.5)
 }
 
 export function buildWallDynamicMeshFromWorldSegments(
@@ -210,7 +226,7 @@ export function buildWallDynamicMeshFromWorldSegments(
   }
 
   const normalizedDims = normalizeWallDimensions(dimensions)
-  const center = computeWallCenter(worldSegments)
+  const center = computeWallCenter(worldSegments, normalizedDims)
   const chains = worldSegmentsToWallChains(worldSegments, center)
 
   const definition: WallDynamicMesh = {

@@ -69,8 +69,6 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
   WallDynamicMesh,
-  WallOpening,
-  WallRepeatErasedSlot,
 } from '@schema/index'
 import {
   TERRAIN_PAINT_MAX_LAYER_COUNT,
@@ -146,7 +144,11 @@ import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending 
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
-import { syncWallInstancedBindingsForObject } from '@schema/wallInstancing'
+import {
+  syncWallInstancedBindingsForObject,
+  WALL_INSTANCED_BINDINGS_USERDATA_KEY,
+  type WallInstancedBindingSpec,
+} from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh, PROTAGONIST_NODE_ID } from '@schema/index'
 
@@ -213,12 +215,21 @@ import { useTerrainGridController } from './useTerrainGridController'
 import { createGuideRouteWaypointLabelsManager, getGuideRouteWaypointLabelMeshes } from './GuideRouteWaypointLabels'
 import { createWallBuildTool } from './WallBuildTool'
 import {
-  computeWallRepairUnitSegmentForLocalPoint,
-  getWallLocalPointAtDefinitionChainDistance,
-  segmentLengthXZ,
   computeWallOpeningForLocalHit,
   findContainingWallOpeningIndex,
 } from './wallSegmentUtils'
+import {
+  createWallEraseController,
+  extractWallRepeatInstanceMeta,
+  mergeWallRepeatErasedSlots,
+  resolveSelectedWallRenderMode,
+} from './wallEraseController'
+import { createWallEraseHoverPresenter } from './wallEraseHoverPresenter'
+import {
+  createWallDoorSelectionController,
+  type WallDoorRectangleSelectionState,
+  type WallDoorSelectionPayload,
+} from './wallDoorSelectionController'
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
@@ -652,38 +663,6 @@ const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
 instancedOutlineGroup.name = 'InstancedOutlineGroup'
-const wallDoorSelectionHighlightGroup = new THREE.Group()
-wallDoorSelectionHighlightGroup.name = 'WallDoorSelectionHighlightGroup'
-wallDoorSelectionHighlightGroup.visible = false
-wallDoorSelectionHighlightGroup.renderOrder = 1200
-
-const wallDoorSelectionStretchLineMaterial = new THREE.LineBasicMaterial({
-  color: 0xbbdefb,
-  transparent: true,
-  opacity: 0.9,
-  depthWrite: false,
-  depthTest: false,
-})
-wallDoorSelectionStretchLineMaterial.toneMapped = false
-
-const wallDoorSelectionRepeatFillMaterial = new THREE.MeshBasicMaterial({
-  color: 0x82b1ff,
-  transparent: true,
-  opacity: 0.35,
-  depthWrite: false,
-  depthTest: false,
-})
-wallDoorSelectionRepeatFillMaterial.toneMapped = false
-
-const wallDoorSelectionRepeatWireMaterial = new THREE.MeshBasicMaterial({
-  color: 0xbbdefb,
-  wireframe: true,
-  transparent: true,
-  opacity: 0.9,
-  depthWrite: false,
-  depthTest: false,
-})
-wallDoorSelectionRepeatWireMaterial.toneMapped = false
 
 const PICK_MAX_DISTANCE_DEFAULT = 100
 function getPickMaxDistance() {
@@ -1808,6 +1787,10 @@ const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
 const navigationSpeedBoostModifierActive = ref(false)
+const wallEditNodeId = ref<string | null>(null)
+const roadEditNodeId = ref<string | null>(null)
+const floorEditNodeId = ref<string | null>(null)
+const waterEditNodeId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
 const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
@@ -1819,6 +1802,158 @@ const selectedNodeIsWater = computed(() => isWaterSurfaceNode(sceneStore.selecte
 // - InstanceLayout: restore erased instances
 const scatterRepairModifierActive = computed(() => scatterEraseModeActive.value && scatterEraseRestoreModifierActive.value)
 const wallRepairModeActive = computed(() => scatterRepairModifierActive.value && selectedNodeIsWall.value)
+
+function getPrimarySelectedNodeId(): string | null {
+  return sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+}
+
+function resolveEditableWallNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Wall') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function resolveEditableRoadNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Road') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function resolveEditableFloorNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Floor') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!isWaterSurfaceNode(node)) {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function clearWallEditMode(): void {
+  wallEditNodeId.value = null
+}
+
+function clearRoadEditMode(): void {
+  roadEditNodeId.value = null
+}
+
+function clearFloorEditMode(): void {
+  floorEditNodeId.value = null
+}
+
+function clearWaterEditMode(): void {
+  waterEditNodeId.value = null
+}
+
+function enterWallEditMode(nodeId: string | null | undefined): void {
+  clearRoadEditMode()
+  clearFloorEditMode()
+  clearWaterEditMode()
+  wallEditNodeId.value = resolveEditableWallNode(nodeId)?.id ?? null
+}
+
+function enterRoadEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearFloorEditMode()
+  clearWaterEditMode()
+  roadEditNodeId.value = resolveEditableRoadNode(nodeId)?.id ?? null
+}
+
+function enterFloorEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearRoadEditMode()
+  clearWaterEditMode()
+  floorEditNodeId.value = resolveEditableFloorNode(nodeId)?.id ?? null
+}
+
+function enterWaterEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearRoadEditMode()
+  clearFloorEditMode()
+  waterEditNodeId.value = resolveEditableWaterNode(nodeId)?.id ?? null
+}
+
+function isSelectedWallEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || wallEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableWallNode(selectedId))
+}
+
+function isSelectedRoadEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || roadEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableRoadNode(selectedId))
+}
+
+function isSelectedFloorEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || floorEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableFloorNode(selectedId))
+}
+
+function isSelectedWaterEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || waterEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableWaterNode(selectedId))
+}
 
 watch(
   () => [activeBuildTool.value, sceneStore.selectedNodeId] as const,
@@ -1832,7 +1967,7 @@ watch(
       return
     }
 
-    if (activeBuildTool.value === 'floor' && selectedNodeIsFloor.value) {
+    if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && selectedNodeIsFloor.value) {
       const restored = readFloorBuildShapeFromNode(node)
       const floorMesh = node.dynamicMesh?.type === 'Floor' ? (node.dynamicMesh as FloorDynamicMesh) : null
       const canApplyRectangle = restored !== 'rectangle' || (floorMesh?.vertices?.length ?? 0) === 4
@@ -1842,7 +1977,7 @@ watch(
       return
     }
 
-    if (activeBuildTool.value === 'wall' && selectedNodeIsWall.value) {
+    if (activeBuildTool.value === 'wall' && isSelectedWallEditMode() && selectedNodeIsWall.value) {
       const restored = readWallBuildShapeFromNode(node)
       if (restored && restored !== wallBuildShape.value) {
         buildToolsStore.setWallBuildShape(restored)
@@ -1850,7 +1985,7 @@ watch(
       return
     }
 
-    if (activeBuildTool.value === 'water' && selectedNodeIsWater.value) {
+    if (activeBuildTool.value === 'water' && isSelectedWaterEditMode() && selectedNodeIsWater.value) {
       const restored = readWaterBuildShapeFromNode(node)
       if (restored && restored !== waterBuildShape.value) {
         buildToolsStore.setWaterBuildShape(restored)
@@ -1865,6 +2000,18 @@ watch(
   (tool) => {
     if (tool !== 'wall' && wallDoorSelectModeActive.value) {
       buildToolsStore.setWallDoorSelectModeActive(false)
+    }
+    if (tool !== 'wall') {
+      clearWallEditMode()
+    }
+    if (tool !== 'road') {
+      clearRoadEditMode()
+    }
+    if (tool !== 'floor') {
+      clearFloorEditMode()
+    }
+    if (tool !== 'water') {
+      clearWaterEditMode()
     }
     if (tool !== 'wall') {
       clearWallDoorRectangleSelectionState()
@@ -1883,11 +2030,41 @@ watch(wallDoorSelectModeActive, (active) => {
 watch(
   () => sceneStore.selectedNodeId,
   () => {
+    if (!isSelectedWallEditMode()) {
+      clearWallEditMode()
+    }
+    if (!isSelectedRoadEditMode()) {
+      clearRoadEditMode()
+    }
+    if (!isSelectedFloorEditMode()) {
+      clearFloorEditMode()
+    }
+    if (!isSelectedWaterEditMode()) {
+      clearWaterEditMode()
+    }
     if (wallDoorSelectModeActive.value && wallDoorSelectionPayload.value?.length) {
       return
     }
     clearWallDoorRectangleSelectionState()
     clearWallDoorSelectionPayload()
+  },
+)
+
+watch(
+  () => sceneStore.selectedNodeIds.slice(),
+  (selectedIds) => {
+    if (selectedIds.length !== 1 || selectedIds[0] !== wallEditNodeId.value) {
+      clearWallEditMode()
+    }
+    if (selectedIds.length !== 1 || selectedIds[0] !== roadEditNodeId.value) {
+      clearRoadEditMode()
+    }
+    if (selectedIds.length !== 1 || selectedIds[0] !== floorEditNodeId.value) {
+      clearFloorEditMode()
+    }
+    if (selectedIds.length !== 1 || selectedIds[0] !== waterEditNodeId.value) {
+      clearWaterEditMode()
+    }
   },
 )
 
@@ -2236,41 +2413,22 @@ const wallEraseUnitLengthM = computed(() => {
   return Math.max(1e-3, Math.abs(value))
 })
 
-// Wall erase hover uses the same visual language as InstanceLayout erase hover:
-// cyan for erase, green for restore; depthTest off so it's always readable.
-const wallEraseHoverEdgeMaterial = new THREE.LineBasicMaterial({
-  color: 0x4dd0e1,
-  transparent: true,
-  opacity: 0.95,
-  depthTest: false,
-  depthWrite: false,
+const wallEraseHoverPresenter = createWallEraseHoverPresenter({
+  instancedHoverMaterial,
+  instancedHoverRestoreMaterial,
+  instancedOutlineSync: {
+    syncProxyMatrixFromSlot: (proxy, mesh, index) => instancedOutlineManager.syncProxyMatrixFromSlot(proxy, mesh, index),
+  },
 })
-wallEraseHoverEdgeMaterial.toneMapped = false
-
-const wallEraseHoverBoxGeometry = new THREE.BoxGeometry(1, 1, 1)
-const wallEraseHoverEdgesGeometry = new THREE.EdgesGeometry(wallEraseHoverBoxGeometry)
-
-const wallEraseHoverGroup = new THREE.Group()
-wallEraseHoverGroup.name = 'WallEraseHover'
-wallEraseHoverGroup.renderOrder = 19996
-wallEraseHoverGroup.visible = false
-wallEraseHoverGroup.frustumCulled = false
-
-const wallEraseHoverFill = new THREE.Mesh(wallEraseHoverBoxGeometry, instancedHoverMaterial)
-wallEraseHoverFill.name = 'WallEraseHoverFill'
-wallEraseHoverFill.renderOrder = 19996
-wallEraseHoverFill.frustumCulled = false
-;(wallEraseHoverFill as any).raycast = () => {}
-
-const wallEraseHoverEdges = new THREE.LineSegments(wallEraseHoverEdgesGeometry, wallEraseHoverEdgeMaterial)
-wallEraseHoverEdges.name = 'WallEraseHoverEdges'
-wallEraseHoverEdges.renderOrder = 19997
-wallEraseHoverEdges.frustumCulled = false
-;(wallEraseHoverEdges as any).raycast = () => {}
-
-wallEraseHoverGroup.add(wallEraseHoverFill)
-wallEraseHoverGroup.add(wallEraseHoverEdges)
+const {
+  wallEraseHoverGroup,
+  wallEraseRepeatHoverGroup,
+  clearWallEraseHoverHighlight,
+  updateWallEraseHoverHighlight,
+  dispose: disposeWallEraseHoverPresenter,
+} = wallEraseHoverPresenter
 vertexOverlayGroup.add(wallEraseHoverGroup)
+vertexOverlayGroup.add(wallEraseRepeatHoverGroup)
 
 
 let pendingVertexSnapResult: VertexSnapResult | null = null
@@ -2282,190 +2440,138 @@ function clearVertexSnapMarkers() {
   vertexOverlayHintTargetMarker.visible = false
 }
 
-function clearWallEraseHoverHighlight() {
-  wallEraseHoverGroup.visible = false
+function buildRepeatErasedSlotKeySet(
+  slots: Array<{ chainIndex?: unknown; slotIndex?: unknown }> | undefined,
+): Set<string> {
+  const keySet = new Set<string>()
+  ;(Array.isArray(slots) ? slots : []).forEach((slot) => {
+    const chainIndex = Math.max(0, Math.trunc(Number(slot?.chainIndex ?? 0)))
+    const slotIndex = Math.max(0, Math.trunc(Number(slot?.slotIndex ?? -1)))
+    if (!Number.isFinite(chainIndex) || !Number.isFinite(slotIndex) || slotIndex < 0) {
+      return
+    }
+    keySet.add(`${chainIndex}:${slotIndex}`)
+  })
+  return keySet
 }
 
-function resolveWallHitPointFromCurrentRay(wallObject: THREE.Object3D): THREE.Vector3 | null {
-  wallObject.updateWorldMatrix(true, true)
-  const wallHits = raycaster.intersectObject(wallObject, true)
-  wallHits.sort((a, b) => a.distance - b.distance)
-  const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
-  if (first?.point) {
-    return first.point as THREE.Vector3
-  }
-
-  const planeHit = new THREE.Vector3()
-  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return planeHit
-  }
-  return null
+function getWallInstancedBindingSpecs(object: THREE.Object3D): WallInstancedBindingSpec[] {
+  const raw = (object.userData as Record<string, unknown> | undefined)?.[WALL_INSTANCED_BINDINGS_USERDATA_KEY]
+  return Array.isArray(raw) ? raw.filter((entry) => Boolean(entry && typeof entry === 'object')) as WallInstancedBindingSpec[] : []
 }
 
-const wallEraseHoverDirHelper = new THREE.Vector3()
-const wallEraseHoverMidHelper = new THREE.Vector3()
-const wallEraseHoverUpHelper = new THREE.Vector3()
-const wallEraseHoverBasisXHelper = new THREE.Vector3()
-const wallEraseHoverBasisYHelper = new THREE.Vector3()
-const wallEraseHoverBasisZHelper = new THREE.Vector3()
-const wallEraseHoverMatHelper = new THREE.Matrix4()
-
-function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.Vector3): boolean {
-  const object = objectMap.get(hitNodeId) ?? null
-  const node = findSceneNode(sceneStore.nodes, hitNodeId)
-  const wallMesh = node && (node as any).dynamicMesh?.type === 'Wall'
-    ? (node as any).dynamicMesh as WallDynamicMesh
-    : null
-  if (!object || !node || !wallMesh) {
-    clearWallEraseHoverHighlight()
-    return false
+function collectRepeatRenderableSlotKeySet(
+  wallObject: THREE.Object3D | null,
+): Set<string> {
+  const keySet = new Set<string>()
+  if (!wallObject) {
+    return keySet
   }
 
-  const segments = compileWallSegmentsFromDefinition(wallMesh)
-  if (!segments.length) {
-    clearWallEraseHoverHighlight()
-    return false
+  const specs = getWallInstancedBindingSpecs(wallObject)
+  specs.forEach((spec) => {
+    const metas = Array.isArray(spec.instanceMetas) ? spec.instanceMetas : []
+    metas.forEach((meta) => {
+      const chainIndex = Math.max(0, Math.trunc(Number(meta?.chainIndex ?? 0)))
+      const slotIndex = Math.max(0, Math.trunc(Number(meta?.repeatSlotIndex ?? -1)))
+      if (!Number.isFinite(chainIndex) || !Number.isFinite(slotIndex) || slotIndex < 0) {
+        return
+      }
+      keySet.add(`${chainIndex}:${slotIndex}`)
+    })
+  })
+
+  if (keySet.size > 0) {
+    return keySet
   }
 
-  const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
-  const localPoint = hitPointWorld.clone().applyMatrix4(inv)
+  wallObject.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+    const meta = extractWallRepeatInstanceMeta(mesh)
+    if (!meta) {
+      return
+    }
+    keySet.add(`${meta.chainIndex}:${meta.slotIndex}`)
+  })
+  return keySet
+}
 
-  const isRepair = wallRepairModeActive.value
-  let worldA: THREE.Vector3 | null = null
-  let worldB: THREE.Vector3 | null = null
-  let previewHeight = 0
-  let previewWidth = 0
+function shouldRemoveWallNodeAfterErase(
+  node: SceneNode,
+  nextWallMesh: WallDynamicMesh,
+  wallObject: THREE.Object3D | null,
+): boolean {
+  const renderMode = resolveSelectedWallRenderMode(node)
+  if (renderMode === 'stretch') {
+    return compileWallSegmentsFromDefinition(nextWallMesh).length === 0
+  }
 
-  const unitLenM = wallEraseUnitLengthM.value
-  const halfLenM = unitLenM * 0.5
-
-  if (isRepair) {
-    const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, unitLenM)
-    if (!repair) {
-      clearWallEraseHoverHighlight()
+  const renderableSlotKeys = collectRepeatRenderableSlotKeySet(wallObject)
+  if (renderableSlotKeys.size === 0) {
+    return false
+  }
+  const erasedKeys = buildRepeatErasedSlotKeySet(
+    (nextWallMesh as unknown as { repeatErasedSlots?: Array<{ chainIndex?: unknown; slotIndex?: unknown }> }).repeatErasedSlots,
+  )
+  for (const key of renderableSlotKeys) {
+    if (!erasedKeys.has(key)) {
       return false
     }
-
-    worldA = new THREE.Vector3(repair.start.x, repair.start.y, repair.start.z).applyMatrix4(object.matrixWorld)
-    worldB = new THREE.Vector3(repair.end.x, repair.end.y, repair.end.z).applyMatrix4(object.matrixWorld)
-
-    const nearest = segments[repair.bestIndex] ?? null
-    const h = Number((nearest as any)?.height)
-    const w = Number((nearest as any)?.width)
-    if (Number.isFinite(h)) {
-      previewHeight = Math.max(0, h)
-    }
-    if (Number.isFinite(w)) {
-      previewWidth = Math.max(0, w)
-    }
-  } else {
-    const opening = computeWallOpeningForLocalHit(wallMesh, localPoint, halfLenM)
-    if (!opening) {
-      clearWallEraseHoverHighlight()
-      return false
-    }
-
-    const localA = getWallLocalPointAtDefinitionChainDistance(wallMesh, opening.chainIndex, opening.start)
-    const localB = getWallLocalPointAtDefinitionChainDistance(wallMesh, opening.chainIndex, opening.end)
-    if (!localA || !localB) {
-      clearWallEraseHoverHighlight()
-      return false
-    }
-
-    worldA = new THREE.Vector3(localA.x, localA.y, localA.z).applyMatrix4(object.matrixWorld)
-    worldB = new THREE.Vector3(localB.x, localB.y, localB.z).applyMatrix4(object.matrixWorld)
-
-    const eps = 1e-6
-    for (const seg of segments) {
-      if (!seg) {
-        continue
-      }
-      if (Number(seg.chainIndex ?? -1) !== Number(opening.chainIndex)) {
-        continue
-      }
-      const segStart = Number(seg.chainArcStart ?? 0)
-      const segLen = segmentLengthXZ(seg)
-      const segEnd = segStart + segLen
-      if (!Number.isFinite(segLen) || segLen <= eps) {
-        continue
-      }
-      if (segEnd <= opening.start + eps || segStart >= opening.end - eps) {
-        continue
-      }
-      const h = Number((seg as any)?.height)
-      const w = Number((seg as any)?.width)
-      if (Number.isFinite(h)) {
-        previewHeight = Math.max(previewHeight, h)
-      }
-      if (Number.isFinite(w)) {
-        previewWidth = Math.max(previewWidth, w)
-      }
-    }
   }
-
-  if (!worldA || !worldB) {
-    clearWallEraseHoverHighlight()
-    return false
-  }
-
-  // Visual language: cyan for erase, amber for wall repair.
-  const hoverFillMaterial = isRepair ? instancedHoverRestoreMaterial : instancedHoverMaterial
-  if (wallEraseHoverFill.material !== hoverFillMaterial) {
-    wallEraseHoverFill.material = hoverFillMaterial
-  }
-  wallEraseHoverFill.material.opacity = 0.65
-  wallEraseHoverEdgeMaterial.color.set(isRepair ? 0xffc107 : 0x4dd0e1)
-
-  wallEraseHoverDirHelper.copy(worldB).sub(worldA)
-  // Walls are vertical; force direction to XZ so the overlay doesn't tilt.
-  wallEraseHoverDirHelper.y = 0
-  const len = wallEraseHoverDirHelper.length()
-  if (!Number.isFinite(len) || len <= 1e-6) {
-    clearWallEraseHoverHighlight()
-    return false
-  }
-
-  wallEraseHoverMidHelper.copy(worldA).add(worldB).multiplyScalar(0.5)
-  wallEraseHoverDirHelper.multiplyScalar(1 / len)
-
-  // Determine a representative wall height/width for the highlight volume.
-  if (!Number.isFinite(previewHeight) || previewHeight <= 0) {
-    previewHeight = WALL_DEFAULT_HEIGHT
-  }
-  if (!Number.isFinite(previewWidth) || previewWidth <= 0) {
-    previewWidth = WALL_DEFAULT_WIDTH
-  }
-
-  // Slight padding so it reads clearly.
-  const padW = Math.max(0.03, previewWidth * 0.15)
-  const padH = Math.max(0.05, previewHeight * 0.03)
-  const boxWidth = previewWidth + padW
-  const boxHeight = previewHeight + padH
-
-  // Build an orientation where +Z follows the wall direction and +Y is world up.
-  wallEraseHoverUpHelper.set(0, 1, 0)
-  wallEraseHoverBasisZHelper.copy(wallEraseHoverDirHelper)
-  wallEraseHoverBasisXHelper.crossVectors(wallEraseHoverUpHelper, wallEraseHoverBasisZHelper)
-  if (wallEraseHoverBasisXHelper.lengthSq() <= 1e-10) {
-    wallEraseHoverBasisXHelper.set(1, 0, 0)
-  } else {
-    wallEraseHoverBasisXHelper.normalize()
-  }
-  wallEraseHoverBasisYHelper.crossVectors(wallEraseHoverBasisZHelper, wallEraseHoverBasisXHelper)
-  if (wallEraseHoverBasisYHelper.lengthSq() <= 1e-10) {
-    wallEraseHoverBasisYHelper.set(0, 1, 0)
-  } else {
-    wallEraseHoverBasisYHelper.normalize()
-  }
-  wallEraseHoverMatHelper.makeBasis(wallEraseHoverBasisXHelper, wallEraseHoverBasisYHelper, wallEraseHoverBasisZHelper)
-  wallEraseHoverGroup.quaternion.setFromRotationMatrix(wallEraseHoverMatHelper)
-
-  // Lift center to cover the full wall height above the base polyline.
-  wallEraseHoverGroup.position.copy(wallEraseHoverMidHelper).addScaledVector(wallEraseHoverBasisYHelper, boxHeight * 0.5)
-  wallEraseHoverGroup.scale.set(boxWidth, boxHeight, len)
-  wallEraseHoverGroup.visible = true
   return true
 }
+
+function applyWallMeshEraseResult(node: SceneNode, nodeId: string, nextWallMesh: WallDynamicMesh): void {
+  const wallObject = objectMap.get(nodeId) ?? null
+  if (shouldRemoveWallNodeAfterErase(node, nextWallMesh, wallObject)) {
+    sceneStore.removeSceneNodes([nodeId])
+    const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    if (selectedId === nodeId && scatterEraseModeActive.value) {
+      exitScatterEraseMode()
+    }
+    return
+  }
+  sceneStore.updateNodeDynamicMesh(nodeId, nextWallMesh)
+}
+
+const wallEraseController = createWallEraseController({
+  getSceneNodes: () => sceneStore.nodes,
+  getSelectedWallId: () => sceneStore.selectedNodeId ?? props.selectedNodeId ?? null,
+  objectMap,
+  raycaster,
+  groundPlane,
+  wallRepairModeActive,
+  wallEraseUnitLengthM,
+  collectInstancedPickTargets,
+  applyWallMeshEraseResult,
+  onAfterApply: () => {
+    clearRepairHoverHighlight(true)
+    updateOutlineSelectionTargets()
+    updateSelectionHighlights()
+    updatePlaceholderOverlayPositions()
+  },
+})
+
+const { resolveSelectedWallEraseTargetFromCurrentRay, applySelectedWallEraseTarget } = wallEraseController
+
+const wallDoorSelectionController = createWallDoorSelectionController({
+  objectMap,
+  getSceneNodes: () => sceneStore.nodes,
+  getCamera: () => camera,
+  canvasRef,
+  surfaceRef,
+  isObjectWorldVisible,
+  resolveSelectedWallRenderMode,
+  extractWallRepeatInstanceMeta,
+  mergeWallRepeatErasedSlots,
+  setBoundingBoxFromObject,
+  applyWallMeshEraseResult,
+})
+
+const { wallDoorSelectionHighlightGroup, dispose: disposeWallDoorSelectionController } = wallDoorSelectionController
 
 const placementOverlayHintDirHelper = new THREE.Vector3()
 const placementOverlayHintMidHelper = new THREE.Vector3()
@@ -3018,24 +3124,9 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     }
 
     // 获取当前选中的墙体节点ID
-    const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-    if (!selectedWallId) {
-      // 若找不到选中的墙体ID，清除墙体擦除悬停高亮并返回
-      clearWallEraseHoverHighlight()
-      return false
-    }
-
-    // 从对象映射中获取对应的墙体Three.js对象
-    const wallObject = objectMap.get(selectedWallId) ?? null
-    if (!wallObject) {
-      // 若找不到墙体的Three.js对象，清除高亮并返回
-      clearWallEraseHoverHighlight()
-      return false
-    }
-
-    const hitPointWorld = resolveWallHitPointFromCurrentRay(wallObject)
-    if (hitPointWorld) {
-      updateWallEraseHoverHighlight(selectedWallId, hitPointWorld)
+    const target = resolveSelectedWallEraseTargetFromCurrentRay()
+    if (target) {
+      updateWallEraseHoverHighlight(target)
       return true
     }
 
@@ -3366,6 +3457,14 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
   // - erase: add a WallOpening at the clicked position (default 0.5m radius)
   // - repair (Shift): remove an existing WallOpening that covers the clicked position
   if ((node as any).dynamicMesh?.type === 'Wall' && hitPointWorld) {
+    const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    if (selectedWallId === nodeId) {
+      const target = resolveSelectedWallEraseTargetFromCurrentRay()
+      if (target) {
+        return applySelectedWallEraseTarget(target)
+      }
+    }
+
     const object = objectMap.get(nodeId) ?? null
     const wallMesh = (node as any).dynamicMesh as WallDynamicMesh
     const hasChains = Array.isArray(wallMesh.chains) && wallMesh.chains.length > 0
@@ -3383,7 +3482,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
           return false
         }
         const nextOpenings = removeWallOpeningFromDefinition(wallMesh, openingIdx)
-        sceneStore.updateNodeDynamicMesh(nodeId, { ...wallMesh, openings: nextOpenings })
+        applyWallMeshEraseResult(node, nodeId, { ...wallMesh, openings: nextOpenings })
       } else {
         // Erase = add a new WallOpening (width equals current erase brush width in meters)
         const newOpening = computeWallOpeningForLocalHit(wallMesh, localPoint, halfLenM)
@@ -3391,7 +3490,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
           return false
         }
         const nextOpenings = addWallOpeningToDefinition(wallMesh, newOpening)
-        sceneStore.updateNodeDynamicMesh(nodeId, { ...wallMesh, openings: nextOpenings })
+        applyWallMeshEraseResult(node, nodeId, { ...wallMesh, openings: nextOpenings })
       }
 
       clearRepairHoverHighlight(true)
@@ -3428,507 +3527,7 @@ function clearWallDoorRectangleSelectionState(): void {
 
 function clearWallDoorSelectionPayload(): void {
   wallDoorSelectionPayload.value = null
-  clearWallDoorSelectionHighlight()
-}
-
-function clearWallDoorSelectionHighlight(): void {
-  while (wallDoorSelectionHighlightGroup.children.length > 0) {
-    const child = wallDoorSelectionHighlightGroup.children[wallDoorSelectionHighlightGroup.children.length - 1]
-    if (!child) {
-      break
-    }
-    const line = child as THREE.Line
-    if (line?.isLine) {
-      line.geometry?.dispose?.()
-    }
-    child.removeFromParent()
-  }
-  wallDoorSelectionHighlightGroup.visible = false
-}
-
-function computeWallDoorRectangleBounds(state: WallDoorRectangleSelectionState): WallDoorRectangleClientBounds {
-  const left = Math.min(state.startClientX, state.currentClientX)
-  const right = Math.max(state.startClientX, state.currentClientX)
-  const top = Math.min(state.startClientY, state.currentClientY)
-  const bottom = Math.max(state.startClientY, state.currentClientY)
-  return { left, right, top, bottom }
-}
-
-function updateWallDoorSelectionOverlayBox(state: WallDoorRectangleSelectionState): void {
-  const surface = surfaceRef.value
-  if (!surface) {
-    wallDoorSelectionOverlayBox.value = null
-    return
-  }
-  const bounds = computeWallDoorRectangleBounds(state)
-  const rect = surface.getBoundingClientRect()
-  wallDoorSelectionOverlayBox.value = {
-    left: bounds.left - rect.left,
-    top: bounds.top - rect.top,
-    width: Math.max(0, bounds.right - bounds.left),
-    height: Math.max(0, bounds.bottom - bounds.top),
-  }
-}
-
-function projectWorldToClientPoint(worldPoint: THREE.Vector3): THREE.Vector2 | null {
-  if (!camera || !canvasRef.value) {
-    return null
-  }
-  const projected = worldPoint.clone().project(camera)
-  if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
-    return null
-  }
-  const rect = canvasRef.value.getBoundingClientRect()
-  return new THREE.Vector2(
-    rect.left + (projected.x * 0.5 + 0.5) * rect.width,
-    rect.top + (-projected.y * 0.5 + 0.5) * rect.height,
-  )
-}
-
-function clipSegmentToRect(
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-  rect: WallDoorRectangleClientBounds,
-): [number, number] | null {
-  const dx = bx - ax
-  const dy = by - ay
-  let t0 = 0
-  let t1 = 1
-
-  const clip = (p: number, q: number): boolean => {
-    if (Math.abs(p) < 1e-9) {
-      return q >= 0
-    }
-    const t = q / p
-    if (p < 0) {
-      if (t > t1) return false
-      if (t > t0) t0 = t
-    } else {
-      if (t < t0) return false
-      if (t < t1) t1 = t
-    }
-    return true
-  }
-
-  if (!clip(-dx, ax - rect.left)) return null
-  if (!clip(dx, rect.right - ax)) return null
-  if (!clip(-dy, ay - rect.top)) return null
-  if (!clip(dy, rect.bottom - ay)) return null
-  if (t1 < t0) return null
-  return [t0, t1]
-}
-
-function mergeWallOpeningIntervals(intervals: WallOpening[]): WallOpening[] {
-  const byChain = new Map<number, WallOpening[]>()
-  intervals.forEach((entry) => {
-    const chainIndex = Math.max(0, Math.trunc(Number(entry.chainIndex ?? 0)))
-    const start = Number(entry.start)
-    const end = Number(entry.end)
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start <= 1e-6) {
-      return
-    }
-    const bucket = byChain.get(chainIndex) ?? []
-    if (!byChain.has(chainIndex)) {
-      byChain.set(chainIndex, bucket)
-    }
-    bucket.push({ chainIndex, start: Math.min(start, end), end: Math.max(start, end) })
-  })
-
-  const merged: WallOpening[] = []
-  byChain.forEach((bucket, chainIndex) => {
-    bucket.sort((a, b) => a.start - b.start)
-    let current: WallOpening | null = null
-    bucket.forEach((entry) => {
-      if (!current) {
-        current = { ...entry, chainIndex }
-        return
-      }
-      if (entry.start <= current.end + 1e-6) {
-        current.end = Math.max(current.end, entry.end)
-      } else {
-        merged.push(current)
-        current = { ...entry, chainIndex }
-      }
-    })
-    if (current) {
-      merged.push(current)
-    }
-  })
-
-  return merged
-}
-
-function collectWallDoorStretchIntervals(
-  wallNode: SceneNode,
-  wallObject: THREE.Object3D,
-  rect: WallDoorRectangleClientBounds,
-): WallOpening[] {
-  const wallMesh = wallNode.dynamicMesh as WallDynamicMesh
-  const segments = compileWallSegmentsFromDefinition(wallMesh)
-  if (!segments.length) {
-    return []
-  }
-
-  const startWorld = new THREE.Vector3()
-  const endWorld = new THREE.Vector3()
-  const intervals: WallOpening[] = []
-
-  segments.forEach((seg) => {
-    startWorld.set(seg.start.x, seg.start.y, seg.start.z)
-    endWorld.set(seg.end.x, seg.end.y, seg.end.z)
-    wallObject.localToWorld(startWorld)
-    wallObject.localToWorld(endWorld)
-    const startClient = projectWorldToClientPoint(startWorld)
-    const endClient = projectWorldToClientPoint(endWorld)
-    if (!startClient || !endClient) {
-      return
-    }
-    const clipped = clipSegmentToRect(startClient.x, startClient.y, endClient.x, endClient.y, rect)
-    if (!clipped) {
-      return
-    }
-    const [t0, t1] = clipped
-    if (t1 - t0 <= 1e-6) {
-      return
-    }
-    const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
-    const segStart = Number(seg.chainArcStart ?? 0)
-    const segLengthXZ = Math.hypot(seg.end.x - seg.start.x, seg.end.z - seg.start.z)
-    const segEnd = segStart + segLengthXZ
-    const segLen = Math.max(0, segEnd - segStart)
-    if (segLen <= 1e-6) {
-      return
-    }
-    intervals.push({
-      chainIndex,
-      start: segStart + segLen * Math.max(0, Math.min(1, t0)),
-      end: segStart + segLen * Math.max(0, Math.min(1, t1)),
-    })
-  })
-
-  return mergeWallOpeningIntervals(intervals)
-}
-
-function collectWallDoorRepeatSlots(
-  wallObject: THREE.Object3D,
-  rect: WallDoorRectangleClientBounds,
-): WallRepeatErasedSlot[] {
-  const slots = new Set<string>()
-  const box = new THREE.Box3()
-  const corner = new THREE.Vector3()
-
-  const extractWallInstanceMeta = (mesh: THREE.Mesh): { chainIndex: number; slotIndex: number } | null => {
-    const meta = mesh.userData?.wallInstanceMeta as { chainIndex?: unknown; repeatSlotIndex?: unknown } | undefined
-    if (!meta) {
-      return null
-    }
-    const chainIndex = Math.max(0, Math.trunc(Number(meta.chainIndex ?? 0)))
-    const slotIndex = Math.max(0, Math.trunc(Number(meta.repeatSlotIndex ?? -1)))
-    if (!Number.isFinite(chainIndex) || !Number.isFinite(slotIndex) || slotIndex < 0) {
-      return null
-    }
-    return { chainIndex, slotIndex }
-  }
-
-  wallObject.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-    const meta = extractWallInstanceMeta(mesh)
-    if (!meta) {
-      return
-    }
-    const { chainIndex, slotIndex } = meta
-
-    setBoundingBoxFromObject(mesh, box)
-    if (box.isEmpty()) {
-      return
-    }
-
-    const corners: [number, number, number][] = [
-      [box.min.x, box.min.y, box.min.z],
-      [box.min.x, box.min.y, box.max.z],
-      [box.min.x, box.max.y, box.min.z],
-      [box.min.x, box.max.y, box.max.z],
-      [box.max.x, box.min.y, box.min.z],
-      [box.max.x, box.min.y, box.max.z],
-      [box.max.x, box.max.y, box.min.z],
-      [box.max.x, box.max.y, box.max.z],
-    ]
-
-    let minX = Number.POSITIVE_INFINITY
-    let minY = Number.POSITIVE_INFINITY
-    let maxX = Number.NEGATIVE_INFINITY
-    let maxY = Number.NEGATIVE_INFINITY
-    let hasProjected = false
-
-    corners.forEach(([x, y, z]) => {
-      corner.set(x, y, z)
-      const projected = projectWorldToClientPoint(corner)
-      if (!projected) {
-        return
-      }
-      hasProjected = true
-      minX = Math.min(minX, projected.x)
-      minY = Math.min(minY, projected.y)
-      maxX = Math.max(maxX, projected.x)
-      maxY = Math.max(maxY, projected.y)
-    })
-
-    if (!hasProjected) {
-      return
-    }
-
-    const intersects = !(maxX < rect.left || minX > rect.right || maxY < rect.top || minY > rect.bottom)
-    if (intersects) {
-      slots.add(`${chainIndex}:${slotIndex}`)
-    }
-  })
-
-  return Array.from(slots.values())
-    .map((key) => {
-      const [chainRaw, slotRaw] = key.split(':')
-      const chainIndex = Math.max(0, Math.trunc(Number(chainRaw ?? 0)))
-      const slotIndex = Math.max(0, Math.trunc(Number(slotRaw ?? -1)))
-      return { chainIndex, slotIndex }
-    })
-    .filter((entry) => Number.isFinite(entry.chainIndex) && Number.isFinite(entry.slotIndex) && entry.slotIndex >= 0)
-    .sort((a, b) => (a.chainIndex - b.chainIndex) || (a.slotIndex - b.slotIndex))
-}
-
-function rebuildWallDoorSelectionHighlight(): void {
-  clearWallDoorSelectionHighlight()
-
-  const payload = wallDoorSelectionPayload.value
-  if (!payload?.length) {
-    return
-  }
-
-  payload.forEach((entry) => {
-    const node = findSceneNode(sceneStore.nodes, entry.nodeId)
-    const wallObject = objectMap.get(entry.nodeId) ?? null
-    if (!node || node.dynamicMesh?.type !== 'Wall' || !wallObject) {
-      return
-    }
-
-    if (entry.kind === 'stretch') {
-      const wallMesh = node.dynamicMesh as WallDynamicMesh
-      const segments = compileWallSegmentsFromDefinition(wallMesh)
-      if (!segments.length || !entry.intervals.length) {
-        return
-      }
-
-      const values: number[] = []
-      const startWorld = new THREE.Vector3()
-      const endWorld = new THREE.Vector3()
-
-      entry.intervals.forEach((interval) => {
-        const intervalStart = Math.min(Number(interval.start), Number(interval.end))
-        const intervalEnd = Math.max(Number(interval.start), Number(interval.end))
-        if (!Number.isFinite(intervalStart) || !Number.isFinite(intervalEnd) || intervalEnd - intervalStart <= 1e-6) {
-          return
-        }
-        const chainIndex = Math.max(0, Math.trunc(Number(interval.chainIndex ?? 0)))
-        segments.forEach((seg) => {
-          const segChainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
-          if (segChainIndex !== chainIndex) {
-            return
-          }
-          const segStart = Number(seg.chainArcStart ?? 0)
-          const segLengthXZ = Math.hypot(seg.end.x - seg.start.x, seg.end.z - seg.start.z)
-          const segEnd = segStart + segLengthXZ
-          const segLength = Math.max(0, segEnd - segStart)
-          if (!Number.isFinite(segStart) || !Number.isFinite(segEnd) || segLength <= 1e-6) {
-            return
-          }
-          const overlapStart = Math.max(intervalStart, segStart)
-          const overlapEnd = Math.min(intervalEnd, segEnd)
-          if (overlapEnd - overlapStart <= 1e-6) {
-            return
-          }
-          const t0 = Math.max(0, Math.min(1, (overlapStart - segStart) / segLength))
-          const t1 = Math.max(0, Math.min(1, (overlapEnd - segStart) / segLength))
-          startWorld.set(
-            seg.start.x + (seg.end.x - seg.start.x) * t0,
-            seg.start.y + (seg.end.y - seg.start.y) * t0,
-            seg.start.z + (seg.end.z - seg.start.z) * t0,
-          )
-          endWorld.set(
-            seg.start.x + (seg.end.x - seg.start.x) * t1,
-            seg.start.y + (seg.end.y - seg.start.y) * t1,
-            seg.start.z + (seg.end.z - seg.start.z) * t1,
-          )
-          wallObject.localToWorld(startWorld)
-          wallObject.localToWorld(endWorld)
-          values.push(
-            startWorld.x, startWorld.y, startWorld.z,
-            endWorld.x, endWorld.y, endWorld.z,
-          )
-        })
-      })
-
-      if (!values.length) {
-        return
-      }
-
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(values, 3))
-      const lines = new THREE.LineSegments(geometry, wallDoorSelectionStretchLineMaterial)
-      lines.frustumCulled = false
-      lines.renderOrder = 1200
-      wallDoorSelectionHighlightGroup.add(lines)
-      return
-    }
-
-    const slotSet = new Set<string>()
-    entry.slots.forEach((slot) => {
-      const chainIndex = Math.max(0, Math.trunc(Number(slot.chainIndex ?? 0)))
-      const slotIndex = Math.max(0, Math.trunc(Number(slot.slotIndex ?? -1)))
-      if (Number.isFinite(chainIndex) && Number.isFinite(slotIndex) && slotIndex >= 0) {
-        slotSet.add(`${chainIndex}:${slotIndex}`)
-      }
-    })
-    if (!slotSet.size) {
-      return
-    }
-
-    wallObject.updateWorldMatrix(true, true)
-    wallObject.traverse((child) => {
-      const mesh = child as THREE.Mesh
-      if (!mesh?.isMesh) {
-        return
-      }
-      const meta = mesh.userData?.wallInstanceMeta as { chainIndex?: unknown; repeatSlotIndex?: unknown } | undefined
-      if (!meta) {
-        return
-      }
-      const chainIndex = Math.max(0, Math.trunc(Number(meta.chainIndex ?? 0)))
-      const slotIndex = Math.max(0, Math.trunc(Number(meta.repeatSlotIndex ?? -1)))
-      if (!Number.isFinite(chainIndex) || !Number.isFinite(slotIndex) || slotIndex < 0) {
-        return
-      }
-      if (!slotSet.has(`${chainIndex}:${slotIndex}`)) {
-        return
-      }
-
-      const fillProxy = new THREE.Mesh(mesh.geometry, wallDoorSelectionRepeatFillMaterial)
-      fillProxy.matrixAutoUpdate = false
-      fillProxy.matrix.copy(mesh.matrixWorld)
-      fillProxy.renderOrder = 1199
-      fillProxy.frustumCulled = false
-      wallDoorSelectionHighlightGroup.add(fillProxy)
-
-      const wireProxy = new THREE.Mesh(mesh.geometry, wallDoorSelectionRepeatWireMaterial)
-      wireProxy.matrixAutoUpdate = false
-      wireProxy.matrix.copy(mesh.matrixWorld)
-      wireProxy.renderOrder = 1200
-      wireProxy.frustumCulled = false
-      wallDoorSelectionHighlightGroup.add(wireProxy)
-    })
-  })
-
-  wallDoorSelectionHighlightGroup.visible = wallDoorSelectionHighlightGroup.children.length > 0
-}
-
-function buildWallDoorSelectionPayloadFromRect(rect: WallDoorRectangleClientBounds): WallDoorSelectionPayload | null {
-  const resolveWallRenderModeForNode = (node: SceneNode): 'stretch' | 'repeatInstances' => {
-    const component = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
-    try {
-      const props = clampWallProps(component?.props as Partial<WallComponentProps> | null)
-      return props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch'
-    } catch {
-      return 'stretch'
-    }
-  }
-
-  const entries: WallDoorSelectionEntry[] = []
-  for (const [nodeId, wallObject] of objectMap.entries()) {
-    if (!isObjectWorldVisible(wallObject)) {
-      continue
-    }
-    const node = findSceneNode(sceneStore.nodes, nodeId)
-    if (!node || node.dynamicMesh?.type !== 'Wall') {
-      continue
-    }
-
-    const mode = resolveWallRenderModeForNode(node)
-    if (mode === 'repeatInstances') {
-      const slots = collectWallDoorRepeatSlots(wallObject, rect)
-      if (slots.length) {
-        entries.push({ kind: 'repeatInstances', nodeId, slots })
-      }
-      continue
-    }
-
-    const intervals = collectWallDoorStretchIntervals(node, wallObject, rect)
-    if (intervals.length) {
-      entries.push({ kind: 'stretch', nodeId, intervals })
-    }
-  }
-
-  if (!entries.length) {
-    return null
-  }
-
-  return entries
-}
-
-function applyWallDoorSelectionDelete(): boolean {
-  const payload = wallDoorSelectionPayload.value
-  if (!payload?.length) {
-    return false
-  }
-
-  let applied = false
-  payload.forEach((entry) => {
-    const node = findSceneNode(sceneStore.nodes, entry.nodeId)
-    if (!node || node.dynamicMesh?.type !== 'Wall') {
-      return
-    }
-
-    const wallMesh = node.dynamicMesh as WallDynamicMesh
-    if (entry.kind === 'stretch') {
-      let nextOpenings = Array.isArray(wallMesh.openings) ? wallMesh.openings : []
-      entry.intervals.forEach((interval) => {
-        nextOpenings = addWallOpeningToDefinition({ ...wallMesh, openings: nextOpenings }, interval)
-      })
-      sceneStore.updateNodeDynamicMesh(entry.nodeId, { ...wallMesh, openings: nextOpenings })
-      applied = true
-      return
-    }
-
-    const nextSlotSet = new Set<string>()
-    ;(Array.isArray((wallMesh as any).repeatErasedSlots) ? (wallMesh as any).repeatErasedSlots : []).forEach((slot: any) => {
-      const chainIndex = Math.max(0, Math.trunc(Number(slot?.chainIndex ?? 0)))
-      const slotIndex = Math.max(0, Math.trunc(Number(slot?.slotIndex ?? -1)))
-      if (Number.isFinite(chainIndex) && Number.isFinite(slotIndex) && slotIndex >= 0) {
-        nextSlotSet.add(`${chainIndex}:${slotIndex}`)
-      }
-    })
-    entry.slots.forEach((slot) => {
-      nextSlotSet.add(`${slot.chainIndex}:${slot.slotIndex}`)
-    })
-
-    const repeatErasedSlots = Array.from(nextSlotSet.values())
-      .map((key) => {
-        const [chainRaw, slotRaw] = key.split(':')
-        return {
-          chainIndex: Math.max(0, Math.trunc(Number(chainRaw ?? 0))),
-          slotIndex: Math.max(0, Math.trunc(Number(slotRaw ?? -1))),
-        }
-      })
-      .filter((slot) => Number.isFinite(slot.chainIndex) && Number.isFinite(slot.slotIndex) && slot.slotIndex >= 0)
-      .sort((a, b) => (a.chainIndex - b.chainIndex) || (a.slotIndex - b.slotIndex))
-
-    sceneStore.updateNodeDynamicMesh(entry.nodeId, { ...wallMesh, repeatErasedSlots })
-    applied = true
-  })
-
-  clearWallDoorSelectionPayload()
-  return applied
+  wallDoorSelectionController.clearWallDoorSelectionHighlight()
 }
 
 function pickSceneInstancedTargetAtPointer(event: PointerEvent): { nodeId: string; bindingId: string } | null {
@@ -3981,58 +3580,15 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
   // Selected wall: erase by raycasting the wall object itself (supports procedural walls)
   // and generate a per-interval key so drag erase doesn't spam the same spot.
   if (selectedNodeIsWall.value) {
-    const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-    const wallObject = selectedWallId ? (objectMap.get(selectedWallId) ?? null) : null
-    const wallNode = selectedWallId ? findSceneNode(sceneStore.nodes, selectedWallId) : null
-    const wallMeshDef = wallNode && (wallNode as any).dynamicMesh?.type === 'Wall'
-      ? (wallNode as any).dynamicMesh as WallDynamicMesh
-      : null
-    const segments = wallMeshDef ? compileWallSegmentsFromDefinition(wallMeshDef) : []
-
-    if (selectedWallId && wallObject && segments.length) {
-      const hitPointWorld = resolveWallHitPointFromCurrentRay(wallObject)
-
-      if (!hitPointWorld) {
-        return { handled: false, erasedKey: null }
-      }
-
-      const inv = new THREE.Matrix4().copy(wallObject.matrixWorld).invert()
-      const localPoint = hitPointWorld.clone().applyMatrix4(inv)
-      const unitLenM = wallEraseUnitLengthM.value
-      const halfLenM = unitLenM * 0.5
-      if (!wallMeshDef) {
-        return { handled: false, erasedKey: null }
-      }
-
-      let key = `${selectedWallId}:wall:hit`
-      if (wallRepairModeActive.value) {
-        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, unitLenM)
-        if (!repair) {
-          return { handled: false, erasedKey: null }
-        }
-        // Quantize in local space to avoid spamming the same spot during drag.
-        const q = Math.max(1e-6, unitLenM * 0.5)
-        const bx = Math.round(repair.center.x / q)
-        const bz = Math.round(repair.center.z / q)
-        key = `${selectedWallId}:wall:repair:${bx}:${bz}`
-      } else {
-        const opening = computeWallOpeningForLocalHit(wallMeshDef, localPoint, halfLenM)
-        if (!opening) {
-          return { handled: false, erasedKey: null }
-        }
-        // Quantize by opening center to avoid re-erasing the same area during drag.
-        const q = Math.max(1e-6, unitLenM * 0.5)
-        const center = (Number(opening.start) + Number(opening.end)) * 0.5
-        const bucket = Math.round(center / q)
-        key = `${selectedWallId}:wall:${opening.chainIndex}:${bucket}`
-      }
-      if (options?.skipKey && key === options.skipKey) {
-        return { handled: false, erasedKey: null }
-      }
-
-      const handled = eraseInstancedBinding(selectedWallId, selectedWallId, hitPointWorld)
-      return { handled, erasedKey: handled ? key : null }
+    const target = resolveSelectedWallEraseTargetFromCurrentRay()
+    if (!target) {
+      return { handled: false, erasedKey: null }
     }
+    if (options?.skipKey && target.dragKey === options.skipKey) {
+      return { handled: false, erasedKey: null }
+    }
+    const handled = applySelectedWallEraseTarget(target)
+    return { handled, erasedKey: handled ? target.dragKey : null }
   }
 
   const pickTargets = collectInstancedPickTargets()
@@ -4603,27 +4159,6 @@ type WarpGatePlacementClickSessionState = {
 
 let warpGatePlacementClickSessionState: WarpGatePlacementClickSessionState | null = null
 
-type WallDoorRectangleSelectionState = {
-  pointerId: number
-  startClientX: number
-  startClientY: number
-  currentClientX: number
-  currentClientY: number
-  moved: boolean
-}
-
-type WallDoorRectangleClientBounds = {
-  left: number
-  top: number
-  right: number
-  bottom: number
-}
-
-type WallDoorStretchSelectionEntry = { kind: 'stretch'; nodeId: string; intervals: WallOpening[] }
-type WallDoorRepeatSelectionEntry = { kind: 'repeatInstances'; nodeId: string; slots: WallRepeatErasedSlot[] }
-type WallDoorSelectionEntry = WallDoorStretchSelectionEntry | WallDoorRepeatSelectionEntry
-type WallDoorSelectionPayload = WallDoorSelectionEntry[]
-
 let wallDoorRectangleSelectionState: WallDoorRectangleSelectionState | null = null
 const wallDoorSelectionPayload = ref<WallDoorSelectionPayload | null>(null)
 const wallDoorSelectionOverlayBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
@@ -4631,7 +4166,7 @@ const wallDoorSelectionOverlayBox = ref<{ left: number; top: number; width: numb
 watch(
   () => wallDoorSelectionPayload.value,
   () => {
-    rebuildWallDoorSelectionHighlight()
+    wallDoorSelectionController.rebuildWallDoorSelectionHighlight(wallDoorSelectionPayload.value)
   },
   { flush: 'post' },
 )
@@ -4819,7 +4354,10 @@ const waterDragWorldHelper = new THREE.Vector3()
 const waterPlanePointerHelper = new THREE.Vector3()
 
 function isSelectedFloorCircleEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedFloorEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4831,7 +4369,10 @@ function isSelectedFloorCircleEditMode(): boolean {
 }
 
 function isSelectedWaterRectangleEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedWaterEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4840,7 +4381,10 @@ function isSelectedWaterRectangleEditMode(): boolean {
 }
 
 function isSelectedWaterCircleEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedWaterEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4849,7 +4393,10 @@ function isSelectedWaterCircleEditMode(): boolean {
 }
 
 function isSelectedWaterContourEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedWaterEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4876,8 +4423,8 @@ function isSelectedDisplayBoardEditMode(): boolean {
 }
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'road'
+  const selectedId = isSelectedRoadEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'road' && isSelectedRoadEditMode() && !roadBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -4910,8 +4457,8 @@ function setActiveRoadVertexHandle(active: { nodeId: string; vertexIndex: number
 }
 
 function ensureWallEndpointHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'wall'
+  const selectedId = isSelectedWallEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'wall' && isSelectedWallEditMode() && !wallBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -4975,8 +4522,8 @@ function setActiveDisplayBoardCornerHandle(active: { nodeId: string; cornerIndex
 }
 
 function ensureWaterRectangleHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'water' && isSelectedWaterRectangleEditMode()
+  const selectedId = isSelectedWaterEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'water' && isSelectedWaterEditMode() && !waterBuildTool.getSession() && isSelectedWaterRectangleEditMode()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -5010,8 +4557,8 @@ function ensureWaterVertexHandlesForSelectedNode(options?: { force?: boolean; pr
     waterVertexRenderer.clear()
     return
   }
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'water'
+  const selectedId = isSelectedWaterEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'water' && isSelectedWaterEditMode() && !waterBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -5028,8 +4575,8 @@ function ensureWaterVertexHandlesForSelectedNode(options?: { force?: boolean; pr
 }
 
 function ensureWaterCircleHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'water'
+  const selectedId = isSelectedWaterEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'water' && isSelectedWaterEditMode() && !waterBuildTool.getSession()
   const circleSelectedId = isSelectedWaterCircleEditMode() ? selectedId : null
   const common = {
     active,
@@ -5277,6 +4824,9 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
   if (waterRectangleDragState) {
     return false
   }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
+    return false
+  }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
     return false
@@ -5327,6 +4877,9 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
 
 function tryBeginWaterVertexDrag(event: PointerEvent): boolean {
   if (waterContourVertexDragState) {
+    return false
+  }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
     return false
   }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -5389,6 +4942,9 @@ function tryBeginWaterVertexDrag(event: PointerEvent): boolean {
 
 function tryBeginWaterCircleDrag(event: PointerEvent): boolean {
   if (waterCircleCenterDragState || waterCircleRadiusDragState) {
+    return false
+  }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
     return false
   }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -5468,6 +5024,9 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
   if (waterEdgeDragState) {
     return false
   }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
+    return false
+  }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
     return false
@@ -5542,8 +5101,8 @@ function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) 
     floorVertexRenderer.clear()
     return
   }
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'floor'
+  const selectedId = isSelectedFloorEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && !floorBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -5562,8 +5121,8 @@ function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) 
 }
 
 function ensureFloorCircleHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'floor'
+  const selectedId = isSelectedFloorEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && !floorBuildTool.getSession()
   const circleSelectedId = isSelectedFloorCircleEditMode() ? selectedId : null
 
   const common = {
@@ -5675,6 +5234,9 @@ function cloneFloorVertices(definition: FloorDynamicMesh): Array<[number, number
 
 function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
   if (floorEdgeDragState) {
+    return false
+  }
+  if (!isSelectedFloorEditMode() || floorBuildTool.getSession()) {
     return false
   }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -5877,15 +5439,70 @@ function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
 
 const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
 
+function clearBuildToolVertexSnap() {
+  clearVertexSnapMarkers()
+}
+
+function resolveBuildToolVertexSnapPoint(
+  event: PointerEvent,
+  sourceWorld: THREE.Vector3,
+  options?: {
+    excludeNodeIds?: readonly string[]
+    keepSourceY?: boolean
+  },
+): THREE.Vector3 | null {
+  const active = isVertexSnapActiveEffective.value || event.shiftKey
+  if (!active) {
+    clearBuildToolVertexSnap()
+    return null
+  }
+
+  const excludeNodeIds = new Set<string>([GROUND_NODE_ID])
+  for (const nodeId of options?.excludeNodeIds ?? []) {
+    if (typeof nodeId === 'string' && nodeId.length > 0) {
+      excludeNodeIds.add(nodeId)
+    }
+  }
+
+  const candidate = snapController.findHoverCandidate({
+    event,
+    excludeNodeIds,
+    pixelThresholdPx: vertexSnapThresholdPx.value,
+  })
+  if (!candidate) {
+    clearBuildToolVertexSnap()
+    return null
+  }
+
+  const snapped = candidate.worldPosition.clone()
+  if (options?.keepSourceY) {
+    snapped.y = sourceWorld.y
+  }
+
+  updateVertexSnapMarkers({
+    sourceWorld: sourceWorld.clone(),
+    targetWorld: snapped.clone(),
+    delta: snapped.clone().sub(sourceWorld),
+    targetNodeId: candidate.nodeId,
+    targetMesh: candidate.mesh,
+    targetInstanceId: candidate.instanceId,
+  })
+
+  return snapped
+}
+
 const wallBuildTool = createWallBuildTool({
   activeBuildTool,
   wallBuildShape,
   sceneStore,
+  getWallEditNodeId: () => (isSelectedWallEditMode() ? wallEditNodeId.value : null),
   pointerInteraction,
   rootGroup,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
   normalizeWallDimensionsForViewport,
   getWallBrush: () => ({
@@ -5944,6 +5561,7 @@ watch(wallBrushPresetAssetId, (assetId) => {
 
   if (!id) {
     wallBrushPresetData.value = null
+    wallBuildTool.syncBrushPreset()
     return
   }
 
@@ -5954,6 +5572,7 @@ watch(wallBrushPresetAssetId, (assetId) => {
         return
       }
       wallBrushPresetData.value = data as WallPresetData
+      wallBuildTool.syncBrushPreset()
     })
     .catch((error) => {
       if (token !== wallBrushPresetLoadToken) {
@@ -5961,6 +5580,7 @@ watch(wallBrushPresetAssetId, (assetId) => {
       }
       console.warn('Failed to load wall preset for brush', id, error)
       wallBrushPresetData.value = null
+      wallBuildTool.syncBrushPreset()
     })
 })
 
@@ -6003,6 +5623,8 @@ const roadBuildTool = createRoadBuildTool({
   defaultWidth: ROAD_DEFAULT_WIDTH,
   isAltOverrideActive: () => isAltOverrideActive,
   raycastGroundPoint,
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   collectRoadSnapVertices,
   snapRoadPointToVertices,
   vertexSnapDistance: ROAD_VERTEX_SNAP_DISTANCE,
@@ -6027,6 +5649,8 @@ const floorBuildTool = createFloorBuildTool({
   raycastGroundPoint,
   resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
   getFloorBrush: () => ({
     presetAssetId: floorBrushPresetAssetId.value,
@@ -6044,6 +5668,8 @@ const waterBuildTool = createWaterBuildTool({
   raycastGroundPoint,
   resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
@@ -8070,6 +7696,16 @@ function applyPendingScenePatches(): boolean {
 
   updatePlaceholderOverlayPositions()
   return true
+}
+
+function flushPendingScenePatchesForInteraction(): boolean {
+  if (!sceneStore.isSceneReady) {
+    return false
+  }
+  if (shouldDeferSceneGraphSync()) {
+    return false
+  }
+  return applyPendingScenePatches()
 }
 
 function shouldDeferSceneGraphSync(): boolean {
@@ -10434,14 +10070,6 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
         includePersistedChunkWeightmaps: !usesSurfacePreview,
       },
   )
-  console.log('[SceneViewport] terrain paint preview sync', {
-    nodeId: payload.groundNode.id,
-    mode: payload.mode,
-    previewRevision: payload.previewRevision,
-    liveChunkCount: payload.liveChunkPagesByKey.size,
-    usesSurfacePreview,
-    loadToken: landformsPreviewLoadToken,
-  })
 }
 
 function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {
@@ -11187,7 +10815,7 @@ function disposeScene() {
   instancedMeshGroup.removeFromParent()
   clearInstancedOutlineEntries()
   instancedOutlineGroup.removeFromParent()
-  clearWallDoorSelectionHighlight()
+  wallDoorSelectionController.clearWallDoorSelectionHighlight()
   wallDoorSelectionHighlightGroup.removeFromParent()
 
   directionalLightTargetHandleManager.clear()
@@ -11895,6 +11523,18 @@ function selectionsAreEqual(a: string[], b: string[]): boolean {
 
 function emitSelectionChange(nextSelection: string[]) {
   const deduped = dedupeSelection(nextSelection)
+  if (deduped.length !== 1 || deduped[0] !== wallEditNodeId.value) {
+    clearWallEditMode()
+  }
+  if (deduped.length !== 1 || deduped[0] !== roadEditNodeId.value) {
+    clearRoadEditMode()
+  }
+  if (deduped.length !== 1 || deduped[0] !== floorEditNodeId.value) {
+    clearFloorEditMode()
+  }
+  if (deduped.length !== 1 || deduped[0] !== waterEditNodeId.value) {
+    clearWaterEditMode()
+  }
   const current = sceneStore.selectedNodeIds
   if (selectionsAreEqual(deduped, current)) {
     return
@@ -12190,6 +11830,70 @@ function createEndpointDragPlane(options: {
   return plane.setFromNormalAndCoplanarPoint(normal, start)
 }
 
+function cancelBuildSessionForTool(tool: BuildTool): void {
+  if (tool === 'wall' && wallBuildTool.getSession()) {
+    wallBuildTool.cancel()
+    return
+  }
+  if (tool === 'road' && roadBuildTool.getSession()) {
+    roadBuildTool.cancel()
+    return
+  }
+  if (tool === 'floor' && floorBuildTool.getSession()) {
+    floorBuildTool.cancel()
+    return
+  }
+  if (tool === 'water' && waterBuildTool.getSession()) {
+    waterBuildTool.cancel()
+  }
+}
+
+function resolveBuildToolForNode(node: any): BuildTool | null {
+  const dynamicMeshType = node?.dynamicMesh?.type as string | undefined
+  return isWaterSurfaceNode(node)
+    ? 'water'
+    : isDisplayBoardNode(node)
+    ? 'displayBoard'
+    : dynamicMeshType === 'Wall'
+    ? 'wall'
+    : dynamicMeshType === 'Floor'
+    ? 'floor'
+    : dynamicMeshType === 'Road'
+    ? 'road'
+    : null
+}
+
+function resolveBuildToolForNodeId(nodeId: string | null | undefined): BuildTool | null {
+  return resolveBuildToolForNode(resolveSceneNodeById(nodeId))
+}
+
+function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | null): boolean {
+  if (!toolForNode) {
+    return false
+  }
+  const hitNode: any = resolveSceneNodeById(nodeId)
+  const nodeLocked = Boolean(hitNode?.locked) || sceneStore.isNodeSelectionLocked(nodeId)
+  if (nodeLocked) {
+    return false
+  }
+
+  cancelBuildSessionForTool(toolForNode)
+
+  if (toolForNode === 'wall') {
+    enterWallEditMode(nodeId)
+  } else if (toolForNode === 'road') {
+    enterRoadEditMode(nodeId)
+  } else if (toolForNode === 'floor') {
+    enterFloorEditMode(nodeId)
+  } else if (toolForNode === 'water') {
+    enterWaterEditMode(nodeId)
+  }
+
+  handleBuildToolChange(toolForNode)
+  emitSelectionChange([nodeId])
+  return true
+}
+
 async function handlePointerDown(event: PointerEvent) {
   const applyPointerDownResult = (result: PointerDownResult) => {
     if (result.clearPointerTrackingState) {
@@ -12256,6 +11960,21 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
+  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
+    flushPendingScenePatchesForInteraction()
+    const hit = pickNodeAtPointer(event)
+    if (hit) {
+      const toolForNode = resolveBuildToolForNodeId(hit.nodeId)
+      if (tryEnterNodeBuildToolEditMode(hit.nodeId, toolForNode)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+    }
+  }
+
   if (
     event.button === 0 &&
     wallDoorSelectModeActive.value &&
@@ -12272,7 +11991,7 @@ async function handlePointerDown(event: PointerEvent) {
       moved: false,
     }
     clearWallDoorSelectionPayload()
-    updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState)
+    wallDoorSelectionController.updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState, wallDoorSelectionOverlayBox)
     pointerInteraction.capture(event.pointerId)
     event.preventDefault()
     event.stopPropagation()
@@ -12351,17 +12070,15 @@ async function handlePointerDown(event: PointerEvent) {
   // Scatter erase mode: when a wall node is selected, erase by raycasting the wall object itself.
   // This ensures procedural wall geometry is erasable even when no instanced pick targets exist.
   if (scatterEraseModeActive.value && selectedNodeIsWall.value && event.button === 0) {
-    const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-    const wallObject = selectedWallId ? (objectMap.get(selectedWallId) ?? null) : null
-    if (selectedWallId && wallObject && normalizedPointerGuard.setRayFromEvent(event)) {
-      const hitPointWorld = resolveWallHitPointFromCurrentRay(wallObject)
-      if (hitPointWorld) {
-        const handled = eraseInstancedBinding(selectedWallId, selectedWallId, hitPointWorld)
+    if (normalizedPointerGuard.setRayFromEvent(event)) {
+      const target = resolveSelectedWallEraseTargetFromCurrentRay()
+      if (target) {
+        const handled = applySelectedWallEraseTarget(target)
         if (handled) {
           const dragState: InstancedEraseDragState = {
             pointerId: event.pointerId,
-            lastKey: null,
-            lastAtMs: 0,
+            lastKey: target.dragKey,
+            lastAtMs: performance.now(),
           }
           applyPointerDownResult({
             handled: true,
@@ -12649,7 +12366,7 @@ function handlePointerMove(event: PointerEvent) {
         wallDoorRectangleSelectionState.moved = true
       }
     }
-    updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState)
+    wallDoorSelectionController.updateWallDoorSelectionOverlayBox(wallDoorRectangleSelectionState, wallDoorSelectionOverlayBox)
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13241,12 +12958,12 @@ async function handlePointerUp(event: PointerEvent) {
     if (isPointerUpOnCanvas) {
       if (wallDoorRectangleSelectionState && event.pointerId === wallDoorRectangleSelectionState.pointerId && event.button === 0) {
         const state = wallDoorRectangleSelectionState
-        const bounds = computeWallDoorRectangleBounds(state)
+        const bounds = wallDoorSelectionController.computeWallDoorRectangleBounds(state)
         clearWallDoorRectangleSelectionState()
         const width = bounds.right - bounds.left
         const height = bounds.bottom - bounds.top
         if (state.moved && width >= 2 && height >= 2) {
-          wallDoorSelectionPayload.value = buildWallDoorSelectionPayloadFromRect(bounds)
+          wallDoorSelectionPayload.value = wallDoorSelectionController.buildWallDoorSelectionPayloadFromRect(bounds)
           if (wallDoorSelectionPayload.value?.length) {
             const selectedIds = Array.from(new Set(wallDoorSelectionPayload.value.map((entry) => entry.nodeId)))
             emitSelectionChange(selectedIds)
@@ -14255,34 +13972,17 @@ function handleCanvasDoubleClick(event: MouseEvent) {
     }
   }
 
+  flushPendingScenePatchesForInteraction()
   const hit = pickNodeAtPointer(event)
   if (!hit) {
     return
   }
 
   const hitNodeId = hit.nodeId
-  const hitNode: any = sceneStore.getNodeById(hitNodeId)
-  const hitDynamicMeshType = hitNode?.dynamicMesh?.type as string | undefined
-  const toolForNode: BuildTool | null =
-    isWaterSurfaceNode(hitNode)
-      ? 'water'
-      : isDisplayBoardNode(hitNode)
-      ? 'displayBoard'
-      : hitDynamicMeshType === 'Wall'
-      ? 'wall'
-      : hitDynamicMeshType === 'Floor'
-      ? 'floor'
-      : hitDynamicMeshType === 'Road'
-      ? 'road'
-      : null
-
-  const nodeLocked = Boolean(hitNode?.locked) || sceneStore.isNodeSelectionLocked(hitNodeId)
+  const toolForNode = resolveBuildToolForNodeId(hitNodeId)
 
   // UX: double-click an unlocked Wall/Floor/Road node to immediately enter its edit mode.
-  if (toolForNode && !nodeLocked) {
-    handleBuildToolChange(toolForNode)
-    emitSelectionChange([hitNodeId])
-  } else {
+  if (!tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)) {
     const nextSelection = sceneStore.handleNodeDoubleClick(hitNodeId)
     const appliedSelection = Array.isArray(nextSelection) && nextSelection.length ? nextSelection : [hitNodeId]
     emitSelectionChange(appliedSelection)
@@ -17725,7 +17425,10 @@ function handleViewportShortcut(event: KeyboardEvent) {
       case 'Delete':
       case 'Backspace': {
         if (wallDoorSelectModeActive.value && activeBuildTool.value === 'wall' && wallDoorSelectionPayload.value?.length) {
-          handled = applyWallDoorSelectionDelete()
+          handled = wallDoorSelectionController.applyWallDoorSelectionDelete(wallDoorSelectionPayload.value)
+          if (handled) {
+            clearWallDoorSelectionPayload()
+          }
         }
         break
       }
@@ -17832,6 +17535,7 @@ function handleVertexSnapShiftKeyUp(event: KeyboardEvent) {
     return
   }
   vertexSnapShiftModifierActive.value = false
+  clearBuildToolVertexSnap()
   if (navigationSpeedBoostModifierActive.value) {
     navigationSpeedBoostModifierActive.value = false
     syncControlsConstraintsAndSpeeds()
@@ -17840,6 +17544,7 @@ function handleVertexSnapShiftKeyUp(event: KeyboardEvent) {
 
 function handleVertexSnapShiftBlur() {
   vertexSnapShiftModifierActive.value = false
+  clearBuildToolVertexSnap()
   if (navigationSpeedBoostModifierActive.value) {
     navigationSpeedBoostModifierActive.value = false
     syncControlsConstraintsAndSpeeds()
@@ -17891,9 +17596,8 @@ onBeforeUnmount(() => {
   groundTextureInputRef.value = null
   disposeSceneNodes()
   disposeScene()
-  wallDoorSelectionStretchLineMaterial.dispose()
-  wallDoorSelectionRepeatFillMaterial.dispose()
-  wallDoorSelectionRepeatWireMaterial.dispose()
+  disposeWallDoorSelectionController()
+  disposeWallEraseHoverPresenter()
   disposeCachedTextures()
   window.removeEventListener('keydown', handleViewportShortcut, { capture: true })
   window.removeEventListener('keydown', handleVertexSnapShiftKeyDown, { capture: true })
@@ -18071,6 +17775,7 @@ watch(
 
 watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
+  clearBuildToolVertexSnap()
 
   // Keep viewport side effects consistent even when the tool is activated via store (e.g. AssetPanel).
   if (isGroundBuildTool(tool)) {

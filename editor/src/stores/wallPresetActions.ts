@@ -18,6 +18,7 @@ import {
   isWallPresetFilename,
   type StrictWallPresetWallProps,
   type WallForwardAxis,
+  type WallRenderMode,
   type WallUvAxis,
   type WallPresetData,
   type WallPresetMaterialPatch,
@@ -84,6 +85,7 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     width: WALL_DEFAULT_WIDTH,
     thickness: WALL_DEFAULT_THICKNESS,
     smoothing: WALL_DEFAULT_SMOOTHING,
+    wallRenderMode: 'stretch',
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     isAirWall: true,
     bodyAssetId: null,
@@ -96,10 +98,13 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     footOrientation: { forwardAxis: '+z', yawDeg: 0 },
     footUvAxis: 'auto',
     bodyEndCapAssetId: null,
+    bodyEndCapOffsetLocal: { x: 0, y: 0, z: 0 },
     bodyEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
     headEndCapAssetId: null,
+    headEndCapOffsetLocal: { x: 0, y: 0, z: 0 },
     headEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
     footEndCapAssetId: null,
+    footEndCapOffsetLocal: { x: 0, y: 0, z: 0 },
     footEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
     cornerModels: [],
   },
@@ -125,6 +130,43 @@ function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   return raw.length ? raw : null
 }
+
+function normalizeWallRenderMode(value: unknown, fallback: WallRenderMode = 'stretch'): WallRenderMode {
+  return value === 'repeatInstances' ? 'repeatInstances' : fallback
+}
+
+function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallProps): Partial<WallComponentProps> {
+  return {
+    height: wallProps.height,
+    width: wallProps.width,
+    thickness: wallProps.thickness,
+    smoothing: wallProps.smoothing,
+    wallRenderMode: normalizeWallRenderMode(wallProps.wallRenderMode, 'stretch'),
+    repeatInstanceStep: wallProps.repeatInstanceStep,
+    isAirWall: wallProps.isAirWall,
+    bodyAssetId: wallProps.bodyAssetId ?? null,
+    bodyOrientation: wallProps.bodyOrientation,
+    bodyUvAxis: wallProps.bodyUvAxis,
+    headAssetId: wallProps.headAssetId ?? null,
+    headOrientation: wallProps.headOrientation,
+    headUvAxis: wallProps.headUvAxis,
+    footAssetId: wallProps.footAssetId ?? null,
+    footOrientation: wallProps.footOrientation,
+    footUvAxis: wallProps.footUvAxis,
+    bodyEndCapAssetId: wallProps.bodyEndCapAssetId ?? null,
+    bodyEndCapOffsetLocal: wallProps.bodyEndCapOffsetLocal,
+    bodyEndCapOrientation: wallProps.bodyEndCapOrientation,
+    headEndCapAssetId: wallProps.headEndCapAssetId ?? null,
+    headEndCapOffsetLocal: wallProps.headEndCapOffsetLocal,
+    headEndCapOrientation: wallProps.headEndCapOrientation,
+    footEndCapAssetId: wallProps.footEndCapAssetId ?? null,
+    footEndCapOffsetLocal: wallProps.footEndCapOffsetLocal,
+    footEndCapOrientation: wallProps.footEndCapOrientation,
+    cornerModels: wallProps.cornerModels ?? [],
+  }
+}
+
+export { buildWallComponentPropsPatchFromPreset }
 
 function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallProps {
   if (!value || typeof value !== 'object') {
@@ -297,6 +339,7 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     width: requiredNumber('width'),
     thickness: requiredNumber('thickness'),
     smoothing: requiredNumber('smoothing'),
+    wallRenderMode: normalizeWallRenderMode(record.wallRenderMode, 'stretch'),
     repeatInstanceStep: optionalRepeatInstanceStep(),
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
@@ -309,10 +352,19 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     footOrientation: requiredOrientation(record.footOrientation, 'footOrientation') as any,
     footUvAxis: optionalUvAxis(record.footUvAxis, optionalUvAxis(record.bodyUvAxis, 'auto')),
     bodyEndCapAssetId: requiredAssetIdOrNull('bodyEndCapAssetId'),
+    bodyEndCapOffsetLocal: record.bodyEndCapOffsetLocal
+      ? requiredOffsetLocal(record.bodyEndCapOffsetLocal, 'bodyEndCapOffsetLocal')
+      : { x: 0, y: 0, z: 0 },
     bodyEndCapOrientation: requiredOrientation(record.bodyEndCapOrientation, 'bodyEndCapOrientation') as any,
     headEndCapAssetId: requiredAssetIdOrNull('headEndCapAssetId'),
+    headEndCapOffsetLocal: record.headEndCapOffsetLocal
+      ? requiredOffsetLocal(record.headEndCapOffsetLocal, 'headEndCapOffsetLocal')
+      : { x: 0, y: 0, z: 0 },
     headEndCapOrientation: requiredOrientation(record.headEndCapOrientation, 'headEndCapOrientation') as any,
     footEndCapAssetId: requiredAssetIdOrNull('footEndCapAssetId'),
+    footEndCapOffsetLocal: record.footEndCapOffsetLocal
+      ? requiredOffsetLocal(record.footEndCapOffsetLocal, 'footEndCapOffsetLocal')
+      : { x: 0, y: 0, z: 0 },
     footEndCapOrientation: requiredOrientation(record.footEndCapOrientation, 'footEndCapOrientation') as any,
     cornerModels,
   }
@@ -744,33 +796,11 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         })
       }
 
-      store.updateNodeComponentProps(nodeId, wallComponent.id, {
-        height: wallProps.height,
-        width: wallProps.width,
-        thickness: wallProps.thickness,
-        smoothing: wallProps.smoothing,
-        repeatInstanceStep: wallProps.repeatInstanceStep,
-        isAirWall: wallProps.isAirWall,
-        bodyAssetId: wallProps.bodyAssetId ?? null,
-        bodyOrientation: (wallProps as any).bodyOrientation,
-        bodyUvAxis: (wallProps as any).bodyUvAxis,
-        headAssetId: wallProps.headAssetId ?? null,
-        headOrientation: (wallProps as any).headOrientation,
-        headUvAxis: (wallProps as any).headUvAxis,
-        footAssetId: wallProps.footAssetId ?? null,
-        footOrientation: (wallProps as any).footOrientation,
-        footUvAxis: (wallProps as any).footUvAxis,
-        bodyEndCapAssetId: wallProps.bodyEndCapAssetId ?? null,
-        bodyEndCapOffsetLocal: (wallProps as any).bodyEndCapOffsetLocal,
-        bodyEndCapOrientation: (wallProps as any).bodyEndCapOrientation,
-        headEndCapAssetId: wallProps.headEndCapAssetId ?? null,
-        headEndCapOffsetLocal: (wallProps as any).headEndCapOffsetLocal,
-        headEndCapOrientation: (wallProps as any).headEndCapOrientation,
-        footEndCapAssetId: wallProps.footEndCapAssetId ?? null,
-        footEndCapOffsetLocal: (wallProps as any).footEndCapOffsetLocal,
-        footEndCapOrientation: (wallProps as any).footEndCapOrientation,
-        cornerModels: wallProps.cornerModels ?? [],
-      } as unknown as Partial<Record<string, unknown>>)
+      store.updateNodeComponentProps(
+        nodeId,
+        wallComponent.id,
+        buildWallComponentPropsPatchFromPreset(wallProps) as unknown as Partial<Record<string, unknown>>,
+      )
 
       // Apply node material patches (match by SceneNodeMaterial.id; preserve existing tail slots).
       const target = deps.findNodeById(store.nodes, nodeId)
@@ -778,7 +808,6 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         const existing = Array.isArray(target.materials) ? (target.materials as SceneNodeMaterial[]) : []
         const existingById = new Map(existing.map((entry) => [entry.id, entry]))
         const order = Array.isArray(preset.materialOrder) ? preset.materialOrder : []
-        const orderSet = new Set(order)
 
         const nextMaterials: SceneNodeMaterial[] = []
         for (const materialSlotId of order) {
@@ -841,16 +870,6 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           )
         }
 
-        // Preserve existing tail slots not mentioned in the preset.
-        for (const entry of existing) {
-          if (!orderSet.has(entry.id)) {
-            nextMaterials.push(entry)
-          }
-        }
-
-        if (nextMaterials.length) {
-          store.setNodeMaterials(nodeId, nextMaterials)
-        }
       }
 
       return wallProps as unknown as WallComponentProps

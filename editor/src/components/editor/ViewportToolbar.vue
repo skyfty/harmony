@@ -353,14 +353,6 @@
                 </v-list-item>
               </div>
 
-              <v-divider class="floor-shape-menu__divider" />
-
-              <v-list-item class="wall-shape-menu__action" @click="handleToggleWallDoorSelectMode">
-                <template #prepend>
-                  <v-icon :icon="wallDoorSelectModeActive ? 'mdi-checkbox-marked' : 'mdi-checkbox-blank-outline'" size="18" />
-                </template>
-                <v-list-item-title>Wall Rectangle Door Selection</v-list-item-title>
-              </v-list-item>
 
               <v-divider class="floor-shape-menu__divider" />
 
@@ -1668,7 +1660,9 @@ const wallShapeOptions = (Object.keys(WALL_BUILD_SHAPE_LABELS) as WallBuildShape
   id,
   label: WALL_BUILD_SHAPE_LABELS[id],
   svg:
-    id === 'polygon'
+    id === 'line'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 17L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="5" cy="17" r="2" fill="currentColor"/><circle cx="19" cy="7" r="2" fill="currentColor"/></svg>'
+      : id === 'polygon'
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
       : id === 'rectangle'
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="currentColor" rx="1" ry="1"/></svg>'
@@ -1716,7 +1710,17 @@ function handleBuildToolToggle(tool: BuildTool) {
   const selectionLocked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const nodeLocked = Boolean(primaryNode?.locked)
 
-  const shouldKeepSelectionForEdit = Boolean(next && isSingleSelection && toolMatchesPrimarySelection && !selectionLocked && !nodeLocked)
+  const shouldKeepSelectionForEdit = Boolean(
+    tool !== 'wall'
+    && tool !== 'road'
+    && tool !== 'floor'
+    && tool !== 'water'
+    && next
+    && isSingleSelection
+    && toolMatchesPrimarySelection
+    && !selectionLocked
+    && !nodeLocked,
+  )
 
   // By default, when enabling a build tool, clear selection to avoid accidental operations.
   // Exception: if the primary selection is a single, matching, unlocked node, keep it so the user

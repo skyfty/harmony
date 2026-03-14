@@ -176,7 +176,11 @@ import {
 import { createLodPresetActions } from './lodPresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
-import { BUILTIN_WALL_PRESET_ASSETS, createWallPresetActions } from './wallPresetActions'
+import {
+  BUILTIN_WALL_PRESET_ASSETS,
+  buildWallComponentPropsPatchFromPreset,
+  createWallPresetActions,
+} from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
@@ -12017,6 +12021,8 @@ export const useSceneStore = defineStore('scene', {
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
       bodyAssetId?: string | null
+      wallComponentProps?: Partial<WallComponentProps> | null
+      wallPresetData?: WallPresetData | null
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
@@ -12030,6 +12036,10 @@ export const useSceneStore = defineStore('scene', {
         ...build.definition,
         bodyMaterialConfigId: defaultBodyMaterialConfigId,
       }
+
+      const initialWallComponentPatch = payload.wallPresetData?.wallProps
+        ? buildWallComponentPropsPatchFromPreset(payload.wallPresetData.wallProps)
+        : (payload.wallComponentProps ?? null)
 
       const wallGroup = createWallGroup(defaultMesh, { smoothing: WALL_DEFAULT_SMOOTHING })
       const nodeName = payload.name ?? this.generateWallNodeName()
@@ -12078,11 +12088,17 @@ export const useSceneStore = defineStore('scene', {
             | SceneNodeComponentState<WallComponentProps>
             | undefined)
           if (wallComponent?.id) {
+            const nextPatch = initialWallComponentPatch
+              ? { ...initialWallComponentPatch }
+              : {}
             const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
               ? payload.bodyAssetId
               : null
             if (bodyAssetId) {
-              this.updateNodeComponentProps(desiredId, wallComponent.id, { bodyAssetId })
+              ;(nextPatch as Partial<WallComponentProps>).bodyAssetId = bodyAssetId
+            }
+            if (Object.keys(nextPatch).length) {
+              this.updateNodeComponentProps(desiredId, wallComponent.id, nextPatch as Partial<Record<string, unknown>>)
             }
           }
           return findNodeById(this.nodes, desiredId)
@@ -12102,18 +12118,23 @@ export const useSceneStore = defineStore('scene', {
         if (node) {
           this.setNodeMaterials(node.id, defaultMaterials)
 
+          const nextPatch = initialWallComponentPatch
+            ? { ...initialWallComponentPatch }
+            : {}
           const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
             ? payload.bodyAssetId
             : null
 
           if (bodyAssetId) {
+            ;(nextPatch as Partial<WallComponentProps>).bodyAssetId = bodyAssetId
+          }
+
+          if (Object.keys(nextPatch).length) {
             const component = node.components?.[WALL_COMPONENT_TYPE] as
               | SceneNodeComponentState<WallComponentProps>
               | undefined
             if (component) {
-              this.updateNodeComponentProps(node.id, component.id, {
-                bodyAssetId,
-              })
+              this.updateNodeComponentProps(node.id, component.id, nextPatch as Partial<Record<string, unknown>>)
             }
           }
         }

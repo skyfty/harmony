@@ -9,6 +9,7 @@ export const WALL_PRESET_FORMAT_VERSION = 6
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 export type WallUvAxis = 'auto' | 'u' | 'v'
+export type WallRenderMode = 'stretch' | 'repeatInstances'
 
 export type WallModelOrientation = {
   forwardAxis: WallForwardAxis
@@ -47,6 +48,7 @@ export type StrictWallPresetWallProps = {
   width: number
   thickness: number
   smoothing: number
+  wallRenderMode: WallRenderMode
   repeatInstanceStep: number
   isAirWall: boolean
   bodyAssetId: string | null
@@ -59,10 +61,13 @@ export type StrictWallPresetWallProps = {
   footOrientation: WallModelOrientation
   footUvAxis: WallUvAxis
   bodyEndCapAssetId: string | null
+  bodyEndCapOffsetLocal: WallOffsetLocal
   bodyEndCapOrientation: WallModelOrientation
   headEndCapAssetId: string | null
+  headEndCapOffsetLocal: WallOffsetLocal
   headEndCapOrientation: WallModelOrientation
   footEndCapAssetId: string | null
+  footEndCapOffsetLocal: WallOffsetLocal
   footEndCapOrientation: WallModelOrientation
   cornerModels: StrictWallPresetCornerModelRule[]
 }

@@ -21,6 +21,9 @@ export const GRID_MINOR_SPACING = 0.5
 export const GRID_SNAP_SPACING = GRID_MINOR_SPACING
 export const WALL_DIAGONAL_SNAP_THRESHOLD = THREE.MathUtils.degToRad(20)
 export const WALL_AXIS_SNAP_THRESHOLD = THREE.MathUtils.degToRad(15)
+// Temporary global kill-switch for wall angle/step constraints.
+// Keep false while iterating on wall editing UX.
+export const WALL_ANGLE_STEP_CONSTRAINTS_ENABLED = false
 export const GRID_MINOR_DASH_SIZE = GRID_MINOR_SPACING * 0.12
 export const GRID_MINOR_GAP_SIZE = GRID_MINOR_SPACING * 0.2
 export const FACE_SNAP_PREVIEW_DISTANCE = 0.1

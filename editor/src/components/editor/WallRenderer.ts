@@ -5,11 +5,6 @@ import {
   getCachedModelObject,
   getOrCreateModelObjectRepeatVariant,
   getOrLoadModelObject,
-  allocateModelInstance,
-  allocateModelInstanceBinding,
-  ensureInstancedMeshesRegistered,
-  updateModelInstanceBindingMatrix,
-  updateModelInstanceMatrix,
   releaseModelInstancesForNode,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -20,7 +15,6 @@ import {
   type WallRenderAssetObjects,
   type WallRenderOptions,
 } from '@schema/wallMesh'
-import { compileWallSegmentsFromDefinition, type WallRenderSegment } from '@schema/wallLayout'
 import {
   WALL_COMPONENT_TYPE,
   clampWallProps,
@@ -28,7 +22,6 @@ import {
   resolveWallComponentPropsFromMesh,
   type WallComponentProps,
 } from '@schema/components'
-import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 import {
   applyWallInstancedBindings,
   buildWallInstancedRenderPlan,
@@ -135,6 +128,7 @@ export type WallPreviewRenderData = {
   isAirWall: boolean
   wantsInstancing: boolean
   hasMissingAssets: boolean
+  signatureData: string
 }
 
 function disposeWallGroupResources(group: THREE.Group): void {
@@ -183,170 +177,13 @@ function resolveWallEffectiveDefinition(
   return { ...definition, dimensions: { height, width, thickness } }
 }
 
-const wallSyncPosHelper = new THREE.Vector3()
-const wallSyncScaleHelper = new THREE.Vector3(1, 1, 1)
-const wallSyncStartHelper = new THREE.Vector3()
-const wallSyncEndHelper = new THREE.Vector3()
-const wallSyncLocalStartHelper = new THREE.Vector3()
-const wallSyncLocalEndHelper = new THREE.Vector3()
-const wallSyncLocalDirHelper = new THREE.Vector3()
-const wallSyncLocalUnitDirHelper = new THREE.Vector3()
-const wallSyncLocalOffsetHelper = new THREE.Vector3()
-const wallSyncLocalMatrixHelper = new THREE.Matrix4()
-const wallSyncIncomingHelper = new THREE.Vector3()
-const wallSyncOutgoingHelper = new THREE.Vector3()
-const wallSyncBisectorHelper = new THREE.Vector3()
-const wallSyncYawAxis = new THREE.Vector3(0, 1, 0)
-const wallSyncYawQuatHelper = new THREE.Quaternion()
-
-const wallInstancedBoundsBox = new THREE.Box3()
-const wallInstancedBoundsTmpPoint = new THREE.Vector3()
-const wallInstancedBoundsCorners = [
-  new THREE.Vector3(),
-  new THREE.Vector3(),
-  new THREE.Vector3(),
-  new THREE.Vector3(),
-  new THREE.Vector3(),
-  new THREE.Vector3(),
-  new THREE.Vector3(),
-  new THREE.Vector3(),
-] as [
-  THREE.Vector3,
-  THREE.Vector3,
-  THREE.Vector3,
-  THREE.Vector3,
-  THREE.Vector3,
-  THREE.Vector3,
-  THREE.Vector3,
-  THREE.Vector3,
-]
-
-const WALL_SYNC_EPSILON = 1e-6
-const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
-const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
-const WALL_SYNC_REPEAT_INSTANCE_STEP_M_DEFAULT = 0.5
-
-function normalizeWallRepeatInstanceStep(value: unknown): number {
-  const raw = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(raw)) {
-    return WALL_SYNC_REPEAT_INSTANCE_STEP_M_DEFAULT
-  }
-  return Math.max(WALL_SYNC_MIN_TILE_LENGTH, raw)
-}
-
-function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
-  const dx = a.x - b.x
-  const dz = a.z - b.z
-  return dx * dx + dz * dz
-}
-
-function splitWallSegmentsIntoChains(segments: WallRenderSegment[]): WallRenderSegment[][] {
-  const chains: WallRenderSegment[][] = []
-  let current: WallRenderSegment[] = []
-
-  for (const seg of segments) {
-    const prev = current[current.length - 1]
-    if (prev) {
-      wallSyncStartHelper.set(prev.end.x, prev.end.y, prev.end.z)
-      wallSyncEndHelper.set(seg.start.x, seg.start.y, seg.start.z)
-      if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > WALL_SYNC_EPSILON) {
-        if (current.length) {
-          chains.push(current)
-        }
-        current = []
-      }
-    }
-    current.push(seg)
-  }
-
-  if (current.length) {
-    chains.push(current)
-  }
-
-  return chains
-}
-
-type WallModelOrientation = NonNullable<WallComponentProps['bodyOrientation']>
-type WallForwardAxis = WallModelOrientation['forwardAxis']
-
-type WallForwardAxisInfo = { axis: 'x' | 'z'; sign: 1 | -1 }
-
-function wallForwardAxisInfo(forwardAxis: WallForwardAxis): WallForwardAxisInfo {
-  switch (forwardAxis) {
-    case '+x':
-      return { axis: 'x', sign: 1 }
-    case '-x':
-      return { axis: 'x', sign: -1 }
-    case '+z':
-      return { axis: 'z', sign: 1 }
-    case '-z':
-      return { axis: 'z', sign: -1 }
-    default:
-      throw new Error(`Wall: invalid forwardAxis ${String(forwardAxis)}`)
-  }
-}
-
-function writeWallLocalForward(out: THREE.Vector3, forwardAxis: WallForwardAxis): THREE.Vector3 {
-  switch (forwardAxis) {
-    case '+x':
-      return out.set(1, 0, 0)
-    case '-x':
-      return out.set(-1, 0, 0)
-    case '+z':
-      return out.set(0, 0, 1)
-    case '-z':
-      return out.set(0, 0, -1)
-    default:
-      return out.set(0, 0, 1)
-  }
-}
-
-function resolveWallBoundsAlongAxis(
-  bounds: THREE.Box3,
-  forwardAxis: WallForwardAxis,
-): { tileLengthLocal: number; minAlongAxis: number; maxAlongAxis: number } {
-  const info = wallForwardAxisInfo(forwardAxis)
-  const axis = info.axis
-  const minRaw = bounds.min[axis]
-  const maxRaw = bounds.max[axis]
-
-  const lengthAbs = Math.abs(maxRaw - minRaw)
-  const tileLengthLocal = Math.max(WALL_SYNC_MIN_TILE_LENGTH, lengthAbs)
-
-  // Along coordinate is dot(localForward, localPos). With axis-aligned forward,
-  // this becomes either +axis or -axis.
-  const minAlongAxis = info.sign === 1 ? minRaw : -maxRaw
-  const maxAlongAxis = info.sign === 1 ? maxRaw : -minRaw
-  return { tileLengthLocal, minAlongAxis, maxAlongAxis }
-}
-
-function expandBoxByTransformedBoundingBox(target: THREE.Box3, bbox: THREE.Box3, matrix: THREE.Matrix4): void {
-  if (!bbox || bbox.isEmpty()) {
-    return
-  }
-
-  const min = bbox.min
-  const max = bbox.max
-
-  wallInstancedBoundsCorners[0].set(min.x, min.y, min.z)
-  wallInstancedBoundsCorners[1].set(min.x, min.y, max.z)
-  wallInstancedBoundsCorners[2].set(min.x, max.y, min.z)
-  wallInstancedBoundsCorners[3].set(min.x, max.y, max.z)
-  wallInstancedBoundsCorners[4].set(max.x, min.y, min.z)
-  wallInstancedBoundsCorners[5].set(max.x, min.y, max.z)
-  wallInstancedBoundsCorners[6].set(max.x, max.y, min.z)
-  wallInstancedBoundsCorners[7].set(max.x, max.y, max.z)
-
-  for (const corner of wallInstancedBoundsCorners) {
-    wallInstancedBoundsTmpPoint.copy(corner).applyMatrix4(matrix)
-    target.expandByPoint(wallInstancedBoundsTmpPoint)
-  }
-}
-
 export function createWallRenderer(options: WallRendererOptions) {
   const wallModelRequestCache = new Map<string, Promise<void>>()
   const wallAssetWaiters = new Map<string, Set<string>>()
   const resyncSignatureKeyByNodeId = new Map<string, string>()
+
+  // Keep editor drag and committed wall placement on the exact same schema-side path.
+  const getWallAssetBounds = (assetId: string): THREE.Box3 | null => getCachedModelObject(assetId)?.boundingBox ?? null
 
   type WallDragBindingEntry = {
     assetId: string
@@ -363,82 +200,10 @@ export function createWallRenderer(options: WallRendererOptions) {
   const wallDragCacheByNodeId = new Map<string, WallDragCacheEntry>()
   let activeWallDragNodeId: string | null = null
 
-  const wallDragInstanceHelper = new THREE.Matrix4()
-
   const pendingResyncNodeIds = new Set<string>()
   let wallResyncRafHandle: number | null = null
 
   const FALLBACK_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
-
-  type WallPlacementRepeatBucket = {
-    repeatScaleU: number
-    placements: WallLocalPlacement[]
-  }
-
-  const sanitizeRepeatScaleU = (value: number): number => {
-    return Number.isFinite(value) && value > 0 ? value : 1
-  }
-
-  const bucketWallPlacementsByRepeatScale = (
-    placements: WallLocalPlacement[],
-    maxBuckets = WALL_SYNC_REPEAT_BUCKETS_MAX,
-  ): WallPlacementRepeatBucket[] => {
-    if (!placements.length) {
-      return []
-    }
-
-    if (placements.length === 1 || maxBuckets <= 1) {
-      return [{ repeatScaleU: sanitizeRepeatScaleU(placements[0]!.uvScaleU), placements: placements.slice() }]
-    }
-
-    const safeBucketCount = Math.max(1, Math.min(maxBuckets, placements.length))
-    const scales = placements.map((entry) => sanitizeRepeatScaleU(entry.uvScaleU))
-    const minScale = Math.max(WALL_SYNC_EPSILON, Math.min(...scales))
-    const maxScale = Math.max(minScale, Math.max(...scales))
-
-    if (!Number.isFinite(minScale) || !Number.isFinite(maxScale) || maxScale - minScale <= WALL_SYNC_EPSILON) {
-      const average = scales.reduce((sum, value) => sum + value, 0) / scales.length
-      return [{ repeatScaleU: sanitizeRepeatScaleU(average), placements: placements.slice() }]
-    }
-
-    const minLog = Math.log(minScale)
-    const maxLog = Math.log(maxScale)
-    const buckets = Array.from({ length: safeBucketCount }, () => ({
-      sumScale: 0,
-      count: 0,
-      placements: [] as WallLocalPlacement[],
-    }))
-
-    for (let i = 0; i < placements.length; i += 1) {
-      const placement = placements[i]!
-      const scale = scales[i]!
-      let bucketIndex = 0
-      if (maxLog - minLog > WALL_SYNC_EPSILON) {
-        const normalized = (Math.log(scale) - minLog) / (maxLog - minLog)
-        bucketIndex = Math.round(THREE.MathUtils.clamp(normalized, 0, 1) * (safeBucketCount - 1))
-      }
-      const bucket = buckets[bucketIndex]!
-      bucket.sumScale += scale
-      bucket.count += 1
-      bucket.placements.push(placement)
-    }
-
-    return buckets
-      .filter((bucket) => bucket.count > 0 && bucket.placements.length > 0)
-      .map((bucket) => ({
-        repeatScaleU: sanitizeRepeatScaleU(bucket.sumScale / bucket.count),
-        placements: bucket.placements,
-      }))
-  }
-
-  const buildWallRepeatVariantAssetId = (
-    baseAssetId: string,
-    role: 'body' | 'head' | 'foot',
-    repeatScaleU: number,
-  ): string => {
-    const rounded = sanitizeRepeatScaleU(repeatScaleU).toFixed(4)
-    return `${baseAssetId}#wall-repeat:${role}:u:${rounded}`
-  }
 
   function isWallDragActive(nodeId: string): boolean {
     return activeWallDragNodeId === nodeId && wallDragCacheByNodeId.has(nodeId)
@@ -480,7 +245,7 @@ export function createWallRenderer(options: WallRendererOptions) {
           nodeId,
           definition,
           wallProps,
-          getAssetBounds: (assetId: string) => getCachedModelObject(assetId)?.boundingBox ?? null,
+          getAssetBounds: getWallAssetBounds,
         })
       : null
 
@@ -597,718 +362,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     })
   }
 
-  type WallLocalPlacement = {
-    matrix: THREE.Matrix4
-    uvScaleU: number
-  }
-
-  const buildRepeatErasedSlotSet = (definition: WallDynamicMesh): Set<string> => {
-    const source = definition as unknown as { repeatErasedSlots?: Array<{ chainIndex?: unknown; slotIndex?: unknown }> }
-    const slots = Array.isArray(source.repeatErasedSlots) ? source.repeatErasedSlots : []
-    return new Set(
-      slots.map((entry) => `${Math.max(0, Math.trunc(Number(entry?.chainIndex ?? 0)))}:${Math.max(0, Math.trunc(Number(entry?.slotIndex ?? -1)))}`),
-    )
-  }
-
-  function computeWallBodyLocalPlacementsStretchTiledUv(
-    definition: WallDynamicMesh,
-    bounds: THREE.Box3,
-    mode: 'body' | 'head' | 'foot',
-    orientation: WallModelOrientation,
-    cornerModels: WallCornerModelRule[] = [],
-  ): WallLocalPlacement[] {
-    const placements: WallLocalPlacement[] = []
-    const segments = compileWallSegmentsFromDefinition(definition)
-    if (!segments.length) {
-      return placements
-    }
-
-    const localForward = new THREE.Vector3()
-    writeWallLocalForward(localForward, orientation.forwardAxis)
-    const { tileLengthLocal, minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
-
-    const templateHeight = resolveWallModelHeight(bounds)
-    const minY = bounds.min.y
-
-    const trims = computeWallSegmentJointTrims(segments, cornerModels, mode)
-
-    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-      const segment = segments[segmentIndex] as any
-      wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
-      wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
-      wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
-      wallSyncLocalDirHelper.y = 0
-      const lengthLocal = wallSyncLocalDirHelper.length()
-      if (lengthLocal <= WALL_SYNC_EPSILON) {
-        continue
-      }
-
-      wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
-
-      const trim = trims[segmentIndex] ?? { start: 0, end: 0 }
-      const trimStart = Math.max(0, trim.start)
-      const trimEnd = Math.max(0, trim.end)
-
-      if (trimStart > WALL_SYNC_EPSILON) {
-        wallSyncLocalStartHelper.addScaledVector(wallSyncLocalUnitDirHelper, trimStart)
-      }
-      if (trimEnd > WALL_SYNC_EPSILON) {
-        wallSyncLocalEndHelper.addScaledVector(wallSyncLocalUnitDirHelper, -trimEnd)
-      }
-
-      const trimmedLengthLocal = Math.max(0, lengthLocal - trimStart - trimEnd)
-      if (trimmedLengthLocal <= WALL_SYNC_EPSILON) {
-        continue
-      }
-
-      const quatLocal = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalUnitDirHelper)
-      if (orientation.yawDeg) {
-        wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(orientation.yawDeg))
-        quatLocal.multiply(wallSyncYawQuatHelper)
-      }
-
-      const bodyHeight = resolveWallBodyHeightForSegment(segment)
-      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
-      const scaleAlong = Math.max(trimmedLengthLocal / tileLengthLocal, 1e-6)
-
-      wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis * scaleAlong)
-      wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
-      wallSyncPosHelper.copy(wallSyncLocalStartHelper).sub(wallSyncLocalOffsetHelper)
-
-      const baselineY = wallSyncPosHelper.y
-      const posY = mode === 'body'
-        ? (baselineY - scaleY * minY)
-        : mode === 'head'
-          ? (baselineY + bodyHeight - minY)
-          : (baselineY - minY)
-      wallSyncPosHelper.y = posY
-
-      switch (orientation.forwardAxis) {
-        case '+x':
-        case '-x':
-          wallSyncScaleHelper.set(scaleAlong, scaleY, 1)
-          break
-        case '+z':
-        case '-z':
-          wallSyncScaleHelper.set(1, scaleY, scaleAlong)
-          break
-      }
-      wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
-      placements.push({
-        matrix: new THREE.Matrix4().copy(wallSyncLocalMatrixHelper),
-        uvScaleU: scaleAlong,
-      })
-    }
-
-    return placements
-  }
-
-  function computeWallBodyLocalPlacementsRepeated(
-    definition: WallDynamicMesh,
-    bounds: THREE.Box3,
-    mode: 'body' | 'head' | 'foot',
-    orientation: WallModelOrientation,
-    repeatInstanceStep: number,
-    repeatErasedSlotSet: Set<string>,
-    cornerModels: WallCornerModelRule[] = [],
-  ): WallLocalPlacement[] {
-    const placements: WallLocalPlacement[] = []
-    const segments = compileWallSegmentsFromDefinition(definition)
-    if (!segments.length) {
-      return placements
-    }
-
-    const localForward = new THREE.Vector3()
-    writeWallLocalForward(localForward, orientation.forwardAxis)
-    const { tileLengthLocal, minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
-
-    const templateHeight = resolveWallModelHeight(bounds)
-    const minY = bounds.min.y
-    const trims = computeWallSegmentJointTrims(segments, cornerModels, mode)
-    const repeatSlotByChain = new Map<number, number>()
-
-    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-      const segment = segments[segmentIndex] as any
-      wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
-      wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
-      wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
-      wallSyncLocalDirHelper.y = 0
-      const lengthLocal = wallSyncLocalDirHelper.length()
-      if (lengthLocal <= WALL_SYNC_EPSILON) {
-        continue
-      }
-
-      const trim = trims[segmentIndex] ?? { start: 0, end: 0 }
-      const trimStart = Math.max(0, trim.start)
-      const trimEnd = Math.max(0, trim.end)
-      const trimmedLengthLocal = Math.max(0, lengthLocal - trimStart - trimEnd)
-      if (trimmedLengthLocal <= WALL_SYNC_EPSILON) {
-        continue
-      }
-
-      wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
-      if (trimStart > WALL_SYNC_EPSILON) {
-        wallSyncLocalStartHelper.addScaledVector(wallSyncLocalUnitDirHelper, trimStart)
-      }
-
-      const quatLocal = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalUnitDirHelper)
-      if (orientation.yawDeg) {
-        wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(orientation.yawDeg))
-        quatLocal.multiply(wallSyncYawQuatHelper)
-      }
-
-      const bodyHeight = resolveWallBodyHeightForSegment(segment)
-      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
-      const maxLocalStart = trimmedLengthLocal - tileLengthLocal
-      if (maxLocalStart < -WALL_SYNC_EPSILON) {
-        continue
-      }
-
-      wallSyncScaleHelper.set(1, scaleY, 1)
-
-      const chainIndex = Math.max(0, Math.trunc(Number(segment.chainIndex ?? 0)))
-      for (
-        let localStart = 0;
-        localStart <= maxLocalStart + WALL_SYNC_EPSILON;
-        localStart += repeatInstanceStep
-      ) {
-        const repeatSlotIndex = (() => {
-          const next = (repeatSlotByChain.get(chainIndex) ?? 0) + 1
-          repeatSlotByChain.set(chainIndex, next)
-          return next - 1
-        })()
-        if (repeatErasedSlotSet.has(`${chainIndex}:${repeatSlotIndex}`)) {
-          continue
-        }
-
-        const snappedLocalStart = Math.max(0, Math.min(maxLocalStart, localStart))
-        wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis)
-        wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
-        wallSyncPosHelper.copy(wallSyncLocalStartHelper)
-        wallSyncPosHelper.addScaledVector(wallSyncLocalUnitDirHelper, snappedLocalStart)
-        wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-
-        const baselineY = wallSyncPosHelper.y
-        const posY = mode === 'body'
-          ? (baselineY - scaleY * minY)
-          : mode === 'head'
-            ? (baselineY + bodyHeight - minY)
-            : (baselineY - minY)
-        wallSyncPosHelper.y = posY
-
-        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
-        placements.push({
-          matrix: new THREE.Matrix4().copy(wallSyncLocalMatrixHelper),
-          uvScaleU: 1,
-        })
-      }
-    }
-
-    return placements
-  }
-
-  function computeWallBodyLocalPlacements(
-    definition: WallDynamicMesh,
-    bounds: THREE.Box3,
-    mode: 'body' | 'head' | 'foot',
-    wallRenderMode: 'stretch' | 'repeatInstances',
-    orientation: WallModelOrientation,
-    repeatInstanceStep: number,
-    cornerModels: WallCornerModelRule[] = [],
-  ): WallLocalPlacement[] {
-    if (wallRenderMode === 'repeatInstances') {
-      return computeWallBodyLocalPlacementsRepeated(
-        definition,
-        bounds,
-        mode,
-        orientation,
-        normalizeWallRepeatInstanceStep(repeatInstanceStep),
-        buildRepeatErasedSlotSet(definition),
-        cornerModels,
-      )
-    }
-    return computeWallBodyLocalPlacementsStretchTiledUv(definition, bounds, mode, orientation, cornerModels)
-  }
-
-  type WallCornerModelRule = NonNullable<WallComponentProps['cornerModels']>[number]
-
-  function resolveWallBodyHeightForSegment(segment: WallRenderSegment): number {
-    const raw = segment.height
-    if (!Number.isFinite(raw)) {
-      return 1
-    }
-    return Math.max(0.001, raw)
-  }
-
-  function resolveWallModelHeight(bounds: THREE.Box3): number {
-    return Math.max(1e-6, bounds.max.y - bounds.min.y)
-  }
-
-
-  function pickWallCornerRule(
-    angleRadians: number,
-    rules: WallCornerModelRule[],
-    mode: 'body' | 'head' | 'foot',
-  ): WallCornerModelRule | null {
-    if (!Number.isFinite(angleRadians)) {
-      return null
-    }
-
-    const angleDeg = Math.max(0, Math.min(180, THREE.MathUtils.radToDeg(angleRadians)))
-
-    // Special-case straight joints (interior angle ≈ 180°): if a 180° rule exists,
-    // always use it and ignore tolerance. Use a small radian epsilon.
-    const RAD_STRAIGHT_EPS = 1e-3
-    if (Math.abs(angleRadians - Math.PI) < RAD_STRAIGHT_EPS) {
-      for (const rule of rules) {
-        const rawAsset = mode === 'body'
-          ? (rule as any)?.bodyAssetId
-          : mode === 'head'
-            ? (rule as any)?.headAssetId
-            : (rule as any)?.footAssetId
-        const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
-        if (!assetId) {
-          continue
-        }
-        const rawAngle = typeof (rule as any).angle === 'number' ? (rule as any).angle : Number((rule as any).angle)
-        const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
-        if (ruleAngle >= 180 - 1e-6) {
-          return rule
-        }
-      }
-    }
-
-    let best: { rule: WallCornerModelRule; diff: number; ruleAngle: number } | null = null
-
-    for (const rule of rules) {
-      const rawAsset = mode === 'body'
-        ? (rule as any)?.bodyAssetId
-        : mode === 'head'
-          ? (rule as any)?.headAssetId
-          : (rule as any)?.footAssetId
-      const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
-      if (!assetId) {
-        continue
-      }
-
-      const rawAngle = typeof (rule as any).angle === 'number' ? (rule as any).angle : Number((rule as any).angle)
-      const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
-      const rawTolerance = typeof (rule as any).tolerance === 'number' ? (rule as any).tolerance : Number((rule as any).tolerance)
-      const tolerance = Number.isFinite(rawTolerance) ? Math.max(0, Math.min(90, rawTolerance)) : 5
-
-      const diff = Math.abs(angleDeg - ruleAngle)
-      if (diff > tolerance + 1e-6) {
-        continue
-      }
-
-      if (!best) {
-        best = { rule, diff, ruleAngle }
-        continue
-      }
-      if (diff + 1e-6 < best.diff) {
-        best = { rule, diff, ruleAngle }
-        continue
-      }
-      if (Math.abs(diff - best.diff) <= 1e-6 && ruleAngle + 1e-6 < best.ruleAngle) {
-        best = { rule, diff, ruleAngle }
-      }
-    }
-
-    return best ? best.rule : null
-  }
-
-  function computeWallSegmentJointTrims(
-    segments: WallRenderSegment[],
-    rules: WallCornerModelRule[],
-    mode: 'body' | 'head' | 'foot',
-  ): Array<{ start: number; end: number }> {
-    const trims = Array.from({ length: segments.length }, () => ({ start: 0, end: 0 }))
-    if (segments.length < 2 || !rules.length) {
-      return trims
-    }
-
-    const start = new THREE.Vector3()
-    const end = new THREE.Vector3()
-    const incoming = new THREE.Vector3()
-    const outgoing = new THREE.Vector3()
-
-    const applyTrimForPair = (aIndex: number, bIndex: number): void => {
-      const current = segments[aIndex]
-      const next = segments[bIndex]
-      if (!current || !next) {
-        return
-      }
-
-      start.set(current.end.x, current.end.y, current.end.z)
-      end.set(next.start.x, next.start.y, next.start.z)
-      if (distanceSqXZ(start, end) > WALL_SYNC_EPSILON) {
-        return
-      }
-
-      start.set(current.start.x, current.start.y, current.start.z)
-      end.set(current.end.x, current.end.y, current.end.z)
-      incoming.subVectors(end, start)
-      incoming.y = 0
-
-      start.set(next.start.x, next.start.y, next.start.z)
-      end.set(next.end.x, next.end.y, next.end.z)
-      outgoing.subVectors(end, start)
-      outgoing.y = 0
-
-      if (incoming.lengthSq() < WALL_SYNC_EPSILON || outgoing.lengthSq() < WALL_SYNC_EPSILON) {
-        return
-      }
-
-      incoming.normalize()
-      outgoing.normalize()
-
-      const dotInterior = THREE.MathUtils.clamp(-incoming.dot(outgoing), -1, 1)
-      const angle = Math.acos(dotInterior)
-      if (!Number.isFinite(angle)) {
-        return
-      }
-
-      const rule = pickWallCornerRule(angle, rules, mode)
-      if (!rule) {
-        return
-      }
-
-      const rawStart = Number((rule as any)?.jointTrim?.start)
-      const rawEnd = Number((rule as any)?.jointTrim?.end)
-      const trimStart = Number.isFinite(rawStart) ? Math.max(0, rawStart) : 0
-      const trimEnd = Number.isFinite(rawEnd) ? Math.max(0, rawEnd) : 0
-
-      if (trimEnd > 0) {
-        trims[aIndex]!.end = Math.max(trims[aIndex]!.end, trimEnd)
-      }
-      if (trimStart > 0) {
-        trims[bIndex]!.start = Math.max(trims[bIndex]!.start, trimStart)
-      }
-    }
-
-    for (let i = 0; i < segments.length - 1; i += 1) {
-      applyTrimForPair(i, i + 1)
-    }
-
-    const first = segments[0]!
-    const last = segments[segments.length - 1]!
-    start.set(last.end.x, last.end.y, last.end.z)
-    end.set(first.start.x, first.start.y, first.start.z)
-    if (distanceSqXZ(start, end) <= WALL_SYNC_EPSILON) {
-      applyTrimForPair(segments.length - 1, 0)
-    }
-
-    return trims
-  }
-
-  function computeWallJointLocalMatricesByAsset(
-    definition: WallDynamicMesh,
-    options: { cornerModels?: WallCornerModelRule[]; mode: 'body' | 'head' | 'foot'; getAssetBounds: (assetId: string) => THREE.Box3 | null },
-  ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null; mode: 'body' | 'head' | 'foot' } {
-    const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
-    let primaryAssetId: string | null = null
-
-    const _compiledSegs = compileWallSegmentsFromDefinition(definition)
-    if (_compiledSegs.length < 2) {
-      return { matricesByAssetId, primaryAssetId, mode: options.mode }
-    }
-
-    const rulesSource = Array.isArray(options.cornerModels) ? options.cornerModels : []
-
-    const pushMatrix = (assetId: string, matrix: THREE.Matrix4) => {
-      const bucket = matricesByAssetId.get(assetId) ?? []
-      if (!matricesByAssetId.has(assetId)) {
-        matricesByAssetId.set(assetId, bucket)
-      }
-      bucket.push(matrix)
-      if (!primaryAssetId) {
-        primaryAssetId = assetId
-      }
-    }
-
-    const buildCorner = (
-      current: WallRenderSegment,
-      next: WallRenderSegment,
-      corner: THREE.Vector3,
-    ) => {
-      // 1) 计算当前段的入射向量（incoming）
-      //    - 将当前段的 start/end 写入临时向量（只取 XZ 平面）
-      wallSyncStartHelper.set(current.start.x, current.start.y, current.start.z)
-      wallSyncEndHelper.set(current.end.x, current.end.y, current.end.z)
-      wallSyncIncomingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
-      // 忽略 Y 分量，使计算仅在 XZ 平面进行
-      wallSyncIncomingHelper.y = 0
-
-      // 2) 计算下一段的出射向量（outgoing）
-      //    - 将下一段的 start/end 写入临时向量（只取 XZ 平面）
-      wallSyncStartHelper.set(next.start.x, next.start.y, next.start.z)
-      wallSyncEndHelper.set(next.end.x, next.end.y, next.end.z)
-      wallSyncOutgoingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
-      wallSyncOutgoingHelper.y = 0
-
-      // 3) 如果任一向量长度非常小（退化段）则放弃该拐角
-      if (wallSyncIncomingHelper.lengthSq() < WALL_SYNC_EPSILON || wallSyncOutgoingHelper.lengthSq() < WALL_SYNC_EPSILON) {
-        return
-      }
-
-      // 4) 归一化向量以便计算角度与方向
-      wallSyncIncomingHelper.normalize()
-      wallSyncOutgoingHelper.normalize()
-
-      // 5) 通过点积计算“内角”（straight = 180°）
-      //    - 转角: acos(incoming·outgoing)
-      //    - 内角: acos((-incoming)·outgoing) = π - 转角
-      const dotInterior = THREE.MathUtils.clamp(-wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
-      const angle = Math.acos(dotInterior)
-      // 如果角度不是有效数值，则不放置拐角模型
-      if (!Number.isFinite(angle)) {
-        return
-      }
-
-      // 6) 根据角度与用户定义的规则选择一个拐角模型
-      const rule = pickWallCornerRule(angle, rulesSource, options.mode)
-      if (!rule) {
-        // 未匹配到任何规则时，跳过该拐角
-        return
-      }
-
-      const rawAsset = options.mode === 'body'
-        ? (rule as any)?.bodyAssetId
-        : options.mode === 'head'
-          ? (rule as any)?.headAssetId
-          : (rule as any)?.footAssetId
-      const assetId = typeof rawAsset === 'string' ? rawAsset.trim() : ''
-      if (!assetId) {
-        return
-      }
-
-      const bounds = options.getAssetBounds(assetId)
-      const bodyHeight = resolveWallBodyHeightForSegment(current)
-      const templateHeight = bounds ? resolveWallModelHeight(bounds) : 1
-      const minY = bounds ? bounds.min.y : 0
-      const scaleY = options.mode === 'body' ? (bodyHeight / templateHeight) : 1
-      const baselineY = corner.y
-      const posY = options.mode === 'body'
-        ? (baselineY - scaleY * minY)
-        : options.mode === 'head'
-          ? (baselineY + bodyHeight - minY)
-          : (baselineY - minY)
-
-      // 7) 计算“内角”的角平分线（bisector）作为模型朝向的基准
-      //    - 如果两向量几乎反向（相加后接近 0），使用出射向量作为退化情况下的朝向
-      wallSyncBisectorHelper.copy(wallSyncIncomingHelper).multiplyScalar(-1).add(wallSyncOutgoingHelper)
-      if (wallSyncBisectorHelper.lengthSq() < WALL_SYNC_EPSILON) {
-        wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
-      }
-
-      const localForward = new THREE.Vector3()
-      const forwardAxis = options.mode === 'body'
-        ? (rule as any)?.bodyForwardAxis
-        : options.mode === 'head'
-          ? (rule as any)?.headForwardAxis
-          : (rule as any)?.footForwardAxis
-      const yawDeg = options.mode === 'body'
-        ? (rule as any)?.bodyYawDeg
-        : options.mode === 'head'
-          ? (rule as any)?.headYawDeg
-          : (rule as any)?.footYawDeg
-      writeWallLocalForward(localForward, forwardAxis as WallForwardAxis)
-
-      // 8) 将平分线转换为四元数（模型局部 forwardAxis 对准平分线）
-      const quat = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncBisectorHelper.normalize())
-      // 9) 额外 yaw（绕 Y 旋转）
-      if (typeof yawDeg === 'number' && Number.isFinite(yawDeg) && Math.abs(yawDeg) > 1e-9) {
-        wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(yawDeg))
-        quat.multiply(wallSyncYawQuatHelper)
-      }
-
-      // 10) 组成最终的局部变换矩阵：位置 = 拐角点，旋转 = 计算出的四元数，缩放 = 单位缩放
-      wallSyncScaleHelper.set(1, scaleY, 1)
-      wallSyncPosHelper.set(corner.x, posY, corner.z)
-
-      // Option A: per-rule local offset in the model's local frame, rotated by the final corner orientation.
-      const rawOffset = options.mode === 'body'
-        ? (rule as any)?.bodyOffsetLocal
-        : options.mode === 'head'
-          ? (rule as any)?.headOffsetLocal
-          : (rule as any)?.footOffsetLocal
-      const offsetRecord = rawOffset && typeof rawOffset === 'object' ? (rawOffset as Record<string, unknown>) : null
-      const readOffset = (key: 'x' | 'y' | 'z'): number => {
-        const raw = offsetRecord ? offsetRecord[key] : 0
-        const num = typeof raw === 'number' ? raw : Number(raw)
-        return Number.isFinite(num) ? num : 0
-      }
-      wallSyncLocalOffsetHelper.set(readOffset('x'), readOffset('y'), readOffset('z'))
-      wallSyncLocalOffsetHelper.applyQuaternion(quat)
-      wallSyncPosHelper.add(wallSyncLocalOffsetHelper)
-
-      wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
-
-      // 11) 将计算出的矩阵打包并推入对应 assetId 的矩阵数组中
-      pushMatrix(assetId, new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
-    }
-
-    // Group all compiled segments by their chainIndex (preserving order).
-    // This ensures that a closed chain broken into multiple sub-arcs by openings
-    // is still treated as one closed ring when determining corner placement.
-    const segsByChainIndex = new Map<number, WallRenderSegment[]>()
-    for (const seg of _compiledSegs) {
-      const ci = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
-      let bucket = segsByChainIndex.get(ci)
-      if (!bucket) {
-        bucket = []
-        segsByChainIndex.set(ci, bucket)
-      }
-      bucket.push(seg)
-    }
-
-    for (const segs of segsByChainIndex.values()) {
-
-      for (let i = 0; i < segs.length - 1; i += 1) {
-        const current = segs[i]!
-        const next = segs[i + 1]!
-
-        // Skip pairs that straddle an opening gap (spatially disconnected).
-        wallSyncStartHelper.set(current.end.x, current.end.y, current.end.z)
-        wallSyncEndHelper.set(next.start.x, next.start.y, next.start.z)
-        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > WALL_SYNC_EPSILON) {
-          continue
-        }
-
-        wallSyncPosHelper.set(current.end.x, current.end.y, current.end.z)
-        buildCorner(current, next, wallSyncPosHelper)
-      }
-
-      // Geometric closed-loop seam: if last.end ≈ first.start in world space,
-      // place the wrap-around seam corner even when source chain metadata is stale.
-      if (segs.length >= 1) {
-        const first = segs[0]!
-        const last = segs[segs.length - 1]!
-        wallSyncStartHelper.set(last.end.x, last.end.y, last.end.z)
-        wallSyncEndHelper.set(first.start.x, first.start.y, first.start.z)
-        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= WALL_SYNC_EPSILON) {
-          wallSyncPosHelper.copy(wallSyncStartHelper)
-          buildCorner(last, first, wallSyncPosHelper)
-        }
-      }
-    }
-
-    return { matricesByAssetId, primaryAssetId, mode: options.mode }
-  }
-
-  function computeWallEndCapLocalMatrices(
-    definition: WallDynamicMesh,
-    bounds: THREE.Box3,
-    mode: 'body' | 'head' | 'foot',
-    orientation: WallModelOrientation,
-    offsetLocalValue?: { x: number; y: number; z: number } | null,
-  ): THREE.Matrix4[] {
-    const matrices: THREE.Matrix4[] = []
-    const _compiledSegsForCap = compileWallSegmentsFromDefinition(definition)
-    if (!_compiledSegsForCap.length) {
-      return matrices
-    }
-
-    const chains = splitWallSegmentsIntoChains(_compiledSegsForCap)
-
-    const localForward = new THREE.Vector3()
-    writeWallLocalForward(localForward, orientation.forwardAxis)
-    const { minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
-    const templateHeight = resolveWallModelHeight(bounds)
-    const minY = bounds.min.y
-    const endCapOffsetLocal = new THREE.Vector3(
-      Number((offsetLocalValue as any)?.x) || 0,
-      Number((offsetLocalValue as any)?.y) || 0,
-      Number((offsetLocalValue as any)?.z) || 0,
-    )
-
-    const findDirectionForSegment = (segment: WallRenderSegment | null, fallback: THREE.Vector3): THREE.Vector3 => {
-      if (!segment) {
-        return fallback
-      }
-      fallback.set(segment.end.x - segment.start.x, 0, segment.end.z - segment.start.z)
-      if (fallback.lengthSq() <= WALL_SYNC_EPSILON) {
-        return fallback
-      }
-      return fallback.normalize()
-    }
-
-    for (const chain of chains) {
-      if (!chain.length) {
-        continue
-      }
-
-      // Determine if this chain is closed: first.start == last.end (XZ plane).
-      const firstSeg = chain[0]!
-      const lastSeg = chain[chain.length - 1]!
-      wallSyncStartHelper.set(firstSeg.start.x, firstSeg.start.y, firstSeg.start.z)
-      wallSyncEndHelper.set(lastSeg.end.x, lastSeg.end.y, lastSeg.end.z)
-      const closed = distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= WALL_SYNC_EPSILON
-      if (closed) {
-        continue
-      }
-
-      // Start cap points outward: opposite of the first segment direction.
-      const firstDir = findDirectionForSegment(firstSeg, wallSyncLocalUnitDirHelper)
-      if (firstDir.lengthSq() > WALL_SYNC_EPSILON) {
-        const bodyHeight = resolveWallBodyHeightForSegment(firstSeg)
-        const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
-        wallSyncLocalDirHelper.copy(firstDir).multiplyScalar(-1)
-        const quat = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalDirHelper)
-        if (orientation.yawDeg) {
-          wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(orientation.yawDeg))
-          quat.multiply(wallSyncYawQuatHelper)
-        }
-        wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis)
-        wallSyncLocalOffsetHelper.applyQuaternion(quat)
-        const baselineY = firstSeg.start.y
-        const posY = mode === 'body'
-          ? (baselineY - scaleY * minY)
-          : mode === 'head'
-            ? (baselineY + bodyHeight - minY)
-            : (baselineY - minY)
-        wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
-        wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-        wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
-        wallSyncPosHelper.add(wallSyncStartHelper)
-        wallSyncScaleHelper.set(1, scaleY, 1)
-        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
-        matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
-      }
-
-      // End cap points outward: along the last segment direction.
-      const lastDir = findDirectionForSegment(lastSeg, wallSyncLocalUnitDirHelper)
-      if (lastDir.lengthSq() > WALL_SYNC_EPSILON) {
-        const bodyHeight = resolveWallBodyHeightForSegment(lastSeg)
-        const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
-        wallSyncLocalDirHelper.copy(lastDir)
-        const quat = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalDirHelper)
-        if (orientation.yawDeg) {
-          wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(orientation.yawDeg))
-          quat.multiply(wallSyncYawQuatHelper)
-        }
-        wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis)
-        wallSyncLocalOffsetHelper.applyQuaternion(quat)
-        const baselineY = lastSeg.end.y
-        const posY = mode === 'body'
-          ? (baselineY - scaleY * minY)
-          : mode === 'head'
-            ? (baselineY + bodyHeight - minY)
-            : (baselineY - minY)
-        wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
-        wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-        wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
-        wallSyncPosHelper.add(wallSyncStartHelper)
-        wallSyncScaleHelper.set(1, scaleY, 1)
-        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
-        matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
-      }
-    }
-
-    return matrices
-  }
-
-
   function scheduleWallAssetLoad(assetId: string, nodeId: string, signatureKey: string) {
     // Track all wall nodes waiting on this asset so we can resync them once.
     resyncSignatureKeyByNodeId.set(nodeId, signatureKey)
@@ -1345,8 +398,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         } else {
           scheduleWallResync(nodeId)
         }
-      } catch (error) {
-        console.warn('Failed to load wall model asset', assetId, error)
+      } catch {
       } finally {
         wallModelRequestCache.delete(assetId)
       }
@@ -1549,6 +601,24 @@ export function createWallRenderer(options: WallRendererOptions) {
       isAirWall: Boolean(normalizedProps?.isAirWall),
       wantsInstancing,
       hasMissingAssets,
+      signatureData: stableSerialize({
+        normalizedProps,
+        renderOptions,
+        isAirWall: Boolean(normalizedProps?.isAirWall),
+        wantsInstancing,
+        hasMissingAssets,
+        availableAssets: {
+          body: Boolean(bodyObject),
+          head: Boolean(headObject),
+          foot: Boolean(footObject),
+          bodyEndCap: Boolean(bodyEndCapObject),
+          headEndCap: Boolean(headEndCapObject),
+          footEndCap: Boolean(footEndCapObject),
+          bodyCorners: bodyCornerAssetIds.filter((assetId) => Boolean(bodyCornerObjectsByAssetId?.[assetId])),
+          headCorners: headCornerAssetIds.filter((assetId) => Boolean(headCornerObjectsByAssetId?.[assetId])),
+          footCorners: footCornerAssetIds.filter((assetId) => Boolean(footCornerObjectsByAssetId?.[assetId])),
+        },
+      }),
     }
   }
 
@@ -1892,7 +962,7 @@ export function createWallRenderer(options: WallRendererOptions) {
           nodeId: node.id,
           definition,
           wallProps,
-          getAssetBounds: (assetId: string) => getCachedModelObject(assetId)?.boundingBox ?? null,
+          getAssetBounds: getWallAssetBounds,
         })
       : null
     const hasBindings = Boolean(plan?.hasBindings)
