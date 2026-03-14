@@ -1,8 +1,9 @@
 import * as THREE from 'three'
 import type { FloorDynamicMesh } from '@schema'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
-import { FLOOR_DEFAULT_SIDE_UV_SCALE, FLOOR_DEFAULT_SMOOTH, FLOOR_DEFAULT_THICKNESS } from '@schema/components'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { FloorPresetData } from '@/utils/floorPreset'
+import { buildFloorDynamicMeshPresetPatch } from '@/utils/floorPresetNodeMaterials'
 
 export type FloorPreviewSession = {
   shape: FloorBuildShape
@@ -215,72 +216,22 @@ function disposeFloorPreviewGroup(group: THREE.Group) {
   })
 }
 
-function applyFloorPreviewStyling(group: THREE.Group) {
-  group.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-
-    const applyMaterial = (source: THREE.Material) => {
-      const material = source as THREE.Material & {
-        opacity?: number
-        transparent?: boolean
-        depthWrite?: boolean
-        polygonOffset?: boolean
-        polygonOffsetFactor?: number
-        polygonOffsetUnits?: number
-        color?: { setHex?: (hex: number) => void }
-        emissive?: { setHex?: (hex: number) => void }
-        emissiveIntensity?: number
-        toneMapped?: boolean
-        needsUpdate?: boolean
-      }
-
-      const FLOOR_PREVIEW_COLOR = 0x8fd3ff
-
-      if ('opacity' in material) {
-        material.opacity = 0.65
-        material.transparent = true
-      }
-
-      material.color?.setHex?.(FLOOR_PREVIEW_COLOR)
-      material.emissive?.setHex?.(FLOOR_PREVIEW_COLOR)
-      if (typeof material.emissiveIntensity === 'number') {
-        material.emissiveIntensity = 0.8
-      }
-
-      if (typeof material.toneMapped === 'boolean') {
-        material.toneMapped = false
-      }
-
-      if (typeof material.depthWrite === 'boolean') {
-        material.depthWrite = false
-      }
-      if (typeof material.polygonOffset === 'boolean') {
-        material.polygonOffset = true
-        material.polygonOffsetFactor = -1
-        material.polygonOffsetUnits = -1
-      }
-
-      if (typeof material.needsUpdate === 'boolean') {
-        material.needsUpdate = true
-      }
-    }
-
-    const meshMaterial = mesh.material
-    if (Array.isArray(meshMaterial)) {
-      meshMaterial.forEach((entry) => entry && applyMaterial(entry))
-    } else if (meshMaterial) {
-      applyMaterial(meshMaterial)
-    }
-
-    mesh.layers.enableAll()
-    mesh.renderOrder = 999
+function computePresetSignature(preset: FloorPresetData | null | undefined): string {
+  if (!preset) {
+    return 'default'
+  }
+  return JSON.stringify({
+    materialConfig: preset.materialConfig,
+    floorProps: preset.floorProps,
+    materialOrder: preset.materialOrder,
   })
 }
 
-function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Vector3): {
+function buildFloorPreviewDefinition(
+  vertices: THREE.Vector3[],
+  center: THREE.Vector3,
+  presetData: FloorPresetData | null | undefined,
+): {
   center: THREE.Vector3
   definition: FloorDynamicMesh
 } | null {
@@ -291,14 +242,15 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
   // Local Z should preserve world Z (we no longer rotate/flip floor geometry).
   const normalizedVertices = vertices.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
 
+  const presetMeshPatch = buildFloorDynamicMeshPresetPatch(presetData)
   const definition: FloorDynamicMesh = {
     type: 'Floor',
     vertices: normalizedVertices,
-    topBottomMaterialConfigId: null,
-    sideMaterialConfigId: null,
-    smooth: FLOOR_DEFAULT_SMOOTH,
-    thickness: FLOOR_DEFAULT_THICKNESS,
-    sideUvScale: { x: FLOOR_DEFAULT_SIDE_UV_SCALE.x, y: FLOOR_DEFAULT_SIDE_UV_SCALE.y },
+    topBottomMaterialConfigId: presetMeshPatch?.topBottomMaterialConfigId ?? null,
+    sideMaterialConfigId: presetMeshPatch?.sideMaterialConfigId ?? null,
+    smooth: presetMeshPatch?.smooth ?? 0,
+    thickness: presetMeshPatch?.thickness ?? 0,
+    sideUvScale: presetMeshPatch?.sideUvScale ?? { x: 1, y: 1 },
   }
 
   return { center, definition }
@@ -307,10 +259,13 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
 export function createFloorPreviewRenderer(options: {
   rootGroup: THREE.Group
   getRegularPolygonSides?: () => number
+  getPreviewPresetData?: () => FloorPresetData | null
+  applyPreviewMaterials?: (group: THREE.Group, presetData: FloorPresetData | null) => void
 }): FloorPreviewRenderer {
   let needsSync = false
   let signature: string | null = null
   let lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
+  let lastPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
 
   const clear = (session: FloorPreviewSession | null) => {
     if (session?.previewGroup) {
@@ -325,6 +280,8 @@ export function createFloorPreviewRenderer(options: {
   const flush = (scene: THREE.Scene | null, session: FloorPreviewSession | null) => {
     needsSync = false
     lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
+    const presetData = options.getPreviewPresetData?.() ?? null
+    lastPresetSignature = computePresetSignature(presetData)
 
     if (!scene || !session) {
       if (signature !== null) {
@@ -358,7 +315,7 @@ export function createFloorPreviewRenderer(options: {
       return
     }
 
-    const build = buildFloorPreviewDefinition(previewVertices, center)
+    const build = buildFloorPreviewDefinition(previewVertices, center, presetData)
     if (!build) {
       if (session.previewGroup) {
         clear(session)
@@ -371,17 +328,17 @@ export function createFloorPreviewRenderer(options: {
 
     if (!session.previewGroup) {
       const preview = createFloorGroup(build.definition)
-      applyFloorPreviewStyling(preview)
       preview.userData.isFloorPreview = true
       session.previewGroup = preview
       options.rootGroup.add(preview)
     } else {
       updateFloorGroup(session.previewGroup, build.definition)
-      applyFloorPreviewStyling(session.previewGroup)
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)
       }
     }
+
+    options.applyPreviewMaterials?.(session.previewGroup!, presetData)
 
     session.previewGroup!.position.copy(build.center)
     session.previewGroup!.position.y += FLOOR_PREVIEW_Y_OFFSET
@@ -393,7 +350,11 @@ export function createFloorPreviewRenderer(options: {
     },
     flushIfNeeded: (scene: THREE.Scene | null, session: FloorPreviewSession | null) => {
       const currentRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
+      const currentPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
       if (currentRegularPolygonSides !== lastRegularPolygonSides) {
+        needsSync = true
+      }
+      if (currentPresetSignature !== lastPresetSignature) {
         needsSync = true
       }
       if (!needsSync) {
@@ -407,12 +368,14 @@ export function createFloorPreviewRenderer(options: {
       needsSync = false
       signature = null
       lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
+      lastPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
     },
     dispose: (session: FloorPreviewSession | null) => {
       clear(session)
       needsSync = false
       signature = null
       lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
+      lastPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
     },
   }
 }

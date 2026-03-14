@@ -458,11 +458,15 @@ export function handlePointerMoveDrag(
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
 
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
+    refreshFloorRuntimeMaterials?: (nodeId: string, runtimeObject: THREE.Object3D) => void
     forceRebuildFloorVertexHandles?: () => void
     forceRebuildFloorCircleHandles?: () => void
   },
 ): PointerMoveResult | null {
   const tmpIntersection = new THREE.Vector3()
+  const refreshFloorMaterials = (nodeId: string, runtimeObject: THREE.Object3D) => {
+    ctx.refreshFloorRuntimeMaterials?.(nodeId, runtimeObject)
+  }
 
   if (ctx.floorThicknessDragState && event.pointerId === ctx.floorThicknessDragState.pointerId) {
     const state = ctx.floorThicknessDragState
@@ -568,6 +572,7 @@ export function handlePointerMoveDrag(
     const startVertices = sanitizeFloorVertices((state.baseDefinition as any)?.vertices)
     state.workingDefinition.vertices = startVertices.map(([x, z]) => [x + dx, z + dz])
     ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    refreshFloorMaterials(state.nodeId, state.runtimeObject)
     syncFloorCircleHandlesFromDefinition({
       containerObject: state.runtimeObject,
       definition: state.workingDefinition as any,
@@ -629,6 +634,7 @@ export function handlePointerMoveDrag(
     })
 
     ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    refreshFloorMaterials(state.nodeId, state.runtimeObject)
     syncFloorCircleHandlesFromDefinition({
       containerObject: state.runtimeObject,
       definition: state.workingDefinition as any,
@@ -1515,6 +1521,7 @@ export function handlePointerMoveDrag(
     }
 
     ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    refreshFloorMaterials(state.nodeId, state.runtimeObject)
 
     const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
     if (handles?.isGroup) {
@@ -1544,6 +1551,7 @@ export function handlePointerMoveFloorEdgeDrag(
     raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
     groundPointerHelper: THREE.Vector3
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
+    refreshFloorRuntimeMaterials?: (nodeId: string, runtimeObject: THREE.Object3D) => void
   },
 ): PointerMoveResult | null {
   if (ctx.floorEdgeDragState && event.pointerId === ctx.floorEdgeDragState.pointerId) {
@@ -1590,6 +1598,7 @@ export function handlePointerMoveFloorEdgeDrag(
     const working = state.workingDefinition
     working.vertices = updatedVertices
     ctx.updateFloorGroup(state.runtimeObject, working)
+    ctx.refreshFloorRuntimeMaterials?.(state.nodeId, state.runtimeObject)
 
     return { handled: true }
   }

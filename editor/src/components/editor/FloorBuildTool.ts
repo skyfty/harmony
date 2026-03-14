@@ -54,6 +54,8 @@ export function createFloorBuildTool(options: {
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
+  applyFloorPreviewMaterials?: (group: THREE.Group, presetData: FloorPresetData | null) => void
+  syncCreatedFloorMaterials?: (nodeId: string) => void
   clickDragThresholdPx: number
 }): FloorBuildToolHandle {
   const getRegularPolygonSides = (): number => {
@@ -69,6 +71,8 @@ export function createFloorBuildTool(options: {
   const previewRenderer = createFloorPreviewRenderer({
     rootGroup: options.rootGroup,
     getRegularPolygonSides: () => getRegularPolygonSides(),
+    getPreviewPresetData: () => options.getFloorBrush().presetData,
+    applyPreviewMaterials: (group, presetData) => options.applyFloorPreviewMaterials?.(group, presetData ?? null),
   })
 
   const groundPointerHelper = new THREE.Vector3()
@@ -253,23 +257,13 @@ export function createFloorBuildTool(options: {
 
     const created = options.sceneStore.createFloorNode({
       points: points.map((p) => ({ x: p.x, y: p.y, z: p.z }) satisfies Vector3Like),
+      floorPresetData: options.getFloorBrush()?.presetData ?? null,
     })
 
     if (created) {
       options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))
+      options.syncCreatedFloorMaterials?.(created.id)
       options.sceneStore.selectNode(created.id)
-
-      const brush = options.getFloorBrush?.()
-      const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
-        ? brush.presetAssetId.trim()
-        : null
-      if (presetAssetId) {
-        void options.sceneStore
-          .applyFloorPresetToNode(created.id, presetAssetId, brush?.presetData ?? null)
-          .catch((error: unknown) => {
-            console.warn('Failed to apply floor preset brush', presetAssetId, error)
-          })
-      }
     }
 
     clearSession(true)
@@ -288,23 +282,13 @@ export function createFloorBuildTool(options: {
 
     const created = options.sceneStore.createFloorNode({
       points: points.map((p) => ({ x: p.x, y: p.y, z: p.z }) satisfies Vector3Like),
+      floorPresetData: options.getFloorBrush()?.presetData ?? null,
     })
 
     if (created) {
       options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))
+      options.syncCreatedFloorMaterials?.(created.id)
       options.sceneStore.selectNode(created.id)
-
-      const brush = options.getFloorBrush?.()
-      const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
-        ? brush.presetAssetId.trim()
-        : null
-      if (presetAssetId) {
-        void options.sceneStore
-          .applyFloorPresetToNode(created.id, presetAssetId, brush?.presetData ?? null)
-          .catch((error: unknown) => {
-            console.warn('Failed to apply floor preset brush', presetAssetId, error)
-          })
-      }
     }
 
     clearSession(true)

@@ -156,6 +156,7 @@ import { createPrimitiveMesh, PROTAGONIST_NODE_ID } from '@schema/index'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
+import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
@@ -1349,6 +1350,27 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
       console.warn(message)
     }
   },
+}
+
+function refreshFloorRuntimeMaterials(nodeId: string, targetObject: THREE.Object3D): void {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Floor') {
+    return
+  }
+  if (node.materials && node.materials.length) {
+    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(targetObject)
+  }
+}
+
+function applyFloorPreviewMaterials(targetObject: THREE.Object3D, presetData: import('@/utils/floorPreset').FloorPresetData | null): void {
+  const materials = buildFloorNodeMaterialsFromPreset(presetData, sceneStore.materials)
+  if (materials.length) {
+    applyMaterialOverrides(targetObject, materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(targetObject)
+  }
 }
 
 function applyRendererShadowSetting() {
@@ -5664,6 +5686,13 @@ const floorBuildTool = createFloorBuildTool({
     presetAssetId: floorBrushPresetAssetId.value,
     presetData: floorBrushPresetData.value,
   }),
+  applyFloorPreviewMaterials: (group, presetData) => applyFloorPreviewMaterials(group, presetData),
+  syncCreatedFloorMaterials: (nodeId) => {
+    const runtimeObject = objectMap.get(nodeId) ?? null
+    if (runtimeObject) {
+      refreshFloorRuntimeMaterials(nodeId, runtimeObject)
+    }
+  },
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
@@ -12490,6 +12519,7 @@ function handlePointerMove(event: PointerEvent) {
     updateRoadGroup,
 
     updateFloorGroup,
+    refreshFloorRuntimeMaterials,
     forceRebuildFloorVertexHandles: () => ensureFloorVertexHandlesForSelectedNode({ force: true }),
     forceRebuildFloorCircleHandles: () => ensureFloorCircleHandlesForSelectedNode({ force: true }),
   }
@@ -12778,6 +12808,7 @@ function handlePointerMove(event: PointerEvent) {
     raycastGroundPoint,
     groundPointerHelper,
     updateFloorGroup,
+    refreshFloorRuntimeMaterials,
   })
   if (floorEdge) {
     applyPointerMoveResult(floorEdge)
