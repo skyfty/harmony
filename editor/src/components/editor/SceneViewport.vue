@@ -211,7 +211,7 @@ import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
 import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings, type TerrainPaintLayerDraft } from '@/stores/terrainStore'
-import type { TerrainScatterCategory } from '@schema/terrain-scatter'
+import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
@@ -441,6 +441,8 @@ const {
   scatterSelectedAsset,
   scatterProviderAssetId,
   scatterBrushRadius,
+  scatterBrushShape,
+  scatterSpacing,
   scatterEraseRadius,
   scatterDensityPercent,
 } =
@@ -3028,10 +3030,14 @@ const groundEditor = createGroundEditor({
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
   scatterBrushRadius,
+  scatterBrushShape,
+  scatterSpacing,
   scatterEraseRadius,
   scatterDensityPercent,
   activeBuildTool,
   scatterEraseModeActive,
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
   lockScatterLodToBaseAsset: true,
   scatterChunkStreaming: {
     enabled: resolveGroundScatterChunkStreamingEnabled(),
@@ -3191,7 +3197,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     return false
   }
 
-  scatterEraseRestoreModifierActive.value = Boolean(event.shiftKey)
+  scatterEraseRestoreModifierActive.value = Boolean(event.ctrlKey || event.metaKey)
 
   if (!canvasRef.value || !camera) {
     clearRepairHoverHighlight(false)
@@ -3669,7 +3675,7 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     return { handled: false, erasedKey: null }
   }
 
-  scatterEraseRestoreModifierActive.value = Boolean(event.shiftKey)
+  scatterEraseRestoreModifierActive.value = Boolean(event.ctrlKey || event.metaKey)
 
   // Selected wall: erase by raycasting the wall object itself (supports procedural walls)
   // and generate a per-interval key so drag erase doesn't spam the same spot.
@@ -6205,6 +6211,14 @@ function handleGroundScatterCategoryUpdate(value: TerrainScatterCategory) {
 
 function handleGroundScatterBrushRadiusUpdate(value: number) {
   terrainStore.setScatterBrushRadius(Number(value))
+}
+
+function handleGroundScatterBrushShapeUpdate(value: TerrainScatterBrushShape) {
+  terrainStore.setScatterBrushShape(value)
+}
+
+function handleGroundScatterSpacingUpdate(value: number) {
+  terrainStore.setScatterSpacing(Number(value))
 }
 
 function handleGroundScatterDensityPercentUpdate(value: number) {
@@ -17691,14 +17705,14 @@ function handleViewportShortcut(event: KeyboardEvent) {
 function handleScatterEraseRestoreKeyDown(event: KeyboardEvent) {
   if (!shouldHandleViewportShortcut(event)) return
   if (!scatterEraseModeActive.value) return
-  if (event.key === 'Shift') {
+  if (event.key === 'Control' || event.key === 'Meta') {
     scatterEraseRestoreModifierActive.value = true
   }
 }
 
 function handleScatterEraseRestoreKeyUp(event: KeyboardEvent) {
   if (!scatterEraseModeActive.value) return
-  if (event.key === 'Shift') {
+  if (event.key === 'Control' || event.key === 'Meta') {
     scatterEraseRestoreModifierActive.value = false
   }
 }
@@ -18153,6 +18167,8 @@ defineExpose<SceneViewportHandle>({
         :ground-paint-settings="paintBrushSettings"
         :ground-scatter-category="scatterCategory"
         :ground-scatter-brush-radius="scatterBrushRadius"
+        :ground-scatter-brush-shape="scatterBrushShape"
+        :ground-scatter-spacing="scatterSpacing"
         :ground-scatter-density-percent="scatterDensityPercent"
         :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
         :build-tools-disabled="buildToolsDisabled"
@@ -18197,6 +18213,8 @@ defineExpose<SceneViewportHandle>({
           @update:ground-paint-active-layer="handleGroundPaintActiveLayerUpdate"
           @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
           @update:ground-scatter-brush-radius="handleGroundScatterBrushRadiusUpdate"
+          @update:ground-scatter-brush-shape="handleGroundScatterBrushShapeUpdate"
+          @update:ground-scatter-spacing="handleGroundScatterSpacingUpdate"
           @update:ground-scatter-density-percent="handleGroundScatterDensityPercentUpdate"
           @ground-scatter-asset-select="handleGroundScatterAssetSelect"
           @select-floor-build-shape="handleSelectFloorBuildShape"

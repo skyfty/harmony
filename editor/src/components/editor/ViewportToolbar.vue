@@ -161,6 +161,29 @@
                   </v-tab>
                 </v-tabs>
 
+                <div class="scatter-shape-section">
+                  <div class="scatter-shape-label">Brush Shape</div>
+                  <div class="floor-shape-grid scatter-shape-grid">
+                    <v-list-item
+                      v-for="shape in scatterShapeOptions"
+                      :key="shape.id"
+                      class="floor-shape-item"
+                    >
+                      <v-btn
+                        density="compact"
+                        size="small"
+                        variant="text"
+                        :title="shape.label"
+                        :class="['floor-shape-btn', shape.id === groundScatterBrushShape ? 'floor-shape-selected' : '']"
+                        :disabled="buildToolsDisabled || !hasGroundNode"
+                        @click.stop="handleGroundScatterBrushShapeSelect(shape.id)"
+                      >
+                        <span v-html="shape.svg" />
+                      </v-btn>
+                    </v-list-item>
+                  </div>
+                </div>
+
                 <div class="scatter-control-row">
                   <div class="scatter-spacing-item scatter-spacing--compact">
                     <div class="scatter-spacing-labels">
@@ -182,6 +205,29 @@
                       :disabled="buildToolsDisabled || !hasGroundNode"
                       @blur="commitGroundScatterBrushRadiusInput"
                       @keydown.enter.prevent="commitGroundScatterBrushRadiusInput"
+                    />
+                  </div>
+
+                  <div class="scatter-spacing-item scatter-spacing--compact">
+                    <div class="scatter-spacing-labels">
+                      <span>Scatter Spacing</span>
+                      <span>{{ groundScatterSpacingDisplay }}</span>
+                    </div>
+                    <v-text-field
+                      v-model="groundScatterSpacingInput"
+                      type="number"
+                      suffix="m"
+                      :min="SCATTER_SPACING_MIN"
+                      :max="SCATTER_BRUSH_RADIUS_MAX"
+                      :step="SCATTER_SPACING_STEP"
+                      variant="underlined"
+                      density="compact"
+                      hide-details
+                      inputmode="decimal"
+                      class="scatter-spacing-input"
+                      :disabled="buildToolsDisabled || !hasGroundNode || !groundScatterUsesSpacing"
+                      @blur="commitGroundScatterSpacingInput"
+                      @keydown.enter.prevent="commitGroundScatterSpacingInput"
                     />
                   </div>
 
@@ -1019,7 +1065,11 @@ import { WALL_BUILD_SHAPE_LABELS } from '@/types/wall-build-shape'
 import type { ProjectAsset } from '@/types/project-asset'
 import { SCATTER_BRUSH_RADIUS_MAX, type GroundPanelTab } from '@/stores/terrainStore'
 import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
-import type { TerrainScatterCategory } from '@schema/terrain-scatter'
+import {
+  TERRAIN_SCATTER_BRUSH_SHAPE_LABELS,
+  type TerrainScatterBrushShape,
+  type TerrainScatterCategory,
+} from '@schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { BUILTIN_AIR_WALL_PRESET_ASSET_ID } from '@/stores/wallPresetActions'
 import {
@@ -1080,6 +1130,8 @@ const props = withDefaults(
   groundPaintSettings: TerrainPaintBrushSettings
   groundScatterCategory: TerrainScatterCategory
   groundScatterBrushRadius: number
+  groundScatterBrushShape: TerrainScatterBrushShape
+  groundScatterSpacing: number
   groundScatterDensityPercent: number
   groundScatterProviderAssetId?: string | null
   }>(),
@@ -1136,6 +1188,8 @@ const emit = defineEmits<{
   (event: 'add-ground-paint-layer'): void
   (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
   (event: 'update:ground-scatter-brush-radius', value: number): void
+  (event: 'update:ground-scatter-brush-shape', value: TerrainScatterBrushShape): void
+  (event: 'update:ground-scatter-spacing', value: number): void
   (event: 'update:ground-scatter-density-percent', value: number): void
   (event: 'ground-scatter-asset-select', payload: { category: TerrainScatterCategory; asset: ProjectAsset; providerAssetId: string }): void
   (event: 'start-viewport-placement', item: ViewportPlacementItem): void
@@ -1189,6 +1243,8 @@ const {
   groundPaintSettings,
   groundScatterCategory,
   groundScatterBrushRadius,
+  groundScatterBrushShape,
+  groundScatterSpacing,
   groundScatterDensityPercent,
   groundScatterProviderAssetId,
 } = toRefs(props)
@@ -1215,13 +1271,16 @@ const fixedPrimaryAsAnchor = ref(true)
 
 const SCATTER_BRUSH_RADIUS_MIN = 0.1
 const SCATTER_ERASE_RADIUS_MIN = 0.1
+const SCATTER_SPACING_MIN = 0.1
 const SCATTER_RADIUS_STEP = 0.1
+const SCATTER_SPACING_STEP = 0.1
 const SCATTER_DENSITY_MIN = 0
 const SCATTER_DENSITY_MAX = 100
 const SCATTER_DENSITY_STEP = 1
 const WALL_REGULAR_POLYGON_SIDES_MAX = 256
 
 const groundScatterBrushRadiusInput = ref(groundScatterBrushRadius.value.toFixed(2))
+const groundScatterSpacingInput = ref(groundScatterSpacing.value.toFixed(2))
 const groundScatterDensityInput = ref(Math.round(groundScatterDensityPercent.value).toString())
 const scatterEraseRadiusInput = ref(scatterEraseRadius.value.toFixed(2))
 const floorRegularPolygonSidesInput = ref(floorRegularPolygonSides.value.toString())
@@ -1284,6 +1343,19 @@ function commitGroundScatterDensityInput() {
   groundScatterDensityInput.value = Math.round(normalized).toString()
 }
 
+function commitGroundScatterSpacingInput() {
+  const normalized = parseAndNormalize(
+    groundScatterSpacingInput.value,
+    groundScatterSpacing.value,
+    SCATTER_SPACING_MIN,
+    SCATTER_BRUSH_RADIUS_MAX,
+    SCATTER_SPACING_STEP,
+    2,
+  )
+  emit('update:ground-scatter-spacing', normalized)
+  groundScatterSpacingInput.value = normalized.toFixed(2)
+}
+
 function commitScatterEraseRadiusInput() {
   const normalized = parseAndNormalize(
     scatterEraseRadiusInput.value,
@@ -1341,6 +1413,10 @@ watch(groundScatterBrushRadius, (value) => {
   groundScatterBrushRadiusInput.value = value.toFixed(2)
 })
 
+watch(groundScatterSpacing, (value) => {
+  groundScatterSpacingInput.value = value.toFixed(2)
+})
+
 watch(groundScatterDensityPercent, (value) => {
   groundScatterDensityInput.value = Math.round(value).toString()
 })
@@ -1360,7 +1436,7 @@ watch(wallRegularPolygonSides, (value) => {
 const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFixed(2)} m`)
 
 const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 'mdi-hammer' : 'mdi-broom'))
-const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Shift)' : 'Scatter Erase'))
+const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Ctrl)' : 'Scatter Erase'))
 
 const groundTerrainButtonActive = computed(() => isGroundButtonActive('terrain'))
 const groundPaintButtonActive = computed(() => isGroundButtonActive('paint'))
@@ -1438,7 +1514,9 @@ const groundScatterCategoryModel = computed<TerrainScatterCategory>({
 })
 
 const groundScatterBrushRadiusDisplay = computed(() => `${groundScatterBrushRadius.value.toFixed(2)} m`)
+const groundScatterSpacingDisplay = computed(() => `${groundScatterSpacing.value.toFixed(2)} m`)
 const groundScatterDensityDisplay = computed(() => `${Math.round(groundScatterDensityPercent.value)}%`)
+const groundScatterUsesSpacing = computed(() => groundScatterBrushShape.value === 'rectangle' || groundScatterBrushShape.value === 'line')
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -1782,6 +1860,17 @@ const waterShapeOptions = (Object.keys(WATER_BUILD_SHAPE_LABELS) as WaterBuildSh
       : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
 }))
 
+const scatterShapeOptions = (Object.keys(TERRAIN_SCATTER_BRUSH_SHAPE_LABELS) as TerrainScatterBrushShape[]).map((id) => ({
+  id,
+  label: TERRAIN_SCATTER_BRUSH_SHAPE_LABELS[id],
+  svg:
+    id === 'rectangle'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="none" stroke="currentColor" stroke-width="2" rx="1" ry="1"/></svg>'
+      : id === 'line'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 17L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="5" cy="17" r="2" fill="currentColor"/><circle cx="19" cy="7" r="2" fill="currentColor"/></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+}))
+
 function toggleFixedPrimaryAsAnchor() {
   fixedPrimaryAsAnchor.value = !fixedPrimaryAsAnchor.value
 }
@@ -1970,6 +2059,13 @@ function handleGroundScatterAssetSelect(payload: { asset: ProjectAsset; provider
     asset: payload.asset,
     providerAssetId: payload.providerAssetId,
   })
+}
+
+function handleGroundScatterBrushShapeSelect(shape: TerrainScatterBrushShape) {
+  if (buildToolsDisabled.value || !hasGroundNode.value) {
+    return
+  }
+  emit('update:ground-scatter-brush-shape', shape)
 }
 
 function handleViewportPlacementMenuModelUpdate(value: boolean) {
@@ -2243,6 +2339,21 @@ function handleClearScatterMenuAction() {
   gap: 6px;
   padding: 6px 6px 2px;
 }
+
+.scatter-shape-section {
+  padding-top: 8px;
+}
+
+.scatter-shape-label {
+  padding: 0 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.scatter-shape-grid {
+  padding-top: 4px;
+}
+
 .floor-shape-item {
   padding: 0 !important;
   min-height: unset !important;
