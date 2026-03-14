@@ -6,6 +6,7 @@ import type { useSceneStore } from '@/stores/sceneStore'
 import { createWaterPreviewRenderer, type WaterPreviewSession } from './WaterPreviewRenderer'
 
 export type WaterBuildToolHandle = {
+  getSession: () => WaterPreviewSession | null
   flushPreviewIfNeeded: (scene: THREE.Scene | null) => void
   handlePointerDown: (event: PointerEvent) => boolean
   handlePointerMove: (event: PointerEvent) => boolean
@@ -234,6 +235,8 @@ export function createWaterBuildTool(options: {
   }
 
   return {
+    getSession: () => session,
+
     flushPreviewIfNeeded: (scene) => {
       previewRenderer.flushIfNeeded(scene, session)
     },

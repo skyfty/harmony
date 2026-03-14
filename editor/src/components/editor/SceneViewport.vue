@@ -1788,6 +1788,9 @@ const scatterEraseMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
 const navigationSpeedBoostModifierActive = ref(false)
 const wallEditNodeId = ref<string | null>(null)
+const roadEditNodeId = ref<string | null>(null)
+const floorEditNodeId = ref<string | null>(null)
+const waterEditNodeId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
 const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
@@ -1818,12 +1821,90 @@ function resolveEditableWallNode(nodeId: string | null | undefined): SceneNode |
   return node
 }
 
+function resolveEditableRoadNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Road') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function resolveEditableFloorNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Floor') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!isWaterSurfaceNode(node)) {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
 function clearWallEditMode(): void {
   wallEditNodeId.value = null
 }
 
+function clearRoadEditMode(): void {
+  roadEditNodeId.value = null
+}
+
+function clearFloorEditMode(): void {
+  floorEditNodeId.value = null
+}
+
+function clearWaterEditMode(): void {
+  waterEditNodeId.value = null
+}
+
 function enterWallEditMode(nodeId: string | null | undefined): void {
+  clearRoadEditMode()
+  clearFloorEditMode()
+  clearWaterEditMode()
   wallEditNodeId.value = resolveEditableWallNode(nodeId)?.id ?? null
+}
+
+function enterRoadEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearFloorEditMode()
+  clearWaterEditMode()
+  roadEditNodeId.value = resolveEditableRoadNode(nodeId)?.id ?? null
+}
+
+function enterFloorEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearRoadEditMode()
+  clearWaterEditMode()
+  floorEditNodeId.value = resolveEditableFloorNode(nodeId)?.id ?? null
+}
+
+function enterWaterEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearRoadEditMode()
+  clearFloorEditMode()
+  waterEditNodeId.value = resolveEditableWaterNode(nodeId)?.id ?? null
 }
 
 function isSelectedWallEditMode(): boolean {
@@ -1838,6 +1919,42 @@ function isSelectedWallEditMode(): boolean {
   return Boolean(resolveEditableWallNode(selectedId))
 }
 
+function isSelectedRoadEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || roadEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableRoadNode(selectedId))
+}
+
+function isSelectedFloorEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || floorEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableFloorNode(selectedId))
+}
+
+function isSelectedWaterEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || waterEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableWaterNode(selectedId))
+}
+
 watch(
   () => [activeBuildTool.value, sceneStore.selectedNodeId] as const,
   () => {
@@ -1850,7 +1967,7 @@ watch(
       return
     }
 
-    if (activeBuildTool.value === 'floor' && selectedNodeIsFloor.value) {
+    if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && selectedNodeIsFloor.value) {
       const restored = readFloorBuildShapeFromNode(node)
       const floorMesh = node.dynamicMesh?.type === 'Floor' ? (node.dynamicMesh as FloorDynamicMesh) : null
       const canApplyRectangle = restored !== 'rectangle' || (floorMesh?.vertices?.length ?? 0) === 4
@@ -1868,7 +1985,7 @@ watch(
       return
     }
 
-    if (activeBuildTool.value === 'water' && selectedNodeIsWater.value) {
+    if (activeBuildTool.value === 'water' && isSelectedWaterEditMode() && selectedNodeIsWater.value) {
       const restored = readWaterBuildShapeFromNode(node)
       if (restored && restored !== waterBuildShape.value) {
         buildToolsStore.setWaterBuildShape(restored)
@@ -1886,6 +2003,15 @@ watch(
     }
     if (tool !== 'wall') {
       clearWallEditMode()
+    }
+    if (tool !== 'road') {
+      clearRoadEditMode()
+    }
+    if (tool !== 'floor') {
+      clearFloorEditMode()
+    }
+    if (tool !== 'water') {
+      clearWaterEditMode()
     }
     if (tool !== 'wall') {
       clearWallDoorRectangleSelectionState()
@@ -1907,6 +2033,15 @@ watch(
     if (!isSelectedWallEditMode()) {
       clearWallEditMode()
     }
+    if (!isSelectedRoadEditMode()) {
+      clearRoadEditMode()
+    }
+    if (!isSelectedFloorEditMode()) {
+      clearFloorEditMode()
+    }
+    if (!isSelectedWaterEditMode()) {
+      clearWaterEditMode()
+    }
     if (wallDoorSelectModeActive.value && wallDoorSelectionPayload.value?.length) {
       return
     }
@@ -1920,6 +2055,15 @@ watch(
   (selectedIds) => {
     if (selectedIds.length !== 1 || selectedIds[0] !== wallEditNodeId.value) {
       clearWallEditMode()
+    }
+    if (selectedIds.length !== 1 || selectedIds[0] !== roadEditNodeId.value) {
+      clearRoadEditMode()
+    }
+    if (selectedIds.length !== 1 || selectedIds[0] !== floorEditNodeId.value) {
+      clearFloorEditMode()
+    }
+    if (selectedIds.length !== 1 || selectedIds[0] !== waterEditNodeId.value) {
+      clearWaterEditMode()
     }
   },
 )
@@ -4210,7 +4354,10 @@ const waterDragWorldHelper = new THREE.Vector3()
 const waterPlanePointerHelper = new THREE.Vector3()
 
 function isSelectedFloorCircleEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedFloorEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4222,7 +4369,10 @@ function isSelectedFloorCircleEditMode(): boolean {
 }
 
 function isSelectedWaterRectangleEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedWaterEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4231,7 +4381,10 @@ function isSelectedWaterRectangleEditMode(): boolean {
 }
 
 function isSelectedWaterCircleEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedWaterEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4240,7 +4393,10 @@ function isSelectedWaterCircleEditMode(): boolean {
 }
 
 function isSelectedWaterContourEditMode(): boolean {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!isSelectedWaterEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
   if (!selectedId) {
     return false
   }
@@ -4267,8 +4423,8 @@ function isSelectedDisplayBoardEditMode(): boolean {
 }
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'road'
+  const selectedId = isSelectedRoadEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'road' && isSelectedRoadEditMode() && !roadBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -4366,8 +4522,8 @@ function setActiveDisplayBoardCornerHandle(active: { nodeId: string; cornerIndex
 }
 
 function ensureWaterRectangleHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'water' && isSelectedWaterRectangleEditMode()
+  const selectedId = isSelectedWaterEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'water' && isSelectedWaterEditMode() && !waterBuildTool.getSession() && isSelectedWaterRectangleEditMode()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -4401,8 +4557,8 @@ function ensureWaterVertexHandlesForSelectedNode(options?: { force?: boolean; pr
     waterVertexRenderer.clear()
     return
   }
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'water'
+  const selectedId = isSelectedWaterEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'water' && isSelectedWaterEditMode() && !waterBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -4419,8 +4575,8 @@ function ensureWaterVertexHandlesForSelectedNode(options?: { force?: boolean; pr
 }
 
 function ensureWaterCircleHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'water'
+  const selectedId = isSelectedWaterEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'water' && isSelectedWaterEditMode() && !waterBuildTool.getSession()
   const circleSelectedId = isSelectedWaterCircleEditMode() ? selectedId : null
   const common = {
     active,
@@ -4668,6 +4824,9 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
   if (waterRectangleDragState) {
     return false
   }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
+    return false
+  }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
     return false
@@ -4718,6 +4877,9 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
 
 function tryBeginWaterVertexDrag(event: PointerEvent): boolean {
   if (waterContourVertexDragState) {
+    return false
+  }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
     return false
   }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -4780,6 +4942,9 @@ function tryBeginWaterVertexDrag(event: PointerEvent): boolean {
 
 function tryBeginWaterCircleDrag(event: PointerEvent): boolean {
   if (waterCircleCenterDragState || waterCircleRadiusDragState) {
+    return false
+  }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
     return false
   }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -4859,6 +5024,9 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
   if (waterEdgeDragState) {
     return false
   }
+  if (!isSelectedWaterEditMode() || waterBuildTool.getSession()) {
+    return false
+  }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
     return false
@@ -4933,8 +5101,8 @@ function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) 
     floorVertexRenderer.clear()
     return
   }
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'floor'
+  const selectedId = isSelectedFloorEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && !floorBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -4953,8 +5121,8 @@ function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) 
 }
 
 function ensureFloorCircleHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'floor'
+  const selectedId = isSelectedFloorEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && !floorBuildTool.getSession()
   const circleSelectedId = isSelectedFloorCircleEditMode() ? selectedId : null
 
   const common = {
@@ -5066,6 +5234,9 @@ function cloneFloorVertices(definition: FloorDynamicMesh): Array<[number, number
 
 function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
   if (floorEdgeDragState) {
+    return false
+  }
+  if (!isSelectedFloorEditMode() || floorBuildTool.getSession()) {
     return false
   }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -11270,6 +11441,15 @@ function emitSelectionChange(nextSelection: string[]) {
   if (deduped.length !== 1 || deduped[0] !== wallEditNodeId.value) {
     clearWallEditMode()
   }
+  if (deduped.length !== 1 || deduped[0] !== roadEditNodeId.value) {
+    clearRoadEditMode()
+  }
+  if (deduped.length !== 1 || deduped[0] !== floorEditNodeId.value) {
+    clearFloorEditMode()
+  }
+  if (deduped.length !== 1 || deduped[0] !== waterEditNodeId.value) {
+    clearWaterEditMode()
+  }
   const current = sceneStore.selectedNodeIds
   if (selectionsAreEqual(deduped, current)) {
     return
@@ -13655,6 +13835,12 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (toolForNode && !nodeLocked) {
     if (toolForNode === 'wall') {
       enterWallEditMode(hitNodeId)
+    } else if (toolForNode === 'road') {
+      enterRoadEditMode(hitNodeId)
+    } else if (toolForNode === 'floor') {
+      enterFloorEditMode(hitNodeId)
+    } else if (toolForNode === 'water') {
+      enterWaterEditMode(hitNodeId)
     }
     handleBuildToolChange(toolForNode)
     emitSelectionChange([hitNodeId])
