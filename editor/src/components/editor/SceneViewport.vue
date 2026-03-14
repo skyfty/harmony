@@ -65,6 +65,7 @@ import type {
   GroundGenerationSettings,
   GroundSculptOperation,
   TerrainPaintSettings,
+  TerrainPaintV3Settings,
   RoadDynamicMesh,
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
@@ -72,8 +73,10 @@ import type {
 } from '@schema/index'
 import {
   TERRAIN_PAINT_MAX_LAYER_COUNT,
+  TERRAIN_PAINT_V3_VERSION,
   buildTerrainPaintLayerPlacement,
   clampTerrainPaintLayerDefinition,
+  clampTerrainPaintV3Settings,
   cloneTerrainPaintLayerStyle,
   createGradientBackgroundDome,
   disposeGradientBackgroundDome,
@@ -485,7 +488,51 @@ function cloneTerrainPaintSettingsForEditing(groundNode: SceneNode | null): Terr
   }
 }
 
+function createEmptyTerrainPaintV3Settings(): TerrainPaintV3Settings {
+  return clampTerrainPaintV3Settings({
+    version: TERRAIN_PAINT_V3_VERSION,
+    layers: [],
+    chunks: {},
+  })
+}
+
+function cloneTerrainPaintV3SettingsForEditing(groundNode: SceneNode | null): TerrainPaintV3Settings {
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return createEmptyTerrainPaintV3Settings()
+  }
+  const runtimeState = sceneStore.currentSceneId ? useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId) : null
+  const source = runtimeState?.nodeId === groundNode.id
+    ? runtimeState.terrainPaintV3
+    : ((groundNode.dynamicMesh as GroundDynamicMesh).terrainPaintV3 ?? null)
+  if (!source || source.version !== TERRAIN_PAINT_V3_VERSION) {
+    return createEmptyTerrainPaintV3Settings()
+  }
+  return clampTerrainPaintV3Settings(source)
+}
+
 function buildTerrainPaintDraftsFromGround(groundNode: SceneNode | null): TerrainPaintLayerDraft[] {
+  const v3Settings = cloneTerrainPaintV3SettingsForEditing(groundNode)
+  if (Array.isArray(v3Settings.layers) && v3Settings.layers.length) {
+    return v3Settings.layers
+      .slice()
+      .sort((left, right) => left.zIndex - right.zIndex)
+      .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
+      .map((layer) => {
+        const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
+        return {
+          id: layer.id,
+          slotIndex: layer.zIndex,
+          zIndex: layer.zIndex,
+          enabled: layer.enabled !== false,
+          assetId: assetId || null,
+          asset: assetId ? (sceneStore.getAsset(assetId) ?? null) : null,
+          settings: {
+            ...cloneTerrainPaintLayerStyle(layer),
+            feather: typeof layer.feather === 'number' ? layer.feather : 0,
+          },
+        }
+      })
+  }
   const settings = cloneTerrainPaintSettingsForEditing(groundNode)
   return settings.layers
     .slice()
@@ -496,9 +543,14 @@ function buildTerrainPaintDraftsFromGround(groundNode: SceneNode | null): Terrai
       return {
         id: layer.id,
         slotIndex: getTerrainPaintLayerSlotIndex(layer),
+        zIndex: getTerrainPaintLayerSlotIndex(layer),
+        enabled: true,
         assetId: assetId || null,
         asset: assetId ? (sceneStore.getAsset(assetId) ?? null) : null,
-        settings: cloneTerrainPaintLayerStyle(layer),
+        settings: {
+          ...cloneTerrainPaintLayerStyle(layer),
+          feather: 0,
+        },
       }
     })
 }
@@ -509,12 +561,13 @@ function commitTerrainPaintLayerMetadata(nextLayers: TerrainPaintLayerDraft[]): 
     return
   }
   const nextSettings = cloneTerrainPaintSettingsForEditing(groundNode)
+  const nextV3Settings = cloneTerrainPaintV3SettingsForEditing(groundNode)
   nextSettings.layers = nextLayers
     .slice()
-    .sort((left, right) => left.slotIndex - right.slotIndex)
+    .sort((left, right) => left.zIndex - right.zIndex)
     .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
     .map((layer) => {
-      const placement = buildTerrainPaintLayerPlacement(layer.slotIndex)
+      const placement = buildTerrainPaintLayerPlacement(layer.zIndex)
       return clampTerrainPaintLayerDefinition({
         id: layer.id,
         pageIndex: placement.pageIndex,
@@ -523,12 +576,30 @@ function commitTerrainPaintLayerMetadata(nextLayers: TerrainPaintLayerDraft[]): 
         ...layer.settings,
       })
     })
+  nextV3Settings.layers = nextLayers
+    .slice()
+    .sort((left, right) => left.zIndex - right.zIndex)
+    .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
+    .map((layer) => ({
+      id: layer.id,
+      textureAssetId: layer.assetId ?? layer.asset?.id ?? '',
+      enabled: layer.enabled !== false,
+      zIndex: layer.zIndex,
+      ...layer.settings,
+    }))
   const hasPersistedLayer = nextSettings.layers.some((layer) => layer.textureAssetId.length > 0)
-  if (!hasPersistedLayer && Object.keys(nextSettings.chunks ?? {}).length === 0) {
-    sceneStore.commitGroundPaintEdit(groundNode.id, null)
+    || nextV3Settings.layers.some((layer) => layer.textureAssetId.length > 0)
+  if (!hasPersistedLayer && Object.keys(nextSettings.chunks ?? {}).length === 0 && Object.keys(nextV3Settings.chunks ?? {}).length === 0) {
+    sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
+      terrainPaint: null,
+      terrainPaintV3: null,
+    })
     return
   }
-  sceneStore.commitGroundPaintEdit(groundNode.id, nextSettings)
+  sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
+    terrainPaint: nextSettings,
+    terrainPaintV3: nextV3Settings,
+  })
 }
 
 watch(
@@ -6091,6 +6162,15 @@ function handleGroundPaintSettingsUpdate(value: TerrainPaintBrushSettings) {
   commitTerrainPaintLayerMetadata(paintLayers.value)
 }
 
+function handleGroundPaintActiveLayerUpdate(patch: Partial<Pick<TerrainPaintLayerDraft, 'enabled' | 'zIndex'>>) {
+  const activeLayerId = paintSelectedLayerId.value
+  if (!activeLayerId) {
+    return
+  }
+  terrainStore.updatePaintLayer(activeLayerId, patch)
+  commitTerrainPaintLayerMetadata(paintLayers.value)
+}
+
 function handleGroundScatterCategoryUpdate(value: TerrainScatterCategory) {
   terrainStore.setScatterCategory(value)
 }
@@ -10039,7 +10119,12 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   mode: 'live' | 'surface-rebuild'
 }): void {
   landformsPreviewLoadToken += 1
-  const usesSurfacePreview = payload.mode === 'surface-rebuild'
+  const enabledV3LayerCount = Array.isArray(payload.dynamicMesh.terrainPaintV3?.layers)
+    ? payload.dynamicMesh.terrainPaintV3!.layers.filter((layer) => layer.enabled !== false).length
+    : 0
+  const forceLiveSurfacePreview = enabledV3LayerCount > 4
+  const useLiveSurfacePreview = payload.mode === 'surface-rebuild' || forceLiveSurfacePreview
+  const usesSurfacePreview = useLiveSurfacePreview
     ? syncGroundSurfacePreviewForGround(
       payload.groundObject,
       payload.groundNode,
@@ -10065,7 +10150,7 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
     )
   syncTerrainPaintPreviewForGroundShared(
     payload.groundObject,
-    payload.mode === 'surface-rebuild' && usesSurfacePreview
+    useLiveSurfacePreview && usesSurfacePreview
       ? { ...payload.dynamicMesh, terrainPaint: null }
       : payload.dynamicMesh,
     {
@@ -10073,7 +10158,7 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
       loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
     },
     () => landformsPreviewLoadToken,
-    payload.mode === 'surface-rebuild'
+    useLiveSurfacePreview
       ? (usesSurfacePreview
         ? undefined
         : {
@@ -18001,6 +18086,7 @@ defineExpose<SceneViewportHandle>({
           @add-ground-paint-layer="handleAddGroundPaintLayer"
           @update:ground-paint-asset="handleGroundPaintAssetUpdate"
           @update:ground-paint-settings="handleGroundPaintSettingsUpdate"
+          @update:ground-paint-active-layer="handleGroundPaintActiveLayerUpdate"
           @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
           @update:ground-scatter-brush-radius="handleGroundScatterBrushRadiusUpdate"
           @update:ground-scatter-density-percent="handleGroundScatterDensityPercentUpdate"

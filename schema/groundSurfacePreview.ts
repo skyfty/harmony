@@ -28,6 +28,12 @@ type Canvas2DContext = OffscreenCanvasRenderingContext2D | CanvasRenderingContex
 
 type CanvasLike = OffscreenCanvas | HTMLCanvasElement
 
+export type GroundSurfacePreviewCanvasResult = {
+  canvas: CanvasLike
+  width: number
+  height: number
+}
+
 type ImageDataSource = {
   width: number
   height: number
@@ -437,13 +443,13 @@ function buildGroundSurfacePreviewSignature(groundNode: SceneNode, definition: G
   })
 }
 
-async function composeGroundSurfacePreviewTexture(
+export async function composeGroundSurfacePreviewCanvas(
   groundNode: SceneNode,
   definition: GroundDynamicMesh,
   loaders: GroundSurfacePreviewLoaders,
   options: GroundSurfacePreviewOptions,
   shouldAbort: () => boolean = () => false,
-): Promise<THREE.Texture | null> {
+): Promise<GroundSurfacePreviewCanvasResult | null> {
   const previewSize = computePreviewTextureSize(definition, options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION)
   const composition = createCompositionCanvas(previewSize.width, previewSize.height)
   if (!composition) {
@@ -516,14 +522,7 @@ async function composeGroundSurfacePreviewTexture(
       }
     }
     if (!compiledLayers.length) {
-      const previewTexture = new THREE.CanvasTexture(canvas as unknown as HTMLCanvasElement)
-      previewTexture.wrapS = THREE.ClampToEdgeWrapping
-      previewTexture.wrapT = THREE.ClampToEdgeWrapping
-      previewTexture.minFilter = THREE.LinearFilter
-      previewTexture.magFilter = THREE.LinearFilter
-      ;(previewTexture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (previewTexture as any).colorSpace
-      previewTexture.needsUpdate = true
-      return previewTexture
+      return { canvas, width, height }
     }
     const output = context.getImageData(0, 0, width, height)
     const outputData = output.data
@@ -642,7 +641,21 @@ async function composeGroundSurfacePreviewTexture(
     context.putImageData(output, 0, 0)
   }
 
-  const previewTexture = new THREE.CanvasTexture(canvas as unknown as HTMLCanvasElement)
+  return { canvas, width, height }
+}
+
+async function composeGroundSurfacePreviewTexture(
+  groundNode: SceneNode,
+  definition: GroundDynamicMesh,
+  loaders: GroundSurfacePreviewLoaders,
+  options: GroundSurfacePreviewOptions,
+  shouldAbort: () => boolean = () => false,
+): Promise<THREE.Texture | null> {
+  const result = await composeGroundSurfacePreviewCanvas(groundNode, definition, loaders, options, shouldAbort)
+  if (!result) {
+    return null
+  }
+  const previewTexture = new THREE.CanvasTexture(result.canvas as unknown as HTMLCanvasElement)
   previewTexture.wrapS = THREE.ClampToEdgeWrapping
   previewTexture.wrapT = THREE.ClampToEdgeWrapping
   previewTexture.minFilter = THREE.LinearFilter
@@ -650,6 +663,18 @@ async function composeGroundSurfacePreviewTexture(
   ;(previewTexture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (previewTexture as any).colorSpace
   previewTexture.needsUpdate = true
   return previewTexture
+}
+
+export async function convertGroundSurfacePreviewCanvasToBlob(canvas: CanvasLike): Promise<Blob | null> {
+  if ('convertToBlob' in canvas && typeof canvas.convertToBlob === 'function') {
+    return await canvas.convertToBlob({ type: 'image/png' })
+  }
+  if ('toBlob' in canvas && typeof canvas.toBlob === 'function') {
+    return await new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), 'image/png')
+    })
+  }
+  return null
 }
 
 export function createDefaultGroundSurfacePreviewLoaders(

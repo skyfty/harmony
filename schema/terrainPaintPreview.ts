@@ -105,6 +105,8 @@ function installShaderHooks(material: THREE.MeshStandardMaterial): TerrainPaintS
 
 	material.customProgramCacheKey = () => `harmony-terrain-paint-v3`
 	material.onBeforeCompile = (shader) => {
+
+		console.log('Installing terrain paint shader hooks on material', material)
 		state.shader = shader
 		shader.uniforms.uLandformsEnabled = { value: 0 }
 		shader.uniforms.uLandformsTexture = { value: state.defaultTransparent }

@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 import { useUiStore } from './uiStore'
 import {
   TERRAIN_PAINT_MAX_LAYER_COUNT,
-  buildTerrainPaintLayerPlacement,
   clampTerrainPaintLayerStyle,
   type GroundSculptOperation,
   type TerrainPaintLayerStyle,
@@ -15,17 +14,32 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 export type GroundPanelTab = 'terrain' | 'paint' | TerrainScatterCategory
 export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
 
-export type TerrainPaintBrushSettings = TerrainPaintLayerStyle
+export type TerrainPaintBrushSettings = TerrainPaintLayerStyle & {
+  feather: number
+}
+
 export type TerrainPaintLayerDraft = {
   id: string
+  /** Legacy bridge for V2 paint runtime. */
   slotIndex: number
+  zIndex: number
+  enabled: boolean
   assetId: string | null
   asset: ProjectAsset | null
   settings: TerrainPaintBrushSettings
 }
 
+function clampTerrainPaintBrushSettings(value: Partial<TerrainPaintBrushSettings> | null | undefined): TerrainPaintBrushSettings {
+  const style = clampTerrainPaintLayerStyle(value)
+  const featherValue = typeof value?.feather === 'number' ? value.feather : Number(value?.feather)
+  return {
+    ...style,
+    feather: Number.isFinite(featherValue) ? Math.min(1, Math.max(0, featherValue)) : 0,
+  }
+}
+
 function createDefaultTerrainPaintBrushSettings(): TerrainPaintBrushSettings {
-  return clampTerrainPaintLayerStyle(null)
+  return clampTerrainPaintBrushSettings(null)
 }
 
 function createTerrainPaintLayerId(): string {
@@ -36,20 +50,26 @@ function createTerrainPaintLayerId(): string {
 }
 
 function createTerrainPaintLayerDraft(slotIndex: number, overrides: Partial<TerrainPaintLayerDraft> = {}): TerrainPaintLayerDraft {
-  const placement = buildTerrainPaintLayerPlacement(slotIndex)
+  const normalizedZIndex = Number.isFinite(overrides.zIndex)
+    ? Math.max(0, Math.trunc(overrides.zIndex))
+    : Math.max(0, Math.trunc(slotIndex))
   return {
     id: typeof overrides.id === 'string' && overrides.id.trim().length ? overrides.id.trim() : createTerrainPaintLayerId(),
-    slotIndex: placement.pageIndex * 4 + placement.channelIndex,
+    slotIndex: Number.isFinite(overrides.slotIndex)
+      ? Math.max(0, Math.trunc(overrides.slotIndex))
+      : normalizedZIndex,
+    zIndex: normalizedZIndex,
+    enabled: typeof overrides.enabled === 'boolean' ? overrides.enabled : true,
     assetId: typeof overrides.assetId === 'string' && overrides.assetId.trim().length ? overrides.assetId.trim() : (overrides.asset?.id ?? null),
     asset: overrides.asset ?? null,
-    settings: clampTerrainPaintLayerStyle(overrides.settings ?? null),
+    settings: clampTerrainPaintBrushSettings(overrides.settings ?? null),
   }
 }
 
 function normalizeTerrainPaintLayers(layers: TerrainPaintLayerDraft[]): TerrainPaintLayerDraft[] {
   return layers
-    .map((layer, index) => createTerrainPaintLayerDraft(Number.isFinite(layer.slotIndex) ? layer.slotIndex : index, layer))
-    .sort((left, right) => left.slotIndex - right.slotIndex)
+    .map((layer, index) => createTerrainPaintLayerDraft(Number.isFinite(layer.zIndex) ? layer.zIndex : (Number.isFinite(layer.slotIndex) ? layer.slotIndex : index), layer))
+    .sort((left, right) => left.zIndex - right.zIndex)
     .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
 }
 
@@ -132,11 +152,11 @@ export const useTerrainStore = defineStore('terrain', () => {
     if (paintLayers.value.length >= TERRAIN_PAINT_MAX_LAYER_COUNT) {
       return null
     }
-    const nextSlotIndex = paintLayers.value.reduce((maxSlotIndex, layer) => Math.max(maxSlotIndex, layer.slotIndex), -1) + 1
-    if (nextSlotIndex >= TERRAIN_PAINT_MAX_LAYER_COUNT) {
+    const nextZIndex = paintLayers.value.reduce((maxZIndex, layer) => Math.max(maxZIndex, layer.zIndex), -1) + 1
+    if (nextZIndex >= TERRAIN_PAINT_MAX_LAYER_COUNT) {
       return null
     }
-    const layer = createTerrainPaintLayerDraft(nextSlotIndex, {
+    const layer = createTerrainPaintLayerDraft(nextZIndex, {
       settings: defaultPaintBrushSettings.value,
       ...overrides,
     })
@@ -159,7 +179,7 @@ export const useTerrainStore = defineStore('terrain', () => {
           ...layer,
           ...patch,
           assetId: patch.assetId === undefined ? layer.assetId : patch.assetId,
-          settings: patch.settings ? clampTerrainPaintLayerStyle(patch.settings) : layer.settings,
+          settings: patch.settings ? clampTerrainPaintBrushSettings(patch.settings) : layer.settings,
         })
       }),
     )
@@ -180,7 +200,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   }
 
   function setPaintBrushSettings(value: Partial<TerrainPaintBrushSettings> | TerrainPaintBrushSettings) {
-    const nextSettings = clampTerrainPaintLayerStyle({
+    const nextSettings = clampTerrainPaintBrushSettings({
       ...(selectedPaintLayer.value?.settings ?? defaultPaintBrushSettings.value),
       ...value,
     })

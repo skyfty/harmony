@@ -108,6 +108,7 @@
                   v-model:settings="groundPaintSettingsModel"
                   :has-ground="hasGroundNode"
                   @update:selected-layer-id="groundPaintSelectedLayerIdModel = $event"
+                  @update:active-layer="emit('update:ground-paint-active-layer', $event)"
                   @add-layer="emit('add-ground-paint-layer')"
                 />
               </div>
@@ -1131,6 +1132,7 @@ const emit = defineEmits<{
   (event: 'update:ground-paint-selected-layer-id', value: string | null): void
   (event: 'update:ground-paint-asset', value: ProjectAsset | null): void
   (event: 'update:ground-paint-settings', value: TerrainPaintBrushSettings): void
+  (event: 'update:ground-paint-active-layer', value: Partial<Pick<TerrainPaintLayerDraft, 'enabled' | 'zIndex'>>): void
   (event: 'add-ground-paint-layer'): void
   (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
   (event: 'update:ground-scatter-brush-radius', value: number): void
