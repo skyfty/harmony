@@ -4,6 +4,7 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { splitWallSegmentsIntoChains } from './wallSegmentUtils'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
+import type { WallBuildShape } from '@/types/wall-build-shape'
 
 export type WallEndpointHandleState = {
   nodeId: string
@@ -46,6 +47,7 @@ export type WallEndpointRenderer = {
   } & (
     | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
     | { handleKind: 'joint'; jointIndex: number }
+    | { handleKind: 'circle'; circleKind: 'center' | 'radius' }
   ) & {
     gizmoPart: EndpointGizmoPart
   } | null): void
@@ -61,6 +63,7 @@ export type WallEndpointRenderer = {
     selectedNodeId: string | null
     isSelectionLocked: (nodeId: string) => boolean
     resolveWallDefinition: (nodeId: string) => WallDynamicMesh | null
+    resolveWallBuildShape: (nodeId: string) => WallBuildShape | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
   }): void
   forceRebuild(options: {
@@ -68,6 +71,7 @@ export type WallEndpointRenderer = {
     selectedNodeId: string | null
     isSelectionLocked: (nodeId: string) => boolean
     resolveWallDefinition: (nodeId: string) => WallDynamicMesh | null
+    resolveWallBuildShape: (nodeId: string) => WallBuildShape | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
   }): void
   updateScreenSize(options: {
@@ -113,12 +117,21 @@ function distanceSqXZPoints(a: any, b: any): number {
   return dx * dx + dz * dz
 }
 
-function tryGetCircleEditInfoForChainLocal(segments: any[], range: { startIndex: number; endIndex: number }): {
+function tryGetCircleEditInfoForChainLocal(
+  segments: any[],
+  range: { startIndex: number; endIndex: number },
+  options?: {
+    minSegments?: number
+    enforceRadiusCv?: boolean
+  },
+): {
   centerLocal: { x: number; y: number; z: number }
   radius: number
 } | null {
+  const minSegments = Math.max(3, Math.trunc(Number(options?.minSegments ?? WALL_CIRCLE_EDIT_MIN_SEGMENTS)))
+  const enforceRadiusCv = options?.enforceRadiusCv ?? true
   const count = Math.max(0, Math.trunc(range.endIndex) - Math.trunc(range.startIndex) + 1)
-  if (count < WALL_CIRCLE_EDIT_MIN_SEGMENTS) {
+  if (count < minSegments) {
     return null
   }
 
@@ -152,7 +165,7 @@ function tryGetCircleEditInfoForChainLocal(segments: any[], range: { startIndex:
     pushPoint(seg?.end)
   }
 
-  if (points.length < WALL_CIRCLE_EDIT_MIN_SEGMENTS) {
+  if (points.length < minSegments) {
     return null
   }
 
@@ -167,7 +180,7 @@ function tryGetCircleEditInfoForChainLocal(segments: any[], range: { startIndex:
     }
   }
 
-  if (points.length < WALL_CIRCLE_EDIT_MIN_SEGMENTS) {
+  if (points.length < minSegments) {
     return null
   }
 
@@ -208,8 +221,10 @@ function tryGetCircleEditInfoForChainLocal(segments: any[], range: { startIndex:
   variance /= Math.max(1, radii.length)
   const std = Math.sqrt(Math.max(0, variance))
   const cv = std / Math.max(1e-6, mean)
-  if (!Number.isFinite(cv) || cv > WALL_CIRCLE_EDIT_RADIUS_CV_MAX) {
-    return null
+  if (enforceRadiusCv) {
+    if (!Number.isFinite(cv) || cv > WALL_CIRCLE_EDIT_RADIUS_CV_MAX) {
+      return null
+    }
   }
 
   return { centerLocal, radius: mean }
@@ -351,6 +366,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     selectedNodeId: string | null
     isSelectionLocked: (nodeId: string) => boolean
     resolveWallDefinition: (nodeId: string) => WallDynamicMesh | null
+    resolveWallBuildShape: (nodeId: string) => WallBuildShape | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
     force?: boolean
   }) {
@@ -371,6 +387,8 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       clear()
       return
     }
+    const wallBuildShape = options.resolveWallBuildShape(selectedNodeId)
+    const forceCircleLikeEdit = wallBuildShape === 'circle' || wallBuildShape === 'polygon'
 
     const runtimeObject = options.resolveRuntimeObject(selectedNodeId)
     if (!runtimeObject) {
@@ -418,7 +436,12 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         return
       }
 
-      const circleInfo = tryGetCircleEditInfoForChainLocal(segments as any[], range)
+      const circleInfo = forceCircleLikeEdit
+        ? tryGetCircleEditInfoForChainLocal(segments as any[], range, {
+          minSegments: 3,
+          enforceRadiusCv: false,
+        })
+        : tryGetCircleEditInfoForChainLocal(segments as any[], range)
 
       const addHandle = (options:
         | {
@@ -558,6 +581,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     selectedNodeId: string | null
     isSelectionLocked: (nodeId: string) => boolean
     resolveWallDefinition: (nodeId: string) => WallDynamicMesh | null
+    resolveWallBuildShape: (nodeId: string) => WallBuildShape | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
   }) {
     attachOrRebuild({ ...options, force: false })
@@ -568,6 +592,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     selectedNodeId: string | null
     isSelectionLocked: (nodeId: string) => boolean
     resolveWallDefinition: (nodeId: string) => WallDynamicMesh | null
+    resolveWallBuildShape: (nodeId: string) => WallBuildShape | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
   }) {
     attachOrRebuild({ ...options, force: true })

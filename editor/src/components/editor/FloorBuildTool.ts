@@ -56,6 +56,16 @@ export function createFloorBuildTool(options: {
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
   clickDragThresholdPx: number
 }): FloorBuildToolHandle {
+  const getRegularPolygonSides = (): number => {
+    const raw = options.floorRegularPolygonSides?.value ?? 0
+    if (!Number.isFinite(raw)) {
+      return 0
+    }
+    const rounded = Math.round(raw)
+    const clamped = Math.min(256, Math.max(0, rounded))
+    return clamped >= 3 ? clamped : 0
+  }
+
   const previewRenderer = createFloorPreviewRenderer({
     rootGroup: options.rootGroup,
     getRegularPolygonSides: () => getRegularPolygonSides(),
@@ -101,16 +111,6 @@ export function createFloorBuildTool(options: {
   let leftDragState: LeftDragState | null = null
 
   const getShape = (): FloorBuildShape => options.floorBuildShape.value ?? 'polygon'
-
-  const getRegularPolygonSides = (): number => {
-    const raw = options.floorRegularPolygonSides?.value ?? 0
-    if (!Number.isFinite(raw)) {
-      return 0
-    }
-    const rounded = Math.round(raw)
-    const clamped = Math.min(256, Math.max(0, rounded))
-    return clamped >= 3 ? clamped : 0
-  }
 
   const ensureSession = (): FloorPreviewSession => {
     if (session) {

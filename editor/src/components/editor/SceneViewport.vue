@@ -4469,6 +4469,10 @@ function ensureWallEndpointHandlesForSelectedNode(options?: { force?: boolean })
       const node = findSceneNode(sceneStore.nodes, nodeId)
       return node?.dynamicMesh?.type === 'Wall' ? (node.dynamicMesh as WallDynamicMesh) : null
     },
+    resolveWallBuildShape: (nodeId: string) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      return readWallBuildShapeFromNode(node)
+    },
     resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
   }
   if (options?.force) {

@@ -6,6 +6,7 @@ import type { FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
 import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from '../planarEditMath'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
+import { readWallBuildShapeFromNode } from '@/utils/dynamicMeshBuildShapeUserData'
 import type {
   FloorVertexDragState,
   FloorThicknessDragState,
@@ -309,7 +310,8 @@ export function handlePointerDownTools(
           const chainStartIndex = Math.max(0, Math.trunc(handleHit.chainStartIndex))
           const chainEndIndex = Math.max(chainStartIndex, Math.trunc(handleHit.chainEndIndex))
 
-          const wallBuildShape = ctx.wallBuildShape ?? 'line'
+          const wallBuildShape = readWallBuildShapeFromNode(node) ?? ctx.wallBuildShape ?? 'line'
+          const isCircleLikeWallEditMode = wallBuildShape === 'circle' || wallBuildShape === 'polygon'
 
           const handleKind = handleHit.handleKind
           let endpointKind: 'start' | 'end' = 'start'
@@ -356,6 +358,17 @@ export function handlePointerDownTools(
                   Math.abs(effectiveAxisWorld.y) > 0.9 &&
                   Math.abs(effectiveAxisWorld.x) < 0.2 &&
                   Math.abs(effectiveAxisWorld.z) < 0.2
+
+                // Keep circle-like wall center handle dedicated to height only.
+                if (circleKind === 'center' && !isYAxisDrag) {
+                  return {
+                    handled: true,
+                    clearPointerTrackingState: true,
+                    preventDefault: true,
+                    stopPropagation: true,
+                    stopImmediatePropagation: true,
+                  }
+                }
 
                 if (isYAxisDrag) {
                   const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
@@ -512,6 +525,18 @@ export function handlePointerDownTools(
                 }
               }
 
+              return {
+                handled: true,
+                clearPointerTrackingState: true,
+                preventDefault: true,
+                stopPropagation: true,
+                stopImmediatePropagation: true,
+              }
+            }
+
+            if (isCircleLikeWallEditMode) {
+              // Defensive guard: circle/polygon wall edit mode should never expose
+              // per-endpoint/per-joint editing even if a stale handle is picked.
               return {
                 handled: true,
                 clearPointerTrackingState: true,
