@@ -7698,6 +7698,16 @@ function applyPendingScenePatches(): boolean {
   return true
 }
 
+function flushPendingScenePatchesForInteraction(): boolean {
+  if (!sceneStore.isSceneReady) {
+    return false
+  }
+  if (shouldDeferSceneGraphSync()) {
+    return false
+  }
+  return applyPendingScenePatches()
+}
+
 function shouldDeferSceneGraphSync(): boolean {
   if (!sceneStore.isSceneReady) {
     return false
@@ -11831,11 +11841,15 @@ function resolveBuildToolForNode(node: any): BuildTool | null {
     : null
 }
 
+function resolveBuildToolForNodeId(nodeId: string | null | undefined): BuildTool | null {
+  return resolveBuildToolForNode(resolveSceneNodeById(nodeId))
+}
+
 function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | null): boolean {
   if (!toolForNode) {
     return false
   }
-  const hitNode: any = sceneStore.getNodeById(nodeId)
+  const hitNode: any = resolveSceneNodeById(nodeId)
   const nodeLocked = Boolean(hitNode?.locked) || sceneStore.isNodeSelectionLocked(nodeId)
   if (nodeLocked) {
     return false
@@ -11926,10 +11940,10 @@ async function handlePointerDown(event: PointerEvent) {
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
   if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
+    flushPendingScenePatchesForInteraction()
     const hit = pickNodeAtPointer(event)
     if (hit) {
-      const hitNode: any = sceneStore.getNodeById(hit.nodeId)
-      const toolForNode = resolveBuildToolForNode(hitNode)
+      const toolForNode = resolveBuildToolForNodeId(hit.nodeId)
       if (tryEnterNodeBuildToolEditMode(hit.nodeId, toolForNode)) {
         event.preventDefault()
         event.stopPropagation()
@@ -13936,14 +13950,14 @@ function handleCanvasDoubleClick(event: MouseEvent) {
     }
   }
 
+  flushPendingScenePatchesForInteraction()
   const hit = pickNodeAtPointer(event)
   if (!hit) {
     return
   }
 
   const hitNodeId = hit.nodeId
-  const hitNode: any = sceneStore.getNodeById(hitNodeId)
-  const toolForNode = resolveBuildToolForNode(hitNode)
+  const toolForNode = resolveBuildToolForNodeId(hitNodeId)
 
   // UX: double-click an unlocked Wall/Floor/Road node to immediately enter its edit mode.
   if (!tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)) {
