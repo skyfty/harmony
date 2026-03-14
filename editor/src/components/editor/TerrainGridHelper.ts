@@ -360,7 +360,7 @@ function createGroundDefinitionSnapshot(definition: GroundDynamicMesh): GroundRu
       : null,
     generation: rawDefinition.generation ? (toRaw(rawDefinition.generation) as GroundDynamicMesh['generation']) : null,
     terrainScatter: rawDefinition.terrainScatter ? (toRaw(rawDefinition.terrainScatter) as GroundDynamicMesh['terrainScatter']) : null,
-    terrainPaint: rawDefinition.terrainPaint ? (toRaw(rawDefinition.terrainPaint) as GroundDynamicMesh['terrainPaint']) : null,
+    legacyTerrainPaint: rawDefinition.legacyTerrainPaint ? (toRaw(rawDefinition.legacyTerrainPaint) as GroundDynamicMesh['legacyTerrainPaint']) : null,
   }
 }
 

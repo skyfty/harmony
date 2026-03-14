@@ -1,11 +1,11 @@
 import {
-  clampTerrainPaintV3Settings,
-  clampTerrainPaintLayerDefinition,
+  clampTerrainPaintSettings,
+  clampLegacyTerrainPaintLayerDefinition,
   normalizeGroundSurfaceChunkTextureMap,
   TERRAIN_PAINT_VERSION,
   type GroundSurfaceChunkTextureMap,
+  type LegacyTerrainPaintSettings,
   type TerrainPaintSettings,
-  type TerrainPaintV3Settings,
 } from './index'
 
 export const GROUND_PAINT_SIDECAR_FILENAME = 'ground-paint.bin'
@@ -19,49 +19,77 @@ const STRING_DECODER = new TextDecoder()
 
 export type GroundPaintSidecarPayload = {
   groundNodeId: string
+  legacyTerrainPaint?: LegacyTerrainPaintSettings | null
   terrainPaint: TerrainPaintSettings | null
-  terrainPaintV3?: TerrainPaintV3Settings | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
 }
 
 function normalizePayload(payload: GroundPaintSidecarPayload): GroundPaintSidecarPayload {
+  const legacyTerrainPaint = payload.legacyTerrainPaint
   const terrainPaint = payload.terrainPaint
   if (!terrainPaint) {
     return {
       groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
       terrainPaint: null,
-      terrainPaintV3: payload.terrainPaintV3 ? clampTerrainPaintV3Settings(payload.terrainPaintV3) : null,
+      legacyTerrainPaint: legacyTerrainPaint
+        ? {
+          version: TERRAIN_PAINT_VERSION,
+          weightmapResolution: Number.isFinite(legacyTerrainPaint.weightmapResolution)
+            ? Math.max(8, Math.min(2048, Math.round(legacyTerrainPaint.weightmapResolution)))
+            : 256,
+          layers: Array.isArray(legacyTerrainPaint.layers)
+            ? legacyTerrainPaint.layers
+              .map((layer) => clampLegacyTerrainPaintLayerDefinition(layer))
+              .filter((layer) => layer.id.length > 0 && layer.textureAssetId.length > 0)
+            : [],
+          chunks: Object.fromEntries(
+            Object.entries(legacyTerrainPaint.chunks ?? {})
+              .map(([chunkKey, chunkValue]) => {
+                const normalizedKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+                const pages = Array.isArray(chunkValue?.pages)
+                  ? chunkValue.pages
+                    .map((page) => ({ logicalId: typeof page?.logicalId === 'string' ? page.logicalId.trim() : '' }))
+                    .filter((page) => page.logicalId.length > 0)
+                  : []
+                return [normalizedKey, { pages }] as const
+              })
+              .filter(([chunkKey]) => chunkKey.length > 0),
+          ),
+        }
+        : null,
       groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(payload.groundSurfaceChunks),
     }
   }
 
   return {
     groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
-    terrainPaint: {
-      version: TERRAIN_PAINT_VERSION,
-      weightmapResolution: Number.isFinite(terrainPaint.weightmapResolution)
-        ? Math.max(8, Math.min(2048, Math.round(terrainPaint.weightmapResolution)))
-        : 256,
-      layers: Array.isArray(terrainPaint.layers)
-        ? terrainPaint.layers
-            .map((layer) => clampTerrainPaintLayerDefinition(layer))
+    legacyTerrainPaint: legacyTerrainPaint
+      ? {
+        version: TERRAIN_PAINT_VERSION,
+        weightmapResolution: Number.isFinite(legacyTerrainPaint.weightmapResolution)
+          ? Math.max(8, Math.min(2048, Math.round(legacyTerrainPaint.weightmapResolution)))
+          : 256,
+        layers: Array.isArray(legacyTerrainPaint.layers)
+          ? legacyTerrainPaint.layers
+            .map((layer) => clampLegacyTerrainPaintLayerDefinition(layer))
             .filter((layer) => layer.id.length > 0 && layer.textureAssetId.length > 0)
-        : [],
-      chunks: Object.fromEntries(
-        Object.entries(terrainPaint.chunks ?? {})
-          .map(([chunkKey, chunkValue]) => {
-            const normalizedKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
-            const pages = Array.isArray(chunkValue?.pages)
-              ? chunkValue.pages
+          : [],
+        chunks: Object.fromEntries(
+          Object.entries(legacyTerrainPaint.chunks ?? {})
+            .map(([chunkKey, chunkValue]) => {
+              const normalizedKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+              const pages = Array.isArray(chunkValue?.pages)
+                ? chunkValue.pages
                   .map((page) => ({ logicalId: typeof page?.logicalId === 'string' ? page.logicalId.trim() : '' }))
                   .filter((page) => page.logicalId.length > 0)
-              : []
-            return [normalizedKey, { pages }] as const
-          })
-          .filter(([chunkKey]) => chunkKey.length > 0),
-      ),
-    },
-    terrainPaintV3: payload.terrainPaintV3 ? clampTerrainPaintV3Settings(payload.terrainPaintV3) : null,
+                : []
+              return [normalizedKey, { pages }] as const
+            })
+            .filter(([chunkKey]) => chunkKey.length > 0),
+        ),
+      }
+      : null,
+    terrainPaint: clampTerrainPaintSettings(terrainPaint),
     groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(payload.groundSurfaceChunks),
   }
 }
@@ -71,8 +99,8 @@ export function serializeGroundPaintSidecar(rawPayload: GroundPaintSidecarPayloa
   if (!payload.groundNodeId) {
     throw new Error('groundNodeId is required for ground paint sidecar')
   }
-  if (!payload.terrainPaint && !payload.terrainPaintV3) {
-    throw new Error('terrainPaint or terrainPaintV3 is required for ground paint sidecar')
+  if (!payload.terrainPaint) {
+    throw new Error('terrainPaint is required for ground paint sidecar')
   }
 
   const bodyBytes = STRING_ENCODER.encode(JSON.stringify(payload))
@@ -105,7 +133,7 @@ export function deserializeGroundPaintSidecar(buffer: ArrayBuffer): GroundPaintS
   const payloadBytes = new Uint8Array(buffer, GROUND_PAINT_SIDECAR_HEADER_BYTES, byteLength)
   const parsed = JSON.parse(STRING_DECODER.decode(payloadBytes)) as GroundPaintSidecarPayload
   const normalized = normalizePayload(parsed)
-  if (!normalized.groundNodeId || (!normalized.terrainPaint && !normalized.terrainPaintV3)) {
+  if (!normalized.groundNodeId || !normalized.terrainPaint) {
     throw new Error('Invalid ground paint sidecar payload')
   }
   return normalized

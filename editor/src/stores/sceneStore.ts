@@ -1412,7 +1412,7 @@ function commitGroundPaintRuntimeEdit(
     bumpSceneNodePropertyVersion: () => void
   },
   nodeId: string,
-  terrainPaint: GroundDynamicMesh['terrainPaint'],
+  terrainPaint: GroundDynamicMesh['legacyTerrainPaint'],
 ): boolean {
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
@@ -4969,8 +4969,8 @@ function collectTerrainScatterAssetDependencies(
 }
 
 function collectTerrainPaintAssetDependencies(
-  terrainPaint: GroundDynamicMesh['terrainPaint'] | null | undefined,
-  terrainPaintV3: GroundDynamicMesh['terrainPaintV3'] | null | undefined,
+  terrainPaint: GroundDynamicMesh['legacyTerrainPaint'] | null | undefined,
+  terrainPaintRuntime: GroundDynamicMesh['terrainPaint'] | null | undefined,
   groundSurfaceChunks: GroundDynamicMesh['groundSurfaceChunks'] | null | undefined,
   bakedTextureAssetId: string | null | undefined,
   bucket: Set<string>,
@@ -4995,13 +4995,13 @@ function collectTerrainPaintAssetDependencies(
     })
   }
 
-  if (terrainPaintV3?.version === 3) {
-    if (Array.isArray(terrainPaintV3.layers)) {
-      terrainPaintV3.layers.forEach((layer) => {
+  if (terrainPaintRuntime?.version === 3) {
+    if (Array.isArray(terrainPaintRuntime.layers)) {
+      terrainPaintRuntime.layers.forEach((layer) => {
         collectAssetIdCandidate(bucket, layer?.textureAssetId)
       })
     }
-    Object.values(terrainPaintV3.chunks ?? {}).forEach((chunkState) => {
+    Object.values(terrainPaintRuntime.chunks ?? {}).forEach((chunkState) => {
       Object.values(chunkState?.layers ?? {}).forEach((layerState) => {
         Object.values(layerState?.tiles ?? {}).forEach((tileRef) => {
           const logicalId = typeof tileRef?.logicalId === 'string' ? tileRef.logicalId.trim() : ''
@@ -5045,8 +5045,8 @@ function collectGroundPaintAssetDependencies(scene: StoredSceneDocument, bucket:
   const runtimeState = useGroundPaintStore().getSceneGroundPaint(scene.id)
   if (runtimeState?.nodeId === groundNode.id) {
     collectTerrainPaintAssetDependencies(
+      runtimeState.legacyTerrainPaint,
       runtimeState.terrainPaint,
-      runtimeState.terrainPaintV3,
       runtimeState.groundSurfaceChunks,
       (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId,
       bucket,
@@ -5054,8 +5054,8 @@ function collectGroundPaintAssetDependencies(scene: StoredSceneDocument, bucket:
     return
   }
   collectTerrainPaintAssetDependencies(
+    (groundNode.dynamicMesh as any)?.legacyTerrainPaint,
     (groundNode.dynamicMesh as any)?.terrainPaint,
-    (groundNode.dynamicMesh as any)?.terrainPaintV3,
     (groundNode.dynamicMesh as any)?.groundSurfaceChunks,
     (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId,
     bucket,
@@ -8243,6 +8243,18 @@ export const useSceneStore = defineStore('scene', {
           delete (incoming as Record<string, unknown>).terrainScatter
           shouldPersistScatterSidecar = true
         }
+        if (Object.prototype.hasOwnProperty.call(incoming, 'legacyTerrainPaint')) {
+          const nextTerrainPaint = manualDeepClone((incoming as Record<string, unknown>).terrainPaint ?? null) as Parameters<
+            ReturnType<typeof useGroundPaintStore>['replaceLegacyTerrainPaint']
+          >[2]
+          useGroundPaintStore().replaceLegacyTerrainPaint(
+            this.currentSceneId,
+            nodeId,
+            nextTerrainPaint,
+          )
+          delete (incoming as Record<string, unknown>).legacyTerrainPaint
+          shouldPersistPaintSidecar = true
+        }
         if (Object.prototype.hasOwnProperty.call(incoming, 'terrainPaint')) {
           const nextTerrainPaint = manualDeepClone((incoming as Record<string, unknown>).terrainPaint ?? null) as Parameters<
             ReturnType<typeof useGroundPaintStore>['replaceTerrainPaint']
@@ -8253,18 +8265,6 @@ export const useSceneStore = defineStore('scene', {
             nextTerrainPaint,
           )
           delete (incoming as Record<string, unknown>).terrainPaint
-          shouldPersistPaintSidecar = true
-        }
-        if (Object.prototype.hasOwnProperty.call(incoming, 'terrainPaintV3')) {
-          const nextTerrainPaintV3 = manualDeepClone((incoming as Record<string, unknown>).terrainPaintV3 ?? null) as Parameters<
-            ReturnType<typeof useGroundPaintStore>['replaceTerrainPaintV3']
-          >[2]
-          useGroundPaintStore().replaceTerrainPaintV3(
-            this.currentSceneId,
-            nodeId,
-            nextTerrainPaintV3,
-          )
-          delete (incoming as Record<string, unknown>).terrainPaintV3
           shouldPersistPaintSidecar = true
         }
         if (Object.prototype.hasOwnProperty.call(incoming, 'groundSurfaceChunks')) {
@@ -8313,7 +8313,7 @@ export const useSceneStore = defineStore('scene', {
     },
     commitGroundPaintEdit(
       nodeId: string,
-      terrainPaint: GroundDynamicMesh['terrainPaint'],
+      terrainPaint: GroundDynamicMesh['legacyTerrainPaint'],
     ) {
       return commitGroundPaintRuntimeEdit(this, nodeId, terrainPaint)
     },
@@ -9296,7 +9296,7 @@ export const useSceneStore = defineStore('scene', {
         const dynamicMesh = node.dynamicMesh
         if (dynamicMesh && dynamicMesh.type === 'Ground') {
           const groundMesh = dynamicMesh as GroundDynamicMesh
-          const terrainPaint = groundMesh.terrainPaint ?? null
+          const terrainPaint = groundMesh.legacyTerrainPaint ?? null
           if (terrainPaint && terrainPaint.version === 2 && terrainPaint.chunks) {
             Object.values(terrainPaint.chunks).forEach((chunkRef) => {
               const pages = Array.isArray((chunkRef as any)?.pages) ? (chunkRef as any).pages : []

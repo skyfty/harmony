@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh, SceneNode, TerrainPaintBlendMode, TerrainPaintLayerDefinition } from './index'
+import type { GroundDynamicMesh, SceneNode, TerrainPaintBlendMode, LegacyTerrainPaintLayerDefinition } from './index'
 import { stableSerialize } from './stableSerialize'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import {
@@ -103,7 +103,7 @@ function repeat01(value: number): number {
   return wrapped < 0 ? wrapped + 1 : wrapped
 }
 
-function terrainPaintChannelIndex(channel: TerrainPaintLayerDefinition['channel']): number {
+function terrainPaintChannelIndex(channel: LegacyTerrainPaintLayerDefinition['channel']): number {
   switch (channel) {
     case 'g':
       return 1
@@ -116,7 +116,7 @@ function terrainPaintChannelIndex(channel: TerrainPaintLayerDefinition['channel'
   }
 }
 
-function getTerrainPaintLayerSlotIndex(layer: TerrainPaintLayerDefinition): number {
+function getTerrainPaintLayerSlotIndex(layer: LegacyTerrainPaintLayerDefinition): number {
   return Math.max(0, Math.floor(layer.pageIndex)) * 4 + terrainPaintChannelIndex(layer.channel)
 }
 
@@ -408,7 +408,7 @@ function readWeightValue(page: Uint8ClampedArray | null, resolution: number, u: 
   return sampleImageChannel({ width: resolution, height: resolution, data: page }, u, v, 'clamp', channelIndex)
 }
 
-function compileTerrainPaintLayer(layer: TerrainPaintLayerDefinition, imageData: ImageDataSource): CompiledTerrainPaintLayer {
+function compileTerrainPaintLayer(layer: LegacyTerrainPaintLayerDefinition, imageData: ImageDataSource): CompiledTerrainPaintLayer {
   const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180
   return {
     pageIndex: Math.max(0, Math.floor(layer.pageIndex)),
@@ -429,7 +429,7 @@ function compileTerrainPaintLayer(layer: TerrainPaintLayerDefinition, imageData:
 function buildGroundSurfacePreviewSignature(groundNode: SceneNode, definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
   const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
   const props = component ? clampLandformsComponentProps(component.props) : { layers: [] }
-  const terrainPaint = definition.terrainPaint ?? null
+  const terrainPaint = definition.legacyTerrainPaint ?? null
   const liveKeys = options.liveChunkPagesByKey ? Array.from(options.liveChunkPagesByKey.keys()).sort() : []
   return stableSerialize({
     width: normalizeDimension(definition.width),
@@ -502,7 +502,7 @@ export async function composeGroundSurfacePreviewCanvas(
     }
   }
 
-  const terrainPaint = definition.terrainPaint ?? null
+  const terrainPaint = definition.legacyTerrainPaint ?? null
   if (terrainPaint && terrainPaint.version === 2 && Array.isArray(terrainPaint.layers) && terrainPaint.layers.length) {
     const sortedLayers = [...terrainPaint.layers].sort((left, right) => getTerrainPaintLayerSlotIndex(left) - getTerrainPaintLayerSlotIndex(right))
     const compiledLayers: CompiledTerrainPaintLayer[] = []
@@ -622,8 +622,8 @@ export async function composeGroundSurfacePreviewCanvas(
             }
             const layerUv = transformTerrainPaintUv([meshU, meshV], [groundU, groundV], layer)
             sampleImageData(layer.imageData, layerUv[0], layerUv[1], 'repeat', sampleScratch)
-            const blended = terrainPaintBlendColor([colorR, colorG, colorB], [sampleScratch[0], sampleScratch[1], sampleScratch[2]], layer.blendMode)
-            const layerAlpha = layer.opacity * sampleScratch[3] * weight
+            const blended = terrainPaintBlendColor([colorR, colorG, colorB], [sampleScratch[0] ?? 0, sampleScratch[1] ?? 0, sampleScratch[2] ?? 0], layer.blendMode)
+            const layerAlpha = layer.opacity * (sampleScratch[3] ?? 0) * weight
             if (layerAlpha <= 0) {
               continue
             }
@@ -784,7 +784,7 @@ export function syncGroundSurfacePreviewForGround(
     clearLandformsPreviewForGround(groundObject)
     return false
   }
-  const hasTerrainPaint = Boolean(dynamicMesh.terrainPaint?.layers?.length)
+  const hasTerrainPaint = Boolean(dynamicMesh.legacyTerrainPaint?.layers?.length)
   const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
   const landformsProps = component ? clampLandformsComponentProps(component.props) : null
   const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))

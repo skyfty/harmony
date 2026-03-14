@@ -105,20 +105,20 @@ export {
 export type { GroundPaintSidecarPayload } from './groundPaintSidecar'
 
 export {
-  formatTerrainPaintV3ChunkKey,
-  parseTerrainPaintV3ChunkKey,
-  formatTerrainPaintV3TileKey,
-  parseTerrainPaintV3TileKey,
-  resolveTerrainPaintV3ChunkBounds,
-  resolveTerrainPaintV3TilesPerAxis,
-  resolveTerrainPaintV3TileWorldBounds,
-} from './groundPaintV3'
+  formatTerrainPaintChunkKey,
+  parseTerrainPaintChunkKey,
+  formatTerrainPaintTileKey,
+  parseTerrainPaintTileKey,
+  resolveTerrainPaintChunkBounds,
+  resolveTerrainPaintTilesPerAxis,
+  resolveTerrainPaintTileWorldBounds,
+} from './terrainPaintTiles'
 export type {
-  TerrainPaintV3ChunkBounds,
-  TerrainPaintV3ChunkKeyParts,
-  TerrainPaintV3TileBounds,
-  TerrainPaintV3TileKeyParts,
-} from './groundPaintV3'
+  TerrainPaintChunkBounds,
+  TerrainPaintChunkKeyParts,
+  TerrainPaintTileBounds,
+  TerrainPaintTileKeyParts,
+} from './terrainPaintTiles'
 
 export {
   unzipScenePackage,
@@ -1265,7 +1265,7 @@ export function cloneTerrainPaintLayerStyle(style: TerrainPaintLayerStyle): Terr
   }
 }
 
-export interface TerrainPaintLayerDefinition extends TerrainPaintLayerStyle {
+export interface LegacyTerrainPaintLayerDefinition extends TerrainPaintLayerStyle {
   /** Stable layer id used by editor/runtime state. */
   id: string
   /** Which weightmap page this layer occupies. */
@@ -1307,13 +1307,13 @@ export function buildTerrainPaintLayerPlacement(slotIndex: number): {
   }
 }
 
-export function getTerrainPaintLayerSlotIndex(layer: Pick<TerrainPaintLayerDefinition, 'pageIndex' | 'channel'>): number {
+export function getTerrainPaintLayerSlotIndex(layer: Pick<LegacyTerrainPaintLayerDefinition, 'pageIndex' | 'channel'>): number {
   return Math.max(0, Math.floor(layer.pageIndex)) * TERRAIN_PAINT_PAGE_SIZE + terrainPaintChannelToIndex(layer.channel)
 }
 
-export function clampTerrainPaintLayerDefinition(
-  layer: Partial<TerrainPaintLayerDefinition> | null | undefined,
-): TerrainPaintLayerDefinition {
+export function clampLegacyTerrainPaintLayerDefinition(
+  layer: Partial<LegacyTerrainPaintLayerDefinition> | null | undefined,
+): LegacyTerrainPaintLayerDefinition {
   const style = clampTerrainPaintLayerStyle(layer)
   return {
     id: typeof layer?.id === 'string' ? layer.id.trim() : '',
@@ -1324,7 +1324,7 @@ export function clampTerrainPaintLayerDefinition(
   }
 }
 
-export function cloneTerrainPaintLayerDefinition(layer: TerrainPaintLayerDefinition): TerrainPaintLayerDefinition {
+export function cloneLegacyTerrainPaintLayerDefinition(layer: LegacyTerrainPaintLayerDefinition): LegacyTerrainPaintLayerDefinition {
   return {
     id: layer.id,
     pageIndex: layer.pageIndex,
@@ -1334,7 +1334,7 @@ export function cloneTerrainPaintLayerDefinition(layer: TerrainPaintLayerDefinit
   }
 }
 
-export interface TerrainPaintV3LayerDefinition extends TerrainPaintLayerStyle {
+export interface TerrainPaintLayerDefinition extends TerrainPaintLayerStyle {
   /** Stable layer id used by editor/runtime state. */
   id: string
   /** Texture/image asset id to blend for this layer. */
@@ -1347,9 +1347,9 @@ export interface TerrainPaintV3LayerDefinition extends TerrainPaintLayerStyle {
   feather: number
 }
 
-export function clampTerrainPaintV3LayerDefinition(
-  layer: Partial<TerrainPaintV3LayerDefinition> | null | undefined,
-): TerrainPaintV3LayerDefinition {
+export function clampTerrainPaintLayerDefinition(
+  layer: Partial<TerrainPaintLayerDefinition> | null | undefined,
+): TerrainPaintLayerDefinition {
   const style = clampTerrainPaintLayerStyle(layer)
   return {
     id: typeof layer?.id === 'string' ? layer.id.trim() : '',
@@ -1361,7 +1361,7 @@ export function clampTerrainPaintV3LayerDefinition(
   }
 }
 
-export function cloneTerrainPaintV3LayerDefinition(layer: TerrainPaintV3LayerDefinition): TerrainPaintV3LayerDefinition {
+export function cloneTerrainPaintLayerDefinition(layer: TerrainPaintLayerDefinition): TerrainPaintLayerDefinition {
   return {
     id: layer.id,
     textureAssetId: layer.textureAssetId,
@@ -1383,23 +1383,23 @@ export interface TerrainPaintChunkWeightmapPages {
 
 export type TerrainPaintChunkWeightmapMap = Record<string, TerrainPaintChunkWeightmapPages>
 
-export interface TerrainPaintV3MaskTileRef {
+export interface TerrainPaintMaskTileRef {
   /** Stable content id of the tile mask stored as a private resource. */
   logicalId: string
   /** Monotonic revision for this tile to support incremental preview/bake. */
   revision: number
 }
 
-export interface TerrainPaintV3LayerMaskTiles {
-  tiles: Record<string, TerrainPaintV3MaskTileRef>
+export interface TerrainPaintLayerMaskTiles {
+  tiles: Record<string, TerrainPaintMaskTileRef>
 }
 
-export interface TerrainPaintV3ChunkMaskState {
-  layers: Record<string, TerrainPaintV3LayerMaskTiles>
+export interface TerrainPaintChunkMaskState {
+  layers: Record<string, TerrainPaintLayerMaskTiles>
   revision: number
 }
 
-export type TerrainPaintV3ChunkMaskMap = Record<string, TerrainPaintV3ChunkMaskState>
+export type TerrainPaintChunkMaskMap = Record<string, TerrainPaintChunkMaskState>
 
 export interface GroundSurfaceChunkTextureRef {
   textureAssetId: string
@@ -1408,18 +1408,18 @@ export interface GroundSurfaceChunkTextureRef {
 
 export type GroundSurfaceChunkTextureMap = Record<string, GroundSurfaceChunkTextureRef>
 
-export interface TerrainPaintSettings {
+export interface LegacyTerrainPaintSettings {
   /** Versioned payload for paged terrain paint state. */
   version: typeof TERRAIN_PAINT_VERSION
   /** Weightmap resolution per chunk (pixels per side). */
   weightmapResolution: number
   /** Ordered paint layers. Base is the ground material where total paint weight is below 1. */
-  layers: TerrainPaintLayerDefinition[]
+  layers: LegacyTerrainPaintLayerDefinition[]
   /** Weightmap asset references keyed by chunk key (e.g., "0:0"). */
   chunks: TerrainPaintChunkWeightmapMap
 }
 
-export interface TerrainPaintV3Settings {
+export interface TerrainPaintSettings {
   /** Versioned payload for tiled terrain paint state. */
   version: typeof TERRAIN_PAINT_V3_VERSION
   /** Single mask tile resolution in pixels. */
@@ -1427,17 +1427,17 @@ export interface TerrainPaintV3Settings {
   /** Target world-space tile size in meters. */
   tileWorldSize: number
   /** Ordered layer definitions. */
-  layers: TerrainPaintV3LayerDefinition[]
+  layers: TerrainPaintLayerDefinition[]
   /** Mask tiles keyed by ground chunk key (e.g., "0:0"). */
-  chunks: TerrainPaintV3ChunkMaskMap
+  chunks: TerrainPaintChunkMaskMap
 }
 
-export function clampTerrainPaintV3Settings(
-  settings: Partial<TerrainPaintV3Settings> | null | undefined,
-): TerrainPaintV3Settings {
+export function clampTerrainPaintSettings(
+  settings: Partial<TerrainPaintSettings> | null | undefined,
+): TerrainPaintSettings {
   const layers = Array.isArray(settings?.layers)
     ? settings.layers
-      .map((layer) => clampTerrainPaintV3LayerDefinition(layer))
+      .map((layer) => clampTerrainPaintLayerDefinition(layer))
       .filter((layer) => layer.id.length > 0)
       .sort((left, right) => left.zIndex - right.zIndex)
       .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
@@ -1469,34 +1469,34 @@ export function clampTerrainPaintV3Settings(
                       revision: Math.max(0, Math.trunc(clampTerrainPaintFinite(tileRef?.revision, 0))),
                     }] as const
                   })
-                  .filter((entry): entry is readonly [string, TerrainPaintV3MaskTileRef] => Boolean(entry)),
+                  .filter((entry): entry is readonly [string, TerrainPaintMaskTileRef] => Boolean(entry)),
               )
               return [normalizedLayerId, { tiles }] as const
             })
-            .filter((entry): entry is readonly [string, TerrainPaintV3LayerMaskTiles] => Boolean(entry)),
+            .filter((entry): entry is readonly [string, TerrainPaintLayerMaskTiles] => Boolean(entry)),
         )
         return [normalizedChunkKey, {
           layers: normalizedLayers,
           revision: Math.max(0, Math.trunc(clampTerrainPaintFinite(chunkState?.revision, 0))),
         }] as const
       })
-      .filter((entry): entry is readonly [string, TerrainPaintV3ChunkMaskState] => Boolean(entry)),
+      .filter((entry): entry is readonly [string, TerrainPaintChunkMaskState] => Boolean(entry)),
   )
   return {
     version: TERRAIN_PAINT_V3_VERSION,
     tileResolution: Number.isFinite(settings?.tileResolution)
-      ? Math.max(8, Math.min(1024, Math.round(settings.tileResolution)))
+      ? Math.max(8, Math.min(1024, Math.round(settings?.tileResolution ?? TERRAIN_PAINT_V3_TILE_RESOLUTION)))
       : TERRAIN_PAINT_V3_TILE_RESOLUTION,
     tileWorldSize: Number.isFinite(settings?.tileWorldSize)
-      ? Math.max(0.25, Math.min(256, settings.tileWorldSize))
+      ? Math.max(0.25, Math.min(256, settings?.tileWorldSize ?? TERRAIN_PAINT_V3_TILE_WORLD_SIZE))
       : TERRAIN_PAINT_V3_TILE_WORLD_SIZE,
     layers,
     chunks,
   }
 }
 
-export function cloneTerrainPaintV3Settings(settings: TerrainPaintV3Settings): TerrainPaintV3Settings {
-  return clampTerrainPaintV3Settings(settings)
+export function cloneTerrainPaintSettings(settings: TerrainPaintSettings): TerrainPaintSettings {
+  return clampTerrainPaintSettings(settings)
 }
 
 export function normalizeGroundSurfaceChunkTextureMap(
@@ -1542,8 +1542,8 @@ export interface GroundDynamicMesh {
   textureName?: string | null
   generation?: GroundGenerationSettings | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
+  legacyTerrainPaint?: LegacyTerrainPaintSettings | null
   terrainPaint?: TerrainPaintSettings | null
-  terrainPaintV3?: TerrainPaintV3Settings | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
   terrainPaintBakedTextureAssetId?: string | null
 }
