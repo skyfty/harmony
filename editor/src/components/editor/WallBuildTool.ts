@@ -23,6 +23,7 @@ type PointerInteractionApi = {
 
 export type WallBuildToolHandle = {
   getSession: () => WallBuildToolSession | null
+  syncBrushPreset: () => void
   flushPreviewIfNeeded: (scene: THREE.Scene | null) => void
   flushPreview: (scene: THREE.Scene | null) => void
   handlePointerDown: (event: PointerEvent) => boolean
@@ -164,6 +165,86 @@ export function createWallBuildTool(options: {
     return wallComponent?.props ?? null
   }
 
+  const applyWallPropsToSession = (
+    target: WallBuildToolSession,
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null,
+  ) => {
+    target.wallRenderProps = wallProps
+    if (!wallProps) {
+      return
+    }
+    target.dimensions = options.normalizeWallDimensionsForViewport({
+      height: wallProps.height,
+      width: wallProps.width,
+      thickness: wallProps.thickness,
+    })
+    target.bodyAssetId = wallProps.bodyAssetId ?? null
+  }
+
+  const syncBrushPresetToSession = (target: WallBuildToolSession, applyToCommittedNode = true) => {
+    if (target.branchFrom) {
+      return
+    }
+
+    const brush = options.getWallBrush()
+    const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
+      ? brush.presetAssetId.trim()
+      : null
+    const presetData = brush?.presetData ?? null
+
+    if (presetAssetId) {
+      target.brushPresetAssetId = presetAssetId
+      target.brushPresetData = presetData
+
+      if (presetData) {
+        applyWallPropsToSession(target, presetData.wallProps)
+      }
+
+      if (applyToCommittedNode && target.nodeId) {
+        void options.sceneStore
+          .applyWallPresetToNode(target.nodeId, presetAssetId, presetData)
+          .catch((error: unknown) => {
+            console.warn('Failed to sync active wall preset brush', presetAssetId, error)
+          })
+      }
+
+      if (presetData) {
+        return
+      }
+
+      target.dimensions = options.normalizeWallDimensionsForViewport(target.dimensions)
+      return
+    }
+
+    target.brushPresetAssetId = null
+    target.brushPresetData = null
+
+    if (target.nodeId) {
+      const node = findSceneNode(options.sceneStore.nodes, target.nodeId)
+      if (node?.dynamicMesh?.type === 'Wall') {
+        target.dimensions = getWallNodeDimensions(node)
+        target.segments = expandWallSegmentsToWorld(node)
+        applyWallPropsToSession(target, getWallNodeRenderProps(node))
+        return
+      }
+    }
+
+    if (!target.dragStart && !target.shapeDraft && target.segments.length === 0) {
+      const selectedId = options.sceneStore.selectedNodeId
+      if (selectedId) {
+        const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
+        if (selectedNode?.dynamicMesh?.type === 'Wall') {
+          target.dimensions = getWallNodeDimensions(selectedNode)
+          applyWallPropsToSession(target, getWallNodeRenderProps(selectedNode))
+          return
+        }
+      }
+      applyWallPropsToSession(target, null)
+      target.bodyAssetId = null
+      target.dimensions = options.normalizeWallDimensionsForViewport(target.dimensions)
+    }
+  }
+
   const constrainWallEndPoint = (start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 => {
     // Keep legacy behavior of returning the start point when the movement doesn't cross a grid cell.
     const delta = target.clone().sub(start)
@@ -281,19 +362,7 @@ export function createWallBuildTool(options: {
       const hasActiveBrushPreset = Boolean(presetAssetId)
 
       if (hasActiveBrushPreset) {
-        target.brushPresetAssetId = presetAssetId
-        target.brushPresetData = brush?.presetData ?? null
-
-        const wallProps = brush?.presetData?.wallProps ?? null
-        target.wallRenderProps = wallProps
-        if (wallProps) {
-          target.dimensions = options.normalizeWallDimensionsForViewport({
-            height: wallProps.height,
-            width: wallProps.width,
-            thickness: wallProps.thickness,
-          })
-          target.bodyAssetId = wallProps.bodyAssetId ?? null
-        }
+        syncBrushPresetToSession(target, false)
       } else {
         const selectedId = options.sceneStore.selectedNodeId
         target.wallRenderProps = null
@@ -305,7 +374,7 @@ export function createWallBuildTool(options: {
               | SceneNodeComponentState<WallComponentProps>
               | undefined
             target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-            target.wallRenderProps = wallComponent?.props ?? null
+            applyWallPropsToSession(target, wallComponent?.props ?? null)
           }
         }
 
@@ -325,7 +394,7 @@ export function createWallBuildTool(options: {
           target.nodeId = selectedNode.id
           target.dimensions = getWallNodeDimensions(selectedNode)
           target.segments = expandWallSegmentsToWorld(selectedNode)
-          target.wallRenderProps = getWallNodeRenderProps(selectedNode)
+          applyWallPropsToSession(target, getWallNodeRenderProps(selectedNode))
         }
       }
     } else {
@@ -333,7 +402,7 @@ export function createWallBuildTool(options: {
       if (node?.dynamicMesh?.type === 'Wall') {
         target.dimensions = getWallNodeDimensions(node)
         target.segments = expandWallSegmentsToWorld(node)
-        target.wallRenderProps = getWallNodeRenderProps(node)
+        applyWallPropsToSession(target, getWallNodeRenderProps(node))
       }
     }
 
@@ -513,6 +582,8 @@ export function createWallBuildTool(options: {
       segments: segmentPayload,
       dimensions: session.dimensions,
       bodyAssetId: session.bodyAssetId,
+      wallComponentProps: session.wallRenderProps,
+      wallPresetData: session.brushPresetData,
     })
     if (!created) {
       cancelShapeDraft()
@@ -572,6 +643,8 @@ export function createWallBuildTool(options: {
         segments: segmentPayload,
         dimensions: session.dimensions,
         bodyAssetId: session.bodyAssetId,
+        wallComponentProps: session.wallRenderProps,
+        wallPresetData: session.brushPresetData,
       })
       if (!created) {
         cancelDrag()
@@ -688,6 +761,14 @@ export function createWallBuildTool(options: {
 
   return {
     getSession: () => session,
+
+    syncBrushPreset: () => {
+      if (!session) {
+        return
+      }
+      syncBrushPresetToSession(session)
+      previewRenderer.markDirty()
+    },
 
     flushPreviewIfNeeded: (scene: THREE.Scene | null) => {
       previewRenderer.flushIfNeeded(scene, session)

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { WallDynamicMesh } from '@schema'
 import { createWallRenderGroup, updateWallGroup } from '@schema/wallMesh'
 import type { WallComponentProps } from '@schema/components'
+import { stableSerialize } from '@schema/stableSerialize'
 import { buildWallDynamicMeshFromWorldSegments } from '@/stores/wallUtils'
 import type { WallPreviewRenderData } from './WallRenderer'
 import { applyAirWallVisualToWallGroup } from './WallRenderer'
@@ -200,22 +201,8 @@ export function createWallPreviewRenderer(options: {
       : null
 
     const renderSignature = resolvedRender
-      ? JSON.stringify({
-        isAirWall: resolvedRender.isAirWall,
-        wantsInstancing: resolvedRender.wantsInstancing,
-        hasMissingAssets: resolvedRender.hasMissingAssets,
-        body: Boolean(resolvedRender.assets.bodyObject),
-        head: Boolean(resolvedRender.assets.headObject),
-        foot: Boolean(resolvedRender.assets.footObject),
-        bodyCap: Boolean(resolvedRender.assets.bodyEndCapObject),
-        headCap: Boolean(resolvedRender.assets.headEndCapObject),
-        footCap: Boolean(resolvedRender.assets.footEndCapObject),
-        bodyCorners: Object.keys(resolvedRender.assets.bodyCornerObjectsByAssetId ?? {}).sort(),
-        headCorners: Object.keys(resolvedRender.assets.headCornerObjectsByAssetId ?? {}).sort(),
-        footCorners: Object.keys(resolvedRender.assets.footCornerObjectsByAssetId ?? {}).sort(),
-        smoothing: resolvedRender.renderOptions.smoothing ?? 0,
-      })
-      : 'default'
+      ? resolvedRender.signatureData
+      : stableSerialize({ wallProps: session.wallRenderProps ?? null })
 
     const nextSignature = `${computeWallPreviewSignature(segments, session.dimensions)}|${renderSignature}`
     if (nextSignature === signature) {

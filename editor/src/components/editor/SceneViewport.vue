@@ -5281,6 +5281,7 @@ watch(wallBrushPresetAssetId, (assetId) => {
 
   if (!id) {
     wallBrushPresetData.value = null
+    wallBuildTool.syncBrushPreset()
     return
   }
 
@@ -5291,6 +5292,7 @@ watch(wallBrushPresetAssetId, (assetId) => {
         return
       }
       wallBrushPresetData.value = data as WallPresetData
+      wallBuildTool.syncBrushPreset()
     })
     .catch((error) => {
       if (token !== wallBrushPresetLoadToken) {
@@ -5298,6 +5300,7 @@ watch(wallBrushPresetAssetId, (assetId) => {
       }
       console.warn('Failed to load wall preset for brush', id, error)
       wallBrushPresetData.value = null
+      wallBuildTool.syncBrushPreset()
     })
 })
 

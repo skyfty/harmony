@@ -128,6 +128,7 @@ export type WallPreviewRenderData = {
   isAirWall: boolean
   wantsInstancing: boolean
   hasMissingAssets: boolean
+  signatureData: string
 }
 
 function disposeWallGroupResources(group: THREE.Group): void {
@@ -600,6 +601,24 @@ export function createWallRenderer(options: WallRendererOptions) {
       isAirWall: Boolean(normalizedProps?.isAirWall),
       wantsInstancing,
       hasMissingAssets,
+      signatureData: stableSerialize({
+        normalizedProps,
+        renderOptions,
+        isAirWall: Boolean(normalizedProps?.isAirWall),
+        wantsInstancing,
+        hasMissingAssets,
+        availableAssets: {
+          body: Boolean(bodyObject),
+          head: Boolean(headObject),
+          foot: Boolean(footObject),
+          bodyEndCap: Boolean(bodyEndCapObject),
+          headEndCap: Boolean(headEndCapObject),
+          footEndCap: Boolean(footEndCapObject),
+          bodyCorners: bodyCornerAssetIds.filter((assetId) => Boolean(bodyCornerObjectsByAssetId?.[assetId])),
+          headCorners: headCornerAssetIds.filter((assetId) => Boolean(headCornerObjectsByAssetId?.[assetId])),
+          footCorners: footCornerAssetIds.filter((assetId) => Boolean(footCornerObjectsByAssetId?.[assetId])),
+        },
+      }),
     }
   }
 
