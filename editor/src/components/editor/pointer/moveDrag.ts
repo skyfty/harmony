@@ -1393,7 +1393,9 @@ export function handlePointerMoveDrag(
       const axis = state.axisWorld.clone().normalize()
       const delta = tmpIntersection.clone().sub(state.startHitWorld)
       const t = axis.dot(delta)
-      const world = state.startHitWorld.clone().add(axis.multiplyScalar(t))
+      // Keep the grabbed handle position stable at drag start: project movement onto
+      // the axis, but apply it from the original handle world point (not the hit point).
+      const world = state.startPointWorld.clone().add(axis.multiplyScalar(t))
       local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
     } else {
       // Free dragging uses ground projection. Capture ground hit at drag start to
@@ -1407,9 +1409,11 @@ export function handlePointerMoveDrag(
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
-      const snapped = ctx.groundPointerHelper.clone()
-      snapped.y = 0
-      local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
+      const delta = ctx.groundPointerHelper.clone().sub(state.startHitWorld)
+      delta.y = 0
+      const world = state.startPointWorld.clone().add(delta)
+      world.y = 0
+      local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
     }
 
     if (!local) return { handled: true }
