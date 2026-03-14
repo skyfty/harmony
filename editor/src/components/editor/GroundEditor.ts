@@ -68,6 +68,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab, TerrainPaintLayerDraft } from '@/stores/terrainStore'
 import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 
 import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -1574,11 +1575,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			cancelScatterErase()
 		}
 		if (tab === 'paint') {
-			const selectedNode = options.sceneStore.selectedNode
-			if (selectedNode?.dynamicMesh?.type === 'Ground') {
-				const definition = selectedNode.dynamicMesh as GroundDynamicMesh
+			const groundNode = getGroundNodeFromScene()
+			if (groundNode?.dynamicMesh?.type === 'Ground') {
+				const definition = groundNode.dynamicMesh as GroundDynamicMesh
 				const groundObject = getGroundObject()
-				const terrainPaint = cloneOrCreateTerrainPaintSettings(definition, selectedNode.id)
+				const terrainPaint = cloneOrCreateTerrainPaintSettings(definition, groundNode.id)
 				// Warm layer textures (best-effort).
 				const catalogMap = options.sceneStore.collectCatalogAssetMap()
 				terrainPaint.layers.forEach((layer) => {
@@ -1588,7 +1589,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					}
 				})
 				// Warm currently loaded chunk weightmaps.
-				const session = ensurePaintSession(definition, selectedNode.id)
+				const session = ensurePaintSession(definition, groundNode.id)
 				terrainPaint.chunks && Object.entries(terrainPaint.chunks).forEach(([key]) => {
 					const parts = key.split(':')
 					const chunkRow = Number.parseInt(parts[0] ?? '', 10)
@@ -2965,23 +2966,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		positionAttribute.needsUpdate = true
 	}
 
-	function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-		for (const node of nodes) {
-			if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-				return node
-			}
-			if (node.children?.length) {
-				const nested = findGroundNodeInTree(node.children)
-				if (nested) {
-					return nested
-				}
-			}
-		}
-		return null
-	}
-
 	function getGroundNodeFromScene(): SceneNode | null {
-		return findGroundNodeInTree(options.sceneStore.nodes)
+		return options.sceneStore.currentGroundNode
 	}
 
 	function getGroundTerrainScatterSnapshot(): TerrainScatterStoreSnapshot | null {
@@ -3029,10 +3015,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function getGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
 		const node = getGroundNodeFromScene()
 		if (node?.dynamicMesh?.type === 'Ground') {
+			const runtimeDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(
+				node.id,
+				node.dynamicMesh as GroundDynamicMesh,
+			)
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				return sculptSessionState.definition
 			}
-			return node.dynamicMesh as GroundRuntimeDynamicMesh
+			return runtimeDefinition
 		}
 		return null
 	}
@@ -3816,7 +3806,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return { row, column }
 	}
 
+	function isGroundBuildToolActive(): boolean {
+		const tool = options.activeBuildTool.value
+		return tool === 'terrain' || tool === 'paint' || tool === 'scatter'
+	}
+
 	function scatterModeEnabled(): boolean {
+		if (options.activeBuildTool.value !== 'scatter') {
+			return false
+		}
 		if (options.scatterEraseModeActive.value) {
 			return false
 		}
@@ -3826,19 +3824,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!options.scatterAsset.value) {
 			return false
 		}
-		const selectedNode = options.sceneStore.selectedNode
-		return selectedNode?.dynamicMesh?.type === 'Ground'
+		return getGroundNodeFromScene()?.dynamicMesh?.type === 'Ground'
 	}
 
 	function paintModeEnabled(): boolean {
+		if (options.activeBuildTool.value !== 'paint') {
+			return false
+		}
 		if (options.scatterEraseModeActive.value) {
 			return false
 		}
 		if (options.groundPanelTab.value !== 'paint') {
 			return false
 		}
-		const selectedNode = options.sceneStore.selectedNode
-		return selectedNode?.dynamicMesh?.type === 'Ground'
+		return getGroundNodeFromScene()?.dynamicMesh?.type === 'Ground'
 	}
 
 	function getScatterPreset(category: TerrainScatterCategory) {
@@ -4654,6 +4653,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginScatterErase(event: PointerEvent): boolean {
+		if (!isGroundBuildToolActive()) {
+			return false
+		}
 		const eraseModeActive = options.scatterEraseModeActive.value
 		if (!eraseModeActive) {
 			return false
@@ -4936,7 +4938,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
 		const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
-		const groundNode = options.sceneStore.selectedNode
+		const groundNode = getGroundNodeFromScene()
 		if (groundNode?.dynamicMesh?.type !== 'Ground') {
 			brushMesh.visible = false
 			return
@@ -5008,10 +5010,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function performSculpt(event: PointerEvent) {
 		if (!brushMesh.visible) return
 
-		const groundNode = options.sceneStore.selectedNode
+		const groundNode = getGroundNodeFromScene()
 		if (groundNode?.dynamicMesh?.type !== 'Ground') return
+		const runtimeDefinition = getGroundDynamicMeshDefinition()
+		if (!runtimeDefinition) return
 		if (!sculptSessionState || sculptSessionState.nodeId !== groundNode.id) {
-			ensureSculptSession(groundNode.dynamicMesh as GroundRuntimeDynamicMesh, groundNode.id)
+			ensureSculptSession(runtimeDefinition, groundNode.id)
 		}
 
 		const definition = getGroundDynamicMeshDefinition()
@@ -5122,7 +5126,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		const groundNode = options.sceneStore.selectedNode
+		const groundNode = getGroundNodeFromScene()
 		if (groundNode?.dynamicMesh?.type !== 'Ground') {
 			return
 		}
@@ -5223,7 +5227,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!paintModeEnabled()) {
 			return false
 		}
-		const groundNode = options.sceneStore.selectedNode
+		const groundNode = getGroundNodeFromScene()
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 0) {
 			return false
 		}
@@ -5244,15 +5248,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginSculpt(event: PointerEvent): boolean {
+		if (options.activeBuildTool.value !== 'terrain') {
+			return false
+		}
 		if (options.groundPanelTab.value !== 'terrain') {
 			return false
 		}
-		const groundNode = options.sceneStore.selectedNode
+		const groundNode = getGroundNodeFromScene()
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 0) {
 			return false
 		}
 
-		const definition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+		const definition = getGroundDynamicMeshDefinition()
+		if (!definition) {
+			return false
+		}
 		ensureSculptSession(definition, groundNode.id)
 
 		isSculpting.value = true
@@ -5302,9 +5312,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			/* noop */
 		}
 
-		const selectedNode = options.sceneStore.selectedNode
-		if (selectedNode?.dynamicMesh?.type === 'Ground') {
-			const session = sculptSessionState?.nodeId === selectedNode.id ? sculptSessionState : null
+		const groundNode = getGroundNodeFromScene()
+		if (groundNode?.dynamicMesh?.type === 'Ground') {
+			const session = sculptSessionState?.nodeId === groundNode.id ? sculptSessionState : null
+			const runtimeDefinition = session?.definition ?? getGroundDynamicMeshDefinition()
 			const region = session?.affectedRegion ?? null
 				const touchedChunkKeys = session?.touchedChunkKeys ?? null
 			const dirty = Boolean(session?.dirty)
@@ -5313,11 +5324,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				sculptSessionState = null
 				return true
 			}
-			if (groundObject) {
+			if (groundObject && runtimeDefinition) {
 				const jobToken = (groundNormalsJobToken += 1)
 				void recomputeGroundChunkNormalsInWorker({
 					groundObject,
-					definition: selectedNode.dynamicMesh as GroundRuntimeDynamicMesh,
+					definition: runtimeDefinition,
 					region,
 						touchedChunkKeys,
 					jobToken,
@@ -5331,13 +5342,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 							}
 							mesh.geometry.computeVertexNormals()
 						})
-						stitchGroundChunkNormals(groundObject, selectedNode.dynamicMesh as GroundRuntimeDynamicMesh, region ?? null)
+						stitchGroundChunkNormals(groundObject, runtimeDefinition, region ?? null)
 					} catch (_error) {
 						/* noop */
 					}
 				})
 			}
-			commitSculptSession(selectedNode)
+			commitSculptSession(groundNode)
 		} else {
 			sculptSessionState = null
 		}
@@ -5358,14 +5369,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					event.preventDefault()
 					event.stopPropagation()
 					event.stopImmediatePropagation()
+					return true
 				}
-			} else {
-				options.activeBuildTool.value = null
 			}
-			event.preventDefault()
-			event.stopPropagation()
-			event.stopImmediatePropagation()
-			return true
+			// Keep terrain tool active and allow RMB drag to control the camera.
+			return false
 		}
 
 		if (event.button !== 0) {
@@ -5450,8 +5458,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handlePointerMove(event: PointerEvent): boolean {
-		const selectedNodeIsGround = options.sceneStore.selectedNode?.dynamicMesh?.type === 'Ground'
-		const showBrush = selectedNodeIsGround &&
+		const hasGroundNode = getGroundNodeFromScene()?.dynamicMesh?.type === 'Ground'
+		const isGroundToolActivated = isGroundBuildToolActive()
+		const showBrush = isGroundToolActivated && hasGroundNode &&
 			(options.groundPanelTab.value === 'terrain' || options.groundPanelTab.value === 'paint' || options.scatterEraseModeActive.value || scatterModeEnabled())
 		if (showBrush) {
 			updateBrush(event)
@@ -5676,7 +5685,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()
 			if (sculptSessionState) {
-				commitSculptSession(options.sceneStore.selectedNode ?? null)
+				commitSculptSession(getGroundNodeFromScene())
 			}
 		}
 	}
