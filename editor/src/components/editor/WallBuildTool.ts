@@ -66,6 +66,7 @@ export function createWallBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   wallBuildShape: Ref<WallBuildShape>
   sceneStore: ReturnType<typeof useSceneStore>
+  getWallEditNodeId: () => string | null
   pointerInteraction: PointerInteractionApi
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
@@ -169,6 +170,15 @@ export function createWallBuildTool(options: {
     return wallComponent?.props ?? null
   }
 
+  const getExplicitWallEditNode = (): SceneNode | null => {
+    const nodeId = options.getWallEditNodeId()
+    if (!nodeId) {
+      return null
+    }
+    const node = findSceneNode(options.sceneStore.nodes, nodeId)
+    return node?.dynamicMesh?.type === 'Wall' ? node : null
+  }
+
   const applyWallPropsToSession = (
     target: WallBuildToolSession,
     wallProps: Partial<WallComponentProps> | WallComponentProps | null,
@@ -234,14 +244,11 @@ export function createWallBuildTool(options: {
     }
 
     if (!target.dragStart && !target.shapeDraft && target.segments.length === 0) {
-      const selectedId = options.sceneStore.selectedNodeId
-      if (selectedId) {
-        const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
-        if (selectedNode?.dynamicMesh?.type === 'Wall') {
-          target.dimensions = getWallNodeDimensions(selectedNode)
-          applyWallPropsToSession(target, getWallNodeRenderProps(selectedNode))
-          return
-        }
+      const selectedNode = getExplicitWallEditNode()
+      if (selectedNode) {
+        target.dimensions = getWallNodeDimensions(selectedNode)
+        applyWallPropsToSession(target, getWallNodeRenderProps(selectedNode))
+        return
       }
       applyWallPropsToSession(target, null)
       target.bodyAssetId = null
@@ -433,18 +440,15 @@ export function createWallBuildTool(options: {
       if (hasActiveBrushPreset) {
         syncBrushPresetToSession(target, false)
       } else {
-        const selectedId = options.sceneStore.selectedNodeId
+        const selectedNode = getExplicitWallEditNode()
         target.wallRenderProps = null
-        if (selectedId) {
-          const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
-          if (selectedNode?.dynamicMesh?.type === 'Wall') {
-            target.dimensions = getWallNodeDimensions(selectedNode)
-            const wallComponent = selectedNode.components?.[WALL_COMPONENT_TYPE] as
-              | SceneNodeComponentState<WallComponentProps>
-              | undefined
-            target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-            applyWallPropsToSession(target, wallComponent?.props ?? null)
-          }
+        if (selectedNode) {
+          const wallComponent = selectedNode.components?.[WALL_COMPONENT_TYPE] as
+            | SceneNodeComponentState<WallComponentProps>
+            | undefined
+          target.dimensions = getWallNodeDimensions(selectedNode)
+          target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
+          applyWallPropsToSession(target, wallComponent?.props ?? null)
         }
 
         target.brushPresetAssetId = null
@@ -456,15 +460,12 @@ export function createWallBuildTool(options: {
     }
 
     if (!target.nodeId) {
-      const selectedId = options.sceneStore.selectedNodeId
-      if (selectedId) {
-        const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
-        if (selectedNode?.dynamicMesh?.type === 'Wall') {
-          target.nodeId = selectedNode.id
-          target.dimensions = getWallNodeDimensions(selectedNode)
-          target.segments = expandWallSegmentsToWorld(selectedNode)
-          applyWallPropsToSession(target, getWallNodeRenderProps(selectedNode))
-        }
+      const selectedNode = getExplicitWallEditNode()
+      if (selectedNode) {
+        target.nodeId = selectedNode.id
+        target.dimensions = getWallNodeDimensions(selectedNode)
+        target.segments = expandWallSegmentsToWorld(selectedNode)
+        applyWallPropsToSession(target, getWallNodeRenderProps(selectedNode))
       }
     } else {
       const node = findSceneNode(options.sceneStore.nodes, target.nodeId)

@@ -1710,7 +1710,14 @@ function handleBuildToolToggle(tool: BuildTool) {
   const selectionLocked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const nodeLocked = Boolean(primaryNode?.locked)
 
-  const shouldKeepSelectionForEdit = Boolean(next && isSingleSelection && toolMatchesPrimarySelection && !selectionLocked && !nodeLocked)
+  const shouldKeepSelectionForEdit = Boolean(
+    tool !== 'wall'
+    && next
+    && isSingleSelection
+    && toolMatchesPrimarySelection
+    && !selectionLocked
+    && !nodeLocked,
+  )
 
   // By default, when enabling a build tool, clear selection to avoid accidental operations.
   // Exception: if the primary selection is a single, matching, unlocked node, keep it so the user

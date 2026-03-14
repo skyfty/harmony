@@ -1787,6 +1787,7 @@ const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
 const navigationSpeedBoostModifierActive = ref(false)
+const wallEditNodeId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
 const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
@@ -1798,6 +1799,44 @@ const selectedNodeIsWater = computed(() => isWaterSurfaceNode(sceneStore.selecte
 // - InstanceLayout: restore erased instances
 const scatterRepairModifierActive = computed(() => scatterEraseModeActive.value && scatterEraseRestoreModifierActive.value)
 const wallRepairModeActive = computed(() => scatterRepairModifierActive.value && selectedNodeIsWall.value)
+
+function getPrimarySelectedNodeId(): string | null {
+  return sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+}
+
+function resolveEditableWallNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Wall') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function clearWallEditMode(): void {
+  wallEditNodeId.value = null
+}
+
+function enterWallEditMode(nodeId: string | null | undefined): void {
+  wallEditNodeId.value = resolveEditableWallNode(nodeId)?.id ?? null
+}
+
+function isSelectedWallEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || wallEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableWallNode(selectedId))
+}
 
 watch(
   () => [activeBuildTool.value, sceneStore.selectedNodeId] as const,
@@ -1821,7 +1860,7 @@ watch(
       return
     }
 
-    if (activeBuildTool.value === 'wall' && selectedNodeIsWall.value) {
+    if (activeBuildTool.value === 'wall' && isSelectedWallEditMode() && selectedNodeIsWall.value) {
       const restored = readWallBuildShapeFromNode(node)
       if (restored && restored !== wallBuildShape.value) {
         buildToolsStore.setWallBuildShape(restored)
@@ -1846,6 +1885,9 @@ watch(
       buildToolsStore.setWallDoorSelectModeActive(false)
     }
     if (tool !== 'wall') {
+      clearWallEditMode()
+    }
+    if (tool !== 'wall') {
       clearWallDoorRectangleSelectionState()
       clearWallDoorSelectionPayload()
     }
@@ -1862,11 +1904,23 @@ watch(wallDoorSelectModeActive, (active) => {
 watch(
   () => sceneStore.selectedNodeId,
   () => {
+    if (!isSelectedWallEditMode()) {
+      clearWallEditMode()
+    }
     if (wallDoorSelectModeActive.value && wallDoorSelectionPayload.value?.length) {
       return
     }
     clearWallDoorRectangleSelectionState()
     clearWallDoorSelectionPayload()
+  },
+)
+
+watch(
+  () => sceneStore.selectedNodeIds.slice(),
+  (selectedIds) => {
+    if (selectedIds.length !== 1 || selectedIds[0] !== wallEditNodeId.value) {
+      clearWallEditMode()
+    }
   },
 )
 
@@ -4247,8 +4301,8 @@ function setActiveRoadVertexHandle(active: { nodeId: string; vertexIndex: number
 }
 
 function ensureWallEndpointHandlesForSelectedNode(options?: { force?: boolean }) {
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const active = activeBuildTool.value === 'wall'
+  const selectedId = isSelectedWallEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'wall' && isSelectedWallEditMode() && !wallBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -5218,6 +5272,7 @@ const wallBuildTool = createWallBuildTool({
   activeBuildTool,
   wallBuildShape,
   sceneStore,
+  getWallEditNodeId: () => (isSelectedWallEditMode() ? wallEditNodeId.value : null),
   pointerInteraction,
   rootGroup,
   raycastGroundPoint,
@@ -11212,6 +11267,9 @@ function selectionsAreEqual(a: string[], b: string[]): boolean {
 
 function emitSelectionChange(nextSelection: string[]) {
   const deduped = dedupeSelection(nextSelection)
+  if (deduped.length !== 1 || deduped[0] !== wallEditNodeId.value) {
+    clearWallEditMode()
+  }
   const current = sceneStore.selectedNodeIds
   if (selectionsAreEqual(deduped, current)) {
     return
@@ -13595,6 +13653,9 @@ function handleCanvasDoubleClick(event: MouseEvent) {
 
   // UX: double-click an unlocked Wall/Floor/Road node to immediately enter its edit mode.
   if (toolForNode && !nodeLocked) {
+    if (toolForNode === 'wall') {
+      enterWallEditMode(hitNodeId)
+    }
     handleBuildToolChange(toolForNode)
     emitSelectionChange([hitNodeId])
   } else {
