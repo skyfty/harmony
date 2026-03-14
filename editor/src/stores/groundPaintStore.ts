@@ -84,13 +84,16 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundPain
     return null
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
-  if (!state.terrainPaint && !state.groundSurfaceChunks) {
+  const groundSurfaceChunks = normalizeGroundSurfaceChunkTextureMap(state.groundSurfaceChunks)
+  const hasGroundSurfaceChunks = Object.keys(groundSurfaceChunks).length > 0
+  const terrainPaint = state.terrainPaint ?? (hasGroundSurfaceChunks ? createEmptyTerrainPaintSettings() : null)
+  if (!terrainPaint && !hasGroundSurfaceChunks) {
     return null
   }
   return {
     groundNodeId: groundNode.id,
-    terrainPaint: state.terrainPaint,
-    groundSurfaceChunks: state.groundSurfaceChunks,
+    terrainPaint,
+    groundSurfaceChunks: hasGroundSurfaceChunks ? groundSurfaceChunks : null,
   }
 }
 
