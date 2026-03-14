@@ -1053,7 +1053,7 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
 		})
 		return syncTerrainPaintPreviewForGroundShared(
 			groundObject,
-			{ ...dynamicMesh, legacyTerrainPaint: null },
+			{ ...dynamicMesh, legacyTerrainPaint: null, terrainPaint: null },
 			{
 				loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
 				loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
@@ -1073,7 +1073,7 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
 	if (usesSurfacePreview) {
 		return syncTerrainPaintPreviewForGroundShared(
 			groundObject,
-			{ ...dynamicMesh, legacyTerrainPaint: null },
+			{ ...dynamicMesh, legacyTerrainPaint: null, terrainPaint: null },
 			{
 				loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
 				loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,

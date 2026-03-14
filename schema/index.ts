@@ -112,6 +112,8 @@ export {
   resolveTerrainPaintChunkBounds,
   resolveTerrainPaintTilesPerAxis,
   resolveTerrainPaintTileWorldBounds,
+  decodeTerrainPaintMaskTileToData,
+  sampleTerrainPaintMaskTileValue,
 } from './terrainPaintTiles'
 export type {
   TerrainPaintChunkBounds,

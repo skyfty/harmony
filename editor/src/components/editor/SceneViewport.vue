@@ -10102,7 +10102,8 @@ function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefi
   restoreGroundSurfacePreviewMaterialMap(groundObject)
   landformsPreviewLoadToken += 1
   if (groundNode.dynamicMesh?.type === 'Ground') {
-    const hasTerrainPaint = Boolean(groundNode.dynamicMesh.legacyTerrainPaint?.layers?.length)
+    const hasTerrainPaint = Boolean(groundNode.dynamicMesh.terrainPaint?.layers?.some((layer) => layer.enabled !== false && typeof layer.textureAssetId === 'string' && layer.textureAssetId.trim().length))
+      || Boolean(groundNode.dynamicMesh.legacyTerrainPaint?.layers?.length)
     const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
     const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
     const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
@@ -10118,7 +10119,7 @@ function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefi
     )
     syncTerrainPaintPreviewForGroundShared(
       groundObject,
-      usesSurfacePreview ? { ...groundNode.dynamicMesh, legacyTerrainPaint: null } : groundNode.dynamicMesh,
+      usesSurfacePreview ? { ...groundNode.dynamicMesh, legacyTerrainPaint: null, terrainPaint: null } : groundNode.dynamicMesh,
       {
         loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
         loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
@@ -10144,7 +10145,7 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   groundObject: THREE.Object3D
   groundNode: SceneNode
   dynamicMesh: GroundDynamicMesh
-  liveChunkPagesByKey: Map<string, Uint8ClampedArray[]>
+  liveChunkTileMasksByKey: Map<string, Map<string, Map<string, Uint8ClampedArray | null>>>
   previewRevision: number
   mode: 'live' | 'surface-rebuild'
 }): void {
@@ -10162,7 +10163,7 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
       groundSurfacePreviewLoaders,
       () => landformsPreviewLoadToken,
       {
-        liveChunkPagesByKey: payload.liveChunkPagesByKey,
+        liveChunkTileMasksByKey: payload.liveChunkTileMasksByKey,
         previewRevision: payload.previewRevision,
         maxResolution: LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION,
         applyToMaterialMap: true,
@@ -10181,25 +10182,14 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   syncTerrainPaintPreviewForGroundShared(
     payload.groundObject,
     useLiveSurfacePreview && usesSurfacePreview
-      ? { ...payload.dynamicMesh, legacyTerrainPaint: null }
+      ? { ...payload.dynamicMesh, legacyTerrainPaint: null, terrainPaint: null }
       : payload.dynamicMesh,
     {
       loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
       loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
     },
     () => landformsPreviewLoadToken,
-    useLiveSurfacePreview
-      ? (usesSurfacePreview
-        ? undefined
-        : {
-        liveChunkPagesByKey: payload.liveChunkPagesByKey,
-        previewRevision: payload.previewRevision,
-        })
-      : {
-        liveChunkPagesByKey: payload.liveChunkPagesByKey,
-        previewRevision: payload.previewRevision,
-        includePersistedChunkWeightmaps: !usesSurfacePreview,
-      },
+    { previewRevision: payload.previewRevision },
   )
 }
 

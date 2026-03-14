@@ -27,6 +27,19 @@ export type TerrainPaintChunkBounds = {
 
 export type TerrainPaintTileBounds = TerrainPaintChunkBounds
 
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  if (value <= 0) {
+    return 0
+  }
+  if (value >= 1) {
+    return 1
+  }
+  return value
+}
+
 function clampFinite(value: unknown, fallback: number): number {
   const numeric = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(numeric) ? numeric : fallback
@@ -72,7 +85,7 @@ export function resolveTerrainPaintChunkBounds(
   definition: TerrainPaintGroundDefinition,
   chunkRow: number,
   chunkColumn: number,
-  chunkCells = resolveGroundChunkCells(definition),
+  chunkCells = resolveGroundChunkCells(definition as Parameters<typeof resolveGroundChunkCells>[0]),
 ): TerrainPaintChunkBounds | null {
   const cellSize = clampFinite(definition.cellSize, 1)
   const normalizedChunkCells = Math.max(1, Math.trunc(chunkCells))
@@ -119,4 +132,71 @@ export function resolveTerrainPaintTileWorldBounds(
     width: tileWidth,
     depth: tileDepth,
   }
+}
+
+export async function decodeTerrainPaintMaskTileToData(blob: Blob, resolution: number): Promise<Uint8ClampedArray> {
+  const res = Math.max(1, Math.round(resolution))
+  const expectedSingleChannelLength = res * res
+  const expectedRgbaLength = expectedSingleChannelLength * 4
+  const buffer = await blob.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+
+  let payload = bytes
+  if (bytes.length >= 10 && bytes[0] === 0x48 && bytes[1] === 0x57 && bytes[2] === 0x50 && bytes[3] === 0x31) {
+    const view = new DataView(buffer)
+    const storedRes = view.getUint16(4, true)
+    const payloadLength = view.getUint32(6, true)
+    const payloadOffset = 10
+    if (storedRes !== res) {
+      throw new Error(`Terrain paint mask tile resolution mismatch: expected ${res}, got ${storedRes}`)
+    }
+    if (payloadOffset + payloadLength > bytes.length) {
+      throw new Error('Terrain paint mask tile payload truncated')
+    }
+    payload = bytes.subarray(payloadOffset, payloadOffset + payloadLength)
+  }
+
+  if (payload.length === expectedSingleChannelLength) {
+    return new Uint8ClampedArray(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength))
+  }
+  if (payload.length === expectedRgbaLength) {
+    const mask = new Uint8ClampedArray(expectedSingleChannelLength)
+    for (let index = 0; index < expectedSingleChannelLength; index += 1) {
+      mask[index] = payload[index * 4] ?? 0
+    }
+    return mask
+  }
+  throw new Error(`Unsupported terrain paint mask tile payload length: ${payload.length}`)
+}
+
+export function sampleTerrainPaintMaskTileValue(
+  mask: Uint8ClampedArray | Uint8Array | null | undefined,
+  resolution: number,
+  u: number,
+  v: number,
+): number {
+  if (!mask) {
+    return 0
+  }
+  const res = Math.max(1, Math.round(resolution))
+  if (mask.length < res * res) {
+    return 0
+  }
+  const clampedU = clamp01(u)
+  const clampedV = clamp01(v)
+  const x = clampedU * Math.max(0, res - 1)
+  const y = clampedV * Math.max(0, res - 1)
+  const x0 = Math.floor(x)
+  const y0 = Math.floor(y)
+  const x1 = Math.min(res - 1, x0 + 1)
+  const y1 = Math.min(res - 1, y0 + 1)
+  const tx = x - x0
+  const ty = y - y0
+  const offset00 = y0 * res + x0
+  const offset10 = y0 * res + x1
+  const offset01 = y1 * res + x0
+  const offset11 = y1 * res + x1
+  const top = ((mask[offset00] ?? 0) / 255) * (1 - tx) + ((mask[offset10] ?? 0) / 255) * tx
+  const bottom = ((mask[offset01] ?? 0) / 255) * (1 - tx) + ((mask[offset11] ?? 0) / 255) * tx
+  return top * (1 - ty) + bottom * ty
 }

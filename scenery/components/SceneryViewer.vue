@@ -1184,7 +1184,7 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
     });
     return syncTerrainPaintPreviewForGroundShared(
       groundObject,
-      { ...dynamicMesh, terrainPaint: null },
+      { ...dynamicMesh, legacyTerrainPaint: null, terrainPaint: null },
       terrainPaintLoaders,
       () => terrainPaintPreviewLoadToken,
     );
@@ -1201,7 +1201,7 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
   if (usesSurfacePreview) {
     return syncTerrainPaintPreviewForGroundShared(
       groundObject,
-      { ...dynamicMesh, terrainPaint: null },
+      { ...dynamicMesh, legacyTerrainPaint: null, terrainPaint: null },
       terrainPaintLoaders,
       () => terrainPaintPreviewLoadToken,
     );

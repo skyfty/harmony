@@ -156,7 +156,7 @@ export type GroundEditorOptions = {
 		groundObject: THREE.Object3D
 		groundNode: SceneNode
 		dynamicMesh: GroundDynamicMesh
-		liveChunkPagesByKey: Map<string, Uint8ClampedArray[]>
+		liveChunkTileMasksByKey: Map<string, Map<string, Map<string, Uint8ClampedArray | null>>>
 		previewRevision: number
 		mode: 'live' | 'surface-rebuild'
 	}) => void
@@ -3307,7 +3307,40 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return Array.from(found)
 	}
 
-	function buildLiveTerrainPaintChunkPages(session: PaintSessionState): Map<string, Uint8ClampedArray[]> {
+	function buildLiveTerrainPaintChunkTileMasks(
+		session: PaintSessionState,
+	): Map<string, Map<string, Map<string, Uint8ClampedArray | null>>> {
+		const liveChunkTileMasksByKey = new Map<string, Map<string, Map<string, Uint8ClampedArray | null>>>()
+		session.chunkStates.forEach((chunk) => {
+			const layerMap = new Map<string, Map<string, Uint8ClampedArray | null>>()
+			for (const [layerId, tileMutations] of Object.entries(chunk.v3TileMutations)) {
+				const normalizedLayerId = typeof layerId === 'string' ? layerId.trim() : ''
+				if (!normalizedLayerId) {
+					continue
+				}
+				const tileMap = new Map<string, Uint8ClampedArray | null>()
+				for (const [tileKey, tileMask] of Object.entries(tileMutations ?? {})) {
+					const normalizedTileKey = typeof tileKey === 'string' ? tileKey.trim() : ''
+					if (!normalizedTileKey) {
+						continue
+					}
+					tileMap.set(
+						normalizedTileKey,
+						tileMask ? new Uint8ClampedArray(tileMask) : null,
+					)
+				}
+				if (tileMap.size) {
+					layerMap.set(normalizedLayerId, tileMap)
+				}
+			}
+			if (layerMap.size) {
+				liveChunkTileMasksByKey.set(chunk.key, layerMap)
+			}
+		})
+		return liveChunkTileMasksByKey
+	}
+
+	function buildLiveTerrainPaintChunkPagesForBake(session: PaintSessionState): Map<string, Uint8ClampedArray[]> {
 		const liveChunkPagesByKey = new Map<string, Uint8ClampedArray[]>()
 		session.chunkStates.forEach((chunk) => {
 			liveChunkPagesByKey.set(chunk.key, chunk.previewPages.map((page) => page.slice()))
@@ -3332,7 +3365,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				legacyTerrainPaint: session.settings,
 				terrainPaint: session.terrainPaint,
 			},
-			liveChunkPagesByKey: buildLiveTerrainPaintChunkPages(session),
+			liveChunkTileMasksByKey: buildLiveTerrainPaintChunkTileMasks(session),
 			previewRevision: session.terrainPaintSurfacePreviewRevision,
 			mode,
 		})
@@ -4006,7 +4039,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				groundSurfaceChunks: nextGroundSurfaceChunks,
 				sceneStore: options.sceneStore,
 				groundNode: groundNodeForBake,
-				liveChunkPagesByKey: buildLiveTerrainPaintChunkPages(session),
+				liveChunkPagesByKey: buildLiveTerrainPaintChunkPagesForBake(session),
 				registerAsset: options.sceneStore.registerAsset.bind(options.sceneStore),
 			})
 			if (token !== paintCommitToken) {

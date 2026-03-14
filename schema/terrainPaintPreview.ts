@@ -682,9 +682,7 @@ export type TerrainPaintLoaders = {
 }
 
 export type SyncTerrainPaintPreviewOptions = {
-	liveChunkPagesByKey?: Map<string, Uint8ClampedArray[]>
 	previewRevision?: number
-	includePersistedChunkWeightmaps?: boolean
 }
 
 // Create default loaders using a provided `resolveAssetUrlFromCache` function.
@@ -743,11 +741,9 @@ export function syncTerrainPaintPreviewForGround(
 	dynamicMesh: GroundDynamicMesh,
 	loaders: TerrainPaintLoaders,
 	getToken: () => number,
-	options: SyncTerrainPaintPreviewOptions = {},
+	_options: SyncTerrainPaintPreviewOptions = {},
 ): void {
 	const settings: any = (dynamicMesh as any)?.terrainPaint ?? null
-	const liveChunkPagesByKey = options.liveChunkPagesByKey
-	const includePersistedChunkWeightmaps = options.includePersistedChunkWeightmaps !== false
 
 	// Ensure per-mesh cloned materials and shader hooks
 	cloneTerrainPaintPreviewMaterialsOnce(groundObject)
@@ -820,31 +816,11 @@ export function syncTerrainPaintPreviewForGround(
 	}
 
 	const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : {}
-	if (!liveChunkPagesByKey?.size && (!includePersistedChunkWeightmaps || !Object.keys(chunks).length)) {
+	if (!Object.keys(chunks).length) {
 		return
 	}
 
 	for (const [chunkKey, chunkTargets] of visibleChunkMaterials) {
-		const livePages = liveChunkPagesByKey?.get(chunkKey) ?? null
-		const livePage0 = livePages?.[0] ?? null
-		if (livePage0) {
-			const weightmapResolution = Number.isFinite(settings?.weightmapResolution)
-				? Math.max(1, Math.round(settings.weightmapResolution))
-				: Math.max(1, Math.round(Math.sqrt(livePage0.length / 4)))
-			const liveRefKey = `__live__:${options.previewRevision ?? 0}:${chunkKey}`
-			terrainPaintChunkRefKeys.set(chunkKey, liveRefKey)
-			chunkTargets.forEach((target) => {
-				updateTerrainPaintPreviewWeightmap(target, chunkKey, livePage0, weightmapResolution)
-			})
-			continue
-		}
-		if (!includePersistedChunkWeightmaps) {
-			terrainPaintChunkRefKeys.delete(chunkKey)
-			chunkTargets.forEach((target) => {
-				setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
-			})
-			continue
-		}
 		const ref = (chunks as any)[chunkKey]
 		const logicalId = typeof ref?.pages?.[0]?.logicalId === 'string' ? ref.pages[0].logicalId.trim() : ''
 		if (!logicalId.length) {
