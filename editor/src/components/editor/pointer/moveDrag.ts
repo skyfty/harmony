@@ -838,7 +838,10 @@ export function handlePointerMoveDrag(
     }
 
     if (constrained && !rectangleApplied) {
-      if (state.endpointKind === 'start') {
+      if (state.closedChain) {
+        startSeg.start.copy(constrained)
+        endSeg.end.copy(constrained)
+      } else if (state.endpointKind === 'start') {
         startSeg.start.copy(constrained)
       } else {
         endSeg.end.copy(constrained)

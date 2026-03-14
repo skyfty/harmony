@@ -330,6 +330,7 @@ export function handlePointerDownTools(
           const startSeg = workingSegmentsWorld[chainStartIndex]
           const endSeg = workingSegmentsWorld[chainEndIndex]
           if (startSeg && endSeg) {
+            const closedChain = startSeg.start.distanceToSquared(endSeg.end) <= 1e-6
             // Circle edit mode: center + radius handles only (hide all segment handles).
             if (handleKind === 'circle') {
               const computed = computeChainCenterAndRadiusWorld({
@@ -704,6 +705,7 @@ export function handlePointerDownTools(
               chainStartIndex,
               chainEndIndex,
               endpointKind,
+              closedChain,
 
               wallBuildShape,
               rectangleConstraint: wallBuildShape === 'rectangle'

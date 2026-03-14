@@ -93,6 +93,7 @@ export type WallEndpointDragState = {
   chainStartIndex: number
   chainEndIndex: number
   endpointKind: 'start' | 'end'
+  closedChain: boolean
 
   wallBuildShape: WallBuildShape
   rectangleConstraint: RectangleEditConstraint | null

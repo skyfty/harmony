@@ -719,6 +719,7 @@ export function createWallBuildTool(options: {
     const created = options.sceneStore.createWallNode({
       segments: segmentPayload,
       dimensions: session.dimensions,
+      closed: true,
       bodyAssetId: session.bodyAssetId,
       wallComponentProps: session.wallRenderProps,
       wallPresetData: session.brushPresetData,
@@ -1013,6 +1014,7 @@ export function createWallBuildTool(options: {
     const created = options.sceneStore.createWallNode({
       segments: segmentPayload,
       dimensions: session.dimensions,
+      closed: true,
       bodyAssetId: session.bodyAssetId,
       wallComponentProps: session.wallRenderProps,
       wallPresetData: session.brushPresetData,

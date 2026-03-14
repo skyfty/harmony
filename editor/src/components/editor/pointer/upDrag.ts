@@ -507,9 +507,9 @@ export function handlePointerUpDrag(
       /* noop */
     }
 
-    // Click (no drag): start a wall build session from this endpoint.
+    // Click (no drag): only open branching from non-closed endpoints.
     const node = ctx.findSceneNode(ctx.nodes, state.nodeId)
-    if (node?.dynamicMesh?.type === 'Wall') {
+    if (!state.closedChain && node?.dynamicMesh?.type === 'Wall') {
       ctx.wallBuildToolBeginBranchFromEndpoint({
         nodeId: state.nodeId,
         chainStartIndex: state.chainStartIndex,

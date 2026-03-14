@@ -12019,13 +12019,16 @@ export const useSceneStore = defineStore('scene', {
       nodeId?: string
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
+      closed?: boolean
       name?: string
       bodyAssetId?: string | null
       wallComponentProps?: Partial<WallComponentProps> | null
       wallPresetData?: WallPresetData | null
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
-      const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
+      const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions, {
+        forceClosedSingleChain: Boolean(payload.closed),
+      })
       if (!build) {
         return null
       }
