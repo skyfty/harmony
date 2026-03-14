@@ -390,6 +390,7 @@ export function handlePointerDownTools(
                     workingSegmentsWorld,
                     previewGroup: null,
                     previewSignature: null,
+                    committedRenderSuppressed: false,
                   }
 
                   ctx.setActiveWallEndpointHandle({
@@ -457,6 +458,7 @@ export function handlePointerDownTools(
 
                     previewGroup: null,
                     previewSignature: null,
+                    committedRenderSuppressed: false,
                   }
 
                   return {
@@ -500,6 +502,7 @@ export function handlePointerDownTools(
 
                   previewGroup: null,
                   previewSignature: null,
+                  committedRenderSuppressed: false,
                 }
 
                 return {
@@ -591,6 +594,7 @@ export function handlePointerDownTools(
                 workingSegmentsWorld,
                 previewGroup: null,
                 previewSignature: null,
+                committedRenderSuppressed: false,
               }
 
               ctx.setActiveWallEndpointHandle({
@@ -665,6 +669,7 @@ export function handlePointerDownTools(
                   startJointWorld,
                   previewGroup: null,
                   previewSignature: null,
+                  committedRenderSuppressed: false,
                 }
 
                 ctx.setActiveWallEndpointHandle({
@@ -738,6 +743,7 @@ export function handlePointerDownTools(
               startEndpointWorld,
               previewGroup: null,
               previewSignature: null,
+              committedRenderSuppressed: false,
             }
 
             ctx.setActiveWallEndpointHandle({

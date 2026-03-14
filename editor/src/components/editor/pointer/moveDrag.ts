@@ -453,6 +453,7 @@ export function handlePointerMoveDrag(
       nodeId: string | null
       previewKey: string
     }) => THREE.Group
+    beginWallEditDragPreview?: (nodeId: string) => void
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
@@ -467,6 +468,17 @@ export function handlePointerMoveDrag(
   const refreshFloorMaterials = (nodeId: string, runtimeObject: THREE.Object3D) => {
     ctx.refreshFloorRuntimeMaterials?.(nodeId, runtimeObject)
   }
+  const ensureWallEditDragPreview = (state: {
+    nodeId: string
+    moved: boolean
+    committedRenderSuppressed: boolean
+  }) => {
+    if (!state.moved || state.committedRenderSuppressed) {
+      return
+    }
+    ctx.beginWallEditDragPreview?.(state.nodeId)
+    state.committedRenderSuppressed = true
+  }
 
   if (ctx.floorThicknessDragState && event.pointerId === ctx.floorThicknessDragState.pointerId) {
     const state = ctx.floorThicknessDragState
@@ -479,6 +491,7 @@ export function handlePointerMoveDrag(
     }
 
     state.moved = true
+    ensureWallEditDragPreview(state)
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -872,6 +885,8 @@ export function handlePointerMoveDrag(
       }
     }
 
+    ensureWallEditDragPreview(state)
+
     const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
     if (nextSignature !== state.previewSignature) {
@@ -931,6 +946,7 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
     state.moved = true
+    ensureWallEditDragPreview(state)
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -1021,6 +1037,7 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
     state.moved = true
+    ensureWallEditDragPreview(state)
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -1246,6 +1263,8 @@ export function handlePointerMoveDrag(
         state.moved = true
       }
     }
+
+    ensureWallEditDragPreview(state)
 
     const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)

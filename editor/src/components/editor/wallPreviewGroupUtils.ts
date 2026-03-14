@@ -215,7 +215,7 @@ export function disposeWallPreviewGroup(group: THREE.Group) {
   })
 }
 
-export function applyWallPreviewStyling(group: THREE.Group) {
+export function applyWallGhostPreviewStyling(group: THREE.Group) {
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (!mesh?.isMesh) {
@@ -230,3 +230,6 @@ export function applyWallPreviewStyling(group: THREE.Group) {
     mesh.renderOrder = 999
   })
 }
+
+// Backward-compatible alias. Prefer applyWallGhostPreviewStyling for new call sites.
+export const applyWallPreviewStyling = applyWallGhostPreviewStyling
