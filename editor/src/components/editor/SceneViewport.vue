@@ -10038,13 +10038,6 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
         previewRevision: payload.previewRevision,
       },
   )
-  console.log('[SceneViewport] terrain paint preview sync', {
-    nodeId: payload.groundNode.id,
-    previewRevision: payload.previewRevision,
-    liveChunkCount: payload.liveChunkPagesByKey.size,
-    usesSurfacePreview,
-    loadToken: landformsPreviewLoadToken,
-  })
 }
 
 function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {
@@ -11805,6 +11798,66 @@ function createEndpointDragPlane(options: {
   return plane.setFromNormalAndCoplanarPoint(normal, start)
 }
 
+function cancelBuildSessionForTool(tool: BuildTool): void {
+  if (tool === 'wall' && wallBuildTool.getSession()) {
+    wallBuildTool.cancel()
+    return
+  }
+  if (tool === 'road' && roadBuildTool.getSession()) {
+    roadBuildTool.cancel()
+    return
+  }
+  if (tool === 'floor' && floorBuildTool.getSession()) {
+    floorBuildTool.cancel()
+    return
+  }
+  if (tool === 'water' && waterBuildTool.getSession()) {
+    waterBuildTool.cancel()
+  }
+}
+
+function resolveBuildToolForNode(node: any): BuildTool | null {
+  const dynamicMeshType = node?.dynamicMesh?.type as string | undefined
+  return isWaterSurfaceNode(node)
+    ? 'water'
+    : isDisplayBoardNode(node)
+    ? 'displayBoard'
+    : dynamicMeshType === 'Wall'
+    ? 'wall'
+    : dynamicMeshType === 'Floor'
+    ? 'floor'
+    : dynamicMeshType === 'Road'
+    ? 'road'
+    : null
+}
+
+function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | null): boolean {
+  if (!toolForNode) {
+    return false
+  }
+  const hitNode: any = sceneStore.getNodeById(nodeId)
+  const nodeLocked = Boolean(hitNode?.locked) || sceneStore.isNodeSelectionLocked(nodeId)
+  if (nodeLocked) {
+    return false
+  }
+
+  cancelBuildSessionForTool(toolForNode)
+
+  if (toolForNode === 'wall') {
+    enterWallEditMode(nodeId)
+  } else if (toolForNode === 'road') {
+    enterRoadEditMode(nodeId)
+  } else if (toolForNode === 'floor') {
+    enterFloorEditMode(nodeId)
+  } else if (toolForNode === 'water') {
+    enterWaterEditMode(nodeId)
+  }
+
+  handleBuildToolChange(toolForNode)
+  emitSelectionChange([nodeId])
+  return true
+}
+
 async function handlePointerDown(event: PointerEvent) {
   const applyPointerDownResult = (result: PointerDownResult) => {
     if (result.clearPointerTrackingState) {
@@ -11869,6 +11922,21 @@ async function handlePointerDown(event: PointerEvent) {
   if (guard) {
     applyPointerDownResult(guard)
     return
+  }
+
+  // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
+  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
+    const hit = pickNodeAtPointer(event)
+    if (hit) {
+      const hitNode: any = sceneStore.getNodeById(hit.nodeId)
+      const toolForNode = resolveBuildToolForNode(hitNode)
+      if (tryEnterNodeBuildToolEditMode(hit.nodeId, toolForNode)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+    }
   }
 
   if (
@@ -13875,36 +13943,10 @@ function handleCanvasDoubleClick(event: MouseEvent) {
 
   const hitNodeId = hit.nodeId
   const hitNode: any = sceneStore.getNodeById(hitNodeId)
-  const hitDynamicMeshType = hitNode?.dynamicMesh?.type as string | undefined
-  const toolForNode: BuildTool | null =
-    isWaterSurfaceNode(hitNode)
-      ? 'water'
-      : isDisplayBoardNode(hitNode)
-      ? 'displayBoard'
-      : hitDynamicMeshType === 'Wall'
-      ? 'wall'
-      : hitDynamicMeshType === 'Floor'
-      ? 'floor'
-      : hitDynamicMeshType === 'Road'
-      ? 'road'
-      : null
-
-  const nodeLocked = Boolean(hitNode?.locked) || sceneStore.isNodeSelectionLocked(hitNodeId)
+  const toolForNode = resolveBuildToolForNode(hitNode)
 
   // UX: double-click an unlocked Wall/Floor/Road node to immediately enter its edit mode.
-  if (toolForNode && !nodeLocked) {
-    if (toolForNode === 'wall') {
-      enterWallEditMode(hitNodeId)
-    } else if (toolForNode === 'road') {
-      enterRoadEditMode(hitNodeId)
-    } else if (toolForNode === 'floor') {
-      enterFloorEditMode(hitNodeId)
-    } else if (toolForNode === 'water') {
-      enterWaterEditMode(hitNodeId)
-    }
-    handleBuildToolChange(toolForNode)
-    emitSelectionChange([hitNodeId])
-  } else {
+  if (!tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)) {
     const nextSelection = sceneStore.handleNodeDoubleClick(hitNodeId)
     const appliedSelection = Array.isArray(nextSelection) && nextSelection.length ? nextSelection : [hitNodeId]
     emitSelectionChange(appliedSelection)

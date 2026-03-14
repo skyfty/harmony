@@ -6,7 +6,7 @@ import type { SceneNodeComponentState, SceneNode, WallDynamicMesh } from '@schem
 import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSegment } from './WallPreviewRenderer'
-import { GRID_MAJOR_SPACING } from './constants'
+import { GRID_MAJOR_SPACING, WALL_ANGLE_STEP_CONSTRAINTS_ENABLED } from './constants'
 import { findSceneNode } from './sceneUtils'
 import { constrainWallEndPointSoftSnap } from './wallEndpointSnap'
 import { distanceSqXZ, splitWallSegmentsIntoChains } from './wallSegmentUtils'
@@ -297,7 +297,8 @@ export function createWallBuildTool(options: {
       allowVertexSnap?: boolean
     },
   ): THREE.Vector3 => {
-    const fallbackMode = optionsOverride?.fallback ?? (event.shiftKey ? 'grid' : 'raw')
+    const shiftConstraintActive = Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED)
+    const fallbackMode = optionsOverride?.fallback ?? (shiftConstraintActive ? 'grid' : 'raw')
     const shouldUseVertexSnap = optionsOverride?.allowVertexSnap ?? event.shiftKey
     if (!shouldUseVertexSnap) {
       options.clearVertexSnap?.()
@@ -838,7 +839,12 @@ export function createWallBuildTool(options: {
       return true
     }
 
-    const constrained = constrainWallEndPointForBuild(current.dragStart, snappedPoint, rawPointer, event.shiftKey)
+    const constrained = constrainWallEndPointForBuild(
+      current.dragStart,
+      snappedPoint,
+      rawPointer,
+      Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED),
+    )
     const previous = current.dragEnd
     if (!previous || !previous.equals(constrained)) {
       current.dragEnd = constrained
@@ -945,7 +951,12 @@ export function createWallBuildTool(options: {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
       allowVertexSnap: event.shiftKey,
     })
-    const constrained = constrainWallEndPointForBuild(session.dragStart, pointer, rawPointer, event.shiftKey)
+    const constrained = constrainWallEndPointForBuild(
+      session.dragStart,
+      pointer,
+      rawPointer,
+      Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED),
+    )
     const previous = session.dragEnd
     if (previous && previous.equals(constrained)) {
       return

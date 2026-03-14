@@ -362,11 +362,7 @@ export function ensureTerrainPaintPreviewInstalled(
 			}
 			const state = getOrCreateShaderState(mat)
 			if (!state.shader) {
-				console.log('[terrainPaintPreview] onBeforeRender skipped: shader missing', {
-					meshUuid: mesh.uuid,
-					materialUuid: mat.uuid,
-					chunkKey: resolveChunkKeyFromMesh(mesh),
-				})
+	
 				return
 			}
 			const def = (root.userData as any).__terrainPaintDefinition as GroundDynamicMesh | undefined

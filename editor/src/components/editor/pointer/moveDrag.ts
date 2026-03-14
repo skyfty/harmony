@@ -7,7 +7,7 @@ import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, FLOOR_CIRCLE_HANDLE_Y } from '../FloorC
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import type { WallDynamicMesh } from '@schema'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
-import { GRID_MAJOR_SPACING } from '../constants'
+import { GRID_MAJOR_SPACING, WALL_ANGLE_STEP_CONSTRAINTS_ENABLED } from '../constants'
 import { distanceSqXZ, splitWallSegmentsIntoChains } from '../wallSegmentUtils'
 import {
   buildCirclePlanarPoints,
@@ -735,7 +735,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallEndpointDragState && event.pointerId === ctx.wallEndpointDragState.pointerId) {
     const state = ctx.wallEndpointDragState
-    const constrainActive = Boolean(event.shiftKey)
+    const constrainActive = Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED)
     const dx = event.clientX - state.startX
     const dy = event.clientY - state.startY
     if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
@@ -889,7 +889,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallCircleCenterDragState && event.pointerId === ctx.wallCircleCenterDragState.pointerId) {
     const state = ctx.wallCircleCenterDragState
-    const constrainActive = Boolean(event.shiftKey)
+    const constrainActive = Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED)
 
     const dxStart = event.clientX - state.startX
     const dyStart = event.clientY - state.startY
@@ -979,7 +979,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallCircleRadiusDragState && event.pointerId === ctx.wallCircleRadiusDragState.pointerId) {
     const state = ctx.wallCircleRadiusDragState
-    const constrainActive = Boolean(event.shiftKey)
+    const constrainActive = Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED)
 
     const dxStart = event.clientX - state.startX
     const dyStart = event.clientY - state.startY
@@ -1063,7 +1063,7 @@ export function handlePointerMoveDrag(
 
   if (ctx.wallJointDragState && event.pointerId === ctx.wallJointDragState.pointerId) {
     const state = ctx.wallJointDragState
-    const constrainActive = Boolean(event.shiftKey)
+    const constrainActive = Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED)
     const dx = event.clientX - state.startX
     const dy = event.clientY - state.startY
     if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
