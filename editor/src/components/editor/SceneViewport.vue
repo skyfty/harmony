@@ -7437,6 +7437,7 @@ const draggingChangedHandler = (event: unknown) => {
     if (isDirectionalLightTargetPivot) {
       endDirectionalLightTargetPivotInteraction()
     }
+    updateOutlineSelectionTargets()
     updateGridHighlightFromObject(primaryObject ?? targetObject)
     updateSelectionHighlights()
     if (pendingSceneGraphSync) {
@@ -7465,6 +7466,7 @@ const draggingChangedHandler = (event: unknown) => {
     if (transformGroupState?.entries?.size) {
       transformGroupState.entries.forEach((entry) => primeInstancedTransform(entry.object))
     }
+    updateOutlineSelectionTargets()
     updateGridHighlightFromObject(primaryObject ?? targetObject)
     updateSelectionHighlights()
   }
@@ -11225,6 +11227,30 @@ function updateSelectionHighlights() {
   })
 }
 
+function shouldSuppressSelectionOutlineDuringEditing(): boolean {
+  return Boolean(
+    transformControls?.dragging
+    || sceneStore.activeTransformNodeId
+    || roadVertexDragState
+    || floorVertexDragState
+    || floorThicknessDragState
+    || floorCircleCenterDragState
+    || floorCircleRadiusDragState
+    || floorEdgeDragState
+    || wallEndpointDragState
+    || wallJointDragState
+    || wallHeightDragState
+    || wallCircleCenterDragState
+    || wallCircleRadiusDragState
+    || waterContourVertexDragState
+    || waterCircleCenterDragState
+    || waterCircleRadiusDragState
+    || waterRectangleDragState
+    || waterEdgeDragState
+    || displayBoardCornerDragState
+  )
+}
+
 function clearSelectionHighlights() {
   selectionHighlights.forEach((group) => {
     disposeSelectionIndicator(group)
@@ -11303,6 +11329,11 @@ function collectVisibleMeshesForOutline(
 }
 
 function updateOutlineSelectionTargets() {
+  if (shouldSuppressSelectionOutlineDuringEditing()) {
+    clearOutlineSelectionTargets()
+    return
+  }
+
   const meshSet = new Set<THREE.Object3D>()
   const activeInstancedNodeIds = new Set<string>()
   const idSources: Array<string | null | undefined> = [
@@ -12536,6 +12567,7 @@ function handlePointerMove(event: PointerEvent) {
 
   const dragResult = handlePointerMoveDrag(event, _moveDragCtx)
   if (dragResult) {
+    updateOutlineSelectionTargets()
     updateWallLengthHudFromWallDrag()
     updateFloorSizeHudFromFloorDrag()
     applyPointerMoveResult(dragResult)
@@ -12841,7 +12873,10 @@ function handlePointerMove(event: PointerEvent) {
     pointerInteractionUpdateMoved: (e) => pointerInteraction.updateMoved(e),
     pointerTrackingState,
     transformControlsDragging: Boolean(transformControls?.dragging),
-    sceneStoreBeginTransformInteraction: (nodeId) => sceneStore.beginTransformInteraction(nodeId),
+    sceneStoreBeginTransformInteraction: (nodeId) => {
+      sceneStore.beginTransformInteraction(nodeId)
+      updateOutlineSelectionTargets()
+    },
     onSelectionDragStart: (nodeId) => wallRenderer.beginWallDrag(nodeId),
     updateSelectDragPosition,
   })
@@ -12999,6 +13034,7 @@ async function handlePointerUp(event: PointerEvent) {
       clearFloorSizeHud()
 
       endedWallDragNodeIds.forEach((nodeId) => wallRenderer.endWallDrag(nodeId))
+      updateOutlineSelectionTargets()
     }
 
     // Canvas-only safety: only allow scene-modifying interactions (build/road/floor/scatter)
@@ -13580,6 +13616,7 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13605,6 +13642,7 @@ function handlePointerCancel(event: PointerEvent) {
 
     wallRenderer.endWallDrag(state.nodeId)
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13630,6 +13668,7 @@ function handlePointerCancel(event: PointerEvent) {
 
     wallRenderer.endWallDrag(state.nodeId)
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13673,6 +13712,7 @@ function handlePointerCancel(event: PointerEvent) {
 
     wallRenderer.endWallDrag(state.nodeId)
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13718,6 +13758,7 @@ function handlePointerCancel(event: PointerEvent) {
 
     wallRenderer.endWallDrag(state.nodeId)
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13772,6 +13813,7 @@ function handlePointerCancel(event: PointerEvent) {
 
     wallRenderer.endWallDrag(state.nodeId)
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13800,6 +13842,7 @@ function handlePointerCancel(event: PointerEvent) {
       /* noop */
     }
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13819,6 +13862,7 @@ function handlePointerCancel(event: PointerEvent) {
       /* noop */
     }
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13838,6 +13882,7 @@ function handlePointerCancel(event: PointerEvent) {
       /* noop */
     }
 
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13989,6 +14034,7 @@ function handlePointerCancel(event: PointerEvent) {
     const resetVertices = state.startVertices.map(([x, z]) => [x, z] as [number, number])
     state.workingDefinition.vertices = resetVertices
     updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    updateOutlineSelectionTargets()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -14018,6 +14064,7 @@ function handlePointerCancel(event: PointerEvent) {
       commitSelectionDragTransformsWithDeferredVertexSnap(dragState)
       sceneStore.endTransformInteraction()
       wallRenderer.endWallDrag(dragState.nodeId)
+      updateOutlineSelectionTargets()
     }
   }
 
