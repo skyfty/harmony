@@ -302,6 +302,8 @@ export type FloorCircleRadiusDragState = {
   workingDefinition: FloorDynamicMesh
 
   centerLocal: { x: number; z: number }
+  startRadius: number
+  radiusGrabOffset: number | null
   segments: number
 }
 

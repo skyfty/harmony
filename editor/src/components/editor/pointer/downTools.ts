@@ -939,6 +939,8 @@ export function handlePointerDownTools(
                 workingDefinition,
 
                 centerLocal: { x: centerLocal.x, z: centerLocal.z },
+                startRadius: Math.max(1e-4, circle.radius),
+                radiusGrabOffset: null,
                 segments: Math.max(3, circle.segments),
               }
 

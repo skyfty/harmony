@@ -605,10 +605,21 @@ export function handlePointerMoveDrag(
       state.startHitWorld = tmpIntersection.clone()
     }
 
+    if (state.radiusGrabOffset == null) {
+      const startHitLocal = state.runtimeObject.worldToLocal(state.startHitWorld.clone())
+      const startDistance = Math.hypot(
+        startHitLocal.x - state.centerLocal.x,
+        startHitLocal.z - state.centerLocal.z,
+      )
+      state.radiusGrabOffset = startDistance - state.startRadius
+    }
+
     const hitLocal = state.runtimeObject.worldToLocal(tmpIntersection.clone())
-    const dx = hitLocal.x - state.centerLocal.x
-    const dz = hitLocal.z - state.centerLocal.z
-    const radius = Math.max(1e-4, Math.hypot(dx, dz))
+    const currentDistance = Math.hypot(
+      hitLocal.x - state.centerLocal.x,
+      hitLocal.z - state.centerLocal.z,
+    )
+    const radius = Math.max(1e-4, currentDistance - (state.radiusGrabOffset ?? 0))
 
     state.workingDefinition.vertices = buildCircleVertices({
       centerX: state.centerLocal.x,
