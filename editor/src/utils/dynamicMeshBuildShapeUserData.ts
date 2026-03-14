@@ -1,4 +1,5 @@
-import type { SceneNode } from '@schema'
+import type { SceneNode, WallDynamicMesh } from '@schema'
+import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 
@@ -32,7 +33,29 @@ export function isFloorBuildShape(value: unknown): value is FloorBuildShape {
 }
 
 export function isWallBuildShape(value: unknown): value is WallBuildShape {
-  return value === 'polygon' || value === 'rectangle' || value === 'circle'
+  return value === 'line' || value === 'polygon' || value === 'rectangle' || value === 'circle'
+}
+
+function isClosedWallBuild(node: SceneNode | null | undefined): boolean {
+  if (node?.dynamicMesh?.type !== 'Wall') {
+    return false
+  }
+
+  const compiled = compileWallSegmentsFromDefinition(node.dynamicMesh as WallDynamicMesh)
+  if (!compiled.length) {
+    return false
+  }
+
+  const first = compiled[0]
+  const last = compiled[compiled.length - 1]
+  if (!first || !last) {
+    return false
+  }
+
+  const dx = Math.abs(first.start.x - last.end.x)
+  const dy = Math.abs(first.start.y - last.end.y)
+  const dz = Math.abs(first.start.z - last.end.z)
+  return dx <= 1e-6 && dy <= 1e-6 && dz <= 1e-6
 }
 
 export function readFloorBuildShapeFromNode(node: SceneNode | null | undefined): FloorBuildShape | null {
@@ -42,5 +65,11 @@ export function readFloorBuildShapeFromNode(node: SceneNode | null | undefined):
 
 export function readWallBuildShapeFromNode(node: SceneNode | null | undefined): WallBuildShape | null {
   const raw = readDynamicMeshBuildShapeFromUserData(node?.userData)
-  return isWallBuildShape(raw) ? raw : null
+  if (!isWallBuildShape(raw)) {
+    return null
+  }
+  if (raw === 'polygon' && !isClosedWallBuild(node)) {
+    return 'line'
+  }
+  return raw
 }

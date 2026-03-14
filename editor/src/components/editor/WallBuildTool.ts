@@ -53,11 +53,13 @@ export type WallBuildToolSession = WallPreviewSession & {
     endpointKind: 'start' | 'end'
   } | null
   shapeDraft: {
-    kind: Exclude<WallBuildShape, 'polygon'>
+    kind: Exclude<WallBuildShape, 'polygon' | 'line'>
     pointerId: number
     start: THREE.Vector3
     end: THREE.Vector3
   } | null
+  polygonPoints: THREE.Vector3[]
+  polygonPreviewEnd: THREE.Vector3 | null
 }
 
 export function createWallBuildTool(options: {
@@ -100,7 +102,7 @@ export function createWallBuildTool(options: {
 
   let session: WallBuildToolSession | null = null
 
-  const getShape = (): WallBuildShape => options.wallBuildShape.value ?? 'polygon'
+  const getShape = (): WallBuildShape => options.wallBuildShape.value ?? 'line'
 
   const ensureSession = (): WallBuildToolSession => {
     if (session) {
@@ -119,6 +121,8 @@ export function createWallBuildTool(options: {
       committedNewSegmentCount: 0,
       branchFrom: null,
       shapeDraft: null,
+      polygonPoints: [],
+      polygonPreviewEnd: null,
       wallRenderProps: null,
     }
     return session
@@ -272,6 +276,71 @@ export function createWallBuildTool(options: {
     return snapped
   }
 
+  const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && isFinite(value)
+
+  const resetPolygonDraft = (target: WallBuildToolSession) => {
+    target.polygonPoints = []
+    target.polygonPreviewEnd = null
+    target.segments = []
+  }
+
+  const alignPointYToPolygonDraft = (point: THREE.Vector3, target: WallBuildToolSession): THREE.Vector3 => {
+    const baseY = target.polygonPoints[0]?.y
+    if (isFiniteNumber(baseY)) {
+      point.y = baseY
+    }
+    return point
+  }
+
+  const syncPolygonPreviewSegments = (target: WallBuildToolSession) => {
+    const nextSegments: WallPreviewSegment[] = []
+
+    for (let index = 0; index < target.polygonPoints.length - 1; index += 1) {
+      const start = target.polygonPoints[index]
+      const end = target.polygonPoints[index + 1]
+      if (!start || !end || start.distanceToSquared(end) <= 1e-6) {
+        continue
+      }
+      nextSegments.push({ start: start.clone(), end: end.clone() })
+    }
+
+    const previewEnd = target.polygonPreviewEnd
+    const lastPoint = target.polygonPoints[target.polygonPoints.length - 1]
+    const firstPoint = target.polygonPoints[0]
+
+    if (lastPoint && previewEnd && lastPoint.distanceToSquared(previewEnd) > 1e-6) {
+      nextSegments.push({ start: lastPoint.clone(), end: previewEnd.clone() })
+
+      if (
+        firstPoint
+        && target.polygonPoints.length >= 2
+        && previewEnd.distanceToSquared(firstPoint) > 1e-6
+      ) {
+        nextSegments.push({ start: previewEnd.clone(), end: firstPoint.clone() })
+      }
+    }
+
+    target.segments = nextSegments
+    previewRenderer.markDirty()
+  }
+
+  const buildClosedPolygonSegments = (points: THREE.Vector3[]): WallPreviewSegment[] => {
+    if (points.length < 3) {
+      return []
+    }
+
+    const segments: WallPreviewSegment[] = []
+    for (let index = 0; index < points.length; index += 1) {
+      const start = points[index]
+      const end = points[(index + 1) % points.length]
+      if (!start || !end || start.distanceToSquared(end) <= 1e-6) {
+        continue
+      }
+      segments.push({ start: start.clone(), end: end.clone() })
+    }
+    return segments
+  }
+
   const WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.35
   const WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE_SQ = WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE * WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE
 
@@ -412,6 +481,8 @@ export function createWallBuildTool(options: {
   const beginSegmentDrag = (startPoint: THREE.Vector3) => {
     const current = ensureSession()
     hydrateFromSelection(current)
+    resetPolygonDraft(current)
+    current.shapeDraft = null
     current.dragStart = startPoint.clone()
     current.dragEnd = startPoint.clone()
     previewRenderer.markDirty()
@@ -429,7 +500,7 @@ export function createWallBuildTool(options: {
     previewRenderer.markDirty()
   }
 
-  const beginShapeDraft = (kind: Exclude<WallBuildShape, 'polygon'>, event: PointerEvent): boolean => {
+  const beginShapeDraft = (kind: Exclude<WallBuildShape, 'polygon' | 'line'>, event: PointerEvent): boolean => {
     if (session?.shapeDraft) {
       return false
     }
@@ -443,6 +514,7 @@ export function createWallBuildTool(options: {
 
     const current = ensureSession()
     hydrateFromSelection(current)
+    resetPolygonDraft(current)
     current.dragStart = null
     current.dragEnd = null
     current.nodeId = null
@@ -459,7 +531,7 @@ export function createWallBuildTool(options: {
   }
 
   const computeAdaptiveCircleSegments = (radius: number): number => {
-    if (!Number.isFinite(radius) || radius <= 0) {
+    if (!isFiniteNumber(radius) || radius <= 0) {
       return 0
     }
     const targetSegmentLength = GRID_MAJOR_SPACING * 0.5
@@ -492,8 +564,8 @@ export function createWallBuildTool(options: {
   const buildCircleSegments = (center: THREE.Vector3, radiusEnd: THREE.Vector3): WallPreviewSegment[] => {
     const dx = radiusEnd.x - center.x
     const dz = radiusEnd.z - center.z
-    const radius = Math.hypot(dx, dz)
-    if (!Number.isFinite(radius) || radius < 1e-4) {
+    const radius = Math.sqrt(dx * dx + dz * dz)
+    if (!isFiniteNumber(radius) || radius < 1e-4) {
       return []
     }
 
@@ -614,7 +686,7 @@ export function createWallBuildTool(options: {
     previewRenderer.markDirty()
   }
 
-  const commitSegmentDrag = (): boolean => {
+  const commitLineSegmentDrag = (): boolean => {
     if (!session || !session.dragStart || !session.dragEnd) {
       return false
     }
@@ -629,7 +701,7 @@ export function createWallBuildTool(options: {
     }
 
     const segment: WallPreviewSegment = { start, end }
-    const pendingSegments = [...session.segments, segment]
+    const pendingSegments = session.nodeId ? [...session.segments, segment] : [segment]
 
     const segmentPayload = pendingSegments.map((entry) => ({
       start: entry.start.clone(),
@@ -647,11 +719,11 @@ export function createWallBuildTool(options: {
         wallPresetData: session.brushPresetData,
       })
       if (!created) {
-        cancelDrag()
+        clearSession(true)
         return false
       }
 
-      options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, 'polygon'))
+      options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, 'line'))
 
       nodeId = created.id
       session.nodeId = nodeId
@@ -678,21 +750,25 @@ export function createWallBuildTool(options: {
       const refreshed = findSceneNode(options.sceneStore.nodes, nodeId)
       if (refreshed?.dynamicMesh?.type === 'Wall') {
         session.dimensions = getWallNodeDimensions(refreshed)
+        options.sceneStore.updateNodeUserData(
+          nodeId,
+          mergeUserDataWithDynamicMeshBuildShape(refreshed.userData, 'line'),
+        )
       }
     }
 
-    session.dragStart = end.clone()
-    session.dragEnd = end.clone()
-    session.committedNewSegmentCount += 1
     if (startedFromBranch) {
       session.branchFrom = null
     }
+    session.dragStart = end.clone()
+    session.dragEnd = end.clone()
+    session.committedNewSegmentCount += 1
     session.dimensions = options.normalizeWallDimensionsForViewport(session.dimensions)
     previewRenderer.markDirty()
     return true
   }
 
-  const handlePlacementClick = (event: PointerEvent): boolean => {
+  const handleLinePlacementClick = (event: PointerEvent): boolean => {
     if (options.activeBuildTool.value !== 'wall') {
       return false
     }
@@ -719,13 +795,79 @@ export function createWallBuildTool(options: {
       previewRenderer.markDirty()
     }
 
-    const committed = commitSegmentDrag()
+    const committed = commitLineSegmentDrag()
     if (!committed) {
       current.dragStart = constrained.clone()
       current.dragEnd = constrained.clone()
       previewRenderer.markDirty()
     }
 
+    return true
+  }
+
+  const handlePolygonPlacementClick = (event: PointerEvent): boolean => {
+    if (options.activeBuildTool.value !== 'wall') {
+      return false
+    }
+    if (options.isAltOverrideActive()) {
+      return false
+    }
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return false
+    }
+
+    const current = ensureSession()
+    if (!current.polygonPoints.length) {
+      hydrateFromSelection(current)
+    }
+
+    current.dragStart = null
+    current.dragEnd = null
+    current.shapeDraft = null
+    current.nodeId = null
+    current.committedNewSegmentCount = 0
+
+    const point = alignPointYToPolygonDraft(snapPlacementPoint(groundPointerHelper.clone()), current)
+    const firstPoint = current.polygonPoints[0]
+    const lastPoint = current.polygonPoints[current.polygonPoints.length - 1]
+
+    if (lastPoint && lastPoint.distanceToSquared(point) <= 1e-6) {
+      current.polygonPreviewEnd = point.clone()
+      syncPolygonPreviewSegments(current)
+      return true
+    }
+
+    if (firstPoint && current.polygonPoints.length >= 3 && firstPoint.distanceToSquared(point) <= 1e-6) {
+      current.polygonPreviewEnd = firstPoint.clone()
+      syncPolygonPreviewSegments(current)
+      return true
+    }
+
+    current.polygonPoints.push(point.clone())
+    current.polygonPreviewEnd = point.clone()
+    syncPolygonPreviewSegments(current)
+    return true
+  }
+
+  const updatePolygonCursorPreview = (event: PointerEvent): boolean => {
+    if (!session || session.polygonPoints.length === 0) {
+      return false
+    }
+    if (options.isAltOverrideActive()) {
+      return false
+    }
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return false
+    }
+
+    const next = alignPointYToPolygonDraft(snapPlacementPoint(groundPointerHelper.clone()), session)
+    const previous = session.polygonPreviewEnd
+    if (previous && previous.equals(next)) {
+      return false
+    }
+
+    session.polygonPreviewEnd = next.clone()
+    syncPolygonPreviewSegments(session)
     return true
   }
 
@@ -751,11 +893,55 @@ export function createWallBuildTool(options: {
     previewRenderer.markDirty()
   }
 
-  const finalize = () => {
+  const finalizePolygon = () => {
     if (!session) {
       return
     }
-    cancelDrag()
+
+    const polygonPoints = session.polygonPoints
+      .map((point) => point.clone())
+      .filter((point) => isFiniteNumber(point.x) && isFiniteNumber(point.y) && isFiniteNumber(point.z))
+
+    if (polygonPoints.length < 3) {
+      clearSession(true)
+      return
+    }
+
+    const segments = buildClosedPolygonSegments(polygonPoints)
+    if (segments.length < 3) {
+      clearSession(true)
+      return
+    }
+
+    const segmentPayload = segments.map((entry) => ({
+      start: entry.start.clone(),
+      end: entry.end.clone(),
+    }))
+
+    const shouldApplyBrushPreset = !!session.brushPresetAssetId
+    const created = options.sceneStore.createWallNode({
+      segments: segmentPayload,
+      dimensions: session.dimensions,
+      bodyAssetId: session.bodyAssetId,
+      wallComponentProps: session.wallRenderProps,
+      wallPresetData: session.brushPresetData,
+    })
+
+    if (!created) {
+      clearSession(true)
+      return
+    }
+
+    options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, 'polygon'))
+
+    if (shouldApplyBrushPreset && session.brushPresetAssetId) {
+      void options.sceneStore
+        .applyWallPresetToNode(created.id, session.brushPresetAssetId, session.brushPresetData)
+        .catch((error: unknown) => {
+          console.warn('Failed to apply wall preset brush', session?.brushPresetAssetId, error)
+        })
+    }
+
     clearSession(true)
   }
 
@@ -783,10 +969,9 @@ export function createWallBuildTool(options: {
         return false
       }
       const shape = getShape()
-      if (shape !== 'polygon') {
+      if (shape !== 'line' && shape !== 'polygon') {
         const event = _event
         if (event.button === 0 && !options.isAltOverrideActive()) {
-          // Floor-like behavior: start a drag session for rectangle/circle.
           beginShapeDraft(shape, event)
         }
       }
@@ -815,6 +1000,13 @@ export function createWallBuildTool(options: {
         }
       }
 
+      if (session?.polygonPoints.length) {
+        const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+        if (!isCameraNavActive) {
+          return updatePolygonCursorPreview(event)
+        }
+      }
+
       return false
     },
 
@@ -828,8 +1020,10 @@ export function createWallBuildTool(options: {
           return false
         }
         const shape = getShape()
-        const handled = shape === 'polygon'
-          ? handlePlacementClick(event)
+        const handled = shape === 'line'
+          ? handleLinePlacementClick(event)
+          : shape === 'polygon'
+          ? handlePolygonPlacementClick(event)
           : (() => {
             const hadDraft = Boolean(session?.shapeDraft)
             if (hadDraft) {
@@ -856,11 +1050,12 @@ export function createWallBuildTool(options: {
           if (!clickWasDrag && session) {
             const shape = getShape()
             if (shape === 'polygon') {
-              finalize()
-              } else if (session.shapeDraft) {
-                // Align with Floor: right click cancels rectangle/circle drafts.
-                cancelShapeDraft()
-                clearSession(true)
+              finalizePolygon()
+            } else if (shape === 'line') {
+              clearSession(true)
+            } else if (session.shapeDraft) {
+              cancelShapeDraft()
+              clearSession(true)
             }
             event.preventDefault()
             event.stopPropagation()
@@ -905,7 +1100,7 @@ export function createWallBuildTool(options: {
       if (options.activeBuildTool.value !== 'wall') {
         return false
       }
-      if (getShape() !== 'polygon') {
+      if (getShape() !== 'line') {
         return false
       }
 
@@ -925,6 +1120,8 @@ export function createWallBuildTool(options: {
       current.dragEnd = worldPoint.clone()
       current.committedNewSegmentCount = 0
       current.shapeDraft = null
+      current.polygonPoints = []
+      current.polygonPreviewEnd = null
 
       // When branching from an existing wall, never apply brush presets.
       current.brushPresetAssetId = null

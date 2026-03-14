@@ -309,7 +309,7 @@ export function handlePointerDownTools(
           const chainStartIndex = Math.max(0, Math.trunc(handleHit.chainStartIndex))
           const chainEndIndex = Math.max(chainStartIndex, Math.trunc(handleHit.chainEndIndex))
 
-          const wallBuildShape = ctx.wallBuildShape ?? 'polygon'
+          const wallBuildShape = ctx.wallBuildShape ?? 'line'
 
           const handleKind = handleHit.handleKind
           let endpointKind: 'start' | 'end' = 'start'
