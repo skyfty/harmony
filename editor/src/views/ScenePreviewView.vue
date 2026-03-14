@@ -79,10 +79,6 @@ import {
 } from '@schema/groundMesh'
 import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
-import {
-	syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
-	createDefaultTerrainPaintLoaders,
-} from '@schema/terrainPaintPreview'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
 	createDefaultLandformsPreviewLoaders,
@@ -979,8 +975,6 @@ const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | n
 const bakedGroundTextureCache = new Map<string, THREE.Texture | null>()
 const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
-// Create loaders via schema factory to centralize terrain paint asset loading logic
-const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
 const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
@@ -1030,14 +1024,14 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
 
 
 
-function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
+function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
 	const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
 		? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
 		: ''
 	if (ENABLE_SCENE_PREVIEW_BAKED_GROUND && bakedAssetId) {
-		const token = terrainPaintPreviewLoadToken
+		const token = groundSurfacePreviewLoadToken
 		void loadBakedGroundTexture(bakedAssetId).then((texture) => {
-			if (terrainPaintPreviewLoadToken !== token) {
+			if (groundSurfacePreviewLoadToken !== token) {
 				return
 			}
 			if (texture) {
@@ -1048,18 +1042,10 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
 				groundObject,
 				groundNode,
 				landformsPreviewLoaders,
-				() => terrainPaintPreviewLoadToken,
+					() => groundSurfacePreviewLoadToken,
 			)
 		})
-		return syncTerrainPaintPreviewForGroundShared(
-			groundObject,
-			{ ...dynamicMesh, legacyTerrainPaint: null, terrainPaint: null },
-			{
-				loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
-				loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
-			},
-			() => terrainPaintPreviewLoadToken,
-		)
+		return
 	}
 	const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
 		? syncGroundSurfacePreviewForGround(
@@ -1067,34 +1053,17 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, groundNo
 			groundNode,
 			dynamicMesh,
 			groundSurfacePreviewLoaders,
-			() => terrainPaintPreviewLoadToken,
+			() => groundSurfacePreviewLoadToken,
 		)
 		: false
 	if (usesSurfacePreview) {
-		return syncTerrainPaintPreviewForGroundShared(
-			groundObject,
-			{ ...dynamicMesh, legacyTerrainPaint: null, terrainPaint: null },
-			{
-				loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
-				loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
-			},
-			() => terrainPaintPreviewLoadToken,
-		)
+		return
 	}
 	syncLandformsPreviewForGround(
 		groundObject,
 		groundNode,
 		landformsPreviewLoaders,
-		() => terrainPaintPreviewLoadToken,
-	)
-	return syncTerrainPaintPreviewForGroundShared(
-		groundObject,
-		dynamicMesh,
-		{
-			loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
-			loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
-		},
-		() => terrainPaintPreviewLoadToken,
+		() => groundSurfacePreviewLoadToken,
 	)
 }
 
@@ -1327,7 +1296,7 @@ let currentDocument: SceneJsonExportDocument | null = null
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
-let terrainPaintPreviewLoadToken = 0
+let groundSurfacePreviewLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
 let isApplyingSnapshot = false
@@ -1683,8 +1652,8 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	cachedGroundDynamicMesh = null
 	cachedGroundNode = null
 	cameraDependentUpdateInitialized = false
-	terrainPaintPreviewLoadToken += 1
-	const loadToken = terrainPaintPreviewLoadToken
+	groundSurfacePreviewLoadToken += 1
+	const loadToken = groundSurfacePreviewLoadToken
 	if (!document) {
 		return
 	}
@@ -1695,12 +1664,12 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	if (hasEmbeddedGroundRuntimeHeightmaps(groundNode.dynamicMesh)) {
 	} else {
 		const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
-		if (terrainPaintPreviewLoadToken !== loadToken) {
+		if (groundSurfacePreviewLoadToken !== loadToken) {
 			return
 		}
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	}
-	if (terrainPaintPreviewLoadToken !== loadToken) {
+	if (groundSurfacePreviewLoadToken !== loadToken) {
 		return
 	}
 	attachGroundScatterRuntimeToNode(document.id, groundNode)
@@ -7049,7 +7018,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
 				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
 			}
-			syncTerrainPaintPreviewForGround(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
+			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
 					renderHelpers: isGroundChunkStreamingDebugVisible.value,

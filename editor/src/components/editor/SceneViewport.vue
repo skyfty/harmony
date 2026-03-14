@@ -196,10 +196,10 @@ import {
   sampleGroundHeight,
 } from '@schema/groundMesh'
 import {
-  syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
-  createDefaultTerrainPaintLoaders,
-} from '@schema/terrainPaintPreview'
-import { createDefaultGroundSurfacePreviewLoaders, restoreGroundSurfacePreviewMaterialMap, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
+  createDefaultGroundSurfacePreviewLoaders,
+  restoreGroundSurfacePreviewMaterialMap,
+  syncGroundSurfacePreviewForGround,
+} from '@schema/groundSurfacePreview'
 import {
   clearLandformsPreviewForGround,
   createDefaultLandformsPreviewLoaders,
@@ -3043,7 +3043,7 @@ const groundEditor = createGroundEditor({
     enabled: resolveGroundScatterChunkStreamingEnabled(),
     getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
   },
-  onTerrainPaintPreviewChanged: syncGroundSurfacePreviewFromLiveTerrainPaint,
+  onTerrainPaintSurfacePreviewChanged: syncGroundSurfacePreviewFromLiveTerrainPaint,
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -10105,7 +10105,6 @@ async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string 
 }
 
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
-const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
 const LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION = 512
 
@@ -10117,11 +10116,10 @@ function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefi
   landformsPreviewLoadToken += 1
   if (groundNode.dynamicMesh?.type === 'Ground') {
     const hasTerrainPaint = Boolean(groundNode.dynamicMesh.terrainPaint?.layers?.some((layer) => layer.enabled !== false && typeof layer.textureAssetId === 'string' && layer.textureAssetId.trim().length))
-      || Boolean(groundNode.dynamicMesh.legacyTerrainPaint?.layers?.length)
     const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
     const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
     const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
-    const usesSurfacePreview = syncGroundSurfacePreviewForGround(
+    syncGroundSurfacePreviewForGround(
       groundObject,
       groundNode,
       groundNode.dynamicMesh,
@@ -10131,18 +10129,6 @@ function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefi
         applyToMaterialMap: hasTerrainPaint || hasLandforms,
       },
     )
-    syncTerrainPaintPreviewForGroundShared(
-      groundObject,
-      usesSurfacePreview ? { ...groundNode.dynamicMesh, legacyTerrainPaint: null, terrainPaint: null } : groundNode.dynamicMesh,
-      {
-        loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
-        loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
-      },
-      () => landformsPreviewLoadToken,
-    )
-    if (usesSurfacePreview) {
-      return
-    }
     if (hasTerrainPaint && !hasLandforms) {
       return
     }
@@ -10169,8 +10155,8 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
     : 0
   const forceLiveSurfacePreview = enabledV3LayerCount > 4
   const useLiveSurfacePreview = payload.mode === 'surface-rebuild' || forceLiveSurfacePreview
-  const usesSurfacePreview = useLiveSurfacePreview
-    ? syncGroundSurfacePreviewForGround(
+  if (useLiveSurfacePreview) {
+    syncGroundSurfacePreviewForGround(
       payload.groundObject,
       payload.groundNode,
       payload.dynamicMesh,
@@ -10183,7 +10169,9 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
         applyToMaterialMap: true,
       },
     )
-    : syncGroundSurfacePreviewForGround(
+    return
+  }
+  syncGroundSurfacePreviewForGround(
       payload.groundObject,
       payload.groundNode,
       payload.dynamicMesh,
@@ -10193,18 +10181,6 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
         applyToMaterialMap: true,
       },
     )
-  syncTerrainPaintPreviewForGroundShared(
-    payload.groundObject,
-    useLiveSurfacePreview && usesSurfacePreview
-      ? { ...payload.dynamicMesh, legacyTerrainPaint: null, terrainPaint: null }
-      : payload.dynamicMesh,
-    {
-      loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
-      loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
-    },
-    () => landformsPreviewLoadToken,
-    { previewRevision: payload.previewRevision },
-  )
 }
 
 function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {

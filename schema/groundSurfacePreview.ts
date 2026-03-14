@@ -3,7 +3,6 @@ import type {
   GroundDynamicMesh,
   SceneNode,
   TerrainPaintBlendMode,
-  LegacyTerrainPaintLayerDefinition,
   TerrainPaintLayerDefinition,
   TerrainPaintSettings,
 } from './index'
@@ -23,8 +22,6 @@ import {
   setLandformsPreviewTexture,
   type LandformsPreviewLoaders,
 } from './landformsPreview'
-import type { TerrainPaintLoaders } from './terrainPaintPreview'
-import { resolveGroundChunkCells } from './groundMesh'
 import {
   decodeTerrainPaintMaskTileToData,
   formatTerrainPaintTileKey,
@@ -63,8 +60,6 @@ type LoadedPreviewImage = {
 
 type CompiledTerrainPaintLayer = {
   id: string
-  pageIndex: number
-  channelIndex: number
   opacity: number
   blendMode: TerrainPaintBlendMode | null | undefined
   worldSpace: boolean
@@ -77,14 +72,15 @@ type CompiledTerrainPaintLayer = {
   imageData: ImageDataSource
 }
 
-export type GroundSurfacePreviewLoaders = TerrainPaintLoaders & LandformsPreviewLoaders & {
+export type GroundSurfacePreviewLoaders = LandformsPreviewLoaders & {
+  loadTerrainPaintTextureFromAssetId: (assetId: string, options: { colorSpace: 'srgb' | 'none' }) => Promise<THREE.Texture | null>
+  loadTerrainPaintWeightmapDataFromAssetId: (assetId: string, resolution: number) => Promise<Uint8ClampedArray | null>
   loadGroundSurfaceBaseTextureFromUrl: (url: string) => Promise<THREE.Texture | null>
   loadTerrainPaintMaskTileDataFromAssetId: (assetId: string, resolution: number) => Promise<Uint8ClampedArray | null>
 }
 
 export type GroundSurfacePreviewOptions = {
   maxResolution?: number
-  liveChunkPagesByKey?: Map<string, Uint8ClampedArray[]>
   liveChunkTileMasksByKey?: Map<string, Map<string, Map<string, Uint8ClampedArray | null>>>
   previewRevision?: number
   applyToMaterialMap?: boolean
@@ -120,23 +116,6 @@ function repeat01(value: number): number {
   }
   const wrapped = value - Math.floor(value)
   return wrapped < 0 ? wrapped + 1 : wrapped
-}
-
-function terrainPaintChannelIndex(channel: LegacyTerrainPaintLayerDefinition['channel']): number {
-  switch (channel) {
-    case 'g':
-      return 1
-    case 'b':
-      return 2
-    case 'a':
-      return 3
-    default:
-      return 0
-  }
-}
-
-function getTerrainPaintLayerSlotIndex(layer: LegacyTerrainPaintLayerDefinition): number {
-  return Math.max(0, Math.floor(layer.pageIndex)) * 4 + terrainPaintChannelIndex(layer.channel)
 }
 
 function createCompositionCanvas(width: number, height: number): { canvas: CanvasLike; context: Canvas2DContext } | null {
@@ -326,31 +305,6 @@ export function restoreGroundSurfacePreviewMaterialMap(root: THREE.Object3D | nu
   })
 }
 
-function sampleImageChannel(image: ImageDataSource, u: number, v: number, wrap: 'repeat' | 'clamp', channelIndex: number): number {
-  if (!(image.width > 0) || !(image.height > 0)) {
-    return channelIndex === 3 ? 1 : 0
-  }
-  const normalizedU = wrap === 'repeat' ? repeat01(u) : clamp01(u)
-  const normalizedV = wrap === 'repeat' ? repeat01(v) : clamp01(v)
-  const x = normalizedU * Math.max(0, image.width - 1)
-  const y = normalizedV * Math.max(0, image.height - 1)
-  const x0 = Math.floor(x)
-  const y0 = Math.floor(y)
-  const x1 = Math.min(image.width - 1, x0 + 1)
-  const y1 = Math.min(image.height - 1, y0 + 1)
-  const tx = x - x0
-  const ty = y - y0
-  const channelOffset = Math.max(0, Math.min(3, channelIndex))
-  const rowStride = image.width * 4
-  const offset00 = y0 * rowStride + x0 * 4 + channelOffset
-  const offset10 = y0 * rowStride + x1 * 4 + channelOffset
-  const offset01 = y1 * rowStride + x0 * 4 + channelOffset
-  const offset11 = y1 * rowStride + x1 * 4 + channelOffset
-  const top = mix((image.data[offset00] ?? 0) / 255, (image.data[offset10] ?? 0) / 255, tx)
-  const bottom = mix((image.data[offset01] ?? 0) / 255, (image.data[offset11] ?? 0) / 255, tx)
-  return mix(top, bottom, ty)
-}
-
 function sampleImageData(image: ImageDataSource, u: number, v: number, wrap: 'repeat' | 'clamp', target: Float32Array): void {
   if (!(image.width > 0) || !(image.height > 0)) {
     target[0] = 1
@@ -420,38 +374,10 @@ function transformTerrainPaintUv(
   ]
 }
 
-function readWeightValue(page: Uint8ClampedArray | null, resolution: number, u: number, v: number, channelIndex: number): number {
-  if (!page || resolution <= 0) {
-    return 0
-  }
-  return sampleImageChannel({ width: resolution, height: resolution, data: page }, u, v, 'clamp', channelIndex)
-}
-
-function compileTerrainPaintLayer(layer: LegacyTerrainPaintLayerDefinition, imageData: ImageDataSource): CompiledTerrainPaintLayer {
-  const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180
-  return {
-    id: layer.id,
-    pageIndex: Math.max(0, Math.floor(layer.pageIndex)),
-    channelIndex: terrainPaintChannelIndex(layer.channel),
-    opacity: clamp01(normalizeFinite(layer.opacity, 1)),
-    blendMode: layer.blendMode,
-    worldSpace: layer.worldSpace === true,
-    rotationSin: Math.sin(rotation),
-    rotationCos: Math.cos(rotation),
-    scaleX: normalizeFinite(layer.tileScale.x, 1),
-    scaleY: normalizeFinite(layer.tileScale.y, 1),
-    offsetX: normalizeFinite(layer.offset.x, 0),
-    offsetY: normalizeFinite(layer.offset.y, 0),
-    imageData,
-  }
-}
-
 function compileCurrentTerrainPaintLayer(layer: TerrainPaintLayerDefinition, imageData: ImageDataSource): CompiledTerrainPaintLayer {
   const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180
   return {
     id: layer.id,
-    pageIndex: 0,
-    channelIndex: 0,
     opacity: clamp01(normalizeFinite(layer.opacity, 1)),
     blendMode: layer.blendMode,
     worldSpace: layer.worldSpace === true,
@@ -651,8 +577,7 @@ async function composeCurrentTerrainPaintIntoCanvas(params: {
 function buildGroundSurfacePreviewSignature(groundNode: SceneNode, definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
   const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
   const props = component ? clampLandformsComponentProps(component.props) : { layers: [] }
-  const terrainPaint = definition.terrainPaint ?? definition.legacyTerrainPaint ?? null
-  const liveKeys = options.liveChunkPagesByKey ? Array.from(options.liveChunkPagesByKey.keys()).sort() : []
+  const terrainPaint = definition.terrainPaint ?? null
   const liveTileKeys = options.liveChunkTileMasksByKey ? Array.from(options.liveChunkTileMasksByKey.keys()).sort() : []
   return stableSerialize({
     width: normalizeDimension(definition.width),
@@ -660,7 +585,6 @@ function buildGroundSurfacePreviewSignature(groundNode: SceneNode, definition: G
     textureDataUrl: definition.textureDataUrl ?? null,
     terrainPaint,
     landforms: props.layers.filter((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length),
-    liveChunkKeys: liveKeys,
     liveChunkTileKeys: liveTileKeys,
     previewRevision: options.previewRevision ?? 0,
     maxResolution: options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION,
@@ -726,8 +650,7 @@ export async function composeGroundSurfacePreviewCanvas(
     }
   }
 
-  const shouldUseLegacyLivePreview = Boolean(options.liveChunkPagesByKey?.size && definition.legacyTerrainPaint?.version === 2)
-  const currentTerrainPaint = !shouldUseLegacyLivePreview ? (definition.terrainPaint ?? null) : null
+  const currentTerrainPaint = definition.terrainPaint ?? null
   if (currentTerrainPaint && currentTerrainPaint.version === 3 && Array.isArray(currentTerrainPaint.layers) && currentTerrainPaint.layers.length) {
     const didComposeCurrentTerrainPaint = await composeCurrentTerrainPaintIntoCanvas({
       context,
@@ -742,145 +665,6 @@ export async function composeGroundSurfacePreviewCanvas(
     if (didComposeCurrentTerrainPaint) {
       return { canvas, width, height }
     }
-  }
-
-  const terrainPaint = definition.legacyTerrainPaint ?? null
-  if (terrainPaint && terrainPaint.version === 2 && Array.isArray(terrainPaint.layers) && terrainPaint.layers.length) {
-    const sortedLayers = [...terrainPaint.layers].sort((left, right) => getTerrainPaintLayerSlotIndex(left) - getTerrainPaintLayerSlotIndex(right))
-    const compiledLayers: CompiledTerrainPaintLayer[] = []
-    const sampleScratch = new Float32Array(4)
-    for (const layer of sortedLayers) {
-      const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
-      if (!assetId) {
-        continue
-      }
-      const texture = await loaders.loadTerrainPaintTextureFromAssetId(assetId, { colorSpace: 'srgb' })
-      if (shouldAbort()) {
-        return null
-      }
-      const loaded = loadImageDataFromTexture(texture)
-      if (loaded) {
-        compiledLayers.push(compileTerrainPaintLayer(layer, loaded.imageData))
-      }
-    }
-    if (!compiledLayers.length) {
-      return { canvas, width, height }
-    }
-    const output = context.getImageData(0, 0, width, height)
-    const outputData = output.data
-    const groundWidth = Math.max(1e-6, normalizeDimension(definition.width))
-    const groundDepth = Math.max(1e-6, normalizeDimension(definition.depth))
-    const halfWidth = groundWidth * 0.5
-    const halfDepth = groundDepth * 0.5
-    const persistedChunkEntries = Object.entries(terrainPaint.chunks ?? {})
-    const liveChunkEntries = options.liveChunkPagesByKey
-      ? Array.from(options.liveChunkPagesByKey.keys()).map((chunkKey) => [chunkKey, null] as const)
-      : []
-    const chunkEntries = new Map<string, { pages?: Array<{ logicalId: string }> } | null>()
-    persistedChunkEntries.forEach(([chunkKey, chunkRef]) => {
-      chunkEntries.set(chunkKey, chunkRef)
-    })
-    liveChunkEntries.forEach(([chunkKey]) => {
-      if (!chunkEntries.has(chunkKey)) {
-        chunkEntries.set(chunkKey, null)
-      }
-    })
-    for (const [chunkKey, chunkRef] of chunkEntries.entries()) {
-      if (shouldAbort()) {
-        return null
-      }
-      const [rowText, colText] = chunkKey.split(':')
-      const chunkRow = Number.parseInt(rowText ?? '', 10)
-      const chunkColumn = Number.parseInt(colText ?? '', 10)
-      if (!Number.isFinite(chunkRow) || !Number.isFinite(chunkColumn)) {
-        continue
-      }
-      const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-      const chunkCells = Math.max(1, resolveGroundChunkCells(definition))
-      const startColumn = chunkColumn * chunkCells
-      const startRow = chunkRow * chunkCells
-      const effectiveColumns = Math.max(0, Math.min(chunkCells, Math.max(0, definition.columns - startColumn)))
-      const effectiveRows = Math.max(0, Math.min(chunkCells, Math.max(0, definition.rows - startRow)))
-      const chunkWidth = effectiveColumns * cellSize
-      const chunkDepth = effectiveRows * cellSize
-      if (!(chunkWidth > 0) || !(chunkDepth > 0)) {
-        continue
-      }
-      const minX = -definition.width * 0.5 + startColumn * cellSize
-      const minZ = -definition.depth * 0.5 + startRow * cellSize
-      const startX = Math.max(0, Math.floor(((minX + halfWidth) / groundWidth) * width))
-      const endX = Math.min(width, Math.ceil(((minX + chunkWidth + halfWidth) / groundWidth) * width))
-      const startY = Math.max(0, Math.floor(((minZ + halfDepth) / groundDepth) * height))
-      const endY = Math.min(height, Math.ceil(((minZ + chunkDepth + halfDepth) / groundDepth) * height))
-      if (startX >= endX || startY >= endY) {
-        continue
-      }
-      const livePages = options.liveChunkPagesByKey?.get(chunkKey) ?? null
-      const persistedPages = Array.isArray(chunkRef?.pages) ? chunkRef.pages : []
-      const resolvedPages: Array<Uint8ClampedArray | null> = []
-      const maxPageIndex = compiledLayers.reduce((currentMax, layer) => Math.max(currentMax, layer.pageIndex), -1)
-      const pageCount = Math.max(maxPageIndex + 1, livePages?.length ?? 0, persistedPages.length)
-      for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
-        const livePage = livePages?.[pageIndex] ?? null
-        if (livePage) {
-          resolvedPages.push(livePage)
-          continue
-        }
-        const logicalId = typeof persistedPages[pageIndex]?.logicalId === 'string' ? persistedPages[pageIndex]!.logicalId.trim() : ''
-        if (!logicalId) {
-          resolvedPages.push(null)
-          continue
-        }
-        resolvedPages.push(await loaders.loadTerrainPaintWeightmapDataFromAssetId(logicalId, terrainPaint.weightmapResolution))
-        if (shouldAbort()) {
-          return null
-        }
-      }
-      for (let y = startY; y < endY; y += 1) {
-        if (((y - startY) & 7) === 0 && shouldAbort()) {
-          return null
-        }
-        const worldZ = ((y + 0.5) / height) * groundDepth - halfDepth
-        const meshV = clamp01((worldZ - minZ) / Math.max(1e-6, chunkDepth))
-        const groundV = clamp01((worldZ + halfDepth) / groundDepth)
-        for (let x = startX; x < endX; x += 1) {
-          const worldX = ((x + 0.5) / width) * groundWidth - halfWidth
-          const meshU = clamp01((worldX - minX) / Math.max(1e-6, chunkWidth))
-          const groundU = clamp01((worldX + halfWidth) / groundWidth)
-          const pixelOffset = (y * width + x) * 4
-          let colorR = (outputData[pixelOffset] ?? 255) / 255
-          let colorG = (outputData[pixelOffset + 1] ?? 255) / 255
-          let colorB = (outputData[pixelOffset + 2] ?? 255) / 255
-          for (const layer of compiledLayers) {
-            const weight = readWeightValue(
-              resolvedPages[layer.pageIndex] ?? null,
-              terrainPaint.weightmapResolution,
-              meshU,
-              meshV,
-              layer.channelIndex,
-            )
-            if (weight <= 0) {
-              continue
-            }
-            const layerUv = transformTerrainPaintUv([meshU, meshV], [groundU, groundV], layer)
-            sampleImageData(layer.imageData, layerUv[0], layerUv[1], 'repeat', sampleScratch)
-            const blended = terrainPaintBlendColor([colorR, colorG, colorB], [sampleScratch[0] ?? 0, sampleScratch[1] ?? 0, sampleScratch[2] ?? 0], layer.blendMode)
-            const layerAlpha = layer.opacity * (sampleScratch[3] ?? 0) * weight
-            if (layerAlpha <= 0) {
-              continue
-            }
-            colorR = blended[0] * layerAlpha + colorR * (1 - layerAlpha)
-            colorG = blended[1] * layerAlpha + colorG * (1 - layerAlpha)
-            colorB = blended[2] * layerAlpha + colorB * (1 - layerAlpha)
-          }
-          outputData[pixelOffset] = Math.round(clamp01(colorR) * 255)
-          outputData[pixelOffset + 1] = Math.round(clamp01(colorG) * 255)
-          outputData[pixelOffset + 2] = Math.round(clamp01(colorB) * 255)
-          outputData[pixelOffset + 3] = 255
-        }
-      }
-    }
-    context.putImageData(output, 0, 0)
   }
 
   return { canvas, width, height }
@@ -1044,7 +828,6 @@ export function syncGroundSurfacePreviewForGround(
     return false
   }
   const hasTerrainPaint = Boolean(dynamicMesh.terrainPaint?.layers?.some((layer) => layer.enabled !== false && typeof layer.textureAssetId === 'string' && layer.textureAssetId.trim().length))
-    || Boolean(dynamicMesh.legacyTerrainPaint?.layers?.length)
   const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
   const landformsProps = component ? clampLandformsComponentProps(component.props) : null
   const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
@@ -1079,7 +862,7 @@ export function syncGroundSurfacePreviewForGround(
     console.log('[groundSurfacePreview] preview applied', {
       previewRevision: options.previewRevision ?? null,
       textureUuid: texture.uuid,
-      liveChunkCount: options.liveChunkPagesByKey?.size ?? 0,
+      liveChunkCount: options.liveChunkTileMasksByKey?.size ?? 0,
     })
     if (options.applyToMaterialMap === true) {
       applyGroundSurfacePreviewToMaterialMap(groundObject, texture)

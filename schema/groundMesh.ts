@@ -11,7 +11,6 @@ import {
   type GroundSculptOperation,
 } from './index'
 
-import { ensureTerrainPaintPreviewInstalled } from './terrainPaintPreview'
 import {
   computeGroundBaseHeightAtVertex,
   computeGroundBaseHeightRegion,
@@ -1238,7 +1237,6 @@ export function updateGroundChunks(
     return
   }
 
-  const terrainPaintSettings = (root.userData as any)?.__terrainPaintSettings ?? undefined
   const state = ensureGroundRuntimeState(root, definition)
   const now = Date.now()
   const force = options.force === true
@@ -1434,7 +1432,6 @@ export function updateGroundChunks(
 
   // Load chunks within the tighter load radius (nearest-first).
   let stitchRegion: GroundGeometryUpdateRegion | null = null
-  let needsTerrainPaintRebind = false
   const mergeRegion = (current: GroundGeometryUpdateRegion | null, next: GroundGeometryUpdateRegion): GroundGeometryUpdateRegion => {
     if (!current) {
       return { ...next }
@@ -1468,20 +1465,12 @@ export function updateGroundChunks(
         minColumn: runtime.spec.startColumn,
         maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
       })
-
-      if (terrainPaintSettings) {
-        needsTerrainPaintRebind = true
-      }
     }
 
     // Keep remaining items (and drop any that got created).
     state.pendingCreates = pending
       .slice(processed)
       .filter((entry) => !state.chunks.has(entry.key))
-  }
-
-  if (needsTerrainPaintRebind) {
-    ensureTerrainPaintPreviewInstalled(root, definition, terrainPaintSettings)
   }
 
   // Unload chunks outside the unload radius with a budget.
