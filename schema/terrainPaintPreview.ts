@@ -686,6 +686,7 @@ export type TerrainPaintLoaders = {
 export type SyncTerrainPaintPreviewOptions = {
 	liveChunkPagesByKey?: Map<string, Uint8ClampedArray[]>
 	previewRevision?: number
+	includePersistedChunkWeightmaps?: boolean
 }
 
 // Create default loaders using a provided `resolveAssetUrlFromCache` function.
@@ -748,6 +749,7 @@ export function syncTerrainPaintPreviewForGround(
 ): void {
 	const settings: any = (dynamicMesh as any)?.terrainPaint ?? null
 	const liveChunkPagesByKey = options.liveChunkPagesByKey
+	const includePersistedChunkWeightmaps = options.includePersistedChunkWeightmaps !== false
 
 	// Ensure per-mesh cloned materials and shader hooks
 	cloneTerrainPaintPreviewMaterialsOnce(groundObject)
@@ -820,7 +822,7 @@ export function syncTerrainPaintPreviewForGround(
 	}
 
 	const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : {}
-	if (!liveChunkPagesByKey?.size && !Object.keys(chunks).length) {
+	if (!liveChunkPagesByKey?.size && (!includePersistedChunkWeightmaps || !Object.keys(chunks).length)) {
 		return
 	}
 
@@ -835,6 +837,13 @@ export function syncTerrainPaintPreviewForGround(
 			terrainPaintChunkRefKeys.set(chunkKey, liveRefKey)
 			chunkTargets.forEach((target) => {
 				updateTerrainPaintPreviewWeightmap(target, chunkKey, livePage0, weightmapResolution)
+			})
+			continue
+		}
+		if (!includePersistedChunkWeightmaps) {
+			terrainPaintChunkRefKeys.delete(chunkKey)
+			chunkTargets.forEach((target) => {
+				setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
 			})
 			continue
 		}

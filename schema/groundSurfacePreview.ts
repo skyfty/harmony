@@ -39,6 +39,21 @@ type LoadedPreviewImage = {
   imageData: ImageDataSource
 }
 
+type CompiledTerrainPaintLayer = {
+  pageIndex: number
+  channelIndex: number
+  opacity: number
+  blendMode: TerrainPaintBlendMode | null | undefined
+  worldSpace: boolean
+  rotationSin: number
+  rotationCos: number
+  scaleX: number
+  scaleY: number
+  offsetX: number
+  offsetY: number
+  imageData: ImageDataSource
+}
+
 export type GroundSurfacePreviewLoaders = TerrainPaintLoaders & LandformsPreviewLoaders & {
   loadGroundSurfaceBaseTextureFromUrl: (url: string) => Promise<THREE.Texture | null>
 }
@@ -233,6 +248,10 @@ function loadImageDataFromTexture(texture: THREE.Texture | null): LoadedPreviewI
   return { source, imageData }
 }
 
+function mix(a: number, b: number, factor: number): number {
+  return a + (b - a) * factor
+}
+
 function forEachGroundPreviewMaterial(root: THREE.Object3D, visitor: (material: THREE.MeshStandardMaterial) => void): void {
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh
@@ -282,9 +301,9 @@ export function restoreGroundSurfacePreviewMaterialMap(root: THREE.Object3D | nu
   })
 }
 
-function sampleImageData(image: ImageDataSource, u: number, v: number, wrap: 'repeat' | 'clamp'): [number, number, number, number] {
+function sampleImageChannel(image: ImageDataSource, u: number, v: number, wrap: 'repeat' | 'clamp', channelIndex: number): number {
   if (!(image.width > 0) || !(image.height > 0)) {
-    return [1, 1, 1, 1]
+    return channelIndex === 3 ? 1 : 0
   }
   const normalizedU = wrap === 'repeat' ? repeat01(u) : clamp01(u)
   const normalizedV = wrap === 'repeat' ? repeat01(v) : clamp01(v)
@@ -296,23 +315,45 @@ function sampleImageData(image: ImageDataSource, u: number, v: number, wrap: 're
   const y1 = Math.min(image.height - 1, y0 + 1)
   const tx = x - x0
   const ty = y - y0
-  const read = (sampleX: number, sampleY: number): [number, number, number, number] => {
-    const offset = (sampleY * image.width + sampleX) * 4
-    return [
-      (image.data[offset] ?? 0) / 255,
-      (image.data[offset + 1] ?? 0) / 255,
-      (image.data[offset + 2] ?? 0) / 255,
-      (image.data[offset + 3] ?? 0) / 255,
-    ]
+  const channelOffset = Math.max(0, Math.min(3, channelIndex))
+  const rowStride = image.width * 4
+  const offset00 = y0 * rowStride + x0 * 4 + channelOffset
+  const offset10 = y0 * rowStride + x1 * 4 + channelOffset
+  const offset01 = y1 * rowStride + x0 * 4 + channelOffset
+  const offset11 = y1 * rowStride + x1 * 4 + channelOffset
+  const top = mix((image.data[offset00] ?? 0) / 255, (image.data[offset10] ?? 0) / 255, tx)
+  const bottom = mix((image.data[offset01] ?? 0) / 255, (image.data[offset11] ?? 0) / 255, tx)
+  return mix(top, bottom, ty)
+}
+
+function sampleImageData(image: ImageDataSource, u: number, v: number, wrap: 'repeat' | 'clamp', target: Float32Array): void {
+  if (!(image.width > 0) || !(image.height > 0)) {
+    target[0] = 1
+    target[1] = 1
+    target[2] = 1
+    target[3] = 1
+    return
   }
-  const c00 = read(x0, y0)
-  const c10 = read(x1, y0)
-  const c01 = read(x0, y1)
-  const c11 = read(x1, y1)
-  const mix = (a: number, b: number, factor: number) => a + (b - a) * factor
-  const top: [number, number, number, number] = [mix(c00[0], c10[0], tx), mix(c00[1], c10[1], tx), mix(c00[2], c10[2], tx), mix(c00[3], c10[3], tx)]
-  const bottom: [number, number, number, number] = [mix(c01[0], c11[0], tx), mix(c01[1], c11[1], tx), mix(c01[2], c11[2], tx), mix(c01[3], c11[3], tx)]
-  return [mix(top[0], bottom[0], ty), mix(top[1], bottom[1], ty), mix(top[2], bottom[2], ty), mix(top[3], bottom[3], ty)]
+  const normalizedU = wrap === 'repeat' ? repeat01(u) : clamp01(u)
+  const normalizedV = wrap === 'repeat' ? repeat01(v) : clamp01(v)
+  const x = normalizedU * Math.max(0, image.width - 1)
+  const y = normalizedV * Math.max(0, image.height - 1)
+  const x0 = Math.floor(x)
+  const y0 = Math.floor(y)
+  const x1 = Math.min(image.width - 1, x0 + 1)
+  const y1 = Math.min(image.height - 1, y0 + 1)
+  const tx = x - x0
+  const ty = y - y0
+  const rowStride = image.width * 4
+  const offset00 = y0 * rowStride + x0 * 4
+  const offset10 = y0 * rowStride + x1 * 4
+  const offset01 = y1 * rowStride + x0 * 4
+  const offset11 = y1 * rowStride + x1 * 4
+  for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
+    const top = mix((image.data[offset00 + channelIndex] ?? 0) / 255, (image.data[offset10 + channelIndex] ?? 0) / 255, tx)
+    const bottom = mix((image.data[offset01 + channelIndex] ?? 0) / 255, (image.data[offset11 + channelIndex] ?? 0) / 255, tx)
+    target[channelIndex] = mix(top, bottom, ty)
+  }
 }
 
 function terrainPaintBlendColor(
@@ -341,19 +382,16 @@ function terrainPaintBlendColor(
 function transformTerrainPaintUv(
   meshUv: [number, number],
   worldUv: [number, number],
-  layer: TerrainPaintLayerDefinition,
+  layer: Pick<CompiledTerrainPaintLayer, 'worldSpace' | 'rotationSin' | 'rotationCos' | 'scaleX' | 'scaleY' | 'offsetX' | 'offsetY'>,
 ): [number, number] {
   const baseUv = layer.worldSpace ? worldUv : meshUv
-  const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180
-  const s = Math.sin(rotation)
-  const c = Math.cos(rotation)
   const centeredX = baseUv[0] - 0.5
   const centeredY = baseUv[1] - 0.5
-  const rotatedX = c * centeredX - s * centeredY
-  const rotatedY = s * centeredX + c * centeredY
+  const rotatedX = layer.rotationCos * centeredX - layer.rotationSin * centeredY
+  const rotatedY = layer.rotationSin * centeredX + layer.rotationCos * centeredY
   return [
-    rotatedX * normalizeFinite(layer.tileScale.x, 1) + 0.5 + normalizeFinite(layer.offset.x, 0),
-    rotatedY * normalizeFinite(layer.tileScale.y, 1) + 0.5 + normalizeFinite(layer.offset.y, 0),
+    rotatedX * layer.scaleX + 0.5 + layer.offsetX,
+    rotatedY * layer.scaleY + 0.5 + layer.offsetY,
   ]
 }
 
@@ -361,8 +399,25 @@ function readWeightValue(page: Uint8ClampedArray | null, resolution: number, u: 
   if (!page || resolution <= 0) {
     return 0
   }
-  const image: ImageDataSource = { width: resolution, height: resolution, data: page }
-  return sampleImageData(image, u, v, 'clamp')[channelIndex] ?? 0
+  return sampleImageChannel({ width: resolution, height: resolution, data: page }, u, v, 'clamp', channelIndex)
+}
+
+function compileTerrainPaintLayer(layer: TerrainPaintLayerDefinition, imageData: ImageDataSource): CompiledTerrainPaintLayer {
+  const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180
+  return {
+    pageIndex: Math.max(0, Math.floor(layer.pageIndex)),
+    channelIndex: terrainPaintChannelIndex(layer.channel),
+    opacity: clamp01(normalizeFinite(layer.opacity, 1)),
+    blendMode: layer.blendMode,
+    worldSpace: layer.worldSpace === true,
+    rotationSin: Math.sin(rotation),
+    rotationCos: Math.cos(rotation),
+    scaleX: normalizeFinite(layer.tileScale.x, 1),
+    scaleY: normalizeFinite(layer.tileScale.y, 1),
+    offsetX: normalizeFinite(layer.offset.x, 0),
+    offsetY: normalizeFinite(layer.offset.y, 0),
+    imageData,
+  }
 }
 
 function buildGroundSurfacePreviewSignature(groundNode: SceneNode, definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
@@ -387,11 +442,10 @@ async function composeGroundSurfacePreviewTexture(
   definition: GroundDynamicMesh,
   loaders: GroundSurfacePreviewLoaders,
   options: GroundSurfacePreviewOptions,
+  shouldAbort: () => boolean = () => false,
 ): Promise<THREE.Texture | null> {
-  const composition = createCompositionCanvas(
-    computePreviewTextureSize(definition, options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION).width,
-    computePreviewTextureSize(definition, options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION).height,
-  )
+  const previewSize = computePreviewTextureSize(definition, options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION)
+  const composition = createCompositionCanvas(previewSize.width, previewSize.height)
   if (!composition) {
     return null
   }
@@ -409,6 +463,9 @@ async function composeGroundSurfacePreviewTexture(
   const baseUrl = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl.trim() : ''
   if (baseUrl) {
     const baseTexture = await loaders.loadGroundSurfaceBaseTextureFromUrl(baseUrl)
+    if (shouldAbort()) {
+      return null
+    }
     const loadedBase = loadImageDataFromTexture(baseTexture)
     if (loadedBase) {
       context.drawImage(loadedBase.source, 0, 0, width, height)
@@ -420,6 +477,9 @@ async function composeGroundSurfacePreviewTexture(
     const props = clampLandformsComponentProps(component.props)
     for (const layer of props.layers.filter((entry) => entry.enabled && typeof entry.assetId === 'string' && entry.assetId.trim().length)) {
       const texture = await loaders.loadLandformsTextureFromAssetId(layer.assetId!.trim())
+      if (shouldAbort()) {
+        return null
+      }
       const loaded = loadImageDataFromTexture(texture)
       if (!loaded) {
         continue
@@ -439,17 +499,31 @@ async function composeGroundSurfacePreviewTexture(
   const terrainPaint = definition.terrainPaint ?? null
   if (terrainPaint && terrainPaint.version === 2 && Array.isArray(terrainPaint.layers) && terrainPaint.layers.length) {
     const sortedLayers = [...terrainPaint.layers].sort((left, right) => getTerrainPaintLayerSlotIndex(left) - getTerrainPaintLayerSlotIndex(right))
-    const layerImages = new Map<string, LoadedPreviewImage>()
+    const compiledLayers: CompiledTerrainPaintLayer[] = []
+    const sampleScratch = new Float32Array(4)
     for (const layer of sortedLayers) {
       const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
-      if (!assetId || layerImages.has(assetId)) {
+      if (!assetId) {
         continue
       }
       const texture = await loaders.loadTerrainPaintTextureFromAssetId(assetId, { colorSpace: 'srgb' })
+      if (shouldAbort()) {
+        return null
+      }
       const loaded = loadImageDataFromTexture(texture)
       if (loaded) {
-        layerImages.set(assetId, loaded)
+        compiledLayers.push(compileTerrainPaintLayer(layer, loaded.imageData))
       }
+    }
+    if (!compiledLayers.length) {
+      const previewTexture = new THREE.CanvasTexture(canvas as unknown as HTMLCanvasElement)
+      previewTexture.wrapS = THREE.ClampToEdgeWrapping
+      previewTexture.wrapT = THREE.ClampToEdgeWrapping
+      previewTexture.minFilter = THREE.LinearFilter
+      previewTexture.magFilter = THREE.LinearFilter
+      ;(previewTexture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (previewTexture as any).colorSpace
+      previewTexture.needsUpdate = true
+      return previewTexture
     }
     const output = context.getImageData(0, 0, width, height)
     const outputData = output.data
@@ -471,6 +545,9 @@ async function composeGroundSurfacePreviewTexture(
       }
     })
     for (const [chunkKey, chunkRef] of chunkEntries.entries()) {
+      if (shouldAbort()) {
+        return null
+      }
       const [rowText, colText] = chunkKey.split(':')
       const chunkRow = Number.parseInt(rowText ?? '', 10)
       const chunkColumn = Number.parseInt(colText ?? '', 10)
@@ -500,7 +577,8 @@ async function composeGroundSurfacePreviewTexture(
       const livePages = options.liveChunkPagesByKey?.get(chunkKey) ?? null
       const persistedPages = Array.isArray(chunkRef?.pages) ? chunkRef.pages : []
       const resolvedPages: Array<Uint8ClampedArray | null> = []
-      const pageCount = Math.max(livePages?.length ?? 0, persistedPages.length)
+      const maxPageIndex = compiledLayers.reduce((currentMax, layer) => Math.max(currentMax, layer.pageIndex), -1)
+      const pageCount = Math.max(maxPageIndex + 1, livePages?.length ?? 0, persistedPages.length)
       for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
         const livePage = livePages?.[pageIndex] ?? null
         if (livePage) {
@@ -513,8 +591,14 @@ async function composeGroundSurfacePreviewTexture(
           continue
         }
         resolvedPages.push(await loaders.loadTerrainPaintWeightmapDataFromAssetId(logicalId, terrainPaint.weightmapResolution))
+        if (shouldAbort()) {
+          return null
+        }
       }
       for (let y = startY; y < endY; y += 1) {
+        if (((y - startY) & 7) === 0 && shouldAbort()) {
+          return null
+        }
         const worldZ = ((y + 0.5) / height) * groundDepth - halfDepth
         const meshV = clamp01((worldZ - minZ) / Math.max(1e-6, chunkDepth))
         const groundV = clamp01((worldZ + halfDepth) / groundDepth)
@@ -523,43 +607,34 @@ async function composeGroundSurfacePreviewTexture(
           const meshU = clamp01((worldX - minX) / Math.max(1e-6, chunkWidth))
           const groundU = clamp01((worldX + halfWidth) / groundWidth)
           const pixelOffset = (y * width + x) * 4
-          let color: [number, number, number] = [
-            (outputData[pixelOffset] ?? 255) / 255,
-            (outputData[pixelOffset + 1] ?? 255) / 255,
-            (outputData[pixelOffset + 2] ?? 255) / 255,
-          ]
-          for (const layer of sortedLayers) {
-            const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
-            const texture = assetId ? layerImages.get(assetId) : null
-            if (!texture) {
-              continue
-            }
+          let colorR = (outputData[pixelOffset] ?? 255) / 255
+          let colorG = (outputData[pixelOffset + 1] ?? 255) / 255
+          let colorB = (outputData[pixelOffset + 2] ?? 255) / 255
+          for (const layer of compiledLayers) {
             const weight = readWeightValue(
               resolvedPages[layer.pageIndex] ?? null,
               terrainPaint.weightmapResolution,
               meshU,
               meshV,
-              terrainPaintChannelIndex(layer.channel),
+              layer.channelIndex,
             )
             if (weight <= 0) {
               continue
             }
             const layerUv = transformTerrainPaintUv([meshU, meshV], [groundU, groundV], layer)
-            const sample = sampleImageData(texture.imageData, layerUv[0], layerUv[1], 'repeat')
-            const blended = terrainPaintBlendColor(color, [sample[0], sample[1], sample[2]], layer.blendMode)
-            const layerAlpha = clamp01(normalizeFinite(layer.opacity, 1)) * sample[3] * weight
+            sampleImageData(layer.imageData, layerUv[0], layerUv[1], 'repeat', sampleScratch)
+            const blended = terrainPaintBlendColor([colorR, colorG, colorB], [sampleScratch[0], sampleScratch[1], sampleScratch[2]], layer.blendMode)
+            const layerAlpha = layer.opacity * sampleScratch[3] * weight
             if (layerAlpha <= 0) {
               continue
             }
-            color = [
-              blended[0] * layerAlpha + color[0] * (1 - layerAlpha),
-              blended[1] * layerAlpha + color[1] * (1 - layerAlpha),
-              blended[2] * layerAlpha + color[2] * (1 - layerAlpha),
-            ]
+            colorR = blended[0] * layerAlpha + colorR * (1 - layerAlpha)
+            colorG = blended[1] * layerAlpha + colorG * (1 - layerAlpha)
+            colorB = blended[2] * layerAlpha + colorB * (1 - layerAlpha)
           }
-          outputData[pixelOffset] = Math.round(clamp01(color[0]) * 255)
-          outputData[pixelOffset + 1] = Math.round(clamp01(color[1]) * 255)
-          outputData[pixelOffset + 2] = Math.round(clamp01(color[2]) * 255)
+          outputData[pixelOffset] = Math.round(clamp01(colorR) * 255)
+          outputData[pixelOffset + 1] = Math.round(clamp01(colorG) * 255)
+          outputData[pixelOffset + 2] = Math.round(clamp01(colorB) * 255)
           outputData[pixelOffset + 3] = 255
         }
       }
@@ -701,7 +776,7 @@ export function syncGroundSurfacePreviewForGround(
   const token = getToken()
   let pending = groundSurfacePreviewRequests.get(signature)
   if (!pending) {
-    pending = composeGroundSurfacePreviewTexture(groundNode, dynamicMesh, loaders, options)
+    pending = composeGroundSurfacePreviewTexture(groundNode, dynamicMesh, loaders, options, () => getToken() !== token)
     groundSurfacePreviewRequests.set(signature, pending)
   }
   pending.then((texture) => {
