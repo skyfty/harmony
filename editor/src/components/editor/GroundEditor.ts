@@ -145,6 +145,7 @@ export type GroundEditorOptions = {
 		dynamicMesh: GroundDynamicMesh
 		liveChunkPagesByKey: Map<string, Uint8ClampedArray[]>
 		previewRevision: number
+		mode: 'live' | 'surface-rebuild'
 	}) => void
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
@@ -620,6 +621,7 @@ type PaintSessionState = {
 	terrainPaintSurfacePreviewRevision: number
 	terrainPaintPreviewPendingChunkKeys: Map<string, true>
 	terrainPaintPreviewFlushRafId: number | null
+	terrainPaintSurfacePreviewDebounceTimerId: number | null
 }
 
 let paintSessionState: PaintSessionState | null = null
@@ -637,6 +639,7 @@ const SCATTER_MAX_INSTANCES_PER_STAMP = 20000
 // Performance caps for interactive terrain paint.
 const TERRAIN_PAINT_STAMP_AFFECTED_CHUNKS_MAX = 64
 const TERRAIN_PAINT_PREVIEW_FLUSH_CHUNKS_MAX = 64
+const TERRAIN_PAINT_SURFACE_PREVIEW_DEBOUNCE_MS = 250
 
 function collectPaintChunksOverlappedByBrush(
 	definition: GroundDynamicMesh,
@@ -1344,18 +1347,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				settings.layers.forEach((layer) => {
 					const asset = catalogMap.get(layer.textureAssetId) ?? null
 					if (asset) {
+						const previewSession: PaintSessionState = {
+							nodeId: selectedNode.id,
+							definition,
+							chunkCells: resolveGroundChunkCells(definition),
+							settings,
+							chunkStates: new Map(),
+							hasPendingChanges: false,
+							terrainPaintSurfacePreviewRevision: 0,
+							terrainPaintPreviewPendingChunkKeys: new Map(),
+							terrainPaintPreviewFlushRafId: null,
+							terrainPaintSurfacePreviewDebounceTimerId: null,
+						}
 						void pushTerrainPaintPreviewLayer(
-							{
-								nodeId: selectedNode.id,
-								definition,
-								chunkCells: resolveGroundChunkCells(definition),
-								settings,
-								chunkStates: new Map(),
-								hasPendingChanges: false,
-								terrainPaintSurfacePreviewRevision: 0,
-								terrainPaintPreviewPendingChunkKeys: new Map(),
-								terrainPaintPreviewFlushRafId: null,
-							},
+							previewSession,
 								getTerrainPaintLayerSlotIndex(layer),
 							asset,
 						)
@@ -1795,6 +1800,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				pendingTerrainPaintFlush = null
 
 				resetScatterStoreState('scene-changed')
+				const activePaintSession = paintSessionState
+				const activePreviewFlushRafId = activePaintSession?.terrainPaintPreviewFlushRafId ?? null
+				if (activePreviewFlushRafId !== null) {
+					window.cancelAnimationFrame(activePreviewFlushRafId)
+					activePaintSession!.terrainPaintPreviewFlushRafId = null
+				}
+				const activeSurfacePreviewDebounceTimerId = activePaintSession?.terrainPaintSurfacePreviewDebounceTimerId ?? null
+				if (activeSurfacePreviewDebounceTimerId !== null) {
+					window.clearTimeout(activeSurfacePreviewDebounceTimerId)
+					activePaintSession!.terrainPaintSurfacePreviewDebounceTimerId = null
+				}
 				paintSessionState = null
 				lastVisibleTerrainPaintChunkKeys = new Set()
 				lastTerrainPaintSceneSwitchToken = null
@@ -2000,6 +2016,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (session.terrainPaintPreviewFlushRafId !== null) {
 			window.cancelAnimationFrame(session.terrainPaintPreviewFlushRafId)
 			session.terrainPaintPreviewFlushRafId = null
+		}
+		if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
+			window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
+			session.terrainPaintSurfacePreviewDebounceTimerId = null
 		}
 		ensureTerrainPaintPreviewInstalled(groundMesh, definition, session.settings)
 
@@ -3009,6 +3029,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			terrainPaintSurfacePreviewRevision: 0,
 			terrainPaintPreviewPendingChunkKeys: new Map(),
 			terrainPaintPreviewFlushRafId: null,
+			terrainPaintSurfacePreviewDebounceTimerId: null,
 		}
 		const groundObject = getGroundObject()
 		if (groundObject) {
@@ -3059,7 +3080,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return liveChunkPagesByKey
 	}
 
-	function emitTerrainPaintSurfacePreview(session: PaintSessionState): void {
+	function emitTerrainPaintSurfacePreview(session: PaintSessionState, mode: 'live' | 'surface-rebuild'): void {
 		if (!options.onTerrainPaintPreviewChanged) {
 			return
 		}
@@ -3077,7 +3098,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			},
 			liveChunkPagesByKey: buildLiveTerrainPaintChunkPages(session),
 			previewRevision: session.terrainPaintSurfacePreviewRevision,
+			mode,
 		})
+	}
+
+	function scheduleTerrainPaintSurfacePreviewRebuild(session: PaintSessionState): void {
+		if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
+			window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
+		}
+		session.terrainPaintSurfacePreviewDebounceTimerId = window.setTimeout(() => {
+			session.terrainPaintSurfacePreviewDebounceTimerId = null
+			if (paintSessionState !== session) {
+				return
+			}
+			emitTerrainPaintSurfacePreview(session, 'surface-rebuild')
+		}, TERRAIN_PAINT_SURFACE_PREVIEW_DEBOUNCE_MS)
 	}
 
 	function scheduleTerrainPaintPreviewFlush(session: PaintSessionState): void {
@@ -3087,7 +3122,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.terrainPaintPreviewFlushRafId = window.requestAnimationFrame(() => {
 			session.terrainPaintPreviewFlushRafId = null
 			flushTerrainPaintPreview(session)
-			emitTerrainPaintSurfacePreview(session)
+			emitTerrainPaintSurfacePreview(session, 'live')
 		})
 	}
 
@@ -3154,6 +3189,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function pushTerrainPaintPreviewWeightmap(session: PaintSessionState, chunk: PaintChunkState): void {
 		session.terrainPaintSurfacePreviewRevision += 1
 		enqueueTerrainPaintPreviewChunkKey(session, chunk.key)
+		scheduleTerrainPaintSurfacePreviewRebuild(session)
 	}
 
 	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, slotIndex: number, asset: ProjectAsset): Promise<void> {
