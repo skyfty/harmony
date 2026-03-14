@@ -7,12 +7,13 @@ import {
   type GroundSculptOperation,
   type TerrainPaintLayerStyle,
 } from '@schema'
-import type { TerrainScatterCategory } from '@schema/terrain-scatter'
+import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 export type GroundPanelTab = 'terrain' | 'paint' | TerrainScatterCategory
 export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
+export const SCATTER_SPACING_MAX = 20 as const
 
 export type TerrainPaintBrushSettings = TerrainPaintLayerStyle & {
   feather: number
@@ -104,6 +105,8 @@ export const useTerrainStore = defineStore('terrain', () => {
   const scatterProviderAssetId = ref<string | null>(null)
   // Scatter placement brush radius (visual only). Kept independent from terrain sculpt brush and erase radius.
   const scatterBrushRadius = ref(0.5)
+  const scatterBrushShape = ref<TerrainScatterBrushShape>('circle')
+  const scatterSpacing = ref(1)
   const scatterEraseRadius = ref(1)
   // Scatter density (0-100). Used to scale instance count linearly.
   // Default 60 roughly matches the previous packing factor behavior.
@@ -246,6 +249,15 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterBrushRadius.value = Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, value))
   }
 
+  function setScatterBrushShape(value: TerrainScatterBrushShape) {
+    scatterBrushShape.value = value === 'rectangle' || value === 'line' ? value : 'circle'
+  }
+
+  function setScatterSpacing(value: number) {
+    const num = Number(value)
+    scatterSpacing.value = Number.isFinite(num) ? Math.min(SCATTER_SPACING_MAX, Math.max(0.1, num)) : 1
+  }
+
   function setScatterEraseRadius(value: number) {
     scatterEraseRadius.value = Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, value))
   }
@@ -277,6 +289,8 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterPreset,
     scatterModeActive,
     scatterBrushRadius,
+    scatterBrushShape,
+    scatterSpacing,
     scatterEraseRadius,
     scatterDensityPercent,
     setBrushOperation,
@@ -291,6 +305,8 @@ export const useTerrainStore = defineStore('terrain', () => {
     setPaintSmoothness,
     setPaintBrushSettings,
     setScatterBrushRadius,
+    setScatterBrushShape,
+    setScatterSpacing,
     setScatterEraseRadius,
     setScatterDensityPercent,
   }

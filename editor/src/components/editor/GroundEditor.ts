@@ -30,6 +30,7 @@ import {
 	replaceTerrainScatterInstances,
 	loadTerrainScatterSnapshot,
 	serializeTerrainScatterStore,
+	type TerrainScatterBrushShape,
 	type TerrainScatterCategory,
 	type TerrainScatterInstance,
 	type TerrainScatterLayer,
@@ -90,7 +91,7 @@ import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCull
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 
-export type TerrainBrushShape = 'circle' | 'square' | 'star'
+export type TerrainBrushShape = 'circle' | 'square' | 'star' | 'line'
 
 type GroundSelectionPhase = 'pending' | 'sizing' | 'finalizing'
 
@@ -135,11 +136,22 @@ export type GroundEditorOptions = {
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
+	scatterBrushShape: Ref<TerrainScatterBrushShape>
+	scatterSpacing: Ref<number>
 	scatterEraseRadius: Ref<number>
 	scatterDensityPercent: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
 	onScatterEraseStart?: () => void
 	scatterEraseModeActive: Ref<boolean>
+	resolveVertexSnapPoint?: (
+		event: PointerEvent,
+		sourceWorld: THREE.Vector3,
+		options?: {
+			excludeNodeIds?: readonly string[]
+			keepSourceY?: boolean
+		},
+	) => THREE.Vector3 | null
+	clearVertexSnap?: () => void
 	// Editor-only: keep scatter instances visible/streaming, but never switch LOD tiers; always bind to the preset base asset.
 	lockScatterLodToBaseAsset?: boolean
 	// Optional: enable chunk-based scatter streaming for large grounds.
@@ -183,6 +195,9 @@ const scatterDirectionHelper = new THREE.Vector3()
 const scatterPlacementHelper = new THREE.Vector3()
 const scatterPlacementCandidateLocalHelper = new THREE.Vector3()
 const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
+const scatterMidpointHelper = new THREE.Vector3()
+const scatterLocalAnchorHelper = new THREE.Vector3()
+const scatterLocalCurrentHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
 const scatterBboxSizeHelper = new THREE.Vector3()
@@ -794,6 +809,7 @@ type ScatterSessionState = {
 	bindingAssetId: string
 	lodPresetAssetId: string | null
 	category: TerrainScatterCategory
+	brushShape: TerrainScatterBrushShape
 	definition: GroundDynamicMesh
 	groundMesh: THREE.Object3D
 	spacing: number
@@ -807,6 +823,8 @@ type ScatterSessionState = {
 	chunkCells: number
 	neighborIndex: Map<string, TerrainScatterInstance[]>
 	lastPoint: THREE.Vector3 | null
+	anchorPoint: THREE.Vector3 | null
+	currentPoint: THREE.Vector3 | null
 }
 
 let scatterSession: ScatterSessionState | null = null
@@ -1170,6 +1188,8 @@ function createBrushGeometry(shape: TerrainBrushShape | undefined): THREE.Buffer
 			return new THREE.PlaneGeometry(2, 2, 1, 1)
 		case 'star':
 			return new THREE.ShapeGeometry(createStarShape(5, 1, 0.5))
+		case 'line':
+			return new THREE.PlaneGeometry(2, 0.18, 1, 1)
 		case 'circle':
 		default:
 			return new THREE.CircleGeometry(1, 64)
@@ -1521,10 +1541,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return 'circle'
 	}
 
+	function resolveScatterBrushShape(): TerrainScatterBrushShape {
+		const value = options.scatterBrushShape.value
+		if (value === 'rectangle' || value === 'line') {
+			return value
+		}
+		return 'circle'
+	}
+
 	function getIndicatorBrushShape(): TerrainBrushShape {
-		// Scatter paint/erase use a consistent circle indicator for clarity.
-		if (options.scatterEraseModeActive.value || scatterModeEnabled()) {
+		if (options.scatterEraseModeActive.value) {
 			return 'circle'
+		}
+		if (scatterModeEnabled()) {
+			const shape = resolveScatterBrushShape()
+			return shape === 'rectangle' ? 'square' : shape === 'line' ? 'line' : 'circle'
 		}
 		if (options.groundPanelTab.value === 'paint') {
 			return 'circle'
@@ -1557,6 +1588,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		refreshBrushAppearance()
 	})
 	const stopScatterEraseModeWatch = watch(options.scatterEraseModeActive, () => {
+		refreshBrushAppearance()
+	})
+	const stopScatterBrushShapeWatch = watch(options.scatterBrushShape, () => {
 		refreshBrushAppearance()
 	})
 	refreshBrushAppearance()
@@ -1715,22 +1749,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterPreviewGroup.visible = false
 			return
 		}
-		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+		const snappedPoint = resolveScatterPointFromEvent(event, definition, groundMesh)
+		if (!snappedPoint) {
 			scatterPreviewGroup.visible = false
 			return
 		}
-		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+		if (scatterSession && resolveScatterBrushShape() !== 'circle') {
 			scatterPreviewGroup.visible = false
 			return
 		}
 
-		// Project onto terrain height.
-		scatterPreviewProjectedHelper.copy(scatterPointerHelper)
-		groundMesh.updateMatrixWorld(true)
-		groundMesh.worldToLocal(scatterPreviewProjectedHelper)
-		const height = sampleGroundHeight(definition, scatterPreviewProjectedHelper.x, scatterPreviewProjectedHelper.z)
-		scatterPreviewProjectedHelper.y = height
-		groundMesh.localToWorld(scatterPreviewProjectedHelper)
+		scatterPreviewProjectedHelper.copy(snappedPoint)
 
 		ensureScatterPreviewObject(bindingAssetId)
 		if (!scatterPreviewObject) {
@@ -4156,15 +4185,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
-	function projectScatterPoint(worldPoint: THREE.Vector3): THREE.Vector3 | null {
-		if (!scatterSession) {
-			return null
-		}
-		const { groundMesh, definition } = scatterSession
+	function resolveScatterSpacing(): number {
+		const candidate = Number(options.scatterSpacing.value)
+		return Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
+	}
+
+	function projectScatterPointToGround(
+		definition: GroundDynamicMesh,
+		groundMesh: THREE.Object3D,
+		worldPoint: THREE.Vector3,
+	): THREE.Vector3 | null {
 		const localPoint = worldPoint.clone()
 		groundMesh.worldToLocal(localPoint)
-		// Never place scatter outside the ground bounds.
-		// (We still use the heightmap for Y, but XZ must remain inside the ground region.)
 		const halfWidth = definition.width * 0.5
 		const halfDepth = definition.depth * 0.5
 		if (
@@ -4183,7 +4215,39 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return localPoint
 	}
 
-	function applyScatterPlacement(worldPoint: THREE.Vector3): boolean {
+	function resolveScatterPointFromEvent(
+		event: PointerEvent,
+		definition: GroundDynamicMesh,
+		groundMesh: THREE.Object3D,
+	): THREE.Vector3 | null {
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			options.clearVertexSnap?.()
+			return null
+		}
+		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+			options.clearVertexSnap?.()
+			return null
+		}
+		const projected = projectScatterPointToGround(definition, groundMesh, scatterPointerHelper)
+		if (!projected) {
+			options.clearVertexSnap?.()
+			return null
+		}
+		const snapped = options.resolveVertexSnapPoint?.(event, projected.clone())
+		if (!snapped) {
+			return projected
+		}
+		return projectScatterPointToGround(definition, groundMesh, snapped) ?? projected
+	}
+
+	function projectScatterPoint(worldPoint: THREE.Vector3): THREE.Vector3 | null {
+		if (!scatterSession) {
+			return null
+		}
+		return projectScatterPointToGround(scatterSession.definition, scatterSession.groundMesh, worldPoint)
+	}
+
+	function applyScatterPlacement(worldPoint: THREE.Vector3, optionsOverride?: { yaw?: number | null }): boolean {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return false
 		}
@@ -4194,7 +4258,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const localPoint = projected.clone()
 		scatterSession.groundMesh.worldToLocal(localPoint)
 		const scaleFactor = THREE.MathUtils.lerp(scatterSession.minScale, scatterSession.maxScale, Math.random())
-		const rotation = new THREE.Vector3(0, Math.random() * Math.PI * 2, 0)
+		const rotation = new THREE.Vector3(0, optionsOverride?.yaw ?? Math.random() * Math.PI * 2, 0)
 		const scale = new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor)
 		const draft: TerrainScatterInstance = {
 			id: generateScatterInstanceId(),
@@ -4235,13 +4299,171 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function createScatterStampNeighborhood(spacing: number) {
+		const spacingSq = spacing * spacing
+		const cellSize = Math.max(1e-6, spacing)
+		const stampIndex = new Map<string, THREE.Vector3[]>()
+		const stampCellKey = (point: THREE.Vector3) => {
+			const cellX = Math.floor(point.x / cellSize)
+			const cellZ = Math.floor(point.z / cellSize)
+			return `${cellX}:${cellZ}`
+		}
+		const insert = (point: THREE.Vector3) => {
+			const key = stampCellKey(point)
+			const bucket = stampIndex.get(key)
+			if (bucket) {
+				bucket.push(point)
+			} else {
+				stampIndex.set(key, [point])
+			}
+		}
+		const hasNeighborTooClose = (point: THREE.Vector3) => {
+			const cellX = Math.floor(point.x / cellSize)
+			const cellZ = Math.floor(point.z / cellSize)
+			for (let deltaZ = -1; deltaZ <= 1; deltaZ += 1) {
+				for (let deltaX = -1; deltaX <= 1; deltaX += 1) {
+					const bucket = stampIndex.get(`${cellX + deltaX}:${cellZ + deltaZ}`)
+					if (!bucket?.length) {
+						continue
+					}
+					for (const entry of bucket) {
+						const dx = entry.x - point.x
+						const dz = entry.z - point.z
+						if (dx * dx + dz * dz < spacingSq) {
+							return true
+						}
+					}
+				}
+			}
+			return false
+		}
+		return { spacingSq, insert, hasNeighborTooClose }
+	}
+
+	function canAcceptScatterPoint(
+		projected: THREE.Vector3,
+		session: ScatterSessionState,
+		existingBudget: { totalChecks: number },
+		stampNeighborhood?: ReturnType<typeof createScatterStampNeighborhood>,
+	): boolean {
+		if (stampNeighborhood?.hasNeighborTooClose(projected)) {
+			return false
+		}
+		scatterPlacementCandidateLocalHelper.copy(projected)
+		session.groundMesh.worldToLocal(scatterPlacementCandidateLocalHelper)
+		if (
+			session.neighborIndex &&
+			session.neighborIndex.size &&
+			!isScatterPlacementAvailableByIndex(
+				session,
+				scatterPlacementCandidateLocalHelper.x,
+				scatterPlacementCandidateLocalHelper.z,
+				(session.spacing * session.spacing),
+				existingBudget,
+			)
+		) {
+			return false
+		}
+		if (!session.neighborIndex.size && !isScatterPlacementAvailable(projected, session.spacing, session)) {
+			return false
+		}
+		return true
+	}
+
+	function sampleScatterPointsInRectangle(anchorPoint: THREE.Vector3, currentPoint: THREE.Vector3): THREE.Vector3[] {
+		if (!scatterSession) {
+			return []
+		}
+		scatterLocalAnchorHelper.copy(anchorPoint)
+		scatterSession.groundMesh.worldToLocal(scatterLocalAnchorHelper)
+		scatterLocalCurrentHelper.copy(currentPoint)
+		scatterSession.groundMesh.worldToLocal(scatterLocalCurrentHelper)
+		const minX = Math.min(scatterLocalAnchorHelper.x, scatterLocalCurrentHelper.x)
+		const maxX = Math.max(scatterLocalAnchorHelper.x, scatterLocalCurrentHelper.x)
+		const minZ = Math.min(scatterLocalAnchorHelper.z, scatterLocalCurrentHelper.z)
+		const maxZ = Math.max(scatterLocalAnchorHelper.z, scatterLocalCurrentHelper.z)
+		const width = maxX - minX
+		const depth = maxZ - minZ
+		const spacing = scatterSession.spacing
+		const columnCount = Math.max(1, Math.floor(width / spacing) + 1)
+		const rowCount = Math.max(1, Math.floor(depth / spacing) + 1)
+		const usedWidth = (columnCount - 1) * spacing
+		const usedDepth = (rowCount - 1) * spacing
+		const startX = minX + Math.max(0, (width - usedWidth) * 0.5)
+		const startZ = minZ + Math.max(0, (depth - usedDepth) * 0.5)
+		const accepted: THREE.Vector3[] = []
+		const stampNeighborhood = createScatterStampNeighborhood(spacing)
+		const existingBudget = { totalChecks: 0 }
+		for (let row = 0; row < rowCount; row += 1) {
+			for (let column = 0; column < columnCount; column += 1) {
+				const localX = startX + column * spacing
+				const localZ = startZ + row * spacing
+				scatterPlacementCandidateLocalHelper.set(localX, 0, localZ)
+				scatterSession.groundMesh.localToWorld(scatterPlacementCandidateLocalHelper)
+				const projected = projectScatterPoint(scatterPlacementCandidateLocalHelper)
+				if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
+					continue
+				}
+				const point = projected.clone()
+				accepted.push(point)
+				stampNeighborhood.insert(point)
+			}
+		}
+		return accepted
+	}
+
+	function sampleScatterPointsOnLine(anchorPoint: THREE.Vector3, currentPoint: THREE.Vector3): THREE.Vector3[] {
+		if (!scatterSession) {
+			return []
+		}
+		scatterLocalAnchorHelper.copy(anchorPoint)
+		scatterSession.groundMesh.worldToLocal(scatterLocalAnchorHelper)
+		scatterLocalCurrentHelper.copy(currentPoint)
+		scatterSession.groundMesh.worldToLocal(scatterLocalCurrentHelper)
+		scatterDirectionHelper.copy(scatterLocalCurrentHelper).sub(scatterLocalAnchorHelper)
+		const length = scatterDirectionHelper.length()
+		const spacing = scatterSession.spacing
+		if (length <= 1e-4) {
+			const projected = projectScatterPoint(anchorPoint)
+			return projected ? [projected] : []
+		}
+		scatterDirectionHelper.normalize()
+		const pointCount = Math.max(1, Math.floor(length / spacing) + 1)
+		const usedLength = (pointCount - 1) * spacing
+		const startOffset = Math.max(0, (length - usedLength) * 0.5)
+		const accepted: THREE.Vector3[] = []
+		const stampNeighborhood = createScatterStampNeighborhood(spacing)
+		const existingBudget = { totalChecks: 0 }
+		for (let index = 0; index < pointCount; index += 1) {
+			scatterPlacementCandidateLocalHelper
+				.copy(scatterLocalAnchorHelper)
+				.addScaledVector(scatterDirectionHelper, startOffset + index * spacing)
+			scatterSession.groundMesh.localToWorld(scatterPlacementCandidateLocalHelper)
+			const projected = projectScatterPoint(scatterPlacementCandidateLocalHelper)
+			if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
+				continue
+			}
+			const point = projected.clone()
+			accepted.push(point)
+			stampNeighborhood.insert(point)
+		}
+		return accepted
+	}
+
 	function sampleScatterPointsInBrush(worldCenterPoint: THREE.Vector3): THREE.Vector3[] {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return []
 		}
+		if (scatterSession.brushShape === 'rectangle') {
+			const currentPoint = scatterSession.currentPoint ?? worldCenterPoint
+			return sampleScatterPointsInRectangle(scatterSession.anchorPoint ?? worldCenterPoint, currentPoint)
+		}
+		if (scatterSession.brushShape === 'line') {
+			const currentPoint = scatterSession.currentPoint ?? worldCenterPoint
+			return sampleScatterPointsOnLine(scatterSession.anchorPoint ?? worldCenterPoint, currentPoint)
+		}
 		const radius = scatterSession.radius
 		const spacing = scatterSession.spacing
-		const spacingSq = spacing * spacing
 
 		const targetCount = scatterSession.targetCountPerStamp
 		if (targetCount <= 0) {
@@ -4261,43 +4483,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return []
 		}
 
-		// Local grid index for points accepted in this stamp (fast intra-stamp overlap checks).
-		const cellSize = Math.max(1e-6, spacing)
-		const stampIndex = new Map<string, THREE.Vector3[]>()
-		const stampCellKey = (p: THREE.Vector3) => {
-			const cx = Math.floor(p.x / cellSize)
-			const cz = Math.floor(p.z / cellSize)
-			return `${cx}:${cz}`
-		}
-		const stampIndexInsert = (p: THREE.Vector3) => {
-			const key = stampCellKey(p)
-			const bucket = stampIndex.get(key)
-			if (bucket) {
-				bucket.push(p)
-			} else {
-				stampIndex.set(key, [p])
-			}
-		}
-		const stampIndexHasNeighborTooClose = (p: THREE.Vector3) => {
-			const cx = Math.floor(p.x / cellSize)
-			const cz = Math.floor(p.z / cellSize)
-			for (let dz = -1; dz <= 1; dz += 1) {
-				for (let dx = -1; dx <= 1; dx += 1) {
-					const bucket = stampIndex.get(`${cx + dx}:${cz + dz}`)
-					if (!bucket?.length) {
-						continue
-					}
-					for (const q of bucket) {
-						const ddx = q.x - p.x
-						const ddz = q.z - p.z
-						if (ddx * ddx + ddz * ddz < spacingSq) {
-							return true
-						}
-					}
-				}
-			}
-			return false
-		}
+		const stampNeighborhood = createScatterStampNeighborhood(spacing)
 
 		// Budget for overlap checks against existing instances.
 		const existingBudget = { totalChecks: 0 }
@@ -4309,7 +4495,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		{
 			const p = centerProjected.clone()
 			accepted.push(p)
-			stampIndexInsert(p)
+			stampNeighborhood.insert(p)
 		}
 
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
@@ -4326,34 +4512,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!projected) {
 				continue
 			}
-			// Avoid overlaps within this stamp (XZ plane).
-			if (stampIndexHasNeighborTooClose(projected)) {
-				continue
-			}
-
-			// Avoid overlaps with existing instances (ground-local XZ plane).
-			scatterPlacementCandidateLocalHelper.copy(projected)
-			scatterSession.groundMesh.worldToLocal(scatterPlacementCandidateLocalHelper)
-			if (
-				scatterSession.neighborIndex &&
-				scatterSession.neighborIndex.size &&
-				!isScatterPlacementAvailableByIndex(
-					scatterSession,
-					scatterPlacementCandidateLocalHelper.x,
-					scatterPlacementCandidateLocalHelper.z,
-					spacingSq,
-					existingBudget,
-				)
-			) {
-				continue
-			}
-			// Fallback if index not present.
-			if (!scatterSession.neighborIndex.size && !isScatterPlacementAvailable(projected, spacing, scatterSession)) {
+			if (!canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
 				continue
 			}
 			const p = projected.clone()
 			accepted.push(p)
-			stampIndexInsert(p)
+			stampNeighborhood.insert(p)
 		}
 		return accepted
 	}
@@ -4363,8 +4527,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const points = sampleScatterPointsInBrush(worldCenterPoint)
+		const lineYaw = scatterSession.brushShape === 'line' && scatterSession.anchorPoint && scatterSession.currentPoint
+			? Math.atan2(
+				scatterSession.currentPoint.x - scatterSession.anchorPoint.x,
+				scatterSession.currentPoint.z - scatterSession.anchorPoint.z,
+			)
+			: 0
 		for (const point of points) {
-			applyScatterPlacement(point)
+			applyScatterPlacement(
+				point,
+				scatterSession.brushShape === 'circle'
+					? undefined
+					: { yaw: scatterSession.brushShape === 'line' ? lineYaw : 0 },
+			)
 		}
 	}
 
@@ -4396,7 +4571,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginScatterPlacement(event: PointerEvent): boolean {
-		if (!scatterModeEnabled() || event.button !== 0 || event.shiftKey) {
+		if (!scatterModeEnabled() || event.button !== 0) {
 			return false
 		}
 		const asset = options.scatterAsset.value
@@ -4409,13 +4584,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
-		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+		const startPoint = resolveScatterPointFromEvent(event, definition, groundMesh)
+		if (!startPoint) {
 			return false
 		}
-		// Do not place scatter if the pointer is not over the ground region.
-		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
-			return false
-		}
+		const brushShape = resolveScatterBrushShape()
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
 		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
@@ -4467,7 +4640,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			targetCountPerStamp = 1
 		}
 
-		const effectiveSpacing = spacingStats.minDistance
+		const effectiveSpacing = brushShape === 'circle'
+			? spacingStats.minDistance
+			: resolveScatterSpacing()
 		const chunkCells = resolveChunkCellsForDefinition(definition)
 		scatterSession = {
 			pointerId: event.pointerId,
@@ -4475,6 +4650,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			bindingAssetId,
 			lodPresetAssetId: scatterResolvedLodPresetAssetId,
 			category,
+			brushShape,
 			definition,
 			groundMesh,
 			spacing: effectiveSpacing,
@@ -4488,8 +4664,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			chunkCells,
 			neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
 			lastPoint: null,
+			anchorPoint: startPoint.clone(),
+			currentPoint: startPoint.clone(),
 		}
-		traceScatterPath(scatterPointerHelper.clone())
+		if (brushShape === 'circle') {
+			traceScatterPath(startPoint)
+		}
 		try {
 			options.canvasRef.value?.setPointerCapture(event.pointerId)
 		} catch (_error) {
@@ -4651,16 +4831,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
 			return false
 		}
-		if (!raycastGroundPoint(event, scatterPointerHelper)) {
-			return false
-		}
-		if (!isPointerOverGround(scatterSession.definition, scatterSession.groundMesh, scatterPointerHelper)) {
+		const nextPoint = resolveScatterPointFromEvent(event, scatterSession.definition, scatterSession.groundMesh)
+		if (!nextPoint) {
 			event.preventDefault()
 			event.stopPropagation()
 			event.stopImmediatePropagation()
 			return true
 		}
-		traceScatterPath(scatterPointerHelper.clone())
+		scatterSession.currentPoint = nextPoint.clone()
+		if (scatterSession.brushShape === 'circle') {
+			traceScatterPath(nextPoint)
+		} else {
+			updateBrush(event)
+		}
 		event.preventDefault()
 		event.stopPropagation()
 		event.stopImmediatePropagation()
@@ -4670,6 +4853,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function finalizeScatterPlacement(event: PointerEvent): boolean {
 		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
 			return false
+		}
+		if (scatterSession.brushShape !== 'circle' && scatterSession.anchorPoint) {
+			paintScatterStamp(scatterSession.currentPoint ?? scatterSession.anchorPoint)
 		}
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(event.pointerId)
@@ -4684,6 +4870,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		} catch (error) {
 			console.warn('Failed to register scatter asset into scene assets', error)
 		}
+		options.clearVertexSnap?.()
 		scatterSession = null
 		return true
 	}
@@ -4695,6 +4882,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(scatterSession.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(scatterSession.pointerId)
 		}
+		options.clearVertexSnap?.()
 		scatterSession = null
 		return true
 	}
@@ -4770,15 +4958,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function beginScatterErase(event: PointerEvent): boolean {
 		const eraseModeActive = options.scatterEraseModeActive.value
-		if (!eraseModeActive && !scatterModeEnabled()) {
+		if (!eraseModeActive) {
 			return false
 		}
 		// Use left click for scatter erase; middle click is reserved for camera pan.
 		const allowedButton = event.button === 0
 		if (!allowedButton) {
-			return false
-		}
-		if (!eraseModeActive && !event.shiftKey) {
 			return false
 		}
 		const definition = getGroundDynamicMeshDefinition()
@@ -5077,13 +5262,45 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const intersects = options.raycaster.intersectObject(groundObject, true)
 		const hit = intersects[0]
 		if (hit) {
-			brushMesh.position.copy(hit.point)
-			const scale = options.scatterEraseModeActive.value
-				? resolveScatterEraseRadius()
-				: scatterModeEnabled()
-					? resolveScatterBrushRadius()
-					: options.brushRadius.value
-			brushMesh.scale.set(scale, scale, 1)
+			let targetPoint = hit.point.clone()
+			if (scatterModeEnabled()) {
+				const snapped = resolveScatterPointFromEvent(event, definition, groundObject)
+				if (!snapped) {
+					brushMesh.visible = false
+					return
+				}
+				targetPoint = snapped
+			}
+			brushMesh.position.copy(targetPoint)
+			brushMesh.rotation.set(-Math.PI / 2, 0, 0)
+			if (options.scatterEraseModeActive.value) {
+				const scale = resolveScatterEraseRadius()
+				brushMesh.scale.set(scale, scale, 1)
+			} else if (scatterModeEnabled()) {
+				const shape = resolveScatterBrushShape()
+				if (shape === 'rectangle' && scatterSession?.anchorPoint && scatterSession.currentPoint) {
+					scatterMidpointHelper.copy(scatterSession.anchorPoint).add(scatterSession.currentPoint).multiplyScalar(0.5)
+					brushMesh.position.copy(scatterMidpointHelper)
+					brushMesh.scale.set(
+						Math.max(0.1, Math.abs(scatterSession.currentPoint.x - scatterSession.anchorPoint.x) * 0.5),
+						Math.max(0.1, Math.abs(scatterSession.currentPoint.z - scatterSession.anchorPoint.z) * 0.5),
+						1,
+					)
+				} else if (shape === 'line') {
+					const anchor = scatterSession?.anchorPoint ?? targetPoint
+					const current = scatterSession?.currentPoint ?? targetPoint
+					scatterMidpointHelper.copy(anchor).add(current).multiplyScalar(0.5)
+					brushMesh.position.copy(scatterMidpointHelper)
+					brushMesh.rotation.set(-Math.PI / 2, Math.atan2(current.x - anchor.x, current.z - anchor.z), 0)
+					brushMesh.scale.set(Math.max(0.1, anchor.distanceTo(current) * 0.5), 1, 1)
+				} else {
+					const scale = resolveScatterBrushRadius()
+					brushMesh.scale.set(scale, scale, 1)
+				}
+			} else {
+				const scale = options.brushRadius.value
+				brushMesh.scale.set(scale, scale, 1)
+			}
 			conformBrushToTerrain(definition, groundObject)
 			brushMesh.visible = true
 		} else {
