@@ -116,6 +116,7 @@ export function normalizeWallDimensions(values: { height?: number; width?: numbe
 function worldSegmentsToWallChains(
   segments: WallWorldSegment[],
   center: THREE.Vector3,
+  options: { forceClosedSingleChain?: boolean } = {},
 ): WallChain[] {
   if (!segments.length) return []
 
@@ -137,10 +138,12 @@ function worldSegmentsToWallChains(
   }
   groups.push(current)
 
+  const shouldForceClosedSingleChain = Boolean(options.forceClosedSingleChain && groups.length === 1)
+
   return groups.map((grp) => {
     const first = grp[0]!
     const last = grp[grp.length - 1]!
-    const closed = same(last.end, first.start)
+    const closed = same(last.end, first.start) || shouldForceClosedSingleChain
 
     const points: Vector3Like[] = grp.map((seg) => ({
       x: seg.start.x - center.x,
@@ -219,6 +222,7 @@ export function computeWallCenter(
 export function buildWallDynamicMeshFromWorldSegments(
   segments: Array<{ start: Vector3Like; end: Vector3Like }>,
   dimensions: { height?: number; width?: number; thickness?: number } = {},
+  options: { forceClosedSingleChain?: boolean } = {},
 ): { center: THREE.Vector3; definition: WallDynamicMesh } | null {
   const worldSegments = mergeWallWorldSegmentChainsByEndpoint(buildWallWorldSegments(segments))
   if (!worldSegments.length) {
@@ -227,7 +231,7 @@ export function buildWallDynamicMeshFromWorldSegments(
 
   const normalizedDims = normalizeWallDimensions(dimensions)
   const center = computeWallCenter(worldSegments, normalizedDims)
-  const chains = worldSegmentsToWallChains(worldSegments, center)
+  const chains = worldSegmentsToWallChains(worldSegments, center, options)
 
   const definition: WallDynamicMesh = {
     type: 'Wall',

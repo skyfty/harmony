@@ -93,6 +93,7 @@ export type WallEndpointDragState = {
   chainStartIndex: number
   chainEndIndex: number
   endpointKind: 'start' | 'end'
+  closedChain: boolean
 
   wallBuildShape: WallBuildShape
   rectangleConstraint: RectangleEditConstraint | null
@@ -104,6 +105,7 @@ export type WallEndpointDragState = {
   dragMode: EndpointGizmoDragMode
   axisWorld: THREE.Vector3 | null
   dragPlane: THREE.Plane
+  startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D
 
@@ -116,6 +118,7 @@ export type WallEndpointDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  committedRenderSuppressed: boolean
 }
 
 export type WallJointDragState = {
@@ -136,6 +139,7 @@ export type WallJointDragState = {
   dragMode: EndpointGizmoDragMode
   axisWorld: THREE.Vector3 | null
   dragPlane: THREE.Plane
+  startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D
 
@@ -147,6 +151,7 @@ export type WallJointDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  committedRenderSuppressed: boolean
 }
 
 export type WallHeightDragState = {
@@ -177,6 +182,7 @@ export type WallHeightDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  committedRenderSuppressed: boolean
 }
 
 export type WallCircleCenterDragState = {
@@ -203,6 +209,7 @@ export type WallCircleCenterDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  committedRenderSuppressed: boolean
 }
 
 export type WallCircleRadiusDragState = {
@@ -227,9 +234,11 @@ export type WallCircleRadiusDragState = {
 
   centerWorld: THREE.Vector3
   startRadius: number
+  radiusGrabOffset: number | null
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  committedRenderSuppressed: boolean
 }
 
 export type FloorThicknessDragState = {
@@ -298,6 +307,8 @@ export type FloorCircleRadiusDragState = {
   workingDefinition: FloorDynamicMesh
 
   centerLocal: { x: number; z: number }
+  startRadius: number
+  radiusGrabOffset: number | null
   segments: number
 }
 

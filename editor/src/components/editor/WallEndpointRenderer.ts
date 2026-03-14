@@ -117,6 +117,17 @@ function distanceSqXZPoints(a: any, b: any): number {
   return dx * dx + dz * dz
 }
 
+function isClosedChainRange(segments: any[], range: { startIndex: number; endIndex: number }, eps = 1e-6): boolean {
+  const startSeg = segments[range.startIndex] as any
+  const endSeg = segments[range.endIndex] as any
+  const first = startSeg?.start
+  const last = endSeg?.end
+  if (!first || !last) {
+    return false
+  }
+  return distanceSqXZPoints(first, last) <= eps
+}
+
 function tryGetCircleEditInfoForChainLocal(
   segments: any[],
   range: { startIndex: number; endIndex: number },
@@ -388,7 +399,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       return
     }
     const wallBuildShape = options.resolveWallBuildShape(selectedNodeId)
-    const forceCircleLikeEdit = wallBuildShape === 'circle' || wallBuildShape === 'polygon'
+    const forceCircleLikeEdit = wallBuildShape === 'circle'
 
     const runtimeObject = options.resolveRuntimeObject(selectedNodeId)
     if (!runtimeObject) {
@@ -442,6 +453,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
           enforceRadiusCv: false,
         })
         : tryGetCircleEditInfoForChainLocal(segments as any[], range)
+      const closedChain = isClosedChainRange(segments as any[], range)
 
       const addHandle = (options:
         | {
@@ -558,7 +570,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       }
 
       addHandle({ handleKind: 'endpoint', endpointKind: 'start', point: start })
-      addHandle({ handleKind: 'endpoint', endpointKind: 'end', point: end })
+      if (!closedChain) {
+        addHandle({ handleKind: 'endpoint', endpointKind: 'end', point: end })
+      }
 
       // Joint handles: one per internal vertex between contiguous segments.
       // Hide in normal state; show only on hover/active.

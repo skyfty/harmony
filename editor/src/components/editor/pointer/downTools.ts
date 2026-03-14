@@ -230,6 +230,7 @@ export function handlePointerDownTools(
       gizmoKind: 'center' | 'axis'
       gizmoAxis?: THREE.Vector3
       gizmoPart: any
+      point: THREE.Vector3
     } | null
     setActiveWallEndpointHandle: (active: {
       nodeId: string
@@ -311,7 +312,7 @@ export function handlePointerDownTools(
           const chainEndIndex = Math.max(chainStartIndex, Math.trunc(handleHit.chainEndIndex))
 
           const wallBuildShape = readWallBuildShapeFromNode(node) ?? ctx.wallBuildShape ?? 'line'
-          const isCircleLikeWallEditMode = wallBuildShape === 'circle' || wallBuildShape === 'polygon'
+          const isCircleLikeWallEditMode = wallBuildShape === 'circle'
 
           const handleKind = handleHit.handleKind
           let endpointKind: 'start' | 'end' = 'start'
@@ -329,6 +330,7 @@ export function handlePointerDownTools(
           const startSeg = workingSegmentsWorld[chainStartIndex]
           const endSeg = workingSegmentsWorld[chainEndIndex]
           if (startSeg && endSeg) {
+            const closedChain = startSeg.start.distanceToSquared(endSeg.end) <= 1e-6
             // Circle edit mode: center + radius handles only (hide all segment handles).
             if (handleKind === 'circle') {
               const computed = computeChainCenterAndRadiusWorld({
@@ -359,17 +361,6 @@ export function handlePointerDownTools(
                   Math.abs(effectiveAxisWorld.x) < 0.2 &&
                   Math.abs(effectiveAxisWorld.z) < 0.2
 
-                // Keep circle-like wall center handle dedicated to height only.
-                if (circleKind === 'center' && !isYAxisDrag) {
-                  return {
-                    handled: true,
-                    clearPointerTrackingState: true,
-                    preventDefault: true,
-                    stopPropagation: true,
-                    stopImmediatePropagation: true,
-                  }
-                }
-
                 if (isYAxisDrag) {
                   const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
                   const heightStartPointWorld = centerWorld.clone()
@@ -399,6 +390,7 @@ export function handlePointerDownTools(
                     workingSegmentsWorld,
                     previewGroup: null,
                     previewSignature: null,
+                    committedRenderSuppressed: false,
                   }
 
                   ctx.setActiveWallEndpointHandle({
@@ -466,6 +458,7 @@ export function handlePointerDownTools(
 
                     previewGroup: null,
                     previewSignature: null,
+                    committedRenderSuppressed: false,
                   }
 
                   return {
@@ -505,9 +498,11 @@ export function handlePointerDownTools(
 
                   centerWorld: centerWorld.clone(),
                   startRadius: radius,
+                  radiusGrabOffset: null,
 
                   previewGroup: null,
                   previewSignature: null,
+                  committedRenderSuppressed: false,
                 }
 
                 return {
@@ -599,6 +594,7 @@ export function handlePointerDownTools(
                 workingSegmentsWorld,
                 previewGroup: null,
                 previewSignature: null,
+                committedRenderSuppressed: false,
               }
 
               ctx.setActiveWallEndpointHandle({
@@ -665,6 +661,7 @@ export function handlePointerDownTools(
                     startPointWorld: startJointWorld,
                     freePlaneNormal: new THREE.Vector3(0, 1, 0),
                   }),
+                  startHitWorld: null,
                   containerObject: runtime,
                   dimensions,
                   baseSegmentsWorld,
@@ -672,6 +669,7 @@ export function handlePointerDownTools(
                   startJointWorld,
                   previewGroup: null,
                   previewSignature: null,
+                  committedRenderSuppressed: false,
                 }
 
                 ctx.setActiveWallEndpointHandle({
@@ -712,6 +710,7 @@ export function handlePointerDownTools(
               chainStartIndex,
               chainEndIndex,
               endpointKind,
+              closedChain,
 
               wallBuildShape,
               rectangleConstraint: wallBuildShape === 'rectangle'
@@ -735,6 +734,7 @@ export function handlePointerDownTools(
                 startPointWorld: startEndpointWorld,
                 freePlaneNormal: new THREE.Vector3(0, 1, 0),
               }),
+              startHitWorld: null,
               containerObject: runtime,
               dimensions,
               baseSegmentsWorld,
@@ -743,6 +743,7 @@ export function handlePointerDownTools(
               startEndpointWorld,
               previewGroup: null,
               previewSignature: null,
+              committedRenderSuppressed: false,
             }
 
             ctx.setActiveWallEndpointHandle({
@@ -944,6 +945,8 @@ export function handlePointerDownTools(
                 workingDefinition,
 
                 centerLocal: { x: centerLocal.x, z: centerLocal.z },
+                startRadius: Math.max(1e-4, circle.radius),
+                radiusGrabOffset: null,
                 segments: Math.max(3, circle.segments),
               }
 

@@ -159,6 +159,7 @@ import { createPrimitiveMesh, PROTAGONIST_NODE_ID } from '@schema/index'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
+import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
@@ -250,7 +251,7 @@ import {
   WALL_ENDPOINT_HANDLE_GROUP_NAME,
   WALL_ENDPOINT_HANDLE_Y_OFFSET,
 } from './WallEndpointRenderer'
-import { applyWallPreviewStyling, disposeWallPreviewGroup } from './wallPreviewGroupUtils'
+import { disposeWallPreviewGroup } from './wallPreviewGroupUtils'
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
 import { createWaterRectangleHandleRenderer, type WaterRectangleHandlePickResult } from './WaterRectangleHandleRenderer'
@@ -1422,6 +1423,27 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   },
 }
 
+function refreshFloorRuntimeMaterials(nodeId: string, targetObject: THREE.Object3D): void {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Floor') {
+    return
+  }
+  if (node.materials && node.materials.length) {
+    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(targetObject)
+  }
+}
+
+function applyFloorPreviewMaterials(targetObject: THREE.Object3D, presetData: import('@/utils/floorPreset').FloorPresetData | null): void {
+  const materials = buildFloorNodeMaterialsFromPreset(presetData, sceneStore.materials)
+  if (materials.length) {
+    applyMaterialOverrides(targetObject, materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(targetObject)
+  }
+}
+
 function applyRendererShadowSetting() {
   if (!renderer) {
     return
@@ -2242,7 +2264,6 @@ function syncWallPreviewGroupForEditor(options: {
     updateWallGroup(group, options.definition, resolved.renderOptions)
   }
 
-  applyWallPreviewStyling(group)
   applyAirWallVisualToWallGroup(group, resolved.isAirWall)
 
   if (!rootGroup.children.includes(group)) {
@@ -5735,6 +5756,13 @@ const floorBuildTool = createFloorBuildTool({
     presetAssetId: floorBrushPresetAssetId.value,
     presetData: floorBrushPresetData.value,
   }),
+  applyFloorPreviewMaterials: (group, presetData) => applyFloorPreviewMaterials(group, presetData),
+  syncCreatedFloorMaterials: (nodeId) => {
+    const runtimeObject = objectMap.get(nodeId) ?? null
+    if (runtimeObject) {
+      refreshFloorRuntimeMaterials(nodeId, runtimeObject)
+    }
+  },
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
@@ -12571,10 +12599,14 @@ function handlePointerMove(event: PointerEvent) {
         nodeId,
         previewKey,
       }),
+    beginWallEditDragPreview: (nodeId: string) => {
+      wallRenderer.beginWallDrag(nodeId, { suppressCommittedRender: true })
+    },
     resolveRoadRenderOptionsForNodeId,
     updateRoadGroup,
 
     updateFloorGroup,
+    refreshFloorRuntimeMaterials,
     forceRebuildFloorVertexHandles: () => ensureFloorVertexHandlesForSelectedNode({ force: true }),
     forceRebuildFloorCircleHandles: () => ensureFloorCircleHandlesForSelectedNode({ force: true }),
   }
@@ -12863,6 +12895,7 @@ function handlePointerMove(event: PointerEvent) {
     raycastGroundPoint,
     groundPointerHelper,
     updateFloorGroup,
+    refreshFloorRuntimeMaterials,
   })
   if (floorEdge) {
     applyPointerMoveResult(floorEdge)
@@ -12978,6 +13011,7 @@ async function handlePointerUp(event: PointerEvent) {
       nodePlacementClickSessionState?.pointerId === event.pointerId
 
     const applyPointerUpResult = (result: PointerUpResult) => {
+      const endedWallDragNodeIds = new Set<string>()
       if (result.clearPointerTrackingState) {
         pointerTrackingState = null
       }
@@ -13000,18 +13034,33 @@ async function handlePointerUp(event: PointerEvent) {
         floorCircleRadiusDragState = result.nextFloorCircleRadiusDragState ?? null
       }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
+        if (wallEndpointDragState && !result.nextWallEndpointDragState) {
+          endedWallDragNodeIds.add(wallEndpointDragState.nodeId)
+        }
         wallEndpointDragState = result.nextWallEndpointDragState ?? null
       }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallJointDragState')) {
+        if (wallJointDragState && !(result as any).nextWallJointDragState) {
+          endedWallDragNodeIds.add(wallJointDragState.nodeId)
+        }
         wallJointDragState = (result as any).nextWallJointDragState ?? null
       }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallHeightDragState')) {
+        if (wallHeightDragState && !result.nextWallHeightDragState) {
+          endedWallDragNodeIds.add(wallHeightDragState.nodeId)
+        }
         wallHeightDragState = result.nextWallHeightDragState ?? null
       }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallCircleCenterDragState')) {
+        if (wallCircleCenterDragState && !(result as any).nextWallCircleCenterDragState) {
+          endedWallDragNodeIds.add(wallCircleCenterDragState.nodeId)
+        }
         wallCircleCenterDragState = (result as any).nextWallCircleCenterDragState ?? null
       }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallCircleRadiusDragState')) {
+        if (wallCircleRadiusDragState && !(result as any).nextWallCircleRadiusDragState) {
+          endedWallDragNodeIds.add(wallCircleRadiusDragState.nodeId)
+        }
         wallCircleRadiusDragState = (result as any).nextWallCircleRadiusDragState ?? null
       }
       if (Object.prototype.hasOwnProperty.call(result, 'nextInstancedEraseDragState')) {
@@ -13033,6 +13082,8 @@ async function handlePointerUp(event: PointerEvent) {
       // Any pointer-up ends active wall drag measurements.
       clearWallLengthHud()
       clearFloorSizeHud()
+
+      endedWallDragNodeIds.forEach((nodeId) => wallRenderer.endWallDrag(nodeId))
     }
 
     // Canvas-only safety: only allow scene-modifying interactions (build/road/floor/scatter)
@@ -13637,6 +13688,8 @@ function handlePointerCancel(event: PointerEvent) {
       /* noop */
     }
 
+    wallRenderer.endWallDrag(state.nodeId)
+
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -13659,6 +13712,8 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
+
+    wallRenderer.endWallDrag(state.nodeId)
 
     event.preventDefault()
     event.stopPropagation()
@@ -13700,6 +13755,8 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
+
+    wallRenderer.endWallDrag(state.nodeId)
 
     event.preventDefault()
     event.stopPropagation()
@@ -13743,6 +13800,8 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
+
+    wallRenderer.endWallDrag(state.nodeId)
 
     event.preventDefault()
     event.stopPropagation()
@@ -13795,6 +13854,8 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
+
+    wallRenderer.endWallDrag(state.nodeId)
 
     event.preventDefault()
     event.stopPropagation()

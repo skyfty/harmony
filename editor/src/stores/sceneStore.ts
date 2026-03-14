@@ -113,6 +113,10 @@ export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NOD
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
+import {
+  buildFloorDynamicMeshPresetPatch,
+  buildFloorNodeMaterialsFromPreset,
+} from '@/utils/floorPresetNodeMaterials'
 import { createWallNodeMaterials } from '@/utils/wallNodeMaterials'
 import type {
   SceneMaterial,
@@ -12083,13 +12087,16 @@ export const useSceneStore = defineStore('scene', {
       nodeId?: string
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
+      closed?: boolean
       name?: string
       bodyAssetId?: string | null
       wallComponentProps?: Partial<WallComponentProps> | null
       wallPresetData?: WallPresetData | null
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
-      const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
+      const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions, {
+        forceClosedSingleChain: Boolean(payload.closed),
+      })
       if (!build) {
         return null
       }
@@ -12313,6 +12320,7 @@ export const useSceneStore = defineStore('scene', {
       nodeId?: string
       points: Vector3Like[]
       name?: string,
+      floorPresetData?: FloorPresetData | null
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const build = floorHelpers.buildFloorDynamicMeshFromWorldPoints(payload.points)
@@ -12320,17 +12328,24 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
+      const presetMaterials = buildFloorNodeMaterialsFromPreset(payload.floorPresetData, this.materials)
       // Floors use 2 material slots by default: TopBottom + Side.
-      const defaultMaterials = createFloorNodeMaterials({
-        topBottomName: 'TopBottom',
-        sideName: 'Side',
-      })
+      const defaultMaterials = presetMaterials.length
+        ? presetMaterials
+        : createFloorNodeMaterials({
+            topBottomName: 'TopBottom',
+            sideName: 'Side',
+          })
 
-      const defaultTopId = defaultMaterials[0]?.id ?? null
-      const defaultSideId = defaultMaterials[1]?.id ?? defaultTopId
+      const presetMeshPatch = buildFloorDynamicMeshPresetPatch(payload.floorPresetData)
+      const defaultTopId = presetMeshPatch?.topBottomMaterialConfigId ?? defaultMaterials[0]?.id ?? null
+      const defaultSideId = presetMeshPatch?.sideMaterialConfigId ?? defaultMaterials[1]?.id ?? defaultTopId
 
       const defaultMesh: FloorDynamicMesh = {
         ...build.definition,
+        smooth: presetMeshPatch?.smooth ?? build.definition.smooth,
+        thickness: presetMeshPatch?.thickness ?? build.definition.thickness,
+        sideUvScale: presetMeshPatch?.sideUvScale ?? build.definition.sideUvScale,
         topBottomMaterialConfigId: defaultTopId,
         sideMaterialConfigId: defaultSideId,
       }
@@ -12359,9 +12374,16 @@ export const useSceneStore = defineStore('scene', {
           const existingMesh = existing.dynamicMesh?.type === 'Floor' ? (existing.dynamicMesh as FloorDynamicMesh) : null
           this.updateNodeDynamicMesh(desiredId, {
             ...build.definition,
-            topBottomMaterialConfigId: existingMesh?.topBottomMaterialConfigId ?? null,
-            sideMaterialConfigId: existingMesh?.sideMaterialConfigId ?? null,
+            smooth: presetMeshPatch?.smooth ?? existingMesh?.smooth ?? build.definition.smooth,
+            thickness: presetMeshPatch?.thickness ?? (existingMesh as any)?.thickness ?? build.definition.thickness,
+            sideUvScale: presetMeshPatch?.sideUvScale ?? (existingMesh as any)?.sideUvScale ?? build.definition.sideUvScale,
+            topBottomMaterialConfigId: presetMeshPatch?.topBottomMaterialConfigId ?? existingMesh?.topBottomMaterialConfigId ?? null,
+            sideMaterialConfigId: presetMeshPatch?.sideMaterialConfigId ?? existingMesh?.sideMaterialConfigId ?? null,
           } as FloorDynamicMesh)
+
+          if (presetMaterials.length) {
+            this.setNodeMaterials(desiredId, defaultMaterials)
+          }
 
           const floorComponent = (findNodeById(this.nodes, desiredId)?.components?.[FLOOR_COMPONENT_TYPE] as { id?: string } | undefined)
           if (!floorComponent?.id) {

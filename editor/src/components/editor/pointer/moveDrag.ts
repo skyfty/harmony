@@ -453,16 +453,32 @@ export function handlePointerMoveDrag(
       nodeId: string | null
       previewKey: string
     }) => THREE.Group
+    beginWallEditDragPreview?: (nodeId: string) => void
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
 
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
+    refreshFloorRuntimeMaterials?: (nodeId: string, runtimeObject: THREE.Object3D) => void
     forceRebuildFloorVertexHandles?: () => void
     forceRebuildFloorCircleHandles?: () => void
   },
 ): PointerMoveResult | null {
   const tmpIntersection = new THREE.Vector3()
+  const refreshFloorMaterials = (nodeId: string, runtimeObject: THREE.Object3D) => {
+    ctx.refreshFloorRuntimeMaterials?.(nodeId, runtimeObject)
+  }
+  const ensureWallEditDragPreview = (state: {
+    nodeId: string
+    moved: boolean
+    committedRenderSuppressed: boolean
+  }) => {
+    if (!state.moved || state.committedRenderSuppressed) {
+      return
+    }
+    ctx.beginWallEditDragPreview?.(state.nodeId)
+    state.committedRenderSuppressed = true
+  }
 
   if (ctx.floorThicknessDragState && event.pointerId === ctx.floorThicknessDragState.pointerId) {
     const state = ctx.floorThicknessDragState
@@ -475,6 +491,7 @@ export function handlePointerMoveDrag(
     }
 
     state.moved = true
+    ensureWallEditDragPreview(state)
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -568,6 +585,7 @@ export function handlePointerMoveDrag(
     const startVertices = sanitizeFloorVertices((state.baseDefinition as any)?.vertices)
     state.workingDefinition.vertices = startVertices.map(([x, z]) => [x + dx, z + dz])
     ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    refreshFloorMaterials(state.nodeId, state.runtimeObject)
     syncFloorCircleHandlesFromDefinition({
       containerObject: state.runtimeObject,
       definition: state.workingDefinition as any,
@@ -605,10 +623,21 @@ export function handlePointerMoveDrag(
       state.startHitWorld = tmpIntersection.clone()
     }
 
+    if (state.radiusGrabOffset == null) {
+      const startHitLocal = state.runtimeObject.worldToLocal(state.startHitWorld.clone())
+      const startDistance = Math.hypot(
+        startHitLocal.x - state.centerLocal.x,
+        startHitLocal.z - state.centerLocal.z,
+      )
+      state.radiusGrabOffset = startDistance - state.startRadius
+    }
+
     const hitLocal = state.runtimeObject.worldToLocal(tmpIntersection.clone())
-    const dx = hitLocal.x - state.centerLocal.x
-    const dz = hitLocal.z - state.centerLocal.z
-    const radius = Math.max(1e-4, Math.hypot(dx, dz))
+    const currentDistance = Math.hypot(
+      hitLocal.x - state.centerLocal.x,
+      hitLocal.z - state.centerLocal.z,
+    )
+    const radius = Math.max(1e-4, currentDistance - (state.radiusGrabOffset ?? 0))
 
     state.workingDefinition.vertices = buildCircleVertices({
       centerX: state.centerLocal.x,
@@ -618,6 +647,7 @@ export function handlePointerMoveDrag(
     })
 
     ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    refreshFloorMaterials(state.nodeId, state.runtimeObject)
     syncFloorCircleHandlesFromDefinition({
       containerObject: state.runtimeObject,
       definition: state.workingDefinition as any,
@@ -751,36 +781,50 @@ export function handlePointerMoveDrag(
     const rectangleConstraint = state.wallBuildShape === 'rectangle' ? state.rectangleConstraint : null
 
     if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+          return { handled: true }
+        }
+        state.startHitWorld = tmpIntersection.clone()
+      }
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
       const axis = state.axisWorld.clone().normalize()
-      const delta = tmpIntersection.clone().sub(state.startEndpointWorld)
+      const startHit = state.startHitWorld ?? state.startEndpointWorld
+      const delta = tmpIntersection.clone().sub(startHit)
       const t = axis.dot(delta)
       constrained = state.startEndpointWorld.clone().add(axis.multiplyScalar(t))
       if (constrainActive && rectangleConstraint) {
         snapToMajorGridXZ(constrained, state.startEndpointWorld.y)
       }
     } else {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+          return { handled: true }
+        }
+        state.startHitWorld = ctx.groundPointerHelper.clone()
+      }
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
 
-      const rawPointer = ctx.groundPointerHelper.clone()
+      const startHit = state.startHitWorld ?? state.startEndpointWorld
+      const delta = ctx.groundPointerHelper.clone().sub(startHit)
+      delta.y = 0
+      const target = state.startEndpointWorld.clone().add(delta)
+      target.y = state.startEndpointWorld.y
 
       if (rectangleConstraint) {
         constrained = constrainActive
-          ? snapToMajorGridXZ(rawPointer.clone(), state.startEndpointWorld.y)
-          : rawPointer.clone().setY(state.startEndpointWorld.y)
+          ? snapToMajorGridXZ(target.clone(), state.startEndpointWorld.y)
+          : target.clone().setY(state.startEndpointWorld.y)
       } else {
-        const target = rawPointer.clone()
-        target.y = state.startEndpointWorld.y
-
         const anchor = state.anchorPointWorld.clone()
         anchor.y = state.startEndpointWorld.y
 
         if (constrainActive) {
-          constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
+          constrained = constrainWallEndPointSoftSnap(anchor, target, target)
           constrained.y = state.startEndpointWorld.y
         } else {
           constrained = target
@@ -824,7 +868,10 @@ export function handlePointerMoveDrag(
     }
 
     if (constrained && !rectangleApplied) {
-      if (state.endpointKind === 'start') {
+      if (state.closedChain) {
+        startSeg.start.copy(constrained)
+        endSeg.end.copy(constrained)
+      } else if (state.endpointKind === 'start') {
         startSeg.start.copy(constrained)
       } else {
         endSeg.end.copy(constrained)
@@ -837,6 +884,8 @@ export function handlePointerMoveDrag(
         state.moved = true
       }
     }
+
+    ensureWallEditDragPreview(state)
 
     const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
@@ -897,6 +946,7 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
     state.moved = true
+    ensureWallEditDragPreview(state)
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -987,6 +1037,7 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
     state.moved = true
+    ensureWallEditDragPreview(state)
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -1001,7 +1052,16 @@ export function handlePointerMoveDrag(
       state.startHitWorld = tmpIntersection.clone()
     }
 
-    let newRadius = Math.max(1e-3, Math.hypot(tmpIntersection.x - state.centerWorld.x, tmpIntersection.z - state.centerWorld.z))
+    if (state.radiusGrabOffset == null) {
+      const startDistance = Math.hypot(
+        state.startHitWorld.x - state.centerWorld.x,
+        state.startHitWorld.z - state.centerWorld.z,
+      )
+      state.radiusGrabOffset = startDistance - state.startRadius
+    }
+
+    const currentDistance = Math.hypot(tmpIntersection.x - state.centerWorld.x, tmpIntersection.z - state.centerWorld.z)
+    let newRadius = Math.max(1e-3, currentDistance - (state.radiusGrabOffset ?? 0))
     if (constrainActive) {
       const snappedRadius = Math.round(newRadius / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
       newRadius = Math.max(1e-3, snappedRadius)
@@ -1079,23 +1139,38 @@ export function handlePointerMoveDrag(
     const rectangleConstraint = state.wallBuildShape === 'rectangle' ? state.rectangleConstraint : null
 
     if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+          return { handled: true }
+        }
+        state.startHitWorld = tmpIntersection.clone()
+      }
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
       const axis = state.axisWorld.clone().normalize()
-      const delta = tmpIntersection.clone().sub(state.startJointWorld)
+      const startHit = state.startHitWorld ?? state.startJointWorld
+      const delta = tmpIntersection.clone().sub(startHit)
       const t = axis.dot(delta)
       constrained = state.startJointWorld.clone().add(axis.multiplyScalar(t))
       if (constrainActive && rectangleConstraint) {
         snapToMajorGridXZ(constrained, state.startJointWorld.y)
       }
     } else {
+      if (!state.startHitWorld) {
+        if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+          return { handled: true }
+        }
+        state.startHitWorld = ctx.groundPointerHelper.clone()
+      }
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
 
-      const rawPointer = ctx.groundPointerHelper.clone()
-      const target = rawPointer.clone()
+      const startHit = state.startHitWorld ?? state.startJointWorld
+      const delta = ctx.groundPointerHelper.clone().sub(startHit)
+      delta.y = 0
+      const target = state.startJointWorld.clone().add(delta)
       target.y = state.startJointWorld.y
 
       if (rectangleConstraint) {
@@ -1115,16 +1190,16 @@ export function handlePointerMoveDrag(
           const candidates: Array<{ point: THREE.Vector3; distSq: number }> = []
           if (prevAnchor) {
             prevAnchor.y = state.startJointWorld.y
-            const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, rawPointer)
+            const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, target)
             snapped.y = state.startJointWorld.y
-            const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+            const dSq = distanceSqXZ(snapped.x, snapped.z, target.x, target.z)
             candidates.push({ point: snapped, distSq: dSq })
           }
           if (nextAnchor) {
             nextAnchor.y = state.startJointWorld.y
-            const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, rawPointer)
+            const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, target)
             snapped.y = state.startJointWorld.y
-            const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+            const dSq = distanceSqXZ(snapped.x, snapped.z, target.x, target.z)
             candidates.push({ point: snapped, distSq: dSq })
           }
 
@@ -1188,6 +1263,8 @@ export function handlePointerMoveDrag(
         state.moved = true
       }
     }
+
+    ensureWallEditDragPreview(state)
 
     const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
@@ -1352,7 +1429,9 @@ export function handlePointerMoveDrag(
       const axis = state.axisWorld.clone().normalize()
       const delta = tmpIntersection.clone().sub(state.startHitWorld)
       const t = axis.dot(delta)
-      const world = state.startHitWorld.clone().add(axis.multiplyScalar(t))
+      // Keep the grabbed handle position stable at drag start: project movement onto
+      // the axis, but apply it from the original handle world point (not the hit point).
+      const world = state.startPointWorld.clone().add(axis.multiplyScalar(t))
       local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
     } else {
       // Free dragging uses ground projection. Capture ground hit at drag start to
@@ -1366,9 +1445,11 @@ export function handlePointerMoveDrag(
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
-      const snapped = ctx.groundPointerHelper.clone()
-      snapped.y = 0
-      local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
+      const delta = ctx.groundPointerHelper.clone().sub(state.startHitWorld)
+      delta.y = 0
+      const world = state.startPointWorld.clone().add(delta)
+      world.y = 0
+      local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
     }
 
     if (!local) return { handled: true }
@@ -1459,6 +1540,7 @@ export function handlePointerMoveDrag(
     }
 
     ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    refreshFloorMaterials(state.nodeId, state.runtimeObject)
 
     const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
     if (handles?.isGroup) {
@@ -1488,6 +1570,7 @@ export function handlePointerMoveFloorEdgeDrag(
     raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
     groundPointerHelper: THREE.Vector3
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
+    refreshFloorRuntimeMaterials?: (nodeId: string, runtimeObject: THREE.Object3D) => void
   },
 ): PointerMoveResult | null {
   if (ctx.floorEdgeDragState && event.pointerId === ctx.floorEdgeDragState.pointerId) {
@@ -1534,6 +1617,7 @@ export function handlePointerMoveFloorEdgeDrag(
     const working = state.workingDefinition
     working.vertices = updatedVertices
     ctx.updateFloorGroup(state.runtimeObject, working)
+    ctx.refreshFloorRuntimeMaterials?.(state.nodeId, state.runtimeObject)
 
     return { handled: true }
   }

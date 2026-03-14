@@ -181,6 +181,7 @@ export function createWallRenderer(options: WallRendererOptions) {
   const wallModelRequestCache = new Map<string, Promise<void>>()
   const wallAssetWaiters = new Map<string, Set<string>>()
   const resyncSignatureKeyByNodeId = new Map<string, string>()
+  const suppressedCommittedWallNodeIds = new Set<string>()
 
   // Keep editor drag and committed wall placement on the exact same schema-side path.
   const getWallAssetBounds = (assetId: string): THREE.Box3 | null => getCachedModelObject(assetId)?.boundingBox ?? null
@@ -207,6 +208,29 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   function isWallDragActive(nodeId: string): boolean {
     return activeWallDragNodeId === nodeId && wallDragCacheByNodeId.has(nodeId)
+  }
+
+  function isCommittedWallRenderSuppressed(nodeId: string): boolean {
+    return suppressedCommittedWallNodeIds.has(nodeId)
+  }
+
+  function suppressCommittedWallRender(nodeId: string): void {
+    const object = options.getObjectById(nodeId)
+    if (!object) {
+      return
+    }
+
+    const userData = object.userData ?? (object.userData = {})
+    const wallGroup = userData.wallGroup as THREE.Group | undefined
+    if (wallGroup) {
+      wallGroup.visible = false
+    }
+
+    releaseModelInstancesForNode(nodeId)
+    clearWallInstancedBindingsOnObject(object)
+    delete userData.instancedAssetId
+    delete userData.instancedBounds
+    options.removeInstancedPickProxy(object)
   }
 
   function buildWallDragCache(nodeId: string): WallDragCacheEntry | null {
@@ -275,17 +299,27 @@ export function createWallRenderer(options: WallRendererOptions) {
     return { nodeId, bindings }
   }
 
-  function beginWallDrag(nodeId: string): boolean {
+  function beginWallDrag(nodeId: string, dragOptions: { suppressCommittedRender?: boolean } = {}): boolean {
+    const shouldSuppressCommittedRender = dragOptions.suppressCommittedRender === true
     const cache = buildWallDragCache(nodeId)
     if (!cache) {
       if (activeWallDragNodeId === nodeId) {
         wallDragCacheByNodeId.delete(nodeId)
         activeWallDragNodeId = null
       }
-      return false
+      if (!shouldSuppressCommittedRender) {
+        return false
+      }
+    } else {
+      wallDragCacheByNodeId.set(nodeId, cache)
+      activeWallDragNodeId = nodeId
     }
-    wallDragCacheByNodeId.set(nodeId, cache)
-    activeWallDragNodeId = nodeId
+
+    if (shouldSuppressCommittedRender) {
+      suppressedCommittedWallNodeIds.add(nodeId)
+      suppressCommittedWallRender(nodeId)
+    }
+
     return true
   }
 
@@ -297,6 +331,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       activeWallDragNodeId = null
     }
     wallDragCacheByNodeId.delete(nodeId)
+    suppressedCommittedWallNodeIds.delete(nodeId)
 
     const node = options.getNodeById(nodeId)
     const object = options.getObjectById(nodeId)
@@ -736,9 +771,9 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    if (isWallDragActive(node.id)) {
+    if (isWallDragActive(node.id) || isCommittedWallRenderSuppressed(node.id)) {
       // 拖拽过程中会走一套“临时实例矩阵”的实时更新逻辑（见 syncWallDragInstancedMatrices）。
-      // 为避免拖拽手感抖动/覆盖临时状态，这里直接跳过常规同步。
+      // 手柄编辑时还会显式压掉 committed wall 渲染，只保留编辑结果预览。
       return
     }
 
