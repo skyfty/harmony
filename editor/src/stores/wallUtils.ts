@@ -265,8 +265,45 @@ export function applyWallComponentPropsToNode(
 
   const normalized = clampWallProps(props)
 
+  const localBaseY = node.dynamicMesh.chains.reduce((minY, chain) => {
+    const points = Array.isArray(chain?.points) ? chain.points : []
+    for (const point of points) {
+      const y = Number(point?.y)
+      if (Number.isFinite(y) && y < minY) {
+        minY = y
+      }
+    }
+    return minY
+  }, Number.POSITIVE_INFINITY)
+
+  const currentHeight = Number.isFinite(node.dynamicMesh.dimensions?.height)
+    ? Number(node.dynamicMesh.dimensions.height)
+    : normalized.height
+  const safeLocalBaseY = Number.isFinite(localBaseY) ? localBaseY : -(currentHeight * 0.5)
+  const currentPositionY = Number.isFinite(node.position?.y) ? Number(node.position.y) : 0
+  const worldBaseY = currentPositionY + safeLocalBaseY
+  const nextPositionY = worldBaseY + normalized.height * 0.5
+  const centerYOffset = nextPositionY - currentPositionY
+
+  const nextChains = node.dynamicMesh.chains.map((chain) => ({
+    ...chain,
+    points: Array.isArray(chain.points)
+      ? chain.points.map((point) => ({
+          x: Number(point?.x) || 0,
+          y: (Number(point?.y) || 0) - centerYOffset,
+          z: Number(point?.z) || 0,
+        }))
+      : [],
+  }))
+
+  node.position = {
+    ...node.position,
+    y: nextPositionY,
+  }
+
   node.dynamicMesh = {
     ...node.dynamicMesh,
+    chains: nextChains,
     bodyMaterialConfigId: normalized.bodyMaterialConfigId,
     dimensions: {
       height: normalized.height,
@@ -277,6 +314,7 @@ export function applyWallComponentPropsToNode(
 
   const runtime = deps.getRuntimeObject(node.id)
   if (runtime) {
+    runtime.position.y = nextPositionY
     runtime.traverse((child: Object3D & { type?: string; name?: string; userData?: Record<string, unknown> | undefined }) => {
       if (child.type === 'Group' && child.name === 'WallGroup' && child.userData?.dynamicMeshType === 'Wall') {
         if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {

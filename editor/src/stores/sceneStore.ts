@@ -12768,7 +12768,7 @@ export const useSceneStore = defineStore('scene', {
         target.components = nextComponents
       })
 
-      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
+      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh', 'transform'])
       const normalizedNode = findNodeById(this.nodes, nodeId)
       if (normalizedNode) {
         componentManager.syncNode(normalizedNode)
@@ -12917,7 +12917,10 @@ export const useSceneStore = defineStore('scene', {
         node.components = nextComponents
       })
 
-      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
+      this.queueSceneNodePatch(
+        nodeId,
+        type === WALL_COMPONENT_TYPE ? ['components', 'dynamicMesh', 'transform'] : ['components', 'dynamicMesh'],
+      )
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
@@ -13532,6 +13535,8 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
 
+      let includesWallTransformChange = false
+
       visitNode(this.nodes, nodeId, (node) => {
         const current = findComponentEntryById(node.components, componentId)
         if (!current) {
@@ -13548,6 +13553,7 @@ export const useSceneStore = defineStore('scene', {
         node.components = nextComponents
 
         if (currentType === WALL_COMPONENT_TYPE) {
+          includesWallTransformChange = true
           applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
         } else if (currentType === ROAD_COMPONENT_TYPE) {
           applyRoadComponentPropsToNode(node, nextProps as RoadComponentProps, resolveGroundNodeForHeightSampling(this.nodes))
@@ -13558,7 +13564,10 @@ export const useSceneStore = defineStore('scene', {
         }
       })
 
-      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
+      this.queueSceneNodePatch(
+        nodeId,
+        includesWallTransformChange ? ['components', 'dynamicMesh', 'transform'] : ['components', 'dynamicMesh'],
+      )
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
