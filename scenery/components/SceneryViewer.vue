@@ -6711,37 +6711,18 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   }
 
   const focusPoint = focus.clone();
-  const ownerObject = nodeObjectMap.get(event.targetNodeId ?? event.nodeId ?? '');
-  if (ownerObject) {
-    ownerObject.getWorldQuaternion(tempQuaternion);
-  } else {
-    tempQuaternion.identity();
-  }
-  const destination = focusPoint.clone();
-  const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
-
   const startPosition = camera.position.clone();
   const startTarget = controls.target.clone();
-  const destinationOffset = startPosition.clone().sub(lookTarget);
-  destinationOffset.y = 0;
-  if (destinationOffset.lengthSq() < 1e-6) {
-    const fallbackForward = new THREE.Vector3(0, 0, 1).applyQuaternion(tempQuaternion);
-    destinationOffset.set(fallbackForward.x, 0, fallbackForward.z);
-  }
-  if (destinationOffset.lengthSq() < 1e-6) {
-    destinationOffset.set(0, 0, 1);
-  }
-  const controlTargetDistance = Math.max(controls.minDistance + 0.05, 0.1);
-  destinationOffset.normalize().multiplyScalar(controlTargetDistance);
-  const recoveryLookTarget = lookTarget.clone().add(destinationOffset);
-  destination.copy(lookTarget);
+  const destination = new THREE.Vector3(focusPoint.x, startPosition.y, focusPoint.z);
+  const translation = destination.clone().sub(startPosition);
+  const targetDestination = startTarget.clone().add(translation);
   const durationSeconds = Math.max(0, event.duration ?? 0);
   
   const updateFrame = (alpha: number) => {
     runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.lerpVectors(startPosition, destination, alpha);
-        controls.target.lerpVectors(startTarget, lookTarget, alpha);
+        controls.target.lerpVectors(startTarget, targetDestination, alpha);
         controls.update();
       });
     });
@@ -6751,7 +6732,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.copy(destination);
-        controls.target.copy(recoveryLookTarget);
+        controls.target.copy(targetDestination);
         controls.update();
       });
     });
