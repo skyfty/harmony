@@ -84,6 +84,7 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     height: WALL_DEFAULT_HEIGHT,
     width: WALL_DEFAULT_WIDTH,
     thickness: WALL_DEFAULT_THICKNESS,
+    wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
     smoothing: WALL_DEFAULT_SMOOTHING,
     wallRenderMode: 'stretch',
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
@@ -140,6 +141,7 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
     height: wallProps.height,
     width: wallProps.width,
     thickness: wallProps.thickness,
+    wallBaseOffsetLocal: wallProps.wallBaseOffsetLocal,
     smoothing: wallProps.smoothing,
     wallRenderMode: normalizeWallRenderMode(wallProps.wallRenderMode, 'stretch'),
     repeatInstanceStep: wallProps.repeatInstanceStep,
@@ -338,6 +340,9 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     height: requiredNumber('height'),
     width: requiredNumber('width'),
     thickness: requiredNumber('thickness'),
+    wallBaseOffsetLocal: record.wallBaseOffsetLocal
+      ? requiredOffsetLocal(record.wallBaseOffsetLocal, 'wallBaseOffsetLocal')
+      : { x: 0, y: 0, z: 0 },
     smoothing: requiredNumber('smoothing'),
     wallRenderMode: normalizeWallRenderMode(record.wallRenderMode, 'stretch'),
     repeatInstanceStep: optionalRepeatInstanceStep(),

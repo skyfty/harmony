@@ -452,6 +452,7 @@ export function handlePointerMoveDrag(
       definition: WallDynamicMesh
       nodeId: string | null
       previewKey: string
+      centerWorld: THREE.Vector3
     }) => THREE.Group
     beginWallEditDragPreview?: (nodeId: string) => void
 
@@ -735,8 +736,8 @@ export function handlePointerMoveDrag(
           definition: build.definition,
           nodeId: state.nodeId,
           previewKey: `wall-height-drag:${state.nodeId}`,
+          centerWorld: build.center,
         })
-        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -915,8 +916,8 @@ export function handlePointerMoveDrag(
           definition: build.definition,
           nodeId: state.nodeId,
           previewKey: `wall-endpoint-drag:${state.nodeId}`,
+          centerWorld: build.center,
         })
-        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -1028,8 +1029,8 @@ export function handlePointerMoveDrag(
           definition: build.definition,
           nodeId: state.nodeId,
           previewKey: `wall-circle-center-drag:${state.nodeId}`,
+          centerWorld: build.center,
         })
-        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -1126,8 +1127,8 @@ export function handlePointerMoveDrag(
           definition: build.definition,
           nodeId: state.nodeId,
           previewKey: `wall-circle-radius-drag:${state.nodeId}`,
+          centerWorld: build.center,
         })
-        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -1306,8 +1307,8 @@ export function handlePointerMoveDrag(
           definition: build.definition,
           nodeId: state.nodeId,
           previewKey: `wall-joint-drag:${state.nodeId}`,
+          centerWorld: build.center,
         })
-        state.previewGroup.position.copy(build.center)
       }
     }
 

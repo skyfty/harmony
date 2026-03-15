@@ -116,6 +116,39 @@ function applyWallPreviewStyling(group: THREE.Group) {
   })
 }
 
+function normalizeWallBaseOffsetLocal(wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined): { x: number; y: number; z: number } {
+  const raw = (wallProps as any)?.wallBaseOffsetLocal
+  const x = Number(raw?.x)
+  const y = Number(raw?.y)
+  const z = Number(raw?.z)
+  return {
+    x: Number.isFinite(x) ? x : 0,
+    y: Number.isFinite(y) ? y : 0,
+    z: Number.isFinite(z) ? z : 0,
+  }
+}
+
+function applyWallBaseOffsetToPreviewDefinition(
+  definition: WallDynamicMesh,
+  wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined,
+): WallDynamicMesh {
+  const offset = normalizeWallBaseOffsetLocal(wallProps)
+  if (Math.abs(offset.x) <= 1e-6 && Math.abs(offset.y) <= 1e-6 && Math.abs(offset.z) <= 1e-6) {
+    return definition
+  }
+  return {
+    ...definition,
+    chains: (definition.chains ?? []).map((chain) => ({
+      ...chain,
+      points: (chain.points ?? []).map((point) => ({
+        x: Number(point?.x ?? 0) - offset.x,
+        y: Number(point?.y ?? 0) - offset.y,
+        z: Number(point?.z ?? 0) - offset.z,
+      })),
+    })),
+  }
+}
+
 export function createWallPreviewRenderer(options: {
   rootGroup: THREE.Group
   normalizeWallDimensionsForViewport: (values: {
@@ -201,13 +234,16 @@ export function createWallPreviewRenderer(options: {
       signature = null
       return
     }
+    const previewDefinition = hasCommittedNode
+      ? build.definition
+      : applyWallBaseOffsetToPreviewDefinition(build.definition, session.wallRenderProps)
 
     const previewKey = session.nodeId ?? 'wall-build-draft'
     const resolvedRender = options.syncExactWallPreview
       ? null
       : (options.resolveWallPreviewRenderData
         ? options.resolveWallPreviewRenderData({
-          definition: build.definition,
+          definition: previewDefinition,
           wallProps: session.wallRenderProps,
           nodeId: session.nodeId,
           previewKey,
@@ -242,7 +278,7 @@ export function createWallPreviewRenderer(options: {
       session.previewGroup.scale.set(1, 1, 1)
       options.syncExactWallPreview({
         container: session.previewGroup,
-        definition: build.definition,
+        definition: previewDefinition,
         wallProps: session.wallRenderProps,
         previewKey,
       })
@@ -251,7 +287,7 @@ export function createWallPreviewRenderer(options: {
       }
     } else {
       if (!session.previewGroup) {
-        const preview = createWallRenderGroup(build.definition, resolvedRender?.assets ?? {}, resolvedRender?.renderOptions ?? {})
+        const preview = createWallRenderGroup(previewDefinition, resolvedRender?.assets ?? {}, resolvedRender?.renderOptions ?? {})
         applyWallPreviewStyling(preview)
         applyAirWallVisualToWallGroup(preview, Boolean(resolvedRender?.isAirWall))
         preview.userData.isWallPreview = true
@@ -261,7 +297,7 @@ export function createWallPreviewRenderer(options: {
         if (resolvedRender) {
           session.previewGroup.userData.wallRenderAssets = resolvedRender.assets
         }
-        updateWallGroup(session.previewGroup, build.definition, resolvedRender?.renderOptions ?? {})
+        updateWallGroup(session.previewGroup, previewDefinition, resolvedRender?.renderOptions ?? {})
         applyWallPreviewStyling(session.previewGroup)
         applyAirWallVisualToWallGroup(session.previewGroup, Boolean(resolvedRender?.isAirWall))
         if (!options.rootGroup.children.includes(session.previewGroup)) {

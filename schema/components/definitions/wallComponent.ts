@@ -80,6 +80,8 @@ export interface WallComponentProps {
   height: number
   width: number
   thickness: number
+  /** Creation-time base offset (meters) applied to the wall node origin relative to computed center. */
+  wallBaseOffsetLocal: WallOffsetLocal
   smoothing: number
   /** Material config id used for the wall body mesh (editor-defined). */
   bodyMaterialConfigId: string | null
@@ -263,6 +265,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     }
     return { x: read('x'), y: read('y'), z: read('z') }
   }
+  const wallBaseOffsetLocal = normalizeOffsetLocal((props as any).wallBaseOffsetLocal)
 
   const rawCornerModels = (props as any)?.cornerModels
   if (!Array.isArray(rawCornerModels)) {
@@ -341,6 +344,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     height,
     width,
     thickness,
+    wallBaseOffsetLocal,
     smoothing,
     bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     isAirWall: normalizedIsAirWall,
@@ -374,6 +378,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       height: WALL_DEFAULT_HEIGHT,
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
+      wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
       smoothing: WALL_DEFAULT_SMOOTHING,
       bodyMaterialConfigId: null,
       isAirWall: false,
@@ -405,6 +410,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     height: base?.height,
     width: base?.width,
     thickness: base?.thickness,
+    wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
     smoothing: WALL_DEFAULT_SMOOTHING,
     bodyMaterialConfigId: typeof mesh.bodyMaterialConfigId === 'string' && mesh.bodyMaterialConfigId.trim().length
       ? mesh.bodyMaterialConfigId.trim()
@@ -456,6 +462,11 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     height: props.height,
     width: props.width,
     thickness: props.thickness,
+    wallBaseOffsetLocal: {
+      x: Number((props as any)?.wallBaseOffsetLocal?.x) || 0,
+      y: Number((props as any)?.wallBaseOffsetLocal?.y) || 0,
+      z: Number((props as any)?.wallBaseOffsetLocal?.z) || 0,
+    },
     smoothing: props.smoothing,
     bodyMaterialConfigId: props.bodyMaterialConfigId ?? null,
     isAirWall: Boolean(props.isAirWall),
@@ -601,6 +612,7 @@ export function createWallComponentState(
     height: overrides?.height ?? defaults.height,
     width: overrides?.width ?? defaults.width,
     thickness: overrides?.thickness ?? defaults.thickness,
+    wallBaseOffsetLocal: (overrides as any)?.wallBaseOffsetLocal ?? defaults.wallBaseOffsetLocal,
     smoothing: overrides?.smoothing ?? defaults.smoothing,
     bodyMaterialConfigId: overrides?.bodyMaterialConfigId ?? defaults.bodyMaterialConfigId,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,

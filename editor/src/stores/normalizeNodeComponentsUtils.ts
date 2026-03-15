@@ -129,6 +129,7 @@ export function normalizeNodeComponents(
         height: (existing?.props as { height?: number })?.height ?? baseProps.height,
         width: (existing?.props as { width?: number })?.width ?? baseProps.width,
         thickness: (existing?.props as { thickness?: number })?.thickness ?? baseProps.thickness,
+        wallBaseOffsetLocal: (existingProps as { wallBaseOffsetLocal?: unknown }).wallBaseOffsetLocal ?? (baseProps as any).wallBaseOffsetLocal,
         smoothing: (existingProps as { smoothing?: number }).smoothing ?? baseProps.smoothing,
         isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
         wallRenderMode: (existingProps as { wallRenderMode?: 'stretch' | 'repeatInstances' }).wallRenderMode ?? (baseProps as any).wallRenderMode,

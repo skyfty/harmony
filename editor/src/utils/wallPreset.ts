@@ -47,6 +47,7 @@ export type StrictWallPresetWallProps = {
   height: number
   width: number
   thickness: number
+  wallBaseOffsetLocal: WallOffsetLocal
   smoothing: number
   wallRenderMode: WallRenderMode
   repeatInstanceStep: number

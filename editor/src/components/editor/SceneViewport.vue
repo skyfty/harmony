@@ -1799,48 +1799,85 @@ function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode 
   return node
 }
 
+function refreshSelectionHighlightsForEditModeChange(): void {
+  updateOutlineSelectionTargets()
+  updateSelectionHighlights()
+}
+
+function setWallEditNodeId(nodeId: string | null): void {
+  if (wallEditNodeId.value === nodeId) {
+    return
+  }
+  wallEditNodeId.value = nodeId
+  refreshSelectionHighlightsForEditModeChange()
+}
+
+function setRoadEditNodeId(nodeId: string | null): void {
+  if (roadEditNodeId.value === nodeId) {
+    return
+  }
+  roadEditNodeId.value = nodeId
+  refreshSelectionHighlightsForEditModeChange()
+}
+
+function setFloorEditNodeId(nodeId: string | null): void {
+  if (floorEditNodeId.value === nodeId) {
+    return
+  }
+  floorEditNodeId.value = nodeId
+  refreshSelectionHighlightsForEditModeChange()
+}
+
+function setWaterEditNodeId(nodeId: string | null): void {
+  if (waterEditNodeId.value === nodeId) {
+    return
+  }
+  waterEditNodeId.value = nodeId
+  refreshSelectionHighlightsForEditModeChange()
+}
+
 function clearWallEditMode(): void {
-  wallEditNodeId.value = null
+  setWallEditNodeId(null)
 }
 
 function clearRoadEditMode(): void {
-  roadEditNodeId.value = null
+  setRoadEditNodeId(null)
 }
 
 function clearFloorEditMode(): void {
-  floorEditNodeId.value = null
+  setFloorEditNodeId(null)
 }
 
 function clearWaterEditMode(): void {
-  waterEditNodeId.value = null
+  setWaterEditNodeId(null)
 }
 
 function enterWallEditMode(nodeId: string | null | undefined): void {
   clearRoadEditMode()
   clearFloorEditMode()
   clearWaterEditMode()
-  wallEditNodeId.value = resolveEditableWallNode(nodeId)?.id ?? null
+  setWallEditNodeId(resolveEditableWallNode(nodeId)?.id ?? null)
 }
 
 function enterRoadEditMode(nodeId: string | null | undefined): void {
   clearWallEditMode()
   clearFloorEditMode()
   clearWaterEditMode()
-  roadEditNodeId.value = resolveEditableRoadNode(nodeId)?.id ?? null
+  setRoadEditNodeId(resolveEditableRoadNode(nodeId)?.id ?? null)
 }
 
 function enterFloorEditMode(nodeId: string | null | undefined): void {
   clearWallEditMode()
   clearRoadEditMode()
   clearWaterEditMode()
-  floorEditNodeId.value = resolveEditableFloorNode(nodeId)?.id ?? null
+  setFloorEditNodeId(resolveEditableFloorNode(nodeId)?.id ?? null)
 }
 
 function enterWaterEditMode(nodeId: string | null | undefined): void {
   clearWallEditMode()
   clearRoadEditMode()
   clearFloorEditMode()
-  waterEditNodeId.value = resolveEditableWaterNode(nodeId)?.id ?? null
+  setWaterEditNodeId(resolveEditableWaterNode(nodeId)?.id ?? null)
 }
 
 function isSelectedWallEditMode(): boolean {
@@ -2078,6 +2115,7 @@ function syncWallPreviewGroupForEditor(options: {
   definition: WallDynamicMesh
   nodeId: string | null
   previewKey: string
+  centerWorld: THREE.Vector3
   wallProps?: Partial<WallComponentProps> | WallComponentProps | null
 }): THREE.Group {
   const nodeId = typeof options.nodeId === 'string' ? options.nodeId.trim() : ''
@@ -2088,6 +2126,7 @@ function syncWallPreviewGroupForEditor(options: {
   const wallProps = options.wallProps ?? wallComponent?.props ?? null
 
   const group = options.previewGroup ?? new THREE.Group()
+  group.position.copy(options.centerWorld)
   if (!options.previewGroup) {
     group.name = 'WallPreview'
     group.userData.isWallPreview = true
@@ -12433,17 +12472,20 @@ function handlePointerMove(event: PointerEvent) {
       definition,
       nodeId,
       previewKey,
+      centerWorld,
     }: {
       previewGroup: THREE.Group | null
       definition: WallDynamicMesh
       nodeId: string | null
       previewKey: string
+      centerWorld: THREE.Vector3
     }) =>
       syncWallPreviewGroupForEditor({
         previewGroup,
         definition,
         nodeId,
         previewKey,
+        centerWorld,
       }),
     beginWallEditDragPreview: (nodeId: string) => {
       wallRenderer.beginWallDrag(nodeId, { suppressCommittedRender: true })
