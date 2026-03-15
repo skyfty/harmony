@@ -673,6 +673,19 @@ export function createWallRenderer(options: WallRendererOptions) {
     })
   }
 
+  function releasePreviewNodeRuntimeState(previewNodeId: string): void {
+    previewNodeById.delete(previewNodeId)
+    previewObjectById.delete(previewNodeId)
+    resyncSignatureKeyByNodeId.delete(previewNodeId)
+    pendingResyncNodeIds.delete(previewNodeId)
+    wallDragCacheByNodeId.delete(previewNodeId)
+    suppressedCommittedWallNodeIds.delete(previewNodeId)
+    if (activeWallDragNodeId === previewNodeId) {
+      activeWallDragNodeId = null
+    }
+    releaseModelInstancesForNode(previewNodeId)
+  }
+
   function syncWallPreviewContainer(params: {
     container: THREE.Object3D
     definition: WallDynamicMesh
@@ -680,6 +693,17 @@ export function createWallRenderer(options: WallRendererOptions) {
     previewKey: string
   }): void {
     const previewNodeId = buildPreviewNodeId(params.previewKey)
+    const userData = params.container.userData ?? (params.container.userData = {})
+    const previousPreviewNodeId = typeof userData.wallPreviewNodeId === 'string'
+      ? userData.wallPreviewNodeId
+      : null
+
+    // Reusing the same preview container across different keys (e.g. draft -> committed node)
+    // must release old instanced bindings, otherwise stale first-segment ghosts can persist.
+    if (previousPreviewNodeId && previousPreviewNodeId !== previewNodeId) {
+      releasePreviewNodeRuntimeState(previousPreviewNodeId)
+    }
+
     const normalizedProps = normalizeWallPreviewProps(params.definition, params.wallProps)
     const previewNode: SceneNode = {
       id: previewNodeId,
@@ -699,13 +723,13 @@ export function createWallRenderer(options: WallRendererOptions) {
             },
           }
         : undefined,
-      userData: params.container.userData ?? null,
+      userData,
     }
 
     previewNodeById.set(previewNodeId, previewNode)
     previewObjectById.set(previewNodeId, params.container)
     params.container.userData = {
-      ...(params.container.userData ?? {}),
+      ...userData,
       isWallPreview: true,
       wallPreviewNodeId: previewNodeId,
     }
@@ -721,16 +745,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const userData = container.userData ?? (container.userData = {})
     const previewNodeId = typeof userData.wallPreviewNodeId === 'string' ? userData.wallPreviewNodeId : null
     if (previewNodeId) {
-      previewNodeById.delete(previewNodeId)
-      previewObjectById.delete(previewNodeId)
-      resyncSignatureKeyByNodeId.delete(previewNodeId)
-      pendingResyncNodeIds.delete(previewNodeId)
-      wallDragCacheByNodeId.delete(previewNodeId)
-      suppressedCommittedWallNodeIds.delete(previewNodeId)
-      if (activeWallDragNodeId === previewNodeId) {
-        activeWallDragNodeId = null
-      }
-      releaseModelInstancesForNode(previewNodeId)
+      releasePreviewNodeRuntimeState(previewNodeId)
     }
 
     clearWallInstancedBindingsOnObject(container)
