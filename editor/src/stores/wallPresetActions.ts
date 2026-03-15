@@ -133,6 +133,50 @@ function normalizeOptionalAssetId(value: unknown): string | null {
   return raw.length ? raw : null
 }
 
+function deduplicateNodeMaterialsById(materials: SceneNodeMaterial[]): SceneNodeMaterial[] {
+  const seen = new Set<string>()
+  const deduplicated: SceneNodeMaterial[] = []
+  for (const entry of materials) {
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : ''
+    if (!id || seen.has(id)) {
+      continue
+    }
+    seen.add(id)
+    deduplicated.push(entry)
+  }
+  return deduplicated
+}
+
+function normalizeWallNodeMaterials(materials: SceneNodeMaterial[], preferredBodyId: unknown): SceneNodeMaterial[] {
+  const deduplicated = deduplicateNodeMaterialsById(materials)
+  if (!deduplicated.length) {
+    return deduplicated
+  }
+
+  const materialIds = deduplicated
+    .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
+    .filter((value) => value.length > 0)
+  const resolvedBodyId = resolveWallBodyMaterialConfigId(materialIds, preferredBodyId)
+
+  let bodyKept = false
+  return deduplicated.filter((entry) => {
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : ''
+    const name = typeof (entry as any)?.name === 'string' ? (entry as any).name.trim().toLowerCase() : ''
+    if (name !== 'body') {
+      return true
+    }
+    if (resolvedBodyId && id === resolvedBodyId) {
+      bodyKept = true
+      return true
+    }
+    if (!resolvedBodyId && !bodyKept) {
+      bodyKept = true
+      return true
+    }
+    return false
+  })
+}
+
 function resolveWallBodyMaterialConfigId(materialIds: string[], preferredId: unknown): string | null {
   const normalizedPreferredId = normalizeOptionalAssetId(preferredId)
   if (normalizedPreferredId && materialIds.includes(normalizedPreferredId)) {
@@ -538,11 +582,15 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       const wallProps = assertStrictWallPresetWallProps(component.props)
 
       const nodeMaterials = Array.isArray((node as any).materials) ? ((node as any).materials as SceneNodeMaterial[]) : []
-      if (!nodeMaterials.length) {
+      const normalizedNodeMaterials = normalizeWallNodeMaterials(
+        nodeMaterials,
+        node.dynamicMesh?.type === 'Wall' ? node.dynamicMesh.bodyMaterialConfigId : component.props.bodyMaterialConfigId,
+      )
+      if (!normalizedNodeMaterials.length) {
         throw new Error('墙体节点缺少材质槽位')
       }
 
-      const materialOrder = nodeMaterials
+      const materialOrder = normalizedNodeMaterials
         .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
         .filter((value) => value.length > 0)
       if (!materialOrder.length) {
@@ -550,7 +598,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       }
 
       const materialPatches: Record<string, WallPresetMaterialPatch> = {}
-      for (const entry of nodeMaterials) {
+      for (const entry of normalizedNodeMaterials) {
         const id = typeof entry?.id === 'string' ? entry.id.trim() : ''
         if (!id) {
           continue
@@ -610,7 +658,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
               .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
               .map((value) => (typeof value === 'string' ? value.trim() : ''))
               .filter((value) => value.length > 0),
-            ...nodeMaterials.flatMap((material) => {
+            ...normalizedNodeMaterials.flatMap((material) => {
               const textures = ((material as any).textures ?? null) as Record<string, any> | null
               if (!textures || typeof textures !== 'object') {
                 return []
@@ -917,10 +965,11 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           nextMaterials.push(entry)
         }
 
-        if (nextMaterials.length) {
-          store.setNodeMaterials(nodeId, nextMaterials)
+        const normalizedNextMaterials = normalizeWallNodeMaterials(nextMaterials, wallProps.bodyMaterialConfigId)
+        if (normalizedNextMaterials.length) {
+          store.setNodeMaterials(nodeId, normalizedNextMaterials)
           const resolvedBodyMaterialConfigId = resolveWallBodyMaterialConfigId(
-            nextMaterials
+            normalizedNextMaterials
               .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
               .filter((value) => value.length > 0),
             wallProps.bodyMaterialConfigId,
