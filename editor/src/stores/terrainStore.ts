@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useUiStore } from './uiStore'
 import {
   TERRAIN_PAINT_MAX_LAYER_COUNT,
@@ -14,6 +14,8 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 export type GroundPanelTab = 'terrain' | 'paint' | TerrainScatterCategory
 export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
 export const SCATTER_SPACING_MAX = 20 as const
+const PAINT_CONTEXT_INTENT_TTL_MS = 1800 as const
+const PAINT_CONTEXT_SYNC_DEBOUNCE_MS = 80 as const
 
 export type TerrainPaintBrushSettings = TerrainPaintLayerStyle & {
   feather: number
@@ -117,9 +119,33 @@ export const useTerrainStore = defineStore('terrain', () => {
     groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint' && !!scatterSelectedAsset.value,
   )
   const paintModeActive = computed(() => groundPanelTab.value === 'paint' && !!paintSelectedLayerId.value && !!paintSelectedAsset.value)
+  const lastPaintIntentAtMs = ref(0)
+  let paintContextSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+  function markPaintContextIntent() {
+    lastPaintIntentAtMs.value = Date.now()
+  }
+
+  function hasRecentPaintContextIntent(): boolean {
+    return Date.now() - lastPaintIntentAtMs.value <= PAINT_CONTEXT_INTENT_TTL_MS
+  }
+
+  function clearPaintContextSyncTimer() {
+    if (paintContextSyncTimer !== null) {
+      window.clearTimeout(paintContextSyncTimer)
+      paintContextSyncTimer = null
+    }
+  }
+
+  onScopeDispose(() => {
+    clearPaintContextSyncTimer()
+  })
 
   function setGroundPanelTab(tab: GroundPanelTab) {
     groundPanelTab.value = tab
+    if (tab === 'paint') {
+      markPaintContextIntent()
+    }
     if (tab !== 'terrain' && tab !== 'paint') {
       scatterCategory.value = tab
     }
@@ -142,6 +168,9 @@ export const useTerrainStore = defineStore('terrain', () => {
   function setPaintSelectedLayerId(layerId: string | null) {
     const normalized = typeof layerId === 'string' ? layerId.trim() : ''
     paintSelectedLayerId.value = normalized || (paintLayers.value[0]?.id ?? null)
+    if (paintSelectedLayerId.value) {
+      markPaintContextIntent()
+    }
   }
 
   function replacePaintLayers(layers: TerrainPaintLayerDraft[]) {
@@ -193,6 +222,9 @@ export const useTerrainStore = defineStore('terrain', () => {
     if (!activeLayer) {
       return
     }
+    if (asset) {
+      markPaintContextIntent()
+    }
     updatePaintLayer(activeLayer.id, { asset, assetId: asset?.id ?? null })
     paintSelectedLayerId.value = activeLayer.id
   }
@@ -236,13 +268,23 @@ export const useTerrainStore = defineStore('terrain', () => {
     }
   })
 
-  watch(paintSelectedAsset, (next) => {
-    const ui = useUiStore()
-    if (next) {
-      ui.setActiveSelectionContext('terrain-paint')
-    } else if (ui.activeSelectionContext === 'terrain-paint') {
-      ui.setActiveSelectionContext(null)
-    }
+  watch([paintSelectedAsset, groundPanelTab], ([nextAsset, tab]: [ProjectAsset | null, GroundPanelTab]) => {
+    clearPaintContextSyncTimer()
+    paintContextSyncTimer = window.setTimeout(() => {
+      const ui = useUiStore()
+      const shouldActivatePaintContext = tab === 'paint'
+        && !!nextAsset
+        && (hasRecentPaintContextIntent() || ui.activeSelectionContext === 'terrain-paint')
+
+      if (shouldActivatePaintContext) {
+        ui.setActiveSelectionContext('terrain-paint')
+        return
+      }
+
+      if (ui.activeSelectionContext === 'terrain-paint' && (tab !== 'paint' || !nextAsset)) {
+        ui.setActiveSelectionContext(null)
+      }
+    }, PAINT_CONTEXT_SYNC_DEBOUNCE_MS)
   })
 
   function setScatterBrushRadius(value: number) {
