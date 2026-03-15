@@ -150,6 +150,7 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
 import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
+import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
@@ -1282,6 +1283,15 @@ function applyFloorPreviewMaterials(targetObject: THREE.Object3D, presetData: im
   }
 }
 
+function applyWallPreviewMaterials(targetObject: THREE.Object3D, presetData: import('@/utils/wallPreset').WallPresetData | null): void {
+  const materials = buildWallNodeMaterialsFromPreset(presetData, sceneStore.materials)
+  if (materials.length) {
+    applyMaterialOverrides(targetObject, materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(targetObject)
+  }
+}
+
 function applyRendererShadowSetting() {
   if (!renderer) {
     return
@@ -2138,6 +2148,12 @@ function syncWallPreviewGroupForEditor(options: {
     wallProps,
     previewKey: options.previewKey,
   })
+
+  if (node?.materials && node.materials.length) {
+    applyMaterialOverrides(group, node.materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(group)
+  }
 
   if (!rootGroup.children.includes(group)) {
     rootGroup.add(group)
@@ -5488,6 +5504,7 @@ const wallBuildTool = createWallBuildTool({
     presetAssetId: wallBrushPresetAssetId.value,
     presetData: wallBrushPresetData.value,
   }),
+  applyWallPreviewMaterials: (group, presetData) => applyWallPreviewMaterials(group, presetData),
   resolveWallPreviewRenderData: (params) => wallRenderer.resolveWallPreviewRenderData(params),
   syncExactWallPreview: (params) => wallRenderer.syncWallPreviewContainer(params),
   disposeExactWallPreview: (container) => wallRenderer.disposeWallPreviewContainer(container),

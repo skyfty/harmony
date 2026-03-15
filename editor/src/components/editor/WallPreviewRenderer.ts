@@ -6,6 +6,7 @@ import { stableSerialize } from '@schema/stableSerialize'
 import { buildWallDynamicMeshFromWorldSegments } from '@/stores/wallUtils'
 import type { WallPreviewRenderData } from './WallRenderer'
 import { applyAirWallVisualToWallGroup } from './WallRenderer'
+import type { WallPresetData } from '@/utils/wallPreset'
 
 export type WallPreviewSegment = {
   start: THREE.Vector3
@@ -151,6 +152,8 @@ function applyWallBaseOffsetToPreviewDefinition(
 
 export function createWallPreviewRenderer(options: {
   rootGroup: THREE.Group
+  getPreviewPresetData?: () => WallPresetData | null
+  applyPreviewMaterials?: (group: THREE.Group, presetData: WallPresetData | null) => void
   normalizeWallDimensionsForViewport: (values: {
     height?: number
     width?: number
@@ -197,6 +200,8 @@ export function createWallPreviewRenderer(options: {
       }
       return
     }
+
+    const presetData = options.getPreviewPresetData?.() ?? null
 
     const hasCommittedNode = !!session.nodeId
     const hasActiveDrag = !!session.dragStart && !!session.dragEnd
@@ -285,6 +290,7 @@ export function createWallPreviewRenderer(options: {
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)
       }
+      options.applyPreviewMaterials?.(session.previewGroup, presetData)
     } else {
       if (!session.previewGroup) {
         const preview = createWallRenderGroup(previewDefinition, resolvedRender?.assets ?? {}, resolvedRender?.renderOptions ?? {})
@@ -305,6 +311,7 @@ export function createWallPreviewRenderer(options: {
         }
       }
       session.previewGroup!.position.copy(build.center)
+      options.applyPreviewMaterials?.(session.previewGroup!, presetData)
     }
 
     if (resolvedRender?.hasMissingAssets) {

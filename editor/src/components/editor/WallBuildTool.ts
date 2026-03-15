@@ -83,6 +83,7 @@ export function createWallBuildTool(options: {
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   getWallBrush: () => { presetAssetId: string | null; presetData: WallPresetData | null }
+  applyWallPreviewMaterials?: (group: THREE.Group, presetData: WallPresetData | null) => void
   normalizeWallDimensionsForViewport: (values: {
     height?: number
     width?: number
@@ -105,6 +106,8 @@ export function createWallBuildTool(options: {
   const previewRenderer = createWallPreviewRenderer({
     rootGroup: options.rootGroup,
     normalizeWallDimensionsForViewport: options.normalizeWallDimensionsForViewport,
+    getPreviewPresetData: () => options.getWallBrush().presetData,
+    applyPreviewMaterials: (group, presetData) => options.applyWallPreviewMaterials?.(group, presetData ?? null),
     resolveWallPreviewRenderData: options.resolveWallPreviewRenderData,
     syncExactWallPreview: options.syncExactWallPreview,
     disposeExactWallPreview: options.disposeExactWallPreview,
