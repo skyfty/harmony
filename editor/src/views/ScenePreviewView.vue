@@ -780,31 +780,61 @@ const behaviorPointer = new THREE.Vector2()
 const LAYER_BEHAVIOR_INTERACTIVE = 1
 const LAYER_VEHICLE_INTERACTIVE = 2
 
+function applyInteractionLayers(target: THREE.Object3D, behaviorInteractive: boolean, vehicleInteractive: boolean): void {
+	if (behaviorInteractive) {
+		target.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
+	} else {
+		target.layers.disable(LAYER_BEHAVIOR_INTERACTIVE)
+	}
+
+	if (vehicleInteractive) {
+		target.layers.enable(LAYER_VEHICLE_INTERACTIVE)
+	} else {
+		target.layers.disable(LAYER_VEHICLE_INTERACTIVE)
+	}
+}
+
+function syncInteractionLayersForNonNodeDescendants(root: THREE.Object3D, behaviorInteractive: boolean, vehicleInteractive: boolean): void {
+	const stack = [...root.children]
+	while (stack.length > 0) {
+		const child = stack.pop()
+		if (!child) {
+			continue
+		}
+
+		const childNodeId = child.userData?.nodeId as string | undefined
+		if (childNodeId) {
+			continue
+		}
+
+		applyInteractionLayers(child, behaviorInteractive, vehicleInteractive)
+		stack.push(...child.children)
+	}
+}
+
 function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): void {
 	const target = object ?? nodeObjectMap.get(nodeId)
 	if (!target) {
 		return
 	}
 
+	let behaviorInteractive = target.layers.isEnabled(LAYER_BEHAVIOR_INTERACTIVE)
+
 	try {
 		const directActions = listRegisteredBehaviorActions(nodeId)
 		const hasClick = Array.isArray(directActions) && directActions.includes('click')
 		const clickableAncestor = hasClick ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId)
-		if (clickableAncestor) {
-			target.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
-		} else {
-			target.layers.disable(LAYER_BEHAVIOR_INTERACTIVE)
-		}
+		behaviorInteractive = Boolean(clickableAncestor)
 	} catch {
 		// keep layer state unchanged if behavior registry is unavailable
 	}
 
 	const vehicleNodeId = resolveVehicleAncestorNodeId(nodeId)
-	if (vehicleNodeId) {
-		target.layers.enable(LAYER_VEHICLE_INTERACTIVE)
-	} else {
-		target.layers.disable(LAYER_VEHICLE_INTERACTIVE)
-	}
+	const vehicleInteractive = Boolean(vehicleNodeId)
+
+	applyInteractionLayers(target, behaviorInteractive, vehicleInteractive)
+	// Runtime component visuals (Warp Gate, Guideboard, etc.) are attached as non-node children.
+	syncInteractionLayersForNonNodeDescendants(target, behaviorInteractive, vehicleInteractive)
 }
 
 const behaviorAlertVisible = ref(false)
@@ -4839,12 +4869,23 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 	} else {
 		tempQuaternion.identity()
 	}
-	const destination = focusPoint.clone()
-	destination.y = CAMERA_HEIGHT
 	const lookPoint = focusPoint.clone()
 	lookPoint.y = CAMERA_HEIGHT
 	const startPosition = activeCamera.position.clone()
 	const orbitControls = mapControls ?? null
+	const destinationOffset = startPosition.clone().sub(lookPoint)
+	destinationOffset.y = 0
+	if (destinationOffset.lengthSq() < 1e-6) {
+		const fallbackForward = new THREE.Vector3(0, 0, 1).applyQuaternion(tempQuaternion)
+		destinationOffset.set(fallbackForward.x, 0, fallbackForward.z)
+	}
+	if (destinationOffset.lengthSq() < 1e-6) {
+		destinationOffset.set(0, 0, 1)
+	}
+	const controlTargetDistance = orbitControls ? Math.max(orbitControls.minDistance + 0.05, 0.1) : 0.1
+	destinationOffset.normalize().multiplyScalar(controlTargetDistance)
+	const recoveryLookTarget = lookPoint.clone().add(destinationOffset)
+	const destination = lookPoint.clone()
 	const startTarget = orbitControls ? orbitControls.target.clone() : null
 	const durationSeconds = Math.max(0, event.duration ?? 0)
 	const updateFrame = (alpha: number) => {
@@ -4859,10 +4900,12 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 	const finalize = () => {
 		activeCamera.position.copy(destination)
 		if (orbitControls) {
-			orbitControls.target.copy(lookPoint)
+			orbitControls.target.copy(recoveryLookTarget)
 			orbitControls.update()
+			activeCamera.lookAt(recoveryLookTarget)
+		} else {
+			activeCamera.lookAt(recoveryLookTarget)
 		}
-		activeCamera.lookAt(lookPoint)
 		syncLastFirstPersonStateFromCamera()
 		resolveBehaviorToken(event.token, { type: 'continue' })
 	}
