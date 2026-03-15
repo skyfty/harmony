@@ -11182,9 +11182,35 @@ function updateSelectionIndicatorFromObject(group: THREE.Group, object: THREE.Ob
   group.visible = true
 }
 
+function shouldSuppressNodeHighlightDuringBuildOrEdit(nodeId: string | null | undefined): boolean {
+  if (!nodeId) {
+    return false
+  }
+
+  const node = resolveSceneNodeById(nodeId)
+  const meshType = node?.dynamicMesh?.type
+
+  if (meshType === 'Wall') {
+    return activeBuildTool.value === 'wall' || wallEditNodeId.value === nodeId
+  }
+
+  if (meshType === 'Road') {
+    return activeBuildTool.value === 'road' || roadEditNodeId.value === nodeId
+  }
+
+  if (meshType === 'Floor') {
+    return activeBuildTool.value === 'floor' || floorEditNodeId.value === nodeId
+  }
+
+  return false
+}
+
 function updateSelectionHighlights() {
   const shouldShowSelectedHighlight = (nodeId: string | null | undefined): boolean => {
     if (!nodeId) {
+      return false
+    }
+    if (shouldSuppressNodeHighlightDuringBuildOrEdit(nodeId)) {
       return false
     }
     const node = resolveSceneNodeById(nodeId)
@@ -11335,6 +11361,9 @@ function updateOutlineSelectionTargets() {
 
   idSources.forEach((id) => {
     if (!id) {
+      return
+    }
+    if (shouldSuppressNodeHighlightDuringBuildOrEdit(id)) {
       return
     }
     const node = resolveSceneNodeById(id)
