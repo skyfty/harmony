@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { TERRAIN_PAINT_MAX_LAYER_COUNT, type TerrainPaintBlendMode } from '@schema'
+import { type TerrainPaintBlendMode } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { TerrainPaintBrushSettings, TerrainPaintLayerDraft } from '@/stores/terrainStore'
+import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 
 const BRUSH_RADIUS_MIN = 0.1
@@ -40,10 +40,6 @@ const FEATHER_MAX = 1
 const FEATHER_STEP = 0.01
 const FEATHER_PRECISION = 2
 
-const Z_INDEX_MIN = 0
-const Z_INDEX_STEP = 1
-const Z_INDEX_PRECISION = 0
-
 const blendModeOptions: Array<{ value: TerrainPaintBlendMode; label: string }> = [
   { value: 'normal', label: 'Normal' },
   { value: 'multiply', label: 'Multiply' },
@@ -55,8 +51,6 @@ const props = defineProps<{
   hasGround: boolean
   brushRadius: number
   smoothness: number
-  layers: TerrainPaintLayerDraft[]
-  selectedLayerId: string | null
   asset: ProjectAsset | null
   settings: TerrainPaintBrushSettings
 }>()
@@ -64,23 +58,13 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'update:brushRadius', value: number): void
   (event: 'update:smoothness', value: number): void
-  (event: 'update:selectedLayerId', value: string | null): void
   (event: 'update:asset', value: ProjectAsset | null): void
   (event: 'update:settings', value: TerrainPaintBrushSettings): void
-  (event: 'update:active-layer', value: Partial<Pick<TerrainPaintLayerDraft, 'enabled' | 'zIndex'>>): void
-  (event: 'add-layer'): void
 }>()
 
-const canAddLayer = computed(() => props.layers.length < TERRAIN_PAINT_MAX_LAYER_COUNT)
-const activeLayer = computed(() => props.layers.find((layer) => layer.id === props.selectedLayerId) ?? null)
-const selectedLayerLabel = computed(() => {
-  const layer = activeLayer.value
-  if (!layer) {
-    return 'No active layer'
-  }
-  const orderNumber = layer.zIndex + 1
-  const base = layer.asset?.name?.trim()?.length ? `Layer ${orderNumber}: ${layer.asset.name}` : `Layer ${orderNumber}`
-  return layer.enabled === false ? `${base} (disabled)` : base
+const selectedAssetLabel = computed(() => {
+  const name = typeof props.asset?.name === 'string' ? props.asset.name.trim() : ''
+  return name.length > 0 ? `Texture: ${name}` : 'Select a paint texture'
 })
 
 const brushRadiusModel = computed({
@@ -119,16 +103,8 @@ const offsetYInput = ref(formatNumericValue(props.settings.offset.y, OFFSET_PREC
 const rotationInput = ref(formatNumericValue(props.settings.rotationDeg, ROTATION_PRECISION))
 const opacityInput = ref(formatNumericValue(props.settings.opacity, OPACITY_PRECISION))
 const featherInput = ref(formatNumericValue(props.settings.feather, FEATHER_PRECISION))
-const zIndexInput = ref(formatNumericValue(activeLayer.value?.zIndex ?? 0, Z_INDEX_PRECISION))
 
 const selectedAssetId = computed(() => props.asset?.id ?? '')
-
-function getLayerLabel(layer: TerrainPaintLayerDraft): string {
-  const slotNumber = layer.zIndex + 1
-  const assetName = typeof layer.asset?.name === 'string' ? layer.asset.name.trim() : ''
-  const base = assetName ? `L${slotNumber} · ${assetName}` : `Layer ${slotNumber}`
-  return layer.enabled === false ? `${base} · Off` : base
-}
 
 watch(
   () => props.brushRadius,
@@ -190,13 +166,6 @@ watch(
   () => props.settings.feather,
   (value) => {
     featherInput.value = formatNumericValue(value, FEATHER_PRECISION)
-  },
-)
-
-watch(
-  () => activeLayer.value?.zIndex ?? 0,
-  (value) => {
-    zIndexInput.value = formatNumericValue(value, Z_INDEX_PRECISION)
   },
 )
 
@@ -334,65 +303,11 @@ function commitFeatherInput() {
   featherInput.value = formatNumericValue(normalized, FEATHER_PRECISION)
 }
 
-function commitZIndexInput() {
-  const active = activeLayer.value
-  if (!active) {
-    return
-  }
-  const normalized = parseAndNormalize(
-    zIndexInput.value,
-    active.zIndex,
-    Z_INDEX_MIN,
-    Math.max(Z_INDEX_MIN, TERRAIN_PAINT_MAX_LAYER_COUNT - 1),
-    Z_INDEX_STEP,
-    Z_INDEX_PRECISION,
-  )
-  emit('update:active-layer', { zIndex: Math.round(normalized) })
-  zIndexInput.value = formatNumericValue(normalized, Z_INDEX_PRECISION)
-}
-
-const activeLayerEnabledModel = computed({
-  get: () => activeLayer.value?.enabled !== false,
-  set: (value: boolean) => emit('update:active-layer', { enabled: value }),
-})
-
 const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ?? 0) * 100)}%`)
 </script>
 
 <template>
   <div class="terrain-paint-panel">
-    <div class="control-group">
-      <div class="terrain-paint-panel__layer-header">
-        <div class="text-caption">Paint Layers</div>
-        <v-btn
-          size="x-small"
-          variant="outlined"
-          density="comfortable"
-          :disabled="!props.hasGround || !canAddLayer"
-          @click="emit('add-layer')"
-        >
-          Add Layer
-        </v-btn>
-      </div>
-      <div class="terrain-paint-panel__layer-list">
-        <v-btn
-          v-for="layer in props.layers"
-          :key="layer.id"
-          size="small"
-          :variant="layer.id === props.selectedLayerId ? 'flat' : 'outlined'"
-          :color="layer.id === props.selectedLayerId ? 'primary' : undefined"
-          class="terrain-paint-panel__layer-chip"
-          :disabled="!props.hasGround"
-          @click="emit('update:selectedLayerId', layer.id)"
-        >
-          {{ getLayerLabel(layer) }}
-        </v-btn>
-      </div>
-      <div class="hint-text">
-        {{ props.layers.length }} / {{ TERRAIN_PAINT_MAX_LAYER_COUNT }} layers
-      </div>
-    </div>
-
     <div class="control-row">
       <div class="control-group control-group--compact">
         <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
@@ -435,46 +350,14 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
       </div>
     </div>
     <div class="control-group">
-      <div class="text-caption mb-1">{{ selectedLayerLabel }}</div>
-      <div class="control-row">
-        <div class="control-group control-group--compact">
-          <div class="text-caption">Layer Order</div>
-          <v-text-field
-            v-model="zIndexInput"
-            type="number"
-            :min="Z_INDEX_MIN"
-            :max="TERRAIN_PAINT_MAX_LAYER_COUNT - 1"
-            :step="Z_INDEX_STEP"
-            variant="underlined"
-            density="compact"
-            hide-details
-            inputmode="numeric"
-            :disabled="!props.hasGround || !activeLayer"
-            class="numeric-input"
-            @blur="commitZIndexInput"
-            @keydown.enter.prevent="commitZIndexInput"
-          />
-        </div>
-
-        <div class="control-group control-group--compact">
-          <div class="text-caption">Enabled</div>
-          <v-switch
-            v-model="activeLayerEnabledModel"
-            density="compact"
-            hide-details
-            inset
-            color="primary"
-            :disabled="!props.hasGround || !activeLayer"
-          />
-        </div>
-      </div>
+      <div class="text-caption mb-1">{{ selectedAssetLabel }}</div>
       <AssetPickerList
         :active="true"
         :asset-id="selectedAssetId"
         asset-type="image,texture"
         :show-search="true"
         :thumbnail-size="52"
-        :disabled="!props.hasGround || !activeLayer"
+        :disabled="!props.hasGround"
         @update:asset="(next) => emit('update:asset', next)"
       />
     </div>
@@ -650,24 +533,6 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
   gap: 12px;
 }
 
-.terrain-paint-panel__layer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.terrain-paint-panel__layer-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.terrain-paint-panel__layer-chip {
-  max-width: 100%;
-  text-transform: none;
-}
-
 .control-group {
   display: flex;
   flex-direction: column;
@@ -704,10 +569,5 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
 
 .numeric-input {
   max-width: 160px;
-}
-
-.hint-text {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.65);
 }
 </style>

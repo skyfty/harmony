@@ -102,14 +102,9 @@
                 <TerrainPaintPanel
                   v-model:brush-radius="groundBrushRadiusModel"
                   v-model:smoothness="groundPaintSmoothnessModel"
-                  :layers="groundPaintLayers"
-                  :selected-layer-id="groundPaintSelectedLayerId"
                   v-model:asset="groundPaintAssetModel"
                   v-model:settings="groundPaintSettingsModel"
                   :has-ground="hasGroundNode"
-                  @update:selected-layer-id="groundPaintSelectedLayerIdModel = $event"
-                  @update:active-layer="emit('update:ground-paint-active-layer', $event)"
-                  @add-layer="emit('add-ground-paint-layer')"
                 />
               </div>
             </div>
@@ -1049,7 +1044,7 @@ import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
-import type { TerrainPaintBrushSettings, TerrainPaintLayerDraft } from '@/stores/terrainStore'
+import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { PROTAGONIST_NODE_ID, type CameraControlMode } from '@schema'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
@@ -1124,8 +1119,6 @@ const props = withDefaults(
   groundNoiseStrength: number
   groundNoiseMode: GroundGenerationMode
   groundPaintSmoothness: number
-  groundPaintLayers: TerrainPaintLayerDraft[]
-  groundPaintSelectedLayerId: string | null
   groundPaintAsset: ProjectAsset | null
   groundPaintSettings: TerrainPaintBrushSettings
   groundScatterCategory: TerrainScatterCategory
@@ -1181,11 +1174,8 @@ const emit = defineEmits<{
   (event: 'update:ground-noise-strength', value: number): void
   (event: 'update:ground-noise-mode', value: GroundGenerationMode): void
   (event: 'update:ground-paint-smoothness', value: number): void
-  (event: 'update:ground-paint-selected-layer-id', value: string | null): void
   (event: 'update:ground-paint-asset', value: ProjectAsset | null): void
   (event: 'update:ground-paint-settings', value: TerrainPaintBrushSettings): void
-  (event: 'update:ground-paint-active-layer', value: Partial<Pick<TerrainPaintLayerDraft, 'enabled' | 'zIndex'>>): void
-  (event: 'add-ground-paint-layer'): void
   (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
   (event: 'update:ground-scatter-brush-radius', value: number): void
   (event: 'update:ground-scatter-brush-shape', value: TerrainScatterBrushShape): void
@@ -1237,8 +1227,6 @@ const {
   groundNoiseStrength,
   groundNoiseMode,
   groundPaintSmoothness,
-  groundPaintLayers,
-  groundPaintSelectedLayerId,
   groundPaintAsset,
   groundPaintSettings,
   groundScatterCategory,
@@ -1483,11 +1471,6 @@ const groundNoiseModeModel = computed({
 const groundPaintSmoothnessModel = computed({
   get: () => groundPaintSmoothness.value,
   set: (value: number) => emit('update:ground-paint-smoothness', Number(value)),
-})
-
-const groundPaintSelectedLayerIdModel = computed<string | null>({
-  get: () => groundPaintSelectedLayerId.value,
-  set: (value) => emit('update:ground-paint-selected-layer-id', value),
 })
 
 const groundPaintAssetModel = computed<ProjectAsset | null>({

@@ -318,8 +318,6 @@ function areTerrainPaintLayersEquivalent(a: TerrainPaintLayerDefinition, b: Terr
 		&& a.rotationDeg === b.rotationDeg
 		&& a.blendMode === b.blendMode
 		&& a.worldSpace === b.worldSpace
-		&& a.enabled === b.enabled
-		&& a.zIndex === b.zIndex
 		&& a.feather === b.feather
 		&& a.tileScale.x === b.tileScale.x
 		&& a.tileScale.y === b.tileScale.y
@@ -3103,6 +3101,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session: PaintSessionState,
 	): Map<string, Map<string, Map<string, Uint8ClampedArray | null>>> {
 		const liveChunkTileMasksByKey = new Map<string, Map<string, Map<string, Uint8ClampedArray | null>>>()
+		let totalLayerCount = 0
+		let totalTileCount = 0
 		session.chunkStates.forEach((chunk) => {
 			const layerMap = new Map<string, Map<string, Uint8ClampedArray | null>>()
 			for (const [layerId, tileMutations] of Object.entries(chunk.v3TileMutations)) {
@@ -3122,6 +3122,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					)
 				}
 				if (tileMap.size) {
+					totalLayerCount += 1
+					totalTileCount += tileMap.size
 					layerMap.set(normalizedLayerId, tileMap)
 				}
 			}
@@ -3145,6 +3147,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundObject || !groundNode || groundNode.id !== session.nodeId || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
+		const liveChunkTileMasksByKey = buildLiveTerrainPaintChunkTileMasks(session)
 		options.onTerrainPaintSurfacePreviewChanged({
 			groundObject,
 			groundNode,
@@ -3152,7 +3155,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				...session.definition,
 				terrainPaint: session.terrainPaint,
 			},
-			liveChunkTileMasksByKey: buildLiveTerrainPaintChunkTileMasks(session),
+			liveChunkTileMasksByKey,
 			previewRevision: session.terrainPaintSurfacePreviewRevision,
 			mode,
 		})
@@ -5120,6 +5123,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function performPaint(event: PointerEvent) {
 		if (!brushMesh.visible) {
+			updateBrush(event)
+		}
+		if (!brushMesh.visible) {
 			return
 		}
 		if (!paintModeEnabled()) {
@@ -5224,10 +5230,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginPaint(event: PointerEvent): boolean {
-		if (!paintModeEnabled()) {
+		const groundNode = getGroundNodeFromScene()
+		const paintEnabled = paintModeEnabled()
+		if (!paintEnabled) {
 			return false
 		}
-		const groundNode = getGroundNodeFromScene()
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 0) {
 			return false
 		}

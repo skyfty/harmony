@@ -515,7 +515,7 @@ function commitTerrainPaintLayerMetadata(nextLayers: TerrainPaintLayerDraft[]): 
     .map((layer) => ({
       id: layer.id,
       textureAssetId: layer.assetId ?? layer.asset?.id ?? '',
-      enabled: layer.enabled !== false,
+      enabled: true,
       zIndex: layer.zIndex,
       ...layer.settings,
     }))
@@ -6097,18 +6097,6 @@ function handleGroundPaintSmoothnessUpdate(value: number) {
   terrainStore.setPaintSmoothness(Number(value))
 }
 
-function handleGroundPaintSelectedLayerIdUpdate(value: string | null) {
-  terrainStore.setPaintSelectedLayerId(value)
-}
-
-function handleAddGroundPaintLayer() {
-  const created = terrainStore.addPaintLayer()
-  if (!created) {
-    return
-  }
-  terrainStore.setGroundPanelTab('paint')
-}
-
 function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
   if (value) {
     activateGroundBuildToolFromPanel('paint')
@@ -6119,15 +6107,6 @@ function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
 
 function handleGroundPaintSettingsUpdate(value: TerrainPaintBrushSettings) {
   terrainStore.setPaintBrushSettings(value)
-  commitTerrainPaintLayerMetadata(paintLayers.value)
-}
-
-function handleGroundPaintActiveLayerUpdate(patch: Partial<Pick<TerrainPaintLayerDraft, 'enabled' | 'zIndex'>>) {
-  const activeLayerId = paintSelectedLayerId.value
-  if (!activeLayerId) {
-    return
-  }
-  terrainStore.updatePaintLayer(activeLayerId, patch)
   commitTerrainPaintLayerMetadata(paintLayers.value)
 }
 
@@ -10080,7 +10059,7 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
     ? payload.dynamicMesh.terrainPaint!.layers.filter((layer) => layer.enabled !== false).length
     : 0
   const forceLiveSurfacePreview = enabledV3LayerCount > 4
-  const useLiveSurfacePreview = payload.mode === 'surface-rebuild' || forceLiveSurfacePreview
+  const useLiveSurfacePreview = payload.mode === 'live' || forceLiveSurfacePreview
   if (useLiveSurfacePreview) {
     syncGroundSurfacePreviewForGround(
       payload.groundObject,
@@ -10098,15 +10077,15 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
     return
   }
   syncGroundSurfacePreviewForGround(
-      payload.groundObject,
-      payload.groundNode,
-      payload.dynamicMesh,
-      groundSurfacePreviewLoaders,
-      () => landformsPreviewLoadToken,
-      {
-        applyToMaterialMap: true,
-      },
-    )
+    payload.groundObject,
+    payload.groundNode,
+    payload.dynamicMesh,
+    groundSurfacePreviewLoaders,
+    () => landformsPreviewLoadToken,
+    {
+      applyToMaterialMap: true,
+    },
+  )
 }
 
 function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {
@@ -12160,8 +12139,6 @@ async function handlePointerDown(event: PointerEvent) {
       }
     }
   }
-
-  
 
   const scatter = handlePointerDownScatter(event, {
     scatterEraseModeActive: scatterEraseModeActive.value,
@@ -18053,8 +18030,6 @@ defineExpose<SceneViewportHandle>({
         :ground-noise-strength="groundNoiseStrength"
         :ground-noise-mode="groundNoiseMode"
         :ground-paint-smoothness="paintSmoothness"
-        :ground-paint-layers="paintLayers"
-        :ground-paint-selected-layer-id="paintSelectedLayerId"
         :ground-paint-asset="paintSelectedAsset"
         :ground-paint-settings="paintBrushSettings"
         :ground-scatter-category="scatterCategory"
@@ -18098,11 +18073,8 @@ defineExpose<SceneViewportHandle>({
           @update:ground-noise-strength="handleGroundNoiseStrengthUpdate"
           @update:ground-noise-mode="handleGroundNoiseModeUpdate"
           @update:ground-paint-smoothness="handleGroundPaintSmoothnessUpdate"
-          @update:ground-paint-selected-layer-id="handleGroundPaintSelectedLayerIdUpdate"
-          @add-ground-paint-layer="handleAddGroundPaintLayer"
           @update:ground-paint-asset="handleGroundPaintAssetUpdate"
           @update:ground-paint-settings="handleGroundPaintSettingsUpdate"
-          @update:ground-paint-active-layer="handleGroundPaintActiveLayerUpdate"
           @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
           @update:ground-scatter-brush-radius="handleGroundScatterBrushRadiusUpdate"
           @update:ground-scatter-brush-shape="handleGroundScatterBrushShapeUpdate"
