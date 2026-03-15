@@ -118,6 +118,7 @@ export type WallEndpointDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  previewAnchorWorld?: THREE.Vector3 | null
   committedRenderSuppressed: boolean
 }
 
@@ -151,6 +152,7 @@ export type WallJointDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  previewAnchorWorld?: THREE.Vector3 | null
   committedRenderSuppressed: boolean
 }
 
@@ -182,6 +184,7 @@ export type WallHeightDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  previewAnchorWorld?: THREE.Vector3 | null
   committedRenderSuppressed: boolean
 }
 
@@ -209,6 +212,7 @@ export type WallCircleCenterDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  previewAnchorWorld?: THREE.Vector3 | null
   committedRenderSuppressed: boolean
 }
 
@@ -238,6 +242,7 @@ export type WallCircleRadiusDragState = {
 
   previewGroup: THREE.Group | null
   previewSignature: string | null
+  previewAnchorWorld?: THREE.Vector3 | null
   committedRenderSuppressed: boolean
 }
 

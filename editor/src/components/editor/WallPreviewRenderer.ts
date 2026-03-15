@@ -129,6 +129,13 @@ export function createWallPreviewRenderer(options: {
     nodeId?: string | null
     previewKey: string
   }) => WallPreviewRenderData
+  syncExactWallPreview?: (params: {
+    container: THREE.Object3D
+    definition: WallDynamicMesh
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
+    previewKey: string
+  }) => void
+  disposeExactWallPreview?: (container: THREE.Object3D | null | undefined) => void
 }): WallPreviewRenderer {
   let needsSync = false
   let signature: string | null = null
@@ -137,7 +144,11 @@ export function createWallPreviewRenderer(options: {
     if (session?.previewGroup) {
       const preview = session.previewGroup
       preview.removeFromParent()
-      disposeWallPreviewGroup(preview)
+      if (options.disposeExactWallPreview) {
+        options.disposeExactWallPreview(preview)
+      } else {
+        disposeWallPreviewGroup(preview)
+      }
       session.previewGroup = null
     }
     signature = null
@@ -191,18 +202,23 @@ export function createWallPreviewRenderer(options: {
       return
     }
 
-    const resolvedRender = options.resolveWallPreviewRenderData
-      ? options.resolveWallPreviewRenderData({
-        definition: build.definition,
-        wallProps: session.wallRenderProps,
-        nodeId: session.nodeId,
-        previewKey: session.nodeId ?? 'wall-build-draft',
-      })
-      : null
+    const previewKey = session.nodeId ?? 'wall-build-draft'
+    const resolvedRender = options.syncExactWallPreview
+      ? null
+      : (options.resolveWallPreviewRenderData
+        ? options.resolveWallPreviewRenderData({
+          definition: build.definition,
+          wallProps: session.wallRenderProps,
+          nodeId: session.nodeId,
+          previewKey,
+        })
+        : null)
 
-    const renderSignature = resolvedRender
-      ? resolvedRender.signatureData
-      : stableSerialize({ wallProps: session.wallRenderProps ?? null })
+    const renderSignature = options.syncExactWallPreview
+      ? stableSerialize({ wallProps: session.wallRenderProps ?? null, previewKey, exact: true })
+      : (resolvedRender
+        ? resolvedRender.signatureData
+        : stableSerialize({ wallProps: session.wallRenderProps ?? null }))
 
     const nextSignature = `${computeWallPreviewSignature(segments, session.dimensions)}|${renderSignature}`
     if (nextSignature === signature) {
@@ -213,26 +229,47 @@ export function createWallPreviewRenderer(options: {
     }
     signature = nextSignature
 
-    if (!session.previewGroup) {
-      const preview = createWallRenderGroup(build.definition, resolvedRender?.assets ?? {}, resolvedRender?.renderOptions ?? {})
-      applyWallPreviewStyling(preview)
-      applyAirWallVisualToWallGroup(preview, Boolean(resolvedRender?.isAirWall))
-      preview.userData.isWallPreview = true
-      session.previewGroup = preview
-      options.rootGroup.add(preview)
-    } else {
-      if (resolvedRender) {
-        session.previewGroup.userData.wallRenderAssets = resolvedRender.assets
+    if (options.syncExactWallPreview) {
+      if (!session.previewGroup) {
+        const preview = new THREE.Group()
+        preview.name = 'WallPreview'
+        preview.userData.isWallPreview = true
+        session.previewGroup = preview
+        options.rootGroup.add(preview)
       }
-      updateWallGroup(session.previewGroup, build.definition, resolvedRender?.renderOptions ?? {})
-      applyWallPreviewStyling(session.previewGroup)
-      applyAirWallVisualToWallGroup(session.previewGroup, Boolean(resolvedRender?.isAirWall))
+      session.previewGroup.position.copy(build.center)
+      session.previewGroup.rotation.set(0, 0, 0)
+      session.previewGroup.scale.set(1, 1, 1)
+      options.syncExactWallPreview({
+        container: session.previewGroup,
+        definition: build.definition,
+        wallProps: session.wallRenderProps,
+        previewKey,
+      })
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)
       }
+    } else {
+      if (!session.previewGroup) {
+        const preview = createWallRenderGroup(build.definition, resolvedRender?.assets ?? {}, resolvedRender?.renderOptions ?? {})
+        applyWallPreviewStyling(preview)
+        applyAirWallVisualToWallGroup(preview, Boolean(resolvedRender?.isAirWall))
+        preview.userData.isWallPreview = true
+        session.previewGroup = preview
+        options.rootGroup.add(preview)
+      } else {
+        if (resolvedRender) {
+          session.previewGroup.userData.wallRenderAssets = resolvedRender.assets
+        }
+        updateWallGroup(session.previewGroup, build.definition, resolvedRender?.renderOptions ?? {})
+        applyWallPreviewStyling(session.previewGroup)
+        applyAirWallVisualToWallGroup(session.previewGroup, Boolean(resolvedRender?.isAirWall))
+        if (!options.rootGroup.children.includes(session.previewGroup)) {
+          options.rootGroup.add(session.previewGroup)
+        }
+      }
+      session.previewGroup!.position.copy(build.center)
     }
-
-    session.previewGroup!.position.copy(build.center)
 
     if (resolvedRender?.hasMissingAssets) {
       needsSync = true

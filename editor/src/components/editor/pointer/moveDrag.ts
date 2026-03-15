@@ -479,6 +479,16 @@ export function handlePointerMoveDrag(
     ctx.beginWallEditDragPreview?.(state.nodeId)
     state.committedRenderSuppressed = true
   }
+  const resolveWallPreviewAnchorWorld = (state: {
+    containerObject: THREE.Object3D
+    previewAnchorWorld?: THREE.Vector3 | null
+  }): THREE.Vector3 => {
+    if (!state.previewAnchorWorld) {
+      state.containerObject.updateMatrixWorld(true)
+      state.previewAnchorWorld = state.containerObject.getWorldPosition(new THREE.Vector3())
+    }
+    return state.previewAnchorWorld
+  }
 
   if (ctx.floorThicknessDragState && event.pointerId === ctx.floorThicknessDragState.pointerId) {
     const state = ctx.floorThicknessDragState
@@ -491,7 +501,6 @@ export function handlePointerMoveDrag(
     }
 
     state.moved = true
-    ensureWallEditDragPreview(state)
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -715,7 +724,11 @@ export function handlePointerMoveDrag(
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
     if (nextSignature !== state.previewSignature) {
       state.previewSignature = nextSignature
-      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(
+        mergedForPreview,
+        state.dimensions,
+        resolveWallPreviewAnchorWorld(state),
+      )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
           previewGroup: state.previewGroup,
@@ -891,7 +904,11 @@ export function handlePointerMoveDrag(
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
     if (nextSignature !== state.previewSignature) {
       state.previewSignature = nextSignature
-      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(
+        mergedForPreview,
+        state.dimensions,
+        resolveWallPreviewAnchorWorld(state),
+      )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
           previewGroup: state.previewGroup,
@@ -1000,7 +1017,11 @@ export function handlePointerMoveDrag(
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
     if (nextSignature !== state.previewSignature) {
       state.previewSignature = nextSignature
-      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(
+        mergedForPreview,
+        state.dimensions,
+        resolveWallPreviewAnchorWorld(state),
+      )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
           previewGroup: state.previewGroup,
@@ -1094,7 +1115,11 @@ export function handlePointerMoveDrag(
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
     if (nextSignature !== state.previewSignature) {
       state.previewSignature = nextSignature
-      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(
+        mergedForPreview,
+        state.dimensions,
+        resolveWallPreviewAnchorWorld(state),
+      )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
           previewGroup: state.previewGroup,
@@ -1270,7 +1295,11 @@ export function handlePointerMoveDrag(
     const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
     if (nextSignature !== state.previewSignature) {
       state.previewSignature = nextSignature
-      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(
+        mergedForPreview,
+        state.dimensions,
+        resolveWallPreviewAnchorWorld(state),
+      )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
           previewGroup: state.previewGroup,

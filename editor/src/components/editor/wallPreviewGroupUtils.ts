@@ -108,6 +108,7 @@ export function computeWallPreviewSignature(
 export function buildWallPreviewDynamicMeshFromWorldSegments(
   segments: WallWorldSegment[],
   dimensions: { height: number; width: number; thickness: number },
+  centerOverride?: THREE.Vector3 | null,
 ): { center: THREE.Vector3; definition: WallDynamicMesh } | null {
   if (!segments.length) {
     return null
@@ -127,7 +128,9 @@ export function buildWallPreviewDynamicMeshFromWorldSegments(
     return null
   }
 
-  const center = new THREE.Vector3((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, (min.z + max.z) * 0.5)
+  const center = centerOverride
+    ? centerOverride.clone()
+    : new THREE.Vector3((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, (min.z + max.z) * 0.5)
 
   // Convert world segments to local-space WallChain polylines.
   // Split at discontinuities (gap between seg[i].end and seg[i+1].start).

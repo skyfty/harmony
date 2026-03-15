@@ -93,11 +93,20 @@ export function createWallBuildTool(options: {
     nodeId?: string | null
     previewKey: string
   }) => WallPreviewRenderData
+  syncExactWallPreview?: (params: {
+    container: THREE.Object3D
+    definition: WallDynamicMesh
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
+    previewKey: string
+  }) => void
+  disposeExactWallPreview?: (container: THREE.Object3D | null | undefined) => void
 }) : WallBuildToolHandle {
   const previewRenderer = createWallPreviewRenderer({
     rootGroup: options.rootGroup,
     normalizeWallDimensionsForViewport: options.normalizeWallDimensionsForViewport,
     resolveWallPreviewRenderData: options.resolveWallPreviewRenderData,
+    syncExactWallPreview: options.syncExactWallPreview,
+    disposeExactWallPreview: options.disposeExactWallPreview,
   })
 
   const groundPointerHelper = new THREE.Vector3()
