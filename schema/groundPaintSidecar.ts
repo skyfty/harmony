@@ -1,8 +1,6 @@
 import {
-  clampTerrainPaintSettings,
   normalizeGroundSurfaceChunkTextureMap,
   type GroundSurfaceChunkTextureMap,
-  type TerrainPaintSettings,
 } from './index'
 
 export const GROUND_PAINT_SIDECAR_FILENAME = 'ground-paint.bin'
@@ -16,14 +14,12 @@ const STRING_DECODER = new TextDecoder()
 
 export type GroundPaintSidecarPayload = {
   groundNodeId: string
-  terrainPaint: TerrainPaintSettings | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
 }
 
 function normalizePayload(payload: GroundPaintSidecarPayload): GroundPaintSidecarPayload {
   return {
     groundNodeId: typeof payload.groundNodeId === 'string' ? payload.groundNodeId.trim() : '',
-    terrainPaint: payload.terrainPaint ? clampTerrainPaintSettings(payload.terrainPaint) : null,
     groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(payload.groundSurfaceChunks),
   }
 }
@@ -33,8 +29,9 @@ export function serializeGroundPaintSidecar(rawPayload: GroundPaintSidecarPayloa
   if (!payload.groundNodeId) {
     throw new Error('groundNodeId is required for ground paint sidecar')
   }
-  if (!payload.terrainPaint) {
-    throw new Error('terrainPaint is required for ground paint sidecar')
+  const hasGroundSurfaceChunks = Boolean(payload.groundSurfaceChunks && Object.keys(payload.groundSurfaceChunks).length > 0)
+  if (!hasGroundSurfaceChunks) {
+    throw new Error('ground paint sidecar requires groundSurfaceChunks')
   }
 
   const bodyBytes = STRING_ENCODER.encode(JSON.stringify(payload))
@@ -67,7 +64,8 @@ export function deserializeGroundPaintSidecar(buffer: ArrayBuffer): GroundPaintS
   const payloadBytes = new Uint8Array(buffer, GROUND_PAINT_SIDECAR_HEADER_BYTES, byteLength)
   const parsed = JSON.parse(STRING_DECODER.decode(payloadBytes)) as GroundPaintSidecarPayload
   const normalized = normalizePayload(parsed)
-  if (!normalized.groundNodeId || !normalized.terrainPaint) {
+  const hasGroundSurfaceChunks = Boolean(normalized.groundSurfaceChunks && Object.keys(normalized.groundSurfaceChunks).length > 0)
+  if (!normalized.groundNodeId || !hasGroundSurfaceChunks) {
     throw new Error('Invalid ground paint sidecar payload')
   }
   return normalized

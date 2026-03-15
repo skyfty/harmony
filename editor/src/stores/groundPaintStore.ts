@@ -4,14 +4,9 @@ import type {
   GroundSurfaceChunkTextureRef,
   GroundSurfaceChunkTextureMap,
   SceneNode,
-  TerrainPaintMaskTileRef,
-  TerrainPaintSettings,
 } from '@schema'
 import {
-  cloneTerrainPaintSettings,
   deserializeGroundPaintSidecar,
-  formatTerrainPaintChunkKey,
-  formatTerrainPaintTileKey,
   normalizeGroundSurfaceChunkTextureMap,
   serializeGroundPaintSidecar,
   type GroundPaintSidecarPayload,
@@ -20,7 +15,6 @@ import {
 type GroundPaintRuntimeState = {
   sceneId: string
   nodeId: string
-  terrainPaint: TerrainPaintSettings | null
   groundSurfaceChunks: GroundSurfaceChunkTextureMap | null
 }
 
@@ -42,29 +36,10 @@ function ensureRuntimeState(sceneId: string, nodeId: string): GroundPaintRuntime
   const created: GroundPaintRuntimeState = {
     sceneId,
     nodeId,
-    terrainPaint: null,
     groundSurfaceChunks: null,
   }
   runtimeGroundPaints.set(sceneId, created)
   return created
-}
-
-function createEmptyTerrainPaintSettings(): TerrainPaintSettings {
-  return cloneTerrainPaintSettings({
-    version: 3,
-    tileResolution: 128,
-    tileWorldSize: 8,
-    layers: [],
-    chunks: {},
-  })
-}
-
-function ensureTerrainPaintState(sceneId: string, nodeId: string): TerrainPaintSettings {
-  const state = ensureRuntimeState(sceneId, nodeId)
-  if (!state.terrainPaint) {
-    state.terrainPaint = createEmptyTerrainPaintSettings()
-  }
-  return state.terrainPaint
 }
 
 function replaceRuntimeState(sceneId: string, groundNode: SceneNode | null, payload: GroundPaintSidecarPayload | null): void {
@@ -74,7 +49,6 @@ function replaceRuntimeState(sceneId: string, groundNode: SceneNode | null, payl
     return
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
-  state.terrainPaint = payload?.terrainPaint ? cloneTerrainPaintSettings(payload.terrainPaint) : null
   state.groundSurfaceChunks = normalizeGroundSurfaceChunkTextureMap(payload?.groundSurfaceChunks)
 }
 
@@ -86,13 +60,11 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundPain
   const state = ensureRuntimeState(sceneId, groundNode.id)
   const groundSurfaceChunks = normalizeGroundSurfaceChunkTextureMap(state.groundSurfaceChunks)
   const hasGroundSurfaceChunks = Object.keys(groundSurfaceChunks).length > 0
-  const terrainPaint = state.terrainPaint ?? (hasGroundSurfaceChunks ? createEmptyTerrainPaintSettings() : null)
-  if (!terrainPaint && !hasGroundSurfaceChunks) {
+  if (!hasGroundSurfaceChunks) {
     return null
   }
   return {
     groundNodeId: groundNode.id,
-    terrainPaint,
     groundSurfaceChunks: hasGroundSurfaceChunks ? groundSurfaceChunks : null,
   }
 }
@@ -108,7 +80,7 @@ export function attachGroundPaintRuntimeToNode(
   }
   groundNode.dynamicMesh = {
     ...definition,
-    terrainPaint: state.terrainPaint ? cloneTerrainPaintSettings(state.terrainPaint) : null,
+    terrainPaint: null,
     groundSurfaceChunks: normalizeGroundSurfaceChunkTextureMap(state.groundSurfaceChunks),
   }
   return groundNode
@@ -133,72 +105,9 @@ export const useGroundPaintStore = defineStore('groundPaint', {
     getSceneGroundPaint(sceneId: string): GroundPaintRuntimeState | null {
       return runtimeGroundPaints.get(sceneId) ?? null
     },
-    replaceTerrainPaint(sceneId: string, nodeId: string, terrainPaint: TerrainPaintSettings | null): GroundPaintRuntimeState {
-      const state = ensureRuntimeState(sceneId, nodeId)
-      state.terrainPaint = terrainPaint ? cloneTerrainPaintSettings(terrainPaint) : null
-      return state
-    },
     replaceGroundSurfaceChunks(sceneId: string, nodeId: string, groundSurfaceChunks: GroundSurfaceChunkTextureMap | null): GroundPaintRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
       state.groundSurfaceChunks = normalizeGroundSurfaceChunkTextureMap(groundSurfaceChunks)
-      return state
-    },
-    ensureTerrainPaint(sceneId: string, nodeId: string): TerrainPaintSettings {
-      return ensureTerrainPaintState(sceneId, nodeId)
-    },
-    upsertTerrainPaintMaskTile(
-      sceneId: string,
-      nodeId: string,
-      chunkKey: string,
-      layerId: string,
-      tileKey: string,
-      tileRef: TerrainPaintMaskTileRef,
-    ): GroundPaintRuntimeState {
-      const state = ensureRuntimeState(sceneId, nodeId)
-      const terrainPaint = ensureTerrainPaintState(sceneId, nodeId)
-      const normalizedChunkKey = chunkKey.trim() || formatTerrainPaintChunkKey(0, 0)
-      const normalizedLayerId = layerId.trim()
-      const normalizedTileKey = tileKey.trim() || formatTerrainPaintTileKey(0, 0)
-      if (!normalizedLayerId) {
-        return state
-      }
-      const nextChunkState = terrainPaint.chunks[normalizedChunkKey] ?? { layers: {}, revision: 0 }
-      const nextLayerState = nextChunkState.layers[normalizedLayerId] ?? { tiles: {} }
-      nextLayerState.tiles[normalizedTileKey] = {
-        logicalId: tileRef.logicalId.trim(),
-        revision: Math.max(0, Math.trunc(tileRef.revision)),
-      }
-      nextChunkState.layers[normalizedLayerId] = nextLayerState
-      nextChunkState.revision = Math.max(nextChunkState.revision, tileRef.revision)
-      terrainPaint.chunks[normalizedChunkKey] = nextChunkState
-      state.terrainPaint = cloneTerrainPaintSettings(terrainPaint)
-      return state
-    },
-    removeTerrainPaintMaskTile(
-      sceneId: string,
-      nodeId: string,
-      chunkKey: string,
-      layerId: string,
-      tileKey: string,
-    ): GroundPaintRuntimeState {
-      const state = ensureRuntimeState(sceneId, nodeId)
-      const terrainPaint = state.terrainPaint ? cloneTerrainPaintSettings(state.terrainPaint) : createEmptyTerrainPaintSettings()
-      const normalizedChunkKey = chunkKey.trim()
-      const normalizedLayerId = layerId.trim()
-      const normalizedTileKey = tileKey.trim()
-      const chunkState = normalizedChunkKey ? terrainPaint.chunks[normalizedChunkKey] : null
-      const layerState = chunkState && normalizedLayerId ? chunkState.layers[normalizedLayerId] : null
-      if (!chunkState || !layerState || !normalizedTileKey) {
-        return state
-      }
-      delete layerState.tiles[normalizedTileKey]
-      if (!Object.keys(layerState.tiles).length) {
-        delete chunkState.layers[normalizedLayerId]
-      }
-      if (!Object.keys(chunkState.layers).length) {
-        delete terrainPaint.chunks[normalizedChunkKey]
-      }
-      state.terrainPaint = terrainPaint
       return state
     },
     replaceGroundSurfaceChunk(

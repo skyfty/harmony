@@ -262,6 +262,7 @@ export type FloorThicknessDragState = {
 
   startThickness: number
   thickness: number
+  committedRenderSuppressed: boolean
 
   containerObject: THREE.Object3D
 }

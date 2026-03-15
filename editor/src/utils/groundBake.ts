@@ -1,18 +1,10 @@
 import {
   resolveEnabledComponentState,
-  decodeTerrainPaintMaskTileToData,
-  formatTerrainPaintTileKey,
   parseTerrainPaintChunkKey,
   resolveTerrainPaintChunkBounds,
-  resolveTerrainPaintTilesPerAxis,
-  sampleTerrainPaintMaskTileValue,
   type GroundDynamicMesh,
   type SceneNode,
-  type TerrainPaintBlendMode,
-  type TerrainPaintLayerDefinition,
-  type TerrainPaintSettings,
 } from '@schema'
-import { resolveGroundChunkCells } from '@schema/groundMesh'
 import {
   LANDFORMS_COMPONENT_TYPE,
   clampLandformsComponentProps,
@@ -39,22 +31,6 @@ type ImageDataSource = {
 type LoadedBakedImage = {
   source: CanvasImageSource
   imageData: ImageDataSource
-}
-
-type ChunkBounds = {
-  minX: number
-  minZ: number
-  width: number
-  depth: number
-}
-
-type PreparedCurrentPaintChunk = {
-  bounds: ChunkBounds
-  tileWidth: number
-  tileDepth: number
-  tilesPerAxisX: number
-  tilesPerAxisZ: number
-  layerTiles: Map<string, Map<string, Uint8ClampedArray | null>>
 }
 
 export type BakedGroundTextureResult = {
@@ -85,14 +61,6 @@ function clamp01(value: number): number {
     return 1
   }
   return value
-}
-
-function repeat01(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0
-  }
-  const wrapped = value - Math.floor(value)
-  return wrapped < 0 ? wrapped + 1 : wrapped
 }
 
 function createCompositionCanvas(width: number, height: number): { canvas: CanvasLike; context: Canvas2DContext } | null {
@@ -266,54 +234,6 @@ async function loadImageFromBlob(blob: Blob): Promise<LoadedBakedImage | null> {
   return { source, imageData }
 }
 
-function sampleImageData(image: ImageDataSource, u: number, v: number, wrap: 'repeat' | 'clamp'): [number, number, number, number] {
-  if (!(image.width > 0) || !(image.height > 0)) {
-    return [1, 1, 1, 1]
-  }
-  const normalizedU = wrap === 'repeat' ? repeat01(u) : clamp01(u)
-  const normalizedV = wrap === 'repeat' ? repeat01(v) : clamp01(v)
-  const x = normalizedU * Math.max(0, image.width - 1)
-  const y = normalizedV * Math.max(0, image.height - 1)
-  const x0 = Math.floor(x)
-  const y0 = Math.floor(y)
-  const x1 = Math.min(image.width - 1, x0 + 1)
-  const y1 = Math.min(image.height - 1, y0 + 1)
-  const tx = x - x0
-  const ty = y - y0
-  const read = (sampleX: number, sampleY: number): [number, number, number, number] => {
-    const offset = (sampleY * image.width + sampleX) * 4
-    return [
-      (image.data[offset] ?? 0) / 255,
-      (image.data[offset + 1] ?? 0) / 255,
-      (image.data[offset + 2] ?? 0) / 255,
-      (image.data[offset + 3] ?? 0) / 255,
-    ]
-  }
-  const c00 = read(x0, y0)
-  const c10 = read(x1, y0)
-  const c01 = read(x0, y1)
-  const c11 = read(x1, y1)
-  const mix = (a: number, b: number, factor: number) => a + (b - a) * factor
-  const top: [number, number, number, number] = [
-    mix(c00[0], c10[0], tx),
-    mix(c00[1], c10[1], tx),
-    mix(c00[2], c10[2], tx),
-    mix(c00[3], c10[3], tx),
-  ]
-  const bottom: [number, number, number, number] = [
-    mix(c01[0], c11[0], tx),
-    mix(c01[1], c11[1], tx),
-    mix(c01[2], c11[2], tx),
-    mix(c01[3], c11[3], tx),
-  ]
-  return [
-    mix(top[0], bottom[0], ty),
-    mix(top[1], bottom[1], ty),
-    mix(top[2], bottom[2], ty),
-    mix(top[3], bottom[3], ty),
-  ]
-}
-
 function resolveLayerCompositeOperation(mode: LandformsBlendMode): GlobalCompositeOperation {
   switch (mode) {
     case 'multiply':
@@ -438,86 +358,25 @@ async function renderLandforms(
   return true
 }
 
-function resolvePaintChunkBounds(
-  definition: GroundDynamicMesh,
-  chunkCells: number,
-  chunkRow: number,
-  chunkColumn: number,
-): ChunkBounds | null {
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const startColumn = chunkColumn * Math.max(1, chunkCells)
-  const startRow = chunkRow * Math.max(1, chunkCells)
-  const effectiveColumns = Math.max(0, Math.min(chunkCells, Math.max(0, definition.columns - startColumn)))
-  const effectiveRows = Math.max(0, Math.min(chunkCells, Math.max(0, definition.rows - startRow)))
-  const width = effectiveColumns * cellSize
-  const depth = effectiveRows * cellSize
-  if (!(width > 0) || !(depth > 0)) {
-    return null
-  }
-  const minX = -halfWidth + startColumn * cellSize
-  const minZ = -halfDepth + startRow * cellSize
-  return { minX, minZ, width, depth }
-}
-
-function terrainPaintBlendColor(
-  baseColor: [number, number, number],
-  layerColor: [number, number, number],
-  blendMode: TerrainPaintBlendMode | null | undefined,
-): [number, number, number] {
-  const overlayChannel = (base: number, layer: number): number => {
-    if (base < 0.5) {
-      return 2 * base * layer
-    }
-    return 1 - 2 * (1 - base) * (1 - layer)
-  }
-  switch (blendMode) {
-    case 'multiply':
-      return [baseColor[0] * layerColor[0], baseColor[1] * layerColor[1], baseColor[2] * layerColor[2]]
-    case 'screen':
-      return [
-        1 - (1 - baseColor[0]) * (1 - layerColor[0]),
-        1 - (1 - baseColor[1]) * (1 - layerColor[1]),
-        1 - (1 - baseColor[2]) * (1 - layerColor[2]),
-      ]
-    case 'overlay':
-      return [
-        overlayChannel(baseColor[0], layerColor[0]),
-        overlayChannel(baseColor[1], layerColor[1]),
-        overlayChannel(baseColor[2], layerColor[2]),
-      ]
-    default:
-      return layerColor
-  }
-}
-
-function transformTerrainPaintUv(
-  meshUv: [number, number],
-  worldUv: [number, number],
-  layer: Pick<TerrainPaintLayerDefinition, 'worldSpace' | 'rotationDeg' | 'tileScale' | 'offset'>,
-): [number, number] {
-  const baseUv = layer.worldSpace ? worldUv : meshUv
-  const rotation = (normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180
-  const s = Math.sin(rotation)
-  const c = Math.cos(rotation)
-  const centeredX = baseUv[0] - 0.5
-  const centeredY = baseUv[1] - 0.5
-  const rotatedX = c * centeredX - s * centeredY
-  const rotatedY = s * centeredX + c * centeredY
-  return [
-    rotatedX * normalizeFinite(layer.tileScale.x, 1) + 0.5 + normalizeFinite(layer.offset.x, 0),
-    rotatedY * normalizeFinite(layer.tileScale.y, 1) + 0.5 + normalizeFinite(layer.offset.y, 0),
-  ]
-}
-
-async function prepareCurrentTerrainPaintChunks(
+async function renderGroundSurfaceChunks(
   scene: StoredSceneDocument,
   definition: GroundDynamicMesh,
-  settings: TerrainPaintSettings,
-): Promise<Map<string, PreparedCurrentPaintChunk>> {
-  const prepared = new Map<string, PreparedCurrentPaintChunk>()
-  for (const [chunkKey, chunkState] of Object.entries(settings.chunks ?? {})) {
+  context: Canvas2DContext,
+  width: number,
+  height: number,
+): Promise<boolean> {
+  const chunkEntries = Object.entries(definition.groundSurfaceChunks ?? {})
+    .filter(([, chunkRef]) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length)
+  if (!chunkEntries.length) {
+    return false
+  }
+  const groundWidth = Math.max(1e-6, normalizeDimension(definition.width))
+  const groundDepth = Math.max(1e-6, normalizeDimension(definition.depth))
+  const halfWidth = groundWidth * 0.5
+  const halfDepth = groundDepth * 0.5
+  let drewAny = false
+
+  for (const [chunkKey, chunkRef] of chunkEntries) {
     const parts = parseTerrainPaintChunkKey(chunkKey)
     if (!parts) {
       continue
@@ -526,146 +385,27 @@ async function prepareCurrentTerrainPaintChunks(
     if (!bounds) {
       continue
     }
-    const tilesPerAxisX = resolveTerrainPaintTilesPerAxis(bounds.width, settings.tileWorldSize)
-    const tilesPerAxisZ = resolveTerrainPaintTilesPerAxis(bounds.depth, settings.tileWorldSize)
-    const layerTiles = new Map<string, Map<string, Uint8ClampedArray | null>>()
-    for (const layer of settings.layers.filter((entry) => entry.enabled !== false)) {
-      const tileRefs = chunkState?.layers?.[layer.id]?.tiles ?? {}
-      const tileMap = new Map<string, Uint8ClampedArray | null>()
-      for (const [tileKey, tileRef] of Object.entries(tileRefs)) {
-        const logicalId = typeof tileRef?.logicalId === 'string' ? tileRef.logicalId.trim() : ''
-        if (!logicalId) {
-          continue
-        }
-        const blob = await resolveSceneAssetBlob(scene, logicalId)
-        if (!blob) {
-          tileMap.set(tileKey, null)
-          continue
-        }
-        try {
-          tileMap.set(tileKey, await decodeTerrainPaintMaskTileToData(blob, settings.tileResolution))
-        } catch (_error) {
-          tileMap.set(tileKey, null)
-        }
-      }
-      if (tileMap.size) {
-        layerTiles.set(layer.id, tileMap)
-      }
-    }
-    if (!layerTiles.size) {
+    const textureAssetId = chunkRef?.textureAssetId?.trim() ?? ''
+    if (!textureAssetId) {
       continue
     }
-    prepared.set(chunkKey, {
-      bounds,
-      tileWidth: bounds.width / Math.max(1, tilesPerAxisX),
-      tileDepth: bounds.depth / Math.max(1, tilesPerAxisZ),
-      tilesPerAxisX,
-      tilesPerAxisZ,
-      layerTiles,
-    })
-  }
-  return prepared
-}
-
-async function renderTerrainPaint(
-  scene: StoredSceneDocument,
-  definition: GroundDynamicMesh,
-  context: Canvas2DContext,
-  width: number,
-  height: number,
-): Promise<boolean> {
-  const currentSettings = (definition as any)?.terrainPaint as TerrainPaintSettings | null | undefined
-  if (currentSettings && currentSettings.version === 3 && Array.isArray(currentSettings.layers) && currentSettings.layers.length) {
-    const sortedLayers = [...currentSettings.layers]
-      .filter((layer) => layer.enabled !== false)
-      .sort((left, right) => left.zIndex - right.zIndex)
-    const layerImages = new Map<string, LoadedBakedImage>()
-    for (const layer of sortedLayers) {
-      const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
-      if (!assetId || layerImages.has(assetId)) {
-        continue
-      }
-      const blob = await resolveSceneAssetBlob(scene, assetId)
-      if (!blob) {
-        continue
-      }
-      const loaded = await loadImageFromBlob(blob)
-      if (loaded) {
-        layerImages.set(assetId, loaded)
-      }
+    const blob = await resolveSceneAssetBlob(scene, textureAssetId)
+    if (!blob) {
+      continue
     }
-    const preparedChunks = await prepareCurrentTerrainPaintChunks(scene, definition, currentSettings)
-    if (preparedChunks.size && layerImages.size) {
-      const output = context.getImageData(0, 0, width, height)
-      const outputData = output.data
-      const groundWidth = Math.max(1e-6, normalizeDimension(definition.width))
-      const groundDepth = Math.max(1e-6, normalizeDimension(definition.depth))
-      const halfWidth = groundWidth * 0.5
-      const halfDepth = groundDepth * 0.5
-      for (const chunk of preparedChunks.values()) {
-        const startX = Math.max(0, Math.floor(((chunk.bounds.minX + halfWidth) / groundWidth) * width))
-        const endX = Math.min(width, Math.ceil(((chunk.bounds.minX + chunk.bounds.width + halfWidth) / groundWidth) * width))
-        const startY = Math.max(0, Math.floor(((chunk.bounds.minZ + halfDepth) / groundDepth) * height))
-        const endY = Math.min(height, Math.ceil(((chunk.bounds.minZ + chunk.bounds.depth + halfDepth) / groundDepth) * height))
-        if (startX >= endX || startY >= endY) {
-          continue
-        }
-        for (let y = startY; y < endY; y += 1) {
-          const worldZ = ((y + 0.5) / height) * groundDepth - halfDepth
-          const meshV = clamp01((worldZ - chunk.bounds.minZ) / Math.max(1e-6, chunk.bounds.depth))
-          const groundV = clamp01((worldZ + halfDepth) / groundDepth)
-          for (let x = startX; x < endX; x += 1) {
-            const worldX = ((x + 0.5) / width) * groundWidth - halfWidth
-            const meshU = clamp01((worldX - chunk.bounds.minX) / Math.max(1e-6, chunk.bounds.width))
-            const groundU = clamp01((worldX + halfWidth) / groundWidth)
-            const tileColumn = Math.min(chunk.tilesPerAxisX - 1, Math.max(0, Math.floor((worldX - chunk.bounds.minX) / Math.max(chunk.tileWidth, 1e-6))))
-            const tileRow = Math.min(chunk.tilesPerAxisZ - 1, Math.max(0, Math.floor((worldZ - chunk.bounds.minZ) / Math.max(chunk.tileDepth, 1e-6))))
-            const tileKey = formatTerrainPaintTileKey(tileRow, tileColumn)
-            const tileU = clamp01(((worldX - chunk.bounds.minX) - tileColumn * chunk.tileWidth) / Math.max(chunk.tileWidth, 1e-6))
-            const tileV = clamp01(((worldZ - chunk.bounds.minZ) - tileRow * chunk.tileDepth) / Math.max(chunk.tileDepth, 1e-6))
-            const pixelOffset = (y * width + x) * 4
-            let color: [number, number, number] = [
-              (outputData[pixelOffset] ?? 255) / 255,
-              (outputData[pixelOffset + 1] ?? 255) / 255,
-              (outputData[pixelOffset + 2] ?? 255) / 255,
-            ]
-            for (const layer of sortedLayers) {
-              const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
-              const texture = assetId ? layerImages.get(assetId) : null
-              if (!texture) {
-                continue
-              }
-              const tileMask = chunk.layerTiles.get(layer.id)?.get(tileKey) ?? null
-              const weight = sampleTerrainPaintMaskTileValue(tileMask, currentSettings.tileResolution, tileU, tileV)
-              if (weight <= 0) {
-                continue
-              }
-              const layerUv = transformTerrainPaintUv([meshU, meshV], [groundU, groundV], layer)
-              const sample = sampleImageData(texture.imageData, layerUv[0], layerUv[1], 'repeat')
-              const blended = terrainPaintBlendColor(color, [sample[0], sample[1], sample[2]], layer.blendMode)
-              const layerAlpha = clamp01(normalizeFinite(layer.opacity, 1)) * sample[3] * weight
-              if (layerAlpha <= 0) {
-                continue
-              }
-              color = [
-                blended[0] * layerAlpha + color[0] * (1 - layerAlpha),
-                blended[1] * layerAlpha + color[1] * (1 - layerAlpha),
-                blended[2] * layerAlpha + color[2] * (1 - layerAlpha),
-              ]
-            }
-            outputData[pixelOffset] = Math.round(clamp01(color[0]) * 255)
-            outputData[pixelOffset + 1] = Math.round(clamp01(color[1]) * 255)
-            outputData[pixelOffset + 2] = Math.round(clamp01(color[2]) * 255)
-            outputData[pixelOffset + 3] = 255
-          }
-        }
-      }
-      context.putImageData(output, 0, 0)
-      return true
+    const loaded = await loadImageFromBlob(blob)
+    if (!loaded) {
+      continue
     }
+    const drawX = Math.floor(((bounds.minX + halfWidth) / groundWidth) * width)
+    const drawY = Math.floor(((bounds.minZ + halfDepth) / groundDepth) * height)
+    const drawWidth = Math.max(1, Math.ceil((bounds.width / groundWidth) * width))
+    const drawHeight = Math.max(1, Math.ceil((bounds.depth / groundDepth) * height))
+    context.drawImage(loaded.source, drawX, drawY, drawWidth, drawHeight)
+    drewAny = true
   }
 
-  return false
+  return drewAny
 }
 
 async function canvasToBlob(canvas: CanvasLike): Promise<Blob | null> {
@@ -690,17 +430,7 @@ function hasLandformsContent(groundNode: SceneNode): boolean {
 }
 
 function hasTerrainPaintContent(definition: GroundDynamicMesh): boolean {
-  const currentSettings = (definition as any)?.terrainPaint as TerrainPaintSettings | null | undefined
-  if (currentSettings && currentSettings.version === 3) {
-    if (Array.isArray(currentSettings.layers) && currentSettings.layers.some((layer) => layer.enabled !== false && typeof layer.textureAssetId === 'string' && layer.textureAssetId.trim().length)) {
-      return Object.values(currentSettings.chunks ?? {}).some((chunk) => {
-        return Object.values(chunk?.layers ?? {}).some((layerState) => {
-          return Object.values(layerState?.tiles ?? {}).some((tile) => typeof tile?.logicalId === 'string' && tile.logicalId.trim().length)
-        })
-      })
-    }
-  }
-  return false
+  return Object.values(definition.groundSurfaceChunks ?? {}).some((chunkRef) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length)
 }
 
 export async function bakeGroundSurfaceTexture(
@@ -725,7 +455,7 @@ export async function bakeGroundSurfaceTexture(
   const { canvas, context } = composition
   await renderBaseTexture(context, definition, size.width, size.height)
   await renderLandforms(scene, groundNode, context, size.width, size.height)
-  await renderTerrainPaint(scene, definition, context, size.width, size.height)
+  await renderGroundSurfaceChunks(scene, definition, context, size.width, size.height)
   const blob = await canvasToBlob(canvas)
   if (!blob) {
     return null

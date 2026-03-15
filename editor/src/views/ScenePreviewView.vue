@@ -8083,7 +8083,10 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 	}
 	targets.forEach((target) => {
 		if (hasWallInstancedBindings(target)) {
-			removeVehicleInstance(target.userData?.nodeId as string | undefined)
+			const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
+			if (nodeId) {
+				removeVehicleInstance(nodeId)
+			}
 			syncWallInstancedBindingsForObject(target)
 			return
 		}

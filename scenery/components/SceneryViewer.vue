@@ -9146,6 +9146,7 @@ function hydrateGroundSidecarFromPackage(
   const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';
   if (!paintSidecarPath) {
     definition.terrainPaint = null;
+    definition.groundSurfaceChunks = null;
   } else {
     const paintSidecarBytes = pkg.files[paintSidecarPath];
     if (!paintSidecarBytes) {
@@ -9156,7 +9157,8 @@ function hydrateGroundSidecarFromPackage(
       paintSidecarBytes.byteOffset + paintSidecarBytes.byteLength,
     );
     const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
-    definition.terrainPaint = paintPayload.terrainPaint;
+    definition.terrainPaint = null;
+    definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
   }
 
   return document;

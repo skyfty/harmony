@@ -64,17 +64,12 @@ import type {
   GroundGenerationMode,
   GroundGenerationSettings,
   GroundSculptOperation,
-  TerrainPaintSettings,
   RoadDynamicMesh,
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
   WallDynamicMesh,
 } from '@schema/index'
 import {
-  TERRAIN_PAINT_MAX_LAYER_COUNT,
-  TERRAIN_PAINT_V3_VERSION,
-  clampTerrainPaintSettings,
-  cloneTerrainPaintLayerStyle,
   createGradientBackgroundDome,
   disposeGradientBackgroundDome,
   disposeSkyCubeTexture,
@@ -98,7 +93,6 @@ import {
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
-import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -206,7 +200,7 @@ import { LANDFORMS_COMPONENT_TYPE, clampLandformsComponentProps, type LandformsC
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
-import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings, type TerrainPaintLayerDraft } from '@/stores/terrainStore'
+import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -428,8 +422,6 @@ const {
   brushShape,
   brushOperation,
   groundPanelTab,
-  paintLayers,
-  paintSelectedLayerId,
   paintSelectedAsset,
   paintSmoothness,
   paintBrushSettings,
@@ -456,88 +448,6 @@ const groundDefinition = computed(() => {
   }
   return ground.dynamicMesh as GroundDynamicMesh
 })
-
-function createEmptyTerrainPaintSettings(): TerrainPaintSettings {
-  return clampTerrainPaintSettings({
-    version: TERRAIN_PAINT_V3_VERSION,
-    layers: [],
-    chunks: {},
-  })
-}
-
-function cloneTerrainPaintSettingsForEditing(groundNode: SceneNode | null): TerrainPaintSettings {
-  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-    return createEmptyTerrainPaintSettings()
-  }
-  const runtimeState = sceneStore.currentSceneId ? useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId) : null
-  const source = runtimeState?.nodeId === groundNode.id
-    ? runtimeState.terrainPaint
-    : ((groundNode.dynamicMesh as GroundDynamicMesh).terrainPaint ?? null)
-  if (!source || source.version !== TERRAIN_PAINT_V3_VERSION) {
-    return createEmptyTerrainPaintSettings()
-  }
-  return clampTerrainPaintSettings(source)
-}
-
-function buildTerrainPaintDraftsFromGround(groundNode: SceneNode | null): TerrainPaintLayerDraft[] {
-  const terrainPaintSettings = cloneTerrainPaintSettingsForEditing(groundNode)
-  return terrainPaintSettings.layers
-    .slice()
-    .sort((left, right) => left.zIndex - right.zIndex)
-    .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
-    .map((layer) => {
-      const assetId = typeof layer.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
-      return {
-        id: layer.id,
-        slotIndex: layer.zIndex,
-        zIndex: layer.zIndex,
-        enabled: layer.enabled !== false,
-        assetId: assetId || null,
-        asset: assetId ? (sceneStore.getAsset(assetId) ?? null) : null,
-        settings: {
-          ...cloneTerrainPaintLayerStyle(layer),
-          feather: typeof layer.feather === 'number' ? layer.feather : 0,
-        },
-      }
-    })
-}
-
-function commitTerrainPaintLayerMetadata(nextLayers: TerrainPaintLayerDraft[]): void {
-  const groundNode = getGroundNodeFromStore()
-  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-    return
-  }
-  const nextTerrainPaintSettings = cloneTerrainPaintSettingsForEditing(groundNode)
-  nextTerrainPaintSettings.layers = nextLayers
-    .slice()
-    .sort((left, right) => left.zIndex - right.zIndex)
-    .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
-    .map((layer) => ({
-      id: layer.id,
-      textureAssetId: layer.assetId ?? layer.asset?.id ?? '',
-      enabled: true,
-      zIndex: layer.zIndex,
-      ...layer.settings,
-    }))
-  const hasPersistedLayer = nextTerrainPaintSettings.layers.some((layer) => layer.textureAssetId.length > 0)
-  if (!hasPersistedLayer && Object.keys(nextTerrainPaintSettings.chunks ?? {}).length === 0) {
-    sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-      terrainPaint: null,
-    })
-    return
-  }
-  sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-    terrainPaint: nextTerrainPaintSettings,
-  })
-}
-
-watch(
-  () => [sceneStore.currentSceneId, sceneNodePropertyVersion.value, sceneStore.groundNode?.id] as const,
-  () => {
-    terrainStore.replacePaintLayers(buildTerrainPaintDraftsFromGround(getGroundNodeFromStore()))
-  },
-  { immediate: true },
-)
 
 const groundNoiseStrength = ref(1)
 const groundNoiseMode = ref<GroundGenerationMode>('perlin')
@@ -1877,6 +1787,9 @@ function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode 
     return null
   }
   const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node) {
+    return null
+  }
   if (!isWaterSurfaceNode(node)) {
     return null
   }
@@ -2439,7 +2352,12 @@ const wallEraseHoverPresenter = createWallEraseHoverPresenter({
   instancedHoverMaterial,
   instancedHoverRestoreMaterial,
   instancedOutlineSync: {
-    syncProxyMatrixFromSlot: (proxy, mesh, index) => instancedOutlineManager.syncProxyMatrixFromSlot(proxy, mesh, index),
+    syncProxyMatrixFromSlot: (proxy, mesh, index) => {
+      if (!(proxy as { isMesh?: boolean }).isMesh) {
+        return
+      }
+      instancedOutlineManager.syncProxyMatrixFromSlot(proxy as THREE.Mesh, mesh, index)
+    },
   },
 })
 const {
@@ -2948,8 +2866,6 @@ const groundEditor = createGroundEditor({
   brushShape,
   brushOperation,
   groundPanelTab,
-  paintLayers,
-  paintSelectedLayerId,
   paintAsset: paintSelectedAsset,
   paintSmoothness,
   paintLayerStyle: paintBrushSettings,
@@ -6102,12 +6018,10 @@ function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
     activateGroundBuildToolFromPanel('paint')
   }
   terrainStore.setPaintSelection(value)
-  commitTerrainPaintLayerMetadata(paintLayers.value)
 }
 
 function handleGroundPaintSettingsUpdate(value: TerrainPaintBrushSettings) {
   terrainStore.setPaintBrushSettings(value)
-  commitTerrainPaintLayerMetadata(paintLayers.value)
 }
 
 function handleGroundScatterCategoryUpdate(value: TerrainScatterCategory) {
@@ -10020,7 +9934,7 @@ function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefi
   restoreGroundSurfacePreviewMaterialMap(groundObject)
   landformsPreviewLoadToken += 1
   if (groundNode.dynamicMesh?.type === 'Ground') {
-    const hasTerrainPaint = Boolean(groundNode.dynamicMesh.terrainPaint?.layers?.some((layer) => layer.enabled !== false && typeof layer.textureAssetId === 'string' && layer.textureAssetId.trim().length))
+    const hasTerrainPaint = Boolean(Object.keys(groundNode.dynamicMesh.groundSurfaceChunks ?? {}).length)
     const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
     const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
     const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
@@ -10050,32 +9964,10 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   groundObject: THREE.Object3D
   groundNode: SceneNode
   dynamicMesh: GroundDynamicMesh
-  liveChunkTileMasksByKey: Map<string, Map<string, Map<string, Uint8ClampedArray | null>>>
   previewRevision: number
   mode: 'live' | 'surface-rebuild'
 }): void {
   landformsPreviewLoadToken += 1
-  const enabledV3LayerCount = Array.isArray(payload.dynamicMesh.terrainPaint?.layers)
-    ? payload.dynamicMesh.terrainPaint!.layers.filter((layer) => layer.enabled !== false).length
-    : 0
-  const forceLiveSurfacePreview = enabledV3LayerCount > 4
-  const useLiveSurfacePreview = payload.mode === 'live' || forceLiveSurfacePreview
-  if (useLiveSurfacePreview) {
-    syncGroundSurfacePreviewForGround(
-      payload.groundObject,
-      payload.groundNode,
-      payload.dynamicMesh,
-      groundSurfacePreviewLoaders,
-      () => landformsPreviewLoadToken,
-      {
-        liveChunkTileMasksByKey: payload.liveChunkTileMasksByKey,
-        previewRevision: payload.previewRevision,
-        maxResolution: LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION,
-        applyToMaterialMap: true,
-      },
-    )
-    return
-  }
   syncGroundSurfacePreviewForGround(
     payload.groundObject,
     payload.groundNode,
@@ -10083,6 +9975,8 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
     groundSurfacePreviewLoaders,
     () => landformsPreviewLoadToken,
     {
+      previewRevision: payload.previewRevision,
+      maxResolution: payload.mode === 'live' ? LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION : undefined,
       applyToMaterialMap: true,
     },
   )

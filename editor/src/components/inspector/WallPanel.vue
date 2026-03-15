@@ -672,8 +672,6 @@ watch(assetDialogVisible, (open) => {
   assetDialogCornerIndex.value = null
 })
 
-const smoothingDisplay = computed(() => `${Math.round(localSmoothing.value * 100)}%`)
-
 function serializeAssetDragPayload(raw: string | null): string | null {
   if (!raw) {
     return null

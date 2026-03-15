@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { useUiStore } from './uiStore'
 import {
-  TERRAIN_PAINT_MAX_LAYER_COUNT,
   clampTerrainPaintLayerStyle,
   type GroundSculptOperation,
   type TerrainPaintLayerStyle,
@@ -19,17 +18,6 @@ export type TerrainPaintBrushSettings = TerrainPaintLayerStyle & {
   feather: number
 }
 
-export type TerrainPaintLayerDraft = {
-  id: string
-  /** Legacy bridge for V2 paint runtime. */
-  slotIndex: number
-  zIndex: number
-  enabled: boolean
-  assetId: string | null
-  asset: ProjectAsset | null
-  settings: TerrainPaintBrushSettings
-}
-
 function clampTerrainPaintBrushSettings(value: Partial<TerrainPaintBrushSettings> | null | undefined): TerrainPaintBrushSettings {
   const style = clampTerrainPaintLayerStyle(value)
   const featherValue = typeof value?.feather === 'number' ? value.feather : Number(value?.feather)
@@ -43,58 +31,6 @@ function createDefaultTerrainPaintBrushSettings(): TerrainPaintBrushSettings {
   return clampTerrainPaintBrushSettings(null)
 }
 
-function createTerrainPaintLayerId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return `terrain-paint-layer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-function createTerrainPaintLayerDraft(slotIndex: number, overrides: Partial<TerrainPaintLayerDraft> = {}): TerrainPaintLayerDraft {
-  const normalizedZIndex = typeof overrides.zIndex === 'number' && Number.isFinite(overrides.zIndex)
-    ? Math.max(0, Math.trunc(overrides.zIndex))
-    : Math.max(0, Math.trunc(slotIndex))
-  return {
-    id: typeof overrides.id === 'string' && overrides.id.trim().length ? overrides.id.trim() : createTerrainPaintLayerId(),
-    slotIndex: typeof overrides.slotIndex === 'number' && Number.isFinite(overrides.slotIndex)
-      ? Math.max(0, Math.trunc(overrides.slotIndex))
-      : normalizedZIndex,
-    zIndex: normalizedZIndex,
-    enabled: true,
-    assetId: typeof overrides.assetId === 'string' && overrides.assetId.trim().length ? overrides.assetId.trim() : (overrides.asset?.id ?? null),
-    asset: overrides.asset ?? null,
-    settings: clampTerrainPaintBrushSettings(overrides.settings ?? null),
-  }
-}
-
-function normalizeTerrainPaintLayers(layers: TerrainPaintLayerDraft[]): TerrainPaintLayerDraft[] {
-  return layers
-    .map((layer, index) => createTerrainPaintLayerDraft(Number.isFinite(layer.zIndex) ? layer.zIndex : (Number.isFinite(layer.slotIndex) ? layer.slotIndex : index), layer))
-    .sort((left, right) => left.zIndex - right.zIndex)
-    .slice(0, TERRAIN_PAINT_MAX_LAYER_COUNT)
-}
-
-function normalizeLayerKeyNumber(value: number): string {
-  return Number(value.toFixed(4)).toString()
-}
-
-function buildTerrainPaintLayerKey(assetId: string | null | undefined, settings: TerrainPaintBrushSettings): string {
-  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
-  const normalizedSettings = clampTerrainPaintBrushSettings(settings)
-  return [
-    normalizedAssetId,
-    normalizedSettings.blendMode,
-    normalizedSettings.worldSpace ? '1' : '0',
-    normalizeLayerKeyNumber(normalizedSettings.opacity),
-    normalizeLayerKeyNumber(normalizedSettings.feather),
-    normalizeLayerKeyNumber(normalizedSettings.rotationDeg),
-    normalizeLayerKeyNumber(normalizedSettings.tileScale.x),
-    normalizeLayerKeyNumber(normalizedSettings.tileScale.y),
-    normalizeLayerKeyNumber(normalizedSettings.offset.x),
-    normalizeLayerKeyNumber(normalizedSettings.offset.y),
-  ].join('|')
-}
-
 export const useTerrainStore = defineStore('terrain', () => {
   const brushRadius = ref(3)
   const brushStrength = ref(1.5)
@@ -105,21 +41,8 @@ export const useTerrainStore = defineStore('terrain', () => {
   // Terrain paint (ground material painting) state.
   // 0..1 - maps to neighbor-average smoothing strength/iterations.
   const paintSmoothness = ref(0.25)
-  const defaultPaintBrushSettings = ref<TerrainPaintBrushSettings>(createDefaultTerrainPaintBrushSettings())
-  const paintLayers = ref<TerrainPaintLayerDraft[]>([])
-  const paintSelectedLayerId = ref<string | null>(null)
-  const selectedPaintLayer = computed(() => {
-    const selectedId = paintSelectedLayerId.value
-    if (selectedId) {
-      const match = paintLayers.value.find((layer) => layer.id === selectedId) ?? null
-      if (match) {
-        return match
-      }
-    }
-    return paintLayers.value[0] ?? null
-  })
-  const paintSelectedAsset = computed<ProjectAsset | null>(() => selectedPaintLayer.value?.asset ?? null)
-  const paintBrushSettings = computed<TerrainPaintBrushSettings>(() => selectedPaintLayer.value?.settings ?? defaultPaintBrushSettings.value)
+  const paintSelectedAsset = ref<ProjectAsset | null>(null)
+  const paintBrushSettings = ref<TerrainPaintBrushSettings>(createDefaultTerrainPaintBrushSettings())
 
   const scatterCategory = ref<TerrainScatterCategory>('flora')
   const scatterSelectedAsset = ref<ProjectAsset | null>(null)
@@ -137,7 +60,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   const scatterModeActive = computed(() =>
     groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint' && !!scatterSelectedAsset.value,
   )
-  const paintModeActive = computed(() => groundPanelTab.value === 'paint' && !!paintSelectedLayerId.value && !!paintSelectedAsset.value)
+  const paintModeActive = computed(() => groundPanelTab.value === 'paint' && !!paintSelectedAsset.value)
 
   function setGroundPanelTab(tab: GroundPanelTab) {
     groundPanelTab.value = tab
@@ -160,60 +83,8 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterProviderAssetId.value = payload.providerAssetId ?? null
   }
 
-  function replacePaintLayers(layers: TerrainPaintLayerDraft[]) {
-    const normalized = normalizeTerrainPaintLayers(layers)
-    paintLayers.value = normalized
-    const stillSelected = normalized.some((layer) => layer.id === paintSelectedLayerId.value)
-    paintSelectedLayerId.value = stillSelected ? paintSelectedLayerId.value : (normalized[0]?.id ?? null)
-  }
-
-  function appendPaintLayer(overrides: Partial<TerrainPaintLayerDraft> = {}): TerrainPaintLayerDraft | null {
-    if (paintLayers.value.length >= TERRAIN_PAINT_MAX_LAYER_COUNT) {
-      return null
-    }
-    const nextZIndex = paintLayers.value.reduce((maxZIndex, layer) => Math.max(maxZIndex, layer.zIndex), -1) + 1
-    if (nextZIndex >= TERRAIN_PAINT_MAX_LAYER_COUNT) {
-      return null
-    }
-    const layer = createTerrainPaintLayerDraft(nextZIndex, {
-      settings: defaultPaintBrushSettings.value,
-      enabled: true,
-      ...overrides,
-    })
-    replacePaintLayers([...paintLayers.value, layer])
-    paintSelectedLayerId.value = layer.id
-    return layer
-  }
-
-  function findPaintLayerByKey(assetId: string | null | undefined, settings: TerrainPaintBrushSettings): TerrainPaintLayerDraft | null {
-    const key = buildTerrainPaintLayerKey(assetId, settings)
-    return paintLayers.value.find((layer) => {
-      return buildTerrainPaintLayerKey(layer.assetId ?? layer.asset?.id ?? null, layer.settings) === key
-    }) ?? null
-  }
-
-  function resolveOrCreatePaintLayer(asset: ProjectAsset, settings: TerrainPaintBrushSettings): TerrainPaintLayerDraft | null {
-    const normalizedSettings = clampTerrainPaintBrushSettings(settings)
-    const existing = findPaintLayerByKey(asset.id, normalizedSettings)
-    if (existing) {
-      paintSelectedLayerId.value = existing.id
-      return existing
-    }
-    return appendPaintLayer({
-      asset,
-      assetId: asset.id,
-      settings: normalizedSettings,
-      enabled: true,
-    })
-  }
-
   function setPaintSelection(asset: ProjectAsset | null) {
-    if (!asset) {
-      paintSelectedLayerId.value = null
-      return
-    }
-    const activeSettings = selectedPaintLayer.value?.settings ?? defaultPaintBrushSettings.value
-    resolveOrCreatePaintLayer(asset, activeSettings)
+    paintSelectedAsset.value = asset
   }
 
   function setPaintSmoothness(value: number) {
@@ -222,16 +93,10 @@ export const useTerrainStore = defineStore('terrain', () => {
   }
 
   function setPaintBrushSettings(value: Partial<TerrainPaintBrushSettings> | TerrainPaintBrushSettings) {
-    const nextSettings = clampTerrainPaintBrushSettings({
-      ...(selectedPaintLayer.value?.settings ?? defaultPaintBrushSettings.value),
+    paintBrushSettings.value = clampTerrainPaintBrushSettings({
+      ...paintBrushSettings.value,
       ...value,
     })
-    defaultPaintBrushSettings.value = nextSettings
-    const activeAsset = paintSelectedAsset.value
-    if (!activeAsset) {
-      return
-    }
-    resolveOrCreatePaintLayer(activeAsset, nextSettings)
   }
 
   // Keep UI activeSelectionContext in sync: when the user activates terrain sculpt
@@ -296,8 +161,6 @@ export const useTerrainStore = defineStore('terrain', () => {
     isDigging,
     groundPanelTab,
 
-    paintLayers,
-    paintSelectedLayerId,
     paintSelectedAsset,
     paintSmoothness,
     paintBrushSettings,
@@ -317,7 +180,6 @@ export const useTerrainStore = defineStore('terrain', () => {
     setGroundPanelTab,
     setScatterCategory,
     setScatterSelection,
-    replacePaintLayers,
     setPaintSelection,
     setPaintSmoothness,
     setPaintBrushSettings,

@@ -308,6 +308,9 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
 
 <template>
   <div class="terrain-paint-panel">
+    <div class="terrain-paint-note">
+      Current texture and blend settings affect subsequent strokes only.
+    </div>
     <div class="control-row">
       <div class="control-group control-group--compact">
         <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
@@ -531,6 +534,12 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.terrain-paint-note {
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(var(--v-theme-on-surface), 0.72);
 }
 
 .control-group {

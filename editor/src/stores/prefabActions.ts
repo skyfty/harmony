@@ -313,19 +313,6 @@ function collectNodeAssetDependenciesLocal(node: SceneNode | null | undefined, b
     const definition = (node as any).dynamicMesh as any
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
     collectAssetIdCandidate(bucket, definition?.terrainPaintBakedTextureAssetId)
-    const terrainPaint: any = definition?.terrainPaint
-    if (terrainPaint && terrainPaint.version === 2 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
-      if (Array.isArray(terrainPaint.layers)) {
-        terrainPaint.layers.forEach((layer: any) => collectAssetIdCandidate(bucket, layer?.textureAssetId))
-      }
-      Object.values(terrainPaint.chunks).forEach((chunkRef: any) => {
-        const pages = Array.isArray(chunkRef?.pages) ? chunkRef.pages : []
-        pages.forEach((pageRef: any) => {
-          const logicalId = typeof pageRef?.logicalId === 'string' ? pageRef.logicalId.trim() : ''
-          if (logicalId) bucket.add(logicalId)
-        })
-      })
-    }
   }
   if (Array.isArray(node.children) && node.children.length) {
     node.children.forEach((child) => collectNodeAssetDependenciesLocal(child, bucket))

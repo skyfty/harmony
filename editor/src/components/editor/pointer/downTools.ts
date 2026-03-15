@@ -860,6 +860,7 @@ export function handlePointerDownTools(
 
                   startThickness: clampedBase,
                   thickness: clampedBase,
+                  committedRenderSuppressed: false,
 
                   containerObject: runtime,
                 }
@@ -1034,6 +1035,7 @@ export function handlePointerDownTools(
 
               startThickness: clampedBase,
               thickness: clampedBase,
+              committedRenderSuppressed: false,
 
               containerObject: runtime,
             }
