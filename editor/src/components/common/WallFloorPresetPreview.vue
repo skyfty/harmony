@@ -372,6 +372,7 @@ async function parsePreset(file: File): Promise<ParsedPreset> {
 }
 
 function buildDefaultWallDefinition(preset: WallPresetData): WallDynamicMesh {
+  const bodyMaterialConfigId = preset.wallProps.bodyMaterialConfigId ?? preset.materialOrder?.[0] ?? null
   const built = buildWallDynamicMeshFromWorldSegments(
     [{ start: { x: -DEFAULT_WALL_HALF_LENGTH, y: 0, z: 0 }, end: { x: DEFAULT_WALL_HALF_LENGTH, y: 0, z: 0 } }],
     {
@@ -385,7 +386,7 @@ function buildDefaultWallDefinition(preset: WallPresetData): WallDynamicMesh {
   }
   return {
     ...built.definition,
-    bodyMaterialConfigId: preset.materialOrder?.[0] ?? null,
+    bodyMaterialConfigId,
   }
 }
 
@@ -453,7 +454,7 @@ async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Obj
     },
     {
       smoothing: wallProps.smoothing,
-      bodyMaterialConfigId: preset.materialOrder?.[0] ?? null,
+      bodyMaterialConfigId: wallProps.bodyMaterialConfigId ?? preset.materialOrder?.[0] ?? null,
       cornerModels: wallProps.cornerModels,
       bodyUvAxis: wallProps.bodyUvAxis,
       headUvAxis: wallProps.headUvAxis,

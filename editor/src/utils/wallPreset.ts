@@ -49,6 +49,7 @@ export type StrictWallPresetWallProps = {
   thickness: number
   wallBaseOffsetLocal: WallOffsetLocal
   smoothing: number
+  bodyMaterialConfigId: string | null
   wallRenderMode: WallRenderMode
   repeatInstanceStep: number
   isAirWall: boolean

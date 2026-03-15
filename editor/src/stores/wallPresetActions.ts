@@ -86,6 +86,7 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     thickness: WALL_DEFAULT_THICKNESS,
     wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
     smoothing: WALL_DEFAULT_SMOOTHING,
+    bodyMaterialConfigId: null,
     wallRenderMode: 'stretch',
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     isAirWall: true,
@@ -132,6 +133,14 @@ function normalizeOptionalAssetId(value: unknown): string | null {
   return raw.length ? raw : null
 }
 
+function resolveWallBodyMaterialConfigId(materialIds: string[], preferredId: unknown): string | null {
+  const normalizedPreferredId = normalizeOptionalAssetId(preferredId)
+  if (normalizedPreferredId && materialIds.includes(normalizedPreferredId)) {
+    return normalizedPreferredId
+  }
+  return materialIds[0] ?? null
+}
+
 function normalizeWallRenderMode(value: unknown, fallback: WallRenderMode = 'stretch'): WallRenderMode {
   return value === 'repeatInstances' ? 'repeatInstances' : fallback
 }
@@ -143,6 +152,7 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
     thickness: wallProps.thickness,
     wallBaseOffsetLocal: wallProps.wallBaseOffsetLocal,
     smoothing: wallProps.smoothing,
+    bodyMaterialConfigId: wallProps.bodyMaterialConfigId ?? null,
     wallRenderMode: normalizeWallRenderMode(wallProps.wallRenderMode, 'stretch'),
     repeatInstanceStep: wallProps.repeatInstanceStep,
     isAirWall: wallProps.isAirWall,
@@ -188,6 +198,17 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
       throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}`)
     }
     return raw
+  }
+  const optionalMaterialConfigId = (key: string): string | null => {
+    const raw = record[key]
+    if (raw == null) {
+      return null
+    }
+    if (typeof raw !== 'string') {
+      return null
+    }
+    const trimmed = raw.trim()
+    return trimmed.length ? trimmed : null
   }
   const optionalRepeatInstanceStep = (): number => {
     const raw = record.repeatInstanceStep
@@ -344,6 +365,7 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
       ? requiredOffsetLocal(record.wallBaseOffsetLocal, 'wallBaseOffsetLocal')
       : { x: 0, y: 0, z: 0 },
     smoothing: requiredNumber('smoothing'),
+    bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     wallRenderMode: normalizeWallRenderMode(record.wallRenderMode, 'stretch'),
     repeatInstanceStep: optionalRepeatInstanceStep(),
     isAirWall: requiredBoolean('isAirWall'),
@@ -564,16 +586,27 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         }
       }
 
+      const nodeBodyMaterialConfigId = node.dynamicMesh?.type === 'Wall'
+        ? resolveWallBodyMaterialConfigId(materialOrder, node.dynamicMesh.bodyMaterialConfigId)
+        : null
+      const wallPropsWithMaterialBinding: StrictWallPresetWallProps = {
+        ...wallProps,
+        bodyMaterialConfigId: resolveWallBodyMaterialConfigId(
+          materialOrder,
+          nodeBodyMaterialConfigId ?? component.props.bodyMaterialConfigId,
+        ),
+      }
+
       const dependencyAssetIds = Array.from(
         new Set(
           [
-            wallProps.bodyAssetId,
-            wallProps.headAssetId,
-            wallProps.footAssetId,
-            wallProps.bodyEndCapAssetId,
-            wallProps.headEndCapAssetId,
-            wallProps.footEndCapAssetId,
-            ...(((wallProps as any).cornerModels ?? []) as any[])
+            wallPropsWithMaterialBinding.bodyAssetId,
+            wallPropsWithMaterialBinding.headAssetId,
+            wallPropsWithMaterialBinding.footAssetId,
+            wallPropsWithMaterialBinding.bodyEndCapAssetId,
+            wallPropsWithMaterialBinding.headEndCapAssetId,
+            wallPropsWithMaterialBinding.footEndCapAssetId,
+            ...(((wallPropsWithMaterialBinding as any).cornerModels ?? []) as any[])
               .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
               .map((value) => (typeof value === 'string' ? value.trim() : ''))
               .filter((value) => value.length > 0),
@@ -596,7 +629,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         kind: 'wall-preset',
         formatVersion: WALL_PRESET_FORMAT_VERSION,
         name: sanitizedName,
-        wallProps,
+        wallProps: wallPropsWithMaterialBinding,
         materialOrder,
         materialPatches,
       }
@@ -813,6 +846,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         const existing = Array.isArray(target.materials) ? (target.materials as SceneNodeMaterial[]) : []
         const existingById = new Map(existing.map((entry) => [entry.id, entry]))
         const order = Array.isArray(preset.materialOrder) ? preset.materialOrder : []
+        const slotIdsInPreset = new Set(order.map((value) => (typeof value === 'string' ? value.trim() : '')).filter((value) => value.length > 0))
 
         const nextMaterials: SceneNodeMaterial[] = []
         for (const materialSlotId of order) {
@@ -873,6 +907,27 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
                   : (baseEntry as any).type,
             }),
           )
+        }
+
+        for (const entry of existing) {
+          const slotId = typeof entry?.id === 'string' ? entry.id.trim() : ''
+          if (!slotId || slotIdsInPreset.has(slotId)) {
+            continue
+          }
+          nextMaterials.push(entry)
+        }
+
+        if (nextMaterials.length) {
+          store.setNodeMaterials(nodeId, nextMaterials)
+          const resolvedBodyMaterialConfigId = resolveWallBodyMaterialConfigId(
+            nextMaterials
+              .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
+              .filter((value) => value.length > 0),
+            wallProps.bodyMaterialConfigId,
+          )
+          store.updateNodeComponentProps(nodeId, wallComponent.id, {
+            bodyMaterialConfigId: resolvedBodyMaterialConfigId,
+          })
         }
 
       }
