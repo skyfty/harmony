@@ -1355,21 +1355,8 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
 
         <div class="wall-field-grid">
  
-          <v-text-field
-            :model-value="localSmoothing"
-            type="number"
-            min="0"
-            max="1"
-            step="0.01"
-            label="Corner Smoothness"
-            density="compact"
-            variant="underlined"
-            hide-details
-            @update:modelValue="handleSmoothingModelUpdate"
-            @blur="applySmoothingUpdate(localSmoothing)"
-            @keydown.enter.prevent="applySmoothingUpdate(localSmoothing)"
-          />
           <div class="wall-dimension-block">
+
             <div class="wall-dimension-row">
               <v-text-field
                 v-model.number="localHeight"
@@ -1398,8 +1385,23 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 @keydown.enter.prevent="applyDimensions"
               />
             </div>
+                        
+          <v-text-field
+            :model-value="localSmoothing"
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            label="Corner Smoothness"
+            density="compact"
+            variant="underlined"
+            hide-details
+            @update:modelValue="handleSmoothingModelUpdate"
+            @blur="applySmoothingUpdate(localSmoothing)"
+            @keydown.enter.prevent="applySmoothingUpdate(localSmoothing)"
+          />
             <InspectorVectorControls
-              label="Base Offset (m)"
+              label="Offset"
               :model-value="wallBaseOffsetModelValue"
               :step="0.01"
               :disabled="!wallComponent"
