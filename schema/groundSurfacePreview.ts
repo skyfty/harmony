@@ -21,6 +21,7 @@ import {
 } from './landformsPreview'
 import {
   parseTerrainPaintChunkKey,
+  type TerrainPaintChunkBounds,
   resolveTerrainPaintChunkBounds,
 } from './terrainPaintTiles'
 
@@ -34,6 +35,13 @@ const GROUND_SURFACE_PREVIEW_STATS_KEY = '__HARMONY_GROUND_SURFACE_PREVIEW_STATS
 type Canvas2DContext = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D
 
 type CanvasLike = OffscreenCanvas | HTMLCanvasElement
+
+export type GroundSurfaceLiveChunkPreview = {
+  chunkKey: string
+  bounds: TerrainPaintChunkBounds
+  canvas: CanvasLike
+  revision: number
+}
 
 export type GroundSurfacePreviewCanvasResult = {
   canvas: CanvasLike
@@ -132,6 +140,17 @@ function clearGroundSurfacePreviewLiveTexture(root: THREE.Object3D | null | unde
   if (root?.userData) {
     delete (root.userData as Record<string, unknown>)[GROUND_SURFACE_PREVIEW_LIVE_TEXTURE_KEY]
   }
+}
+
+function setGroundSurfacePreviewLiveTexture(root: THREE.Object3D | null | undefined, texture: THREE.Texture | null): void {
+  if (!root?.userData) {
+    return
+  }
+  if (texture) {
+    ;(root.userData as Record<string, unknown>)[GROUND_SURFACE_PREVIEW_LIVE_TEXTURE_KEY] = texture
+    return
+  }
+  delete (root.userData as Record<string, unknown>)[GROUND_SURFACE_PREVIEW_LIVE_TEXTURE_KEY]
 }
 
 function releaseGroundSurfacePreviewLiveTextureIfDifferent(root: THREE.Object3D | null | undefined, nextTexture: THREE.Texture | null): void {
@@ -359,6 +378,100 @@ function applyGroundSurfacePreviewToMaterialMap(root: THREE.Object3D, texture: T
       material.needsUpdate = true
     }
   })
+}
+
+function getGroundPreviewMaterialMap(root: THREE.Object3D | null | undefined): THREE.Texture | null {
+  let resolved: THREE.Texture | null = null
+  if (!root) {
+    return resolved
+  }
+  forEachGroundPreviewMaterial(root, (material) => {
+    if (!resolved && material.map) {
+      resolved = material.map
+    }
+  })
+  return resolved
+}
+
+export function syncGroundSurfaceLiveChunkPreviews(params: {
+  groundObject: THREE.Object3D
+  groundNode: SceneNode
+  dynamicMesh: GroundDynamicMesh
+  chunkPreviews: GroundSurfaceLiveChunkPreview[]
+  maxResolution?: number
+  applyToMaterialMap?: boolean
+}): boolean {
+  const { groundObject, groundNode, dynamicMesh, chunkPreviews, maxResolution, applyToMaterialMap } = params
+  if (!groundObject || !groundNode || dynamicMesh.type !== 'Ground') {
+    return false
+  }
+  const validPreviews = chunkPreviews.filter((entry) => entry?.canvas && Number.isFinite(entry.bounds?.width) && Number.isFinite(entry.bounds?.depth))
+  if (!validPreviews.length) {
+    return false
+  }
+
+  const previewSize = computePreviewTextureSize(dynamicMesh, maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION)
+  let liveTexture = getGroundSurfacePreviewLiveTexture(groundObject)
+  const existingCanvas = liveTexture?.image as CanvasLike | undefined
+  const canReuseCanvas = Boolean(
+    existingCanvas
+    && 'getContext' in existingCanvas
+    && (((existingCanvas as HTMLCanvasElement).width ?? (existingCanvas as OffscreenCanvas).width) === previewSize.width)
+    && (((existingCanvas as HTMLCanvasElement).height ?? (existingCanvas as OffscreenCanvas).height) === previewSize.height),
+  )
+  const composition = canReuseCanvas
+    ? (() => {
+      const context = existingCanvas!.getContext('2d') as Canvas2DContext | null
+      return context ? { canvas: existingCanvas!, context } : null
+    })()
+    : createCompositionCanvas(previewSize.width, previewSize.height)
+  if (!composition) {
+    return false
+  }
+
+  const { canvas, context } = composition
+  const width = (canvas as HTMLCanvasElement).width ?? (canvas as OffscreenCanvas).width
+  const height = (canvas as HTMLCanvasElement).height ?? (canvas as OffscreenCanvas).height
+  if (!canReuseCanvas) {
+    const seedTexture = getLandformsPreviewTexture(groundObject) ?? getGroundPreviewMaterialMap(groundObject)
+    const seedSource = resolveTextureImageSource(seedTexture)
+    context.clearRect(0, 0, width, height)
+    if (seedSource) {
+      context.drawImage(seedSource, 0, 0, width, height)
+    } else {
+      context.save()
+      context.globalCompositeOperation = 'source-over'
+      context.globalAlpha = 1
+      context.fillStyle = DEFAULT_GROUND_SURFACE_PREVIEW_BACKGROUND
+      context.fillRect(0, 0, width, height)
+      context.restore()
+    }
+  }
+
+  const groundWidth = Math.max(1e-6, normalizeDimension(dynamicMesh.width))
+  const groundDepth = Math.max(1e-6, normalizeDimension(dynamicMesh.depth))
+  const halfWidth = groundWidth * 0.5
+  const halfDepth = groundDepth * 0.5
+  for (const preview of validPreviews) {
+    const drawX = Math.floor(((preview.bounds.minX + halfWidth) / groundWidth) * width)
+    const drawY = Math.floor(((preview.bounds.minZ + halfDepth) / groundDepth) * height)
+    const drawWidth = Math.max(1, Math.ceil((preview.bounds.width / groundWidth) * width))
+    const drawHeight = Math.max(1, Math.ceil((preview.bounds.depth / groundDepth) * height))
+    context.drawImage(preview.canvas, drawX, drawY, drawWidth, drawHeight)
+  }
+
+  const nextTexture = liveTexture && canReuseCanvas
+    ? configureGroundSurfacePreviewTexture(liveTexture, canvas)
+    : configureGroundSurfacePreviewTexture(new THREE.CanvasTexture(canvas as unknown as HTMLCanvasElement), canvas)
+  if (liveTexture && nextTexture !== liveTexture) {
+    liveTexture.dispose()
+  }
+  liveTexture = nextTexture
+  setGroundSurfacePreviewLiveTexture(groundObject, liveTexture)
+  if (applyToMaterialMap === true) {
+    applyGroundSurfacePreviewToMaterialMap(groundObject, liveTexture)
+  }
+  return true
 }
 
 export function restoreGroundSurfacePreviewMaterialMap(root: THREE.Object3D | null | undefined): void {

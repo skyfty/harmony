@@ -34,6 +34,24 @@ function createDefaultTerrainPaintBrushSettings(): TerrainPaintBrushSettings {
 }
 
 export const useTerrainStore = defineStore('terrain', () => {
+  const paintContextIntentAtMs = ref(0)
+  let paintContextSyncTimer: number | null = null
+
+  function clearPaintContextSyncTimer() {
+    if (paintContextSyncTimer !== null) {
+      window.clearTimeout(paintContextSyncTimer)
+      paintContextSyncTimer = null
+    }
+  }
+
+  function markPaintContextIntent() {
+    paintContextIntentAtMs.value = Date.now()
+  }
+
+  function hasRecentPaintContextIntent() {
+    return Date.now() - paintContextIntentAtMs.value <= PAINT_CONTEXT_INTENT_TTL_MS
+  }
+
   const brushRadius = ref(3)
   const brushStrength = ref(1.5)
   const brushShape = ref<'circle' | 'square' | 'star'>('circle')
@@ -90,6 +108,9 @@ export const useTerrainStore = defineStore('terrain', () => {
 
   function setPaintSelection(asset: ProjectAsset | null) {
     paintSelectedAsset.value = asset
+    if (asset) {
+      markPaintContextIntent()
+    }
   }
 
   function setPaintSmoothness(value: number) {
@@ -143,6 +164,10 @@ export const useTerrainStore = defineStore('terrain', () => {
         ui.setActiveSelectionContext(null)
       }
     }, PAINT_CONTEXT_SYNC_DEBOUNCE_MS)
+  })
+
+  onScopeDispose(() => {
+    clearPaintContextSyncTimer()
   })
 
   function setScatterBrushRadius(value: number) {

@@ -188,7 +188,9 @@ import {
 import {
   createDefaultGroundSurfacePreviewLoaders,
   restoreGroundSurfacePreviewMaterialMap,
+  syncGroundSurfaceLiveChunkPreviews,
   syncGroundSurfacePreviewForGround,
+  type GroundSurfaceLiveChunkPreview,
 } from '@schema/groundSurfacePreview'
 import {
   clearLandformsPreviewForGround,
@@ -9959,8 +9961,22 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   dynamicMesh: GroundDynamicMesh
   previewRevision: number
   mode: 'live' | 'surface-rebuild'
+  liveChunkPreviews?: GroundSurfaceLiveChunkPreview[] | null
 }): void {
   landformsPreviewLoadToken += 1
+  if (payload.mode === 'live' && payload.liveChunkPreviews?.length) {
+    const applied = syncGroundSurfaceLiveChunkPreviews({
+      groundObject: payload.groundObject,
+      groundNode: payload.groundNode,
+      dynamicMesh: payload.dynamicMesh,
+      chunkPreviews: payload.liveChunkPreviews,
+      maxResolution: LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION,
+      applyToMaterialMap: true,
+    })
+    if (applied) {
+      return
+    }
+  }
   syncGroundSurfacePreviewForGround(
     payload.groundObject,
     payload.groundNode,
