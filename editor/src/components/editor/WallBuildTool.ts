@@ -50,6 +50,7 @@ export type WallBuildToolSession = WallPreviewSession & {
   bodyAssetId: string | null
   brushPresetAssetId: string | null
   brushPresetData: WallPresetData | null
+  lockedSegmentY: number | null
   committedNewSegmentCount: number
   branchFrom: {
     nodeId: string
@@ -146,6 +147,7 @@ export function createWallBuildTool(options: {
       bodyAssetId: null,
       brushPresetAssetId: null,
       brushPresetData: null,
+      lockedSegmentY: null,
       committedNewSegmentCount: 0,
       branchFrom: null,
       shapeDraft: null,
@@ -381,6 +383,32 @@ export function createWallBuildTool(options: {
     previewRenderer.markDirty()
   }
 
+  const resolveLockedSegmentY = (target: WallBuildToolSession, fallbackY: number): number => {
+    if (isFiniteNumber(target.lockedSegmentY)) {
+      return target.lockedSegmentY
+    }
+
+    const dragY = target.dragStart?.y
+    if (isFiniteNumber(dragY)) {
+      target.lockedSegmentY = dragY
+      return dragY
+    }
+
+    const segmentY = target.segments[0]?.start?.y
+    if (isFiniteNumber(segmentY)) {
+      target.lockedSegmentY = segmentY
+      return segmentY
+    }
+
+    target.lockedSegmentY = isFiniteNumber(fallbackY) ? fallbackY : 0
+    return target.lockedSegmentY
+  }
+
+  const alignPointYToLineDraft = (point: THREE.Vector3, target: WallBuildToolSession): THREE.Vector3 => {
+    point.y = resolveLockedSegmentY(target, point.y)
+    return point
+  }
+
   const buildClosedPolygonSegments = (points: THREE.Vector3[]): WallPreviewSegment[] => {
     if (points.length < 3) {
       return []
@@ -540,6 +568,7 @@ export function createWallBuildTool(options: {
   const beginSegmentDrag = (startPoint: THREE.Vector3) => {
     const current = ensureSession()
     hydrateFromSelection(current)
+    alignPointYToLineDraft(startPoint, current)
     resetPolygonDraft(current)
     current.shapeDraft = null
     current.dragStart = startPoint.clone()
@@ -580,6 +609,7 @@ export function createWallBuildTool(options: {
     current.dragStart = null
     current.dragEnd = null
     current.nodeId = null
+    current.lockedSegmentY = null
     current.committedNewSegmentCount = 0
     current.shapeDraft = {
       kind,
@@ -858,11 +888,11 @@ export function createWallBuildTool(options: {
     const rawPointer = groundPointerHelper.clone()
     const current = ensureSession()
     const excludeNodeId = current.nodeId ?? options.getWallEditNodeId()
-    const snappedPoint = snapPlacementPoint(event, rawPointer.clone(), {
+    const snappedPoint = alignPointYToLineDraft(snapPlacementPoint(event, rawPointer.clone(), {
       fallback: event.shiftKey ? 'grid' : 'raw',
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
       allowVertexSnap: event.shiftKey,
-    })
+    }), current)
     if (!current.dragStart) {
       beginSegmentDrag(snappedPoint)
       return true
@@ -874,6 +904,7 @@ export function createWallBuildTool(options: {
       rawPointer,
       Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED),
     )
+    constrained.y = resolveLockedSegmentY(current, current.dragStart.y)
     const previous = current.dragEnd
     if (!previous || !previous.equals(constrained)) {
       current.dragEnd = constrained
@@ -980,12 +1011,14 @@ export function createWallBuildTool(options: {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
       allowVertexSnap: event.shiftKey,
     })
+    alignPointYToLineDraft(pointer, session)
     const constrained = constrainWallEndPointForBuild(
       session.dragStart,
       pointer,
       rawPointer,
       Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED),
     )
+    constrained.y = resolveLockedSegmentY(session, session.dragStart.y)
     const previous = session.dragEnd
     if (previous && previous.equals(constrained)) {
       return
@@ -1222,6 +1255,7 @@ export function createWallBuildTool(options: {
       current.wallRenderProps = getWallNodeRenderProps(node)
       current.dragStart = worldPoint.clone()
       current.dragEnd = worldPoint.clone()
+      current.lockedSegmentY = isFiniteNumber(worldPoint.y) ? worldPoint.y : 0
       current.committedNewSegmentCount = 0
       current.shapeDraft = null
       current.polygonPoints = []
