@@ -182,6 +182,8 @@ export function createWallRenderer(options: WallRendererOptions) {
   const wallAssetWaiters = new Map<string, Set<string>>()
   const resyncSignatureKeyByNodeId = new Map<string, string>()
   const suppressedCommittedWallNodeIds = new Set<string>()
+  const previewNodeById = new Map<string, SceneNode>()
+  const previewObjectById = new Map<string, THREE.Object3D>()
 
   // Keep editor drag and committed wall placement on the exact same schema-side path.
   const getWallAssetBounds = (assetId: string): THREE.Box3 | null => getCachedModelObject(assetId)?.boundingBox ?? null
@@ -205,6 +207,24 @@ export function createWallRenderer(options: WallRendererOptions) {
   let wallResyncRafHandle: number | null = null
 
   const FALLBACK_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
+  const PREVIEW_SIGNATURE_KEY = '__harmonyWallPreviewSignature'
+
+  function isPreviewNodeId(nodeId: string | null | undefined): boolean {
+    return typeof nodeId === 'string' && nodeId.startsWith('__wall-preview__:')
+  }
+
+  function getRenderableNodeById(nodeId: string): SceneNode | null {
+    return previewNodeById.get(nodeId) ?? options.getNodeById(nodeId)
+  }
+
+  function getRenderableObjectById(nodeId: string): THREE.Object3D | null {
+    return previewObjectById.get(nodeId) ?? options.getObjectById(nodeId)
+  }
+
+  function buildPreviewNodeId(previewKey: string): string {
+    const key = previewKey.trim()
+    return `__wall-preview__:${key || 'default'}`
+  }
 
   function isWallDragActive(nodeId: string): boolean {
     return activeWallDragNodeId === nodeId && wallDragCacheByNodeId.has(nodeId)
@@ -215,7 +235,7 @@ export function createWallRenderer(options: WallRendererOptions) {
   }
 
   function suppressCommittedWallRender(nodeId: string): void {
-    const object = options.getObjectById(nodeId)
+    const object = getRenderableObjectById(nodeId)
     if (!object) {
       return
     }
@@ -234,7 +254,7 @@ export function createWallRenderer(options: WallRendererOptions) {
   }
 
   function buildWallDragCache(nodeId: string): WallDragCacheEntry | null {
-    const node = options.getNodeById(nodeId)
+    const node = getRenderableNodeById(nodeId)
     if (!node || node.dynamicMesh?.type !== 'Wall') {
       return null
     }
@@ -333,8 +353,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     wallDragCacheByNodeId.delete(nodeId)
     suppressedCommittedWallNodeIds.delete(nodeId)
 
-    const node = options.getNodeById(nodeId)
-    const object = options.getObjectById(nodeId)
+    const node = getRenderableNodeById(nodeId)
+    const object = getRenderableObjectById(nodeId)
     if (!node || !object) {
       return
     }
@@ -386,8 +406,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       pendingResyncNodeIds.clear()
 
       nodeIds.forEach((id) => {
-        const node = options.getNodeById(id)
-        const object = options.getObjectById(id)
+        const node = getRenderableNodeById(id)
+        const object = getRenderableObjectById(id)
         if (!node || !object) {
           return
         }
@@ -448,45 +468,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     nodeId?: string | null
     previewKey: string
   }): WallPreviewRenderData {
-    const normalizedProps = (() => {
-      if (!params.wallProps) {
-        return null
-      }
-
-      const baseProps = resolveWallComponentPropsFromMesh(params.definition)
-      const source = params.wallProps as Partial<WallComponentProps>
-      const sourceAny = source as Record<string, unknown>
-
-      return clampWallProps({
-        height: source.height ?? baseProps.height,
-        width: source.width ?? baseProps.width,
-        thickness: source.thickness ?? baseProps.thickness,
-        smoothing: source.smoothing ?? baseProps.smoothing,
-        bodyMaterialConfigId: source.bodyMaterialConfigId ?? baseProps.bodyMaterialConfigId,
-        isAirWall: source.isAirWall ?? baseProps.isAirWall,
-        wallRenderMode: source.wallRenderMode ?? (baseProps as any).wallRenderMode,
-        repeatInstanceStep: source.repeatInstanceStep ?? (baseProps as any).repeatInstanceStep,
-        bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
-        headAssetId: source.headAssetId ?? baseProps.headAssetId,
-        footAssetId: source.footAssetId ?? baseProps.footAssetId,
-        bodyUvAxis: source.bodyUvAxis ?? (baseProps as any).bodyUvAxis,
-        headUvAxis: source.headUvAxis ?? (baseProps as any).headUvAxis,
-        footUvAxis: source.footUvAxis ?? (baseProps as any).footUvAxis,
-        bodyEndCapAssetId: source.bodyEndCapAssetId ?? baseProps.bodyEndCapAssetId,
-        bodyEndCapOffsetLocal: source.bodyEndCapOffsetLocal ?? baseProps.bodyEndCapOffsetLocal,
-        headEndCapAssetId: source.headEndCapAssetId ?? baseProps.headEndCapAssetId,
-        headEndCapOffsetLocal: source.headEndCapOffsetLocal ?? baseProps.headEndCapOffsetLocal,
-        footEndCapAssetId: source.footEndCapAssetId ?? baseProps.footEndCapAssetId,
-        footEndCapOffsetLocal: source.footEndCapOffsetLocal ?? baseProps.footEndCapOffsetLocal,
-        bodyOrientation: source.bodyOrientation ?? baseProps.bodyOrientation,
-        headOrientation: source.headOrientation ?? baseProps.headOrientation,
-        footOrientation: source.footOrientation ?? baseProps.footOrientation,
-        bodyEndCapOrientation: source.bodyEndCapOrientation ?? baseProps.bodyEndCapOrientation,
-        headEndCapOrientation: source.headEndCapOrientation ?? baseProps.headEndCapOrientation,
-        footEndCapOrientation: source.footEndCapOrientation ?? baseProps.footEndCapOrientation,
-        cornerModels: Array.isArray(sourceAny.cornerModels) ? sourceAny.cornerModels as any[] : baseProps.cornerModels,
-      })
-    })()
+    const normalizedProps = normalizeWallPreviewProps(params.definition, params.wallProps)
 
     const cornerModels = Array.isArray(normalizedProps?.cornerModels)
       ? normalizedProps.cornerModels
@@ -551,16 +533,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       : { smoothing: 0 }
 
     const assets: WallRenderAssetObjects = {}
-    const syntheticNodeId = (() => {
-      const nodeId = typeof params.nodeId === 'string' ? params.nodeId.trim() : ''
-      if (nodeId) {
-        return nodeId
-      }
-      const key = typeof params.previewKey === 'string' ? params.previewKey.trim() : ''
-      return `__wall-preview__:${key || 'default'}`
-    })()
-
-    const previewSignatureKey = '__harmonyWallPreviewSignature'
+    const syntheticNodeId = buildPreviewNodeId(typeof params.previewKey === 'string' ? params.previewKey : '')
     let hasMissingAssets = false
 
     const resolvePreviewAsset = (assetId: string | null | undefined): THREE.Object3D | null => {
@@ -573,7 +546,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         return cached.object
       }
       hasMissingAssets = true
-      scheduleWallAssetLoad(id, syntheticNodeId, previewSignatureKey)
+      scheduleWallAssetLoad(id, syntheticNodeId, PREVIEW_SIGNATURE_KEY)
       return null
     }
 
@@ -655,6 +628,117 @@ export function createWallRenderer(options: WallRendererOptions) {
         },
       }),
     }
+  }
+
+  function normalizeWallPreviewProps(
+    definition: WallDynamicMesh,
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined,
+  ): WallComponentProps | null {
+    if (!wallProps) {
+      return null
+    }
+
+    const baseProps = resolveWallComponentPropsFromMesh(definition)
+    const source = wallProps as Partial<WallComponentProps>
+    const sourceAny = source as Record<string, unknown>
+
+    return clampWallProps({
+      height: source.height ?? baseProps.height,
+      width: source.width ?? baseProps.width,
+      thickness: source.thickness ?? baseProps.thickness,
+      smoothing: source.smoothing ?? baseProps.smoothing,
+      bodyMaterialConfigId: source.bodyMaterialConfigId ?? baseProps.bodyMaterialConfigId,
+      isAirWall: source.isAirWall ?? baseProps.isAirWall,
+      wallRenderMode: source.wallRenderMode ?? baseProps.wallRenderMode,
+      repeatInstanceStep: source.repeatInstanceStep ?? baseProps.repeatInstanceStep,
+      bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
+      headAssetId: source.headAssetId ?? baseProps.headAssetId,
+      footAssetId: source.footAssetId ?? baseProps.footAssetId,
+      bodyUvAxis: source.bodyUvAxis ?? baseProps.bodyUvAxis,
+      headUvAxis: source.headUvAxis ?? baseProps.headUvAxis,
+      footUvAxis: source.footUvAxis ?? baseProps.footUvAxis,
+      bodyEndCapAssetId: source.bodyEndCapAssetId ?? baseProps.bodyEndCapAssetId,
+      bodyEndCapOffsetLocal: source.bodyEndCapOffsetLocal ?? baseProps.bodyEndCapOffsetLocal,
+      headEndCapAssetId: source.headEndCapAssetId ?? baseProps.headEndCapAssetId,
+      headEndCapOffsetLocal: source.headEndCapOffsetLocal ?? baseProps.headEndCapOffsetLocal,
+      footEndCapAssetId: source.footEndCapAssetId ?? baseProps.footEndCapAssetId,
+      footEndCapOffsetLocal: source.footEndCapOffsetLocal ?? baseProps.footEndCapOffsetLocal,
+      bodyOrientation: source.bodyOrientation ?? baseProps.bodyOrientation,
+      headOrientation: source.headOrientation ?? baseProps.headOrientation,
+      footOrientation: source.footOrientation ?? baseProps.footOrientation,
+      bodyEndCapOrientation: source.bodyEndCapOrientation ?? baseProps.bodyEndCapOrientation,
+      headEndCapOrientation: source.headEndCapOrientation ?? baseProps.headEndCapOrientation,
+      footEndCapOrientation: source.footEndCapOrientation ?? baseProps.footEndCapOrientation,
+      cornerModels: Array.isArray(sourceAny.cornerModels) ? sourceAny.cornerModels as any[] : baseProps.cornerModels,
+    })
+  }
+
+  function syncWallPreviewContainer(params: {
+    container: THREE.Object3D
+    definition: WallDynamicMesh
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
+    previewKey: string
+  }): void {
+    const previewNodeId = buildPreviewNodeId(params.previewKey)
+    const normalizedProps = normalizeWallPreviewProps(params.definition, params.wallProps)
+    const previewNode: SceneNode = {
+      id: previewNodeId,
+      name: 'WallPreview',
+      nodeType: 'Mesh',
+      position: { x: params.container.position.x, y: params.container.position.y, z: params.container.position.z },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      dynamicMesh: params.definition,
+      components: normalizedProps
+        ? {
+            [WALL_COMPONENT_TYPE]: {
+              id: previewNodeId,
+              type: WALL_COMPONENT_TYPE,
+              enabled: true,
+              props: normalizedProps,
+            },
+          }
+        : undefined,
+      userData: params.container.userData ?? null,
+    }
+
+    previewNodeById.set(previewNodeId, previewNode)
+    previewObjectById.set(previewNodeId, params.container)
+    params.container.userData = {
+      ...(params.container.userData ?? {}),
+      isWallPreview: true,
+      wallPreviewNodeId: previewNodeId,
+    }
+
+    syncWallContainer(params.container, previewNode, PREVIEW_SIGNATURE_KEY)
+  }
+
+  function disposeWallPreviewContainer(container: THREE.Object3D | null | undefined): void {
+    if (!container) {
+      return
+    }
+
+    const userData = container.userData ?? (container.userData = {})
+    const previewNodeId = typeof userData.wallPreviewNodeId === 'string' ? userData.wallPreviewNodeId : null
+    if (previewNodeId) {
+      previewNodeById.delete(previewNodeId)
+      previewObjectById.delete(previewNodeId)
+      resyncSignatureKeyByNodeId.delete(previewNodeId)
+      pendingResyncNodeIds.delete(previewNodeId)
+      wallDragCacheByNodeId.delete(previewNodeId)
+      suppressedCommittedWallNodeIds.delete(previewNodeId)
+      if (activeWallDragNodeId === previewNodeId) {
+        activeWallDragNodeId = null
+      }
+      releaseModelInstancesForNode(previewNodeId)
+    }
+
+    clearWallInstancedBindingsOnObject(container)
+    delete userData.instancedAssetId
+    delete userData.instancedBounds
+    delete userData.wallPreviewNodeId
+    options.removeInstancedPickProxy(container)
+    removeWallGroup(container)
   }
 
   function ensureWallGroup(
@@ -1091,7 +1175,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       removeWallGroup(container)
     }
 
-    if (hasBindings) {
+    if (hasBindings && !isPreviewNodeId(node.id)) {
       // 有实例化绑定时，确保 pick proxy 存在（用于命中测试/选中）。
       options.ensureInstancedPickProxy(container, node)
     } else {
@@ -1101,6 +1185,8 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   return {
     syncWallContainer,
+    syncWallPreviewContainer,
+    disposeWallPreviewContainer,
     beginWallDrag,
     endWallDrag,
     syncWallDragInstancedMatrices,

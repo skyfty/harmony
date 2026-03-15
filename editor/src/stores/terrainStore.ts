@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useUiStore } from './uiStore'
 import {
   clampTerrainPaintLayerStyle,
@@ -13,6 +13,8 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 export type GroundPanelTab = 'terrain' | 'paint' | TerrainScatterCategory
 export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
 export const SCATTER_SPACING_MAX = 20 as const
+const PAINT_CONTEXT_INTENT_TTL_MS = 1800 as const
+const PAINT_CONTEXT_SYNC_DEBOUNCE_MS = 80 as const
 
 export type TerrainPaintBrushSettings = TerrainPaintLayerStyle & {
   feather: number
@@ -64,6 +66,9 @@ export const useTerrainStore = defineStore('terrain', () => {
 
   function setGroundPanelTab(tab: GroundPanelTab) {
     groundPanelTab.value = tab
+    if (tab === 'paint') {
+      markPaintContextIntent()
+    }
     if (tab !== 'terrain' && tab !== 'paint') {
       scatterCategory.value = tab
     }
@@ -121,13 +126,23 @@ export const useTerrainStore = defineStore('terrain', () => {
     }
   })
 
-  watch(paintSelectedAsset, (next) => {
-    const ui = useUiStore()
-    if (next) {
-      ui.setActiveSelectionContext('terrain-paint')
-    } else if (ui.activeSelectionContext === 'terrain-paint') {
-      ui.setActiveSelectionContext(null)
-    }
+  watch([paintSelectedAsset, groundPanelTab], ([nextAsset, tab]: [ProjectAsset | null, GroundPanelTab]) => {
+    clearPaintContextSyncTimer()
+    paintContextSyncTimer = window.setTimeout(() => {
+      const ui = useUiStore()
+      const shouldActivatePaintContext = tab === 'paint'
+        && !!nextAsset
+        && (hasRecentPaintContextIntent() || ui.activeSelectionContext === 'terrain-paint')
+
+      if (shouldActivatePaintContext) {
+        ui.setActiveSelectionContext('terrain-paint')
+        return
+      }
+
+      if (ui.activeSelectionContext === 'terrain-paint' && (tab !== 'paint' || !nextAsset)) {
+        ui.setActiveSelectionContext(null)
+      }
+    }, PAINT_CONTEXT_SYNC_DEBOUNCE_MS)
   })
 
   function setScatterBrushRadius(value: number) {

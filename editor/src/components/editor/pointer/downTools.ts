@@ -330,6 +330,8 @@ export function handlePointerDownTools(
           const startSeg = workingSegmentsWorld[chainStartIndex]
           const endSeg = workingSegmentsWorld[chainEndIndex]
           if (startSeg && endSeg) {
+            runtime.updateMatrixWorld(true)
+            const previewAnchorWorld = runtime.getWorldPosition(new THREE.Vector3())
             const closedChain = startSeg.start.distanceToSquared(endSeg.end) <= 1e-6
             // Circle edit mode: center + radius handles only (hide all segment handles).
             if (handleKind === 'circle') {
@@ -390,6 +392,7 @@ export function handlePointerDownTools(
                     workingSegmentsWorld,
                     previewGroup: null,
                     previewSignature: null,
+                    previewAnchorWorld: previewAnchorWorld.clone(),
                     committedRenderSuppressed: false,
                   }
 
@@ -458,6 +461,7 @@ export function handlePointerDownTools(
 
                     previewGroup: null,
                     previewSignature: null,
+                    previewAnchorWorld: previewAnchorWorld.clone(),
                     committedRenderSuppressed: false,
                   }
 
@@ -502,6 +506,7 @@ export function handlePointerDownTools(
 
                   previewGroup: null,
                   previewSignature: null,
+                  previewAnchorWorld: previewAnchorWorld.clone(),
                   committedRenderSuppressed: false,
                 }
 
@@ -594,6 +599,7 @@ export function handlePointerDownTools(
                 workingSegmentsWorld,
                 previewGroup: null,
                 previewSignature: null,
+                previewAnchorWorld: previewAnchorWorld.clone(),
                 committedRenderSuppressed: false,
               }
 
@@ -743,6 +749,7 @@ export function handlePointerDownTools(
               startEndpointWorld,
               previewGroup: null,
               previewSignature: null,
+              previewAnchorWorld: previewAnchorWorld.clone(),
               committedRenderSuppressed: false,
             }
 

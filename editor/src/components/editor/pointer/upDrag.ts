@@ -79,6 +79,7 @@ export function handlePointerUpDrag(
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: any, options?: any) => any
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
+    disposeWallPreviewGroup?: (group: THREE.Group) => void
 
     roadBuildToolBeginBranchFromVertex: (options: {
       nodeId: string
@@ -235,7 +236,11 @@ export function handlePointerUpDrag(
       const preview = state.previewGroup
       state.previewGroup = null
       preview.removeFromParent()
-      disposeWallPreviewGroup(preview)
+      if (ctx.disposeWallPreviewGroup) {
+        ctx.disposeWallPreviewGroup(preview)
+      } else {
+        disposeWallPreviewGroup(preview)
+      }
     }
 
     if (state.moved) {
@@ -362,7 +367,11 @@ export function handlePointerUpDrag(
       const preview = state.previewGroup
       state.previewGroup = null
       preview.removeFromParent()
-      disposeWallPreviewGroup(preview)
+      if (ctx.disposeWallPreviewGroup) {
+        ctx.disposeWallPreviewGroup(preview)
+      } else {
+        disposeWallPreviewGroup(preview)
+      }
     }
 
     if (state.moved) {
@@ -408,7 +417,11 @@ export function handlePointerUpDrag(
       const preview = state.previewGroup
       state.previewGroup = null
       preview.removeFromParent()
-      disposeWallPreviewGroup(preview)
+      if (ctx.disposeWallPreviewGroup) {
+        ctx.disposeWallPreviewGroup(preview)
+      } else {
+        disposeWallPreviewGroup(preview)
+      }
     }
 
     if (state.moved) {
@@ -455,7 +468,11 @@ export function handlePointerUpDrag(
       const preview = state.previewGroup
       state.previewGroup = null
       preview.removeFromParent()
-      disposeWallPreviewGroup(preview)
+      if (ctx.disposeWallPreviewGroup) {
+        ctx.disposeWallPreviewGroup(preview)
+      } else {
+        disposeWallPreviewGroup(preview)
+      }
     }
 
     if (state.moved) {
@@ -545,7 +562,11 @@ export function handlePointerUpDrag(
       const preview = state.previewGroup
       state.previewGroup = null
       preview.removeFromParent()
-      disposeWallPreviewGroup(preview)
+      if (ctx.disposeWallPreviewGroup) {
+        ctx.disposeWallPreviewGroup(preview)
+      } else {
+        disposeWallPreviewGroup(preview)
+      }
     }
 
     if (state.moved) {

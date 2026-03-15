@@ -241,7 +241,6 @@ import {
   WALL_ENDPOINT_HANDLE_GROUP_NAME,
   WALL_ENDPOINT_HANDLE_Y_OFFSET,
 } from './WallEndpointRenderer'
-import { disposeWallPreviewGroup } from './wallPreviewGroupUtils'
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
 import { createWaterRectangleHandleRenderer, type WaterRectangleHandlePickResult } from './WaterRectangleHandleRenderer'
@@ -316,7 +315,6 @@ import { useSnapController, type VertexSnapResult, type PlacementSnapResult } fr
 import { createPickProxyManager } from './PickProxyManager'
 import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
-import { createWallRenderGroup, updateWallGroup } from '@schema/wallMesh'
 import { createDirectionalLightTargetHandleManager } from './DirectionalLightTargetHandle'
 import { lockDirectionalLightTargetWorldPosition, syncLightFromNodeDuringDrag } from './realtimeLightSync'
 import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
@@ -2087,25 +2085,18 @@ function syncWallPreviewGroupForEditor(options: {
     | undefined
   const wallProps = options.wallProps ?? wallComponent?.props ?? null
 
-  const resolved = wallRenderer.resolveWallPreviewRenderData({
-    definition: options.definition,
-    wallProps,
-    nodeId: node?.id ?? null,
-    previewKey: options.previewKey,
-  })
-
-  const group = options.previewGroup
-    ? options.previewGroup
-    : createWallRenderGroup(options.definition, resolved.assets, resolved.renderOptions)
-
+  const group = options.previewGroup ?? new THREE.Group()
   if (!options.previewGroup) {
+    group.name = 'WallPreview'
     group.userData.isWallPreview = true
-  } else {
-    group.userData.wallRenderAssets = resolved.assets
-    updateWallGroup(group, options.definition, resolved.renderOptions)
   }
 
-  applyAirWallVisualToWallGroup(group, resolved.isAirWall)
+  wallRenderer.syncWallPreviewContainer({
+    container: group,
+    definition: options.definition,
+    wallProps,
+    previewKey: options.previewKey,
+  })
 
   if (!rootGroup.children.includes(group)) {
     rootGroup.add(group)
@@ -5457,6 +5448,8 @@ const wallBuildTool = createWallBuildTool({
     presetData: wallBrushPresetData.value,
   }),
   resolveWallPreviewRenderData: (params) => wallRenderer.resolveWallPreviewRenderData(params),
+  syncExactWallPreview: (params) => wallRenderer.syncWallPreviewContainer(params),
+  disposeExactWallPreview: (container) => wallRenderer.disposeWallPreviewContainer(container),
 })
 
 type WallPresetData = import('@/utils/wallPreset').WallPresetData
@@ -11055,9 +11048,35 @@ function updateSelectionIndicatorFromObject(group: THREE.Group, object: THREE.Ob
   group.visible = true
 }
 
+function shouldSuppressNodeHighlightDuringBuildOrEdit(nodeId: string | null | undefined): boolean {
+  if (!nodeId) {
+    return false
+  }
+
+  const node = resolveSceneNodeById(nodeId)
+  const meshType = node?.dynamicMesh?.type
+
+  if (meshType === 'Wall') {
+    return activeBuildTool.value === 'wall' || wallEditNodeId.value === nodeId
+  }
+
+  if (meshType === 'Road') {
+    return activeBuildTool.value === 'road' || roadEditNodeId.value === nodeId
+  }
+
+  if (meshType === 'Floor') {
+    return activeBuildTool.value === 'floor' || floorEditNodeId.value === nodeId
+  }
+
+  return false
+}
+
 function updateSelectionHighlights() {
   const shouldShowSelectedHighlight = (nodeId: string | null | undefined): boolean => {
     if (!nodeId) {
+      return false
+    }
+    if (shouldSuppressNodeHighlightDuringBuildOrEdit(nodeId)) {
       return false
     }
     const node = resolveSceneNodeById(nodeId)
@@ -11208,6 +11227,9 @@ function updateOutlineSelectionTargets() {
 
   idSources.forEach((id) => {
     if (!id) {
+      return
+    }
+    if (shouldSuppressNodeHighlightDuringBuildOrEdit(id)) {
       return
     }
     const node = resolveSceneNodeById(id)
@@ -13169,6 +13191,7 @@ async function handlePointerUp(event: PointerEvent) {
         resolveRoadRenderOptionsForNodeId,
         updateRoadGroup,
         updateFloorGroup,
+        disposeWallPreviewGroup: (preview) => wallRenderer.disposeWallPreviewContainer(preview),
         roadBuildToolBeginBranchFromVertex: (options) => roadBuildTool.beginBranchFromVertex(options),
         wallBuildToolBeginBranchFromEndpoint: (options) => wallBuildTool.beginBranchFromEndpoint(options),
       })
@@ -13496,7 +13519,7 @@ function handlePointerCancel(event: PointerEvent) {
         const preview = state.previewGroup
         state.previewGroup = null
         preview.removeFromParent()
-        disposeWallPreviewGroup(preview)
+        wallRenderer.disposeWallPreviewContainer(preview)
       }
     } catch {
       /* noop */
@@ -13522,7 +13545,7 @@ function handlePointerCancel(event: PointerEvent) {
         const preview = state.previewGroup
         state.previewGroup = null
         preview.removeFromParent()
-        disposeWallPreviewGroup(preview)
+        wallRenderer.disposeWallPreviewContainer(preview)
       }
     } catch {
       /* noop */
@@ -13548,7 +13571,7 @@ function handlePointerCancel(event: PointerEvent) {
         const preview = state.previewGroup
         state.previewGroup = null
         preview.removeFromParent()
-        disposeWallPreviewGroup(preview)
+        wallRenderer.disposeWallPreviewContainer(preview)
       }
 
       const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
@@ -13592,7 +13615,7 @@ function handlePointerCancel(event: PointerEvent) {
         const preview = state.previewGroup
         state.previewGroup = null
         preview.removeFromParent()
-        disposeWallPreviewGroup(preview)
+        wallRenderer.disposeWallPreviewContainer(preview)
       }
 
       const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
@@ -13638,7 +13661,7 @@ function handlePointerCancel(event: PointerEvent) {
         const preview = state.previewGroup
         state.previewGroup = null
         preview.removeFromParent()
-        disposeWallPreviewGroup(preview)
+        wallRenderer.disposeWallPreviewContainer(preview)
       }
 
       const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
