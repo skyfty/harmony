@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { MathUtils, Vector3 } from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@schema'
+import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -34,7 +35,6 @@ const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore
 
 const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
-const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
 const localRepeatInstanceStep = ref<number>(WALL_DEFAULT_REPEAT_INSTANCE_STEP)
 
@@ -157,7 +157,7 @@ type WallEndCapOffsetKey = 'bodyEndCapOffsetLocal' | 'headEndCapOffsetLocal' | '
 type WallDimensionValues = {
   height: number
   width: number
-  thickness: number
+  thickness?: number
 }
 
 const WALL_UP_AXIS = new Vector3(0, 1, 0)
@@ -184,6 +184,12 @@ const cornerModels = computed<WallCornerModelRow[]>(() => {
   const raw = wallComponent.value?.props?.cornerModels
   return Array.isArray(raw) ? (raw as WallCornerModelRow[]) : []
 })
+
+const wallBaseOffsetModelValue = computed(() => normalizeOffsetLocal((wallComponent.value?.props as any)?.wallBaseOffsetLocal))
+
+function toFixedTwoDecimals(value: number): number {
+  return Math.round(value * 100) / 100
+}
 
 function clampAngleDegrees(value: unknown, fallback: number): number {
   const num = typeof value === 'number' ? value : Number(value)
@@ -402,9 +408,8 @@ watch(
       return
     }
     isSyncingFromScene.value = true
-      localHeight.value = Number(((props.height ?? WALL_DEFAULT_HEIGHT)).toFixed(1))
-    localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
-    localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
+      localHeight.value = toFixedTwoDecimals(props.height ?? WALL_DEFAULT_HEIGHT)
+    localWidth.value = toFixedTwoDecimals(props.width ?? WALL_DEFAULT_WIDTH)
     localSmoothing.value = Number.isFinite(props.smoothing)
       ? Math.min(1, Math.max(0, props.smoothing))
       : WALL_DEFAULT_SMOOTHING
@@ -419,10 +424,13 @@ watch(
 )
 
 function resolveClampedWallDimensions(raw: WallDimensionValues, props: Partial<WallComponentProps>): WallDimensionValues {
+  const nextThickness = Number(raw.thickness)
   return {
-    height: clampDimension(Number(raw.height), props.height ?? WALL_DEFAULT_HEIGHT, WALL_MIN_HEIGHT),
-    width: clampDimension(Number(raw.width), props.width ?? WALL_DEFAULT_WIDTH, WALL_MIN_WIDTH),
-    thickness: clampDimension(Number(raw.thickness), props.thickness ?? WALL_DEFAULT_THICKNESS, WALL_MIN_THICKNESS),
+    height: toFixedTwoDecimals(clampDimension(Number(raw.height), props.height ?? WALL_DEFAULT_HEIGHT, WALL_MIN_HEIGHT)),
+    width: toFixedTwoDecimals(clampDimension(Number(raw.width), props.width ?? WALL_DEFAULT_WIDTH, WALL_MIN_WIDTH)),
+    ...(Number.isFinite(nextThickness)
+      ? { thickness: clampDimension(nextThickness, props.thickness ?? WALL_DEFAULT_THICKNESS, WALL_MIN_THICKNESS) }
+      : {}),
   }
 }
 
@@ -442,19 +450,17 @@ function commitWallDimensions(raw: WallDimensionValues) {
 
   try {
     const nextDimensions = resolveClampedWallDimensions(raw, props)
+    const hasThickness = Number.isFinite(nextDimensions.thickness)
     const hasChanges =
       props.height !== nextDimensions.height ||
       props.width !== nextDimensions.width ||
-      props.thickness !== nextDimensions.thickness
+      (hasThickness && props.thickness !== nextDimensions.thickness)
 
     if (localHeight.value !== nextDimensions.height) {
       localHeight.value = nextDimensions.height
     }
     if (localWidth.value !== nextDimensions.width) {
       localWidth.value = nextDimensions.width
-    }
-    if (localThickness.value !== nextDimensions.thickness) {
-      localThickness.value = nextDimensions.thickness
     }
 
     if (hasChanges) {
@@ -1063,17 +1069,16 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'foot
 watch([
   localHeight,
   localWidth,
-  localThickness,
-], ([height, width, thickness], [prevHeight, prevWidth, prevThickness]) => {
+], ([height, width], [prevHeight, prevWidth]) => {
   if (isSyncingFromScene.value || isApplyingDimensions.value) {
     return
   }
 
-  if (!Number.isFinite(height) || !Number.isFinite(width) || !Number.isFinite(thickness)) {
+  if (!Number.isFinite(height) || !Number.isFinite(width)) {
     return
   }
 
-  if (height === prevHeight && width === prevWidth && thickness === prevThickness) {
+  if (height === prevHeight && width === prevWidth) {
     return
   }
 
@@ -1111,8 +1116,44 @@ function applyDimensions() {
   commitWallDimensions({
     height: Number(localHeight.value),
     width: Number(localWidth.value),
-    thickness: Number(localThickness.value),
   })
+}
+
+function handleWallBaseOffsetAxisUpdate(axis: 'x' | 'y' | 'z', rawValue: string): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = toFixedTwoDecimals(Number(rawValue))
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const current = normalizeOffsetLocal((component.props as any)?.wallBaseOffsetLocal)
+  if (Math.abs(current[axis] - value) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, {
+    wallBaseOffsetLocal: {
+      ...current,
+      [axis]: value,
+    },
+  } as any)
+}
+
+function resetWallBaseOffset(): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const current = normalizeOffsetLocal((component.props as any)?.wallBaseOffsetLocal)
+  if (Math.abs(current.x) <= 1e-6 && Math.abs(current.y) <= 1e-6 && Math.abs(current.z) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, {
+    wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
+  } as any)
 }
 
 function applySmoothingUpdate(rawValue: unknown) {
@@ -1356,20 +1397,15 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 inputmode="decimal"
                 @keydown.enter.prevent="applyDimensions"
               />
-              <v-text-field
-                v-model.number="localThickness"
-                label="Thickness (m)"
-                type="number"
-                class="slider-input"
-                density="compact"
-                inputmode="decimal"
-                variant="underlined"
-                step="0.05"
-                min="0.05"
-                @blur="applyDimensions"
-                @keydown.enter.prevent="applyDimensions"
-              />
             </div>
+            <InspectorVectorControls
+              label="Base Offset (m)"
+              :model-value="wallBaseOffsetModelValue"
+              :step="0.01"
+              :disabled="!wallComponent"
+              @dblclick:label="resetWallBaseOffset"
+              @update:axis="handleWallBaseOffsetAxisUpdate"
+            />
             <div class="wall-dimension-actions">
               <v-btn
                 class="wall-dimension-action-button"
@@ -2751,6 +2787,10 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
   display: flex;
   gap: 0.5rem;
   align-items: flex-end;
+}
+
+.wall-dimension-block :deep(.vector-group) {
+  padding: 0.15rem 0 0;
 }
 
 .wall-dimension-row .slider-input {

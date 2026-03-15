@@ -12630,9 +12630,48 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
+      const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+      const existingWallProps = wallComponent?.props
+        ? clampWallProps(wallComponent.props as WallComponentProps)
+        : null
+      const wallBaseOffsetLocal = existingWallProps?.wallBaseOffsetLocal
+      const baseOffsetX = Number((wallBaseOffsetLocal as any)?.x) || 0
+      const baseOffsetY = Number((wallBaseOffsetLocal as any)?.y) || 0
+      const baseOffsetZ = Number((wallBaseOffsetLocal as any)?.z) || 0
+
+      // Line-build sessions operate on the currently visible world segments. Convert them
+      // back to the unshifted baseline before rebuilding, then re-apply the local base
+      // offset once to avoid recursive accumulation on previously committed segments.
+      const normalizedSegments = (payload.segments ?? []).map((segment) => ({
+        start: {
+          x: Number(segment?.start?.x ?? 0) + baseOffsetX,
+          y: Number(segment?.start?.y ?? 0) + baseOffsetY,
+          z: Number(segment?.start?.z ?? 0) + baseOffsetZ,
+        },
+        end: {
+          x: Number(segment?.end?.x ?? 0) + baseOffsetX,
+          y: Number(segment?.end?.y ?? 0) + baseOffsetY,
+          z: Number(segment?.end?.z ?? 0) + baseOffsetZ,
+        },
+      }))
+
+      const build = buildWallDynamicMeshFromWorldSegments(normalizedSegments, payload.dimensions)
       if (!build) {
         return false
+      }
+
+      if (Math.abs(baseOffsetX) > 1e-6 || Math.abs(baseOffsetY) > 1e-6 || Math.abs(baseOffsetZ) > 1e-6) {
+        build.definition = {
+          ...build.definition,
+          chains: (build.definition.chains ?? []).map((chain) => ({
+            ...chain,
+            points: (chain.points ?? []).map((point) => ({
+              x: Number(point?.x ?? 0) - baseOffsetX,
+              y: Number(point?.y ?? 0) - baseOffsetY,
+              z: Number(point?.z ?? 0) - baseOffsetZ,
+            })),
+          })),
+        }
       }
 
       const currentBodyMaterialConfigId = typeof (node.dynamicMesh as any)?.bodyMaterialConfigId === 'string'
@@ -12653,7 +12692,7 @@ export const useSceneStore = defineStore('scene', {
       // Keep wall component dimensions in sync with the wall mesh so inspector UI and runtime component state
       // always reflect geometry edits (e.g. gizmo height drag).
       const meshProps = resolveWallComponentPropsFromMesh(build.definition)
-      const previousWallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+      const previousWallComponent = wallComponent
       const previousProps = previousWallComponent?.props as WallComponentProps | undefined
       const nextProps = clampWallProps({
         ...meshProps,
@@ -13022,6 +13061,8 @@ export const useSceneStore = defineStore('scene', {
         | RigidbodyComponentProps
         | VehicleComponentProps
         | WaterComponentProps
+      let wallCenterOffsetDelta: { x: number; y: number; z: number } | null = null
+      let isOffsetOnlyWallPatch = false
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = clampWallProps(component.props as WallComponentProps)
         const typedPatch = patch as Partial<WallComponentProps>
@@ -13029,6 +13070,7 @@ export const useSceneStore = defineStore('scene', {
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
         const hasFootAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footAssetId')
+        const hasWallBaseOffsetLocal = Object.prototype.hasOwnProperty.call(typedPatch, 'wallBaseOffsetLocal')
         const hasBodyEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapAssetId')
         const hasHeadEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapAssetId')
         const hasFootEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapAssetId')
@@ -13049,6 +13091,8 @@ export const useSceneStore = defineStore('scene', {
         const hasWallRenderMode = Object.prototype.hasOwnProperty.call(typedPatch, 'wallRenderMode')
         const hasRepeatInstanceStep = Object.prototype.hasOwnProperty.call(typedPatch, 'repeatInstanceStep')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
+        const patchKeys = Object.keys(typedPatch)
+        isOffsetOnlyWallPatch = hasWallBaseOffsetLocal && patchKeys.length === 1
 
         const orientationsEqual = (a: any, b: any): boolean => {
           const axisA = typeof a?.forwardAxis === 'string' ? a.forwardAxis : null
@@ -13191,6 +13235,9 @@ export const useSceneStore = defineStore('scene', {
           height: (typedPatch.height as number | undefined) ?? currentProps.height,
           width: (typedPatch.width as number | undefined) ?? currentProps.width,
           thickness: (typedPatch.thickness as number | undefined) ?? currentProps.thickness,
+          wallBaseOffsetLocal: hasWallBaseOffsetLocal
+            ? (typedPatch.wallBaseOffsetLocal as any)
+            : currentProps.wallBaseOffsetLocal,
           smoothing: hasSmoothing
             ? (typedPatch.smoothing as number | undefined)
             : currentProps.smoothing,
@@ -13269,6 +13316,7 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.height - merged.height) <= 1e-4 &&
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
+          offsetLocalEqual(currentProps.wallBaseOffsetLocal, merged.wallBaseOffsetLocal) &&
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
           (currentProps.bodyMaterialConfigId ?? null) === (merged.bodyMaterialConfigId ?? null) &&
           currentProps.isAirWall === merged.isAirWall &&
@@ -13295,6 +13343,12 @@ export const useSceneStore = defineStore('scene', {
           cornerModelsEqual(currentProps.cornerModels, merged.cornerModels)
         if (unchanged) {
           return false
+        }
+
+        wallCenterOffsetDelta = {
+          x: (Number((merged.wallBaseOffsetLocal as any)?.x) || 0) - (Number((currentProps.wallBaseOffsetLocal as any)?.x) || 0),
+          y: (Number((merged.wallBaseOffsetLocal as any)?.y) || 0) - (Number((currentProps.wallBaseOffsetLocal as any)?.y) || 0),
+          z: (Number((merged.wallBaseOffsetLocal as any)?.z) || 0) - (Number((currentProps.wallBaseOffsetLocal as any)?.z) || 0),
         }
 
         nextProps = cloneWallComponentProps(merged)
@@ -13553,8 +13607,42 @@ export const useSceneStore = defineStore('scene', {
         node.components = nextComponents
 
         if (currentType === WALL_COMPONENT_TYPE) {
-          includesWallTransformChange = true
-          applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
+          includesWallTransformChange = !isOffsetOnlyWallPatch
+          if (!isOffsetOnlyWallPatch) {
+            applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
+          }
+          if (wallCenterOffsetDelta && node.dynamicMesh?.type === 'Wall' && (
+            Math.abs(wallCenterOffsetDelta.x) > 1e-6
+            || Math.abs(wallCenterOffsetDelta.y) > 1e-6
+            || Math.abs(wallCenterOffsetDelta.z) > 1e-6
+          )) {
+            node.dynamicMesh = {
+              ...node.dynamicMesh,
+              chains: (node.dynamicMesh.chains ?? []).map((chain) => ({
+                ...chain,
+                points: (chain.points ?? []).map((point) => ({
+                  x: Number(point?.x ?? 0) - wallCenterOffsetDelta!.x,
+                  y: Number(point?.y ?? 0) - wallCenterOffsetDelta!.y,
+                  z: Number(point?.z ?? 0) - wallCenterOffsetDelta!.z,
+                })),
+              })),
+            }
+
+            const runtime = getRuntimeObject(node.id)
+            if (runtime) {
+              runtime.traverse((child) => {
+                const group = child as THREE.Group
+                if (!(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')) {
+                  return
+                }
+                updateWallGroup(group, node.dynamicMesh as WallDynamicMesh, {
+                  smoothing: resolveWallSmoothing(node),
+                  wallRenderMode: resolveWallRenderMode(node),
+                  repeatInstanceStep: resolveWallRepeatInstanceStep(node),
+                } as any)
+              })
+            }
+          }
         } else if (currentType === ROAD_COMPONENT_TYPE) {
           applyRoadComponentPropsToNode(node, nextProps as RoadComponentProps, resolveGroundNodeForHeightSampling(this.nodes))
         } else if (currentType === DISPLAY_BOARD_COMPONENT_TYPE) {

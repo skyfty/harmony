@@ -807,7 +807,16 @@ export function createWallBuildTool(options: {
     }
 
     const segment: WallPreviewSegment = { start, end }
-    const pendingSegments = session.nodeId ? [...session.segments, segment] : [segment]
+    const currentSession = session
+    const liveBaseSegments = currentSession.nodeId
+      ? (() => {
+          const liveNode = findSceneNode(options.sceneStore.nodes, currentSession.nodeId)
+          return liveNode?.dynamicMesh?.type === 'Wall'
+            ? expandWallSegmentsToWorld(liveNode)
+            : currentSession.segments
+        })()
+      : []
+    const pendingSegments = currentSession.nodeId ? [...liveBaseSegments, segment] : [segment]
 
     const segmentPayload = pendingSegments.map((entry) => ({
       start: entry.start.clone(),
@@ -815,6 +824,7 @@ export function createWallBuildTool(options: {
     }))
 
     let nodeId = session.nodeId
+    let continuationAnchor = end.clone()
     const shouldApplyBrushPreset = !nodeId && !!session.brushPresetAssetId
     if (!nodeId) {
       const created = options.sceneStore.createWallNode({
@@ -831,10 +841,20 @@ export function createWallBuildTool(options: {
 
       options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, 'line'))
 
-      nodeId = created.id
-      session.nodeId = nodeId
-      session.segments = pendingSegments
-      session.dimensions = getWallNodeDimensions(created)
+      const createdNodeId = created.id
+      nodeId = createdNodeId
+      session.nodeId = createdNodeId
+      const createdLive = findSceneNode(options.sceneStore.nodes, createdNodeId)
+      session.segments = createdLive?.dynamicMesh?.type === 'Wall'
+        ? expandWallSegmentsToWorld(createdLive)
+        : expandWallSegmentsToWorld(created)
+      const createdTail = session.segments[session.segments.length - 1]?.end
+      if (createdTail) {
+        continuationAnchor = createdTail.clone()
+      }
+      session.dimensions = createdLive?.dynamicMesh?.type === 'Wall'
+        ? getWallNodeDimensions(createdLive)
+        : getWallNodeDimensions(created)
 
       if (shouldApplyBrushPreset && session.brushPresetAssetId) {
         void options.sceneStore
@@ -855,6 +875,11 @@ export function createWallBuildTool(options: {
       session.segments = pendingSegments
       const refreshed = findSceneNode(options.sceneStore.nodes, nodeId)
       if (refreshed?.dynamicMesh?.type === 'Wall') {
+        session.segments = expandWallSegmentsToWorld(refreshed)
+        const refreshedTail = session.segments[session.segments.length - 1]?.end
+        if (refreshedTail) {
+          continuationAnchor = refreshedTail.clone()
+        }
         session.dimensions = getWallNodeDimensions(refreshed)
         options.sceneStore.updateNodeUserData(
           nodeId,
@@ -866,8 +891,9 @@ export function createWallBuildTool(options: {
     if (startedFromBranch) {
       session.branchFrom = null
     }
-    session.dragStart = end.clone()
-    session.dragEnd = end.clone()
+    session.lockedSegmentY = isFiniteNumber(continuationAnchor.y) ? continuationAnchor.y : session.lockedSegmentY
+    session.dragStart = continuationAnchor.clone()
+    session.dragEnd = continuationAnchor.clone()
     session.committedNewSegmentCount += 1
     session.dimensions = options.normalizeWallDimensionsForViewport(session.dimensions)
     previewRenderer.markDirty()
