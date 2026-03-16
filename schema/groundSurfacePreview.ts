@@ -444,7 +444,9 @@ function installGroundSurfacePreviewShaderHooks(material: THREE.MeshStandardMate
         [
           '#include <map_fragment>',
           'if (uHarmonyGroundOverlayEnabled > 0.5) {',
-          '  vec2 harmonyOverlayUv = (vHarmonyGroundOverlayLocalXZ - uHarmonyGroundOverlayBounds.xy) / max(uHarmonyGroundOverlayBounds.zw, vec2(1e-5));',
+          '  vec2 harmonyOverlayUvRaw = (vHarmonyGroundOverlayLocalXZ - uHarmonyGroundOverlayBounds.xy) / max(uHarmonyGroundOverlayBounds.zw, vec2(1e-5));',
+          '  // Match ground mesh UVs: U grows with +X, V decreases as +Z moves "down" across the canvas.',
+          '  vec2 harmonyOverlayUv = vec2(harmonyOverlayUvRaw.x, 1.0 - harmonyOverlayUvRaw.y);',
           '  bool harmonyOverlayInside = harmonyOverlayUv.x >= 0.0 && harmonyOverlayUv.x <= 1.0 && harmonyOverlayUv.y >= 0.0 && harmonyOverlayUv.y <= 1.0;',
           '  if (harmonyOverlayInside) {',
           '    vec4 harmonyOverlaySample = texture2D(uHarmonyGroundOverlayTexture, harmonyOverlayUv);',
