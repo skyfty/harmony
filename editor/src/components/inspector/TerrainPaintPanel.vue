@@ -50,11 +50,6 @@ const emit = defineEmits<{
   (event: 'update:settings', value: TerrainPaintBrushSettings): void
 }>()
 
-const selectedAssetLabel = computed(() => {
-  const name = typeof props.asset?.name === 'string' ? props.asset.name.trim() : ''
-  return name.length > 0 ? `Texture: ${name}` : 'Select a paint texture'
-})
-
 const brushRadiusModel = computed({
   get: () => props.brushRadius,
   set: (value: number) => emit('update:brushRadius', value),
@@ -70,11 +65,6 @@ function emitSettingsPatch(patch: Partial<TerrainPaintBrushSettings>) {
 const blendModeModel = computed<TerrainPaintBlendMode>({
   get: () => props.settings.blendMode,
   set: (value) => emitSettingsPatch({ blendMode: value }),
-})
-
-const worldSpaceModel = computed({
-  get: () => props.settings.worldSpace,
-  set: (value: boolean) => emitSettingsPatch({ worldSpace: value }),
 })
 
 const brushRadiusInput = ref(formatNumericValue(props.brushRadius, BRUSH_RADIUS_PRECISION))
