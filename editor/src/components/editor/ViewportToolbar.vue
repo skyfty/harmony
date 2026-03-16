@@ -101,7 +101,6 @@
               <div class="ground-tool-menu__content">
                 <TerrainPaintPanel
                   v-model:brush-radius="groundBrushRadiusModel"
-                  v-model:smoothness="groundPaintSmoothnessModel"
                   v-model:asset="groundPaintAssetModel"
                   v-model:settings="groundPaintSettingsModel"
                   :has-ground="hasGroundNode"
@@ -1118,7 +1117,6 @@ const props = withDefaults(
   groundBrushOperation: GroundSculptOperation | null
   groundNoiseStrength: number
   groundNoiseMode: GroundGenerationMode
-  groundPaintSmoothness: number
   groundPaintAsset: ProjectAsset | null
   groundPaintSettings: TerrainPaintBrushSettings
   groundScatterCategory: TerrainScatterCategory
@@ -1173,7 +1171,6 @@ const emit = defineEmits<{
   (event: 'update:ground-brush-operation', value: GroundSculptOperation | null): void
   (event: 'update:ground-noise-strength', value: number): void
   (event: 'update:ground-noise-mode', value: GroundGenerationMode): void
-  (event: 'update:ground-paint-smoothness', value: number): void
   (event: 'update:ground-paint-asset', value: ProjectAsset | null): void
   (event: 'update:ground-paint-settings', value: TerrainPaintBrushSettings): void
   (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
@@ -1226,7 +1223,6 @@ const {
   groundBrushOperation,
   groundNoiseStrength,
   groundNoiseMode,
-  groundPaintSmoothness,
   groundPaintAsset,
   groundPaintSettings,
   groundScatterCategory,
@@ -1466,11 +1462,6 @@ const groundNoiseStrengthModel = computed({
 const groundNoiseModeModel = computed({
   get: () => groundNoiseMode.value,
   set: (value: GroundGenerationMode) => emit('update:ground-noise-mode', value),
-})
-
-const groundPaintSmoothnessModel = computed({
-  get: () => groundPaintSmoothness.value,
-  set: (value: number) => emit('update:ground-paint-smoothness', Number(value)),
 })
 
 const groundPaintAssetModel = computed<ProjectAsset | null>({

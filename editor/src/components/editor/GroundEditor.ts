@@ -104,7 +104,6 @@ export type GroundEditorOptions = {
 	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
 	paintAsset: Ref<ProjectAsset | null>
-	paintSmoothness: Ref<number>
 	paintLayerStyle: Ref<TerrainPaintBrushSettings>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
@@ -236,6 +235,14 @@ function createCompositionCanvas(width: number, height: number): OffscreenCanvas
 const terrainPaintBrushImageCache = new Map<string, Promise<LoadedPaintImage | null>>()
 const terrainPaintBrushImageResolvedCache = new Map<string, LoadedPaintImage | null>()
 
+function getLoadedTerrainPaintBrushImage(assetId: string): LoadedPaintImage | null {
+	const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+	if (!normalized) {
+		return null
+	}
+	return terrainPaintBrushImageResolvedCache.get(normalized) ?? null
+}
+
 function resolveCanvasImageSourceSize(source: CanvasImageSource): { width: number; height: number } | null {
 	const candidate = source as { width?: number; height?: number; videoWidth?: number; videoHeight?: number; naturalWidth?: number; naturalHeight?: number }
 	const width = candidate.width ?? candidate.videoWidth ?? candidate.naturalWidth ?? 0
@@ -294,52 +301,52 @@ function extractPaintImageDataFromSource(source: CanvasImageSource, width?: numb
 
 async function loadTerrainPaintBrushImage(asset: ProjectAsset): Promise<LoadedPaintImage | null> {
 	const assetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
-	if (!assetId) {
-		return null
-	}
-	const cached = terrainPaintBrushImageCache.get(assetId)
-	if (cached) {
-		return await cached
-	}
-	const pending = (async () => {
-		try {
-			const cache = useAssetCacheStore()
-			const entry = await cache.downloaProjectAsset(asset)
-			const blob = entry?.status === 'cached' ? (entry.blob ?? null) : null
-			if (!blob) {
-				terrainPaintBrushImageResolvedCache.set(assetId, null)
-				return null
-			}
-			const source = await blobToCanvasImageSource(blob)
-			if (!source) {
-				terrainPaintBrushImageResolvedCache.set(assetId, null)
-				return null
-			}
-			const imageData = extractPaintImageDataFromSource(source)
-			if (!imageData) {
-				terrainPaintBrushImageResolvedCache.set(assetId, null)
-				return null
-			}
-			const loaded = { source, imageData }
-			terrainPaintBrushImageResolvedCache.set(assetId, loaded)
-			return loaded
-		} catch (error) {
-			console.warn('加载地貌绘制笔刷图片失败：', error)
-			terrainPaintBrushImageCache.delete(assetId)
-			terrainPaintBrushImageResolvedCache.set(assetId, null)
-			return null
-		}
-	})()
-	terrainPaintBrushImageCache.set(assetId, pending)
-	return await pending
-}
-
-function getLoadedTerrainPaintBrushImage(assetId: string | null | undefined): LoadedPaintImage | null {
 	const normalized = typeof assetId === 'string' ? assetId.trim() : ''
 	if (!normalized) {
 		return null
 	}
-	return terrainPaintBrushImageResolvedCache.get(normalized) ?? null
+	const cached = terrainPaintBrushImageResolvedCache.get(normalized)
+	if (cached) {
+		return cached
+	}
+	const inflight = terrainPaintBrushImageCache.get(normalized)
+	if (inflight) {
+		return await inflight
+	}
+	const pending = (async () => {
+		const cache = useAssetCacheStore()
+		let blob: Blob | null = null
+		try {
+			const entry = await cache.downloaProjectAsset(asset)
+			blob = entry.blob ?? null
+		} catch (error) {
+			console.warn('加载地貌绘制笔刷失败：', error)
+		}
+		if (!blob) {
+			const fallbackUrl = typeof asset.downloadUrl === 'string' ? asset.downloadUrl.trim() : ''
+			if (fallbackUrl) {
+				const response = await fetch(fallbackUrl, { credentials: 'include' }).catch(() => null)
+				blob = response?.ok ? await response.blob() : null
+			}
+		}
+		if (!blob) {
+			return null
+		}
+		const source = await blobToCanvasImageSource(blob)
+		if (!source) {
+			return null
+		}
+		const imageData = extractPaintImageDataFromSource(source)
+		if (!imageData) {
+			return null
+		}
+		return { source, imageData }
+	})()
+	terrainPaintBrushImageCache.set(normalized, pending)
+	const loaded = await pending
+	terrainPaintBrushImageResolvedCache.set(normalized, loaded)
+	terrainPaintBrushImageCache.delete(normalized)
+	return loaded
 }
 
 function samplePaintImageData(image: PaintImageDataSource, u: number, v: number, target: Float32Array): void {
@@ -632,47 +639,6 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 		}
 	}
 	return nextChunks
-}
-
-
-function blurWeightmap(data: Uint8ClampedArray, resolution: number, iterations: number): Uint8ClampedArray {
-	const res = Math.max(1, Math.round(resolution))
-	let src: Uint8ClampedArray<ArrayBufferLike> = data
-	let dst: Uint8ClampedArray<ArrayBufferLike> = new Uint8ClampedArray(src.length) as Uint8ClampedArray<ArrayBufferLike>
-	const iters = Math.max(0, Math.min(8, Math.round(iterations)))
-	for (let iter = 0; iter < iters; iter += 1) {
-		for (let y = 0; y < res; y += 1) {
-			for (let x = 0; x < res; x += 1) {
-				const base = (y * res + x) * 4
-				const sums: [number, number, number, number] = [0, 0, 0, 0]
-				let count = 0
-				for (let oy = -1; oy <= 1; oy += 1) {
-					const yy = THREE.MathUtils.clamp(y + oy, 0, res - 1)
-					for (let ox = -1; ox <= 1; ox += 1) {
-						const xx = THREE.MathUtils.clamp(x + ox, 0, res - 1)
-						const off = (yy * res + xx) * 4
-						sums[0] += src[off] ?? 0
-						sums[1] += src[off + 1] ?? 0
-						sums[2] += src[off + 2] ?? 0
-						sums[3] += src[off + 3] ?? 0
-						count += 1
-					}
-				}
-				const r = Math.round(sums[0] / Math.max(1, count))
-				const g = Math.round(sums[1] / Math.max(1, count))
-				const b = Math.round(sums[2] / Math.max(1, count))
-				const a = Math.round(sums[3] / Math.max(1, count))
-				dst[base] = r
-				dst[base + 1] = g
-				dst[base + 2] = b
-				dst[base + 3] = a
-			}
-		}
-		const swap = src
-		src = dst
-		dst = swap
-	}
-	return src
 }
 
 function clampScatterBrushRadius(value: unknown): number {
@@ -3475,15 +3441,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return false
 			}
 
-			const smoothness = clamp01(options.paintSmoothness.value)
-			const smoothIterations = Math.max(0, Math.min(6, Math.round(smoothness * 4)))
 			let nextGroundSurfaceChunks = cloneGroundSurfaceChunks(session.definition, session.nodeId)
-			if (smoothIterations > 0) {
-				dirtyChunks.forEach((chunk) => {
-					chunk.surfaceData = blurWeightmap(chunk.surfaceData, chunk.resolution, smoothIterations)
-					queueTerrainPaintLiveSurfacePreviewChunk(session, chunk)
-				})
-			}
 
 			for (const chunk of dirtyChunks) {
 				if (token !== paintCommitToken) {

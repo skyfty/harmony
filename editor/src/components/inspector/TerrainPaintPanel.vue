@@ -10,11 +10,6 @@ const BRUSH_RADIUS_MAX = 50
 const BRUSH_RADIUS_STEP = 0.1
 const BRUSH_RADIUS_PRECISION = 1
 
-const SMOOTHNESS_MIN = 0
-const SMOOTHNESS_MAX = 1
-const SMOOTHNESS_STEP = 0.01
-const SMOOTHNESS_PRECISION = 2
-
 const TILE_SCALE_MIN = 0.001
 const TILE_SCALE_MAX = 64
 const TILE_SCALE_STEP = 0.01
@@ -29,11 +24,6 @@ const ROTATION_MIN = -360
 const ROTATION_MAX = 360
 const ROTATION_STEP = 1
 const ROTATION_PRECISION = 0
-
-const OPACITY_MIN = 0
-const OPACITY_MAX = 1
-const OPACITY_STEP = 0.01
-const OPACITY_PRECISION = 2
 
 const FEATHER_MIN = 0
 const FEATHER_MAX = 1
@@ -50,14 +40,12 @@ const blendModeOptions: Array<{ value: TerrainPaintBlendMode; label: string }> =
 const props = defineProps<{
   hasGround: boolean
   brushRadius: number
-  smoothness: number
   asset: ProjectAsset | null
   settings: TerrainPaintBrushSettings
 }>()
 
 const emit = defineEmits<{
   (event: 'update:brushRadius', value: number): void
-  (event: 'update:smoothness', value: number): void
   (event: 'update:asset', value: ProjectAsset | null): void
   (event: 'update:settings', value: TerrainPaintBrushSettings): void
 }>()
@@ -70,11 +58,6 @@ const selectedAssetLabel = computed(() => {
 const brushRadiusModel = computed({
   get: () => props.brushRadius,
   set: (value: number) => emit('update:brushRadius', value),
-})
-
-const smoothnessModel = computed({
-  get: () => props.smoothness,
-  set: (value: number) => emit('update:smoothness', value),
 })
 
 function emitSettingsPatch(patch: Partial<TerrainPaintBrushSettings>) {
@@ -95,13 +78,11 @@ const worldSpaceModel = computed({
 })
 
 const brushRadiusInput = ref(formatNumericValue(props.brushRadius, BRUSH_RADIUS_PRECISION))
-const smoothnessInput = ref(formatNumericValue(props.smoothness, SMOOTHNESS_PRECISION))
 const tileScaleXInput = ref(formatNumericValue(props.settings.tileScale.x, TILE_SCALE_PRECISION))
 const tileScaleYInput = ref(formatNumericValue(props.settings.tileScale.y, TILE_SCALE_PRECISION))
 const offsetXInput = ref(formatNumericValue(props.settings.offset.x, OFFSET_PRECISION))
 const offsetYInput = ref(formatNumericValue(props.settings.offset.y, OFFSET_PRECISION))
 const rotationInput = ref(formatNumericValue(props.settings.rotationDeg, ROTATION_PRECISION))
-const opacityInput = ref(formatNumericValue(props.settings.opacity, OPACITY_PRECISION))
 const featherInput = ref(formatNumericValue(props.settings.feather, FEATHER_PRECISION))
 
 const selectedAssetId = computed(() => props.asset?.id ?? '')
@@ -110,13 +91,6 @@ watch(
   () => props.brushRadius,
   (value) => {
     brushRadiusInput.value = formatNumericValue(value, BRUSH_RADIUS_PRECISION)
-  },
-)
-
-watch(
-  () => props.smoothness,
-  (value) => {
-    smoothnessInput.value = formatNumericValue(value, SMOOTHNESS_PRECISION)
   },
 )
 
@@ -152,13 +126,6 @@ watch(
   () => props.settings.rotationDeg,
   (value) => {
     rotationInput.value = formatNumericValue(value, ROTATION_PRECISION)
-  },
-)
-
-watch(
-  () => props.settings.opacity,
-  (value) => {
-    opacityInput.value = formatNumericValue(value, OPACITY_PRECISION)
   },
 )
 
@@ -209,19 +176,6 @@ function commitBrushRadiusInput() {
   )
   brushRadiusModel.value = normalized
   brushRadiusInput.value = formatNumericValue(normalized, BRUSH_RADIUS_PRECISION)
-}
-
-function commitSmoothnessInput() {
-  const normalized = parseAndNormalize(
-    smoothnessInput.value,
-    props.smoothness,
-    SMOOTHNESS_MIN,
-    SMOOTHNESS_MAX,
-    SMOOTHNESS_STEP,
-    SMOOTHNESS_PRECISION,
-  )
-  smoothnessModel.value = normalized
-  smoothnessInput.value = formatNumericValue(normalized, SMOOTHNESS_PRECISION)
 }
 
 function commitTileScaleAxis(axis: 'x' | 'y') {
@@ -277,19 +231,6 @@ function commitRotationInput() {
   rotationInput.value = formatNumericValue(normalized, ROTATION_PRECISION)
 }
 
-function commitOpacityInput() {
-  const normalized = parseAndNormalize(
-    opacityInput.value,
-    props.settings.opacity,
-    OPACITY_MIN,
-    OPACITY_MAX,
-    OPACITY_STEP,
-    OPACITY_PRECISION,
-  )
-  emitSettingsPatch({ opacity: normalized })
-  opacityInput.value = formatNumericValue(normalized, OPACITY_PRECISION)
-}
-
 function commitFeatherInput() {
   const normalized = parseAndNormalize(
     featherInput.value,
@@ -302,55 +243,31 @@ function commitFeatherInput() {
   emitSettingsPatch({ feather: normalized })
   featherInput.value = formatNumericValue(normalized, FEATHER_PRECISION)
 }
-
-const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ?? 0) * 100)}%`)
 </script>
 
 <template>
   <div class="terrain-paint-panel">
     <div class="terrain-paint-note">
-      Current texture, softness, and blend settings affect subsequent strokes only.
+      Texture and brush settings affect subsequent strokes only.
     </div>
-    <div class="control-row">
-      <div class="control-group control-group--compact">
-        <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
-        <v-text-field
-          v-model="brushRadiusInput"
-          type="number"
-          suffix="m"
-          :min="BRUSH_RADIUS_MIN"
-          :max="BRUSH_RADIUS_MAX"
-          :step="BRUSH_RADIUS_STEP"
-          variant="underlined"
-          density="compact"
-          hide-details
-          inputmode="decimal"
-          :disabled="!props.hasGround"
-          class="numeric-input"
-          @blur="commitBrushRadiusInput"
-          @keydown.enter.prevent="commitBrushRadiusInput"
-        />
-      </div>
-
-      <div class="control-group control-group--compact">
-        <div class="text-caption">Edge Smoothing: {{ smoothnessPercent }}</div>
-        <v-text-field
-          v-model="smoothnessInput"
-          type="number"
-          suffix="x"
-          :min="SMOOTHNESS_MIN"
-          :max="SMOOTHNESS_MAX"
-          :step="SMOOTHNESS_STEP"
-          variant="underlined"
-          density="compact"
-          hide-details
-          inputmode="decimal"
-          :disabled="!props.hasGround"
-          class="numeric-input"
-          @blur="commitSmoothnessInput"
-          @keydown.enter.prevent="commitSmoothnessInput"
-        />
-      </div>
+    <div class="control-group control-group--compact">
+      <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
+      <v-text-field
+        v-model="brushRadiusInput"
+        type="number"
+        suffix="m"
+        :min="BRUSH_RADIUS_MIN"
+        :max="BRUSH_RADIUS_MAX"
+        :step="BRUSH_RADIUS_STEP"
+        variant="underlined"
+        density="compact"
+        hide-details
+        inputmode="decimal"
+        :disabled="!props.hasGround"
+        class="numeric-input"
+        @blur="commitBrushRadiusInput"
+        @keydown.enter.prevent="commitBrushRadiusInput"
+      />
     </div>
     <div class="control-group">
       <div class="text-caption mb-1">{{ selectedAssetLabel }}</div>
@@ -443,25 +360,6 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
       </div>
 
       <div class="control-group control-group--compact">
-        <div class="text-caption">Opacity</div>
-        <v-text-field
-          v-model="opacityInput"
-          type="number"
-          :min="OPACITY_MIN"
-          :max="OPACITY_MAX"
-          :step="OPACITY_STEP"
-          variant="underlined"
-          density="compact"
-          hide-details
-          inputmode="decimal"
-          :disabled="!props.hasGround"
-          class="numeric-input"
-          @blur="commitOpacityInput"
-          @keydown.enter.prevent="commitOpacityInput"
-        />
-      </div>
-
-      <div class="control-group control-group--compact">
         <div class="text-caption">Soft Edge</div>
         <v-text-field
           v-model="featherInput"
@@ -546,12 +444,6 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.control-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
 }
 
 .terrain-paint-grid {

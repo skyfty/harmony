@@ -59,8 +59,6 @@ export const useTerrainStore = defineStore('terrain', () => {
   const groundPanelTab = ref<GroundPanelTab>('terrain')
 
   // Terrain paint (ground material painting) state.
-  // 0..1 - maps to neighbor-average smoothing strength/iterations.
-  const paintSmoothness = ref(0.25)
   const paintSelectedAsset = ref<ProjectAsset | null>(null)
   const paintBrushSettings = ref<TerrainPaintBrushSettings>(createDefaultTerrainPaintBrushSettings())
 
@@ -111,11 +109,6 @@ export const useTerrainStore = defineStore('terrain', () => {
     if (asset) {
       markPaintContextIntent()
     }
-  }
-
-  function setPaintSmoothness(value: number) {
-    const num = Number(value)
-    paintSmoothness.value = Number.isFinite(num) ? Math.min(1, Math.max(0, num)) : 0.25
   }
 
   function setPaintBrushSettings(value: Partial<TerrainPaintBrushSettings> | TerrainPaintBrushSettings) {
@@ -202,7 +195,6 @@ export const useTerrainStore = defineStore('terrain', () => {
     groundPanelTab,
 
     paintSelectedAsset,
-    paintSmoothness,
     paintBrushSettings,
     paintModeActive,
 
@@ -221,7 +213,6 @@ export const useTerrainStore = defineStore('terrain', () => {
     setScatterCategory,
     setScatterSelection,
     setPaintSelection,
-    setPaintSmoothness,
     setPaintBrushSettings,
     setScatterBrushRadius,
     setScatterBrushShape,
