@@ -513,20 +513,26 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
   }
 
   const previewSize = computePreviewTextureSize(dynamicMesh, maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION)
+  const persistedTexture = getLandformsPreviewTexture(groundObject)
   let liveTexture = getGroundSurfacePreviewLiveTexture(groundObject)
+  const seedTexture = persistedTexture ?? liveTexture
+  const seedSource = resolveTextureImageSource(seedTexture)
+  const seedSize = seedSource ? resolveCanvasImageSourceSize(seedSource) : null
+  const targetWidth = Math.max(previewSize.width, seedSize?.width ?? 0)
+  const targetHeight = Math.max(previewSize.height, seedSize?.height ?? 0)
   const existingCanvas = liveTexture?.image as CanvasLike | undefined
   const canReuseCanvas = Boolean(
     existingCanvas
     && 'getContext' in existingCanvas
-    && (((existingCanvas as HTMLCanvasElement).width ?? (existingCanvas as OffscreenCanvas).width) === previewSize.width)
-    && (((existingCanvas as HTMLCanvasElement).height ?? (existingCanvas as OffscreenCanvas).height) === previewSize.height),
+    && (((existingCanvas as HTMLCanvasElement).width ?? (existingCanvas as OffscreenCanvas).width) === targetWidth)
+    && (((existingCanvas as HTMLCanvasElement).height ?? (existingCanvas as OffscreenCanvas).height) === targetHeight),
   )
   const composition = canReuseCanvas
     ? (() => {
       const context = existingCanvas!.getContext('2d') as Canvas2DContext | null
       return context ? { canvas: existingCanvas!, context } : null
     })()
-    : createCompositionCanvas(previewSize.width, previewSize.height)
+    : createCompositionCanvas(targetWidth, targetHeight)
   if (!composition) {
     return false
   }
@@ -535,8 +541,6 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
   const width = (canvas as HTMLCanvasElement).width ?? (canvas as OffscreenCanvas).width
   const height = (canvas as HTMLCanvasElement).height ?? (canvas as OffscreenCanvas).height
   if (!canReuseCanvas) {
-    const seedTexture = getLandformsPreviewTexture(groundObject) ?? getGroundSurfacePreviewLiveTexture(groundObject)
-    const seedSource = resolveTextureImageSource(seedTexture)
     context.clearRect(0, 0, width, height)
     if (seedSource) {
       context.drawImage(seedSource, 0, 0, width, height)
@@ -552,6 +556,9 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
     const drawY = Math.floor(((preview.bounds.minZ + halfDepth) / groundDepth) * height)
     const drawWidth = Math.max(1, Math.ceil((preview.bounds.width / groundWidth) * width))
     const drawHeight = Math.max(1, Math.ceil((preview.bounds.depth / groundDepth) * height))
+    // Replace the whole chunk footprint each live update.
+    // Using source-over here repeatedly compounds edge alpha and makes strokes look sharper until final rebuild.
+    context.clearRect(drawX, drawY, drawWidth, drawHeight)
     context.drawImage(preview.canvas, drawX, drawY, drawWidth, drawHeight)
   }
 

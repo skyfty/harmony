@@ -425,7 +425,6 @@ const {
   brushOperation,
   groundPanelTab,
   paintSelectedAsset,
-  paintSmoothness,
   paintBrushSettings,
   scatterCategory,
   scatterSelectedAsset,
@@ -2916,7 +2915,6 @@ const groundEditor = createGroundEditor({
   brushOperation,
   groundPanelTab,
   paintAsset: paintSelectedAsset,
-  paintSmoothness,
   paintLayerStyle: paintBrushSettings,
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
@@ -6059,10 +6057,6 @@ function handleGroundNoiseStrengthUpdate(value: number) {
 
 function handleGroundNoiseModeUpdate(value: GroundGenerationMode) {
   groundNoiseMode.value = value
-}
-
-function handleGroundPaintSmoothnessUpdate(value: number) {
-  terrainStore.setPaintSmoothness(Number(value))
 }
 
 function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
@@ -18064,7 +18058,6 @@ defineExpose<SceneViewportHandle>({
         :ground-brush-operation="brushOperation"
         :ground-noise-strength="groundNoiseStrength"
         :ground-noise-mode="groundNoiseMode"
-        :ground-paint-smoothness="paintSmoothness"
         :ground-paint-asset="paintSelectedAsset"
         :ground-paint-settings="paintBrushSettings"
         :ground-scatter-category="scatterCategory"
@@ -18107,7 +18100,6 @@ defineExpose<SceneViewportHandle>({
           @update:ground-brush-operation="handleGroundBrushOperationUpdate"
           @update:ground-noise-strength="handleGroundNoiseStrengthUpdate"
           @update:ground-noise-mode="handleGroundNoiseModeUpdate"
-          @update:ground-paint-smoothness="handleGroundPaintSmoothnessUpdate"
           @update:ground-paint-asset="handleGroundPaintAssetUpdate"
           @update:ground-paint-settings="handleGroundPaintSettingsUpdate"
           @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
