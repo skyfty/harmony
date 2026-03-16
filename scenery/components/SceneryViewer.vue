@@ -2069,6 +2069,53 @@ const behaviorPointer = new THREE.Vector2();
 let handleBehaviorClick: ((event: MouseEvent | TouchEvent) => void) | null = null;
 const LAYER_BEHAVIOR_INTERACTIVE = 1;
 
+function applyInteractionLayers(target: THREE.Object3D, behaviorInteractive: boolean): void {
+  if (behaviorInteractive) {
+    target.layers.enable(LAYER_BEHAVIOR_INTERACTIVE);
+  } else {
+    target.layers.disable(LAYER_BEHAVIOR_INTERACTIVE);
+  }
+}
+
+function syncInteractionLayersForNonNodeDescendants(root: THREE.Object3D, behaviorInteractive: boolean): void {
+  const stack = [...root.children];
+  while (stack.length > 0) {
+    const child = stack.pop();
+    if (!child) {
+      continue;
+    }
+
+    const childNodeId = child.userData?.nodeId as string | undefined;
+    if (childNodeId) {
+      continue;
+    }
+
+    applyInteractionLayers(child, behaviorInteractive);
+    stack.push(...child.children);
+  }
+}
+
+function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): void {
+  const target = object ?? nodeObjectMap.get(nodeId);
+  if (!target) {
+    return;
+  }
+
+  let behaviorInteractive = target.layers.isEnabled(LAYER_BEHAVIOR_INTERACTIVE);
+  try {
+    const actions = listRegisteredBehaviorActions(nodeId);
+    const clickable = Array.isArray(actions) && actions.includes('click');
+    const behaviorTargetId = clickable ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
+    behaviorInteractive = Boolean(behaviorTargetId);
+  } catch (e) {
+    // keep current behavior layer state when registry is unavailable
+  }
+
+  applyInteractionLayers(target, behaviorInteractive);
+  // Runtime visuals (Warp Gate, Guideboard, etc.) are attached as non-node children.
+  syncInteractionLayersForNonNodeDescendants(target, behaviorInteractive);
+}
+
 const WHEEL_MOVE_STEP = 1.2;
 const worldUp = new THREE.Vector3(0, 1, 0);
 const tempForwardVec = new THREE.Vector3();
@@ -4350,20 +4397,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     ensureRigidbodyBindingForObject(nodeId, object);
     attachRuntimeForNode(nodeId, object);
 
-    // Ensure interaction layers are in sync for this runtime object (enable behavior layer
-    // when the node or any ancestor is registered as clickable).
-    try {
-      const actions = listRegisteredBehaviorActions(nodeId);
-      const clickable = Array.isArray(actions) && actions.includes('click');
-      const behaviorTargetId = clickable ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
-      if (behaviorTargetId) {
-        object.layers.enable(LAYER_BEHAVIOR_INTERACTIVE);
-      } else {
-        object.layers.disable(LAYER_BEHAVIOR_INTERACTIVE);
-      }
-    } catch (e) {
-      // ignore
-    }
+    syncInteractionLayersForNode(nodeId, object);
 
     const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
     if (instancedAssetId) {
@@ -6380,22 +6414,7 @@ function refreshBehaviorProximityCandidates(): void {
 const behaviorRuntimeListener: BehaviorRuntimeListener = {
   onRegistryChanged(nodeId) {
     syncBehaviorProximityCandidate(nodeId);
-    try {
-      // ensure objects belonging to this node update their interaction layers
-      const object = nodeObjectMap.get(nodeId);
-      if (object) {
-        const actions = listRegisteredBehaviorActions(nodeId);
-        const clickable = Array.isArray(actions) && actions.includes('click');
-        const behaviorTargetId = clickable ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
-        if (behaviorTargetId) {
-          object.layers.enable(LAYER_BEHAVIOR_INTERACTIVE);
-        } else {
-          object.layers.disable(LAYER_BEHAVIOR_INTERACTIVE);
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
+    syncInteractionLayersForNode(nodeId);
   },
 };
 
@@ -6692,25 +6711,18 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   }
 
   const focusPoint = focus.clone();
-  const ownerObject = nodeObjectMap.get(event.targetNodeId ?? event.nodeId ?? '');
-  if (ownerObject) {
-    ownerObject.getWorldQuaternion(tempQuaternion);
-  } else {
-    tempQuaternion.identity();
-  }
-  const destination = focusPoint.clone();
-  destination.y = HUMAN_EYE_HEIGHT;
-  const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
-
   const startPosition = camera.position.clone();
   const startTarget = controls.target.clone();
+  const destination = new THREE.Vector3(focusPoint.x, startPosition.y, focusPoint.z);
+  const translation = destination.clone().sub(startPosition);
+  const targetDestination = startTarget.clone().add(translation);
   const durationSeconds = Math.max(0, event.duration ?? 0);
   
   const updateFrame = (alpha: number) => {
     runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.lerpVectors(startPosition, destination, alpha);
-        controls.target.lerpVectors(startTarget, lookTarget, alpha);
+        controls.target.lerpVectors(startTarget, targetDestination, alpha);
         controls.update();
       });
     });
@@ -6720,6 +6732,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.copy(destination);
+        controls.target.copy(targetDestination);
         controls.update();
       });
     });
