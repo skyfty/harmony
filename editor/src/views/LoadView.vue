@@ -222,7 +222,10 @@ async function bootstrap() {
 
     statusMessage.value = '打开工程…'
     progress.value = 78
-    const opened = await sceneStore.selectScene(preferred, { setLastEdited: false })
+    const opened = await sceneStore.selectScene(preferred, {
+      setLastEdited: false,
+      forceReload: true,
+    })
     if (!opened) {
       throw new Error('Failed to open scene')
     }

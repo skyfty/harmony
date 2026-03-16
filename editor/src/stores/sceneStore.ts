@@ -7332,14 +7332,14 @@ export const useSceneStore = defineStore('scene', {
       this.currentSceneId = scene.id
       applyCurrentSceneMeta(this, scene)
       applySceneAssetState(this, scene)
-      replaceSceneNodes(this, cloneSceneNodes(scene.nodes))
       this.environment = resolveSceneDocumentEnvironment(scene)
-      const effectiveGroundSettings = resolveGroundSettingsFromNodes(this.nodes, cloneGroundSettings(scene.groundSettings))
-      replaceSceneNodes(this, ensureEnvironmentNode(
-        ensureGroundNode(this.nodes, effectiveGroundSettings),
+      const clonedNodes = cloneSceneNodes(scene.nodes)
+      const effectiveGroundSettings = resolveGroundSettingsFromNodes(clonedNodes, cloneGroundSettings(scene.groundSettings))
+      const normalizedNodes = ensureEnvironmentNode(
+        ensureGroundNode(clonedNodes, effectiveGroundSettings),
         this.environment,
       )
-      )
+      replaceSceneNodes(this, normalizedNodes)
       this.rebuildGeneratedMeshRuntimes()
       this.planningData = clonePlanningData(scene.planningData)
       this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
@@ -14692,10 +14692,11 @@ export const useSceneStore = defineStore('scene', {
       return sceneDocument.id
     },
     
-    async selectScene(sceneId: string, options: { setLastEdited?: boolean } = {}) {
+    async selectScene(sceneId: string, options: { setLastEdited?: boolean; forceReload?: boolean } = {}) {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
-      if (sceneId === this.currentSceneId) {
+      const forceReload = options.forceReload === true
+      if (!forceReload && sceneId === this.currentSceneId) {
         this.isSceneReady = false
         try {
           await this.ensureSceneAssetsReady({ showOverlay: true })
