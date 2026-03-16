@@ -453,7 +453,6 @@ async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Obj
       footCornerObjectsByAssetId: Object.fromEntries(footCornerObjects),
     },
     {
-      smoothing: wallProps.smoothing,
       bodyMaterialConfigId: wallProps.bodyMaterialConfigId ?? preset.materialOrder?.[0] ?? null,
       cornerModels: wallProps.cornerModels,
       bodyUvAxis: wallProps.bodyUvAxis,

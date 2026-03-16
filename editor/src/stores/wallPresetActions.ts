@@ -3,7 +3,6 @@ import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_REPEAT_INSTANCE_STEP,
-  WALL_DEFAULT_SMOOTHING,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
   type WallComponentProps,
@@ -85,7 +84,6 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     width: WALL_DEFAULT_WIDTH,
     thickness: WALL_DEFAULT_THICKNESS,
     wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
-    smoothing: WALL_DEFAULT_SMOOTHING,
     bodyMaterialConfigId: null,
     wallRenderMode: 'stretch',
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
@@ -195,7 +193,6 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
     width: wallProps.width,
     thickness: wallProps.thickness,
     wallBaseOffsetLocal: wallProps.wallBaseOffsetLocal,
-    smoothing: wallProps.smoothing,
     bodyMaterialConfigId: wallProps.bodyMaterialConfigId ?? null,
     wallRenderMode: normalizeWallRenderMode(wallProps.wallRenderMode, 'stretch'),
     repeatInstanceStep: wallProps.repeatInstanceStep,
@@ -408,7 +405,6 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     wallBaseOffsetLocal: record.wallBaseOffsetLocal
       ? requiredOffsetLocal(record.wallBaseOffsetLocal, 'wallBaseOffsetLocal')
       : { x: 0, y: 0, z: 0 },
-    smoothing: requiredNumber('smoothing'),
     bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     wallRenderMode: normalizeWallRenderMode(record.wallRenderMode, 'stretch'),
     repeatInstanceStep: optionalRepeatInstanceStep(),

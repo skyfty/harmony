@@ -91,7 +91,7 @@ async function getWechatConfig(miniAppId?: string) {
     throw new Error('WeChat pay is disabled')
   }
   if (!config.appId || !config.mchId || !config.serialNo || !config.privateKey || !config.apiV3Key || !config.notifyUrl) {
-    throw new Error('Missing WeChat pay configuration')
+    throw new Error('Missing WeChat pay configuration', config.appId, config.mchId, config.serialNo, Boolean(config.privateKey), Boolean(config.apiV3Key), config.notifyUrl)
   }
   return config
 }

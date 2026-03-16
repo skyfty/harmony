@@ -67,8 +67,31 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
 
   if (hasBearerToken) {
     const token = authorization!.slice('Bearer '.length)
+    let payload:
+      | {
+          sub: string
+          miniAppId?: string
+          username?: string
+          wxOpenId?: string
+        }
+      | undefined
     try {
-      const payload = verifyMiniAuthToken(token)
+      payload = verifyMiniAuthToken(token)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const name = error instanceof Error ? error.name : 'UnknownError'
+      console.warn('[mini-auth] token verification failed', {
+        path: ctx.path,
+        method: ctx.method,
+        ip: ctx.ip || ctx.request.ip,
+        tokenSummary: summarizeBearerToken(token),
+        tokenPreview: decodeJwtPayloadPreview(token),
+        errorName: name,
+        errorMessage: message,
+      })
+    }
+
+    if (payload) {
       ctx.state.miniAuthUser = {
         id: payload.sub,
         miniAppId: payload.miniAppId,
@@ -84,21 +107,6 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
       }
       await next()
       return
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const name = error instanceof Error ? error.name : 'UnknownError'
-      console.warn('[mini-auth] token verification failed', {
-        path: ctx.path,
-        method: ctx.method,
-        ip: ctx.ip || ctx.request.ip,
-        tokenSummary: summarizeBearerToken(token),
-        tokenPreview: decodeJwtPayloadPreview(token),
-        errorName: name,
-        errorMessage: message,
-      })
-      // Do not bypass with test user when a bearer token is present but invalid.
-      // This avoids masking auth errors and prevents ambiguous middleware flows.
-      ctx.throw(401, 'Invalid user token')
     }
   }
 
@@ -126,7 +134,6 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
   if (!hasBearerToken) {
     ctx.throw(401, 'Unauthorized')
   }
-  ctx.throw(401, 'Invalid user token')
 }
 
 export async function optionalMiniAuth(ctx: Context, next: Next): Promise<void> {

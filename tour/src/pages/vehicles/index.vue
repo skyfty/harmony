@@ -20,6 +20,22 @@
       active="vehicle"
       @navigate="handleNavigate"
     />
+    <view v-if="showPurchaseConfirmDialog" class="purchase-dialog">
+      <view class="purchase-dialog__mask" @tap="closePurchaseConfirmDialog" />
+      <view class="purchase-dialog__panel">
+        <view class="purchase-dialog__title">购买车辆</view>
+        <view class="purchase-dialog__content">是否购买「{{ purchaseConfirmVehicleName }}」？</view>
+        <view class="purchase-dialog__actions">
+          <button class="purchase-dialog__btn purchase-dialog__btn--cancel" :disabled="loading" @tap="closePurchaseConfirmDialog">
+            取消
+          </button>
+          <button class="purchase-dialog__btn purchase-dialog__btn--confirm" :disabled="loading" @tap="confirmPurchaseFromDialog">
+            确认
+          </button>
+        </view>
+      </view>
+    </view>
+    <PhoneBindSheet v-model="showPhoneBindSheet" @bound="handlePhoneBound" />
   </view>
 </template>
 
@@ -31,13 +47,13 @@ defineOptions({ name: 'VehiclesPage' });
 const statusBarHeight = ref(getStatusBarHeight());
 import BottomNav from '@/components/BottomNav.vue';
 import PageHeader from '@/components/PageHeader.vue';
+import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import VehicleCard from '@/components/VehicleCard.vue';
 import { listVehicles, purchaseVehicleByProduct, selectCurrentVehicle } from '@/api/mini/vehicles';
 import type { Vehicle } from '@/types/vehicle';
 import type { VehicleStatus } from '@/types/vehicle';
 import {
   isPhoneBindingRequiredError,
-  promptBindPhoneBeforeCheckout,
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
@@ -82,9 +98,36 @@ function setSelectedVehicle(vehicle: Vehicle | null): void {
 const vehicles = ref<Vehicle[]>([]);
 const selectedId = ref(getSelectedVehicleId());
 const loading = ref(false);
+const showPhoneBindSheet = ref(false);
+const pendingPurchaseProductId = ref<string>('');
+const showPurchaseConfirmDialog = ref(false);
+const purchaseConfirmVehicleId = ref<string>('');
+const purchaseConfirmVehicleName = ref('');
 const purchaseVehicle = purchaseVehicleByProduct as unknown as (productId: string) => Promise<unknown>;
 const selectVehicleAsCurrent =
   selectCurrentVehicle as unknown as (vehicleId: string) => Promise<{ currentVehicleId: string }>;
+
+function closePurchaseConfirmDialog() {
+  showPurchaseConfirmDialog.value = false;
+  purchaseConfirmVehicleId.value = '';
+  purchaseConfirmVehicleName.value = '';
+}
+
+async function confirmPurchaseFromDialog() {
+  const vehicleId = purchaseConfirmVehicleId.value;
+  const selectedVehicle: Vehicle | null = vehicles.value.find((item) => item.id === vehicleId) || null;
+  closePurchaseConfirmDialog();
+  if (!selectedVehicle) {
+    return;
+  }
+  const productId: string = String((selectedVehicle as { productId?: unknown }).productId ?? '');
+  if (!productId) {
+    void uni.showToast({ title: '该车辆暂不可购买', icon: 'none' });
+    return;
+  }
+  pendingPurchaseProductId.value = productId;
+  await purchaseVehicleWithProductId(productId);
+}
 
 async function reload() {
   const rows = (await listVehicles()) as unknown as Vehicle[];
@@ -103,6 +146,56 @@ onMounted(() => {
   });
 });
 
+async function purchaseVehicleWithProductId(productId: string) {
+  if (!productId || loading.value) {
+    return;
+  }
+
+  loading.value = true;
+  void uni.showLoading({ title: '购买中...' });
+  try {
+    const result = (await purchaseVehicle(productId)) as {
+      order?: { id: string };
+      payParams?: {
+        appId: string;
+        timeStamp: string;
+        nonceStr: string;
+        package: string;
+        signType: 'RSA';
+        paySign: string;
+      };
+    };
+    if (result.payParams) {
+      await requestMiniProgramPayment(result.payParams);
+    }
+    await reload();
+    void uni.showToast({ title: '购买成功', icon: 'none' });
+    if (result.order?.id) {
+      uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` });
+    }
+  } catch (error: unknown) {
+    if (isPhoneBindingRequiredError(error)) {
+      closePurchaseConfirmDialog();
+      pendingPurchaseProductId.value = productId;
+      showPhoneBindSheet.value = true;
+      return;
+    }
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });
+  } finally {
+    loading.value = false;
+    void uni.hideLoading();
+  }
+}
+
+async function handlePhoneBound() {
+  const productId = pendingPurchaseProductId.value;
+  pendingPurchaseProductId.value = '';
+  if (!productId) {
+    return;
+  }
+  await purchaseVehicleWithProductId(productId);
+}
+
 async function select(id: string, status: VehicleStatus) {
   if (loading.value) {
     return;
@@ -112,55 +205,9 @@ async function select(id: string, status: VehicleStatus) {
     return;
   }
   if (status === 'locked') {
-    const confirmed = await new Promise<boolean>((resolve) => {
-      uni.showModal({
-        title: '购买车辆',
-        content: `是否购买「${selectedVehicle.name}」？`,
-        confirmText: '确认',
-        cancelText: '取消',
-        success: (res) => resolve(Boolean(res.confirm)),
-        fail: () => resolve(false),
-      });
-    });
-    if (!confirmed) {
-      return;
-    }
-    const productId: string = String((selectedVehicle as { productId?: unknown }).productId ?? '');
-    if (!productId) {
-      void uni.showToast({ title: '该车辆暂不可购买', icon: 'none' });
-      return;
-    }
-    loading.value = true;
-    void uni.showLoading({ title: '购买中...' });
-    try {
-      const result = (await purchaseVehicle(productId)) as {
-        order?: { id: string };
-        payParams?: {
-          appId: string;
-          timeStamp: string;
-          nonceStr: string;
-          package: string;
-          signType: 'RSA';
-          paySign: string;
-        };
-      };
-      if (result.payParams) {
-        await requestMiniProgramPayment(result.payParams);
-      }
-      await reload();
-      void uni.showToast({ title: '购买成功', icon: 'none' });
-      if (result.order?.id) {
-        uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` });
-      }
-    } catch (error: unknown) {
-      if (isPhoneBindingRequiredError(error)) {
-        await promptBindPhoneBeforeCheckout();
-      }
-      void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });
-    } finally {
-      loading.value = false;
-      void uni.hideLoading();
-    }
+    purchaseConfirmVehicleId.value = selectedVehicle.id;
+    purchaseConfirmVehicleName.value = selectedVehicle.name;
+    showPurchaseConfirmDialog.value = true;
     return;
   }
 
@@ -238,5 +285,75 @@ function handleNavigate(key: NavKey) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.purchase-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+
+.purchase-dialog__mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 12, 20, 0.48);
+}
+
+.purchase-dialog__panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 620rpx;
+  max-width: calc(100vw - 64rpx);
+  border-radius: 28rpx;
+  background: #ffffff;
+  padding: 36rpx 30rpx 26rpx;
+  box-shadow: 0 22rpx 70rpx rgba(24, 35, 66, 0.2);
+}
+
+.purchase-dialog__title {
+  font-size: 34rpx;
+  line-height: 48rpx;
+  font-weight: 700;
+  color: #101828;
+  text-align: center;
+}
+
+.purchase-dialog__content {
+  margin-top: 16rpx;
+  font-size: 28rpx;
+  line-height: 42rpx;
+  color: #344054;
+  text-align: center;
+}
+
+.purchase-dialog__actions {
+  margin-top: 30rpx;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18rpx;
+}
+
+.purchase-dialog__btn {
+  height: 78rpx;
+  line-height: 78rpx;
+  border-radius: 18rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.purchase-dialog__btn::after {
+  border: 0;
+}
+
+.purchase-dialog__btn--cancel {
+  background: #eef2f8;
+  color: #344054;
+}
+
+.purchase-dialog__btn--confirm {
+  background: #2e6eff;
+  color: #ffffff;
 }
 </style>

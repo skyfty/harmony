@@ -29,6 +29,7 @@
         </view>
       </view>
     </view>
+    <PhoneBindSheet v-model="showPhoneBindSheet" @bound="handlePhoneBound" />
   </view>
 </template>
 
@@ -37,17 +38,19 @@ import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { listOrders, payOrder } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
+import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import type { OrderListItem, OrderStatus } from '@/types/order';
 import type { PaymentStatus } from '@/types/order';
 import {
   isPhoneBindingRequiredError,
-  promptBindPhoneBeforeCheckout,
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
 
 const orders = ref<OrderListItem[]>([]);
 const payingOrderId = ref('');
+const showPhoneBindSheet = ref(false);
+const pendingOrderId = ref('');
 
 onShow(() => {
   void reload();
@@ -115,7 +118,9 @@ async function submitPayment(orderId: string) {
     }
   } catch (error) {
     if (isPhoneBindingRequiredError(error)) {
-      await promptBindPhoneBeforeCheckout();
+      pendingOrderId.value = orderId;
+      showPhoneBindSheet.value = true;
+      return;
     }
     void uni.showToast({ title: toCheckoutErrorMessage(error, '支付失败'), icon: 'none' });
   } finally {
@@ -123,6 +128,15 @@ async function submitPayment(orderId: string) {
     void uni.hideLoading();
     await reload();
   }
+}
+
+async function handlePhoneBound() {
+  const orderId = pendingOrderId.value;
+  pendingOrderId.value = '';
+  if (!orderId || payingOrderId.value) {
+    return;
+  }
+  await submitPayment(orderId);
 }
 </script>
 

@@ -260,7 +260,6 @@ import {
   WALL_DEFAULT_REPEAT_INSTANCE_STEP,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
-  WALL_DEFAULT_SMOOTHING,
   clampWallProps,
   cloneWallComponentProps,
   ROAD_DEFAULT_WIDTH,
@@ -1457,14 +1456,12 @@ function cloneGroundSettings(settings: Partial<GroundSettings> | null | undefine
   return groundUtils.cloneGroundSettings(settings as any) as GroundSettings
 }
 
-import { buildWallDynamicMeshFromWorldSegments, applyWallComponentPropsToNode as applyWallComponentPropsToNodeImported, resolveWallSmoothing as resolveWallSmoothingImported } from './wallUtils'
+import { buildWallDynamicMeshFromWorldSegments, applyWallComponentPropsToNode as applyWallComponentPropsToNodeImported } from './wallUtils'
 
 // Local wrapper to inject runtime helpers into the moved wall helper.
 function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProps): boolean {
   return applyWallComponentPropsToNodeImported(node, props, { getRuntimeObject, updateWallGroup })
 }
-
-const resolveWallSmoothing = resolveWallSmoothingImported
 
 function resolveWallRenderMode(node: SceneNode | null | undefined): 'stretch' | 'repeatInstances' {
   const component = node?.components?.[WALL_COMPONENT_TYPE] as
@@ -2819,7 +2816,6 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
       runtime = createGuideRouteGroup(meshDefinition as GuideRouteDynamicMesh)
     } else {
       runtime = createWallGroup(meshDefinition as WallDynamicMesh, {
-        smoothing: resolveWallSmoothing(node),
         wallRenderMode: resolveWallRenderMode(node),
         repeatInstanceStep: resolveWallRepeatInstanceStep(node),
       });
@@ -12051,7 +12047,7 @@ export const useSceneStore = defineStore('scene', {
         ? buildWallComponentPropsPatchFromPreset(payload.wallPresetData.wallProps)
         : (payload.wallComponentProps ?? null)
 
-      const wallGroup = createWallGroup(defaultMesh, { smoothing: WALL_DEFAULT_SMOOTHING })
+      const wallGroup = createWallGroup(defaultMesh)
       const nodeName = payload.name ?? this.generateWallNodeName()
 
       this.captureHistorySnapshot()
@@ -12796,7 +12792,6 @@ export const useSceneStore = defineStore('scene', {
             return
           }
           updateWallGroup(group, build.definition, {
-            smoothing: resolveWallSmoothing(node),
             wallRenderMode: resolveWallRenderMode(node),
             repeatInstanceStep: resolveWallRepeatInstanceStep(node),
           } as any)
@@ -13143,7 +13138,6 @@ export const useSceneStore = defineStore('scene', {
         const hasBodyEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapOrientation')
         const hasHeadEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapOrientation')
         const hasFootEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapOrientation')
-        const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasWallRenderMode = Object.prototype.hasOwnProperty.call(typedPatch, 'wallRenderMode')
         const hasRepeatInstanceStep = Object.prototype.hasOwnProperty.call(typedPatch, 'repeatInstanceStep')
@@ -13295,9 +13289,6 @@ export const useSceneStore = defineStore('scene', {
           wallBaseOffsetLocal: hasWallBaseOffsetLocal
             ? (typedPatch.wallBaseOffsetLocal as any)
             : currentProps.wallBaseOffsetLocal,
-          smoothing: hasSmoothing
-            ? (typedPatch.smoothing as number | undefined)
-            : currentProps.smoothing,
           bodyMaterialConfigId: hasBodyMaterialConfigId
             ? (typedPatch.bodyMaterialConfigId as string | null | undefined)
             : currentProps.bodyMaterialConfigId,
@@ -13374,7 +13365,6 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
           offsetLocalEqual(currentProps.wallBaseOffsetLocal, merged.wallBaseOffsetLocal) &&
-          Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
           (currentProps.bodyMaterialConfigId ?? null) === (merged.bodyMaterialConfigId ?? null) &&
           currentProps.isAirWall === merged.isAirWall &&
           currentProps.wallRenderMode === merged.wallRenderMode &&
@@ -13693,7 +13683,6 @@ export const useSceneStore = defineStore('scene', {
                   return
                 }
                 updateWallGroup(group, node.dynamicMesh as WallDynamicMesh, {
-                  smoothing: resolveWallSmoothing(node),
                   wallRenderMode: resolveWallRenderMode(node),
                   repeatInstanceStep: resolveWallRepeatInstanceStep(node),
                 } as any)

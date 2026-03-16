@@ -194,6 +194,7 @@
         </button>
       </view>
     </view>
+    <PhoneBindSheet v-model="showPhoneBindSheet" @bound="handlePhoneBound" />
   </view>
 </template>
 
@@ -202,10 +203,10 @@ import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 import { getOrderDetail, payOrder } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
+import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import type { OrderDetail, OrderItem, OrderStatus, PaymentStatus } from '@/types/order';
 import {
   isPhoneBindingRequiredError,
-  promptBindPhoneBeforeCheckout,
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
@@ -217,6 +218,8 @@ defineOptions({
 const order = ref<OrderDetail | null>(null);
 const currentOrderId = ref('');
 const paying = ref(false);
+const showPhoneBindSheet = ref(false);
+const pendingOrderId = ref('');
 
 const vehicleItems = computed<OrderItem[]>(() => {
   if (!order.value) return [];
@@ -279,10 +282,12 @@ async function submitPayment() {
     return;
   }
 
+  const orderId = currentOrderId.value;
+
   paying.value = true;
   void uni.showLoading({ title: '发起支付...' });
   try {
-    const result = await payOrder(currentOrderId.value);
+    const result = await payOrder(orderId);
     if (result.payParams) {
       await requestMiniProgramPayment(result.payParams);
       void uni.showToast({ title: '支付成功', icon: 'none' });
@@ -291,7 +296,9 @@ async function submitPayment() {
     }
   } catch (error) {
     if (isPhoneBindingRequiredError(error)) {
-      await promptBindPhoneBeforeCheckout();
+      pendingOrderId.value = orderId;
+      showPhoneBindSheet.value = true;
+      return;
     }
     void uni.showToast({ title: toCheckoutErrorMessage(error, '支付失败'), icon: 'none' });
   } finally {
@@ -301,6 +308,16 @@ async function submitPayment() {
       await loadOrder(currentOrderId.value);
     }
   }
+}
+
+async function handlePhoneBound() {
+  const orderId = pendingOrderId.value;
+  pendingOrderId.value = '';
+  if (!orderId || paying.value) {
+    return;
+  }
+  currentOrderId.value = orderId;
+  await submitPayment();
 }
 </script>
 
