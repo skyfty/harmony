@@ -287,6 +287,59 @@ function buildWallChainDefinitions(definition: WallDynamicMesh): WallVisualChain
   return result
 }
 
+function cross2dXZ(a: { x: number; z: number }, b: { x: number; z: number }): number {
+  return a.x * b.z - a.z * b.x
+}
+
+function intersectWallLinesXZ(
+  pointA: { x: number; z: number },
+  dirA: { x: number; z: number },
+  pointB: { x: number; z: number },
+  dirB: { x: number; z: number },
+  out: THREE.Vector3,
+): boolean {
+  const denom = cross2dXZ(dirA, dirB)
+  if (Math.abs(denom) <= WALL_EPSILON) {
+    return false
+  }
+  const deltaX = pointB.x - pointA.x
+  const deltaZ = pointB.z - pointA.z
+  const t = (deltaX * dirB.z - deltaZ * dirB.x) / denom
+  out.set(pointA.x + dirA.x * t, 0, pointA.z + dirA.z * t)
+  return Number.isFinite(out.x) && Number.isFinite(out.z)
+}
+
+function computeWallJoinOffsetPoint(
+  vertex: { x: number; y: number; z: number },
+  prevDir: THREE.Vector3 | null,
+  nextDir: THREE.Vector3 | null,
+  halfWidth: number,
+  sideSign: 1 | -1,
+  fallbackDir: THREE.Vector3,
+  out: THREE.Vector3,
+): THREE.Vector3 {
+  const directionA = prevDir && prevDir.lengthSq() > WALL_EPSILON ? prevDir : fallbackDir
+  const directionB = nextDir && nextDir.lengthSq() > WALL_EPSILON ? nextDir : fallbackDir
+
+  const normalA = new THREE.Vector3(-directionA.z * sideSign, 0, directionA.x * sideSign)
+  const normalB = new THREE.Vector3(-directionB.z * sideSign, 0, directionB.x * sideSign)
+  const pointA = new THREE.Vector3(vertex.x + normalA.x * halfWidth, 0, vertex.z + normalA.z * halfWidth)
+  const pointB = new THREE.Vector3(vertex.x + normalB.x * halfWidth, 0, vertex.z + normalB.z * halfWidth)
+
+  if (intersectWallLinesXZ(pointA, directionA, pointB, directionB, out)) {
+    const dx = out.x - vertex.x
+    const dz = out.z - vertex.z
+    const maxMiter = halfWidth * 4
+    if (dx * dx + dz * dz <= maxMiter * maxMiter) {
+      out.y = vertex.y
+      return out
+    }
+  }
+
+  out.set(vertex.x + (-fallbackDir.z * sideSign) * halfWidth, vertex.y, vertex.z + (fallbackDir.x * sideSign) * halfWidth)
+  return out
+}
+
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
     const mesh = child as THREE.Mesh
@@ -1623,7 +1676,7 @@ function rebuildWallGroup(
     uvs.push(uvC[0], uvC[1], uvB[0], uvB[1], uvD[0], uvD[1])
   }
 
-  const proceduralGeometryByChain = (segs: WallRenderSeg[]): THREE.BufferGeometry | null => {
+  const proceduralGeometryByChain = (segs: WallRenderSeg[], closed: boolean): THREE.BufferGeometry | null => {
     const halfWidth = Math.max(WALL_EPSILON, width * 0.5)
     const positions: number[] = []
     const uvs: number[] = []
@@ -1631,7 +1684,6 @@ function rebuildWallGroup(
     const end = new THREE.Vector3()
     const dir = new THREE.Vector3()
     const unitDir = new THREE.Vector3()
-    const lateral = new THREE.Vector3()
     const lb0 = new THREE.Vector3()
     const rb0 = new THREE.Vector3()
     const lt0 = new THREE.Vector3()
@@ -1640,52 +1692,94 @@ function rebuildWallGroup(
     const rb1 = new THREE.Vector3()
     const lt1 = new THREE.Vector3()
     const rt1 = new THREE.Vector3()
+    const prevDir = new THREE.Vector3()
+    const nextDir = new THREE.Vector3()
+    const fallbackDir = new THREE.Vector3()
+    const leftJoint = new THREE.Vector3()
+    const rightJoint = new THREE.Vector3()
     let arc = 0
 
-    for (let i = 0; i < segs.length; i += 1) {
-      const seg = segs[i]!
-      const segmentLayout = resolveWallVerticalLayout(resolveWallBodyHeight(seg), { headAssetHeight, footAssetHeight })
-      const segmentBodyHeight = segmentLayout.bodyHeight
-      if (segmentBodyHeight <= WALL_EPSILON) {
-        continue
-      }
+    const segmentInfos = segs
+      .map((seg) => {
+        const segmentLayout = resolveWallVerticalLayout(resolveWallBodyHeight(seg), { headAssetHeight, footAssetHeight })
+        const segmentBodyHeight = segmentLayout.bodyHeight
+        if (segmentBodyHeight <= WALL_EPSILON) {
+          return null
+        }
 
-      start.set(seg.start.x, seg.start.y + segmentLayout.bodyBaseY, seg.start.z)
-      end.set(seg.end.x, seg.end.y + segmentLayout.bodyBaseY, seg.end.z)
-      dir.subVectors(end, start)
-      dir.y = 0
-      const len = dir.length()
-      if (len <= WALL_EPSILON) {
-        continue
-      }
-      unitDir.copy(dir).multiplyScalar(1 / len)
-      lateral.set(-unitDir.z, 0, unitDir.x)
+        start.set(seg.start.x, seg.start.y + segmentLayout.bodyBaseY, seg.start.z)
+        end.set(seg.end.x, seg.end.y + segmentLayout.bodyBaseY, seg.end.z)
+        dir.subVectors(end, start)
+        dir.y = 0
+        const len = dir.length()
+        if (len <= WALL_EPSILON) {
+          return null
+        }
 
-      lb0.copy(start).addScaledVector(lateral, halfWidth)
-      rb0.copy(start).addScaledVector(lateral, -halfWidth)
-      lb1.copy(end).addScaledVector(lateral, halfWidth)
-      rb1.copy(end).addScaledVector(lateral, -halfWidth)
-      lt0.copy(lb0).setY(lb0.y + segmentBodyHeight)
-      rt0.copy(rb0).setY(rb0.y + segmentBodyHeight)
-      lt1.copy(lb1).setY(lb1.y + segmentBodyHeight)
-      rt1.copy(rb1).setY(rb1.y + segmentBodyHeight)
+        unitDir.copy(dir).multiplyScalar(1 / len)
+        return {
+          seg,
+          baseY: segmentLayout.bodyBaseY,
+          bodyHeight: segmentBodyHeight,
+          start: seg.start,
+          end: seg.end,
+          len,
+          dir: unitDir.clone(),
+        }
+      })
+      .filter((entry): entry is {
+        seg: WallRenderSeg
+        baseY: number
+        bodyHeight: number
+        start: WallRenderSeg['start']
+        end: WallRenderSeg['end']
+        len: number
+        dir: THREE.Vector3
+      } => Boolean(entry))
+
+    if (!segmentInfos.length) {
+      return null
+    }
+
+    for (let i = 0; i < segmentInfos.length; i += 1) {
+      const info = segmentInfos[i]!
+      const prev = i > 0 ? segmentInfos[i - 1]! : (closed ? segmentInfos[segmentInfos.length - 1]! : null)
+      const next = i < segmentInfos.length - 1 ? segmentInfos[i + 1]! : (closed ? segmentInfos[0]! : null)
+
+      fallbackDir.copy(info.dir)
+      prevDir.copy(prev?.dir ?? info.dir)
+      nextDir.copy(next?.dir ?? info.dir)
+
+      start.set(info.start.x, info.start.y + info.baseY, info.start.z)
+      end.set(info.end.x, info.end.y + info.baseY, info.end.z)
+
+      computeWallJoinOffsetPoint(start, prev ? prevDir : null, info.dir, halfWidth, 1, fallbackDir, leftJoint)
+      lb0.copy(leftJoint)
+      computeWallJoinOffsetPoint(start, prev ? prevDir : null, info.dir, halfWidth, -1, fallbackDir, rightJoint)
+      rb0.copy(rightJoint)
+
+      computeWallJoinOffsetPoint(end, info.dir, next ? nextDir : null, halfWidth, 1, fallbackDir, leftJoint)
+      lb1.copy(leftJoint)
+      computeWallJoinOffsetPoint(end, info.dir, next ? nextDir : null, halfWidth, -1, fallbackDir, rightJoint)
+      rb1.copy(rightJoint)
+
+      lt0.copy(lb0).setY(lb0.y + info.bodyHeight)
+      rt0.copy(rb0).setY(rb0.y + info.bodyHeight)
+      lt1.copy(lb1).setY(lb1.y + info.bodyHeight)
+      rt1.copy(rb1).setY(rb1.y + info.bodyHeight)
 
       const u0 = arc
-      const u1 = arc + len
-      pushSegmentQuad(positions, uvs, lb0, lb1, lt0, lt1, [u0, 0], [u1, 0], [u0, segmentBodyHeight], [u1, segmentBodyHeight])
-      pushSegmentQuad(positions, uvs, rb0, rt0, rb1, rt1, [u0, 0], [u0, segmentBodyHeight], [u1, 0], [u1, segmentBodyHeight])
+      const u1 = arc + info.len
+      pushSegmentQuad(positions, uvs, lb0, lb1, lt0, lt1, [u0, 0], [u1, 0], [u0, info.bodyHeight], [u1, info.bodyHeight])
+      pushSegmentQuad(positions, uvs, rb0, rt0, rb1, rt1, [u0, 0], [u0, info.bodyHeight], [u1, 0], [u1, info.bodyHeight])
       pushSegmentQuad(positions, uvs, lt0, lt1, rt0, rt1, [u0, 0], [u1, 0], [u0, width], [u1, width])
       pushSegmentQuad(positions, uvs, rb0, rb1, lb0, lb1, [u0, 0], [u1, 0], [u0, width], [u1, width])
 
-      const prev = i > 0 ? segs[i - 1] : null
-      const next = i < segs.length - 1 ? segs[i + 1] : null
-      const hasPrev = Boolean(prev && Math.hypot(seg.start.x - prev.end.x, seg.start.z - prev.end.z) <= WALL_EPSILON)
-      const hasNext = Boolean(next && Math.hypot(seg.end.x - next.start.x, seg.end.z - next.start.z) <= WALL_EPSILON)
-      if (!hasPrev) {
-        pushSegmentQuad(positions, uvs, rb0, lb0, rt0, lt0, [0, 0], [width, 0], [0, segmentBodyHeight], [width, segmentBodyHeight])
+      if (!prev) {
+        pushSegmentQuad(positions, uvs, rb0, lb0, rt0, lt0, [0, 0], [width, 0], [0, info.bodyHeight], [width, info.bodyHeight])
       }
-      if (!hasNext) {
-        pushSegmentQuad(positions, uvs, lb1, rb1, lt1, rt1, [0, 0], [width, 0], [0, segmentBodyHeight], [width, segmentBodyHeight])
+      if (!next) {
+        pushSegmentQuad(positions, uvs, lb1, rb1, lt1, rt1, [0, 0], [width, 0], [0, info.bodyHeight], [width, info.bodyHeight])
       }
 
       arc = u1
@@ -1705,7 +1799,7 @@ function rebuildWallGroup(
 
   for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
     const chainDef = chainDefinitions[chainIndex]!
-    const geometry = proceduralGeometryByChain(chainDef.segs)
+    const geometry = proceduralGeometryByChain(chainDef.segs, chainDef.closed)
     if (!geometry) {
       continue
     }
