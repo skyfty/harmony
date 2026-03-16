@@ -107,10 +107,17 @@ export function useScenePicking(
     return resolveNodeIdFromObject(intersection.object)
   }
 
-  function collectSceneIntersections(recursive = true): THREE.Intersection[] {
+  function collectSceneIntersections(options?: {
+    recursive?: boolean
+    raycaster?: THREE.Raycaster
+    maxDistance?: number
+  }): THREE.Intersection[] {
     if (instancedBoundsHasPending()) {
       flushInstancedBounds()
     }
+
+    const recursive = options?.recursive ?? true
+    const activeRaycaster = options?.raycaster ?? raycaster
 
     rootGroup.updateWorldMatrix(true, true)
     instancedMeshGroup.updateWorldMatrix(true, true)
@@ -154,10 +161,12 @@ export function useScenePicking(
       addInstancedPickTarget(candidate)
     }
 
-    let intersections = raycaster.intersectObjects(pickTargets, recursive)
+    let intersections = activeRaycaster.intersectObjects(pickTargets, recursive)
     intersections.sort((a, b) => a.distance - b.distance)
-    // filter by configured max pick distance (distance is from the ray origin)
-    const maxD = getMaxPickDistance()
+    const configuredMaxDistance = options?.maxDistance
+    const maxD = Number.isFinite(configuredMaxDistance)
+      ? Math.max(0, configuredMaxDistance as number)
+      : getMaxPickDistance()
     intersections = intersections.filter((it) => typeof it.distance === 'number' ? it.distance <= maxD : true)
     return intersections
   }
@@ -259,6 +268,7 @@ export function useScenePicking(
   }
 
   return {
+    isEditorOnlyObject,
     resolveNodeIdFromObject,
     resolveNodeIdFromIntersection,
     collectSceneIntersections,

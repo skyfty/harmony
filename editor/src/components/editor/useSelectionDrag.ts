@@ -32,6 +32,12 @@ export function useSelectionDrag(
     getVertexSnapDelta?: (options: { drag: SelectionDragState; event: PointerEvent }) => THREE.Vector3 | null
     computeTransformPivotWorld?: (object: THREE.Object3D, out: THREE.Vector3) => void
     beforeEmitTransformUpdates?: (nodeIds: string[]) => void
+    resolveDropSurfaceHeight?: (options: {
+      nodeId: string
+      object: THREE.Object3D
+      bounds: THREE.Box3
+      excludedNodeIds: Set<string>
+    }) => number | null
   }
 ) {
   const sceneStore = useSceneStore()
@@ -278,6 +284,7 @@ export function useSelectionDrag(
     }
 
     const updates: TransformUpdatePayload[] = []
+    const excludedNodeIds = new Set(unlockedSelection)
 
     for (const nodeId of topLevelIds) {
       const object = objectMap.get(nodeId)
@@ -292,8 +299,16 @@ export function useSelectionDrag(
       }
 
       object.getWorldPosition(dropWorldPositionHelper)
-      const groundY = resolveGroundHeightAtWorldXZ(dropWorldPositionHelper.x, dropWorldPositionHelper.z)
-      const deltaY = groundY - dropBoundingBoxHelper.min.y
+      const surfaceY = callbacks.resolveDropSurfaceHeight?.({
+        nodeId,
+        object,
+        bounds: dropBoundingBoxHelper,
+        excludedNodeIds,
+      })
+      const targetY = Number.isFinite(surfaceY)
+        ? (surfaceY as number)
+        : resolveGroundHeightAtWorldXZ(dropWorldPositionHelper.x, dropWorldPositionHelper.z)
+      const deltaY = targetY - dropBoundingBoxHelper.min.y
       if (Math.abs(deltaY) <= DROP_TO_GROUND_EPSILON) {
         continue
       }
