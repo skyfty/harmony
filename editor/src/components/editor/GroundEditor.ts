@@ -397,6 +397,61 @@ function blendTerrainPaintSurfaceColor(
 	}
 }
 
+function decodeStraightAlphaSurfaceColor(
+	surfaceData: Uint8ClampedArray,
+	offset: number,
+	targetColor: [number, number, number],
+): number {
+	const alpha = clamp01((surfaceData[offset + 3] ?? 0) / 255)
+	targetColor[0] = clamp01((surfaceData[offset] ?? 0) / 255)
+	targetColor[1] = clamp01((surfaceData[offset + 1] ?? 0) / 255)
+	targetColor[2] = clamp01((surfaceData[offset + 2] ?? 0) / 255)
+	if (alpha <= 0) {
+		targetColor[0] = 0
+		targetColor[1] = 0
+		targetColor[2] = 0
+	}
+	return alpha
+}
+
+function compositeStraightAlphaSurfaceColor(
+	destColor: [number, number, number],
+	destAlpha: number,
+	sourceColor: [number, number, number],
+	sourceAlpha: number,
+	targetColor: [number, number, number],
+): number {
+	const normalizedDestAlpha = clamp01(destAlpha)
+	const normalizedSourceAlpha = clamp01(sourceAlpha)
+	const outAlpha = normalizedSourceAlpha + normalizedDestAlpha * (1 - normalizedSourceAlpha)
+	if (outAlpha <= 1e-6) {
+		targetColor[0] = 0
+		targetColor[1] = 0
+		targetColor[2] = 0
+		return 0
+	}
+	targetColor[0] = clamp01(((sourceColor[0] * normalizedSourceAlpha) + (destColor[0] * normalizedDestAlpha * (1 - normalizedSourceAlpha))) / outAlpha)
+	targetColor[1] = clamp01(((sourceColor[1] * normalizedSourceAlpha) + (destColor[1] * normalizedDestAlpha * (1 - normalizedSourceAlpha))) / outAlpha)
+	targetColor[2] = clamp01(((sourceColor[2] * normalizedSourceAlpha) + (destColor[2] * normalizedDestAlpha * (1 - normalizedSourceAlpha))) / outAlpha)
+	return outAlpha
+}
+
+function normalizeSurfaceDataToStraightAlpha(surfaceData: Uint8ClampedArray): Uint8ClampedArray {
+	for (let offset = 0; offset < surfaceData.length; offset += 4) {
+		const alpha = clamp01((surfaceData[offset + 3] ?? 0) / 255)
+		if (alpha <= 0) {
+			surfaceData[offset] = 0
+			surfaceData[offset + 1] = 0
+			surfaceData[offset + 2] = 0
+			continue
+		}
+		surfaceData[offset] = Math.round(clamp01(((surfaceData[offset] ?? 0) / 255) / alpha) * 255)
+		surfaceData[offset + 1] = Math.round(clamp01(((surfaceData[offset + 1] ?? 0) / 255) / alpha) * 255)
+		surfaceData[offset + 2] = Math.round(clamp01(((surfaceData[offset + 2] ?? 0) / 255) / alpha) * 255)
+	}
+	return surfaceData
+}
+
 function createBlankPaintSurfaceData(resolution: number): Uint8ClampedArray {
 	const normalized = Math.max(1, Math.round(resolution))
 	return new Uint8ClampedArray(normalized * normalized * 4)
@@ -3141,7 +3196,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					if (!source) {
 						return
 					}
-					state.surfaceData = extractChunkSurfaceDataAtResolution(source, resolution)
+					state.surfaceData = normalizeSurfaceDataToStraightAlpha(extractChunkSurfaceDataAtResolution(source, resolution))
 					state.surfaceRevision = 1
 					state.previewEncodedRevision = 1
 				} catch (error) {
@@ -3201,6 +3256,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const halfDepth = Math.max(1e-6, definition.depth * 0.5)
 		const baseColor: [number, number, number] = [0, 0, 0]
 		const layerColor: [number, number, number] = [0, 0, 0]
+		const nextColor: [number, number, number] = [0, 0, 0]
 		const sampledColor = new Float32Array(4)
 		let any = false
 		for (let y = minY; y <= maxY; y += 1) {
@@ -3247,17 +3303,26 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (blendedAmount <= 0) {
 					continue
 				}
-				baseColor[0] = (chunk.surfaceData[offset] ?? 0) / 255
-				baseColor[1] = (chunk.surfaceData[offset + 1] ?? 0) / 255
-				baseColor[2] = (chunk.surfaceData[offset + 2] ?? 0) / 255
+				const baseAlpha = decodeStraightAlphaSurfaceColor(chunk.surfaceData, offset, baseColor)
 				layerColor[0] = clamp01(sampledColor[0] ?? 0)
 				layerColor[1] = clamp01(sampledColor[1] ?? 0)
 				layerColor[2] = clamp01(sampledColor[2] ?? 0)
 				const blended = blendTerrainPaintSurfaceColor(baseColor, layerColor, stamp.settings.blendMode)
-				const nextR = Math.round(THREE.MathUtils.lerp(baseColor[0], clamp01(blended[0] ?? baseColor[0]), blendedAmount) * 255)
-				const nextG = Math.round(THREE.MathUtils.lerp(baseColor[1], clamp01(blended[1] ?? baseColor[1]), blendedAmount) * 255)
-				const nextB = Math.round(THREE.MathUtils.lerp(baseColor[2], clamp01(blended[2] ?? baseColor[2]), blendedAmount) * 255)
-				const nextA = Math.max(chunk.surfaceData[offset + 3] ?? 0, Math.round(blendedAmount * 255))
+				const nextAlpha = compositeStraightAlphaSurfaceColor(
+					baseColor,
+					baseAlpha,
+					[
+						clamp01(blended[0] ?? layerColor[0]),
+						clamp01(blended[1] ?? layerColor[1]),
+						clamp01(blended[2] ?? layerColor[2]),
+					],
+					blendedAmount,
+					nextColor,
+				)
+				const nextR = Math.round(nextColor[0] * 255)
+				const nextG = Math.round(nextColor[1] * 255)
+				const nextB = Math.round(nextColor[2] * 255)
+				const nextA = Math.round(nextAlpha * 255)
 				if (
 					nextR !== (chunk.surfaceData[offset] ?? 0)
 					|| nextG !== (chunk.surfaceData[offset + 1] ?? 0)

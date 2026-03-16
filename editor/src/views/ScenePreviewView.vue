@@ -1054,6 +1054,9 @@ function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, gro
 			dynamicMesh,
 			groundSurfacePreviewLoaders,
 			() => groundSurfacePreviewLoadToken,
+			{
+				applyToMaterialMap: true,
+			},
 		)
 		: false
 	if (usesSurfacePreview) {

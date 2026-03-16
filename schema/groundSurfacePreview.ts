@@ -28,7 +28,6 @@ import {
 const DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION = 1024
 const MIN_GROUND_SURFACE_PREVIEW_RESOLUTION = 256
 const groundSurfacePreviewRequests = new Map<string, Promise<THREE.Texture | null>>()
-const DEFAULT_GROUND_SURFACE_PREVIEW_BACKGROUND = '#ffffff'
 const GROUND_SURFACE_PREVIEW_DEBUG_FLAG_KEY = '__HARMONY_GROUND_SURFACE_PREVIEW_DEBUG__'
 const GROUND_SURFACE_PREVIEW_STATS_KEY = '__HARMONY_GROUND_SURFACE_PREVIEW_STATS__'
 
@@ -47,6 +46,12 @@ export type GroundSurfacePreviewCanvasResult = {
   canvas: CanvasLike
   width: number
   height: number
+}
+
+type GroundSurfacePreviewCompiledShader = {
+  uniforms: Record<string, { value: any }>
+  vertexShader: string
+  fragmentShader: string
 }
 
 type ImageDataSource = {
@@ -83,10 +88,19 @@ export type GroundSurfacePreviewOptions = {
   seedTexture?: THREE.Texture | null
 }
 
-const GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY = '__groundSurfacePreviewOriginalMap'
-const GROUND_SURFACE_PREVIEW_MAP_ACTIVE_KEY = '__groundSurfacePreviewMapActive'
 const GROUND_SURFACE_PREVIEW_LIVE_TEXTURE_KEY = '__groundSurfacePreviewLiveTexture'
 const extractedPreviewImageDataCache = new WeakMap<object, ImageDataSource>()
+const groundSurfacePreviewShaderStateByMaterial = new WeakMap<THREE.MeshStandardMaterial, GroundSurfacePreviewShaderState>()
+
+type GroundSurfacePreviewShaderState = {
+  installed: boolean
+  shader: GroundSurfacePreviewCompiledShader | null
+  overlayTexture: THREE.Texture | null
+  overlayBounds: THREE.Vector4
+  defaultTransparentTexture: THREE.DataTexture
+  originalOnBeforeCompile: THREE.MeshStandardMaterial['onBeforeCompile']
+  originalCustomProgramCacheKey?: THREE.MeshStandardMaterial['customProgramCacheKey']
+}
 
 function nowMs(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -345,6 +359,108 @@ function loadImageDataFromTexture(texture: THREE.Texture | null): LoadedPreviewI
   return { source, imageData }
 }
 
+function createDefaultTransparentOverlayTexture(): THREE.DataTexture {
+  const texture = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat)
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.minFilter = THREE.LinearFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.needsUpdate = true
+  return texture
+}
+
+function getOrCreateGroundSurfacePreviewShaderState(material: THREE.MeshStandardMaterial): GroundSurfacePreviewShaderState {
+  const existing = groundSurfacePreviewShaderStateByMaterial.get(material)
+  if (existing) {
+    return existing
+  }
+  const created: GroundSurfacePreviewShaderState = {
+    installed: false,
+    shader: null,
+    overlayTexture: null,
+    overlayBounds: new THREE.Vector4(-0.5, -0.5, 1, 1),
+    defaultTransparentTexture: createDefaultTransparentOverlayTexture(),
+    originalOnBeforeCompile: material.onBeforeCompile,
+    originalCustomProgramCacheKey: material.customProgramCacheKey,
+  }
+  groundSurfacePreviewShaderStateByMaterial.set(material, created)
+  return created
+}
+
+function updateGroundSurfacePreviewShaderUniforms(state: GroundSurfacePreviewShaderState): void {
+  const shader = state.shader
+  if (!shader) {
+    return
+  }
+  const overlayTexture = state.overlayTexture ?? state.defaultTransparentTexture
+  if (shader.uniforms.uHarmonyGroundOverlayEnabled) {
+    shader.uniforms.uHarmonyGroundOverlayEnabled.value = state.overlayTexture ? 1 : 0
+  }
+  if (shader.uniforms.uHarmonyGroundOverlayTexture) {
+    shader.uniforms.uHarmonyGroundOverlayTexture.value = overlayTexture
+  }
+  if (shader.uniforms.uHarmonyGroundOverlayBounds) {
+    shader.uniforms.uHarmonyGroundOverlayBounds.value.copy(state.overlayBounds)
+  }
+}
+
+function installGroundSurfacePreviewShaderHooks(material: THREE.MeshStandardMaterial): GroundSurfacePreviewShaderState {
+  const state = getOrCreateGroundSurfacePreviewShaderState(material)
+  if (state.installed) {
+    return state
+  }
+  material.customProgramCacheKey = () => {
+    const originalKey = state.originalCustomProgramCacheKey?.call(material) ?? ''
+    return `${originalKey}|harmony-ground-surface-overlay-v1`
+  }
+  material.onBeforeCompile = (shader, renderer) => {
+    state.originalOnBeforeCompile?.call(material, shader, renderer)
+    state.shader = shader
+    shader.uniforms.uHarmonyGroundOverlayEnabled = { value: 0 }
+    shader.uniforms.uHarmonyGroundOverlayTexture = { value: state.defaultTransparentTexture }
+    shader.uniforms.uHarmonyGroundOverlayBounds = { value: state.overlayBounds }
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        'void main() {',
+        'varying vec2 vHarmonyGroundOverlayLocalXZ;\nvoid main() {',
+      )
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n\tvHarmonyGroundOverlayLocalXZ = position.xz;',
+      )
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        'void main() {',
+        [
+          'uniform float uHarmonyGroundOverlayEnabled;',
+          'uniform sampler2D uHarmonyGroundOverlayTexture;',
+          'uniform vec4 uHarmonyGroundOverlayBounds;',
+          'varying vec2 vHarmonyGroundOverlayLocalXZ;',
+          'void main() {',
+        ].join('\n'),
+      )
+      .replace(
+        '#include <map_fragment>',
+        [
+          '#include <map_fragment>',
+          'if (uHarmonyGroundOverlayEnabled > 0.5) {',
+          '  vec2 harmonyOverlayUv = (vHarmonyGroundOverlayLocalXZ - uHarmonyGroundOverlayBounds.xy) / max(uHarmonyGroundOverlayBounds.zw, vec2(1e-5));',
+          '  bool harmonyOverlayInside = harmonyOverlayUv.x >= 0.0 && harmonyOverlayUv.x <= 1.0 && harmonyOverlayUv.y >= 0.0 && harmonyOverlayUv.y <= 1.0;',
+          '  if (harmonyOverlayInside) {',
+          '    vec4 harmonyOverlaySample = texture2D(uHarmonyGroundOverlayTexture, harmonyOverlayUv);',
+          '    float harmonyOverlayAlpha = clamp(harmonyOverlaySample.a, 0.0, 1.0);',
+          '    diffuseColor.rgb = mix(diffuseColor.rgb, harmonyOverlaySample.rgb, harmonyOverlayAlpha);',
+          '  }',
+          '}',
+        ].join('\n'),
+      )
+    updateGroundSurfacePreviewShaderUniforms(state)
+  }
+  state.installed = true
+  material.needsUpdate = true
+  return state
+}
+
 function forEachGroundPreviewMaterial(root: THREE.Object3D, visitor: (material: THREE.MeshStandardMaterial) => void): void {
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh
@@ -366,31 +482,15 @@ function forEachGroundPreviewMaterial(root: THREE.Object3D, visitor: (material: 
   })
 }
 
-function applyGroundSurfacePreviewToMaterialMap(root: THREE.Object3D, texture: THREE.Texture): void {
+function applyGroundSurfacePreviewToMaterialMap(root: THREE.Object3D, texture: THREE.Texture, definition: GroundDynamicMesh): void {
+  const width = Math.max(1e-6, normalizeDimension(definition.width))
+  const depth = Math.max(1e-6, normalizeDimension(definition.depth))
   forEachGroundPreviewMaterial(root, (material) => {
-    const userData = (material.userData ??= {}) as Record<string, unknown>
-    if (!(GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY in userData)) {
-      userData[GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY] = material.map ?? null
-    }
-    userData[GROUND_SURFACE_PREVIEW_MAP_ACTIVE_KEY] = true
-    if (material.map !== texture) {
-      material.map = texture
-      material.needsUpdate = true
-    }
+    const state = installGroundSurfacePreviewShaderHooks(material)
+    state.overlayTexture = texture
+    state.overlayBounds.set(-width * 0.5, -depth * 0.5, width, depth)
+    updateGroundSurfacePreviewShaderUniforms(state)
   })
-}
-
-function getGroundPreviewMaterialMap(root: THREE.Object3D | null | undefined): THREE.Texture | null {
-  let resolved: THREE.Texture | null = null
-  if (!root) {
-    return resolved
-  }
-  forEachGroundPreviewMaterial(root, (material) => {
-    if (!resolved && material.map) {
-      resolved = material.map
-    }
-  })
-  return resolved
 }
 
 export function syncGroundSurfaceLiveChunkPreviews(params: {
@@ -433,18 +533,11 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
   const width = (canvas as HTMLCanvasElement).width ?? (canvas as OffscreenCanvas).width
   const height = (canvas as HTMLCanvasElement).height ?? (canvas as OffscreenCanvas).height
   if (!canReuseCanvas) {
-    const seedTexture = getLandformsPreviewTexture(groundObject) ?? getGroundPreviewMaterialMap(groundObject)
+    const seedTexture = getLandformsPreviewTexture(groundObject) ?? getGroundSurfacePreviewLiveTexture(groundObject)
     const seedSource = resolveTextureImageSource(seedTexture)
     context.clearRect(0, 0, width, height)
     if (seedSource) {
       context.drawImage(seedSource, 0, 0, width, height)
-    } else {
-      context.save()
-      context.globalCompositeOperation = 'source-over'
-      context.globalAlpha = 1
-      context.fillStyle = DEFAULT_GROUND_SURFACE_PREVIEW_BACKGROUND
-      context.fillRect(0, 0, width, height)
-      context.restore()
     }
   }
 
@@ -469,7 +562,7 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
   liveTexture = nextTexture
   setGroundSurfacePreviewLiveTexture(groundObject, liveTexture)
   if (applyToMaterialMap === true) {
-    applyGroundSurfacePreviewToMaterialMap(groundObject, liveTexture)
+    applyGroundSurfacePreviewToMaterialMap(groundObject, liveTexture, dynamicMesh)
   }
   return true
 }
@@ -480,14 +573,12 @@ export function restoreGroundSurfacePreviewMaterialMap(root: THREE.Object3D | nu
   }
   clearGroundSurfacePreviewLiveTexture(root)
   forEachGroundPreviewMaterial(root, (material) => {
-    const userData = (material.userData ?? {}) as Record<string, unknown>
-    if (!(GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY in userData)) {
+    const state = groundSurfacePreviewShaderStateByMaterial.get(material)
+    if (!state) {
       return
     }
-    material.map = (userData[GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY] as THREE.Texture | null | undefined) ?? null
-    delete userData[GROUND_SURFACE_PREVIEW_ORIGINAL_MAP_KEY]
-    delete userData[GROUND_SURFACE_PREVIEW_MAP_ACTIVE_KEY]
-    material.needsUpdate = true
+    state.overlayTexture = null
+    updateGroundSurfacePreviewShaderUniforms(state)
   })
 }
 
@@ -589,23 +680,8 @@ export async function composeGroundSurfacePreviewCanvas(
   const width = (canvas as HTMLCanvasElement).width ?? (canvas as OffscreenCanvas).width
   const height = (canvas as HTMLCanvasElement).height ?? (canvas as OffscreenCanvas).height
   context.clearRect(0, 0, width, height)
-  context.save()
-  context.globalCompositeOperation = 'source-over'
-  context.globalAlpha = 1
-  context.fillStyle = DEFAULT_GROUND_SURFACE_PREVIEW_BACKGROUND
-  context.fillRect(0, 0, width, height)
-  context.restore()
-
-  const baseUrl = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl.trim() : ''
-  if (baseUrl) {
-    const baseTexture = await loaders.loadGroundSurfaceBaseTextureFromUrl(baseUrl)
-    if (shouldAbort()) {
-      return null
-    }
-    const loadedBase = loadImageDataFromTexture(baseTexture)
-    if (loadedBase) {
-      context.drawImage(loadedBase.source, 0, 0, width, height)
-    }
+  if (seedImageSource) {
+    context.drawImage(seedImageSource, 0, 0, width, height)
   }
 
   const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
@@ -840,8 +916,12 @@ export function syncGroundSurfacePreviewForGround(
   }
   const signature = buildGroundSurfacePreviewSignature(groundNode, dynamicMesh, options)
   const currentSignature = ((groundObject.userData as any)?.[LANDFORMS_PREVIEW_SIGNATURE_USERDATA_KEY] as string | null | undefined) ?? null
-  if (currentSignature === signature && getLandformsPreviewTexture(groundObject)) {
-    releaseGroundSurfacePreviewLiveTextureIfDifferent(groundObject, getLandformsPreviewTexture(groundObject))
+  const currentTexture = getLandformsPreviewTexture(groundObject)
+  if (currentSignature === signature && currentTexture) {
+    if (options.applyToMaterialMap === true) {
+      applyGroundSurfacePreviewToMaterialMap(groundObject, currentTexture, dynamicMesh)
+    }
+    releaseGroundSurfacePreviewLiveTextureIfDifferent(groundObject, currentTexture)
     return true
   }
   const token = getToken()
@@ -863,7 +943,7 @@ export function syncGroundSurfacePreviewForGround(
       return
     }
     if (options.applyToMaterialMap === true) {
-      applyGroundSurfacePreviewToMaterialMap(groundObject, texture)
+      applyGroundSurfacePreviewToMaterialMap(groundObject, texture, dynamicMesh)
     }
     setLandformsPreviewTexture(groundObject, signature, texture)
     releaseGroundSurfacePreviewLiveTextureIfDifferent(groundObject, texture)
