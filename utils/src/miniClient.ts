@@ -100,9 +100,6 @@ function summarizeToken(token?: string): string {
 }
 
 function debugMiniAuth(message: string, details?: Record<string, unknown>): void {
-  if (!isMiniAuthDebugEnabled()) {
-    return;
-  }
   if (details) {
     console.info(`[mini-auth-debug] ${message}`, details);
     return;
