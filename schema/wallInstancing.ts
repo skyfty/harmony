@@ -93,6 +93,31 @@ const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
 const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
 const WALL_SYNC_REPEAT_INSTANCE_STEP_M_DEFAULT = 0.5
 
+type WallVerticalLayout = {
+  bodyBaseY: number
+  bodyHeight: number
+  headBaseY: number
+  footBaseY: number
+}
+
+type WallVerticalLayoutOptions = {
+  headAssetHeight?: number
+  footAssetHeight?: number
+}
+
+function resolveWallVerticalLayout(totalHeightRaw: number, options: WallVerticalLayoutOptions = {}): WallVerticalLayout {
+  const totalHeight = Math.max(0, Number.isFinite(totalHeightRaw) ? totalHeightRaw : 1)
+  const headAssetHeight = Math.max(0, Number.isFinite(options.headAssetHeight) ? (options.headAssetHeight as number) : 0)
+  const footAssetHeight = Math.max(0, Number.isFinite(options.footAssetHeight) ? (options.footAssetHeight as number) : 0)
+  const bodyHeight = Math.max(0, totalHeight - headAssetHeight - footAssetHeight)
+  return {
+    bodyBaseY: footAssetHeight,
+    bodyHeight,
+    headBaseY: totalHeight - headAssetHeight,
+    footBaseY: 0,
+  }
+}
+
 function normalizeWallRepeatInstanceStep(value: unknown): number {
   const raw = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(raw)) {
@@ -453,6 +478,7 @@ function computeWallBodyLocalPlacementsStretchTiledUv(
   bounds: THREE.Box3,
   mode: WallPlacementMode,
   orientation: WallModelOrientation,
+  verticalLayoutOptions: WallVerticalLayoutOptions,
   cornerModels: WallCornerModelRule[] = [],
 ): WallLocalPlacement[] {
   const placements: WallLocalPlacement[] = []
@@ -501,8 +527,11 @@ function computeWallBodyLocalPlacementsStretchTiledUv(
       quatLocal.multiply(wallSyncYawQuatHelper)
     }
 
-    const bodyHeight = resolveWallBodyHeightForSegment(segment)
-    const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
+    const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(segment), verticalLayoutOptions)
+    if (mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON) {
+      continue
+    }
+    const scaleY = mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
     const scaleAlong = Math.max(trimmedLengthLocal / tileLengthLocal, 1e-6)
     wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis * scaleAlong)
     wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
@@ -510,10 +539,10 @@ function computeWallBodyLocalPlacementsStretchTiledUv(
 
     const baselineY = wallSyncPosHelper.y
     const posY = mode === 'body'
-      ? (baselineY - scaleY * minY)
+      ? (baselineY + layout.bodyBaseY - scaleY * minY)
       : mode === 'head'
-        ? (baselineY + bodyHeight - minY)
-        : (baselineY - minY)
+        ? (baselineY + layout.headBaseY - minY)
+        : (baselineY + layout.footBaseY - minY)
     wallSyncPosHelper.y = posY
 
     switch (orientation.forwardAxis) {
@@ -544,6 +573,7 @@ function computeWallBodyLocalPlacementsRepeated(
   bounds: THREE.Box3,
   mode: WallPlacementMode,
   orientation: WallModelOrientation,
+  verticalLayoutOptions: WallVerticalLayoutOptions,
   repeatInstanceStep: number,
   repeatErasedSlotSet: Set<string>,
   cornerModels: WallCornerModelRule[] = [],
@@ -592,8 +622,11 @@ function computeWallBodyLocalPlacementsRepeated(
       quatLocal.multiply(wallSyncYawQuatHelper)
     }
 
-    const bodyHeight = resolveWallBodyHeightForSegment(segment)
-    const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
+    const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(segment), verticalLayoutOptions)
+    if (mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON) {
+      continue
+    }
+    const scaleY = mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
     const maxLocalStart = trimmedLengthLocal - tileLengthLocal
     if (maxLocalStart < -WALL_SYNC_EPSILON) {
       continue
@@ -620,10 +653,10 @@ function computeWallBodyLocalPlacementsRepeated(
 
       const baselineY = wallSyncPosHelper.y
       const posY = mode === 'body'
-        ? (baselineY - scaleY * minY)
+        ? (baselineY + layout.bodyBaseY - scaleY * minY)
         : mode === 'head'
-          ? (baselineY + bodyHeight - minY)
-          : (baselineY - minY)
+          ? (baselineY + layout.headBaseY - minY)
+          : (baselineY + layout.footBaseY - minY)
       wallSyncPosHelper.y = posY
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
       placements.push({
@@ -646,6 +679,7 @@ function computeWallBodyLocalPlacements(
   mode: WallPlacementMode,
   wallRenderMode: WallRenderMode,
   orientation: WallModelOrientation,
+  verticalLayoutOptions: WallVerticalLayoutOptions,
   repeatInstanceStep: number,
   cornerModels: WallCornerModelRule[] = [],
 ): WallLocalPlacement[] {
@@ -655,12 +689,13 @@ function computeWallBodyLocalPlacements(
       bounds,
       mode,
       orientation,
+      verticalLayoutOptions,
       normalizeWallRepeatInstanceStep(repeatInstanceStep),
       buildRepeatErasedSlotSet(definition),
       cornerModels,
     )
   }
-  return computeWallBodyLocalPlacementsStretchTiledUv(definition, bounds, mode, orientation, cornerModels)
+  return computeWallBodyLocalPlacementsStretchTiledUv(definition, bounds, mode, orientation, verticalLayoutOptions, cornerModels)
 }
 
 function computeWallJointLocalMatricesByAsset(
@@ -668,6 +703,7 @@ function computeWallJointLocalMatricesByAsset(
   options: {
     cornerModels?: WallCornerModelRule[]
     mode: WallPlacementMode
+    verticalLayoutOptions: WallVerticalLayoutOptions
     getAssetBounds: (assetId: string) => THREE.Box3 | null
   },
 ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null; mode: WallPlacementMode } {
@@ -728,16 +764,19 @@ function computeWallJointLocalMatricesByAsset(
     }
 
     const bounds = options.getAssetBounds(assetId)
-    const bodyHeight = resolveWallBodyHeightForSegment(current)
+    const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(current), options.verticalLayoutOptions)
+    if (options.mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON) {
+      return
+    }
     const templateHeight = bounds ? resolveWallModelHeight(bounds) : 1
     const minY = bounds ? bounds.min.y : 0
-    const scaleY = options.mode === 'body' ? (bodyHeight / templateHeight) : 1
+    const scaleY = options.mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
     const baselineY = corner.y
     const posY = options.mode === 'body'
-      ? (baselineY - scaleY * minY)
+      ? (baselineY + layout.bodyBaseY - scaleY * minY)
       : options.mode === 'head'
-        ? (baselineY + bodyHeight - minY)
-        : (baselineY - minY)
+        ? (baselineY + layout.headBaseY - minY)
+        : (baselineY + layout.footBaseY - minY)
 
     wallSyncBisectorHelper.copy(wallSyncIncomingHelper).multiplyScalar(-1).add(wallSyncOutgoingHelper)
     if (wallSyncBisectorHelper.lengthSq() < WALL_SYNC_EPSILON) {
@@ -826,6 +865,7 @@ function computeWallEndCapLocalMatrices(
   bounds: THREE.Box3,
   mode: WallPlacementMode,
   orientation: WallModelOrientation,
+  verticalLayoutOptions: WallVerticalLayoutOptions,
   offsetLocalValue?: WallOffsetLocal | null,
 ): THREE.Matrix4[] {
   const matrices: THREE.Matrix4[] = []
@@ -872,8 +912,9 @@ function computeWallEndCapLocalMatrices(
 
     const firstDir = findDirectionForSegment(firstSeg, wallSyncLocalUnitDirHelper)
     if (firstDir.lengthSq() > WALL_SYNC_EPSILON) {
-      const bodyHeight = resolveWallBodyHeightForSegment(firstSeg)
-      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
+      const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(firstSeg), verticalLayoutOptions)
+      if (!(mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON)) {
+        const scaleY = mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
       wallSyncLocalDirHelper.copy(firstDir).multiplyScalar(-1)
       const quat = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalDirHelper)
       if (orientation.yawDeg) {
@@ -884,10 +925,10 @@ function computeWallEndCapLocalMatrices(
       wallSyncLocalOffsetHelper.applyQuaternion(quat)
       const baselineY = firstSeg.start.y
       const posY = mode === 'body'
-        ? (baselineY - scaleY * minY)
+        ? (baselineY + layout.bodyBaseY - scaleY * minY)
         : mode === 'head'
-          ? (baselineY + bodyHeight - minY)
-          : (baselineY - minY)
+          ? (baselineY + layout.headBaseY - minY)
+          : (baselineY + layout.footBaseY - minY)
       wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
       wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
       wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
@@ -895,12 +936,14 @@ function computeWallEndCapLocalMatrices(
       wallSyncScaleHelper.set(1, scaleY, 1)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
       matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+      }
     }
 
     const lastDir = findDirectionForSegment(lastSeg, wallSyncLocalUnitDirHelper)
     if (lastDir.lengthSq() > WALL_SYNC_EPSILON) {
-      const bodyHeight = resolveWallBodyHeightForSegment(lastSeg)
-      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
+      const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(lastSeg), verticalLayoutOptions)
+      if (!(mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON)) {
+        const scaleY = mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
       wallSyncLocalDirHelper.copy(lastDir)
       const quat = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalDirHelper)
       if (orientation.yawDeg) {
@@ -911,10 +954,10 @@ function computeWallEndCapLocalMatrices(
       wallSyncLocalOffsetHelper.applyQuaternion(quat)
       const baselineY = lastSeg.end.y
       const posY = mode === 'body'
-        ? (baselineY - scaleY * minY)
+        ? (baselineY + layout.bodyBaseY - scaleY * minY)
         : mode === 'head'
-          ? (baselineY + bodyHeight - minY)
-          : (baselineY - minY)
+          ? (baselineY + layout.headBaseY - minY)
+          : (baselineY + layout.footBaseY - minY)
       wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
       wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
       wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
@@ -922,6 +965,7 @@ function computeWallEndCapLocalMatrices(
       wallSyncScaleHelper.set(1, scaleY, 1)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
       matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+      }
     }
   }
 
@@ -995,6 +1039,18 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
     }
   }
 
+  const headAssetHeight = (() => {
+    if (!wallProps.headAssetId) return 0
+    const box = params.getAssetBounds(wallProps.headAssetId)
+    return box ? Math.max(0, box.max.y - box.min.y) : 0
+  })()
+  const footAssetHeight = (() => {
+    if (!wallProps.footAssetId) return 0
+    const box = params.getAssetBounds(wallProps.footAssetId)
+    return box ? Math.max(0, box.max.y - box.min.y) : 0
+  })()
+  const verticalLayoutOptions: WallVerticalLayoutOptions = { headAssetHeight, footAssetHeight }
+
   if (wallProps.bodyAssetId) {
     const bounds = params.getAssetBounds(wallProps.bodyAssetId)
     if (bounds) {
@@ -1004,6 +1060,7 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
         'body',
         wallProps.wallRenderMode,
         wallProps.bodyOrientation,
+        verticalLayoutOptions,
         wallProps.repeatInstanceStep,
         cornerModels,
       )
@@ -1043,6 +1100,7 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
         'head',
         wallProps.wallRenderMode,
         wallProps.headOrientation,
+        verticalLayoutOptions,
         wallProps.repeatInstanceStep,
         cornerModels,
       )
@@ -1082,6 +1140,7 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
         'foot',
         wallProps.wallRenderMode,
         wallProps.footOrientation,
+        verticalLayoutOptions,
         wallProps.repeatInstanceStep,
         cornerModels,
       )
@@ -1115,16 +1174,19 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
   const bodyJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
     cornerModels,
     mode: 'body',
+    verticalLayoutOptions,
     getAssetBounds: params.getAssetBounds,
   })
   const headJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
     cornerModels,
     mode: 'head',
+    verticalLayoutOptions,
     getAssetBounds: params.getAssetBounds,
   })
   const footJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
     cornerModels,
     mode: 'foot',
+    verticalLayoutOptions,
     getAssetBounds: params.getAssetBounds,
   })
   const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId ?? footJointBuckets.primaryAssetId
@@ -1157,6 +1219,7 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
         bounds,
         'body',
         wallProps.bodyEndCapOrientation,
+        verticalLayoutOptions,
         wallProps.bodyEndCapOffsetLocal,
       )
       if (localMatrices.length > 0) {
@@ -1179,6 +1242,7 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
         bounds,
         'head',
         wallProps.headEndCapOrientation,
+        verticalLayoutOptions,
         wallProps.headEndCapOffsetLocal,
       )
       if (localMatrices.length > 0) {
@@ -1201,6 +1265,7 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
         bounds,
         'foot',
         wallProps.footEndCapOrientation,
+        verticalLayoutOptions,
         wallProps.footEndCapOffsetLocal,
       )
       if (localMatrices.length > 0) {

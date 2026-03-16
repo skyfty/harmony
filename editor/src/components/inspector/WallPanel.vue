@@ -18,7 +18,6 @@ import {
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
   WALL_MIN_REPEAT_INSTANCE_STEP,
-  WALL_DEFAULT_SMOOTHING,
   WALL_MIN_HEIGHT,
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
@@ -35,7 +34,6 @@ const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore
 
 const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
-const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
 const localRepeatInstanceStep = ref<number>(WALL_DEFAULT_REPEAT_INSTANCE_STEP)
 
 const isSyncingFromScene = ref(false)
@@ -410,9 +408,6 @@ watch(
     isSyncingFromScene.value = true
       localHeight.value = toFixedTwoDecimals(props.height ?? WALL_DEFAULT_HEIGHT)
     localWidth.value = toFixedTwoDecimals(props.width ?? WALL_DEFAULT_WIDTH)
-    localSmoothing.value = Number.isFinite(props.smoothing)
-      ? Math.min(1, Math.max(0, props.smoothing))
-      : WALL_DEFAULT_SMOOTHING
     localRepeatInstanceStep.value = Number.isFinite((props as any).repeatInstanceStep)
       ? Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, Number((props as any).repeatInstanceStep))
       : WALL_DEFAULT_REPEAT_INSTANCE_STEP
@@ -1156,42 +1151,6 @@ function resetWallBaseOffset(): void {
   } as any)
 }
 
-function applySmoothingUpdate(rawValue: unknown) {
-  if (isSyncingFromScene.value) {
-    return
-  }
-  const nodeId = selectedNodeId.value
-  const component = wallComponent.value
-  if (!nodeId || !component) {
-    return
-  }
-  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
-  if (!Number.isFinite(value)) {
-    return
-  }
-  const clamped = Math.min(1, Math.max(0, value))
-  const current = typeof component.props?.smoothing === 'number'
-    ? component.props.smoothing
-    : WALL_DEFAULT_SMOOTHING
-  if (Math.abs(current - clamped) <= 1e-6) {
-    return
-  }
-  if (localSmoothing.value !== clamped) {
-    localSmoothing.value = clamped
-  }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothing: clamped })
-}
-
-function handleSmoothingModelUpdate(rawValue: unknown): void {
-  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
-  if (!Number.isFinite(value)) {
-    return
-  }
-  const clamped = Math.min(1, Math.max(0, value))
-  localSmoothing.value = clamped
-  applySmoothingUpdate(clamped)
-}
-
 function applyRenderModeUpdate(rawValue: unknown) {
   if (isSyncingFromScene.value) {
     return
@@ -1385,21 +1344,6 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 @keydown.enter.prevent="applyDimensions"
               />
             </div>
-                        
-          <v-text-field
-            :model-value="localSmoothing"
-            type="number"
-            min="0"
-            max="1"
-            step="0.01"
-            label="Corner Smoothness"
-            density="compact"
-            variant="underlined"
-            hide-details
-            @update:modelValue="handleSmoothingModelUpdate"
-            @blur="applySmoothingUpdate(localSmoothing)"
-            @keydown.enter.prevent="applySmoothingUpdate(localSmoothing)"
-          />
             <InspectorVectorControls
               label="Offset"
               :model-value="wallBaseOffsetModelValue"

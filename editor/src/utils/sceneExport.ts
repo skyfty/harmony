@@ -40,8 +40,6 @@ import {
   type PreloadableComponentProps,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
-  WALL_COMPONENT_TYPE,
-  clampWallProps,
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
@@ -877,9 +875,7 @@ function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): 
         return ground
       }
     case 'Wall': {
-      const component = node.components?.[WALL_COMPONENT_TYPE]
-      const smoothing = clampWallProps(component?.props ?? null).smoothing
-      return createWallGroup(mesh, { smoothing }).clone(true)
+      return createWallGroup(mesh).clone(true)
     }
     case 'Road':
       {

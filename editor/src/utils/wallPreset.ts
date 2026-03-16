@@ -5,7 +5,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const WALL_PRESET_FORMAT_VERSION = 6
+export const WALL_PRESET_FORMAT_VERSION = 7
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 export type WallUvAxis = 'auto' | 'u' | 'v'
@@ -48,7 +48,6 @@ export type StrictWallPresetWallProps = {
   width: number
   thickness: number
   wallBaseOffsetLocal: WallOffsetLocal
-  smoothing: number
   bodyMaterialConfigId: string | null
   wallRenderMode: WallRenderMode
   repeatInstanceStep: number

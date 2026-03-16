@@ -189,7 +189,6 @@ export async function buildWallMesh(
   const bodyMaterialConfigId = resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps);
   const buildProceduralWallGroup = async (): Promise<THREE.Group> => {
     const group = createWallGroup(meshInfo, {
-      smoothing: wallProps.smoothing,
       wallRenderMode: wallProps.wallRenderMode,
       repeatInstanceStep: wallProps.repeatInstanceStep,
       bodyMaterialConfigId,

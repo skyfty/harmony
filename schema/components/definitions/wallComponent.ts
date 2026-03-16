@@ -10,7 +10,6 @@ export const WALL_DEFAULT_THICKNESS = 0.2
 export const WALL_MIN_HEIGHT = 0.0
 export const WALL_MIN_WIDTH = 0.0
 export const WALL_MIN_THICKNESS = 0.0
-export const WALL_DEFAULT_SMOOTHING = 0.05
 export const WALL_DEFAULT_REPEAT_INSTANCE_STEP = 0.5
 export const WALL_MIN_REPEAT_INSTANCE_STEP = 0.01
 
@@ -82,7 +81,6 @@ export interface WallComponentProps {
   thickness: number
   /** Creation-time base offset (meters) applied to the wall node origin relative to computed center. */
   wallBaseOffsetLocal: WallOffsetLocal
-  smoothing: number
   /** Material config id used for the wall body mesh (editor-defined). */
   bodyMaterialConfigId: string | null
   /**
@@ -222,7 +220,6 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const height = Math.max(WALL_MIN_HEIGHT, requiredNumber('height'))
   const width = Math.max(WALL_MIN_WIDTH, requiredNumber('width'))
   const thickness = Math.max(WALL_MIN_THICKNESS, requiredNumber('thickness'))
-  const smoothing = Math.min(1, Math.max(0, requiredNumber('smoothing')))
 
   const requiredJointTrim = (value: unknown, label: string): WallJointTrim => {
     if (!value || typeof value !== 'object') {
@@ -345,7 +342,6 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     width,
     thickness,
     wallBaseOffsetLocal,
-    smoothing,
     bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     isAirWall: normalizedIsAirWall,
     wallRenderMode: requiredRenderMode((props as any).wallRenderMode, 'wallRenderMode'),
@@ -379,7 +375,6 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
       wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
-      smoothing: WALL_DEFAULT_SMOOTHING,
       bodyMaterialConfigId: null,
       isAirWall: false,
       wallRenderMode: 'stretch',
@@ -411,7 +406,6 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     width: base?.width,
     thickness: base?.thickness,
     wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
-    smoothing: WALL_DEFAULT_SMOOTHING,
     bodyMaterialConfigId: typeof mesh.bodyMaterialConfigId === 'string' && mesh.bodyMaterialConfigId.trim().length
       ? mesh.bodyMaterialConfigId.trim()
       : null,
@@ -467,7 +461,6 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
       y: Number((props as any)?.wallBaseOffsetLocal?.y) || 0,
       z: Number((props as any)?.wallBaseOffsetLocal?.z) || 0,
     },
-    smoothing: props.smoothing,
     bodyMaterialConfigId: props.bodyMaterialConfigId ?? null,
     isAirWall: Boolean(props.isAirWall),
     wallRenderMode: props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
@@ -613,7 +606,6 @@ export function createWallComponentState(
     width: overrides?.width ?? defaults.width,
     thickness: overrides?.thickness ?? defaults.thickness,
     wallBaseOffsetLocal: (overrides as any)?.wallBaseOffsetLocal ?? defaults.wallBaseOffsetLocal,
-    smoothing: overrides?.smoothing ?? defaults.smoothing,
     bodyMaterialConfigId: overrides?.bodyMaterialConfigId ?? defaults.bodyMaterialConfigId,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     wallRenderMode: overrides?.wallRenderMode ?? defaults.wallRenderMode,

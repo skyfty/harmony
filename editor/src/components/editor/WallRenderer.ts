@@ -98,13 +98,12 @@ export function applyAirWallVisualToWallGroup(group: THREE.Group, isAirWall: boo
 
 export function computeWallDynamicMeshSignature(
   definition: WallDynamicMesh,
-  options: { smoothing?: number; wallRenderMode?: 'stretch' | 'repeatInstances' } = {},
+  options: { wallRenderMode?: 'stretch' | 'repeatInstances' } = {},
 ): string {
   const serialized = stableSerialize({
     chains: definition.chains ?? [],
     openings: definition.openings ?? [],
     dimensions: definition.dimensions ?? { height: 3, width: 0.2, thickness: 0.1 },
-    smoothing: Number.isFinite(options.smoothing) ? options.smoothing : 0,
     wallRenderMode: options.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
   })
   return hashString(serialized)
@@ -148,16 +147,6 @@ function disposeWallGroupResources(group: THREE.Group): void {
       material.dispose()
     }
   })
-}
-
-function resolveWallSmoothingFromNode(node: SceneNode): number {
-  const component = node.components?.[WALL_COMPONENT_TYPE] as
-    | SceneNodeComponentState<WallComponentProps>
-    | undefined
-  if (!component) {
-    return 0
-  }
-  return clampWallProps(component.props ?? null).smoothing
 }
 
 function resolveWallEffectiveDefinition(
@@ -512,7 +501,6 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     const renderOptions: WallRenderOptions = normalizedProps
       ? {
-        smoothing: normalizedProps.smoothing,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(params.definition, normalizedProps),
         cornerModels,
         wallRenderMode: normalizedProps.wallRenderMode,
@@ -530,7 +518,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         footEndCapOffsetLocal: normalizedProps.footEndCapOffsetLocal,
         footEndCapOrientation: normalizedProps.footEndCapOrientation,
       }
-      : { smoothing: 0 }
+      : {}
 
     const assets: WallRenderAssetObjects = {}
     const syntheticNodeId = buildPreviewNodeId(typeof params.previewKey === 'string' ? params.previewKey : '')
@@ -646,7 +634,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       height: source.height ?? baseProps.height,
       width: source.width ?? baseProps.width,
       thickness: source.thickness ?? baseProps.thickness,
-      smoothing: source.smoothing ?? baseProps.smoothing,
       bodyMaterialConfigId: source.bodyMaterialConfigId ?? baseProps.bodyMaterialConfigId,
       isAirWall: source.isAirWall ?? baseProps.isAirWall,
       wallRenderMode: source.wallRenderMode ?? baseProps.wallRenderMode,
@@ -772,7 +759,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     wallGroup = createWallGroup(wallDefinition, renderOptions)
     wallGroup.userData.nodeId = node.id
     wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, {
-      smoothing: renderOptions.smoothing,
       wallRenderMode: renderOptions.wallRenderMode,
     })
     wallGroup.userData.__harmonyWallBodyMaterialConfigId = renderOptions.bodyMaterialConfigId ?? null
@@ -790,7 +776,6 @@ export function createWallRenderer(options: WallRendererOptions) {
   ): void {
     const groupData = wallGroup.userData ?? (wallGroup.userData = {})
     const nextSignature = computeWallDynamicMeshSignature(definition, {
-      smoothing: options.smoothing,
       wallRenderMode: options.wallRenderMode,
     })
     const nextBodyMaterialConfigId = options.bodyMaterialConfigId ?? null
@@ -889,13 +874,9 @@ export function createWallRenderer(options: WallRendererOptions) {
     const isAirWall = Boolean(wallComponent?.props?.isAirWall)
 
     // 统一规整 wall props（clampWallProps 会负责缺省值/范围约束）。
-    // smoothing 同时用于：
-    // - 程序墙体的几何平滑（createWallGroup/updateWallGroup）
-    // - 动态网格签名（signature）用于判断是否需要重建/更新几何。
     const wallProps = wallComponent
       ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
       : null
-    const smoothing = wallProps?.smoothing ?? resolveWallSmoothingFromNode(node)
     const wallRenderMode = wallProps?.wallRenderMode ?? 'stretch'
 
     // 各类实例化模型资源：
@@ -970,7 +951,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       options.removeInstancedPickProxy(container)
 
       const wallRenderOptions: WallRenderOptions = {
-        smoothing,
         wallRenderMode,
         repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
@@ -1056,7 +1036,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       options.removeInstancedPickProxy(container)
 
       const wallRenderOptions: WallRenderOptions = {
-        smoothing,
         wallRenderMode,
         repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
@@ -1116,7 +1095,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       options.removeInstancedPickProxy(container)
 
       const wallRenderOptions: WallRenderOptions = {
-        smoothing,
         wallRenderMode,
         repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
@@ -1149,7 +1127,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       options.removeInstancedPickProxy(container)
 
       const wallRenderOptions: WallRenderOptions = {
-        smoothing,
         wallRenderMode,
         repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
@@ -1171,7 +1148,6 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     if (hasProceduralBodyFallback) {
       const wallRenderOptions: WallRenderOptions = {
-        smoothing,
         wallRenderMode,
         repeatInstanceStep: wallProps?.repeatInstanceStep,
         bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),

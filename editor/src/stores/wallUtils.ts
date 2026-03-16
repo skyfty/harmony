@@ -9,7 +9,6 @@ import {
   WALL_MIN_THICKNESS,
   clampWallProps,
   type WallComponentProps,
-  WALL_DEFAULT_SMOOTHING,
 } from '@schema/components'
 import type { Object3D } from 'three'
 
@@ -244,16 +243,6 @@ export function buildWallDynamicMeshFromWorldSegments(
   return { center, definition }
 }
 
-export function resolveWallSmoothing(node: SceneNode | null | undefined): number {
-  const component = node?.components?.['wall'] as
-    | { props?: Partial<WallComponentProps> | null }
-    | undefined
-  if (!component) {
-    return WALL_DEFAULT_SMOOTHING
-  }
-  return clampWallProps(component.props ?? null).smoothing
-}
-
 export function applyWallComponentPropsToNode(
   node: SceneNode,
   props: WallComponentProps,
@@ -319,7 +308,6 @@ export function applyWallComponentPropsToNode(
       if (child.type === 'Group' && child.name === 'WallGroup' && child.userData?.dynamicMeshType === 'Wall') {
         if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
           deps.updateWallGroup(child, node.dynamicMesh, {
-            smoothing: resolveWallSmoothing(node),
             wallRenderMode: normalized.wallRenderMode,
             repeatInstanceStep: normalized.repeatInstanceStep,
           } as any)
