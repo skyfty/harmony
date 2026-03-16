@@ -84,6 +84,19 @@ const inFlightGetRequests = new Map<string, Promise<unknown>>();
 let miniAuthRecoveryHandler: MiniAuthRecoveryHandler | null = null;
 let pendingMiniAuthRecovery: Promise<boolean> | null = null;
 
+function isBusinessAuthFailure(code: number, message: string): boolean {
+  if (code === 401 || code === 403) {
+    return true;
+  }
+
+  const normalized = String(message || '').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /UnauthorizedError|unauthorized|unauthenticated|token\s*(expired|invalid)|forbidden|未授权|登录失效/i.test(normalized);
+}
+
 function isMiniAuthDebugEnabled(): boolean {
   const raw = String((import.meta as any)?.env?.VITE_MINI_DEBUG_AUTH ?? '').trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes';
@@ -248,7 +261,7 @@ function mapRequestError(error: unknown): MiniApiError {
   }
 
   if (error instanceof HttpError) {
-    if (error.status === 401) {
+    if (error.status === 401 || error.status === 403) {
       return new MiniApiError(error.message || 'Unauthorized', { kind: 'auth', status: error.status });
     }
     if (RETRYABLE_STATUS.has(error.status)) {
@@ -283,6 +296,12 @@ async function executeWithRetry<T>(target: string, options: HttpRequestOptions):
       }
 
       if (payload.code !== 0) {
+        if (isBusinessAuthFailure(payload.code, payload.message)) {
+          throw new MiniApiError(payload.message || 'Unauthorized', {
+            kind: 'auth',
+            code: payload.code,
+          });
+        }
         throw new MiniApiError(payload.message || 'API request failed', {
           kind: 'business',
           code: payload.code,

@@ -33,6 +33,10 @@ type WechatApi = {
 let pendingAuthPromise: Promise<string> | null = null
 let miniAuthInitialized = false
 const MINI_AUTH_LOG_PREFIX = '[mini-auth]'
+const MINI_AUTH_SESSION_STORAGE_KEYS = [
+  'tour:selectedVehicleId',
+  'tour:selectedVehicle',
+]
 
 function logMiniAuth(message: string, details?: unknown): void {
   if (details === undefined) {
@@ -56,6 +60,26 @@ function errorMiniAuth(message: string, details?: unknown): void {
     return
   }
   console.error(`${MINI_AUTH_LOG_PREFIX} ${message}`, details)
+}
+
+function clearMiniAuthSessionStorage(): void {
+  if (typeof uni === 'undefined' || typeof uni.removeStorageSync !== 'function') {
+    return
+  }
+
+  MINI_AUTH_SESSION_STORAGE_KEYS.forEach((key) => {
+    try {
+      uni.removeStorageSync(key)
+    } catch {
+      // ignore storage cleanup errors
+    }
+  })
+}
+
+function clearMiniAuthLocalState(reason: string): void {
+  setAccessToken('')
+  clearMiniAuthSessionStorage()
+  logMiniAuth('mini auth local state cleared', { reason })
 }
 
 function getMiniAppId(): string {
@@ -236,7 +260,7 @@ async function performMiniAuth(force = false): Promise<string> {
     }
   } else {
     logMiniAuth('force=true, clear token before re-auth')
-    setAccessToken('')
+    clearMiniAuthLocalState('force-re-auth')
   }
 
   if (!pendingAuthPromise) {
@@ -255,7 +279,7 @@ async function performMiniAuth(force = false): Promise<string> {
     })()
       .catch((error) => {
         errorMiniAuth('performMiniAuth failed, token cleared', error)
-        setAccessToken('')
+        clearMiniAuthLocalState('perform-auth-failed')
         throw error
       })
       .finally(() => {
@@ -281,7 +305,7 @@ export async function recoverMiniAuthSession(): Promise<boolean> {
     return Boolean(token)
   } catch (error) {
     errorMiniAuth('recoverMiniAuthSession failed', error)
-    setAccessToken('')
+    clearMiniAuthLocalState('recover-failed')
     return false
   }
 }
@@ -310,7 +334,7 @@ export async function prewarmMiniAuth(): Promise<string> {
 }
 
 export function resetMiniAuthSession(): void {
-  setAccessToken('')
+  clearMiniAuthLocalState('manual-reset')
 }
 
 export function initializeMiniAuth(): void {
