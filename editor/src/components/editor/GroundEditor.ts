@@ -1,4 +1,4 @@
-import { reactive, ref, watch, type Ref } from 'vue'
+import { reactive, ref, toRaw, watch, type Ref } from 'vue'
 import * as THREE from 'three'
 import type {
 	GroundDynamicMesh,
@@ -349,27 +349,38 @@ async function loadTerrainPaintBrushImage(asset: ProjectAsset): Promise<LoadedPa
 	return loaded
 }
 
-function samplePaintImageData(image: PaintImageDataSource, u: number, v: number, target: Float32Array): void {
+function createTerrainPaintImageSamplingContext(image: PaintImageDataSource): TerrainPaintImageSamplingContext {
+	return {
+		image,
+		widthMinusOne: Math.max(0, image.width - 1),
+		heightMinusOne: Math.max(0, image.height - 1),
+		rowStride: image.width * 4,
+	}
+}
+
+function samplePaintImageData(imageContext: TerrainPaintImageSamplingContext, u: number, v: number, target: Float32Array): void {
+	const image = imageContext.image
 	const normalizedU = u - Math.floor(u)
 	const normalizedV = v - Math.floor(v)
 	const wrappedU = normalizedU < 0 ? normalizedU + 1 : normalizedU
 	const wrappedV = normalizedV < 0 ? normalizedV + 1 : normalizedV
-	const x = wrappedU * Math.max(0, image.width - 1)
-	const y = wrappedV * Math.max(0, image.height - 1)
+	const x = wrappedU * imageContext.widthMinusOne
+	const y = wrappedV * imageContext.heightMinusOne
 	const x0 = Math.floor(x)
 	const y0 = Math.floor(y)
 	const x1 = Math.min(image.width - 1, x0 + 1)
 	const y1 = Math.min(image.height - 1, y0 + 1)
 	const tx = x - x0
 	const ty = y - y0
-	const rowStride = image.width * 4
+	const rowStride = imageContext.rowStride
+	const data = image.data
 	const offset00 = y0 * rowStride + x0 * 4
 	const offset10 = y0 * rowStride + x1 * 4
 	const offset01 = y1 * rowStride + x0 * 4
 	const offset11 = y1 * rowStride + x1 * 4
 	for (let channelIndex = 0; channelIndex < 4; channelIndex += 1) {
-		const top = THREE.MathUtils.lerp((image.data[offset00 + channelIndex] ?? 0) / 255, (image.data[offset10 + channelIndex] ?? 0) / 255, tx)
-		const bottom = THREE.MathUtils.lerp((image.data[offset01 + channelIndex] ?? 0) / 255, (image.data[offset11 + channelIndex] ?? 0) / 255, tx)
+		const top = THREE.MathUtils.lerp((data[offset00 + channelIndex] ?? 0) / 255, (data[offset10 + channelIndex] ?? 0) / 255, tx)
+		const bottom = THREE.MathUtils.lerp((data[offset01 + channelIndex] ?? 0) / 255, (data[offset11 + channelIndex] ?? 0) / 255, tx)
 		target[channelIndex] = THREE.MathUtils.lerp(top, bottom, ty)
 	}
 }
@@ -379,91 +390,38 @@ function sampleTerrainPaintBrushColor(
 	meshV: number,
 	worldU: number,
 	worldV: number,
-	settings: TerrainPaintBrushSettings,
-	brushImage: PaintImageDataSource,
+	settings: TerrainPaintSamplingSettings,
+	brushImage: TerrainPaintImageSamplingContext,
 	target: Float32Array,
 ): void {
 	const baseU = settings.worldSpace ? worldU : meshU
 	const baseV = settings.worldSpace ? worldV : meshV
 	const centeredX = baseU - 0.5
 	const centeredY = baseV - 0.5
-	const rotation = (clampFinite(settings.rotationDeg, 0) * Math.PI) / 180
-	const rotationSin = Math.sin(rotation)
-	const rotationCos = Math.cos(rotation)
-	const rotatedX = rotationCos * centeredX - rotationSin * centeredY
-	const rotatedY = rotationSin * centeredX + rotationCos * centeredY
+	const rotatedX = settings.rotationCos * centeredX - settings.rotationSin * centeredY
+	const rotatedY = settings.rotationSin * centeredX + settings.rotationCos * centeredY
 	samplePaintImageData(
 		brushImage,
-		rotatedX * clampFinite(settings.tileScale.x, 1) + 0.5 + clampFinite(settings.offset.x, 0),
-		rotatedY * clampFinite(settings.tileScale.y, 1) + 0.5 + clampFinite(settings.offset.y, 0),
+		rotatedX * settings.tileScaleX + 0.5 + settings.offsetX,
+		rotatedY * settings.tileScaleY + 0.5 + settings.offsetY,
 		target,
 	)
 }
 
-function blendTerrainPaintSurfaceColor(
-	baseColor: [number, number, number],
-	layerColor: [number, number, number],
-	blendMode: TerrainPaintBrushSettings['blendMode'],
-): [number, number, number] {
-	switch (blendMode) {
-		case 'multiply':
-			return [baseColor[0] * layerColor[0], baseColor[1] * layerColor[1], baseColor[2] * layerColor[2]]
-		case 'screen':
-			return [
-				1 - (1 - baseColor[0]) * (1 - layerColor[0]),
-				1 - (1 - baseColor[1]) * (1 - layerColor[1]),
-				1 - (1 - baseColor[2]) * (1 - layerColor[2]),
-			]
-		case 'overlay':
-			return [
-				baseColor[0] < 0.5 ? 2 * baseColor[0] * layerColor[0] : 1 - 2 * (1 - baseColor[0]) * (1 - layerColor[0]),
-				baseColor[1] < 0.5 ? 2 * baseColor[1] * layerColor[1] : 1 - 2 * (1 - baseColor[1]) * (1 - layerColor[1]),
-				baseColor[2] < 0.5 ? 2 * baseColor[2] * layerColor[2] : 1 - 2 * (1 - baseColor[2]) * (1 - layerColor[2]),
-			]
-		default:
-			return layerColor
+function createTerrainPaintSamplingSettings(settings: TerrainPaintBrushSettings): TerrainPaintSamplingSettings {
+	const rotation = (clampFinite(settings.rotationDeg, 0) * Math.PI) / 180
+	return {
+		worldSpace: settings.worldSpace,
+		rotationSin: Math.sin(rotation),
+		rotationCos: Math.cos(rotation),
+		tileScaleX: clampFinite(settings.tileScale.x, 1),
+		tileScaleY: clampFinite(settings.tileScale.y, 1),
+		offsetX: clampFinite(settings.offset.x, 0),
+		offsetY: clampFinite(settings.offset.y, 0),
+		opacity: clamp01(settings.opacity),
+		blendMode: settings.blendMode,
 	}
 }
-
-function decodeStraightAlphaSurfaceColor(
-	surfaceData: Uint8ClampedArray,
-	offset: number,
-	targetColor: [number, number, number],
-): number {
-	const alpha = clamp01((surfaceData[offset + 3] ?? 0) / 255)
-	targetColor[0] = clamp01((surfaceData[offset] ?? 0) / 255)
-	targetColor[1] = clamp01((surfaceData[offset + 1] ?? 0) / 255)
-	targetColor[2] = clamp01((surfaceData[offset + 2] ?? 0) / 255)
-	if (alpha <= 0) {
-		targetColor[0] = 0
-		targetColor[1] = 0
-		targetColor[2] = 0
-	}
-	return alpha
-}
-
-function compositeStraightAlphaSurfaceColor(
-	destColor: [number, number, number],
-	destAlpha: number,
-	sourceColor: [number, number, number],
-	sourceAlpha: number,
-	targetColor: [number, number, number],
-): number {
-	const normalizedDestAlpha = clamp01(destAlpha)
-	const normalizedSourceAlpha = clamp01(sourceAlpha)
-	const outAlpha = normalizedSourceAlpha + normalizedDestAlpha * (1 - normalizedSourceAlpha)
-	if (outAlpha <= 1e-6) {
-		targetColor[0] = 0
-		targetColor[1] = 0
-		targetColor[2] = 0
-		return 0
-	}
-	targetColor[0] = clamp01(((sourceColor[0] * normalizedSourceAlpha) + (destColor[0] * normalizedDestAlpha * (1 - normalizedSourceAlpha))) / outAlpha)
-	targetColor[1] = clamp01(((sourceColor[1] * normalizedSourceAlpha) + (destColor[1] * normalizedDestAlpha * (1 - normalizedSourceAlpha))) / outAlpha)
-	targetColor[2] = clamp01(((sourceColor[2] * normalizedSourceAlpha) + (destColor[2] * normalizedDestAlpha * (1 - normalizedSourceAlpha))) / outAlpha)
-	return outAlpha
-}
-
 function normalizeSurfaceDataToStraightAlpha(surfaceData: Uint8ClampedArray): Uint8ClampedArray {
 	for (let offset = 0; offset < surfaceData.length; offset += 4) {
 		const alpha = clamp01((surfaceData[offset + 3] ?? 0) / 255)
@@ -655,6 +613,8 @@ const sculptStrokePrevPointHelper = new THREE.Vector3()
 const sculptStrokeNextPointHelper = new THREE.Vector3()
 const paintStrokePrevPointHelper = new THREE.Vector3()
 const paintStrokeNextPointHelper = new THREE.Vector3()
+const paintStrokeCurrentLocalPointHelper = new THREE.Vector3()
+const paintStrokeInterpolatedPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
 	pointerId: number
@@ -688,9 +648,28 @@ type PaintImageDataSource = {
 	data: Uint8ClampedArray
 }
 
+type TerrainPaintImageSamplingContext = {
+	image: PaintImageDataSource
+	widthMinusOne: number
+	heightMinusOne: number
+	rowStride: number
+}
+
 type LoadedPaintImage = {
 	source: CanvasImageSource
 	imageData: PaintImageDataSource
+}
+
+type TerrainPaintSamplingSettings = {
+	worldSpace: boolean
+	rotationSin: number
+	rotationCos: number
+	tileScaleX: number
+	tileScaleY: number
+	offsetX: number
+	offsetY: number
+	opacity: number
+	blendMode: TerrainPaintBrushSettings['blendMode']
 }
 
 type TerrainPaintStampRequest = {
@@ -699,8 +678,8 @@ type TerrainPaintStampRequest = {
 	radius: number
 	strength: number
 	feather: number
-	settings: TerrainPaintBrushSettings
-	brushImage: LoadedPaintImage
+	sampling: TerrainPaintSamplingSettings
+	brushImage: TerrainPaintImageSamplingContext
 }
 
 type TerrainPaintChunkBounds = {
@@ -3264,84 +3243,124 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const feather = clamp01(stamp.feather)
-		const opacity = clamp01(stamp.settings.opacity)
+		const opacity = stamp.sampling.opacity
 		if (opacity <= 0) {
 			return
 		}
 		const radiusSq = radius * radius
-		const halfWidth = Math.max(1e-6, definition.width * 0.5)
-		const halfDepth = Math.max(1e-6, definition.depth * 0.5)
-		const baseColor: [number, number, number] = [0, 0, 0]
-		const layerColor: [number, number, number] = [0, 0, 0]
-		const nextColor: [number, number, number] = [0, 0, 0]
+		const safeRadiusSq = Math.max(radiusSq, 1e-6)
+		const pixelWidth = bounds.width / res
+		const pixelDepth = bounds.depth / res
+		const definitionWidth = Math.max(definition.width, 1e-6)
+		const definitionDepth = Math.max(definition.depth, 1e-6)
+		const halfWidth = definition.width * 0.5
+		const halfDepth = definition.depth * 0.5
+		const invDefinitionWidth = 1 / definitionWidth
+		const invDefinitionDepth = 1 / definitionDepth
+		const invLocalBrushWidth = 1 / Math.max(radiusX * 2, 1e-6)
+		const invLocalBrushHeight = 1 / Math.max(radiusY * 2, 1e-6)
 		const sampledColor = new Float32Array(4)
+		const surfaceData = chunk.surfaceData
+		const sampling = stamp.sampling
+		const blendMode = sampling.blendMode
+		const brushImage = stamp.brushImage
 		let any = false
-		for (let y = minY; y <= maxY; y += 1) {
-			for (let x = minX; x <= maxX; x += 1) {
-				const pxMeters = ((x + 0.5) / res) * bounds.width
-				const pzMeters = ((y + 0.5) / res) * bounds.depth
+		let pzMeters = (minY + 0.5) * pixelDepth
+		for (let y = minY; y <= maxY; y += 1, pzMeters += pixelDepth) {
+			const dz = pzMeters - czMeters
+			const worldZ = bounds.minZ + pzMeters
+			const normalizedMeshV = (worldZ + halfDepth) * invDefinitionDepth
+			const meshV = normalizedMeshV <= 0 ? 0 : normalizedMeshV >= 1 ? 1 : normalizedMeshV
+			const normalizedLocalBrushV = ((y + 0.5) - (centerY - radiusY)) * invLocalBrushHeight
+			const localBrushV = normalizedLocalBrushV <= 0 ? 0 : normalizedLocalBrushV >= 1 ? 1 : normalizedLocalBrushV
+			let pxMeters = (minX + 0.5) * pixelWidth
+			for (let x = minX; x <= maxX; x += 1, pxMeters += pixelWidth) {
 				const dx = pxMeters - cxMeters
-				const dz = pzMeters - czMeters
 				const distSq = dx * dx + dz * dz
 				if (distSq >= radiusSq) {
 					continue
 				}
-				const falloff = computeSoftBrushFalloff(distSq / Math.max(radiusSq, 1e-6), feather)
+				const falloff = computeSoftBrushFalloff(distSq / safeRadiusSq, feather)
 				const amount = clamp01(strength * opacity * falloff)
 				if (amount <= 0) {
 					continue
 				}
 				const offset = (y * res + x) * 4
-				const worldX = bounds.minX + ((x + 0.5) / res) * bounds.width
-				const worldZ = bounds.minZ + ((y + 0.5) / res) * bounds.depth
-				const meshU = THREE.MathUtils.clamp((worldX + halfWidth) / Math.max(definition.width, 1e-6), 0, 1)
-				const meshV = THREE.MathUtils.clamp((worldZ + halfDepth) / Math.max(definition.depth, 1e-6), 0, 1)
-				const localBrushU = radiusX > 1e-6 ? ((x + 0.5) - (centerX - radiusX)) / Math.max(radiusX * 2, 1e-6) : 0.5
-				const localBrushV = radiusY > 1e-6 ? ((y + 0.5) - (centerY - radiusY)) / Math.max(radiusY * 2, 1e-6) : 0.5
+				const worldX = bounds.minX + pxMeters
+				const normalizedMeshU = (worldX + halfWidth) * invDefinitionWidth
+				const meshU = normalizedMeshU <= 0 ? 0 : normalizedMeshU >= 1 ? 1 : normalizedMeshU
+				const normalizedLocalBrushU = ((x + 0.5) - (centerX - radiusX)) * invLocalBrushWidth
+				const localBrushU = normalizedLocalBrushU <= 0 ? 0 : normalizedLocalBrushU >= 1 ? 1 : normalizedLocalBrushU
 				sampleTerrainPaintBrushColor(
-					THREE.MathUtils.clamp(localBrushU, 0, 1),
-					THREE.MathUtils.clamp(localBrushV, 0, 1),
+					localBrushU,
+					localBrushV,
 					meshU,
 					meshV,
-					stamp.settings,
-					stamp.brushImage.imageData,
+					sampling,
+					brushImage,
 					sampledColor,
 				)
-				const sampleAlpha = clamp01(sampledColor[3] ?? 1)
-				const blendedAmount = clamp01(amount * sampleAlpha)
+				const sampleColorR = sampledColor[0] ?? 0
+				const sampleColorG = sampledColor[1] ?? 0
+				const sampleColorB = sampledColor[2] ?? 0
+				const sampleColorA = sampledColor[3] ?? 0
+				const sampleAlpha = sampleColorA <= 0 ? 0 : sampleColorA >= 1 ? 1 : sampleColorA
+				const blendedAmountRaw = amount * sampleAlpha
+				const blendedAmount = blendedAmountRaw <= 0 ? 0 : blendedAmountRaw >= 1 ? 1 : blendedAmountRaw
 				if (blendedAmount <= 0) {
 					continue
 				}
-				const baseAlpha = decodeStraightAlphaSurfaceColor(chunk.surfaceData, offset, baseColor)
-				layerColor[0] = clamp01(sampledColor[0] ?? 0)
-				layerColor[1] = clamp01(sampledColor[1] ?? 0)
-				layerColor[2] = clamp01(sampledColor[2] ?? 0)
-				const blended = blendTerrainPaintSurfaceColor(baseColor, layerColor, stamp.settings.blendMode)
-				const nextAlpha = compositeStraightAlphaSurfaceColor(
-					baseColor,
-					baseAlpha,
-					[
-						clamp01(blended[0] ?? layerColor[0]),
-						clamp01(blended[1] ?? layerColor[1]),
-						clamp01(blended[2] ?? layerColor[2]),
-					],
-					blendedAmount,
-					nextColor,
-				)
-				const nextR = Math.round(nextColor[0] * 255)
-				const nextG = Math.round(nextColor[1] * 255)
-				const nextB = Math.round(nextColor[2] * 255)
+				const destAlpha = (surfaceData[offset + 3] ?? 0) / 255
+				const baseAlpha = destAlpha <= 0 ? 0 : destAlpha >= 1 ? 1 : destAlpha
+				const baseR = baseAlpha <= 0 ? 0 : ((surfaceData[offset] ?? 0) / 255)
+				const baseG = baseAlpha <= 0 ? 0 : ((surfaceData[offset + 1] ?? 0) / 255)
+				const baseB = baseAlpha <= 0 ? 0 : ((surfaceData[offset + 2] ?? 0) / 255)
+				const layerR = sampleColorR <= 0 ? 0 : sampleColorR >= 1 ? 1 : sampleColorR
+				const layerG = sampleColorG <= 0 ? 0 : sampleColorG >= 1 ? 1 : sampleColorG
+				const layerB = sampleColorB <= 0 ? 0 : sampleColorB >= 1 ? 1 : sampleColorB
+
+				let blendedR = layerR
+				let blendedG = layerG
+				let blendedB = layerB
+				switch (blendMode) {
+					case 'multiply':
+						blendedR = baseR * layerR
+						blendedG = baseG * layerG
+						blendedB = baseB * layerB
+						break
+					case 'screen':
+						blendedR = 1 - (1 - baseR) * (1 - layerR)
+						blendedG = 1 - (1 - baseG) * (1 - layerG)
+						blendedB = 1 - (1 - baseB) * (1 - layerB)
+						break
+					case 'overlay':
+						blendedR = baseR < 0.5 ? 2 * baseR * layerR : 1 - 2 * (1 - baseR) * (1 - layerR)
+						blendedG = baseG < 0.5 ? 2 * baseG * layerG : 1 - 2 * (1 - baseG) * (1 - layerG)
+						blendedB = baseB < 0.5 ? 2 * baseB * layerB : 1 - 2 * (1 - baseB) * (1 - layerB)
+						break
+				}
+
+				const nextAlpha = blendedAmount + baseAlpha * (1 - blendedAmount)
+				let nextR = 0
+				let nextG = 0
+				let nextB = 0
+				if (nextAlpha > 1e-6) {
+					const invNextAlpha = 1 / nextAlpha
+					nextR = Math.round((((blendedR * blendedAmount) + (baseR * baseAlpha * (1 - blendedAmount))) * invNextAlpha) * 255)
+					nextG = Math.round((((blendedG * blendedAmount) + (baseG * baseAlpha * (1 - blendedAmount))) * invNextAlpha) * 255)
+					nextB = Math.round((((blendedB * blendedAmount) + (baseB * baseAlpha * (1 - blendedAmount))) * invNextAlpha) * 255)
+				}
 				const nextA = Math.round(nextAlpha * 255)
 				if (
-					nextR !== (chunk.surfaceData[offset] ?? 0)
-					|| nextG !== (chunk.surfaceData[offset + 1] ?? 0)
-					|| nextB !== (chunk.surfaceData[offset + 2] ?? 0)
-					|| nextA !== (chunk.surfaceData[offset + 3] ?? 0)
+					nextR !== (surfaceData[offset] ?? 0)
+					|| nextG !== (surfaceData[offset + 1] ?? 0)
+					|| nextB !== (surfaceData[offset + 2] ?? 0)
+					|| nextA !== (surfaceData[offset + 3] ?? 0)
 				) {
-					chunk.surfaceData[offset] = nextR
-					chunk.surfaceData[offset + 1] = nextG
-					chunk.surfaceData[offset + 2] = nextB
-					chunk.surfaceData[offset + 3] = nextA
+					surfaceData[offset] = nextR
+					surfaceData[offset + 1] = nextG
+					surfaceData[offset + 2] = nextB
+					surfaceData[offset + 3] = nextA
 					any = true
 				}
 			}
@@ -4841,7 +4860,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		updateGroundChunks(groundObject, definition, options.getCamera())
 
-		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
+		const localPoint = paintStrokeCurrentLocalPointHelper.copy(brushMesh.position)
+		groundObject.worldToLocal(localPoint)
 		localPoint.y -= 0.1
 
 		const radius = options.brushRadius.value
@@ -4864,25 +4884,48 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!paintAsset?.id) {
 			return
 		}
-		let brushImage = getLoadedTerrainPaintBrushImage(paintAsset.id)
+		const brushStrength = clamp01(options.brushStrength.value)
+		if (brushStrength <= 0) {
+			return
+		}
+		const paintLayerStyle = toRaw(options.paintLayerStyle.value)
+		const feather = clamp01(paintLayerStyle.feather ?? 0)
+		const brushSettings: TerrainPaintBrushSettings = {
+			...paintLayerStyle,
+			tileScale: {
+				x: paintLayerStyle.tileScale.x,
+				y: paintLayerStyle.tileScale.y,
+			},
+			offset: {
+				x: paintLayerStyle.offset.x,
+				y: paintLayerStyle.offset.y,
+			},
+			feather,
+		}
+		const sampling = createTerrainPaintSamplingSettings(brushSettings)
+		if (sampling.opacity <= 0) {
+			return
+		}
+		const brushImage = getLoadedTerrainPaintBrushImage(paintAsset.id)
 		if (!brushImage) {
 			void loadTerrainPaintBrushImage(paintAsset)
 			return
 		}
+		const brushImageContext = createTerrainPaintImageSamplingContext(brushImage.imageData)
 
 		for (let i = 0; i < steps; i += 1) {
 			const t = steps <= 1 ? 1 : (i + 1) / steps
 			const point = prev && paintStrokePointerId === event.pointerId
-				? paintStrokePrevPointHelper.clone().lerp(paintStrokeNextPointHelper, t)
+				? paintStrokeInterpolatedPointHelper.lerpVectors(paintStrokePrevPointHelper, paintStrokeNextPointHelper, t)
 				: localPoint
 			const stamp: TerrainPaintStampRequest = {
 				localX: point.x,
 				localZ: point.z,
 				radius,
-				strength: clamp01(options.brushStrength.value),
-				feather: clamp01(options.paintLayerStyle.value.feather ?? 0),
-				settings: { ...options.paintLayerStyle.value },
-				brushImage,
+				strength: brushStrength,
+				feather,
+				sampling,
+				brushImage: brushImageContext,
 			}
 			const chunks = collectPaintChunksOverlappedByBrush(definition, session.chunkCells, point.x, point.z, radius)
 			for (const chunkInfo of chunks) {
@@ -4896,7 +4939,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 
 		paintStrokePointerId = event.pointerId
-		paintStrokeLastLocalPoint = localPoint.clone()
+		paintStrokeLastLocalPoint = paintStrokeNextPointHelper.copy(localPoint)
 	}
 
 	function refreshGroundMesh(definition: GroundRuntimeDynamicMesh | null = getGroundDynamicMeshDefinition()) {
@@ -5149,15 +5192,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function handlePointerMove(event: PointerEvent): boolean {
 		const hasGroundNode = getGroundNodeFromScene()?.dynamicMesh?.type === 'Ground'
 		const isGroundToolActivated = isGroundBuildToolActive()
+		const groundPanelTab = options.groundPanelTab.value
+		const scatterEraseModeActive = options.scatterEraseModeActive.value
+		const scatterModeActive = scatterModeEnabled()
 		const showBrush = isGroundToolActivated && hasGroundNode &&
-			(options.groundPanelTab.value === 'terrain' || options.groundPanelTab.value === 'paint' || options.scatterEraseModeActive.value || scatterModeEnabled())
+			(groundPanelTab === 'terrain' || groundPanelTab === 'paint' || scatterEraseModeActive || scatterModeActive)
 		if (showBrush) {
 			updateBrush(event)
 			updateScatterHoverPreview(event)
-			if (options.groundPanelTab.value === 'paint' && isPainting.value && paintStrokePointerId === event.pointerId) {
+			if (groundPanelTab === 'paint' && isPainting.value && paintStrokePointerId === event.pointerId) {
 				performPaint(event)
 			}
-			if (options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
+			if (groundPanelTab === 'terrain' && !scatterEraseModeActive && isSculpting.value) {
 				performSculpt(event)
 			}
 		} else {
