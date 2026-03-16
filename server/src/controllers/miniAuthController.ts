@@ -153,7 +153,20 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
       metadata: { openId: identity.openId },
     })
     ctx.body = session
-  } catch {
+  } catch (error) {
+    const requestedMiniAppId =
+      (typeof miniAppId === 'string' && miniAppId.trim()) ||
+      (typeof ctx.get === 'function' ? ctx.get('X-Mini-App-Id') : '') ||
+      undefined
+    const safeCodePreview = typeof code === 'string' ? `${code.slice(0, 6)}***` : undefined
+    console.error('[mini-wechat-login] failed', {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+      requestedMiniAppId,
+      codePreview: safeCodePreview,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent: ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent'],
+    })
     const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
     await recordLogin({
       username: code,
@@ -171,7 +184,7 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
       path: '/mini-auth/wechat-login',
       metadata: { code },
     })
-    ctx.throw(400, 'Wechat login failed')
+    ctx.throw(400, error instanceof Error ? error.message : 'Wechat login failed')
   }
 }
 

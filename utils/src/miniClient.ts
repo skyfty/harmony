@@ -105,7 +105,7 @@ function resolveRequestTarget(path: string): string {
   if (isAbsoluteUrl(path)) {
     return path;
   }
-
+  
   if (path.startsWith('/mini-auth/')) {
     return `${getApiOrigin()}/api${path}`;
   }
@@ -321,26 +321,25 @@ async function executeWithAuthRecovery<T>(path: string, target: string, options:
 }
 
 export async function miniRequest<T>(path: string, options: HttpRequestOptions = {}): Promise<T> {
+  console.log("dddddddddddddddddddddddddddd 1111111111111111111", path);
   const method = options.method ?? 'GET';
   const target = resolveRequestTarget(path);
 
+  console.log("dddddddddddddddddddddddddddd 222ddddddddddd22222222222222222222", target,method);
   if (method === 'GET') {
     const requestKey = buildGetRequestKey(target, options);
     const inFlight = inFlightGetRequests.get(requestKey) as Promise<T> | undefined;
     if (inFlight) {
       return await inFlight;
     }
-
     const pending = executeWithAuthRecovery<T>(path, target, { ...options, method: 'GET' });
     inFlightGetRequests.set(requestKey, pending);
-
     try {
       return await pending;
     } finally {
       inFlightGetRequests.delete(requestKey);
     }
   }
-
   return await executeWithAuthRecovery<T>(path, target, options);
 }
 
