@@ -78,8 +78,7 @@ const worldSpaceModel = computed({
 })
 
 const brushRadiusInput = ref(formatNumericValue(props.brushRadius, BRUSH_RADIUS_PRECISION))
-const tileScaleXInput = ref(formatNumericValue(props.settings.tileScale.x, TILE_SCALE_PRECISION))
-const tileScaleYInput = ref(formatNumericValue(props.settings.tileScale.y, TILE_SCALE_PRECISION))
+const tileScaleInput = ref(formatNumericValue(props.settings.tileScale.x, TILE_SCALE_PRECISION))
 const offsetXInput = ref(formatNumericValue(props.settings.offset.x, OFFSET_PRECISION))
 const offsetYInput = ref(formatNumericValue(props.settings.offset.y, OFFSET_PRECISION))
 const rotationInput = ref(formatNumericValue(props.settings.rotationDeg, ROTATION_PRECISION))
@@ -95,16 +94,9 @@ watch(
 )
 
 watch(
-  () => props.settings.tileScale.x,
-  (value) => {
-    tileScaleXInput.value = formatNumericValue(value, TILE_SCALE_PRECISION)
-  },
-)
-
-watch(
-  () => props.settings.tileScale.y,
-  (value) => {
-    tileScaleYInput.value = formatNumericValue(value, TILE_SCALE_PRECISION)
+  () => [props.settings.tileScale.x, props.settings.tileScale.y] as const,
+  ([x]) => {
+    tileScaleInput.value = formatNumericValue(x, TILE_SCALE_PRECISION)
   },
 )
 
@@ -178,12 +170,10 @@ function commitBrushRadiusInput() {
   brushRadiusInput.value = formatNumericValue(normalized, BRUSH_RADIUS_PRECISION)
 }
 
-function commitTileScaleAxis(axis: 'x' | 'y') {
-  const source = axis === 'x' ? tileScaleXInput : tileScaleYInput
-  const fallback = props.settings.tileScale[axis]
+function commitTileScaleInput() {
   const normalized = parseAndNormalize(
-    source.value,
-    fallback,
+    tileScaleInput.value,
+    props.settings.tileScale.x,
     TILE_SCALE_MIN,
     TILE_SCALE_MAX,
     TILE_SCALE_STEP,
@@ -191,11 +181,11 @@ function commitTileScaleAxis(axis: 'x' | 'y') {
   )
   emitSettingsPatch({
     tileScale: {
-      ...props.settings.tileScale,
-      [axis]: normalized,
+      x: normalized,
+      y: normalized,
     },
   })
-  source.value = formatNumericValue(normalized, TILE_SCALE_PRECISION)
+  tileScaleInput.value = formatNumericValue(normalized, TILE_SCALE_PRECISION)
 }
 
 function commitOffsetAxis(axis: 'x' | 'y') {
@@ -247,46 +237,66 @@ function commitFeatherInput() {
 
 <template>
   <div class="terrain-paint-panel">
-    <div class="terrain-paint-note">
-      Texture and brush settings affect subsequent strokes only.
-    </div>
-    <div class="control-group control-group--compact">
-      <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
-      <v-text-field
-        v-model="brushRadiusInput"
-        type="number"
-        suffix="m"
-        :min="BRUSH_RADIUS_MIN"
-        :max="BRUSH_RADIUS_MAX"
-        :step="BRUSH_RADIUS_STEP"
-        variant="underlined"
-        density="compact"
-        hide-details
-        inputmode="decimal"
-        :disabled="!props.hasGround"
-        class="numeric-input"
-        @blur="commitBrushRadiusInput"
-        @keydown.enter.prevent="commitBrushRadiusInput"
-      />
-    </div>
-    <div class="control-group">
-      <div class="text-caption mb-1">{{ selectedAssetLabel }}</div>
-      <AssetPickerList
-        :active="true"
-        :asset-id="selectedAssetId"
-        asset-type="image,texture"
-        :show-search="true"
-        :thumbnail-size="52"
-        :disabled="!props.hasGround"
-        @update:asset="(next) => emit('update:asset', next)"
-      />
-    </div>
+    <div class="control-row control-row--top">
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Brush Radius: </div>
+        <v-text-field
+          v-model="brushRadiusInput"
+          type="number"
+          suffix="m"
+          :min="BRUSH_RADIUS_MIN"
+          :max="BRUSH_RADIUS_MAX"
+          :step="BRUSH_RADIUS_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitBrushRadiusInput"
+          @keydown.enter.prevent="commitBrushRadiusInput"
+        />
+      </div>
 
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Soft Edge</div>
+        <v-text-field
+          v-model="featherInput"
+          type="number"
+          :min="FEATHER_MIN"
+          :max="FEATHER_MAX"
+          :step="FEATHER_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitFeatherInput"
+          @keydown.enter.prevent="commitFeatherInput"
+        />
+      </div>
+
+      <div class="control-group control-group--compact">
+        <div class="text-caption mb-1">Blend</div>
+        <v-select
+          v-model="blendModeModel"
+          :items="blendModeOptions"
+          item-title="label"
+          item-value="value"
+          variant="underlined"
+          density="compact"
+          hide-details
+          :disabled="!props.hasGround"
+          class="blend-input"
+        />
+      </div>
+    </div>
     <div class="terrain-paint-grid">
       <div class="control-group control-group--compact">
-        <div class="text-caption">Tile X</div>
+        <div class="text-caption">Tile Scale</div>
         <v-text-field
-          v-model="tileScaleXInput"
+          v-model="tileScaleInput"
           type="number"
           :min="TILE_SCALE_MIN"
           :max="TILE_SCALE_MAX"
@@ -297,30 +307,30 @@ function commitFeatherInput() {
           inputmode="decimal"
           :disabled="!props.hasGround"
           class="numeric-input"
-          @blur="commitTileScaleAxis('x')"
-          @keydown.enter.prevent="commitTileScaleAxis('x')"
+          @blur="commitTileScaleInput"
+          @keydown.enter.prevent="commitTileScaleInput"
         />
       </div>
 
       <div class="control-group control-group--compact">
-        <div class="text-caption">Tile Y</div>
+        <div class="text-caption">Rotation</div>
         <v-text-field
-          v-model="tileScaleYInput"
+          v-model="rotationInput"
           type="number"
-          :min="TILE_SCALE_MIN"
-          :max="TILE_SCALE_MAX"
-          :step="TILE_SCALE_STEP"
+          suffix="deg"
+          :min="ROTATION_MIN"
+          :max="ROTATION_MAX"
+          :step="ROTATION_STEP"
           variant="underlined"
           density="compact"
           hide-details
           inputmode="decimal"
           :disabled="!props.hasGround"
           class="numeric-input"
-          @blur="commitTileScaleAxis('y')"
-          @keydown.enter.prevent="commitTileScaleAxis('y')"
+          @blur="commitRotationInput"
+          @keydown.enter.prevent="commitRotationInput"
         />
       </div>
-
       <div class="control-group control-group--compact">
         <div class="text-caption">Offset X</div>
         <v-text-field
@@ -359,71 +369,21 @@ function commitFeatherInput() {
         />
       </div>
 
-      <div class="control-group control-group--compact">
-        <div class="text-caption">Soft Edge</div>
-        <v-text-field
-          v-model="featherInput"
-          type="number"
-          :min="FEATHER_MIN"
-          :max="FEATHER_MAX"
-          :step="FEATHER_STEP"
-          variant="underlined"
-          density="compact"
-          hide-details
-          inputmode="decimal"
-          :disabled="!props.hasGround"
-          class="numeric-input"
-          @blur="commitFeatherInput"
-          @keydown.enter.prevent="commitFeatherInput"
-        />
-      </div>
 
-      <div class="control-group control-group--compact">
-        <div class="text-caption">Rotation</div>
-        <v-text-field
-          v-model="rotationInput"
-          type="number"
-          suffix="deg"
-          :min="ROTATION_MIN"
-          :max="ROTATION_MAX"
-          :step="ROTATION_STEP"
-          variant="underlined"
-          density="compact"
-          hide-details
-          inputmode="decimal"
-          :disabled="!props.hasGround"
-          class="numeric-input"
-          @blur="commitRotationInput"
-          @keydown.enter.prevent="commitRotationInput"
-        />
-      </div>
-
-      <div class="control-group terrain-paint-grid__full-row">
-        <div class="text-caption mb-1">Blend</div>
-        <v-select
-          v-model="blendModeModel"
-          :items="blendModeOptions"
-          item-title="label"
-          item-value="value"
-          variant="underlined"
-          density="compact"
-          hide-details
-          :disabled="!props.hasGround"
-        />
-      </div>
-
-      <div class="control-group terrain-paint-grid__full-row terrain-paint-grid__switch-row">
-        <div class="text-caption">World Space</div>
-        <v-switch
-          v-model="worldSpaceModel"
-          density="compact"
-          hide-details
-          inset
-          color="primary"
-          :disabled="!props.hasGround"
-        />
-      </div>
     </div>
+    <div class="control-group">
+      <AssetPickerList
+        :active="true"
+        :asset-id="selectedAssetId"
+        asset-type="image,texture"
+        :show-search="true"
+        :thumbnail-size="52"
+        :disabled="!props.hasGround"
+        @update:asset="(next) => emit('update:asset', next)"
+      />
+    </div>
+
+    
   </div>
 </template>
 
@@ -446,9 +406,19 @@ function commitFeatherInput() {
   gap: 6px;
 }
 
+.control-row {
+  display: grid;
+  align-items: start;
+  gap: 8px;
+}
+
+.control-row--top {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .terrain-paint-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px 8px;
 }
 
@@ -470,5 +440,15 @@ function commitFeatherInput() {
 
 .numeric-input {
   max-width: 160px;
+}
+
+.blend-input {
+  max-width: 220px;
+}
+
+@media (max-width: 900px) {
+  .control-row--top {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

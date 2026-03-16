@@ -15,6 +15,7 @@ export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
 export const SCATTER_SPACING_MAX = 20 as const
 const PAINT_CONTEXT_INTENT_TTL_MS = 1800 as const
 const PAINT_CONTEXT_SYNC_DEBOUNCE_MS = 80 as const
+const TERRAIN_PAINT_DEFAULT_FEATHER = 0.6 as const
 
 export type TerrainPaintBrushSettings = TerrainPaintLayerStyle & {
   feather: number
@@ -25,7 +26,7 @@ function clampTerrainPaintBrushSettings(value: Partial<TerrainPaintBrushSettings
   const featherValue = typeof value?.feather === 'number' ? value.feather : Number(value?.feather)
   return {
     ...style,
-    feather: Number.isFinite(featherValue) ? Math.min(1, Math.max(0, featherValue)) : 0,
+    feather: Number.isFinite(featherValue) ? Math.min(1, Math.max(0, featherValue)) : TERRAIN_PAINT_DEFAULT_FEATHER,
   }
 }
 
