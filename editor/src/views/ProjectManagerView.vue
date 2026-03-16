@@ -83,13 +83,17 @@ function openLogin() {
 }
 
 async function handleCreateProject(payload: ProjectCreateParams) {
-  const { project } = await createProjectWithDefaultScene(payload)
-  await router.push({ path: '/editor', query: { projectId: project.id } })
+  const { project, scene } = await createProjectWithDefaultScene(payload)
+  await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
   overlayClose?.()
 }
 
-async function handleOpenProject(payload: { projectId: string }) {
-  await router.push({ path: '/editor', query: { projectId: payload.projectId } })
+async function handleOpenProject(payload: { projectId: string; sceneId?: string | null }) {
+  const query: Record<string, string> = { projectId: payload.projectId }
+  if (typeof payload.sceneId === 'string' && payload.sceneId.trim()) {
+    query.sceneId = payload.sceneId.trim()
+  }
+  await router.push({ path: '/editor', query })
   overlayClose?.()
 }
 
@@ -180,7 +184,7 @@ async function handleSync() {
             <v-card-subtitle>{{ p.sceneCount }} scenes</v-card-subtitle>
             <v-card-text class="pm-project__meta">{{ p.id }}</v-card-text>
             <v-card-actions>
-              <v-btn color="primary" variant="flat" @click="handleOpenProject({ projectId: p.id })">Open</v-btn>
+              <v-btn color="primary" variant="flat" @click="handleOpenProject({ projectId: p.id, sceneId: p.lastEditedSceneId })">Open</v-btn>
               <v-spacer />
               <v-btn
                 color="error"

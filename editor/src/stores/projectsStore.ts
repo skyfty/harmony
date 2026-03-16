@@ -216,6 +216,7 @@ function toMetadata(document: Project): ProjectSummary {
     id: document.id,
     name: document.name,
     sceneCount: Array.isArray(document.scenes) ? document.scenes.length : 0,
+    lastEditedSceneId: typeof document.lastEditedSceneId === 'string' ? document.lastEditedSceneId : null,
     updatedAt: new Date().toISOString(),
   }
 }

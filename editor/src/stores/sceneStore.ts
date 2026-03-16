@@ -2986,16 +2986,6 @@ function evaluateWarpGateAttributes(
   return { sanitizedUserData, shouldAttachWarpGate }
 }
 
-const initialSceneDocument = createSceneDocument('Sample Scene', {
-  nodes: initialNodes,
-  materials: initialMaterials,
-  selectedNodeId: null,
-  selectedNodeIds: [],
-  resourceProviderId: 'builtin',
-  assetCatalog: initialAssetCatalog,
-  assetIndex: initialAssetIndex,
-})
-
 const runtimeObjectRegistry = new Map<string, Object3D>()
 let runtimeRefreshInFlight: Promise<void> | null = null
 
@@ -6346,6 +6336,134 @@ function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument)
   }
 }
 
+function createInitialSceneState(): SceneState {
+  const assetCatalog = cloneAssetCatalog(initialAssetCatalog)
+  const assetIndex = cloneAssetIndex(initialAssetIndex)
+  const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
+  const viewportSettings = cloneViewportSettings(defaultViewportSettings)
+  const initialEnvironment = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS)
+  let clonedNodes = cloneSceneNodes(initialNodes)
+  clonedNodes = ensureEnvironmentNode(
+    ensureGroundNode(clonedNodes, cloneGroundSettings(undefined)),
+    initialEnvironment,
+  )
+  const initialGroundNode = findGroundNode(clonedNodes)
+  componentManager.reset()
+  componentManager.syncScene(clonedNodes)
+  return {
+    currentSceneId: null,
+    sceneSwitchToken: 0,
+    currentSceneMeta: null,
+    nodes: clonedNodes,
+    groundNode: initialGroundNode,
+    materials: cloneSceneMaterials(initialMaterials),
+    selectedNodeId: null,
+    selectedNodeIds: [],
+    selectedRoadSegment: null,
+    activeTool: 'select',
+    assetCatalog,
+    assetIndex,
+    packageAssetMap: {},
+    packageDirectoryCache,
+    packageDirectoryLoaded: {},
+    projectTree: createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog, assetIndex), packageDirectoryCache),
+    activeDirectoryId: defaultDirectoryId,
+    selectedAssetId: null,
+    camera: cloneCameraState(defaultCameraState),
+    viewportSettings,
+    skybox: cloneSkyboxSettings(defaultSkyboxSettings),
+    shadowsEnabled: normalizeShadowsEnabledInput(defaultShadowsEnabled),
+    environment: initialEnvironment,
+    groundSettings: cloneGroundSettings(undefined),
+    planningData: null,
+    panelVisibility: { ...defaultPanelVisibility },
+    panelPlacement: { ...defaultPanelPlacement },
+    projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
+    resourceProviderId: 'builtin',
+    cloudPreviewEnabled: false,
+    prefabAssetDownloadProgress: {},
+    cameraFocusNodeId: null,
+    cameraFocusRequestId: 0,
+    nodeHighlightTargetId: null,
+    nodeHighlightRequestId: 0,
+    clipboard: null,
+    draggingAssetId: null,
+    draggingAssetObject: null,
+    undoStack: [],
+    redoStack: [],
+    isRestoringHistory: false,
+    activeTransformNodeId: null,
+    transformSnapshotCaptured: false,
+    isSceneReady: false,
+    hasUnsavedChanges: false,
+    sceneGraphStructureVersion: 0,
+    sceneNodePropertyVersion: 0,
+    pendingScenePatches: [],
+    workspaceId: '',
+    workspaceType: 'local',
+    workspaceLabel: 'Local User',
+  }
+}
+
+function resetSceneStateToNoSelection(store: SceneState) {
+  const initialState = createInitialSceneState()
+  store.currentSceneId = null
+  store.currentSceneMeta = null
+  store.sceneSwitchToken += 1
+  replaceSceneNodes(store, cloneSceneNodes(initialState.nodes))
+  store.environment = cloneEnvironmentSettings(initialState.environment)
+  store.materials = cloneSceneMaterials(initialState.materials)
+  store.selectedNodeId = null
+  store.selectedNodeIds = []
+  store.selectedRoadSegment = null
+  store.assetCatalog = cloneAssetCatalog(initialState.assetCatalog)
+  store.assetIndex = cloneAssetIndex(initialState.assetIndex)
+  store.packageAssetMap = {}
+  store.packageDirectoryCache = {}
+  store.packageDirectoryLoaded = {}
+  store.projectTree = createProjectTreeFromCache(
+    buildVisibleAssetCatalog(store.assetCatalog, store.assetIndex),
+    store.packageDirectoryCache,
+  )
+  store.activeDirectoryId = defaultDirectoryId
+  store.selectedAssetId = null
+  store.camera = cloneCameraState(initialState.camera)
+  store.viewportSettings = cloneViewportSettings(initialState.viewportSettings)
+  store.skybox = cloneSkyboxSettings(initialState.skybox)
+  store.shadowsEnabled = normalizeShadowsEnabledInput(initialState.shadowsEnabled)
+  store.groundSettings = cloneGroundSettings(initialState.groundSettings)
+  store.planningData = null
+  store.panelVisibility = { ...initialState.panelVisibility }
+  store.panelPlacement = { ...initialState.panelPlacement }
+  store.projectPanelTreeSize = initialState.projectPanelTreeSize
+  store.resourceProviderId = initialState.resourceProviderId
+  store.cloudPreviewEnabled = false
+  store.prefabAssetDownloadProgress = {}
+  store.cameraFocusNodeId = null
+  store.cameraFocusRequestId = 0
+  store.nodeHighlightTargetId = null
+  store.nodeHighlightRequestId = 0
+  store.clipboard = null
+  store.draggingAssetId = null
+  store.draggingAssetObject = null
+  store.undoStack = []
+  store.redoStack = []
+  store.isRestoringHistory = false
+  store.activeTransformNodeId = null
+  store.transformSnapshotCaptured = false
+  store.isSceneReady = false
+  store.hasUnsavedChanges = false
+  store.sceneGraphStructureVersion = 0
+  store.sceneNodePropertyVersion = 0
+  store.pendingScenePatches = []
+  store.workspaceId = ''
+  store.workspaceType = 'local'
+  store.workspaceLabel = 'Local User'
+  clearRuntimeObjectRegistry()
+  componentManager.reset()
+  componentManager.syncScene(store.nodes)
+}
+
 function releaseRuntimeTree(node: SceneNode) {
   if (isGroundNode(node)) {
     const store = getTerrainScatterStore(node.id)
@@ -6676,84 +6794,7 @@ function insertNodeMutable(
 
 
 export const useSceneStore = defineStore('scene', {
-  state: (): SceneState => {
-    const assetCatalog = cloneAssetCatalog(initialSceneDocument.assetCatalog)
-    const assetIndex = cloneAssetIndex(initialSceneDocument.assetIndex)
-    const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
-    const viewportSettings = cloneViewportSettings(initialSceneDocument.viewportSettings)
-    const initialSkybox = resolveDocumentSkybox(initialSceneDocument)
-    const initialShadowsEnabled = resolveDocumentShadowsEnabled(initialSceneDocument)
-    let clonedNodes = cloneSceneNodes(initialSceneDocument.nodes)
-    const initialEnvironment = initialSceneDocument.environment
-      ? cloneEnvironmentSettings(initialSceneDocument.environment)
-      : extractEnvironmentSettings(findNodeById(clonedNodes, ENVIRONMENT_NODE_ID))
-    clonedNodes = ensureEnvironmentNode(
-      ensureGroundNode(clonedNodes, initialSceneDocument.groundSettings),
-      initialEnvironment,
-    )
-    const initialGroundNode = findGroundNode(clonedNodes)
-    componentManager.reset()
-    componentManager.syncScene(clonedNodes)
-    return {
-      currentSceneId: initialSceneDocument.id,
-      sceneSwitchToken: 0,
-      currentSceneMeta: {
-        name: initialSceneDocument.name,
-        createdAt: initialSceneDocument.createdAt,
-        updatedAt: initialSceneDocument.updatedAt,
-        projectId: initialSceneDocument.projectId ?? '',
-      },
-      nodes: clonedNodes,
-      groundNode: initialGroundNode,
-      materials: cloneSceneMaterials(initialSceneDocument.materials),
-      selectedNodeId: initialSceneDocument.selectedNodeId,
-      selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
-      selectedRoadSegment: null,
-      activeTool: 'select',
-      assetCatalog,
-      assetIndex,
-      packageAssetMap: {},
-      packageDirectoryCache,
-      packageDirectoryLoaded: {},
-      projectTree: createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog, assetIndex), packageDirectoryCache),
-      activeDirectoryId: defaultDirectoryId,
-      selectedAssetId: null,
-      camera: cloneCameraState(initialSceneDocument.camera),
-      viewportSettings,
-      skybox: initialSkybox,
-      shadowsEnabled: initialShadowsEnabled,
-      environment: initialEnvironment,
-      groundSettings: cloneGroundSettings(initialSceneDocument.groundSettings),
-      planningData: clonePlanningData((initialSceneDocument as StoredSceneDocument).planningData),
-      panelVisibility: { ...defaultPanelVisibility },
-      panelPlacement: { ...defaultPanelPlacement },
-      projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
-      resourceProviderId: initialSceneDocument.resourceProviderId,
-      cloudPreviewEnabled: false,
-      prefabAssetDownloadProgress: {},
-      cameraFocusNodeId: null,
-      cameraFocusRequestId: 0,
-    nodeHighlightTargetId: null,
-    nodeHighlightRequestId: 0,
-      // clipboard moved to dedicated clipboard store (legacy field kept for typing compatibility)
-      clipboard: null,
-      draggingAssetId: null,
-      draggingAssetObject: null,
-      undoStack: [],
-      redoStack: [],
-      isRestoringHistory: false,
-      activeTransformNodeId: null,
-      transformSnapshotCaptured: false,
-      isSceneReady: false,
-      hasUnsavedChanges: false,
-      sceneGraphStructureVersion: 0,
-      sceneNodePropertyVersion: 0,
-      pendingScenePatches: [],
-      workspaceId: '',
-      workspaceType: 'local',
-      workspaceLabel: 'Local User',
-    }
-  },
+  state: (): SceneState => createInitialSceneState(),
   getters: {
     currentGroundNode(state): SceneNode | null {
       return state.groundNode
@@ -14693,12 +14734,12 @@ export const useSceneStore = defineStore('scene', {
       }
       return true
     },
-    async deleteScene(sceneId: string) {
+    async deleteScene(sceneId: string): Promise<{ deleted: boolean; projectId: string | null; hasRemainingScenes: boolean }> {
       const scenesStore = useScenesStore()
       const projectsStore = useProjectsStore()
       const target = await scenesStore.loadSceneDocument(sceneId)
       if (!target) {
-        return false
+        return { deleted: false, projectId: null, hasRemainingScenes: scenesStore.metadata.length > 0 }
       }
 
       const projectId = target.projectId
@@ -14716,13 +14757,10 @@ export const useSceneStore = defineStore('scene', {
         if (projectId) {
           projectsStore.setActiveProject(projectId)
         }
-        const fallbackId = await this.createScene('Untitled Scene', {
-          groundSettings: this.groundSettings,
-        })
-        if (this.currentSceneId !== fallbackId) {
-          await this.selectScene(fallbackId)
+        if (this.currentSceneId === sceneId) {
+          resetSceneStateToNoSelection(this)
         }
-        return true
+        return { deleted: true, projectId: projectId ?? null, hasRemainingScenes: false }
       }
 
       if (this.currentSceneId === sceneId) {
@@ -14735,7 +14773,7 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
-      return true
+      return { deleted: true, projectId: projectId ?? null, hasRemainingScenes: true }
     },
     async renameScene(sceneId: string, name: string) {
       const trimmed = name.trim()
