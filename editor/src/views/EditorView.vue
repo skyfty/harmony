@@ -158,8 +158,8 @@ watch(isProjectManagerOverlayOpen, (open) => {
 })
 
 async function handleCreateProject(payload: ProjectCreateParams) {
-  const { project } = await createProjectWithDefaultScene(payload)
-  await router.push({ path: '/editor', query: { projectId: project.id } })
+  const { project, scene } = await createProjectWithDefaultScene(payload)
+  await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
 }
 
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
@@ -1600,7 +1600,14 @@ async function handleSelectScene(sceneId: string) {
 }
 
 async function handleDeleteScene(sceneId: string) {
-  await sceneStore.deleteScene(sceneId)
+  const result = await sceneStore.deleteScene(sceneId)
+  if (!result.deleted) {
+    return
+  }
+  if (!result.hasRemainingScenes) {
+    const query = result.projectId ? { returnTo: '/editor', projectId: result.projectId } : undefined
+    await router.replace({ path: '/', query })
+  }
 }
 
 async function handleRenameScene(payload: { id: string; name: string }) {

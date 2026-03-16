@@ -2,6 +2,7 @@ export interface ProjectSummary {
   id: string
   name: string
   sceneCount: number
+  lastEditedSceneId: string | null
   updatedAt: string
 }
 

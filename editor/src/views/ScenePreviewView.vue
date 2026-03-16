@@ -1008,7 +1008,7 @@ const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
 const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
-const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = false
+const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 
 async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
 	const normalizedId = assetId.trim()

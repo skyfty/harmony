@@ -6,7 +6,15 @@ import { useScenesStore } from '@/stores/scenesStore'
 import { waitForPiniaHydration } from '@/utils/piniaPersist'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useProjectsStore } from '@/stores/projectsStore'
-import { buildServerApiUrl } from '@/api/serverApiConfig'
+
+type BootstrapErrorCode =
+  | 'project-not-found'
+  | 'project-has-no-scenes'
+  | 'missing-last-scene'
+  | 'invalid-route-scene'
+  | 'invalid-last-scene'
+  | 'scene-open-failed'
+  | 'unknown'
 
 
 const LoadingScreen = defineComponent({
@@ -16,6 +24,7 @@ const LoadingScreen = defineComponent({
     status: { type: String, default: 'Initializing…' },
     error: { type: String, default: null },
     retrying: { type: Boolean, default: false },
+    canRetry: { type: Boolean, default: false },
   },
   emits: ['retry', 'backToProjects'],
   setup(props, { emit }) {
@@ -64,29 +73,29 @@ const LoadingScreen = defineComponent({
                     'div',
                     { class: 'load-error__actions' },
                     [
-                          h(
-                            'button',
-                            {
-                              class: 'load-retry-button',
-                              type: 'button',
-                              disabled: props.retrying,
-                              onClick: handleRetry,
-                              'aria-label': 'Retry loading project',
-                            },
-                            props.retrying ? '🔁 Retrying…' : '🔁 Retry',
-                          ),
-                      typeof props.error === 'string' && props.error.includes('Project does not exist')
-                        ? h(
-                            'button',
-                            {
-                              class: 'load-back-button',
-                              type: 'button',
-                              onClick: handleBackToProjects,
-                              'aria-label': 'Return to Projects',
-                            },
-                            '↩ Return to Projects',
-                          )
-                        : null,
+                          props.canRetry
+                            ? h(
+                                'button',
+                                {
+                                  class: 'load-retry-button',
+                                  type: 'button',
+                                  disabled: props.retrying,
+                                  onClick: handleRetry,
+                                  'aria-label': 'Retry loading project',
+                                },
+                                props.retrying ? '🔁 Retrying…' : '🔁 Retry',
+                              )
+                            : null,
+                      h(
+                        'button',
+                        {
+                          class: 'load-back-button',
+                          type: 'button',
+                          onClick: handleBackToProjects,
+                          'aria-label': 'Return to Projects',
+                        },
+                        '↩ Return to Projects',
+                      ),
                     ],
                   ),
                 ])
@@ -106,8 +115,64 @@ const currentComponent = shallowRef<typeof LoadingScreen | typeof EditorView>(Lo
 const progress = ref(5)
 const statusMessage = ref('Initializing scene editor…')
 const errorMessage = ref<string | null>(null)
+const errorCode = ref<BootstrapErrorCode | null>(null)
 const isBooting = ref(false)
 const isRetrying = ref(false)
+
+function resolveTargetSceneId(
+  project: NonNullable<Awaited<ReturnType<typeof projectsStore.loadProjectDocument>>>,
+  routeSceneId: string,
+): string {
+  const sceneIds = new Set(project.scenes.map((scene) => scene.id))
+  if (!sceneIds.size) {
+    throw new Error('Project has no scenes')
+  }
+  if (routeSceneId) {
+    if (!sceneIds.has(routeSceneId)) {
+      throw new Error('Requested scene is not part of this project')
+    }
+    return routeSceneId
+  }
+  if (!project.lastEditedSceneId) {
+    throw new Error('Project is missing last edited scene')
+  }
+  if (!sceneIds.has(project.lastEditedSceneId)) {
+    throw new Error('Project last edited scene is invalid')
+  }
+  return project.lastEditedSceneId
+}
+
+function classifyBootstrapError(error: unknown): { code: BootstrapErrorCode; message: string } {
+  const message = error instanceof Error ? error.message : 'Load failed'
+  switch (message) {
+    case 'Project does not exist or has been deleted':
+      return { code: 'project-not-found', message }
+    case 'Project has no scenes':
+      return {
+        code: 'project-has-no-scenes',
+        message: 'Project has no scenes. Create a scene from the project manager before opening the editor.',
+      }
+    case 'Project is missing last edited scene':
+      return {
+        code: 'missing-last-scene',
+        message: 'Project is missing lastEditedSceneId. Set a valid scene before opening the editor.',
+      }
+    case 'Requested scene is not part of this project':
+      return { code: 'invalid-route-scene', message: 'The requested scene is not part of this project.' }
+    case 'Project last edited scene is invalid':
+      return {
+        code: 'invalid-last-scene',
+        message: 'Project lastEditedSceneId does not match any existing scene.',
+      }
+    case 'Failed to open scene':
+      return {
+        code: 'scene-open-failed',
+        message: 'Failed to open scene. Return to Projects or retry after checking scene data.',
+      }
+    default:
+      return { code: 'unknown', message }
+  }
+}
 
 async function bootstrap() {
   if (isBooting.value) {
@@ -119,6 +184,7 @@ async function bootstrap() {
   statusMessage.value = 'Initializing scene editor…'
   isBooting.value = true
   errorMessage.value = null
+  errorCode.value = null
   statusMessage.value = 'Initializing scene directory…'
   progress.value = 12
 
@@ -136,11 +202,11 @@ async function bootstrap() {
 
     const project = await projectsStore.loadProjectDocument(projectId)
     if (!project) {
-      errorMessage.value = 'Project does not exist or has been deleted'
-      statusMessage.value = 'Load failed'
-      progress.value = 100
-      return
+      throw new Error('Project does not exist or has been deleted')
     }
+
+    const routeSceneIdRaw = route.query.sceneId
+    const routeSceneId = typeof routeSceneIdRaw === 'string' ? routeSceneIdRaw.trim() : ''
 
     statusMessage.value = 'Syncing local save…'
     progress.value = 28
@@ -151,43 +217,15 @@ async function bootstrap() {
     statusMessage.value = 'Checking scene data…'
     progress.value = 46
 
-    // Ensure a default scene exists for newly created projects.
-    if (!project.scenes.length) {
-      statusMessage.value = 'Creating default scene…'
-      progress.value = 60
-      const newSceneId = await sceneStore.createScene('New Scene')
-      const doc = await scenesStore.loadSceneDocument(newSceneId, { hydrateGroundRuntime: true })
-      if (!doc) {
-        throw new Error('Failed to create default scene')
-      }
-      const sceneJsonUrl = buildServerApiUrl(`/api/user-scenes/${encodeURIComponent(doc.id)}`)
-      await projectsStore.saveProjectDocument({
-        ...project,
-        scenes: [
-          {
-            id: doc.id,
-            name: doc.name,
-            sceneJsonUrl,
-            projectId: project.id,
-          },
-        ],
-        lastEditedSceneId: doc.id,
-      })
-    }
-
     const latestProject = (await projectsStore.loadProjectDocument(projectId)) ?? project
-    const sceneIds = new Set(latestProject.scenes.map((s) => s.id))
-    const preferred = latestProject.lastEditedSceneId && sceneIds.has(latestProject.lastEditedSceneId)
-      ? latestProject.lastEditedSceneId
-      : latestProject.scenes[0]?.id
-
-    if (!preferred) {
-      throw new Error('Project missing default scene')
-    }
+    const preferred = resolveTargetSceneId(latestProject, routeSceneId)
 
     statusMessage.value = '打开工程…'
     progress.value = 78
-    const opened = await sceneStore.selectScene(preferred, { setLastEdited: false })
+    const opened = await sceneStore.selectScene(preferred, {
+      setLastEdited: false,
+      forceReload: true,
+    })
     if (!opened) {
       throw new Error('Failed to open scene')
     }
@@ -198,9 +236,10 @@ async function bootstrap() {
     progress.value = 100
     currentComponent.value = EditorView
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Load failed'
+    const classified = classifyBootstrapError(error)
     console.error('[LoadView] Failed to initialize editor', error)
-    errorMessage.value = message
+    errorCode.value = classified.code
+    errorMessage.value = classified.message
     statusMessage.value = 'Load failed'
     progress.value = 100
   } finally {
@@ -226,8 +265,9 @@ const componentProps = computed(() =>
         status: statusMessage.value,
         error: errorMessage.value,
         retrying: isRetrying.value,
+        canRetry: errorCode.value === 'scene-open-failed' || errorCode.value === 'unknown',
         onRetry: handleRetry,
-        onBackToProjects: typeof errorMessage.value === 'string' && errorMessage.value.includes('Project does not exist')
+        onBackToProjects: errorCode.value !== null
           ? () => router.replace({ path: '/' })
           : undefined,
       }
@@ -241,13 +281,12 @@ onMounted(() => {
 // Re-run the loader when the projectId query changes (navigating to the same
 // `/editor` route with a different project should re-run the full boot flow).
 watch(
-  () => route.query.projectId,
+  () => [route.query.projectId, route.query.sceneId],
   (newVal, oldVal) => {
-    // Only re-bootstrap if the value actually changed.
-    if (newVal !== oldVal) {
-      // Reset retry state and show loading UI again.
+    if (newVal[0] !== oldVal[0] || newVal[1] !== oldVal[1]) {
       isRetrying.value = false
       errorMessage.value = null
+      errorCode.value = null
       currentComponent.value = LoadingScreen
       progress.value = 5
       statusMessage.value = 'Initializing scene editor…'
@@ -373,6 +412,7 @@ watch(
 
 .load-error__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
   align-items: center;

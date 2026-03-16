@@ -92,6 +92,7 @@ import {
   registerRuntimeObject,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
+import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
@@ -7741,13 +7742,46 @@ function getGroundNodeFromStore(): SceneNode | null {
   return sceneStore.groundNode
 }
 
+function cloneGroundSurfaceChunkMap(
+  source: GroundDynamicMesh['groundSurfaceChunks'] | null | undefined,
+): GroundDynamicMesh['groundSurfaceChunks'] {
+  if (!source) {
+    return null
+  }
+  const result: NonNullable<GroundDynamicMesh['groundSurfaceChunks']> = {}
+  Object.entries(source).forEach(([chunkKey, chunkRef]) => {
+    const normalizedKey = chunkKey.trim()
+    const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
+    if (!normalizedKey || !textureAssetId) {
+      return
+    }
+    const revision = Number.isFinite(chunkRef?.revision)
+      ? Math.max(0, Math.trunc(chunkRef!.revision))
+      : 0
+    result[normalizedKey] = {
+      textureAssetId,
+      revision,
+    }
+  })
+  return Object.keys(result).length ? result : null
+}
+
 function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
   const node = getGroundNodeFromStore()
   if (node?.dynamicMesh?.type === 'Ground' && sceneStore.currentSceneId) {
-    return useGroundHeightmapStore().resolveGroundRuntimeMesh(
+    const runtimeDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(
       node.id,
       node.dynamicMesh,
     )
+    const paintRuntime = useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId)
+    if (paintRuntime && paintRuntime.nodeId === node.id) {
+      return {
+        ...runtimeDefinition,
+        terrainPaint: null,
+        groundSurfaceChunks: cloneGroundSurfaceChunkMap(paintRuntime.groundSurfaceChunks),
+      }
+    }
+    return runtimeDefinition
   }
   return null
 }
@@ -9978,21 +10012,30 @@ const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAsse
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
 const LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION = 512
 
-function syncGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined, groundNode: SceneNode): void {
+function syncGroundLandformsPreview(
+  groundObject: THREE.Object3D | null | undefined,
+  groundNode: SceneNode,
+  runtimeDefinitionOverride?: GroundRuntimeDynamicMesh | null,
+): void {
   if (!groundObject) {
     return
   }
   restoreGroundSurfacePreviewMaterialMap(groundObject)
   landformsPreviewLoadToken += 1
-  if (groundNode.dynamicMesh?.type === 'Ground') {
-    const hasTerrainPaint = Boolean(Object.keys(groundNode.dynamicMesh.groundSurfaceChunks ?? {}).length)
+  const runtimeDefinition = runtimeDefinitionOverride
+    ?? ((groundNode.dynamicMesh?.type === 'Ground' && getGroundNodeFromStore()?.id === groundNode.id)
+      ? resolveGroundDynamicMeshDefinition()
+      : null)
+  const previewDefinition = runtimeDefinition ?? (groundNode.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : null)
+  if (previewDefinition?.type === 'Ground') {
+    const hasTerrainPaint = Boolean(Object.keys(previewDefinition.groundSurfaceChunks ?? {}).length)
     const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
     const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
     const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
     syncGroundSurfacePreviewForGround(
       groundObject,
       groundNode,
-      groundNode.dynamicMesh,
+      previewDefinition,
       groundSurfacePreviewLoaders,
       () => landformsPreviewLoadToken,
       {
@@ -16040,7 +16083,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         if (shouldSkipSculptRefresh) {
           delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
         }
-        syncGroundChunkLoadingMode(groundObject, groundDefinition, null)
+        syncGroundChunkLoadingMode(groundObject, groundDefinition, camera)
 
         // The Skybox sun (Sky.js) uses a DirectionalLight for shadows. Re-fit it when the ground changes.
         if (skySunLight) {
@@ -16049,8 +16092,8 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       } else if (groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
-      syncGroundChunkLoadingMode(groundObject, groundDefinition, null)
-      syncGroundLandformsPreview(groundObject, node)
+      syncGroundChunkLoadingMode(groundObject, groundDefinition, camera)
+      syncGroundLandformsPreview(groundObject, node, groundDefinition)
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
@@ -17075,8 +17118,8 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
       groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
-      syncGroundChunkLoadingMode(groundMesh, groundDefinition, null)
-      syncGroundLandformsPreview(groundMesh, node)
+      syncGroundChunkLoadingMode(groundMesh, groundDefinition, camera)
+      syncGroundLandformsPreview(groundMesh, node, groundDefinition)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'

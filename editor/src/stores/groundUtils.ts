@@ -60,6 +60,27 @@ type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown; ter
 type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
 type GroundRuntimeDynamicMesh = GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array }
 
+function buildPrimaryGroundMaterialProps(
+  createMaterialProps: GroundDeps['createMaterialProps'],
+  primaryMaterial: SceneNodeMaterial | null,
+): SceneMaterialProps {
+  const materialProps: Partial<SceneMaterialProps> = {
+    color: primaryMaterial?.color ?? '#707070',
+    transparent: primaryMaterial?.transparent,
+    opacity: primaryMaterial?.opacity,
+    side: primaryMaterial?.side,
+    wireframe: primaryMaterial?.wireframe,
+    metalness: primaryMaterial?.metalness,
+    roughness: primaryMaterial?.roughness,
+    emissive: primaryMaterial?.emissive,
+    emissiveIntensity: primaryMaterial?.emissiveIntensity,
+    aoStrength: primaryMaterial?.aoStrength,
+    envMapIntensity: primaryMaterial?.envMapIntensity,
+    textures: manualDeepCloneLocal(primaryMaterial?.textures ?? null) as SceneMaterialProps['textures'],
+  }
+  return createMaterialProps(materialProps)
+}
+
 export function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | null): GroundGenerationSettings | undefined {
   if (!settings) {
     return undefined
@@ -346,12 +367,7 @@ export function createGroundSceneNodeWithDeps(deps: GroundDeps, overrides: { dyn
     canPrefab: false,
     allowChildNodes: false,
     materials: [
-      createNodeMaterial(null, createMaterialProps({
-        color: '#707070',
-        wireframe: false,
-        opacity: 1,
-        transparent: false,
-      }), { name: 'Ground Material' })
+      createNodeMaterial(null, buildPrimaryGroundMaterialProps(createMaterialProps, null), { name: 'Ground Material' })
     ],
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
@@ -399,6 +415,9 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
       return Object.keys(base).length ? base : undefined
     })()
 
+    const normalizedDynamicMesh = createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings)
+    const primaryMaterialProps = buildPrimaryGroundMaterialProps(createMaterialProps, primaryMaterial)
+
     return {
       ...node,
       id: GROUND_NODE_ID,
@@ -407,19 +426,18 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
       allowChildNodes: false,
       // preserve primary material identity when possible
       materials: [
-        createNodeMaterial(null, createMaterialProps({
-          color: primaryMaterial?.color ?? '#707070',
-          wireframe: false,
-          opacity: 1,
-          transparent: false,
-        }), { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type })
+        createNodeMaterial(
+          primaryMaterial?.materialId ?? null,
+          primaryMaterialProps,
+          { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type },
+        )
       ],
       position: createVector(0, 0, 0),
       rotation: createVector(0, 0, 0),
       scale: createVector(1, 1, 1),
       visible: node.visible ?? true,
       locked: true,
-      dynamicMesh: createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings),
+      dynamicMesh: normalizedDynamicMesh,
       components: nextComponents,
       sourceAssetId: undefined,
       children,
