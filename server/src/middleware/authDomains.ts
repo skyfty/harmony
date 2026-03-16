@@ -3,6 +3,40 @@ import { appConfig } from '@/config/env'
 import { getMiniProgramTestSessionUser } from '@/services/miniAuthService'
 import { verifyAdminAuthToken, verifyMiniAuthToken } from '@/utils/domainJwt'
 
+function summarizeBearerToken(token: string): string {
+  if (!token) {
+    return 'none'
+  }
+  if (token.length <= 16) {
+    return `${token.length}:${token}`
+  }
+  return `${token.length}:${token.slice(0, 8)}...${token.slice(-6)}`
+}
+
+function decodeJwtPayloadPreview(token: string): Record<string, unknown> {
+  const parts = token.split('.')
+  if (parts.length < 2) {
+    return { validFormat: false }
+  }
+  const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+  try {
+    const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as Record<string, unknown>
+    return {
+      validFormat: true,
+      iss: payload.iss,
+      aud: payload.aud,
+      sub: payload.sub,
+      exp: payload.exp,
+      iat: payload.iat,
+      kind: payload.kind,
+      miniAppId: payload.miniAppId,
+    }
+  } catch {
+    return { validFormat: false }
+  }
+}
+
 function readBearerToken(ctx: Context): string {
   const authorization = ctx.headers.authorization
   if (!authorization || !authorization.startsWith('Bearer ')) {
@@ -50,7 +84,18 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
       }
       await next()
       return
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const name = error instanceof Error ? error.name : 'UnknownError'
+      console.warn('[mini-auth] token verification failed', {
+        path: ctx.path,
+        method: ctx.method,
+        ip: ctx.ip || ctx.request.ip,
+        tokenSummary: summarizeBearerToken(token),
+        tokenPreview: decodeJwtPayloadPreview(token),
+        errorName: name,
+        errorMessage: message,
+      })
       // Fall through to optional non-production bypass.
     }
   }

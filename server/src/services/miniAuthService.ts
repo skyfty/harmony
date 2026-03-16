@@ -260,6 +260,8 @@ export async function miniLoginWithOpenId(input: {
   }
 
   const unionId = normalizeOptionalString(input.unionId)
+  const displayName = normalizeOptionalString(input.displayName)
+  const avatarUrl = normalizeOptionalString(input.avatarUrl)
   let user = await pickCanonicalWechatUser({ miniAppId, openId, unionId })
 
   if (!user) {
@@ -268,12 +270,12 @@ export async function miniLoginWithOpenId(input: {
       authProvider: 'wechat-mini-program',
       wxOpenId: openId,
       wxUnionId: unionId,
-      displayName: normalizeOptionalString(input.displayName) ?? appConfig.miniAuth.defaultDisplayName,
-      avatarUrl: normalizeOptionalString(input.avatarUrl),
+      displayName: displayName ?? appConfig.miniAuth.defaultDisplayName,
+      avatarUrl,
       lastLoginAt: new Date(),
       lastLoginSource: 'mini-wechat-login',
       wechatIdentitySyncedAt: new Date(),
-      wechatProfileSyncedAt: input.displayName || input.avatarUrl ? new Date() : undefined,
+      wechatProfileSyncedAt: displayName || avatarUrl ? new Date() : undefined,
       status: 'active',
     })
   } else {
@@ -289,7 +291,7 @@ export async function miniLoginWithOpenId(input: {
     if (!user.displayName) {
       user.displayName = appConfig.miniAuth.defaultDisplayName
     }
-    syncWechatProfile(user, input.displayName, input.avatarUrl)
+    syncWechatProfile(user, displayName, avatarUrl)
     markLogin(user)
     await user.save()
   }

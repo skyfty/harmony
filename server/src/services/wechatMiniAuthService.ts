@@ -42,7 +42,9 @@ function normalizeWechatError(response: WechatCode2SessionError): string {
   if (code === 45011) {
     return 'Wechat login rate limited'
   }
-  return response.errmsg ? `Wechat login failed: ${response.errmsg}` : 'Wechat login failed'
+  return response.errmsg
+    ? `Wechat login failed [${code}]: ${response.errmsg}`
+    : `Wechat login failed [${code}]`
 }
 
 export async function exchangeMiniProgramCode(code: string, miniAppId?: string): Promise<WechatMiniIdentity> {
@@ -80,6 +82,13 @@ export async function exchangeMiniProgramCode(code: string, miniAppId?: string):
   }
 
   if (!response.ok) {
+    console.error('[mini-wechat-login] code2session http error', {
+      status: response.status,
+      statusText: response.statusText,
+      miniAppId: config.miniAppId,
+      baseUrl: config.baseUrl,
+      responseText: text,
+    })
     throw new Error('Wechat login request failed')
   }
 
@@ -88,6 +97,12 @@ export async function exchangeMiniProgramCode(code: string, miniAppId?: string):
   }
 
   if ('errcode' in parsed && parsed.errcode) {
+    console.error('[mini-wechat-login] code2session business error', {
+      miniAppId: config.miniAppId,
+      errcode: parsed.errcode,
+      errmsg: parsed.errmsg,
+      baseUrl: config.baseUrl,
+    })
     throw new Error(normalizeWechatError(parsed))
   }
 

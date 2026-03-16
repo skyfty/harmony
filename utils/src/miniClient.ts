@@ -84,6 +84,32 @@ const inFlightGetRequests = new Map<string, Promise<unknown>>();
 let miniAuthRecoveryHandler: MiniAuthRecoveryHandler | null = null;
 let pendingMiniAuthRecovery: Promise<boolean> | null = null;
 
+function isMiniAuthDebugEnabled(): boolean {
+  const raw = String((import.meta as any)?.env?.VITE_MINI_DEBUG_AUTH ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+function summarizeToken(token?: string): string {
+  if (!token) {
+    return 'none';
+  }
+  if (token.length <= 12) {
+    return `${token.length}:${token}`;
+  }
+  return `${token.length}:${token.slice(0, 6)}...${token.slice(-4)}`;
+}
+
+function debugMiniAuth(message: string, details?: Record<string, unknown>): void {
+  if (!isMiniAuthDebugEnabled()) {
+    return;
+  }
+  if (details) {
+    console.info(`[mini-auth-debug] ${message}`, details);
+    return;
+  }
+  console.info(`[mini-auth-debug] ${message}`);
+}
+
 export function setMiniAuthRecoveryHandler(handler: MiniAuthRecoveryHandler | null): void {
   miniAuthRecoveryHandler = handler;
 }
@@ -105,7 +131,7 @@ function resolveRequestTarget(path: string): string {
   if (isAbsoluteUrl(path)) {
     return path;
   }
-
+  
   if (path.startsWith('/mini-auth/')) {
     return `${getApiOrigin()}/api${path}`;
   }
@@ -292,6 +318,14 @@ async function executeWithAuthRecovery<T>(path: string, target: string, options:
     return await executeWithRetry<T>(target, options);
   } catch (rawError) {
     const error = mapRequestError(rawError);
+    debugMiniAuth('request failed', {
+      path,
+      target,
+      method: options.method ?? 'GET',
+      kind: error.kind,
+      status: error.status,
+      message: error.message,
+    });
     if (error.kind !== 'auth' || options.auth === false || !miniAuthRecoveryHandler) {
       throw error;
     }
@@ -312,6 +346,11 @@ async function executeWithAuthRecovery<T>(path: string, target: string, options:
     }
 
     const recovered = await pendingMiniAuthRecovery;
+    debugMiniAuth('auth recovery result', {
+      path,
+      target,
+      recovered,
+    });
     if (!recovered) {
       throw error;
     }
@@ -323,6 +362,16 @@ async function executeWithAuthRecovery<T>(path: string, target: string, options:
 export async function miniRequest<T>(path: string, options: HttpRequestOptions = {}): Promise<T> {
   const method = options.method ?? 'GET';
   const target = resolveRequestTarget(path);
+  const token = options.auth === false ? undefined : getAuthToken();
+
+  debugMiniAuth('request', {
+    path,
+    target,
+    method,
+    authEnabled: options.auth !== false,
+    hasBearerToken: Boolean(token),
+    tokenSummary: summarizeToken(token),
+  });
 
   if (method === 'GET') {
     const requestKey = buildGetRequestKey(target, options);
@@ -330,17 +379,14 @@ export async function miniRequest<T>(path: string, options: HttpRequestOptions =
     if (inFlight) {
       return await inFlight;
     }
-
     const pending = executeWithAuthRecovery<T>(path, target, { ...options, method: 'GET' });
     inFlightGetRequests.set(requestKey, pending);
-
     try {
       return await pending;
     } finally {
       inFlightGetRequests.delete(requestKey);
     }
   }
-
   return await executeWithAuthRecovery<T>(path, target, options);
 }
 

@@ -57,6 +57,29 @@ function normalizeUrl(url: string): string {
   return `${getBaseUrl()}${url}`;
 }
 
+function extractAbsoluteOrigin(value: string): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const match = trimmed.match(/^(https?:\/\/[^/]+)/i);
+  if (match?.[1]) {
+    return match[1];
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (typeof parsed.protocol === 'string' && typeof parsed.host === 'string' && parsed.protocol && parsed.host) {
+      return `${parsed.protocol}//${parsed.host}`;
+    }
+  } catch {
+    // Ignore and fall back to undefined.
+  }
+
+  return undefined;
+}
+
 function getRequestData(body: unknown): unknown {
   if (body === undefined || body === null) return undefined;
   if (typeof body === 'string') return body;
@@ -99,13 +122,7 @@ export function getDownloadCdnBaseUrl(): string {
 
 export function getApiOrigin(): string {
   const baseUrl = getBaseUrl();
-  try {
-    const parsed = new URL(baseUrl);
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    const match = (baseUrl as string).match(/^(https?:\/\/[^/]+)/);
-    return match ? match[1] : baseUrl;
-  }
+  return extractAbsoluteOrigin(baseUrl) ?? baseUrl;
 }
 
 export function getAuthToken(): string | undefined {
