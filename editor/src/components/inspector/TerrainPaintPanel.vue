@@ -309,7 +309,7 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
 <template>
   <div class="terrain-paint-panel">
     <div class="terrain-paint-note">
-      Current texture and blend settings affect subsequent strokes only.
+      Current texture, softness, and blend settings affect subsequent strokes only.
     </div>
     <div class="control-row">
       <div class="control-group control-group--compact">
@@ -462,7 +462,7 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
       </div>
 
       <div class="control-group control-group--compact">
-        <div class="text-caption">Feather</div>
+        <div class="text-caption">Soft Edge</div>
         <v-text-field
           v-model="featherInput"
           type="number"

@@ -186,6 +186,26 @@ function clamp01(value: number): number {
 	return Math.max(0, Math.min(1, value))
 }
 
+function computeSoftBrushFalloff(normalizedDistanceSquared: number, feather: number): number {
+	if (normalizedDistanceSquared >= 1) {
+		return 0
+	}
+	const normalizedFeather = clamp01(feather)
+	if (normalizedFeather <= 0) {
+		return 1
+	}
+	const effectiveFeather = 1 - ((1 - normalizedFeather) * (1 - normalizedFeather))
+	const hardRadius = Math.max(0, 1 - effectiveFeather)
+	const hardRadiusSquared = hardRadius * hardRadius
+	if (normalizedDistanceSquared <= hardRadiusSquared) {
+		return 1
+	}
+	const normalizedDistance = Math.sqrt(Math.max(0, normalizedDistanceSquared))
+	const edgeT = clamp01((normalizedDistance - hardRadius) / Math.max(effectiveFeather, 1e-6))
+	const smoothstep = edgeT * edgeT * (3 - 2 * edgeT)
+	return 1 - smoothstep
+}
+
 function cloneGroundSurfaceChunks(definition: GroundDynamicMesh, nodeId?: string | null): GroundSurfaceChunkTextureMap | null {
 	const sceneId = useSceneStore().currentSceneId
 	const runtimeState = sceneId && nodeId
@@ -3277,10 +3297,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (strength <= 0) {
 			return
 		}
+		const feather = clamp01(stamp.feather)
 		const opacity = clamp01(stamp.settings.opacity)
 		if (opacity <= 0) {
 			return
 		}
+		const radiusSq = radius * radius
 		const halfWidth = Math.max(1e-6, definition.width * 0.5)
 		const halfDepth = Math.max(1e-6, definition.depth * 0.5)
 		const baseColor: [number, number, number] = [0, 0, 0]
@@ -3294,19 +3316,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const pzMeters = ((y + 0.5) / res) * bounds.depth
 				const dx = pxMeters - cxMeters
 				const dz = pzMeters - czMeters
-				const dist = Math.hypot(dx, dz)
-				if (dist > radius) {
+				const distSq = dx * dx + dz * dz
+				if (distSq >= radiusSq) {
 					continue
 				}
-				const t = dist / Math.max(1e-6, radius)
-				const feather = clamp01(stamp.feather)
-				const falloffStart = Math.max(0, 1 - feather)
-				const hardEdge = feather <= 0
-					? 1
-					: t <= falloffStart
-						? 1
-						: Math.max(0, 1 - ((t - falloffStart) / Math.max(feather, 1e-6)))
-				const falloff = hardEdge * hardEdge
+				const falloff = computeSoftBrushFalloff(distSq / Math.max(radiusSq, 1e-6), feather)
 				const amount = clamp01(strength * opacity * falloff)
 				if (amount <= 0) {
 					continue

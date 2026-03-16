@@ -28,6 +28,26 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value))
 }
 
+function computeSoftBrushFalloff(normalizedDistanceSquared: number, feather: number): number {
+  if (normalizedDistanceSquared >= 1) {
+    return 0
+  }
+  const normalizedFeather = clamp01(feather)
+  if (normalizedFeather <= 0) {
+    return 1
+  }
+  const effectiveFeather = 1 - ((1 - normalizedFeather) * (1 - normalizedFeather))
+  const hardRadius = Math.max(0, 1 - effectiveFeather)
+  const hardRadiusSquared = hardRadius * hardRadius
+  if (normalizedDistanceSquared <= hardRadiusSquared) {
+    return 1
+  }
+  const normalizedDistance = Math.sqrt(Math.max(0, normalizedDistanceSquared))
+  const edgeT = clamp01((normalizedDistance - hardRadius) / Math.max(effectiveFeather, 1e-6))
+  const smoothstep = edgeT * edgeT * (3 - 2 * edgeT)
+  return 1 - smoothstep
+}
+
 export function applyGroundPaintBrushFallback(input: GroundPaintBrushKernelInput): GroundPaintBrushKernelOutput {
   const resolution = Math.max(1, Math.trunc(input.tileResolution))
   const mask = input.mask.slice()
@@ -44,17 +64,10 @@ export function applyGroundPaintBrushFallback(input: GroundPaintBrushKernelInput
       const dx = x + 0.5 - input.centerX
       const dy = y + 0.5 - input.centerY
       const distanceSq = dx * dx + dy * dy
-      if (distanceSq > radiusSq) {
+      if (distanceSq >= radiusSq) {
         continue
       }
-      const distance = Math.sqrt(distanceSq)
-      const normalizedDistance = radius > 0 ? distance / radius : 0
-      const falloffStart = 1 - feather
-      const falloff = feather <= 0
-        ? 1
-        : normalizedDistance <= falloffStart
-          ? 1
-          : 1 - (normalizedDistance - falloffStart) / Math.max(1e-6, feather)
+      const falloff = computeSoftBrushFalloff(distanceSq / Math.max(radiusSq, 1e-6), feather)
       const amount = clamp01(falloff) * strength
       if (amount <= 0) {
         continue
