@@ -2910,10 +2910,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				node.id,
 				node.dynamicMesh as GroundDynamicMesh,
 			)
+			const sceneId = typeof options.sceneStore.currentSceneId === 'string'
+				? options.sceneStore.currentSceneId.trim()
+				: ''
+			const paintRuntime = sceneId
+				? useGroundPaintStore().getSceneGroundPaint(sceneId)
+				: null
+			const mergedRuntimeDefinition = paintRuntime && paintRuntime.nodeId === node.id
+				? {
+					...runtimeDefinition,
+					terrainPaint: null,
+					groundSurfaceChunks: cloneGroundSurfaceChunks(runtimeDefinition, node.id),
+				}
+				: runtimeDefinition
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				return sculptSessionState.definition
 			}
-			return runtimeDefinition
+			return mergedRuntimeDefinition
 		}
 		return null
 	}
