@@ -5598,8 +5598,22 @@ function createContentHistoryEntry(store: SceneState): SceneHistoryEntry {
     kind: 'content-snapshot',
     nodes: cloneSceneNodes(store.nodes),
     materials: cloneSceneMaterials(store.materials),
-    groundSettings: cloneGroundSettings(store.groundSettings),
+    groundSettings: resolveGroundSettingsFromNodes(store.nodes, store.groundSettings),
   }
+}
+
+function resolveGroundSettingsFromNodes(nodes: SceneNode[], fallback: GroundSettings): GroundSettings {
+  const base = cloneGroundSettings(fallback)
+  const groundNode = findGroundNode(nodes)
+  const definition = groundNode?.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : null
+  if (!definition) {
+    return base
+  }
+  return cloneGroundSettings({
+    width: Number.isFinite(definition.width) ? Number(definition.width) : base.width,
+    depth: Number.isFinite(definition.depth) ? Number(definition.depth) : base.depth,
+    enableAirWall: base.enableAirWall,
+  })
 }
 
 type NodeBasicsHistoryRequest = {
@@ -6234,6 +6248,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   const projectId = typeof meta.projectId === 'string' ? meta.projectId : ''
   const environment = cloneEnvironmentSettings(store.environment)
   const nodes = ensureEnvironmentNode(cloneSceneNodes(store.nodes), environment)
+  const effectiveGroundSettings = resolveGroundSettingsFromNodes(nodes, store.groundSettings)
 
   const planningData = store.planningData
   const normalizedPlanningData = planningData && isPlanningDataEmpty(planningData) ? null : planningData
@@ -6251,7 +6266,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     skybox: cloneSkyboxSettings(store.skybox),
     shadowsEnabled: normalizeShadowsEnabledInput(store.shadowsEnabled),
     environment,
-    groundSettings: cloneGroundSettings(store.groundSettings),
+    groundSettings: effectiveGroundSettings,
     panelVisibility: normalizePanelVisibilityState(store.panelVisibility),
     panelPlacement: normalizePanelPlacementStateInput(store.panelPlacement),
     resourceProviderId: store.resourceProviderId ?? 'builtin',
@@ -7278,8 +7293,9 @@ export const useSceneStore = defineStore('scene', {
       applySceneAssetState(this, scene)
       replaceSceneNodes(this, cloneSceneNodes(scene.nodes))
       this.environment = resolveSceneDocumentEnvironment(scene)
+      const effectiveGroundSettings = resolveGroundSettingsFromNodes(this.nodes, cloneGroundSettings(scene.groundSettings))
       replaceSceneNodes(this, ensureEnvironmentNode(
-        ensureGroundNode(this.nodes, scene.groundSettings),
+        ensureGroundNode(this.nodes, effectiveGroundSettings),
         this.environment,
       )
       )
@@ -7292,7 +7308,7 @@ export const useSceneStore = defineStore('scene', {
       this.shadowsEnabled = resolveDocumentShadowsEnabled(scene)
       this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
-      this.groundSettings = cloneGroundSettings(scene.groundSettings)
+      this.groundSettings = effectiveGroundSettings
       this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
       this.hasUnsavedChanges = false
 

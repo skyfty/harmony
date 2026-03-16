@@ -55,6 +55,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
+import { useGroundScatterStore } from '@/stores/groundScatterStore'
 
 import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -2070,10 +2071,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const store = ensureScatterStoreRef()
 		const groundMesh = getGroundObject()
 		const definition = getGroundDynamicMeshDefinition()
-		if (!groundMesh || !definition || store.layers.size === 0) {
+		if (!groundMesh || !definition) {
 			return
 		}
 		updateGroundChunks(groundMesh, definition, options.getCamera())
+		if (store.layers.size === 0) {
+			return
+		}
 
 		if (scatterChunkStreamingEnabled) {
 			// Prepare/normalize LOD preset payloads once; binding is handled by chunk streaming.
@@ -2851,7 +2855,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return null
 		}
 		const definition = node.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
-		return definition.terrainScatter ?? null
+		const embeddedSnapshot = definition.terrainScatter ?? null
+		if (embeddedSnapshot) {
+			return embeddedSnapshot
+		}
+		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
+		if (!sceneId) {
+			return null
+		}
+		const runtimeState = useGroundScatterStore().getSceneGroundScatter(sceneId)
+		if (!runtimeState || runtimeState.nodeId !== node.id) {
+			return null
+		}
+		return runtimeState.terrainScatter ?? null
 	}
 
 	function getScatterSnapshotTimestamp(snapshot: TerrainScatterStoreSnapshot | null | undefined): number | null {

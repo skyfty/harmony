@@ -399,6 +399,8 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
       return Object.keys(base).length ? base : undefined
     })()
 
+    const normalizedDynamicMesh = createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings)
+
     return {
       ...node,
       id: GROUND_NODE_ID,
@@ -419,7 +421,7 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
       scale: createVector(1, 1, 1),
       visible: node.visible ?? true,
       locked: true,
-      dynamicMesh: createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings),
+      dynamicMesh: normalizedDynamicMesh,
       components: nextComponents,
       sourceAssetId: undefined,
       children,
