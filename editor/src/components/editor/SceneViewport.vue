@@ -544,6 +544,7 @@ const gizmoContainerRef = ref<HTMLDivElement | null>(null)
 const statsHostRef = ref<HTMLDivElement | null>(null)
 
 const raycaster = new THREE.Raycaster()
+const dropRaycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const objectMap = new Map<string, THREE.Object3D>()
 const instancedMeshes: THREE.InstancedMesh[] = []
@@ -1543,6 +1544,7 @@ function computeGuideRouteDynamicMeshSignature(definition: GuideRouteDynamicMesh
 
 
 const {
+  isEditorOnlyObject,
   resolveNodeIdFromIntersection,
   collectSceneIntersections,
   projectPointerToPlane,
@@ -6557,6 +6559,94 @@ const {
       if (captured.length) {
         queueMicrotask(() => applyCapturedLightTargetUpdates(captured))
       }
+    },
+    resolveDropSurfaceHeight: ({ bounds, excludedNodeIds }) => {
+      const excludedObjects = new Set<THREE.Object3D>()
+      excludedNodeIds.forEach((id) => {
+        const excludedObject = objectMap.get(id)
+        if (excludedObject) {
+          excludedObjects.add(excludedObject)
+        }
+      })
+
+      const isExcludedIntersection = (candidate: THREE.Object3D | null): boolean => {
+        let current: THREE.Object3D | null = candidate
+        while (current) {
+          if (excludedObjects.has(current)) {
+            return true
+          }
+          current = current.parent ?? null
+        }
+        return false
+      }
+
+      const sizeX = Math.max(0, bounds.max.x - bounds.min.x)
+      const sizeY = Math.max(0, bounds.max.y - bounds.min.y)
+      const sizeZ = Math.max(0, bounds.max.z - bounds.min.z)
+      const insetX = sizeX > 1e-3 ? Math.min(sizeX * 0.1, 0.05) : 0
+      const insetZ = sizeZ > 1e-3 ? Math.min(sizeZ * 0.1, 0.05) : 0
+      const minX = bounds.min.x + insetX
+      const maxX = bounds.max.x - insetX
+      const minZ = bounds.min.z + insetZ
+      const maxZ = bounds.max.z - insetZ
+      const centerX = (bounds.min.x + bounds.max.x) * 0.5
+      const centerZ = (bounds.min.z + bounds.max.z) * 0.5
+      const samplePoints = [
+        new THREE.Vector2(centerX, centerZ),
+        new THREE.Vector2(minX, minZ),
+        new THREE.Vector2(minX, maxZ),
+        new THREE.Vector2(maxX, minZ),
+        new THREE.Vector2(maxX, maxZ),
+      ]
+
+      const rayOriginY = bounds.max.y + Math.max(sizeY, 1) + 0.1
+      let bestSurfaceY: number | null = null
+
+      for (const samplePoint of samplePoints) {
+        dropRaycaster.set(
+          new THREE.Vector3(samplePoint.x, rayOriginY, samplePoint.y),
+          new THREE.Vector3(0, -1, 0),
+        )
+
+        const intersections = collectSceneIntersections({
+          raycaster: dropRaycaster,
+          maxDistance: Number.POSITIVE_INFINITY,
+        })
+
+        for (const intersection of intersections) {
+          if (!intersection?.point) {
+            continue
+          }
+          if (isEditorOnlyObject(intersection.object as THREE.Object3D)) {
+            continue
+          }
+          if (isExcludedIntersection(intersection.object as THREE.Object3D)) {
+            continue
+          }
+
+          const nodeId = resolveNodeIdFromIntersection(intersection)
+          if (!nodeId || excludedNodeIds.has(nodeId) || sceneStore.isNodeSelectionLocked(nodeId)) {
+            continue
+          }
+
+          const baseObject = objectMap.get(nodeId)
+          if (!baseObject) {
+            continue
+          }
+          if (!sceneStore.isNodeVisible(nodeId) || !isObjectWorldVisible(baseObject)) {
+            continue
+          }
+
+          const hitY = intersection.point.y
+          if (!Number.isFinite(hitY)) {
+            continue
+          }
+          bestSurfaceY = bestSurfaceY === null ? hitY : Math.max(bestSurfaceY, hitY)
+          break
+        }
+      }
+
+      return bestSurfaceY
     },
     getVertexSnapDelta: ({ drag, event }) => {
       const active = isVertexSnapActiveEffective.value || event.shiftKey

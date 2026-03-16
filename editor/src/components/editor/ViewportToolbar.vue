@@ -747,7 +747,7 @@
         color="undefined"
         variant="text"
         class="toolbar-button"
-        title="Drop to Ground"
+        title="Drop to Surface"
         :disabled="!canDropSelection"
         @click="emit('drop-to-ground')"
       />
