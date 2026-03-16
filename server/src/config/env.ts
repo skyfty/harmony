@@ -154,7 +154,8 @@ export const appConfig = {
     audience: process.env.MINI_JWT_AUDIENCE ?? 'harmony-mini-api',
     expiresIn: process.env.MINI_JWT_EXPIRES_IN ?? '12h',
     defaultDisplayName: process.env.MINI_DEFAULT_DISPLAY_NAME ?? '微信用户',
-    allowTestBypassInNonProd: true,
+    allowTestBypassInNonProd:
+      process.env.NODE_ENV !== 'production' && (process.env.MINI_AUTH_ALLOW_TEST_BYPASS_IN_NON_PROD ?? 'true') === 'true',
     defaultMiniAppId: process.env.WECHAT_MINI_DEFAULT_APP_ID ?? fallbackWechatMiniAppId,
     wechatMiniAppId: fallbackWechatMiniAppId,
     wechatMiniAppSecret: fallbackWechatMiniAppSecret,
