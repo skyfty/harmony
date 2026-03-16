@@ -20,6 +20,7 @@
       active="vehicle"
       @navigate="handleNavigate"
     />
+    <PhoneBindSheet v-model="showPhoneBindSheet" @bound="handlePhoneBound" />
   </view>
 </template>
 
@@ -31,13 +32,13 @@ defineOptions({ name: 'VehiclesPage' });
 const statusBarHeight = ref(getStatusBarHeight());
 import BottomNav from '@/components/BottomNav.vue';
 import PageHeader from '@/components/PageHeader.vue';
+import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import VehicleCard from '@/components/VehicleCard.vue';
 import { listVehicles, purchaseVehicleByProduct, selectCurrentVehicle } from '@/api/mini/vehicles';
 import type { Vehicle } from '@/types/vehicle';
 import type { VehicleStatus } from '@/types/vehicle';
 import {
   isPhoneBindingRequiredError,
-  promptBindPhoneBeforeCheckout,
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
@@ -82,6 +83,8 @@ function setSelectedVehicle(vehicle: Vehicle | null): void {
 const vehicles = ref<Vehicle[]>([]);
 const selectedId = ref(getSelectedVehicleId());
 const loading = ref(false);
+const showPhoneBindSheet = ref(false);
+const pendingPurchaseProductId = ref<string>('');
 const purchaseVehicle = purchaseVehicleByProduct as unknown as (productId: string) => Promise<unknown>;
 const selectVehicleAsCurrent =
   selectCurrentVehicle as unknown as (vehicleId: string) => Promise<{ currentVehicleId: string }>;
@@ -102,6 +105,55 @@ onMounted(() => {
     void uni.showToast({ title: '加载失败', icon: 'none' });
   });
 });
+
+async function purchaseVehicleWithProductId(productId: string) {
+  if (!productId || loading.value) {
+    return;
+  }
+
+  loading.value = true;
+  void uni.showLoading({ title: '购买中...' });
+  try {
+    const result = (await purchaseVehicle(productId)) as {
+      order?: { id: string };
+      payParams?: {
+        appId: string;
+        timeStamp: string;
+        nonceStr: string;
+        package: string;
+        signType: 'RSA';
+        paySign: string;
+      };
+    };
+    if (result.payParams) {
+      await requestMiniProgramPayment(result.payParams);
+    }
+    await reload();
+    void uni.showToast({ title: '购买成功', icon: 'none' });
+    if (result.order?.id) {
+      uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` });
+    }
+  } catch (error: unknown) {
+    if (isPhoneBindingRequiredError(error)) {
+      pendingPurchaseProductId.value = productId;
+      showPhoneBindSheet.value = true;
+      return;
+    }
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });
+  } finally {
+    loading.value = false;
+    void uni.hideLoading();
+  }
+}
+
+async function handlePhoneBound() {
+  const productId = pendingPurchaseProductId.value;
+  pendingPurchaseProductId.value = '';
+  if (!productId) {
+    return;
+  }
+  await purchaseVehicleWithProductId(productId);
+}
 
 async function select(id: string, status: VehicleStatus) {
   if (loading.value) {
@@ -130,37 +182,8 @@ async function select(id: string, status: VehicleStatus) {
       void uni.showToast({ title: '该车辆暂不可购买', icon: 'none' });
       return;
     }
-    loading.value = true;
-    void uni.showLoading({ title: '购买中...' });
-    try {
-      const result = (await purchaseVehicle(productId)) as {
-        order?: { id: string };
-        payParams?: {
-          appId: string;
-          timeStamp: string;
-          nonceStr: string;
-          package: string;
-          signType: 'RSA';
-          paySign: string;
-        };
-      };
-      if (result.payParams) {
-        await requestMiniProgramPayment(result.payParams);
-      }
-      await reload();
-      void uni.showToast({ title: '购买成功', icon: 'none' });
-      if (result.order?.id) {
-        uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` });
-      }
-    } catch (error: unknown) {
-      if (isPhoneBindingRequiredError(error)) {
-        await promptBindPhoneBeforeCheckout();
-      }
-      void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });
-    } finally {
-      loading.value = false;
-      void uni.hideLoading();
-    }
+    pendingPurchaseProductId.value = productId;
+    await purchaseVehicleWithProductId(productId);
     return;
   }
 

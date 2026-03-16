@@ -96,9 +96,6 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
         errorName: name,
         errorMessage: message,
       })
-      // Do not bypass with test user when a bearer token is present but invalid.
-      // This avoids masking auth errors and prevents ambiguous middleware flows.
-      ctx.throw(401, 'Invalid user token')
     }
   }
 
@@ -126,7 +123,6 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
   if (!hasBearerToken) {
     ctx.throw(401, 'Unauthorized')
   }
-  ctx.throw(401, 'Invalid user token')
 }
 
 export async function optionalMiniAuth(ctx: Context, next: Next): Promise<void> {
