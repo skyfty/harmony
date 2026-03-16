@@ -1155,7 +1155,7 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
 
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
 const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
-const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = false
+const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 
 function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
   const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
@@ -1187,6 +1187,9 @@ function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, gro
       dynamicMesh,
       groundSurfacePreviewLoaders,
       () => groundSurfacePreviewLoadToken,
+      {
+        applyToMaterialMap: true,
+      },
     )
     : false;
   if (usesSurfacePreview) {
