@@ -157,7 +157,7 @@ async function readWechatProfile(): Promise<WechatProfile> {
 }
 
 async function getWechatLoginCode(): Promise<string> {
-  logMiniAuth('starting wx.login ddddddddddddddddddddddddddddddd')
+  logMiniAuth('starting wx.login')
   return await new Promise<string>((resolve, reject) => {
     uni.login({
       provider: 'weixin',
@@ -201,7 +201,6 @@ export async function loginWithWechatCode(code: string, profile: WechatProfile =
     hasDisplayName: Boolean(profile.displayName),
     hasAvatarUrl: Boolean(profile.avatarUrl),
   })
-  logMiniAuth('ffffffffffffffffffffffffffffffffff')
   const data = await miniRequest<LoginResponse>('/mini-auth/wechat-login', {
     method: 'POST',
     auth: false,
@@ -223,7 +222,7 @@ export async function loginWithWechatCode(code: string, profile: WechatProfile =
   }
 
   setAccessToken(token)
-  logMiniAuth('wechat-login success, token stored')
+  logMiniAuth('wechat-login success, token stored', { tokenLength: token.length })
   return token
 }
 
