@@ -74,13 +74,13 @@ const WALL_PRESETS_CATEGORY_ID = `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`
 function filterOutWallPresets(nodes: ProjectDirectory[] | undefined): ProjectDirectory[] {
   if (!nodes || !nodes.length) return []
   return nodes
-    .map((node) => {
+    .map((node): ProjectDirectory | null => {
       if (!node) return null
       if (node.id === WALL_PRESETS_CATEGORY_ID) return null
       const children = node.children ? filterOutWallPresets(node.children) : undefined
       return {
         ...node,
-        children: children && children.length ? children : undefined,
+        ...(children && children.length ? { children } : {}),
       }
     })
     .filter((n): n is ProjectDirectory => !!n)
@@ -125,6 +125,8 @@ const pendingDeleteAssets = ref<ProjectAsset[]>([])
 const isBatchDeletion = ref(false)
 const selectedAssetIds = ref<string[]>([])
 const draggingDirectoryId = ref<string | null>(null)
+const directoryDropHoverId = ref<string | null>(null)
+const assetDropHoverId = ref<string | null>(null)
 const dropActive = ref(false)
 const dropProcessing = ref(false)
 const dropDragDepth = ref(0)
@@ -357,6 +359,8 @@ function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
   }
   return (directory.assets ?? []).filter((asset) => isPanelVisibleAsset(asset)).length
 }
+
+void countDirectoryAssets
 
 const activeProviderId = computed(() => findProviderIdForDirectoryId(activeDirectoryId.value ?? null))
 const activeProviderError = computed(() => (activeProviderId.value ? getProviderError(activeProviderId.value) : null))
@@ -692,6 +696,8 @@ async function handleAddAsset(asset: ProjectAsset) {
   }
 }
 
+void handleAddAsset
+
 function refreshGallery() {
   const providerId = activeProviderId.value
   if (providerId) {
@@ -739,6 +745,8 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
 
 function handleAssetDragEnd() {
   sceneStore.setDraggingAssetId(null)
+  directoryDropHoverId.value = null
+  assetDropHoverId.value = null
   destroyDragPreview()
   detachDragSuppressionListeners()
 }
@@ -1425,6 +1433,7 @@ const galleryDirectories = computed(() => {
 })
 
 const DIRECTORY_DRAG_MIME = 'application/x-harmony-asset-directory'
+const AUTO_FOLDER_PREFIX = 'New Folder'
 
 const selectedSingleAsset = computed(() => {
   if (!selectedAssetId.value) {
@@ -1734,20 +1743,195 @@ function handleDirectoryDragStart(event: DragEvent, directoryId: string) {
 
 function handleDirectoryDragEnd() {
   draggingDirectoryId.value = null
+  directoryDropHoverId.value = null
+}
+
+function parseDraggedDirectoryId(dataTransfer: DataTransfer | null | undefined): string {
+  const payload = dataTransfer?.getData(DIRECTORY_DRAG_MIME)?.trim() ?? ''
+  if (payload.length) {
+    return payload
+  }
+  return draggingDirectoryId.value?.trim() ?? ''
+}
+
+function parseDraggedAssetId(dataTransfer: DataTransfer | null | undefined): string {
+  const payload = dataTransfer?.getData(ASSET_DRAG_MIME) ?? ''
+  if (payload.trim().length) {
+    try {
+      const parsed = JSON.parse(payload) as { assetId?: unknown }
+      if (typeof parsed.assetId === 'string' && parsed.assetId.trim().length) {
+        return parsed.assetId.trim()
+      }
+    } catch {
+      // Ignore malformed payload and fallback to store drag state.
+    }
+  }
+  return draggingAssetId.value?.trim() ?? ''
+}
+
+function clearAssetDropHover(assetId?: string) {
+  if (!assetId || assetDropHoverId.value === assetId) {
+    assetDropHoverId.value = null
+  }
+}
+
+function getNextAutoFolderName(): string {
+  const siblings = currentDirectory.value?.children ?? []
+  const usedNumbers = new Set<number>()
+  for (const directory of siblings) {
+    const match = /^new folder\s+(\d+)$/i.exec(directory.name.trim())
+    if (!match) {
+      continue
+    }
+    const value = Number.parseInt(match[1] ?? '', 10)
+    if (Number.isFinite(value) && value > 0) {
+      usedNumbers.add(value)
+    }
+  }
+  let index = 1
+  while (usedNumbers.has(index)) {
+    index += 1
+  }
+  return `${AUTO_FOLDER_PREFIX} ${index}`
+}
+
+function canAutoGroupAssetsInCurrentDirectory(scope: 'local' | 'preset'): boolean {
+  const directoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
+  if (scope === 'local') {
+    return isLocalDirectoryId(directoryId)
+  }
+  return authStore.canResourceWrite && isPresetDirectoryId(directoryId)
+}
+
+function allowAssetToAssetDrop(event: DragEvent, targetAssetId: string): boolean {
+  if (!event.dataTransfer) {
+    clearAssetDropHover(targetAssetId)
+    return false
+  }
+  const types = Array.from(event.dataTransfer.types ?? [])
+  if (!types.includes(ASSET_DRAG_MIME)) {
+    clearAssetDropHover(targetAssetId)
+    return false
+  }
+  const draggedAssetId = parseDraggedAssetId(event.dataTransfer)
+  if (!draggedAssetId || draggedAssetId === targetAssetId) {
+    clearAssetDropHover(targetAssetId)
+    return false
+  }
+  const draggedAsset = sceneStore.getAsset(draggedAssetId)
+  const targetAsset = sceneStore.getAsset(targetAssetId)
+  const draggedScope = getAssetMutationScope(draggedAsset)
+  const targetScope = getAssetMutationScope(targetAsset)
+  if (!draggedScope || draggedScope !== targetScope || !canAutoGroupAssetsInCurrentDirectory(draggedScope)) {
+    clearAssetDropHover(targetAssetId)
+    return false
+  }
+  const visibleAssetIds = new Set(displayedAssets.value.map((asset) => asset.id))
+  if (!visibleAssetIds.has(draggedAssetId) || !visibleAssetIds.has(targetAssetId)) {
+    clearAssetDropHover(targetAssetId)
+    return false
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer.dropEffect = 'move'
+  assetDropHoverId.value = targetAssetId
+  return true
+}
+
+function handleAssetCardDragEnter(event: DragEvent, targetAssetId: string) {
+  allowAssetToAssetDrop(event, targetAssetId)
+}
+
+function handleAssetCardDragOver(event: DragEvent, targetAssetId: string) {
+  allowAssetToAssetDrop(event, targetAssetId)
+}
+
+function handleAssetCardDragLeave(_event: DragEvent, targetAssetId: string) {
+  clearAssetDropHover(targetAssetId)
+}
+
+async function handleAssetCardDrop(event: DragEvent, targetAssetId: string) {
+  if (!allowAssetToAssetDrop(event, targetAssetId) || !event.dataTransfer) {
+    return
+  }
+  const draggedAssetId = parseDraggedAssetId(event.dataTransfer)
+  if (!draggedAssetId || draggedAssetId === targetAssetId) {
+    clearAssetDropHover(targetAssetId)
+    return
+  }
+
+  const draggedAsset = sceneStore.getAsset(draggedAssetId)
+  const targetAsset = sceneStore.getAsset(targetAssetId)
+  const scope = getAssetMutationScope(draggedAsset)
+  if (!draggedAsset || !targetAsset || !scope || scope !== getAssetMutationScope(targetAsset)) {
+    clearAssetDropHover(targetAssetId)
+    return
+  }
+
+  const parentDirectoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
+  const preservedActiveDirectoryId = activeDirectoryId.value
+  const folderName = getNextAutoFolderName()
+
+  try {
+    if (scope === 'local' && isLocalDirectoryId(parentDirectoryId)) {
+      const createdDirectoryId = sceneStore.createAssetDirectory(folderName, parentDirectoryId)
+      if (!createdDirectoryId) {
+        return
+      }
+      const assetIds = Array.from(new Set([draggedAssetId, targetAssetId]))
+      assetIds.forEach((assetId) => {
+        sceneStore.moveProjectAssetToDirectory(assetId, createdDirectoryId)
+      })
+      ensureDirectoryOpened(parentDirectoryId)
+      ensureDirectoryOpened(createdDirectoryId)
+      if (preservedActiveDirectoryId) {
+        sceneStore.setActiveDirectory(preservedActiveDirectoryId)
+      }
+    } else if (scope === 'preset' && authStore.canResourceWrite && isPresetDirectoryId(parentDirectoryId)) {
+      const created = await createResourceCategory({
+        name: folderName,
+        parentId: resolveServerCategoryId(parentDirectoryId),
+      })
+      await bulkMoveResourceAssetsToCategory({
+        assetIds: Array.from(new Set([draggedAssetId, targetAssetId])),
+        targetCategoryId: created.id,
+      })
+      await refreshPresetProviderAssets()
+      ensureDirectoryOpened(parentDirectoryId)
+      ensureDirectoryOpened(created.id)
+    }
+  } catch (error) {
+    console.error('Failed to auto group assets into folder', error)
+  } finally {
+    clearAssetDropHover(targetAssetId)
+  }
+}
+
+function setDirectoryDropHover(directoryId: string | null) {
+  directoryDropHoverId.value = directoryId
+}
+
+function clearDirectoryDropHover(directoryId?: string) {
+  if (!directoryId || directoryDropHoverId.value === directoryId) {
+    directoryDropHoverId.value = null
+  }
 }
 
 function allowDirectoryDrop(event: DragEvent, directoryId: string) {
   if (!event.dataTransfer) {
+    clearDirectoryDropHover(directoryId)
     return false
   }
   const targetScope = getDirectoryMutationScope(directoryId)
   if (!targetScope) {
+    clearDirectoryDropHover(directoryId)
     return false
   }
   const types = Array.from(event.dataTransfer.types ?? [])
-  const draggedDirectoryId = draggingDirectoryId.value?.trim() ?? ''
+  const draggedDirectoryId = parseDraggedDirectoryId(event.dataTransfer)
   const draggedDirectoryScope = draggedDirectoryId ? getDirectoryMutationScope(draggedDirectoryId) : null
-  const draggedAssetId = draggingAssetId.value?.trim() ?? ''
+  const draggedAssetId = parseDraggedAssetId(event.dataTransfer)
   const draggedAsset = draggedAssetId ? sceneStore.getAsset(draggedAssetId) : null
   const draggedAssetScope = getAssetMutationScope(draggedAsset)
   const acceptsAsset = types.includes(ASSET_DRAG_MIME)
@@ -1756,23 +1940,41 @@ function allowDirectoryDrop(event: DragEvent, directoryId: string) {
     && !(targetScope === 'preset' && directoryId === PRESET_PROVIDER_ROOT_DIRECTORY_ID)
   const acceptsDirectory = types.includes(DIRECTORY_DRAG_MIME) && draggedDirectoryScope === targetScope
   if (!acceptsAsset && !acceptsDirectory) {
+    clearDirectoryDropHover(directoryId)
     return false
   }
   event.preventDefault()
   event.stopPropagation()
   event.dataTransfer.dropEffect = 'move'
+  setDirectoryDropHover(directoryId)
   return true
+}
+
+function handleDirectoryDragEnter(event: DragEvent, directoryId: string) {
+  allowDirectoryDrop(event, directoryId)
+}
+
+function handleDirectoryDragOver(event: DragEvent, directoryId: string) {
+  allowDirectoryDrop(event, directoryId)
+}
+
+function handleDirectoryDragLeave(_event: DragEvent, directoryId: string) {
+  clearDirectoryDropHover(directoryId)
 }
 
 async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
   if (!allowDirectoryDrop(event, directoryId) || !event.dataTransfer) {
     return
   }
-  const draggedDirectoryId = draggingDirectoryId.value?.trim() ?? ''
+  const preservedActiveDirectoryId = activeDirectoryId.value
+  const draggedDirectoryId = parseDraggedDirectoryId(event.dataTransfer)
   if (draggedDirectoryId) {
     try {
       if (isLocalDirectoryId(draggedDirectoryId) && isLocalDirectoryId(directoryId)) {
-        sceneStore.moveAssetDirectory(draggedDirectoryId, directoryId)
+        const moved = sceneStore.moveAssetDirectory(draggedDirectoryId, directoryId)
+        if (moved && preservedActiveDirectoryId) {
+          sceneStore.setActiveDirectory(preservedActiveDirectoryId)
+        }
       } else if (isPresetDirectoryMutable(draggedDirectoryId) && isPresetDirectoryId(directoryId)) {
         await moveResourceCategory(draggedDirectoryId, resolveServerCategoryId(directoryId))
         await refreshPresetProviderAssets()
@@ -1782,21 +1984,20 @@ async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
       console.error('Failed to move directory', error)
     } finally {
       draggingDirectoryId.value = null
+      clearDirectoryDropHover(directoryId)
     }
     return
   }
-  const assetId = draggingAssetId.value?.trim()
+  const assetId = parseDraggedAssetId(event.dataTransfer)
   if (!assetId) {
+    clearDirectoryDropHover(directoryId)
     return
   }
   try {
     const asset = sceneStore.getAsset(assetId)
     const scope = getAssetMutationScope(asset)
     if (scope === 'local' && isLocalDirectoryId(directoryId)) {
-      const moved = sceneStore.moveProjectAssetToDirectory(assetId, directoryId)
-      if (moved) {
-        sceneStore.setActiveDirectory(directoryId)
-      }
+      sceneStore.moveProjectAssetToDirectory(assetId, directoryId)
     } else if (scope === 'preset' && isPresetDirectoryId(directoryId)) {
       const targetCategoryId = resolveServerCategoryId(directoryId)
       if (!targetCategoryId) {
@@ -1804,10 +2005,11 @@ async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
       }
       await bulkMoveResourceAssetsToCategory({ assetIds: [assetId], targetCategoryId })
       await refreshPresetProviderAssets()
-      sceneStore.setActiveDirectory(directoryId)
     }
   } catch (error) {
     console.error('Failed to move asset to directory', error)
+  } finally {
+    clearDirectoryDropHover(directoryId)
   }
 }
 
@@ -2377,6 +2579,37 @@ const assetProviderMap = computed(() => {
   return map
 })
 
+const assetPackagePathMap = computed(() => {
+  const map = new Map<string, string[]>()
+  const traverse = (
+    directories: ProjectDirectory[] | undefined,
+    inheritedProviderId: string | null,
+    inheritedPath: string[],
+  ) => {
+    if (!directories?.length) {
+      return
+    }
+    directories.forEach((directory) => {
+      const directoryProviderId = extractProviderIdFromPackageDirectoryId(directory.id) ?? inheritedProviderId
+      const isProviderRoot = Boolean(extractProviderIdFromPackageDirectoryId(directory.id))
+      const nextPath = directoryProviderId
+        ? (isProviderRoot ? [] : [...inheritedPath, directory.name])
+        : inheritedPath
+
+      if (directory.assets?.length && directoryProviderId) {
+        directory.assets.forEach((asset) => {
+          map.set(asset.id, [...nextPath])
+        })
+      }
+      if (directory.children?.length) {
+        traverse(directory.children, directoryProviderId, nextPath)
+      }
+    })
+  }
+  traverse(projectTree.value, null, [])
+  return map
+})
+
 function providerIdForAsset(asset: ProjectAsset): string | null {
   return assetProviderMap.value.get(asset.id) ?? null
 }
@@ -2395,7 +2628,8 @@ function prepareAssetForOperations(asset: ProjectAsset): ProjectAsset {
   if (!providerId) {
     return asset
   }
-  return sceneStore.copyPackageAssetToAssets(providerId, asset)
+  const packagePathSegments = assetPackagePathMap.value.get(asset.id) ?? []
+  return sceneStore.copyPackageAssetToAssets(providerId, asset, { packagePathSegments })
 }
 
 const indexedDbLoadQueue = new Set<string>()
@@ -2687,6 +2921,8 @@ function destroyDragPreview() {
 onBeforeUnmount(() => {
   destroyDragPreview()
   detachDragSuppressionListeners()
+  directoryDropHoverId.value = null
+  assetDropHoverId.value = null
   if (typeof window !== 'undefined' && windowPasteListener) {
     window.removeEventListener('paste', windowPasteListener, true)
     windowPasteListener = null
@@ -2770,11 +3006,13 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
             </template>
             <template #title="{ item }">
               <div
-                class="tree-node-title"
+                :class="['tree-node-title', { 'is-drop-target': directoryDropHoverId === item.id }]"
                 :draggable="isDraggableDirectoryId(item?.id)"
                 @dragstart.stop="handleDirectoryDragStart($event, item.id)"
                 @dragend="handleDirectoryDragEnd"
-                @dragover="allowDirectoryDrop($event, item.id)"
+                @dragenter="handleDirectoryDragEnter($event, item.id)"
+                @dragover="handleDirectoryDragOver($event, item.id)"
+                @dragleave="handleDirectoryDragLeave($event, item.id)"
                 @drop="handleDirectoryDrop($event, item.id)"
                 @dblclick.stop="item?.id && sceneStore.setActiveDirectory(item.id)"
               >
@@ -2945,7 +3183,14 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               <v-card
                 v-for="directory in galleryDirectories"
                 :key="directory.id"
-                :class="['resource-card', 'directory-card', { 'is-active': activeDirectoryId === directory.id }]"
+                :class="[
+                  'resource-card',
+                  'directory-card',
+                  {
+                    'is-active': activeDirectoryId === directory.id,
+                    'is-drop-target': directoryDropHoverId === directory.id,
+                  },
+                ]"
                 elevation="4"
                 :draggable="isDraggableDirectoryId(directory.id)"
                 tabindex="0"
@@ -2954,7 +3199,9 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 @keyup.space.prevent="enterDirectory(directory)"
                 @dragstart.stop="handleDirectoryDragStart($event, directory.id)"
                 @dragend="handleDirectoryDragEnd"
-                @dragover="allowDirectoryDrop($event, directory.id)"
+                @dragenter="handleDirectoryDragEnter($event, directory.id)"
+                @dragover="handleDirectoryDragOver($event, directory.id)"
+                @dragleave="handleDirectoryDragLeave($event, directory.id)"
                 @drop="handleDirectoryDrop($event, directory.id)"
               >
                 <div class="directory-preview">
@@ -2994,6 +3241,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     'is-selected': selectedAssetId === asset.id,
                     'is-dragging': isAssetDragging(asset.id),
                     'is-downloading': isAssetDownloading(asset),
+                    'is-drop-target': assetDropHoverId === asset.id,
                   },
                 ]"
                 elevation="4"
@@ -3001,6 +3249,10 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 @click="selectAsset(asset)"
                 @dragstart.stop="handleAssetDragStart($event, asset)"
                 @dragend="handleAssetDragEnd"
+                @dragenter="handleAssetCardDragEnter($event, asset.id)"
+                @dragover="handleAssetCardDragOver($event, asset.id)"
+                @dragleave="handleAssetCardDragLeave($event, asset.id)"
+                @drop="handleAssetCardDrop($event, asset.id)"
               >
                 <div class="asset-preview" :style="{ background: asset.previewColor }">
                   <div class="asset-select-control">
@@ -3552,7 +3804,17 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   display: flex;
   align-items: center;
   gap: 4px;
+  width: 100%;
   min-width: 0;
+  min-height: 24px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.tree-node-title.is-drop-target {
+  background: rgba(77, 208, 225, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(77, 208, 225, 0.45);
 }
 
 .tree-node-text {
@@ -3626,6 +3888,12 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
 .asset-card.is-downloading {
   border-color: rgba(77, 208, 225, 0.35);
+}
+
+.asset-card.is-drop-target {
+  border-color: rgba(77, 208, 225, 0.92);
+  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.82), 0 0 16px rgba(77, 208, 225, 0.28);
+  transform: translateY(-3px);
 }
 
 .asset-preview {
@@ -3793,6 +4061,11 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   box-shadow: 0 0 12px rgba(0, 172, 193, 0.35);
 }
 
+.directory-card.is-drop-target {
+  border-color: rgba(77, 208, 225, 0.9);
+  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.8), 0 0 16px rgba(77, 208, 225, 0.35);
+}
+
 .directory-preview {
   display: flex;
   align-items: center;
@@ -3826,6 +4099,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   color: #ffffff;
   line-height: 1.1;
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;

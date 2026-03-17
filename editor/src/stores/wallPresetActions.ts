@@ -9,7 +9,6 @@ import {
 } from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
-import { determineAssetCategoryId } from './assetCatalog'
 import { extractExtension } from '@/utils/blob'
 import {
   WALL_PRESET_FORMAT_VERSION,
@@ -35,6 +34,7 @@ export type WallPresetStoreLike = {
   registerAsset: (asset: ProjectAsset, options: any) => ProjectAsset
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
+  resolveConfigAssetSaveDirectoryId: () => string
 
   addNodeComponent: <T extends string>(nodeId: string, type: T) => any
   updateNodeComponentProps: (nodeId: string, componentId: string, patch: any) => boolean
@@ -715,7 +715,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           description: fileName,
           previewColor: deps.WALL_PRESET_PREVIEW_COLOR,
         }
-        const categoryId = determineAssetCategoryId(updated)
+        const categoryId = store.resolveConfigAssetSaveDirectoryId()
         const sourceMeta = (store.assetIndex as any)[assetId]?.source
         return store.registerAsset(updated, {
           categoryId,
@@ -735,7 +735,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         gleaned: true,
         extension: extractExtension(fileName) ?? null,
       }
-      const categoryId = determineAssetCategoryId(projectAsset)
+      const categoryId = store.resolveConfigAssetSaveDirectoryId()
       const registered = store.registerAsset(projectAsset, {
         categoryId,
         source: { type: 'local' },

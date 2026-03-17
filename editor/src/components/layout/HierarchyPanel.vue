@@ -822,7 +822,9 @@ function resolveHierarchyAssetFromEvent(event: DragEvent): ProjectAsset | null {
   }
   const meta = sceneStore.assetIndex?.[asset.id]
   if (meta?.source?.type === 'package' && meta.source.providerId) {
-    asset = sceneStore.copyPackageAssetToAssets(meta.source.providerId, asset)
+    asset = sceneStore.copyPackageAssetToAssets(meta.source.providerId, asset, {
+      packagePathSegments: Array.isArray(meta.source.packagePathSegments) ? meta.source.packagePathSegments : [],
+    })
   }
   return asset.type === 'model' || asset.type === 'prefab' ? asset : null
 }

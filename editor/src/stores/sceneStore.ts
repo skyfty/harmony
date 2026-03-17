@@ -5483,6 +5483,8 @@ function cloneAssetCatalog(catalog: Record<string, ProjectAsset[]>): Record<stri
 }
 
 const SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID = 'scene-assets-root'
+const SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID = 'scene-assets-local-packages'
+const SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME = 'Packages'
 
 const sceneAssetCategoryLabelLookup = ASSET_CATEGORY_CONFIG.reduce<Record<string, string>>((acc, category) => {
   acc[category.id] = category.label
@@ -5595,6 +5597,21 @@ function buildSceneAssetManifest(assetCatalog: Record<string, ProjectAsset[]>): 
     })
   })
 
+  if (!directoriesById[SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID]) {
+    directoriesById[SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID] = {
+      id: SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
+      name: SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
+      parentId: SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID,
+      directoryIds: [],
+      assetIds: [],
+      createdAt: generatedAt,
+      updatedAt: generatedAt,
+    }
+  }
+  if (!directoriesById[SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID]!.directoryIds.includes(SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID)) {
+    directoriesById[SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID]!.directoryIds.push(SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID)
+  }
+
   return {
     format: 'harmony-asset-manifest',
     version: 2,
@@ -5623,7 +5640,7 @@ function findManifestDirectoryPath(manifest: AssetManifest, directoryId: string 
   const visited = new Set<string>()
   let currentId: string | null = directoryId
   while (currentId && !visited.has(currentId)) {
-    const directory = manifest.directoriesById[currentId]
+    const directory: AssetManifestDirectory | undefined = manifest.directoriesById[currentId]
     if (!directory) {
       break
     }
@@ -5658,7 +5675,7 @@ function mapManifestAssetToProjectAsset(
     type: manifestAsset.type,
     description: manifestAsset.description ?? undefined,
     downloadUrl,
-    previewColor: existingAsset?.previewColor ?? resolvePreviewColor(manifestAsset.type),
+    previewColor: existingAsset?.previewColor ?? '#90A4AE',
     thumbnail: thumbnailUrl,
     tags: manifestAsset.tags?.map((tag) => tag.name).filter((name): name is string => typeof name === 'string' && name.length > 0),
     tagIds: [...manifestAsset.tagIds],
@@ -5813,6 +5830,13 @@ function synchronizeManifestWithCatalog(
     }
   })
 
+  ensureManifestDirectory(
+    nextManifest,
+    nextManifest.rootDirectoryId,
+    SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
+    SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
+  )
+
   return cleanupManifestDirectoryReferences(nextManifest)
 }
 
@@ -5832,6 +5856,88 @@ function resolveManifestDirectoryIdFromProjectDirectoryId(
 function findManifestDirectoryContainingAsset(manifest: AssetManifest, assetId: string): string | null {
   const match = Object.values(manifest.directoriesById).find((directory) => directory.assetIds.includes(assetId))
   return match?.id ?? null
+}
+
+function findManifestChildDirectoryByName(
+  manifest: AssetManifest,
+  parentId: string,
+  name: string,
+): AssetManifestDirectory | null {
+  const parent = manifest.directoriesById[parentId]
+  if (!parent) {
+    return null
+  }
+  const normalizedName = name.trim().toLowerCase()
+  if (!normalizedName.length) {
+    return null
+  }
+  for (const childId of parent.directoryIds) {
+    const child = manifest.directoriesById[childId]
+    if (!child) {
+      continue
+    }
+    if (child.name.trim().toLowerCase() === normalizedName) {
+      return child
+    }
+  }
+  return null
+}
+
+function ensureManifestDirectory(
+  manifest: AssetManifest,
+  parentId: string,
+  name: string,
+  preferredId?: string,
+): { directoryId: string; created: boolean } {
+  const parent = manifest.directoriesById[parentId]
+  if (!parent) {
+    return { directoryId: manifest.rootDirectoryId, created: false }
+  }
+
+  const existingByName = findManifestChildDirectoryByName(manifest, parentId, name)
+  if (existingByName) {
+    return { directoryId: existingByName.id, created: false }
+  }
+
+  const directoryId = preferredId && !(preferredId in manifest.directoriesById) ? preferredId : generateUuid()
+  const resolvedName = buildUniqueDirectoryName(manifest, parentId, name)
+  const now = new Date().toISOString()
+  manifest.directoriesById[directoryId] = {
+    id: directoryId,
+    name: resolvedName,
+    parentId,
+    directoryIds: [],
+    assetIds: [],
+    createdAt: now,
+    updatedAt: now,
+  }
+  parent.directoryIds = [...parent.directoryIds, directoryId]
+  parent.updatedAt = now
+  return { directoryId, created: true }
+}
+
+function getLocalPackagesManifestDirectoryId(manifest: AssetManifest | null | undefined): string | null {
+  if (!manifest) {
+    return null
+  }
+  if (SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID in manifest.directoriesById) {
+    return SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID
+  }
+  const existingByName = findManifestChildDirectoryByName(
+    manifest,
+    manifest.rootDirectoryId,
+    SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
+  )
+  return existingByName?.id ?? null
+}
+
+function normalizeDirectorySegmentForManifest(value: string | null | undefined): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed.length) {
+    return 'Unnamed'
+  }
+  const normalized = trimmed.replace(/[\\/]+/g, '-').replace(/\s+/g, ' ').trim()
+  return normalized.length ? normalized : 'Unnamed'
 }
 
 function isManifestDirectoryDescendant(manifest: AssetManifest, ancestorId: string, candidateId: string): boolean {
@@ -6985,16 +7091,6 @@ function findDirectoryPathInTree(
   return null
 }
 
-function collectDirectoryAssets(directory: ProjectDirectory | null, bucket: ProjectAsset[]) {
-  if (!directory) {
-    return
-  }
-  if (directory.assets?.length) {
-    bucket.push(...directory.assets)
-  }
-  directory.children?.forEach((child) => collectDirectoryAssets(child, bucket))
-}
-
 function findAssetInTree(directories: ProjectDirectory[], assetId: string): ProjectAsset | null {
   for (const dir of directories) {
     if (dir.assets) {
@@ -7004,6 +7100,26 @@ function findAssetInTree(directories: ProjectDirectory[], assetId: string): Proj
     if (dir.children) {
       const found = findAssetInTree(dir.children, assetId)
       if (found) return found
+    }
+  }
+  return null
+}
+
+function findAssetPathSegmentsInDirectories(
+  directories: ProjectDirectory[],
+  assetId: string,
+  trail: string[] = [],
+): string[] | null {
+  for (const directory of directories) {
+    const nextTrail = [...trail, directory.name]
+    if (directory.assets?.some((item) => item.id === assetId)) {
+      return nextTrail
+    }
+    if (directory.children?.length) {
+      const found = findAssetPathSegmentsInDirectories(directory.children, assetId, nextTrail)
+      if (found) {
+        return found
+      }
     }
   }
   return null
@@ -9990,6 +10106,105 @@ export const useSceneStore = defineStore('scene', {
       })
       return map
     },
+    ensureLocalPackagesDirectoryInAssets(): string {
+      const currentManifest = cloneAssetManifest(this.assetManifest) ?? buildSceneAssetManifest(this.assetCatalog)
+      const existingLocalPackagesDirectoryId = getLocalPackagesManifestDirectoryId(currentManifest)
+      if (existingLocalPackagesDirectoryId) {
+        return existingLocalPackagesDirectoryId
+      }
+
+      const created = ensureManifestDirectory(
+        currentManifest,
+        currentManifest.rootDirectoryId,
+        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
+        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
+      )
+      this.applyCatalogUpdate(this.assetCatalog, {
+        nextManifest: currentManifest,
+        commitSnapshot: false,
+        updateNodes: false,
+      })
+      return created.directoryId
+    },
+    resolveConfigAssetSaveDirectoryId(): string {
+      const manifest = this.assetManifest
+      if (!manifest) {
+        return SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID
+      }
+
+      const fallbackDirectoryId = manifest.rootDirectoryId
+      const activeProjectDirectoryId = this.activeDirectoryId
+      if (!activeProjectDirectoryId) {
+        return fallbackDirectoryId
+      }
+
+      const activeDirectoryPath = findDirectoryPathInTree(this.projectTree, activeProjectDirectoryId) ?? []
+      const isReadonlyPackagesDirectory = activeDirectoryPath.some((entry) => entry.id === PACKAGES_ROOT_DIRECTORY_ID)
+      if (isReadonlyPackagesDirectory) {
+        return fallbackDirectoryId
+      }
+
+      const activeManifestDirectoryId = resolveManifestDirectoryIdFromProjectDirectoryId(manifest, activeProjectDirectoryId)
+      if (!activeManifestDirectoryId) {
+        return fallbackDirectoryId
+      }
+
+      const localPackagesDirectoryId = getLocalPackagesManifestDirectoryId(manifest)
+      if (localPackagesDirectoryId && isManifestDirectoryDescendant(manifest, localPackagesDirectoryId, activeManifestDirectoryId)) {
+        return fallbackDirectoryId
+      }
+
+      return activeManifestDirectoryId
+    },
+    resolvePackageMirrorDirectoryId(providerId: string, packagePathSegments: string[] = []): string {
+      const manifest = cloneAssetManifest(this.assetManifest) ?? buildSceneAssetManifest(this.assetCatalog)
+      let changed = false
+
+      const localPackagesDirectory = ensureManifestDirectory(
+        manifest,
+        manifest.rootDirectoryId,
+        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
+        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
+      )
+      changed = changed || localPackagesDirectory.created
+
+      const providerDirectory = ensureManifestDirectory(
+        manifest,
+        localPackagesDirectory.directoryId,
+        normalizeDirectorySegmentForManifest(providerId),
+      )
+      changed = changed || providerDirectory.created
+
+      let currentDirectoryId = providerDirectory.directoryId
+      packagePathSegments
+        .map((segment) => normalizeDirectorySegmentForManifest(segment))
+        .forEach((segment) => {
+          const ensured = ensureManifestDirectory(manifest, currentDirectoryId, segment)
+          changed = changed || ensured.created
+          currentDirectoryId = ensured.directoryId
+        })
+
+      if (changed || !this.assetManifest) {
+        this.applyCatalogUpdate(this.assetCatalog, {
+          nextManifest: manifest,
+          commitSnapshot: false,
+          updateNodes: false,
+        })
+      }
+
+      return currentDirectoryId
+    },
+    getPackageAssetPathSegments(providerId: string, assetId: string): string[] {
+      const providerDirectories = this.packageDirectoryCache[providerId]
+      if (!providerDirectories?.length) {
+        return []
+      }
+      const foundPath = findAssetPathSegmentsInDirectories(providerDirectories, assetId)
+      if (!foundPath?.length) {
+        return []
+      }
+      return foundPath
+    },
     createAssetDirectory(name: string, parentProjectDirectoryId?: string | null): string | null {
       const manifest = cloneAssetManifest(this.assetManifest)
       if (!manifest) {
@@ -10765,11 +10980,19 @@ export const useSceneStore = defineStore('scene', {
     ): Promise<{ sequenceId: string; sequence: SceneBehavior[]; action: BehaviorEventType; name: string } | null> {
       return prefabActions.applyBehaviorPrefabToNode(this as unknown as PrefabStoreLike, nodeId, assetId)
     },
-    copyPackageAssetToAssets(providerId: string, asset: ProjectAsset): ProjectAsset {
-      return this.copyPackageAssetsToAssets(providerId, [asset])[0] ?? asset
+    copyPackageAssetToAssets(
+      providerId: string,
+      asset: ProjectAsset,
+      options: { packagePathSegments?: string[] } = {},
+    ): ProjectAsset {
+      return this.copyPackageAssetsToAssets(providerId, [asset], options)[0] ?? asset
     },
 
-    copyPackageAssetsToAssets(providerId: string, assets: ProjectAsset[]): ProjectAsset[] {
+    copyPackageAssetsToAssets(
+      providerId: string,
+      assets: ProjectAsset[],
+      options: { packagePathSegments?: string[]; packagePathByAssetId?: Record<string, string[]> } = {},
+    ): ProjectAsset[] {
       const normalized = Array.isArray(assets)
         ? assets
             .filter((asset) => asset && typeof asset.id === 'string' && asset.id.trim().length > 0)
@@ -10782,7 +11005,20 @@ export const useSceneStore = defineStore('scene', {
       const nextPackageMap: Record<string, string> = { ...this.packageAssetMap }
       let packageMapChanged = false
       const resolved: ProjectAsset[] = []
-      const toRegister: ProjectAsset[] = []
+      const toRegister: Array<{ asset: ProjectAsset; originalAssetId: string; packagePathSegments: string[] }> = []
+      const targetCategoryIdByAssetId = new Map<string, string>()
+      const packagePathByAssetId: Record<string, string[]> = {}
+
+      const resolvePackagePathSegments = (assetId: string): string[] => {
+        if (options.packagePathByAssetId && Array.isArray(options.packagePathByAssetId[assetId])) {
+          return options.packagePathByAssetId[assetId]!
+        }
+        if (Array.isArray(options.packagePathSegments)) {
+          return options.packagePathSegments
+        }
+        const derived = this.getPackageAssetPathSegments(providerId, assetId)
+        return derived.length ? derived : []
+      }
 
       normalized.forEach((asset) => {
         const mapKey = `${providerId}::${asset.id}`
@@ -10797,25 +11033,39 @@ export const useSceneStore = defineStore('scene', {
           packageMapChanged = true
         }
 
+        const packagePathSegments = resolvePackagePathSegments(asset.id)
+        const targetCategoryId = this.resolvePackageMirrorDirectoryId(providerId, packagePathSegments)
+        targetCategoryIdByAssetId.set(asset.id, targetCategoryId)
+        packagePathByAssetId[asset.id] = [...packagePathSegments]
+
         toRegister.push({
-          ...asset,
-          gleaned: true,
+          originalAssetId: asset.id,
+          packagePathSegments,
+          asset: {
+            ...asset,
+            gleaned: true,
+          },
         })
       })
 
       if (toRegister.length) {
-        const registered = this.registerAssets(toRegister, {
-          categoryId: (asset) => determineAssetCategoryId(asset),
+        const registered = this.registerAssets(toRegister.map((entry) => entry.asset), {
+          categoryId: (asset) => targetCategoryIdByAssetId.get(asset.id) ?? determineAssetCategoryId(asset),
           source: (asset) => ({
             type: 'package',
             providerId,
             originalAssetId: asset.id,
+            packagePathSegments: packagePathByAssetId[asset.id] ?? [],
           }),
           commitOptions: { updateNodes: false },
         })
 
-        registered.forEach((asset) => {
-          nextPackageMap[`${providerId}::${asset.id}`] = asset.id
+        toRegister.forEach((entry) => {
+          const registeredAsset = registered.find((asset) => asset.id === entry.asset.id)
+          if (!registeredAsset) {
+            return
+          }
+          nextPackageMap[`${providerId}::${entry.originalAssetId}`] = registeredAsset.id
         })
         packageMapChanged = true
         resolved.push(...registered)
