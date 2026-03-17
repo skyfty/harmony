@@ -68,13 +68,22 @@ type WechatNotifyBody = {
   summary: string
 }
 
-type WechatTransaction = {
+export type WechatPayTradeState =
+  | 'SUCCESS'
+  | 'REFUND'
+  | 'NOTPAY'
+  | 'CLOSED'
+  | 'REVOKED'
+  | 'USERPAYING'
+  | 'PAYERROR'
+
+export type WechatTransaction = {
   appid: string
   mchid: string
   out_trade_no: string
-  transaction_id: string
+  transaction_id?: string
   trade_type: string
-  trade_state: string
+  trade_state: WechatPayTradeState | string
   trade_state_desc?: string
   success_time?: string
   attach?: string
@@ -119,6 +128,8 @@ async function resolveWechatPayConfig(miniAppId?: string) {
   }
 }
 
+type WechatPayConfigResolved = Awaited<ReturnType<typeof getWechatConfig>>
+
 async function getWechatConfig(miniAppId?: string) {
   const { config } = await resolveWechatPayConfig(miniAppId)
   if (!config.enabled) {
@@ -140,7 +151,10 @@ async function listWechatPayConfigs() {
     .filter((item) => item.wechatPay.enabled)
     .map((item) => ({
       miniAppId: item.miniAppId,
-      config: item.wechatPay,
+      config: {
+        ...item.wechatPay,
+        appId: item.miniAppId,
+      },
     }))
 }
 
@@ -155,15 +169,8 @@ function sha256RsaSign(privateKey: string, message: string): string {
   return signer.sign(privateKey, 'base64')
 }
 
-function deriveRefundNotifyUrl(notifyUrl: string): string {
-  if (notifyUrl.includes('/wechat/pay/notify')) {
-    return notifyUrl.replace('/wechat/pay/notify', '/wechat/pay/refund/notify')
-  }
-  return notifyUrl
-}
-
-async function buildAuthorization(method: string, requestPath: string, body: string, miniAppId?: string) {
-  const { mchId, serialNo, privateKey } = await getWechatConfig(miniAppId)
+function buildAuthorizationByConfig(config: WechatPayConfigResolved, method: string, requestPath: string, body: string) {
+  const { mchId, serialNo, privateKey } = config
   const timestamp = String(Math.floor(Date.now() / 1000))
   const nonceStr = randomBytes(16).toString('hex')
   const message = `${method}\n${requestPath}\n${timestamp}\n${nonceStr}\n${body}\n`
@@ -175,19 +182,24 @@ async function buildAuthorization(method: string, requestPath: string, body: str
   }
 }
 
-async function requestWechat<T>(requestPath: string, payload: Record<string, unknown>, miniAppId?: string): Promise<T> {
+async function requestWechat<T>(
+  method: 'GET' | 'POST',
+  requestPath: string,
+  payload: Record<string, unknown> | undefined,
+  miniAppId?: string,
+): Promise<T> {
   const config = await getWechatConfig(miniAppId)
-  const body = JSON.stringify(payload)
-  const { authorization } = await buildAuthorization('POST', requestPath, body, miniAppId)
+  const body = payload ? JSON.stringify(payload) : ''
+  const { authorization } = buildAuthorizationByConfig(config, method, requestPath, body)
   const response = await fetch(`${config.baseUrl}${requestPath}`, {
-    method: 'POST',
+    method,
     headers: {
-      'Content-Type': 'application/json',
+      ...(payload ? { 'Content-Type': 'application/json' } : {}),
       Accept: 'application/json',
       Authorization: authorization,
       'User-Agent': 'HarmonyServer/1.0',
     },
-    body,
+    ...(payload ? { body } : {}),
   })
   const text = await response.text()
   let parsed: unknown = null
@@ -250,7 +262,7 @@ export async function createOrderPayment(options: CreatePaymentOptions): Promise
   if (attach) {
     payload.attach = attach
   }
-  const result = await requestWechat<{ prepay_id: string }>('/v3/pay/transactions/jsapi', payload, miniAppId)
+  const result = await requestWechat<{ prepay_id: string }>('POST', '/v3/pay/transactions/jsapi', payload, miniAppId)
   if (!result?.prepay_id) {
     throw new Error('Failed to create prepay order')
   }
@@ -266,27 +278,50 @@ export async function createOrderPayment(options: CreatePaymentOptions): Promise
   }
 }
 
-export async function createOrderRefund(options: CreateRefundOptions): Promise<WechatRefundResult> {
-  const { miniAppId, orderNumber, refundRequestNo, reason, refundAmount, totalAmount } = options
-  const config = await getWechatConfig(miniAppId)
-  const payload: Record<string, unknown> = {
-    out_trade_no: orderNumber,
-    out_refund_no: refundRequestNo,
-    reason,
-    notify_url: deriveRefundNotifyUrl(config.notifyUrl),
-    amount: {
-      refund: toMinorCurrency(refundAmount),
-      total: toMinorCurrency(totalAmount),
-      currency: 'CNY',
-    },
+export async function queryWechatOrderByOutTradeNo(orderNumber: string, miniAppId?: string): Promise<WechatTransaction> {
+  const safeOrderNumber = (orderNumber || '').trim()
+  if (!safeOrderNumber) {
+    throw new Error('orderNumber is required')
   }
-  const result = await requestWechat<Record<string, unknown>>('/v3/refund/domestic/refunds', payload, miniAppId)
-  return {
-    refundId: typeof result.refund_id === 'string' ? result.refund_id : undefined,
-    outRefundNo: typeof result.out_refund_no === 'string' ? result.out_refund_no : refundRequestNo,
-    status: typeof result.status === 'string' ? result.status : 'PROCESSING',
-    raw: result,
+
+  const candidates = miniAppId ? [{ miniAppId, config: await getWechatConfig(miniAppId) }] : await listWechatPayConfigs()
+  let lastError: unknown = null
+
+  for (const { config } of candidates) {
+    try {
+      const requestPath = `/v3/pay/transactions/out-trade-no/${encodeURIComponent(safeOrderNumber)}?mchid=${encodeURIComponent(config.mchId)}`
+      const { authorization } = buildAuthorizationByConfig(config, 'GET', requestPath, '')
+      const response = await fetch(`${config.baseUrl}${requestPath}`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: authorization,
+          'User-Agent': 'HarmonyServer/1.0',
+        },
+      })
+      const text = await response.text()
+      let parsed: unknown = null
+      if (text) {
+        try {
+          parsed = JSON.parse(text)
+        } catch {
+          parsed = text
+        }
+      }
+      if (!response.ok) {
+        const message =
+          typeof parsed === 'object' && parsed && 'message' in parsed
+            ? String((parsed as Record<string, unknown>).message)
+            : 'Wechat order query failed'
+        throw new Error(message)
+      }
+      return parsed as WechatTransaction
+    } catch (error) {
+      lastError = error
+    }
   }
+
+  throw lastError instanceof Error ? lastError : new Error('Wechat order query failed')
 }
 
 export function verifyWechatCallbackSignature(

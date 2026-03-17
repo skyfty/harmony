@@ -3,6 +3,7 @@ import type { FloorDynamicMesh } from '@schema'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
+import { resolveVisibleLocalHandleY } from './visibleHandleYUtils'
 
 export type FloorVertexHandleState = {
   nodeId: string
@@ -22,7 +23,6 @@ export type FloorVertexHandlePickResult = {
 export type FloorVertexRenderer = {
   clear(): void
   clearHover(): void
-  setDynamicYOffset(yOffset: number | null): void
   setActiveHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: EndpointGizmoPart } | null): void
   updateHover(options: {
     camera: THREE.Camera | null
@@ -65,6 +65,8 @@ const FLOOR_VERTEX_HANDLE_RENDER_ORDER = 1001
 const FLOOR_VERTEX_HANDLE_GROUP_NAME = '__FloorVertexHandles'
 const FLOOR_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 32
 const FLOOR_VERTEX_HANDLE_COLOR = 0xff4081
+const FLOOR_VERTEX_HANDLE_TOP_MARGIN_PX = 72
+const FLOOR_VERTEX_HANDLE_BOTTOM_MARGIN_PX = 56
 
 function computeFloorVertexHandleSignature(definition: FloorDynamicMesh): string {
   const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
@@ -109,21 +111,6 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
     if (!hovered) return
     hovered = null
     refreshHighlight()
-  }
-
-  function setDynamicYOffset(yOffset: number | null) {
-    if (!state) {
-      return
-    }
-    const dynamicYOffset = typeof yOffset === 'number' && Number.isFinite(yOffset) ? yOffset : null
-    state.group.userData.dynamicYOffset = dynamicYOffset
-
-    for (const child of state.group.children) {
-      const basePointY = Number(child.userData?.basePointY)
-      const defaultYOffset = Number(child.userData?.yOffset)
-      const effectiveYOffset = dynamicYOffset ?? (Number.isFinite(defaultYOffset) ? defaultYOffset : FLOOR_VERTEX_HANDLE_Y_OFFSET)
-      child.position.y = (Number.isFinite(basePointY) ? basePointY : 0) + effectiveYOffset
-    }
   }
 
   function setActiveHandle(next: { nodeId: string; vertexIndex: number; gizmoPart: EndpointGizmoPart } | null) {
@@ -206,7 +193,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
       ? Math.min(10, Math.max(0, Number(definition.thickness)))
       : 0
 
-    const yOffset = FLOOR_VERTEX_HANDLE_Y_OFFSET + thickness * 0.5
+    const preferredLocalY = FLOOR_VERTEX_HANDLE_Y_OFFSET + thickness
 
     const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
     vertices.forEach((v, index) => {
@@ -230,16 +217,19 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
 
         const handle = gizmo.root
         handle.name = `FloorVertexHandle_${index + 1}`
-        handle.position.set(x, yOffset, z)
+        handle.position.set(x, preferredLocalY, z)
         handle.layers.enableAll()
         handle.userData.isFloorVertexHandle = true
         handle.userData.nodeId = selectedNodeId
         handle.userData.floorVertexIndex = index
+        handle.userData.anchorLocalX = x
+        handle.userData.anchorLocalY = 0
+        handle.userData.anchorLocalZ = z
         handle.userData.baseDiameter = gizmo.baseDiameter
         handle.userData.endpointGizmo = gizmo
         handle.userData.handleKey = `${selectedNodeId}:${index}`
-        handle.userData.basePointY = 0
-        handle.userData.yOffset = yOffset
+        handle.userData.floorThickness = thickness
+        handle.userData.yOffset = preferredLocalY
 
         // Copy metadata to meshes for picking.
         handle.traverse((child) => {
@@ -386,6 +376,25 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
     state.group.updateWorldMatrix(true, false)
     for (const child of state.group.children) {
       const handle = child as THREE.Object3D
+      const anchorX = Number(handle.userData?.anchorLocalX)
+      const anchorY = Number(handle.userData?.anchorLocalY)
+      const anchorZ = Number(handle.userData?.anchorLocalZ)
+      const floorThickness = Number(handle.userData?.floorThickness)
+      if (Number.isFinite(anchorX) && Number.isFinite(anchorY) && Number.isFinite(anchorZ)) {
+        tmpWorldPos.set(anchorX, anchorY, anchorZ)
+        const resolvedLocalY = resolveVisibleLocalHandleY({
+          camera: options.camera,
+          canvas: options.canvas,
+          runtimeObject: state.group.parent ?? state.group,
+          localAnchor: tmpWorldPos,
+          preferredLocalY: anchorY + FLOOR_VERTEX_HANDLE_Y_OFFSET + Math.max(0, Number.isFinite(floorThickness) ? floorThickness : 0),
+          minLocalY: anchorY + FLOOR_VERTEX_HANDLE_Y_OFFSET,
+          topMarginPx: FLOOR_VERTEX_HANDLE_TOP_MARGIN_PX,
+          bottomMarginPx: FLOOR_VERTEX_HANDLE_BOTTOM_MARGIN_PX,
+        })
+        handle.userData.yOffset = resolvedLocalY - anchorY
+        handle.position.set(anchorX, resolvedLocalY, anchorZ)
+      }
       const baseDiameterRaw = handle.userData?.baseDiameter
       const baseDiameter =
         typeof baseDiameterRaw === 'number' && Number.isFinite(baseDiameterRaw) && baseDiameterRaw > 1e-6
@@ -418,7 +427,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
     return state
   }
 
-  return { clear, clearHover, setDynamicYOffset, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
+  return { clear, clearHover, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
 }
 
 export { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y_OFFSET as FLOOR_VERTEX_HANDLE_Y }

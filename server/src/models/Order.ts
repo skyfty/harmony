@@ -45,6 +45,13 @@ const orderSchema = new Schema<OrderDocument>(
     refundId: { type: String },
     refundedAt: { type: Date },
     refundResult: { type: Schema.Types.Mixed },
+    fulfillmentStatus: {
+      type: String,
+      enum: ['pending', 'fulfilled'],
+      default: 'pending',
+      index: true,
+    },
+    fulfilledAt: { type: Date },
     totalAmount: { type: Number, required: true, min: 0 },
     paymentMethod: { type: String },
     paymentProvider: { type: String },

@@ -582,6 +582,10 @@ export interface OrderDocument extends Document<Types.ObjectId> {
   refundedAt?: Date
   /** 中文：退款结果信息（可选） */
   refundResult?: Record<string, unknown>
+  /** 中文：履约状态（pending/fulfilled） */
+  fulfillmentStatus?: 'pending' | 'fulfilled'
+  /** 中文：履约完成时间（可选） */
+  fulfilledAt?: Date
   /** 中文：订单总金额 */
   totalAmount: number
   /** 中文：支付方式（可选） */

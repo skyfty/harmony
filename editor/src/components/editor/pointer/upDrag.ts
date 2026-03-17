@@ -1,9 +1,6 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@schema'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
-import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
-import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, FLOOR_CIRCLE_HANDLE_Y } from '../FloorCircleHandleRenderer'
-import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { disposeWallPreviewGroup } from '../wallPreviewGroupUtils'
 import type {
   FloorThicknessDragState,
@@ -115,29 +112,6 @@ export function handlePointerUpDrag(
         stopPropagation: true,
         stopImmediatePropagation: true,
       }
-    }
-
-    // Click (no drag): revert handle y offsets.
-    try {
-      const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
-      if (handles?.isGroup) {
-        const yOffset = FLOOR_VERTEX_HANDLE_Y + Math.max(0, state.startThickness) * 0.5
-        for (const child of handles.children) {
-          child.userData.yOffset = yOffset
-          child.position.y = yOffset
-        }
-      }
-
-      const circleHandles = state.containerObject.getObjectByName(FLOOR_CIRCLE_HANDLE_GROUP_NAME) as THREE.Group | null
-      if (circleHandles?.isGroup) {
-        const yOffset = FLOOR_CIRCLE_HANDLE_Y + Math.max(0, state.startThickness) * 0.5
-        for (const child of circleHandles.children) {
-          child.userData.yOffset = yOffset
-          child.position.y = yOffset
-        }
-      }
-    } catch {
-      /* noop */
     }
 
     return {
@@ -266,40 +240,6 @@ export function handlePointerUpDrag(
         stopPropagation: true,
         stopImmediatePropagation: true,
       }
-    }
-
-    // Click/no-drag: revert handle y offsets.
-    try {
-      const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
-      if (handles?.isGroup) {
-        const yOffset = Math.max(0.05, state.startHeight * 0.5)
-        for (const child of handles.children) {
-          const handleKind = child?.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
-          const chainStartIndex = Math.max(0, Math.trunc(Number(child?.userData?.chainStartIndex)))
-          const chainEndIndex = Math.max(chainStartIndex, Math.trunc(Number(child?.userData?.chainEndIndex)))
-          const startSeg = state.baseSegmentsWorld[chainStartIndex]
-          const endSeg = state.baseSegmentsWorld[chainEndIndex]
-          let pointWorld: THREE.Vector3 | null = null
-          if (handleKind === 'joint') {
-            const jointIndex = Math.trunc(Number(child?.userData?.jointIndex))
-            const seg = state.baseSegmentsWorld[jointIndex]
-            if (seg) {
-              pointWorld = seg.end.clone()
-            }
-          } else {
-            const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
-            if (startSeg && endSeg) {
-              pointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
-            }
-          }
-          if (!pointWorld) continue
-          const local = state.containerObject.worldToLocal(pointWorld)
-          child.userData.yOffset = yOffset
-          child.position.set(local.x, local.y + yOffset, local.z)
-        }
-      }
-    } catch {
-      /* noop */
     }
 
     return {
@@ -517,6 +457,9 @@ export function handlePointerUpDrag(
         if (mesh) {
           const local = state.containerObject.worldToLocal(state.startEndpointWorld.clone())
           const yOffset = Number(mesh.userData?.yOffset)
+          mesh.userData.anchorLocalX = local.x
+          mesh.userData.anchorLocalY = local.y
+          mesh.userData.anchorLocalZ = local.z
           mesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
         }
       }
@@ -613,6 +556,9 @@ export function handlePointerUpDrag(
         if (mesh) {
           const local = state.containerObject.worldToLocal(state.startJointWorld.clone())
           const yOffset = Number(mesh.userData?.yOffset)
+          mesh.userData.anchorLocalX = local.x
+          mesh.userData.anchorLocalY = local.y
+          mesh.userData.anchorLocalZ = local.z
           mesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
         }
       }

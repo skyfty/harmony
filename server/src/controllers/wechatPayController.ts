@@ -1,9 +1,5 @@
 import type { Context } from 'koa'
 import { OrderModel } from '@/models/Order'
-import { ProductModel } from '@/models/Product'
-import { VehicleModel } from '@/models/Vehicle'
-import { UserProductModel } from '@/models/UserProduct'
-import { UserVehicleModel } from '@/models/UserVehicle'
 import {
   decryptWechatNotifyResource,
   parseWechatNotifyBody,
@@ -11,6 +7,7 @@ import {
   type WechatRefundTransaction,
 } from '@/services/paymentService'
 import { addProductToWarehouse, removeProductFromWarehouse } from '@/services/warehouseService'
+import { settlePaidOrder } from '@/services/orderSettlementService'
 
 const UNPARSED_BODY = Symbol.for('unparsedBody')
 
@@ -146,21 +143,25 @@ export async function wechatPayNotify(ctx: Context): Promise<void> {
   }
 
   if (transaction.trade_state === 'SUCCESS') {
-    if (order.paymentStatus !== 'succeeded') {
-      order.status = 'paid'
-      order.orderStatus = 'paid'
-      order.paymentStatus = 'succeeded'
-      order.transactionId = transaction.transaction_id
-      order.paidAt = transaction.success_time ? new Date(transaction.success_time) : new Date()
-      order.paymentProvider = 'wechat'
-      order.paymentMethod = order.paymentMethod || 'wechat'
-      order.paymentResult = {
-        ...(order.paymentResult ?? {}),
+    try {
+      await settlePaidOrder({
+        orderNumber: transaction.out_trade_no,
+        source: 'wechat-notify',
         notifyId: notifyBody.id,
-        success: transaction,
+        transaction,
+      })
+    } catch (error) {
+      console.error('[wechat-pay] settlement failed, wait notify retry', {
+        orderNumber: transaction.out_trade_no,
+        transactionId: transaction.transaction_id,
+        error,
+      })
+      ctx.status = 500
+      ctx.body = {
+        code: 'FAIL',
+        message: '结算失败，请重试',
       }
-      await order.save()
-      await fulfillPaidOrder(order)
+      return
     }
     notifySuccess(ctx)
     return

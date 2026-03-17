@@ -105,6 +105,8 @@ export type WallEndpointDragState = {
   dragMode: EndpointGizmoDragMode
   axisWorld: THREE.Vector3 | null
   dragPlane: THREE.Plane
+  // Captured from the initial pointer-down projection when possible so wall drags
+  // keep the grabbed point aligned with the cursor from the first move frame.
   startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D
@@ -140,6 +142,8 @@ export type WallJointDragState = {
   dragMode: EndpointGizmoDragMode
   axisWorld: THREE.Vector3 | null
   dragPlane: THREE.Plane
+  // Captured from the initial pointer-down projection when possible so wall drags
+  // keep the grabbed point aligned with the cursor from the first move frame.
   startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D
@@ -200,6 +204,8 @@ export type WallCircleCenterDragState = {
 
   dragPlane: THREE.Plane
   startPointWorld: THREE.Vector3
+  // Captured from the initial pointer-down projection when possible so wall drags
+  // keep the grabbed point aligned with the cursor from the first move frame.
   startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D
@@ -228,6 +234,8 @@ export type WallCircleRadiusDragState = {
 
   dragPlane: THREE.Plane
   startPointWorld: THREE.Vector3
+  // Captured from the initial pointer-down projection when possible so wall drags
+  // keep the grabbed point aligned with the cursor from the first move frame.
   startHitWorld: THREE.Vector3 | null
 
   containerObject: THREE.Object3D

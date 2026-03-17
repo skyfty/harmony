@@ -8,6 +8,7 @@ import {
 } from './EndpointGizmo'
 import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from './planarEditMath'
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
+import { resolveVisibleLocalHandleY } from './visibleHandleYUtils'
 
 export type FloorCircleHandleState = {
   nodeId: string
@@ -28,7 +29,6 @@ export type FloorCircleHandlePickResult = {
 export type FloorCircleHandleRenderer = {
   clear(): void
   clearHover(): void
-  setDynamicYOffset(yOffset: number | null): void
   setActiveHandle(active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: EndpointGizmoPart } | null): void
   updateHover(options: {
     camera: THREE.Camera | null
@@ -73,6 +73,8 @@ export const FLOOR_CIRCLE_HANDLE_GROUP_NAME = '__FloorCircleHandles'
 const FLOOR_CIRCLE_HANDLE_RENDER_ORDER = 1001
 const FLOOR_CIRCLE_HANDLE_SCREEN_DIAMETER_PX = 36
 const FLOOR_CIRCLE_HANDLE_COLOR = 0xff4081
+const FLOOR_CIRCLE_HANDLE_TOP_MARGIN_PX = 72
+const FLOOR_CIRCLE_HANDLE_BOTTOM_MARGIN_PX = 56
 
 function computeFloorCircleHandleSignature(definition: FloorDynamicMesh): string {
   const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
@@ -133,27 +135,6 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
     if (!hovered) return
     hovered = null
     refreshHighlight()
-  }
-
-  function resolveEffectiveYOffset(handle: THREE.Object3D): number {
-    const dynamicYOffset = Number(state?.group.userData?.dynamicYOffset)
-    if (Number.isFinite(dynamicYOffset)) {
-      return dynamicYOffset
-    }
-    const yOffset = Number(handle.userData?.yOffset)
-    return Number.isFinite(yOffset) ? yOffset : FLOOR_CIRCLE_HANDLE_Y_OFFSET
-  }
-
-  function setDynamicYOffset(yOffset: number | null) {
-    if (!state) {
-      return
-    }
-    const dynamicYOffset = typeof yOffset === 'number' && Number.isFinite(yOffset) ? yOffset : null
-    state.group.userData.dynamicYOffset = dynamicYOffset
-    for (const child of state.group.children) {
-      const basePointY = Number(child.userData?.basePointY)
-      child.position.y = (Number.isFinite(basePointY) ? basePointY : 0) + resolveEffectiveYOffset(child)
-    }
   }
 
   function setActiveHandle(next: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: EndpointGizmoPart } | null) {
@@ -241,12 +222,12 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
     const thickness = Number.isFinite(definition.thickness)
       ? Math.min(10, Math.max(0, Number(definition.thickness)))
       : 0
-    const yOffset = FLOOR_CIRCLE_HANDLE_Y_OFFSET + thickness * 0.5
+    const preferredLocalY = FLOOR_CIRCLE_HANDLE_Y_OFFSET + thickness
 
     group.userData.centerX = circle.centerX
     group.userData.centerZ = circle.centerZ
     group.userData.radius = circle.radius
-    group.userData.yOffset = yOffset
+    group.userData.floorThickness = thickness
 
     const centerGizmo = createEndpointGizmoObject({
       axes: { x: false, y: true, z: false },
@@ -260,17 +241,20 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
 
     const centerHandle = centerGizmo.root
     centerHandle.name = 'FloorCircleCenterHandle'
-    centerHandle.position.set(circle.centerX, yOffset, circle.centerZ)
+    centerHandle.position.set(circle.centerX, preferredLocalY, circle.centerZ)
     centerHandle.layers.enableAll()
     centerHandle.userData.isFloorCircleHandle = true
     centerHandle.userData.nodeId = selectedNodeId
     centerHandle.userData.handleKind = 'circle'
     centerHandle.userData.circleKind = 'center'
+    centerHandle.userData.anchorLocalX = circle.centerX
+    centerHandle.userData.anchorLocalY = 0
+    centerHandle.userData.anchorLocalZ = circle.centerZ
     centerHandle.userData.baseDiameter = centerGizmo.baseDiameter
     centerHandle.userData.endpointGizmo = centerGizmo
     centerHandle.userData.handleKey = `${selectedNodeId}:circle:center`
-    centerHandle.userData.basePointY = 0
-    centerHandle.userData.yOffset = yOffset
+    centerHandle.userData.floorThickness = thickness
+    centerHandle.userData.yOffset = preferredLocalY
 
     centerHandle.traverse((child) => {
       const mesh = child as THREE.Mesh
@@ -293,17 +277,20 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
 
     const radiusHandle = radiusGizmo.root
     radiusHandle.name = 'FloorCircleRadiusHandle'
-    radiusHandle.position.set(circle.centerX + circle.radius, yOffset, circle.centerZ)
+    radiusHandle.position.set(circle.centerX + circle.radius, preferredLocalY, circle.centerZ)
     radiusHandle.layers.enableAll()
     radiusHandle.userData.isFloorCircleHandle = true
     radiusHandle.userData.nodeId = selectedNodeId
     radiusHandle.userData.handleKind = 'circle'
     radiusHandle.userData.circleKind = 'radius'
+    radiusHandle.userData.anchorLocalX = circle.centerX + circle.radius
+    radiusHandle.userData.anchorLocalY = 0
+    radiusHandle.userData.anchorLocalZ = circle.centerZ
     radiusHandle.userData.baseDiameter = radiusGizmo.baseDiameter
     radiusHandle.userData.endpointGizmo = radiusGizmo
     radiusHandle.userData.handleKey = `${selectedNodeId}:circle:radius`
-    radiusHandle.userData.basePointY = 0
-    radiusHandle.userData.yOffset = yOffset
+    radiusHandle.userData.floorThickness = thickness
+    radiusHandle.userData.yOffset = preferredLocalY
 
     radiusHandle.traverse((child) => {
       const mesh = child as THREE.Mesh
@@ -445,6 +432,7 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
       const centerX = Number(state.group.userData?.centerX)
       const centerZ = Number(state.group.userData?.centerZ)
       const radius = Number(state.group.userData?.radius)
+      const floorThickness = Number(state.group.userData?.floorThickness)
       if (Number.isFinite(centerX + centerZ + radius) && radius > 1e-4) {
         options.camera.getWorldPosition(tmpCameraWorldPos)
         tmpCameraLocalPos.copy(tmpCameraWorldPos)
@@ -465,12 +453,42 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
 
         const radiusHandle = state.group.children.find((c) => c?.userData?.circleKind === 'radius') as THREE.Object3D | undefined
         if (radiusHandle) {
-          radiusHandle.position.set(rx, resolveEffectiveYOffset(radiusHandle), rz)
+          tmpWorldPos.set(rx, 0, rz)
+          const resolvedLocalY = resolveVisibleLocalHandleY({
+            camera: options.camera,
+            canvas: options.canvas,
+            runtimeObject: state.group.parent ?? state.group,
+            localAnchor: tmpWorldPos,
+            preferredLocalY: FLOOR_CIRCLE_HANDLE_Y_OFFSET + Math.max(0, Number.isFinite(floorThickness) ? floorThickness : 0),
+            minLocalY: FLOOR_CIRCLE_HANDLE_Y_OFFSET,
+            topMarginPx: FLOOR_CIRCLE_HANDLE_TOP_MARGIN_PX,
+            bottomMarginPx: FLOOR_CIRCLE_HANDLE_BOTTOM_MARGIN_PX,
+          })
+          radiusHandle.userData.anchorLocalX = rx
+          radiusHandle.userData.anchorLocalY = 0
+          radiusHandle.userData.anchorLocalZ = rz
+          radiusHandle.userData.yOffset = resolvedLocalY
+          radiusHandle.position.set(rx, resolvedLocalY, rz)
         }
 
         const centerHandle = state.group.children.find((c) => c?.userData?.circleKind === 'center') as THREE.Object3D | undefined
         if (centerHandle) {
-          centerHandle.position.set(centerX, resolveEffectiveYOffset(centerHandle), centerZ)
+          tmpWorldPos.set(centerX, 0, centerZ)
+          const resolvedLocalY = resolveVisibleLocalHandleY({
+            camera: options.camera,
+            canvas: options.canvas,
+            runtimeObject: state.group.parent ?? state.group,
+            localAnchor: tmpWorldPos,
+            preferredLocalY: FLOOR_CIRCLE_HANDLE_Y_OFFSET + Math.max(0, Number.isFinite(floorThickness) ? floorThickness : 0),
+            minLocalY: FLOOR_CIRCLE_HANDLE_Y_OFFSET,
+            topMarginPx: FLOOR_CIRCLE_HANDLE_TOP_MARGIN_PX,
+            bottomMarginPx: FLOOR_CIRCLE_HANDLE_BOTTOM_MARGIN_PX,
+          })
+          centerHandle.userData.anchorLocalX = centerX
+          centerHandle.userData.anchorLocalY = 0
+          centerHandle.userData.anchorLocalZ = centerZ
+          centerHandle.userData.yOffset = resolvedLocalY
+          centerHandle.position.set(centerX, resolvedLocalY, centerZ)
         }
       }
     }
@@ -512,7 +530,7 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
     return state
   }
 
-  return { clear, clearHover, setDynamicYOffset, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
+  return { clear, clearHover, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
 }
 
 export { FLOOR_CIRCLE_HANDLE_Y_OFFSET as FLOOR_CIRCLE_HANDLE_Y }
