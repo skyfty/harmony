@@ -20,6 +20,8 @@ export type RoadPreviewRenderer = {
 
 const ROAD_PREVIEW_SIGNATURE_PRECISION = 1000
 const ROAD_PREVIEW_Y_OFFSET = 0.01
+const ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR = 0.3
+const ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR = 0.45
 
 function encodeRoadPreviewNumber(value: number): string {
   return `${Math.round(value * ROAD_PREVIEW_SIGNATURE_PRECISION)}`
@@ -82,10 +84,14 @@ function applyRoadPreviewStyling(group: THREE.Group) {
       }
 
       const ROAD_PREVIEW_COLOR = 0x8fd3ff
+      let requiresMaterialUpdate = false
 
       if ('opacity' in material) {
         material.opacity = 0.75
-        material.transparent = true
+        if (material.transparent !== true) {
+          material.transparent = true
+          requiresMaterialUpdate = true
+        }
       }
 
       // Make the preview clearly visible against the ground.
@@ -97,20 +103,35 @@ function applyRoadPreviewStyling(group: THREE.Group) {
 
       // Disable tone mapping so the highlight stays bright even without scene lights.
       if (typeof material.toneMapped === 'boolean') {
-        material.toneMapped = false
+        if (material.toneMapped !== false) {
+          material.toneMapped = false
+          requiresMaterialUpdate = true
+        }
       }
 
       // Reduce z-fighting / depth artifacts when close to the ground.
       if (typeof material.depthWrite === 'boolean') {
-        material.depthWrite = false
+        if (material.depthWrite !== false) {
+          material.depthWrite = false
+          requiresMaterialUpdate = true
+        }
       }
       if (typeof material.polygonOffset === 'boolean') {
-        material.polygonOffset = true
-        material.polygonOffsetFactor = -1
-        material.polygonOffsetUnits = -1
+        if (material.polygonOffset !== true) {
+          material.polygonOffset = true
+          requiresMaterialUpdate = true
+        }
+        if (material.polygonOffsetFactor !== -1) {
+          material.polygonOffsetFactor = -1
+          requiresMaterialUpdate = true
+        }
+        if (material.polygonOffsetUnits !== -1) {
+          material.polygonOffsetUnits = -1
+          requiresMaterialUpdate = true
+        }
       }
 
-      if (typeof material.needsUpdate === 'boolean') {
+      if (requiresMaterialUpdate && typeof material.needsUpdate === 'boolean') {
         material.needsUpdate = true
       }
     }
@@ -220,13 +241,21 @@ export function createRoadPreviewRenderer(options: {
       : null
 
     if (!session.previewGroup) {
-      const preview = createRoadGroup(build.definition, { heightSampler: localHeightSampler })
+      const preview = createRoadGroup(build.definition, {
+        heightSampler: localHeightSampler,
+        samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
+        smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
+      })
       applyRoadPreviewStyling(preview)
       preview.userData.isRoadPreview = true
       session.previewGroup = preview
       options.rootGroup.add(preview)
     } else {
-      updateRoadGroup(session.previewGroup, build.definition, { heightSampler: localHeightSampler })
+      updateRoadGroup(session.previewGroup, build.definition, {
+        heightSampler: localHeightSampler,
+        samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
+        smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
+      })
       applyRoadPreviewStyling(session.previewGroup)
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)

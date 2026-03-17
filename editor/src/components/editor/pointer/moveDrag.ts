@@ -192,6 +192,37 @@ const rectDragCornersTmp = [
 const rectDraggedCornerTmp = new THREE.Vector3()
 const wallHandleWorldTmp = new THREE.Vector3()
 
+const ROAD_INTERACTIVE_SAMPLING_DENSITY_FACTOR = 0.35
+const ROAD_INTERACTIVE_SMOOTHING_STRENGTH_FACTOR = 0.5
+
+function resolveInteractiveRoadRenderOptions(base: unknown): any {
+  const source = (base && typeof base === 'object') ? (base as Record<string, unknown>) : null
+  const samplingRaw = source?.samplingDensityFactor
+  const smoothingRaw = source?.smoothingStrengthFactor
+  const samplingValue = typeof samplingRaw === 'number' ? samplingRaw : Number(samplingRaw)
+  const smoothingValue = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
+
+  const samplingDensityFactor = Number.isFinite(samplingValue)
+    ? Math.min(samplingValue, ROAD_INTERACTIVE_SAMPLING_DENSITY_FACTOR)
+    : ROAD_INTERACTIVE_SAMPLING_DENSITY_FACTOR
+  const smoothingStrengthFactor = Number.isFinite(smoothingValue)
+    ? Math.min(smoothingValue, ROAD_INTERACTIVE_SMOOTHING_STRENGTH_FACTOR)
+    : ROAD_INTERACTIVE_SMOOTHING_STRENGTH_FACTOR
+
+  if (!source) {
+    return {
+      samplingDensityFactor,
+      smoothingStrengthFactor,
+    }
+  }
+
+  return {
+    ...source,
+    samplingDensityFactor,
+    smoothingStrengthFactor,
+  }
+}
+
 function snapToMajorGridXZ(point: THREE.Vector3, y: number): THREE.Vector3 {
   point.x = Math.round(point.x / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
   point.z = Math.round(point.z / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
@@ -1436,7 +1467,7 @@ export function handlePointerMoveDrag(
       }
     }
 
-    const roadOptions = ctx.resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
+    const roadOptions = resolveInteractiveRoadRenderOptions(ctx.resolveRoadRenderOptionsForNodeId(state.nodeId))
     ctx.updateRoadGroup(state.roadGroup, state.workingDefinition, roadOptions)
 
     // Update all handle mesh positions if present (smoothing adjusts the whole path).

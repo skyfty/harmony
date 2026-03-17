@@ -354,7 +354,7 @@ function clampHeightSeriesSlope(values: number[], minimums: number[], maxDeltaY:
   return working
 }
 
-function disposeObject3D(object: THREE.Object3D) {
+function disposeObject3D(object: THREE.Object3D, preservedMaterials: ReadonlySet<THREE.Material> = new Set()) {
   object.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (!mesh?.isMesh) {
@@ -365,8 +365,12 @@ function disposeObject3D(object: THREE.Object3D) {
     }
     const material = mesh.material
     if (Array.isArray(material)) {
-      material.forEach((entry) => entry?.dispose())
-    } else if (material) {
+      material.forEach((entry) => {
+        if (entry && !preservedMaterials.has(entry)) {
+          entry.dispose()
+        }
+      })
+    } else if (material && !preservedMaterials.has(material)) {
       material.dispose()
     }
   })
@@ -438,13 +442,64 @@ function computeOffsetPointMiterLimited(
   return out.copy(cur).addScaledVector(miter, miterLen)
 }
 
-function clearGroupContent(group: THREE.Group) {
+function clearGroupContent(group: THREE.Group, preservedMaterials: ReadonlySet<THREE.Material> = new Set()) {
   while (group.children.length) {
     const child = group.children.pop()
     if (child) {
-      disposeObject3D(child)
+      disposeObject3D(child, preservedMaterials)
     }
   }
+}
+
+type ReusableRoadMaterials = {
+  road: THREE.MeshStandardMaterial | null
+  shoulders: THREE.MeshStandardMaterial | null
+  laneLines: THREE.MeshBasicMaterial | null
+}
+
+function resolveReusableRoadMaterial<T extends THREE.Material>(
+  group: THREE.Group,
+  meshName: string,
+  predicate: (material: THREE.Material) => material is T,
+): T | null {
+  const object = group.getObjectByName(meshName)
+  const mesh = object as THREE.Mesh | null
+  if (!mesh?.isMesh) {
+    return null
+  }
+  const material = mesh.material
+  if (Array.isArray(material) || !material || !predicate(material)) {
+    return null
+  }
+  return material
+}
+
+function collectReusableRoadMaterials(group: THREE.Group, options: RoadJunctionSmoothingOptions): ReusableRoadMaterials {
+  return {
+    road: resolveReusableRoadMaterial(
+      group,
+      'RoadMesh',
+      (material): material is THREE.MeshStandardMaterial => (material as THREE.MeshStandardMaterial).isMeshStandardMaterial === true,
+    ),
+    shoulders: options.shoulders
+      ? resolveReusableRoadMaterial(
+          group,
+          'RoadShoulders',
+          (material): material is THREE.MeshStandardMaterial => (material as THREE.MeshStandardMaterial).isMeshStandardMaterial === true,
+        )
+      : null,
+    laneLines: options.laneLines
+      ? resolveReusableRoadMaterial(
+          group,
+          'RoadLaneLines',
+          (material): material is THREE.MeshBasicMaterial => (material as THREE.MeshBasicMaterial).isMeshBasicMaterial === true,
+        )
+      : null,
+  }
+}
+
+function disposeMaterial(material: THREE.Material | null | undefined) {
+  material?.dispose()
 }
 
 function createShoulderMaterial(): THREE.MeshStandardMaterial {
@@ -908,19 +963,36 @@ function buildLaneLineGeometry(
 }
 
 function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}) {
-  clearGroupContent(group)
-
   const smoothing = normalizeJunctionSmoothing(options.junctionSmoothing)
   const width = Math.max(ROAD_MIN_WIDTH, Number.isFinite(definition.width) ? definition.width : ROAD_DEFAULT_WIDTH)
   const buildData = collectRoadBuildData(definition)
   if (!buildData) {
+    clearGroupContent(group)
     return
   }
 
   const curves = buildRoadCurves(smoothing, buildData)
   if (!curves.length) {
+    clearGroupContent(group)
     return
   }
+
+  const reusableMaterials = collectReusableRoadMaterials(group, options)
+  const preservedMaterials = new Set<THREE.Material>()
+  if (reusableMaterials.road) {
+    preservedMaterials.add(reusableMaterials.road)
+  }
+  if (reusableMaterials.shoulders) {
+    preservedMaterials.add(reusableMaterials.shoulders)
+  }
+  if (reusableMaterials.laneLines) {
+    preservedMaterials.add(reusableMaterials.laneLines)
+  }
+  clearGroupContent(group, preservedMaterials)
+
+  let usedRoadMaterial = false
+  let usedShoulderMaterial = false
+  let usedLaneLineMaterial = false
 
   const heightSampler = typeof options.heightSampler === 'function' ? options.heightSampler : null
 
@@ -1097,6 +1169,9 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     meshOptions,
   )
   if (!roadGeometry) {
+    disposeMaterial(reusableMaterials.road)
+    disposeMaterial(reusableMaterials.shoulders)
+    disposeMaterial(reusableMaterials.laneLines)
     return
   }
 
@@ -1109,11 +1184,12 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     }
   }
 
-  const roadMesh = new THREE.Mesh(roadGeometry, createRoadMaterial())
+  const roadMesh = new THREE.Mesh(roadGeometry, reusableMaterials.road ?? createRoadMaterial())
   roadMesh.name = 'RoadMesh'
   roadMesh.castShadow = false
   roadMesh.receiveShadow = true
   group.add(roadMesh)
+  usedRoadMaterial = true
 
   if (options.shoulders) {
     const shoulderWidth = Number.isFinite(options.shoulderWidth) && options.shoulderWidth! > 0.01
@@ -1270,12 +1346,13 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       if (rightStrip) rightStrip.dispose()
 
       if (merged) {
-        const shoulderMesh = new THREE.Mesh(merged, createShoulderMaterial())
+        const shoulderMesh = new THREE.Mesh(merged, reusableMaterials.shoulders ?? createShoulderMaterial())
         shoulderMesh.castShadow = false
         shoulderMesh.receiveShadow = true
         shoulderMesh.name = 'RoadShoulders'
         shoulderMesh.userData.overrideMaterial = true
         group.add(shoulderMesh)
+        usedShoulderMaterial = true
       }
     } else {
       if (leftStrip) leftStrip.dispose()
@@ -1324,16 +1401,27 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       sharedHeightSeriesList ?? undefined,
     )
     if (laneGeometry) {
-      const laneMesh = new THREE.Mesh(laneGeometry, createLaneLineMaterial())
+      const laneMesh = new THREE.Mesh(laneGeometry, reusableMaterials.laneLines ?? createLaneLineMaterial())
       laneMesh.name = 'RoadLaneLines'
       laneMesh.renderOrder = 1000
       laneMesh.userData.overrideMaterial = true
       group.add(laneMesh)
+      usedLaneLineMaterial = true
     }
   }
 
   const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
   roadMesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
+
+  if (!usedRoadMaterial) {
+    disposeMaterial(reusableMaterials.road)
+  }
+  if (!usedShoulderMaterial) {
+    disposeMaterial(reusableMaterials.shoulders)
+  }
+  if (!usedLaneLineMaterial) {
+    disposeMaterial(reusableMaterials.laneLines)
+  }
 }
 
 function ensureRoadContentGroup(root: THREE.Group): THREE.Group {

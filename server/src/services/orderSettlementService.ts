@@ -29,6 +29,21 @@ interface SyncOrderResult {
 	changed: boolean
 }
 
+function isTransactionUnsupportedError(error: unknown): boolean {
+	if (!error || typeof error !== 'object') {
+		return false
+	}
+	const maybeCode = (error as { code?: unknown }).code
+	const maybeName = (error as { codeName?: unknown }).codeName
+	const maybeMessage = (error as { message?: unknown }).message
+	return (
+		maybeCode === 20 ||
+		maybeName === 'IllegalOperation' ||
+		(typeof maybeMessage === 'string' &&
+			maybeMessage.includes('Transaction numbers are only allowed on a replica set member or mongos'))
+	)
+}
+
 function normalizeQuantity(quantity: unknown): number {
 	return Math.max(1, Math.floor(Number(quantity) || 1))
 }
@@ -54,14 +69,18 @@ function mergeOrderPaymentResult(
 	}
 }
 
-async function fulfillOrderInTransaction(order: any, session: ClientSession): Promise<void> {
+async function fulfillOrder(order: any, session?: ClientSession): Promise<void> {
 	const now = new Date()
 	for (const item of order.items ?? []) {
 		if (!item?.productId) {
 			continue
 		}
 		const quantity = normalizeQuantity(item.quantity)
-		const product = await ProductModel.findById(item.productId).session(session).exec()
+		const productQuery = ProductModel.findById(item.productId)
+		if (session) {
+			productQuery.session(session)
+		}
+		const product = await productQuery.exec()
 		if (!product) {
 			console.warn('[order-settlement] product not found, skip item fulfillment', {
 				orderNumber: order.orderNumber,
@@ -90,7 +109,11 @@ async function fulfillOrderInTransaction(order: any, session: ClientSession): Pr
 			{ upsert: true, session },
 		).exec()
 
-		const boundVehicle = await VehicleModel.findOne({ productId: product._id }).select({ _id: 1 }).session(session).lean().exec()
+		const boundVehicleQuery = VehicleModel.findOne({ productId: product._id }).select({ _id: 1 })
+		if (session) {
+			boundVehicleQuery.session(session)
+		}
+		const boundVehicle = await boundVehicleQuery.lean().exec()
 		if (boundVehicle?._id) {
 			await UserVehicleModel.updateOne(
 				{ userId: order.userId, vehicleId: boundVehicle._id },
@@ -125,8 +148,12 @@ export async function settlePaidOrder(options: SettlePaidOrderOptions): Promise<
 	try {
 		let result: SyncOrderResult = { orderFound: false, changed: false }
 
-		await session.withTransaction(async () => {
-			const order = await OrderModel.findOne({ orderNumber: safeOrderNumber }).session(session).exec()
+		const settleCore = async (activeSession?: ClientSession): Promise<void> => {
+			const orderQuery = OrderModel.findOne({ orderNumber: safeOrderNumber })
+			if (activeSession) {
+				orderQuery.session(activeSession)
+			}
+			const order = await orderQuery.exec()
 			if (!order) {
 				result = { orderFound: false, changed: false }
 				return
@@ -151,7 +178,7 @@ export async function settlePaidOrder(options: SettlePaidOrderOptions): Promise<
 			order.paymentProvider = 'wechat'
 			order.paymentMethod = order.paymentMethod || 'wechat'
 
-			await fulfillOrderInTransaction(order, session)
+			await fulfillOrder(order, activeSession)
 
 			order.fulfillmentStatus = 'fulfilled'
 			order.fulfilledAt = new Date()
@@ -161,9 +188,28 @@ export async function settlePaidOrder(options: SettlePaidOrderOptions): Promise<
 				success: options.transaction,
 			})
 
-			await order.save({ session })
+			if (activeSession) {
+				await order.save({ session: activeSession })
+			} else {
+				await order.save()
+			}
 			result.changed = true
-		})
+		}
+
+		try {
+			await session.withTransaction(async () => {
+				await settleCore(session)
+			})
+		} catch (error) {
+			if (!isTransactionUnsupportedError(error)) {
+				throw error
+			}
+			console.warn('[order-settlement] transaction unavailable, fallback to non-transaction settlement', {
+				orderNumber: safeOrderNumber,
+				source: options.source,
+			})
+			await settleCore()
+		}
 
 		return result
 	} finally {
