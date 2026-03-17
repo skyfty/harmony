@@ -51,6 +51,9 @@ export interface ResourceAssetItem {
   categoryId: string;
   categoryPath: ResourceCategoryPathItem[];
   categoryPathString: string;
+  directoryId?: null | string;
+  directoryPath?: ResourceCategoryPathItem[];
+  directoryPathString?: string;
   color: null | string;
   createdAt: string;
   description: null | string;
@@ -80,6 +83,7 @@ export interface ResourceAssetItem {
 
 export interface ListResourceAssetsParams {
   categoryId?: string;
+  directoryId?: string;
   includeDescendants?: boolean;
   keyword?: string;
   page?: number;
@@ -94,6 +98,49 @@ export interface BulkMoveAssetsPayload {
   fromCategoryId?: string;
   includeDescendants?: boolean;
   targetCategoryId: string;
+}
+
+export interface BulkMoveAssetsDirectoryPayload {
+  assetIds: string[];
+  targetDirectoryId: string;
+}
+
+export interface ResourceDirectoryItem {
+  children: ResourceDirectoryItem[];
+  createdAt: string;
+  depth: number;
+  hasChildren: boolean;
+  id: string;
+  name: string;
+  parentId: null | string;
+  path: ResourceCategoryPathItem[];
+  updatedAt: string;
+}
+
+export interface ResourceDirectoryEntryDirectory {
+  createdAt: string;
+  depth: number;
+  hasChildren: boolean;
+  id: string;
+  kind: 'directory';
+  name: string;
+  parentId: null | string;
+  path: ResourceCategoryPathItem[];
+  pathIds: string[];
+  pathNames: string[];
+  updatedAt: string;
+}
+
+export type ResourceDirectoryEntry = ResourceAssetItem | ResourceDirectoryEntryDirectory;
+
+export interface ResourceDirectoryEntriesResult {
+  currentDirectory: {
+    id: string;
+    name: string;
+    parentId: null | string;
+    path: ResourceCategoryPathItem[];
+  };
+  items: ResourceDirectoryEntry[];
 }
 
 export interface MergeCategoryPayload {
@@ -148,6 +195,43 @@ export async function bulkMoveResourceAssetsApi(payload: BulkMoveAssetsPayload) 
     '/admin/resources/assets/bulk-move-category',
     payload,
   );
+}
+
+export async function bulkMoveResourceAssetsDirectoryApi(payload: BulkMoveAssetsDirectoryPayload) {
+  return requestClient.post<{ matchedCount: number; modifiedCount: number }>(
+    '/admin/resources/assets/bulk-move-directory',
+    payload,
+  );
+}
+
+export async function listResourceDirectoriesApi() {
+  return requestClient.get<ResourceDirectoryItem[]>('/admin/resources/asset-directories');
+}
+
+export async function listResourceDirectoryEntriesApi(directoryId?: string) {
+  return requestClient.get<ResourceDirectoryEntriesResult>('/admin/resources/asset-directories/entries', {
+    params: {
+      directoryId,
+    },
+  });
+}
+
+export async function createResourceDirectoryApi(payload: { name: string; parentId?: null | string }) {
+  return requestClient.post<ResourceDirectoryItem>('/admin/resources/asset-directories', payload);
+}
+
+export async function updateResourceDirectoryApi(id: string, payload: { name: string }) {
+  return requestClient.put<ResourceDirectoryItem>(`/admin/resources/asset-directories/${id}`, payload);
+}
+
+export async function deleteResourceDirectoryApi(id: string) {
+  return requestClient.delete(`/admin/resources/asset-directories/${id}`);
+}
+
+export async function moveResourceDirectoryApi(id: string, targetParentId: null | string) {
+  return requestClient.post<ResourceDirectoryItem>(`/admin/resources/asset-directories/${id}/move`, {
+    targetParentId,
+  });
 }
 
 export async function listResourceCategoriesApi() {

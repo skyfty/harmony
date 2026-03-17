@@ -577,11 +577,20 @@ instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
 instancedOutlineGroup.name = 'InstancedOutlineGroup'
 
-const PICK_MAX_DISTANCE_DEFAULT = 100
+const PICK_MAX_DISTANCE_DEFAULT = 5000
+function resolveCameraFarPickDistance(): number | null {
+  const far = camera?.far
+  return typeof far === 'number' && Number.isFinite(far) && far > 0 ? far : null
+}
+
 function getPickMaxDistance() {
   const raw = (window as any).__HARMONY_PICK_MAX_DISTANCE__
   const n = Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : PICK_MAX_DISTANCE_DEFAULT
+  if (Number.isFinite(n) && n > 0) {
+    return n
+  }
+  const cameraFar = resolveCameraFarPickDistance()
+  return cameraFar ?? PICK_MAX_DISTANCE_DEFAULT
 }
 let protagonistInitialVisibilityCapture: ProtagonistInitialVisibilityCapture | null = null
 
@@ -6748,7 +6757,8 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
   try {
     const camPos = camera.position
     const dist = camPos.distanceTo(intersection)
-    if (dist > getPickMaxDistance()) {
+    const maxPickDistance = getPickMaxDistance()
+    if (Number.isFinite(maxPickDistance) && dist > maxPickDistance) {
       return null
     }
   } catch (e) {

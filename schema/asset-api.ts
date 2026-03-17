@@ -45,6 +45,9 @@ export interface AssetSummary {
   categoryId: string
   categoryPath: AssetCategoryPathItem[]
   categoryPathString: string
+  directoryId?: string | null
+  directoryPath?: AssetCategoryPathItem[]
+  directoryPathString?: string
   type: AssetType
   tags: AssetTagSummary[]
   tagIds: string[]
