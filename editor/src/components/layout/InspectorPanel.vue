@@ -19,6 +19,7 @@ import LandformsPanel from '@/components/inspector/LandformsPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
+import BillboardPanel from '@/components/inspector/BillboardPanel.vue'
 import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
@@ -37,6 +38,7 @@ import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 import {
   BEHAVIOR_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
+  BILLBOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
   AUTO_TOUR_COMPONENT_TYPE,
@@ -549,6 +551,7 @@ watch(
           <div v-if="nodeComponents.length" class="component-list">
             <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
               <DisplayBoardPanel v-if="component.type === DISPLAY_BOARD_COMPONENT_TYPE" />
+              <BillboardPanel v-else-if="component.type === BILLBOARD_COMPONENT_TYPE" />
               <GuideboardPanel v-else-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />

@@ -261,6 +261,63 @@
           </v-list>
         </v-menu>
         <v-menu
+          v-else-if="tool.id === 'displayBoard'"
+          v-model="displayBoardToolMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="displayBoardToolButtonActive ? 'primary' : undefined"
+              :variant="displayBoardToolButtonActive ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled"
+              @click="handleDisplayBoardToolButtonClick"
+              @contextmenu.prevent.stop="handleDisplayBoardToolButtonCancel"
+            />
+          </template>
+          <v-list density="compact" class="display-board-tool-menu">
+            <div
+              class="popup-menu-card display-board-tool-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Display Surfaces</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="displayBoardToolMenuOpen = false" />
+              </v-toolbar>
+              <div class="display-board-tool-menu__content">
+                <v-list-item
+                  prepend-icon="mdi-advertisements"
+                  title="Display Board"
+                  subtitle="Flat image board"
+                  :active="activeBuildTool === 'displayBoard'"
+                  @click="handleDisplayBoardToolSelect('displayBoard')"
+                />
+                <v-list-item
+                  prepend-icon="mdi-billboard"
+                  title="Billboard"
+                  subtitle="Cylindrical camera-facing board"
+                  :active="activeBuildTool === 'billboard'"
+                  @click="handleDisplayBoardToolSelect('billboard')"
+                />
+              </div>
+            </div>
+          </v-list>
+        </v-menu>
+        <v-menu
           v-else-if="tool.id === 'floor'"
           :model-value="floorShapeMenuOpen"
           location="bottom"
@@ -1252,6 +1309,7 @@ const rotationMenuOpen = ref(false)
 const mirrorMenuOpen = ref(false)
 const alignMenuOpen = ref(false)
 const fixedPrimaryAsAnchor = ref(true)
+const displayBoardToolMenuOpen = ref(false)
 
 const SCATTER_BRUSH_RADIUS_MIN = 0.1
 const SCATTER_ERASE_RADIUS_MIN = 0.1
@@ -1584,6 +1642,9 @@ watch(canEraseScatterEffective, (enabled) => {
 })
 
 watch(buildToolsDisabled, (disabled) => {
+  if (disabled && displayBoardToolMenuOpen.value) {
+    displayBoardToolMenuOpen.value = false
+  }
   if (disabled && groundTerrainMenuOpen.value) {
     emit('update:ground-terrain-menu-open', false)
   }
@@ -1615,6 +1676,7 @@ watch(hasGroundNode, (available) => {
 
 // Mutual exclusivity helpers
 function closeExternalMenus() {
+  displayBoardToolMenuOpen.value = false
   emit('update:ground-terrain-menu-open', false)
   emit('update:ground-paint-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
@@ -1795,9 +1857,13 @@ const buildToolButtons = [
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Brush' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
   { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
-  { id: 'displayBoard', icon: 'mdi-billboard', label: 'Display Board Tool (Left Mouse Drag)' },
+  { id: 'displayBoard', icon: 'mdi-advertisements', label: 'Display Surface Tools' },
   { id: 'warpGate', icon: 'mdi-gate', label: 'Warp Gate Tool (Left Mouse)' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
+
+const displayBoardToolButtonActive = computed(
+  () => displayBoardToolMenuOpen.value || activeBuildTool.value === 'displayBoard' || activeBuildTool.value === 'billboard',
+)
 
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
   id,
@@ -1902,6 +1968,33 @@ function handleBuildToolToggle(tool: BuildTool) {
       return
     }
     setBuildToolMenuOpen(tool, false)
+  }
+}
+
+function handleDisplayBoardToolButtonClick() {
+  if (buildToolsDisabled.value) {
+    return
+  }
+  if (!displayBoardToolMenuOpen.value) {
+    closeAllMenus()
+    displayBoardToolMenuOpen.value = true
+    return
+  }
+  displayBoardToolMenuOpen.value = false
+}
+
+function handleDisplayBoardToolSelect(tool: 'displayBoard' | 'billboard') {
+  handleBuildToolToggle(tool)
+  displayBoardToolMenuOpen.value = false
+}
+
+function handleDisplayBoardToolButtonCancel() {
+  if (buildToolsDisabled.value) {
+    return
+  }
+  displayBoardToolMenuOpen.value = false
+  if (activeBuildTool.value === 'displayBoard' || activeBuildTool.value === 'billboard') {
+    emit('change-build-tool', null)
   }
 }
 

@@ -226,6 +226,7 @@ import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { persistPlanningImageLayersToIndexedDB } from '@/utils/planningImageStorage'
 import { installPlanningImagesResolver } from '@/utils/planningImageComponentResolver'
 import type {
+  BillboardComponentProps,
   DisplayBoardComponentProps,
   EffectComponentProps,
   GuideRouteComponentProps,
@@ -253,6 +254,7 @@ import {
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
+  BILLBOARD_COMPONENT_TYPE,
   EFFECT_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
@@ -273,6 +275,8 @@ import {
   cloneRoadComponentProps,
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
+  clampBillboardComponentProps,
+  cloneBillboardComponentProps,
   clampWarpGateComponentProps,
   cloneWarpGateComponentProps,
   clampEffectComponentProps,
@@ -324,6 +328,7 @@ type NodeComponentPropsByType = {
   [VIEW_POINT_COMPONENT_TYPE]: ViewPointComponentProps
   [WARP_GATE_COMPONENT_TYPE]: WarpGateComponentProps
   [DISPLAY_BOARD_COMPONENT_TYPE]: DisplayBoardComponentProps
+  [BILLBOARD_COMPONENT_TYPE]: BillboardComponentProps
   [PLANNING_IMAGES_COMPONENT_TYPE]: PlanningImagesComponentProps
   [EFFECT_COMPONENT_TYPE]: EffectComponentProps
   [PROTAGONIST_COMPONENT_TYPE]: ProtagonistComponentProps
@@ -2584,6 +2589,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
 
 const GUIDEBOARD_NAME_PATTERN = /^Guideboard(?:\b|$)/i
 const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
+const BILLBOARD_NAME_PATTERN = /^Billboard(?:\b|$)/i
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object') {
@@ -12657,6 +12663,38 @@ export const useSceneStore = defineStore('scene', {
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
 
+    generateBillboardNodeName() {
+      const prefix = 'Billboard '
+      const pattern = /^Billboard\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
+
     ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
@@ -13219,6 +13257,66 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
+    createBillboardNode(payload: {
+      nodeId?: string
+      center: Vector3Like
+      rotation: Vector3Like
+      scale: Vector3Like
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+    }): SceneNode | null {
+      const scaleX = Math.max(1e-3, Math.abs(Number(payload.scale.x)))
+      const scaleY = Math.max(1e-3, Math.abs(Number(payload.scale.y)))
+      const radialScale = Math.max(1e-3, scaleX / Math.PI)
+      const runtime = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.5, 0.5, 1, 48, 1, true),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+      )
+      runtime.castShadow = false
+      runtime.receiveShadow = true
+      runtime.userData = {
+        ...(runtime.userData ?? {}),
+        billboard: true,
+      }
+
+      const nodeName = payload.name ?? this.generateBillboardNodeName()
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeId: payload.nodeId,
+          nodeType: 'Cylinder',
+          object: runtime,
+          name: nodeName,
+          position: createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0),
+          rotation: createVector(Number(payload.rotation.x) || 0, Number(payload.rotation.y) || 0, Number(payload.rotation.z) || 0),
+          scale: createVector(radialScale, scaleY, radialScale),
+          editorFlags: payload.editorFlags,
+          userData: {
+            billboard: true,
+          },
+        })
+
+        if (!node) {
+          return null
+        }
+
+        const primaryMaterial = node.materials?.[0] ?? null
+        if (primaryMaterial) {
+          this.updateNodeMaterialProps(node.id, primaryMaterial.id, { side: 'double' })
+        }
+
+        if (!node.components?.[BILLBOARD_COMPONENT_TYPE]) {
+          this.addNodeComponent<typeof BILLBOARD_COMPONENT_TYPE>(node.id, BILLBOARD_COMPONENT_TYPE)
+        }
+
+        return findNodeById(this.nodes, node.id) ?? node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
     updateWaterSurfaceMeshNode(payload: {
       nodeId: string
       localPoints: Array<[number, number]>
@@ -13665,6 +13763,8 @@ export const useSceneStore = defineStore('scene', {
           }
           if (componentState.type === WALL_COMPONENT_TYPE) {
             applyWallComponentPropsToNode(node, componentState.props as unknown as WallComponentProps)
+          } else if (componentState.type === BILLBOARD_COMPONENT_TYPE) {
+            // Billboard runtime is texture-driven; no geometry sync is required here.
           } else if (componentState.type === DISPLAY_BOARD_COMPONENT_TYPE) {
             applyDisplayBoardComponentPropsToNode(
               node,
@@ -13777,6 +13877,7 @@ export const useSceneStore = defineStore('scene', {
         | WallComponentProps
         | RoadComponentProps
         | LandformsComponentProps
+        | BillboardComponentProps
         | DisplayBoardComponentProps
         | PlanningImagesComponentProps
         | WarpGateComponentProps
@@ -14121,6 +14222,32 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneDisplayBoardComponentProps(merged)
+      } else if (type === BILLBOARD_COMPONENT_TYPE) {
+        const currentProps = component.props as BillboardComponentProps
+        const typedPatch = patch as Partial<BillboardComponentProps>
+        const hasIntrinsicWidth = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicWidth')
+        const hasIntrinsicHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicHeight')
+        const hasAdaptation = Object.prototype.hasOwnProperty.call(typedPatch, 'adaptation')
+        const nextAdaptation = hasAdaptation
+          ? typedPatch.adaptation === 'fill'
+            ? 'fill'
+            : 'fit'
+          : currentProps.adaptation ?? 'fit'
+        const merged = clampBillboardComponentProps({
+          assetId: typeof typedPatch.assetId === 'string' ? typedPatch.assetId : currentProps.assetId,
+          intrinsicWidth: hasIntrinsicWidth ? typedPatch.intrinsicWidth ?? undefined : currentProps.intrinsicWidth,
+          intrinsicHeight: hasIntrinsicHeight ? typedPatch.intrinsicHeight ?? undefined : currentProps.intrinsicHeight,
+          adaptation: nextAdaptation,
+        })
+        const unchanged =
+          (currentProps.assetId ?? '') === merged.assetId &&
+          optionalNumberEquals(currentProps.intrinsicWidth, merged.intrinsicWidth) &&
+          optionalNumberEquals(currentProps.intrinsicHeight, merged.intrinsicHeight) &&
+          (currentProps.adaptation ?? 'fit') === merged.adaptation
+        if (unchanged) {
+          return false
+        }
+        nextProps = cloneBillboardComponentProps(merged)
       } else if (type === PLANNING_IMAGES_COMPONENT_TYPE) {
         const currentProps = clampPlanningImagesComponentProps(component.props as PlanningImagesComponentProps)
         const typedPatch = patch as Partial<PlanningImagesComponentProps>
@@ -14363,6 +14490,8 @@ export const useSceneStore = defineStore('scene', {
           }
         } else if (currentType === ROAD_COMPONENT_TYPE) {
           applyRoadComponentPropsToNode(node, nextProps as RoadComponentProps, resolveGroundNodeForHeightSampling(this.nodes))
+        } else if (currentType === BILLBOARD_COMPONENT_TYPE) {
+          // Billboard runtime is texture-driven; no geometry sync is required here.
         } else if (currentType === DISPLAY_BOARD_COMPONENT_TYPE) {
           applyDisplayBoardComponentPropsToNode(node, nextProps as DisplayBoardComponentProps)
         } else if (currentType === FLOOR_COMPONENT_TYPE) {
@@ -14450,6 +14579,62 @@ export const useSceneStore = defineStore('scene', {
       const dimensions = await measureAssetImageDimensions(normalizedId, asset)
 
       const patch: Partial<DisplayBoardComponentProps> = {
+        assetId: normalizedId,
+      }
+      if (dimensions) {
+        patch.intrinsicWidth = dimensions.width
+        patch.intrinsicHeight = dimensions.height
+      } else {
+        patch.intrinsicWidth = undefined
+        patch.intrinsicHeight = undefined
+      }
+
+      const changed = this.updateNodeComponentProps(nodeId, componentId, patch)
+
+      if (shouldUpdateMaterial) {
+        const ref: SceneMaterialTextureRef | null = asset?.name?.trim().length
+          ? { assetId: normalizedId, name: asset?.name }
+          : { assetId: normalizedId }
+        this.setNodePrimaryTexture(nodeId, ref, 'albedo')
+      }
+
+      return changed
+    },
+    async applyBillboardAsset(
+      nodeId: string,
+      componentId: string,
+      assetId: string | null,
+      options: { updateMaterial?: boolean } = {},
+    ): Promise<boolean> {
+      const rawId = typeof assetId === 'string' ? assetId.trim() : ''
+      const normalizedId = rawId.startsWith('asset://') ? rawId.slice('asset://'.length) : rawId
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        return false
+      }
+      const componentEntry = findComponentEntryById(node.components, componentId)
+      if (!componentEntry || componentEntry[0] !== BILLBOARD_COMPONENT_TYPE) {
+        return false
+      }
+
+      const shouldUpdateMaterial = options.updateMaterial !== false
+
+      if (!normalizedId) {
+        const changed = this.updateNodeComponentProps(nodeId, componentId, {
+          assetId: '',
+          intrinsicWidth: undefined,
+          intrinsicHeight: undefined,
+        })
+        if (shouldUpdateMaterial) {
+          this.setNodePrimaryTexture(nodeId, null, 'albedo')
+        }
+        return changed
+      }
+
+      const asset = this.getAsset(normalizedId)
+      const dimensions = await measureAssetImageDimensions(normalizedId, asset)
+
+      const patch: Partial<BillboardComponentProps> = {
         assetId: normalizedId,
       }
       if (dimensions) {

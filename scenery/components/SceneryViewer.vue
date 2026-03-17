@@ -573,6 +573,7 @@ import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
 import {
   behaviorComponentDefinition,
+  billboardComponentDefinition,
   guideboardComponentDefinition,
   displayBoardComponentDefinition,
   floorComponentDefinition,
@@ -1668,6 +1669,7 @@ previewComponentManager.registerDefinition(wallComponentDefinition);
 previewComponentManager.registerDefinition(roadComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);
 previewComponentManager.registerDefinition(displayBoardComponentDefinition);
+previewComponentManager.registerDefinition(billboardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
@@ -10261,6 +10263,13 @@ function startRenderLoop(
         }
 
         if (deltaSeconds > 0) {
+          previewComponentManager.setFrameState({
+            cameraWorldPosition: {
+              x: camera.position.x,
+              y: camera.position.y,
+              z: camera.position.z,
+            },
+          });
           previewComponentManager.update(deltaSeconds);
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
 

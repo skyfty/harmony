@@ -129,6 +129,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
 import {
 	behaviorComponentDefinition,
+	billboardComponentDefinition,
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
 	floorComponentDefinition,
@@ -757,6 +758,7 @@ previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
 previewComponentManager.registerDefinition(displayBoardComponentDefinition)
+previewComponentManager.registerDefinition(billboardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
@@ -6905,6 +6907,13 @@ function updateCameraControlsForFrame(
  * - Derived state (speed)
  */
 function updatePlaybackSystemsForFrame(delta: number): void {
+	previewComponentManager.setFrameState({
+		cameraWorldPosition: {
+			x: camera.position.x,
+			y: camera.position.y,
+			z: camera.position.z,
+		},
+	})
 	previewComponentManager.update(delta)
 	animationMixers.forEach((mixer) => mixer.update(delta))
 	effectRuntimeTickers.forEach((tick) => {

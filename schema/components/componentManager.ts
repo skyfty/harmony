@@ -9,7 +9,7 @@ import type {
 
 import { stableSerialize } from '../stableSerialize'
 
-import { Component, type ComponentRuntimeContext } from './Component'
+import { Component, type ComponentFrameState, type ComponentRuntimeContext } from './Component'
 
 export interface ComponentDefinition<TProps = Record<string, unknown>> {
   type: NodeComponentType
@@ -57,6 +57,7 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
   private props: Readonly<TProps>
   private enabled: boolean
   private dirty = false
+  private frameState: Readonly<ComponentFrameState>
   private readonly nodeIdValue: string
   private readonly componentIdValue: string
 
@@ -65,12 +66,14 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
     componentId: string,
     initialProps: TProps,
     isEnabled: boolean,
+    frameState: Readonly<ComponentFrameState>,
   ) {
     this.nodeIdValue = nodeId
     this.componentIdValue = componentId
     this.runtimeObject = null
     this.props = initialProps
     this.enabled = isEnabled
+    this.frameState = frameState
   }
 
   get nodeId(): string {
@@ -104,11 +107,19 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
     return this.enabled
   }
 
+  getFrameState(): Readonly<ComponentFrameState> {
+    return this.frameState
+  }
+
   setEnabled(enabled: boolean) {
     if (this.enabled !== enabled) {
       this.enabled = enabled
       this.markDirty()
     }
+  }
+
+  setFrameState(frameState: Readonly<ComponentFrameState>) {
+    this.frameState = frameState
   }
 
   markDirty(): void {
@@ -125,6 +136,7 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
 export class ComponentManager {
   private readonly definitions = new Map<NodeComponentType, AnyComponentDefinition>()
   private readonly nodeBundles = new Map<string, NodeComponentBundle>()
+  private frameState: Readonly<ComponentFrameState> = { cameraWorldPosition: null }
 
   registerDefinition<TProps>(definition: ComponentDefinition<TProps>): void {
     this.definitions.set(definition.type, definition as AnyComponentDefinition)
@@ -158,6 +170,18 @@ export class ComponentManager {
       })
     })
     this.nodeBundles.clear()
+    this.frameState = { cameraWorldPosition: null }
+  }
+
+  setFrameState(frameState: Partial<ComponentFrameState> | null | undefined): void {
+    this.frameState = {
+      cameraWorldPosition: frameState?.cameraWorldPosition ?? null,
+    }
+    this.nodeBundles.forEach((bundle) => {
+      bundle.instances.forEach((wrapper) => {
+        wrapper.context.setFrameState(this.frameState)
+      })
+    })
   }
 
   syncScene(nodes: SceneNode[]): void {
@@ -197,7 +221,7 @@ export class ComponentManager {
       activeStateIds.add(state.id)
       const existing = bundle.instances.get(state.id) ?? null
       if (!existing) {
-        const context = new ComponentContextImpl(node.id, state.id, state.props, true)
+        const context = new ComponentContextImpl(node.id, state.id, state.props, true, this.frameState)
         context.setRuntimeObject(bundle.runtimeObject)
         const instance = definition.createInstance(context)
         const propsSignature = stableSerialize(state.props)
@@ -246,7 +270,7 @@ export class ComponentManager {
         if (existing.definition.recreateOnPropsChange) {
           this.destroyInstance(node.id, state.id)
 
-          const context = new ComponentContextImpl(node.id, state.id, nextProps, true)
+          const context = new ComponentContextImpl(node.id, state.id, nextProps, true, this.frameState)
           context.setRuntimeObject(bundle.runtimeObject)
           const instance = existing.definition.createInstance(context)
           bundle.instances.set(state.id, {

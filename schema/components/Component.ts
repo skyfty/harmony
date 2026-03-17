@@ -1,11 +1,16 @@
 import type { Object3D } from 'three'
 
+export interface ComponentFrameState {
+  cameraWorldPosition: { x: number; y: number; z: number } | null
+}
+
 export interface ComponentRuntimeContext<TProps = Record<string, unknown>> {
   readonly nodeId: string
   readonly componentId: string
   getRuntimeObject(): Object3D | null
   getProps(): Readonly<TProps>
   isEnabled(): boolean
+  getFrameState(): Readonly<ComponentFrameState>
   markDirty(): void
 }
 

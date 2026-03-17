@@ -1723,6 +1723,22 @@ const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'displayBoard') {
     return 'cursor-display-board'
   }
+
+  if (activeBuildTool.value === 'billboard') {
+    if (event.button === 0 && !isAltOverrideActive) {
+      if (billboardBuildTool.handlePointerDown(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+    }
+
+    if (event.button === 2) {
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
+  }
   if (activeBuildTool.value === 'warpGate') {
     return 'cursor-warp-gate'
   }
@@ -5853,6 +5869,7 @@ const waterBuildTool = createWaterBuildTool({
 
 const displayBoardBuildTool = createDisplayBoardBuildTool({
   activeBuildTool,
+  toolId: 'displayBoard',
   sceneStore,
   rootGroup,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -5895,6 +5912,54 @@ const displayBoardBuildTool = createDisplayBoardBuildTool({
   },
   createDisplayBoardNode: (payload) => {
     sceneStore.createDisplayBoardNode(payload)
+  },
+})
+
+const billboardBuildTool = createDisplayBoardBuildTool({
+  activeBuildTool,
+  toolId: 'billboard',
+  sceneStore,
+  rootGroup,
+  isAltOverrideActive: () => isAltOverrideActive,
+  resolveSurfaceAtPointer: resolveBuildSurfaceAtPointer,
+  projectPointerToPlane: (event, plane) => projectPointerToPlane(event, plane),
+  getCameraDirection: () => {
+    const direction = new THREE.Vector3(0, 0, -1)
+    if (camera) {
+      camera.getWorldDirection(direction)
+    }
+    return direction.normalize()
+  },
+  resolveVertexSnapAtPointer,
+  updatePlacementSnap: (event, previewObject) => {
+    const result = snapController.updatePlacementSideSnap({
+      event,
+      previewObject,
+      active: true,
+      pixelThresholdPx: vertexSnapThresholdPx.value,
+      excludeNodeIds: new Set([GROUND_NODE_ID]),
+    })
+    updatePlacementSideSnapMarkers(result)
+    return result?.best?.delta?.clone() ?? null
+  },
+  clearPlacementSnap: () => {
+    snapController.resetPlacementSideSnap()
+    clearPlacementSideSnapMarkers()
+  },
+  showVertexSnap: (snap) => {
+    updateVertexSnapMarkers(
+      snap
+        ? {
+            sourceWorld: snap.sourceWorld.clone(),
+            targetWorld: snap.targetWorld.clone(),
+            delta: snap.targetWorld.clone().sub(snap.sourceWorld),
+            targetNodeId: '',
+          }
+        : null,
+    )
+  },
+  createDisplayBoardNode: (payload) => {
+    sceneStore.createBillboardNode(payload)
   },
 })
 
@@ -13111,6 +13176,7 @@ function handlePointerMove(event: PointerEvent) {
 
   const buildTools = handlePointerMoveBuildTools(event, {
     displayBoardBuildToolHandlePointerMove: (e) => displayBoardBuildTool.handlePointerMove(e),
+    billboardBuildToolHandlePointerMove: (e) => billboardBuildTool.handlePointerMove(e),
     waterBuildToolHandlePointerMove: (e) => waterBuildTool.handlePointerMove(e),
     floorBuildToolHandlePointerMove: (e) => floorBuildTool.handlePointerMove(e),
     wallBuildToolHandlePointerMove: (e) => wallBuildTool.handlePointerMove(e),
@@ -13594,6 +13660,7 @@ async function handlePointerUp(event: PointerEvent) {
         maybeCancelBuildToolOnRightDoubleClick,
         handleGroundEditorPointerUp,
         displayBoardBuildToolHandlePointerUp: (e) => displayBoardBuildTool.handlePointerUp(e),
+        billboardBuildToolHandlePointerUp: (e) => billboardBuildTool.handlePointerUp(e),
         waterBuildToolHandlePointerUp: (e) => waterBuildTool.handlePointerUp(e),
         wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
         roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
@@ -14225,6 +14292,15 @@ function handlePointerCancel(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'billboard') {
+    if (billboardBuildTool.handlePointerCancel(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
   if (activeBuildTool.value === 'floor') {
     if (floorBuildTool.handlePointerCancel(event)) {
       event.preventDefault()
@@ -14351,6 +14427,14 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (activeBuildTool.value === 'displayBoard') {
     if (displayBoardBuildTool.handleDoubleClick(event)) {
       clearDisplayBoardSizeHud()
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+  }
+
+  if (activeBuildTool.value === 'billboard') {
+    if (billboardBuildTool.handleDoubleClick(event)) {
       event.preventDefault()
       event.stopPropagation()
       return
@@ -14491,6 +14575,11 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'billboard':
+      billboardBuildTool.cancel()
+      handleBuildToolChange(null)
+      handled = true
+      break
     case 'warpGate':
       warpGatePlacementClickSessionState = null
       hideWarpGatePlacementPreview()
@@ -14524,6 +14613,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
   if (activeBuildTool.value === 'displayBoard' && tool !== 'displayBoard') {
     displayBoardBuildTool.cancel()
     clearDisplayBoardSizeHud()
+  }
+  if (activeBuildTool.value === 'billboard' && tool !== 'billboard') {
+    billboardBuildTool.cancel()
   }
   if (activeBuildTool.value === 'warpGate' && tool !== 'warpGate') {
     warpGatePlacementClickSessionState = null
@@ -17974,6 +18066,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   displayBoardBuildTool.dispose()
+  billboardBuildTool.dispose()
   clearDisplayBoardSizeHud()
   stopSelectionPreviewVisibilityMonitor()
   if (nodePickerStore.isActive) {
@@ -18205,6 +18298,7 @@ watch(activeBuildTool, (tool, previous) => {
   }
   if (tool !== 'displayBoard') {
     displayBoardBuildTool.cancel()
+    billboardBuildTool.cancel()
     clearDisplayBoardSizeHud()
     if (displayBoardCornerDragState) {
       pointerInteraction.releaseIfCaptured(displayBoardCornerDragState.pointerId)

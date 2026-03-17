@@ -26,6 +26,10 @@ import {
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
   createDisplayBoardComponentState,
+  BILLBOARD_COMPONENT_TYPE,
+  clampBillboardComponentProps,
+  cloneBillboardComponentProps,
+  createBillboardComponentState,
   GUIDEBOARD_COMPONENT_TYPE,
   clampGuideboardComponentProps,
   cloneGuideboardComponentProps,
@@ -47,6 +51,7 @@ import {
 } from '@schema/components'
 
 const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
+const BILLBOARD_NAME_PATTERN = /^Billboard(?:\b|$)/i
 
 export function cloneComponentProps<T>(props: T): T {
   if (props === null || props === undefined) {
@@ -95,11 +100,31 @@ export function shouldAutoAttachDisplayBoard(node: SceneNode): boolean {
   return false
 }
 
+export function shouldAutoAttachBillboard(node: SceneNode): boolean {
+  const userData = node.userData as Record<string, unknown> | undefined
+  if (userData) {
+    const directFlag = userData['billboard'] === true || userData['isBillboard'] === true
+    if (directFlag) {
+      return true
+    }
+  }
+  const typeName = typeof node.nodeType === 'string' ? node.nodeType.trim().toLowerCase() : ''
+  if (typeName === 'billboard') {
+    return true
+  }
+  const nodeName = typeof node.name === 'string' ? node.name.trim() : ''
+  if (nodeName.length && BILLBOARD_NAME_PATTERN.test(nodeName)) {
+    return true
+  }
+  return false
+}
+
 export function normalizeNodeComponents(
   node: SceneNode,
   components?: SceneNodeComponentMap,
   options: {
     attachDisplayBoard?: boolean
+    attachBillboard?: boolean
     attachGuideboard?: boolean
     attachViewPoint?: boolean
     attachWarpGate?: boolean
@@ -228,6 +253,24 @@ export function normalizeNodeComponents(
     }
   }
 
+  const existingBillboard = normalized[BILLBOARD_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
+  const shouldAttachBillboard = options.attachBillboard ?? shouldAutoAttachBillboard(node)
+  if (existingBillboard) {
+    const nextProps = cloneBillboardComponentProps(clampBillboardComponentProps(existingBillboard.props as any))
+    const clonedMetadata: Record<string, unknown> | undefined = existingBillboard.metadata
+    normalized[BILLBOARD_COMPONENT_TYPE] = {
+      id: existingBillboard.id && existingBillboard.id.trim().length ? existingBillboard.id : generateUuid(),
+      type: BILLBOARD_COMPONENT_TYPE,
+      enabled: existingBillboard.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  } else if (shouldAttachBillboard) {
+    normalized[BILLBOARD_COMPONENT_TYPE] = {
+      ...createBillboardComponentState(node, undefined, { id: generateUuid(), enabled: true }),
+    }
+  }
+
   const existingGuideboard = normalized[GUIDEBOARD_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
   if (existingGuideboard) {
     const nextProps = cloneGuideboardComponentProps(clampGuideboardComponentProps(existingGuideboard.props as any))
@@ -314,5 +357,6 @@ export default {
   cloneComponentProps,
   cloneComponentState,
   shouldAutoAttachDisplayBoard,
+  shouldAutoAttachBillboard,
   normalizeNodeComponents,
 }

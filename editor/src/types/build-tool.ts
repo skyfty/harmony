@@ -1,4 +1,4 @@
-export type BuildTool = 'terrain' | 'paint' | 'scatter' | 'wall' | 'floor' | 'road' | 'water' | 'displayBoard' | 'warpGate'
+export type BuildTool = 'terrain' | 'paint' | 'scatter' | 'wall' | 'floor' | 'road' | 'water' | 'displayBoard' | 'billboard' | 'warpGate'
 
 export const BUILD_TOOL_LABELS: Record<BuildTool, string> = {
   terrain: '地形工具',

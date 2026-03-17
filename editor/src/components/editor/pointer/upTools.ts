@@ -7,6 +7,7 @@ export function handlePointerUpTools(
 
     handleGroundEditorPointerUp: (event: PointerEvent) => boolean
     displayBoardBuildToolHandlePointerUp: (event: PointerEvent) => boolean
+    billboardBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     waterBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     wallBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     roadBuildToolHandlePointerUp: (event: PointerEvent) => boolean
@@ -24,6 +25,15 @@ export function handlePointerUpTools(
   }
 
   if (ctx.displayBoardBuildToolHandlePointerUp(event)) {
+    return {
+      handled: true,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
+  if (ctx.billboardBuildToolHandlePointerUp(event)) {
     return {
       handled: true,
       preventDefault: true,

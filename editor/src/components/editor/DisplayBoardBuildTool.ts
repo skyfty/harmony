@@ -292,6 +292,49 @@ function fitRectangleForWorldPoints(session: DisplayBoardBuildSession, pointsWor
   }
 }
 
+function fitRectangleForDrag(session: DisplayBoardBuildSession): FittedRectangle | null {
+  const startPoint = session.points[0] ?? null
+  if (!startPoint) {
+    return null
+  }
+
+  const delta = session.currentPoint.clone().sub(startPoint)
+  const widthRaw = delta.dot(session.axisU)
+  const heightRaw = delta.dot(session.axisV)
+  const width = Math.max(Math.abs(widthRaw), MIN_RECT_SIZE)
+  const height = Math.max(Math.abs(heightRaw), MIN_RECT_SIZE)
+
+  const centerWorld = startPoint
+    .clone()
+    .addScaledVector(session.axisU, widthRaw * 0.5)
+    .addScaledVector(session.axisV, heightRaw * 0.5)
+
+  const axisXWorld = session.axisU.clone().multiplyScalar(widthRaw >= 0 ? 1 : -1)
+  const axisYWorld = session.axisV.clone().multiplyScalar(heightRaw >= 0 ? 1 : -1)
+
+  tmpMatrix.makeBasis(axisXWorld, axisYWorld, session.normal)
+  const quaternion = new THREE.Quaternion().setFromRotationMatrix(tmpMatrix)
+
+  const halfWidth = width * 0.5
+  const halfHeight = height * 0.5
+  const cornersWorld: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
+    centerWorld.clone().addScaledVector(axisXWorld, -halfWidth).addScaledVector(axisYWorld, -halfHeight),
+    centerWorld.clone().addScaledVector(axisXWorld, halfWidth).addScaledVector(axisYWorld, -halfHeight),
+    centerWorld.clone().addScaledVector(axisXWorld, halfWidth).addScaledVector(axisYWorld, halfHeight),
+    centerWorld.clone().addScaledVector(axisXWorld, -halfWidth).addScaledVector(axisYWorld, halfHeight),
+  ]
+
+  return {
+    centerWorld,
+    axisXWorld,
+    axisYWorld,
+    quaternion,
+    width,
+    height,
+    cornersWorld,
+  }
+}
+
 function setLineSegmentsGeometry(
   geometry: THREE.BufferGeometry,
   points: THREE.Vector3[],
@@ -458,6 +501,7 @@ function resolvePlacementPoint(
 
 export function createDisplayBoardBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
+  toolId?: BuildTool
   sceneStore: ReturnType<typeof useSceneStore>
   rootGroup: THREE.Group
   isAltOverrideActive: () => boolean
@@ -475,6 +519,7 @@ export function createDisplayBoardBuildTool(options: {
   }) => unknown
 }): DisplayBoardBuildToolHandle {
   let session: DisplayBoardBuildSession | null = null
+  const toolId = options.toolId ?? 'displayBoard'
 
   const clearSession = () => {
     if (session) {
@@ -653,11 +698,13 @@ export function createDisplayBoardBuildTool(options: {
       }),
       MIN_EDGE_LENGTH,
     )
-    if (stablePoints.length < 3) {
-      return true
+    let rectangle: FittedRectangle | null = null
+    if (stablePoints.length >= 3) {
+      rectangle = fitRectangleForWorldPoints(activeSession, activeSession.points)
+    } else if (toolId === 'billboard') {
+      rectangle = fitRectangleForDrag(activeSession)
     }
 
-    const rectangle = fitRectangleForWorldPoints(activeSession, activeSession.points)
     if (!rectangle || rectangle.width <= MIN_RECT_SIZE || rectangle.height <= MIN_RECT_SIZE) {
       return true
     }
@@ -678,14 +725,14 @@ export function createDisplayBoardBuildTool(options: {
     getSession: () => session,
 
     handlePointerDown: (event: PointerEvent) => {
-      if (options.activeBuildTool.value !== 'displayBoard' || event.button !== 0 || options.isAltOverrideActive()) {
+      if (options.activeBuildTool.value !== toolId || event.button !== 0 || options.isAltOverrideActive()) {
         return false
       }
       return commitCurrentPoint(event)
     },
 
     handlePointerMove: (event: PointerEvent) => {
-      if (!session || options.activeBuildTool.value !== 'displayBoard' || event.pointerId !== session.pointerId) {
+      if (!session || options.activeBuildTool.value !== toolId || event.pointerId !== session.pointerId) {
         return false
       }
 
@@ -701,8 +748,11 @@ export function createDisplayBoardBuildTool(options: {
     },
 
     handlePointerUp: (event: PointerEvent) => {
-      if (!session || options.activeBuildTool.value !== 'displayBoard' || event.pointerId !== session.pointerId) {
+      if (!session || options.activeBuildTool.value !== toolId || event.pointerId !== session.pointerId) {
         return false
+      }
+      if (toolId === 'billboard' && event.button === 0) {
+        return finalize()
       }
       return event.button === 0
     },
@@ -716,7 +766,7 @@ export function createDisplayBoardBuildTool(options: {
     },
 
     handleDoubleClick: (_event: MouseEvent) => {
-      if (options.activeBuildTool.value !== 'displayBoard' || !session) {
+      if (options.activeBuildTool.value !== toolId || !session) {
         return false
       }
       return finalize()
