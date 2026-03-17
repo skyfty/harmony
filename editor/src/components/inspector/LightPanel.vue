@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import LightDirectionSphere from '@/components/inspector/LightDirectionSphere.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { LightNodeProperties, LightNodeType, LightShadowProperties } from '@schema/index'
 
@@ -8,6 +9,16 @@ const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const props = defineProps<{ disabled?: boolean }>()
+
+type NumericVector3 = { x: number; y: number; z: number }
+
+const DEFAULT_LIGHT_DIRECTION: NumericVector3 = { x: 0, y: -1, z: 0 }
+const DEFAULT_LIGHT_TARGET_DISTANCE: Record<'Directional' | 'Spot', number> = {
+  Directional: 30,
+  Spot: 20,
+}
+
+let lightDirectionInteractionActive = false
 
 const lightForm = reactive({
   color: '#ffffff',
@@ -19,9 +30,6 @@ const lightForm = reactive({
   penumbra: 0.3,
   width: 10,
   height: 10,
-  targetX: 0,
-  targetY: 0,
-  targetZ: 0,
   castShadow: false,
 
   shadowMapSize: 1024,
@@ -41,6 +49,9 @@ const supportsDistance = computed(() => lightType.value === 'Point' || lightType
 const supportsAngle = computed(() => lightType.value === 'Spot')
 const supportsShadow = computed(() => lightType.value === 'Directional' || lightType.value === 'Point' || lightType.value === 'Spot')
 const supportsGroundColor = computed(() => lightType.value === 'Hemisphere')
+const supportsDirection = computed(() => lightType.value === 'Directional' || lightType.value === 'Spot')
+const directionWidgetType = computed<'Directional' | 'Spot'>(() => lightType.value === 'Spot' ? 'Spot' : 'Directional')
+const lightDirection = computed<NumericVector3>(() => computeSelectedLightDirection())
 
 function toDegrees(radians: number) {
   return (radians * 180) / Math.PI
@@ -58,12 +69,15 @@ function coerceNumber(value: number | number[]): number | null {
   return numeric
 }
 
-function patchLight(properties: Partial<LightNodeProperties>) {
+function patchLight(
+  properties: Partial<LightNodeProperties>,
+  options: { captureHistory?: boolean } = {},
+) {
   const id = selectedNodeId.value
   if (!id || props.disabled || !selectedNode.value?.light) {
     return
   }
-  sceneStore.updateLightProperties(id, properties)
+  sceneStore.updateLightProperties(id, properties, options)
 }
 
 function patchShadow(properties: Partial<LightShadowProperties>) {
@@ -77,6 +91,103 @@ function setEnabled(enabled: boolean) {
   }
   sceneStore.setNodeVisibility(id, enabled)
 }
+
+function normalizeDirection(direction: NumericVector3): NumericVector3 {
+  const length = Math.sqrt(
+    direction.x * direction.x + direction.y * direction.y + direction.z * direction.z,
+  )
+  if (!Number.isFinite(length) || length <= 1e-6) {
+    return { ...DEFAULT_LIGHT_DIRECTION }
+  }
+  return {
+    x: direction.x / length,
+    y: direction.y / length,
+    z: direction.z / length,
+  }
+}
+
+function resolveTargetDistance(): number {
+  const node = selectedNode.value
+  const light = node?.light
+  if (!node || !light || !supportsDirection.value || !light.target) {
+    return DEFAULT_LIGHT_TARGET_DISTANCE[directionWidgetType.value]
+  }
+
+  const dx = light.target.x - node.position.x
+  const dy = light.target.y - node.position.y
+  const dz = light.target.z - node.position.z
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  if (!Number.isFinite(distance) || distance <= 1e-6) {
+    return DEFAULT_LIGHT_TARGET_DISTANCE[directionWidgetType.value]
+  }
+  return distance
+}
+
+function computeSelectedLightDirection(): NumericVector3 {
+  const node = selectedNode.value
+  const light = node?.light
+  if (!node || !light || !supportsDirection.value || !light.target) {
+    return { ...DEFAULT_LIGHT_DIRECTION }
+  }
+
+  return normalizeDirection({
+    x: light.target.x - node.position.x,
+    y: light.target.y - node.position.y,
+    z: light.target.z - node.position.z,
+  })
+}
+
+function applyLightDirection(
+  direction: NumericVector3,
+  options: { captureHistory?: boolean } = {},
+) {
+  const node = selectedNode.value
+  const light = node?.light
+  if (!node || !light || !supportsDirection.value) {
+    return
+  }
+
+  const normalized = normalizeDirection(direction)
+  const distance = resolveTargetDistance()
+
+  patchLight(
+    {
+      target: {
+        x: node.position.x + normalized.x * distance,
+        y: node.position.y + normalized.y * distance,
+        z: node.position.z + normalized.z * distance,
+      },
+    },
+    options,
+  )
+}
+
+function handleDirectionInteractionStart() {
+  if (props.disabled || lightDirectionInteractionActive || !selectedNode.value?.light) {
+    return
+  }
+  sceneStore.captureHistorySnapshot()
+  lightDirectionInteractionActive = true
+}
+
+function handleDirectionUpdate(direction: NumericVector3) {
+  if (!lightDirectionInteractionActive) {
+    handleDirectionInteractionStart()
+  }
+  applyLightDirection(direction, { captureHistory: false })
+}
+
+function handleDirectionInteractionEnd(direction: NumericVector3) {
+  if (!lightDirectionInteractionActive) {
+    return
+  }
+  applyLightDirection(direction, { captureHistory: false })
+  lightDirectionInteractionActive = false
+}
+
+watch(selectedNodeId, () => {
+  lightDirectionInteractionActive = false
+})
 
 watch(
   selectedNode,
@@ -103,16 +214,6 @@ watch(
     lightForm.shadowCameraNear = (shadow.cameraNear ?? 0.1) as number
     lightForm.shadowCameraFar = (shadow.cameraFar ?? 200) as number
     lightForm.shadowOrthoSize = (shadow.orthoSize ?? 20) as number
-
-    if ((light.type === 'Directional' || light.type === 'Spot') && light.target) {
-      lightForm.targetX = light.target.x
-      lightForm.targetY = light.target.y
-      lightForm.targetZ = light.target.z
-    } else {
-      lightForm.targetX = 0
-      lightForm.targetY = 0
-      lightForm.targetZ = 0
-    }
 
     if (light.type === 'Spot') {
       lightForm.angle = toDegrees(light.angle ?? Math.PI / 6)
@@ -365,6 +466,22 @@ function handleShadowOrthoSizeChange(value: string | number) {
           </div>
         </div>
       </template>
+
+      <div v-if="supportsDirection" class="section-block direction-block">
+        <div class="direction-block__header">
+          <span class="row-label">Direction</span>
+          <span class="direction-block__hint">Drag sphere to rotate light direction</span>
+        </div>
+        <LightDirectionSphere
+          :direction="lightDirection"
+          :light-type="directionWidgetType"
+          :disabled="props.disabled"
+          @interaction:start="handleDirectionInteractionStart"
+          @update:direction="handleDirectionUpdate"
+          @interaction:end="handleDirectionInteractionEnd"
+        />
+      </div>
+
       <div v-if="supportsShadow" class="section-block material-row">
         <span class="row-label">Cast Shadow</span>
         <v-switch
@@ -541,5 +658,24 @@ function handleShadowOrthoSizeChange(value: string | number) {
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: rgba(233, 236, 241, 0.72);
+}
+
+.direction-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.direction-block__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.direction-block__hint {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.56);
+  text-align: right;
 }
 </style>
