@@ -111,6 +111,7 @@ export interface AssetManifestAsset {
   thumbnailUrl: string | null
   resource?: AssetManifestResource | null
   thumbnail?: AssetManifestResource | null
+  metadata?: Record<string, unknown>
   description: string | null
   createdAt: string
   updatedAt: string

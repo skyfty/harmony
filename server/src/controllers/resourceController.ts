@@ -904,6 +904,10 @@ function mapAssetDocument(
     description,
     originalFilename,
     mimeType,
+    metadata:
+      asset.metadata && typeof asset.metadata === 'object' && !Array.isArray(asset.metadata)
+        ? (asset.metadata as Record<string, unknown>)
+        : undefined,
     createdAt,
     updatedAt,
   }

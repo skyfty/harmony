@@ -1,6 +1,6 @@
 import { DEFAULT_ASSET_TYPE, isAssetType } from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
-import type { ProjectAsset, ServerAssetType } from '@/types/project-asset'
+import type { ProjectAsset, ProjectAssetMetadata, ServerAssetType } from '@/types/project-asset'
 import { extractExtension } from '@/utils/blob'
 
 export interface ServerAssetTagDto {
@@ -30,6 +30,7 @@ export interface ServerAssetDto {
   sizeCategory?: string | null
   imageWidth?: number | null
   imageHeight?: number | null
+  metadata?: ProjectAssetMetadata | null
   size?: number | null
   seriesId?: string | null
   seriesName?: string | null
@@ -104,6 +105,7 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     sizeCategory: typeof asset.sizeCategory === 'string' ? asset.sizeCategory : undefined,
     imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : undefined,
     imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : undefined,
+    metadata: asset.metadata && typeof asset.metadata === 'object' ? { ...asset.metadata } : undefined,
     seriesId: 'seriesId' in asset ? (typeof asset.seriesId === 'string' ? asset.seriesId : null) : undefined,
     seriesName: typeof asset.seriesName === 'string' ? asset.seriesName : undefined,
     terrainScatterPreset:
@@ -113,6 +115,6 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     createdAt: typeof asset.createdAt === 'string' ? asset.createdAt : undefined,
     updatedAt: typeof asset.updatedAt === 'string' ? asset.updatedAt : undefined,
     gleaned: false,
-      extension: extractExtension(downloadUrl) ?? null,
+    extension: extractExtension(downloadUrl) ?? null,
   }
 }

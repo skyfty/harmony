@@ -3,6 +3,17 @@ import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 
 export type ServerAssetType = AssetType
 
+export interface ProjectAssetModelStats {
+  vertexCount: number
+  faceCount: number
+  meshCount: number
+}
+
+export interface ProjectAssetMetadata {
+  modelStats?: ProjectAssetModelStats | null
+  [key: string]: unknown
+}
+
 export interface ProjectAsset {
   id: string
   name: string
@@ -33,6 +44,7 @@ export interface ProjectAsset {
   seriesId?: string | null
   seriesName?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
+  metadata?: ProjectAssetMetadata | null
   createdAt?: string
   updatedAt?: string
   gleaned: boolean

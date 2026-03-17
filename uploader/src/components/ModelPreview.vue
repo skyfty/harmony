@@ -20,8 +20,8 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'dimensions', payload: { length: number; width: number; height: number }): void
-}>()
-
+  (e: 'model-stats', payload: { vertexCount: number; faceCount: number; meshCount: number }): void
+}>()\n
 const uploadStore = useUploadStore()
 const THUMBNAIL_SIZE = 512
 const ALPHA_THRESHOLD = 10
@@ -177,8 +177,24 @@ async function loadModel(): Promise<void> {
           emit('dimensions', { length, width, height })
         } catch (err) {
           // noop
-        }
-        loader.removeEventListener('loaded', handleLoaded)
+        }        try {
+          let vertexCount = 0
+          let faceCount = 0
+          let meshCount = 0
+          object.traverse((child) => {
+            const mesh = child as THREE.Mesh
+            if (mesh.isMesh && mesh.geometry) {
+              meshCount++
+              const pos = mesh.geometry.attributes.position
+              if (pos) vertexCount += pos.count
+              const idx = mesh.geometry.index
+              faceCount += idx ? Math.floor(idx.count / 3) : Math.floor((pos?.count ?? 0) / 3)
+            }
+          })
+          emit('model-stats', { vertexCount, faceCount, meshCount })
+        } catch (err) {
+          // noop
+        }        loader.removeEventListener('loaded', handleLoaded)
         resolve()
       }
       loader.addEventListener('loaded', handleLoaded)

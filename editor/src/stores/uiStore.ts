@@ -2,6 +2,11 @@ import { defineStore } from 'pinia'
 
 type LoadingMode = 'indeterminate' | 'determinate'
 
+export interface LoadingOverlayDetailItem {
+  label: string
+  description: string
+}
+
 export interface LoadingOverlayOptions {
   mode?: LoadingMode
   progress?: number
@@ -12,6 +17,10 @@ export interface LoadingOverlayOptions {
   cancelText?: string
   autoClose?: boolean
   autoCloseDelay?: number
+  interactionLock?: string | null
+  detailsTitle?: string
+  details?: LoadingOverlayDetailItem[]
+  detailsExpanded?: boolean
 }
 
 interface LoadingOverlayState {
@@ -25,6 +34,10 @@ interface LoadingOverlayState {
   cancelText: string
   autoClose: boolean
   autoCloseDelay: number
+  interactionLock: string | null
+  detailsTitle: string
+  details: LoadingOverlayDetailItem[]
+  detailsExpanded: boolean
 }
 
 interface UiState {
@@ -46,6 +59,10 @@ const defaultOverlayState: LoadingOverlayState = {
   cancelText: '取消',
   autoClose: true,
   autoCloseDelay: 600,
+  interactionLock: null,
+  detailsTitle: '详情',
+  details: [],
+  detailsExpanded: false,
 }
 
 let loadingOverlayCancelHandler: (() => void) | null = null
@@ -83,23 +100,76 @@ export const useUiStore = defineStore('ui', {
         cancelText: options.cancelText ?? defaultOverlayState.cancelText,
         autoClose: options.autoClose ?? defaultOverlayState.autoClose,
         autoCloseDelay: options.autoCloseDelay ?? defaultOverlayState.autoCloseDelay,
+        interactionLock: options.interactionLock ?? defaultOverlayState.interactionLock,
+        detailsTitle: options.detailsTitle ?? defaultOverlayState.detailsTitle,
+        details: Array.isArray(options.details) ? [...options.details] : defaultOverlayState.details,
+        detailsExpanded: options.detailsExpanded ?? defaultOverlayState.detailsExpanded,
       }
     },
     updateLoadingOverlay(options: Partial<LoadingOverlayOptions>) {
-      this.loadingOverlay = {
-        ...this.loadingOverlay,
-        ...options,
-        mode: options.mode ?? this.loadingOverlay.mode,
-        progress: this.loadingOverlay.mode === 'determinate'
-          ? this.normalizeProgress(options.progress ?? this.loadingOverlay.progress)
-          : this.loadingOverlay.progress,
-        title: options.title ?? this.loadingOverlay.title,
-        message: options.message ?? this.loadingOverlay.message,
-        closable: options.closable ?? this.loadingOverlay.closable,
-        cancelable: options.cancelable ?? this.loadingOverlay.cancelable,
-        cancelText: options.cancelText ?? this.loadingOverlay.cancelText,
-        autoClose: options.autoClose ?? this.loadingOverlay.autoClose,
-        autoCloseDelay: options.autoCloseDelay ?? this.loadingOverlay.autoCloseDelay,
+      // Update mode if provided, otherwise keep current
+      if (options.mode !== undefined) {
+        this.loadingOverlay.mode = options.mode
+      }
+      
+      // Update progress only if mode is determinate, and handle normalization
+      if (this.loadingOverlay.mode === 'determinate' && options.progress !== undefined) {
+        this.loadingOverlay.progress = this.normalizeProgress(options.progress)
+      }
+      
+      // Update title if provided
+      if (options.title !== undefined) {
+        this.loadingOverlay.title = options.title
+      }
+      
+      // Update message if provided
+      if (options.message !== undefined) {
+        this.loadingOverlay.message = options.message
+      }
+      
+      // Update closable if provided
+      if (options.closable !== undefined) {
+        this.loadingOverlay.closable = options.closable
+      }
+      
+      // Update cancelable if provided
+      if (options.cancelable !== undefined) {
+        this.loadingOverlay.cancelable = options.cancelable
+      }
+      
+      // Update cancelText if provided
+      if (options.cancelText !== undefined) {
+        this.loadingOverlay.cancelText = options.cancelText
+      }
+      
+      // Update autoClose if provided
+      if (options.autoClose !== undefined) {
+        this.loadingOverlay.autoClose = options.autoClose
+      }
+      
+      // Update autoCloseDelay if provided
+      if (options.autoCloseDelay !== undefined) {
+        this.loadingOverlay.autoCloseDelay = options.autoCloseDelay
+      }
+      
+      // Update interactionLock if provided
+      if (options.interactionLock !== undefined) {
+        this.loadingOverlay.interactionLock = options.interactionLock
+      }
+      
+      // Update detailsTitle if provided
+      if (options.detailsTitle !== undefined) {
+        this.loadingOverlay.detailsTitle = options.detailsTitle
+      }
+      
+      // Update details if provided (create new array to trigger reactivity)
+      if (Array.isArray(options.details)) {
+        this.loadingOverlay.details = [...options.details]
+      }
+      
+      // Update detailsExpanded if provided
+      if (options.detailsExpanded !== undefined) {
+        this.loadingOverlay.detailsExpanded = options.detailsExpanded
       }
 
       if (this.loadingOverlay.mode === 'determinate') {
@@ -108,11 +178,15 @@ export const useUiStore = defineStore('ui', {
     },
     updateLoadingProgress(progress: number, options: { autoClose?: boolean; autoCloseDelay?: number } = {}) {
       this.loadingOverlay.mode = 'determinate'
-      this.loadingOverlay.progress = this.normalizeProgress(progress)
-      if (typeof options.autoClose === 'boolean') {
+      const normalizedProgress = this.normalizeProgress(progress)
+      // Only update if value actually changed to prevent unnecessary updates
+      if (this.loadingOverlay.progress !== normalizedProgress) {
+        this.loadingOverlay.progress = normalizedProgress
+      }
+      if (typeof options.autoClose === 'boolean' && this.loadingOverlay.autoClose !== options.autoClose) {
         this.loadingOverlay.autoClose = options.autoClose
       }
-      if (typeof options.autoCloseDelay === 'number') {
+      if (typeof options.autoCloseDelay === 'number' && this.loadingOverlay.autoCloseDelay !== options.autoCloseDelay) {
         this.loadingOverlay.autoCloseDelay = options.autoCloseDelay
       }
       this.handleAutoClose()
@@ -132,6 +206,18 @@ export const useUiStore = defineStore('ui', {
         title: this.loadingOverlay.title,
         message: this.loadingOverlay.message,
       }
+    },
+    isInteractionLocked(lock?: string | null) {
+      if (!this.loadingOverlay.visible) {
+        return false
+      }
+      if (!this.loadingOverlay.interactionLock) {
+        return false
+      }
+      if (!lock) {
+        return true
+      }
+      return this.loadingOverlay.interactionLock === lock
     },
     requestClose() {
       if (!this.loadingOverlay.closable) return

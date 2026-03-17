@@ -20,6 +20,7 @@
         :task-id="task.id"
         class="preview-renderer__model-canvas"
         @dimensions="onModelDimensions"
+        @model-stats="onModelStats"
       />
     </div>
     <div v-else-if="task.preview.kind === 'hdri'" class="preview-renderer__model">
@@ -121,6 +122,10 @@ async function refreshLodPresetPreview(): Promise<void> {
 function onModelDimensions(payload: { length: number; width: number; height: number }): void {
   const { length, width, height } = payload
   uploadStore.updateModelDimensions(props.task.id, { length, width, height })
+}
+
+function onModelStats(payload: { vertexCount: number; faceCount: number; meshCount: number }): void {
+  uploadStore.updateModelMetadata(props.task.id, payload)
 }
 
 function rgbToHex(r: number, g: number, b: number): string {

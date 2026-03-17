@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { LoadingOverlayDetailItem } from '@/stores/uiStore'
 
 const props = withDefaults(
   defineProps<{
@@ -11,6 +12,9 @@ const props = withDefaults(
     closable?: boolean
     cancelable?: boolean
     cancelText?: string
+    detailsTitle?: string
+    details?: LoadingOverlayDetailItem[]
+    detailsExpanded?: boolean
   }>(),
   {
     mode: 'indeterminate',
@@ -20,6 +24,9 @@ const props = withDefaults(
     closable: false,
     cancelable: false,
     cancelText: '取消',
+    detailsTitle: '详情',
+    details: () => [],
+    detailsExpanded: false,
   },
 )
 
@@ -35,6 +42,7 @@ const safeProgress = computed(() => {
 })
 
 const percentLabel = computed(() => `${Math.round(safeProgress.value)}%`)
+const hasDetails = computed(() => Array.isArray(props.details) && props.details.length > 0)
 
 function handleClose() {
   if (!props.closable) return
@@ -92,6 +100,18 @@ function handleCancel() {
                 {{ cancelText }}
               </v-btn>
             </div>
+
+            <details v-if="hasDetails" class="overlay-details" :open="detailsExpanded">
+              <summary class="overlay-details__summary">
+                {{ detailsTitle }} ({{ details.length }})
+              </summary>
+              <div class="overlay-details__list">
+                <div v-for="item in details" :key="`${item.label}:${item.description}`" class="overlay-details__item">
+                  <div class="overlay-details__label">{{ item.label }}</div>
+                  <div class="overlay-details__description">{{ item.description }}</div>
+                </div>
+              </div>
+            </details>
           </section>
         </div>
       </div>
@@ -175,6 +195,54 @@ function handleCancel() {
   margin-top: 18px;
   display: flex;
   justify-content: center;
+}
+
+.overlay-details {
+  margin-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 16px;
+}
+
+.overlay-details__summary {
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  list-style: none;
+}
+
+.overlay-details__summary::-webkit-details-marker {
+  display: none;
+}
+
+.overlay-details__list {
+  max-height: min(36vh, 280px);
+  overflow: auto;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.overlay-details__item {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.overlay-details__label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.overlay-details__description {
+  margin-top: 4px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  opacity: 0.8;
+  word-break: break-word;
 }
 
 .overlay-fade-enter-active,

@@ -430,6 +430,10 @@ function buildExtraHints(entry: UploadAssetEntry): string[] {
     if (parts.length) hints.push(`Model dimensions ${parts.join(', ')}`)
     const sizeCategory = entrySizeCategory(entry)
     if (sizeCategory) hints.push(`Size category ${sizeCategory}`)
+    const modelStats = resolveEntryModelStats(entry)
+    if (modelStats) {
+      hints.push(`Model stats ${formatCount(modelStats.vertexCount)} vertices, ${formatCount(modelStats.faceCount)} faces, ${formatCount(modelStats.meshCount)} meshes`)
+    }
   }
   if (entry.asset.type === 'image') {
     const parts: string[] = []
@@ -438,6 +442,44 @@ function buildExtraHints(entry: UploadAssetEntry): string[] {
     if (parts.length) hints.push(`Image size ${parts.join(', ')}`)
   }
   return hints
+}
+
+function resolveEntryModelStats(entry: UploadAssetEntry): { vertexCount: number; faceCount: number; meshCount: number } | null {
+  const candidate = entry.asset.metadata?.modelStats
+  if (!candidate || typeof candidate !== 'object') {
+    return null
+  }
+  const vertexCount = Number((candidate as { vertexCount?: unknown }).vertexCount)
+  const faceCount = Number((candidate as { faceCount?: unknown }).faceCount)
+  const meshCount = Number((candidate as { meshCount?: unknown }).meshCount)
+  if (!Number.isFinite(vertexCount) || !Number.isFinite(faceCount) || !Number.isFinite(meshCount)) {
+    return null
+  }
+  return {
+    vertexCount: Math.max(0, Math.round(vertexCount)),
+    faceCount: Math.max(0, Math.round(faceCount)),
+    meshCount: Math.max(0, Math.round(meshCount)),
+  }
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(value)))
+}
+
+function formatEntryModelStats(entry: UploadAssetEntry): string | null {
+  const modelStats = resolveEntryModelStats(entry)
+  if (!modelStats) {
+    return null
+  }
+  return `${formatCount(modelStats.vertexCount)} vertices | ${formatCount(modelStats.faceCount)} faces | ${formatCount(modelStats.meshCount)} meshes`
+}
+
+function hasEntryMetaOverlay(entry: UploadAssetEntry): boolean {
+  if (isModelAsset(entry.asset)) return !!resolveEntryModelStats(entry)
+  if (entry.asset.type === 'image' || entry.asset.type === 'texture') {
+    return !!(entry.imageWidth || entry.imageHeight)
+  }
+  return false
 }
 
 function integrateSuggestedTags(entry: UploadAssetEntry, tags: string[]): number {
@@ -1667,34 +1709,67 @@ function keepLocalReferencesAfterUpload(): void {
                         @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
                       />
 
-                      <div v-if="isModelAsset(entry.asset)" class="upload-preview__actions">
-                        <v-btn
-                          color="primary"
-                          variant="tonal"
-                          size="small"
-                          icon="mdi-camera"
-                          :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
-                          title="Capture thumbnail"
-                          aria-label="Capture thumbnail"
-                          @click="() => capturePreviewThumbnail(entry)"
-                        />
-                        <v-btn
-                          color="secondary"
-                          variant="tonal"
-                          size="small"
-                          icon="mdi-upload"
-                          :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
-                          title="Upload custom thumbnail"
-                          aria-label="Upload custom thumbnail"
-                          @click="() => promptThumbnailUpload(entry)"
-                        />
-                        <input
-                          type="file"
-                          accept="image/*"
-                          class="upload-preview__file-input"
-                          :ref="(el) => registerThumbnailInput(entry.assetId, el as HTMLInputElement | null)"
-                          @change="(event) => handleThumbnailFileSelected(entry, event)"
-                        />
+                      <div v-if="hasEntryMetaOverlay(entry)" class="upload-preview__meta-overlay">
+                        <template v-if="resolveEntryModelStats(entry)">
+                          <div class="upload-preview__meta-row">
+                            <span class="upload-preview__meta-k">顶点数</span>
+                            <span class="upload-preview__meta-v">{{ formatCount(resolveEntryModelStats(entry)!.vertexCount) }}</span>
+                          </div>
+                          <div class="upload-preview__meta-row">
+                            <span class="upload-preview__meta-k">面数</span>
+                            <span class="upload-preview__meta-v">{{ formatCount(resolveEntryModelStats(entry)!.faceCount) }}</span>
+                          </div>
+                          <div class="upload-preview__meta-row">
+                            <span class="upload-preview__meta-k">网格数</span>
+                            <span class="upload-preview__meta-v">{{ formatCount(resolveEntryModelStats(entry)!.meshCount) }}</span>
+                          </div>
+                        </template>
+                        <template v-if="(entry.asset.type === 'image' || entry.asset.type === 'texture') && (entry.imageWidth || entry.imageHeight)">
+                          <div v-if="entry.imageWidth" class="upload-preview__meta-row">
+                            <span class="upload-preview__meta-k">宽度</span>
+                            <span class="upload-preview__meta-v">{{ Math.round(entry.imageWidth) }} px</span>
+                          </div>
+                          <div v-if="entry.imageHeight" class="upload-preview__meta-row">
+                            <span class="upload-preview__meta-k">高度</span>
+                            <span class="upload-preview__meta-v">{{ Math.round(entry.imageHeight) }} px</span>
+                          </div>
+                          <div v-if="entry.imageWidth && entry.imageHeight" class="upload-preview__meta-row">
+                            <span class="upload-preview__meta-k">像素数</span>
+                            <span class="upload-preview__meta-v">{{ formatCount(Math.round(entry.imageWidth) * Math.round(entry.imageHeight)) }}</span>
+                          </div>
+                        </template>
+                      </div>
+
+                      <div v-if="isModelAsset(entry.asset) || entry.thumbnailPreviewUrl || entry.asset.thumbnail" class="upload-preview__actions">
+                        <template v-if="isModelAsset(entry.asset)">
+                          <v-btn
+                            color="primary"
+                            variant="tonal"
+                            size="small"
+                            icon="mdi-camera"
+                            :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
+                            title="Capture thumbnail"
+                            aria-label="Capture thumbnail"
+                            @click="() => capturePreviewThumbnail(entry)"
+                          />
+                          <v-btn
+                            color="secondary"
+                            variant="tonal"
+                            size="small"
+                            icon="mdi-upload"
+                            :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
+                            title="Upload custom thumbnail"
+                            aria-label="Upload custom thumbnail"
+                            @click="() => promptThumbnailUpload(entry)"
+                          />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            class="upload-preview__file-input"
+                            :ref="(el) => registerThumbnailInput(entry.assetId, el as HTMLInputElement | null)"
+                            @change="(event) => handleThumbnailFileSelected(entry, event)"
+                          />
+                        </template>
                         <div v-if="entry.thumbnailPreviewUrl || entry.asset.thumbnail" class="upload-preview__thumb">
                           <img :src="entry.thumbnailPreviewUrl || entry.asset.thumbnail || ''" alt="Captured thumbnail" />
                           <span class="upload-preview__thumb-label">Current thumbnail</span>
@@ -1952,6 +2027,40 @@ function keepLocalReferencesAfterUpload(): void {
 .upload-preview-wrapper {
   position: relative;
   width: 100%;
+}
+
+.upload-preview__meta-overlay {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.58);
+  border-radius: 8px;
+  padding: 8px 10px;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
+.upload-preview__meta-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  line-height: 1.4;
+}
+
+.upload-preview__meta-k {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.6);
+  min-width: 42px;
+}
+
+.upload-preview__meta-v {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: rgba(233, 236, 241, 0.92);
 }
 
 .upload-preview__actions {
