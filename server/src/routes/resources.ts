@@ -2,13 +2,16 @@ import Router from 'koa-router'
 import { authMiddleware } from '@/middleware/auth'
 import { requireAnyPermission } from '@/middleware/permission'
 import {
+  bulkMoveAssetsDirectory,
   bulkMoveAssetsCategory,
+  createAssetDirectory,
   createAssetSeries,
   updateAssetSeries,
   createAssetCategory,
   createAssetTag,
   deleteAsset,
   deleteAssetCategory,
+  deleteAssetDirectory,
   deleteAssetTag,
   downloadAsset,
   getAsset,
@@ -18,6 +21,8 @@ import {
   getAssetCategoryPath,
   getAssetManifest,
   getProjectDirectories,
+  listAssetDirectories,
+  listAssetDirectoryEntries,
   listCategoryAssets,
   listAssetTags,
   listAssets,
@@ -26,10 +31,12 @@ import {
   listResourceCategories,
   mergeAssetCategories,
   moveAssetCategory,
+  moveAssetDirectory,
   searchAssetCategories,
   refreshAssetManifest,
   updateAsset,
   updateAssetCategory,
+  updateAssetDirectory,
   updateAssetTag,
   uploadAsset,
 } from '@/controllers/resourceController'
@@ -43,6 +50,12 @@ resourceRouter.get('/categories/search', searchAssetCategories)
 
 resourceRouter.use(authMiddleware)
 resourceRouter.post('/categories', requireAnyPermission(['resource:write']), createAssetCategory)
+resourceRouter.get('/asset-directories', requireAnyPermission(['resource:read']), listAssetDirectories)
+resourceRouter.get('/asset-directories/entries', requireAnyPermission(['resource:read']), listAssetDirectoryEntries)
+resourceRouter.post('/asset-directories', requireAnyPermission(['resource:write']), createAssetDirectory)
+resourceRouter.put('/asset-directories/:id', requireAnyPermission(['resource:write']), updateAssetDirectory)
+resourceRouter.delete('/asset-directories/:id', requireAnyPermission(['resource:write']), deleteAssetDirectory)
+resourceRouter.post('/asset-directories/:id/move', requireAnyPermission(['resource:write']), moveAssetDirectory)
 resourceRouter.get('/categories/:id/children', requireAnyPermission(['resource:read']), getAssetCategoryChildren)
 resourceRouter.get('/categories/:id/path', requireAnyPermission(['resource:read']), getAssetCategoryPath)
 resourceRouter.get('/categories/:id/descendants', requireAnyPermission(['resource:read']), getAssetCategoryDescendants)
@@ -82,6 +95,7 @@ resourceRouter.put(
 resourceRouter.delete('/assets/:id', requireAnyPermission(['resource:write']), deleteAsset)
 resourceRouter.get('/assets/:id/download', requireAnyPermission(['resource:read']), downloadAsset)
 resourceRouter.post('/assets/bulk-move-category', requireAnyPermission(['resource:write']), bulkMoveAssetsCategory)
+resourceRouter.post('/assets/bulk-move-directory', requireAnyPermission(['resource:write']), bulkMoveAssetsDirectory)
 resourceRouter.post('/assets/manifest/refresh', requireAnyPermission(['resource:write']), refreshAssetManifest)
 resourceRouter.get('/tags', requireAnyPermission(['resource:read']), listAssetTags)
 resourceRouter.post('/tags', requireAnyPermission(['resource:write']), createAssetTag)

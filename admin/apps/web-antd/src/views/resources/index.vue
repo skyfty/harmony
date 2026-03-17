@@ -1,27 +1,44 @@
 <script setup lang="ts">
 import type { FormInstance, UploadChangeParam, UploadFile, UploadProps } from 'ant-design-vue';
+import type { TableProps } from 'ant-design-vue';
 
 import { computed, onMounted, reactive, ref } from 'vue';
 
-import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
   buildResourceDownloadUrl,
+  bulkMoveResourceAssetsDirectoryApi,
   createResourceAssetApi,
+  createResourceDirectoryApi,
   deleteResourceAssetApi,
+  deleteResourceDirectoryApi,
   getResourceAssetApi,
-  listResourceAssetsApi,
   listResourceCategoriesApi,
+  listResourceDirectoriesApi,
+  listResourceDirectoryEntriesApi,
   listResourceSeriesApi,
   listResourceTagsApi,
+  moveResourceDirectoryApi,
   updateResourceAssetApi,
+  updateResourceDirectoryApi,
   type ResourceAssetItem,
   type ResourceCategoryItem,
+  type ResourceDirectoryEntry,
+  type ResourceDirectoryEntryDirectory,
+  type ResourceDirectoryItem,
   type ResourceSeriesItem,
   type ResourceTagItem,
 } from '#/api';
 
-import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Upload, Tooltip } from 'ant-design-vue';
-import { DownloadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Table, Upload, Tooltip, Tag } from 'ant-design-vue';
+import {
+  DeleteOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  FolderOpenOutlined,
+  FolderOutlined,
+  PlusOutlined,
+  ArrowRightOutlined,
+} from '@ant-design/icons-vue';
 
 interface AssetFormModel {
   categoryId: string;
@@ -66,6 +83,23 @@ const brokenThumbnailUrls = ref<Set<string>>(new Set());
 const previewVisible = ref(false);
 const previewImage = ref('');
 const previewTitle = ref('');
+const directoryItems = ref<ResourceDirectoryItem[]>([]);
+const currentDirectoryId = ref('');
+const currentDirectoryPath = ref<Array<{ id: string; name: string }>>([]);
+const mixedItems = ref<ResourceDirectoryEntry[]>([]);
+const loadingEntries = ref(false);
+const keyword = ref('');
+const selectedAssetIds = ref<string[]>([]);
+const movingAssets = ref(false);
+const movingAssetIds = ref<string[]>([]);
+const movingDirectoryId = ref<null | string>(null);
+const moveModalOpen = ref(false);
+const moveTargetDirectoryId = ref('');
+const moveMode = ref<'asset' | 'directory'>('asset');
+const directoryModalOpen = ref(false);
+const directoryModalMode = ref<'create' | 'edit'>('create');
+const directoryName = ref('');
+const dragPayload = ref<null | { id: string; kind: 'asset' | 'directory' }>(null);
 
 const categoryOptions = computed(() => {
   const output: Array<{ label: string; value: string }> = [];
@@ -90,6 +124,7 @@ const filterSeriesOptions = computed(() => [{ label: '全部', value: '' }, ...s
 const filterTagOptions = computed(() => [{ label: '全部', value: '' }, ...tagOptions.value]);
 
 const modalTitle = computed(() => (editingId.value ? '编辑资产' : '新增资产'));
+const directoryModalTitle = computed(() => (directoryModalMode.value === 'create' ? '新建目录' : '编辑目录'));
 
 const assetUploadProps: UploadProps = {
   beforeUpload: () => false,
@@ -138,6 +173,43 @@ function resetForm() {
   thumbnailFileList.value = [];
 }
 
+function isDirectoryEntry(item: ResourceDirectoryEntry): item is ResourceDirectoryEntryDirectory {
+  return (item as ResourceDirectoryEntryDirectory).kind === 'directory';
+}
+
+const directoryOptions = computed(() => {
+  const output: Array<{ label: string; value: string }> = [];
+  function walk(nodes: ResourceDirectoryItem[], prefix = '') {
+    nodes.forEach((node) => {
+      const label = prefix ? `${prefix} / ${node.name}` : node.name;
+      output.push({ label, value: node.id });
+      if (Array.isArray(node.children) && node.children.length) {
+        walk(node.children, label);
+      }
+    });
+  }
+  walk(directoryItems.value);
+  return output;
+});
+
+const filteredItems = computed(() => {
+  const search = keyword.value.trim().toLowerCase();
+  const raw = mixedItems.value;
+  const sorted = [...raw].sort((a, b) => {
+    const aDir = isDirectoryEntry(a);
+    const bDir = isDirectoryEntry(b);
+    if (aDir && !bDir) return -1;
+    if (!aDir && bDir) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  if (!search) {
+    return sorted;
+  }
+  return sorted.filter((item) => item.name.toLowerCase().includes(search));
+});
+
+const selectedAssetsCount = computed(() => selectedAssetIds.value.length);
+
 function mapDoneFile(url: null | string, name: string): UploadFile[] {
   if (!url) {
     return [];
@@ -153,14 +225,34 @@ function mapDoneFile(url: null | string, name: string): UploadFile[] {
 }
 
 async function loadLookups() {
-  const [categoryList, tagList, seriesList] = await Promise.all([
+  const [categoryList, tagList, seriesList, dirTree] = await Promise.all([
     listResourceCategoriesApi(),
     listResourceTagsApi(),
     listResourceSeriesApi(),
+    listResourceDirectoriesApi(),
   ]);
   categories.value = categoryList || [];
   tags.value = tagList || [];
   series.value = seriesList || [];
+  directoryItems.value = dirTree || [];
+}
+
+async function loadCurrentDirectoryEntries() {
+  loadingEntries.value = true;
+  try {
+    const result = await listResourceDirectoryEntriesApi(currentDirectoryId.value || undefined);
+    currentDirectoryId.value = result.currentDirectory.id;
+    currentDirectoryPath.value = result.currentDirectory.path || [];
+    mixedItems.value = result.items || [];
+    selectedAssetIds.value = [];
+  } finally {
+    loadingEntries.value = false;
+  }
+}
+
+async function refreshDirectoryContext() {
+  await loadLookups();
+  await loadCurrentDirectoryEntries();
 }
 
 function openCreateModal() {
@@ -190,6 +282,114 @@ async function openEditModal(row: ResourceAssetItem) {
   assetFileList.value = mapDoneFile(detail.url || null, detail.originalFilename || detail.name || 'asset-file');
   thumbnailFileList.value = mapDoneFile(detail.thumbnailUrl || detail.previewUrl || null, 'thumbnail');
   modalOpen.value = true;
+}
+
+function openDirectory(item: ResourceDirectoryEntryDirectory) {
+  currentDirectoryId.value = item.id;
+  loadCurrentDirectoryEntries();
+}
+
+function openDirectoryCreateModal() {
+  directoryModalMode.value = 'create';
+  directoryName.value = '';
+  directoryModalOpen.value = true;
+}
+
+function openDirectoryEditModal(directoryId?: string) {
+  const id = directoryId || currentDirectoryId.value;
+  const target = directoryOptions.value.find((item) => item.value === id);
+  if (!target || currentDirectoryPath.value.length <= 1) {
+    message.warning('根目录不支持编辑');
+    return;
+  }
+  directoryModalMode.value = 'edit';
+  directoryName.value = target.label.split('/').pop()?.trim() || '';
+  movingDirectoryId.value = id;
+  directoryModalOpen.value = true;
+}
+
+function handleDirectoryDelete(directoryId?: string) {
+  const id = directoryId || currentDirectoryId.value;
+  const isRoot = currentDirectoryPath.value.length <= 1 && id === currentDirectoryId.value;
+  if (isRoot) {
+    message.warning('根目录不支持删除');
+    return;
+  }
+  Modal.confirm({
+    title: '确认删除目录吗？',
+    content: '仅支持删除空目录。',
+    okType: 'danger',
+    onOk: async () => {
+      await deleteResourceDirectoryApi(id);
+      message.success('目录已删除');
+      if (id === currentDirectoryId.value && currentDirectoryPath.value.length > 1) {
+        currentDirectoryId.value = currentDirectoryPath.value[currentDirectoryPath.value.length - 2]!.id;
+      }
+      await refreshDirectoryContext();
+    },
+  });
+}
+
+function openMoveAssetModal(assetId?: string) {
+  moveMode.value = 'asset';
+  movingAssetIds.value = assetId ? [assetId] : [...selectedAssetIds.value];
+  if (!movingAssetIds.value.length) {
+    message.warning('请先选择要移动的资产');
+    return;
+  }
+  moveTargetDirectoryId.value = currentDirectoryId.value;
+  moveModalOpen.value = true;
+}
+
+function openMoveDirectoryModal(directoryId: string) {
+  moveMode.value = 'directory';
+  movingDirectoryId.value = directoryId;
+  moveTargetDirectoryId.value = currentDirectoryId.value;
+  moveModalOpen.value = true;
+}
+
+async function submitMove() {
+  if (!moveTargetDirectoryId.value) {
+    message.warning('请选择目标目录');
+    return;
+  }
+  movingAssets.value = true;
+  try {
+    if (moveMode.value === 'asset') {
+      await bulkMoveResourceAssetsDirectoryApi({
+        assetIds: movingAssetIds.value,
+        targetDirectoryId: moveTargetDirectoryId.value,
+      });
+      message.success('资产移动成功');
+    } else if (movingDirectoryId.value) {
+      await moveResourceDirectoryApi(movingDirectoryId.value, moveTargetDirectoryId.value);
+      message.success('目录移动成功');
+    }
+    moveModalOpen.value = false;
+    await refreshDirectoryContext();
+  } finally {
+    movingAssets.value = false;
+  }
+}
+
+async function submitDirectoryModal() {
+  const name = directoryName.value.trim();
+  if (!name) {
+    message.warning('请输入目录名');
+    return;
+  }
+  if (directoryModalMode.value === 'create') {
+    await createResourceDirectoryApi({
+      name,
+      parentId: currentDirectoryId.value || undefined,
+    });
+    message.success('目录创建成功');
+  } else if (movingDirectoryId.value) {
+    await updateResourceDirectoryApi(movingDirectoryId.value, { name });
+    message.success('目录更新成功');
+  }
+  directoryModalOpen.value = false;
+  await refreshDirectoryContext();
 }
 
 function handleAssetFileChange(info: UploadChangeParam<UploadFile<any>>) {
@@ -252,6 +452,7 @@ async function submitAsset() {
   payload.append('name', assetFormModel.name.trim());
   payload.append('type', assetFormModel.type);
   payload.append('categoryId', assetFormModel.categoryId);
+  payload.append('directoryId', currentDirectoryId.value);
   payload.append('description', assetFormModel.description.trim());
 
   payload.append('tagIds', JSON.stringify(assetFormModel.tagIds || []));
@@ -284,8 +485,7 @@ async function submitAsset() {
       message.success('资产创建成功');
     }
     modalOpen.value = false;
-    await loadLookups();
-    assetGridApi.reload();
+    await refreshDirectoryContext();
   } finally {
     submitting.value = false;
   }
@@ -299,7 +499,7 @@ function handleDelete(row: ResourceAssetItem) {
     onOk: async () => {
       await deleteResourceAssetApi(row.id);
       message.success('资产已删除');
-      assetGridApi.reload();
+      loadCurrentDirectoryEntries();
     },
   });
 }
@@ -327,154 +527,193 @@ function handleThumbnailError(row: ResourceAssetItem) {
   brokenThumbnailUrls.value = next;
 }
 
-const [AssetGrid, assetGridApi] = useVbenVxeGrid<ResourceAssetItem>({
-  formOptions: {
-    schema: [
-      {
-        component: 'Input',
-        fieldName: 'keyword',
-        label: '关键字',
-        componentProps: { allowClear: true, placeholder: '资产名称' },
-      },
-      {
-        component: 'Select',
-        fieldName: 'type',
-        label: '类型',
-        componentProps: {
-          allowClear: true,
-          options: typeOptions,
-          placeholder: '全部类型',
-        },
-      },
-      {
-        component: 'Select',
-        fieldName: 'categoryId',
-        label: '分类',
-        componentProps: {
-          allowClear: true,
-          options: filterCategoryOptions,
-          placeholder: '全部分类',
-        },
-      },
-      {
-        component: 'Select',
-        fieldName: 'seriesId',
-        label: '系列',
-        componentProps: {
-          allowClear: true,
-          options: filterSeriesOptions,
-          placeholder: '全部系列',
-        },
-      },
-      {
-        component: 'Select',
-        fieldName: 'tagId',
-        label: '标签',
-        componentProps: {
-          allowClear: true,
-          options: filterTagOptions,
-          placeholder: '全部标签',
-        },
-      },
-    ],
+const columns = [
+  { dataIndex: 'thumbnail', key: 'thumbnail', title: '缩略图', width: 90 },
+  { dataIndex: 'name', key: 'name', title: '名称' },
+  { dataIndex: 'type', key: 'type', title: '类型', width: 120 },
+  { dataIndex: 'categoryPathString', key: 'categoryPathString', title: '分类路径', width: 260 },
+  { dataIndex: 'size', key: 'size', title: '大小(B)', width: 120 },
+  { dataIndex: 'updatedAt', key: 'updatedAt', title: '更新时间', width: 180 },
+  { dataIndex: 'actions', key: 'actions', title: '操作', width: 280 },
+];
+
+const rowSelection = computed<TableProps['rowSelection']>(() => ({
+  selectedRowKeys: selectedAssetIds.value,
+  onChange: (keys, rows) => {
+    selectedAssetIds.value = rows
+      .filter((item) => !isDirectoryEntry(item as ResourceDirectoryEntry))
+      .map((item) => (item as ResourceAssetItem).id);
   },
-  gridOptions: {
-    border: true,
-    columns: [
-      {
-        field: 'thumbnailUrl',
-        minWidth: 96,
-        slots: { default: 'thumbnail' },
-        title: '缩略图',
-      },
-      { field: 'name', minWidth: 180, title: '名称' },
-      { field: 'type', minWidth: 100, title: '类型' },
-      { field: 'categoryPathString', minWidth: 220, title: '分类路径' },
-      { field: 'seriesName', minWidth: 140, title: '系列' },
-      { field: 'size', minWidth: 120, title: '大小(B)' },
-      { field: 'createdAt', minWidth: 170, formatter: 'formatDateTime', title: '创建时间' },
-      { field: 'updatedAt', minWidth: 170, formatter: 'formatDateTime', title: '更新时间' },
-      {
-        align: 'left',
-        field: 'actions',
-        fixed: 'right',
-        minWidth: 240,
-        slots: { default: 'actions' },
-        title: '操作',
-      },
-    ],
-    pagerConfig: {
-      pageSize: 20,
+  getCheckboxProps: (record) => ({
+    disabled: isDirectoryEntry(record as ResourceDirectoryEntry),
+  }),
+}));
+
+function formatDateTime(value?: string) {
+  if (!value) {
+    return '-';
+  }
+  return new Date(value).toLocaleString();
+}
+
+function customRow(record: ResourceDirectoryEntry) {
+  const item = record;
+  return {
+    draggable: true,
+    onDragstart: () => {
+      dragPayload.value = {
+        id: item.id,
+        kind: isDirectoryEntry(item) ? 'directory' : 'asset',
+      };
     },
-    proxyConfig: {
-      ajax: {
-        query: async ({ page }: any, formValues: Record<string, any>) => {
-          return await listResourceAssetsApi({
-            categoryId: formValues.categoryId || undefined,
-            includeDescendants: true,
-            keyword: formValues.keyword || undefined,
-            page: page.currentPage,
-            pageSize: page.pageSize,
-            seriesId: formValues.seriesId || undefined,
-            tagIds: formValues.tagId ? [formValues.tagId] : undefined,
-            types: formValues.type ? [formValues.type] : undefined,
-          });
-        },
-      },
+    onDragover: (event: DragEvent) => {
+      if (isDirectoryEntry(item) && dragPayload.value) {
+        event.preventDefault();
+      }
     },
-    toolbarConfig: {
-      custom: true,
-      refresh: true,
-      search: true,
-      zoom: true,
+    onDrop: async (event: DragEvent) => {
+      if (!isDirectoryEntry(item) || !dragPayload.value) {
+        return;
+      }
+      event.preventDefault();
+      if (dragPayload.value.kind === 'asset') {
+        await bulkMoveResourceAssetsDirectoryApi({
+          assetIds: [dragPayload.value.id],
+          targetDirectoryId: item.id,
+        });
+        message.success('资产移动成功');
+      } else if (dragPayload.value.id !== item.id) {
+        await moveResourceDirectoryApi(dragPayload.value.id, item.id);
+        message.success('目录移动成功');
+      }
+      dragPayload.value = null;
+      await refreshDirectoryContext();
     },
-  },
-});
+    onDragend: () => {
+      dragPayload.value = null;
+    },
+  };
+}
 
 onMounted(async () => {
-  await loadLookups();
+  await refreshDirectoryContext();
 });
 </script>
 
 <template>
   <div class="p-5">
-    <AssetGrid>
-      <template #toolbar-actions>
-        <Button v-access:code="'resource:write'" type="primary" @click="openCreateModal">新增资产</Button>
-      </template>
+    <Space style="width: 100%; justify-content: space-between; margin-bottom: 12px" align="center">
+      <Space>
+        <Button v-access:code="'resource:write'" type="primary" @click="openCreateModal">
+          <PlusOutlined />
+          新增资产
+        </Button>
+        <Button v-access:code="'resource:write'" @click="openDirectoryCreateModal">新建目录</Button>
+        <Button v-access:code="'resource:write'" @click="() => openDirectoryEditModal()">编辑目录</Button>
+        <Button v-access:code="'resource:write'" danger @click="() => handleDirectoryDelete()">删除目录</Button>
+        <Button v-access:code="'resource:write'" @click="() => openMoveAssetModal()" :disabled="selectedAssetsCount === 0">
+          移动选中资产
+        </Button>
+      </Space>
+      <Input v-model:value="keyword" allow-clear style="width: 260px" placeholder="搜索当前目录文件/目录" />
+    </Space>
 
-      <template #thumbnail="{ row }">
-        <Image
-          v-if="isThumbnailAvailable(row)"
-          :src="getThumbnailUrl(row)"
-          :width="52"
-          :height="52"
-          style="object-fit: cover; border-radius: 4px"
-          @error="() => handleThumbnailError(row)"
-        />
-        <span v-else>-</span>
+    <Space style="margin-bottom: 12px" wrap>
+      <Tag color="blue">当前目录</Tag>
+      <template v-for="(crumb, index) in currentDirectoryPath" :key="crumb.id">
+        <Button type="link" size="small" @click="() => { currentDirectoryId = crumb.id; loadCurrentDirectoryEntries(); }">{{ crumb.name }}</Button>
+        <ArrowRightOutlined v-if="index < currentDirectoryPath.length - 1" />
       </template>
+    </Space>
 
-      <template #actions="{ row }">
-        <Space>
-          <Tooltip title="下载">
-            <Button type="text" size="small" @click="handleDownload(row.id)">
-              <DownloadOutlined />
+    <Table
+      :columns="columns"
+      :data-source="filteredItems"
+      :loading="loadingEntries"
+      :pagination="false"
+      :row-selection="rowSelection"
+      :custom-row="customRow"
+      :row-key="(row: any) => row.id"
+      size="middle"
+    >
+      <template #bodyCell="{ column, record }">
+        <template v-if="column.key === 'thumbnail'">
+          <template v-if="isDirectoryEntry(record)">
+            <FolderOutlined style="font-size: 20px; color: #1677ff" />
+          </template>
+          <template v-else>
+            <Image
+              v-if="isThumbnailAvailable(record)"
+              :src="getThumbnailUrl(record)"
+              :width="42"
+              :height="42"
+              style="object-fit: cover; border-radius: 4px"
+              @error="() => handleThumbnailError(record)"
+            />
+            <span v-else>-</span>
+          </template>
+        </template>
+
+        <template v-else-if="column.key === 'name'">
+          <template v-if="isDirectoryEntry(record)">
+            <Button type="link" @click="openDirectory(record)">
+              <FolderOpenOutlined /> {{ record.name }}
             </Button>
-          </Tooltip>
-          <Tooltip title="编辑">
-            <Button v-access:code="'resource:write'" type="text" size="small" @click="openEditModal(row)">
-              <EditOutlined />
-            </Button>
-          </Tooltip>
-          <Tooltip title="删除">
-            <Button v-access:code="'resource:write'" danger type="text" size="small" @click="handleDelete(row)">
-              <DeleteOutlined />
-            </Button>
-          </Tooltip>
-        </Space>
+          </template>
+          <template v-else>
+            {{ record.name }}
+          </template>
+        </template>
+
+        <template v-else-if="column.key === 'type'">
+          <template v-if="isDirectoryEntry(record)">目录</template>
+          <template v-else>{{ record.type }}</template>
+        </template>
+
+        <template v-else-if="column.key === 'categoryPathString'">
+          <template v-if="isDirectoryEntry(record)">-</template>
+          <template v-else>{{ record.categoryPathString || '-' }}</template>
+        </template>
+
+        <template v-else-if="column.key === 'size'">
+          <template v-if="isDirectoryEntry(record)">-</template>
+          <template v-else>{{ record.size }}</template>
+        </template>
+
+        <template v-else-if="column.key === 'updatedAt'">
+          {{ formatDateTime(record.updatedAt) }}
+        </template>
+
+        <template v-else-if="column.key === 'actions'">
+          <Space>
+            <template v-if="isDirectoryEntry(record)">
+              <Button v-access:code="'resource:write'" type="text" size="small" @click="openDirectory(record)">打开</Button>
+              <Button v-access:code="'resource:write'" type="text" size="small" @click="() => openDirectoryEditModal(record.id)">编辑</Button>
+              <Button v-access:code="'resource:write'" type="text" size="small" @click="() => openMoveDirectoryModal(record.id)">移动</Button>
+              <Button v-access:code="'resource:write'" danger type="text" size="small" @click="() => handleDirectoryDelete(record.id)">删除</Button>
+            </template>
+            <template v-else>
+              <Tooltip title="下载">
+                <Button type="text" size="small" @click="handleDownload(record.id)">
+                  <DownloadOutlined />
+                </Button>
+              </Tooltip>
+              <Tooltip title="编辑">
+                <Button v-access:code="'resource:write'" type="text" size="small" @click="openEditModal(record)">
+                  <EditOutlined />
+                </Button>
+              </Tooltip>
+              <Button v-access:code="'resource:write'" type="text" size="small" @click="() => openMoveAssetModal(record.id)">移动</Button>
+              <Tooltip title="删除">
+                <Button v-access:code="'resource:write'" danger type="text" size="small" @click="handleDelete(record)">
+                  <DeleteOutlined />
+                </Button>
+              </Tooltip>
+            </template>
+          </Space>
+        </template>
       </template>
-    </AssetGrid>
+    </Table>
 
     <Modal
       :open="modalOpen"
@@ -502,6 +741,9 @@ onMounted(async () => {
             :options="categoryOptions"
             placeholder="选择分类"
           />
+        </Form.Item>
+        <Form.Item label="当前目录">
+          <Input :value="currentDirectoryPath.map((item) => item.name).join(' / ')" disabled />
         </Form.Item>
         <Form.Item label="标签" name="tagIds">
           <Select
@@ -570,6 +812,43 @@ onMounted(async () => {
 
     <Modal :open="previewVisible" :title="previewTitle" :footer="null" @cancel="previewVisible = false">
       <img alt="preview" style="width: 100%" :src="previewImage" />
+    </Modal>
+
+    <Modal
+      :open="directoryModalOpen"
+      :title="directoryModalTitle"
+      ok-text="保存"
+      cancel-text="取消"
+      @ok="submitDirectoryModal"
+      @cancel="directoryModalOpen = false"
+    >
+      <Form :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+        <Form.Item label="目录名" required>
+          <Input v-model:value="directoryName" placeholder="请输入目录名" />
+        </Form.Item>
+      </Form>
+    </Modal>
+
+    <Modal
+      :open="moveModalOpen"
+      :confirm-loading="movingAssets"
+      title="移动到目录"
+      ok-text="移动"
+      cancel-text="取消"
+      @ok="submitMove"
+      @cancel="moveModalOpen = false"
+    >
+      <Form :label-col="{ span: 6 }" :wrapper-col="{ span: 16 }">
+        <Form.Item label="目标目录" required>
+          <Select
+            v-model:value="moveTargetDirectoryId"
+            show-search
+            option-filter-prop="label"
+            :options="directoryOptions"
+            placeholder="选择目标目录"
+          />
+        </Form.Item>
+      </Form>
     </Modal>
   </div>
 </template>
