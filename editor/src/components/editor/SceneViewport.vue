@@ -252,6 +252,7 @@ import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './W
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
 import {
   createFloorCircleHandleRenderer,
+  FLOOR_CIRCLE_HANDLE_Y,
   type FloorCircleHandlePickResult,
 } from './FloorCircleHandleRenderer'
 import {
@@ -4487,6 +4488,8 @@ const waterCircleHandleRenderer = createWaterCircleHandleRenderer()
 const waterDragIntersectionHelper = new THREE.Vector3()
 const waterDragWorldHelper = new THREE.Vector3()
 const waterPlanePointerHelper = new THREE.Vector3()
+const dynamicAxisSurfacePointHelper = new THREE.Vector3()
+const dynamicAxisLocalPointHelper = new THREE.Vector3()
 
 function isSelectedFloorCircleEditMode(): boolean {
   if (!isSelectedFloorEditMode()) {
@@ -5308,6 +5311,94 @@ function setActiveFloorVertexHandle(active: { nodeId: string; vertexIndex: numbe
 
 function setActiveFloorCircleHandle(active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: any } | null) {
   floorCircleHandleRenderer.setActiveHandle(active as any)
+}
+
+function raycastRuntimeSurfacePoint(event: PointerEvent, runtimeObject: THREE.Object3D, result: THREE.Vector3): boolean {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
+    return false
+  }
+  runtimeObject.updateWorldMatrix(true, true)
+  const intersections = raycaster.intersectObject(runtimeObject, true)
+  for (const intersection of intersections) {
+    if (!intersection?.point) {
+      continue
+    }
+    if (isEditorOnlyIntersectionObject(intersection.object as THREE.Object3D)) {
+      continue
+    }
+    result.copy(intersection.point)
+    return true
+  }
+  return false
+}
+
+function clearDynamicWallFloorHandleYOffset() {
+  wallEndpointRenderer.setDynamicYOffset(null)
+  floorVertexRenderer.setDynamicYOffset(null)
+  floorCircleHandleRenderer.setDynamicYOffset(null)
+}
+
+function updateDynamicWallFloorHandleYOffsetFromPointer(event: PointerEvent, canHoverGizmos: boolean) {
+  if (!canHoverGizmos) {
+    clearDynamicWallFloorHandleYOffset()
+    return
+  }
+
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId) {
+    clearDynamicWallFloorHandleYOffset()
+    return
+  }
+
+  if (activeBuildTool.value === 'wall' && isSelectedWallEditMode() && !wallBuildTool.getSession()) {
+    const node = findSceneNode(sceneStore.nodes, selectedId)
+    const runtime = objectMap.get(selectedId) ?? null
+    if (!runtime || node?.dynamicMesh?.type !== 'Wall') {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+    if (!raycastRuntimeSurfacePoint(event, runtime, dynamicAxisSurfacePointHelper)) {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+    const local = runtime.worldToLocal(dynamicAxisSurfacePointHelper.clone())
+    const wallHeight = Number(node.dynamicMesh?.dimensions?.height)
+    const minOffset = WALL_ENDPOINT_HANDLE_Y_OFFSET
+    const maxOffset = Math.max(minOffset + 0.05, Number.isFinite(wallHeight) ? wallHeight - 0.05 : minOffset + 5)
+    const yOffset = THREE.MathUtils.clamp(local.y, minOffset, maxOffset)
+
+    wallEndpointRenderer.setDynamicYOffset(yOffset)
+    floorVertexRenderer.setDynamicYOffset(null)
+    floorCircleHandleRenderer.setDynamicYOffset(null)
+    return
+  }
+
+  if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && !floorBuildTool.getSession()) {
+    const node = findSceneNode(sceneStore.nodes, selectedId)
+    const runtime = objectMap.get(selectedId) ?? null
+    if (!runtime || node?.dynamicMesh?.type !== 'Floor') {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+    if (!raycastRuntimeSurfacePoint(event, runtime, dynamicAxisSurfacePointHelper)) {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+
+    dynamicAxisLocalPointHelper.copy(dynamicAxisSurfacePointHelper)
+    runtime.worldToLocal(dynamicAxisLocalPointHelper)
+    const thickness = Number(node.dynamicMesh?.thickness)
+    const minOffset = Math.min(FLOOR_VERTEX_HANDLE_Y, FLOOR_CIRCLE_HANDLE_Y)
+    const maxOffset = minOffset + Math.max(0, Number.isFinite(thickness) ? thickness : 0)
+    const yOffset = THREE.MathUtils.clamp(dynamicAxisLocalPointHelper.y, minOffset, Math.max(minOffset, maxOffset))
+
+    wallEndpointRenderer.setDynamicYOffset(null)
+    floorVertexRenderer.setDynamicYOffset(yOffset)
+    floorCircleHandleRenderer.setDynamicYOffset(yOffset)
+    return
+  }
+
+  clearDynamicWallFloorHandleYOffset()
 }
 
 const FLOOR_EDGE_PICK_DISTANCE = 0.3
@@ -12736,6 +12827,8 @@ function handlePointerMove(event: PointerEvent) {
     waterVertexRenderer.clearHover()
     waterCircleHandleRenderer.clearHover()
   }
+
+  updateDynamicWallFloorHandleYOffsetFromPointer(event, canHoverGizmos)
 
   const _moveDragCtx: any = {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
