@@ -54,7 +54,9 @@ import { listVehicles, purchaseVehicleByProduct, selectCurrentVehicle } from '@/
 import type { Vehicle } from '@/types/vehicle';
 import type { VehicleStatus } from '@/types/vehicle';
 import {
+  isProfileCompletionRequiredError,
   isPhoneBindingRequiredError,
+  promptCompleteProfileBeforeCheckout,
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
@@ -214,6 +216,11 @@ async function purchaseVehicleWithProductId(productId: string) {
       closePurchaseConfirmDialog();
       pendingPurchaseProductId.value = productId;
       showPhoneBindSheet.value = true;
+      return;
+    }
+    if (isProfileCompletionRequiredError(error)) {
+      closePurchaseConfirmDialog();
+      await promptCompleteProfileBeforeCheckout();
       return;
     }
     void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });

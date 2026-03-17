@@ -45,24 +45,6 @@
     </view>
 
     <BottomNav active="scenic" @navigate="handleNavigate" />
-
-    <view v-if="miniAuthProfileAuthorizationPending" class="wechat-auth-overlay">
-      <view class="wechat-auth-dialog">
-        <text class="wechat-auth-title">补全微信昵称</text>
-        <text class="wechat-auth-copy">首次登录需要同步你的微信昵称，避免新账号显示为“微信用户”。</text>
-        <button
-          class="wechat-auth-primary"
-          :loading="miniAuthProfileAuthorizationSubmitting"
-          :disabled="miniAuthProfileAuthorizationSubmitting"
-          @tap="handleWechatProfileAuthorization"
-        >授权微信昵称</button>
-        <button
-          class="wechat-auth-secondary"
-          :disabled="miniAuthProfileAuthorizationSubmitting"
-          @tap="handleDismissWechatProfileAuthorization"
-        >暂不授权</button>
-      </view>
-    </view>
   </view>
 </template>
 
@@ -73,12 +55,6 @@ import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
 import { listScenics } from '@/api/mini';
-import {
-  completeMiniAuthProfileAuthorization,
-  dismissMiniAuthProfileAuthorizationPrompt,
-  miniAuthProfileAuthorizationPending,
-  miniAuthProfileAuthorizationSubmitting,
-} from '@/api/mini/session';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
 import type { ScenicSummary } from '@/types/scenic';
@@ -147,21 +123,6 @@ function resolveScenicProgress(_scenicId: string): { percent: number; descriptio
 
 function handleNavigate(key: NavKey) {
   redirectToNav(key);
-}
-
-async function handleWechatProfileAuthorization() {
-  const updated = await completeMiniAuthProfileAuthorization();
-  if (updated) {
-    uni.showToast({ title: '微信昵称已同步', icon: 'none' });
-    return;
-  }
-
-  uni.showToast({ title: '未获取到微信昵称', icon: 'none' });
-}
-
-function handleDismissWechatProfileAuthorization() {
-  dismissMiniAuthProfileAuthorizationPrompt();
-  uni.showToast({ title: '已跳过昵称授权', icon: 'none' });
 }
 </script>
 
@@ -306,65 +267,6 @@ function handleDismissWechatProfileAuthorization() {
 
 .card-item {
   overflow: visible;
-}
-
-.wechat-auth-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  background: rgba(12, 20, 33, 0.46);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.wechat-auth-dialog {
-  width: 100%;
-  max-width: 320px;
-  border-radius: 20px;
-  background: #ffffff;
-  padding: 22px 18px 18px;
-  box-shadow: 0 18px 40px rgba(18, 35, 63, 0.18);
-}
-
-.wechat-auth-title {
-  display: block;
-  font-size: 18px;
-  font-weight: 700;
-  color: #162033;
-}
-
-.wechat-auth-copy {
-  display: block;
-  margin-top: 10px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #5f6d84;
-}
-
-.wechat-auth-primary,
-.wechat-auth-secondary {
-  width: 100%;
-  border-radius: 14px;
-  font-size: 14px;
-}
-
-.wechat-auth-primary {
-  margin-top: 18px;
-  background: linear-gradient(135deg, #2f8cff, #5c6dff);
-  color: #ffffff;
-}
-
-.wechat-auth-primary::after,
-.wechat-auth-secondary::after {
-  border: none;
-}
-
-.wechat-auth-secondary {
-  margin-top: 10px;
-  background: #eef3fb;
-  color: #40506b;
 }
 
 @keyframes hero-float {

@@ -15,6 +15,12 @@
     </view>
 
     <view class="content">
+      <view v-if="isProfileIncomplete" class="tips-card">
+        <text class="tips-title">请先完善头像和昵称</text>
+        <text class="tips-desc">下单和支付前需要先完成资料设置。</text>
+        <button class="tips-action" @tap="openProfileEdit">立即完善</button>
+      </view>
+
       <view class="card">
         <view class="row" @tap="nav('/pages/orders/index')">
           <text class="label">订单中心</text>
@@ -129,6 +135,13 @@ const maskedPhone = computed(() => {
     return phone;
   }
   return `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+});
+
+const isProfileIncomplete = computed(() => {
+  const displayName = String(profile.value.displayName || '').trim();
+  const avatarUrl = String(profile.value.avatarUrl || '').trim();
+  const isPlaceholderName = !displayName || displayName === '微信用户' || displayName === '游客';
+  return isPlaceholderName || !avatarUrl;
 });
 
 function openProfileEdit() {
@@ -247,6 +260,39 @@ function handleNavigate(key: NavKey) {
 
 .content {
   padding: 0 16px 18px;
+}
+
+.tips-card {
+  background: rgba(255, 179, 64, 0.12);
+  border: 1px solid rgba(255, 179, 64, 0.42);
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.tips-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: #5a3a00;
+}
+
+.tips-desc {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #7a5514;
+}
+
+.tips-action {
+  margin-top: 10px;
+  height: 32px;
+  line-height: 32px;
+  border-radius: 999px;
+  background: #ffb340;
+  color: #ffffff;
+  font-size: 12px;
+  padding: 0 14px;
 }
 
 .card {

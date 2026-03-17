@@ -230,35 +230,7 @@ function handleOpacityInput(imageId: string, value: string | number | null): voi
       <div class="planning-images-panel-header">
         <span class="planning-images-panel-title">Planning Images</span>
         <v-spacer />
-        <span class="planning-images-panel-subtitle">{{ imageCountLabel }}</span>
-        <v-menu
-          v-if="planningImagesComponent"
-          location="bottom end"
-          origin="auto"
-          transition="fade-transition"
-        >
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon
-              variant="text"
-              size="small"
-              class="component-menu-btn"
-              @click.stop
-            >
-              <v-icon size="18">mdi-dots-vertical</v-icon>
-            </v-btn>
-          </template>
-          <v-list density="compact">
-            <v-list-item @click.stop="handleToggleComponent()">
-              <v-list-item-title>{{ componentEnabled ? 'Disable' : 'Enable' }}</v-list-item-title>
-            </v-list-item>
-            <v-divider class="component-menu-divider" inset />
-            <v-list-item @click.stop="handleRemoveComponent()">
-              <v-list-item-title>Remove</v-list-item-title>
-            </v-list-item>
-          </v-list>
-        </v-menu>
+        
       </div>
     </v-expansion-panel-title>
 
@@ -283,14 +255,12 @@ function handleOpacityInput(imageId: string, value: string | number | null): voi
             </div>
             <div class="planning-image-card-title-wrap">
               <div class="planning-image-card-title">{{ image.name || `Planning Image ${index + 1}` }}</div>
-              <div class="planning-image-card-meta">{{ image.size.width.toFixed(2) }} × {{ image.size.height.toFixed(2) }} m</div>
             </div>
             <v-switch
               :model-value="image.visible"
               density="compact"
               hide-details
               color="primary"
-              inset
               :disabled="!componentEnabled"
               @update:model-value="handleVisibilityChange(image.id, $event)"
             />
@@ -310,19 +280,6 @@ function handleOpacityInput(imageId: string, value: string | number | null): voi
                 thumb-label
                 :disabled="!componentEnabled"
                 @update:model-value="handleOpacitySlider(image.id, $event)"
-              />
-              <v-text-field
-                :model-value="image.displayOpacityPercent"
-                type="number"
-                suffix="%"
-                density="compact"
-                variant="solo"
-                hide-details
-                class="planning-image-opacity-input"
-                :min="0"
-                :max="100"
-                :disabled="!componentEnabled"
-                @update:modelValue="handleOpacityInput(image.id, $event)"
               />
             </div>
           </div>

@@ -182,7 +182,6 @@
                   <div class="scatter-spacing-item scatter-spacing--compact">
                     <div class="scatter-spacing-labels">
                       <span>Brush Radius</span>
-                      <span>{{ groundScatterBrushRadiusDisplay }}</span>
                     </div>
                     <v-text-field
                       v-model="groundScatterBrushRadiusInput"
@@ -205,7 +204,6 @@
                   <div class="scatter-spacing-item scatter-spacing--compact">
                     <div class="scatter-spacing-labels">
                       <span>Scatter Spacing</span>
-                      <span>{{ groundScatterSpacingDisplay }}</span>
                     </div>
                     <v-text-field
                       v-model="groundScatterSpacingInput"
@@ -228,7 +226,6 @@
                   <div class="scatter-spacing-item scatter-spacing--compact">
                     <div class="scatter-spacing-labels">
                       <span>Density</span>
-                      <span>{{ groundScatterDensityDisplay }}</span>
                     </div>
                     <v-text-field
                       v-model="groundScatterDensityInput"
@@ -2402,7 +2399,7 @@ function handleClearScatterMenuAction() {
 
 .floor-shape-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 6px;
   padding: 6px 6px 2px;
 }

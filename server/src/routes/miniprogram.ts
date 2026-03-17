@@ -1,5 +1,6 @@
 import Router from 'koa-router'
 import { optionalMiniAuth, requireMiniAuth } from '@/middleware/authDomains'
+import { requireMiniProfileComplete } from '@/middleware/miniProfile'
 import {
   listSceneSpots,
   getSceneSpot,
@@ -160,7 +161,7 @@ miniRouter.post('/exhibitions/:id/visit', visitExhibition)
 miniRouter.post('/exhibitions/:id/share', shareExhibition)
 
 // products
-miniRouter.post('/products/:id/purchase', purchaseProduct)
+miniRouter.post('/products/:id/purchase', requireMiniProfileComplete, purchaseProduct)
 miniRouter.get('/user-vehicles', listUserVehicles)
 miniRouter.post('/vehicles/:id/select', setCurrentVehicle)
 
@@ -173,8 +174,8 @@ miniRouter.post('/coupons/:id/claim', claimCoupon)
 // orders
 miniRouter.get('/orders', listOrders)
 miniRouter.get('/orders/:id', getOrder)
-miniRouter.post('/orders', createOrder)
-miniRouter.post('/orders/:id/pay', payOrder)
+miniRouter.post('/orders', requireMiniProfileComplete, createOrder)
+miniRouter.post('/orders/:id/pay', requireMiniProfileComplete, payOrder)
 miniRouter.post('/orders/:id/refund/apply', applyOrderRefund)
 
 // achievements

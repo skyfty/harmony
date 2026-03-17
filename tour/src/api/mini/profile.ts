@@ -1,7 +1,7 @@
 import type { Gender, UserProfile } from '@/types/profile'
-import { miniRequest } from '@harmony/utils'
+import { getApiOrigin, miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
-import { setAccessToken } from './token'
+import { getAccessToken, setAccessToken } from './token'
 
 type MiniProfileUser = {
   id: string
@@ -29,6 +29,10 @@ type UpdateProfilePayload = {
   avatarUrl?: string
   gender?: Gender
   birthDate?: string
+}
+
+type UploadAvatarResponse = {
+  avatarUrl?: string
 }
 
 function toUserProfile(user: MiniProfileUser): UserProfile {
@@ -69,6 +73,63 @@ export async function saveProfile(profile: UserProfile): Promise<UserProfile> {
     body: payload,
   })
   return toUserProfile(response.user)
+}
+
+export async function uploadProfileAvatar(filePath: string): Promise<string> {
+  const localFilePath = String(filePath || '').trim()
+  if (!localFilePath) {
+    throw new Error('头像文件路径无效')
+  }
+
+  await ensureMiniAuth()
+  const token = getAccessToken()
+  const target = `${getApiOrigin()}/api/mini-auth/avatar`
+
+  const result = await new Promise<UploadAvatarResponse>((resolve, reject) => {
+    uni.uploadFile({
+      url: target,
+      filePath: localFilePath,
+      name: 'avatar',
+      timeout: 30000,
+      header: token ? { Authorization: `Bearer ${token}` } : undefined,
+      success: (response) => {
+        const statusCode = Number(response.statusCode ?? 0)
+        const bodyText = typeof response.data === 'string' ? response.data : ''
+        if (!bodyText) {
+          reject(new Error('头像上传响应为空'))
+          return
+        }
+
+        try {
+          const parsed = JSON.parse(bodyText) as {
+            code?: number
+            data?: UploadAvatarResponse
+            message?: string
+          }
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(new Error(parsed.message || `头像上传失败(${statusCode || 'network'})`))
+            return
+          }
+          if (parsed.code !== 0) {
+            reject(new Error(parsed.message || '头像上传失败'))
+            return
+          }
+          resolve(parsed.data ?? {})
+        } catch {
+          reject(new Error('头像上传响应格式错误'))
+        }
+      },
+      fail: () => {
+        reject(new Error('头像上传失败'))
+      },
+    })
+  })
+
+  const avatarUrl = String(result.avatarUrl || '').trim()
+  if (!avatarUrl) {
+    throw new Error('头像上传未返回有效地址')
+  }
+  return avatarUrl
 }
 
 export async function bindWechatPhone(code: string): Promise<UserProfile> {
