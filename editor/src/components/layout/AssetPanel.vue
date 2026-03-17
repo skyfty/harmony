@@ -69,6 +69,25 @@ const {
   selectedNodeId,
 } = storeToRefs(sceneStore)
 
+const WALL_PRESETS_CATEGORY_ID = `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`
+
+function filterOutWallPresets(nodes: ProjectDirectory[] | undefined): ProjectDirectory[] {
+  if (!nodes || !nodes.length) return []
+  return nodes
+    .map((node) => {
+      if (!node) return null
+      if (node.id === WALL_PRESETS_CATEGORY_ID) return null
+      const children = node.children ? filterOutWallPresets(node.children) : undefined
+      return {
+        ...node,
+        children: children && children.length ? children : undefined,
+      }
+    })
+    .filter((n): n is ProjectDirectory => !!n)
+}
+
+const filteredProjectTree = computed(() => filterOutWallPresets(projectTree.value))
+
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
 watch(openedDirectories, (ids, previousIds) => {
   const sanitized = sanitizeOpenedDirectories(ids, projectTree.value)
@@ -325,15 +344,18 @@ function arraysEqual(a: string[], b: string[]): boolean {
   return true
 }
 
+function isPanelVisibleAsset(asset: ProjectAsset | null | undefined): boolean {
+  if (!asset?.id) {
+    return false
+  }
+  return sceneStore.assetIndex?.[asset.id]?.internal !== true
+}
+
 function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
   if (!directory) {
     return 0
   }
-  const directCount = directory.assets?.length ?? 0
-  if (!directory.children?.length) {
-    return directCount
-  }
-  return directory.children.reduce((total, child) => total + countDirectoryAssets(child), directCount)
+  return (directory.assets ?? []).filter((asset) => isPanelVisibleAsset(asset)).length
 }
 
 const activeProviderId = computed(() => findProviderIdForDirectoryId(activeDirectoryId.value ?? null))
@@ -1065,7 +1087,10 @@ const searchFieldRef = ref<unknown>(null)
 
 const normalizedSearchQuery = computed(() => (searchQuery.value ?? '').trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
-const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+const baseDisplayedAssets = computed(() => {
+  const assets = isSearchActive.value ? searchResults.value : currentAssets.value
+  return assets.filter((asset) => isPanelVisibleAsset(asset))
+})
 const categoryFilteredAssets = computed(() => baseDisplayedAssets.value)
 
 const SERIES_ID_PREFIX = 'series:id:'
@@ -1394,7 +1419,9 @@ const galleryDirectories = computed(() => {
   if (isSearchActive.value) {
     return []
   }
-  return currentDirectory.value?.children ?? []
+  const children = currentDirectory.value?.children ?? []
+  const WALL_PRESETS_CATEGORY_ID = `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`
+  return children.filter((dir) => dir.id !== WALL_PRESETS_CATEGORY_ID)
 })
 
 const DIRECTORY_DRAG_MIME = 'application/x-harmony-asset-directory'
@@ -2459,8 +2486,9 @@ function searchAsset() {
     const matches: ProjectAsset[] = []
     const seen = new Set<string>()
     collectAssets(projectTree.value ?? [], matches, query, seen)
-    matches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-    searchResults.value = matches
+    const visibleMatches = matches.filter((asset) => isPanelVisibleAsset(asset))
+    visibleMatches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    searchResults.value = visibleMatches
     searchLoaded.value = true
   } finally {
     searchLoading.value = false
@@ -2718,7 +2746,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
           <v-treeview
             v-model:opened="openedDirectories"
             v-model:activated="selectedDirectory"
-            :items="projectTree"
+            :items="filteredProjectTree"
             item-title="name"
             item-value="id"
             activatable
@@ -2900,11 +2928,11 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
           </div>
           <v-divider />
           <div class="project-gallery-scroll">
-            <div v-if="galleryDirectories.length" class="gallery-grid gallery-grid--directories">
+            <div v-if="galleryDirectories.length || displayedAssets.length" class="gallery-grid">
               <v-card
                 v-for="directory in galleryDirectories"
                 :key="directory.id"
-                :class="['directory-card', { 'is-active': activeDirectoryId === directory.id }]"
+                :class="['resource-card', 'directory-card', { 'is-active': activeDirectoryId === directory.id }]"
                 elevation="4"
                 :draggable="isDraggableDirectoryId(directory.id)"
                 tabindex="0"
@@ -2916,11 +2944,9 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 @dragover="allowDirectoryDrop($event, directory.id)"
                 @drop="handleDirectoryDrop($event, directory.id)"
               >
-                <div class="directory-card-body">
-                  <v-icon size="40" color="primary">mdi-folder</v-icon>
-                  <div class="directory-card-text">
-                    <span class="directory-card-title">{{ directory.name }}</span>
-                    <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} assets</span>
+                <div class="directory-preview">
+                  <div class="directory-preview-icon">
+                    <v-icon size="42" color="primary">mdi-folder</v-icon>
                   </div>
                   <div class="directory-card-actions">
                     <v-btn
@@ -2939,16 +2965,18 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       size="small"
                       @click.stop="promptDeleteDirectory(directory.id)"
                     />
-                    <v-icon class="directory-card-hint" size="18" color="primary">mdi-gesture-double-tap</v-icon>
                   </div>
                 </div>
+                <div class="directory-info">
+                  <span class="directory-card-title">{{ directory.name }}</span>
+                  <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} assets</span>
+                </div>
               </v-card>
-            </div>
-            <div v-if="displayedAssets.length" class="gallery-grid">
               <v-card
                 v-for="asset in displayedAssets"
                 :key="asset.id"
                 :class="[
+                  'resource-card',
                   'asset-card',
                   {
                     'is-selected': selectedAssetId === asset.id,
@@ -3532,10 +3560,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   padding: 10px;
 }
 
-.gallery-grid--directories {
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-}
-
 .toolbar-select-checkbox {
   display: flex;
   align-items: center;
@@ -3551,18 +3575,23 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   height: 22px;
 }
 
-.asset-card {
+.resource-card {
   display: flex;
   flex-direction: column;
   background-color: rgba(18, 20, 24, 0.9);
   border: 1px solid transparent;
   transition: border-color 150ms ease, transform 150ms ease;
   cursor: pointer;
+  overflow: hidden;
 }
 
-.asset-card:hover {
+.resource-card:hover {
   border-color: rgba(77, 208, 225, 0.45);
   transform: translateY(-2px);
+}
+
+.asset-card {
+  min-height: 132px;
 }
 
 .asset-card.is-selected {
@@ -3735,22 +3764,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .directory-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  background-color: rgba(18, 20, 24, 0.82);
-  border: 1px solid transparent;
-  min-height: 120px;
-  transition: border-color 150ms ease, transform 150ms ease;
+  min-height: 132px;
   outline: none;
-  cursor: pointer;
-  padding: 16px;
-}
-
-.directory-card:hover,
-.directory-card:focus-visible {
-  border-color: rgba(77, 208, 225, 0.45);
-  transform: translateY(-2px);
 }
 
 .directory-card.is-active {
@@ -3758,43 +3773,87 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   box-shadow: 0 0 12px rgba(0, 172, 193, 0.35);
 }
 
-.directory-card-body {
+.directory-preview {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  height: 96px;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(77, 208, 225, 0.18), transparent 45%),
+    linear-gradient(180deg, rgba(21, 29, 39, 0.96) 0%, rgba(10, 15, 22, 0.98) 100%);
 }
 
-.directory-card-text {
+.directory-preview-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: rgba(77, 208, 225, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(77, 208, 225, 0.08);
+}
+
+.directory-info {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  padding: 10px 10px 12px;
   min-width: 0;
-  flex: 1;
 }
 
 .directory-card-title {
-  font-size: 0.95rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: #ffffff;
-  white-space: nowrap;
+  line-height: 1.1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .directory-card-subtitle {
-  font-size: 0.78rem;
+  font-size: 0.66rem;
   color: rgba(233, 236, 241, 0.7);
-}
-
-.directory-card-hint {
-  opacity: 0.6;
+  line-height: 1.1;
 }
 
 .directory-card-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-left: auto;
+  z-index: 2;
+  background-color: rgba(0, 0, 0, 0.28);
+  border-radius: 10px;
+  backdrop-filter: blur(2px);
+}
+
+.directory-card-actions :deep(.v-btn) {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.directory-card:focus-visible {
+  border-color: rgba(77, 208, 225, 0.45);
+  transform: translateY(-2px);
+}
+
+.directory-card:hover .directory-preview-icon,
+.directory-card.is-active .directory-preview-icon {
+  background: rgba(77, 208, 225, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(77, 208, 225, 0.18);
+}
+
+.directory-card-title,
+.asset-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 

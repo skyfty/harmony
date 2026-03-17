@@ -7273,20 +7273,6 @@ export const useSceneStore = defineStore('scene', {
         return []
       }
 
-      if (state.activeDirectoryId === ASSETS_ROOT_DIRECTORY_ID) {
-        const collected: ProjectAsset[] = []
-        collectDirectoryAssets(directory, collected)
-        return collected
-      }
-
-      const path = findDirectoryPathInTree(state.projectTree, state.activeDirectoryId)
-      const isUnderPackages = path ? path.some((entry) => entry.id === PACKAGES_ROOT_DIRECTORY_ID) : false
-      if (isUnderPackages) {
-        const collected: ProjectAsset[] = []
-        collectDirectoryAssets(directory, collected)
-        return collected
-      }
-
       return directory.assets ?? []
     },
     environmentSettings(state): EnvironmentSettings {
