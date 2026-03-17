@@ -8061,7 +8061,15 @@ function shouldDeferSceneGraphSync(): boolean {
   return false
 }
 
-const terrainGridHelper = new TerrainGridHelper()
+const terrainGridHelper = new TerrainGridHelper({
+  getGroundObject: () => {
+    const groundNode = getGroundNodeFromStore()
+    if (!groundNode) {
+      return null
+    }
+    return objectMap.get(groundNode.id) ?? getRuntimeObject(groundNode.id) ?? null
+  },
+})
 terrainGridHelper.name = 'TerrainGridHelper'
 
 const axesHelper = new THREE.AxesHelper(4)
@@ -8672,11 +8680,14 @@ function renderViewportFrame() {
 }
 
 function applyGridVisibility(visible: boolean) {
+  terrainGridHelper.setOverlayVisible(visible)
   terrainGridHelper.visible = visible
   if (!visible) {
     updateGridHighlight(null)
     return
   }
+
+  terrainGridController.refresh()
 
   const dragPoint = isDragHovering.value ? dragPreview.getLastPoint() : null
   if (dragPoint) {
