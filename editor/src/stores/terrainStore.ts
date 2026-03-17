@@ -79,7 +79,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   const scatterModeActive = computed(() =>
     groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint' && !!scatterSelectedAsset.value,
   )
-  const paintModeActive = computed(() => groundPanelTab.value === 'paint' && !!paintSelectedAsset.value)
+  const paintModeActive = computed(() => groundPanelTab.value === 'paint')
 
   function setGroundPanelTab(tab: GroundPanelTab) {
     groundPanelTab.value = tab
@@ -141,12 +141,11 @@ export const useTerrainStore = defineStore('terrain', () => {
     }
   })
 
-  watch([paintSelectedAsset, groundPanelTab], ([nextAsset, tab]: [ProjectAsset | null, GroundPanelTab]) => {
+  watch([paintSelectedAsset, groundPanelTab], ([, tab]: [ProjectAsset | null, GroundPanelTab]) => {
     clearPaintContextSyncTimer()
     paintContextSyncTimer = window.setTimeout(() => {
       const ui = useUiStore()
       const shouldActivatePaintContext = tab === 'paint'
-        && !!nextAsset
         && (hasRecentPaintContextIntent() || ui.activeSelectionContext === 'terrain-paint')
 
       if (shouldActivatePaintContext) {
@@ -154,7 +153,7 @@ export const useTerrainStore = defineStore('terrain', () => {
         return
       }
 
-      if (ui.activeSelectionContext === 'terrain-paint' && (tab !== 'paint' || !nextAsset)) {
+      if (ui.activeSelectionContext === 'terrain-paint' && tab !== 'paint') {
         ui.setActiveSelectionContext(null)
       }
     }, PAINT_CONTEXT_SYNC_DEBOUNCE_MS)

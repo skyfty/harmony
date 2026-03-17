@@ -5336,7 +5336,7 @@ function resolveSelectionContextForBuildTool(tool: BuildTool | null): string | n
     return terrainStore.brushOperation ? 'terrain-sculpt' : 'build-tool:terrain'
   }
   if (tool === 'paint') {
-    return terrainStore.paintSelectedAsset ? 'terrain-paint' : 'build-tool:paint'
+    return terrainStore.groundPanelTab === 'paint' ? 'terrain-paint' : 'build-tool:paint'
   }
   if (tool === 'scatter') {
     if (scatterEraseModeActive.value) {

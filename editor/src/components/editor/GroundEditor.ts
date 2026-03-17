@@ -672,14 +672,17 @@ type TerrainPaintSamplingSettings = {
 	blendMode: TerrainPaintBrushSettings['blendMode']
 }
 
+type TerrainPaintStrokeMode = 'paint' | 'erase'
+
 type TerrainPaintStampRequest = {
+	mode: TerrainPaintStrokeMode
 	localX: number
 	localZ: number
 	radius: number
 	strength: number
 	feather: number
 	sampling: TerrainPaintSamplingSettings
-	brushImage: TerrainPaintImageSamplingContext
+	brushImage: TerrainPaintImageSamplingContext | null
 }
 
 type TerrainPaintChunkBounds = {
@@ -1430,7 +1433,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return 0x5fb0ff
 		}
 		if (options.groundPanelTab.value === 'paint') {
-			return 0x8bc34a
+			return options.paintAsset.value ? 0x8bc34a : 0xffb347
 		}
 		if (scatterModeEnabled()) {
 			return 0x4dd0e1
@@ -1447,6 +1450,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		refreshBrushAppearance()
 	})
 	const stopScatterEraseModeWatch = watch(options.scatterEraseModeActive, () => {
+		refreshBrushAppearance()
+	})
+	watch(options.paintAsset, () => {
 		refreshBrushAppearance()
 	})
 	watch(options.scatterBrushShape, () => {
@@ -3259,7 +3265,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const invDefinitionDepth = 1 / definitionDepth
 		const invLocalBrushWidth = 1 / Math.max(radiusX * 2, 1e-6)
 		const invLocalBrushHeight = 1 / Math.max(radiusY * 2, 1e-6)
-		const sampledColor = new Float32Array(4)
+		const eraseMode = stamp.mode === 'erase'
+		const sampledColor = eraseMode ? null : new Float32Array(4)
 		const surfaceData = chunk.surfaceData
 		const sampling = stamp.sampling
 		const blendMode = sampling.blendMode
@@ -3286,6 +3293,31 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					continue
 				}
 				const offset = (y * res + x) * 4
+				const destAlpha = (surfaceData[offset + 3] ?? 0) / 255
+				const baseAlpha = destAlpha <= 0 ? 0 : destAlpha >= 1 ? 1 : destAlpha
+				if (eraseMode) {
+					const nextAlpha = Math.max(0, baseAlpha - amount)
+					const nextA = Math.round(nextAlpha * 255)
+					const nextR = nextA > 0 ? (surfaceData[offset] ?? 0) : 0
+					const nextG = nextA > 0 ? (surfaceData[offset + 1] ?? 0) : 0
+					const nextB = nextA > 0 ? (surfaceData[offset + 2] ?? 0) : 0
+					if (
+						nextR !== (surfaceData[offset] ?? 0)
+						|| nextG !== (surfaceData[offset + 1] ?? 0)
+						|| nextB !== (surfaceData[offset + 2] ?? 0)
+						|| nextA !== (surfaceData[offset + 3] ?? 0)
+					) {
+						surfaceData[offset] = nextR
+						surfaceData[offset + 1] = nextG
+						surfaceData[offset + 2] = nextB
+						surfaceData[offset + 3] = nextA
+						any = true
+					}
+					continue
+				}
+				if (!sampledColor || !brushImage) {
+					continue
+				}
 				const worldX = bounds.minX + pxMeters
 				const normalizedMeshU = (worldX + halfWidth) * invDefinitionWidth
 				const meshU = normalizedMeshU <= 0 ? 0 : normalizedMeshU >= 1 ? 1 : normalizedMeshU
@@ -3310,8 +3342,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (blendedAmount <= 0) {
 					continue
 				}
-				const destAlpha = (surfaceData[offset + 3] ?? 0) / 255
-				const baseAlpha = destAlpha <= 0 ? 0 : destAlpha >= 1 ? 1 : destAlpha
 				const baseR = baseAlpha <= 0 ? 0 : ((surfaceData[offset] ?? 0) / 255)
 				const baseG = baseAlpha <= 0 ? 0 : ((surfaceData[offset + 1] ?? 0) / 255)
 				const baseB = baseAlpha <= 0 ? 0 : ((surfaceData[offset + 2] ?? 0) / 255)
@@ -4881,9 +4911,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const session = ensurePaintSession(definition, groundNode.id)
 		const paintAsset = options.paintAsset.value
-		if (!paintAsset?.id) {
-			return
-		}
+		const strokeMode: TerrainPaintStrokeMode = paintAsset?.id ? 'paint' : 'erase'
 		const brushStrength = clamp01(options.brushStrength.value)
 		if (brushStrength <= 0) {
 			return
@@ -4906,12 +4934,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sampling.opacity <= 0) {
 			return
 		}
-		const brushImage = getLoadedTerrainPaintBrushImage(paintAsset.id)
-		if (!brushImage) {
-			void loadTerrainPaintBrushImage(paintAsset)
-			return
+		let brushImageContext: TerrainPaintImageSamplingContext | null = null
+		if (strokeMode === 'paint') {
+			if (!paintAsset?.id) {
+				return
+			}
+			const brushImage = getLoadedTerrainPaintBrushImage(paintAsset.id)
+			if (!brushImage) {
+				void loadTerrainPaintBrushImage(paintAsset)
+				return
+			}
+			brushImageContext = createTerrainPaintImageSamplingContext(brushImage.imageData)
 		}
-		const brushImageContext = createTerrainPaintImageSamplingContext(brushImage.imageData)
 
 		for (let i = 0; i < steps; i += 1) {
 			const t = steps <= 1 ? 1 : (i + 1) / steps
@@ -4919,6 +4953,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				? paintStrokeInterpolatedPointHelper.lerpVectors(paintStrokePrevPointHelper, paintStrokeNextPointHelper, t)
 				: localPoint
 			const stamp: TerrainPaintStampRequest = {
+				mode: strokeMode,
 				localX: point.x,
 				localZ: point.z,
 				radius,
