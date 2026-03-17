@@ -145,6 +145,10 @@ type CreateOrderBody = {
   metadata?: Record<string, unknown>
 }
 
+type ApplyRefundBody = {
+  reason?: string
+}
+
 function getMiniAppId(ctx: Context): string | undefined {
   const miniAuthUser = (ctx.state as { miniAuthUser?: { miniAppId?: string } }).miniAuthUser
   const miniAppId = miniAuthUser?.miniAppId

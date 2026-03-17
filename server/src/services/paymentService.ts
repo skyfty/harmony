@@ -169,6 +169,13 @@ function sha256RsaSign(privateKey: string, message: string): string {
   return signer.sign(privateKey, 'base64')
 }
 
+function deriveRefundNotifyUrl(notifyUrl: string): string {
+  if (notifyUrl.includes('/wechat/pay/notify')) {
+    return notifyUrl.replace('/wechat/pay/notify', '/wechat/pay/refund/notify')
+  }
+  return notifyUrl
+}
+
 function buildAuthorizationByConfig(config: WechatPayConfigResolved, method: string, requestPath: string, body: string) {
   const { mchId, serialNo, privateKey } = config
   const timestamp = String(Math.floor(Date.now() / 1000))
@@ -322,6 +329,29 @@ export async function queryWechatOrderByOutTradeNo(orderNumber: string, miniAppI
   }
 
   throw lastError instanceof Error ? lastError : new Error('Wechat order query failed')
+}
+
+export async function createOrderRefund(options: CreateRefundOptions): Promise<WechatRefundResult> {
+  const { miniAppId, orderNumber, refundRequestNo, reason, refundAmount, totalAmount } = options
+  const config = await getWechatConfig(miniAppId)
+  const payload: Record<string, unknown> = {
+    out_trade_no: orderNumber,
+    out_refund_no: refundRequestNo,
+    reason,
+    notify_url: deriveRefundNotifyUrl(config.notifyUrl),
+    amount: {
+      refund: toMinorCurrency(refundAmount),
+      total: toMinorCurrency(totalAmount),
+      currency: 'CNY',
+    },
+  }
+  const result = await requestWechat<Record<string, unknown>>('POST', '/v3/refund/domestic/refunds', payload, miniAppId)
+  return {
+    refundId: typeof result.refund_id === 'string' ? result.refund_id : undefined,
+    outRefundNo: typeof result.out_refund_no === 'string' ? result.out_refund_no : refundRequestNo,
+    status: typeof result.status === 'string' ? result.status : 'PROCESSING',
+    raw: result,
+  }
 }
 
 export function verifyWechatCallbackSignature(
