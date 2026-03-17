@@ -72,15 +72,13 @@ export function resolveWaterRectangleBounds(node: SceneNode | null | undefined):
     return null
   }
 
-  const centerX = Number(target.position?.x ?? 0)
-  const centerZ = Number(target.position?.z ?? 0)
   const y = Number(target.position?.y ?? 0)
 
   return {
-    minX: centerX - width * 0.5,
-    maxX: centerX + width * 0.5,
-    minY: centerZ - depth * 0.5,
-    maxY: centerZ + depth * 0.5,
+    minX: -width * 0.5,
+    maxX: width * 0.5,
+    minY: -depth * 0.5,
+    maxY: depth * 0.5,
     y,
     width,
     depth,

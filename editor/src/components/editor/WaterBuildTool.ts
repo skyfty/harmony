@@ -4,6 +4,7 @@ import type { BuildTool } from '@/types/build-tool'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { useSceneStore } from '@/stores/sceneStore'
 import { createWaterPreviewRenderer, type WaterPreviewSession } from './WaterPreviewRenderer'
+import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
 
 export type WaterBuildToolHandle = {
   getSession: () => WaterPreviewSession | null
@@ -20,6 +21,7 @@ type Session = {
   shape: WaterBuildShape
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
+  rectangleDirection: THREE.Vector3 | null
   previewGroup: THREE.Group | null
 }
 
@@ -80,6 +82,7 @@ export function createWaterBuildTool(options: {
       shape: getShape(),
       points: [],
       previewEnd: null,
+      rectangleDirection: null,
       previewGroup: null,
     }
     return session
@@ -137,6 +140,7 @@ export function createWaterBuildTool(options: {
     current.shape = 'rectangle'
     current.points = [start.clone()]
     current.previewEnd = start.clone()
+    current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
     markPreviewDirty()
     return true
@@ -156,6 +160,7 @@ export function createWaterBuildTool(options: {
     current.shape = 'circle'
     current.points = [center.clone()]
     current.previewEnd = initialEnd
+    current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
     markPreviewDirty()
     return true
@@ -174,6 +179,10 @@ export function createWaterBuildTool(options: {
       ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
       : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
+
+    if (session.shape === 'rectangle' && !session.rectangleDirection) {
+      session.rectangleDirection = resolveRectangleDirection(session.points[0] ?? next, next)
+    }
 
     const previous = session.previewEnd
     if (previous && previous.equals(next)) {
@@ -361,25 +370,17 @@ export function createWaterBuildTool(options: {
           markPreviewDirty()
 
           const start = session.points[0]!
-          const minX = Math.min(start.x, end.x)
-          const maxX = Math.max(start.x, end.x)
-          const minZ = Math.min(start.z, end.z)
-          const maxZ = Math.max(start.z, end.z)
-          const width = maxX - minX
-          const depth = maxZ - minZ
-          if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= WATER_MIN_SIZE || depth <= WATER_MIN_SIZE) {
+          const rectangle = buildRotatedRectangleFromCorner(start, end, session.rectangleDirection)
+          if (!rectangle || rectangle.width <= WATER_MIN_SIZE || rectangle.depth <= WATER_MIN_SIZE) {
             clearSession(true)
             return true
           }
 
           options.sceneStore.createWaterNode({
-            center: {
-              x: (minX + maxX) * 0.5,
-              y: start.y,
-              z: (minZ + maxZ) * 0.5,
-            },
-            width,
-            depth,
+            center: rectangle.center,
+            width: rectangle.width,
+            depth: rectangle.depth,
+            yaw: rectangle.yaw,
           })
           clearSession(true)
           return true

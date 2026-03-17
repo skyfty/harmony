@@ -4,11 +4,13 @@ import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
 import { buildFloorDynamicMeshPresetPatch } from '@/utils/floorPresetNodeMaterials'
+import { buildRotatedRectangleFromCorner } from './rotatedRectangleBuild'
 
 export type FloorPreviewSession = {
   shape: FloorBuildShape
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
+  rectangleDirection: THREE.Vector3 | null
   previewGroup: THREE.Group | null
 }
 
@@ -38,22 +40,13 @@ function encodePreviewNumber(value: number): string {
   return `${Math.round(value * FLOOR_PREVIEW_SIGNATURE_PRECISION)}`
 }
 
-function buildRectanglePreviewPoints(first: THREE.Vector3, second: THREE.Vector3): THREE.Vector3[] {
-  const minX = Math.min(first.x, second.x)
-  const maxX = Math.max(first.x, second.x)
-  const minZ = Math.min(first.z, second.z)
-  const maxZ = Math.max(first.z, second.z)
-
-  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-    return []
-  }
-
-  return [
-    new THREE.Vector3(minX, first.y, minZ),
-    new THREE.Vector3(minX, first.y, maxZ),
-    new THREE.Vector3(maxX, first.y, maxZ),
-    new THREE.Vector3(maxX, first.y, minZ),
-  ]
+function buildRectanglePreviewPoints(
+  first: THREE.Vector3,
+  second: THREE.Vector3,
+  rectangleDirection: THREE.Vector3 | null,
+): THREE.Vector3[] {
+  const rectangle = buildRotatedRectangleFromCorner(first, second, rectangleDirection)
+  return rectangle ? rectangle.corners.map((point) => point.clone()) : []
 }
 
 export function buildFloorCircleOrRegularPolygonPoints(
@@ -116,6 +109,7 @@ function getPreviewVertices(
   shape: FloorBuildShape,
   points: THREE.Vector3[],
   previewEnd: THREE.Vector3 | null,
+  rectangleDirection: THREE.Vector3 | null,
   regularPolygonSides = 0,
 ): THREE.Vector3[] {
   if (!points.length) {
@@ -125,7 +119,7 @@ function getPreviewVertices(
   if (shape === 'rectangle' && previewEnd) {
     const start = points[0]
     if (start) {
-      return buildRectanglePreviewPoints(start, previewEnd)
+      return buildRectanglePreviewPoints(start, previewEnd, rectangleDirection)
     }
   }
 
@@ -147,7 +141,7 @@ function getPreviewVertices(
     const first = points[0]
     const second = points[1]
     if (first && second && previewEnd.equals(second)) {
-      const rectangle = buildRectanglePreviewPoints(first, second)
+      const rectangle = buildRectanglePreviewPoints(first, second, rectangleDirection)
       if (rectangle.length) {
         return rectangle
       }
@@ -291,7 +285,13 @@ export function createFloorPreviewRenderer(options: {
       return
     }
 
-    const previewVertices = getPreviewVertices(session.shape, session.points, session.previewEnd, lastRegularPolygonSides)
+    const previewVertices = getPreviewVertices(
+      session.shape,
+      session.points,
+      session.previewEnd,
+      session.rectangleDirection,
+      lastRegularPolygonSides,
+    )
     if (previewVertices.length < 3) {
       if (session.previewGroup) {
         clear(session)

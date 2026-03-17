@@ -7,6 +7,7 @@ import {
   createFloorPreviewRenderer,
   type FloorPreviewSession,
 } from './FloorPreviewRenderer'
+import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
@@ -138,6 +139,7 @@ export function createFloorBuildTool(options: {
       shape: getShape(),
       points: [],
       previewEnd: null,
+      rectangleDirection: null,
       previewGroup: null,
     }
     return session
@@ -169,6 +171,7 @@ export function createFloorBuildTool(options: {
     current.shape = 'rectangle'
     current.points = [start.clone()]
     current.previewEnd = start.clone()
+    current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
     hideStartIndicator()
     previewRenderer.markDirty()
@@ -193,6 +196,7 @@ export function createFloorBuildTool(options: {
     current.shape = 'circle'
     current.points = [center.clone()]
     current.previewEnd = initialEnd
+    current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
     hideStartIndicator()
     previewRenderer.markDirty()
@@ -242,6 +246,10 @@ export function createFloorBuildTool(options: {
       ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
       : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
+
+    if (session.shape === 'rectangle' && !session.rectangleDirection) {
+      session.rectangleDirection = resolveRectangleDirection(session.points[0] ?? next, next)
+    }
 
     const previous = session.previewEnd
     if (previous && previous.equals(next)) {
@@ -444,23 +452,13 @@ export function createFloorBuildTool(options: {
           previewRenderer.markDirty()
 
           const start = session.points[0]!
-          const minX = Math.min(start.x, end.x)
-          const maxX = Math.max(start.x, end.x)
-          const minZ = Math.min(start.z, end.z)
-          const maxZ = Math.max(start.z, end.z)
-          const width = maxX - minX
-          const depth = maxZ - minZ
-          if (!Number.isFinite(width) || !Number.isFinite(depth) || width * depth <= 1e-6) {
+          const rectangle = buildRotatedRectangleFromCorner(start, end, session.rectangleDirection)
+          if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
             clearSession(true)
             return true
           }
 
-          finalizeFromVertices([
-            new THREE.Vector3(minX, start.y, minZ),
-            new THREE.Vector3(minX, start.y, maxZ),
-            new THREE.Vector3(maxX, start.y, maxZ),
-            new THREE.Vector3(maxX, start.y, minZ),
-          ])
+          finalizeFromVertices(rectangle.corners)
           return true
         }
 

@@ -20,6 +20,7 @@ import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { WallPreviewRenderData } from './WallRenderer'
+import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -69,6 +70,7 @@ export type WallBuildToolSession = WallPreviewSession & {
     pointerId: number
     start: THREE.Vector3
     end: THREE.Vector3
+    direction: THREE.Vector3 | null
   } | null
   lastCommittedSegment: WallPreviewSegment | null
   polygonPoints: THREE.Vector3[]
@@ -709,6 +711,7 @@ export function createWallBuildTool(options: {
       pointerId: event.pointerId,
       start: start.clone(),
       end: end.clone(),
+      direction: null,
     }
     current.lastCommittedSegment = null
     current.segments = []
@@ -774,19 +777,16 @@ export function createWallBuildTool(options: {
     return Math.min(256, Math.max(12, estimate))
   }
 
-  const buildRectangleSegments = (start: THREE.Vector3, end: THREE.Vector3): WallPreviewSegment[] => {
-    const minX = Math.min(start.x, end.x)
-    const maxX = Math.max(start.x, end.x)
-    const minZ = Math.min(start.z, end.z)
-    const maxZ = Math.max(start.z, end.z)
-    const y = start.y
-    if (Math.abs(maxX - minX) < 1e-4 || Math.abs(maxZ - minZ) < 1e-4) {
+  const buildRectangleSegments = (
+    start: THREE.Vector3,
+    end: THREE.Vector3,
+    direction: THREE.Vector3 | null,
+  ): WallPreviewSegment[] => {
+    const rectangle = buildRotatedRectangleFromCorner(start, end, direction)
+    if (!rectangle) {
       return []
     }
-    const p1 = new THREE.Vector3(minX, y, minZ)
-    const p2 = new THREE.Vector3(maxX, y, minZ)
-    const p3 = new THREE.Vector3(maxX, y, maxZ)
-    const p4 = new THREE.Vector3(minX, y, maxZ)
+    const [p1, p2, p3, p4] = rectangle.corners
     return [
       { start: p1, end: p2 },
       { start: p2, end: p3 },
@@ -857,10 +857,14 @@ export function createWallBuildTool(options: {
     }
     session.shapeDraft.end.copy(end)
 
+    if (kind === 'rectangle' && !session.shapeDraft.direction) {
+      session.shapeDraft.direction = resolveRectangleDirection(start, end)
+    }
+
     const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
 
     session.segments = kind === 'rectangle'
-      ? buildRectangleSegments(start, end)
+      ? buildRectangleSegments(start, end, session.shapeDraft.direction)
       : buildCircleSegments(start, end, regularPolygonSides)
 
     previewRenderer.markDirty()
@@ -881,7 +885,7 @@ export function createWallBuildTool(options: {
     const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
 
     const segments = kind === 'rectangle'
-      ? buildRectangleSegments(start, end)
+      ? buildRectangleSegments(start, end, session.shapeDraft.direction)
       : buildCircleSegments(start, end, regularPolygonSides)
 
     if (!segments.length) {

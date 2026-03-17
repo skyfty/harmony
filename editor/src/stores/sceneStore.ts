@@ -13412,11 +13412,14 @@ export const useSceneStore = defineStore('scene', {
       center: Vector3Like
       width: number
       depth: number
+      yaw?: number
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const width = Math.max(1e-3, Math.abs(Number(payload.width)))
       const depth = Math.max(1e-3, Math.abs(Number(payload.depth)))
+      const yaw = Number(payload.yaw)
+      const rotationY = Number.isFinite(yaw) ? yaw : 0
       if (!Number.isFinite(width) || !Number.isFinite(depth)) {
         return null
       }
@@ -13434,7 +13437,7 @@ export const useSceneStore = defineStore('scene', {
           object: runtime,
           name: nodeName,
           position: createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0),
-          rotation: createVector(-Math.PI / 2, 0, 0),
+          rotation: createVector(-Math.PI / 2, rotationY, 0),
           scale: createVector(width, depth, 1),
           editorFlags: payload.editorFlags,
           userData,
@@ -13656,9 +13659,12 @@ export const useSceneStore = defineStore('scene', {
       center: Vector3Like
       width: number
       depth: number
+      yaw?: number
     }): SceneNode | null {
       const width = Math.max(1e-3, Math.abs(Number(payload.width)))
       const depth = Math.max(1e-3, Math.abs(Number(payload.depth)))
+      const yaw = Number(payload.yaw)
+      const rotationY = Number.isFinite(yaw) ? yaw : 0
       if (!Number.isFinite(width) || !Number.isFinite(depth)) {
         return null
       }
@@ -13671,7 +13677,7 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       visitNode(this.nodes, payload.nodeId, (node) => {
         node.position = createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0)
-        node.rotation = createVector(-Math.PI / 2, 0, 0)
+        node.rotation = createVector(-Math.PI / 2, rotationY, 0)
         node.scale = createVector(width, depth, 1)
         node.userData = mergeUserDataWithWaterBuildShape(node.userData, 'rectangle')
       })

@@ -4388,6 +4388,10 @@ type WaterRectangleDragState = {
   parentObject: THREE.Object3D
   startPosition: THREE.Vector3
   startScale: THREE.Vector3
+  startRotation: THREE.Euler
+  startCenterWorld: THREE.Vector3
+  axisXWorld: THREE.Vector3
+  axisYWorld: THREE.Vector3
   startBounds: {
     minX: number
     maxX: number
@@ -4484,6 +4488,12 @@ type WaterEdgeDragState =
       moved: boolean
       runtimeObject: THREE.Object3D
       parentObject: THREE.Object3D
+      startPosition: THREE.Vector3
+      startScale: THREE.Vector3
+      startRotation: THREE.Euler
+      startCenterWorld: THREE.Vector3
+      axisXWorld: THREE.Vector3
+      axisYWorld: THREE.Vector3
       startBounds: {
         minX: number
         maxX: number
@@ -4797,21 +4807,56 @@ function setActiveWaterCircleHandle(active: { nodeId: string; circleKind: 'cente
   waterCircleHandleRenderer.setActiveHandle(active as any)
 }
 
+const waterRectangleDragAxisHelper = new THREE.Vector3()
+const waterRectangleDragAxisHelper2 = new THREE.Vector3()
+const waterRectangleDragCenterHelper = new THREE.Vector3()
+const waterRectangleDragLocalCenterHelper = new THREE.Vector3()
+
 function applyWaterRectanglePreviewTransform(
   runtimeObject: THREE.Object3D,
+  parentObject: THREE.Object3D,
+  centerWorld: THREE.Vector3,
+  width: number,
+  depth: number,
+  rotationY: number,
+) {
+  parentObject.updateMatrixWorld(true)
+  runtimeObject.position.copy(parentObject.worldToLocal(waterRectangleDragLocalCenterHelper.copy(centerWorld)))
+  runtimeObject.rotation.set(-Math.PI / 2, rotationY, 0)
+  runtimeObject.scale.set(Math.max(1e-3, width), Math.max(1e-3, depth), 1)
+  runtimeObject.updateMatrixWorld(true)
+}
+
+function applyWaterRectanglePreviewBounds(
+  state: Pick<
+    WaterRectangleDragState,
+    'runtimeObject' | 'parentObject' | 'startBounds' | 'startCenterWorld' | 'axisXWorld' | 'axisYWorld' | 'startRotation'
+  >,
   bounds: { minX: number; maxX: number; minY: number; maxY: number; y: number },
 ) {
   const width = Math.max(1e-3, bounds.maxX - bounds.minX)
   const depth = Math.max(1e-3, bounds.maxY - bounds.minY)
-  runtimeObject.position.set((bounds.minX + bounds.maxX) * 0.5, bounds.y, (bounds.minY + bounds.maxY) * 0.5)
-  runtimeObject.rotation.set(-Math.PI / 2, 0, 0)
-  runtimeObject.scale.set(width, depth, 1)
-  runtimeObject.updateMatrixWorld(true)
+  const centerOffsetX = (bounds.minX + bounds.maxX) * 0.5
+  const centerOffsetY = (bounds.minY + bounds.maxY) * 0.5
+  const centerWorld = waterRectangleDragCenterHelper.copy(state.startCenterWorld)
+    .addScaledVector(state.axisXWorld, centerOffsetX)
+    .addScaledVector(state.axisYWorld, centerOffsetY)
+
+  applyWaterRectanglePreviewTransform(
+    state.runtimeObject,
+    state.parentObject,
+    centerWorld,
+    width,
+    depth,
+    state.startRotation.y,
+  )
 }
 
-function restoreWaterRectanglePreviewTransform(state: WaterRectangleDragState) {
+function restoreWaterRectanglePreviewTransform(
+  state: Pick<WaterRectangleDragState, 'runtimeObject' | 'startPosition' | 'startRotation' | 'startScale'>,
+) {
   state.runtimeObject.position.copy(state.startPosition)
-  state.runtimeObject.rotation.set(-Math.PI / 2, 0, 0)
+  state.runtimeObject.rotation.copy(state.startRotation)
   state.runtimeObject.scale.copy(state.startScale)
   state.runtimeObject.updateMatrixWorld(true)
 }
@@ -4962,14 +5007,10 @@ function pickWaterRectangleEdgeAtPointer(event: PointerEvent, node: SceneNode, r
     return null
   }
 
-  const parentObject = runtimeObject.parent
-  if (!parentObject) {
-    return null
-  }
-  const localPointer = parentObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterPlanePointerHelper.clone()))
+  const localPointer = runtimeObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterPlanePointerHelper.clone()))
 
   return pickNearestPlanarEdge({
-    pointer: new THREE.Vector2(localPointer.x, localPointer.z),
+    pointer: new THREE.Vector2(localPointer.x, localPointer.y),
     vertices: buildRectanglePlanarPoints({
       minX: bounds.minX,
       maxX: bounds.maxX,
@@ -5025,6 +5066,10 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
     y: hit.zSide,
   }
   const dragPlane = createWaterDragPlane(runtime)
+  runtime.updateMatrixWorld(true)
+  const centerWorld = runtime.getWorldPosition(waterRectangleDragCenterHelper).clone()
+  const axisXWorld = runtime.localToWorld(waterRectangleDragAxisHelper.set(1, 0, 0)).sub(centerWorld).normalize().clone()
+  const axisYWorld = runtime.localToWorld(waterRectangleDragAxisHelper2.set(0, 1, 0)).sub(centerWorld).normalize().clone()
 
   waterRectangleDragState = {
     pointerId: event.pointerId,
@@ -5037,6 +5082,10 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
     parentObject,
     startPosition: runtime.position.clone(),
     startScale: runtime.scale.clone(),
+    startRotation: runtime.rotation.clone(),
+    startCenterWorld: centerWorld,
+    axisXWorld,
+    axisYWorld,
     startBounds: {
       minX: bounds.minX,
       maxX: bounds.maxX,
@@ -5222,6 +5271,10 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
       return false
     }
     const dragPlane = createWaterDragPlane(runtime)
+    runtime.updateMatrixWorld(true)
+    const centerWorld = runtime.getWorldPosition(waterRectangleDragCenterHelper).clone()
+    const axisXWorld = runtime.localToWorld(waterRectangleDragAxisHelper.set(1, 0, 0)).sub(centerWorld).normalize().clone()
+    const axisYWorld = runtime.localToWorld(waterRectangleDragAxisHelper2.set(0, 1, 0)).sub(centerWorld).normalize().clone()
     waterEdgeDragState = {
       kind: 'rectangle',
       pointerId: event.pointerId,
@@ -5232,6 +5285,12 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
       moved: false,
       runtimeObject: runtime,
       parentObject,
+      startPosition: runtime.position.clone(),
+      startScale: runtime.scale.clone(),
+      startRotation: runtime.rotation.clone(),
+      startCenterWorld: centerWorld,
+      axisXWorld,
+      axisYWorld,
       startBounds: {
         minX: bounds.minX,
         maxX: bounds.maxX,
@@ -13048,10 +13107,10 @@ function handlePointerMove(event: PointerEvent) {
       return
     }
 
-    const pointerLocal = state.parentObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterDragIntersectionHelper.clone()))
+    const pointerLocal = state.runtimeObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterDragIntersectionHelper.clone()))
     const localBounds = { ...state.startBounds }
     const x = pointerLocal.x
-    const y = pointerLocal.z
+    const y = pointerLocal.y
     const eps = 1e-3
     if (state.draggedSide.x === 'min') {
       localBounds.minX = Math.min(x, localBounds.maxX - eps)
@@ -13064,7 +13123,7 @@ function handlePointerMove(event: PointerEvent) {
       localBounds.maxY = Math.max(y, localBounds.minY + eps)
     }
 
-    applyWaterRectanglePreviewTransform(state.runtimeObject, localBounds)
+    applyWaterRectanglePreviewBounds(state, localBounds)
     return
   }
 
@@ -13116,10 +13175,10 @@ function handlePointerMove(event: PointerEvent) {
       if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
       }
-      const pointerLocal = state.parentObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterDragIntersectionHelper.clone()))
+      const pointerLocal = state.runtimeObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterDragIntersectionHelper.clone()))
       const nextBounds = { ...state.startBounds }
       const x = pointerLocal.x
-      const y = pointerLocal.z
+      const y = pointerLocal.y
       const eps = 1e-3
       if (state.edgeIndex === 0) {
         nextBounds.minX = Math.min(x, nextBounds.maxX - eps)
@@ -13130,7 +13189,7 @@ function handlePointerMove(event: PointerEvent) {
       } else {
         nextBounds.minY = Math.min(y, nextBounds.maxY - eps)
       }
-      applyWaterRectanglePreviewTransform(state.runtimeObject, nextBounds)
+      applyWaterRectanglePreviewBounds(state, nextBounds)
       return
     }
 
@@ -13503,29 +13562,23 @@ async function handlePointerUp(event: PointerEvent) {
 
         if (state.kind === 'rectangle') {
           if (state.moved) {
-            const runtimeBounds = {
-              minX: state.runtimeObject.position.x - Math.abs(state.runtimeObject.scale.x) * 0.5,
-              maxX: state.runtimeObject.position.x + Math.abs(state.runtimeObject.scale.x) * 0.5,
-              minZ: state.runtimeObject.position.z - Math.abs(state.runtimeObject.scale.y) * 0.5,
-              maxZ: state.runtimeObject.position.z + Math.abs(state.runtimeObject.scale.y) * 0.5,
-              y: state.runtimeObject.position.y,
-            }
             sceneStore.updateWaterNodeRectangle({
               nodeId: state.nodeId,
               center: {
-                x: (runtimeBounds.minX + runtimeBounds.maxX) * 0.5,
-                y: runtimeBounds.y,
-                z: (runtimeBounds.minZ + runtimeBounds.maxZ) * 0.5,
+                x: state.runtimeObject.position.x,
+                y: state.runtimeObject.position.y,
+                z: state.runtimeObject.position.z,
               },
-              width: runtimeBounds.maxX - runtimeBounds.minX,
-              depth: runtimeBounds.maxZ - runtimeBounds.minZ,
+              width: Math.abs(state.runtimeObject.scale.x),
+              depth: Math.abs(state.runtimeObject.scale.y),
+              yaw: state.runtimeObject.rotation.y,
             })
             ensureWaterRectangleHandlesForSelectedNode({ force: true })
             void nextTick(() => {
               ensureWaterRectangleHandlesForSelectedNode({ force: true })
             })
           } else {
-            applyWaterRectanglePreviewTransform(state.runtimeObject, state.startBounds)
+            restoreWaterRectanglePreviewTransform(state)
           }
         } else if (state.moved) {
           commitWaterContourNode(state.nodeId, state.workingPoints, 'polygon')
@@ -13551,22 +13604,16 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveWaterRectangleHandle(null)
 
         if (state.moved) {
-          const runtimeBounds = {
-            minX: state.runtimeObject.position.x - Math.abs(state.runtimeObject.scale.x) * 0.5,
-            maxX: state.runtimeObject.position.x + Math.abs(state.runtimeObject.scale.x) * 0.5,
-            minZ: state.runtimeObject.position.z - Math.abs(state.runtimeObject.scale.y) * 0.5,
-            maxZ: state.runtimeObject.position.z + Math.abs(state.runtimeObject.scale.y) * 0.5,
-            y: state.runtimeObject.position.y,
-          }
           sceneStore.updateWaterNodeRectangle({
             nodeId: state.nodeId,
             center: {
-              x: (runtimeBounds.minX + runtimeBounds.maxX) * 0.5,
-              y: runtimeBounds.y,
-              z: (runtimeBounds.minZ + runtimeBounds.maxZ) * 0.5,
+              x: state.runtimeObject.position.x,
+              y: state.runtimeObject.position.y,
+              z: state.runtimeObject.position.z,
             },
-            width: runtimeBounds.maxX - runtimeBounds.minX,
-            depth: runtimeBounds.maxZ - runtimeBounds.minZ,
+            width: Math.abs(state.runtimeObject.scale.x),
+            depth: Math.abs(state.runtimeObject.scale.y),
+            yaw: state.runtimeObject.rotation.y,
           })
           ensureWaterRectangleHandlesForSelectedNode({ force: true })
           void nextTick(() => {
@@ -14370,7 +14417,7 @@ function handlePointerCancel(event: PointerEvent) {
     pointerInteraction.releaseIfCaptured(event.pointerId)
     try {
       if (state.kind === 'rectangle') {
-        applyWaterRectanglePreviewTransform(state.runtimeObject, state.startBounds)
+        restoreWaterRectanglePreviewTransform(state)
         ensureWaterRectangleHandlesForSelectedNode({ force: true })
       } else {
         buildWaterPreviewFromLocalPoints(state.runtimeObject, state.startPoints)
