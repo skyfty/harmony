@@ -1,5 +1,9 @@
 import type { Context } from 'koa'
 import { OrderModel } from '@/models/Order'
+import { ProductModel } from '@/models/Product'
+import { VehicleModel } from '@/models/Vehicle'
+import { UserProductModel } from '@/models/UserProduct'
+import { UserVehicleModel } from '@/models/UserVehicle'
 import {
   decryptWechatNotifyResource,
   parseWechatNotifyBody,

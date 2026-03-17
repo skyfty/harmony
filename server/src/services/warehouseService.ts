@@ -8,6 +8,7 @@ interface AddProductOptions {
   product: ProductDocument
   orderId: Types.ObjectId
   quantity?: number
+  session?: ClientSession
 }
 
 interface RemoveProductOptions {
