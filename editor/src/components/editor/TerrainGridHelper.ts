@@ -4,7 +4,7 @@ import { GRID_MAJOR_SPACING } from './constants'
 
 const MAJOR_COLOR = '#ffc107'
 const MAJOR_OPACITY = 0.95
-const GRID_MAJOR_LINE_WIDTH_PX = 1.0
+const GRID_MAJOR_LINE_WIDTH_PX = 0.85
 const TERRAIN_GRID_SHADER_KEY = 'harmony-terrain-grid-overlay-v2'
 const MAJOR_COLOR_VALUE = new THREE.Color(MAJOR_COLOR)
 
