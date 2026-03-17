@@ -62,6 +62,7 @@ export interface UploadTask {
   aiTagError: string | null
   aiLastSignature: string | null
   aiSuggestedTags: string[]
+  metadata?: Record<string, unknown> | null
 }
 
 export interface CreateTaskOptions {
@@ -281,6 +282,15 @@ function buildExtraHints(task: UploadTask): string[] {
     const category = computeSizeCategory(task.dimensionLength, task.dimensionWidth, task.dimensionHeight)
     if (category) {
       hints.push(`尺寸分类 ${category}`)
+    }
+    const rawStats = task.metadata?.modelStats
+    if (rawStats && typeof rawStats === 'object') {
+      const stats = rawStats as { vertexCount?: number; faceCount?: number; meshCount?: number }
+      const statParts: string[] = []
+      if (typeof stats.vertexCount === 'number') statParts.push(`${stats.vertexCount.toLocaleString('en-US')} 顶点`)
+      if (typeof stats.faceCount === 'number') statParts.push(`${stats.faceCount.toLocaleString('en-US')} 面`)
+      if (typeof stats.meshCount === 'number') statParts.push(`${stats.meshCount} 个网格`)
+      if (statParts.length) hints.push(`模型统计 ${statParts.join('，')}`)
     }
   }
   if (task.type === 'image') {
@@ -600,6 +610,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         aiTagError: null,
         aiLastSignature: null,
         aiSuggestedTags: [],
+        metadata: null,
       }) as UploadTask
       tasks.value.push(task)
       activeTaskId.value = id
@@ -784,6 +795,9 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     if (isFiniteNumber(task.imageHeight)) {
       formData.append('imageHeight', Math.round(task.imageHeight).toString())
     }
+    if (task.metadata && typeof task.metadata === 'object') {
+      formData.append('metadata', JSON.stringify(task.metadata))
+    }
     if (task.categoryId) {
       formData.append('categoryId', task.categoryId)
     }
@@ -856,6 +870,13 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     if (changed) {
       task.updatedAt = Date.now()
     }
+  }
+
+  function updateModelMetadata(id: string, stats: { vertexCount: number; faceCount: number; meshCount: number }): void {
+    const task = findTask(id)
+    const existing = task.metadata && typeof task.metadata === 'object' ? task.metadata : {}
+    task.metadata = { ...existing, modelStats: { ...stats } }
+    task.updatedAt = Date.now()
   }
 
   function updateModelDimensions(id: string, dims: { length?: number; width?: number; height?: number }): void {
@@ -1007,6 +1028,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     generateTagsWithAi,
     updateImageMetadata,
     updateModelDimensions,
+    updateModelMetadata,
   markThumbnailPending,
   applyThumbnailResult,
     startUpload,

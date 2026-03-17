@@ -33,6 +33,7 @@ import {
 import { deleteProviderCatalog, loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
+import { prepareLocalAssetImport, type LocalAssetImportPhase } from '@/utils/localAssetImport'
 import type { SceneNode } from '@schema'
 import { getExtensionFromMimeType, inferAssetType } from '@schema'
 import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
@@ -129,8 +130,29 @@ const directoryDropHoverId = ref<string | null>(null)
 const assetDropHoverId = ref<string | null>(null)
 const dropActive = ref(false)
 const dropProcessing = ref(false)
+type DropImportStage = LocalAssetImportPhase | 'store-asset' | 'finalize'
+type DropImportProgressState = {
+  total: number
+  completed: number
+  failed: number
+  currentFileName: string
+  currentPhase: string
+  currentStep: number
+  stepCount: number
+}
+
+const DROP_IMPORT_STAGE_ORDER: DropImportStage[] = ['extract-metadata', 'generate-thumbnail', 'store-asset', 'finalize']
+const DROP_IMPORT_STAGE_LABELS: Record<DropImportStage, string> = {
+  'extract-metadata': 'Extracting asset metadata…',
+  'generate-thumbnail': 'Generating thumbnail…',
+  'store-asset': 'Caching asset file…',
+  finalize: 'Saving asset metadata…',
+}
+
+const dropImportProgress = ref<DropImportProgressState | null>(null)
 const dropDragDepth = ref(0)
 let dropFeedbackTimer: number | null = null
+let dropImportAbortController: AbortController | null = null
 const uploadDialogOpen = ref(false)
 
 const providerLoadingState = ref<Record<string, boolean>>({})
@@ -2233,10 +2255,32 @@ function extractAssetUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] 
 
 async function importLocalFile(
   file: File,
-  options: { displayName?: string; type?: ProjectAsset['type'] } = {},
+  options: {
+    displayName?: string
+    type?: ProjectAsset['type']
+    signal?: AbortSignal
+    onPhase?: (phase: DropImportStage) => void
+  } = {},
 ): Promise<ProjectAsset> {
   const type = options.type ?? inferAssetType({ mimeType: file.type ?? null, nameOrUrl: file.name ?? null, fallbackType: 'file' })
   const fallbackName = options.displayName ?? (file.name && file.name.trim().length ? file.name : 'Dropped Asset')
+  const draftAsset: ProjectAsset = {
+    id: `local:${file.name}:${file.size}:${file.lastModified}`,
+    name: fallbackName,
+    type,
+    downloadUrl: file.name ?? fallbackName,
+    previewColor: resolvePreviewColor(type),
+    thumbnail: null,
+    description: fallbackName,
+    metadata: null,
+    gleaned: true,
+    extension: extractExtension(file.name) ?? getExtensionFromMimeType(file.type) ?? null,
+  }
+  const prepared = await prepareLocalAssetImport(draftAsset, file, {
+    signal: options.signal,
+    onPhase: (phase) => options.onPhase?.(phase),
+  })
+  options.onPhase?.('store-asset')
   const { asset } = await sceneStore.ensureLocalAssetFromFile(file, {
     type,
     name: fallbackName,
@@ -2244,7 +2288,36 @@ async function importLocalFile(
     previewColor: resolvePreviewColor(type),
     gleaned: true,
   })
-  return asset
+  options.onPhase?.('finalize')
+
+  const nextMetadata = mergeAssetMetadata(asset.metadata ?? null, prepared.metadata ?? null)
+  const updates: Partial<ProjectAsset> = {}
+  if (typeof prepared.dimensionLength === 'number' && prepared.dimensionLength > 0) {
+    updates.dimensionLength = prepared.dimensionLength
+  }
+  if (typeof prepared.dimensionWidth === 'number' && prepared.dimensionWidth > 0) {
+    updates.dimensionWidth = prepared.dimensionWidth
+  }
+  if (typeof prepared.dimensionHeight === 'number' && prepared.dimensionHeight > 0) {
+    updates.dimensionHeight = prepared.dimensionHeight
+  }
+  if (typeof prepared.imageWidth === 'number' && prepared.imageWidth > 0) {
+    updates.imageWidth = Math.round(prepared.imageWidth)
+  }
+  if (typeof prepared.imageHeight === 'number' && prepared.imageHeight > 0) {
+    updates.imageHeight = Math.round(prepared.imageHeight)
+  }
+  if (prepared.thumbnailDataUrl) {
+    updates.thumbnail = prepared.thumbnailDataUrl
+  }
+  if (nextMetadata) {
+    updates.metadata = nextMetadata
+  }
+
+  if (!Object.keys(updates).length) {
+    return asset
+  }
+  return sceneStore.updateProjectAssetMetadata(asset.id, updates) ?? asset
 }
 
 async function importDataUrlAsset(dataUrl: string): Promise<ProjectAsset> {
@@ -2283,13 +2356,24 @@ async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: P
   const collected = new Map<string, ProjectAsset>()
   const errors: string[] = []
   const files = getDroppedFiles(dataTransfer)
+  beginDropImportProgress(files.length)
   for (const file of files) {
+    let failed = false
     try {
-      const asset = await importLocalFile(file)
+      const asset = await importLocalFile(file, {
+        signal: dropImportAbortController?.signal,
+        onPhase: (phase) => updateDropImportProgress(file.name, phase),
+      })
       collected.set(asset.id, asset)
     } catch (error) {
-  const message = (error as Error).message ?? `Import failed: ${file.name}`
+      if ((error as Error).name === 'AbortError') {
+        throw error
+      }
+      failed = true
+      const message = (error as Error).message ?? `Import failed: ${file.name}`
       errors.push(message)
+    } finally {
+      completeDropImportProgress(file.name, failed)
     }
   }
 
@@ -2314,9 +2398,36 @@ async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: P
 
 const allowAssetDrop = computed(() => true)
 const dropOverlayVisible = computed(() => dropActive.value || dropProcessing.value)
-const dropOverlayMessage = computed(() =>
-  dropProcessing.value ? 'Processing assets…' : 'Drag files, links, or scene nodes here to add assets',
-)
+const dropOverlayMessage = computed(() => {
+  if (!dropProcessing.value) {
+    return 'Drag files, links, or scene nodes here to add assets'
+  }
+  return dropImportProgress.value?.currentPhase ?? 'Processing assets…'
+})
+const dropOverlayStatus = computed(() => {
+  const progress = dropImportProgress.value
+  if (!dropProcessing.value || !progress) {
+    return ''
+  }
+  const base = `${progress.completed}/${progress.total} files`
+  return progress.failed > 0 ? `${base} - ${progress.failed} failed` : base
+})
+const dropOverlayCurrentFile = computed(() => {
+  const progress = dropImportProgress.value
+  if (!dropProcessing.value || !progress?.currentFileName) {
+    return ''
+  }
+  return progress.currentFileName
+})
+const dropOverlayPercent = computed(() => {
+  const progress = dropImportProgress.value
+  if (!progress || progress.total <= 0) {
+    return 0
+  }
+  const inFlight = progress.currentStep > 0 ? progress.currentStep / progress.stepCount : 0
+  const percent = ((progress.completed + inFlight) / progress.total) * 100
+  return Math.max(0, Math.min(100, percent))
+})
 
 function handleGalleryDragEnter(event: DragEvent) {
   if (!allowAssetDrop.value || dropProcessing.value) {
@@ -2390,6 +2501,8 @@ async function handleGalleryDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   dropProcessing.value = true
+  dropImportAbortController?.abort()
+  dropImportAbortController = new AbortController()
   dropActive.value = false
   dropDragDepth.value = 0
   clearDropFeedbackTimer()
@@ -2428,10 +2541,73 @@ async function handleGalleryDrop(event: DragEvent) {
       showDropFeedback('error', 'No importable assets detected')
     }
   } catch (error) {
+    if ((error as Error).name === 'AbortError') {
+      return
+    }
     console.error('Failed to process gallery drop payload', error)
     showDropFeedback('error', (error as Error).message ?? 'Failed to process drop payload')
   } finally {
     dropProcessing.value = false
+    dropImportProgress.value = null
+    dropImportAbortController = null
+  }
+}
+
+function mergeAssetMetadata(
+  current: ProjectAsset['metadata'] | null | undefined,
+  incoming: ProjectAsset['metadata'] | null | undefined,
+): ProjectAsset['metadata'] | null {
+  const base = current && typeof current === 'object' ? { ...current } : null
+  const next = incoming && typeof incoming === 'object' ? { ...incoming } : null
+  if (!base && !next) {
+    return null
+  }
+  return {
+    ...(base ?? {}),
+    ...(next ?? {}),
+  }
+}
+
+function beginDropImportProgress(total: number): void {
+  if (total <= 0) {
+    dropImportProgress.value = null
+    return
+  }
+  dropImportProgress.value = {
+    total,
+    completed: 0,
+    failed: 0,
+    currentFileName: '',
+    currentPhase: DROP_IMPORT_STAGE_LABELS['extract-metadata'],
+    currentStep: 0,
+    stepCount: DROP_IMPORT_STAGE_ORDER.length,
+  }
+}
+
+function updateDropImportProgress(fileName: string, phase: DropImportStage): void {
+  const current = dropImportProgress.value
+  if (!current) {
+    return
+  }
+  dropImportProgress.value = {
+    ...current,
+    currentFileName: fileName,
+    currentPhase: DROP_IMPORT_STAGE_LABELS[phase],
+    currentStep: DROP_IMPORT_STAGE_ORDER.indexOf(phase) + 1,
+  }
+}
+
+function completeDropImportProgress(fileName: string, failed: boolean): void {
+  const current = dropImportProgress.value
+  if (!current) {
+    return
+  }
+  dropImportProgress.value = {
+    ...current,
+    completed: Math.min(current.total, current.completed + 1),
+    failed: current.failed + (failed ? 1 : 0),
+    currentFileName: fileName,
+    currentStep: 0,
   }
 }
 
@@ -2918,6 +3094,7 @@ function destroyDragPreview() {
 }
 
 onBeforeUnmount(() => {
+  dropImportAbortController?.abort()
   destroyDragPreview()
   detachDragSuppressionListeners()
   directoryDropHoverId.value = null
@@ -3320,6 +3497,16 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
           <div v-if="dropOverlayVisible" class="drop-overlay">
             <v-icon size="42" color="white">mdi-cloud-upload</v-icon>
             <span class="drop-overlay__message">{{ dropOverlayMessage }}</span>
+            <span v-if="dropOverlayStatus" class="drop-overlay__status">{{ dropOverlayStatus }}</span>
+            <span v-if="dropOverlayCurrentFile" class="drop-overlay__file">{{ dropOverlayCurrentFile }}</span>
+            <v-progress-linear
+              v-if="dropProcessing && dropImportProgress"
+              class="drop-overlay__progress"
+              :model-value="dropOverlayPercent"
+              color="primary"
+              rounded
+              height="8"
+            />
           </div>
         </div>
       </Pane>
@@ -3750,6 +3937,24 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 .drop-overlay__message {
   font-size: 15px;
   font-weight: 500;
+}
+
+.drop-overlay__status {
+  font-size: 13px;
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.drop-overlay__file {
+  max-width: min(100%, 340px);
+  font-size: 12px;
+  color: rgba(233, 236, 241, 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drop-overlay__progress {
+  width: min(320px, 100%);
 }
 
 .project-gallery.has-drop-feedback .drop-overlay {

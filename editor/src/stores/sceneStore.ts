@@ -5554,6 +5554,7 @@ function mapProjectAssetToManifestAsset(
           exportable: false,
         }
       : null,
+    metadata: asset.metadata && typeof asset.metadata === 'object' ? { ...asset.metadata } : undefined,
     description: asset.description ?? null,
     createdAt: asset.createdAt ?? generatedAt,
     updatedAt: asset.updatedAt ?? generatedAt,
@@ -5695,6 +5696,7 @@ function mapManifestAssetToProjectAsset(
     sizeCategory: manifestAsset.sizeCategory ?? undefined,
     imageWidth: manifestAsset.imageWidth ?? undefined,
     imageHeight: manifestAsset.imageHeight ?? undefined,
+    metadata: manifestAsset.metadata && typeof manifestAsset.metadata === 'object' ? { ...manifestAsset.metadata } : undefined,
     seriesId: manifestAsset.seriesId ?? undefined,
     seriesName: manifestAsset.seriesName ?? undefined,
     terrainScatterPreset: manifestAsset.terrainScatterPreset ?? undefined,
@@ -10416,6 +10418,9 @@ export const useSceneStore = defineStore('scene', {
           downloadUrl: updates.downloadUrl ?? asset.downloadUrl,
           extension: updates.extension ?? asset.extension ?? null,
           previewColor: updates.previewColor ?? asset.previewColor,
+          metadata: updates.metadata === undefined
+            ? (asset.metadata && typeof asset.metadata === 'object' ? { ...asset.metadata } : asset.metadata ?? null)
+            : (updates.metadata && typeof updates.metadata === 'object' ? { ...updates.metadata } : updates.metadata ?? null),
           createdAt: asset.createdAt ?? timestamp,
           updatedAt: timestamp,
           gleaned: asset.gleaned,
@@ -10605,6 +10610,7 @@ export const useSceneStore = defineStore('scene', {
         previewColor: metadata.previewColor ?? '#ffffff',
         thumbnail: null,
         description,
+        metadata: null,
         gleaned: metadata.gleaned ?? true,
         extension: extractExtension(file.name) ?? getExtensionFromMimeType(file.type) ?? null,
       }

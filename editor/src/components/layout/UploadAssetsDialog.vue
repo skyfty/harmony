@@ -430,6 +430,10 @@ function buildExtraHints(entry: UploadAssetEntry): string[] {
     if (parts.length) hints.push(`Model dimensions ${parts.join(', ')}`)
     const sizeCategory = entrySizeCategory(entry)
     if (sizeCategory) hints.push(`Size category ${sizeCategory}`)
+    const modelStats = resolveEntryModelStats(entry)
+    if (modelStats) {
+      hints.push(`Model stats ${formatCount(modelStats.vertexCount)} vertices, ${formatCount(modelStats.faceCount)} faces, ${formatCount(modelStats.meshCount)} meshes`)
+    }
   }
   if (entry.asset.type === 'image') {
     const parts: string[] = []
@@ -438,6 +442,36 @@ function buildExtraHints(entry: UploadAssetEntry): string[] {
     if (parts.length) hints.push(`Image size ${parts.join(', ')}`)
   }
   return hints
+}
+
+function resolveEntryModelStats(entry: UploadAssetEntry): { vertexCount: number; faceCount: number; meshCount: number } | null {
+  const candidate = entry.asset.metadata?.modelStats
+  if (!candidate || typeof candidate !== 'object') {
+    return null
+  }
+  const vertexCount = Number((candidate as { vertexCount?: unknown }).vertexCount)
+  const faceCount = Number((candidate as { faceCount?: unknown }).faceCount)
+  const meshCount = Number((candidate as { meshCount?: unknown }).meshCount)
+  if (!Number.isFinite(vertexCount) || !Number.isFinite(faceCount) || !Number.isFinite(meshCount)) {
+    return null
+  }
+  return {
+    vertexCount: Math.max(0, Math.round(vertexCount)),
+    faceCount: Math.max(0, Math.round(faceCount)),
+    meshCount: Math.max(0, Math.round(meshCount)),
+  }
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(value)))
+}
+
+function formatEntryModelStats(entry: UploadAssetEntry): string | null {
+  const modelStats = resolveEntryModelStats(entry)
+  if (!modelStats) {
+    return null
+  }
+  return `${formatCount(modelStats.vertexCount)} vertices | ${formatCount(modelStats.faceCount)} faces | ${formatCount(modelStats.meshCount)} meshes`
 }
 
 function integrateSuggestedTags(entry: UploadAssetEntry, tags: string[]): number {
@@ -1667,6 +1701,11 @@ function keepLocalReferencesAfterUpload(): void {
                         @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
                       />
 
+                      <div v-if="formatEntryModelStats(entry)" class="upload-preview__meta">
+                        <div class="upload-preview__meta-title">Imported model stats</div>
+                        <div class="upload-preview__meta-copy">{{ formatEntryModelStats(entry) }}</div>
+                      </div>
+
                       <div v-if="isModelAsset(entry.asset)" class="upload-preview__actions">
                         <v-btn
                           color="primary"
@@ -1952,6 +1991,25 @@ function keepLocalReferencesAfterUpload(): void {
 .upload-preview-wrapper {
   position: relative;
   width: 100%;
+}
+
+.upload-preview__meta {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.upload-preview__meta-title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.78);
+}
+
+.upload-preview__meta-copy {
+  margin-top: 4px;
+  font-size: 0.84rem;
+  color: rgba(233, 236, 241, 0.94);
 }
 
 .upload-preview__actions {
