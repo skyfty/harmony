@@ -266,8 +266,7 @@ class BillboardComponent extends Component<BillboardComponentProps> {
 
   private syncRuntimeMode(mesh: CylinderMesh): void {
     const cameraWorldPosition = this.context.getFrameState().cameraWorldPosition
-    const shouldUseShader = Boolean(this.context.isEnabled() && cameraWorldPosition && this.currentTexture)
-    if (!shouldUseShader) {
+    if (!this.context.isEnabled() || !cameraWorldPosition || !this.currentTexture) {
       this.restoreBaseMaterial(mesh)
       return
     }
