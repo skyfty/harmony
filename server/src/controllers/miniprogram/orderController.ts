@@ -10,10 +10,12 @@ import { generateOrderNumber } from '@/utils/orderNumber'
 
 type OrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled'
 type PaymentStatus = 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+type RefundStatus = 'none' | 'applied' | 'approved' | 'rejected' | 'processing' | 'succeeded' | 'failed'
 type OrderItemType = 'product' | 'prop' | 'equipment' | 'service' | 'other'
 
 const ORDER_STATUS_VALUES: OrderStatus[] = ['pending', 'paid', 'completed', 'cancelled']
 const PAYMENT_STATUS_VALUES: PaymentStatus[] = ['unpaid', 'processing', 'succeeded', 'failed', 'refunded', 'closed']
+const REFUND_STATUS_VALUES: RefundStatus[] = ['none', 'applied', 'approved', 'rejected', 'processing', 'succeeded', 'failed']
 
 interface OrderItemLean {
   productId: Types.ObjectId
@@ -30,6 +32,16 @@ interface OrderLean {
   status?: OrderStatus
   orderStatus?: OrderStatus
   paymentStatus?: PaymentStatus
+  refundStatus?: RefundStatus
+  refundReason?: string
+  refundRequestedAt?: Date
+  refundReviewedAt?: Date
+  refundRejectReason?: string
+  refundAmount?: number
+  refundRequestNo?: string
+  refundId?: string
+  refundedAt?: Date
+  refundResult?: Record<string, unknown>
   totalAmount: number
   paymentMethod?: string
   paymentProvider?: string
@@ -96,6 +108,16 @@ interface OrderResponse {
   status: OrderStatus
   orderStatus: OrderStatus
   paymentStatus: PaymentStatus
+  refundStatus: RefundStatus
+  refundReason?: string
+  refundRequestedAt?: string
+  refundReviewedAt?: string
+  refundRejectReason?: string
+  refundAmount?: number
+  refundRequestNo?: string
+  refundId?: string
+  refundedAt?: string
+  refundResult?: Record<string, unknown>
   totalAmount: number
   paymentMethod?: string
   paymentProvider?: string
@@ -120,12 +142,23 @@ type CreateOrderBody = {
   metadata?: Record<string, unknown>
 }
 
+type ApplyRefundBody = {
+  reason?: string
+}
+
 function resolveOrderStatus(order: OrderLean): OrderStatus {
   return order.orderStatus ?? order.status ?? 'pending'
 }
 
 function resolvePaymentStatus(order: OrderLean): PaymentStatus {
   return order.paymentStatus ?? (resolveOrderStatus(order) === 'paid' ? 'succeeded' : 'unpaid')
+}
+
+function resolveRefundStatus(order: OrderLean): RefundStatus {
+  if (order.refundStatus && REFUND_STATUS_VALUES.includes(order.refundStatus)) {
+    return order.refundStatus
+  }
+  return 'none'
 }
 
 function pickOrderItemType(value: unknown): OrderItemType {
@@ -171,6 +204,7 @@ function buildOrderResponse(
   const customerName = user?.displayName || user?.username || ''
   const orderStatus = resolveOrderStatus(order)
   const paymentStatus = resolvePaymentStatus(order)
+  const refundStatus = resolveRefundStatus(order)
   const items: OrderResponseItem[] = order.items.map((item) => {
     const productId = item.productId.toString()
     const product = productMap.get(productId)
@@ -207,6 +241,16 @@ function buildOrderResponse(
     status: orderStatus,
     orderStatus,
     paymentStatus,
+    refundStatus,
+    refundReason: order.refundReason ?? undefined,
+    refundRequestedAt: order.refundRequestedAt ? order.refundRequestedAt.toISOString() : undefined,
+    refundReviewedAt: order.refundReviewedAt ? order.refundReviewedAt.toISOString() : undefined,
+    refundRejectReason: order.refundRejectReason ?? undefined,
+    refundAmount: order.refundAmount,
+    refundRequestNo: order.refundRequestNo ?? undefined,
+    refundId: order.refundId ?? undefined,
+    refundedAt: order.refundedAt ? order.refundedAt.toISOString() : undefined,
+    refundResult: order.refundResult,
     totalAmount: order.totalAmount,
     paymentMethod: order.paymentMethod ?? undefined,
     paymentProvider: order.paymentProvider ?? undefined,
@@ -223,13 +267,16 @@ function buildOrderResponse(
 
 export async function listOrders(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
-  const { status, paymentStatus } = ctx.query as { status?: string; paymentStatus?: string }
+  const { status, paymentStatus, refundStatus } = ctx.query as { status?: string; paymentStatus?: string; refundStatus?: string }
   const filter: Record<string, unknown> = { userId: new Types.ObjectId(userId) }
   if (status && ORDER_STATUS_VALUES.includes(status as OrderStatus)) {
     filter.orderStatus = status
   }
   if (paymentStatus && PAYMENT_STATUS_VALUES.includes(paymentStatus as PaymentStatus)) {
     filter.paymentStatus = paymentStatus
+  }
+  if (refundStatus && REFUND_STATUS_VALUES.includes(refundStatus as RefundStatus)) {
+    filter.refundStatus = refundStatus
   }
   const orders = (await OrderModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as OrderLean[]
   const productIds = new Set<string>()
@@ -321,6 +368,7 @@ export async function createOrder(ctx: Context): Promise<void> {
     items: orderItems,
     metadata: {
       source: 'mini-order-create',
+      miniAppId: checkoutUser.miniAppId,
       ...(body.metadata ?? {}),
     },
     createdAt: now,
@@ -356,11 +404,15 @@ export async function payOrder(ctx: Context): Promise<void> {
 
   const orderStatus = (order.orderStatus ?? order.status) as OrderStatus
   const paymentStatus = (order.paymentStatus ?? (orderStatus === 'paid' ? 'succeeded' : 'unpaid')) as PaymentStatus
+  const refundStatus = resolveRefundStatus(order.toObject() as OrderLean)
   if (orderStatus === 'completed' || orderStatus === 'cancelled') {
     ctx.throw(400, 'Order is not payable')
   }
   if (paymentStatus === 'succeeded') {
     ctx.throw(400, 'Order already paid')
+  }
+  if (refundStatus !== 'none') {
+    ctx.throw(400, 'Order has an active refund flow')
   }
 
   const description = (order.items[0]?.name || 'Harmony商品支付').slice(0, 120)
@@ -392,4 +444,70 @@ export async function payOrder(ctx: Context): Promise<void> {
     paymentStatus: order.paymentStatus,
     payParams: paymentResult.payParams,
   }
+}
+
+export async function applyOrderRefund(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid order id')
+  }
+
+  const reason = typeof (ctx.request.body as ApplyRefundBody | undefined)?.reason === 'string'
+    ? (ctx.request.body as ApplyRefundBody).reason!.trim()
+    : ''
+  if (!reason) {
+    ctx.throw(400, 'Refund reason is required')
+  }
+  if (reason.length > 200) {
+    ctx.throw(400, 'Refund reason is too long')
+  }
+
+  const order = await OrderModel.findOne({ _id: id, userId }).exec()
+  if (!order) {
+    ctx.throw(404, 'Order not found')
+    return
+  }
+
+  const orderStatus = (order.orderStatus ?? order.status) as OrderStatus
+  const paymentStatus = (order.paymentStatus ?? (orderStatus === 'paid' ? 'succeeded' : 'unpaid')) as PaymentStatus
+  const refundStatus = resolveRefundStatus(order.toObject() as OrderLean)
+
+  if (orderStatus !== 'paid' && orderStatus !== 'completed') {
+    ctx.throw(400, 'Order is not refundable')
+  }
+  if (paymentStatus !== 'succeeded') {
+    ctx.throw(400, 'Order payment is not completed')
+  }
+  if (!['none', 'rejected', 'failed'].includes(refundStatus)) {
+    ctx.throw(400, 'Refund already requested')
+  }
+
+  order.refundStatus = 'applied'
+  order.refundReason = reason
+  order.refundRequestedAt = new Date()
+  order.refundAmount = order.totalAmount
+  order.refundReviewedAt = undefined
+  order.refundReviewedBy = null
+  order.refundRejectReason = undefined
+  order.refundRequestNo = undefined
+  order.refundId = undefined
+  order.refundedAt = undefined
+  order.refundResult = {
+    ...(order.refundResult ?? {}),
+    appliedBy: userId,
+    appliedAt: new Date().toISOString(),
+  }
+  await order.save()
+
+  const row = (await OrderModel.findById(order._id).lean().exec()) as OrderLean | null
+  if (!row) {
+    ctx.throw(500, 'Failed to load order')
+    return
+  }
+  const productIds = Array.from(new Set(row.items.map((item) => item.productId.toString())))
+  const productMap = await buildProductMap(productIds)
+  const vehicleMapByProductId = await buildVehicleMapByProductId(productIds)
+  const userMap = await buildUserMap([row.userId.toString()])
+  ctx.body = buildOrderResponse(row, productMap, vehicleMapByProductId, userMap)
 }

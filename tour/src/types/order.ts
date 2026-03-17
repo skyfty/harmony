@@ -1,5 +1,6 @@
 export type OrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled';
 export type PaymentStatus = 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed';
+export type RefundStatus = 'none' | 'applied' | 'approved' | 'rejected' | 'processing' | 'succeeded' | 'failed';
 
 export interface OrderItem {
   productId: string;
@@ -29,6 +30,16 @@ export interface OrderListItem {
   status: OrderStatus;
   orderStatus: OrderStatus;
   paymentStatus: PaymentStatus;
+  refundStatus: RefundStatus;
+  refundReason?: string;
+  refundRequestedAt?: string;
+  refundReviewedAt?: string;
+  refundRejectReason?: string;
+  refundAmount?: number;
+  refundRequestNo?: string;
+  refundId?: string;
+  refundedAt?: string;
+  refundResult?: Record<string, unknown>;
   paymentProvider?: string;
   transactionId?: string;
   paidAt?: string;

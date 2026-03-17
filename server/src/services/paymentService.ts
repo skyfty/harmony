@@ -36,6 +36,22 @@ export interface PaymentResult {
   payParams?: WechatPrepayResult
 }
 
+export interface CreateRefundOptions {
+  miniAppId?: string
+  orderNumber: string
+  refundRequestNo: string
+  reason: string
+  refundAmount: number
+  totalAmount: number
+}
+
+export interface WechatRefundResult {
+  refundId?: string
+  outRefundNo: string
+  status: string
+  raw: Record<string, unknown>
+}
+
 type WechatNotifyResource = {
   algorithm: string
   ciphertext: string
@@ -70,6 +86,24 @@ type WechatTransaction = {
   }
   payer?: {
     openid?: string
+  }
+}
+
+export type WechatRefundTransaction = {
+  refund_id: string
+  out_refund_no: string
+  out_trade_no: string
+  refund_status: 'SUCCESS' | 'CLOSED' | 'ABNORMAL' | 'PROCESSING' | string
+  success_time?: string
+  amount?: {
+    refund?: number
+    total?: number
+    payer_total?: number
+    payer_refund?: number
+    settlement_refund?: number
+    settlement_total?: number
+    discount_refund?: number
+    currency?: string
   }
 }
 
@@ -119,6 +153,13 @@ function sha256RsaSign(privateKey: string, message: string): string {
   signer.update(message)
   signer.end()
   return signer.sign(privateKey, 'base64')
+}
+
+function deriveRefundNotifyUrl(notifyUrl: string): string {
+  if (notifyUrl.includes('/wechat/pay/notify')) {
+    return notifyUrl.replace('/wechat/pay/notify', '/wechat/pay/refund/notify')
+  }
+  return notifyUrl
 }
 
 async function buildAuthorization(method: string, requestPath: string, body: string, miniAppId?: string) {
@@ -222,6 +263,29 @@ export async function createOrderPayment(options: CreatePaymentOptions): Promise
     raw: {
       prepayId: result.prepay_id,
     },
+  }
+}
+
+export async function createOrderRefund(options: CreateRefundOptions): Promise<WechatRefundResult> {
+  const { miniAppId, orderNumber, refundRequestNo, reason, refundAmount, totalAmount } = options
+  const config = await getWechatConfig(miniAppId)
+  const payload: Record<string, unknown> = {
+    out_trade_no: orderNumber,
+    out_refund_no: refundRequestNo,
+    reason,
+    notify_url: deriveRefundNotifyUrl(config.notifyUrl),
+    amount: {
+      refund: toMinorCurrency(refundAmount),
+      total: toMinorCurrency(totalAmount),
+      currency: 'CNY',
+    },
+  }
+  const result = await requestWechat<Record<string, unknown>>('/v3/refund/domestic/refunds', payload, miniAppId)
+  return {
+    refundId: typeof result.refund_id === 'string' ? result.refund_id : undefined,
+    outRefundNo: typeof result.out_refund_no === 'string' ? result.out_refund_no : refundRequestNo,
+    status: typeof result.status === 'string' ? result.status : 'PROCESSING',
+    raw: result,
   }
 }
 

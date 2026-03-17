@@ -18,6 +18,16 @@ export interface OrderItem {
   status: 'pending' | 'paid' | 'completed' | 'cancelled';
   orderStatus?: 'pending' | 'paid' | 'completed' | 'cancelled';
   paymentStatus?: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed';
+  refundStatus?: 'none' | 'applied' | 'approved' | 'rejected' | 'processing' | 'succeeded' | 'failed';
+  refundReason?: string | null;
+  refundRequestedAt?: string | null;
+  refundReviewedAt?: string | null;
+  refundRejectReason?: string | null;
+  refundAmount?: number | null;
+  refundRequestNo?: string | null;
+  refundId?: string | null;
+  refundedAt?: string | null;
+  refundResult?: Record<string, unknown> | null;
   totalAmount: number;
   paymentMethod?: string | null;
   paymentProvider?: string | null;
@@ -35,6 +45,8 @@ export interface OrderItem {
 export interface ListOrdersParams {
   keyword?: string;
   status?: string;
+  paymentStatus?: string;
+  refundStatus?: string;
   page?: number;
   pageSize?: number;
 }
@@ -84,4 +96,12 @@ export async function updateOrderApi(id: string, payload: UpdateOrderPayload) {
 
 export async function deleteOrderApi(id: string) {
   return requestClient.delete(`/admin/orders/${id}`);
+}
+
+export async function approveOrderRefundApi(id: string) {
+  return requestClient.post<OrderItem>(`/admin/orders/${id}/refund/approve`, {});
+}
+
+export async function rejectOrderRefundApi(id: string, reason: string) {
+  return requestClient.post<OrderItem>(`/admin/orders/${id}/refund/reject`, { reason });
 }

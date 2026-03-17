@@ -1,5 +1,7 @@
-import { MiniApiError, miniRequest, setMiniAuthRecoveryHandler } from '@harmony/utils'
+import * as harmonyUtils from '@harmony/utils'
 import { getAccessToken, setAccessToken } from './token'
+
+const { MiniApiError, miniRequest } = harmonyUtils
 
 export { getAccessToken, setAccessToken }
 
@@ -345,17 +347,7 @@ export function initializeMiniAuth(): void {
   }
 
   miniAuthInitialized = true
-  logMiniAuth('mini auth initialized, register recovery handler')
-  setMiniAuthRecoveryHandler(async ({ path }) => {
-    logMiniAuth('auth recovery handler triggered', { path })
-    if (path.startsWith('/mini-auth/')) {
-      warnMiniAuth('auth endpoint itself failed, reset session and stop recovery')
-      resetMiniAuthSession()
-      return false
-    }
-    logMiniAuth('attempt recoverMiniAuthSession for protected api')
-    return await recoverMiniAuthSession()
-  })
+  logMiniAuth('mini auth initialized')
 
   if (shouldAutoLogin()) {
     logMiniAuth('auto login enabled, trigger prewarmMiniAuth from initialize')

@@ -3,9 +3,13 @@ import { Types } from 'mongoose'
 import { OrderModel } from '@/models/Order'
 import { AppUserModel } from '@/models/AppUser'
 import { ProductModel } from '@/models/Product'
+import { UserProductModel } from '@/models/UserProduct'
+import { createOrderRefund } from '@/services/paymentService'
+import { generateRefundRequestNumber } from '@/utils/orderNumber'
 
 const ORDER_STATUS = new Set(['pending', 'paid', 'completed', 'cancelled'])
 const PAYMENT_STATUS = new Set(['unpaid', 'processing', 'succeeded', 'failed', 'refunded', 'closed'])
+const REFUND_STATUS = new Set(['none', 'applied', 'approved', 'rejected', 'processing', 'succeeded', 'failed'])
 
 type OrderPayload = {
   orderNumber?: string
@@ -13,6 +17,7 @@ type OrderPayload = {
   status?: 'pending' | 'paid' | 'completed' | 'cancelled'
   orderStatus?: 'pending' | 'paid' | 'completed' | 'cancelled'
   paymentStatus?: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  refundStatus?: 'none' | 'applied' | 'approved' | 'rejected' | 'processing' | 'succeeded' | 'failed'
   paymentMethod?: string
   shippingAddress?: string
   scenicId?: string | null
@@ -24,6 +29,10 @@ type OrderPayload = {
     price?: number
     quantity?: number
   }>
+}
+
+type RejectRefundPayload = {
+  reason?: string
 }
 
 function toStringValue(value: unknown): string | null {
@@ -73,6 +82,16 @@ function mapOrder(order: any, relationMap: { users: Map<string, any>; products: 
     status: order.orderStatus ?? order.status,
     orderStatus: order.orderStatus ?? order.status,
     paymentStatus: order.paymentStatus ?? ((order.orderStatus ?? order.status) === 'paid' ? 'succeeded' : 'unpaid'),
+    refundStatus: order.refundStatus ?? 'none',
+    refundReason: order.refundReason ?? null,
+    refundRequestedAt: order.refundRequestedAt ? new Date(order.refundRequestedAt).toISOString() : null,
+    refundReviewedAt: order.refundReviewedAt ? new Date(order.refundReviewedAt).toISOString() : null,
+    refundRejectReason: order.refundRejectReason ?? null,
+    refundAmount: typeof order.refundAmount === 'number' ? order.refundAmount : null,
+    refundRequestNo: order.refundRequestNo ?? null,
+    refundId: order.refundId ?? null,
+    refundedAt: order.refundedAt ? new Date(order.refundedAt).toISOString() : null,
+    refundResult: order.refundResult ?? null,
     totalAmount: order.totalAmount,
     paymentMethod: order.paymentMethod ?? null,
     paymentProvider: order.paymentProvider ?? null,
@@ -111,7 +130,7 @@ function mapOrder(order: any, relationMap: { users: Map<string, any>; products: 
 }
 
 export async function listOrders(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '10', keyword, status, paymentStatus } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '10', keyword, status, paymentStatus, refundStatus } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
@@ -124,6 +143,9 @@ export async function listOrders(ctx: Context): Promise<void> {
   }
   if (paymentStatus && PAYMENT_STATUS.has(paymentStatus)) {
     filter.paymentStatus = paymentStatus
+  }
+  if (refundStatus && REFUND_STATUS.has(refundStatus)) {
+    filter.refundStatus = refundStatus
   }
   const [rows, total] = await Promise.all([
     OrderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
@@ -225,6 +247,10 @@ export async function updateOrder(ctx: Context): Promise<void> {
   if (!PAYMENT_STATUS.has(nextPaymentStatus)) {
     ctx.throw(400, 'Invalid payment status')
   }
+  const nextRefundStatus = body.refundStatus ?? current.refundStatus ?? 'none'
+  if (!REFUND_STATUS.has(nextRefundStatus)) {
+    ctx.throw(400, 'Invalid refund status')
+  }
   const nextMetadata: Record<string, unknown> = {
     ...((current.metadata ?? {}) as Record<string, unknown>),
     ...(body.metadata ?? {}),
@@ -241,6 +267,7 @@ export async function updateOrder(ctx: Context): Promise<void> {
       status: nextStatus,
       orderStatus: body.orderStatus ?? nextStatus,
       paymentStatus: nextPaymentStatus,
+      refundStatus: nextRefundStatus,
       paymentMethod: body.paymentMethod === undefined ? current.paymentMethod : toStringValue(body.paymentMethod),
       shippingAddress:
         body.shippingAddress === undefined ? current.shippingAddress : toStringValue(body.shippingAddress),
@@ -263,4 +290,137 @@ export async function deleteOrder(ctx: Context): Promise<void> {
   // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
   ctx.status = 200
   ctx.body = {}
+}
+
+export async function approveOrderRefund(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid order id')
+  }
+
+  const order = await OrderModel.findById(id).exec()
+  if (!order) {
+    ctx.throw(404, 'Order not found')
+    return
+  }
+
+  if (order.paymentStatus !== 'succeeded') {
+    ctx.throw(400, 'Order payment is not refundable')
+  }
+  if (!['applied', 'failed'].includes(order.refundStatus ?? 'none')) {
+    ctx.throw(400, 'Order refund is not pending review')
+  }
+
+  const usedCount = await UserProductModel.countDocuments({
+    userId: order.userId,
+    orderId: order._id,
+    state: 'used',
+  }).exec()
+  if (usedCount > 0) {
+    ctx.throw(400, 'Order contains consumed products and cannot be refunded')
+  }
+
+  const adminId = ctx.state.adminAuthUser?.id
+  const adminObjectId = adminId && Types.ObjectId.isValid(adminId) ? new Types.ObjectId(adminId) : null
+  const refundRequestNo = order.refundRequestNo || generateRefundRequestNumber()
+  const now = new Date()
+  order.refundStatus = 'approved'
+  order.refundReviewedAt = now
+  order.refundReviewedBy = adminObjectId
+  order.refundRejectReason = undefined
+  order.refundRequestNo = refundRequestNo
+  order.refundAmount = order.totalAmount
+  await order.save()
+
+  try {
+    const refundResult = await createOrderRefund({
+      miniAppId: order.metadata?.miniAppId as string | undefined,
+      orderNumber: order.orderNumber,
+      refundRequestNo,
+      reason: order.refundReason || '用户申请退款',
+      refundAmount: order.refundAmount ?? order.totalAmount,
+      totalAmount: order.totalAmount,
+    })
+
+    order.refundId = refundResult.refundId || order.refundId
+    order.refundStatus = refundResult.status === 'SUCCESS' ? 'succeeded' : 'processing'
+    if (refundResult.status === 'SUCCESS') {
+      order.paymentStatus = 'refunded'
+      order.refundedAt = new Date()
+    }
+    order.refundResult = {
+      ...(order.refundResult ?? {}),
+      approvedBy: adminId ?? null,
+      approvedAt: now.toISOString(),
+      createRefundResponse: refundResult.raw,
+    }
+    await order.save()
+  } catch (error) {
+    order.refundStatus = 'failed'
+    order.refundResult = {
+      ...(order.refundResult ?? {}),
+      approvedBy: adminId ?? null,
+      approvedAt: now.toISOString(),
+      createRefundError: error instanceof Error ? error.message : String(error),
+    }
+    await order.save()
+    throw error
+  }
+
+  const row = await OrderModel.findById(order._id).lean().exec()
+  if (!row) {
+    ctx.throw(500, 'Order reload failed')
+    return
+  }
+  const relationMap = await buildRelationMap([row])
+  ctx.body = mapOrder(row, relationMap)
+}
+
+export async function rejectOrderRefund(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid order id')
+  }
+
+  const reason = typeof (ctx.request.body as RejectRefundPayload | undefined)?.reason === 'string'
+    ? (ctx.request.body as RejectRefundPayload).reason!.trim()
+    : ''
+  if (!reason) {
+    ctx.throw(400, 'Reject reason is required')
+  }
+  if (reason.length > 200) {
+    ctx.throw(400, 'Reject reason is too long')
+  }
+
+  const order = await OrderModel.findById(id).exec()
+  if (!order) {
+    ctx.throw(404, 'Order not found')
+    return
+  }
+  if ((order.refundStatus ?? 'none') !== 'applied') {
+    ctx.throw(400, 'Order refund is not pending review')
+  }
+
+  const adminId = ctx.state.adminAuthUser?.id
+  const adminObjectId = adminId && Types.ObjectId.isValid(adminId) ? new Types.ObjectId(adminId) : null
+  const now = new Date()
+  order.refundStatus = 'rejected'
+  order.refundReviewedAt = now
+  order.refundReviewedBy = adminObjectId
+  order.refundRejectReason = reason
+  order.refundResult = {
+    ...(order.refundResult ?? {}),
+    rejectedBy: adminId ?? null,
+    rejectedAt: now.toISOString(),
+    rejectedReason: reason,
+  }
+  await order.save()
+
+  const row = await OrderModel.findById(order._id).lean().exec()
+  if (!row) {
+    ctx.throw(500, 'Order reload failed')
+    return
+  }
+  const relationMap = await buildRelationMap([row])
+  ctx.body = mapOrder(row, relationMap)
 }

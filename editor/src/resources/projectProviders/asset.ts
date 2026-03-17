@@ -1,3 +1,9 @@
+import type {
+  AssetManifest,
+  AssetManifestAsset,
+  AssetManifestDirectory,
+  LegacyAssetManifest,
+} from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -6,44 +12,6 @@ import { mapServerAssetToProjectAsset, normalizeServerAssetType } from '@/api/se
 import { useAuthStore } from '@/stores/authStore'
 import type { ResourceProvider } from './types'
 
-interface AssetManifestTag {
-  id: string
-  name: string
-}
-
-interface AssetManifestEntry {
-  id: string
-  name: string
-  type: ProjectAsset['type']
-  categoryId?: string | null
-  categoryPath?: Array<{ id: string; name: string }> | null
-  categoryPathString?: string | null
-  tags?: AssetManifestTag[]
-  tagIds?: string[]
-  seriesId?: string | null
-  seriesName?: string | null
-  downloadUrl: string
-  previewUrl?: string | null
-  thumbnailUrl?: string | null
-  description?: string | null
-  color?: string | null
-  dimensionLength?: number | null
-  dimensionWidth?: number | null
-  dimensionHeight?: number | null
-  sizeCategory?: string | null
-  imageWidth?: number | null
-  imageHeight?: number | null
-  createdAt?: string
-  updatedAt?: string
-  size?: number
-  terrainScatterPreset?: TerrainScatterCategory | null
-}
-
-interface AssetManifest {
-  generatedAt: string
-  assets: AssetManifestEntry[]
-}
-
 interface ApiEnvelope<T> {
   code: number
   data: T
@@ -51,6 +19,9 @@ interface ApiEnvelope<T> {
 }
 
 type AssetManifestLoader = () => Promise<AssetManifest>
+
+const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
+const LEGACY_UNCATEGORIZED_DIRECTORY_ID = 'legacy-uncategorized'
 
 const TYPE_LABELS: Record<string, string> = {
   model: 'Model',
@@ -86,12 +57,12 @@ async function fetchManifest(): Promise<AssetManifest> {
     throw new Error(`资产清单请求失败 (${response.status})`)
   }
 
-  const payload = (await response.json()) as ApiEnvelope<AssetManifest>
+  const payload = (await response.json()) as ApiEnvelope<AssetManifest | LegacyAssetManifest>
   const manifest = payload?.data
-  if (!manifest || !Array.isArray(manifest.assets)) {
+  if (!manifest) {
     throw new Error('资产清单格式不正确')
   }
-  return manifest
+  return normalizeManifest(manifest)
 }
 
 let manifestCache: AssetManifest | null = null
@@ -114,7 +85,9 @@ async function ensureManifest(loader: AssetManifestLoader = fetchManifest): Prom
   return manifestPromise
 }
 
-function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
+function mapManifestEntry(entry: AssetManifestAsset): ProjectAsset {
+  const downloadUrl = entry.resource?.url ?? entry.downloadUrl
+  const thumbnailUrl = entry.thumbnail?.url ?? entry.thumbnailUrl ?? null
   return mapServerAssetToProjectAsset({
     id: entry.id,
     name: entry.name,
@@ -124,10 +97,10 @@ function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
     categoryPathString: entry.categoryPathString ?? null,
     seriesId: entry.seriesId ?? null,
     seriesName: entry.seriesName ?? null,
-    downloadUrl: entry.downloadUrl,
-    url: entry.downloadUrl,
-    previewUrl: entry.previewUrl ?? entry.thumbnailUrl ?? null,
-    thumbnailUrl: entry.thumbnailUrl ?? null,
+    downloadUrl,
+    url: downloadUrl,
+    previewUrl: thumbnailUrl,
+    thumbnailUrl,
     description: entry.description ?? undefined,
     tags: entry.tags,
     tagIds: entry.tagIds,
@@ -145,22 +118,157 @@ function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
   })
 }
 
-function buildDirectories(entries: AssetManifestEntry[]): ProjectDirectory[] {
-  const grouped = new Map<string, ProjectAsset[]>()
-  entries.forEach((entry) => {
-    const asset = mapManifestEntry(entry)
-    const type = normalizeServerAssetType(asset.type)
-    if (!grouped.has(type)) {
-      grouped.set(type, [])
+function normalizeManifest(rawManifest: AssetManifest | LegacyAssetManifest): AssetManifest {
+  if (isAssetManifest(rawManifest)) {
+    return rawManifest
+  }
+  if (isLegacyManifest(rawManifest)) {
+    return convertLegacyManifest(rawManifest)
+  }
+  throw new Error('资产清单格式不正确')
+}
+
+function isAssetManifest(value: unknown): value is AssetManifest {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<AssetManifest>
+  return candidate.format === 'harmony-asset-manifest'
+    && candidate.version === 2
+    && typeof candidate.rootDirectoryId === 'string'
+    && !!candidate.directoriesById
+    && typeof candidate.directoriesById === 'object'
+    && !!candidate.assetsById
+    && typeof candidate.assetsById === 'object'
+}
+
+function isLegacyManifest(value: unknown): value is LegacyAssetManifest {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<LegacyAssetManifest>
+  return Array.isArray(candidate.assets)
+}
+
+function ensureDirectory(
+  directoriesById: Record<string, AssetManifestDirectory>,
+  id: string,
+  name: string,
+  parentId: string | null,
+): AssetManifestDirectory {
+  const existing = directoriesById[id]
+  if (existing) {
+    return existing
+  }
+  const directory: AssetManifestDirectory = {
+    id,
+    name,
+    parentId,
+    directoryIds: [],
+    assetIds: [],
+  }
+  directoriesById[id] = directory
+  if (parentId) {
+    const parent = directoriesById[parentId]
+    if (parent && !parent.directoryIds.includes(id)) {
+      parent.directoryIds.push(id)
     }
-    grouped.get(type)!.push(asset)
+  }
+  return directory
+}
+
+function convertLegacyManifest(manifest: LegacyAssetManifest): AssetManifest {
+  const directoriesById: Record<string, AssetManifestDirectory> = {
+    [MANIFEST_ROOT_DIRECTORY_ID]: {
+      id: MANIFEST_ROOT_DIRECTORY_ID,
+      name: 'Assets',
+      parentId: null,
+      directoryIds: [],
+      assetIds: [],
+    },
+  }
+  const assetsById: Record<string, AssetManifestAsset> = {}
+
+  manifest.assets.forEach((entry) => {
+    assetsById[entry.id] = entry
+    const normalizedPath = Array.isArray(entry.categoryPath)
+      ? entry.categoryPath.filter((item): item is { id: string; name: string } => !!item && typeof item.id === 'string' && typeof item.name === 'string')
+      : []
+
+    let parentId = MANIFEST_ROOT_DIRECTORY_ID
+    if (!normalizedPath.length) {
+      const uncategorized = ensureDirectory(directoriesById, LEGACY_UNCATEGORIZED_DIRECTORY_ID, 'Ungrouped', MANIFEST_ROOT_DIRECTORY_ID)
+      uncategorized.assetIds.push(entry.id)
+      return
+    }
+
+    normalizedPath.forEach((segment) => {
+      ensureDirectory(directoriesById, segment.id, segment.name, parentId)
+      parentId = segment.id
+    })
+
+    directoriesById[parentId]?.assetIds.push(entry.id)
   })
 
-  return Array.from(grouped.entries()).map(([type, assets]) => ({
-    id: `server-assets-${type}`,
-    name: TYPE_LABELS[type] ?? type,
-    assets,
-  }))
+  return {
+    format: 'harmony-asset-manifest',
+    version: 2,
+    generatedAt: manifest.generatedAt,
+    rootDirectoryId: MANIFEST_ROOT_DIRECTORY_ID,
+    directoriesById,
+    assetsById,
+  }
+}
+
+function buildDirectoryTree(
+  manifest: AssetManifest,
+  directoryId: string,
+): ProjectDirectory | null {
+  const directory = manifest.directoriesById[directoryId]
+  if (!directory) {
+    return null
+  }
+
+  const assets = directory.assetIds
+    .map((assetId) => manifest.assetsById[assetId])
+    .filter((asset): asset is AssetManifestAsset => !!asset)
+    .map(mapManifestEntry)
+
+  const children = directory.directoryIds
+    .map((childId) => buildDirectoryTree(manifest, childId))
+    .filter((child): child is ProjectDirectory => !!child)
+
+  return {
+    id: directory.id,
+    name: directory.name,
+    children: children.length ? children : undefined,
+    assets: assets.length ? assets : undefined,
+  }
+}
+
+function buildDirectories(manifest: AssetManifest): ProjectDirectory[] {
+  const rootDirectory = manifest.directoriesById[manifest.rootDirectoryId]
+  if (!rootDirectory) {
+    return []
+  }
+
+  const topLevelDirectories = rootDirectory.directoryIds
+    .map((childId) => buildDirectoryTree(manifest, childId))
+    .filter((child): child is ProjectDirectory => !!child)
+
+  if (rootDirectory.assetIds.length) {
+    const ungroupedAssets = rootDirectory.assetIds
+      .map((assetId) => manifest.assetsById[assetId])
+      .filter((asset): asset is AssetManifestAsset => !!asset)
+      .map(mapManifestEntry)
+    topLevelDirectories.unshift({
+      id: `${manifest.rootDirectoryId}-assets`,
+      name: TYPE_LABELS[normalizeServerAssetType('file')] ?? 'Assets',
+      assets: ungroupedAssets,
+    })
+  }
+
+  return topLevelDirectories
 }
 
 export const assetProvider: ResourceProvider = {
@@ -170,7 +278,7 @@ export const assetProvider: ResourceProvider = {
   includeInPackages: true,
   async load(): Promise<ProjectDirectory[]> {
     const manifest = await ensureManifest()
-    return buildDirectories(manifest.assets)
+    return buildDirectories(manifest)
   },
 }
 
@@ -208,5 +316,7 @@ export function invalidateAssetManifestCache(): void {
 
 export async function loadScatterAssets(category: TerrainScatterCategory): Promise<ProjectAsset[]> {
   const manifest = await ensureManifest()
-  return manifest.assets.filter((entry) => entry.terrainScatterPreset === category).map(mapManifestEntry)
+  return Object.values(manifest.assetsById)
+    .filter((entry) => entry.terrainScatterPreset === category)
+    .map(mapManifestEntry)
 }

@@ -65,10 +65,12 @@ import {
   updateCouponType,
 } from '@/controllers/admin/couponTypeController'
 import {
+  approveOrderRefund,
   createOrder,
   deleteOrder,
   getOrder,
   listOrders,
+  rejectOrderRefund,
   updateOrder,
 } from '@/controllers/admin/orderController'
 import {
@@ -253,6 +255,8 @@ adminRouter.get('/orders', requireAnyPermission(['order:read']), listOrders)
 adminRouter.get('/orders/:id', requireAnyPermission(['order:read']), getOrder)
 adminRouter.post('/orders', requireAnyPermission(['order:write']), createOrder)
 adminRouter.put('/orders/:id', requireAnyPermission(['order:write']), updateOrder)
+adminRouter.post('/orders/:id/refund/approve', requireAnyPermission(['order:write']), approveOrderRefund)
+adminRouter.post('/orders/:id/refund/reject', requireAnyPermission(['order:write']), rejectOrderRefund)
 adminRouter.delete('/orders/:id', requireAnyPermission(['order:write']), deleteOrder)
 
 adminRouter.get('/users', requireAnyPermission(['user:read']), listAppUsers)

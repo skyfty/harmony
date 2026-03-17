@@ -560,6 +560,28 @@ export interface OrderDocument extends Document<Types.ObjectId> {
   orderStatus: 'pending' | 'paid' | 'completed' | 'cancelled'
   /** 中文：支付状态（unpaid/processing/succeeded/failed/refunded/closed） */
   paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  /** 中文：退款状态（none/applied/approved/rejected/processing/succeeded/failed） */
+  refundStatus: 'none' | 'applied' | 'approved' | 'rejected' | 'processing' | 'succeeded' | 'failed'
+  /** 中文：用户退款原因（可选） */
+  refundReason?: string
+  /** 中文：退款申请时间（可选） */
+  refundRequestedAt?: Date
+  /** 中文：退款审核时间（可选） */
+  refundReviewedAt?: Date
+  /** 中文：退款审核管理员 ID（可选） */
+  refundReviewedBy?: Types.ObjectId | null
+  /** 中文：退款驳回原因（可选） */
+  refundRejectReason?: string
+  /** 中文：退款金额（可选） */
+  refundAmount?: number
+  /** 中文：退款请求号（可选） */
+  refundRequestNo?: string
+  /** 中文：微信退款单号（可选） */
+  refundId?: string
+  /** 中文：退款完成时间（可选） */
+  refundedAt?: Date
+  /** 中文：退款结果信息（可选） */
+  refundResult?: Record<string, unknown>
   /** 中文：订单总金额 */
   totalAmount: number
   /** 中文：支付方式（可选） */

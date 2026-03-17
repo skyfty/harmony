@@ -6,6 +6,7 @@ import 'splitpanes/dist/splitpanes.css'
 import {
   useSceneStore,
   extractProviderIdFromPackageDirectoryId,
+  buildPackageDirectoryId,
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
@@ -14,16 +15,22 @@ import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { isWallPresetFilename } from '@/utils/wallPreset'
-import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
-import type { ResourceCategory } from '@/types/resource-category'
-import { fetchResourceCategories } from '@/api/resourceAssets'
-import { isAssetTypeName, isRootCategoryName } from '@/utils/categoryPath'
+import { ASSETS_ROOT_DIRECTORY_ID, PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
-import { assetProvider } from '@/resources/projectProviders/asset'
-import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
+import { assetProvider, invalidateAssetManifestCache } from '@/resources/projectProviders/asset'
+import {
+  bulkMoveResourceAssetsToCategory,
+  createResourceCategory,
+  deleteResourceAsset,
+  deleteResourceCategory,
+  updateResourceCategory,
+  updateAssetOnServer,
+  moveResourceCategory,
+} from '@/api/resourceAssets'
+import { deleteProviderCatalog, loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import type { SceneNode } from '@schema'
@@ -46,6 +53,7 @@ const assetCacheStore = useAssetCacheStore()
 const authStore = useAuthStore()
 
 const PRESET_PROVIDER_ID = assetProvider.id
+const PRESET_PROVIDER_ROOT_DIRECTORY_ID = buildPackageDirectoryId(PRESET_PROVIDER_ID)
 const galleryRoot = ref<HTMLElement | null>(null)
 const galleryHovered = ref(false)
 
@@ -97,6 +105,7 @@ const deleteDialogOpen = ref(false)
 const pendingDeleteAssets = ref<ProjectAsset[]>([])
 const isBatchDeletion = ref(false)
 const selectedAssetIds = ref<string[]>([])
+const draggingDirectoryId = ref<string | null>(null)
 const dropActive = ref(false)
 const dropProcessing = ref(false)
 const dropDragDepth = ref(0)
@@ -120,8 +129,21 @@ function setProviderError(providerId: string, message: string | null): void {
 }
 
 function findProviderIdForDirectoryId(directoryId: string | null): string | null {
-  if (!directoryId) return null
-  return extractProviderIdFromPackageDirectoryId(directoryId)
+  if (!directoryId) {
+    return null
+  }
+  const directProviderId = extractProviderIdFromPackageDirectoryId(directoryId)
+  if (directProviderId) {
+    return directProviderId
+  }
+  const path = findDirectoryPath(projectTree.value ?? [], directoryId)
+  for (const entry of path) {
+    const providerId = extractProviderIdFromPackageDirectoryId(entry.id)
+    if (providerId) {
+      return providerId
+    }
+  }
+  return null
 }
 
 async function loadPackageDirectory(providerId: string, options: { force?: boolean } = {}) {
@@ -189,6 +211,14 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
 
 const presetRefreshPending = ref(false)
 
+async function refreshProviderCatalog(providerId: string): Promise<void> {
+  if (providerId === PRESET_PROVIDER_ID) {
+    invalidateAssetManifestCache()
+  }
+  await deleteProviderCatalog(providerId)
+  await loadPackageDirectory(providerId, { force: true })
+}
+
 async function refreshPresetProviderAssets(): Promise<void> {
   if (!PRESET_PROVIDER_ID) {
     return
@@ -198,7 +228,7 @@ async function refreshPresetProviderAssets(): Promise<void> {
   }
   presetRefreshPending.value = true
   try {
-    await loadPackageDirectory(PRESET_PROVIDER_ID, { force: true })
+    await refreshProviderCatalog(PRESET_PROVIDER_ID)
   } catch (error) {
     console.error('Failed to refresh preset assets', error)
   } finally {
@@ -399,6 +429,9 @@ function isAssetDownloading(asset: ProjectAsset) {
 function canDeleteAsset(asset: ProjectAsset) {
   if (sceneStore.assetIndex?.[asset.id]?.internal) {
     return false
+  }
+  if (providerIdForAsset(asset) === PRESET_PROVIDER_ID) {
+    return authStore.canResourceWrite
   }
   if (asset.type === 'material') {
     return asset.gleaned !== false
@@ -640,7 +673,7 @@ async function handleAddAsset(asset: ProjectAsset) {
 function refreshGallery() {
   const providerId = activeProviderId.value
   if (providerId) {
-    void loadPackageDirectory(providerId, { force: true })
+    void refreshProviderCatalog(providerId)
   }
 }
 
@@ -819,8 +852,7 @@ function isAssetSelected(assetId: string) {
 
 function toggleAssetSelection(asset: ProjectAsset) {
   const assetId = asset.id
-  const cacheId = resolveAssetCacheId(asset)
-  if (!asset.gleaned || !assetCacheStore.hasCache(cacheId) || isAssetDownloading(asset)) {
+  if (!canDeleteAsset(asset)) {
     return
   }
   if (isAssetSelected(assetId)) {
@@ -878,8 +910,24 @@ async function performDeleteAssets() {
     return
   }
   try {
-    const assetIds = assets.map((asset) => asset.id)
-    const removedIds = await sceneStore.deleteProjectAssets(assetIds)
+    const localAssetIds = assets
+      .filter((asset) => providerIdForAsset(asset) !== PRESET_PROVIDER_ID)
+      .map((asset) => asset.id)
+    const presetAssetIds = assets
+      .filter((asset) => providerIdForAsset(asset) === PRESET_PROVIDER_ID)
+      .map((asset) => asset.id)
+
+    let removedIds: string[] = []
+    if (localAssetIds.length) {
+      const removedLocalIds = await sceneStore.deleteProjectAssets(localAssetIds)
+      removedIds = removedIds.concat(removedLocalIds)
+    }
+    if (presetAssetIds.length) {
+      await Promise.all(presetAssetIds.map((assetId) => deleteResourceAsset(assetId)))
+      await refreshPresetProviderAssets()
+      removedIds = removedIds.concat(presetAssetIds)
+    }
+
     if (removedIds.length) {
       sceneStore.selectAsset(null)
       searchResults.value = searchResults.value.filter((item) => !removedIds.includes(item.id))
@@ -896,214 +944,102 @@ function isAssetDragging(assetId: string) {
   return draggingAssetId.value === assetId
 }
 
-const categoryTree = ref<ResourceCategory[]>([])
-const categoryTreeLoaded = ref(false)
-const categoryTreeLoading = ref(false)
-const categoryPath = ref<ResourceCategory[]>([])
-
 interface CategoryBreadcrumbItem {
   id: string | null
   name: string
-  category: ResourceCategory | null
+  directory: ProjectDirectory | null
   depth: number
-  children: ResourceCategory[]
+  children: ProjectDirectory[]
 }
 
-function collectDisplayChildren(nodes: ResourceCategory[] | undefined, bucket: ResourceCategory[]): void {
-  if (!Array.isArray(nodes)) {
-    return
+function findDirectoryPath(directories: ProjectDirectory[], targetId: string | null): ProjectDirectory[] {
+  if (!targetId) {
+    return []
   }
-  nodes.forEach((node) => {
-    if (!node) {
-      return
-    }
-    if ((isAssetTypeName(node.name) || isRootCategoryName(node.name)) && Array.isArray(node.children) && node.children.length) {
-      collectDisplayChildren(node.children, bucket)
-    } else {
-      bucket.push(node)
-    }
-  })
-}
-
-function getDisplayChildren(category: ResourceCategory | null): ResourceCategory[] {
-  const bucket: ResourceCategory[] = []
-  const source = category ? category.children : categoryTree.value
-  collectDisplayChildren(source, bucket)
-  return bucket.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
-}
-
-const categoryIndex = computed(() => {
-  const map = new Map<string, ResourceCategory>()
-  const traverse = (nodes: ResourceCategory[] | undefined) => {
-    if (!Array.isArray(nodes)) {
-      return
-    }
-    nodes.forEach((node) => {
-      if (!node || typeof node.id !== 'string') {
-        return
+  const path: ProjectDirectory[] = []
+  const visit = (nodes: ProjectDirectory[]): boolean => {
+    for (const node of nodes) {
+      path.push(node)
+      if (node.id === targetId) {
+        return true
       }
-      map.set(node.id, node)
-      if (Array.isArray(node.children) && node.children.length) {
-        traverse(node.children)
+      if (node.children?.length && visit(node.children)) {
+        return true
       }
-    })
+      path.pop()
+    }
+    return false
   }
-  traverse(categoryTree.value)
-  return map
-})
+  return visit(directories) ? [...path] : []
+}
 
-const categoryGraph = computed(() => {
-  const parentMap = new Map<string, ResourceCategory | null>()
-  const descendantMap = new Map<string, Set<string>>()
-
-  const traverse = (node: ResourceCategory, parent: ResourceCategory | null): Set<string> => {
-    parentMap.set(node.id, parent)
-    const descendants = new Set<string>([node.id])
-    const children = getDisplayChildren(node)
-    children.forEach((child) => {
-      const childSet = traverse(child, node)
-      childSet.forEach((id) => descendants.add(id))
-    })
-    descendantMap.set(node.id, descendants)
-    return descendants
-  }
-
-  const roots = getDisplayChildren(null)
-  roots.forEach((root) => traverse(root, null))
-
-  return { roots, parentMap, descendantMap }
-})
+const activeDirectoryPath = computed(() => findDirectoryPath(projectTree.value ?? [], activeDirectoryId.value ?? null))
 
 const categoryBreadcrumbs = computed<CategoryBreadcrumbItem[]>(() => {
-  const items: CategoryBreadcrumbItem[] = []
-  const graph = categoryGraph.value
-  items.push({
-    id: null,
-  name: 'All Assets',
-    category: null,
-    depth: 0,
-    children: graph.roots,
-  })
-  categoryPath.value.forEach((entry, index) => {
-    const resolved = categoryIndex.value.get(entry.id) ?? entry
+  const roots = projectTree.value ?? []
+  const path = activeDirectoryPath.value
+  const items: CategoryBreadcrumbItem[] = [
+    {
+      id: null,
+      name: 'All Assets',
+      directory: null,
+      depth: 0,
+      children: roots,
+    },
+  ]
+  path.forEach((directory, index) => {
     items.push({
-      id: resolved.id,
-      name: resolved.name,
-      category: resolved,
+      id: directory.id,
+      name: directory.name,
+      directory,
       depth: index + 1,
-      children: getDisplayChildren(resolved),
+      children: directory.children ?? [],
     })
   })
   return items
 })
 
-function buildCategoryPathChain(category: ResourceCategory): ResourceCategory[] {
-  const graph = categoryGraph.value
-  const chain: ResourceCategory[] = []
-  const visited = new Set<string>()
-  let current: ResourceCategory | null = category
-  while (current && !visited.has(current.id)) {
-    chain.unshift(current)
-    visited.add(current.id)
-    current = graph.parentMap.get(current.id) ?? null
-  }
-  return chain.length ? chain : [category]
-}
-
-const activeCategoryId = computed(() => {
-  const last = categoryPath.value[categoryPath.value.length - 1]
-  return last?.id ?? null
-})
-
-const activeCategoryDescendants = computed(() => {
-  const id = activeCategoryId.value
-  if (!id) {
-    return null
-  }
-  const graph = categoryGraph.value
-  const set = graph.descendantMap.get(id)
-  if (set && set.size) {
-    return set
-  }
-  return new Set<string>([id])
-})
-
-function assetMatchesCategoryFilter(asset: ProjectAsset, allowed: Set<string>): boolean {
-  const pathIds = Array.isArray(asset.categoryPath)
-    ? asset.categoryPath
-        .map((item) => (item && typeof item.id === 'string' ? item.id : null))
-        .filter((id): id is string => !!id)
-    : []
-  if (pathIds.some((id) => allowed.has(id))) {
-    return true
-  }
-  if (asset.categoryId && allowed.has(asset.categoryId)) {
-    return true
-  }
-  return false
-}
-
-async function loadCategoryTree(options: { force?: boolean } = {}): Promise<void> {
-  if (categoryTreeLoading.value) {
-    return
-  }
-  if (categoryTreeLoaded.value && !options.force) {
-    return
-  }
-  categoryTreeLoading.value = true
-  try {
-    const categories = await fetchResourceCategories()
-    categoryTree.value = Array.isArray(categories) ? categories : []
-    categoryTreeLoaded.value = true
-  } catch (error) {
-    console.error('Failed to load categories', error)
-  } finally {
-    categoryTreeLoading.value = false
-  }
-}
-
 function handleBreadcrumbClick(index: number): void {
   if (index <= 0) {
-    if (categoryPath.value.length) {
-      categoryPath.value = []
-    }
+    sceneStore.setActiveDirectory(ASSETS_ROOT_DIRECTORY_ID)
     return
   }
-  const next = categoryPath.value.slice(0, index)
-  categoryPath.value = next
+  const crumb = categoryBreadcrumbs.value[index]
+  if (crumb?.id) {
+    sceneStore.setActiveDirectory(crumb.id)
+  }
 }
 
-function handleBreadcrumbChildSelect(_crumbIndex: number, category: ResourceCategory): void {
-  if (!category || typeof category.id !== 'string') {
+function handleBreadcrumbChildSelect(_crumbIndex: number, directory: ProjectDirectory): void {
+  if (!directory?.id) {
     return
   }
-  categoryPath.value = buildCategoryPathChain(category)
+  sceneStore.setActiveDirectory(directory.id)
 }
 
 function isBreadcrumbIndexActive(index: number): boolean {
   if (index === 0) {
-    return categoryPath.value.length === 0
+    return !activeDirectoryId.value || activeDirectoryId.value === ASSETS_ROOT_DIRECTORY_ID
   }
-  return index === categoryPath.value.length
+  return categoryBreadcrumbs.value[index]?.id === activeDirectoryId.value
 }
 
 function isCategoryActive(categoryId: string): boolean {
-  return categoryPath.value.some((entry) => entry.id === categoryId)
+  return activeDirectoryPath.value.some((entry) => entry.id === categoryId)
 }
 
-function buildCategoryLabel(category: ResourceCategory | null): string {
-  if (!category) {
-  return 'All Assets'
+function buildCategoryLabel(directory: ProjectDirectory | null): string {
+  if (!directory) {
+    return 'All Assets'
   }
-  return category.name
+  return directory.name
 }
 
 function categoryTooltip(crumb: CategoryBreadcrumbItem): string {
-  return buildCategoryLabel(crumb.category)
+  return buildCategoryLabel(crumb.directory)
 }
 
 onMounted(() => {
-  void loadCategoryTree()
   void refreshPresetProviderAssets()
 })
 
@@ -1115,29 +1051,6 @@ onMounted(() => {
     void handleGalleryClipboardPaste(event)
   }
   window.addEventListener('paste', windowPasteListener, true)
-})
-
-watch(categoryTree, () => {
-  if (!categoryPath.value.length) {
-    return
-  }
-  const last = categoryPath.value[categoryPath.value.length - 1]
-  if (!last || !last.id) {
-    categoryPath.value = []
-    return
-  }
-  const refreshed = categoryIndex.value.get(last.id)
-  if (!refreshed) {
-    categoryPath.value = []
-    return
-  }
-  const next = buildCategoryPathChain(refreshed)
-  const unchanged =
-    next.length === categoryPath.value.length &&
-    next.every((item, idx) => item.id === categoryPath.value[idx]?.id)
-  if (!unchanged) {
-    categoryPath.value = next
-  }
 })
 
 const searchQuery = ref<string | null>('')
@@ -1153,15 +1066,7 @@ const searchFieldRef = ref<unknown>(null)
 const normalizedSearchQuery = computed(() => (searchQuery.value ?? '').trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
-
-const categoryFilteredAssets = computed(() => {
-  const base = baseDisplayedAssets.value
-  const allowed = activeCategoryDescendants.value
-  if (!allowed || !allowed.size) {
-    return base
-  }
-  return base.filter((asset) => assetMatchesCategoryFilter(asset, allowed))
-})
+const categoryFilteredAssets = computed(() => baseDisplayedAssets.value)
 
 const SERIES_ID_PREFIX = 'series:id:'
 const SERIES_NAME_PREFIX = 'series:name:'
@@ -1489,11 +1394,383 @@ const galleryDirectories = computed(() => {
   if (isSearchActive.value) {
     return []
   }
-  if (activeDirectoryId.value !== PACKAGES_ROOT_DIRECTORY_ID) {
-    return []
-  }
   return currentDirectory.value?.children ?? []
 })
+
+const DIRECTORY_DRAG_MIME = 'application/x-harmony-asset-directory'
+
+const selectedSingleAsset = computed(() => {
+  if (!selectedAssetId.value) {
+    return null
+  }
+  return displayedAssets.value.find((asset) => asset.id === selectedAssetId.value) ?? null
+})
+
+function isLocalDirectoryId(directoryId: string | null | undefined): boolean {
+  if (!directoryId) {
+    return false
+  }
+  if (directoryId === ASSETS_ROOT_DIRECTORY_ID) {
+    return true
+  }
+  return !!sceneStore.assetManifest?.directoriesById?.[directoryId]
+}
+
+function isPresetDirectoryId(directoryId: string | null | undefined): boolean {
+  if (!directoryId) {
+    return false
+  }
+  return findProviderIdForDirectoryId(directoryId) === PRESET_PROVIDER_ID
+}
+
+function resolveServerCategoryId(directoryId: string | null | undefined): string | null {
+  if (!directoryId || !isPresetDirectoryId(directoryId)) {
+    return null
+  }
+  return directoryId === PRESET_PROVIDER_ROOT_DIRECTORY_ID ? null : directoryId
+}
+
+function isPresetDirectoryMutable(directoryId: string | null | undefined): boolean {
+  return authStore.canResourceWrite && isPresetDirectoryId(directoryId) && directoryId !== PRESET_PROVIDER_ROOT_DIRECTORY_ID
+}
+
+function isDraggableDirectoryId(directoryId: string | null | undefined): boolean {
+  return (isLocalDirectoryId(directoryId) && directoryId !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directoryId)
+}
+
+function getAssetMutationScope(asset: ProjectAsset | null | undefined): 'local' | 'preset' | null {
+  if (!asset) {
+    return null
+  }
+  if (providerIdForAsset(asset) === PRESET_PROVIDER_ID) {
+    return 'preset'
+  }
+  if (sceneStore.assetManifest?.assetsById?.[asset.id]) {
+    return 'local'
+  }
+  return null
+}
+
+function getDirectoryMutationScope(directoryId: string | null | undefined): 'local' | 'preset' | null {
+  if (isLocalDirectoryId(directoryId)) {
+    return 'local'
+  }
+  if (isPresetDirectoryId(directoryId)) {
+    return 'preset'
+  }
+  return null
+}
+
+const canCreateDirectory = computed(() => {
+  const directoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
+  return isLocalDirectoryId(directoryId) || (authStore.canResourceWrite && isPresetDirectoryId(directoryId))
+})
+const canRenameDirectory = computed(() =>
+  !!activeDirectoryId.value
+  && (
+    (isLocalDirectoryId(activeDirectoryId.value) && activeDirectoryId.value !== ASSETS_ROOT_DIRECTORY_ID)
+    || isPresetDirectoryMutable(activeDirectoryId.value)
+  ),
+)
+const canDeleteDirectory = computed(() =>
+  !!activeDirectoryId.value
+  && (
+    (isLocalDirectoryId(activeDirectoryId.value) && activeDirectoryId.value !== ASSETS_ROOT_DIRECTORY_ID)
+    || isPresetDirectoryMutable(activeDirectoryId.value)
+  ),
+)
+const canRenameSelectedAsset = computed(() => {
+  const asset = selectedSingleAsset.value
+  if (!asset) {
+    return false
+  }
+  const scope = getAssetMutationScope(asset)
+  if (scope === 'local') {
+    return true
+  }
+  if (scope === 'preset') {
+    return authStore.canResourceWrite
+  }
+  return false
+})
+
+const directoryDialogOpen = ref(false)
+const directoryDialogMode = ref<'create' | 'rename'>('create')
+const directoryDialogName = ref('')
+const directoryDialogTargetId = ref<string | null>(null)
+const directoryDeleteDialogOpen = ref(false)
+const directoryDeleteTargetId = ref<string | null>(null)
+const assetRenameDialogOpen = ref(false)
+const assetRenameTargetId = ref<string | null>(null)
+const assetRenameValue = ref('')
+
+const directoryDialogTitle = computed(() => (directoryDialogMode.value === 'create' ? 'Create Folder' : 'Rename Folder'))
+const directoryDialogConfirmLabel = computed(() => (directoryDialogMode.value === 'create' ? 'Create' : 'Rename'))
+const directoryDeleteTarget = computed(() => {
+  const targetId = directoryDeleteTargetId.value
+  return targetId ? findDirectoryById(projectTree.value ?? [], targetId) : null
+})
+const assetRenameTarget = computed(() => {
+  const targetId = assetRenameTargetId.value
+  if (!targetId) {
+    return null
+  }
+  return displayedAssets.value.find((asset) => asset.id === targetId) ?? sceneStore.getAsset(targetId)
+})
+
+function promptCreateDirectory() {
+  if (!canCreateDirectory.value) {
+    return
+  }
+  directoryDialogMode.value = 'create'
+  directoryDialogTargetId.value = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
+  directoryDialogName.value = 'New Folder'
+  directoryDialogOpen.value = true
+}
+
+function promptRenameDirectory(directoryId?: string | null) {
+  const targetDirectoryId = directoryId ?? activeDirectoryId.value
+  const canRenameTarget = targetDirectoryId
+    && (
+      (isLocalDirectoryId(targetDirectoryId) && targetDirectoryId !== ASSETS_ROOT_DIRECTORY_ID)
+      || isPresetDirectoryMutable(targetDirectoryId)
+    )
+  if (!canRenameTarget) {
+    return
+  }
+  const directory = projectTree.value.length ? findDirectoryById(projectTree.value, targetDirectoryId) : null
+  directoryDialogMode.value = 'rename'
+  directoryDialogTargetId.value = targetDirectoryId
+  directoryDialogName.value = directory?.name ?? 'Folder'
+  directoryDialogOpen.value = true
+}
+
+function promptDeleteDirectory(directoryId?: string | null) {
+  const targetDirectoryId = directoryId ?? activeDirectoryId.value
+  const canDeleteTarget = targetDirectoryId
+    && (
+      (isLocalDirectoryId(targetDirectoryId) && targetDirectoryId !== ASSETS_ROOT_DIRECTORY_ID)
+      || isPresetDirectoryMutable(targetDirectoryId)
+    )
+  if (!canDeleteTarget) {
+    return
+  }
+  directoryDeleteTargetId.value = targetDirectoryId
+  directoryDeleteDialogOpen.value = true
+}
+
+function cancelDirectoryDialog() {
+  directoryDialogOpen.value = false
+  directoryDialogTargetId.value = null
+  directoryDialogName.value = ''
+}
+
+async function submitDirectoryDialog() {
+  const name = directoryDialogName.value.trim()
+  if (!name.length) {
+    return
+  }
+  try {
+    if (directoryDialogMode.value === 'create') {
+      const parentId = directoryDialogTargetId.value ?? activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
+      if (isLocalDirectoryId(parentId)) {
+        const directoryId = sceneStore.createAssetDirectory(name, parentId)
+        if (directoryId) {
+          ensureDirectoryOpened(directoryId)
+        }
+      } else if (authStore.canResourceWrite && isPresetDirectoryId(parentId)) {
+        const created = await createResourceCategory({
+          name,
+          parentId: resolveServerCategoryId(parentId),
+        })
+        await refreshPresetProviderAssets()
+        ensureDirectoryOpened(parentId)
+        ensureDirectoryOpened(created.id)
+        sceneStore.setActiveDirectory(created.id)
+      }
+    } else if (directoryDialogTargetId.value) {
+      if (isLocalDirectoryId(directoryDialogTargetId.value)) {
+        sceneStore.renameAssetDirectory(directoryDialogTargetId.value, name)
+      } else if (isPresetDirectoryMutable(directoryDialogTargetId.value)) {
+        await updateResourceCategory(directoryDialogTargetId.value, { name })
+        await refreshPresetProviderAssets()
+    }
+    }
+    cancelDirectoryDialog()
+  } catch (error) {
+    console.error('Failed to submit directory dialog', error)
+  }
+}
+
+function cancelDeleteDirectory() {
+  directoryDeleteDialogOpen.value = false
+  directoryDeleteTargetId.value = null
+}
+
+async function confirmDeleteDirectory() {
+  const targetDirectoryId = directoryDeleteTargetId.value
+  if (!targetDirectoryId) {
+    cancelDeleteDirectory()
+    return
+  }
+  try {
+    if (isLocalDirectoryId(targetDirectoryId)) {
+      const result = sceneStore.deleteAssetDirectory(targetDirectoryId)
+      if (result.removedAssetIds.length) {
+        selectedAssetIds.value = selectedAssetIds.value.filter((id) => !result.removedAssetIds.includes(id))
+      }
+    } else if (isPresetDirectoryMutable(targetDirectoryId)) {
+      await deleteResourceCategory(targetDirectoryId)
+      if (activeDirectoryId.value === targetDirectoryId) {
+        sceneStore.setActiveDirectory(PRESET_PROVIDER_ROOT_DIRECTORY_ID)
+      }
+      await refreshPresetProviderAssets()
+    }
+  } catch (error) {
+    console.error('Failed to delete directory', error)
+  }
+  cancelDeleteDirectory()
+}
+
+function promptRenameSelectedAsset() {
+  const asset = selectedSingleAsset.value
+  if (!asset) {
+    return
+  }
+  assetRenameTargetId.value = asset.id
+  assetRenameValue.value = asset.name
+  assetRenameDialogOpen.value = true
+}
+
+function cancelAssetRenameDialog() {
+  assetRenameDialogOpen.value = false
+  assetRenameTargetId.value = null
+  assetRenameValue.value = ''
+}
+
+async function submitAssetRenameDialog() {
+  const targetId = assetRenameTargetId.value
+  const name = assetRenameValue.value.trim()
+  if (!targetId || !name.length) {
+    return
+  }
+  try {
+    const targetAsset = assetRenameTarget.value
+    const scope = getAssetMutationScope(targetAsset)
+    if (scope === 'local') {
+      sceneStore.renameProjectAsset(targetId, name)
+    } else if (scope === 'preset' && authStore.canResourceWrite) {
+      await updateAssetOnServer({ assetId: targetId, name })
+      await refreshPresetProviderAssets()
+    }
+    cancelAssetRenameDialog()
+  } catch (error) {
+    console.error('Failed to rename asset', error)
+  }
+}
+
+function findDirectoryById(directories: ProjectDirectory[], id: string): ProjectDirectory | null {
+  for (const directory of directories) {
+    if (directory.id === id) {
+      return directory
+    }
+    if (directory.children?.length) {
+      const nested = findDirectoryById(directory.children, id)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return null
+}
+
+function handleDirectoryDragStart(event: DragEvent, directoryId: string) {
+  if (!event.dataTransfer || !isDraggableDirectoryId(directoryId)) {
+    return
+  }
+  draggingDirectoryId.value = directoryId
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData(DIRECTORY_DRAG_MIME, directoryId)
+}
+
+function handleDirectoryDragEnd() {
+  draggingDirectoryId.value = null
+}
+
+function allowDirectoryDrop(event: DragEvent, directoryId: string) {
+  if (!event.dataTransfer) {
+    return false
+  }
+  const targetScope = getDirectoryMutationScope(directoryId)
+  if (!targetScope) {
+    return false
+  }
+  const types = Array.from(event.dataTransfer.types ?? [])
+  const draggedDirectoryId = draggingDirectoryId.value?.trim() ?? ''
+  const draggedDirectoryScope = draggedDirectoryId ? getDirectoryMutationScope(draggedDirectoryId) : null
+  const draggedAssetId = draggingAssetId.value?.trim() ?? ''
+  const draggedAsset = draggedAssetId ? sceneStore.getAsset(draggedAssetId) : null
+  const draggedAssetScope = getAssetMutationScope(draggedAsset)
+  const acceptsAsset = types.includes(ASSET_DRAG_MIME)
+    && !!draggedAssetId
+    && draggedAssetScope === targetScope
+    && !(targetScope === 'preset' && directoryId === PRESET_PROVIDER_ROOT_DIRECTORY_ID)
+  const acceptsDirectory = types.includes(DIRECTORY_DRAG_MIME) && draggedDirectoryScope === targetScope
+  if (!acceptsAsset && !acceptsDirectory) {
+    return false
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer.dropEffect = 'move'
+  return true
+}
+
+async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
+  if (!allowDirectoryDrop(event, directoryId) || !event.dataTransfer) {
+    return
+  }
+  const draggedDirectoryId = draggingDirectoryId.value?.trim() ?? ''
+  if (draggedDirectoryId) {
+    try {
+      if (isLocalDirectoryId(draggedDirectoryId) && isLocalDirectoryId(directoryId)) {
+        sceneStore.moveAssetDirectory(draggedDirectoryId, directoryId)
+      } else if (isPresetDirectoryMutable(draggedDirectoryId) && isPresetDirectoryId(directoryId)) {
+        await moveResourceCategory(draggedDirectoryId, resolveServerCategoryId(directoryId))
+        await refreshPresetProviderAssets()
+      }
+      ensureDirectoryOpened(directoryId)
+    } catch (error) {
+      console.error('Failed to move directory', error)
+    } finally {
+      draggingDirectoryId.value = null
+    }
+    return
+  }
+  const assetId = draggingAssetId.value?.trim()
+  if (!assetId) {
+    return
+  }
+  try {
+    const asset = sceneStore.getAsset(assetId)
+    const scope = getAssetMutationScope(asset)
+    if (scope === 'local' && isLocalDirectoryId(directoryId)) {
+      const moved = sceneStore.moveProjectAssetToDirectory(assetId, directoryId)
+      if (moved) {
+        sceneStore.setActiveDirectory(directoryId)
+      }
+    } else if (scope === 'preset' && isPresetDirectoryId(directoryId)) {
+      const targetCategoryId = resolveServerCategoryId(directoryId)
+      if (!targetCategoryId) {
+        return
+      }
+      await bulkMoveResourceAssetsToCategory({ assetIds: [assetId], targetCategoryId })
+      await refreshPresetProviderAssets()
+      sceneStore.setActiveDirectory(directoryId)
+    }
+  } catch (error) {
+    console.error('Failed to move asset to directory', error)
+  }
+}
 
 function ensureDirectoryOpened(directoryId: string) {
   if (!openedDirectories.value.includes(directoryId)) {
@@ -2014,6 +2291,12 @@ const deletionSummary = computed(() => {
     return ''
   }
   const names = pendingDeleteAssets.value.map((asset) => `“${asset.name}”`).join('、')
+  const presetOnly = pendingDeleteAssets.value.every((asset) => providerIdForAsset(asset) === PRESET_PROVIDER_ID)
+  if (presetOnly) {
+    return isBatchDeletion.value
+      ? `Are you sure you want to delete the selected global assets ${names}? This will remove them from the shared asset library. This action cannot be undone.`
+      : `Are you sure you want to delete global asset ${names}? This will remove it from the shared asset library. This action cannot be undone.`
+  }
   const prefix = isBatchDeletion.value
     ? `Are you sure you want to delete the selected assets ${names}?`
     : `Are you sure you want to delete asset ${names}?`
@@ -2406,6 +2689,30 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
           <v-toolbar density="compact" height="46">
             <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Resource</v-toolbar-title>
             <v-spacer />
+            <v-btn
+              icon="mdi-folder-plus-outline"
+              variant="text"
+              density="compact"
+              :disabled="!canCreateDirectory"
+              title="Create folder"
+              @click="promptCreateDirectory"
+            />
+            <v-btn
+              icon="mdi-pencil-outline"
+              variant="text"
+              density="compact"
+              :disabled="!canRenameDirectory"
+              title="Rename folder"
+              @click="promptRenameDirectory()"
+            />
+            <v-btn
+              icon="mdi-delete-outline"
+              variant="text"
+              density="compact"
+              :disabled="!canDeleteDirectory"
+              title="Delete folder"
+              @click="promptDeleteDirectory()"
+            />
           </v-toolbar>
           <v-divider />
           <v-treeview
@@ -2421,7 +2728,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               <v-icon>mdi-folder</v-icon>
             </template>
             <template #title="{ item }">
-              <div class="tree-node-title">
+              <div
+                class="tree-node-title"
+                :draggable="isDraggableDirectoryId(item?.id)"
+                @dragstart.stop="handleDirectoryDragStart($event, item.id)"
+                @dragend="handleDirectoryDragEnd"
+                @dragover="allowDirectoryDrop($event, item.id)"
+                @drop="handleDirectoryDrop($event, item.id)"
+                @dblclick.stop="item?.id && sceneStore.setActiveDirectory(item.id)"
+              >
                 <span class="tree-node-text">{{ item.name }}</span>
                 <v-progress-circular
                   v-if="isProviderDirectory(item?.id) && isDirectoryLoading(item?.id)"
@@ -2477,6 +2792,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               :disabled="!canUploadSelectionToServer"
               :title="authStore.canResourceWrite ? 'Upload to Server' : 'Missing resource:write permission'"
               @click="openUploadDialog"
+            />
+            <v-btn
+              color="primary"
+              variant="text"
+              density="compact"
+              icon="mdi-rename-outline"
+              :disabled="!canRenameSelectedAsset"
+              title="Rename asset"
+              @click="promptRenameSelectedAsset"
             />
             <v-divider vertical class="mx-1" />
             <div class="project-toolbar__search">
@@ -2582,10 +2906,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 :key="directory.id"
                 :class="['directory-card', { 'is-active': activeDirectoryId === directory.id }]"
                 elevation="4"
+                :draggable="isDraggableDirectoryId(directory.id)"
                 tabindex="0"
                 @dblclick.stop="enterDirectory(directory)"
                 @keyup.enter.prevent="enterDirectory(directory)"
                 @keyup.space.prevent="enterDirectory(directory)"
+                @dragstart.stop="handleDirectoryDragStart($event, directory.id)"
+                @dragend="handleDirectoryDragEnd"
+                @dragover="allowDirectoryDrop($event, directory.id)"
+                @drop="handleDirectoryDrop($event, directory.id)"
               >
                 <div class="directory-card-body">
                   <v-icon size="40" color="primary">mdi-folder</v-icon>
@@ -2593,11 +2922,29 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     <span class="directory-card-title">{{ directory.name }}</span>
                     <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} assets</span>
                   </div>
-                  <v-icon class="directory-card-hint" size="18" color="primary">mdi-gesture-double-tap</v-icon>
+                  <div class="directory-card-actions">
+                    <v-btn
+                      v-if="(isLocalDirectoryId(directory.id) && directory.id !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directory.id)"
+                      icon="mdi-pencil-outline"
+                      variant="text"
+                      density="compact"
+                      size="small"
+                      @click.stop="promptRenameDirectory(directory.id)"
+                    />
+                    <v-btn
+                      v-if="(isLocalDirectoryId(directory.id) && directory.id !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directory.id)"
+                      icon="mdi-delete-outline"
+                      variant="text"
+                      density="compact"
+                      size="small"
+                      @click.stop="promptDeleteDirectory(directory.id)"
+                    />
+                    <v-icon class="directory-card-hint" size="18" color="primary">mdi-gesture-double-tap</v-icon>
+                  </div>
                 </div>
               </v-card>
             </div>
-            <div v-else-if="displayedAssets.length" class="gallery-grid">
+            <div v-if="displayedAssets.length" class="gallery-grid">
               <v-card
                 v-for="asset in displayedAssets"
                 :key="asset.id"
@@ -2666,7 +3013,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 </div>
               </v-card>
             </div>
-            <div v-else class="placeholder-text">
+            <div v-if="!galleryDirectories.length && !displayedAssets.length" class="placeholder-text">
               <template v-if="isSearchActive">
                 No assets found for "{{ normalizedSearchQuery }}".
               </template>
@@ -2698,6 +3045,68 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
       :tag-options="tagOptions"
       @uploaded="handleUploadCompleted"
     />
+
+    <v-dialog v-model="directoryDialogOpen" max-width="420">
+      <v-card>
+        <v-card-title>{{ directoryDialogTitle }}</v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="directoryDialogName"
+            label="Folder name"
+            variant="outlined"
+            density="comfortable"
+            hide-details
+            autofocus
+            @keydown.enter.prevent="submitDirectoryDialog"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="cancelDirectoryDialog">Cancel</v-btn>
+          <v-btn color="primary" variant="flat" @click="submitDirectoryDialog">{{ directoryDialogConfirmLabel }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="directoryDeleteDialogOpen" max-width="420">
+      <v-card>
+        <v-card-title class="text-error">Delete Folder</v-card-title>
+        <v-card-text>
+          <p class="delete-dialog-text">
+            Delete folder "{{ directoryDeleteTarget?.name ?? 'Folder' }}" and all contained assets? This action cannot be undone.
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="cancelDeleteDirectory">Cancel</v-btn>
+          <v-btn color="error" variant="flat" @click="confirmDeleteDirectory">Delete Folder</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="assetRenameDialogOpen" max-width="420">
+      <v-card>
+        <v-card-title>Rename Asset</v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="assetRenameValue"
+            label="Asset name"
+            variant="outlined"
+            density="comfortable"
+            hide-details
+            autofocus
+            :hint="assetRenameTarget?.id ?? ''"
+            persistent-hint
+            @keydown.enter.prevent="submitAssetRenameDialog"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="cancelAssetRenameDialog">Cancel</v-btn>
+          <v-btn color="primary" variant="flat" @click="submitAssetRenameDialog">Rename</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <v-dialog v-model="deleteDialogOpen" max-width="420">
       <v-card>
@@ -3379,6 +3788,13 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
 .directory-card-hint {
   opacity: 0.6;
+}
+
+.directory-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
 }
 
 
