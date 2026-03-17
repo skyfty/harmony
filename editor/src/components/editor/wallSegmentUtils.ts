@@ -2,6 +2,20 @@ import * as THREE from 'three'
 
 export type WallChainRange = { startIndex: number; endIndex: number }
 
+export type WallDefinitionAutofillPlan = {
+  chainIndex: number
+  direction: 1 | -1
+  closedLoop: boolean
+  score: number
+  startArc: number
+  endArc: number
+  stepLength: number
+  segments: Array<{
+    start: { x: number; y: number; z: number }
+    end: { x: number; y: number; z: number }
+  }>
+}
+
 export type WallSegmentDimensions = {
   height: number
   width: number
@@ -658,6 +672,7 @@ type WallLocalHitOnCompiled = {
   hitArcInChain: number
   erasableRangeStart: number
   erasableRangeEnd: number
+  distSq: number
 }
 
 type WallLocalHitPreference = {
@@ -795,6 +810,145 @@ function resolveWallLocalHitOnCompiledSegments(
     hitArcInChain,
     erasableRangeStart,
     erasableRangeEnd,
+    distSq: bestDistSq,
+  }
+}
+
+function wrapWallChainDistance(totalLen: number, distance: number): number {
+  if (!Number.isFinite(totalLen) || totalLen <= 1e-6) {
+    return 0
+  }
+  const wrapped = distance % totalLen
+  return wrapped < 0 ? wrapped + totalLen : wrapped
+}
+
+function resolveWallDefinitionPointAtDistance(
+  definition: WallDynamicMesh,
+  chainIndex: number,
+  distance: number,
+  options: { totalLen: number; closed: boolean },
+): { x: number; y: number; z: number } | null {
+  const safeDistance = options.closed
+    ? wrapWallChainDistance(options.totalLen, distance)
+    : Math.max(0, Math.min(options.totalLen, distance))
+  return getWallLocalPointAtDefinitionChainDistance(definition, chainIndex, safeDistance)
+}
+
+function computeClosedArcTravel(from: number, to: number, totalLen: number): number {
+  return wrapWallChainDistance(totalLen, to - from)
+}
+
+export function computeWallAutofillPlanForDefinition(
+  definition: WallDynamicMesh,
+  placedStartLocal: THREE.Vector3,
+  placedEndLocal: THREE.Vector3,
+  stepLength: number,
+): WallDefinitionAutofillPlan | null {
+  const step = Math.max(1e-6, Number(stepLength))
+  if (!Number.isFinite(step) || step <= 1e-6) {
+    return null
+  }
+
+  const startHit = resolveWallLocalHitOnCompiledSegments(definition, placedStartLocal)
+  if (!startHit) {
+    return null
+  }
+
+  const endHit = resolveWallLocalHitOnCompiledSegments(definition, placedEndLocal, {
+    preferredChainIndex: startHit.chainIndex,
+    preferredArcStart: startHit.erasableRangeStart,
+    preferredArcEnd: startHit.erasableRangeEnd,
+  })
+  if (!endHit || endHit.chainIndex !== startHit.chainIndex) {
+    return null
+  }
+
+  const chainIndex = startHit.chainIndex
+  const chain = definition.chains?.[chainIndex]
+  if (!chain) {
+    return null
+  }
+
+  const totalLen = computeChainArcLength(chain)
+  if (!Number.isFinite(totalLen) || totalLen <= 1e-6) {
+    return null
+  }
+
+  const startArc = Math.max(0, Math.min(totalLen, startHit.hitArcInChain))
+  const endArc = Math.max(0, Math.min(totalLen, endHit.hitArcInChain))
+  const availableStart = Math.max(0, Math.min(totalLen, startHit.erasableRangeStart))
+  const availableEnd = Math.max(0, Math.min(totalLen, endHit.erasableRangeEnd))
+  const availableSpan = Math.max(0, availableEnd - availableStart)
+  const closedLoop = Boolean(chain.closed) && availableSpan >= totalLen - 1e-4
+
+  let direction: 1 | -1 = 1
+  let remaining = 0
+
+  if (closedLoop) {
+    const forwardTravel = computeClosedArcTravel(startArc, endArc, totalLen)
+    const backwardTravel = computeClosedArcTravel(endArc, startArc, totalLen)
+    const placedLen = Math.min(forwardTravel, backwardTravel)
+    if (!Number.isFinite(placedLen) || placedLen <= 1e-6 || placedLen >= totalLen - 1e-6) {
+      return null
+    }
+    direction = forwardTravel <= backwardTravel ? 1 : -1
+    remaining = totalLen - placedLen
+  } else {
+    const delta = endArc - startArc
+    if (!Number.isFinite(delta) || Math.abs(delta) <= 1e-6) {
+      return null
+    }
+    direction = delta >= 0 ? 1 : -1
+    remaining = direction > 0
+      ? Math.max(0, availableEnd - endArc)
+      : Math.max(0, endArc - availableStart)
+  }
+
+  if (!Number.isFinite(remaining) || remaining <= 1e-6) {
+    return null
+  }
+
+  const segments: WallDefinitionAutofillPlan['segments'] = []
+  let currentDistance = endArc
+  let remainingDistance = remaining
+  const maxIterations = Math.min(4096, Math.ceil(remaining / step) + 2)
+
+  for (let index = 0; index < maxIterations && remainingDistance > 1e-6; index += 1) {
+    const segmentLen = remainingDistance <= step + 1e-6 ? remainingDistance : step
+    const nextDistance = currentDistance + direction * segmentLen
+    const start = resolveWallDefinitionPointAtDistance(definition, chainIndex, currentDistance, {
+      totalLen,
+      closed: closedLoop,
+    })
+    const end = resolveWallDefinitionPointAtDistance(definition, chainIndex, nextDistance, {
+      totalLen,
+      closed: closedLoop,
+    })
+    if (!start || !end) {
+      break
+    }
+    if (distanceSqXZ(start.x, start.z, end.x, end.z) > 1e-10) {
+      segments.push({ start, end })
+    }
+    currentDistance = closedLoop
+      ? wrapWallChainDistance(totalLen, nextDistance)
+      : Math.max(availableStart, Math.min(availableEnd, nextDistance))
+    remainingDistance -= segmentLen
+  }
+
+  if (!segments.length) {
+    return null
+  }
+
+  return {
+    chainIndex,
+    direction,
+    closedLoop,
+    score: startHit.distSq + endHit.distSq,
+    startArc,
+    endArc,
+    stepLength: step,
+    segments,
   }
 }
 

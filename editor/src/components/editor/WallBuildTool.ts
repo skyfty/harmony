@@ -9,7 +9,12 @@ import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSeg
 import { GRID_MAJOR_SPACING, WALL_ANGLE_STEP_CONSTRAINTS_ENABLED } from './constants'
 import { findSceneNode } from './sceneUtils'
 import { constrainWallEndPointSoftSnap } from './wallEndpointSnap'
-import { distanceSqXZ, splitWallSegmentsIntoChains } from './wallSegmentUtils'
+import {
+  computeWallAutofillPlanForDefinition,
+  distanceSqXZ,
+  segmentLengthXZ,
+  splitWallSegmentsIntoChains,
+} from './wallSegmentUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
@@ -31,6 +36,7 @@ export type WallBuildToolHandle = {
   syncBrushPreset: () => void
   flushPreviewIfNeeded: (scene: THREE.Scene | null) => void
   flushPreview: (scene: THREE.Scene | null) => void
+  autofillFromLastCommittedSegment: () => boolean
   handlePointerDown: (event: PointerEvent) => boolean
   handlePointerMove: (event: PointerEvent) => boolean
   handlePointerUp: (event: PointerEvent) => boolean
@@ -64,6 +70,7 @@ export type WallBuildToolSession = WallPreviewSession & {
     start: THREE.Vector3
     end: THREE.Vector3
   } | null
+  lastCommittedSegment: WallPreviewSegment | null
   polygonPoints: THREE.Vector3[]
   polygonPreviewEnd: THREE.Vector3 | null
 }
@@ -154,6 +161,7 @@ export function createWallBuildTool(options: {
       committedNewSegmentCount: 0,
       branchFrom: null,
       shapeDraft: null,
+      lastCommittedSegment: null,
       polygonPoints: [],
       polygonPreviewEnd: null,
       wallRenderProps: null,
@@ -226,6 +234,68 @@ export function createWallBuildTool(options: {
       thickness: wallProps.thickness,
     })
     target.bodyAssetId = wallProps.bodyAssetId ?? null
+  }
+
+  const collectWallNodes = (nodes: SceneNode[], out: SceneNode[] = []): SceneNode[] => {
+    nodes.forEach((node) => {
+      if (node.dynamicMesh?.type === 'Wall') {
+        out.push(node)
+      }
+      const children = Array.isArray((node as SceneNode & { children?: SceneNode[] }).children)
+        ? ((node as SceneNode & { children?: SceneNode[] }).children as SceneNode[])
+        : []
+      if (children.length) {
+        collectWallNodes(children, out)
+      }
+    })
+    return out
+  }
+
+  const toWorldPoint = (origin: THREE.Vector3, point: { x: number; y: number; z: number }): THREE.Vector3 => (
+    new THREE.Vector3(origin.x + Number(point.x), origin.y + Number(point.y), origin.z + Number(point.z))
+  )
+
+  const resolveAutofillHost = (target: WallBuildToolSession): { node: SceneNode; segments: WallPreviewSegment[] } | null => {
+    const placedSegment = target.lastCommittedSegment
+    if (!placedSegment) {
+      return null
+    }
+
+    const stepLength = segmentLengthXZ(placedSegment)
+    if (!Number.isFinite(stepLength) || stepLength <= 1e-6) {
+      return null
+    }
+
+    const maxDistSq = 0.35 * 0.35
+    let best: { node: SceneNode; score: number; segments: WallPreviewSegment[] } | null = null
+
+    collectWallNodes(options.sceneStore.nodes).forEach((node) => {
+      if (node.id === target.nodeId || node.dynamicMesh?.type !== 'Wall') {
+        return
+      }
+
+      const origin = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
+      const localStart = placedSegment.start.clone().sub(origin)
+      const localEnd = placedSegment.end.clone().sub(origin)
+      const plan = computeWallAutofillPlanForDefinition(node.dynamicMesh as WallDynamicMesh, localStart, localEnd, stepLength)
+      if (!plan || plan.score > maxDistSq * 2 || !plan.segments.length) {
+        return
+      }
+
+      const worldSegments = plan.segments.map(({ start, end }) => ({
+        start: toWorldPoint(origin, start),
+        end: toWorldPoint(origin, end),
+      }))
+      if (!worldSegments.length) {
+        return
+      }
+
+      if (!best || plan.score < best.score) {
+        best = { node, score: plan.score, segments: worldSegments }
+      }
+    })
+
+    return best ? { node: best.node, segments: best.segments } : null
   }
 
   const syncBrushPresetToSession = (target: WallBuildToolSession, applyToCommittedNode = true) => {
@@ -620,6 +690,7 @@ export function createWallBuildTool(options: {
       start: start.clone(),
       end: end.clone(),
     }
+    current.lastCommittedSegment = null
     current.segments = []
     previewRenderer.markDirty()
     return true
@@ -894,6 +965,7 @@ export function createWallBuildTool(options: {
     if (startedFromBranch) {
       session.branchFrom = null
     }
+    session.lastCommittedSegment = { start: start.clone(), end: end.clone() }
     session.lockedSegmentY = isFiniteNumber(continuationAnchor.y) ? continuationAnchor.y : session.lockedSegmentY
     session.dragStart = continuationAnchor.clone()
     session.dragEnd = continuationAnchor.clone()
@@ -1109,6 +1181,63 @@ export function createWallBuildTool(options: {
     clearSession(true)
   }
 
+  const autofillFromLastCommittedSegment = (): boolean => {
+    if (options.activeBuildTool.value !== 'wall' || getShape() !== 'line' || !session?.nodeId || !session.lastCommittedSegment) {
+      return false
+    }
+
+    const liveNode = findSceneNode(options.sceneStore.nodes, session.nodeId)
+    if (!liveNode || liveNode.dynamicMesh?.type !== 'Wall') {
+      return false
+    }
+
+    const host = resolveAutofillHost(session)
+    if (!host?.segments.length) {
+      return false
+    }
+
+    const liveBaseSegments = expandWallSegmentsToWorld(liveNode)
+    const pendingSegments = [...liveBaseSegments, ...host.segments]
+    const updated = options.sceneStore.updateWallNodeGeometry(session.nodeId, {
+      segments: pendingSegments.map((entry) => ({
+        start: entry.start.clone(),
+        end: entry.end.clone(),
+      })),
+      dimensions: session.dimensions,
+    })
+    if (!updated) {
+      return false
+    }
+
+    const refreshed = findSceneNode(options.sceneStore.nodes, session.nodeId)
+    if (refreshed?.dynamicMesh?.type === 'Wall') {
+      session.segments = expandWallSegmentsToWorld(refreshed)
+      session.dimensions = getWallNodeDimensions(refreshed)
+      options.sceneStore.updateNodeUserData(
+        session.nodeId,
+        mergeUserDataWithDynamicMeshBuildShape(refreshed.userData, 'line'),
+      )
+    } else {
+      session.segments = pendingSegments
+    }
+
+    const tail = host.segments[host.segments.length - 1]?.end?.clone()
+    if (tail) {
+      session.dragStart = tail.clone()
+      session.dragEnd = tail.clone()
+      session.lockedSegmentY = isFiniteNumber(tail.y) ? tail.y : session.lockedSegmentY
+      session.lastCommittedSegment = {
+        start: host.segments[host.segments.length - 1]!.start.clone(),
+        end: tail.clone(),
+      }
+    }
+
+    session.committedNewSegmentCount += host.segments.length
+    session.dimensions = options.normalizeWallDimensionsForViewport(session.dimensions)
+    previewRenderer.markDirty()
+    return true
+  }
+
   return {
     getSession: () => session,
 
@@ -1127,6 +1256,8 @@ export function createWallBuildTool(options: {
     flushPreview: (scene: THREE.Scene | null) => {
       previewRenderer.flush(scene, session)
     },
+
+    autofillFromLastCommittedSegment,
 
     handlePointerDown: (_event: PointerEvent) => {
       if (options.activeBuildTool.value !== 'wall') {
@@ -1287,6 +1418,7 @@ export function createWallBuildTool(options: {
       current.lockedSegmentY = isFiniteNumber(worldPoint.y) ? worldPoint.y : 0
       current.committedNewSegmentCount = 0
       current.shapeDraft = null
+      current.lastCommittedSegment = null
       current.polygonPoints = []
       current.polygonPreviewEnd = null
 
