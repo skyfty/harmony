@@ -65,8 +65,14 @@ export type PrefabStoreLike = {
 
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
+  resolveConfigAssetSaveDirectoryId: () => string
 
-  copyPackageAssetsToAssets: (providerId: string, assets: ProjectAsset[]) => ProjectAsset[]
+  copyPackageAssetsToAssets: (
+    providerId: string,
+    assets: ProjectAsset[],
+    options?: { packagePathSegments?: string[]; packagePathByAssetId?: Record<string, string[]> },
+  ) => ProjectAsset[]
+  getPackageAssetPathSegments: (providerId: string, assetId: string) => string[]
 
   queueSceneNodePatch: (nodeId: string, fields: string[]) => void
   captureNodeStructureHistorySnapshot: (ops: unknown[]) => void
@@ -666,7 +672,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
           previewColor: deps.NODE_PREFAB_PREVIEW_COLOR,
           extension: extractExtension(fileName) ?? existing.extension ?? null,
         }
-        const categoryId = determineAssetCategoryId(updated)
+        const categoryId = store.resolveConfigAssetSaveDirectoryId()
         const sourceMeta = store.assetIndex[targetAssetId]?.source
         return store.registerAsset(updated, {
           categoryId,
@@ -686,7 +692,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         gleaned: true,
         extension: extractExtension(fileName) ?? null,
       }
-      const categoryId = determineAssetCategoryId(projectAsset)
+      const categoryId = store.resolveConfigAssetSaveDirectoryId()
       const registered = store.registerAsset(projectAsset, {
         categoryId,
         source: { type: 'local' },
@@ -815,7 +821,14 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
             }
           })
           if (providerAssets.length) {
-            store.copyPackageAssetsToAssets(providerId, providerAssets)
+            const packagePathByAssetId: Record<string, string[]> = {}
+            providerAssets.forEach((providerAsset) => {
+              const path = store.getPackageAssetPathSegments(providerId, providerAsset.id)
+              if (path.length) {
+                packagePathByAssetId[providerAsset.id] = path
+              }
+            })
+            store.copyPackageAssetsToAssets(providerId, providerAssets, { packagePathByAssetId })
           }
         } else if (missingIds.length) {
           console.warn(`Provider ${providerId} is not loaded; prefab dependencies may be unavailable.`)
@@ -1373,7 +1386,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       }
 
       return store.registerAsset(projectAsset, {
-        categoryId: determineAssetCategoryId(projectAsset),
+        categoryId: store.resolveConfigAssetSaveDirectoryId(),
         source: { type: 'local' },
         commitOptions: { updateNodes: false },
       })

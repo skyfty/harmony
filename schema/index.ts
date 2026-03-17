@@ -437,6 +437,7 @@ export type AssetSourceMetadata =
       type: 'package'
       providerId: string
       originalAssetId: string
+      packagePathSegments?: string[]
     }
   | {
       type: 'local'

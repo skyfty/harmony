@@ -21,6 +21,7 @@ export type LodPresetStoreLike = {
   registerAsset: (asset: ProjectAsset, options: any) => ProjectAsset
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
+  resolveConfigAssetSaveDirectoryId: () => string
 
   addNodeComponent: <T extends string>(nodeId: string, type: T) => any
   updateNodeComponentProps: (nodeId: string, componentId: string, patch: any) => boolean
@@ -95,7 +96,7 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         extension: extractExtension(fileName) ?? null,
       }
 
-      const categoryId = determineAssetCategoryId(projectAsset)
+      const categoryId = store.resolveConfigAssetSaveDirectoryId()
       const registered = store.registerAsset(projectAsset, {
         categoryId,
         source: { type: 'local' },
