@@ -28,6 +28,7 @@ export type FloorCircleHandlePickResult = {
 export type FloorCircleHandleRenderer = {
   clear(): void
   clearHover(): void
+  setDynamicYOffset(yOffset: number | null): void
   setActiveHandle(active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: EndpointGizmoPart } | null): void
   updateHover(options: {
     camera: THREE.Camera | null
@@ -132,6 +133,27 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
     if (!hovered) return
     hovered = null
     refreshHighlight()
+  }
+
+  function resolveEffectiveYOffset(handle: THREE.Object3D): number {
+    const dynamicYOffset = Number(state?.group.userData?.dynamicYOffset)
+    if (Number.isFinite(dynamicYOffset)) {
+      return dynamicYOffset
+    }
+    const yOffset = Number(handle.userData?.yOffset)
+    return Number.isFinite(yOffset) ? yOffset : FLOOR_CIRCLE_HANDLE_Y_OFFSET
+  }
+
+  function setDynamicYOffset(yOffset: number | null) {
+    if (!state) {
+      return
+    }
+    const dynamicYOffset = typeof yOffset === 'number' && Number.isFinite(yOffset) ? yOffset : null
+    state.group.userData.dynamicYOffset = dynamicYOffset
+    for (const child of state.group.children) {
+      const basePointY = Number(child.userData?.basePointY)
+      child.position.y = (Number.isFinite(basePointY) ? basePointY : 0) + resolveEffectiveYOffset(child)
+    }
   }
 
   function setActiveHandle(next: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: EndpointGizmoPart } | null) {
@@ -247,6 +269,7 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
     centerHandle.userData.baseDiameter = centerGizmo.baseDiameter
     centerHandle.userData.endpointGizmo = centerGizmo
     centerHandle.userData.handleKey = `${selectedNodeId}:circle:center`
+    centerHandle.userData.basePointY = 0
     centerHandle.userData.yOffset = yOffset
 
     centerHandle.traverse((child) => {
@@ -279,6 +302,7 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
     radiusHandle.userData.baseDiameter = radiusGizmo.baseDiameter
     radiusHandle.userData.endpointGizmo = radiusGizmo
     radiusHandle.userData.handleKey = `${selectedNodeId}:circle:radius`
+    radiusHandle.userData.basePointY = 0
     radiusHandle.userData.yOffset = yOffset
 
     radiusHandle.traverse((child) => {
@@ -441,14 +465,12 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
 
         const radiusHandle = state.group.children.find((c) => c?.userData?.circleKind === 'radius') as THREE.Object3D | undefined
         if (radiusHandle) {
-          const y = Number(radiusHandle.userData?.yOffset)
-          radiusHandle.position.set(rx, Number.isFinite(y) ? y : FLOOR_CIRCLE_HANDLE_Y_OFFSET, rz)
+          radiusHandle.position.set(rx, resolveEffectiveYOffset(radiusHandle), rz)
         }
 
         const centerHandle = state.group.children.find((c) => c?.userData?.circleKind === 'center') as THREE.Object3D | undefined
         if (centerHandle) {
-          const y = Number(centerHandle.userData?.yOffset)
-          centerHandle.position.set(centerX, Number.isFinite(y) ? y : FLOOR_CIRCLE_HANDLE_Y_OFFSET, centerZ)
+          centerHandle.position.set(centerX, resolveEffectiveYOffset(centerHandle), centerZ)
         }
       }
     }
@@ -490,7 +512,7 @@ export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {
     return state
   }
 
-  return { clear, clearHover, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
+  return { clear, clearHover, setDynamicYOffset, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
 }
 
 export { FLOOR_CIRCLE_HANDLE_Y_OFFSET as FLOOR_CIRCLE_HANDLE_Y }

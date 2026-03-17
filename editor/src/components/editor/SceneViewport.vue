@@ -252,6 +252,7 @@ import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './W
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
 import {
   createFloorCircleHandleRenderer,
+  FLOOR_CIRCLE_HANDLE_Y,
   type FloorCircleHandlePickResult,
 } from './FloorCircleHandleRenderer'
 import {
@@ -3689,12 +3690,7 @@ type WallLengthHudLabel = {
   text: string
 }
 
-type FloorSizeHudLabel = {
-  visible: boolean
-  x: number
-  y: number
-  text: string
-}
+type FloorSizeHudLabel = WallLengthHudLabel
 
 const wallLengthHud = reactive<{ visible: boolean; left: WallLengthHudLabel; right: WallLengthHudLabel }>({
   visible: false,
@@ -3702,9 +3698,10 @@ const wallLengthHud = reactive<{ visible: boolean; left: WallLengthHudLabel; rig
   right: { visible: false, x: 0, y: 0, text: '' },
 })
 
-const floorSizeHud = reactive<{ visible: boolean; label: FloorSizeHudLabel }>({
+const floorSizeHud = reactive<{ visible: boolean; left: FloorSizeHudLabel; right: FloorSizeHudLabel }>({
   visible: false,
-  label: { visible: false, x: 0, y: 0, text: '' },
+  left: { visible: false, x: 0, y: 0, text: '' },
+  right: { visible: false, x: 0, y: 0, text: '' },
 })
 
 const displayBoardSizeHud = reactive<{ visible: boolean; label: FloorSizeHudLabel }>({
@@ -3713,8 +3710,15 @@ const displayBoardSizeHud = reactive<{ visible: boolean; label: FloorSizeHudLabe
 })
 
 const wallLengthHudProjectHelper = new THREE.Vector3()
-const wallLengthHudMidpointHelper = new THREE.Vector3()
-const wallLengthHudMidpointHelper2 = new THREE.Vector3()
+const wallLengthHudMidpointHelper3 = new THREE.Vector3()
+const wallLengthHudMidpointHelper4 = new THREE.Vector3()
+const wallLengthHudMidpointHelper5 = new THREE.Vector3()
+const wallLengthHudMidpointHelper6 = new THREE.Vector3()
+const wallLengthHudMidpointHelper7 = new THREE.Vector3()
+const wallLengthHudMidpointHelper8 = new THREE.Vector3()
+const HUD_NEAR_HANDLE_SAMPLE_RATIO = 0.24
+const HUD_NEAR_HANDLE_OFFSET_PX = 58
+const HUD_WORLD_Y_OFFSET = 0.03
 
 function clearWallLengthHud() {
   wallLengthHud.visible = false
@@ -3726,8 +3730,10 @@ function clearWallLengthHud() {
 
 function clearFloorSizeHud() {
   floorSizeHud.visible = false
-  floorSizeHud.label.visible = false
-  floorSizeHud.label.text = ''
+  floorSizeHud.left.visible = false
+  floorSizeHud.right.visible = false
+  floorSizeHud.left.text = ''
+  floorSizeHud.right.text = ''
 }
 
 function clearDisplayBoardSizeHud() {
@@ -3779,6 +3785,168 @@ function projectWorldToOverlay(world: THREE.Vector3): { visible: boolean; x: num
   return { visible: true, x, y }
 }
 
+function setHudLabel(label: WallLengthHudLabel, projected: { visible: boolean; x: number; y: number }, text: string) {
+  label.visible = projected.visible && text.length > 0
+  label.x = projected.x
+  label.y = projected.y
+  label.text = label.visible ? text : ''
+}
+
+function projectLabelNearHandle(
+  activeWorld: THREE.Vector3,
+  targetWorld: THREE.Vector3,
+): { visible: boolean; x: number; y: number } {
+  const activeProjected = projectWorldToOverlay(
+    wallLengthHudMidpointHelper3.copy(activeWorld).setY(activeWorld.y + HUD_WORLD_Y_OFFSET),
+  )
+  if (!activeProjected.visible) {
+    return activeProjected
+  }
+
+  const sampleProjected = projectWorldToOverlay(
+    wallLengthHudMidpointHelper4
+      .copy(activeWorld)
+      .lerp(targetWorld, HUD_NEAR_HANDLE_SAMPLE_RATIO)
+      .setY(activeWorld.y + HUD_WORLD_Y_OFFSET),
+  )
+
+  let dx = 0
+  let dy = -1
+  if (sampleProjected.visible) {
+    dx = sampleProjected.x - activeProjected.x
+    dy = sampleProjected.y - activeProjected.y
+  }
+  const length = Math.hypot(dx, dy)
+  if (length <= 1e-3) {
+    dx = 0
+    dy = -1
+  } else {
+    dx /= length
+    dy /= length
+  }
+
+  return {
+    visible: true,
+    x: activeProjected.x + dx * HUD_NEAR_HANDLE_OFFSET_PX,
+    y: activeProjected.y + dy * HUD_NEAR_HANDLE_OFFSET_PX,
+  }
+}
+
+function showWallSingleLengthLabel(startWorld: THREE.Vector3, endWorld: THREE.Vector3, text: string, activeWorld: THREE.Vector3) {
+  const targetWorld = activeWorld.distanceToSquared(startWorld) <= activeWorld.distanceToSquared(endWorld) ? endWorld : startWorld
+  const projected = projectLabelNearHandle(activeWorld, targetWorld)
+  setHudLabel(wallLengthHud.left, projected, text)
+  setHudLabel(wallLengthHud.right, { visible: false, x: 0, y: 0 }, '')
+  wallLengthHud.visible = wallLengthHud.left.visible
+}
+
+function showWallLabels(options: {
+  activeWorld: THREE.Vector3
+  leftTarget?: THREE.Vector3 | null
+  leftText?: string
+  rightTarget?: THREE.Vector3 | null
+  rightText?: string
+}) {
+  const leftProjected = options.leftTarget && options.leftText
+    ? projectLabelNearHandle(options.activeWorld, options.leftTarget)
+    : { visible: false, x: 0, y: 0 }
+  const rightProjected = options.rightTarget && options.rightText
+    ? projectLabelNearHandle(options.activeWorld, options.rightTarget)
+    : { visible: false, x: 0, y: 0 }
+  setHudLabel(wallLengthHud.left, leftProjected, options.leftText ?? '')
+  setHudLabel(wallLengthHud.right, rightProjected, options.rightText ?? '')
+  wallLengthHud.visible = wallLengthHud.left.visible || wallLengthHud.right.visible
+}
+
+function showFloorLabels(options: {
+  activeWorld: THREE.Vector3
+  leftTarget?: THREE.Vector3 | null
+  leftText?: string
+  rightTarget?: THREE.Vector3 | null
+  rightText?: string
+}) {
+  const leftProjected = options.leftTarget && options.leftText
+    ? projectLabelNearHandle(options.activeWorld, options.leftTarget)
+    : { visible: false, x: 0, y: 0 }
+  const rightProjected = options.rightTarget && options.rightText
+    ? projectLabelNearHandle(options.activeWorld, options.rightTarget)
+    : { visible: false, x: 0, y: 0 }
+  setHudLabel(floorSizeHud.left, leftProjected, options.leftText ?? '')
+  setHudLabel(floorSizeHud.right, rightProjected, options.rightText ?? '')
+  floorSizeHud.visible = floorSizeHud.left.visible || floorSizeHud.right.visible
+}
+
+function getFloorWorldVertices(runtime: THREE.Object3D, vertices: unknown[]): THREE.Vector3[] {
+  const result: THREE.Vector3[] = []
+  for (const entry of vertices) {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      continue
+    }
+    const lx = Number(entry[0])
+    const lz = Number(entry[1])
+    if (!Number.isFinite(lx) || !Number.isFinite(lz)) {
+      continue
+    }
+    result.push(runtime.localToWorld(new THREE.Vector3(lx, 0, lz)))
+  }
+  return result
+}
+
+function tryShowFloorVertexAdjacentLengths(runtime: THREE.Object3D, vertices: unknown[], vertexIndex: number): boolean {
+  const worldVertices = getFloorWorldVertices(runtime, vertices)
+  if (worldVertices.length < 2) {
+    return false
+  }
+
+  const count = worldVertices.length
+  const index = THREE.MathUtils.euclideanModulo(vertexIndex, count)
+  const active = worldVertices[index]
+  const prev = worldVertices[(index - 1 + count) % count]
+  const next = worldVertices[(index + 1) % count]
+  if (!active || (!prev && !next)) {
+    return false
+  }
+
+  const prevLength = prev ? distanceXZ(active, prev) : NaN
+  const nextLength = next ? distanceXZ(active, next) : NaN
+
+  if (prev && next && Number.isFinite(prevLength) && Number.isFinite(nextLength)) {
+    showFloorLabels({
+      activeWorld: active,
+      leftTarget: prev,
+      leftText: `Left ${formatWallLengthMeters(prevLength)}`,
+      rightTarget: next,
+      rightText: `Right ${formatWallLengthMeters(nextLength)}`,
+    })
+    return floorSizeHud.visible
+  }
+
+  const target = prev ?? next
+  const length = target ? distanceXZ(active, target) : NaN
+  if (!target || !Number.isFinite(length)) {
+    return false
+  }
+
+  showFloorLabels({
+    activeWorld: active,
+    leftTarget: target,
+    leftText: `Length ${formatWallLengthMeters(length)}`,
+  })
+  return floorSizeHud.visible
+}
+
+function tryShowFloorCircleSizeLabel(centerWorld: THREE.Vector3, radiusWorld: THREE.Vector3, radius: number): boolean {
+  if (!Number.isFinite(radius) || radius <= 1e-6) {
+    return false
+  }
+  showFloorLabels({
+    activeWorld: radiusWorld,
+    leftTarget: centerWorld,
+    leftText: `Radius ${formatWallLengthMeters(radius)}  Diameter ${formatWallLengthMeters(radius * 2)}`,
+  })
+  return floorSizeHud.visible
+}
+
 function updateWallLengthHudFromWallDrag() {
   // Default to hidden and only enable when a wall drag is active.
   clearWallLengthHud()
@@ -3800,21 +3968,14 @@ function updateWallLengthHudFromWallDrag() {
     const lenL = distanceXZ(segL.start, segL.end)
     const lenR = distanceXZ(segR.start, segR.end)
 
-    const midL = wallLengthHudMidpointHelper.copy(segL.start).add(segL.end).multiplyScalar(0.5)
-    const pL = projectWorldToOverlay(midL)
-    const midR = wallLengthHudMidpointHelper2.copy(segR.start).add(segR.end).multiplyScalar(0.5)
-    const pR = projectWorldToOverlay(midR)
-
-    wallLengthHud.visible = pL.visible || pR.visible
-    wallLengthHud.left.visible = pL.visible
-    wallLengthHud.left.x = pL.x
-    wallLengthHud.left.y = pL.y
-    wallLengthHud.left.text = `Left ${formatWallLengthMeters(lenL)}`
-
-    wallLengthHud.right.visible = pR.visible
-    wallLengthHud.right.x = pR.x
-    wallLengthHud.right.y = pR.y
-    wallLengthHud.right.text = `Right ${formatWallLengthMeters(lenR)}`
+    const jointWorld = segL.end
+    showWallLabels({
+      activeWorld: jointWorld,
+      leftTarget: segL.start,
+      leftText: `Left ${formatWallLengthMeters(lenL)}`,
+      rightTarget: segR.end,
+      rightText: `Right ${formatWallLengthMeters(lenR)}`,
+    })
     return
   }
 
@@ -3826,16 +3987,8 @@ function updateWallLengthHudFromWallDrag() {
       return
     }
     const len = distanceXZ(seg.start, seg.end)
-    const mid = wallLengthHudMidpointHelper.copy(seg.start).add(seg.end).multiplyScalar(0.5)
-    const projected = projectWorldToOverlay(mid)
-    if (!projected.visible) {
-      return
-    }
-    wallLengthHud.visible = true
-    wallLengthHud.left.visible = true
-    wallLengthHud.left.x = projected.x
-    wallLengthHud.left.y = projected.y
-    wallLengthHud.left.text = `Length ${formatWallLengthMeters(len)}`
+    const activeWorld = state.endpointKind === 'start' ? seg.start : seg.end
+    showWallSingleLengthLabel(seg.start, seg.end, `Length ${formatWallLengthMeters(len)}`, activeWorld)
   }
 }
 
@@ -3857,35 +4010,52 @@ function updateWallLengthHudFromWallBuild() {
     return
   }
 
-  // For rectangle/circle draft, skip length HUD (we only show for polygon segment dragging).
-  if ((session as any).shapeDraft) {
-    return
+  if (session.shapeDraft?.kind === 'rectangle') {
+    const start = session.shapeDraft.start
+    const end = session.shapeDraft.end
+    const minX = Math.min(start.x, end.x)
+    const maxX = Math.max(start.x, end.x)
+    const minZ = Math.min(start.z, end.z)
+    const maxZ = Math.max(start.z, end.z)
+    const current = wallLengthHudMidpointHelper7.set(end.x, start.y, end.z)
+    const leftCorner = wallLengthHudMidpointHelper8.set(minX === end.x ? maxX : minX, start.y, end.z)
+    const rightCorner = wallLengthHudMidpointHelper6.set(end.x, start.y, minZ === end.z ? maxZ : minZ)
+    showWallLabels({
+      activeWorld: current,
+      leftTarget: leftCorner,
+      leftText: `Left ${formatWallLengthMeters(distanceXZ(current, leftCorner))}`,
+      rightTarget: rightCorner,
+      rightText: `Right ${formatWallLengthMeters(distanceXZ(current, rightCorner))}`,
+    })
+    if (wallLengthHud.visible) {
+      return
+    }
   }
 
-  if (!session.dragStart || !session.dragEnd) {
-    return
+  if (session.dragStart && session.dragEnd) {
+    const len = distanceXZ(session.dragStart, session.dragEnd)
+    if (Number.isFinite(len)) {
+      showWallSingleLengthLabel(session.dragStart, session.dragEnd, `Length ${formatWallLengthMeters(len)}`, session.dragEnd)
+      if (wallLengthHud.visible) {
+        return
+      }
+    }
   }
 
-  const len = distanceXZ(session.dragStart, session.dragEnd)
-  if (!Number.isFinite(len)) {
+  const previewEnd = session.polygonPreviewEnd
+  const lastPoint = session.polygonPoints[session.polygonPoints.length - 1]
+  if (!previewEnd || !lastPoint) {
     return
   }
-
-  const mid = wallLengthHudMidpointHelper.copy(session.dragStart).add(session.dragEnd).multiplyScalar(0.5)
-  const projected = projectWorldToOverlay(mid)
-  if (!projected.visible) {
+  const len = distanceXZ(lastPoint, previewEnd)
+  if (!Number.isFinite(len) || len <= 1e-6) {
     return
   }
-
-  wallLengthHud.visible = true
-  wallLengthHud.left.visible = true
-  wallLengthHud.left.x = projected.x
-  wallLengthHud.left.y = projected.y
-  wallLengthHud.left.text = `Length ${formatWallLengthMeters(len)}`
+  showWallSingleLengthLabel(lastPoint, previewEnd, `Length ${formatWallLengthMeters(len)}`, previewEnd)
 }
 
-const floorSizeHudTmpWorld = new THREE.Vector3()
 const floorSizeHudTmpWorld2 = new THREE.Vector3()
+const floorSizeHudTmpWorld3 = new THREE.Vector3()
 
 function updateFloorSizeHudFromFloorDrag() {
   clearFloorSizeHud()
@@ -3894,77 +4064,42 @@ function updateFloorSizeHudFromFloorDrag() {
     return
   }
 
-  if (!floorVertexDragState || !floorVertexDragState.moved) {
-    return
-  }
-
   // Only show while floor tool is active; keeps UX consistent with other gizmo overlays.
   if (activeBuildTool.value !== 'floor') {
     return
   }
 
+  if (floorCircleRadiusDragState && floorCircleRadiusDragState.moved) {
+    const state = floorCircleRadiusDragState
+    const centerWorld = state.runtimeObject.localToWorld(
+      wallLengthHudMidpointHelper5.set(state.centerLocal.x, 0, state.centerLocal.z).clone(),
+    )
+    let radius = 0
+    for (const vertex of getFloorWorldVertices(state.runtimeObject, state.workingDefinition?.vertices ?? [])) {
+      radius = Math.max(radius, distanceXZ(centerWorld, vertex))
+    }
+    const radiusWorld = state.runtimeObject.localToWorld(
+      wallLengthHudMidpointHelper6.set(state.centerLocal.x + radius, 0, state.centerLocal.z).clone(),
+    )
+    tryShowFloorCircleSizeLabel(centerWorld, radiusWorld, radius)
+    return
+  }
+
+  if (!floorVertexDragState || !floorVertexDragState.moved) {
+    return
+  }
+
   const state = floorVertexDragState
-  const runtime = state.runtimeObject
   const vertices = Array.isArray(state.workingDefinition?.vertices) ? state.workingDefinition.vertices : []
   if (!vertices.length) {
     return
   }
 
-  const shape = floorBuildShape.value ?? 'polygon'
-  if (shape !== 'rectangle' && shape !== 'circle') {
+  const shape = state.floorBuildShape ?? floorBuildShape.value ?? 'polygon'
+  if (shape === 'circle') {
     return
   }
-
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-
-  for (const entry of vertices) {
-    if (!Array.isArray(entry) || entry.length < 2) continue
-    const lx = Number(entry[0])
-    const lz = Number(entry[1])
-    if (!Number.isFinite(lx) || !Number.isFinite(lz)) continue
-    const w = runtime.localToWorld(floorSizeHudTmpWorld.set(lx, 0, lz))
-    minX = Math.min(minX, w.x)
-    maxX = Math.max(maxX, w.x)
-    minZ = Math.min(minZ, w.z)
-    maxZ = Math.max(maxZ, w.z)
-  }
-
-  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-    return
-  }
-
-  const centerWorld = floorSizeHudTmpWorld2.set((minX + maxX) * 0.5, 0.02, (minZ + maxZ) * 0.5)
-  const projected = projectWorldToOverlay(centerWorld)
-  if (!projected.visible) {
-    return
-  }
-
-  if (shape === 'rectangle') {
-    const width = Math.max(0, maxX - minX)
-    const depth = Math.max(0, maxZ - minZ)
-    floorSizeHud.visible = true
-    floorSizeHud.label.visible = true
-    floorSizeHud.label.x = projected.x
-    floorSizeHud.label.y = projected.y
-    floorSizeHud.label.text = `Width ${formatWallLengthMeters(width)}  Depth ${formatWallLengthMeters(depth)}`
-    return
-  }
-
-  // Circle: show radius/diameter derived from the current geometry bounds.
-  const radius = 0.5 * Math.max(maxX - minX, maxZ - minZ)
-  const diameter = radius * 2
-  if (!Number.isFinite(radius) || radius <= 1e-6) {
-    return
-  }
-
-  floorSizeHud.visible = true
-  floorSizeHud.label.visible = true
-  floorSizeHud.label.x = projected.x
-  floorSizeHud.label.y = projected.y
-  floorSizeHud.label.text = `Radius ${formatWallLengthMeters(radius)}  Diameter ${formatWallLengthMeters(diameter)}`
+  tryShowFloorVertexAdjacentLengths(state.runtimeObject, vertices, state.vertexIndex)
 }
 
 function updateFloorSizeHudFromFloorBuild() {
@@ -3991,18 +4126,16 @@ function updateFloorSizeHudFromFloorBuild() {
     const maxX = Math.max(start.x, end.x)
     const minZ = Math.min(start.z, end.z)
     const maxZ = Math.max(start.z, end.z)
-    const width = Math.max(0, maxX - minX)
-    const depth = Math.max(0, maxZ - minZ)
-
-    const centerWorld = floorSizeHudTmpWorld2.set((minX + maxX) * 0.5, 0.02, (minZ + maxZ) * 0.5)
-    const projected = projectWorldToOverlay(centerWorld)
-    if (!projected.visible) return
-
-    floorSizeHud.visible = true
-    floorSizeHud.label.visible = true
-    floorSizeHud.label.x = projected.x
-    floorSizeHud.label.y = projected.y
-    floorSizeHud.label.text = `Width ${formatWallLengthMeters(width)}  Depth ${formatWallLengthMeters(depth)}`
+    const current = floorSizeHudTmpWorld3.set(end.x, start.y, end.z)
+    const leftCorner = wallLengthHudMidpointHelper7.set(minX === end.x ? maxX : minX, start.y, end.z)
+    const rightCorner = wallLengthHudMidpointHelper8.set(end.x, start.y, minZ === end.z ? maxZ : minZ)
+    showFloorLabels({
+      activeWorld: current,
+      leftTarget: leftCorner,
+      leftText: `Left ${formatWallLengthMeters(distanceXZ(current, leftCorner))}`,
+      rightTarget: rightCorner,
+      rightText: `Right ${formatWallLengthMeters(distanceXZ(current, rightCorner))}`,
+    })
     return
   }
 
@@ -4011,18 +4144,30 @@ function updateFloorSizeHudFromFloorBuild() {
     const end = session.previewEnd
     if (!center || !end) return
     const radius = Math.hypot(end.x - center.x, end.z - center.z)
-    const diameter = radius * 2
     if (!Number.isFinite(radius) || radius <= 1e-6) return
+    tryShowFloorCircleSizeLabel(
+      floorSizeHudTmpWorld2.set(center.x, center.y, center.z),
+      floorSizeHudTmpWorld3.set(end.x, end.y, end.z),
+      radius,
+    )
+    return
+  }
 
-    const centerWorld = floorSizeHudTmpWorld2.set(center.x, 0.02, center.z)
-    const projected = projectWorldToOverlay(centerWorld)
-    if (!projected.visible) return
-
-    floorSizeHud.visible = true
-    floorSizeHud.label.visible = true
-    floorSizeHud.label.x = projected.x
-    floorSizeHud.label.y = projected.y
-    floorSizeHud.label.text = `Radius ${formatWallLengthMeters(radius)}  Diameter ${formatWallLengthMeters(diameter)}`
+  if (session.shape === 'polygon') {
+    const lastPoint = session.points[session.points.length - 1]
+    const previewEnd = session.previewEnd
+    if (!lastPoint || !previewEnd) {
+      return
+    }
+    const len = distanceXZ(lastPoint, previewEnd)
+    if (!Number.isFinite(len) || len <= 1e-6) {
+      return
+    }
+    showFloorLabels({
+      activeWorld: previewEnd,
+      leftTarget: lastPoint,
+      leftText: `Length ${formatWallLengthMeters(len)}`,
+    })
   }
 }
 
@@ -4343,6 +4488,8 @@ const waterCircleHandleRenderer = createWaterCircleHandleRenderer()
 const waterDragIntersectionHelper = new THREE.Vector3()
 const waterDragWorldHelper = new THREE.Vector3()
 const waterPlanePointerHelper = new THREE.Vector3()
+const dynamicAxisSurfacePointHelper = new THREE.Vector3()
+const dynamicAxisLocalPointHelper = new THREE.Vector3()
 
 function isSelectedFloorCircleEditMode(): boolean {
   if (!isSelectedFloorEditMode()) {
@@ -5164,6 +5311,94 @@ function setActiveFloorVertexHandle(active: { nodeId: string; vertexIndex: numbe
 
 function setActiveFloorCircleHandle(active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: any } | null) {
   floorCircleHandleRenderer.setActiveHandle(active as any)
+}
+
+function raycastRuntimeSurfacePoint(event: PointerEvent, runtimeObject: THREE.Object3D, result: THREE.Vector3): boolean {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
+    return false
+  }
+  runtimeObject.updateWorldMatrix(true, true)
+  const intersections = raycaster.intersectObject(runtimeObject, true)
+  for (const intersection of intersections) {
+    if (!intersection?.point) {
+      continue
+    }
+    if (isEditorOnlyIntersectionObject(intersection.object as THREE.Object3D)) {
+      continue
+    }
+    result.copy(intersection.point)
+    return true
+  }
+  return false
+}
+
+function clearDynamicWallFloorHandleYOffset() {
+  wallEndpointRenderer.setDynamicYOffset(null)
+  floorVertexRenderer.setDynamicYOffset(null)
+  floorCircleHandleRenderer.setDynamicYOffset(null)
+}
+
+function updateDynamicWallFloorHandleYOffsetFromPointer(event: PointerEvent, canHoverGizmos: boolean) {
+  if (!canHoverGizmos) {
+    clearDynamicWallFloorHandleYOffset()
+    return
+  }
+
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId) {
+    clearDynamicWallFloorHandleYOffset()
+    return
+  }
+
+  if (activeBuildTool.value === 'wall' && isSelectedWallEditMode() && !wallBuildTool.getSession()) {
+    const node = findSceneNode(sceneStore.nodes, selectedId)
+    const runtime = objectMap.get(selectedId) ?? null
+    if (!runtime || node?.dynamicMesh?.type !== 'Wall') {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+    if (!raycastRuntimeSurfacePoint(event, runtime, dynamicAxisSurfacePointHelper)) {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+    const local = runtime.worldToLocal(dynamicAxisSurfacePointHelper.clone())
+    const wallHeight = Number(node.dynamicMesh?.dimensions?.height)
+    const minOffset = WALL_ENDPOINT_HANDLE_Y_OFFSET
+    const maxOffset = Math.max(minOffset + 0.05, Number.isFinite(wallHeight) ? wallHeight - 0.05 : minOffset + 5)
+    const yOffset = THREE.MathUtils.clamp(local.y, minOffset, maxOffset)
+
+    wallEndpointRenderer.setDynamicYOffset(yOffset)
+    floorVertexRenderer.setDynamicYOffset(null)
+    floorCircleHandleRenderer.setDynamicYOffset(null)
+    return
+  }
+
+  if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && !floorBuildTool.getSession()) {
+    const node = findSceneNode(sceneStore.nodes, selectedId)
+    const runtime = objectMap.get(selectedId) ?? null
+    if (!runtime || node?.dynamicMesh?.type !== 'Floor') {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+    if (!raycastRuntimeSurfacePoint(event, runtime, dynamicAxisSurfacePointHelper)) {
+      clearDynamicWallFloorHandleYOffset()
+      return
+    }
+
+    dynamicAxisLocalPointHelper.copy(dynamicAxisSurfacePointHelper)
+    runtime.worldToLocal(dynamicAxisLocalPointHelper)
+    const thickness = Number(node.dynamicMesh?.thickness)
+    const minOffset = Math.min(FLOOR_VERTEX_HANDLE_Y, FLOOR_CIRCLE_HANDLE_Y)
+    const maxOffset = minOffset + Math.max(0, Number.isFinite(thickness) ? thickness : 0)
+    const yOffset = THREE.MathUtils.clamp(dynamicAxisLocalPointHelper.y, minOffset, Math.max(minOffset, maxOffset))
+
+    wallEndpointRenderer.setDynamicYOffset(null)
+    floorVertexRenderer.setDynamicYOffset(yOffset)
+    floorCircleHandleRenderer.setDynamicYOffset(yOffset)
+    return
+  }
+
+  clearDynamicWallFloorHandleYOffset()
 }
 
 const FLOOR_EDGE_PICK_DISTANCE = 0.3
@@ -12593,6 +12828,8 @@ function handlePointerMove(event: PointerEvent) {
     waterCircleHandleRenderer.clearHover()
   }
 
+  updateDynamicWallFloorHandleYOffsetFromPointer(event, canHoverGizmos)
+
   const _moveDragCtx: any = {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
     roadVertexDragState,
@@ -17668,7 +17905,9 @@ function handleViewportShortcut(event: KeyboardEvent) {
   }
 
   if (!handled && !event.ctrlKey && !event.metaKey && event.shiftKey && !event.altKey) {
-    if (event.code === 'KeyF') {
+    if (event.code === 'KeyG') {
+      handled = wallBuildTool.autofillFromLastCommittedSegment()
+    } else if (event.code === 'KeyF') {
       const focusIds = collectVisibleFocusNodeIds()
       if (focusIds.length > 0 && focusCameraOnSelection(focusIds)) {
         handled = true
@@ -18243,11 +18482,18 @@ defineExpose<SceneViewportHandle>({
 
         <div v-if="floorSizeHud.visible" class="floor-size-hud">
           <div
-            v-if="floorSizeHud.label.visible"
+            v-if="floorSizeHud.left.visible"
             class="floor-size-hud__label"
-            :style="{ left: floorSizeHud.label.x + 'px', top: floorSizeHud.label.y + 'px' }"
+            :style="{ left: floorSizeHud.left.x + 'px', top: floorSizeHud.left.y + 'px' }"
           >
-            {{ floorSizeHud.label.text }}
+            {{ floorSizeHud.left.text }}
+          </div>
+          <div
+            v-if="floorSizeHud.right.visible"
+            class="floor-size-hud__label"
+            :style="{ left: floorSizeHud.right.x + 'px', top: floorSizeHud.right.y + 'px' }"
+          >
+            {{ floorSizeHud.right.text }}
           </div>
         </div>
 

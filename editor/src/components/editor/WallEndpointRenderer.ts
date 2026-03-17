@@ -40,6 +40,7 @@ export type WallEndpointHandlePickResult = {
 export type WallEndpointRenderer = {
   clear(): void
   clearHover(): void
+  setDynamicYOffset(yOffset: number | null): void
   setActiveHandle(active: {
     nodeId: string
     chainStartIndex: number
@@ -317,6 +318,21 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     refreshHighlight()
   }
 
+  function setDynamicYOffset(yOffset: number | null) {
+    if (!state) {
+      return
+    }
+    const dynamicYOffset = typeof yOffset === 'number' && Number.isFinite(yOffset) ? yOffset : null
+    state.group.userData.dynamicYOffset = dynamicYOffset
+
+    for (const child of state.group.children) {
+      const basePointY = Number(child.userData?.basePointY)
+      const defaultYOffset = Number(child.userData?.yOffset)
+      const effectiveYOffset = dynamicYOffset ?? (Number.isFinite(defaultYOffset) ? defaultYOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET)
+      child.position.y = (Number.isFinite(basePointY) ? basePointY : 0) + effectiveYOffset
+    }
+  }
+
   function setActiveHandle(next: {
     nodeId: string
     chainStartIndex: number
@@ -523,6 +539,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         }
         handle.userData.baseDiameter = gizmo.baseDiameter
         handle.userData.endpointGizmo = gizmo
+        handle.userData.basePointY = Number.isFinite(y) ? y : 0
         handle.userData.handleKey =
           options.handleKind === 'joint'
             ? `${selectedNodeId}:${range.startIndex}:${range.endIndex}:joint:${options.jointIndex}`
@@ -900,6 +917,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
   return {
     clear,
     clearHover,
+    setDynamicYOffset,
     setActiveHandle,
     updateHover,
     ensure,

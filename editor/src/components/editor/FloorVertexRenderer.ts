@@ -22,6 +22,7 @@ export type FloorVertexHandlePickResult = {
 export type FloorVertexRenderer = {
   clear(): void
   clearHover(): void
+  setDynamicYOffset(yOffset: number | null): void
   setActiveHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: EndpointGizmoPart } | null): void
   updateHover(options: {
     camera: THREE.Camera | null
@@ -108,6 +109,21 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
     if (!hovered) return
     hovered = null
     refreshHighlight()
+  }
+
+  function setDynamicYOffset(yOffset: number | null) {
+    if (!state) {
+      return
+    }
+    const dynamicYOffset = typeof yOffset === 'number' && Number.isFinite(yOffset) ? yOffset : null
+    state.group.userData.dynamicYOffset = dynamicYOffset
+
+    for (const child of state.group.children) {
+      const basePointY = Number(child.userData?.basePointY)
+      const defaultYOffset = Number(child.userData?.yOffset)
+      const effectiveYOffset = dynamicYOffset ?? (Number.isFinite(defaultYOffset) ? defaultYOffset : FLOOR_VERTEX_HANDLE_Y_OFFSET)
+      child.position.y = (Number.isFinite(basePointY) ? basePointY : 0) + effectiveYOffset
+    }
   }
 
   function setActiveHandle(next: { nodeId: string; vertexIndex: number; gizmoPart: EndpointGizmoPart } | null) {
@@ -222,6 +238,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
         handle.userData.baseDiameter = gizmo.baseDiameter
         handle.userData.endpointGizmo = gizmo
         handle.userData.handleKey = `${selectedNodeId}:${index}`
+        handle.userData.basePointY = 0
         handle.userData.yOffset = yOffset
 
         // Copy metadata to meshes for picking.
@@ -401,7 +418,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
     return state
   }
 
-  return { clear, clearHover, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
+  return { clear, clearHover, setDynamicYOffset, setActiveHandle, updateHover, ensure, forceRebuild, pick, updateScreenSize, getState }
 }
 
 export { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y_OFFSET as FLOOR_VERTEX_HANDLE_Y }
