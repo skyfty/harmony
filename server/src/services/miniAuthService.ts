@@ -66,6 +66,10 @@ export interface MiniSessionUser {
 export interface MiniSessionResponse {
   token?: string
   user: MiniSessionUser
+  authFlow?: {
+    isNewUser: boolean
+    usedDefaultDisplayName: boolean
+  }
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -262,9 +266,12 @@ export async function miniLoginWithOpenId(input: {
   const unionId = normalizeOptionalString(input.unionId)
   const displayName = normalizeOptionalString(input.displayName)
   const avatarUrl = normalizeOptionalString(input.avatarUrl)
+  const usedDefaultDisplayName = !displayName
   let user = await pickCanonicalWechatUser({ miniAppId, openId, unionId })
+  let isNewUser = false
 
   if (!user) {
+    isNewUser = true
     user = await AppUserModel.create({
       miniAppId,
       authProvider: 'wechat-mini-program',
@@ -304,6 +311,10 @@ export async function miniLoginWithOpenId(input: {
   return {
     token: issueMiniToken(sessionUser),
     user: sessionUser,
+    authFlow: {
+      isNewUser,
+      usedDefaultDisplayName: isNewUser && usedDefaultDisplayName,
+    },
   }
 }
 
