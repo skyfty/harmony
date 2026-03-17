@@ -560,6 +560,10 @@ export interface OrderDocument extends Document<Types.ObjectId> {
   orderStatus: 'pending' | 'paid' | 'completed' | 'cancelled'
   /** 中文：支付状态（unpaid/processing/succeeded/failed/refunded/closed） */
   paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  /** 中文：履约状态（pending/fulfilled） */
+  fulfillmentStatus?: 'pending' | 'fulfilled'
+  /** 中文：履约完成时间（可选） */
+  fulfilledAt?: Date
   /** 中文：订单总金额 */
   totalAmount: number
   /** 中文：支付方式（可选） */

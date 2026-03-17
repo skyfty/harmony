@@ -109,6 +109,7 @@ const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MAX = 0.5
 const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_RATIO = 0.15
 const WALL_ENDPOINT_HANDLE_TOP_MARGIN_PX = 72
 const WALL_ENDPOINT_HANDLE_BOTTOM_MARGIN_PX = 56
+const WALL_ENDPOINT_HANDLE_PROXIMITY_PX = 44
 
 function distanceSqXZPoints(a: any, b: any): number {
   const ax = Number(a?.x) || 0
@@ -268,6 +269,18 @@ function computeWorldUnitsPerPixel(options: {
   return Math.max(1e-6, distance) / safeHeight
 }
 
+function isEditorOnlyIntersectionObject(object: THREE.Object3D | null): boolean {
+  let current: THREE.Object3D | null = object
+  while (current) {
+    const userData = current.userData as Record<string, unknown> | undefined
+    if (userData?.editorOnly === true) {
+      return true
+    }
+    current = current.parent ?? null
+  }
+  return false
+}
+
 // If the camera is very close to the handle, apply an extra on-screen multiplier
 // so the gizmo becomes proportionally larger at near distances. This helps
 // clicking when the camera is almost on top of a node.
@@ -298,15 +311,179 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
   const tmpCameraWorldPos = new THREE.Vector3()
   const tmpCameraLocalPos = new THREE.Vector3()
   const tmpLocalPos = new THREE.Vector3()
+  const tmpLocalPos2 = new THREE.Vector3()
+  const tmpProjectedPos = new THREE.Vector3()
   const tmpParentWorldScale = new THREE.Vector3(1, 1, 1)
   let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
+
+  function clearHoverPlacement() {
+    if (!state) {
+      return
+    }
+    for (const child of state.group.children) {
+      delete child.userData?.hoverPreferredLocalY
+    }
+  }
+
+  function updateLinearHandlePosition(options: {
+    handle: THREE.Object3D
+    runtimeObject: THREE.Object3D
+    camera: THREE.Camera
+    canvas: HTMLCanvasElement
+  }): void {
+    const { handle, runtimeObject, camera, canvas } = options
+    const anchorX = Number(handle.userData?.anchorLocalX)
+    const anchorY = Number(handle.userData?.anchorLocalY)
+    const anchorZ = Number(handle.userData?.anchorLocalZ)
+    const wallHeight = Number(handle.userData?.wallHeight)
+    const hoverPreferredLocalY = Number(handle.userData?.hoverPreferredLocalY)
+    if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY) || !Number.isFinite(anchorZ)) {
+      return
+    }
+
+    tmpLocalPos.set(anchorX, anchorY, anchorZ)
+    const resolvedLocalY = resolveVisibleLocalHandleY({
+      camera,
+      canvas,
+      runtimeObject,
+      localAnchor: tmpLocalPos,
+      preferredLocalY: Number.isFinite(hoverPreferredLocalY)
+        ? hoverPreferredLocalY
+        : anchorY + Math.max(0.1, Number.isFinite(wallHeight) ? wallHeight : 0.1),
+      minLocalY: anchorY + WALL_ENDPOINT_HANDLE_Y_OFFSET,
+      topMarginPx: WALL_ENDPOINT_HANDLE_TOP_MARGIN_PX,
+      bottomMarginPx: WALL_ENDPOINT_HANDLE_BOTTOM_MARGIN_PX,
+    })
+    handle.userData.yOffset = resolvedLocalY - anchorY
+    handle.position.set(anchorX, resolvedLocalY, anchorZ)
+  }
+
+  function raycastRuntimeSurfaceLocalPoint(runtimeObject: THREE.Object3D, raycaster: THREE.Raycaster): THREE.Vector3 | null {
+    runtimeObject.updateWorldMatrix(true, true)
+    const intersections = raycaster.intersectObject(runtimeObject, true)
+    for (const intersection of intersections) {
+      if (!intersection?.point) {
+        continue
+      }
+      if (isEditorOnlyIntersectionObject(intersection.object as THREE.Object3D)) {
+        continue
+      }
+      tmpLocalPos2.copy(intersection.point)
+      runtimeObject.worldToLocal(tmpLocalPos2)
+      return tmpLocalPos2.clone()
+    }
+    return null
+  }
+
+  function findNearbyLinearHandle(options: {
+    runtimeObject: THREE.Object3D
+    camera: THREE.Camera
+    canvas: HTMLCanvasElement
+    pointerClientX: number
+    pointerClientY: number
+  }): THREE.Object3D | null {
+    if (!state) {
+      return null
+    }
+
+    const rect = options.canvas.getBoundingClientRect()
+    const pointerX = options.pointerClientX - rect.left
+    const pointerY = options.pointerClientY - rect.top
+    const maxDistSq = WALL_ENDPOINT_HANDLE_PROXIMITY_PX * WALL_ENDPOINT_HANDLE_PROXIMITY_PX
+    let bestHandle: THREE.Object3D | null = null
+    let bestDistSq = Number.POSITIVE_INFINITY
+
+    for (const child of state.group.children) {
+      if (child?.userData?.handleKind === 'circle') {
+        continue
+      }
+
+      const anchorX = Number(child.userData?.anchorLocalX)
+      const anchorY = Number(child.userData?.anchorLocalY)
+      const anchorZ = Number(child.userData?.anchorLocalZ)
+      if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY) || !Number.isFinite(anchorZ)) {
+        continue
+      }
+
+      tmpWorldPos.set(anchorX, anchorY, anchorZ)
+      options.runtimeObject.localToWorld(tmpWorldPos)
+      tmpProjectedPos.copy(tmpWorldPos).project(options.camera)
+      if (tmpProjectedPos.z < -1 || tmpProjectedPos.z > 1) {
+        continue
+      }
+
+      const screenX = (tmpProjectedPos.x * 0.5 + 0.5) * rect.width
+      const screenY = (-tmpProjectedPos.y * 0.5 + 0.5) * rect.height
+      const dx = screenX - pointerX
+      const dy = screenY - pointerY
+      const distSq = dx * dx + dy * dy
+      if (distSq <= maxDistSq && distSq < bestDistSq) {
+        bestDistSq = distSq
+        bestHandle = child
+      }
+    }
+
+    return bestHandle
+  }
+
+  function resolveHandleRoot(object: THREE.Object3D | null): THREE.Object3D | null {
+    if (!state || !object) {
+      return null
+    }
+    let current: THREE.Object3D | null = object
+    while (current && current.parent) {
+      if (current.parent === state.group) {
+        return current
+      }
+      current = current.parent
+    }
+    return null
+  }
+
+  function applyHoverPlacement(options: {
+    handle: THREE.Object3D | null
+    runtimeObject: THREE.Object3D
+    camera: THREE.Camera
+    canvas: HTMLCanvasElement
+    raycaster: THREE.Raycaster
+  }): void {
+    clearHoverPlacement()
+    const handle = options.handle
+    if (!handle) {
+      return
+    }
+
+    const anchorY = Number(handle.userData?.anchorLocalY)
+    const wallHeight = Number(handle.userData?.wallHeight)
+    if (!Number.isFinite(anchorY)) {
+      return
+    }
+
+    const surfaceLocalPoint = raycastRuntimeSurfaceLocalPoint(options.runtimeObject, options.raycaster)
+    const hoverLocalYRaw = surfaceLocalPoint?.y
+    handle.userData.hoverPreferredLocalY = Number.isFinite(hoverLocalYRaw)
+      ? THREE.MathUtils.clamp(
+          Number(hoverLocalYRaw) + WALL_ENDPOINT_HANDLE_Y_OFFSET,
+          anchorY + WALL_ENDPOINT_HANDLE_Y_OFFSET,
+          anchorY + Math.max(0.1, Number.isFinite(wallHeight) ? wallHeight : 0.1),
+        )
+      : anchorY + Math.max(0.1, Number.isFinite(wallHeight) ? wallHeight : 0.1)
+
+    updateLinearHandlePosition({
+      handle,
+      runtimeObject: options.runtimeObject,
+      camera: options.camera,
+      canvas: options.canvas,
+    })
+  }
 
   function clear() {
     if (!state) {
       return
     }
     const existing = state
+    clearHoverPlacement()
     state = null
     existing.group.removeFromParent()
     disposeWallEndpointHandleGroup(existing.group)
@@ -316,6 +493,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
 
   function clearHover() {
     if (!hovered) return
+    clearHoverPlacement()
     hovered = null
     refreshHighlight()
   }
@@ -646,28 +824,12 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       if (child?.userData?.handleKind === 'circle') {
         continue
       }
-
-      const anchorX = Number(child?.userData?.anchorLocalX)
-      const anchorY = Number(child?.userData?.anchorLocalY)
-      const anchorZ = Number(child?.userData?.anchorLocalZ)
-      const wallHeight = Number(child?.userData?.wallHeight)
-      if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY) || !Number.isFinite(anchorZ)) {
-        continue
-      }
-
-      tmpLocalPos.set(anchorX, anchorY, anchorZ)
-      const resolvedLocalY = resolveVisibleLocalHandleY({
+      updateLinearHandlePosition({
+        handle: child,
+        runtimeObject,
         camera: options.camera,
         canvas: options.canvas,
-        runtimeObject,
-        localAnchor: tmpLocalPos,
-        preferredLocalY: anchorY + Math.max(0.1, Number.isFinite(wallHeight) ? wallHeight : 0.1),
-        minLocalY: anchorY + WALL_ENDPOINT_HANDLE_Y_OFFSET,
-        topMarginPx: WALL_ENDPOINT_HANDLE_TOP_MARGIN_PX,
-        bottomMarginPx: WALL_ENDPOINT_HANDLE_BOTTOM_MARGIN_PX,
       })
-      child.userData.yOffset = resolvedLocalY - anchorY
-      child.position.set(anchorX, resolvedLocalY, anchorZ)
     }
 
     // Circle radius handle: place at the nearest-to-camera point on the circle (XZ)
@@ -821,13 +983,31 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const intersections = options.raycaster.intersectObjects(state.group.children, true)
     intersections.sort((a, b) => a.distance - b.distance)
 
-    const first = intersections[0]
-    if (!first) {
+    const runtimeObject = (state.group.parent as THREE.Object3D | null) ?? null
+
+    const directTarget = intersections[0]?.object as THREE.Object3D | undefined
+    let target = resolveHandleRoot(directTarget ?? null) ?? directTarget ?? null
+    let gizmoPart = (directTarget?.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
+
+    if ((!target || !gizmoPart) && runtimeObject) {
+      const nearbyHandle = findNearbyLinearHandle({
+        runtimeObject,
+        camera: options.camera,
+        canvas: options.canvas,
+        pointerClientX: options.event.clientX,
+        pointerClientY: options.event.clientY,
+      })
+      if (nearbyHandle) {
+        target = nearbyHandle
+        gizmoPart = 'center'
+      }
+    }
+
+    if (!target || !gizmoPart) {
       clearHover()
       return
     }
 
-    const target = first.object as THREE.Object3D
     const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
     const chainStartIndex = Math.trunc(Number(target.userData?.chainStartIndex))
     const chainEndIndex = Math.trunc(Number(target.userData?.chainEndIndex))
@@ -840,8 +1020,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const endpointKind = target.userData?.endpointKind === 'end' ? 'end' : 'start'
     const jointIndex = Math.trunc(Number(target.userData?.jointIndex))
     const circleKind = target.userData?.circleKind === 'radius' ? 'radius' : 'center'
-    const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
-    if (!nodeId || chainStartIndex < 0 || chainEndIndex < chainStartIndex || !gizmoPart) {
+    if (!nodeId || chainStartIndex < 0 || chainEndIndex < chainStartIndex) {
       clearHover()
       return
     }
@@ -862,6 +1041,19 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     if (hovered && hovered.handleKey === handleKey && hovered.gizmoPart === gizmoPart) {
       return
     }
+
+    if (runtimeObject && handleKind !== 'circle') {
+      applyHoverPlacement({
+        handle: target,
+        runtimeObject,
+        camera: options.camera,
+        canvas: options.canvas,
+        raycaster: options.raycaster,
+      })
+    } else {
+      clearHoverPlacement()
+    }
+
     hovered = { handleKey, gizmoPart }
     refreshHighlight()
   }

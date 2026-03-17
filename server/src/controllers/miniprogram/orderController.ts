@@ -6,6 +6,7 @@ import { VehicleModel } from '@/models/Vehicle'
 import { AppUserModel } from '@/models/AppUser'
 import { ensureMiniCheckoutUser, ensureUserId } from './utils'
 import { createOrderPayment } from '@/services/paymentService'
+import { syncOrderWithWechat } from '@/services/orderSettlementService'
 import { generateOrderNumber } from '@/utils/orderNumber'
 
 type OrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled'
@@ -30,6 +31,8 @@ interface OrderLean {
   status?: OrderStatus
   orderStatus?: OrderStatus
   paymentStatus?: PaymentStatus
+  fulfillmentStatus?: 'pending' | 'fulfilled'
+  fulfilledAt?: Date
   totalAmount: number
   paymentMethod?: string
   paymentProvider?: string
@@ -118,6 +121,73 @@ type CreateOrderBody = {
   paymentMethod?: string
   shippingAddress?: string
   metadata?: Record<string, unknown>
+}
+
+function getMiniAppId(ctx: Context): string | undefined {
+  const miniAuthUser = (ctx.state as { miniAuthUser?: { miniAppId?: string } }).miniAuthUser
+  const miniAppId = miniAuthUser?.miniAppId
+  return typeof miniAppId === 'string' ? miniAppId.trim() || undefined : undefined
+}
+
+function shouldTryActiveSync(order: OrderLean): boolean {
+  if (order.paymentStatus === 'succeeded' && order.fulfillmentStatus !== 'fulfilled') {
+    return true
+  }
+  if (order.paymentStatus === 'unpaid' || order.paymentStatus === 'processing') {
+    return true
+  }
+  return resolveOrderStatus(order) === 'pending'
+}
+
+async function reconcileOrdersForRead(orders: OrderLean[], miniAppId?: string): Promise<boolean> {
+  if (!miniAppId || !orders.length) {
+    return false
+  }
+
+  const candidates = orders.filter((order) => shouldTryActiveSync(order)).slice(0, 5)
+  if (!candidates.length) {
+    return false
+  }
+
+  let changed = false
+  for (const order of candidates) {
+    try {
+      const result = await syncOrderWithWechat({
+        orderNumber: order.orderNumber,
+        source: 'order-list-sync',
+        miniAppId,
+      })
+      changed = changed || result.changed
+    } catch (error) {
+      console.warn('[mini-orders] active order sync failed', {
+        orderNumber: order.orderNumber,
+        miniAppId,
+        error,
+      })
+    }
+  }
+  return changed
+}
+
+async function reconcileSingleOrderForRead(order: OrderLean, miniAppId?: string): Promise<boolean> {
+  if (!miniAppId || !shouldTryActiveSync(order)) {
+    return false
+  }
+  try {
+    const result = await syncOrderWithWechat({
+      orderNumber: order.orderNumber,
+      source: 'order-detail-sync',
+      miniAppId,
+    })
+    return result.changed
+  } catch (error) {
+    console.warn('[mini-orders] active order detail sync failed', {
+      orderNumber: order.orderNumber,
+      miniAppId,
+      error,
+    })
+    return false
+  }
 }
 
 function resolveOrderStatus(order: OrderLean): OrderStatus {
@@ -223,6 +293,7 @@ function buildOrderResponse(
 
 export async function listOrders(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
+  const miniAppId = getMiniAppId(ctx)
   const { status, paymentStatus } = ctx.query as { status?: string; paymentStatus?: string }
   const filter: Record<string, unknown> = { userId: new Types.ObjectId(userId) }
   if (status && ORDER_STATUS_VALUES.includes(status as OrderStatus)) {
@@ -231,7 +302,11 @@ export async function listOrders(ctx: Context): Promise<void> {
   if (paymentStatus && PAYMENT_STATUS_VALUES.includes(paymentStatus as PaymentStatus)) {
     filter.paymentStatus = paymentStatus
   }
-  const orders = (await OrderModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as OrderLean[]
+  let orders = (await OrderModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as OrderLean[]
+  const synced = await reconcileOrdersForRead(orders, miniAppId)
+  if (synced) {
+    orders = (await OrderModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as OrderLean[]
+  }
   const productIds = new Set<string>()
   orders.forEach((order) => {
     order.items.forEach((item) => {
@@ -251,14 +326,23 @@ export async function listOrders(ctx: Context): Promise<void> {
 
 export async function getOrder(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
+  const miniAppId = getMiniAppId(ctx)
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid order id')
   }
-  const order = (await OrderModel.findOne({ _id: id, userId }).lean().exec()) as OrderLean | null
+  let order = (await OrderModel.findOne({ _id: id, userId }).lean().exec()) as OrderLean | null
   if (!order) {
     ctx.throw(404, 'Order not found')
     return
+  }
+  const synced = await reconcileSingleOrderForRead(order, miniAppId)
+  if (synced) {
+    order = (await OrderModel.findOne({ _id: id, userId }).lean().exec()) as OrderLean | null
+    if (!order) {
+      ctx.throw(404, 'Order not found')
+      return
+    }
   }
   const productIds = Array.from(new Set(order.items.map((item) => item.productId.toString())))
   const productMap = await buildProductMap(productIds)

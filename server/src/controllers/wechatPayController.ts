@@ -1,15 +1,11 @@
 import type { Context } from 'koa'
 import { OrderModel } from '@/models/Order'
-import { ProductModel } from '@/models/Product'
-import { VehicleModel } from '@/models/Vehicle'
-import { UserProductModel } from '@/models/UserProduct'
-import { UserVehicleModel } from '@/models/UserVehicle'
 import {
   decryptWechatNotifyResource,
   parseWechatNotifyBody,
   verifyWechatCallbackSignature,
 } from '@/services/paymentService'
-import { addProductToWarehouse } from '@/services/warehouseService'
+import { settlePaidOrder } from '@/services/orderSettlementService'
 
 const UNPARSED_BODY = Symbol.for('unparsedBody')
 
@@ -30,59 +26,6 @@ function notifySuccess(ctx: Context): void {
   ctx.body = {
     code: 'SUCCESS',
     message: '成功',
-  }
-}
-
-async function fulfillPaidOrder(order: any): Promise<void> {
-  const now = new Date()
-  for (const item of order.items ?? []) {
-    if (!item?.productId) {
-      continue
-    }
-    const product = await ProductModel.findById(item.productId).exec()
-    if (!product) {
-      continue
-    }
-    const expiresAt = product.validityDays ? new Date(now.getTime() + product.validityDays * 86400000) : null
-    await UserProductModel.updateOne(
-      { userId: order.userId, productId: product._id },
-      {
-        $setOnInsert: {
-          userId: order.userId,
-          productId: product._id,
-        },
-        $set: {
-          state: 'unused',
-          usedAt: null,
-          expiresAt,
-          orderId: order._id,
-          metadata: order.metadata ?? null,
-          acquiredAt: now,
-        },
-      },
-      { upsert: true },
-    ).exec()
-
-    const boundVehicle = await VehicleModel.findOne({ productId: product._id }).select({ _id: 1 }).lean().exec()
-    if (boundVehicle?._id) {
-      await UserVehicleModel.updateOne(
-        { userId: order.userId, vehicleId: boundVehicle._id },
-        {
-          $setOnInsert: {
-            userId: order.userId,
-            vehicleId: boundVehicle._id,
-            ownedAt: now,
-          },
-        },
-        { upsert: true },
-      ).exec()
-    }
-
-    await addProductToWarehouse({
-      userId: order.userId.toString(),
-      product: product.toObject() as any,
-      orderId: order._id,
-    })
   }
 }
 
@@ -111,21 +54,25 @@ export async function wechatPayNotify(ctx: Context): Promise<void> {
   }
 
   if (transaction.trade_state === 'SUCCESS') {
-    if (order.paymentStatus !== 'succeeded') {
-      order.status = 'paid'
-      order.orderStatus = 'paid'
-      order.paymentStatus = 'succeeded'
-      order.transactionId = transaction.transaction_id
-      order.paidAt = transaction.success_time ? new Date(transaction.success_time) : new Date()
-      order.paymentProvider = 'wechat'
-      order.paymentMethod = order.paymentMethod || 'wechat'
-      order.paymentResult = {
-        ...(order.paymentResult ?? {}),
+    try {
+      await settlePaidOrder({
+        orderNumber: transaction.out_trade_no,
+        source: 'wechat-notify',
         notifyId: notifyBody.id,
-        success: transaction,
+        transaction,
+      })
+    } catch (error) {
+      console.error('[wechat-pay] settlement failed, wait notify retry', {
+        orderNumber: transaction.out_trade_no,
+        transactionId: transaction.transaction_id,
+        error,
+      })
+      ctx.status = 500
+      ctx.body = {
+        code: 'FAIL',
+        message: '结算失败，请重试',
       }
-      await order.save()
-      await fulfillPaidOrder(order)
+      return
     }
     notifySuccess(ctx)
     return
