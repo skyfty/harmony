@@ -8,6 +8,12 @@ interface AddProductOptions {
   product: ProductDocument
   orderId: Types.ObjectId
   quantity?: number
+}
+
+interface RemoveProductOptions {
+  userId: string
+  productId: Types.ObjectId
+  quantity?: number
   session?: ClientSession
 }
 
@@ -48,4 +54,20 @@ export async function addProductToWarehouse({ userId, product, orderId, quantity
       ...(session ? { session } : {}),
     },
   ).exec()
+}
+
+export async function removeProductFromWarehouse({ userId, productId, quantity = 1 }: RemoveProductOptions): Promise<void> {
+  const safeQuantity = Math.max(1, Math.floor(quantity))
+  const row = await WarehouseModel.findOne({
+    userId: new Types.ObjectId(userId),
+    productId,
+  }).exec()
+  if (!row) {
+    return
+  }
+
+  row.quantity = Math.max(0, row.quantity - safeQuantity)
+  row.totalPurchased = Math.max(row.totalConsumed, row.totalPurchased - safeQuantity)
+  row.updatedAt = new Date()
+  await row.save()
 }

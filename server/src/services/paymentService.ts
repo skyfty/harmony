@@ -36,6 +36,22 @@ export interface PaymentResult {
   payParams?: WechatPrepayResult
 }
 
+export interface CreateRefundOptions {
+  miniAppId?: string
+  orderNumber: string
+  refundRequestNo: string
+  reason: string
+  refundAmount: number
+  totalAmount: number
+}
+
+export interface WechatRefundResult {
+  refundId?: string
+  outRefundNo: string
+  status: string
+  raw: Record<string, unknown>
+}
+
 type WechatNotifyResource = {
   algorithm: string
   ciphertext: string
@@ -79,6 +95,24 @@ export type WechatTransaction = {
   }
   payer?: {
     openid?: string
+  }
+}
+
+export type WechatRefundTransaction = {
+  refund_id: string
+  out_refund_no: string
+  out_trade_no: string
+  refund_status: 'SUCCESS' | 'CLOSED' | 'ABNORMAL' | 'PROCESSING' | string
+  success_time?: string
+  amount?: {
+    refund?: number
+    total?: number
+    payer_total?: number
+    payer_refund?: number
+    settlement_refund?: number
+    settlement_total?: number
+    discount_refund?: number
+    currency?: string
   }
 }
 

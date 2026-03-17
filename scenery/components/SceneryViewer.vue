@@ -553,7 +553,6 @@ import {
 		extractSkycubeZipFaces,
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
-  applyGroundPaintSidecarsToSceneDocument,
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
   type EnvironmentSettings,

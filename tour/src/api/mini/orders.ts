@@ -70,3 +70,13 @@ export async function payOrder(orderId: string): Promise<PayOrderResult> {
     body: {},
   })
 }
+
+export async function applyOrderRefund(orderId: string, reason: string): Promise<OrderDetail> {
+  await ensureMiniAuth()
+  return await miniRequest<OrderDetail>(`/orders/${encodeURIComponent(orderId)}/refund/apply`, {
+    method: 'POST',
+    body: {
+      reason,
+    },
+  })
+}

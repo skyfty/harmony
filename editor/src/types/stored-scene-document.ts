@@ -1,4 +1,5 @@
 import type {
+  AssetManifest,
   GroundSettings,
   SceneNode,
   AssetIndexEntry,
@@ -35,6 +36,7 @@ export interface StoredSceneDocument {
   createdAt: string
   updatedAt: string
   assetCatalog: Record<string, ProjectAsset[]>
+  assetManifest?: AssetManifest | null
   assetIndex: Record<string, AssetIndexEntry>
   packageAssetMap: Record<string, string>
   resourceSummary?: SceneResourceSummary

@@ -1,17 +1,15 @@
 import { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema'
 import type { AssetType } from '@harmony/schema'
-import { TerrainScatterCategories } from '@harmony/schema/terrain-scatter'
-import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type {
   AssetCategory as AssetCategoryDto,
   AssetDirectory,
-  AssetManifest as AssetManifestDto,
-  AssetManifestEntry as AssetManifestEntryDto,
   AssetSeries,
   AssetSummary,
   AssetTag,
   AssetTagSummary,
-} from '@harmony/schema/asset-api'
+} from '@harmony/schema'
+import { TerrainScatterCategories } from '@harmony/schema/terrain-scatter'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { Context } from 'koa'
 import path from 'node:path'
 import fs from 'fs-extra'
@@ -42,6 +40,7 @@ import {
 } from '@/services/assetCategoryService'
 import { appConfig } from '@/config/env'
 const MANIFEST_FILENAME = 'asset-manifest.json'
+const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
 
 const ASSET_COLORS: Record<string, string> = {
@@ -108,6 +107,65 @@ type AssetData = {
 }
 
 type AssetSource = LeanAsset | AssetData
+
+type AssetManifestResourceDto = {
+  kind: 'embedded' | 'remote' | 'local' | 'inline' | 'manifest'
+  url?: string | null
+  fileKey?: string | null
+  path?: string | null
+  mimeType?: string | null
+  exportable?: boolean
+  metadata?: Record<string, unknown>
+}
+
+type AssetManifestAssetDto = {
+  id: string
+  name: string
+  type: AssetType
+  categoryId?: string
+  categoryPath?: CategoryPathItemDto[]
+  categoryPathString?: string
+  tags: AssetTagSummary[]
+  tagIds: string[]
+  seriesId?: string | null
+  seriesName?: string | null
+  series?: AssetSeries | null
+  terrainScatterPreset?: TerrainScatterCategory | null
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
+  downloadUrl: string
+  thumbnailUrl: string | null
+  resource?: AssetManifestResourceDto | null
+  thumbnail?: AssetManifestResourceDto | null
+  description: string | null
+  createdAt: string
+  updatedAt: string
+  size: number
+}
+
+type AssetManifestDirectoryDto = {
+  id: string
+  name: string
+  parentId: string | null
+  directoryIds: string[]
+  assetIds: string[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+type AssetManifestDto = {
+  format: 'harmony-asset-manifest'
+  version: 2
+  generatedAt: string
+  rootDirectoryId: string
+  directoriesById: Record<string, AssetManifestDirectoryDto>
+  assetsById: Record<string, AssetManifestAssetDto>
+}
 
 type AssetListQuery = {
   page: number
@@ -716,8 +774,10 @@ function mapAssetTagDocument(tag: AssetTagDocumentLike): AssetTag {
   }
 }
 
-function mapManifestEntry(asset: AssetSource, categoryLookup?: Map<string, CategoryInfo>): AssetManifestEntryDto {
+function mapManifestAsset(asset: AssetSource, categoryLookup?: Map<string, CategoryInfo>): AssetManifestAssetDto {
   const response = mapAssetDocument(asset, categoryLookup)
+  const assetFileKey = resolveAssetFileKey(asset)
+  const thumbnailFileKey = resolveThumbnailFileKey(asset)
   return {
     id: response.id,
     name: response.name,
@@ -740,11 +800,61 @@ function mapManifestEntry(asset: AssetSource, categoryLookup?: Map<string, Categ
     imageHeight: response.imageHeight ?? null,
     downloadUrl: response.downloadUrl,
     thumbnailUrl: response.thumbnailUrl ?? null,
+    resource: {
+      kind: 'remote',
+      url: response.downloadUrl,
+      fileKey: assetFileKey,
+      mimeType: response.mimeType ?? null,
+      exportable: true,
+    },
+    thumbnail: response.thumbnailUrl
+      ? {
+          kind: 'remote',
+          url: response.thumbnailUrl,
+          fileKey: thumbnailFileKey,
+          exportable: false,
+        }
+      : null,
     description: response.description ?? null,
     createdAt: response.createdAt,
     updatedAt: response.updatedAt,
     size: response.size,
   }
+}
+
+function buildManifestDirectories(
+  categoryTree: CategoryTreeNode[],
+  assetIdsByCategoryId: Map<string, string[]>,
+): Record<string, AssetManifestDirectoryDto> {
+  const generatedAt = new Date().toISOString()
+  const directoriesById: Record<string, AssetManifestDirectoryDto> = {
+    [MANIFEST_ROOT_DIRECTORY_ID]: {
+      id: MANIFEST_ROOT_DIRECTORY_ID,
+      name: 'Assets',
+      parentId: null,
+      directoryIds: categoryTree.map((node) => node.id),
+      assetIds: [],
+      createdAt: generatedAt,
+      updatedAt: generatedAt,
+    },
+  }
+
+  const visit = (node: CategoryTreeNode, parentId: string) => {
+    directoriesById[node.id] = {
+      id: node.id,
+      name: node.name,
+      parentId,
+      directoryIds: node.children.map((child) => child.id),
+      assetIds: [...(assetIdsByCategoryId.get(node.id) ?? [])],
+      createdAt: node.createdAt,
+      updatedAt: node.updatedAt,
+    }
+    node.children.forEach((child) => visit(child, node.id))
+  }
+
+  categoryTree.forEach((node) => visit(node, MANIFEST_ROOT_DIRECTORY_ID))
+
+  return directoriesById
 }
 
 async function readManifestFromDisk(): Promise<AssetManifestDto | null> {
@@ -768,6 +878,7 @@ async function writeManifestToDisk(manifest: AssetManifestDto): Promise<void> {
 }
 
 async function buildManifest(): Promise<AssetManifestDto> {
+  await ensureRootCategory()
   const assets = (await AssetModel.find()
     .sort({ updatedAt: -1 })
     .populate('tags')
@@ -775,10 +886,39 @@ async function buildManifest(): Promise<AssetManifestDto> {
     .lean()
     .exec()) as LeanAsset[]
   const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
-  const entries = assets.map((asset) => mapManifestEntry(asset, categoryLookup))
+  const manifestAssets = assets.map((asset) => mapManifestAsset(asset, categoryLookup))
+  const assetsById = manifestAssets.reduce<Record<string, AssetManifestAssetDto>>((acc, asset) => {
+    acc[asset.id] = asset
+    return acc
+  }, {})
+  const assetIdsByCategoryId = manifestAssets.reduce<Map<string, string[]>>((acc, asset) => {
+    const categoryId = typeof asset.categoryId === 'string' && asset.categoryId.length ? asset.categoryId : MANIFEST_ROOT_DIRECTORY_ID
+    const bucket = acc.get(categoryId)
+    if (bucket) {
+      bucket.push(asset.id)
+    } else {
+      acc.set(categoryId, [asset.id])
+    }
+    return acc
+  }, new Map<string, string[]>())
+  const categoryTree = await getCategoryTree()
+  const directoriesById = buildManifestDirectories(categoryTree, assetIdsByCategoryId)
+
+  const rootAssets = assetIdsByCategoryId.get(MANIFEST_ROOT_DIRECTORY_ID)
+  if (rootAssets?.length) {
+    directoriesById[MANIFEST_ROOT_DIRECTORY_ID] = {
+      ...directoriesById[MANIFEST_ROOT_DIRECTORY_ID],
+      assetIds: [...rootAssets],
+    }
+  }
+
   return {
+    format: 'harmony-asset-manifest',
+    version: 2,
     generatedAt: new Date().toISOString(),
-    assets: entries,
+    rootDirectoryId: MANIFEST_ROOT_DIRECTORY_ID,
+    directoriesById,
+    assetsById,
   }
 }
 

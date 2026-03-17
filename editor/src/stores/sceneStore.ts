@@ -89,6 +89,9 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
 import type {
+  AssetManifest,
+  AssetManifestAsset,
+  AssetManifestDirectory,
   ClipboardEntry,
   SceneMaterialTextureSlot,
   SceneSkyboxSettings,
@@ -207,6 +210,7 @@ import {
 } from '@/utils/aiModelMesh'
 
 import {
+  ASSET_CATEGORY_CONFIG,
   cloneAssetList,
   cloneProjectTree,
   createEmptyAssetCatalog,
@@ -5472,6 +5476,444 @@ function cloneAssetCatalog(catalog: Record<string, ProjectAsset[]>): Record<stri
   return clone
 }
 
+const SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID = 'scene-assets-root'
+
+const sceneAssetCategoryLabelLookup = ASSET_CATEGORY_CONFIG.reduce<Record<string, string>>((acc, category) => {
+  acc[category.id] = category.label
+  return acc
+}, {})
+
+function inferAssetManifestResourceKind(url: string): 'inline' | 'local' | 'remote' | 'manifest' {
+  const normalized = url.trim().toLowerCase()
+  if (!normalized.length) {
+    return 'manifest'
+  }
+  if (normalized.startsWith('data:')) {
+    return 'inline'
+  }
+  if (normalized.startsWith('blob:') || normalized.startsWith('indexeddb:')) {
+    return 'local'
+  }
+  if (normalized.startsWith('http://') || normalized.startsWith('https://') || normalized.startsWith('/')) {
+    return 'remote'
+  }
+  return 'manifest'
+}
+
+function mapProjectAssetToManifestAsset(
+  asset: ProjectAsset,
+  categoryId: string,
+  categoryName: string,
+  generatedAt: string,
+): AssetManifestAsset {
+  const downloadUrl = typeof asset.downloadUrl === 'string' ? asset.downloadUrl : ''
+  const thumbnailUrl = typeof asset.thumbnail === 'string' && asset.thumbnail.trim().length ? asset.thumbnail : null
+  const tagNames = Array.isArray(asset.tags) ? asset.tags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0) : []
+  const tagIds = Array.isArray(asset.tagIds) ? asset.tagIds.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0) : []
+
+  return {
+    id: asset.id,
+    name: asset.name,
+    type: asset.type,
+    categoryId: asset.categoryId ?? categoryId,
+    categoryPath: asset.categoryPath ?? [{ id: categoryId, name: categoryName }],
+    categoryPathString: asset.categoryPathString ?? categoryName,
+    tags: tagNames.map((name, index) => ({
+      id: tagIds[index] ?? `${asset.id}:tag:${index}`,
+      name,
+    })),
+    tagIds,
+    seriesId: asset.seriesId ?? null,
+    seriesName: asset.seriesName ?? null,
+    color: asset.color ?? null,
+    dimensionLength: asset.dimensionLength ?? null,
+    dimensionWidth: asset.dimensionWidth ?? null,
+    dimensionHeight: asset.dimensionHeight ?? null,
+    sizeCategory: asset.sizeCategory ?? null,
+    imageWidth: asset.imageWidth ?? null,
+    imageHeight: asset.imageHeight ?? null,
+    downloadUrl,
+    thumbnailUrl,
+    resource: {
+      kind: inferAssetManifestResourceKind(downloadUrl),
+      url: downloadUrl || null,
+      exportable: true,
+    },
+    thumbnail: thumbnailUrl
+      ? {
+          kind: inferAssetManifestResourceKind(thumbnailUrl),
+          url: thumbnailUrl,
+          exportable: false,
+        }
+      : null,
+    description: asset.description ?? null,
+    createdAt: asset.createdAt ?? generatedAt,
+    updatedAt: asset.updatedAt ?? generatedAt,
+    size: 0,
+    terrainScatterPreset: asset.terrainScatterPreset ?? null,
+  }
+}
+
+function buildSceneAssetManifest(assetCatalog: Record<string, ProjectAsset[]>): AssetManifest {
+  const generatedAt = new Date().toISOString()
+  const directoriesById: Record<string, AssetManifestDirectory> = {
+    [SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID]: {
+      id: SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID,
+      name: 'Scene Assets',
+      parentId: null,
+      directoryIds: [],
+      assetIds: [],
+      createdAt: generatedAt,
+      updatedAt: generatedAt,
+    },
+  }
+  const assetsById: Record<string, AssetManifestAsset> = {}
+
+  Object.entries(assetCatalog).forEach(([categoryId, assets]) => {
+    if (!Array.isArray(assets) || !assets.length) {
+      return
+    }
+    const categoryName = sceneAssetCategoryLabelLookup[categoryId] ?? categoryId
+    directoriesById[categoryId] = {
+      id: categoryId,
+      name: categoryName,
+      parentId: SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID,
+      directoryIds: [],
+      assetIds: assets.map((asset) => asset.id),
+      createdAt: generatedAt,
+      updatedAt: generatedAt,
+    }
+    directoriesById[SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID]!.directoryIds.push(categoryId)
+    assets.forEach((asset) => {
+      assetsById[asset.id] = mapProjectAssetToManifestAsset(asset, categoryId, categoryName, generatedAt)
+    })
+  })
+
+  return {
+    format: 'harmony-asset-manifest',
+    version: 2,
+    generatedAt,
+    rootDirectoryId: SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID,
+    directoriesById,
+    assetsById,
+  }
+}
+
+function buildCatalogAssetMap(catalog: Record<string, ProjectAsset[]>): Map<string, ProjectAsset> {
+  const map = new Map<string, ProjectAsset>()
+  Object.values(catalog).forEach((assets) => {
+    assets.forEach((asset) => {
+      map.set(asset.id, asset)
+    })
+  })
+  return map
+}
+
+function findManifestDirectoryPath(manifest: AssetManifest, directoryId: string | null | undefined): AssetManifestDirectory[] {
+  if (!directoryId) {
+    return []
+  }
+  const chain: AssetManifestDirectory[] = []
+  const visited = new Set<string>()
+  let currentId: string | null = directoryId
+  while (currentId && !visited.has(currentId)) {
+    const directory = manifest.directoriesById[currentId]
+    if (!directory) {
+      break
+    }
+    chain.unshift(directory)
+    visited.add(currentId)
+    currentId = directory.parentId
+  }
+  return chain
+}
+
+function mapManifestAssetToProjectAsset(
+  manifest: AssetManifest,
+  manifestAsset: AssetManifestAsset,
+  existingAsset: ProjectAsset | null,
+  directoryId: string,
+): ProjectAsset {
+  const pathDirectories = findManifestDirectoryPath(manifest, directoryId)
+  const categoryPath = pathDirectories
+    .filter((directory) => directory.id !== manifest.rootDirectoryId)
+    .map((directory) => ({ id: directory.id, name: directory.name }))
+  const categoryPathString = categoryPath.map((item) => item.name).join('/')
+  const downloadUrl = manifestAsset.resource?.url ?? manifestAsset.downloadUrl
+  const thumbnailUrl = manifestAsset.thumbnail?.url ?? manifestAsset.thumbnailUrl ?? null
+
+  return {
+    id: manifestAsset.id,
+    name: manifestAsset.name,
+    extension: existingAsset?.extension ?? extractExtension(downloadUrl) ?? null,
+    categoryId: directoryId,
+    categoryPath,
+    categoryPathString,
+    type: manifestAsset.type,
+    description: manifestAsset.description ?? undefined,
+    downloadUrl,
+    previewColor: existingAsset?.previewColor ?? resolvePreviewColor(manifestAsset.type),
+    thumbnail: thumbnailUrl,
+    tags: manifestAsset.tags?.map((tag) => tag.name).filter((name): name is string => typeof name === 'string' && name.length > 0),
+    tagIds: [...manifestAsset.tagIds],
+    color: manifestAsset.color ?? undefined,
+    dimensionLength: manifestAsset.dimensionLength ?? undefined,
+    dimensionWidth: manifestAsset.dimensionWidth ?? undefined,
+    dimensionHeight: manifestAsset.dimensionHeight ?? undefined,
+    sizeCategory: manifestAsset.sizeCategory ?? undefined,
+    imageWidth: manifestAsset.imageWidth ?? undefined,
+    imageHeight: manifestAsset.imageHeight ?? undefined,
+    seriesId: manifestAsset.seriesId ?? undefined,
+    seriesName: manifestAsset.seriesName ?? undefined,
+    terrainScatterPreset: manifestAsset.terrainScatterPreset ?? undefined,
+    createdAt: manifestAsset.createdAt,
+    updatedAt: manifestAsset.updatedAt,
+    gleaned: existingAsset?.gleaned ?? true,
+  }
+}
+
+function buildAssetCatalogFromManifest(
+  manifest: AssetManifest,
+  existingCatalog: Record<string, ProjectAsset[]>,
+): Record<string, ProjectAsset[]> {
+  const existingAssetMap = buildCatalogAssetMap(existingCatalog)
+  const catalog: Record<string, ProjectAsset[]> = {}
+
+  Object.values(manifest.directoriesById).forEach((directory) => {
+    catalog[directory.id] = directory.assetIds
+      .map((assetId) => manifest.assetsById[assetId])
+      .filter((asset): asset is AssetManifestAsset => !!asset)
+      .map((asset) => mapManifestAssetToProjectAsset(manifest, asset, existingAssetMap.get(asset.id) ?? null, directory.id))
+  })
+
+  return catalog
+}
+
+function buildLocalAssetTreeFromManifest(
+  manifest: AssetManifest,
+  catalog: Record<string, ProjectAsset[]>,
+  directoryId: string,
+): ProjectDirectory | null {
+  const directory = manifest.directoriesById[directoryId]
+  if (!directory) {
+    return null
+  }
+
+  const childDirectories = directory.directoryIds
+    .map((childId) => buildLocalAssetTreeFromManifest(manifest, catalog, childId))
+    .filter((entry): entry is ProjectDirectory => !!entry)
+
+  const projectDirectoryId = directory.id === manifest.rootDirectoryId ? ASSETS_ROOT_DIRECTORY_ID : directory.id
+
+  return {
+    id: projectDirectoryId,
+    name: directory.id === manifest.rootDirectoryId ? 'Assets' : directory.name,
+    children: childDirectories.length ? childDirectories : undefined,
+    assets: (catalog[directory.id] ?? []).map((asset) => ({ ...asset })),
+  }
+}
+
+function buildSceneProjectTree(
+  assetManifest: AssetManifest | null,
+  assetCatalog: Record<string, ProjectAsset[]>,
+  assetIndex: Record<string, AssetIndexEntry>,
+  packageDirectoryCache: Record<string, ProjectDirectory[]>,
+): ProjectDirectory[] {
+  const fallbackTree = createProjectTreeFromCache(
+    buildVisibleAssetCatalog(assetCatalog, assetIndex),
+    packageDirectoryCache,
+  )
+  const packagesBranch = fallbackTree.find((directory) => directory.id === PACKAGES_ROOT_DIRECTORY_ID) ?? fallbackTree[1]
+  if (!assetManifest) {
+    return packagesBranch ? [fallbackTree[0]!, packagesBranch] : fallbackTree
+  }
+  const localBranch = buildLocalAssetTreeFromManifest(assetManifest, assetCatalog, assetManifest.rootDirectoryId)
+  if (!localBranch) {
+    return packagesBranch ? [fallbackTree[0]!, packagesBranch] : fallbackTree
+  }
+  return packagesBranch ? [localBranch, packagesBranch] : [localBranch]
+}
+
+function normalizeAssetIndexCategoryIds(
+  assetIndex: Record<string, AssetIndexEntry>,
+  catalog: Record<string, ProjectAsset[]>,
+): Record<string, AssetIndexEntry> {
+  const nextIndex: Record<string, AssetIndexEntry> = { ...assetIndex }
+  Object.entries(catalog).forEach(([categoryId, assets]) => {
+    assets.forEach((asset) => {
+      const current = nextIndex[asset.id]
+      if (current) {
+        nextIndex[asset.id] = { ...current, categoryId }
+      }
+    })
+  })
+  return nextIndex
+}
+
+function cleanupManifestDirectoryReferences(manifest: AssetManifest): AssetManifest {
+  const directoriesById: Record<string, AssetManifestDirectory> = Object.fromEntries(
+    Object.entries(manifest.directoriesById).map(([directoryId, directory]) => [
+      directoryId,
+      {
+        ...directory,
+        directoryIds: directory.directoryIds.filter((childId, index, array) => childId in manifest.directoriesById && array.indexOf(childId) === index),
+        assetIds: directory.assetIds.filter((assetId, index, array) => assetId in manifest.assetsById && array.indexOf(assetId) === index),
+      },
+    ]),
+  )
+  return {
+    ...manifest,
+    directoriesById,
+  }
+}
+
+function synchronizeManifestWithCatalog(
+  manifest: AssetManifest | null,
+  nextCatalog: Record<string, ProjectAsset[]>,
+  options: { preferredDirectoryId?: string | null } = {},
+): AssetManifest {
+  const baseManifest = cloneAssetManifest(manifest) ?? buildSceneAssetManifest(nextCatalog)
+  const nextManifest = cleanupManifestDirectoryReferences(baseManifest)
+  const nextCatalogMap = buildCatalogAssetMap(nextCatalog)
+  const knownAssetIds = new Set<string>(Object.keys(nextManifest.assetsById))
+
+  Object.values(nextManifest.directoriesById).forEach((directory) => {
+    directory.assetIds = directory.assetIds.filter((assetId) => nextCatalogMap.has(assetId))
+  })
+
+  knownAssetIds.forEach((assetId) => {
+    if (!nextCatalogMap.has(assetId)) {
+      delete nextManifest.assetsById[assetId]
+    }
+  })
+
+  nextCatalogMap.forEach((asset, assetId) => {
+    const preferredDirectoryId = options.preferredDirectoryId && options.preferredDirectoryId in nextManifest.directoriesById
+      ? options.preferredDirectoryId
+      : (typeof asset.categoryId === 'string' && asset.categoryId in nextManifest.directoriesById ? asset.categoryId : nextManifest.rootDirectoryId)
+
+    if (!nextManifest.assetsById[assetId]) {
+      nextManifest.assetsById[assetId] = mapProjectAssetToManifestAsset(asset, preferredDirectoryId, nextManifest.directoriesById[preferredDirectoryId]?.name ?? preferredDirectoryId, nextManifest.generatedAt)
+      const directory = nextManifest.directoriesById[preferredDirectoryId]
+      if (directory && !directory.assetIds.includes(assetId)) {
+        directory.assetIds.push(assetId)
+      }
+    } else {
+      const existing = nextManifest.assetsById[assetId]!
+      nextManifest.assetsById[assetId] = {
+        ...existing,
+        ...mapProjectAssetToManifestAsset(asset, existing.categoryId ?? preferredDirectoryId, nextManifest.directoriesById[existing.categoryId ?? preferredDirectoryId]?.name ?? asset.name, existing.updatedAt ?? nextManifest.generatedAt),
+      }
+    }
+  })
+
+  return cleanupManifestDirectoryReferences(nextManifest)
+}
+
+function resolveManifestDirectoryIdFromProjectDirectoryId(
+  manifest: AssetManifest | null,
+  projectDirectoryId: string | null | undefined,
+): string | null {
+  if (!manifest || !projectDirectoryId) {
+    return null
+  }
+  if (projectDirectoryId === ASSETS_ROOT_DIRECTORY_ID) {
+    return manifest.rootDirectoryId
+  }
+  return projectDirectoryId in manifest.directoriesById ? projectDirectoryId : null
+}
+
+function findManifestDirectoryContainingAsset(manifest: AssetManifest, assetId: string): string | null {
+  const match = Object.values(manifest.directoriesById).find((directory) => directory.assetIds.includes(assetId))
+  return match?.id ?? null
+}
+
+function isManifestDirectoryDescendant(manifest: AssetManifest, ancestorId: string, candidateId: string): boolean {
+  if (ancestorId === candidateId) {
+    return true
+  }
+  const visited = new Set<string>()
+  let currentId: string | null = candidateId
+  while (currentId && !visited.has(currentId)) {
+    if (currentId === ancestorId) {
+      return true
+    }
+    visited.add(currentId)
+    currentId = manifest.directoriesById[currentId]?.parentId ?? null
+  }
+  return false
+}
+
+function buildUniqueDirectoryName(manifest: AssetManifest, parentId: string, desiredName: string, selfId?: string): string {
+  const trimmed = desiredName.trim() || 'New Folder'
+  const parent = manifest.directoriesById[parentId]
+  const siblingNames = new Set(
+    (parent?.directoryIds ?? [])
+      .filter((directoryId) => directoryId !== selfId)
+      .map((directoryId) => manifest.directoriesById[directoryId]?.name.trim().toLowerCase())
+      .filter((name): name is string => !!name),
+  )
+  if (!siblingNames.has(trimmed.toLowerCase())) {
+    return trimmed
+  }
+  let suffix = 2
+  let candidate = `${trimmed} (${suffix})`
+  while (siblingNames.has(candidate.toLowerCase())) {
+    suffix += 1
+    candidate = `${trimmed} (${suffix})`
+  }
+  return candidate
+}
+
+function cloneAssetManifest(manifest: AssetManifest | null | undefined): AssetManifest | null {
+  if (!manifest) {
+    return null
+  }
+  return {
+    format: manifest.format,
+    version: manifest.version,
+    generatedAt: manifest.generatedAt,
+    rootDirectoryId: manifest.rootDirectoryId,
+    directoriesById: Object.fromEntries(
+      Object.entries(manifest.directoriesById).map(([directoryId, directory]) => [
+        directoryId,
+        {
+          ...directory,
+          directoryIds: [...directory.directoryIds],
+          assetIds: [...directory.assetIds],
+        },
+      ]),
+    ),
+    assetsById: Object.fromEntries(
+      Object.entries(manifest.assetsById).map(([assetId, asset]) => [
+        assetId,
+        {
+          ...asset,
+          categoryPath: asset.categoryPath ? asset.categoryPath.map((item) => ({ ...item })) : undefined,
+          tags: asset.tags ? asset.tags.map((item) => ({ ...item })) : [],
+          tagIds: [...asset.tagIds],
+          resource: asset.resource ? { ...asset.resource } : null,
+          thumbnail: asset.thumbnail ? { ...asset.thumbnail } : null,
+        },
+      ]),
+    ),
+  }
+}
+
+function isStoredAssetManifest(value: unknown): value is AssetManifest {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const manifest = value as Partial<AssetManifest>
+  return manifest.format === 'harmony-asset-manifest'
+    && manifest.version === 2
+    && typeof manifest.rootDirectoryId === 'string'
+    && !!manifest.directoriesById
+    && typeof manifest.directoriesById === 'object'
+    && !!manifest.assetsById
+    && typeof manifest.assetsById === 'object'
+}
+
 function cloneAssetIndex(index: Record<string, AssetIndexEntry>): Record<string, AssetIndexEntry> {
   const clone: Record<string, AssetIndexEntry> = {}
   Object.entries(index).forEach(([assetId, entry]) => {
@@ -5564,12 +6006,13 @@ function migrateScenePersistedState(
 }
 
 function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
-  store.assetCatalog = cloneAssetCatalog(scene.assetCatalog)
-  store.assetIndex = cloneAssetIndex(scene.assetIndex)
+  store.assetManifest = cloneAssetManifest(scene.assetManifest) ?? buildSceneAssetManifest(scene.assetCatalog)
+  store.assetCatalog = buildAssetCatalogFromManifest(store.assetManifest, cloneAssetCatalog(scene.assetCatalog))
+  store.assetIndex = normalizeAssetIndexCategoryIds(cloneAssetIndex(scene.assetIndex), store.assetCatalog)
   ensureBuiltinWallPresetAssets(store.assetCatalog, store.assetIndex)
   store.packageAssetMap = clonePackageAssetMap(scene.packageAssetMap)
   store.materials = cloneSceneMaterials(Array.isArray(scene.materials) ? scene.materials : initialMaterials)
-  const nextTree = createProjectTreeFromCache(store.assetCatalog, store.packageDirectoryCache)
+  const nextTree = buildSceneProjectTree(store.assetManifest, store.assetCatalog, store.assetIndex, store.packageDirectoryCache)
   store.projectTree = nextTree
   if (store.activeDirectoryId && !findDirectory(nextTree, store.activeDirectoryId)) {
     store.activeDirectoryId = defaultDirectoryId
@@ -6113,6 +6556,7 @@ function createSceneDocument(
     createdAt?: string
     updatedAt?: string
     assetCatalog?: Record<string, ProjectAsset[]>
+    assetManifest?: AssetManifest | null
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
     resourceSummary?: SceneResourceSummary
@@ -6157,6 +6601,7 @@ function createSceneDocument(
   const createdAt = options.createdAt ?? now
   const updatedAt = options.updatedAt ?? createdAt
   const assetCatalog = options.assetCatalog ? cloneAssetCatalog(options.assetCatalog) : createEmptyAssetCatalog()
+  const assetManifest = cloneAssetManifest(options.assetManifest) ?? buildSceneAssetManifest(assetCatalog)
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
   let resourceSummary: SceneResourceSummary | undefined
@@ -6189,6 +6634,7 @@ function createSceneDocument(
     createdAt,
     updatedAt,
     assetCatalog,
+    assetManifest,
     assetIndex,
     packageAssetMap,
     resourceSummary,
@@ -6259,6 +6705,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     createdAt: meta.createdAt,
     updatedAt: now,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
+    assetManifest: buildSceneAssetManifest(store.assetCatalog),
     assetIndex: cloneAssetIndex(store.assetIndex),
     packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
     planningData: normalizedPlanningData ?? undefined,
@@ -6335,6 +6782,7 @@ function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument)
 function createInitialSceneState(): SceneState {
   const assetCatalog = cloneAssetCatalog(initialAssetCatalog)
   const assetIndex = cloneAssetIndex(initialAssetIndex)
+  const assetManifest = buildSceneAssetManifest(assetCatalog)
   const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
   const viewportSettings = cloneViewportSettings(defaultViewportSettings)
   const initialEnvironment = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS)
@@ -6358,11 +6806,12 @@ function createInitialSceneState(): SceneState {
     selectedRoadSegment: null,
     activeTool: 'select',
     assetCatalog,
+    assetManifest,
     assetIndex,
     packageAssetMap: {},
     packageDirectoryCache,
     packageDirectoryLoaded: {},
-    projectTree: createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog, assetIndex), packageDirectoryCache),
+    projectTree: buildSceneProjectTree(assetManifest, assetCatalog, assetIndex, packageDirectoryCache),
     activeDirectoryId: defaultDirectoryId,
     selectedAssetId: null,
     camera: cloneCameraState(defaultCameraState),
@@ -9484,8 +9933,10 @@ export const useSceneStore = defineStore('scene', {
     },
     // Helper: rebuild project tree from current catalog + package directory cache
     refreshProjectTree() {
-      this.projectTree = createProjectTreeFromCache(
-        buildVisibleAssetCatalog(this.assetCatalog, this.assetIndex),
+      this.projectTree = buildSceneProjectTree(
+        this.assetManifest,
+        this.assetCatalog,
+        this.assetIndex,
         this.packageDirectoryCache,
       )
     },
@@ -9504,13 +9955,26 @@ export const useSceneStore = defineStore('scene', {
       options?: {
         nextIndex?: Record<string, AssetIndexEntry>
         nextPackageMap?: Record<string, string>
+        nextManifest?: AssetManifest | null
+        preferredDirectoryId?: string | null
         commitSnapshot?: boolean
         updateNodes?: boolean
       },
     ) {
-      this.assetCatalog = nextCatalog
+      const nextManifest = options?.nextManifest
+        ? cloneAssetManifest(options.nextManifest)
+        : synchronizeManifestWithCatalog(this.assetManifest, nextCatalog, {
+            preferredDirectoryId: options?.preferredDirectoryId,
+          })
+      const normalizedCatalog = nextManifest
+        ? buildAssetCatalogFromManifest(nextManifest, nextCatalog)
+        : nextCatalog
+      this.assetManifest = nextManifest
+      this.assetCatalog = normalizedCatalog
       if (options?.nextIndex) {
-        this.assetIndex = options.nextIndex
+        this.assetIndex = normalizeAssetIndexCategoryIds(options.nextIndex, normalizedCatalog)
+      } else {
+        this.assetIndex = normalizeAssetIndexCategoryIds(this.assetIndex, normalizedCatalog)
       }
       if (options?.nextPackageMap) {
         this.packageAssetMap = options.nextPackageMap
@@ -9533,6 +9997,202 @@ export const useSceneStore = defineStore('scene', {
         })
       })
       return map
+    },
+    createAssetDirectory(name: string, parentProjectDirectoryId?: string | null): string | null {
+      const manifest = cloneAssetManifest(this.assetManifest)
+      if (!manifest) {
+        return null
+      }
+      const parentId = resolveManifestDirectoryIdFromProjectDirectoryId(
+        manifest,
+        parentProjectDirectoryId ?? this.activeDirectoryId ?? ASSETS_ROOT_DIRECTORY_ID,
+      ) ?? manifest.rootDirectoryId
+      const parent = manifest.directoriesById[parentId]
+      if (!parent) {
+        return null
+      }
+      const directoryId = generateUuid()
+      const resolvedName = buildUniqueDirectoryName(manifest, parentId, name)
+      manifest.directoriesById[directoryId] = {
+        id: directoryId,
+        name: resolvedName,
+        parentId,
+        directoryIds: [],
+        assetIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+      parent.directoryIds = [...parent.directoryIds, directoryId]
+      this.applyCatalogUpdate(this.assetCatalog, {
+        nextManifest: manifest,
+        commitSnapshot: true,
+        updateNodes: false,
+      })
+      this.setActiveDirectory(directoryId)
+      return directoryId
+    },
+    renameAssetDirectory(projectDirectoryId: string, name: string): boolean {
+      const manifest = cloneAssetManifest(this.assetManifest)
+      const directoryId = resolveManifestDirectoryIdFromProjectDirectoryId(manifest, projectDirectoryId)
+      if (!manifest || !directoryId || directoryId === manifest.rootDirectoryId) {
+        return false
+      }
+      const directory = manifest.directoriesById[directoryId]
+      if (!directory) {
+        return false
+      }
+      const parentId = directory.parentId ?? manifest.rootDirectoryId
+      const resolvedName = buildUniqueDirectoryName(manifest, parentId, name, directoryId)
+      if (resolvedName === directory.name) {
+        return false
+      }
+      directory.name = resolvedName
+      directory.updatedAt = new Date().toISOString()
+      this.applyCatalogUpdate(this.assetCatalog, {
+        nextManifest: manifest,
+        commitSnapshot: true,
+        updateNodes: false,
+      })
+      return true
+    },
+    moveAssetDirectory(projectDirectoryId: string, targetProjectDirectoryId: string): boolean {
+      const manifest = cloneAssetManifest(this.assetManifest)
+      const directoryId = resolveManifestDirectoryIdFromProjectDirectoryId(manifest, projectDirectoryId)
+      const targetDirectoryId = resolveManifestDirectoryIdFromProjectDirectoryId(manifest, targetProjectDirectoryId)
+      if (!manifest || !directoryId || !targetDirectoryId || directoryId === manifest.rootDirectoryId) {
+        return false
+      }
+      if (directoryId === targetDirectoryId || isManifestDirectoryDescendant(manifest, directoryId, targetDirectoryId)) {
+        return false
+      }
+      const directory = manifest.directoriesById[directoryId]
+      const currentParent = directory?.parentId ? manifest.directoriesById[directory.parentId] : null
+      const targetParent = manifest.directoriesById[targetDirectoryId]
+      if (!directory || !targetParent) {
+        return false
+      }
+      if (directory.parentId === targetDirectoryId) {
+        return false
+      }
+      if (currentParent) {
+        currentParent.directoryIds = currentParent.directoryIds.filter((id) => id !== directoryId)
+      }
+      directory.parentId = targetDirectoryId
+      directory.name = buildUniqueDirectoryName(manifest, targetDirectoryId, directory.name, directoryId)
+      directory.updatedAt = new Date().toISOString()
+      targetParent.directoryIds = [...targetParent.directoryIds, directoryId]
+      this.applyCatalogUpdate(this.assetCatalog, {
+        nextManifest: manifest,
+        commitSnapshot: true,
+        updateNodes: false,
+      })
+      this.setActiveDirectory(directoryId)
+      return true
+    },
+    deleteAssetDirectory(projectDirectoryId: string): { removedDirectoryIds: string[]; removedAssetIds: string[] } {
+      const manifest = cloneAssetManifest(this.assetManifest)
+      const directoryId = resolveManifestDirectoryIdFromProjectDirectoryId(manifest, projectDirectoryId)
+      if (!manifest || !directoryId || directoryId === manifest.rootDirectoryId) {
+        return { removedDirectoryIds: [], removedAssetIds: [] }
+      }
+      const directory = manifest.directoriesById[directoryId]
+      if (!directory) {
+        return { removedDirectoryIds: [], removedAssetIds: [] }
+      }
+
+      const directoryIdsToRemove = new Set<string>()
+      const assetIdsToRemove = new Set<string>()
+      const stack = [directoryId]
+      while (stack.length) {
+        const currentId = stack.pop()!
+        if (directoryIdsToRemove.has(currentId)) {
+          continue
+        }
+        directoryIdsToRemove.add(currentId)
+        const currentDirectory = manifest.directoriesById[currentId]
+        currentDirectory?.assetIds.forEach((assetId) => assetIdsToRemove.add(assetId))
+        currentDirectory?.directoryIds.forEach((childId) => stack.push(childId))
+      }
+
+      const parentId = directory.parentId ?? manifest.rootDirectoryId
+      const parent = manifest.directoriesById[parentId]
+      if (parent) {
+        parent.directoryIds = parent.directoryIds.filter((id) => id !== directoryId)
+      }
+
+      directoryIdsToRemove.forEach((id) => {
+        delete manifest.directoriesById[id]
+      })
+      assetIdsToRemove.forEach((assetId) => {
+        delete manifest.assetsById[assetId]
+      })
+
+      const nextCatalog = buildAssetCatalogFromManifest(cleanupManifestDirectoryReferences(manifest), this.assetCatalog)
+      const nextAssetIndex = { ...this.assetIndex }
+      assetIdsToRemove.forEach((assetId) => {
+        delete nextAssetIndex[assetId]
+      })
+      const nextPackageMap = filterPackageAssetMapByUsage(this.packageAssetMap, new Set(Object.keys(nextAssetIndex)))
+
+      this.applyCatalogUpdate(nextCatalog, {
+        nextManifest: manifest,
+        nextIndex: nextAssetIndex,
+        nextPackageMap,
+        commitSnapshot: true,
+        updateNodes: false,
+      })
+      this.setActiveDirectory(parentId === manifest.rootDirectoryId ? ASSETS_ROOT_DIRECTORY_ID : parentId)
+      return {
+        removedDirectoryIds: Array.from(directoryIdsToRemove),
+        removedAssetIds: Array.from(assetIdsToRemove),
+      }
+    },
+    renameProjectAsset(assetId: string, name: string): boolean {
+      const manifest = cloneAssetManifest(this.assetManifest)
+      if (!manifest || !(assetId in manifest.assetsById)) {
+        return false
+      }
+      const asset = manifest.assetsById[assetId]!
+      const nextName = name.trim()
+      if (!nextName.length || nextName === asset.name) {
+        return false
+      }
+      asset.name = nextName
+      asset.updatedAt = new Date().toISOString()
+      this.applyCatalogUpdate(this.assetCatalog, {
+        nextManifest: manifest,
+        commitSnapshot: true,
+        updateNodes: false,
+      })
+      return true
+    },
+    moveProjectAssetToDirectory(assetId: string, targetProjectDirectoryId: string): boolean {
+      const manifest = cloneAssetManifest(this.assetManifest)
+      const targetDirectoryId = resolveManifestDirectoryIdFromProjectDirectoryId(manifest, targetProjectDirectoryId)
+      if (!manifest || !targetDirectoryId || !(assetId in manifest.assetsById)) {
+        return false
+      }
+      const currentDirectoryId = findManifestDirectoryContainingAsset(manifest, assetId)
+      if (currentDirectoryId === targetDirectoryId) {
+        return false
+      }
+      if (currentDirectoryId && manifest.directoriesById[currentDirectoryId]) {
+        manifest.directoriesById[currentDirectoryId]!.assetIds = manifest.directoriesById[currentDirectoryId]!.assetIds.filter((id) => id !== assetId)
+      }
+      const targetDirectory = manifest.directoriesById[targetDirectoryId]
+      if (!targetDirectory) {
+        return false
+      }
+      targetDirectory.assetIds = [...targetDirectory.assetIds.filter((id) => id !== assetId), assetId]
+      const asset = manifest.assetsById[assetId]!
+      asset.categoryId = targetDirectoryId
+      asset.updatedAt = new Date().toISOString()
+      this.applyCatalogUpdate(this.assetCatalog, {
+        nextManifest: manifest,
+        commitSnapshot: true,
+        updateNodes: false,
+      })
+      return true
     },
     getPackageDirectories(providerId: string): ProjectDirectory[] | null {
       const cached = this.packageDirectoryCache[providerId]
@@ -9711,6 +10371,10 @@ export const useSceneStore = defineStore('scene', {
         if (typeof options.categoryId === 'function') {
           return options.categoryId(asset)
         }
+        const preferredDirectoryId = resolveManifestDirectoryIdFromProjectDirectoryId(this.assetManifest, this.activeDirectoryId)
+        if (preferredDirectoryId && preferredDirectoryId !== this.assetManifest?.rootDirectoryId) {
+          return preferredDirectoryId
+        }
         return determineAssetCategoryId(asset)
       }
 
@@ -9752,7 +10416,10 @@ export const useSceneStore = defineStore('scene', {
         return []
       }
 
-      this.applyCatalogUpdate(nextCatalog, { nextIndex })
+      this.applyCatalogUpdate(nextCatalog, {
+        nextIndex,
+        preferredDirectoryId: resolveManifestDirectoryIdFromProjectDirectoryId(this.assetManifest, this.activeDirectoryId),
+      })
 
       registeredAssets.forEach((asset) => {
         void this.syncAssetPackageMapEntry(asset, sourceByAssetId[asset.id])
@@ -14860,6 +15527,9 @@ export const useSceneStore = defineStore('scene', {
           assetCatalog: isAssetCatalog(entry.assetCatalog)
             ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
             : undefined,
+          assetManifest: isStoredAssetManifest((entry as { assetManifest?: unknown }).assetManifest)
+            ? ((entry as { assetManifest?: AssetManifest }).assetManifest ?? null)
+            : undefined,
           assetIndex: isAssetIndex(entry.assetIndex)
             ? (entry.assetIndex as Record<string, AssetIndexEntry>)
             : undefined,
@@ -14955,6 +15625,9 @@ export const useSceneStore = defineStore('scene', {
           updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
           assetCatalog: isAssetCatalog(entry.assetCatalog)
             ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
+            : undefined,
+          assetManifest: isStoredAssetManifest((entry as { assetManifest?: unknown }).assetManifest)
+            ? ((entry as { assetManifest?: AssetManifest }).assetManifest ?? null)
             : undefined,
           assetIndex: isAssetIndex(entry.assetIndex)
             ? (entry.assetIndex as Record<string, AssetIndexEntry>)

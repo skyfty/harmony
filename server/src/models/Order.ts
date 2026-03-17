@@ -29,6 +29,22 @@ const orderSchema = new Schema<OrderDocument>(
       default: 'unpaid',
       index: true,
     },
+    refundStatus: {
+      type: String,
+      enum: ['none', 'applied', 'approved', 'rejected', 'processing', 'succeeded', 'failed'],
+      default: 'none',
+      index: true,
+    },
+    refundReason: { type: String },
+    refundRequestedAt: { type: Date },
+    refundReviewedAt: { type: Date },
+    refundReviewedBy: { type: Schema.Types.ObjectId, ref: 'Admin', default: null },
+    refundRejectReason: { type: String },
+    refundAmount: { type: Number, min: 0 },
+    refundRequestNo: { type: String, index: true },
+    refundId: { type: String },
+    refundedAt: { type: Date },
+    refundResult: { type: Schema.Types.Mixed },
     fulfillmentStatus: {
       type: String,
       enum: ['pending', 'fulfilled'],
@@ -55,5 +71,6 @@ const orderSchema = new Schema<OrderDocument>(
 
 orderSchema.index({ createdAt: -1 })
 orderSchema.index({ userId: 1, paymentStatus: 1, createdAt: -1 })
+orderSchema.index({ userId: 1, refundStatus: 1, createdAt: -1 })
 
 export const OrderModel = model<OrderDocument>('Order', orderSchema)

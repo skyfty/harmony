@@ -72,7 +72,19 @@ export interface AssetSummary {
   updatedAt: string
 }
 
-export interface AssetManifestEntry {
+export type AssetManifestResourceKind = 'embedded' | 'remote' | 'local' | 'inline' | 'manifest'
+
+export interface AssetManifestResource {
+  kind: AssetManifestResourceKind
+  url?: string | null
+  fileKey?: string | null
+  path?: string | null
+  mimeType?: string | null
+  exportable?: boolean
+  metadata?: Record<string, unknown>
+}
+
+export interface AssetManifestAsset {
   id: string
   name: string
   type: AssetType
@@ -94,15 +106,40 @@ export interface AssetManifestEntry {
   imageHeight?: number | null
   downloadUrl: string
   thumbnailUrl: string | null
+  resource?: AssetManifestResource | null
+  thumbnail?: AssetManifestResource | null
   description: string | null
   createdAt: string
   updatedAt: string
   size: number
 }
 
+export interface AssetManifestDirectory {
+  id: string
+  name: string
+  parentId: string | null
+  directoryIds: string[]
+  assetIds: string[]
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface AssetManifest {
+  format: 'harmony-asset-manifest'
+  version: 2
   generatedAt: string
-  assets: AssetManifestEntry[]
+  rootDirectoryId: string
+  directoriesById: Record<string, AssetManifestDirectory>
+  assetsById: Record<string, AssetManifestAsset>
+}
+
+export type AssetManifestEntry = AssetManifestAsset
+
+export interface LegacyAssetManifestEntry extends AssetManifestAsset {}
+
+export interface LegacyAssetManifest {
+  generatedAt: string
+  assets: LegacyAssetManifestEntry[]
 }
 
 export interface AssetDirectory<TAsset = AssetSummary> {

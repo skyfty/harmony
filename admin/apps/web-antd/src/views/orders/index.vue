@@ -102,6 +102,23 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
           ],
         },
       },
+      {
+        component: 'Select',
+        fieldName: 'refundStatus',
+        label: '退款状态',
+        componentProps: {
+          allowClear: true,
+          options: [
+            { label: '未申请', value: 'none' },
+            { label: '待审核', value: 'applied' },
+            { label: '已审核', value: 'approved' },
+            { label: '已驳回', value: 'rejected' },
+            { label: '处理中', value: 'processing' },
+            { label: '成功', value: 'succeeded' },
+            { label: '失败', value: 'failed' },
+          ],
+        },
+      },
     ],
   },
   gridOptions: {
@@ -110,6 +127,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
       { field: 'orderNumber', minWidth: 200, title: t('page.orders.index.table.orderNumber') },
       { field: 'status', minWidth: 120, title: t('page.orders.index.table.status') },
       { field: 'paymentStatus', minWidth: 120, title: '支付状态' },
+      { field: 'refundStatus', minWidth: 120, title: '退款状态' },
       { field: 'userInfo.displayName', minWidth: 160, title: t('page.orders.index.table.user') },
       { field: 'totalAmount', minWidth: 120, title: t('page.orders.index.table.totalAmount') },
       { field: 'items', minWidth: 120, formatter: (val: any) => (val || []).length, title: t('page.orders.index.table.items') },
@@ -125,6 +143,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
             keyword: formValues.keyword,
             status: formValues.status || undefined,
             paymentStatus: formValues.paymentStatus || undefined,
+            refundStatus: formValues.refundStatus || undefined,
             page: page.currentPage,
             pageSize: page.pageSize,
           };

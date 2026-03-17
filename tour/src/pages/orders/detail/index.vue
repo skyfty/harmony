@@ -60,6 +60,30 @@
             {{ paymentStatusText(order.paymentStatus) }}
           </text>
         </view>
+        <view class="row">
+          <text class="label">
+            退款状态
+          </text>
+          <text class="value">
+            {{ refundStatusText(order.refundStatus) }}
+          </text>
+        </view>
+        <view class="row" v-if="order.refundReason">
+          <text class="label">
+            退款原因
+          </text>
+          <text class="value">
+            {{ order.refundReason }}
+          </text>
+        </view>
+        <view class="row" v-if="order.refundRejectReason">
+          <text class="label">
+            驳回原因
+          </text>
+          <text class="value">
+            {{ order.refundRejectReason }}
+          </text>
+        </view>
         <view class="row" v-if="order.transactionId">
           <text class="label">
             支付流水号
@@ -84,6 +108,25 @@
             {{ formatDateTime(order.createdAt) }}
           </text>
         </view>
+      </view>
+
+      <view class="card" v-if="order && canApplyRefund">
+        <text class="section-title">
+          申请退款
+        </text>
+        <textarea
+          class="refund-textarea"
+          v-model="refundReason"
+          maxlength="200"
+          placeholder="请填写退款原因"
+        />
+        <button
+          class="refund-button"
+          :disabled="refundSubmitting"
+          @tap="submitRefund"
+        >
+          {{ refundSubmitting ? '提交中...' : '提交退款申请' }}
+        </button>
       </view>
 
       <view class="card">
@@ -201,10 +244,10 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
-import { getOrderDetail, payOrder } from '@/api/mini';
+import { applyOrderRefund, getOrderDetail, payOrder } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
 import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
-import type { OrderDetail, OrderItem, OrderStatus, PaymentStatus } from '@/types/order';
+import type { OrderDetail, OrderItem, OrderStatus, PaymentStatus, RefundStatus } from '@/types/order';
 import {
   isPhoneBindingRequiredError,
   requestMiniProgramPayment,
@@ -218,6 +261,8 @@ defineOptions({
 const order = ref<OrderDetail | null>(null);
 const currentOrderId = ref('');
 const paying = ref(false);
+const refundSubmitting = ref(false);
+const refundReason = ref('');
 const showPhoneBindSheet = ref(false);
 const pendingOrderId = ref('');
 
@@ -230,6 +275,18 @@ const showPayAction = computed(() => {
   if (!order.value) return false;
   const status = order.value.orderStatus || order.value.status;
   return status === 'pending' && ['unpaid', 'failed', 'closed'].includes(order.value.paymentStatus);
+});
+
+const canApplyRefund = computed(() => {
+  if (!order.value) return false;
+  const orderStatus = order.value.orderStatus || order.value.status;
+  if (orderStatus !== 'paid' && orderStatus !== 'completed') {
+    return false;
+  }
+  if (order.value.paymentStatus !== 'succeeded') {
+    return false;
+  }
+  return ['none', 'rejected', 'failed'].includes(order.value.refundStatus);
 });
 
 onLoad((query) => {
@@ -265,6 +322,16 @@ function paymentStatusText(status: PaymentStatus) {
   if (status === 'failed') return '支付失败';
   if (status === 'refunded') return '已退款';
   return '已关闭';
+}
+
+function refundStatusText(status: RefundStatus) {
+  if (status === 'none') return '未申请';
+  if (status === 'applied') return '待审核';
+  if (status === 'approved') return '已审核';
+  if (status === 'rejected') return '已驳回';
+  if (status === 'processing') return '退款处理中';
+  if (status === 'succeeded') return '退款成功';
+  return '退款失败';
 }
 
 function formatDateTime(value: string) {
@@ -307,6 +374,29 @@ async function submitPayment() {
     if (currentOrderId.value) {
       await loadOrder(currentOrderId.value);
     }
+  }
+}
+
+async function submitRefund() {
+  const orderId = currentOrderId.value;
+  if (!orderId || refundSubmitting.value) {
+    return;
+  }
+  const reason = refundReason.value.trim();
+  if (!reason) {
+    void uni.showToast({ title: '请填写退款原因', icon: 'none' });
+    return;
+  }
+
+  refundSubmitting.value = true;
+  try {
+    order.value = await applyOrderRefund(orderId, reason);
+    refundReason.value = '';
+    void uni.showToast({ title: '申请已提交', icon: 'none' });
+  } catch (error) {
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '提交退款申请失败'), icon: 'none' });
+  } finally {
+    refundSubmitting.value = false;
   }
 }
 
@@ -484,5 +574,27 @@ async function handlePhoneBound() {
 
 .sub-empty {
   padding: 8px 0;
+}
+
+.refund-textarea {
+  margin-top: 10px;
+  width: 100%;
+  min-height: 88px;
+  border-radius: 12px;
+  background: #f5f8fc;
+  padding: 10px;
+  font-size: 13px;
+  color: #1a1f2e;
+}
+
+.refund-button {
+  margin-top: 10px;
+  height: 40px;
+  line-height: 40px;
+  border-radius: 999px;
+  background: #eff5ff;
+  color: #1f7aec;
+  font-size: 13px;
+  font-weight: 700;
 }
 </style>

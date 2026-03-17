@@ -210,6 +210,186 @@ export async function createResourceCategory(payload: CreateResourceCategoryPayl
   return payloadBody
 }
 
+export interface UpdateResourceCategoryPayload {
+  name?: string
+  description?: string | null
+}
+
+export async function updateResourceCategory(
+  categoryId: string,
+  payload: UpdateResourceCategoryPayload,
+): Promise<ResourceCategory> {
+  const trimmed = categoryId.trim()
+  if (!trimmed.length) {
+    throw new Error('分类 id 不能为空')
+  }
+
+  const url = buildServerApiUrl(`/resources/categories/${encodeURIComponent(trimmed)}`)
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const body: Record<string, unknown> = {}
+  if (typeof payload.name === 'string') {
+    body.name = payload.name
+  }
+  if (payload.description !== undefined) {
+    body.description = payload.description ?? null
+  }
+
+  const response = await fetch(url, {
+    method: 'PUT',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `更新分类失败（${response.status}）`)
+  }
+
+  const payloadBody = await parseJsonResponse<ResourceCategory>(response)
+  if (!payloadBody || typeof payloadBody.id !== 'string') {
+    throw new Error('服务器返回的分类数据无效')
+  }
+  return payloadBody
+}
+
+export async function deleteResourceCategory(categoryId: string): Promise<void> {
+  const trimmed = categoryId.trim()
+  if (!trimmed.length) {
+    throw new Error('分类 id 不能为空')
+  }
+
+  const url = buildServerApiUrl(`/resources/categories/${encodeURIComponent(trimmed)}`)
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers,
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `删除分类失败（${response.status}）`)
+  }
+}
+
+export async function moveResourceCategory(categoryId: string, targetParentId: string | null): Promise<ResourceCategory> {
+  const trimmed = categoryId.trim()
+  if (!trimmed.length) {
+    throw new Error('分类 id 不能为空')
+  }
+
+  const url = buildServerApiUrl(`/resources/categories/${encodeURIComponent(trimmed)}/move`)
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ targetParentId }),
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `移动分类失败（${response.status}）`)
+  }
+
+  const payloadBody = await parseJsonResponse<ResourceCategory>(response)
+  if (!payloadBody || typeof payloadBody.id !== 'string') {
+    throw new Error('服务器返回的分类数据无效')
+  }
+  return payloadBody
+}
+
+export interface BulkMoveResourceAssetsPayload {
+  assetIds?: string[]
+  fromCategoryId?: string | null
+  includeDescendants?: boolean
+  targetCategoryId: string
+}
+
+export interface BulkMoveResourceAssetsResult {
+  matchedCount?: number
+  modifiedCount: number
+}
+
+export async function bulkMoveResourceAssetsToCategory(
+  payload: BulkMoveResourceAssetsPayload,
+): Promise<BulkMoveResourceAssetsResult> {
+  const targetCategoryId = payload.targetCategoryId.trim()
+  if (!targetCategoryId.length) {
+    throw new Error('目标分类 id 不能为空')
+  }
+
+  const url = buildServerApiUrl('/resources/assets/bulk-move-category')
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const body: Record<string, unknown> = {
+    targetCategoryId,
+  }
+  if (Array.isArray(payload.assetIds)) {
+    body.assetIds = payload.assetIds
+      .filter((id): id is string => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+  }
+  if (payload.fromCategoryId !== undefined) {
+    body.fromCategoryId = payload.fromCategoryId
+  }
+  if (payload.includeDescendants !== undefined) {
+    body.includeDescendants = payload.includeDescendants
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `移动资源失败（${response.status}）`)
+  }
+
+  const payloadBody = await parseJsonResponse<BulkMoveResourceAssetsResult>(response)
+  if (!payloadBody || typeof payloadBody.modifiedCount !== 'number') {
+    throw new Error('服务器返回的资源移动结果无效')
+  }
+  return payloadBody
+}
+
 export async function fetchAssetSeries(): Promise<AssetSeries[]> {
   const url = buildServerApiUrl('/resources/series')
   const authStore = useAuthStore()
@@ -528,6 +708,31 @@ export async function fetchResourceAsset(assetId: string): Promise<ServerAssetDt
     throw new Error('服务器返回的资源数据无效')
   }
   return payload
+}
+
+export async function deleteResourceAsset(assetId: string): Promise<void> {
+  const trimmed = assetId.trim()
+  if (!trimmed.length) {
+    throw new Error('assetId 不能为空')
+  }
+  const url = buildServerApiUrl(`/resources/assets/${encodeURIComponent(trimmed)}`)
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers,
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `删除资源失败（${response.status}）`)
+  }
 }
 
 export interface UpdateAssetFileOptions {
