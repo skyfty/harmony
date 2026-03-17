@@ -1,13 +1,24 @@
 import * as harmonyUtils from '@harmony/utils'
+import { ref } from 'vue'
 import { getAccessToken, setAccessToken } from './token'
 
 const { MiniApiError, miniRequest } = harmonyUtils
 
 export { getAccessToken, setAccessToken }
 
+type MiniSessionUser = {
+  displayName?: string
+  avatarUrl?: string
+}
+
 type LoginResponse = {
   token?: string
   accessToken?: string
+  user?: MiniSessionUser
+  authFlow?: {
+    isNewUser?: boolean
+    usedDefaultDisplayName?: boolean
+  }
 }
 
 type WechatProfile = {
@@ -25,6 +36,12 @@ type WechatApi = {
     success?: (result: { authSetting?: Record<string, boolean> }) => void
     fail?: () => void
   }) => void
+  getUserProfile?: (options: {
+    desc: string
+    lang?: string
+    success?: (result: { userInfo?: WechatUserInfo }) => void
+    fail?: (error?: unknown) => void
+  }) => void
   getUserInfo?: (options: {
     lang?: string
     success?: (result: { userInfo?: WechatUserInfo }) => void
@@ -35,10 +52,13 @@ type WechatApi = {
 let pendingAuthPromise: Promise<string> | null = null
 let miniAuthInitialized = false
 const MINI_AUTH_LOG_PREFIX = '[mini-auth]'
+const MINI_AUTH_PENDING_PROFILE_PROMPT_STORAGE_KEY = 'tour:mini-auth:pending-wechat-profile-prompt'
 const MINI_AUTH_SESSION_STORAGE_KEYS = [
   'tour:selectedVehicleId',
   'tour:selectedVehicle',
 ]
+const miniAuthProfileAuthorizationPending = ref(false)
+const miniAuthProfileAuthorizationSubmitting = ref(false)
 
 function logMiniAuth(message: string, details?: unknown): void {
   if (details === undefined) {
@@ -81,6 +101,8 @@ function clearMiniAuthSessionStorage(): void {
 function clearMiniAuthLocalState(reason: string): void {
   setAccessToken('')
   clearMiniAuthSessionStorage()
+  writeMiniAuthProfileAuthorizationPending(false)
+  miniAuthProfileAuthorizationSubmitting.value = false
   logMiniAuth('mini auth local state cleared', { reason })
 }
 
@@ -116,6 +138,46 @@ function normalizeOptionalString(value: unknown): string | undefined {
 function getWechatApi(): WechatApi | null {
   const runtime = globalThis as typeof globalThis & { wx?: WechatApi }
   return runtime.wx ?? null
+}
+
+function readMiniAuthProfileAuthorizationPending(): boolean {
+  if (typeof uni === 'undefined' || typeof uni.getStorageSync !== 'function') {
+    return false
+  }
+
+  try {
+    return uni.getStorageSync(MINI_AUTH_PENDING_PROFILE_PROMPT_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeMiniAuthProfileAuthorizationPending(value: boolean): void {
+  miniAuthProfileAuthorizationPending.value = value
+
+  if (typeof uni === 'undefined') {
+    return
+  }
+
+  try {
+    if (value) {
+      uni.setStorageSync(MINI_AUTH_PENDING_PROFILE_PROMPT_STORAGE_KEY, '1')
+    } else {
+      uni.removeStorageSync(MINI_AUTH_PENDING_PROFILE_PROMPT_STORAGE_KEY)
+    }
+  } catch {
+    // ignore storage sync errors
+  }
+}
+
+function syncMiniAuthProfileAuthorizationState(): void {
+  miniAuthProfileAuthorizationPending.value = readMiniAuthProfileAuthorizationPending()
+}
+
+function updateMiniAuthProfileAuthorizationRequirement(data: LoginResponse): void {
+  const shouldPrompt = data.authFlow?.isNewUser === true && data.authFlow?.usedDefaultDisplayName === true
+  writeMiniAuthProfileAuthorizationPending(shouldPrompt)
+  logMiniAuth('updated wechat profile authorization prompt state', { shouldPrompt })
 }
 
 async function canReadWechatProfileSilently(wechatApi: WechatApi): Promise<boolean> {
@@ -182,6 +244,43 @@ async function readWechatProfile(): Promise<WechatProfile> {
   })
 }
 
+async function requestWechatProfileWithUserGesture(): Promise<WechatProfile> {
+  const wechatApi = getWechatApi()
+  if (!wechatApi) {
+    warnMiniAuth('wx api unavailable, cannot request profile from user gesture')
+    return {}
+  }
+
+  if (typeof wechatApi.getUserProfile === 'function') {
+    logMiniAuth('requesting wx.getUserProfile from user gesture')
+    return await new Promise<WechatProfile>((resolve) => {
+      wechatApi.getUserProfile?.({
+        desc: '用于完善登录昵称和头像',
+        lang: 'zh_CN',
+        success: (result) => {
+          const displayName = normalizeOptionalString(result?.userInfo?.nickName)
+          const avatarUrl = normalizeOptionalString(result?.userInfo?.avatarUrl)
+          logMiniAuth('wx.getUserProfile success', {
+            hasDisplayName: Boolean(displayName),
+            hasAvatarUrl: Boolean(avatarUrl),
+          })
+          resolve({
+            displayName,
+            avatarUrl,
+          })
+        },
+        fail: (error) => {
+          warnMiniAuth('wx.getUserProfile failed', error)
+          resolve({})
+        },
+      })
+    })
+  }
+
+  warnMiniAuth('wx.getUserProfile unavailable, fallback to silent profile read')
+  return await readWechatProfile()
+}
+
 async function getWechatLoginCode(): Promise<string> {
   logMiniAuth('starting wx.login')
   return await new Promise<string>((resolve, reject) => {
@@ -217,6 +316,7 @@ export async function loginWithCredentials(username: string, password: string): 
   }
 
   setAccessToken(token)
+  writeMiniAuthProfileAuthorizationPending(false)
   return token
 }
 
@@ -248,8 +348,61 @@ export async function loginWithWechatCode(code: string, profile: WechatProfile =
   }
 
   setAccessToken(token)
+  updateMiniAuthProfileAuthorizationRequirement(data)
   logMiniAuth('wechat-login success, token stored', { tokenLength: token.length })
   return token
+}
+
+export async function completeMiniAuthProfileAuthorization(): Promise<boolean> {
+  if (miniAuthProfileAuthorizationSubmitting.value) {
+    logMiniAuth('wechat profile authorization already in progress')
+    return false
+  }
+
+  miniAuthProfileAuthorizationSubmitting.value = true
+
+  try {
+    const profile = await requestWechatProfileWithUserGesture()
+    if (!profile.displayName && !profile.avatarUrl) {
+      warnMiniAuth('wechat profile authorization returned empty profile')
+      return false
+    }
+
+    await ensureMiniAuth()
+    const data = await miniRequest<LoginResponse>('/mini-auth/profile', {
+      method: 'PATCH',
+      body: {
+        displayName: profile.displayName,
+        avatarUrl: profile.avatarUrl,
+      },
+    })
+
+    const token = readTokenFromResponse(data)
+    if (token) {
+      setAccessToken(token)
+    }
+
+    const hasDisplayName = Boolean(normalizeOptionalString(data.user?.displayName ?? profile.displayName))
+    if (hasDisplayName) {
+      writeMiniAuthProfileAuthorizationPending(false)
+    }
+
+    logMiniAuth('wechat profile authorization completed', {
+      hasDisplayName,
+      hasAvatarUrl: Boolean(normalizeOptionalString(data.user?.avatarUrl ?? profile.avatarUrl)),
+    })
+    return hasDisplayName
+  } catch (error) {
+    errorMiniAuth('wechat profile authorization failed', error)
+    return false
+  } finally {
+    miniAuthProfileAuthorizationSubmitting.value = false
+  }
+}
+
+export function dismissMiniAuthProfileAuthorizationPrompt(): void {
+  writeMiniAuthProfileAuthorizationPending(false)
+  logMiniAuth('wechat profile authorization prompt dismissed by user')
 }
 
 async function performMiniAuth(force = false): Promise<string> {
@@ -341,6 +494,7 @@ export function resetMiniAuthSession(): void {
 
 export function initializeMiniAuth(): void {
   logMiniAuth('initializeMiniAuth invoked')
+  syncMiniAuthProfileAuthorizationState()
   if (miniAuthInitialized) {
     logMiniAuth('initializeMiniAuth skipped, already initialized')
     return
@@ -364,3 +518,5 @@ export async function ensureDevLogin(): Promise<string> {
 export function isMiniAuthError(error: unknown): error is MiniApiError {
   return error instanceof MiniApiError && error.kind === 'auth'
 }
+
+export { miniAuthProfileAuthorizationPending, miniAuthProfileAuthorizationSubmitting }
