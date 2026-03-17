@@ -1542,9 +1542,6 @@ const groundScatterCategoryModel = computed<TerrainScatterCategory>({
   },
 })
 
-const groundScatterBrushRadiusDisplay = computed(() => `${groundScatterBrushRadius.value.toFixed(2)} m`)
-const groundScatterSpacingDisplay = computed(() => `${groundScatterSpacing.value.toFixed(2)} m`)
-const groundScatterDensityDisplay = computed(() => `${Math.round(groundScatterDensityPercent.value)}%`)
 const groundScatterUsesSpacing = computed(() => groundScatterBrushShape.value === 'rectangle' || groundScatterBrushShape.value === 'line')
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [

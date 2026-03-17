@@ -259,14 +259,6 @@ const replacementPromptMessage = computed(() => {
   return `${count} assets were uploaded successfully. Replace the current local asset references with the server assets now?`
 })
 
-// Helpers and UI logic moved from ProjectPanel
-function canRequestAiTagsForEntry(entry: UploadAssetEntry | null): boolean {
-  if (!entry) return false
-  const name = entry.name?.trim().length ? entry.name.trim() : entry.asset.name?.trim()
-  const description = entry.description?.trim() ?? ''
-  return Boolean(name || description)
-}
-
 function normalizeHexColor(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -280,44 +272,6 @@ function formatHexInputDisplay(value: string | null | undefined): string {
   return normalized ? normalized.toUpperCase() : ''
 }
 
-function applyEntryColor(entry: UploadAssetEntry, value: string | null): void {
-  const normalized = normalizeHexColor(value)
-  if (normalized) {
-    entry.color = normalized
-    entry.colorHexInput = normalized.toUpperCase()
-    markEntryDirty(entry)
-  }
-}
-
-function handleEntryColorInput(entry: UploadAssetEntry, value: string | number | null): void {
-  const raw = typeof value === 'number' ? value.toString() : (value ?? '')
-  const hex = raw.replace(/[^0-9a-fA-F]/g, '').slice(0, 6)
-  entry.colorHexInput = hex.length ? `#${hex.toUpperCase()}` : ''
-  if (!hex.length) {
-    entry.color = ''
-    markEntryDirty(entry)
-    return
-  }
-  const normalized = normalizeHexColor(entry.colorHexInput)
-  if (normalized) {
-    entry.color = normalized
-    markEntryDirty(entry)
-  }
-}
-
-function handleEntryColorBlur(entry: UploadAssetEntry): void {
-  const normalized = normalizeHexColor(entry.colorHexInput)
-  if (!normalized) {
-    entry.colorHexInput = ''
-    entry.color = ''
-    markEntryDirty(entry)
-    return
-  }
-  entry.color = normalized
-  entry.colorHexInput = normalized.toUpperCase()
-  markEntryDirty(entry)
-}
-
 function handleEntryScatterPresetChange(
   entry: UploadAssetEntry,
   value: TerrainScatterCategory | string | null,
@@ -325,15 +279,6 @@ function handleEntryScatterPresetChange(
   const normalized = typeof value === 'string' && value.trim().length ? (value as TerrainScatterCategory) : null
   entry.terrainScatterPreset = normalized
   markEntryDirty(entry)
-}
-
-function entryColorPreview(entry: UploadAssetEntry): string {
-  return (
-    normalizeHexColor(entry.color) ??
-    normalizeHexColor(entry.asset.color ?? null) ??
-    TYPE_COLOR_FALLBACK[entry.asset.type] ??
-    '#455A64'
-  )
 }
 
 function handleEntryNameChange(entry: UploadAssetEntry, value: string | null): void {
@@ -366,16 +311,6 @@ function handleEntryCategoryPathLabelChange(entry: UploadAssetEntry, value: stri
   if (!matchedLabel || matchedLabel !== entry.categoryPathLabel) {
     entry.categoryId = null
   }
-  markEntryDirty(entry)
-}
-
-function formatDimension(value: number | null): string {
-  return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
-}
-
-function setEntryDimension(entry: UploadAssetEntry, key: DimensionKey, value: string | number | null): void {
-  const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
-  entry[key] = Number.isFinite(parsed) && parsed >= 0 ? parsed : null
   markEntryDirty(entry)
 }
 
@@ -464,14 +399,6 @@ function resolveEntryModelStats(entry: UploadAssetEntry): { vertexCount: number;
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(value)))
-}
-
-function formatEntryModelStats(entry: UploadAssetEntry): string | null {
-  const modelStats = resolveEntryModelStats(entry)
-  if (!modelStats) {
-    return null
-  }
-  return `${formatCount(modelStats.vertexCount)} vertices | ${formatCount(modelStats.faceCount)} faces | ${formatCount(modelStats.meshCount)} meshes`
 }
 
 function hasEntryMetaOverlay(entry: UploadAssetEntry): boolean {
@@ -943,14 +870,6 @@ async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: 
   } finally {
     entry.aiLoading = false
   }
-}
-
-function handleGenerateTagsClick(entry?: UploadAssetEntry): void {
-  const target = entry ?? activeEntry.value
-  if (!target) {
-    return
-  }
-  void requestAiTagsForEntry(target, { auto: false })
 }
 
 function handleEntryDescriptionBlur(entry: UploadAssetEntry): void {

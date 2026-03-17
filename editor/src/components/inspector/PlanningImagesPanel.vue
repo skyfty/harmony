@@ -52,8 +52,6 @@ watch(
   { immediate: true, deep: true },
 )
 
-const imageCountLabel = computed(() => `${localImages.value.length} image${localImages.value.length === 1 ? '' : 's'}`)
-
 function clearPreviewDisposers(): void {
   previewDisposers.forEach((dispose) => {
     try {
@@ -167,24 +165,6 @@ function updateImageById(imageId: string, patch: Partial<PlanningImageDisplayEnt
   updateImages(nextImages)
 }
 
-function handleToggleComponent(): void {
-  const component = planningImagesComponent.value
-  const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
-    return
-  }
-  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
-}
-
-function handleRemoveComponent(): void {
-  const component = planningImagesComponent.value
-  const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
-    return
-  }
-  sceneStore.removeNodeComponent(nodeId, component.id)
-}
-
 function handleVisibilityChange(imageId: string, value: boolean | null): void {
   if (value === null) {
     return
@@ -212,16 +192,6 @@ function handleOpacitySlider(imageId: string, value: number | readonly number[])
   updateImages(nextImages)
 }
 
-function handleOpacityInput(imageId: string, value: string | number | null): void {
-  if (value === '' || value === null || value === undefined) {
-    return
-  }
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  handleOpacitySlider(imageId, numeric)
-}
 </script>
 
 <template>

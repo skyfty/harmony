@@ -6907,6 +6907,9 @@ function updateCameraControlsForFrame(
  * - Derived state (speed)
  */
 function updatePlaybackSystemsForFrame(delta: number): void {
+	if (!camera) {
+		return
+	}
 	previewComponentManager.setFrameState({
 		cameraWorldPosition: {
 			x: camera.position.x,

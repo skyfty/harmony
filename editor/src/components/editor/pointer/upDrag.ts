@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@schema'
+import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
+import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { disposeWallPreviewGroup } from '../wallPreviewGroupUtils'
 import type {
   FloorThicknessDragState,

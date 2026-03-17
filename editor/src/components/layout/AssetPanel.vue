@@ -1518,24 +1518,6 @@ function refreshDirectoryNameTruncation(): void {
 const assetTitleElements = ref<Record<string, HTMLElement>>({})
 const truncatedAssetNameIds = ref<Set<string>>(new Set())
 
-function isAssetNameTruncated(assetId: string): boolean {
-  return truncatedAssetNameIds.value.has(assetId)
-}
-
-function setAssetTitleElement(assetId: string, element: unknown): void {
-  if (element instanceof HTMLElement) {
-    assetTitleElements.value = { ...assetTitleElements.value, [assetId]: element }
-    updateAssetNameTruncation(assetId)
-    return
-  }
-  if (!(assetId in assetTitleElements.value)) {
-    return
-  }
-  const nextElements = { ...assetTitleElements.value }
-  delete nextElements[assetId]
-  assetTitleElements.value = nextElements
-}
-
 function updateAssetNameTruncation(assetId: string): void {
   const element = assetTitleElements.value[assetId]
   if (!element) {
@@ -1553,10 +1535,6 @@ function updateAssetNameTruncation(assetId: string): void {
     next.delete(assetId)
   }
   truncatedAssetNameIds.value = next
-}
-
-function handleAssetTitlePointerEnter(assetId: string): void {
-  updateAssetNameTruncation(assetId)
 }
 
 function refreshAssetNameTruncation(): void {
@@ -1648,13 +1626,6 @@ watch(
 const DIRECTORY_DRAG_MIME = 'application/x-harmony-asset-directory'
 const AUTO_FOLDER_PREFIX = 'New Folder'
 
-const selectedSingleAsset = computed(() => {
-  if (!selectedAssetId.value) {
-    return null
-  }
-  return displayedAssets.value.find((asset) => asset.id === selectedAssetId.value) ?? null
-})
-
 function isLocalDirectoryId(directoryId: string | null | undefined): boolean {
   if (!directoryId) {
     return false
@@ -1728,21 +1699,6 @@ const canDeleteDirectory = computed(() =>
     || isPresetDirectoryMutable(activeDirectoryId.value)
   ),
 )
-const canRenameSelectedAsset = computed(() => {
-  const asset = selectedSingleAsset.value
-  if (!asset) {
-    return false
-  }
-  const scope = getAssetMutationScope(asset)
-  if (scope === 'local') {
-    return true
-  }
-  if (scope === 'preset') {
-    return authStore.canResourceWrite
-  }
-  return false
-})
-
 const directoryDialogOpen = ref(false)
 const directoryDialogMode = ref<'create' | 'rename'>('create')
 const directoryDialogName = ref('')
@@ -1879,16 +1835,6 @@ async function confirmDeleteDirectory() {
     console.error('Failed to delete directory', error)
   }
   cancelDeleteDirectory()
-}
-
-function promptRenameSelectedAsset() {
-  const asset = selectedSingleAsset.value
-  if (!asset) {
-    return
-  }
-  assetRenameTargetId.value = asset.id
-  assetRenameValue.value = asset.name
-  assetRenameDialogOpen.value = true
 }
 
 function promptRenameAsset(assetId?: string) {

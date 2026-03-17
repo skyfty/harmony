@@ -290,9 +290,10 @@ export function createWallBuildTool(options: {
     const maxDistSq = 0.35 * 0.35
     let best: { node: SceneNode; score: number; segments: WallPreviewSegment[] } | null = null
 
-    collectWallNodes(options.sceneStore.nodes).forEach((node) => {
+    const wallNodes = collectWallNodes(options.sceneStore.nodes)
+    for (const node of wallNodes) {
       if (node.id === target.nodeId || node.dynamicMesh?.type !== 'Wall') {
-        return
+        continue
       }
 
       const origin = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
@@ -300,7 +301,7 @@ export function createWallBuildTool(options: {
       const localEnd = placedSegment.end.clone().sub(origin)
       const plan = computeWallAutofillPlanForDefinition(node.dynamicMesh as WallDynamicMesh, localStart, localEnd, stepLength)
       if (!plan || plan.score > maxDistSq * 2 || !plan.segments.length) {
-        return
+        continue
       }
 
       const worldSegments = plan.segments.map(({ start, end }) => ({
@@ -308,15 +309,18 @@ export function createWallBuildTool(options: {
         end: toWorldPoint(origin, end),
       }))
       if (!worldSegments.length) {
-        return
+        continue
       }
 
       if (!best || plan.score < best.score) {
         best = { node, score: plan.score, segments: worldSegments }
       }
-    })
+    }
 
-    return best ? { node: best.node, segments: best.segments } : null
+    if (!best) {
+      return null
+    }
+    return { node: best.node, segments: best.segments }
   }
 
   const syncBrushPresetToSession = (target: WallBuildToolSession, applyToCommittedNode = true) => {

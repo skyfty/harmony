@@ -1734,19 +1734,7 @@ const buildToolCursorClass = computed(() => {
   }
 
   if (activeBuildTool.value === 'billboard') {
-    if (event.button === 0 && !isAltOverrideActive) {
-      if (billboardBuildTool.handlePointerDown(event)) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return
-      }
-    }
-
-    if (event.button === 2) {
-      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
-      return
-    }
+    return 'cursor-billboard'
   }
   if (activeBuildTool.value === 'warpGate') {
     return 'cursor-warp-gate'

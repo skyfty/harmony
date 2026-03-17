@@ -2589,7 +2589,6 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
 
 const GUIDEBOARD_NAME_PATTERN = /^Guideboard(?:\b|$)/i
 const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
-const BILLBOARD_NAME_PATTERN = /^Billboard(?:\b|$)/i
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object') {
