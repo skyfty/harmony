@@ -29,6 +29,9 @@ interface SyncOrderResult {
 	changed: boolean
 }
 
+let transactionCapability: 'unknown' | 'supported' | 'unsupported' = 'unknown'
+let transactionFallbackLogged = false
+
 function isTransactionUnsupportedError(error: unknown): boolean {
 	if (!error || typeof error !== 'object') {
 		return false
@@ -196,18 +199,28 @@ export async function settlePaidOrder(options: SettlePaidOrderOptions): Promise<
 			result.changed = true
 		}
 
+		if (transactionCapability === 'unsupported') {
+			await settleCore()
+			return result
+		}
+
 		try {
 			await session.withTransaction(async () => {
 				await settleCore(session)
 			})
+			transactionCapability = 'supported'
 		} catch (error) {
 			if (!isTransactionUnsupportedError(error)) {
 				throw error
 			}
-			console.warn('[order-settlement] transaction unavailable, fallback to non-transaction settlement', {
-				orderNumber: safeOrderNumber,
-				source: options.source,
-			})
+			transactionCapability = 'unsupported'
+			if (!transactionFallbackLogged) {
+				console.warn('[order-settlement] transaction unavailable, fallback to non-transaction settlement', {
+					orderNumber: safeOrderNumber,
+					source: options.source,
+				})
+				transactionFallbackLogged = true
+			}
 			await settleCore()
 		}
 

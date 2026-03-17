@@ -40,6 +40,7 @@
 </template>
 
 <script setup lang="ts">
+import { onShow } from '@dcloudio/uni-app';
 import { onMounted, ref } from 'vue';
 import { getStatusBarHeight } from '@/utils/systemInfo';
 defineOptions({ name: 'VehiclesPage' });
@@ -140,9 +141,44 @@ async function reload() {
   }
 }
 
+function hasOwnedVehicleByProductId(productId: string): boolean {
+  if (!productId) {
+    return false;
+  }
+  return vehicles.value.some((item) => item.productId === productId && item.status === 'owned');
+}
+
+async function waitForVehicleOwnershipSync(productId: string): Promise<boolean> {
+  if (!productId) {
+    await reload();
+    return false;
+  }
+
+  const maxAttempts = 8;
+  const intervalMs = 700;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await reload();
+    if (hasOwnedVehicleByProductId(productId)) {
+      return true;
+    }
+    if (attempt < maxAttempts - 1) {
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), intervalMs);
+      });
+    }
+  }
+  return false;
+}
+
 onMounted(() => {
   void reload().catch(() => {
     void uni.showToast({ title: '加载失败', icon: 'none' });
+  });
+});
+
+onShow(() => {
+  void reload().catch(() => {
+    // Keep silent on foreground refresh failure to avoid noisy toasts.
   });
 });
 
@@ -168,8 +204,8 @@ async function purchaseVehicleWithProductId(productId: string) {
     if (result.payParams) {
       await requestMiniProgramPayment(result.payParams);
     }
-    await reload();
-    void uni.showToast({ title: '购买成功', icon: 'none' });
+    const synced = await waitForVehicleOwnershipSync(productId);
+    void uni.showToast({ title: synced ? '购买成功' : '支付成功，状态同步中', icon: 'none' });
     if (result.order?.id) {
       uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` });
     }
