@@ -117,7 +117,10 @@ async function listWechatPayConfigs() {
     .filter((item) => item.wechatPay.enabled)
     .map((item) => ({
       miniAppId: item.miniAppId,
-      config: item.wechatPay,
+      config: {
+        ...item.wechatPay,
+        appId: item.miniAppId,
+      },
     }))
 }
 
