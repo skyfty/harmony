@@ -5658,20 +5658,29 @@ function mapManifestAssetToProjectAsset(
   directoryId: string,
 ): ProjectAsset {
   const pathDirectories = findManifestDirectoryPath(manifest, directoryId)
-  const categoryPath = pathDirectories
+  const fallbackCategoryPath = pathDirectories
     .filter((directory) => directory.id !== manifest.rootDirectoryId)
     .map((directory) => ({ id: directory.id, name: directory.name }))
-  const categoryPathString = categoryPath.map((item) => item.name).join('/')
+  const fallbackCategoryPathString = fallbackCategoryPath.map((item) => item.name).join('/')
   const downloadUrl = manifestAsset.resource?.url ?? manifestAsset.downloadUrl
   const thumbnailUrl = manifestAsset.thumbnail?.url ?? manifestAsset.thumbnailUrl ?? null
+  const preservedCategoryPath = Array.isArray(manifestAsset.categoryPath) && manifestAsset.categoryPath.length
+    ? manifestAsset.categoryPath
+        .filter((item): item is { id: string; name: string } => !!item && typeof item.id === 'string' && typeof item.name === 'string')
+    : fallbackCategoryPath
+  const preservedCategoryPathString = typeof manifestAsset.categoryPathString === 'string' && manifestAsset.categoryPathString.trim().length
+    ? manifestAsset.categoryPathString
+    : fallbackCategoryPathString
 
   return {
     id: manifestAsset.id,
     name: manifestAsset.name,
     extension: existingAsset?.extension ?? extractExtension(downloadUrl) ?? null,
-    categoryId: directoryId,
-    categoryPath,
-    categoryPathString,
+    categoryId: typeof manifestAsset.categoryId === 'string' && manifestAsset.categoryId.trim().length
+      ? manifestAsset.categoryId
+      : directoryId,
+    categoryPath: preservedCategoryPath,
+    categoryPathString: preservedCategoryPathString,
     type: manifestAsset.type,
     description: manifestAsset.description ?? undefined,
     downloadUrl,
@@ -10382,6 +10391,48 @@ export const useSceneStore = defineStore('scene', {
       // Persist scene immediately after renaming a project asset
       void this.saveActiveScene({ force: true }).catch(() => {})
       return true
+    },
+    updateProjectAssetMetadata(assetId: string, updates: Partial<ProjectAsset>): ProjectAsset | null {
+      const currentAsset = this.findAssetInCatalog(assetId)
+      const currentMeta = this.assetIndex[assetId]
+      if (!currentAsset || !currentMeta) {
+        return null
+      }
+
+      const nextCatalog = { ...this.assetCatalog }
+      const currentList = nextCatalog[currentMeta.categoryId] ?? []
+      const timestamp = new Date().toISOString()
+      let updatedAsset: ProjectAsset | null = null
+
+      nextCatalog[currentMeta.categoryId] = currentList.map((asset) => {
+        if (asset.id !== assetId) {
+          return asset
+        }
+        updatedAsset = {
+          ...asset,
+          ...updates,
+          id: asset.id,
+          type: asset.type,
+          downloadUrl: updates.downloadUrl ?? asset.downloadUrl,
+          extension: updates.extension ?? asset.extension ?? null,
+          previewColor: updates.previewColor ?? asset.previewColor,
+          createdAt: asset.createdAt ?? timestamp,
+          updatedAt: timestamp,
+          gleaned: asset.gleaned,
+        }
+        return updatedAsset
+      })
+
+      if (!updatedAsset) {
+        return null
+      }
+
+      this.applyCatalogUpdate(nextCatalog, {
+        commitSnapshot: true,
+        updateNodes: false,
+      })
+      void this.saveActiveScene({ force: true }).catch(() => {})
+      return this.findAssetInCatalog(assetId)
     },
     moveProjectAssetToDirectory(assetId: string, targetProjectDirectoryId: string): boolean {
       const manifest = cloneAssetManifest(this.assetManifest)

@@ -7,9 +7,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useAuthStore } from '@/stores/authStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
-import type { AssetSeries } from '@/types/asset-series'
 import CategoryPathSelector from '@/components/common/CategoryPathSelector.vue'
-import SeriesSelector from '@/components/common/SeriesSelector.vue'
 import AssetPreviewRenderer from '@/components/common/AssetPreviewRenderer.vue'
 import { buildCategoryPathString } from '@/utils/categoryPath'
 import {
@@ -18,8 +16,6 @@ import {
   generateAssetTagSuggestions,
   mapServerAssetToProjectAsset,
   fetchResourceCategories,
-  fetchAssetSeries,
-  createAssetSeries,
   uploadAssetToServer,
 } from '@/api/resourceAssets'
 import { ensureAuthenticatedForResourceUpload } from '@/utils/uploadGuard'
@@ -87,7 +83,7 @@ type UploadAssetEntry = {
   description: string
   categoryId: string | null
   categoryPathLabel: string
-  seriesId: string | null
+  
   color: string
   colorHexInput: string
   dimensionLength: number | null
@@ -108,6 +104,16 @@ type UploadAssetEntry = {
   aiLoading: boolean
   hasPendingChanges: boolean
   terrainScatterPreset: TerrainScatterCategory | null
+  localSaveStatus: 'idle' | 'saving' | 'success' | 'error'
+  localSaveError: string | null
+  uploadedServerAsset: ProjectAsset | null
+  replacedWithServerAsset: boolean
+}
+
+type UploadedReplacementCandidate = {
+  localAssetId: string
+  remoteAsset: ProjectAsset
+  file: File
 }
 
 type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
@@ -133,22 +139,24 @@ const activeEntry = computed<UploadAssetEntry | null>(() => {
   return uploadEntries.value[0] ?? null
 })
 const uploadSubmitting = ref(false)
+const localSaveSubmitting = ref(false)
 const uploadError = ref<string | null>(null)
+const operationNotice = ref<string | null>(null)
 const serverTags = ref<TagOption[]>([])
 const serverTagsLoaded = ref(false)
 const serverTagsLoading = ref(false)
 const serverTagsError = ref<string | null>(null)
 const closeGuardDialogOpen = ref(false)
+const replacementPromptOpen = ref(false)
+const replacementApplying = ref(false)
+const pendingReplacementCandidates = ref<UploadedReplacementCandidate[]>([])
 
 const resourceCategories = ref<ResourceCategory[]>([])
 const resourceCategoriesLoaded = ref(false)
 const resourceCategoriesLoading = ref(false)
 const resourceCategoriesError = ref<string | null>(null)
 
-const assetSeries = ref<AssetSeries[]>([])
-const assetSeriesLoaded = ref(false)
-const assetSeriesLoading = ref(false)
-const assetSeriesError = ref<string | null>(null)
+// Series handling temporarily disabled
 
 const categoryIndex = computed(() => {
   const map = new Map<string, ResourceCategory>()
@@ -169,6 +177,11 @@ const categoryIndex = computed(() => {
 
 const uploadTagOptions = computed<TagOption[]>(() => {
   const map = new Map<string, TagOption>()
+  props.tagOptions?.forEach((option) => {
+    if (option?.value && !map.has(option.value)) {
+      map.set(option.value, option)
+    }
+  })
   serverTags.value.forEach((option) => {
     if (!map.has(option.value)) map.set(option.value, option)
   })
@@ -176,35 +189,74 @@ const uploadTagOptions = computed<TagOption[]>(() => {
 })
 
 const canUploadAll = computed(
-  () => authStore.canResourceWrite && uploadEntries.value.some((entry) => entry.status !== 'success') && !uploadSubmitting.value,
+  () => authStore.canResourceWrite && uploadEntries.value.some((entry) => !entry.replacedWithServerAsset) && !uploadSubmitting.value && !replacementApplying.value,
 )
 const canReadResource = computed(() => authStore.hasPermission('resource:read'))
-const tagsEditable = computed(() => canReadResource.value)
+const canUseRemoteCategorySelector = computed(() => canReadResource.value && !resourceCategoriesError.value)
 const tagAccessHint = computed(() => {
-  if (tagsEditable.value) return ''
+  if (canReadResource.value) return ''
   if (!authStore.isAuthenticated) {
-    return 'Log in with resource:read permission to load and edit tags.'
+    return 'Tags can still be edited locally. Log in with resource:read to load server tag suggestions.'
   }
-  return '当前账号缺少 resource:read，无法读取或编辑标签。'
+  return '当前账号缺少 resource:read。标签仍可本地编辑，但不会加载服务器标签列表。'
+})
+const categoryAccessHint = computed(() => {
+  if (canUseRemoteCategorySelector.value) {
+    return ''
+  }
+  if (!authStore.isAuthenticated) {
+    return 'Category selector is unavailable while logged out. You can still edit Category Path manually for local metadata.'
+  }
+  if (!canReadResource.value) {
+    return '当前账号缺少 resource:read。可继续使用 Category Path 手动输入并保存到本地元数据。'
+  }
+  if (resourceCategoriesError.value) {
+    return `Category list unavailable: ${resourceCategoriesError.value}`
+  }
+  return ''
 })
 const canUploadCurrent = computed(() => {
   if (!authStore.canResourceWrite) return false
   const entry = activeEntry.value
   if (!entry) return false
-  if (uploadSubmitting.value) return false
-  return entry.status !== 'success' && entry.status !== 'uploading'
+  if (uploadSubmitting.value || replacementApplying.value) return false
+  return !entry.replacedWithServerAsset && entry.status !== 'uploading'
+})
+const canSaveCurrent = computed(() => {
+  const entry = activeEntry.value
+  if (!entry) return false
+  if (uploadSubmitting.value || localSaveSubmitting.value || replacementApplying.value) return false
+  return !entry.replacedWithServerAsset && entry.status !== 'uploading'
+})
+const canSaveAll = computed(() => {
+  if (uploadSubmitting.value || localSaveSubmitting.value || replacementApplying.value) return false
+  return uploadEntries.value.some((entry) => !entry.replacedWithServerAsset && entry.status !== 'uploading')
 })
 const hasUploadingEntries = computed(() => uploadEntries.value.some((entry) => entry.status === 'uploading'))
-const hasDirtyEntries = computed(() => uploadEntries.value.some((entry) => entry.hasPendingChanges && entry.status !== 'success'))
-const shouldConfirmClose = computed(() => hasUploadingEntries.value || hasDirtyEntries.value)
+const hasSavingEntries = computed(() => localSaveSubmitting.value || uploadEntries.value.some((entry) => entry.localSaveStatus === 'saving'))
+const hasDirtyEntries = computed(() => uploadEntries.value.some((entry) => entry.hasPendingChanges && !entry.replacedWithServerAsset))
+const shouldConfirmClose = computed(() => hasUploadingEntries.value || hasSavingEntries.value || hasDirtyEntries.value)
 const closeGuardMessage = computed(() => {
   if (hasUploadingEntries.value) {
     return 'Some assets are still uploading. Closing now may interrupt the process. Continue?'
   }
+  if (hasSavingEntries.value) {
+    return 'Some assets are still saving locally. Closing now may interrupt the process. Continue?'
+  }
   if (hasDirtyEntries.value) {
-    return 'Some assets have unsaved changes. Close without uploading?'
+    return 'Some assets have unsaved metadata changes. Close without saving?'
   }
   return ''
+})
+const replacementPromptMessage = computed(() => {
+  const count = pendingReplacementCandidates.value.length
+  if (count <= 0) {
+    return ''
+  }
+  if (count === 1) {
+    return 'The asset was uploaded successfully. Replace the current local asset reference with the server asset now?'
+  }
+  return `${count} assets were uploaded successfully. Replace the current local asset references with the server assets now?`
 })
 
 // Helpers and UI logic moved from ProjectPanel
@@ -294,13 +346,25 @@ function handleEntryDescriptionChange(entry: UploadAssetEntry, value: string | n
   markEntryDirty(entry)
 }
 
+
+
 function handleEntryTagsChange(entry: UploadAssetEntry, value: string[] | string | null): void {
   if (Array.isArray(value)) {
-    entry.tagValues = value
+    entry.tagValues = value.map((item) => (typeof item === 'string' ? item.trim() : '')).filter((item) => item.length > 0)
   } else if (typeof value === 'string') {
     entry.tagValues = value.trim().length ? [value] : []
   } else {
     entry.tagValues = []
+  }
+  markEntryDirty(entry)
+}
+
+function handleEntryCategoryPathLabelChange(entry: UploadAssetEntry, value: string | null): void {
+  entry.categoryPathLabel = (value ?? '').toString()
+  const matchedCategory = findCategoryById(entry.categoryId)
+  const matchedLabel = buildCategoryLabel(matchedCategory)
+  if (!matchedLabel || matchedLabel !== entry.categoryPathLabel) {
+    entry.categoryId = null
   }
   markEntryDirty(entry)
 }
@@ -406,13 +470,17 @@ function integrateSuggestedTags(entry: UploadAssetEntry, tags: string[]): number
 function markEntryDirty(entry: UploadAssetEntry | null): void {
   if (!entry) return
   entry.hasPendingChanges = true
-  if (entry.status === 'success') {
-    return
-  }
+  entry.localSaveStatus = 'idle'
+  entry.localSaveError = null
+  entry.uploadedServerAsset = null
+  entry.uploadedAssetId = null
+  entry.replacedWithServerAsset = false
   if (entry.status === 'error') {
     entry.error = null
   }
-  entry.status = 'pending'
+  if (entry.status !== 'uploading') {
+    entry.status = 'pending'
+  }
 }
 
 function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
@@ -449,7 +517,6 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
     description: asset.description ?? '',
     categoryId: initialCategoryId,
     categoryPathLabel: initialCategoryLabel ?? '',
-    seriesId: typeof asset.seriesId === 'string' ? asset.seriesId : null,
     color: normalizedColor ?? '',
     colorHexInput: formatHexInputDisplay(normalizedColor),
     dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
@@ -470,7 +537,334 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
     aiLoading: false,
     hasPendingChanges: false,
     terrainScatterPreset: asset.terrainScatterPreset ?? null,
+    localSaveStatus: 'idle',
+    localSaveError: null,
+    uploadedServerAsset: null,
+    replacedWithServerAsset: false,
   }
+}
+
+function revokeObjectUrlIfNeeded(url: string | null | undefined): void {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    URL.revokeObjectURL(url)
+  }
+}
+
+function normalizeTagValueList(values: string[]): string[] {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  values.forEach((value) => {
+    const trimmed = typeof value === 'string' ? value.trim() : ''
+    if (!trimmed.length) {
+      return
+    }
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) {
+      return
+    }
+    seen.add(key)
+    normalized.push(trimmed)
+  })
+  return normalized
+}
+
+function parseCategoryPathSegments(label: string | null | undefined): string[] {
+  if (typeof label !== 'string') {
+    return []
+  }
+  return label
+    .split(/[\\/>]|\s+->\s+/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+}
+
+function slugifyCategorySegment(segment: string): string {
+  const slug = segment.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  return slug.replace(/^-+|-+$/g, '') || 'segment'
+}
+
+function buildEntryCategoryMetadata(entry: UploadAssetEntry): {
+  categoryId: string | null
+  categoryPath: { id: string; name: string }[]
+  categoryPathString: string
+  categoryPathSegments: string[]
+} {
+  const selectedCategory = findCategoryById(entry.categoryId)
+  if (selectedCategory) {
+    const categoryPath = Array.isArray(selectedCategory.path) && selectedCategory.path.length
+      ? selectedCategory.path
+          .filter((item): item is { id: string; name: string } => !!item && typeof item.id === 'string' && typeof item.name === 'string')
+      : [{ id: selectedCategory.id, name: selectedCategory.name }]
+    return {
+      categoryId: selectedCategory.id,
+      categoryPath,
+      categoryPathString: buildCategoryPathString(categoryPath.map((item) => item.name)),
+      categoryPathSegments: categoryPath.map((item) => item.name),
+    }
+  }
+
+  const categoryPathSegments = parseCategoryPathSegments(entry.categoryPathLabel)
+  return {
+    categoryId: null,
+    categoryPath: categoryPathSegments.map((segment, index) => ({
+      id: `local-category:${index}:${slugifyCategorySegment(segment)}`,
+      name: segment,
+    })),
+    categoryPathString: categoryPathSegments.length ? buildCategoryPathString(categoryPathSegments) : '',
+    categoryPathSegments,
+  }
+}
+
+
+function buildLocalTagMetadata(entry: UploadAssetEntry): { tags: string[]; tagIds: string[] } {
+  const normalizedValues = normalizeTagValueList(entry.tagValues)
+  const optionById = new Map(uploadTagOptions.value.map((option) => [option.value, option] as const))
+  const optionByName = new Map(uploadTagOptions.value.map((option) => [option.name.trim().toLowerCase(), option] as const))
+  const tags: string[] = []
+  const tagIds: string[] = []
+
+  normalizedValues.forEach((value) => {
+    const byId = optionById.get(value)
+    if (byId) {
+      tags.push(byId.name)
+      tagIds.push(byId.value)
+      return
+    }
+    const byName = optionByName.get(value.toLowerCase())
+    if (byName) {
+      tags.push(byName.name)
+      tagIds.push(byName.value)
+      return
+    }
+    tags.push(value)
+  })
+
+  return { tags, tagIds }
+}
+
+async function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read thumbnail data'))
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Failed to read thumbnail data'))
+    }
+    reader.readAsDataURL(blob)
+  })
+}
+
+function resolvePersistedThumbnailUrl(entry: UploadAssetEntry, asset: ProjectAsset): string | null {
+  if (entry.thumbnailFile) {
+    return null
+  }
+  const candidate = typeof asset.thumbnail === 'string' ? asset.thumbnail.trim() : ''
+  if (candidate.length && !candidate.startsWith('blob:')) {
+    return candidate
+  }
+  if ((asset.type === 'image' || asset.type === 'texture' || asset.type === 'hdri') && typeof asset.downloadUrl === 'string') {
+    const downloadUrl = asset.downloadUrl.trim()
+    if (downloadUrl.length && !downloadUrl.startsWith('blob:')) {
+      return downloadUrl
+    }
+  }
+  return null
+}
+
+type PreparedEntryMetadata = {
+  asset: ProjectAsset
+  file: File | null
+  thumbnailFile: File | null
+  thumbnailUrl: string | null
+  name: string
+  description: string
+  categoryId: string | null
+  categoryPath: { id: string; name: string }[]
+  categoryPathString: string
+  categoryPathSegments: string[]
+  color: string | null
+  previewColor: string
+  dimensionLength: number | null
+  dimensionWidth: number | null
+  dimensionHeight: number | null
+  imageWidth: number | null
+  imageHeight: number | null
+  sizeCategory: string | null
+  tags: string[]
+  tagIds: string[]
+  terrainScatterPreset: TerrainScatterCategory | null
+}
+
+async function buildPreparedEntryMetadata(
+  entry: UploadAssetEntry,
+  options: { includeSourceFile?: boolean; ensureThumbnail?: boolean } = {},
+): Promise<PreparedEntryMetadata> {
+  const asset = sceneStore.getAsset(entry.assetId) ?? entry.asset
+  if (!asset) {
+    throw new Error('Asset not found')
+  }
+
+  const name = entry.name.trim().length ? entry.name.trim() : asset.name
+  const description = entry.description.trim()
+  const category = buildEntryCategoryMetadata(entry)
+  const color = normalizeHexColor(entry.color)
+  const previewColor = color ?? asset.previewColor ?? TYPE_COLOR_FALLBACK[asset.type] ?? '#455A64'
+  const dimensionLength = typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) ? entry.dimensionLength : null
+  const dimensionWidth = typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) ? entry.dimensionWidth : null
+  const dimensionHeight = typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) ? entry.dimensionHeight : null
+  const imageWidth = typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) ? Math.round(entry.imageWidth) : null
+  const imageHeight = typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) ? Math.round(entry.imageHeight) : null
+  const sizeCategory = computeSizeCategory(dimensionLength, dimensionWidth, dimensionHeight)
+  const { tags, tagIds } = buildLocalTagMetadata(entry)
+
+  let file: File | null = null
+  const shouldLoadSourceFile = options.includeSourceFile || (options.ensureThumbnail && !entry.thumbnailFile && !resolvePersistedThumbnailUrl(entry, asset))
+  if (shouldLoadSourceFile) {
+    file = await createUploadFileFromCache(asset)
+  }
+
+  let thumbnailFile = entry.thumbnailFile
+  if (!thumbnailFile && options.ensureThumbnail && file) {
+    const thumbnailAsset: ProjectAsset = {
+      ...asset,
+      color: color ?? asset.color,
+      previewColor,
+    }
+    thumbnailFile = await generateAssetThumbnail({
+      asset: thumbnailAsset,
+      file,
+      width: ASSET_THUMBNAIL_WIDTH,
+      height: ASSET_THUMBNAIL_HEIGHT,
+    })
+  }
+
+  const thumbnailUrl = thumbnailFile ? await readBlobAsDataUrl(thumbnailFile) : resolvePersistedThumbnailUrl(entry, asset)
+
+  return {
+    asset,
+    file,
+    thumbnailFile,
+    thumbnailUrl,
+    name,
+    description,
+    categoryId: category.categoryId,
+    categoryPath: category.categoryPath,
+    categoryPathString: category.categoryPathString,
+    categoryPathSegments: category.categoryPathSegments,
+    color,
+    previewColor,
+    dimensionLength,
+    dimensionWidth,
+    dimensionHeight,
+    imageWidth,
+    imageHeight,
+    sizeCategory,
+    tags,
+    tagIds,
+    terrainScatterPreset: entry.terrainScatterPreset ?? null,
+  }
+}
+
+function syncEntryFromAsset(entry: UploadAssetEntry, asset: ProjectAsset): void {
+  entry.asset = asset
+  entry.name = asset.name
+  entry.description = asset.description ?? ''
+  entry.categoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
+  entry.categoryPathLabel = asset.categoryPathString ?? entry.categoryPathLabel
+  entry.color = normalizeHexColor(asset.color ?? null) ?? ''
+  entry.colorHexInput = formatHexInputDisplay(asset.color ?? null)
+  entry.dimensionLength = typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null
+  entry.dimensionWidth = typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null
+  entry.dimensionHeight = typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null
+  entry.imageWidth = typeof asset.imageWidth === 'number' ? asset.imageWidth : null
+  entry.imageHeight = typeof asset.imageHeight === 'number' ? asset.imageHeight : null
+  entry.terrainScatterPreset = asset.terrainScatterPreset ?? null
+}
+
+async function saveEntryLocally(entry: UploadAssetEntry): Promise<void> {
+  entry.localSaveStatus = 'saving'
+  entry.localSaveError = null
+  try {
+    const prepared = await buildPreparedEntryMetadata(entry, { ensureThumbnail: true })
+    const updated = sceneStore.updateProjectAssetMetadata(entry.assetId, {
+      name: prepared.name,
+      description: prepared.description || undefined,
+      categoryId: prepared.categoryId ?? undefined,
+      categoryPath: prepared.categoryPath.length ? prepared.categoryPath : undefined,
+      categoryPathString: prepared.categoryPathString || undefined,
+      color: prepared.color ?? null,
+      previewColor: prepared.previewColor,
+      dimensionLength: prepared.dimensionLength,
+      dimensionWidth: prepared.dimensionWidth,
+      dimensionHeight: prepared.dimensionHeight,
+      sizeCategory: prepared.sizeCategory ?? null,
+      imageWidth: prepared.imageWidth,
+      imageHeight: prepared.imageHeight,
+      thumbnail: prepared.thumbnailUrl,
+      tags: prepared.tags.length ? prepared.tags : undefined,
+      tagIds: prepared.tagIds.length ? prepared.tagIds : undefined,
+      terrainScatterPreset: prepared.terrainScatterPreset,
+    })
+    if (!updated) {
+      throw new Error('Failed to update local asset metadata')
+    }
+    syncEntryFromAsset(entry, updated)
+    entry.hasPendingChanges = false
+    entry.localSaveStatus = 'success'
+    operationNotice.value = `Saved local metadata for ${prepared.name}.`
+  } catch (error) {
+    entry.localSaveStatus = 'error'
+    entry.localSaveError = (error as Error).message ?? 'Failed to save local asset metadata'
+    throw error
+  }
+}
+
+async function submitLocalSave(options: { entries?: UploadAssetEntry[] } = {}): Promise<void> {
+  if (localSaveSubmitting.value) {
+    return
+  }
+  const targetEntries = (options.entries ?? uploadEntries.value).filter((entry) => entry && !entry.replacedWithServerAsset)
+  if (!targetEntries.length) {
+    return
+  }
+  localSaveSubmitting.value = true
+  uploadError.value = null
+  operationNotice.value = null
+  let savedCount = 0
+  const failedEntries: string[] = []
+  for (const entry of targetEntries) {
+    try {
+      await saveEntryLocally(entry)
+      savedCount += 1
+    } catch (_error) {
+      failedEntries.push(entry.name?.trim() || entry.asset.name || entry.assetId)
+    }
+  }
+  if (savedCount > 0) {
+    operationNotice.value = savedCount === 1
+      ? 'Saved local asset metadata.'
+      : `Saved local metadata for ${savedCount} assets.`
+  }
+  if (failedEntries.length > 0) {
+    const preview = failedEntries.slice(0, 2).join(', ')
+    const suffix = failedEntries.length > 2 ? ` and ${failedEntries.length - 2} more` : ''
+    uploadError.value = `Failed to save ${failedEntries.length} asset(s): ${preview}${suffix}`
+  }
+  localSaveSubmitting.value = false
+}
+
+function handleSaveCurrent(): void {
+  if (!activeEntry.value) {
+    return
+  }
+  void submitLocalSave({ entries: [activeEntry.value] })
+}
+
+function handleSaveAll(): void {
+  void submitLocalSave()
 }
 
 async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: boolean } = {}): Promise<void> {
@@ -541,15 +935,16 @@ function cancelDialogClose(): void {
 
 function resetUploadState() {
   uploadEntries.value.forEach((entry) => {
-    if (entry.thumbnailPreviewUrl) {
-      URL.revokeObjectURL(entry.thumbnailPreviewUrl)
-      entry.thumbnailPreviewUrl = null
-    }
+    revokeObjectUrlIfNeeded(entry.thumbnailPreviewUrl)
+    entry.thumbnailPreviewUrl = null
   })
   uploadEntries.value = []
   uploadError.value = null
+  operationNotice.value = null
   activeEntryId.value = null
   closeGuardDialogOpen.value = false
+  replacementPromptOpen.value = false
+  pendingReplacementCandidates.value = []
   previewRefs.clear()
   thumbnailInputRefs.clear()
 }
@@ -558,7 +953,7 @@ async function loadServerTags(options: { force?: boolean } = {}) {
   const force = options.force ?? false
   if (serverTagsLoading.value) return
   if (serverTagsLoaded.value && !force) return
-  if (!tagsEditable.value) {
+  if (!canReadResource.value) {
     serverTags.value = []
     serverTagsLoaded.value = true
     serverTagsError.value = tagAccessHint.value
@@ -606,32 +1001,8 @@ async function loadResourceCategories(options: { force?: boolean } = {}) {
   }
 }
 
-async function loadAssetSeries(options: { force?: boolean } = {}) {
-  const force = options.force ?? false
-  if (assetSeriesLoading.value) return
-  if (assetSeriesLoaded.value && !force) return
-  assetSeriesLoading.value = true
-  assetSeriesError.value = null
-  try {
-    const seriesList = await fetchAssetSeries()
-    assetSeries.value = Array.isArray(seriesList)
-      ? [...seriesList].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'zh-CN'))
-      : []
-    assetSeriesLoaded.value = true
-  } catch (error) {
-    assetSeriesError.value = (error as Error).message ?? 'Failed to load series'
-  } finally {
-    assetSeriesLoading.value = false
-  }
-}
+// Series loading disabled while Series input is removed
 
-async function handleCreateSeries(payload: { name: string; description?: string | null }): Promise<AssetSeries> {
-  const created = await createAssetSeries(payload)
-  const map = new Map(assetSeries.value.map((item) => [item.id, item] as const))
-  map.set(created.id, created)
-  assetSeries.value = Array.from(map.values()).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'zh-CN'))
-  return created
-}
 
 function findCategoryById(targetId: string | null): ResourceCategory | null {
   if (!targetId) return null
@@ -650,7 +1021,10 @@ function buildCategoryLabel(category: ResourceCategory | null): string {
 function updateEntryCategoryLabel(entry: UploadAssetEntry): void {
   if (!entry) return
   const category = findCategoryById(entry.categoryId)
-  entry.categoryPathLabel = buildCategoryLabel(category)
+  const nextLabel = buildCategoryLabel(category)
+  if (nextLabel.length) {
+    entry.categoryPathLabel = nextLabel
+  }
 }
 
 function handleEntryCategoryChange(entry: UploadAssetEntry, value: string | null): void {
@@ -675,21 +1049,7 @@ function handleEntryCategoryCreated(entry: UploadAssetEntry, category: ResourceC
   void loadResourceCategories({ force: true })
 }
 
-function handleEntrySeriesChange(entry: UploadAssetEntry, value: string | null): void {
-  const normalized = typeof value === 'string' ? value.trim() : ''
-  entry.seriesId = normalized.length ? normalized : null
-  markEntryDirty(entry)
-}
-
-function handleEntrySeriesCreated(entry: UploadAssetEntry, series: AssetSeries): void {
-  if (series && typeof series.id === 'string') {
-    handleEntrySeriesChange(entry, series.id)
-    const map = new Map(assetSeries.value.map((item) => [item.id, item] as const))
-    map.set(series.id, series)
-    assetSeries.value = Array.from(map.values()).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'zh-CN'))
-    void loadAssetSeries({ force: true })
-  }
-}
+/* Series helpers removed (Series input temporarily disabled) */
 
 function handlePreviewDimensions(entry: UploadAssetEntry, payload: { length: number; width: number; height: number }): void {
   if (!payload) return
@@ -765,9 +1125,7 @@ function handleThumbnailFileSelected(entry: UploadAssetEntry, event: Event): voi
     input.value = ''
     return
   }
-  if (entry.thumbnailPreviewUrl) {
-    URL.revokeObjectURL(entry.thumbnailPreviewUrl)
-  }
+  revokeObjectUrlIfNeeded(entry.thumbnailPreviewUrl)
   entry.thumbnailFile = file
   entry.thumbnailPreviewUrl = URL.createObjectURL(file)
   entry.thumbnailCapturedAt = Date.now()
@@ -824,9 +1182,7 @@ async function capturePreviewThumbnail(entry: UploadAssetEntry, options: { silen
       width: ASSET_THUMBNAIL_WIDTH,
       height: ASSET_THUMBNAIL_HEIGHT,
     })
-    if (entry.thumbnailPreviewUrl) {
-      URL.revokeObjectURL(entry.thumbnailPreviewUrl)
-    }
+    revokeObjectUrlIfNeeded(entry.thumbnailPreviewUrl)
     entry.thumbnailFile = file
     entry.thumbnailPreviewUrl = URL.createObjectURL(file)
     entry.thumbnailCapturedAt = Date.now()
@@ -850,7 +1206,7 @@ watch(
       void nextTick(() => {
         void loadServerTags()
         void loadResourceCategories()
-        void loadAssetSeries()
+        // series loading skipped
       })
     } else if (!uploadSubmitting.value) {
       resetUploadState()
@@ -894,7 +1250,7 @@ async function createUploadFileFromCache(asset: ProjectAsset): Promise<File> {
 async function resolveEntriesTagIds(entries: UploadAssetEntry[]): Promise<Map<string, string[]>> {
   const resolved = new Map<string, string[]>()
   if (!entries.length) return resolved
-  if (!tagsEditable.value) {
+  if (!authStore.canResourceWrite) {
     entries.forEach((entry) => {
       resolved.set(entry.assetId, [])
     })
@@ -967,7 +1323,7 @@ async function resolveEntriesTagIds(entries: UploadAssetEntry[]): Promise<Map<st
 async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
   if (uploadSubmitting.value) return
   const resolveTargetEntries = () =>
-    (options.entries ?? uploadEntries.value).filter((entry) => entry && entry.status !== 'success')
+    (options.entries ?? uploadEntries.value).filter((entry) => entry && !entry.replacedWithServerAsset && entry.status !== 'uploading')
 
   if (!resolveTargetEntries().length) return
 
@@ -984,75 +1340,47 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
 
   uploadSubmitting.value = true
   uploadError.value = null
+  operationNotice.value = null
   try {
     const tagMap = await resolveEntriesTagIds(targetEntries)
-    const replacementMap = new Map<string, string>()
+    const replacementCandidates: UploadedReplacementCandidate[] = []
     for (const entry of targetEntries) {
       entry.status = 'uploading'
       entry.error = null
       try {
-        const asset = sceneStore.getAsset(entry.assetId) ?? entry.asset
-        if (!asset) throw new Error('Asset not found')
-        const file = await createUploadFileFromCache(asset)
-        const uploadName = entry.name.trim().length ? entry.name.trim() : asset.name
-        const uploadDescription = entry.description.trim()
-        const normalizedColor = normalizeHexColor(entry.color)
-        let thumbnailFile: File | null = entry.thumbnailFile
-        if (!thumbnailFile) {
-          try {
-            const thumbnailAsset: ProjectAsset = {
-              ...asset,
-              color: normalizedColor ?? asset.color,
-              previewColor: normalizedColor ?? asset.previewColor,
-            }
-            thumbnailFile = await generateAssetThumbnail({
-              asset: thumbnailAsset,
-              file,
-              width: ASSET_THUMBNAIL_WIDTH,
-              height: ASSET_THUMBNAIL_HEIGHT,
-            })
-          } catch (thumbnailError) {
-            throw new Error(`Failed to generate thumbnail: ${(thumbnailError as Error).message ?? 'Unknown error'}`)
-          }
+        const prepared = await buildPreparedEntryMetadata(entry, { includeSourceFile: true, ensureThumbnail: true })
+        if (!prepared.file) {
+          throw new Error('Asset source file is not available for upload')
         }
-        const dimensionLength = typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) ? entry.dimensionLength : null
-        const dimensionWidth = typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) ? entry.dimensionWidth : null
-        const dimensionHeight = typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) ? entry.dimensionHeight : null
-        const imageWidth = typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) ? Math.round(entry.imageWidth) : null
-        const imageHeight = typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) ? Math.round(entry.imageHeight) : null
         const tagIds = tagMap.get(entry.assetId) ?? []
 
         const serverAsset = await uploadAssetToServer({
-          file,
-          thumbnailFile,
-          name: uploadName,
-          type: asset.type,
-          description: uploadDescription.length ? uploadDescription : undefined,
+          file: prepared.file,
+          thumbnailFile: prepared.thumbnailFile,
+          name: prepared.name,
+          type: prepared.asset.type,
+          description: prepared.description.length ? prepared.description : undefined,
           tagIds,
-          categoryId: entry.categoryId,
-          seriesId: entry.seriesId,
-          color: normalizedColor,
-          dimensionLength,
-          dimensionWidth,
-          dimensionHeight,
-          imageWidth,
-          imageHeight,
-          terrainScatterPreset: entry.terrainScatterPreset ?? null,
+          categoryId: prepared.categoryId,
+          categoryPathSegments: prepared.categoryPathSegments.length ? prepared.categoryPathSegments : undefined,
+          color: prepared.color,
+          dimensionLength: prepared.dimensionLength,
+          dimensionWidth: prepared.dimensionWidth,
+          dimensionHeight: prepared.dimensionHeight,
+          imageWidth: prepared.imageWidth,
+          imageHeight: prepared.imageHeight,
+          terrainScatterPreset: prepared.terrainScatterPreset,
         })
         const mapped = mapServerAssetToProjectAsset(serverAsset)
-        const replaced = sceneStore.replaceLocalAssetWithServerAsset(entry.assetId, mapped, { source: { type: 'url' } })
-        if (!replaced) throw new Error('Failed to update asset reference')
-        await assetCacheStore.storeAssetBlob(replaced.id, {
-          blob: file,
-          mimeType: file.type || null,
-          filename: file.name,
-          downloadUrl: replaced.downloadUrl,
-        })
-        assetCacheStore.removeCache(entry.assetId)
         entry.status = 'success'
-        entry.uploadedAssetId = replaced.id
+        entry.uploadedAssetId = mapped.id
+        entry.uploadedServerAsset = mapped
         entry.hasPendingChanges = false
-        replacementMap.set(entry.assetId, replaced.id)
+        replacementCandidates.push({
+          localAssetId: entry.assetId,
+          remoteAsset: mapped,
+          file: prepared.file,
+        })
       } catch (error) {
         entry.status = 'error'
         entry.error = (error as Error).message ?? 'Upload failed'
@@ -1060,17 +1388,22 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
       }
     }
 
-    if (replacementMap.size) {
-      emit('uploaded', { successCount: replacementMap.size, replacementMap: Object.fromEntries(replacementMap.entries()) })
-    }
-
     const hasErrors = targetEntries.some((entry) => entry.status === 'error')
+    if (replacementCandidates.length) {
+      pendingReplacementCandidates.value = replacementCandidates
+      replacementPromptOpen.value = true
+      operationNotice.value = replacementCandidates.length === 1
+        ? 'Uploaded 1 asset to the server. Choose whether to replace the local reference.'
+        : `Uploaded ${replacementCandidates.length} assets to the server. Choose whether to replace the local references.`
+    }
     if (hasErrors) {
       uploadError.value = 'Some assets failed to upload. Please check errors and retry.'
       return
     }
 
-    // Keep dialog open after all uploads so users can review results or close manually.
+    if (!replacementCandidates.length) {
+      operationNotice.value = 'Upload completed.'
+    }
   } catch (error) {
     uploadError.value = (error as Error).message ?? 'Failed to upload assets'
   } finally {
@@ -1086,6 +1419,58 @@ function handleUploadCurrent(): void {
 function handleUploadAll(): void {
   void submitUpload()
 }
+
+async function confirmReplaceUploaded(): Promise<void> {
+  if (replacementApplying.value) {
+    return
+  }
+  replacementApplying.value = true
+  uploadError.value = null
+  try {
+    const replacementMap = new Map<string, string>()
+    for (const candidate of pendingReplacementCandidates.value) {
+      const replaced = sceneStore.replaceLocalAssetWithServerAsset(candidate.localAssetId, candidate.remoteAsset, { source: { type: 'url' } })
+      if (!replaced) {
+        throw new Error('Failed to update asset reference')
+      }
+      await assetCacheStore.storeAssetBlob(replaced.id, {
+        blob: candidate.file,
+        mimeType: candidate.file.type || null,
+        filename: candidate.file.name,
+        downloadUrl: replaced.downloadUrl,
+      })
+      assetCacheStore.removeCache(candidate.localAssetId)
+      replacementMap.set(candidate.localAssetId, replaced.id)
+      const entry = uploadEntries.value.find((item) => item.assetId === candidate.localAssetId)
+      if (entry) {
+        entry.replacedWithServerAsset = true
+        entry.uploadedServerAsset = replaced
+        entry.hasPendingChanges = false
+      }
+    }
+    replacementPromptOpen.value = false
+    pendingReplacementCandidates.value = []
+    if (replacementMap.size) {
+      emit('uploaded', {
+        successCount: replacementMap.size,
+        replacementMap: Object.fromEntries(replacementMap.entries()),
+      })
+      operationNotice.value = replacementMap.size === 1
+        ? 'Uploaded asset is now using the server reference.'
+        : `${replacementMap.size} uploaded assets are now using server references.`
+    }
+  } catch (error) {
+    uploadError.value = (error as Error).message ?? 'Failed to replace local asset references'
+  } finally {
+    replacementApplying.value = false
+  }
+}
+
+function keepLocalReferencesAfterUpload(): void {
+  replacementPromptOpen.value = false
+  pendingReplacementCandidates.value = []
+  operationNotice.value = 'Upload completed. Local asset references were kept unchanged.'
+}
 </script>
 
 <template>
@@ -1094,7 +1479,7 @@ function handleUploadAll(): void {
     <v-card class="material-details-panel">
       <v-toolbar density="compact" class="panel-toolbar" height="40px">
         <div class="toolbar-text">
-          <div class="material-title">Upload Assets to Server</div>
+          <div class="material-title">Edit Asset Metadata</div>
         </div>
         <v-spacer />
         <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleRequestDialogClose" />
@@ -1125,7 +1510,13 @@ function handleUploadAll(): void {
                   </div>
                   <v-chip size="small" color="primary" variant="tonal">{{ getAssetTypeLabel(entry.asset) }}</v-chip>
                 </div>
+                <div class="upload-entry__status-row">
+                  <v-chip v-if="entry.localSaveStatus === 'success'" size="small" color="success" variant="tonal">Local metadata saved</v-chip>
+                  <v-chip v-if="entry.status === 'success' && !entry.replacedWithServerAsset" size="small" color="info" variant="tonal">Uploaded to server</v-chip>
+                  <v-chip v-if="entry.replacedWithServerAsset" size="small" color="warning" variant="tonal">Using server asset reference</v-chip>
+                </div>
                 <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
+                <div v-if="entry.localSaveStatus === 'error' && entry.localSaveError" class="urload-entry__error">{{ entry.localSaveError }}</div>
 
                 <div class="upload-entry__body">
                   <div class="upload-entry__form">
@@ -1136,26 +1527,12 @@ function handleUploadAll(): void {
                         label="Asset Name"
                         density="compact"
                         variant="underlined"
-                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                         @update:model-value="(value) => handleEntryNameChange(entry, value)">
                       </v-text-field>
                     </div>
 
-                    <div class="upload-entry__series-row">
-                      <SeriesSelector
-                        :model-value="entry.seriesId"
-                        :series-options="assetSeries"
-                        label="Asset Series"
-                        density="compact"
-                        :loading="assetSeriesLoading"
-                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                        :clearable="true"
-                        :allow-create="true"
-                        :create-series="handleCreateSeries"
-                        @update:model-value="(value) => handleEntrySeriesChange(entry, value)"
-                        @series-created="(series) => handleEntrySeriesCreated(entry, series)"
-                      />
-                    </div>
+                    <!-- Series input temporarily removed -->
 
                     <div class="upload-entry__category-row">
                       <CategoryPathSelector
@@ -1165,10 +1542,23 @@ function handleUploadAll(): void {
                         placeholder="Select or create a category"
                         hint="Optional. Leave empty to keep the asset in the root category."
                         class="category-selector"
-                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset || !canUseRemoteCategorySelector"
                         @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
                         @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
                         @category-created="(category) => handleEntryCategoryCreated(entry, category)"
+                      />
+                    </div>
+                    <div v-if="categoryAccessHint" class="upload-entry__field-hint upload-entry__field-hint--warning">{{ categoryAccessHint }}</div>
+                    <div class="upload-entry__category-row">
+                      <v-text-field
+                        :model-value="entry.categoryPathLabel"
+                        label="Category Path"
+                        density="compact"
+                        variant="underlined"
+                        hint="Optional local category path. Example: Nature / Trees / Pine"
+                        persistent-hint
+                        :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
+                        @update:model-value="(value) => handleEntryCategoryPathLabelChange(entry, value)"
                       />
                     </div>
 
@@ -1183,7 +1573,7 @@ function handleUploadAll(): void {
                         variant="underlined"
                         clearable
                         hide-details
-                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                         @update:model-value="(value) => handleEntryScatterPresetChange(entry, value as TerrainScatterCategory | null)"
                       >
                         <template #item="{ props, item }">
@@ -1202,94 +1592,9 @@ function handleUploadAll(): void {
                       </v-select>
                     </div>
 
-                    <div class="upload-entry__color-row">
-                      <v-text-field
-                        class="upload-entry__color-input"
-                        :model-value="entry.colorHexInput"
-                        label="Primary Color"
-                        density="compact"
-                        variant="underlined"
-                        placeholder="#RRGGBB"
-                        hide-details
-                        spellcheck="false"
-                        autocorrect="off"
-                        autocomplete="off"
-                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                        @update:model-value="(value) => handleEntryColorInput(entry, value)"
-                        @blur="() => handleEntryColorBlur(entry)"
-                      >
-                        <template #append-inner>
-                          <v-menu :close-on-content-click="false" transition="scale-transition" location="bottom start">
-                            <template #activator="{ props: menuProps }">
-                              <v-btn
-                                v-bind="menuProps"
-                                class="color-swatch"
-                                :style="{ backgroundColor: entryColorPreview(entry) }"
-                                variant="tonal"
-                                size="small"
-                                :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                              >
-                                <v-icon color="white" size="16">mdi-eyedropper-variant</v-icon>
-                              </v-btn>
-                            </template>
-                            <div class="color-picker">
-                              <v-color-picker
-                                :model-value="entryColorPreview(entry)"
-                                mode="hex"
-                                :modes="['hex']"
-                                hide-inputs
-                                @update:model-value="(value) => applyEntryColor(entry, value as string)"
-                              />
-                            </div>
-                          </v-menu>
-                        </template>
-                      </v-text-field>
-                    </div>
+                    
 
-                    <div v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'" class="upload-entry__dimensions">
-                      <div class="upload-entry__dimension-grid">
-                        <v-text-field
-                          :model-value="formatDimension(entry.dimensionLength)"
-                          label="Length (m)"
-                          type="number"
-                          density="compact"
-                          variant="underlined"
-                          step="0.01"
-                          min="0"
-                          suffix="m"
-                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                          @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)"
-                        />
-                        <v-text-field
-                          :model-value="formatDimension(entry.dimensionWidth)"
-                          label="Width (m)"
-                          type="number"
-                          density="compact"
-                          variant="underlined"
-                          step="0.01"
-                          min="0"
-                          suffix="m"
-                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                          @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)"
-                        />
-                        <v-text-field
-                          :model-value="formatDimension(entry.dimensionHeight)"
-                          label="Height (m)"
-                          type="number"
-                          density="compact"
-                          variant="underlined"
-                          step="0.01"
-                          min="0"
-                          suffix="m"
-                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                          @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)"
-                        />
-                      </div>
-                      <v-chip v-if="entrySizeCategory(entry)" class="upload-entry__size-chip" size="small" color="secondary" variant="tonal">
-                        Size category: {{ entrySizeCategory(entry) }}
-                      </v-chip>
-                    </div>
-                    <div v-else-if="entry.asset.type === 'image'" class="upload-entry__dimensions">
+                    <div v-if="entry.asset.type === 'image'" class="upload-entry__dimensions">
                       <div class="upload-entry__dimension-grid">
                         <v-text-field
                           :model-value="formatInteger(entry.imageWidth)"
@@ -1300,7 +1605,7 @@ function handleUploadAll(): void {
                           step="1"
                           min="0"
                           suffix="px"
-                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                          :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                           @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)"
                         />
                         <v-text-field
@@ -1312,7 +1617,7 @@ function handleUploadAll(): void {
                           step="1"
                           min="0"
                           suffix="px"
-                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                          :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                           @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)"
                         />
                       </div>
@@ -1325,7 +1630,7 @@ function handleUploadAll(): void {
                       density="compact"
                       variant="underlined"
                       rows="2"
-                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                      :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                       @update:model-value="(value) => handleEntryDescriptionChange(entry, value)"
                       @blur="() => handleEntryDescriptionBlur(entry)"
                     />
@@ -1346,25 +1651,11 @@ function handleUploadAll(): void {
                       hide-selected
                       new-value-mode="add"
                       :loading="serverTagsLoading"
-                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success' || !tagsEditable"
+                      :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                       @update:model-value="(value) => handleEntryTagsChange(entry, value as string[])"
                     />
                     <div v-if="tagAccessHint" class="upload-entry__field-hint upload-entry__field-hint--warning">{{ tagAccessHint }}</div>
 
-                    <div class="upload-ai-row">
-                      <v-btn
-                        color="secondary"
-                        variant="tonal"
-                        size="small"
-                        :disabled="uploadSubmitting || !canRequestAiTagsForEntry(entry) || entry.aiLoading"
-                        :loading="entry.aiLoading"
-                        @click="() => handleGenerateTagsClick(entry)"
-                      >
-                        Generate tags with AI
-                      </v-btn>
-                      <span v-if="entry.aiError" class="upload-ai-row__error">{{ entry.aiError }}</span>
-                      <span v-else-if="entry.aiSuggestedTags.length" class="upload-ai-row__hint">Suggested: {{ entry.aiSuggestedTags.join(', ') }}</span>
-                    </div>
                   </div>
                   <div class="upload-entry__preview-pane">
                     <div v-if="entry.assetId === activeEntryId" class="upload-preview-wrapper">
@@ -1382,7 +1673,7 @@ function handleUploadAll(): void {
                           variant="tonal"
                           size="small"
                           icon="mdi-camera"
-                          :disabled="uploadSubmitting || entry.status === 'uploading'"
+                          :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                           title="Capture thumbnail"
                           aria-label="Capture thumbnail"
                           @click="() => capturePreviewThumbnail(entry)"
@@ -1392,7 +1683,7 @@ function handleUploadAll(): void {
                           variant="tonal"
                           size="small"
                           icon="mdi-upload"
-                          :disabled="uploadSubmitting || entry.status === 'uploading'"
+                          :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                           title="Upload custom thumbnail"
                           aria-label="Upload custom thumbnail"
                           @click="() => promptThumbnailUpload(entry)"
@@ -1404,8 +1695,8 @@ function handleUploadAll(): void {
                           :ref="(el) => registerThumbnailInput(entry.assetId, el as HTMLInputElement | null)"
                           @change="(event) => handleThumbnailFileSelected(entry, event)"
                         />
-                        <div v-if="entry.thumbnailPreviewUrl" class="upload-preview__thumb">
-                          <img :src="entry.thumbnailPreviewUrl" alt="Captured thumbnail" />
+                        <div v-if="entry.thumbnailPreviewUrl || entry.asset.thumbnail" class="upload-preview__thumb">
+                          <img :src="entry.thumbnailPreviewUrl || entry.asset.thumbnail || ''" alt="Captured thumbnail" />
                           <span class="upload-preview__thumb-label">Current thumbnail</span>
                         </div>
                       </div>
@@ -1417,7 +1708,7 @@ function handleUploadAll(): void {
           </v-window>
         </div>
         <div v-else class="upload-empty-state">
-          Select local assets to begin uploading.
+          Select local assets to edit metadata.
         </div>
       </v-card-text>
       <v-card-actions class="upload-actions">
@@ -1426,12 +1717,22 @@ function handleUploadAll(): void {
             <v-icon size="18" color="error">mdi-alert-circle</v-icon>
             <span>{{ uploadError }}</span>
           </template>
+          <template v-else-if="operationNotice">
+            <v-icon size="18" color="success">mdi-check-circle</v-icon>
+            <span>{{ operationNotice }}</span>
+          </template>
         </div>
         <v-spacer />
-        <v-btn color="secondary" variant="tonal" :disabled="!canUploadCurrent" :loading="uploadSubmitting && !!activeEntry && activeEntry.status === 'uploading'" @click="handleUploadCurrent">
-          Upload Current
+        <v-btn color="secondary" variant="tonal" :disabled="!canSaveCurrent" :loading="localSaveSubmitting && !!activeEntry && activeEntry.localSaveStatus === 'saving'" @click="handleSaveCurrent">
+          Save
         </v-btn>
-        <v-btn color="primary" variant="flat" :loading="uploadSubmitting" :disabled="!canUploadAll" @click="handleUploadAll">
+        <v-btn color="primary" variant="flat" :loading="localSaveSubmitting" :disabled="!canSaveAll" @click="handleSaveAll">
+          Save All
+        </v-btn>
+        <v-btn color="secondary" variant="tonal" :disabled="!canUploadCurrent" :loading="uploadSubmitting && !!activeEntry && activeEntry.status === 'uploading'" @click="handleUploadCurrent">
+          Upload
+        </v-btn>
+        <v-btn color="info" variant="flat" :loading="uploadSubmitting" :disabled="!canUploadAll" @click="handleUploadAll">
           Upload All
         </v-btn>
       </v-card-actions>
@@ -1440,12 +1741,24 @@ function handleUploadAll(): void {
 
   <v-dialog v-model="closeGuardDialogOpen" max-width="420">
     <v-card>
-      <v-card-title>Close upload dialog?</v-card-title>
+      <v-card-title>Close metadata dialog?</v-card-title>
       <v-card-text>{{ closeGuardMessage }}</v-card-text>
       <v-card-actions>
         <v-spacer />
         <v-btn variant="text" @click="cancelDialogClose">Stay</v-btn>
         <v-btn color="warning" variant="flat" @click="confirmDialogClose">Leave</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="replacementPromptOpen" max-width="460" persistent>
+    <v-card>
+      <v-card-title>Use Server Asset References?</v-card-title>
+      <v-card-text>{{ replacementPromptMessage }}</v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" :disabled="replacementApplying" @click="keepLocalReferencesAfterUpload">Keep Local References</v-btn>
+        <v-btn color="primary" variant="flat" :loading="replacementApplying" @click="confirmReplaceUploaded">Replace References</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -1537,6 +1850,12 @@ function handleUploadAll(): void {
   flex-direction: column;
   gap: 16px;
   padding: 4px 2px 12px;
+}
+
+.upload-entry__status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .upload-entry__body {

@@ -1376,8 +1376,7 @@ const uploadableSelectedAssets = computed(() =>
   selectedAssets.value.filter((asset) => assetIndex.value?.[asset.id]?.source?.type === 'local'),
 )
 
-const canUploadSelection = computed(() => uploadableSelectedAssets.value.length > 0)
-const canUploadSelectionToServer = computed(() => canUploadSelection.value && authStore.canResourceWrite)
+const canEditSelectedAssetMetadata = computed(() => uploadableSelectedAssets.value.length > 0)
 
 function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[]): boolean {
   if (!selectedValues.length) {
@@ -2049,7 +2048,7 @@ function showDropFeedback(kind: 'success' | 'error', message: string) {
 }
 
 function openUploadDialog() {
-  if (!canUploadSelectionToServer.value) {
+  if (!canEditSelectedAssetMetadata.value) {
     return
   }
   uploadDialogOpen.value = true
@@ -2064,7 +2063,7 @@ function handleUploadCompleted(payload: { successCount: number; replacementMap: 
       sceneStore.selectAsset(lastId)
     }
   }
-  showDropFeedback('success', `Successfully uploaded ${payload.successCount} assets`)
+  showDropFeedback('success', `Switched ${payload.successCount} assets to server references`)
 }
 
 function isInternalAssetDrag(event: DragEvent): boolean {
@@ -3067,19 +3066,10 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               color="primary"
               variant="text"
               density="compact"
-              icon="mdi-cloud-upload"
-              :disabled="!canUploadSelectionToServer"
-              :title="authStore.canResourceWrite ? 'Upload to Server' : 'Missing resource:write permission'"
-              @click="openUploadDialog"
-            />
-            <v-btn
-              color="primary"
-              variant="text"
-              density="compact"
               icon="mdi-rename-outline"
-              :disabled="!canRenameSelectedAsset"
-              title="Rename asset"
-              @click="promptRenameSelectedAsset"
+              :disabled="!canEditSelectedAssetMetadata"
+              title="Edit asset metadata"
+              @click="openUploadDialog"
             />
             <v-divider vertical class="mx-1" />
             <div class="project-toolbar__search">
