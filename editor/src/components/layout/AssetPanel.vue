@@ -1129,11 +1129,13 @@ onMounted(() => {
 })
 
 onMounted(() => {
+  refreshDirectoryNameTruncation()
   refreshAssetNameTruncation()
   if (typeof window === 'undefined') {
     return
   }
   windowResizeListener = () => {
+    refreshDirectoryNameTruncation()
     refreshAssetNameTruncation()
   }
   window.addEventListener('resize', windowResizeListener)
@@ -1461,6 +1463,58 @@ const displayedAssets = computed(() => {
   return base.filter((asset) => assetMatchesSelectedTags(asset, tagFilterValues.value))
 })
 
+const directoryTitleElements = ref<Record<string, HTMLElement>>({})
+const truncatedDirectoryNameIds = ref<Set<string>>(new Set())
+
+function isDirectoryNameTruncated(directoryId: string): boolean {
+  return truncatedDirectoryNameIds.value.has(directoryId)
+}
+
+function setDirectoryTitleElement(directoryId: string, element: unknown): void {
+  if (element instanceof HTMLElement) {
+    directoryTitleElements.value = { ...directoryTitleElements.value, [directoryId]: element }
+    updateDirectoryNameTruncation(directoryId)
+    return
+  }
+  if (!(directoryId in directoryTitleElements.value)) {
+    return
+  }
+  const nextElements = { ...directoryTitleElements.value }
+  delete nextElements[directoryId]
+  directoryTitleElements.value = nextElements
+}
+
+function updateDirectoryNameTruncation(directoryId: string): void {
+  const element = directoryTitleElements.value[directoryId]
+  if (!element) {
+    return
+  }
+  const isTruncated = element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1
+  const currentlyTruncated = truncatedDirectoryNameIds.value.has(directoryId)
+  if (isTruncated === currentlyTruncated) {
+    return
+  }
+  const next = new Set(truncatedDirectoryNameIds.value)
+  if (isTruncated) {
+    next.add(directoryId)
+  } else {
+    next.delete(directoryId)
+  }
+  truncatedDirectoryNameIds.value = next
+}
+
+function handleDirectoryTitlePointerEnter(directoryId: string): void {
+  updateDirectoryNameTruncation(directoryId)
+}
+
+function refreshDirectoryNameTruncation(): void {
+  void nextTick(() => {
+    for (const directory of galleryDirectories.value) {
+      updateDirectoryNameTruncation(directory.id)
+    }
+  })
+}
+
 const assetTitleElements = ref<Record<string, HTMLElement>>({})
 const truncatedAssetNameIds = ref<Set<string>>(new Set())
 
@@ -1564,6 +1618,32 @@ const galleryDirectories = computed(() => {
   const WALL_PRESETS_CATEGORY_ID = `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`
   return children.filter((dir) => dir.id !== WALL_PRESETS_CATEGORY_ID)
 })
+
+watch(
+  galleryDirectories,
+  (directories) => {
+    const visibleIds = new Set(directories.map((directory) => directory.id))
+
+    const nextElements: Record<string, HTMLElement> = {}
+    for (const [directoryId, element] of Object.entries(directoryTitleElements.value)) {
+      if (visibleIds.has(directoryId)) {
+        nextElements[directoryId] = element
+      }
+    }
+    directoryTitleElements.value = nextElements
+
+    const nextTruncated = new Set<string>()
+    for (const directoryId of truncatedDirectoryNameIds.value) {
+      if (visibleIds.has(directoryId)) {
+        nextTruncated.add(directoryId)
+      }
+    }
+    truncatedDirectoryNameIds.value = nextTruncated
+
+    refreshDirectoryNameTruncation()
+  },
+  { flush: 'post' },
+)
 
 const DIRECTORY_DRAG_MIME = 'application/x-harmony-asset-directory'
 const AUTO_FOLDER_PREFIX = 'New Folder'
@@ -3666,7 +3746,24 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     />
                   </div>
                   <div class="directory-info-overlay">
-                    <span class="directory-card-title">{{ directory.name }}</span>
+                    <v-tooltip
+                      :disabled="!isDirectoryNameTruncated(directory.id)"
+                      :text="directory.name"
+                      location="bottom start"
+                      open-delay="120"
+                    >
+                      <template #activator="{ props }">
+                        <span
+                          v-bind="props"
+                          :ref="(element) => setDirectoryTitleElement(directory.id, element)"
+                          class="directory-card-title"
+                          @mouseenter="handleDirectoryTitlePointerEnter(directory.id)"
+                          @focusin="handleDirectoryTitlePointerEnter(directory.id)"
+                        >
+                          {{ directory.name }}
+                        </span>
+                      </template>
+                    </v-tooltip>
                   </div>
                 </div>
               </v-card>
@@ -4604,7 +4701,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   padding-right: 6px;
   display: flex;
   align-items: flex-end;
-  pointer-events: none;
+  z-index: 2;
 }
 
 .directory-card-subtitle {
@@ -4624,6 +4721,14 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   background-color: rgba(0, 0, 0, 0.28);
   border-radius: 10px;
   backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.directory-card:hover .directory-card-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .directory-card-actions :deep(.v-btn) {

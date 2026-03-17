@@ -21,7 +21,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'dimensions', payload: { length: number; width: number; height: number }): void
   (e: 'model-stats', payload: { vertexCount: number; faceCount: number; meshCount: number }): void
-}>()\n
+}>()
 const uploadStore = useUploadStore()
 const THUMBNAIL_SIZE = 512
 const ALPHA_THRESHOLD = 10
