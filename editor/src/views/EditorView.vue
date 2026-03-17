@@ -2024,6 +2024,11 @@ function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
 
 async function handleEditorViewShortcut(event: KeyboardEvent) {
   if (!shouldHandleViewportShortcut(event)) return
+  if (uiStore.isInteractionLocked('asset-import')) {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   let handled = false
 
   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {

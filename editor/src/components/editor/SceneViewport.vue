@@ -17870,6 +17870,7 @@ function isEventFromViewportOverlayUi(event: Event): boolean {
 
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
+  if (uiStore.isInteractionLocked('asset-import')) return false
   if (isEditableKeyboardTarget(event.target)) return false
   if (isEventFromViewportOverlayUi(event)) return false
   if (props.previewActive) return false

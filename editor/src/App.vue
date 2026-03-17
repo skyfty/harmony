@@ -23,6 +23,9 @@ function handleOverlayClose() {
       :closable="loadingOverlay.closable"
       :cancelable="loadingOverlay.cancelable"
       :cancel-text="loadingOverlay.cancelText"
+      :details-title="loadingOverlay.detailsTitle"
+      :details="loadingOverlay.details"
+      :details-expanded="loadingOverlay.detailsExpanded"
       @close="handleOverlayClose"
       @cancel="uiStore.requestCancelLoadingOverlay()"
     />

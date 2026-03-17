@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
@@ -32,7 +32,7 @@ import {
 } from '@/api/resourceAssets'
 import { deleteProviderCatalog, loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@schema/modelObjectCache'
-import { dataUrlToBlob, extractExtension } from '@/utils/blob'
+import { computeBlobHash, dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { prepareLocalAssetImport, type LocalAssetImportPhase } from '@/utils/localAssetImport'
 import type { SceneNode } from '@schema'
 import { getExtensionFromMimeType, inferAssetType } from '@schema'
@@ -52,6 +52,7 @@ import type {
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const authStore = useAuthStore()
+const uiStore = useUiStore()
 
 const PRESET_PROVIDER_ID = assetProvider.id
 const PRESET_PROVIDER_ROOT_DIRECTORY_ID = buildPackageDirectoryId(PRESET_PROVIDER_ID)
@@ -120,6 +121,7 @@ let windowDragOverListener: ((event: DragEvent) => void) | null = null
 let windowDropListener: ((event: DragEvent) => void) | null = null
 let hiddenDragImageEl: HTMLDivElement | null = null
 let windowPasteListener: ((event: ClipboardEvent) => void) | null = null
+let windowResizeListener: (() => void) | null = null
 const addPendingAssetId = ref<string | null>(null)
 const deleteDialogOpen = ref(false)
 const pendingDeleteAssets = ref<ProjectAsset[]>([])
@@ -130,7 +132,7 @@ const directoryDropHoverId = ref<string | null>(null)
 const assetDropHoverId = ref<string | null>(null)
 const dropActive = ref(false)
 const dropProcessing = ref(false)
-type DropImportStage = LocalAssetImportPhase | 'store-asset' | 'finalize'
+type DropImportStage = LocalAssetImportPhase | 'store-asset' | 'reuse-existing' | 'finalize'
 type DropImportProgressState = {
   total: number
   completed: number
@@ -141,13 +143,35 @@ type DropImportProgressState = {
   stepCount: number
 }
 
-const DROP_IMPORT_STAGE_ORDER: DropImportStage[] = ['extract-metadata', 'generate-thumbnail', 'store-asset', 'finalize']
+type DropImportFailureItem = {
+  sourceName: string
+  reason: string
+}
+
+type DropImportOutcome = {
+  asset: ProjectAsset
+  isNew: boolean
+}
+
+type DropImportResult = {
+  assets: ProjectAsset[]
+  totalSources: number
+  newCount: number
+  reusedCount: number
+  failedItems: DropImportFailureItem[]
+}
+
+const DROP_IMPORT_STAGE_ORDER: DropImportStage[] = ['extract-metadata', 'generate-thumbnail', 'store-asset', 'reuse-existing', 'finalize']
 const DROP_IMPORT_STAGE_LABELS: Record<DropImportStage, string> = {
   'extract-metadata': 'Extracting asset metadata…',
   'generate-thumbnail': 'Generating thumbnail…',
   'store-asset': 'Caching asset file…',
+  'reuse-existing': 'Reusing existing asset…',
   finalize: 'Saving asset metadata…',
 }
+
+const ASSET_IMPORT_INTERACTION_LOCK = 'asset-import'
+const MAX_IMPORT_FAILURE_DETAILS = 50
 
 const dropImportProgress = ref<DropImportProgressState | null>(null)
 const dropDragDepth = ref(0)
@@ -408,7 +432,6 @@ function handleProjectSplitResized(event: SplitpanesResizedEvent) {
 }
 
 async function selectAsset(asset: ProjectAsset) {
-  const uiStore = useUiStore()
   const buildToolsStore = useBuildToolsStore()
   // For model-like assets, ensure the asset is downloaded/cached before selecting
   if (MODEL_ASSET_TYPES.has(asset.type)) {
@@ -1105,6 +1128,17 @@ onMounted(() => {
   window.addEventListener('paste', windowPasteListener, true)
 })
 
+onMounted(() => {
+  refreshAssetNameTruncation()
+  if (typeof window === 'undefined') {
+    return
+  }
+  windowResizeListener = () => {
+    refreshAssetNameTruncation()
+  }
+  window.addEventListener('resize', windowResizeListener)
+})
+
 const searchQuery = ref<string | null>('')
 const searchResults = ref<ProjectAsset[]>([])
 const searchLoaded = ref(false)
@@ -1426,6 +1460,84 @@ const displayedAssets = computed(() => {
   }
   return base.filter((asset) => assetMatchesSelectedTags(asset, tagFilterValues.value))
 })
+
+const assetTitleElements = ref<Record<string, HTMLElement>>({})
+const truncatedAssetNameIds = ref<Set<string>>(new Set())
+
+function isAssetNameTruncated(assetId: string): boolean {
+  return truncatedAssetNameIds.value.has(assetId)
+}
+
+function setAssetTitleElement(assetId: string, element: unknown): void {
+  if (element instanceof HTMLElement) {
+    assetTitleElements.value = { ...assetTitleElements.value, [assetId]: element }
+    updateAssetNameTruncation(assetId)
+    return
+  }
+  if (!(assetId in assetTitleElements.value)) {
+    return
+  }
+  const nextElements = { ...assetTitleElements.value }
+  delete nextElements[assetId]
+  assetTitleElements.value = nextElements
+}
+
+function updateAssetNameTruncation(assetId: string): void {
+  const element = assetTitleElements.value[assetId]
+  if (!element) {
+    return
+  }
+  const isTruncated = element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1
+  const currentlyTruncated = truncatedAssetNameIds.value.has(assetId)
+  if (isTruncated === currentlyTruncated) {
+    return
+  }
+  const next = new Set(truncatedAssetNameIds.value)
+  if (isTruncated) {
+    next.add(assetId)
+  } else {
+    next.delete(assetId)
+  }
+  truncatedAssetNameIds.value = next
+}
+
+function handleAssetTitlePointerEnter(assetId: string): void {
+  updateAssetNameTruncation(assetId)
+}
+
+function refreshAssetNameTruncation(): void {
+  void nextTick(() => {
+    for (const asset of displayedAssets.value) {
+      updateAssetNameTruncation(asset.id)
+    }
+  })
+}
+
+watch(
+  displayedAssets,
+  (assets) => {
+    const visibleIds = new Set(assets.map((asset) => asset.id))
+
+    const nextElements: Record<string, HTMLElement> = {}
+    for (const [assetId, element] of Object.entries(assetTitleElements.value)) {
+      if (visibleIds.has(assetId)) {
+        nextElements[assetId] = element
+      }
+    }
+    assetTitleElements.value = nextElements
+
+    const nextTruncated = new Set<string>()
+    for (const assetId of truncatedAssetNameIds.value) {
+      if (visibleIds.has(assetId)) {
+        nextTruncated.add(assetId)
+      }
+    }
+    truncatedAssetNameIds.value = nextTruncated
+
+    refreshAssetNameTruncation()
+  },
+  { flush: 'post' },
+)
 
 watch(tagOptions, (options) => {
   if (!tagFilterValues.value.length) {
@@ -2261,11 +2373,18 @@ async function importLocalFile(
     signal?: AbortSignal
     onPhase?: (phase: DropImportStage) => void
   } = {},
-): Promise<ProjectAsset> {
+): Promise<DropImportOutcome> {
   const type = options.type ?? inferAssetType({ mimeType: file.type ?? null, nameOrUrl: file.name ?? null, fallbackType: 'file' })
   const fallbackName = options.displayName ?? (file.name && file.name.trim().length ? file.name : 'Dropped Asset')
+  const assetId = await computeBlobHash(file)
+  const existing = sceneStore.getAsset(assetId)
+  if (existing) {
+    options.onPhase?.('reuse-existing')
+    options.onPhase?.('finalize')
+    return { asset: existing, isNew: false }
+  }
   const draftAsset: ProjectAsset = {
-    id: `local:${file.name}:${file.size}:${file.lastModified}`,
+    id: assetId,
     name: fallbackName,
     type,
     downloadUrl: file.name ?? fallbackName,
@@ -2315,12 +2434,15 @@ async function importLocalFile(
   }
 
   if (!Object.keys(updates).length) {
-    return asset
+    return { asset, isNew: true }
   }
-  return sceneStore.updateProjectAssetMetadata(asset.id, updates) ?? asset
+  return {
+    asset: sceneStore.updateProjectAssetMetadata(asset.id, updates) ?? asset,
+    isNew: true,
+  }
 }
 
-async function importDataUrlAsset(dataUrl: string): Promise<ProjectAsset> {
+async function importDataUrlAsset(dataUrl: string): Promise<DropImportOutcome> {
   const blob = dataUrlToBlob(dataUrl)
   const mimeType = blob.type && blob.type.length ? blob.type : 'application/octet-stream'
   const extension = getExtensionFromMimeType(mimeType) ?? 'bin'
@@ -2330,8 +2452,12 @@ async function importDataUrlAsset(dataUrl: string): Promise<ProjectAsset> {
   return importLocalFile(file, { displayName: fileName, type })
 }
 
-function importRemoteAssetFromUrl(url: string): ProjectAsset {
+function importRemoteAssetFromUrl(url: string): DropImportOutcome {
   const normalizedUrl = normalizeRemoteUrl(url)
+  const existing = sceneStore.getAsset(normalizedUrl)
+  if (existing) {
+    return { asset: existing, isNew: false }
+  }
   const assetType = inferAssetType({ nameOrUrl: normalizedUrl, fallbackType: 'file' })
   const name = deriveAssetNameFromUrl(normalizedUrl)
   const asset: ProjectAsset = {
@@ -2346,58 +2472,166 @@ function importRemoteAssetFromUrl(url: string): ProjectAsset {
     extension: extractExtension(name) ?? null,
   }
   const categoryId = determineAssetCategoryId(asset)
-  return sceneStore.registerAsset(asset, {
-    categoryId,
-    source: { type: 'url' },
+  return {
+    asset: sceneStore.registerAsset(asset, {
+      categoryId,
+      source: { type: 'url' },
+    }),
+    isNew: true,
+  }
+}
+
+function buildDropImportFailure(sourceName: string, error: unknown): DropImportFailureItem {
+  const reason = error instanceof Error && error.message
+    ? error.message
+    : `Import failed for ${sourceName}`
+  return { sourceName, reason }
+}
+
+function buildAssetImportSummary(result: DropImportResult): string {
+  const successCount = result.newCount + result.reusedCount
+  const segments = [`成功 ${successCount} 个`]
+  if (result.reusedCount > 0) {
+    segments.push(`复用 ${result.reusedCount} 个`)
+  }
+  if (result.failedItems.length > 0) {
+    segments.push(`失败 ${result.failedItems.length} 个`)
+  }
+  return `资产导入完成，${segments.join('，')}`
+}
+
+function buildImportFailureDetails(items: DropImportFailureItem[]): { label: string; description: string }[] {
+  const details = items.slice(0, MAX_IMPORT_FAILURE_DETAILS).map((item) => ({
+    label: item.sourceName,
+    description: item.reason,
+  }))
+  if (items.length > MAX_IMPORT_FAILURE_DETAILS) {
+    details.push({
+      label: '更多失败项',
+      description: `其余 ${items.length - MAX_IMPORT_FAILURE_DETAILS} 个失败项已省略，请查看控制台日志。`,
+    })
+  }
+  return details
+}
+
+function syncAssetImportOverlayFromProgress(progress: DropImportProgressState | null): void {
+  if (!progress) {
+    return
+  }
+  const inFlight = progress.currentStep > 0 ? progress.currentStep / Math.max(progress.stepCount, 1) : 0
+  const percent = ((progress.completed + inFlight) / Math.max(progress.total, 1)) * 100
+  uiStore.updateLoadingOverlay({
+    message: progress.currentFileName
+      ? `${progress.currentPhase} (${progress.currentFileName})`
+      : progress.currentPhase,
+    progress: Math.max(0, Math.min(100, percent)),
   })
 }
 
-async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: ProjectAsset[]; errors: string[] }> {
+function showAssetImportOverlay(total: number): void {
+  uiStore.showLoadingOverlay({
+    title: '导入资产',
+    message: total > 0 ? `准备导入 ${total} 个资源…` : '准备导入资源…',
+    mode: 'determinate',
+    progress: 0,
+    closable: false,
+    cancelable: false,
+    autoClose: false,
+    interactionLock: ASSET_IMPORT_INTERACTION_LOCK,
+    detailsTitle: '失败详情',
+    details: [],
+    detailsExpanded: false,
+  })
+}
+
+function showAssetImportResultOverlay(result: DropImportResult): void {
+  uiStore.updateLoadingOverlay({
+    title: '导入资产',
+    message: buildAssetImportSummary(result),
+    progress: 100,
+    closable: true,
+    cancelable: false,
+    autoClose: result.failedItems.length === 0,
+    autoCloseDelay: result.failedItems.length === 0 ? 1400 : 0,
+    interactionLock: result.failedItems.length === 0 ? null : ASSET_IMPORT_INTERACTION_LOCK,
+    detailsTitle: '失败详情',
+    details: buildImportFailureDetails(result.failedItems),
+    detailsExpanded: result.failedItems.length > 0,
+  })
+}
+
+async function processAssetDrop(dataTransfer: DataTransfer): Promise<DropImportResult> {
   const collected = new Map<string, ProjectAsset>()
-  const errors: string[] = []
   const files = getDroppedFiles(dataTransfer)
-  beginDropImportProgress(files.length)
+  const urls = extractAssetUrlsFromDataTransfer(dataTransfer)
+  const failedItems: DropImportFailureItem[] = []
+  let newCount = 0
+  let reusedCount = 0
+  beginDropImportProgress(files.length + urls.length)
   for (const file of files) {
     let failed = false
     try {
-      const asset = await importLocalFile(file, {
+      const outcome = await importLocalFile(file, {
         signal: dropImportAbortController?.signal,
         onPhase: (phase) => updateDropImportProgress(file.name, phase),
       })
-      collected.set(asset.id, asset)
+      collected.set(outcome.asset.id, outcome.asset)
+      if (outcome.isNew) {
+        newCount += 1
+      } else {
+        reusedCount += 1
+      }
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
         throw error
       }
       failed = true
-      const message = (error as Error).message ?? `Import failed: ${file.name}`
-      errors.push(message)
+      failedItems.push(buildDropImportFailure(file.name, error))
     } finally {
       completeDropImportProgress(file.name, failed)
     }
   }
 
-  const urls = extractAssetUrlsFromDataTransfer(dataTransfer)
   for (const url of urls) {
+    let failed = false
     try {
       if (url.startsWith('data:')) {
-        const asset = await importDataUrlAsset(url)
-        collected.set(asset.id, asset)
+        const outcome = await importDataUrlAsset(url)
+        collected.set(outcome.asset.id, outcome.asset)
+        if (outcome.isNew) {
+          newCount += 1
+        } else {
+          reusedCount += 1
+        }
       } else {
-        const asset = importRemoteAssetFromUrl(url)
-        collected.set(asset.id, asset)
+        updateDropImportProgress(url, 'finalize')
+        const outcome = importRemoteAssetFromUrl(url)
+        collected.set(outcome.asset.id, outcome.asset)
+        if (outcome.isNew) {
+          newCount += 1
+        } else {
+          reusedCount += 1
+        }
       }
     } catch (error) {
-  const message = (error as Error).message ?? `Import failed: ${url}`
-      errors.push(message)
+      failed = true
+      failedItems.push(buildDropImportFailure(url, error))
+    } finally {
+      completeDropImportProgress(url, failed)
     }
   }
 
-  return { assets: Array.from(collected.values()), errors }
+  return {
+    assets: Array.from(collected.values()),
+    totalSources: files.length + urls.length,
+    newCount,
+    reusedCount,
+    failedItems,
+  }
 }
 
 const allowAssetDrop = computed(() => true)
-const dropOverlayVisible = computed(() => dropActive.value || dropProcessing.value)
+const dropOverlayVisible = computed(() => dropActive.value)
 const dropOverlayMessage = computed(() => {
   if (!dropProcessing.value) {
     return 'Drag files, links, or scene nodes here to add assets'
@@ -2511,7 +2745,10 @@ async function handleGalleryDrop(event: DragEvent) {
       await handleSceneNodeDrop(draggedNodeId)
       return
     }
-    const { assets, errors } = await processAssetDrop(event.dataTransfer)
+    const totalSources = getDroppedFiles(event.dataTransfer).length + extractAssetUrlsFromDataTransfer(event.dataTransfer).length
+    showAssetImportOverlay(totalSources)
+    const result = await processAssetDrop(event.dataTransfer)
+    const { assets } = result
     if (assets.length) {
       // Preserve currently active directory when importing from local filesystem
       const previousActive = activeDirectoryId.value
@@ -2531,20 +2768,47 @@ async function handleGalleryDrop(event: DragEvent) {
         sceneStore.setActiveDirectory(previousActive)
       }
     }
-    if (assets.length && errors.length) {
-      showDropFeedback('error', `Successfully imported ${assets.length} assets, but ${errors.length} failed`)
-    } else if (assets.length) {
-      showDropFeedback('success', `Successfully imported ${assets.length} assets`)
-    } else if (errors.length) {
-      showDropFeedback('error', errors[0] ?? 'Failed to import assets')
+    if (result.totalSources > 0) {
+      showAssetImportResultOverlay(result)
+    }
+    const successCount = result.newCount + result.reusedCount
+    if (successCount > 0 && result.failedItems.length > 0) {
+      showDropFeedback('error', `Imported ${successCount} assets, but ${result.failedItems.length} failed`)
+    } else if (successCount > 0) {
+      showDropFeedback('success', `Imported ${successCount} assets`)
+    } else if (result.failedItems.length > 0) {
+      showDropFeedback('error', result.failedItems[0]?.reason ?? 'Failed to import assets')
     } else {
+      uiStore.updateLoadingOverlay({
+        title: '导入资产',
+        message: '未检测到可导入的资源',
+        progress: 100,
+        closable: true,
+        autoClose: true,
+        autoCloseDelay: 1200,
+        interactionLock: null,
+        details: [],
+        detailsExpanded: false,
+      })
       showDropFeedback('error', 'No importable assets detected')
     }
   } catch (error) {
     if ((error as Error).name === 'AbortError') {
+      uiStore.hideLoadingOverlay(true)
       return
     }
     console.error('Failed to process gallery drop payload', error)
+    uiStore.updateLoadingOverlay({
+      title: '导入资产',
+      message: (error as Error).message ?? 'Failed to process drop payload',
+      progress: 100,
+      closable: true,
+      autoClose: false,
+      interactionLock: ASSET_IMPORT_INTERACTION_LOCK,
+      detailsTitle: '失败详情',
+      details: buildImportFailureDetails([buildDropImportFailure('导入任务', error)]),
+      detailsExpanded: true,
+    })
     showDropFeedback('error', (error as Error).message ?? 'Failed to process drop payload')
   } finally {
     dropProcessing.value = false
@@ -2578,10 +2842,11 @@ function beginDropImportProgress(total: number): void {
     completed: 0,
     failed: 0,
     currentFileName: '',
-    currentPhase: DROP_IMPORT_STAGE_LABELS['extract-metadata'],
+    currentPhase: 'Preparing import…',
     currentStep: 0,
     stepCount: DROP_IMPORT_STAGE_ORDER.length,
   }
+  syncAssetImportOverlayFromProgress(dropImportProgress.value)
 }
 
 function updateDropImportProgress(fileName: string, phase: DropImportStage): void {
@@ -2595,6 +2860,7 @@ function updateDropImportProgress(fileName: string, phase: DropImportStage): voi
     currentPhase: DROP_IMPORT_STAGE_LABELS[phase],
     currentStep: DROP_IMPORT_STAGE_ORDER.indexOf(phase) + 1,
   }
+  syncAssetImportOverlayFromProgress(dropImportProgress.value)
 }
 
 function completeDropImportProgress(fileName: string, failed: boolean): void {
@@ -2607,8 +2873,10 @@ function completeDropImportProgress(fileName: string, failed: boolean): void {
     completed: Math.min(current.total, current.completed + 1),
     failed: current.failed + (failed ? 1 : 0),
     currentFileName: fileName,
+    currentPhase: failed ? 'Import failed' : 'Asset processed',
     currentStep: 0,
   }
+  syncAssetImportOverlayFromProgress(dropImportProgress.value)
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -3103,6 +3371,10 @@ onBeforeUnmount(() => {
     window.removeEventListener('paste', windowPasteListener, true)
     windowPasteListener = null
   }
+  if (typeof window !== 'undefined' && windowResizeListener) {
+    window.removeEventListener('resize', windowResizeListener)
+    windowResizeListener = null
+  }
   sceneStore.setDraggingAssetId(null)
   if (searchDebounceHandle !== null) {
     clearTimeout(searchDebounceHandle)
@@ -3422,7 +3694,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 @drop="handleAssetCardDrop($event, asset.id)"
               >
                 <div class="asset-preview" :style="{ background: asset.previewColor }">
-                  <div class="asset-select-control">
+                  <div class="asset-select-control" :class="{ 'is-visible': isAssetSelected(asset.id) }">
                     <v-checkbox-btn
                       :model-value="isAssetSelected(asset.id)"
                       density="compact"
@@ -3500,7 +3772,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
             <span v-if="dropOverlayStatus" class="drop-overlay__status">{{ dropOverlayStatus }}</span>
             <span v-if="dropOverlayCurrentFile" class="drop-overlay__file">{{ dropOverlayCurrentFile }}</span>
             <v-progress-linear
-              v-if="dropProcessing && dropImportProgress"
+              v-if="dropActive && dropProcessing && dropImportProgress"
               class="drop-overlay__progress"
               :model-value="dropOverlayPercent"
               color="primary"
@@ -4121,6 +4393,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   top: 6px;
   left: 6px;
   z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.resource-card:hover .asset-select-control,
+.asset-select-control.is-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .asset-select-control :deep(.v-selection-control) {
@@ -4179,6 +4460,13 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   color: #ffffff;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
   line-height: 1.1;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
 }
 
 .asset-subtitle {
@@ -4217,6 +4505,14 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   border-radius: 10px;
   backdrop-filter: blur(2px);
   z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.resource-card:hover .asset-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .asset-progress {
