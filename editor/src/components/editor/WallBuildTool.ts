@@ -89,6 +89,9 @@ export function createWallBuildTool(options: {
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
+  isEditReferenceVisible?: () => boolean
+  showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
+  hideStartIndicator?: () => void
   getWallBrush: () => { presetAssetId: string | null; presetData: WallPresetData | null }
   applyWallPreviewMaterials?: (group: THREE.Group, presetData: WallPresetData | null) => void
   normalizeWallDimensionsForViewport: (values: {
@@ -130,6 +133,10 @@ export function createWallBuildTool(options: {
   }
 
   let session: WallBuildToolSession | null = null
+
+  const hideStartIndicator = () => {
+    options.hideStartIndicator?.()
+  }
 
   const getShape = (): WallBuildShape => options.wallBuildShape.value ?? 'line'
 
@@ -175,6 +182,7 @@ export function createWallBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    hideStartIndicator()
     options.clearVertexSnap?.()
     session = null
     previewRenderer.reset()
@@ -218,6 +226,17 @@ export function createWallBuildTool(options: {
     }
     const node = findSceneNode(options.sceneStore.nodes, nodeId)
     return node?.dynamicMesh?.type === 'Wall' ? node : null
+  }
+
+  const getStartIndicatorHeight = (): number => {
+    if (session?.dimensions && Number.isFinite(session.dimensions.height) && session.dimensions.height > 0) {
+      return session.dimensions.height
+    }
+    const selectedNode = getExplicitWallEditNode()
+    if (selectedNode) {
+      return getWallNodeDimensions(selectedNode).height
+    }
+    return options.normalizeWallDimensionsForViewport({}).height
   }
 
   const applyWallPropsToSession = (
@@ -646,6 +665,7 @@ export function createWallBuildTool(options: {
     current.shapeDraft = null
     current.dragStart = startPoint.clone()
     current.dragEnd = startPoint.clone()
+    hideStartIndicator()
     previewRenderer.markDirty()
   }
 
@@ -692,7 +712,55 @@ export function createWallBuildTool(options: {
     }
     current.lastCommittedSegment = null
     current.segments = []
+    hideStartIndicator()
     previewRenderer.markDirty()
+    return true
+  }
+
+  const updateStartIndicatorCursorPreview = (event: PointerEvent): boolean => {
+    const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+    if (isCameraNavActive || options.isAltOverrideActive()) {
+      hideStartIndicator()
+      return false
+    }
+    if (options.isEditReferenceVisible?.()) {
+      hideStartIndicator()
+      return false
+    }
+
+    const hasBuildSession = Boolean(
+      session?.dragStart
+      || session?.shapeDraft
+      || (session?.polygonPoints.length ?? 0) > 0,
+    )
+    if (hasBuildSession) {
+      hideStartIndicator()
+      return false
+    }
+
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      hideStartIndicator()
+      return false
+    }
+
+    const currentShape = getShape()
+    const rawPointer = groundPointerHelper.clone()
+    const excludeNodeId = options.getWallEditNodeId()
+    const snappedPoint = currentShape === 'line'
+      ? snapPlacementPoint(event, rawPointer.clone(), {
+          fallback: event.shiftKey ? 'grid' : 'raw',
+          excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+          allowVertexSnap: event.shiftKey,
+        })
+      : currentShape === 'polygon'
+      ? snapPlacementPoint(event, rawPointer.clone(), {
+          excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+        })
+      : snapPlacementPoint(event, rawPointer.clone(), {
+          excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
+        })
+
+    options.showStartIndicator?.(snappedPoint, { height: getStartIndicatorHeight() })
     return true
   }
 
@@ -996,6 +1064,7 @@ export function createWallBuildTool(options: {
     }), current)
     if (!current.dragStart) {
       beginSegmentDrag(snappedPoint)
+      hideStartIndicator()
       return true
     }
 
@@ -1054,6 +1123,7 @@ export function createWallBuildTool(options: {
     if (lastPoint && lastPoint.distanceToSquared(point) <= 1e-6) {
       current.polygonPreviewEnd = point.clone()
       syncPolygonPreviewSegments(current)
+      hideStartIndicator()
       return true
     }
 
@@ -1066,6 +1136,7 @@ export function createWallBuildTool(options: {
     current.polygonPoints.push(point.clone())
     current.polygonPreviewEnd = point.clone()
     syncPolygonPreviewSegments(current)
+    hideStartIndicator()
     return true
   }
 
@@ -1278,6 +1349,8 @@ export function createWallBuildTool(options: {
         return false
       }
 
+      updateStartIndicatorCursorPreview(event)
+
       if (session?.shapeDraft) {
         const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
         if (!isCameraNavActive) {
@@ -1384,6 +1457,7 @@ export function createWallBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        hideStartIndicator()
         options.clearVertexSnap?.()
         return false
       }
@@ -1438,6 +1512,7 @@ export function createWallBuildTool(options: {
     },
 
     dispose: () => {
+      hideStartIndicator()
       options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession(false)
