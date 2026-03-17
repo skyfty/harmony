@@ -58,6 +58,9 @@ export function createRoadBuildTool(options: {
   defaultWidth: number
 
   isAltOverrideActive: () => boolean
+  isEditReferenceVisible?: () => boolean
+  showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
+  hideStartIndicator?: () => void
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
@@ -91,6 +94,10 @@ export function createRoadBuildTool(options: {
 
   let session: RoadBuildToolSession | null = null
 
+  const hideStartIndicator = () => {
+    options.hideStartIndicator?.()
+  }
+
   const clearPreview = () => {
     previewRenderer.clear(session)
   }
@@ -109,6 +116,7 @@ export function createRoadBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    hideStartIndicator()
     options.clearVertexSnap?.()
     session = null
     options.pointerInteraction.clearIfKind('buildToolRightClick')
@@ -172,6 +180,41 @@ export function createRoadBuildTool(options: {
 
     session.previewEnd = next
     updatePreview()
+  }
+
+  const updateStartIndicatorCursorPreview = (event: PointerEvent): boolean => {
+    const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+    if (isCameraNavActive || options.isAltOverrideActive()) {
+      hideStartIndicator()
+      return false
+    }
+    if (options.isEditReferenceVisible?.()) {
+      hideStartIndicator()
+      return false
+    }
+    if (session && session.points.length > 0) {
+      hideStartIndicator()
+      return false
+    }
+    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+      hideStartIndicator()
+      return false
+    }
+
+    const rawPointer = groundPointerHelper.clone()
+    rawPointer.y = 0
+
+    const snapped = options.resolveVertexSnapPoint?.(event, rawPointer, {
+      keepSourceY: true,
+    })
+    const point = snapped?.clone() ?? options.snapRoadPointToVertices(
+      rawPointer,
+      session?.snapVertices ?? options.collectRoadSnapVertices(),
+      options.vertexSnapDistance,
+    ).position.clone()
+
+    options.showStartIndicator?.(point, { height: 2 })
+    return true
   }
 
   const handlePlacementClick = (event: PointerEvent): boolean => {
@@ -332,6 +375,7 @@ export function createRoadBuildTool(options: {
                 current.snapVertices = options.collectRoadSnapVertices()
                 current.points.push(worldProjected.clone())
                 current.previewEnd = worldProjected.clone()
+                hideStartIndicator()
                 updatePreview()
                 return true
               }
@@ -372,6 +416,7 @@ export function createRoadBuildTool(options: {
     if (current.points.length === 0) {
       current.points.push(point.clone())
       current.previewEnd = point.clone()
+      hideStartIndicator()
       updatePreview()
       return true
     }
@@ -521,6 +566,8 @@ export function createRoadBuildTool(options: {
         return false
       }
 
+      updateStartIndicatorCursorPreview(event)
+
       if (session?.points.length) {
         const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
         if (!isCameraNavActive) {
@@ -583,6 +630,7 @@ export function createRoadBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        hideStartIndicator()
         options.clearVertexSnap?.()
         return false
       }
@@ -601,11 +649,13 @@ export function createRoadBuildTool(options: {
       current.snapVertices = options.collectRoadSnapVertices()
       current.targetNodeId = nodeId
       current.startVertexIndex = vertexIndex
+      hideStartIndicator()
       updatePreview({ immediate: true })
       return true
     },
 
     dispose: () => {
+      hideStartIndicator()
       options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession({ disposePreview: false })

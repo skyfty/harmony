@@ -232,6 +232,7 @@ import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
 import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
+import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
 import { createCameraResetDirectionController, type CameraResetDirection } from './cameraResetDirection'
 import {
   createRoadVertexRenderer,
@@ -1940,9 +1941,20 @@ function isSelectedWaterEditMode(): boolean {
   return Boolean(resolveEditableWaterNode(selectedId))
 }
 
+let buildStartIndicatorRenderer: ReturnType<typeof createBuildStartIndicatorRenderer> | null = null
+
+function showBuildStartIndicator(point: THREE.Vector3, options?: { height?: number | null }) {
+  buildStartIndicatorRenderer?.showAt(point, options)
+}
+
+function hideBuildStartIndicator() {
+  buildStartIndicatorRenderer?.hide()
+}
+
 watch(
   () => [activeBuildTool.value, sceneStore.selectedNodeId] as const,
   () => {
+    hideBuildStartIndicator()
     const node = sceneStore.selectedNode ?? null
     if (!node) {
       return
@@ -1983,6 +1995,7 @@ watch(
 watch(
   () => activeBuildTool.value,
   (tool) => {
+    hideBuildStartIndicator()
     if (tool !== 'wall' && wallDoorSelectModeActive.value) {
       buildToolsStore.setWallDoorSelectModeActive(false)
     }
@@ -5630,6 +5643,10 @@ function resolveBuildToolVertexSnapPoint(
   return snapped
 }
 
+buildStartIndicatorRenderer = createBuildStartIndicatorRenderer({
+  rootGroup,
+})
+
 const wallBuildTool = createWallBuildTool({
   activeBuildTool,
   wallBuildShape,
@@ -5644,6 +5661,9 @@ const wallBuildTool = createWallBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isEditReferenceVisible: () => isSelectedWallEditMode(),
+  showStartIndicator: showBuildStartIndicator,
+  hideStartIndicator: hideBuildStartIndicator,
   normalizeWallDimensionsForViewport,
   getWallBrush: () => ({
     presetAssetId: wallBrushPresetAssetId.value,
@@ -5765,6 +5785,9 @@ const roadBuildTool = createRoadBuildTool({
   getScene: () => scene,
   defaultWidth: ROAD_DEFAULT_WIDTH,
   isAltOverrideActive: () => isAltOverrideActive,
+  isEditReferenceVisible: () => isSelectedRoadEditMode(),
+  showStartIndicator: showBuildStartIndicator,
+  hideStartIndicator: hideBuildStartIndicator,
   raycastGroundPoint,
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
@@ -5796,6 +5819,9 @@ const floorBuildTool = createFloorBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isEditReferenceVisible: () => isSelectedFloorEditMode(),
+  showStartIndicator: showBuildStartIndicator,
+  hideStartIndicator: hideBuildStartIndicator,
   getFloorBrush: () => ({
     presetAssetId: floorBrushPresetAssetId.value,
     presetData: floorBrushPresetData.value,
@@ -11185,6 +11211,8 @@ function disposeScene() {
   wallBuildTool.dispose()
   roadBuildTool.dispose()
   floorBuildTool.dispose()
+  buildStartIndicatorRenderer?.dispose()
+  buildStartIndicatorRenderer = null
   waterBuildTool.dispose()
   pendingSceneGraphSync = false
 }

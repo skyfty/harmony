@@ -11,6 +11,7 @@ import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
+import { buildFloorDynamicMeshPresetPatch } from '@/utils/floorPresetNodeMaterials'
 
 export type FloorBuildToolHandle = {
   getSession: () => FloorPreviewSession | null
@@ -53,6 +54,9 @@ export function createFloorBuildTool(options: {
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
+  isEditReferenceVisible?: () => boolean
+  showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
+  hideStartIndicator?: () => void
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
   applyFloorPreviewMaterials?: (group: THREE.Group, presetData: FloorPresetData | null) => void
   syncCreatedFloorMaterials?: (nodeId: string) => void
@@ -114,6 +118,16 @@ export function createFloorBuildTool(options: {
   let rightClickState: RightClickState | null = null
   let leftDragState: LeftDragState | null = null
 
+  const hideStartIndicator = () => {
+    options.hideStartIndicator?.()
+  }
+
+  const getStartIndicatorHeight = (): number => {
+    const presetPatch = buildFloorDynamicMeshPresetPatch(options.getFloorBrush().presetData)
+    const thickness = presetPatch?.thickness
+    return Number.isFinite(thickness) && Number(thickness) > 0 ? Number(thickness) : 2
+  }
+
   const getShape = (): FloorBuildShape => options.floorBuildShape.value ?? 'polygon'
 
   const ensureSession = (): FloorPreviewSession => {
@@ -135,6 +149,7 @@ export function createFloorBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    hideStartIndicator()
     options.clearVertexSnap?.()
     session = null
     rightClickState = null
@@ -155,6 +170,7 @@ export function createFloorBuildTool(options: {
     current.points = [start.clone()]
     current.previewEnd = start.clone()
     leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
+    hideStartIndicator()
     previewRenderer.markDirty()
     return true
   }
@@ -178,7 +194,33 @@ export function createFloorBuildTool(options: {
     current.points = [center.clone()]
     current.previewEnd = initialEnd
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
+    hideStartIndicator()
     previewRenderer.markDirty()
+    return true
+  }
+
+  const updateStartIndicatorCursorPreview = (event: PointerEvent): boolean => {
+    const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+    if (isCameraNavActive || options.isAltOverrideActive()) {
+      hideStartIndicator()
+      return false
+    }
+    if (options.isEditReferenceVisible?.()) {
+      hideStartIndicator()
+      return false
+    }
+    if (session && session.points.length > 0) {
+      hideStartIndicator()
+      return false
+    }
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      hideStartIndicator()
+      return false
+    }
+
+    const raw = groundPointerHelper.clone()
+    const point = resolvePlacementPoint(event, raw)
+    options.showStartIndicator?.(point, { height: getStartIndicatorHeight() })
     return true
   }
 
@@ -238,6 +280,7 @@ export function createFloorBuildTool(options: {
 
     current.points.push(point.clone())
     current.previewEnd = point.clone()
+    hideStartIndicator()
     previewRenderer.markDirty()
     return true
   }
@@ -348,6 +391,8 @@ export function createFloorBuildTool(options: {
       if (options.activeBuildTool.value !== 'floor') {
         return false
       }
+
+      updateStartIndicatorCursorPreview(event)
 
       if (leftDragState && event.pointerId === leftDragState.pointerId) {
         const isLeftButtonDown = (event.buttons & 1) !== 0
@@ -505,6 +550,7 @@ export function createFloorBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        hideStartIndicator()
         options.clearVertexSnap?.()
         return false
       }
@@ -513,6 +559,7 @@ export function createFloorBuildTool(options: {
     },
 
     dispose: () => {
+      hideStartIndicator()
       options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession(false)
