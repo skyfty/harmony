@@ -170,6 +170,9 @@ function updateWallCircleHandleMeshesForChain(options: {
     // Keep metadata in sync so per-frame camera-facing updates don't jump.
     child.userData.circleCenterLocal = { x: centerLocal.x, y: centerLocal.y, z: centerLocal.z }
     child.userData.circleRadius = radiusWorld
+    child.userData.anchorLocalX = local.x
+    child.userData.anchorLocalY = local.y
+    child.userData.anchorLocalZ = local.z
 
     child.position.set(
       local.x,
@@ -255,22 +258,31 @@ function syncFloorCircleHandlesFromDefinition(options: {
   if (!circle) return
 
   const thickness = Number.isFinite(definition.thickness) ? Math.max(0, Number(definition.thickness)) : 0
-  const yOffset = FLOOR_CIRCLE_HANDLE_Y + thickness * 0.5
+  const preferredLocalY = FLOOR_CIRCLE_HANDLE_Y + thickness
 
   handles.userData.centerX = circle.centerX
   handles.userData.centerZ = circle.centerZ
   handles.userData.radius = circle.radius
-  handles.userData.yOffset = yOffset
+  handles.userData.floorThickness = thickness
 
   for (const child of handles.children) {
-    child.userData.yOffset = yOffset
+    child.userData.floorThickness = thickness
     if (child.userData?.circleKind === 'center') {
-      child.position.set(circle.centerX, yOffset, circle.centerZ)
+      child.userData.anchorLocalX = circle.centerX
+      child.userData.anchorLocalY = 0
+      child.userData.anchorLocalZ = circle.centerZ
+      child.userData.yOffset = preferredLocalY
+      child.position.set(circle.centerX, preferredLocalY, circle.centerZ)
     } else if (child.userData?.circleKind === 'radius') {
       // Will be re-oriented toward camera by updateScreenSize; any valid point is fine here.
-      child.position.set(circle.centerX + circle.radius, yOffset, circle.centerZ)
+      child.userData.anchorLocalX = circle.centerX + circle.radius
+      child.userData.anchorLocalY = 0
+      child.userData.anchorLocalZ = circle.centerZ
+      child.userData.yOffset = preferredLocalY
+      child.position.set(circle.centerX + circle.radius, preferredLocalY, circle.centerZ)
     } else {
-      child.position.y = yOffset
+      child.userData.yOffset = preferredLocalY
+      child.position.y = preferredLocalY
     }
   }
 }
@@ -370,6 +382,9 @@ function updateWallHandleMeshesForChain(options: {
     wallHandleWorldTmp.copy(pointWorld)
     const local = containerObject.worldToLocal(wallHandleWorldTmp)
     const yOffset = Number(child.userData?.yOffset)
+    child.userData.anchorLocalX = local.x
+    child.userData.anchorLocalY = local.y
+    child.userData.anchorLocalZ = local.z
     child.position.set(
       local.x,
       local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET),
@@ -540,22 +555,26 @@ export function handlePointerMoveDrag(
       /* noop */
     }
 
-    // Update handle positions so the gizmo stays at mid-thickness while dragging.
+    // Keep the handle metadata aligned with the current thickness; renderer-side
+    // screen-space placement will clamp the final Y into view on the next frame.
     const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
     if (handles?.isGroup) {
-      const yOffset = FLOOR_VERTEX_HANDLE_Y + Math.max(0, state.thickness) * 0.5
+      const preferredLocalY = FLOOR_VERTEX_HANDLE_Y + Math.max(0, state.thickness)
       for (const child of handles.children) {
-        child.userData.yOffset = yOffset
-        child.position.y = yOffset
+        child.userData.floorThickness = state.thickness
+        child.userData.yOffset = preferredLocalY
+        child.position.y = preferredLocalY
       }
     }
 
     const circleHandles = state.containerObject.getObjectByName(FLOOR_CIRCLE_HANDLE_GROUP_NAME) as THREE.Group | null
     if (circleHandles?.isGroup) {
-      const yOffset = FLOOR_CIRCLE_HANDLE_Y + Math.max(0, state.thickness) * 0.5
+      const preferredLocalY = FLOOR_CIRCLE_HANDLE_Y + Math.max(0, state.thickness)
+      circleHandles.userData.floorThickness = state.thickness
       for (const child of circleHandles.children) {
-        child.userData.yOffset = yOffset
-        child.position.y = yOffset
+        child.userData.floorThickness = state.thickness
+        child.userData.yOffset = preferredLocalY
+        child.position.y = preferredLocalY
       }
     }
 
@@ -741,11 +760,17 @@ export function handlePointerMoveDrag(
       }
     }
 
-    // Update handle positions so the gizmo stays at mid-height while dragging.
+    // Keep the handle metadata aligned with the current height; renderer-side
+    // screen-space placement will clamp the final Y into view on the next frame.
     const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
     if (handles?.isGroup) {
-      const yOffset = Math.max(0.05, quantized * 0.5)
       for (const child of handles.children) {
+        if (child?.userData?.handleKind === 'circle') {
+          child.userData.wallHeight = quantized
+          child.userData.yOffset = Math.max(WALL_ENDPOINT_HANDLE_Y_OFFSET, quantized)
+          continue
+        }
+
         const handleKind = child?.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
         const chainStartIndex = Math.max(0, Math.trunc(Number(child?.userData?.chainStartIndex)))
         const chainEndIndex = Math.max(chainStartIndex, Math.trunc(Number(child?.userData?.chainEndIndex)))
@@ -769,8 +794,12 @@ export function handlePointerMoveDrag(
 
         const local = state.containerObject.worldToLocal(pointWorld)
 
-        child.userData.yOffset = yOffset
-        child.position.set(local.x, local.y + yOffset, local.z)
+        child.userData.anchorLocalX = local.x
+        child.userData.anchorLocalY = local.y
+        child.userData.anchorLocalZ = local.z
+        child.userData.wallHeight = quantized
+        child.userData.yOffset = Math.max(WALL_ENDPOINT_HANDLE_Y_OFFSET, quantized)
+        child.position.set(local.x, local.y + Math.max(WALL_ENDPOINT_HANDLE_Y_OFFSET, quantized), local.z)
       }
     }
 
@@ -814,17 +843,17 @@ export function handlePointerMoveDrag(
       }
     } else {
       if (!state.startHitWorld) {
-        if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+        if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
           return { handled: true }
         }
-        state.startHitWorld = ctx.groundPointerHelper.clone()
+        state.startHitWorld = tmpIntersection.clone()
       }
-      if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+      if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
 
       const startHit = state.startHitWorld ?? state.startEndpointWorld
-      const delta = ctx.groundPointerHelper.clone().sub(startHit)
+      const delta = tmpIntersection.clone().sub(startHit)
       delta.y = 0
       const target = state.startEndpointWorld.clone().add(delta)
       target.y = state.startEndpointWorld.y
@@ -946,6 +975,9 @@ export function handlePointerMoveDrag(
         }) as THREE.Object3D | undefined
         if (handleMesh) {
           const yOffset = Number(handleMesh.userData?.yOffset)
+          handleMesh.userData.anchorLocalX = local.x
+          handleMesh.userData.anchorLocalY = local.y
+          handleMesh.userData.anchorLocalZ = local.z
           handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
         }
       }
@@ -1184,17 +1216,17 @@ export function handlePointerMoveDrag(
       }
     } else {
       if (!state.startHitWorld) {
-        if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+        if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
           return { handled: true }
         }
-        state.startHitWorld = ctx.groundPointerHelper.clone()
+        state.startHitWorld = tmpIntersection.clone()
       }
-      if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+      if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
 
       const startHit = state.startHitWorld ?? state.startJointWorld
-      const delta = ctx.groundPointerHelper.clone().sub(startHit)
+      const delta = tmpIntersection.clone().sub(startHit)
       delta.y = 0
       const target = state.startJointWorld.clone().add(delta)
       target.y = state.startJointWorld.y
@@ -1339,6 +1371,9 @@ export function handlePointerMoveDrag(
         }) as THREE.Object3D | undefined
         if (handleMesh) {
           const yOffset = Number(handleMesh.userData?.yOffset)
+          handleMesh.userData.anchorLocalX = local.x
+          handleMesh.userData.anchorLocalY = local.y
+          handleMesh.userData.anchorLocalZ = local.z
           handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
         }
       }
@@ -1583,6 +1618,9 @@ export function handlePointerMoveDrag(
         const z = Number(v[1])
         if (!Number.isFinite(x) || !Number.isFinite(z)) continue
         const y = Number(child?.userData?.yOffset)
+        child.userData.anchorLocalX = x
+        child.userData.anchorLocalY = 0
+        child.userData.anchorLocalZ = z
         child.position.set(x, Number.isFinite(y) ? y : FLOOR_VERTEX_HANDLE_Y, z)
       }
     }

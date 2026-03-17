@@ -4,6 +4,7 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { splitWallSegmentsIntoChains } from './wallSegmentUtils'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
+import { resolveVisibleLocalHandleY } from './visibleHandleYUtils'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 
 export type WallEndpointHandleState = {
@@ -40,7 +41,6 @@ export type WallEndpointHandlePickResult = {
 export type WallEndpointRenderer = {
   clear(): void
   clearHover(): void
-  setDynamicYOffset(yOffset: number | null): void
   setActiveHandle(active: {
     nodeId: string
     chainStartIndex: number
@@ -107,6 +107,8 @@ const WALL_CIRCLE_CENTER_HANDLE_EXTRA_Y = 0.15
 const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MIN = 0.1
 const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MAX = 0.5
 const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_RATIO = 0.15
+const WALL_ENDPOINT_HANDLE_TOP_MARGIN_PX = 72
+const WALL_ENDPOINT_HANDLE_BOTTOM_MARGIN_PX = 56
 
 function distanceSqXZPoints(a: any, b: any): number {
   const ax = Number(a?.x) || 0
@@ -318,21 +320,6 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     refreshHighlight()
   }
 
-  function setDynamicYOffset(yOffset: number | null) {
-    if (!state) {
-      return
-    }
-    const dynamicYOffset = typeof yOffset === 'number' && Number.isFinite(yOffset) ? yOffset : null
-    state.group.userData.dynamicYOffset = dynamicYOffset
-
-    for (const child of state.group.children) {
-      const basePointY = Number(child.userData?.basePointY)
-      const defaultYOffset = Number(child.userData?.yOffset)
-      const effectiveYOffset = dynamicYOffset ?? (Number.isFinite(defaultYOffset) ? defaultYOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET)
-      child.position.y = (Number.isFinite(basePointY) ? basePointY : 0) + effectiveYOffset
-    }
-  }
-
   function setActiveHandle(next: {
     nodeId: string
     chainStartIndex: number
@@ -446,8 +433,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     }
 
     const height = Math.max(0.1, definition.dimensions?.height ?? 3)
-    // Place the gizmo at the middle of the wall height for better intuition.
-    const yOffset = height * 0.5
+    const preferredYOffset = height
 
     const chainRanges = splitWallSegmentsIntoChains(segments as any[])
     chainRanges.forEach((range, chainIndex) => {
@@ -518,11 +504,14 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
             ? `WallJointHandle_${chainIndex + 1}_${options.jointIndex}`
             : `WallCircleHandle_${chainIndex + 1}_${options.circleKind}`
         }
-        handle.position.set(x, (Number.isFinite(y) ? y : 0) + yOffset, z)
+        handle.position.set(x, (Number.isFinite(y) ? y : 0) + preferredYOffset, z)
         handle.layers.enableAll()
         handle.userData.editorOnly = true
         handle.userData.isWallEndpointHandle = true
         handle.userData.nodeId = selectedNodeId
+        handle.userData.anchorLocalX = x
+        handle.userData.anchorLocalY = Number.isFinite(y) ? y : 0
+        handle.userData.anchorLocalZ = z
         handle.userData.chainStartIndex = range.startIndex
         handle.userData.chainEndIndex = range.endIndex
         handle.userData.handleKind = options.handleKind
@@ -539,14 +528,14 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         }
         handle.userData.baseDiameter = gizmo.baseDiameter
         handle.userData.endpointGizmo = gizmo
-        handle.userData.basePointY = Number.isFinite(y) ? y : 0
+        handle.userData.wallHeight = height
         handle.userData.handleKey =
           options.handleKind === 'joint'
             ? `${selectedNodeId}:${range.startIndex}:${range.endIndex}:joint:${options.jointIndex}`
             : options.handleKind === 'circle'
               ? `${selectedNodeId}:${range.startIndex}:${range.endIndex}:circle:${options.circleKind}`
             : `${selectedNodeId}:${range.startIndex}:${range.endIndex}:endpoint:${options.endpointKind}`
-        handle.userData.yOffset = yOffset
+        handle.userData.yOffset = preferredYOffset
 
         handle.traverse((child) => {
           const mesh = child as THREE.Mesh
@@ -651,12 +640,40 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     state.group.updateWorldMatrix(true, true)
 
     options.camera.getWorldPosition(tmpCameraWorldPos)
+    const runtimeObject = (state.group.parent as THREE.Object3D | null) ?? state.group
+
+    for (const child of state.group.children) {
+      if (child?.userData?.handleKind === 'circle') {
+        continue
+      }
+
+      const anchorX = Number(child?.userData?.anchorLocalX)
+      const anchorY = Number(child?.userData?.anchorLocalY)
+      const anchorZ = Number(child?.userData?.anchorLocalZ)
+      const wallHeight = Number(child?.userData?.wallHeight)
+      if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY) || !Number.isFinite(anchorZ)) {
+        continue
+      }
+
+      tmpLocalPos.set(anchorX, anchorY, anchorZ)
+      const resolvedLocalY = resolveVisibleLocalHandleY({
+        camera: options.camera,
+        canvas: options.canvas,
+        runtimeObject,
+        localAnchor: tmpLocalPos,
+        preferredLocalY: anchorY + Math.max(0.1, Number.isFinite(wallHeight) ? wallHeight : 0.1),
+        minLocalY: anchorY + WALL_ENDPOINT_HANDLE_Y_OFFSET,
+        topMarginPx: WALL_ENDPOINT_HANDLE_TOP_MARGIN_PX,
+        bottomMarginPx: WALL_ENDPOINT_HANDLE_BOTTOM_MARGIN_PX,
+      })
+      child.userData.yOffset = resolvedLocalY - anchorY
+      child.position.set(anchorX, resolvedLocalY, anchorZ)
+    }
 
     // Circle radius handle: place at the nearest-to-camera point on the circle (XZ)
     // to reduce occlusion. Skip while a circle drag is active so moveDrag can own
     // the handle placement without fighting this per-frame update.
     if (!options.freezeCircleFacing) {
-      const runtimeObject = (state.group.parent as THREE.Object3D | null) ?? null
       if (runtimeObject) {
         tmpCameraLocalPos.copy(tmpCameraWorldPos)
         runtimeObject.worldToLocal(tmpCameraLocalPos)
@@ -671,7 +688,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
           if (!centerLocalRaw || !Number.isFinite(radiusRaw) || radiusRaw <= 1e-6) continue
 
           const centerLocal = tmpLocalPos.set(centerLocalRaw.x, centerLocalRaw.y, centerLocalRaw.z)
-          const yOffset = Number(child.userData?.yOffset)
+          const wallHeight = Math.max(0.1, Number(child?.userData?.wallHeight) || 0.1)
 
           if (circleKind === 'center') {
             const dir = tmpCameraLocalPos.clone().sub(centerLocal)
@@ -687,9 +704,23 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
               WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MAX,
             )
             const frontPosLocal = centerLocal.clone().add(dir.multiplyScalar(frontOffset))
+            const resolvedLocalY = resolveVisibleLocalHandleY({
+              camera: options.camera,
+              canvas: options.canvas,
+              runtimeObject,
+              localAnchor: frontPosLocal,
+              preferredLocalY: centerLocal.y + wallHeight + WALL_CIRCLE_CENTER_HANDLE_EXTRA_Y,
+              minLocalY: centerLocal.y + WALL_ENDPOINT_HANDLE_Y_OFFSET + WALL_CIRCLE_CENTER_HANDLE_EXTRA_Y,
+              topMarginPx: WALL_ENDPOINT_HANDLE_TOP_MARGIN_PX,
+              bottomMarginPx: WALL_ENDPOINT_HANDLE_BOTTOM_MARGIN_PX,
+            })
+            child.userData.anchorLocalX = frontPosLocal.x
+            child.userData.anchorLocalY = centerLocal.y
+            child.userData.anchorLocalZ = frontPosLocal.z
+            child.userData.yOffset = resolvedLocalY - centerLocal.y - WALL_CIRCLE_CENTER_HANDLE_EXTRA_Y
             child.position.set(
               frontPosLocal.x,
-              frontPosLocal.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET) + WALL_CIRCLE_CENTER_HANDLE_EXTRA_Y,
+              resolvedLocalY,
               frontPosLocal.z,
             )
             continue
@@ -703,9 +734,23 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
             dir.normalize()
           }
           const radiusPosLocal = centerLocal.clone().add(dir.multiplyScalar(radiusRaw))
+          const resolvedLocalY = resolveVisibleLocalHandleY({
+            camera: options.camera,
+            canvas: options.canvas,
+            runtimeObject,
+            localAnchor: radiusPosLocal,
+            preferredLocalY: centerLocal.y + wallHeight,
+            minLocalY: centerLocal.y + WALL_ENDPOINT_HANDLE_Y_OFFSET,
+            topMarginPx: WALL_ENDPOINT_HANDLE_TOP_MARGIN_PX,
+            bottomMarginPx: WALL_ENDPOINT_HANDLE_BOTTOM_MARGIN_PX,
+          })
+          child.userData.anchorLocalX = radiusPosLocal.x
+          child.userData.anchorLocalY = centerLocal.y
+          child.userData.anchorLocalZ = radiusPosLocal.z
+          child.userData.yOffset = resolvedLocalY - centerLocal.y
           child.position.set(
             radiusPosLocal.x,
-            radiusPosLocal.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET),
+            resolvedLocalY,
             radiusPosLocal.z,
           )
         }
@@ -917,7 +962,6 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
   return {
     clear,
     clearHover,
-    setDynamicYOffset,
     setActiveHandle,
     updateHover,
     ensure,

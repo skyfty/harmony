@@ -2,7 +2,8 @@ import * as THREE from 'three'
 import type { SceneNode, WallDynamicMesh } from '@schema'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
-import type { FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
+import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, type FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
+import { WALL_ENDPOINT_HANDLE_GROUP_NAME } from '../WallEndpointRenderer'
 import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from '../planarEditMath'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
@@ -43,6 +44,76 @@ function distSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
 
 function isAxisAlignedEdge(a: THREE.Vector3, b: THREE.Vector3, eps = RECTANGLE_CHAIN_EPS): boolean {
   return Math.abs(a.x - b.x) <= eps || Math.abs(a.z - b.z) <= eps
+}
+
+function getHandleWorldPosition(handle: THREE.Object3D | null): THREE.Vector3 | null {
+  if (!handle) {
+    return null
+  }
+  handle.updateWorldMatrix(true, false)
+  return handle.getWorldPosition(new THREE.Vector3())
+}
+
+function findWallHandleObject(options: {
+  runtimeObject: THREE.Object3D
+  chainStartIndex: number
+  chainEndIndex: number
+  handleKind: 'endpoint' | 'joint' | 'circle'
+  endpointKind?: 'start' | 'end'
+  jointIndex?: number
+  circleKind?: 'center' | 'radius'
+}): THREE.Object3D | null {
+  const group = options.runtimeObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+  if (!group?.isGroup) {
+    return null
+  }
+  return group.children.find((child) => {
+    const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+    const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+    if (startIndex !== options.chainStartIndex || endIndex !== options.chainEndIndex) {
+      return false
+    }
+    if (child?.userData?.handleKind !== options.handleKind) {
+      return false
+    }
+    if (options.handleKind === 'endpoint') {
+      return child?.userData?.endpointKind === options.endpointKind
+    }
+    if (options.handleKind === 'joint') {
+      return Math.trunc(Number(child?.userData?.jointIndex)) === Math.trunc(Number(options.jointIndex))
+    }
+    return child?.userData?.circleKind === options.circleKind
+  }) ?? null
+}
+
+function findFloorCircleHandleObject(runtimeObject: THREE.Object3D, circleKind: 'center' | 'radius'): THREE.Object3D | null {
+  const group = runtimeObject.getObjectByName(FLOOR_CIRCLE_HANDLE_GROUP_NAME) as THREE.Group | null
+  if (!group?.isGroup) {
+    return null
+  }
+  return group.children.find((child) => child?.userData?.circleKind === circleKind) ?? null
+}
+
+function resolveWallHandleDragReferenceWorld(options: {
+  runtimeObject: THREE.Object3D
+  chainStartIndex: number
+  chainEndIndex: number
+  handleKind: 'endpoint' | 'joint' | 'circle'
+  handleHitPoint: THREE.Vector3
+  endpointKind?: 'start' | 'end'
+  jointIndex?: number
+  circleKind?: 'center' | 'radius'
+  fallbackWorld: THREE.Vector3
+}): THREE.Vector3 {
+  return getHandleWorldPosition(findWallHandleObject({
+    runtimeObject: options.runtimeObject,
+    chainStartIndex: options.chainStartIndex,
+    chainEndIndex: options.chainEndIndex,
+    handleKind: options.handleKind,
+    endpointKind: options.endpointKind,
+    jointIndex: options.jointIndex,
+    circleKind: options.circleKind,
+  })) ?? options.handleHitPoint.clone() ?? options.fallbackWorld.clone()
 }
 
 function sideOf(value: number, min: number, max: number, eps = RECTANGLE_CHAIN_EPS): 'min' | 'max' {
@@ -176,6 +247,20 @@ function computeFloorCircleLocalFromVertices(vertices: any[]): { centerX: number
   return { centerX: circle.centerX, centerZ: circle.centerY, radius: circle.radius, segments: circle.segments }
 }
 
+function resolveWallDragStartHitWorld(options: {
+  event: PointerEvent
+  projection: 'ground' | 'plane'
+  dragPlane: THREE.Plane
+  raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
+  raycastPlanePoint: (event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3) => boolean
+}): THREE.Vector3 | null {
+  const point = new THREE.Vector3()
+  if (options.projection === 'plane') {
+    return options.raycastPlanePoint(options.event, options.dragPlane, point) ? point.clone() : null
+  }
+  return options.raycastGroundPoint(options.event, point) ? point.clone() : null
+}
+
 export function handlePointerDownTools(
   event: PointerEvent,
   ctx: {
@@ -250,6 +335,8 @@ export function handlePointerDownTools(
       startPointWorld: THREE.Vector3
       freePlaneNormal?: THREE.Vector3
     }) => THREE.Plane
+    raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
+    raycastPlanePoint: (event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3) => boolean
 
     nodes: SceneNode[]
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
@@ -346,6 +433,15 @@ export function handlePointerDownTools(
 
                 const radiusPointWorld = centerWorld.clone().add(new THREE.Vector3(radius, 0, 0))
                 const startPointWorld = (circleKind === 'radius' ? radiusPointWorld : centerWorld).clone()
+                const dragReferenceWorld = resolveWallHandleDragReferenceWorld({
+                  runtimeObject: runtime,
+                  chainStartIndex,
+                  chainEndIndex,
+                  handleKind: 'circle',
+                  circleKind,
+                  handleHitPoint: handleHit.point,
+                  fallbackWorld: startPointWorld,
+                })
 
                 // Special case: dragging the center handle's Y axis arrow adjusts wall height.
                 const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
@@ -365,8 +461,19 @@ export function handlePointerDownTools(
 
                 if (isYAxisDrag) {
                   const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
-                  const heightStartPointWorld = centerWorld.clone()
-                  heightStartPointWorld.y += Math.max(0.05, dimensions.height * 0.5)
+                  const heightStartPointWorld =
+                    getHandleWorldPosition(findWallHandleObject({
+                      runtimeObject: runtime,
+                      chainStartIndex,
+                      chainEndIndex,
+                      handleKind: 'circle',
+                      circleKind: 'center',
+                    })) ?? centerWorld.clone().setY(centerWorld.y + Math.max(0.05, dimensions.height))
+                  const dragPlane = ctx.createEndpointDragPlane({
+                    mode: 'axis',
+                    axisWorld: new THREE.Vector3(0, axisSign, 0),
+                    startPointWorld: heightStartPointWorld,
+                  })
 
                   const wallHeightDragState: WallHeightDragState = {
                     pointerId: event.pointerId,
@@ -376,13 +483,15 @@ export function handlePointerDownTools(
                     moved: false,
 
                     axisSign,
-                    dragPlane: ctx.createEndpointDragPlane({
-                      mode: 'axis',
-                      axisWorld: new THREE.Vector3(0, axisSign, 0),
-                      startPointWorld: heightStartPointWorld,
-                    }),
+                    dragPlane,
                     startPointWorld: heightStartPointWorld.clone(),
-                    startHitWorld: null,
+                    startHitWorld: resolveWallDragStartHitWorld({
+                      event,
+                      projection: 'plane',
+                      dragPlane,
+                      raycastGroundPoint: ctx.raycastGroundPoint,
+                      raycastPlanePoint: ctx.raycastPlanePoint,
+                    }),
 
                     startHeight: dimensions.height,
 
@@ -423,8 +532,15 @@ export function handlePointerDownTools(
                 const dragPlane = ctx.createEndpointDragPlane({
                   mode: 'free',
                   axisWorld: null,
-                  startPointWorld,
+                  startPointWorld: dragReferenceWorld,
                   freePlaneNormal: new THREE.Vector3(0, 1, 0),
+                })
+                const startHitWorld = resolveWallDragStartHitWorld({
+                  event,
+                  projection: 'plane',
+                  dragPlane,
+                  raycastGroundPoint: ctx.raycastGroundPoint,
+                  raycastPlanePoint: ctx.raycastPlanePoint,
                 })
 
                 ctx.setActiveWallEndpointHandle({
@@ -449,7 +565,7 @@ export function handlePointerDownTools(
 
                     dragPlane,
                     startPointWorld,
-                    startHitWorld: null,
+                    startHitWorld,
 
                     containerObject: runtime,
 
@@ -492,7 +608,7 @@ export function handlePointerDownTools(
 
                   dragPlane,
                   startPointWorld,
-                  startHitWorld: null,
+                  startHitWorld,
 
                   containerObject: runtime,
 
@@ -548,6 +664,15 @@ export function handlePointerDownTools(
 
             const startEndpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
             const anchorPointWorld = endpointKind === 'start' ? startSeg.end.clone() : endSeg.start.clone()
+            const endpointDragReferenceWorld = resolveWallHandleDragReferenceWorld({
+              runtimeObject: runtime,
+              chainStartIndex,
+              chainEndIndex,
+              handleKind: 'endpoint',
+              endpointKind,
+              handleHitPoint: handleHit.point,
+              fallbackWorld: startEndpointWorld,
+            })
 
             const startJointWorld =
               handleKind === 'joint' && workingSegmentsWorld[jointIndex]
@@ -572,8 +697,21 @@ export function handlePointerDownTools(
 
             if (isYAxisDrag) {
               const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
-              const startPointWorld = (startJointWorld ?? startEndpointWorld).clone()
-              startPointWorld.y += Math.max(0.05, dimensions.height * 0.5)
+              const startPointSource = startJointWorld ?? startEndpointWorld
+              const startPointWorld =
+                getHandleWorldPosition(findWallHandleObject({
+                  runtimeObject: runtime,
+                  chainStartIndex,
+                  chainEndIndex,
+                  handleKind: handleKind === 'joint' ? 'joint' : 'endpoint',
+                  endpointKind: handleKind === 'joint' ? undefined : endpointKind,
+                  jointIndex: handleKind === 'joint' ? jointIndex : undefined,
+                })) ?? startPointSource.clone().setY(startPointSource.y + Math.max(0.05, dimensions.height))
+              const dragPlane = ctx.createEndpointDragPlane({
+                mode: 'axis',
+                axisWorld: new THREE.Vector3(0, axisSign, 0),
+                startPointWorld,
+              })
 
               const wallHeightDragState: WallHeightDragState = {
                 pointerId: event.pointerId,
@@ -583,13 +721,15 @@ export function handlePointerDownTools(
                 moved: false,
 
                 axisSign,
-                dragPlane: ctx.createEndpointDragPlane({
-                  mode: 'axis',
-                  axisWorld: new THREE.Vector3(0, axisSign, 0),
-                  startPointWorld,
-                }),
+                dragPlane,
                 startPointWorld: startPointWorld.clone(),
-                startHitWorld: null,
+                startHitWorld: resolveWallDragStartHitWorld({
+                  event,
+                  projection: 'plane',
+                  dragPlane,
+                  raycastGroundPoint: ctx.raycastGroundPoint,
+                  raycastPlanePoint: ctx.raycastPlanePoint,
+                }),
 
                 startHeight: dimensions.height,
 
@@ -645,6 +785,20 @@ export function handlePointerDownTools(
                     draggedCornerIndex: draggedCornerIndex as 0 | 1 | 2 | 3,
                   })
                   : null
+                const dragPlane = ctx.createEndpointDragPlane({
+                  mode: effectiveDragMode,
+                  axisWorld: effectiveAxisWorld,
+                  startPointWorld: resolveWallHandleDragReferenceWorld({
+                    runtimeObject: runtime,
+                    chainStartIndex,
+                    chainEndIndex,
+                    handleKind: 'joint',
+                    jointIndex: clampedJointIndex,
+                    handleHitPoint: handleHit.point,
+                    fallbackWorld: startJointWorld,
+                  }),
+                  freePlaneNormal: new THREE.Vector3(0, 1, 0),
+                })
 
                 const wallJointDragState: WallJointDragState = {
                   pointerId: event.pointerId,
@@ -661,13 +815,14 @@ export function handlePointerDownTools(
                   moved: false,
                   dragMode: effectiveDragMode,
                   axisWorld: effectiveAxisWorld,
-                  dragPlane: ctx.createEndpointDragPlane({
-                    mode: effectiveDragMode,
-                    axisWorld: effectiveAxisWorld,
-                    startPointWorld: startJointWorld,
-                    freePlaneNormal: new THREE.Vector3(0, 1, 0),
+                  dragPlane,
+                  startHitWorld: resolveWallDragStartHitWorld({
+                    event,
+                    projection: 'plane',
+                    dragPlane,
+                    raycastGroundPoint: ctx.raycastGroundPoint,
+                    raycastPlanePoint: ctx.raycastPlanePoint,
                   }),
-                  startHitWorld: null,
                   containerObject: runtime,
                   dimensions,
                   baseSegmentsWorld,
@@ -710,6 +865,13 @@ export function handlePointerDownTools(
               }
             }
 
+            const endpointDragPlane = ctx.createEndpointDragPlane({
+              mode: effectiveDragMode,
+              axisWorld: effectiveAxisWorld,
+              startPointWorld: endpointDragReferenceWorld,
+              freePlaneNormal: new THREE.Vector3(0, 1, 0),
+            })
+
             const wallEndpointDragState: WallEndpointDragState = {
               pointerId: event.pointerId,
               nodeId: handleHit.nodeId,
@@ -734,13 +896,14 @@ export function handlePointerDownTools(
               moved: false,
               dragMode: effectiveDragMode,
               axisWorld: effectiveAxisWorld,
-              dragPlane: ctx.createEndpointDragPlane({
-                mode: effectiveDragMode,
-                axisWorld: effectiveAxisWorld,
-                startPointWorld: startEndpointWorld,
-                freePlaneNormal: new THREE.Vector3(0, 1, 0),
+              dragPlane: endpointDragPlane,
+              startHitWorld: resolveWallDragStartHitWorld({
+                event,
+                projection: 'plane',
+                dragPlane: endpointDragPlane,
+                raycastGroundPoint: ctx.raycastGroundPoint,
+                raycastPlanePoint: ctx.raycastPlanePoint,
               }),
-              startHitWorld: null,
               containerObject: runtime,
               dimensions,
               baseSegmentsWorld,
@@ -845,8 +1008,9 @@ export function handlePointerDownTools(
                   : (Number.isFinite((node.dynamicMesh as any).thickness) ? Number((node.dynamicMesh as any).thickness) : FLOOR_DEFAULT_THICKNESS)
 
                 const clampedBase = Math.min(FLOOR_MAX_THICKNESS, Math.max(FLOOR_MIN_THICKNESS, baseThickness))
-                const yOffset = FLOOR_VERTEX_HANDLE_Y + clampedBase * 0.5
-                const startPointWorld = runtime.localToWorld(new THREE.Vector3(circle.centerX, yOffset, circle.centerZ))
+                const startPointWorld =
+                  getHandleWorldPosition(findFloorCircleHandleObject(runtime, 'center'))
+                  ?? runtime.localToWorld(new THREE.Vector3(circle.centerX, FLOOR_VERTEX_HANDLE_Y + clampedBase, circle.centerZ))
 
                 const floorThicknessDragState: FloorThicknessDragState = {
                   pointerId: event.pointerId,
