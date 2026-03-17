@@ -1669,6 +1669,18 @@ function promptRenameSelectedAsset() {
   assetRenameDialogOpen.value = true
 }
 
+function promptRenameAsset(assetId?: string) {
+  if (!assetId) return
+  assetRenameTargetId.value = assetId
+  const asset = displayedAssets.value.find((a) => a.id === assetId) ?? sceneStore.getAsset(assetId)
+  assetRenameValue.value = asset?.name ?? ''
+  assetRenameDialogOpen.value = true
+}
+
+function promptDeleteAsset(asset: ProjectAsset) {
+  openDeleteDialog([asset], false)
+}
+
 function cancelAssetRenameDialog() {
   assetRenameDialogOpen.value = false
   assetRenameTargetId.value = null
@@ -2187,6 +2199,8 @@ async function handleGalleryDrop(event: DragEvent) {
     }
     const { assets, errors } = await processAssetDrop(event.dataTransfer)
     if (assets.length) {
+      // Preserve currently active directory when importing from local filesystem
+      const previousActive = activeDirectoryId.value
       const categoryOrder = assets.map((asset) => determineAssetCategoryId(asset))
       const uniqueCategories = Array.from(new Set(categoryOrder.filter(Boolean)))
       uniqueCategories.forEach((categoryId) => {
@@ -2194,15 +2208,14 @@ async function handleGalleryDrop(event: DragEvent) {
           ensureDirectoryOpened(categoryId)
         }
       })
-      const targetCategory = uniqueCategories.length
-        ? uniqueCategories[uniqueCategories.length - 1]
-        : determineAssetCategoryId(assets[assets.length - 1]!)
-      if (targetCategory) {
-        sceneStore.setActiveDirectory(targetCategory)
-      }
+      // Do not change active directory on import; keep previousActive
       const lastAsset = assets[assets.length - 1]!
       sceneStore.selectAsset(lastAsset.id)
       selectedAssetIds.value = [lastAsset.id]
+      if (previousActive) {
+        // restore previous active directory to be explicit (no-op if unchanged)
+        sceneStore.setActiveDirectory(previousActive)
+      }
     }
     if (assets.length && errors.length) {
       showDropFeedback('error', `Successfully imported ${assets.length} assets, but ${errors.length} failed`)
@@ -2966,10 +2979,9 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       @click.stop="promptDeleteDirectory(directory.id)"
                     />
                   </div>
-                </div>
-                <div class="directory-info">
-                  <span class="directory-card-title">{{ directory.name }}</span>
-                  <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} assets</span>
+                  <div class="directory-info-overlay">
+                    <span class="directory-card-title">{{ directory.name }}</span>
+                  </div>
                 </div>
               </v-card>
               <v-card
@@ -3002,17 +3014,21 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     />
                   </div>
                   <div class="asset-actions">
-          
                     <v-btn
-                      color="primary"
-                      variant="tonal"
+                      v-if="getAssetMutationScope(asset) === 'local' || (providerIdForAsset(asset) === PRESET_PROVIDER_ID && authStore.canResourceWrite)"
+                      icon="mdi-pencil-outline"
+                      variant="text"
                       density="compact"
-                      icon="mdi-plus"
                       size="small"
-                      style="min-width: 20px; height: 20px;"
-                      :loading="addPendingAssetId === asset.id"
-                      :disabled="!canAddAsset(asset)"
-                      @click.stop="handleAddAsset(asset)"
+                      @click.stop="promptRenameAsset(asset.id)"
+                    />
+                    <v-btn
+                      v-if="canDeleteAsset(asset)"
+                      icon="mdi-delete-outline"
+                      variant="text"
+                      density="compact"
+                      size="small"
+                      @click.stop="promptDeleteAsset(asset)"
                     />
                   </div>
                   <img
@@ -3556,6 +3572,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  grid-auto-rows: 96px;
   gap: 8px;
   padding: 10px;
 }
@@ -3583,6 +3600,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   transition: border-color 150ms ease, transform 150ms ease;
   cursor: pointer;
   overflow: hidden;
+  height: 100%;
 }
 
 .resource-card:hover {
@@ -3591,7 +3609,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .asset-card {
-  min-height: 132px;
+  /* row height controlled by grid-auto-rows; ensure asset card fills the row */
+  height: 100%;
 }
 
 .asset-card.is-selected {
@@ -3764,7 +3783,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .directory-card {
-  min-height: 132px;
+  /* row height controlled by grid-auto-rows; ensure directory card fills the row */
+  height: 100%;
   outline: none;
 }
 
@@ -3797,11 +3817,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .directory-info {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px 10px 12px;
-  min-width: 0;
+  display: none;
 }
 
 .directory-card-title {
@@ -3814,6 +3830,16 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.directory-info-overlay {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  padding-right: 6px;
+  display: flex;
+  align-items: flex-end;
+  pointer-events: none;
 }
 
 .directory-card-subtitle {

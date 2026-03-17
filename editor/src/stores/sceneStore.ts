@@ -6705,7 +6705,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     createdAt: meta.createdAt,
     updatedAt: now,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
-    assetManifest: buildSceneAssetManifest(store.assetCatalog),
+    assetManifest: cloneAssetManifest(store.assetManifest) ?? buildSceneAssetManifest(store.assetCatalog),
     assetIndex: cloneAssetIndex(store.assetIndex),
     packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
     planningData: normalizedPlanningData ?? undefined,
@@ -10015,6 +10015,8 @@ export const useSceneStore = defineStore('scene', {
         updateNodes: false,
       })
       this.setActiveDirectory(directoryId)
+      // Persist scene immediately after modifying asset directories
+      void this.saveActiveScene({ force: true }).catch(() => {})
       return directoryId
     },
     renameAssetDirectory(projectDirectoryId: string, name: string): boolean {
@@ -10039,6 +10041,8 @@ export const useSceneStore = defineStore('scene', {
         commitSnapshot: true,
         updateNodes: false,
       })
+      // Persist scene immediately after renaming a directory
+      void this.saveActiveScene({ force: true }).catch(() => {})
       return true
     },
     moveAssetDirectory(projectDirectoryId: string, targetProjectDirectoryId: string): boolean {
@@ -10073,6 +10077,8 @@ export const useSceneStore = defineStore('scene', {
         updateNodes: false,
       })
       this.setActiveDirectory(directoryId)
+      // Persist scene immediately after moving a directory
+      void this.saveActiveScene({ force: true }).catch(() => {})
       return true
     },
     deleteAssetDirectory(projectDirectoryId: string): { removedDirectoryIds: string[]; removedAssetIds: string[] } {
@@ -10128,6 +10134,8 @@ export const useSceneStore = defineStore('scene', {
         updateNodes: false,
       })
       this.setActiveDirectory(parentId === manifest.rootDirectoryId ? ASSETS_ROOT_DIRECTORY_ID : parentId)
+      // Persist scene immediately after deleting a directory (and its assets)
+      void this.saveActiveScene({ force: true }).catch(() => {})
       return {
         removedDirectoryIds: Array.from(directoryIdsToRemove),
         removedAssetIds: Array.from(assetIdsToRemove),
@@ -10150,6 +10158,8 @@ export const useSceneStore = defineStore('scene', {
         commitSnapshot: true,
         updateNodes: false,
       })
+      // Persist scene immediately after renaming a project asset
+      void this.saveActiveScene({ force: true }).catch(() => {})
       return true
     },
     moveProjectAssetToDirectory(assetId: string, targetProjectDirectoryId: string): boolean {
@@ -10178,6 +10188,8 @@ export const useSceneStore = defineStore('scene', {
         commitSnapshot: true,
         updateNodes: false,
       })
+      // Persist scene immediately after moving an asset to a different directory
+      void this.saveActiveScene({ force: true }).catch(() => {})
       return true
     },
     getPackageDirectories(providerId: string): ProjectDirectory[] | null {
@@ -10410,6 +10422,9 @@ export const useSceneStore = defineStore('scene', {
       registeredAssets.forEach((asset) => {
         void this.syncAssetPackageMapEntry(asset, sourceByAssetId[asset.id])
       })
+
+      // Persist scene immediately after registering new assets so they survive reload
+      void this.saveActiveScene({ force: true }).catch(() => {})
 
       return registeredAssets
     },
@@ -10896,6 +10911,8 @@ export const useSceneStore = defineStore('scene', {
 
       if (deletableIds.length) {
         commitSceneSnapshot(this, { updateNodes: false })
+        // Persist scene immediately after deleting assets
+        void this.saveActiveScene({ force: true }).catch(() => {})
       }
 
       return deletableIds
@@ -10958,6 +10975,8 @@ export const useSceneStore = defineStore('scene', {
       }
 
       commitSceneSnapshot(this, { updateNodes: true })
+      // Persist scene after replacing a local asset with a server asset
+      void this.saveActiveScene({ force: true }).catch(() => {})
       return storedAsset
     },
     setResourceProviderId(providerId: string) {
