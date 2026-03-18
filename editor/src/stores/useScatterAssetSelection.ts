@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { assetProvider } from '@/resources/projectProviders/asset'
+import { assetProvider, type ScatterAssetOption } from '@/resources/projectProviders/asset'
 
 interface UseScatterAssetSelectionOptions {
   updateTerrainSelection?: boolean
@@ -23,18 +23,27 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
     await assetCacheStore.downloaProjectAsset(asset)
   }
 
-  async function selectScatterAsset(sourceAsset: ProjectAsset): Promise<ProjectAsset | null> {
+  async function selectScatterAsset(source: ScatterAssetOption): Promise<ProjectAsset | null> {
     if (selectingAssetId.value) {
       return null
     }
-    selectingAssetId.value = sourceAsset.id
+    selectingAssetId.value = source.providerAssetId
     try {
-      const registered = sceneStore.copyPackageAssetToAssets(assetProvider.id, sourceAsset)
+      if (source.source === 'scene') {
+        await ensureAssetCached(source.asset)
+        if (options?.updateTerrainSelection !== false) {
+          terrainStore.setScatterSelection({ asset: source.asset, providerAssetId: source.providerAssetId })
+        }
+        options?.onSelected?.(source.asset, source.providerAssetId)
+        return source.asset
+      }
+
+      const registered = sceneStore.copyPackageAssetToAssets(assetProvider.id, source.asset)
       await ensureAssetCached(registered)
       if (options?.updateTerrainSelection !== false) {
-        terrainStore.setScatterSelection({ asset: registered, providerAssetId: sourceAsset.id })
+        terrainStore.setScatterSelection({ asset: registered, providerAssetId: source.providerAssetId })
       }
-      options?.onSelected?.(registered, sourceAsset.id)
+      options?.onSelected?.(registered, source.providerAssetId)
       return registered
     } catch (error) {
       console.warn('Failed to prepare scatter asset', error)

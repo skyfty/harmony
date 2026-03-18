@@ -10,6 +10,7 @@ import type { ProjectDirectory } from '@/types/project-directory'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { mapServerAssetToProjectAsset, normalizeServerAssetType } from '@/api/serverAssetTypes'
 import { useAuthStore } from '@/stores/authStore'
+import { useSceneStore } from '@/stores/sceneStore'
 import type { ResourceProvider } from './types'
 
 interface ApiEnvelope<T> {
@@ -289,6 +290,12 @@ export interface TerrainScatterPreset {
   maxScale: number
 }
 
+export interface ScatterAssetOption {
+  asset: ProjectAsset
+  providerAssetId: string
+  source: 'server' | 'scene'
+}
+
 export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatterPreset> = {
   flora: {
     label: 'Flora',
@@ -314,9 +321,62 @@ export function invalidateAssetManifestCache(): void {
   manifestCache = null
 }
 
-export async function loadScatterAssets(category: TerrainScatterCategory): Promise<ProjectAsset[]> {
-  const manifest = await ensureManifest()
+function loadSceneScatterAssets(category: TerrainScatterCategory): ScatterAssetOption[] {
+  const sceneStore = useSceneStore()
+  const merged = new Map<string, ScatterAssetOption>()
+
+  Object.values(sceneStore.assetCatalog).forEach((assets) => {
+    assets.forEach((asset) => {
+      if (asset.terrainScatterPreset !== category) {
+        return
+      }
+      merged.set(asset.id, {
+        asset,
+        providerAssetId: asset.id,
+        source: 'scene',
+      })
+    })
+  })
+
+  return Array.from(merged.values())
+}
+
+function loadManifestScatterAssets(manifest: AssetManifest, category: TerrainScatterCategory): ScatterAssetOption[] {
   return Object.values(manifest.assetsById)
     .filter((entry) => entry.terrainScatterPreset === category)
-    .map(mapManifestEntry)
+    .map((entry) => {
+      const asset = mapManifestEntry(entry)
+      return {
+        asset,
+        providerAssetId: asset.id,
+        source: 'server' as const,
+      }
+    })
+}
+
+export async function loadScatterAssets(category: TerrainScatterCategory): Promise<ScatterAssetOption[]> {
+  const merged = new Map<string, ScatterAssetOption>()
+  const sceneAssets = loadSceneScatterAssets(category)
+
+  let manifestAssets: ScatterAssetOption[] = []
+  let manifestError: Error | null = null
+  try {
+    const manifest = await ensureManifest()
+    manifestAssets = loadManifestScatterAssets(manifest, category)
+  } catch (error) {
+    manifestError = error as Error
+  }
+
+  manifestAssets.forEach((entry) => {
+    merged.set(entry.asset.id, entry)
+  })
+  sceneAssets.forEach((entry) => {
+    merged.set(entry.asset.id, entry)
+  })
+
+  if (!merged.size && manifestError) {
+    throw manifestError
+  }
+
+  return Array.from(merged.values())
 }

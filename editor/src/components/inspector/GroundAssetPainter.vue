@@ -3,10 +3,11 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
+import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { useUiStore } from '@/stores/uiStore'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
-import { loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { loadScatterAssets, terrainScatterPresets, type ScatterAssetOption } from '@/resources/projectProviders/asset'
 import { useScatterAssetSelection } from '@/stores/useScatterAssetSelection'
 
 const props = defineProps<{
@@ -25,15 +26,16 @@ const emit = defineEmits<{
 }>()
 
 const terrainStore = useTerrainStore()
+const sceneStore = useSceneStore()
 
 const { scatterSelectedAsset, scatterProviderAssetId } = storeToRefs(terrainStore)
 
 const categoryKeys = Object.keys(terrainScatterPresets) as TerrainScatterCategory[]
-const assetBuckets = reactive<Record<TerrainScatterCategory, ProjectAsset[]>>(
+const assetBuckets = reactive<Record<TerrainScatterCategory, ScatterAssetOption[]>>(
   categoryKeys.reduce((acc, key) => {
     acc[key] = []
     return acc
-  }, {} as Record<TerrainScatterCategory, ProjectAsset[]>),
+  }, {} as Record<TerrainScatterCategory, ScatterAssetOption[]>),
 )
 const loadingMap = reactive<Record<TerrainScatterCategory, boolean>>(
   categoryKeys.reduce((acc, key) => {
@@ -59,7 +61,7 @@ const searchQuery = ref(props.search ?? '')
 
 watch(
   () => props.search,
-  (value) => {
+  (value: string | undefined) => {
     if (value === undefined) {
       return
     }
@@ -92,12 +94,12 @@ const placeholderIconSize = computed(() => {
   return Math.min(32, Math.max(16, Math.round(thumbnailSizePx.value * 0.35)))
 })
 
-const filteredAssets = computed(() => {
+const filteredAssets = computed<ScatterAssetOption[]>(() => {
   const list = assetBuckets[props.category] ?? []
   if (!normalizedSearch.value) {
     return list
   }
-  return list.filter((asset) => asset.name.toLowerCase().includes(normalizedSearch.value))
+  return list.filter((entry: ScatterAssetOption) => entry.asset.name.toLowerCase().includes(normalizedSearch.value))
 })
 
 const hasAnyAssets = computed(() => (assetBuckets[props.category]?.length ?? 0) > 0)
@@ -112,11 +114,11 @@ function handleSearchInput(value: string | null) {
   emit('update:search', searchQuery.value)
 }
 
-async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<void> {
+async function ensureAssetsLoaded(category: TerrainScatterCategory, options: { force?: boolean } = {}): Promise<void> {
   if (loadingMap[category]) {
     return
   }
-  if (assetBuckets[category]?.length) {
+  if (!options.force && assetBuckets[category]?.length) {
     return
   }
   loadingMap[category] = true
@@ -131,8 +133,8 @@ async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<voi
   }
 }
 
-async function handleAssetClick(asset: ProjectAsset): Promise<void> {
-  await selectScatterAsset(asset)
+async function handleAssetClick(entry: ScatterAssetOption): Promise<void> {
+  await selectScatterAsset(entry)
   const uiStore = useUiStore()
   uiStore.setActiveSelectionContext('scatter')
 }
@@ -141,14 +143,14 @@ function assetThumbnail(asset: ProjectAsset): string | null {
   return asset.thumbnail ?? null
 }
 
-function isAssetActive(assetId: string): boolean {
+function isAssetActive(entry: ScatterAssetOption): boolean {
   if (props.selectedProviderAssetId != null) {
-    return props.selectedProviderAssetId === assetId
+    return props.selectedProviderAssetId === entry.providerAssetId
   }
   if (scatterProviderAssetId.value) {
-    return scatterProviderAssetId.value === assetId
+    return scatterProviderAssetId.value === entry.providerAssetId
   }
-  return scatterSelectedAsset.value?.id === assetId
+  return scatterSelectedAsset.value?.id === entry.asset.id
 }
 
 onMounted(() => {
@@ -160,11 +162,20 @@ onMounted(() => {
 
 watch(
   () => props.category,
-  (category) => {
+  (category: TerrainScatterCategory) => {
     if (props.updateTerrainSelection !== false) {
       terrainStore.setScatterCategory(category)
     }
     void ensureAssetsLoaded(category)
+  },
+)
+
+watch(
+  () => sceneStore.assetCatalog,
+  () => {
+    categoryKeys.forEach((category) => {
+      void ensureAssetsLoaded(category, { force: true })
+    })
   },
 )
 </script>
@@ -195,17 +206,17 @@ watch(
     <template v-else>
       <div v-if="filteredAssets.length" class="thumbnail-grid">
         <button
-          v-for="asset in filteredAssets"
-          :key="asset.id"
+          v-for="entry in filteredAssets"
+          :key="entry.asset.id"
           class="thumbnail-item"
           type="button"
-          :title="asset.name || 'Untitled'"
-          :aria-label="asset.name || 'Untitled'"
-          :class="{ 'is-selected': isAssetActive(asset.id) }"
-          @click="handleAssetClick(asset)"
+          :title="entry.asset.name || 'Untitled'"
+          :aria-label="entry.asset.name || 'Untitled'"
+          :class="{ 'is-selected': isAssetActive(entry) }"
+          @click="handleAssetClick(entry)"
         >
-          <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(asset) ? `url(${assetThumbnail(asset)})` : undefined }">
-            <span v-if="!assetThumbnail(asset)" class="thumbnail-placeholder">
+          <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(entry.asset) ? `url(${assetThumbnail(entry.asset)})` : undefined }">
+            <span v-if="!assetThumbnail(entry.asset)" class="thumbnail-placeholder">
               <v-icon icon="mdi-cube-outline" :size="placeholderIconSize" />
             </span>
           </div>
