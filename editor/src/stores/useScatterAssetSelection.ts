@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { assetProvider, type ScatterAssetOption } from '@/resources/projectProviders/asset'
+import { assetProvider, terrainScatterPresets, type ScatterAssetOption } from '@/resources/projectProviders/asset'
 
 interface UseScatterAssetSelectionOptions {
   updateTerrainSelection?: boolean
@@ -23,28 +23,80 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
     await assetCacheStore.downloaProjectAsset(asset)
   }
 
+  function computeHorizontalBoundingCircleDiameter(bounds: { min: { x: number; z: number }; max: { x: number; z: number } }): number | null {
+    const maxAbsX = Math.max(Math.abs(Number(bounds.min.x)), Math.abs(Number(bounds.max.x)))
+    const maxAbsZ = Math.max(Math.abs(Number(bounds.min.z)), Math.abs(Number(bounds.max.z)))
+    if (!Number.isFinite(maxAbsX) || !Number.isFinite(maxAbsZ)) {
+      return null
+    }
+    const radius = Math.sqrt(maxAbsX * maxAbsX + maxAbsZ * maxAbsZ)
+    if (!Number.isFinite(radius) || radius <= 0) {
+      return null
+    }
+    return radius * 2
+  }
+
+  function resolveScatterMaxScale(): number {
+    const category = terrainStore.scatterCategory
+    const preset = terrainScatterPresets[category]
+    const maxScale = Number(preset?.maxScale)
+    if (!Number.isFinite(maxScale) || maxScale <= 0) {
+      return 1
+    }
+    return maxScale
+  }
+
+  async function applyAutoScatterSpacing(asset: ProjectAsset): Promise<void> {
+    if (!asset?.id) {
+      return
+    }
+
+    try {
+      const bounds = await sceneStore.measureModelAssetBoundingBox(asset.id)
+      if (!bounds || bounds.isEmpty()) {
+        return
+      }
+
+      const diameter = computeHorizontalBoundingCircleDiameter(bounds)
+      if (diameter == null) {
+        return
+      }
+
+      const recommendedSpacing = diameter * resolveScatterMaxScale()
+      if (!Number.isFinite(recommendedSpacing) || recommendedSpacing <= 0) {
+        return
+      }
+
+      terrainStore.setScatterSpacing(recommendedSpacing)
+    } catch (error) {
+      console.warn('Failed to auto-resolve scatter spacing from asset size', asset.id, error)
+    }
+  }
+
   async function selectScatterAsset(source: ScatterAssetOption): Promise<ProjectAsset | null> {
     if (selectingAssetId.value) {
       return null
     }
     selectingAssetId.value = source.providerAssetId
     try {
+      let selectedAsset: ProjectAsset
+
       if (source.source === 'scene') {
         await ensureAssetCached(source.asset)
-        if (options?.updateTerrainSelection !== false) {
-          terrainStore.setScatterSelection({ asset: source.asset, providerAssetId: source.providerAssetId })
-        }
-        options?.onSelected?.(source.asset, source.providerAssetId)
-        return source.asset
+        selectedAsset = source.asset
+      } else {
+        const registered = sceneStore.copyPackageAssetToAssets(assetProvider.id, source.asset)
+        await ensureAssetCached(registered)
+        selectedAsset = registered
       }
 
-      const registered = sceneStore.copyPackageAssetToAssets(assetProvider.id, source.asset)
-      await ensureAssetCached(registered)
       if (options?.updateTerrainSelection !== false) {
-        terrainStore.setScatterSelection({ asset: registered, providerAssetId: source.providerAssetId })
+        terrainStore.setScatterSelection({ asset: selectedAsset, providerAssetId: source.providerAssetId })
       }
-      options?.onSelected?.(registered, source.providerAssetId)
-      return registered
+
+      await applyAutoScatterSpacing(selectedAsset)
+      options?.onSelected?.(selectedAsset, source.providerAssetId)
+      return selectedAsset
     } catch (error) {
       console.warn('Failed to prepare scatter asset', error)
       return null
