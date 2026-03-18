@@ -5660,10 +5660,118 @@ function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
 }
 
+const GROUND_BRUSH_RADIUS_WHEEL_STEP = 0.1
+
+function clampGroundBrushRadius(value: number): number {
+  const next = Number(value)
+  if (!Number.isFinite(next)) {
+    return terrainStore.brushRadius
+  }
+  return Math.min(50, Math.max(0.1, next))
+}
+
+function clampScatterBrushRadius(value: number): number {
+  const next = Number(value)
+  if (!Number.isFinite(next)) {
+    return terrainStore.scatterBrushRadius
+  }
+  return Math.min(20, Math.max(0.1, next))
+}
+
+function clampScatterEraseBrushRadius(value: number): number {
+  const next = Number(value)
+  if (!Number.isFinite(next)) {
+    return terrainStore.scatterEraseRadius
+  }
+  return Math.min(20, Math.max(0.1, next))
+}
+
+function syncBrushIndicatorScaleImmediately(radius: number): void {
+  if (!brushMesh.visible) {
+    return
+  }
+  if (!Number.isFinite(radius) || radius <= 0) {
+    return
+  }
+  brushMesh.scale.set(radius, radius, 1)
+  brushMesh.updateMatrixWorld(true)
+}
+
 // Camera controls debug (DEV only): set `window.__HARMONY_CAMERA_CONTROLS_DEBUG__ = true` in DevTools.
 // Removed camera controls debug logging.
 
 // Removed handleViewportWheelDebug
+
+function resolveGroundWheelRadiusTarget(): 'terrain' | 'scatter' | 'scatter-erase' | null {
+  if (scatterEraseModeActive.value) {
+    return 'scatter-erase'
+  }
+
+  if (buildToolsDisabled.value) {
+    return null
+  }
+
+  if (activeBuildTool.value === 'terrain' || activeBuildTool.value === 'paint') {
+    return hasGroundNode.value ? 'terrain' : null
+  }
+
+  if (activeBuildTool.value === 'scatter') {
+    if (terrainStore.scatterBrushShape !== 'circle') {
+      return null
+    }
+    return hasGroundNode.value ? 'scatter' : null
+  }
+
+  return null
+}
+
+function applyGroundBrushRadiusWheelDelta(event: WheelEvent): boolean {
+  if (event.defaultPrevented) {
+    return false
+  }
+  if (props.previewActive) {
+    return false
+  }
+  if (uiStore.isInteractionLocked('asset-import')) {
+    return false
+  }
+  if (!(event.ctrlKey || event.metaKey)) {
+    return false
+  }
+  if (isEventFromViewportOverlayUi(event)) {
+    return false
+  }
+
+  const direction = event.deltaY < 0 ? 1 : -1
+  const delta = direction * GROUND_BRUSH_RADIUS_WHEEL_STEP
+
+  const target = resolveGroundWheelRadiusTarget()
+  if (!target) {
+    return false
+  }
+
+  if (target === 'terrain') {
+    const nextRadius = clampGroundBrushRadius(terrainStore.brushRadius + delta)
+    handleGroundBrushRadiusUpdate(nextRadius)
+    syncBrushIndicatorScaleImmediately(nextRadius)
+  } else if (target === 'scatter') {
+    const nextRadius = clampScatterBrushRadius(terrainStore.scatterBrushRadius + delta)
+    handleGroundScatterBrushRadiusUpdate(nextRadius)
+    syncBrushIndicatorScaleImmediately(nextRadius)
+  } else {
+    const nextRadius = clampScatterEraseBrushRadius(terrainStore.scatterEraseRadius + delta)
+    terrainStore.setScatterEraseRadius(nextRadius)
+    syncBrushIndicatorScaleImmediately(nextRadius)
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+  return true
+}
+
+function handleViewportWheel(event: WheelEvent) {
+  applyGroundBrushRadiusWheelDelta(event)
+}
 
 function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
   if (event.button !== 2) {
@@ -18032,6 +18140,9 @@ function handleVertexSnapShiftBlur() {
 
 onMounted(() => {
   initScene()
+  if (canvasRef.value) {
+    canvasRef.value.addEventListener('wheel', handleViewportWheel, { passive: false, capture: true })
+  }
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
   updateOutlineSelectionTargets()
@@ -18079,6 +18190,9 @@ onBeforeUnmount(() => {
   disposeWallDoorSelectionController()
   disposeWallEraseHoverPresenter()
   disposeCachedTextures()
+  if (canvasRef.value) {
+    canvasRef.value.removeEventListener('wheel', handleViewportWheel, { capture: true })
+  }
   window.removeEventListener('keydown', handleViewportShortcut, { capture: true })
   window.removeEventListener('keydown', handleVertexSnapShiftKeyDown, { capture: true })
   window.removeEventListener('keyup', handleVertexSnapShiftKeyUp, { capture: true })
