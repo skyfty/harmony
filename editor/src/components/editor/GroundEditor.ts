@@ -5122,11 +5122,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					cancelScatterPlacement()
 					return true
 				}
+				const sessionAfterCommit = scatterSession
 				scatterSession.polygonPreviewEnd = null
 				refreshScatterSessionPreview(scatterSession)
 				commitScatterSessionPreview(scatterSession)
-				options.clearVertexSnap?.()
 				scatterSession = null
+				if (sessionAfterCommit) {
+					// Keep the polygon snap indicator visible for the next shape after commit.
+					resolveScatterPointFromEvent(event, sessionAfterCommit.definition, sessionAfterCommit.groundMesh)
+				}
 				return true
 			}
 			return false
