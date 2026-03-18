@@ -94,6 +94,11 @@ export function createWallBuildTool(options: {
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
+  holdStartIndicatorUntilNodeVisible?: (options: {
+    nodeId: string
+    point: THREE.Vector3
+    height?: number | null
+  }) => void
   getWallBrush: () => { presetAssetId: string | null; presetData: WallPresetData | null }
   applyWallPreviewMaterials?: (group: THREE.Group, presetData: WallPresetData | null) => void
   normalizeWallDimensionsForViewport: (values: {
@@ -239,6 +244,37 @@ export function createWallBuildTool(options: {
       return getWallNodeDimensions(selectedNode).height
     }
     return options.normalizeWallDimensionsForViewport({}).height
+  }
+
+  const showLockedStartIndicator = (point: THREE.Vector3 | null | undefined) => {
+    if (!point) {
+      return
+    }
+    options.showStartIndicator?.(point, { height: getStartIndicatorHeight() })
+  }
+
+  const holdStartIndicatorUntilNodeVisible = (nodeId: string | null | undefined, point: THREE.Vector3 | null | undefined) => {
+    if (!nodeId || !point) {
+      return
+    }
+    options.holdStartIndicatorUntilNodeVisible?.({
+      nodeId,
+      point: point.clone(),
+      height: getStartIndicatorHeight(),
+    })
+  }
+
+  const getLockedStartIndicatorPoint = (): THREE.Vector3 | null => {
+    if (session?.shapeDraft?.start) {
+      return session.shapeDraft.start
+    }
+    if (session?.dragStart) {
+      return session.dragStart
+    }
+    if ((session?.polygonPoints.length ?? 0) > 0) {
+      return session?.polygonPoints[0] ?? null
+    }
+    return null
   }
 
   const applyWallPropsToSession = (
@@ -671,7 +707,7 @@ export function createWallBuildTool(options: {
     current.shapeDraft = null
     current.dragStart = startPoint.clone()
     current.dragEnd = startPoint.clone()
-    hideStartIndicator()
+    showLockedStartIndicator(startPoint)
     previewRenderer.markDirty()
   }
 
@@ -719,7 +755,7 @@ export function createWallBuildTool(options: {
     }
     current.lastCommittedSegment = null
     current.segments = []
-    hideStartIndicator()
+    showLockedStartIndicator(start)
     previewRenderer.markDirty()
     return true
   }
@@ -741,8 +777,8 @@ export function createWallBuildTool(options: {
       || (session?.polygonPoints.length ?? 0) > 0,
     )
     if (hasBuildSession) {
-      hideStartIndicator()
-      return false
+      showLockedStartIndicator(getLockedStartIndicatorPoint())
+      return true
     }
 
     if (!raycastPlacementPoint(event, groundPointerHelper)) {
@@ -931,7 +967,9 @@ export function createWallBuildTool(options: {
         })
     }
 
+    const createdNodeId = created.id
     clearSession(true)
+    holdStartIndicatorUntilNodeVisible(createdNodeId, start)
     return true
   }
 
@@ -1015,6 +1053,8 @@ export function createWallBuildTool(options: {
             console.warn('Failed to apply wall preset brush', session?.brushPresetAssetId, error)
           })
       }
+
+      holdStartIndicatorUntilNodeVisible(nodeId, start)
     } else {
       const updated = options.sceneStore.updateWallNodeGeometry(nodeId, {
         segments: segmentPayload,
@@ -1038,6 +1078,7 @@ export function createWallBuildTool(options: {
           mergeUserDataWithDynamicMeshBuildShape(refreshed.userData, 'line'),
         )
       }
+      holdStartIndicatorUntilNodeVisible(nodeId, start)
     }
 
     if (startedFromBranch) {
@@ -1074,7 +1115,6 @@ export function createWallBuildTool(options: {
     }), current)
     if (!current.dragStart) {
       beginSegmentDrag(snappedPoint)
-      hideStartIndicator()
       return true
     }
 
@@ -1133,7 +1173,7 @@ export function createWallBuildTool(options: {
     if (lastPoint && lastPoint.distanceToSquared(point) <= 1e-6) {
       current.polygonPreviewEnd = point.clone()
       syncPolygonPreviewSegments(current)
-      hideStartIndicator()
+      showLockedStartIndicator(current.polygonPoints[0] ?? point)
       return true
     }
 
@@ -1146,7 +1186,7 @@ export function createWallBuildTool(options: {
     current.polygonPoints.push(point.clone())
     current.polygonPreviewEnd = point.clone()
     syncPolygonPreviewSegments(current)
-    hideStartIndicator()
+    showLockedStartIndicator(current.polygonPoints[0] ?? point)
     return true
   }
 
@@ -1259,7 +1299,10 @@ export function createWallBuildTool(options: {
         })
     }
 
+    const createdNodeId = created.id
+    const startPoint = polygonPoints[0]?.clone() ?? null
     clearSession(true)
+    holdStartIndicatorUntilNodeVisible(createdNodeId, startPoint)
   }
 
   const autofillFromLastCommittedSegment = (): boolean => {
@@ -1517,6 +1560,7 @@ export function createWallBuildTool(options: {
         endpointKind: endpointKind === 'end' ? 'end' : 'start',
       }
 
+      showLockedStartIndicator(worldPoint)
       previewRenderer.markDirty()
       return true
     },

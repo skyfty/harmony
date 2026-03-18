@@ -234,6 +234,7 @@ import { createWaterBuildTool } from './WaterBuildTool'
 import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
 import { createCameraResetDirectionController, type CameraResetDirection } from './cameraResetDirection'
+import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
 import {
   createRoadVertexRenderer,
   ROAD_VERTEX_HANDLE_GROUP_NAME,
@@ -1955,19 +1956,123 @@ function isSelectedWaterEditMode(): boolean {
 }
 
 let buildStartIndicatorRenderer: ReturnType<typeof createBuildStartIndicatorRenderer> | null = null
+type PendingBuildStartIndicator = {
+  tool: BuildTool
+  nodeId: string
+  point: THREE.Vector3
+  height: number | null
+}
+
+const BUILD_START_INDICATOR_MIN_NODE_SCREEN_DIAMETER_PX = 12
+const buildStartIndicatorBounds = new THREE.Box3()
+const buildStartIndicatorSphere = new THREE.Sphere()
+const buildStartIndicatorWorldCenter = new THREE.Vector3()
+let pendingBuildStartIndicator: PendingBuildStartIndicator | null = null
 
 function showBuildStartIndicator(point: THREE.Vector3, options?: { height?: number | null }) {
   buildStartIndicatorRenderer?.showAt(point, options)
 }
 
-function hideBuildStartIndicator() {
+function holdBuildStartIndicatorUntilNodeVisible(options: {
+  nodeId: string
+  point: THREE.Vector3
+  height?: number | null
+}) {
+  const tool = activeBuildTool.value
+  if (!tool) {
+    return
+  }
+  pendingBuildStartIndicator = {
+    tool,
+    nodeId: options.nodeId,
+    point: options.point.clone(),
+    height: typeof options.height === 'number' && Number.isFinite(options.height)
+      ? options.height
+      : null,
+  }
+  buildStartIndicatorRenderer?.showAt(options.point, { height: options.height })
+}
+
+function hideBuildStartIndicator(options?: { preservePending?: boolean }) {
+  if (!options?.preservePending) {
+    pendingBuildStartIndicator = null
+  }
   buildStartIndicatorRenderer?.hide()
+}
+
+function isPendingBuildStartIndicatorNodeVisible(): boolean {
+  if (!pendingBuildStartIndicator || !camera || !canvasRef.value) {
+    return false
+  }
+  if (activeBuildTool.value !== pendingBuildStartIndicator.tool) {
+    return false
+  }
+
+  const runtimeObject = objectMap.get(pendingBuildStartIndicator.nodeId) ?? null
+  if (!runtimeObject || !sceneStore.isNodeVisible(pendingBuildStartIndicator.nodeId) || !isObjectWorldVisible(runtimeObject)) {
+    return false
+  }
+
+  const canvasRect = canvasRef.value.getBoundingClientRect()
+  if (canvasRect.width <= 0 || canvasRect.height <= 0) {
+    return false
+  }
+
+  buildStartIndicatorBounds.setFromObject(runtimeObject)
+  if (buildStartIndicatorBounds.isEmpty()) {
+    return false
+  }
+
+  buildStartIndicatorBounds.getBoundingSphere(buildStartIndicatorSphere)
+  if (!Number.isFinite(buildStartIndicatorSphere.radius) || buildStartIndicatorSphere.radius <= 1e-6) {
+    return false
+  }
+
+  buildStartIndicatorWorldCenter.copy(buildStartIndicatorSphere.center)
+  buildStartIndicatorWorldCenter.project(camera)
+  if (!Number.isFinite(buildStartIndicatorWorldCenter.x)
+    || !Number.isFinite(buildStartIndicatorWorldCenter.y)
+    || !Number.isFinite(buildStartIndicatorWorldCenter.z)) {
+    return false
+  }
+  if (buildStartIndicatorWorldCenter.z < -1 || buildStartIndicatorWorldCenter.z > 1) {
+    return false
+  }
+  if (Math.abs(buildStartIndicatorWorldCenter.x) > 1 || Math.abs(buildStartIndicatorWorldCenter.y) > 1) {
+    return false
+  }
+
+  const distance = camera.position.distanceTo(buildStartIndicatorSphere.center)
+  const unitsPerPixel = computeWorldUnitsPerPixel({
+    camera,
+    distance,
+    viewportHeightPx: canvasRect.height,
+  })
+  const screenDiameterPx = (buildStartIndicatorSphere.radius * 2) / Math.max(unitsPerPixel, 1e-6)
+  return screenDiameterPx >= BUILD_START_INDICATOR_MIN_NODE_SCREEN_DIAMETER_PX
+}
+
+function updatePendingBuildStartIndicator() {
+  if (!pendingBuildStartIndicator) {
+    return
+  }
+  if (activeBuildTool.value !== pendingBuildStartIndicator.tool) {
+    hideBuildStartIndicator()
+    return
+  }
+  if (isPendingBuildStartIndicatorNodeVisible()) {
+    hideBuildStartIndicator()
+    return
+  }
+  buildStartIndicatorRenderer?.showAt(pendingBuildStartIndicator.point, {
+    height: pendingBuildStartIndicator.height,
+  })
 }
 
 watch(
   () => [activeBuildTool.value, sceneStore.selectedNodeId] as const,
   () => {
-    hideBuildStartIndicator()
+    hideBuildStartIndicator({ preservePending: activeBuildTool.value === pendingBuildStartIndicator?.tool })
     const node = sceneStore.selectedNode ?? null
     if (!node) {
       return
@@ -2008,7 +2113,7 @@ watch(
 watch(
   () => activeBuildTool.value,
   (tool) => {
-    hideBuildStartIndicator()
+    hideBuildStartIndicator({ preservePending: tool === pendingBuildStartIndicator?.tool })
     if (tool !== 'wall' && wallDoorSelectModeActive.value) {
       buildToolsStore.setWallDoorSelectModeActive(false)
     }
@@ -5454,6 +5559,7 @@ const wallBuildTool = createWallBuildTool({
   isEditReferenceVisible: () => isSelectedWallEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
+  holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   normalizeWallDimensionsForViewport,
   getWallBrush: () => ({
     presetAssetId: wallBrushPresetAssetId.value,
@@ -5578,6 +5684,7 @@ const roadBuildTool = createRoadBuildTool({
   isEditReferenceVisible: () => isSelectedRoadEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
+  holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   raycastGroundPoint,
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
@@ -5612,6 +5719,7 @@ const floorBuildTool = createFloorBuildTool({
   isEditReferenceVisible: () => isSelectedFloorEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
+  holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   getFloorBrush: () => ({
     presetAssetId: floorBrushPresetAssetId.value,
     presetData: floorBrushPresetData.value,
@@ -5638,6 +5746,10 @@ const waterBuildTool = createWaterBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isEditReferenceVisible: () => isSelectedWaterEditMode(),
+  showStartIndicator: showBuildStartIndicator,
+  hideStartIndicator: hideBuildStartIndicator,
+  holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
@@ -10820,6 +10932,7 @@ function animate() {
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
   waterBuildTool.flushPreviewIfNeeded(scene)
+  updatePendingBuildStartIndicator()
   ensureDisplayBoardCornerHandlesForSelectedNode()
   // Endpoint gizmos: keep a large, click-friendly on-screen size.
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 30 })

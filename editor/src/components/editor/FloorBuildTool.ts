@@ -58,6 +58,11 @@ export function createFloorBuildTool(options: {
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
+  holdStartIndicatorUntilNodeVisible?: (options: {
+    nodeId: string
+    point: THREE.Vector3
+    height?: number | null
+  }) => void
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
   applyFloorPreviewMaterials?: (group: THREE.Group, presetData: FloorPresetData | null) => void
   syncCreatedFloorMaterials?: (nodeId: string) => void
@@ -129,6 +134,24 @@ export function createFloorBuildTool(options: {
     return Number.isFinite(thickness) && Number(thickness) > 0 ? Number(thickness) : 2
   }
 
+  const showLockedStartIndicator = (point: THREE.Vector3 | null | undefined) => {
+    if (!point) {
+      return
+    }
+    options.showStartIndicator?.(point, { height: getStartIndicatorHeight() })
+  }
+
+  const holdStartIndicatorUntilNodeVisible = (nodeId: string | null | undefined, point: THREE.Vector3 | null | undefined) => {
+    if (!nodeId || !point) {
+      return
+    }
+    options.holdStartIndicatorUntilNodeVisible?.({
+      nodeId,
+      point: point.clone(),
+      height: getStartIndicatorHeight(),
+    })
+  }
+
   const getShape = (): FloorBuildShape => options.floorBuildShape.value ?? 'polygon'
 
   const ensureSession = (): FloorPreviewSession => {
@@ -173,7 +196,7 @@ export function createFloorBuildTool(options: {
     current.previewEnd = start.clone()
     current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
-    hideStartIndicator()
+    showLockedStartIndicator(start)
     previewRenderer.markDirty()
     return true
   }
@@ -198,7 +221,7 @@ export function createFloorBuildTool(options: {
     current.previewEnd = initialEnd
     current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
-    hideStartIndicator()
+    showLockedStartIndicator(center)
     previewRenderer.markDirty()
     return true
   }
@@ -214,8 +237,8 @@ export function createFloorBuildTool(options: {
       return false
     }
     if (session && session.points.length > 0) {
-      hideStartIndicator()
-      return false
+      showLockedStartIndicator(session.points[0] ?? null)
+      return true
     }
     if (!raycastPlacementPoint(event, groundPointerHelper)) {
       hideStartIndicator()
@@ -291,7 +314,7 @@ export function createFloorBuildTool(options: {
 
     current.points.push(point.clone())
     current.previewEnd = point.clone()
-    hideStartIndicator()
+    showLockedStartIndicator(current.points[0] ?? point)
     previewRenderer.markDirty()
     return true
   }
@@ -320,7 +343,11 @@ export function createFloorBuildTool(options: {
       options.sceneStore.selectNode(created.id)
     }
 
+    const startPoint = session?.points[0]?.clone() ?? points[0]?.clone() ?? null
     clearSession(true)
+    if (created) {
+      holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+    }
   }
 
   const finalizeFromVertices = (vertices: THREE.Vector3[]) => {
@@ -345,7 +372,11 @@ export function createFloorBuildTool(options: {
       options.sceneStore.selectNode(created.id)
     }
 
+    const startPoint = session?.points[0]?.clone() ?? points[0]?.clone() ?? null
     clearSession(true)
+    if (created) {
+      holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+    }
   }
 
   return {

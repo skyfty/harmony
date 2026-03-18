@@ -61,6 +61,11 @@ export function createRoadBuildTool(options: {
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
+  holdStartIndicatorUntilNodeVisible?: (options: {
+    nodeId: string
+    point: THREE.Vector3
+    height?: number | null
+  }) => void
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
@@ -96,6 +101,24 @@ export function createRoadBuildTool(options: {
 
   const hideStartIndicator = () => {
     options.hideStartIndicator?.()
+  }
+
+  const showLockedStartIndicator = (point: THREE.Vector3 | null | undefined) => {
+    if (!point) {
+      return
+    }
+    options.showStartIndicator?.(point, { height: 2 })
+  }
+
+  const holdStartIndicatorUntilNodeVisible = (nodeId: string | null | undefined, point: THREE.Vector3 | null | undefined) => {
+    if (!nodeId || !point) {
+      return
+    }
+    options.holdStartIndicatorUntilNodeVisible?.({
+      nodeId,
+      point: point.clone(),
+      height: 2,
+    })
   }
 
   const clearPreview = () => {
@@ -193,8 +216,8 @@ export function createRoadBuildTool(options: {
       return false
     }
     if (session && session.points.length > 0) {
-      hideStartIndicator()
-      return false
+      showLockedStartIndicator(session.points[0] ?? null)
+      return true
     }
     if (!options.raycastGroundPoint(event, groundPointerHelper)) {
       hideStartIndicator()
@@ -486,7 +509,9 @@ export function createRoadBuildTool(options: {
           }
         }
         options.ensureRoadVertexHandlesForSelectedNode({ force: true })
+        const startPoint = committed[0]?.clone() ?? session.points[0]?.clone() ?? null
         clearSession()
+        holdStartIndicatorUntilNodeVisible(targetNodeId, startPoint)
         return
       }
     }
@@ -519,7 +544,9 @@ export function createRoadBuildTool(options: {
       }
       options.selectNode(connectNodeId)
       options.ensureRoadVertexHandlesForSelectedNode({ force: true })
+      const startPoint = committed[0]?.clone() ?? session.points[0]?.clone() ?? null
       clearSession()
+      holdStartIndicatorUntilNodeVisible(connectNodeId, startPoint)
       return
     }
 
@@ -547,7 +574,11 @@ export function createRoadBuildTool(options: {
       options.ensureRoadVertexHandlesForSelectedNode({ force: true })
     }
 
+    const startPoint = committed[0]?.clone() ?? session.points[0]?.clone() ?? null
     clearSession()
+    if (created?.dynamicMesh?.type === 'Road') {
+      holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+    }
   }
 
   return {
@@ -649,7 +680,7 @@ export function createRoadBuildTool(options: {
       current.snapVertices = options.collectRoadSnapVertices()
       current.targetNodeId = nodeId
       current.startVertexIndex = vertexIndex
-      hideStartIndicator()
+      showLockedStartIndicator(worldPoint)
       updatePreview({ immediate: true })
       return true
     },

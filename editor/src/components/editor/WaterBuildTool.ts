@@ -57,6 +57,14 @@ export function createWaterBuildTool(options: {
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
+  isEditReferenceVisible?: () => boolean
+  showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
+  hideStartIndicator?: () => void
+  holdStartIndicatorUntilNodeVisible?: (options: {
+    nodeId: string
+    point: THREE.Vector3
+    height?: number | null
+  }) => void
   clickDragThresholdPx: number
 }): WaterBuildToolHandle {
   const previewRenderer = createWaterPreviewRenderer({ rootGroup: options.rootGroup })
@@ -71,6 +79,30 @@ export function createWaterBuildTool(options: {
   let session: Session | null = null
   let rightClickState: RightClickState | null = null
   let leftDragState: LeftDragState | null = null
+
+  const hideStartIndicator = () => {
+    options.hideStartIndicator?.()
+  }
+
+  const getStartIndicatorHeight = (): number => 2
+
+  const showLockedStartIndicator = (point: THREE.Vector3 | null | undefined) => {
+    if (!point) {
+      return
+    }
+    options.showStartIndicator?.(point, { height: getStartIndicatorHeight() })
+  }
+
+  const holdStartIndicatorUntilNodeVisible = (nodeId: string | null | undefined, point: THREE.Vector3 | null | undefined) => {
+    if (!nodeId || !point) {
+      return
+    }
+    options.holdStartIndicatorUntilNodeVisible?.({
+      nodeId,
+      point: point.clone(),
+      height: getStartIndicatorHeight(),
+    })
+  }
 
   const getShape = (): WaterBuildShape => options.waterBuildShape.value ?? 'rectangle'
 
@@ -94,11 +126,36 @@ export function createWaterBuildTool(options: {
     } else if (session?.previewGroup) {
       session.previewGroup.removeFromParent()
     }
+    hideStartIndicator()
     options.clearVertexSnap?.()
     session = null
     rightClickState = null
     leftDragState = null
     previewRenderer.reset()
+  }
+
+  const updateStartIndicatorCursorPreview = (event: PointerEvent): boolean => {
+    const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+    if (isCameraNavActive || options.isAltOverrideActive()) {
+      hideStartIndicator()
+      return false
+    }
+    if (options.isEditReferenceVisible?.()) {
+      hideStartIndicator()
+      return false
+    }
+    if (session && session.points.length > 0) {
+      showLockedStartIndicator(session.points[0] ?? null)
+      return true
+    }
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      hideStartIndicator()
+      return false
+    }
+
+    const point = resolvePlacementPoint(event, groundPointerHelper.clone())
+    options.showStartIndicator?.(point, { height: getStartIndicatorHeight() })
+    return true
   }
 
   const alignPointYToSession = (point: THREE.Vector3, targetSession: WaterPreviewSession | null): THREE.Vector3 => {
@@ -142,6 +199,7 @@ export function createWaterBuildTool(options: {
     current.previewEnd = start.clone()
     current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
+    showLockedStartIndicator(start)
     markPreviewDirty()
     return true
   }
@@ -162,6 +220,7 @@ export function createWaterBuildTool(options: {
     current.previewEnd = initialEnd
     current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
+    showLockedStartIndicator(center)
     markPreviewDirty()
     return true
   }
@@ -220,6 +279,7 @@ export function createWaterBuildTool(options: {
 
     current.points.push(point.clone())
     current.previewEnd = point.clone()
+    showLockedStartIndicator(current.points[0] ?? point)
     markPreviewDirty()
     return true
   }
@@ -236,11 +296,15 @@ export function createWaterBuildTool(options: {
       return
     }
 
-    options.sceneStore.createWaterSurfaceMeshNode({
+    const created = options.sceneStore.createWaterSurfaceMeshNode({
       buildShape: 'polygon',
       points: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
     })
+    const startPoint = points[0]?.clone() ?? null
     clearSession(true)
+    if (created) {
+      holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+    }
   }
 
   const finalizeCircle = () => {
@@ -267,11 +331,15 @@ export function createWaterBuildTool(options: {
       ))
     }
 
-    options.sceneStore.createWaterSurfaceMeshNode({
+    const created = options.sceneStore.createWaterSurfaceMeshNode({
       buildShape: 'circle',
       points: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
     })
+    const startPoint = center.clone()
     clearSession(true)
+    if (created) {
+      holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+    }
   }
 
   return {
@@ -324,6 +392,8 @@ export function createWaterBuildTool(options: {
       if (options.activeBuildTool.value !== 'water') {
         return false
       }
+
+      updateStartIndicatorCursorPreview(event)
 
       if (leftDragState && session && event.pointerId === leftDragState.pointerId) {
         const isLeftButtonDown = (event.buttons & 1) !== 0
@@ -379,11 +449,15 @@ export function createWaterBuildTool(options: {
             return true
           }
 
-          options.sceneStore.createWaterSurfaceMeshNode({
+          const created = options.sceneStore.createWaterSurfaceMeshNode({
             buildShape: 'rectangle',
             points: rectangle.corners.map((point) => ({ x: point.x, y: point.y, z: point.z })),
           })
+          const startPoint = start.clone()
           clearSession(true)
+          if (created) {
+            holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+          }
           return true
         }
 
@@ -448,6 +522,7 @@ export function createWaterBuildTool(options: {
 
     cancel: () => {
       if (!session) {
+        hideStartIndicator()
         options.clearVertexSnap?.()
         return false
       }
@@ -456,6 +531,7 @@ export function createWaterBuildTool(options: {
     },
 
     dispose: () => {
+      hideStartIndicator()
       options.clearVertexSnap?.()
       previewRenderer.dispose(session)
       clearSession(false)
