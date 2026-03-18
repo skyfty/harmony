@@ -38,6 +38,9 @@ import {
   type ProtagonistComponentProps,
   PRELOADABLE_COMPONENT_TYPE,
   type PreloadableComponentProps,
+  WALL_COMPONENT_TYPE,
+  type WallComponentProps,
+  clampWallProps,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
 } from '@schema/components'
@@ -875,7 +878,27 @@ function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): 
         return ground
       }
     case 'Wall': {
-      return createWallGroup(mesh).clone(true)
+      const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+      const wallProps = wallComponent
+        ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
+        : null
+      const resolveCachedWallAssetHeight = (assetId: string | null | undefined): number | undefined => {
+        const id = typeof assetId === 'string' ? assetId.trim() : ''
+        if (!id) {
+          return undefined
+        }
+        const bounds = getCachedModelObject(id)?.boundingBox ?? null
+        if (!bounds) {
+          return undefined
+        }
+        const height = bounds.max.y - bounds.min.y
+        return Number.isFinite(height) && height > 0 ? height : undefined
+      }
+
+      return createWallGroup(mesh, {
+        headAssetHeight: resolveCachedWallAssetHeight(wallProps?.headAssetId),
+        footAssetHeight: resolveCachedWallAssetHeight(wallProps?.footAssetId),
+      }).clone(true)
     }
     case 'Road':
       {

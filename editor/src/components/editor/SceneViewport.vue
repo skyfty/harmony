@@ -3150,7 +3150,13 @@ function toggleScatterEraseMode() {
     sceneStore.selectAsset(null)
   }
   terrainStore.setBrushOperation(null)
-  handleBuildToolChange(null)
+  if (selectedNodeIsGround.value) {
+    if (activeBuildTool.value !== 'scatter') {
+      handleBuildToolChange('scatter')
+    }
+  } else {
+    handleBuildToolChange(null)
+  }
   cancelGroundEditorScatterPlacement()
   scatterEraseModeActive.value = true
   uiStore.setActiveSelectionContext('scatter-erase')

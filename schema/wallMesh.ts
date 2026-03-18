@@ -88,6 +88,10 @@ export type WallRenderOptions = {
   wallRenderMode?: WallRenderMode
   repeatInstanceStep?: number
 
+  // Optional explicit vertical-layout overrides used by procedural body fallback.
+  headAssetHeight?: number
+  footAssetHeight?: number
+
   // Per-part UV repeat axis for stretched wall tiling.
   bodyUvAxis?: WallUvAxis
   headUvAxis?: WallUvAxis
@@ -1631,8 +1635,16 @@ function rebuildWallGroup(
     ? extractInstancedAssetTemplate(assets.footEndCapObject)
     : null
 
-  const headAssetHeight = headTemplate ? Math.max(0, Math.abs(headTemplate.baseSize.y)) : 0
-  const footAssetHeight = footTemplate ? Math.max(0, Math.abs(footTemplate.baseSize.y)) : 0
+  const resolvedHeadAssetHeight = headTemplate ? Math.max(0, Math.abs(headTemplate.baseSize.y)) : 0
+  const resolvedFootAssetHeight = footTemplate ? Math.max(0, Math.abs(footTemplate.baseSize.y)) : 0
+  const headAssetHeight = Math.max(
+    0,
+    Number.isFinite(options.headAssetHeight) ? Number(options.headAssetHeight) : resolvedHeadAssetHeight,
+  )
+  const footAssetHeight = Math.max(
+    0,
+    Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : resolvedFootAssetHeight,
+  )
 
   const wallRenderMode = normalizeWallRenderMode(options.wallRenderMode)
   const repeatInstanceStep = normalizeWallRepeatInstanceStep(options.repeatInstanceStep)

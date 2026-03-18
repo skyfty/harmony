@@ -2839,9 +2839,28 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
     } else if (meshType === 'GuideRoute') {
       runtime = createGuideRouteGroup(meshDefinition as GuideRouteDynamicMesh)
     } else {
+      const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+      const wallProps = wallComponent
+        ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
+        : null
+      const resolveCachedWallAssetHeight = (assetId: string | null | undefined): number | undefined => {
+        const id = typeof assetId === 'string' ? assetId.trim() : ''
+        if (!id) {
+          return undefined
+        }
+        const bounds = getCachedModelObject(id)?.boundingBox ?? null
+        if (!bounds) {
+          return undefined
+        }
+        const height = bounds.max.y - bounds.min.y
+        return Number.isFinite(height) && height > 0 ? height : undefined
+      }
+
       runtime = createWallGroup(meshDefinition as WallDynamicMesh, {
         wallRenderMode: resolveWallRenderMode(node),
         repeatInstanceStep: resolveWallRepeatInstanceStep(node),
+        headAssetHeight: resolveCachedWallAssetHeight(wallProps?.headAssetId),
+        footAssetHeight: resolveCachedWallAssetHeight(wallProps?.footAssetId),
       });
     }
 

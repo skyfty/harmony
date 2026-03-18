@@ -931,6 +931,27 @@ export function createWallRenderer(options: WallRendererOptions) {
     )
     const hasProceduralBodyFallback = !bodyAssetId
 
+    const resolveCachedWallAssetHeight = (assetId: string | null | undefined): number | undefined => {
+      const id = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!id) {
+        return undefined
+      }
+      const bounds = getWallAssetBounds(id)
+      if (!bounds) {
+        return undefined
+      }
+      const height = bounds.max.y - bounds.min.y
+      return Number.isFinite(height) && height > 0 ? height : undefined
+    }
+
+    const buildProceduralWallRenderOptions = (): WallRenderOptions => ({
+      wallRenderMode,
+      repeatInstanceStep: wallProps?.repeatInstanceStep,
+      bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      headAssetHeight: resolveCachedWallAssetHeight(headAssetId),
+      footAssetHeight: resolveCachedWallAssetHeight(footAssetId),
+    })
+
     const userData = container.userData ?? (container.userData = {})
 
     // ============================
@@ -950,11 +971,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallRenderOptions: WallRenderOptions = {
-        wallRenderMode,
-        repeatInstanceStep: wallProps?.repeatInstanceStep,
-        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
-      }
+      const wallRenderOptions = buildProceduralWallRenderOptions()
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
@@ -1035,11 +1052,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallRenderOptions: WallRenderOptions = {
-        wallRenderMode,
-        repeatInstanceStep: wallProps?.repeatInstanceStep,
-        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
-      }
+      const wallRenderOptions = buildProceduralWallRenderOptions()
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
@@ -1094,11 +1107,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallRenderOptions: WallRenderOptions = {
-        wallRenderMode,
-        repeatInstanceStep: wallProps?.repeatInstanceStep,
-        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
-      }
+      const wallRenderOptions = buildProceduralWallRenderOptions()
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
@@ -1126,11 +1135,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallRenderOptions: WallRenderOptions = {
-        wallRenderMode,
-        repeatInstanceStep: wallProps?.repeatInstanceStep,
-        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
-      }
+      const wallRenderOptions = buildProceduralWallRenderOptions()
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(wallGroup, effectiveDefinition, signatureKey, wallRenderOptions)
@@ -1147,11 +1152,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     if (hasProceduralBodyFallback) {
-      const wallRenderOptions: WallRenderOptions = {
-        wallRenderMode,
-        repeatInstanceStep: wallProps?.repeatInstanceStep,
-        bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
-      }
+      const wallRenderOptions = buildProceduralWallRenderOptions()
       const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, wallRenderOptions)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
