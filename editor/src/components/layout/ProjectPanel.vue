@@ -1,7 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import AssetPanel from './AssetPanel.vue'
-import ConsolePanel from './ConsolePanel.vue'
 import AIChatPanel from '@/components/layout/AIChatPanel.vue'
 
 const props = defineProps<{
@@ -14,7 +13,7 @@ const emit = defineEmits<{
   (event: 'toggle-placement'): void
 }>()
 
-type ProjectPanelTab = 'project' | 'assistant' | 'console'
+type ProjectPanelTab = 'project' | 'assistant'
 
 const PROJECT_TAB_STORAGE_KEY = 'harmony:project-panel:active-tab'
 
@@ -23,7 +22,7 @@ function restoreActiveTab(): ProjectPanelTab {
     return 'project'
   }
   const stored = window.localStorage.getItem(PROJECT_TAB_STORAGE_KEY)
-  if (stored === 'assistant' || stored === 'console') {
+  if (stored === 'assistant') {
     return stored
   }
   return 'project'
@@ -81,15 +80,6 @@ const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float 
           >
             <span class="panel-toolbar-tab__label">AI Chat</span>
           </v-btn>
-          <v-btn
-            class="panel-toolbar-tab"
-            :class="{ 'is-active': activeTab === 'console' }"
-            variant="text"
-            size="small"
-            @click="selectTab('console')"
-          >
-            <span class="panel-toolbar-tab__label">Console</span>
-          </v-btn>
         </div>
       </div>
       <v-spacer />
@@ -109,7 +99,6 @@ const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float 
       <div v-else-if="activeTab === 'assistant'" class="assistant-panel">
         <AIChatPanel :capture-viewport-screenshot="captureViewportScreenshot" />
       </div>
-  <ConsolePanel v-else class="console-panel-wrapper" />
     </div>
   </v-card>
 </template>
@@ -221,11 +210,5 @@ const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float 
   display: flex;
   min-height: 0;
   padding: 6px 8px 10px;
-}
-
-.console-panel-wrapper {
-  flex: 1;
-  display: flex;
-  min-height: 0;
 }
 </style>

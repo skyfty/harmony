@@ -5,7 +5,6 @@ import router from './router'
 import vuetify from './utils/vuetify'
 import { createPersistedStatePlugin } from './utils/piniaPersist'
 import { useAuthStore } from '@/stores/authStore'
-import { useConsoleStore } from '@/stores/consoleStore'
 import './style.css'
 import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
@@ -55,9 +54,6 @@ async function preloadRuntimeConfig() {
 	app.use(router)
 	app.use(vuetify)
 	app.use(VueViewer)
-
-	const consoleStore = useConsoleStore(pinia)
-	consoleStore.startCapture()
 
 	const authStore = useAuthStore(pinia)
 	await authStore.initialize()
