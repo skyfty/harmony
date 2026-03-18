@@ -2979,6 +2979,7 @@ const groundEditor = createGroundEditor({
 
 const {
   brushMesh,
+  scatterAreaPreviewGroup,
   scatterPreviewGroup,
   groundSelectionGroup,
   groundSelection,
@@ -9866,6 +9867,7 @@ function initScene() {
   scene.add(terrainGridHelper)
   scene.add(axesHelper)
   scene.add(brushMesh)
+  scene.add(scatterAreaPreviewGroup)
   scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
@@ -10980,6 +10982,7 @@ function disposeScene() {
   }
 
   groundSelectionGroup.removeFromParent()
+  scatterAreaPreviewGroup.removeFromParent()
   vertexOverlayGroup.removeFromParent()
   clearVertexSnapMarkers()
 

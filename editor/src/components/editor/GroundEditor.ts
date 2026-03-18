@@ -1312,6 +1312,38 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	scatterPreviewGroup.visible = false
 	scatterPreviewGroup.renderOrder = 998
 
+	const scatterAreaPreviewGroup = new THREE.Group()
+	scatterAreaPreviewGroup.name = 'ScatterAreaPreview'
+	scatterAreaPreviewGroup.visible = false
+	scatterAreaPreviewGroup.renderOrder = 997
+
+	const scatterAreaPreviewFill = new THREE.Mesh(
+		new THREE.BufferGeometry(),
+		new THREE.MeshBasicMaterial({
+			color: 0x4dd0e1,
+			transparent: true,
+			opacity: 0.14,
+			side: THREE.DoubleSide,
+			depthTest: false,
+			depthWrite: false,
+		}),
+	)
+	scatterAreaPreviewFill.renderOrder = 997
+
+	const scatterAreaPreviewOutline = new THREE.Line(
+		new THREE.BufferGeometry(),
+		new THREE.LineBasicMaterial({
+			color: 0x4dd0e1,
+			transparent: true,
+			opacity: 0.9,
+			depthTest: false,
+			depthWrite: false,
+		}),
+	)
+	scatterAreaPreviewOutline.renderOrder = 998
+	scatterAreaPreviewGroup.add(scatterAreaPreviewFill)
+	scatterAreaPreviewGroup.add(scatterAreaPreviewOutline)
+
 	let scatterPreviewAssetId: string | null = null
 	let scatterPreviewObject: THREE.Object3D | null = null
 
@@ -3804,6 +3836,147 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.previewInstances = []
 	}
 
+	function setScatterAreaPreviewGeometry(target: THREE.Mesh | THREE.Line, nextGeometry: THREE.BufferGeometry): void {
+		const previousGeometry = target.geometry
+		target.geometry = nextGeometry
+		previousGeometry?.dispose()
+	}
+
+	function clearScatterAreaPreview(): void {
+		scatterAreaPreviewFill.visible = false
+		scatterAreaPreviewOutline.visible = false
+		scatterAreaPreviewGroup.visible = false
+	}
+
+	function createScatterAreaOutlineGeometry(points: THREE.Vector3[], closed: boolean): THREE.BufferGeometry | null {
+		if (points.length < 2) {
+			return null
+		}
+		const vertexCount = closed ? points.length + 1 : points.length
+		const positions = new Float32Array(vertexCount * 3)
+		for (let index = 0; index < points.length; index += 1) {
+			const point = points[index]
+			if (!point) {
+				continue
+			}
+			const offset = index * 3
+			positions[offset] = point.x
+			positions[offset + 1] = point.y + BRUSH_SURFACE_OFFSET * 2
+			positions[offset + 2] = point.z
+		}
+		if (closed) {
+			const first = points[0]
+			if (first) {
+				const offset = points.length * 3
+				positions[offset] = first.x
+				positions[offset + 1] = first.y + BRUSH_SURFACE_OFFSET * 2
+				positions[offset + 2] = first.z
+			}
+		}
+		const geometry = new THREE.BufferGeometry()
+		geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+		return geometry
+	}
+
+	function createScatterAreaFillGeometry(points: THREE.Vector3[]): THREE.BufferGeometry | null {
+		if (points.length < 3) {
+			return null
+		}
+		const contour = points.map((point) => new THREE.Vector2(point.x, point.z))
+		const triangles = THREE.ShapeUtils.triangulateShape(contour, [])
+		if (!triangles.length) {
+			return null
+		}
+		const positions = new Float32Array(triangles.length * 9)
+		let offset = 0
+		for (const triangle of triangles) {
+			for (const vertexIndex of triangle) {
+				const point = points[vertexIndex]
+				if (!point) {
+					continue
+				}
+				positions[offset] = point.x
+				positions[offset + 1] = point.y + BRUSH_SURFACE_OFFSET
+				positions[offset + 2] = point.z
+				offset += 3
+			}
+		}
+		if (offset < 9) {
+			return null
+		}
+		const geometry = new THREE.BufferGeometry()
+		geometry.setAttribute('position', new THREE.BufferAttribute(positions.subarray(0, offset), 3))
+		return geometry
+	}
+
+	function resolveScatterAreaPreviewPoints(session: ScatterSessionState): { points: THREE.Vector3[]; closed: boolean; fill: boolean } | null {
+		if (session.brushShape === 'rectangle') {
+			const anchor = session.anchorPoint
+			const current = session.currentPoint
+			if (!anchor || !current) {
+				return null
+			}
+			const direction = session.rectangleDirection ?? resolveRectangleDragDirection(anchor, current)
+			const rectangle = buildRotatedRectangleFromCorner(anchor, current, direction)
+			if (!rectangle) {
+				return null
+			}
+			return { points: rectangle.corners.map((point) => point.clone()), closed: true, fill: true }
+		}
+		if (session.brushShape === 'line') {
+			const anchor = session.anchorPoint
+			const current = session.currentPoint
+			if (!anchor || !current || anchor.distanceToSquared(current) <= 1e-6) {
+				return null
+			}
+			return { points: [anchor.clone(), current.clone()], closed: false, fill: false }
+		}
+		if (session.brushShape === 'polygon') {
+			const points = session.polygonPoints.map((point) => point.clone())
+			const previewEnd = session.polygonPreviewEnd
+			const lastCommitted = points[points.length - 1] ?? null
+			if (previewEnd && (!lastCommitted || previewEnd.distanceToSquared(lastCommitted) > 1e-6)) {
+				points.push(previewEnd.clone())
+			}
+			if (points.length < 2) {
+				return null
+			}
+			return {
+				points,
+				closed: points.length >= 3,
+				fill: points.length >= 3,
+			}
+		}
+		return null
+	}
+
+	function refreshScatterAreaPreview(session: ScatterSessionState | null): void {
+		if (!session || session.brushShape === 'circle') {
+			clearScatterAreaPreview()
+			return
+		}
+		const preview = resolveScatterAreaPreviewPoints(session)
+		if (!preview) {
+			clearScatterAreaPreview()
+			return
+		}
+		const outlineGeometry = createScatterAreaOutlineGeometry(preview.points, preview.closed)
+		if (!outlineGeometry) {
+			clearScatterAreaPreview()
+			return
+		}
+		setScatterAreaPreviewGeometry(scatterAreaPreviewOutline, outlineGeometry)
+		const fillGeometry = preview.fill ? createScatterAreaFillGeometry(preview.points) : null
+		if (fillGeometry) {
+			setScatterAreaPreviewGeometry(scatterAreaPreviewFill, fillGeometry)
+			scatterAreaPreviewFill.visible = true
+		} else {
+			scatterAreaPreviewFill.visible = false
+		}
+		scatterAreaPreviewOutline.visible = true
+		scatterAreaPreviewGroup.visible = true
+	}
+
 	function createScatterPreviewInstance(
 		session: ScatterSessionState,
 		point: THREE.Vector3,
@@ -3875,8 +4048,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function refreshScatterSessionPreview(session: ScatterSessionState): void {
 		if (session.brushShape === 'circle') {
+			clearScatterAreaPreview()
 			return
 		}
+		refreshScatterAreaPreview(session)
 		if (session.brushShape === 'polygon') {
 			const committedPoints = session.polygonPoints
 			const lastCommitted = committedPoints[committedPoints.length - 1] ?? null
@@ -4789,6 +4964,22 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function syncScatterDragShapeFromEvent(event: PointerEvent, session: ScatterSessionState): boolean {
+		const nextPoint = resolveScatterPointFromEvent(event, session.definition, session.groundMesh)
+		if (!nextPoint) {
+			return false
+		}
+		session.currentPoint = nextPoint.clone()
+		if (session.brushShape === 'rectangle' && session.anchorPoint && !session.rectangleDirection) {
+			const rawPoint = resolveRawScatterPointFromEvent(event, session.definition, session.groundMesh)
+			if (rawPoint) {
+				rawPoint.y = session.anchorPoint.y
+				session.rectangleDirection = resolveRectangleDragDirection(session.anchorPoint, rawPoint)
+			}
+		}
+		return true
+	}
+
 	function finalizeScatterPlacement(event: PointerEvent): boolean {
 		if (!scatterSession) {
 			return false
@@ -4820,6 +5011,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		if (scatterSession.brushShape !== 'circle') {
+			if (scatterSession.brushShape === 'rectangle' || scatterSession.brushShape === 'line') {
+				if (syncScatterDragShapeFromEvent(event, scatterSession)) {
+					refreshScatterSessionPreview(scatterSession)
+				}
+			}
 			commitScatterSessionPreview(scatterSession)
 		}
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
@@ -4835,6 +5031,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		} catch (error) {
 			console.warn('Failed to register scatter asset into scene assets', error)
 		}
+		clearScatterAreaPreview()
 		options.clearVertexSnap?.()
 		scatterSession = null
 		return true
@@ -4843,9 +5040,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function cancelScatterPlacement(): boolean {
 		if (!scatterSession) {
 			scatterRightClickState = null
+			clearScatterAreaPreview()
 			return false
 		}
 		clearScatterSessionPreviewInstances(scatterSession)
+		clearScatterAreaPreview()
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(scatterSession.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(scatterSession.pointerId)
 		}
@@ -5250,10 +5449,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			} else if (scatterModeEnabled()) {
 				const shape = resolveScatterBrushShape()
 				if (shape === 'rectangle' && scatterSession?.anchorPoint && scatterSession.currentPoint) {
+					const previewDirection = scatterSession.rectangleDirection
+						?? resolveRectangleDragDirection(scatterSession.anchorPoint, scatterSession.currentPoint)
 					const rectangle = buildRotatedRectangleFromCorner(
 						scatterSession.anchorPoint,
 						scatterSession.currentPoint,
-						scatterSession.rectangleDirection,
+						previewDirection,
 					)
 					if (rectangle) {
 						brushMesh.position.copy(rectangle.center)
@@ -5264,13 +5465,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 							1,
 						)
 					} else {
-						scatterMidpointHelper.copy(scatterSession.anchorPoint).add(scatterSession.currentPoint).multiplyScalar(0.5)
-						brushMesh.position.copy(scatterMidpointHelper)
-						brushMesh.scale.set(
-							Math.max(0.1, Math.abs(scatterSession.currentPoint.x - scatterSession.anchorPoint.x) * 0.5),
-							Math.max(0.1, Math.abs(scatterSession.currentPoint.z - scatterSession.anchorPoint.z) * 0.5),
-							1,
-						)
+						brushMesh.position.copy(scatterSession.anchorPoint)
+						brushMesh.rotation.set(-Math.PI / 2, 0, 0)
+						brushMesh.scale.set(0.1, 0.1, 1)
 					}
 				} else if (shape === 'line') {
 					const anchor = scatterSession?.anchorPoint ?? targetPoint
@@ -6011,6 +6208,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		brushMesh.geometry.dispose()
 		const material = brushMesh.material as THREE.Material
 		material.dispose()
+		scatterAreaPreviewFill.geometry.dispose()
+		;(scatterAreaPreviewFill.material as THREE.Material).dispose()
+		scatterAreaPreviewOutline.geometry.dispose()
+		;(scatterAreaPreviewOutline.material as THREE.Material).dispose()
+		scatterAreaPreviewGroup.clear()
 		groundSelectionGroup.clear()
 		scatterPreviewGroup.clear()
 		sculptSessionState = null
@@ -6020,6 +6222,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	return {
 		brushMesh,
+		scatterAreaPreviewGroup,
 		scatterPreviewGroup,
 		groundSelectionGroup,
 		groundSelection,
