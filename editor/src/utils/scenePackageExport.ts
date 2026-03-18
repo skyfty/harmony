@@ -13,7 +13,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
-import { buildPackageAssetMapForExport, calculateSceneResourceSummary, useSceneStore } from '@/stores/sceneStore'
+import { buildPackageAssetMapForExport, calculateSceneResourceSummary, cloneSceneDocumentWithRuntimeGroundSidecars, useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
@@ -143,7 +143,7 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
   if (!looksEditableScene) {
     return cloned
   }
-  const editable = cloned as StoredSceneDocument
+  const editable = cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
   const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(editable)
   editable.packageAssetMap = packageAssetMap
   editable.assetIndex = assetIndex

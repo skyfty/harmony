@@ -148,8 +148,8 @@ import {
 import { cloudSettingsEqual } from '@schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
-import { useGroundScatterStore } from './groundScatterStore'
-import { useGroundPaintStore } from './groundPaintStore'
+import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
+import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from './groundPaintStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
@@ -1756,6 +1756,21 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
     }
   }
   return null
+}
+
+function attachRuntimeGroundSidecarsToDocument(document: StoredSceneDocument): StoredSceneDocument {
+  const groundNode = findGroundNode(document.nodes ?? [])
+  if (!groundNode) {
+    return document
+  }
+  attachGroundScatterRuntimeToNode(document.id, groundNode)
+  attachGroundPaintRuntimeToNode(document.id, groundNode)
+  return document
+}
+
+export function cloneSceneDocumentWithRuntimeGroundSidecars(document: StoredSceneDocument): StoredSceneDocument {
+  const cloned = manualDeepClone(document) as StoredSceneDocument
+  return attachRuntimeGroundSidecarsToDocument(cloned)
 }
 
 function syncGroundNodeReference(store: Pick<SceneState, 'nodes' | 'groundNode'>): SceneNode | null {
@@ -4308,9 +4323,10 @@ export async function buildPackageAssetMapForExport(
   scene: StoredSceneDocument,
   _options?: { embedResources?: boolean },
 ): Promise<{ packageAssetMap: Record<string, string>; assetIndex: Record<string, AssetIndexEntry> }> {
-  const usedAssetIds = collectSceneAssetReferences(scene)
-  let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap)),usedAssetIds)
-  const assetIndex = filterAssetIndexByUsage(scene.assetIndex, usedAssetIds)
+  const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
+  const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
+  let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(runtimeAwareScene.packageAssetMap)),usedAssetIds)
+  const assetIndex = filterAssetIndexByUsage(runtimeAwareScene.assetIndex, usedAssetIds)
 
   return { packageAssetMap, assetIndex }
 }
@@ -4406,9 +4422,10 @@ export async function calculateSceneResourceSummary(
   scene: StoredSceneDocument,
   options: SceneBundleExportOptions,
 ): Promise<SceneResourceSummary> {
-  const packageMap = scene.packageAssetMap ?? {}
-  const assetIndex = scene.assetIndex ?? {}
-  const assetCatalog = scene.assetCatalog ?? {}
+  const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
+  const packageMap = runtimeAwareScene.packageAssetMap ?? {}
+  const assetIndex = runtimeAwareScene.assetIndex ?? {}
+  const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
 
   const summary: SceneResourceSummary = {
     totalBytes: 0,
@@ -4428,7 +4445,7 @@ export async function calculateSceneResourceSummary(
   }
 
   const materialById = new Map<string, SceneMaterial>()
-  ;(scene.materials ?? []).forEach((material) => {
+  ;(runtimeAwareScene.materials ?? []).forEach((material) => {
     if (!material || typeof material !== 'object' || typeof material.id !== 'string') {
       return
     }
@@ -4577,7 +4594,7 @@ export async function calculateSceneResourceSummary(
     }
   }
 
-  traverseNodesForTextures(scene.nodes ?? [])
+  traverseNodesForTextures(runtimeAwareScene.nodes ?? [])
 
   const processed = new Set<string>()
   const packageEntriesByAsset = new Map<string, Array<{ key: string; value: string }>>()
@@ -4713,9 +4730,10 @@ export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
 ): Promise<StoredSceneDocument> {
   const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene)
+  const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   return createSceneDocument(scene.name, {
     id: scene.id,
-    nodes: scene.nodes,
+    nodes: runtimeAwareScene.nodes,
     selectedNodeId: scene.selectedNodeId,
     selectedNodeIds: scene.selectedNodeIds,
     camera: scene.camera,
@@ -15800,6 +15818,7 @@ export const useSceneStore = defineStore('scene', {
           refreshViewport: false,
         })
 
+        attachRuntimeGroundSidecarsToDocument(scene)
         this.applySceneDocumentToState(scene)
       } finally {
         this.isSceneReady = true
@@ -16096,6 +16115,9 @@ export const useSceneStore = defineStore('scene', {
           await useGroundScatterStore().hydrateSceneDocument(this.currentSceneId, findGroundNode(this.nodes), scatterSidecar)
           const paintSidecar = await useScenesStore().loadGroundPaintSidecar(this.currentSceneId)
           await useGroundPaintStore().hydrateSceneDocument(this.currentSceneId, findGroundNode(this.nodes), paintSidecar)
+          const groundNode = findGroundNode(this.nodes)
+          attachGroundScatterRuntimeToNode(this.currentSceneId, groundNode)
+          attachGroundPaintRuntimeToNode(this.currentSceneId, groundNode)
         }
         await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
       } finally {

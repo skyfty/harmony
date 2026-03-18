@@ -36,6 +36,7 @@ import {
   SCENE_BUNDLE_FORMAT_VERSION,
   buildPackageAssetMapForExport,
   calculateSceneResourceSummary,
+  cloneSceneDocumentWithRuntimeGroundSidecars,
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { useProjectsStore } from '@/stores/projectsStore'
@@ -1096,6 +1097,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
         throw new Error(`无法读取场景：${id}`)
       }
 
+      document = cloneSceneDocumentWithRuntimeGroundSidecars(document)
       const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
       document.packageAssetMap = packageAssetMap
       document.assetIndex = assetIndex
@@ -1275,6 +1277,7 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
       return
     }
 
+    document = cloneSceneDocumentWithRuntimeGroundSidecars(document)
     const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
     if (isStale?.()) {
       return

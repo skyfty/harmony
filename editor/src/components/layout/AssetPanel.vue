@@ -174,7 +174,6 @@ const ASSET_IMPORT_INTERACTION_LOCK = 'asset-import'
 const MAX_IMPORT_FAILURE_DETAILS = 50
 
 const dropImportProgress = ref<DropImportProgressState | null>(null)
-const dropDragDepth = ref(0)
 let dropFeedbackTimer: number | null = null
 let dropImportAbortController: AbortController | null = null
 const uploadDialogOpen = ref(false)
@@ -2689,6 +2688,26 @@ const dropOverlayPercent = computed(() => {
   return Math.max(0, Math.min(100, percent))
 })
 
+function isDragLeavingCurrentTarget(event: DragEvent): boolean {
+  const currentTarget = event.currentTarget
+  if (!(currentTarget instanceof HTMLElement)) {
+    return true
+  }
+  const relatedTarget = event.relatedTarget
+  if (relatedTarget instanceof Node && currentTarget.contains(relatedTarget)) {
+    return false
+  }
+  const { clientX, clientY } = event
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return true
+  }
+  const bounds = currentTarget.getBoundingClientRect()
+  return clientX < bounds.left
+    || clientX > bounds.right
+    || clientY < bounds.top
+    || clientY > bounds.bottom
+}
+
 function handleGalleryDragEnter(event: DragEvent) {
   if (!allowAssetDrop.value || dropProcessing.value) {
     return
@@ -2703,8 +2722,9 @@ function handleGalleryDragEnter(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  dropDragDepth.value += 1
-  dropActive.value = true
+  if (!dropActive.value) {
+    dropActive.value = true
+  }
   event.dataTransfer.dropEffect = 'copy'
 }
 
@@ -2722,7 +2742,9 @@ function handleGalleryDragOver(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  dropActive.value = true
+  if (!dropActive.value) {
+    dropActive.value = true
+  }
   event.dataTransfer.dropEffect = 'copy'
 }
 
@@ -2738,12 +2760,12 @@ function handleGalleryDragLeave(event: DragEvent) {
   if (!draggedNodeId && !hasAssetPayload) {
     return
   }
+  if (!isDragLeavingCurrentTarget(event)) {
+    return
+  }
   event.preventDefault()
   event.stopPropagation()
-  dropDragDepth.value = Math.max(0, dropDragDepth.value - 1)
-  if (dropDragDepth.value === 0) {
-    dropActive.value = false
-  }
+  dropActive.value = false
 }
 
 async function handleGalleryDrop(event: DragEvent) {
@@ -2764,7 +2786,6 @@ async function handleGalleryDrop(event: DragEvent) {
   dropImportAbortController?.abort()
   dropImportAbortController = new AbortController()
   dropActive.value = false
-  dropDragDepth.value = 0
   clearDropFeedbackTimer()
   try {
     if (draggedNodeId) {
@@ -3809,7 +3830,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               </template>
             </div>
           </div>
-          <div v-if="dropOverlayVisible" class="drop-overlay">
+          <div v-show="dropOverlayVisible" class="drop-overlay">
             <v-icon size="42" color="white">mdi-cloud-upload</v-icon>
             <span class="drop-overlay__message">{{ dropOverlayMessage }}</span>
             <span v-if="dropOverlayStatus" class="drop-overlay__status">{{ dropOverlayStatus }}</span>

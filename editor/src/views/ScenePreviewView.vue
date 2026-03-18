@@ -58,7 +58,7 @@ import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from '@/stores/groundPaintStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
-import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
+import { buildPackageAssetMapForExport, calculateSceneResourceSummary, cloneSceneDocumentWithRuntimeGroundSidecars } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
@@ -5161,6 +5161,7 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
+	document = cloneSceneDocumentWithRuntimeGroundSidecars(document)
 	if (ENABLE_SCENE_PREVIEW_BAKED_GROUND) {
 		const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document)
 		document.packageAssetMap = packageAssetMap
