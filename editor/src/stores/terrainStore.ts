@@ -13,6 +13,7 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 export type GroundPanelTab = 'terrain' | 'paint' | TerrainScatterCategory
 export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
 export const SCATTER_SPACING_MAX = 20 as const
+export const SCATTER_REGULAR_POLYGON_SIDES_MAX = 256 as const
 const PAINT_CONTEXT_INTENT_TTL_MS = 1800 as const
 const PAINT_CONTEXT_SYNC_DEBOUNCE_MS = 80 as const
 const TERRAIN_PAINT_DEFAULT_FEATHER = 0.6 as const
@@ -69,6 +70,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   // Scatter placement brush radius (visual only). Kept independent from terrain sculpt brush and erase radius.
   const scatterBrushRadius = ref(0.5)
   const scatterBrushShape = ref<TerrainScatterBrushShape>('circle')
+  const scatterRegularPolygonSides = ref(5)
   const scatterSpacing = ref(1)
   const scatterEraseRadius = ref(1)
   // Scatter density (0-100). Used to scale instance count linearly.
@@ -168,7 +170,14 @@ export const useTerrainStore = defineStore('terrain', () => {
   }
 
   function setScatterBrushShape(value: TerrainScatterBrushShape) {
-    scatterBrushShape.value = value === 'rectangle' || value === 'line' ? value : 'circle'
+    scatterBrushShape.value = value === 'rectangle' || value === 'line' || value === 'polygon' ? value : 'circle'
+  }
+
+  function setScatterRegularPolygonSides(value: number) {
+    const num = Number(value)
+    const rounded = Number.isFinite(num) ? Math.round(num) : 0
+    const clamped = Math.min(SCATTER_REGULAR_POLYGON_SIDES_MAX, Math.max(0, rounded))
+    scatterRegularPolygonSides.value = clamped >= 3 ? clamped : 0
   }
 
   function setScatterSpacing(value: number) {
@@ -205,6 +214,7 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterModeActive,
     scatterBrushRadius,
     scatterBrushShape,
+    scatterRegularPolygonSides,
     scatterSpacing,
     scatterEraseRadius,
     scatterDensityPercent,
@@ -216,6 +226,7 @@ export const useTerrainStore = defineStore('terrain', () => {
     setPaintBrushSettings,
     setScatterBrushRadius,
     setScatterBrushShape,
+    setScatterRegularPolygonSides,
     setScatterSpacing,
     setScatterEraseRadius,
     setScatterDensityPercent,

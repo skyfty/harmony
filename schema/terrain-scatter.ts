@@ -2,14 +2,15 @@ export const TerrainScatterCategories = ['flora', 'rocks', 'trees'] as const
 
 export type TerrainScatterCategory = (typeof TerrainScatterCategories)[number]
 
-export const TerrainScatterBrushShapes = ['circle', 'rectangle', 'line'] as const
+export const TerrainScatterBrushShapes = ['circle', 'rectangle', 'line', 'polygon'] as const
 
 export type TerrainScatterBrushShape = (typeof TerrainScatterBrushShapes)[number]
 
 export const TERRAIN_SCATTER_BRUSH_SHAPE_LABELS: Record<TerrainScatterBrushShape, string> = {
-  circle: 'Circle',
+  circle: 'Regular Polygon',
   rectangle: 'Rectangle',
   line: 'Line',
+  polygon: 'Polygon Area',
 }
 
 export const TERRAIN_SCATTER_STORE_VERSION = 1

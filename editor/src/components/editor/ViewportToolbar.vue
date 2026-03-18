@@ -167,8 +167,9 @@
                     <v-list-item
                       v-for="shape in scatterShapeOptions"
                       :key="shape.id"
-                      class="floor-shape-item"
+                      :class="['floor-shape-item', shape.id === 'circle' ? 'wall-shape-item--polygon-tool' : '']"
                     >
+                      <div :class="shape.id === 'circle' ? 'wall-regular-polygon-control' : undefined">
                       <v-btn
                         density="compact"
                         size="small"
@@ -180,6 +181,22 @@
                       >
                         <span v-html="shape.svg" />
                       </v-btn>
+                        <v-text-field
+                          v-if="shape.id === 'circle'"
+                          v-model="groundScatterRegularPolygonSidesInput"
+                          type="number"
+                          density="compact"
+                          variant="outlined"
+                          hide-details
+                          class="wall-regular-polygon-input"
+                          suffix="s"
+                          :min="0"
+                          :max="WALL_REGULAR_POLYGON_SIDES_MAX"
+                          :disabled="buildToolsDisabled || !hasGroundNode || groundScatterBrushShape !== 'circle'"
+                          @blur="commitGroundScatterRegularPolygonSidesInput"
+                          @keydown.enter.prevent="commitGroundScatterRegularPolygonSidesInput"
+                        />
+                      </div>
                     </v-list-item>
                   </div>
                 </div>
@@ -1196,6 +1213,7 @@ const props = withDefaults(
   groundScatterCategory: TerrainScatterCategory
   groundScatterBrushRadius: number
   groundScatterBrushShape: TerrainScatterBrushShape
+  groundScatterRegularPolygonSides: number
   groundScatterSpacing: number
   groundScatterDensityPercent: number
   groundScatterProviderAssetId?: string | null
@@ -1250,6 +1268,7 @@ const emit = defineEmits<{
   (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
   (event: 'update:ground-scatter-brush-radius', value: number): void
   (event: 'update:ground-scatter-brush-shape', value: TerrainScatterBrushShape): void
+  (event: 'update:ground-scatter-regular-polygon-sides', value: number): void
   (event: 'update:ground-scatter-spacing', value: number): void
   (event: 'update:ground-scatter-density-percent', value: number): void
   (event: 'ground-scatter-asset-select', payload: { category: TerrainScatterCategory; asset: ProjectAsset; providerAssetId: string }): void
@@ -1302,6 +1321,7 @@ const {
   groundScatterCategory,
   groundScatterBrushRadius,
   groundScatterBrushShape,
+  groundScatterRegularPolygonSides,
   groundScatterSpacing,
   groundScatterDensityPercent,
   groundScatterProviderAssetId,
@@ -1375,6 +1395,7 @@ const WALL_REGULAR_POLYGON_SIDES_MAX = 256
 const groundScatterBrushRadiusInput = ref(groundScatterBrushRadius.value.toFixed(2))
 const groundScatterSpacingInput = ref(groundScatterSpacing.value.toFixed(2))
 const groundScatterDensityInput = ref(Math.round(groundScatterDensityPercent.value).toString())
+const groundScatterRegularPolygonSidesInput = ref(groundScatterRegularPolygonSides.value.toString())
 const scatterEraseRadiusInput = ref(scatterEraseRadius.value.toFixed(2))
 const floorRegularPolygonSidesInput = ref(floorRegularPolygonSides.value.toString())
 const wallRegularPolygonSidesInput = ref(wallRegularPolygonSides.value.toString())
@@ -1449,6 +1470,26 @@ function commitGroundScatterSpacingInput() {
   groundScatterSpacingInput.value = normalized.toFixed(2)
 }
 
+function normalizeGroundScatterRegularPolygonSides(value: number): number {
+  const rounded = Math.round(value)
+  const clamped = clampValue(rounded, 0, WALL_REGULAR_POLYGON_SIDES_MAX)
+  return clamped >= 3 ? clamped : 0
+}
+
+function commitGroundScatterRegularPolygonSidesInput() {
+  const normalized = parseAndNormalize(
+    groundScatterRegularPolygonSidesInput.value,
+    groundScatterRegularPolygonSides.value,
+    0,
+    WALL_REGULAR_POLYGON_SIDES_MAX,
+    1,
+    0,
+  )
+  const resolved = normalizeGroundScatterRegularPolygonSides(normalized)
+  emit('update:ground-scatter-regular-polygon-sides', resolved)
+  groundScatterRegularPolygonSidesInput.value = resolved.toString()
+}
+
 function commitScatterEraseRadiusInput() {
   const normalized = parseAndNormalize(
     scatterEraseRadiusInput.value,
@@ -1512,6 +1553,10 @@ watch(groundScatterSpacing, (value) => {
 
 watch(groundScatterDensityPercent, (value) => {
   groundScatterDensityInput.value = Math.round(value).toString()
+})
+
+watch(groundScatterRegularPolygonSides, (value) => {
+  groundScatterRegularPolygonSidesInput.value = normalizeGroundScatterRegularPolygonSides(value).toString()
 })
 
 watch(scatterEraseRadius, (value) => {
@@ -1596,7 +1641,11 @@ const groundScatterCategoryModel = computed<TerrainScatterCategory>({
   },
 })
 
-const groundScatterUsesSpacing = computed(() => groundScatterBrushShape.value === 'rectangle' || groundScatterBrushShape.value === 'line')
+const groundScatterUsesSpacing = computed(() =>
+  groundScatterBrushShape.value === 'rectangle'
+  || groundScatterBrushShape.value === 'line'
+  || groundScatterBrushShape.value === 'polygon',
+)
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -1956,6 +2005,8 @@ const scatterShapeOptions = (Object.keys(TERRAIN_SCATTER_BRUSH_SHAPE_LABELS) as 
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="none" stroke="currentColor" stroke-width="2" rx="1" ry="1"/></svg>'
       : id === 'line'
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 17L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="5" cy="17" r="2" fill="currentColor"/><circle cx="19" cy="7" r="2" fill="currentColor"/></svg>'
+      : id === 'polygon'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="none" stroke="currentColor" stroke-width="2" points="12,3 2,21 22,21"/></svg>'
       : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
 }))
 

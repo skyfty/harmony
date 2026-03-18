@@ -432,6 +432,7 @@ const {
   scatterProviderAssetId,
   scatterBrushRadius,
   scatterBrushShape,
+  scatterRegularPolygonSides,
   scatterSpacing,
   scatterEraseRadius,
   scatterDensityPercent,
@@ -2948,6 +2949,7 @@ const groundEditor = createGroundEditor({
   scatterAsset: scatterSelectedAsset,
   scatterBrushRadius,
   scatterBrushShape,
+  scatterRegularPolygonSides,
   scatterSpacing,
   scatterEraseRadius,
   scatterDensityPercent,
@@ -6373,6 +6375,10 @@ function handleGroundScatterBrushRadiusUpdate(value: number) {
 
 function handleGroundScatterBrushShapeUpdate(value: TerrainScatterBrushShape) {
   terrainStore.setScatterBrushShape(value)
+}
+
+function handleGroundScatterRegularPolygonSidesUpdate(value: number) {
+  terrainStore.setScatterRegularPolygonSides(Number(value))
 }
 
 function handleGroundScatterSpacingUpdate(value: number) {
@@ -18480,6 +18486,7 @@ defineExpose<SceneViewportHandle>({
         :ground-scatter-category="scatterCategory"
         :ground-scatter-brush-radius="scatterBrushRadius"
         :ground-scatter-brush-shape="scatterBrushShape"
+        :ground-scatter-regular-polygon-sides="scatterRegularPolygonSides"
         :ground-scatter-spacing="scatterSpacing"
         :ground-scatter-density-percent="scatterDensityPercent"
         :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
@@ -18522,6 +18529,7 @@ defineExpose<SceneViewportHandle>({
           @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
           @update:ground-scatter-brush-radius="handleGroundScatterBrushRadiusUpdate"
           @update:ground-scatter-brush-shape="handleGroundScatterBrushShapeUpdate"
+          @update:ground-scatter-regular-polygon-sides="handleGroundScatterRegularPolygonSidesUpdate"
           @update:ground-scatter-spacing="handleGroundScatterSpacingUpdate"
           @update:ground-scatter-density-percent="handleGroundScatterDensityPercentUpdate"
           @ground-scatter-asset-select="handleGroundScatterAssetSelect"

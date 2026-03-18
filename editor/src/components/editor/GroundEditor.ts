@@ -48,6 +48,7 @@ import {
 	updateScatterInstanceMatrix,
 	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
+import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -110,6 +111,7 @@ export type GroundEditorOptions = {
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
 	scatterBrushShape: Ref<TerrainScatterBrushShape>
+	scatterRegularPolygonSides: Ref<number>
 	scatterSpacing: Ref<number>
 	scatterEraseRadius: Ref<number>
 	scatterDensityPercent: Ref<number>
@@ -639,11 +641,23 @@ type ScatterSessionState = {
 	lastPoint: THREE.Vector3 | null
 	anchorPoint: THREE.Vector3 | null
 	currentPoint: THREE.Vector3 | null
+	rectangleDirection: THREE.Vector3 | null
+	polygonPoints: THREE.Vector3[]
+	polygonPreviewEnd: THREE.Vector3 | null
 	previewLayerId: string
 	previewInstances: TerrainScatterInstance[]
 }
 
 let scatterSession: ScatterSessionState | null = null
+
+type ScatterRightClickState = {
+	pointerId: number
+	startX: number
+	startY: number
+	moved: boolean
+}
+
+let scatterRightClickState: ScatterRightClickState | null = null
 
 type PaintImageDataSource = {
 	width: number
@@ -735,6 +749,7 @@ let pendingTerrainPaintFlush: Promise<boolean> | null = null
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
 const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
+const SCATTER_CLICK_DRAG_THRESHOLD_PX = 6
 
 // Safety cap to avoid runaway interactive placement on tiny assets / huge brushes.
 // Keep this high so densityPercent remains proportional for common use-cases.
@@ -1408,10 +1423,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function resolveScatterBrushShape(): TerrainScatterBrushShape {
 		const value = options.scatterBrushShape.value
-		if (value === 'rectangle' || value === 'line') {
+		if (value === 'rectangle' || value === 'line' || value === 'polygon') {
 			return value
 		}
 		return 'circle'
+	}
+
+	function resolveScatterRegularPolygonSides(): number {
+		const raw = Number(options.scatterRegularPolygonSides.value)
+		if (!Number.isFinite(raw)) {
+			return 0
+		}
+		const rounded = Math.round(raw)
+		const clamped = Math.min(256, Math.max(0, rounded))
+		return clamped >= 3 ? clamped : 0
 	}
 
 	function getIndicatorBrushShape(): TerrainBrushShape {
@@ -1420,7 +1445,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		if (scatterModeEnabled()) {
 			const shape = resolveScatterBrushShape()
-			return shape === 'rectangle' || shape === 'line' ? 'square' : 'circle'
+			return shape === 'rectangle' || shape === 'line' || shape === 'polygon' ? 'square' : 'circle'
 		}
 		if (options.groundPanelTab.value === 'paint') {
 			return 'circle'
@@ -3838,6 +3863,25 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (session.brushShape === 'circle') {
 			return
 		}
+		if (session.brushShape === 'polygon') {
+			const committedPoints = session.polygonPoints
+			const lastCommitted = committedPoints[committedPoints.length - 1] ?? null
+			const previewEnd = session.polygonPreviewEnd
+			const hasDistinctPreview = Boolean(
+				previewEnd
+				&& (!lastCommitted || previewEnd.distanceToSquared(lastCommitted) > 1e-6),
+			)
+			const polygonPoints = hasDistinctPreview
+				? [...committedPoints, previewEnd!]
+				: committedPoints
+			if (polygonPoints.length < 3) {
+				clearScatterSessionPreviewInstances(session)
+				return
+			}
+			const points = sampleScatterPointsInPolygonArea(polygonPoints)
+			syncScatterSessionPreviewInstances(session, points, 0)
+			return
+		}
 		const center = session.currentPoint ?? session.anchorPoint
 		if (!center) {
 			clearScatterSessionPreviewInstances(session)
@@ -3974,33 +4018,162 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function buildScatterRegularPolygonVertices(
+		centerPoint: THREE.Vector3,
+		currentPoint: THREE.Vector3,
+		sides: number,
+	): THREE.Vector3[] {
+		const radius = Math.hypot(currentPoint.x - centerPoint.x, currentPoint.z - centerPoint.z)
+		if (!Number.isFinite(radius) || radius <= 1e-4 || sides < 3) {
+			return []
+		}
+		const baseAngle = Math.atan2(currentPoint.z - centerPoint.z, currentPoint.x - centerPoint.x)
+		const points: THREE.Vector3[] = []
+		for (let index = 0; index < sides; index += 1) {
+			const theta = baseAngle + (index / sides) * Math.PI * 2
+			points.push(new THREE.Vector3(
+				centerPoint.x + Math.cos(theta) * radius,
+				centerPoint.y,
+				centerPoint.z + Math.sin(theta) * radius,
+			))
+		}
+		return points
+	}
+
+	function computePolygonAreaXZ(points: THREE.Vector3[]): number {
+		if (points.length < 3) {
+			return 0
+		}
+		let sum = 0
+		for (let index = 0; index < points.length; index += 1) {
+			const current = points[index]
+			const next = points[(index + 1) % points.length]
+			if (!current || !next) {
+				continue
+			}
+			sum += (current.x * next.z) - (next.x * current.z)
+		}
+		return Math.abs(sum) * 0.5
+	}
+
+	function isPointInsidePolygonXZ(point: THREE.Vector3, polygonPoints: THREE.Vector3[]): boolean {
+		if (polygonPoints.length < 3) {
+			return false
+		}
+		let inside = false
+		for (let i = 0, j = polygonPoints.length - 1; i < polygonPoints.length; j = i++) {
+			const a = polygonPoints[i]
+			const b = polygonPoints[j]
+			if (!a || !b) {
+				continue
+			}
+			const intersects =
+				((a.z > point.z) !== (b.z > point.z))
+				&& (point.x < (((b.x - a.x) * (point.z - a.z)) / Math.max(1e-8, b.z - a.z)) + a.x)
+			if (intersects) {
+				inside = !inside
+			}
+		}
+		return inside
+	}
+
+	function sampleScatterPointsInPolygonArea(polygonPoints: THREE.Vector3[]): THREE.Vector3[] {
+		if (!scatterSession || polygonPoints.length < 3) {
+			return []
+		}
+		const polygonArea = computePolygonAreaXZ(polygonPoints)
+		if (!Number.isFinite(polygonArea) || polygonArea <= 1e-6) {
+			return []
+		}
+		let minX = Number.POSITIVE_INFINITY
+		let maxX = Number.NEGATIVE_INFINITY
+		let minZ = Number.POSITIVE_INFINITY
+		let maxZ = Number.NEGATIVE_INFINITY
+		for (const point of polygonPoints) {
+			if (!point) {
+				continue
+			}
+			minX = Math.min(minX, point.x)
+			maxX = Math.max(maxX, point.x)
+			minZ = Math.min(minZ, point.z)
+			maxZ = Math.max(maxZ, point.z)
+		}
+		if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+			return []
+		}
+		const spacing = scatterSession.spacing
+		const accepted: THREE.Vector3[] = []
+		const stampNeighborhood = createScatterStampNeighborhood(spacing)
+		const existingBudget = { totalChecks: 0 }
+		const startX = minX + Math.max(0.01, spacing * 0.5)
+		const startZ = minZ + Math.max(0.01, spacing * 0.5)
+		for (let z = startZ; z <= maxZ; z += spacing) {
+			for (let x = startX; x <= maxX; x += spacing) {
+				scatterPlacementCandidateWorldHelper.set(x, polygonPoints[0]?.y ?? 0, z)
+				if (!isPointInsidePolygonXZ(scatterPlacementCandidateWorldHelper, polygonPoints)) {
+					continue
+				}
+				const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
+				if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
+					continue
+				}
+				const point = projected.clone()
+				accepted.push(point)
+				stampNeighborhood.insert(point)
+			}
+		}
+		if (!accepted.length) {
+			const centroid = polygonPoints.reduce(
+				(acc, point) => acc.add(point),
+				new THREE.Vector3(),
+			).multiplyScalar(1 / polygonPoints.length)
+			const projected = projectScatterPoint(centroid)
+			if (projected) {
+				accepted.push(projected)
+			}
+		}
+		return accepted
+	}
+
 	function sampleScatterPointsInRectangle(anchorPoint: THREE.Vector3, currentPoint: THREE.Vector3): THREE.Vector3[] {
 		if (!scatterSession) {
 			return []
 		}
-		scatterLocalAnchorHelper.copy(anchorPoint)
-		scatterSession.groundMesh.worldToLocal(scatterLocalAnchorHelper)
-		scatterLocalCurrentHelper.copy(currentPoint)
-		scatterSession.groundMesh.worldToLocal(scatterLocalCurrentHelper)
-		const deltaX = scatterLocalCurrentHelper.x - scatterLocalAnchorHelper.x
-		const deltaZ = scatterLocalCurrentHelper.z - scatterLocalAnchorHelper.z
-		const width = Math.abs(deltaX)
-		const depth = Math.abs(deltaZ)
-		const stepXSign = deltaX >= 0 ? 1 : -1
-		const stepZSign = deltaZ >= 0 ? 1 : -1
+		const rectangle = buildRotatedRectangleFromCorner(anchorPoint, currentPoint, scatterSession.rectangleDirection)
+		if (!rectangle || rectangle.width <= 1e-6 || rectangle.depth <= 1e-6) {
+			return []
+		}
+		const cornerA = rectangle.corners[0]
+		const cornerB = rectangle.corners[1]
+		const cornerD = rectangle.corners[3]
+		if (!cornerA || !cornerB || !cornerD) {
+			return []
+		}
+		scatterDirectionHelper.copy(cornerB).sub(cornerA)
+		const widthLength = scatterDirectionHelper.length()
+		if (widthLength <= 1e-6) {
+			return []
+		}
+		scatterDirectionHelper.divideScalar(widthLength)
+		scatterMidpointHelper.copy(cornerD).sub(cornerA)
+		const depthLength = scatterMidpointHelper.length()
+		if (depthLength <= 1e-6) {
+			return []
+		}
+		scatterMidpointHelper.divideScalar(depthLength)
 		const spacing = scatterSession.spacing
-		const columnCount = Math.max(1, Math.floor(width / spacing) + 1)
-		const rowCount = Math.max(1, Math.floor(depth / spacing) + 1)
+		const columnCount = Math.max(1, Math.floor(rectangle.width / spacing) + 1)
+		const rowCount = Math.max(1, Math.floor(rectangle.depth / spacing) + 1)
 		const accepted: THREE.Vector3[] = []
 		const stampNeighborhood = createScatterStampNeighborhood(spacing)
 		const existingBudget = { totalChecks: 0 }
 		for (let row = 0; row < rowCount; row += 1) {
 			for (let column = 0; column < columnCount; column += 1) {
-				const localX = scatterLocalAnchorHelper.x + (column * spacing * stepXSign)
-				const localZ = scatterLocalAnchorHelper.z + (row * spacing * stepZSign)
-				scatterPlacementCandidateLocalHelper.set(localX, 0, localZ)
-				scatterSession.groundMesh.localToWorld(scatterPlacementCandidateLocalHelper)
-				const projected = projectScatterPoint(scatterPlacementCandidateLocalHelper)
+				scatterPlacementCandidateWorldHelper
+					.copy(cornerA)
+					.addScaledVector(scatterDirectionHelper, column * spacing)
+					.addScaledVector(scatterMidpointHelper, row * spacing)
+				const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
 				if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
 					continue
 				}
@@ -4052,6 +4225,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return []
 		}
+		if (scatterSession.brushShape === 'polygon') {
+			const committed = scatterSession.polygonPoints
+			const previewEnd = scatterSession.polygonPreviewEnd
+			const previewPoints = previewEnd && committed.length > 0
+				? [...committed, previewEnd]
+				: committed
+			return sampleScatterPointsInPolygonArea(previewPoints)
+		}
 		if (scatterSession.brushShape === 'rectangle') {
 			const currentPoint = scatterSession.currentPoint ?? worldCenterPoint
 			return sampleScatterPointsInRectangle(scatterSession.anchorPoint ?? worldCenterPoint, currentPoint)
@@ -4062,6 +4243,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const radius = scatterSession.radius
 		const spacing = scatterSession.spacing
+		const regularPolygonSides = resolveScatterRegularPolygonSides()
+		const regularPolygonVertices = regularPolygonSides >= 3 && scatterSession.anchorPoint && scatterSession.currentPoint
+			? buildScatterRegularPolygonVertices(scatterSession.anchorPoint, scatterSession.currentPoint, regularPolygonSides)
+			: []
 
 		const targetCount = scatterSession.targetCountPerStamp
 		if (targetCount <= 0) {
@@ -4096,16 +4281,38 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			stampNeighborhood.insert(p)
 		}
 
+		let minX = centerProjected.x - radius
+		let maxX = centerProjected.x + radius
+		let minZ = centerProjected.z - radius
+		let maxZ = centerProjected.z + radius
+		if (regularPolygonVertices.length >= 3) {
+			minX = Math.min(...regularPolygonVertices.map((point) => point.x))
+			maxX = Math.max(...regularPolygonVertices.map((point) => point.x))
+			minZ = Math.min(...regularPolygonVertices.map((point) => point.z))
+			maxZ = Math.max(...regularPolygonVertices.map((point) => point.z))
+		}
+
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
-			const u = Math.random()
-			const v = Math.random()
-			const r = Math.sqrt(u) * radius
-			const theta = v * Math.PI * 2
-			scatterPlacementCandidateWorldHelper.set(
-				centerProjected.x + Math.cos(theta) * r,
-				centerProjected.y,
-				centerProjected.z + Math.sin(theta) * r,
-			)
+			if (regularPolygonVertices.length >= 3) {
+				scatterPlacementCandidateWorldHelper.set(
+					THREE.MathUtils.lerp(minX, maxX, Math.random()),
+					centerProjected.y,
+					THREE.MathUtils.lerp(minZ, maxZ, Math.random()),
+				)
+				if (!isPointInsidePolygonXZ(scatterPlacementCandidateWorldHelper, regularPolygonVertices)) {
+					continue
+				}
+			} else {
+				const u = Math.random()
+				const v = Math.random()
+				const r = Math.sqrt(u) * radius
+				const theta = v * Math.PI * 2
+				scatterPlacementCandidateWorldHelper.set(
+					centerProjected.x + Math.cos(theta) * r,
+					centerProjected.y,
+					centerProjected.z + Math.sin(theta) * r,
+				)
+			}
 			const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
 			if (!projected) {
 				continue
@@ -4164,7 +4371,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginScatterPlacement(event: PointerEvent): boolean {
-		if (!scatterModeEnabled() || event.button !== 0) {
+		if (!scatterModeEnabled()) {
+			return false
+		}
+		if (event.button === 2 && scatterSession?.brushShape === 'polygon') {
+			scatterRightClickState = {
+				pointerId: event.pointerId,
+				startX: event.clientX,
+				startY: event.clientY,
+				moved: false,
+			}
+			return false
+		}
+		if (event.button !== 0) {
 			return false
 		}
 		const asset = options.scatterAsset.value
@@ -4214,7 +4433,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			minFloor: 0.01,
 		})
 
-		const brushAreaM2 = Math.PI * effectiveRadius * effectiveRadius
+		const regularPolygonSides = brushShape === 'circle' ? resolveScatterRegularPolygonSides() : 0
+		const brushAreaM2 = regularPolygonSides >= 3
+			? (regularPolygonSides * effectiveRadius * effectiveRadius * Math.sin((Math.PI * 2) / regularPolygonSides) * 0.5)
+			: (Math.PI * effectiveRadius * effectiveRadius)
 		let { targetCount: targetCountPerStamp } = computeOccupancyTargetCount({
 			areaM2: brushAreaM2,
 			footprintAreaM2,
@@ -4237,6 +4459,68 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			? spacingStats.minDistance
 			: resolveScatterSpacing()
 		const chunkCells = resolveChunkCellsForDefinition(definition)
+		if (brushShape === 'polygon') {
+			if (!scatterSession || scatterSession.brushShape !== 'polygon') {
+				scatterSession = {
+					pointerId: event.pointerId,
+					asset,
+					bindingAssetId,
+					lodPresetAssetId: scatterResolvedLodPresetAssetId,
+					category,
+					brushShape,
+					definition,
+					groundMesh,
+					spacing: effectiveSpacing,
+					radius: effectiveRadius,
+					targetCountPerStamp,
+					minScale: presetMinScale,
+					maxScale: presetMaxScale,
+					store: ensureScatterStoreRef(),
+					layer,
+					modelGroup: scatterModelGroup,
+					chunkCells,
+					neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
+					lastPoint: null,
+					anchorPoint: null,
+					currentPoint: null,
+					rectangleDirection: null,
+					polygonPoints: [],
+					polygonPreviewEnd: null,
+					previewLayerId: `scatter-preview:${layer.id}:polygon`,
+					previewInstances: [],
+				}
+			}
+			const currentSession = scatterSession
+			if (!currentSession) {
+				return false
+			}
+			const alignedPoint = startPoint.clone()
+			if (currentSession.polygonPoints.length > 0) {
+				alignedPoint.y = currentSession.polygonPoints[0]?.y ?? alignedPoint.y
+				const lastPoint = currentSession.polygonPoints[currentSession.polygonPoints.length - 1]
+				if (lastPoint && lastPoint.distanceToSquared(alignedPoint) <= 1e-6) {
+					currentSession.pointerId = event.pointerId
+					currentSession.currentPoint = alignedPoint.clone()
+					currentSession.polygonPreviewEnd = alignedPoint.clone()
+					refreshScatterSessionPreview(currentSession)
+					event.preventDefault()
+					event.stopPropagation()
+					event.stopImmediatePropagation()
+					return true
+				}
+			}
+			currentSession.pointerId = event.pointerId
+			currentSession.anchorPoint = currentSession.polygonPoints[0] ?? alignedPoint.clone()
+			currentSession.currentPoint = alignedPoint.clone()
+			currentSession.polygonPoints.push(alignedPoint.clone())
+			currentSession.polygonPreviewEnd = alignedPoint.clone()
+			refreshScatterSessionPreview(currentSession)
+			event.preventDefault()
+			event.stopPropagation()
+			event.stopImmediatePropagation()
+			return true
+		}
+
 		scatterSession = {
 			pointerId: event.pointerId,
 			asset,
@@ -4259,6 +4543,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			lastPoint: null,
 			anchorPoint: startPoint.clone(),
 			currentPoint: startPoint.clone(),
+			rectangleDirection: null,
+			polygonPoints: [],
+			polygonPreviewEnd: null,
 			previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}`,
 			previewInstances: [],
 		}
@@ -4425,7 +4712,35 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function updateScatterPlacement(event: PointerEvent): boolean {
-		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
+		if (scatterRightClickState && event.pointerId === scatterRightClickState.pointerId && !scatterRightClickState.moved) {
+			const dx = event.clientX - scatterRightClickState.startX
+			const dy = event.clientY - scatterRightClickState.startY
+			if (Math.hypot(dx, dy) >= SCATTER_CLICK_DRAG_THRESHOLD_PX) {
+				scatterRightClickState.moved = true
+			}
+		}
+		if (!scatterSession) {
+			return false
+		}
+		if (scatterSession.brushShape === 'polygon') {
+			const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+			if (isCameraNavActive || scatterSession.polygonPoints.length < 1) {
+				return false
+			}
+			const nextPoint = resolveScatterPointFromEvent(event, scatterSession.definition, scatterSession.groundMesh)
+			if (!nextPoint) {
+				return false
+			}
+			nextPoint.y = scatterSession.polygonPoints[0]?.y ?? nextPoint.y
+			scatterSession.currentPoint = nextPoint.clone()
+			scatterSession.polygonPreviewEnd = nextPoint.clone()
+			refreshScatterSessionPreview(scatterSession)
+			event.preventDefault()
+			event.stopPropagation()
+			event.stopImmediatePropagation()
+			return true
+		}
+		if (event.pointerId !== scatterSession.pointerId) {
 			return false
 		}
 		const nextPoint = resolveScatterPointFromEvent(event, scatterSession.definition, scatterSession.groundMesh)
@@ -4436,6 +4751,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 		scatterSession.currentPoint = nextPoint.clone()
+		if (scatterSession.brushShape === 'rectangle' && scatterSession.anchorPoint && !scatterSession.rectangleDirection) {
+			scatterSession.rectangleDirection = resolveRectangleDirection(scatterSession.anchorPoint, nextPoint)
+		}
 		if (scatterSession.brushShape === 'circle') {
 			traceScatterPath(nextPoint)
 		} else {
@@ -4449,7 +4767,33 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function finalizeScatterPlacement(event: PointerEvent): boolean {
-		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
+		if (!scatterSession) {
+			return false
+		}
+		if (scatterSession.brushShape === 'polygon') {
+			if (event.button === 0 && event.pointerId === scatterSession.pointerId) {
+				return true
+			}
+			if (event.button === 2 && scatterRightClickState && scatterRightClickState.pointerId === event.pointerId) {
+				const clickWasDrag = scatterRightClickState.moved
+				scatterRightClickState = null
+				if (clickWasDrag) {
+					return false
+				}
+				if (scatterSession.polygonPoints.length < 3) {
+					cancelScatterPlacement()
+					return true
+				}
+				scatterSession.polygonPreviewEnd = null
+				refreshScatterSessionPreview(scatterSession)
+				commitScatterSessionPreview(scatterSession)
+				options.clearVertexSnap?.()
+				scatterSession = null
+				return true
+			}
+			return false
+		}
+		if (event.pointerId !== scatterSession.pointerId) {
 			return false
 		}
 		if (scatterSession.brushShape !== 'circle') {
@@ -4475,6 +4819,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function cancelScatterPlacement(): boolean {
 		if (!scatterSession) {
+			scatterRightClickState = null
 			return false
 		}
 		clearScatterSessionPreviewInstances(scatterSession)
@@ -4482,6 +4827,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			options.canvasRef.value.releasePointerCapture(scatterSession.pointerId)
 		}
 		options.clearVertexSnap?.()
+		scatterRightClickState = null
 		scatterSession = null
 		return true
 	}
@@ -4881,13 +5227,28 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			} else if (scatterModeEnabled()) {
 				const shape = resolveScatterBrushShape()
 				if (shape === 'rectangle' && scatterSession?.anchorPoint && scatterSession.currentPoint) {
-					scatterMidpointHelper.copy(scatterSession.anchorPoint).add(scatterSession.currentPoint).multiplyScalar(0.5)
-					brushMesh.position.copy(scatterMidpointHelper)
-					brushMesh.scale.set(
-						Math.max(0.1, Math.abs(scatterSession.currentPoint.x - scatterSession.anchorPoint.x) * 0.5),
-						Math.max(0.1, Math.abs(scatterSession.currentPoint.z - scatterSession.anchorPoint.z) * 0.5),
-						1,
+					const rectangle = buildRotatedRectangleFromCorner(
+						scatterSession.anchorPoint,
+						scatterSession.currentPoint,
+						scatterSession.rectangleDirection,
 					)
+					if (rectangle) {
+						brushMesh.position.copy(rectangle.center)
+						brushMesh.rotation.set(-Math.PI / 2, rectangle.yaw, 0)
+						brushMesh.scale.set(
+							Math.max(0.1, rectangle.width * 0.5),
+							Math.max(0.1, rectangle.depth * 0.5),
+							1,
+						)
+					} else {
+						scatterMidpointHelper.copy(scatterSession.anchorPoint).add(scatterSession.currentPoint).multiplyScalar(0.5)
+						brushMesh.position.copy(scatterMidpointHelper)
+						brushMesh.scale.set(
+							Math.max(0.1, Math.abs(scatterSession.currentPoint.x - scatterSession.anchorPoint.x) * 0.5),
+							Math.max(0.1, Math.abs(scatterSession.currentPoint.z - scatterSession.anchorPoint.z) * 0.5),
+							1,
+						)
+					}
 				} else if (shape === 'line') {
 					const anchor = scatterSession?.anchorPoint ?? targetPoint
 					const current = scatterSession?.currentPoint ?? targetPoint
