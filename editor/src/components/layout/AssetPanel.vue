@@ -3712,26 +3712,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       @click.stop="promptDeleteDirectory(directory.id)"
                     />
                   </div>
-                  <div class="directory-info-overlay">
-                    <v-tooltip
-                      :disabled="!isDirectoryNameTruncated(directory.id)"
-                      :text="directory.name"
-                      location="bottom start"
-                      open-delay="120"
-                    >
-                      <template #activator="{ props }">
-                        <span
-                          v-bind="props"
-                          :ref="(element) => setDirectoryTitleElement(directory.id, element)"
-                          class="directory-card-title"
-                          @mouseenter="handleDirectoryTitlePointerEnter(directory.id)"
-                          @focusin="handleDirectoryTitlePointerEnter(directory.id)"
-                        >
-                          {{ directory.name }}
-                        </span>
-                      </template>
-                    </v-tooltip>
-                  </div>
+                  
                 </div>
               </v-card>
               <v-card
