@@ -3982,26 +3982,22 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterSession.groundMesh.worldToLocal(scatterLocalAnchorHelper)
 		scatterLocalCurrentHelper.copy(currentPoint)
 		scatterSession.groundMesh.worldToLocal(scatterLocalCurrentHelper)
-		const minX = Math.min(scatterLocalAnchorHelper.x, scatterLocalCurrentHelper.x)
-		const maxX = Math.max(scatterLocalAnchorHelper.x, scatterLocalCurrentHelper.x)
-		const minZ = Math.min(scatterLocalAnchorHelper.z, scatterLocalCurrentHelper.z)
-		const maxZ = Math.max(scatterLocalAnchorHelper.z, scatterLocalCurrentHelper.z)
-		const width = maxX - minX
-		const depth = maxZ - minZ
+		const deltaX = scatterLocalCurrentHelper.x - scatterLocalAnchorHelper.x
+		const deltaZ = scatterLocalCurrentHelper.z - scatterLocalAnchorHelper.z
+		const width = Math.abs(deltaX)
+		const depth = Math.abs(deltaZ)
+		const stepXSign = deltaX >= 0 ? 1 : -1
+		const stepZSign = deltaZ >= 0 ? 1 : -1
 		const spacing = scatterSession.spacing
 		const columnCount = Math.max(1, Math.floor(width / spacing) + 1)
 		const rowCount = Math.max(1, Math.floor(depth / spacing) + 1)
-		const usedWidth = (columnCount - 1) * spacing
-		const usedDepth = (rowCount - 1) * spacing
-		const startX = minX + Math.max(0, (width - usedWidth) * 0.5)
-		const startZ = minZ + Math.max(0, (depth - usedDepth) * 0.5)
 		const accepted: THREE.Vector3[] = []
 		const stampNeighborhood = createScatterStampNeighborhood(spacing)
 		const existingBudget = { totalChecks: 0 }
 		for (let row = 0; row < rowCount; row += 1) {
 			for (let column = 0; column < columnCount; column += 1) {
-				const localX = startX + column * spacing
-				const localZ = startZ + row * spacing
+				const localX = scatterLocalAnchorHelper.x + (column * spacing * stepXSign)
+				const localZ = scatterLocalAnchorHelper.z + (row * spacing * stepZSign)
 				scatterPlacementCandidateLocalHelper.set(localX, 0, localZ)
 				scatterSession.groundMesh.localToWorld(scatterPlacementCandidateLocalHelper)
 				const projected = projectScatterPoint(scatterPlacementCandidateLocalHelper)
@@ -4033,15 +4029,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		scatterDirectionHelper.normalize()
 		const pointCount = Math.max(1, Math.floor(length / spacing) + 1)
-		const usedLength = (pointCount - 1) * spacing
-		const startOffset = Math.max(0, (length - usedLength) * 0.5)
 		const accepted: THREE.Vector3[] = []
 		const stampNeighborhood = createScatterStampNeighborhood(spacing)
 		const existingBudget = { totalChecks: 0 }
 		for (let index = 0; index < pointCount; index += 1) {
 			scatterPlacementCandidateLocalHelper
 				.copy(scatterLocalAnchorHelper)
-				.addScaledVector(scatterDirectionHelper, startOffset + index * spacing)
+				.addScaledVector(scatterDirectionHelper, index * spacing)
 			scatterSession.groundMesh.localToWorld(scatterPlacementCandidateLocalHelper)
 			const projected = projectScatterPoint(scatterPlacementCandidateLocalHelper)
 			if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
@@ -4899,7 +4893,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					const current = scatterSession?.currentPoint ?? targetPoint
 					scatterMidpointHelper.copy(anchor).add(current).multiplyScalar(0.5)
 					brushMesh.position.copy(scatterMidpointHelper)
-					brushMesh.rotation.set(-Math.PI / 2, Math.atan2(current.x - anchor.x, current.z - anchor.z), 0)
+					brushMesh.rotation.set(-Math.PI / 2, Math.atan2(current.x - anchor.x, current.z - anchor.z) + Math.PI / 2, 0)
 					brushMesh.scale.set(Math.max(0.1, anchor.distanceTo(current) * 0.5), 1, 1)
 				} else {
 					const scale = resolveScatterBrushRadius()

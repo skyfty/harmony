@@ -6,6 +6,7 @@
       <template v-for="tool in buildToolButtons" :key="tool.id">
         <v-menu
           v-if="tool.id === 'terrain'"
+          :activator="menuActivators.terrain"
           :model-value="groundTerrainMenuOpen"
           location="bottom"
           :offset="6"
@@ -16,6 +17,7 @@
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('terrain', el)"
               :icon="tool.icon"
               density="compact"
               size="small"
@@ -61,6 +63,7 @@
         </v-menu>
         <v-menu
           v-else-if="tool.id === 'paint'"
+          :activator="menuActivators.paint"
           :model-value="groundPaintMenuOpen"
           location="bottom"
           :offset="6"
@@ -71,6 +74,7 @@
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('paint', el)"
               :icon="tool.icon"
               density="compact"
               size="small"
@@ -111,6 +115,7 @@
         </v-menu>
         <v-menu
           v-else-if="tool.id === 'scatter'"
+          :activator="menuActivators.scatter"
           :model-value="groundScatterMenuOpen"
           location="bottom"
           :offset="6"
@@ -121,6 +126,7 @@
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('scatter', el)"
               :icon="tool.icon"
               density="compact"
               size="small"
@@ -259,6 +265,7 @@
         </v-menu>
         <v-menu
           v-else-if="tool.id === 'displayBoard'"
+          :activator="menuActivators.displayBoard"
           v-model="displayBoardToolMenuOpen"
           location="bottom"
           :offset="6"
@@ -268,6 +275,7 @@
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('displayBoard', el)"
               :icon="tool.icon"
               density="compact"
               size="small"
@@ -316,6 +324,7 @@
         </v-menu>
         <v-menu
           v-else-if="tool.id === 'floor'"
+          :activator="menuActivators.floor"
           :model-value="floorShapeMenuOpen"
           location="bottom"
           :offset="6"
@@ -326,6 +335,7 @@
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('floor', el)"
               :icon="tool.icon"
               density="compact"
               size="small"
@@ -413,6 +423,7 @@
         </v-menu>
         <v-menu
           v-else-if="tool.id === 'wall'"
+          :activator="menuActivators.wall"
           :model-value="wallShapeMenuOpen"
           location="bottom"
           :offset="6"
@@ -423,6 +434,7 @@
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('wall', el)"
               :icon="tool.icon"
               density="compact"
               size="small"
@@ -510,6 +522,7 @@
         </v-menu>
         <v-menu
           v-else-if="tool.id === 'water'"
+          :activator="menuActivators.water"
           :model-value="waterShapeMenuOpen"
           location="bottom"
           :offset="6"
@@ -520,6 +533,7 @@
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('water', el)"
               :icon="tool.icon"
               density="compact"
               size="small"
@@ -585,6 +599,7 @@
         />
       </template>
       <v-menu
+        :activator="menuActivators.viewportPlacement"
         :model-value="viewportPlacementMenuOpen"
         location="bottom"
         :offset="6"
@@ -595,6 +610,7 @@
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
+            :ref="(el: unknown) => setMenuActivator('viewportPlacement', el)"
             icon="mdi-shape-plus"
             density="compact"
             size="small"
@@ -663,6 +679,7 @@
         </v-list>
       </v-menu>
       <v-menu
+        :activator="menuActivators.scatterErase"
         :model-value="scatterEraseMenuOpen"
         location="bottom"
         :offset="6"
@@ -673,6 +690,7 @@
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
+            :ref="(el: unknown) => setMenuActivator('scatterErase', el)"
             :icon="scatterEraseButtonIcon"
             density="compact"
             size="small"
@@ -1040,6 +1058,7 @@
       />
 
       <v-menu
+        :activator="menuActivators.cameraReset"
         :model-value="cameraResetMenuOpen"
         location="bottom"
         :offset="6"
@@ -1050,6 +1069,7 @@
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
+            :ref="(el: unknown) => setMenuActivator('cameraReset', el)"
             icon="mdi-camera"
             density="compact"
             size="small"
@@ -1092,7 +1112,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRefs, watch } from 'vue'
+import { computed, reactive, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
@@ -1307,6 +1327,40 @@ const mirrorMenuOpen = ref(false)
 const alignMenuOpen = ref(false)
 const fixedPrimaryAsAnchor = ref(true)
 const displayBoardToolMenuOpen = ref(false)
+
+type MenuActivatorKey =
+  | 'terrain'
+  | 'paint'
+  | 'scatter'
+  | 'displayBoard'
+  | 'floor'
+  | 'wall'
+  | 'water'
+  | 'viewportPlacement'
+  | 'scatterErase'
+  | 'cameraReset'
+
+const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined>>({
+  terrain: undefined,
+  paint: undefined,
+  scatter: undefined,
+  displayBoard: undefined,
+  floor: undefined,
+  wall: undefined,
+  water: undefined,
+  viewportPlacement: undefined,
+  scatterErase: undefined,
+  cameraReset: undefined,
+})
+
+function setMenuActivator(key: MenuActivatorKey, el: unknown) {
+  if (!el) {
+    menuActivators[key] = undefined
+    return
+  }
+  const elementCandidate = (el as { $el?: unknown }).$el ?? el
+  menuActivators[key] = elementCandidate instanceof HTMLElement ? elementCandidate : undefined
+}
 
 const SCATTER_BRUSH_RADIUS_MIN = 0.1
 const SCATTER_ERASE_RADIUS_MIN = 0.1
