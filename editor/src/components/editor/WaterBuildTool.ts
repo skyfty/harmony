@@ -379,11 +379,9 @@ export function createWaterBuildTool(options: {
             return true
           }
 
-          options.sceneStore.createWaterNode({
-            center: rectangle.center,
-            width: rectangle.width,
-            depth: rectangle.depth,
-            yaw: rectangle.yaw,
+          options.sceneStore.createWaterSurfaceMeshNode({
+            buildShape: 'rectangle',
+            points: rectangle.corners.map((point) => ({ x: point.x, y: point.y, z: point.z })),
           })
           clearSession(true)
           return true

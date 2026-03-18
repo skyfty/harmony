@@ -330,14 +330,7 @@ export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }):
 
     session.previewGroup.position.copy(center)
     session.previewGroup.position.y += PREVIEW_Y_OFFSET
-    let rotationY = 0
-    if (session.shape === 'rectangle' && session.previewEnd) {
-      const start = session.points[0]
-      if (start) {
-        rotationY = buildRotatedRectangleFromCorner(start, session.previewEnd, session.rectangleDirection)?.yaw ?? 0
-      }
-    }
-    session.previewGroup.rotation.set(-Math.PI / 2, rotationY, 0)
+    session.previewGroup.rotation.set(-Math.PI / 2, 0, 0)
   }
 
   return {

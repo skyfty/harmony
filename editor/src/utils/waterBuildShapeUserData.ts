@@ -50,37 +50,3 @@ export function isWaterSurfaceNode(node: SceneNode | null | undefined): boolean 
 
   return node.nodeType === 'Mesh' && Boolean(extractWaterSurfaceMeshMetadataFromUserData(node.userData))
 }
-
-export function resolveWaterRectangleBounds(node: SceneNode | null | undefined): {
-  minX: number
-  maxX: number
-  minY: number
-  maxY: number
-  y: number
-  width: number
-  depth: number
-} | null {
-  if (!node || node.nodeType !== 'Plane' || readWaterBuildShapeFromNode(node) !== 'rectangle' || !isWaterSurfaceNode(node)) {
-    return null
-  }
-
-  const target = node
-
-  const width = Math.abs(Number(target.scale?.x ?? 1))
-  const depth = Math.abs(Number(target.scale?.y ?? 1))
-  if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 1e-6 || depth <= 1e-6) {
-    return null
-  }
-
-  const y = Number(target.position?.y ?? 0)
-
-  return {
-    minX: -width * 0.5,
-    maxX: width * 0.5,
-    minY: -depth * 0.5,
-    maxY: depth * 0.5,
-    y,
-    width,
-    depth,
-  }
-}

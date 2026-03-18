@@ -13406,59 +13406,10 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
-    createWaterNode(payload: {
-      nodeId?: string
-      center: Vector3Like
-      width: number
-      depth: number
-      yaw?: number
-      name?: string
-      editorFlags?: SceneNodeEditorFlags
-    }): SceneNode | null {
-      const width = Math.max(1e-3, Math.abs(Number(payload.width)))
-      const depth = Math.max(1e-3, Math.abs(Number(payload.depth)))
-      const yaw = Number(payload.yaw)
-      const rotationY = Number.isFinite(yaw) ? yaw : 0
-      if (!Number.isFinite(width) || !Number.isFinite(depth)) {
-        return null
-      }
-
-      const runtime = createPrimitiveMesh('Plane', { doubleSided: true })
-      const nodeName = payload.name ?? this.generateWaterNodeName()
-      const userData = mergeUserDataWithWaterBuildShape(undefined, 'rectangle')
-
-      this.captureHistorySnapshot()
-      this.beginHistoryCaptureSuppression()
-      try {
-        const node = this.addSceneNode({
-          nodeId: payload.nodeId,
-          nodeType: 'Plane',
-          object: runtime,
-          name: nodeName,
-          position: createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0),
-          rotation: createVector(-Math.PI / 2, rotationY, 0),
-          scale: createVector(width, depth, 1),
-          editorFlags: payload.editorFlags,
-          userData,
-        })
-
-        if (!node) {
-          return null
-        }
-
-        this.addNodeComponent<typeof WATER_COMPONENT_TYPE>(node.id, WATER_COMPONENT_TYPE)
-        this.applyWaterNodeDefaultNormalMap(node.id)
-        const updated = findNodeById(this.nodes, node.id)
-        return updated ?? node
-      } finally {
-        this.endHistoryCaptureSuppression()
-      }
-    },
-
     createWaterSurfaceMeshNode(payload: {
       nodeId?: string
       points: Vector3Like[]
-      buildShape: Exclude<WaterBuildShape, 'rectangle'>
+      buildShape: WaterBuildShape
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
@@ -13629,7 +13580,7 @@ export const useSceneStore = defineStore('scene', {
     updateWaterSurfaceMeshNode(payload: {
       nodeId: string
       localPoints: Array<[number, number]>
-      buildShape: Exclude<WaterBuildShape, 'rectangle'>
+      buildShape: WaterBuildShape
     }): SceneNode | null {
       const target = findNodeById(this.nodes, payload.nodeId)
       if (!target || target.nodeType !== 'Mesh' || !isWaterSurfaceNode(target)) {
@@ -13649,38 +13600,6 @@ export const useSceneStore = defineStore('scene', {
         }, payload.buildShape)
       })
       this.queueSceneNodePatch(payload.nodeId, ['userData'])
-      commitSceneSnapshot(this)
-      return findNodeById(this.nodes, payload.nodeId)
-    },
-
-    updateWaterNodeRectangle(payload: {
-      nodeId: string
-      center: Vector3Like
-      width: number
-      depth: number
-      yaw?: number
-    }): SceneNode | null {
-      const width = Math.max(1e-3, Math.abs(Number(payload.width)))
-      const depth = Math.max(1e-3, Math.abs(Number(payload.depth)))
-      const yaw = Number(payload.yaw)
-      const rotationY = Number.isFinite(yaw) ? yaw : 0
-      if (!Number.isFinite(width) || !Number.isFinite(depth)) {
-        return null
-      }
-
-      const target = findNodeById(this.nodes, payload.nodeId)
-      if (!target || target.nodeType !== 'Plane' || !isWaterSurfaceNode(target)) {
-        return null
-      }
-
-      this.captureHistorySnapshot()
-      visitNode(this.nodes, payload.nodeId, (node) => {
-        node.position = createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0)
-        node.rotation = createVector(-Math.PI / 2, rotationY, 0)
-        node.scale = createVector(width, depth, 1)
-        node.userData = mergeUserDataWithWaterBuildShape(node.userData, 'rectangle')
-      })
-      this.queueSceneNodePatch(payload.nodeId, ['transform', 'userData'])
       commitSceneSnapshot(this)
       return findNodeById(this.nodes, payload.nodeId)
     },
