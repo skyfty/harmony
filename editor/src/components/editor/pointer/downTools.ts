@@ -42,10 +42,6 @@ function distSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   return dx * dx + dz * dz
 }
 
-function isAxisAlignedEdge(a: THREE.Vector3, b: THREE.Vector3, eps = RECTANGLE_CHAIN_EPS): boolean {
-  return Math.abs(a.x - b.x) <= eps || Math.abs(a.z - b.z) <= eps
-}
-
 function getHandleWorldPosition(handle: THREE.Object3D | null): THREE.Vector3 | null {
   if (!handle) {
     return null
@@ -128,6 +124,18 @@ function sideOf(value: number, min: number, max: number, eps = RECTANGLE_CHAIN_E
   return dMin <= dMax ? 'min' : 'max'
 }
 
+function toPlanarVectorXZ(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3 {
+  return new THREE.Vector3(to.x - from.x, 0, to.z - from.z)
+}
+
+function planarLength(vector: THREE.Vector3): number {
+  return Math.hypot(vector.x, vector.z)
+}
+
+function planarDot(a: THREE.Vector3, b: THREE.Vector3): number {
+  return a.x * b.x + a.z * b.z
+}
+
 function tryCreateRectangleEditConstraint(options: {
   segmentsWorld: WallWorldSegmentLike[]
   chainStartIndex: number
@@ -158,35 +166,49 @@ function tryCreateRectangleEditConstraint(options: {
   if (distSqXZ(seg3.start, v3) > RECTANGLE_CHAIN_EPS * RECTANGLE_CHAIN_EPS) return null
   if (distSqXZ(seg3.end, v0) > RECTANGLE_CHAIN_EPS * RECTANGLE_CHAIN_EPS) return null
 
-  // Axis-aligned rectangle perimeter.
-  if (!isAxisAlignedEdge(v0, v1)) return null
-  if (!isAxisAlignedEdge(v1, v2)) return null
-  if (!isAxisAlignedEdge(v2, v3)) return null
-  if (!isAxisAlignedEdge(v3, v0)) return null
+  const edgeU = toPlanarVectorXZ(v0, v1)
+  const edgeV = toPlanarVectorXZ(v0, v3)
+  const edgeULength = planarLength(edgeU)
+  const edgeVLength = planarLength(edgeV)
+  if (edgeULength <= RECTANGLE_CHAIN_EPS || edgeVLength <= RECTANGLE_CHAIN_EPS) {
+    return null
+  }
+
+  const axisUWorld = edgeU.clone().multiplyScalar(1 / edgeULength)
+  const axisVWorld = edgeV.clone().multiplyScalar(1 / edgeVLength)
+  const orthogonality = Math.abs(planarDot(axisUWorld, axisVWorld))
+  if (orthogonality > 1e-3) {
+    return null
+  }
+
+  const expectedV2 = v0.clone()
+    .addScaledVector(axisUWorld, edgeULength)
+    .addScaledVector(axisVWorld, edgeVLength)
+  if (distSqXZ(expectedV2, v2) > RECTANGLE_CHAIN_EPS * RECTANGLE_CHAIN_EPS) {
+    return null
+  }
 
   const corners = [v0, v1, v2, v3] as const
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-  for (const c of corners) {
-    minX = Math.min(minX, c.x)
-    maxX = Math.max(maxX, c.x)
-    minZ = Math.min(minZ, c.z)
-    maxZ = Math.max(maxZ, c.z)
+  const originWorld = v0.clone()
+  const boundsStart = {
+    uMin: 0,
+    uMax: edgeULength,
+    vMin: 0,
+    vMax: edgeVLength,
   }
 
   const cornerSides = corners.map((c) => ({
-    x: sideOf(c.x, minX, maxX),
-    z: sideOf(c.z, minZ, maxZ),
+    u: sideOf(planarDot(toPlanarVectorXZ(originWorld, c), axisUWorld), boundsStart.uMin, boundsStart.uMax),
+    v: sideOf(planarDot(toPlanarVectorXZ(originWorld, c), axisVWorld), boundsStart.vMin, boundsStart.vMax),
   })) as unknown as RectangleEditConstraint['cornerSides']
-
-  const oppositeCornerWorld = corners[(draggedCornerIndex ^ 2) as 0 | 1 | 2 | 3].clone()
 
   return {
     cornerSides,
     draggedCornerIndex,
-    oppositeCornerWorld,
+    originWorld,
+    axisUWorld,
+    axisVWorld,
+    boundsStart,
   }
 }
 

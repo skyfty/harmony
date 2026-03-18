@@ -4516,6 +4516,7 @@ type WaterContourVertexDragState = {
   runtimeObject: THREE.Object3D
   basePoints: Array<[number, number]>
   workingPoints: Array<[number, number]>
+  rectangleConstraint: WaterRectangleVertexConstraint | null
 }
 
 type WaterCircleCenterDragState = {
@@ -4563,6 +4564,41 @@ type WaterEdgeDragState = {
   perp: THREE.Vector2
   referencePoint: THREE.Vector2
   initialProjection: number
+  rectangleConstraint: WaterRectangleEdgeConstraint | null
+}
+
+type WaterRectangleBounds = {
+  uMin: number
+  uMax: number
+  vMin: number
+  vMax: number
+}
+
+type WaterRectangleCornerSide = {
+  u: 'min' | 'max'
+  v: 'min' | 'max'
+}
+
+type WaterRectangleFrame = {
+  originLocal: THREE.Vector2
+  axisULocal: THREE.Vector2
+  axisVLocal: THREE.Vector2
+  boundsStart: WaterRectangleBounds
+  cornerSides: [
+    WaterRectangleCornerSide,
+    WaterRectangleCornerSide,
+    WaterRectangleCornerSide,
+    WaterRectangleCornerSide,
+  ]
+}
+
+type WaterRectangleVertexConstraint = WaterRectangleFrame & {
+  draggedSide: WaterRectangleCornerSide
+}
+
+type WaterRectangleEdgeConstraint = WaterRectangleFrame & {
+  draggedAxis: 'u' | 'v'
+  draggedSide: 'min' | 'max'
 }
 
 let waterContourVertexDragState: WaterContourVertexDragState | null = null
@@ -4905,6 +4941,193 @@ function cloneWaterContourPoints(node: SceneNode | null | undefined): Array<[num
   return getWaterContourLocalPoints(node).map(([x, y]) => [x, y] as [number, number])
 }
 
+function sideOfWaterRectangle(value: number, min: number, max: number, eps = 1e-4): 'min' | 'max' {
+  const dMin = Math.abs(value - min)
+  const dMax = Math.abs(value - max)
+  if (dMin <= eps && dMax <= eps) {
+    return 'min'
+  }
+  if (dMin <= eps) {
+    return 'min'
+  }
+  if (dMax <= eps) {
+    return 'max'
+  }
+  return dMin <= dMax ? 'min' : 'max'
+}
+
+function createWaterRectangleFrame(points: Array<[number, number]>): WaterRectangleFrame | null {
+  if (points.length !== 4) {
+    return null
+  }
+
+  const corners = points.map(([x, y]) => new THREE.Vector2(x, y)) as [THREE.Vector2, THREE.Vector2, THREE.Vector2, THREE.Vector2]
+  const originLocal = corners[0].clone()
+  const edgeU = corners[1].clone().sub(originLocal)
+  const edgeV = corners[3].clone().sub(originLocal)
+  const lenU = edgeU.length()
+  const lenV = edgeV.length()
+  if (lenU <= 1e-4 || lenV <= 1e-4) {
+    return null
+  }
+
+  const axisULocal = edgeU.clone().multiplyScalar(1 / lenU)
+  const axisVLocal = edgeV.clone().multiplyScalar(1 / lenV)
+  if (Math.abs(axisULocal.dot(axisVLocal)) > 1e-3) {
+    return null
+  }
+
+  const expectedCorner2 = originLocal.clone()
+    .add(axisULocal.clone().multiplyScalar(lenU))
+    .add(axisVLocal.clone().multiplyScalar(lenV))
+  if (expectedCorner2.distanceToSquared(corners[2]) > 1e-6) {
+    return null
+  }
+
+  const boundsStart: WaterRectangleBounds = {
+    uMin: 0,
+    uMax: lenU,
+    vMin: 0,
+    vMax: lenV,
+  }
+
+  const cornerSides = corners.map((corner) => {
+    const rel = corner.clone().sub(originLocal)
+    const u = rel.dot(axisULocal)
+    const v = rel.dot(axisVLocal)
+    return {
+      u: sideOfWaterRectangle(u, boundsStart.uMin, boundsStart.uMax),
+      v: sideOfWaterRectangle(v, boundsStart.vMin, boundsStart.vMax),
+    }
+  }) as WaterRectangleFrame['cornerSides']
+
+  return {
+    originLocal,
+    axisULocal,
+    axisVLocal,
+    boundsStart,
+    cornerSides,
+  }
+}
+
+function buildWaterRectanglePointsFromBounds(
+  frame: Pick<WaterRectangleFrame, 'originLocal' | 'axisULocal' | 'axisVLocal' | 'cornerSides'>,
+  bounds: WaterRectangleBounds,
+): Array<[number, number]> {
+  return frame.cornerSides.map((side) => {
+    const point = frame.originLocal.clone()
+      .add(frame.axisULocal.clone().multiplyScalar(side.u === 'min' ? bounds.uMin : bounds.uMax))
+      .add(frame.axisVLocal.clone().multiplyScalar(side.v === 'min' ? bounds.vMin : bounds.vMax))
+    return [point.x, point.y] as [number, number]
+  })
+}
+
+function createWaterRectangleVertexConstraint(
+  points: Array<[number, number]>,
+  vertexIndex: number,
+): WaterRectangleVertexConstraint | null {
+  const frame = createWaterRectangleFrame(points)
+  const draggedSide = frame?.cornerSides?.[vertexIndex]
+  if (!frame || !draggedSide) {
+    return null
+  }
+
+  return {
+    ...frame,
+    draggedSide: { ...draggedSide },
+  }
+}
+
+function applyWaterRectangleVertexConstraint(
+  constraint: WaterRectangleVertexConstraint,
+  localPoint: THREE.Vector2,
+): Array<[number, number]> {
+  const rel = localPoint.clone().sub(constraint.originLocal)
+  const projectedU = rel.dot(constraint.axisULocal)
+  const projectedV = rel.dot(constraint.axisVLocal)
+  const eps = 1e-4
+  let uMin = constraint.boundsStart.uMin
+  let uMax = constraint.boundsStart.uMax
+  let vMin = constraint.boundsStart.vMin
+  let vMax = constraint.boundsStart.vMax
+
+  if (constraint.draggedSide.u === 'min') {
+    uMin = Math.min(projectedU, uMax - eps)
+  } else {
+    uMax = Math.max(projectedU, uMin + eps)
+  }
+
+  if (constraint.draggedSide.v === 'min') {
+    vMin = Math.min(projectedV, vMax - eps)
+  } else {
+    vMax = Math.max(projectedV, vMin + eps)
+  }
+
+  return buildWaterRectanglePointsFromBounds(constraint, { uMin, uMax, vMin, vMax })
+}
+
+function createWaterRectangleEdgeConstraint(
+  points: Array<[number, number]>,
+  edgeIndex: number,
+): WaterRectangleEdgeConstraint | null {
+  const frame = createWaterRectangleFrame(points)
+  if (!frame) {
+    return null
+  }
+
+  const startSide = frame.cornerSides[edgeIndex]
+  const endSide = frame.cornerSides[(edgeIndex + 1) % frame.cornerSides.length]
+  if (!startSide || !endSide) {
+    return null
+  }
+
+  if (startSide.u === endSide.u && startSide.v !== endSide.v) {
+    return {
+      ...frame,
+      draggedAxis: 'u',
+      draggedSide: startSide.u,
+    }
+  }
+
+  if (startSide.v === endSide.v && startSide.u !== endSide.u) {
+    return {
+      ...frame,
+      draggedAxis: 'v',
+      draggedSide: startSide.v,
+    }
+  }
+
+  return null
+}
+
+function applyWaterRectangleEdgeConstraint(
+  constraint: WaterRectangleEdgeConstraint,
+  localPoint: THREE.Vector2,
+): Array<[number, number]> {
+  const rel = localPoint.clone().sub(constraint.originLocal)
+  const projectedU = rel.dot(constraint.axisULocal)
+  const projectedV = rel.dot(constraint.axisVLocal)
+  const eps = 1e-4
+  let uMin = constraint.boundsStart.uMin
+  let uMax = constraint.boundsStart.uMax
+  let vMin = constraint.boundsStart.vMin
+  let vMax = constraint.boundsStart.vMax
+
+  if (constraint.draggedAxis === 'u') {
+    if (constraint.draggedSide === 'min') {
+      uMin = Math.min(projectedU, uMax - eps)
+    } else {
+      uMax = Math.max(projectedU, uMin + eps)
+    }
+  } else if (constraint.draggedSide === 'min') {
+    vMin = Math.min(projectedV, vMax - eps)
+  } else {
+    vMax = Math.max(projectedV, vMin + eps)
+  }
+
+  return buildWaterRectanglePointsFromBounds(constraint, { uMin, uMax, vMin, vMax })
+}
+
 function buildWaterPreviewFromLocalPoints(runtimeObject: THREE.Object3D, points: Array<[number, number]>): boolean {
   const metadata = buildWaterSurfaceMetadataFromLocalPoints(points)
   if (!metadata) {
@@ -5019,6 +5242,9 @@ function tryBeginWaterVertexDrag(event: PointerEvent): boolean {
     runtimeObject: runtime,
     basePoints,
     workingPoints: basePoints.map(([x, y]) => [x, y] as [number, number]),
+    rectangleConstraint: resolveWaterContourBuildShape(selectedId) === 'rectangle'
+      ? createWaterRectangleVertexConstraint(basePoints, hit.vertexIndex)
+      : null,
   }
   setActiveWaterVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
   pointerInteraction.capture(event.pointerId)
@@ -5141,6 +5367,9 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
       perp: hit.perp.clone(),
       referencePoint: hit.referencePoint.clone(),
       initialProjection: hit.initialProjection,
+      rectangleConstraint: resolveWaterContourBuildShape(selectedId) === 'rectangle'
+        ? createWaterRectangleEdgeConstraint(startPoints, hit.edgeIndex)
+        : null,
     }
     pointerInteraction.capture(event.pointerId)
     return true
@@ -12828,11 +13057,15 @@ function handlePointerMove(event: PointerEvent) {
     }
 
     const local = state.runtimeObject.worldToLocal(world)
-    const nextPoints = state.workingPoints.map(([x, y]) => [x, y] as [number, number])
-    if (!nextPoints[state.vertexIndex]) {
-      return
+    const nextPoints = state.rectangleConstraint
+      ? applyWaterRectangleVertexConstraint(state.rectangleConstraint, new THREE.Vector2(local.x, local.y))
+      : state.workingPoints.map(([x, y]) => [x, y] as [number, number])
+    if (!state.rectangleConstraint) {
+      if (!nextPoints[state.vertexIndex]) {
+        return
+      }
+      nextPoints[state.vertexIndex] = [local.x, local.y]
     }
-    nextPoints[state.vertexIndex] = [local.x, local.y]
     state.workingPoints = nextPoints
     if (buildWaterPreviewFromLocalPoints(state.runtimeObject, nextPoints)) {
       ensureWaterVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
@@ -12953,6 +13186,17 @@ function handlePointerMove(event: PointerEvent) {
     if (!raycastGroundPoint(event, groundPointerHelper)) {
       return
     }
+
+    if (state.rectangleConstraint) {
+      const local = state.runtimeObject.worldToLocal(groundPointerHelper.clone())
+      const nextPoints = applyWaterRectangleEdgeConstraint(state.rectangleConstraint, new THREE.Vector2(local.x, local.y))
+      state.workingPoints = nextPoints
+      if (buildWaterPreviewFromLocalPoints(state.runtimeObject, nextPoints)) {
+        ensureWaterVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+      }
+      return
+    }
+
     const pointerVec = new THREE.Vector2(groundPointerHelper.x, groundPointerHelper.z)
     const projection = state.perp.dot(pointerVec.clone().sub(state.referencePoint))
     const delta = projection - state.initialProjection
