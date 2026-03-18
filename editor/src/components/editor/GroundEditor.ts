@@ -648,6 +648,11 @@ type ScatterSessionState = {
 	previewInstances: TerrainScatterInstance[]
 }
 
+type ScatterPreviewSample = {
+	key: string
+	point: THREE.Vector3
+}
+
 let scatterSession: ScatterSessionState | null = null
 
 type ScatterRightClickState = {
@@ -3980,7 +3985,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function createScatterPreviewInstance(
 		session: ScatterSessionState,
 		point: THREE.Vector3,
-		index: number,
+		previewKey: string,
 		yaw: number,
 		existing?: TerrainScatterInstance,
 	): TerrainScatterInstance {
@@ -3995,7 +4000,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			? Number(existingYaw)
 			: (Number.isFinite(yaw) ? yaw : 0)
 		const instance: TerrainScatterInstance = {
-			id: existing?.id ?? `scatter_preview_${session.pointerId}_${index}`,
+			id: existing?.id ?? `scatter_preview_${session.pointerId}_${previewKey}`,
 			assetId: session.asset.id,
 			layerId: session.previewLayerId,
 			profileId: session.lodPresetAssetId ?? session.layer.profileId ?? session.asset.id,
@@ -4021,24 +4026,27 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function syncScatterSessionPreviewInstances(
 		session: ScatterSessionState,
-		points: THREE.Vector3[],
+		samples: ScatterPreviewSample[],
 		yaw: number,
 		options: { randomizeYaw?: boolean } = {},
 	): void {
 		const existing = session.previewInstances
+		const existingById = new Map(existing.map((instance) => [instance.id, instance]))
 		const next: TerrainScatterInstance[] = []
-		for (let index = 0; index < points.length; index += 1) {
-			const point = points[index]
+		const nextIds = new Set<string>()
+		for (const sample of samples) {
+			const point = sample.point
 			if (!point) {
 				continue
 			}
-			const previous = existing[index]
+			const previewId = `scatter_preview_${session.pointerId}_${sample.key}`
+			const previous = existingById.get(previewId)
 			const previewYaw = options.randomizeYaw
 				? (Number.isFinite(previous?.localRotation?.y)
 					? Number(previous?.localRotation?.y)
 					: Math.random() * Math.PI * 2)
 				: yaw
-			const preview = createScatterPreviewInstance(session, point, index, previewYaw, previous)
+			const preview = createScatterPreviewInstance(session, point, sample.key, previewYaw, previous)
 			const matrix = composeScatterMatrix(preview, session.groundMesh, scatterWorldMatrixHelper)
 			if (!preview.binding?.nodeId) {
 				if (!bindScatterInstance(preview, matrix, session.bindingAssetId)) {
@@ -4047,17 +4055,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			} else {
 				updateScatterInstanceMatrix(preview, session.groundMesh, scatterWorldMatrixHelper)
 			}
+			nextIds.add(preview.id)
 			next.push(preview)
 		}
 
-		for (let index = next.length; index < existing.length; index += 1) {
-			const stale = existing[index]
-			if (stale) {
+		for (const stale of existing) {
+			if (!nextIds.has(stale.id)) {
 				releaseScatterInstance(stale)
 			}
 		}
 
 		session.previewInstances = next
+	}
+
+	function createScatterPreviewSamples(points: THREE.Vector3[]): ScatterPreviewSample[] {
+		return points.map((point, index) => ({ key: `index:${index}`, point }))
 	}
 
 	function refreshScatterSessionPreview(session: ScatterSessionState): void {
@@ -4082,7 +4094,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return
 			}
 			const points = sampleScatterPointsInPolygonArea(polygonPoints)
-			syncScatterSessionPreviewInstances(session, points, 0)
+			syncScatterSessionPreviewInstances(session, createScatterPreviewSamples(points), 0)
 			return
 		}
 		const center = session.currentPoint ?? session.anchorPoint
@@ -4090,12 +4102,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			clearScatterSessionPreviewInstances(session)
 			return
 		}
-		const points = sampleScatterPointsInBrush(center)
 		if (session.brushShape === 'line') {
-			syncScatterSessionPreviewInstances(session, points, 0, { randomizeYaw: true })
+			syncScatterSessionPreviewInstances(
+				session,
+				sampleScatterPreviewSamplesOnLine(session.anchorPoint ?? center, center),
+				0,
+				{ randomizeYaw: true },
+			)
 			return
 		}
-		syncScatterSessionPreviewInstances(session, points, resolveScatterStampYaw(session))
+		const points = sampleScatterPointsInBrush(center)
+		syncScatterSessionPreviewInstances(session, createScatterPreviewSamples(points), resolveScatterStampYaw(session))
 	}
 
 	function commitScatterSessionPreview(session: ScatterSessionState): number {
@@ -4413,37 +4430,63 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function sampleScatterPointsOnLine(anchorPoint: THREE.Vector3, currentPoint: THREE.Vector3): THREE.Vector3[] {
-		if (!scatterSession) {
+		return sampleScatterPreviewSamplesOnLine(anchorPoint, currentPoint).map((sample) => sample.point)
+	}
+
+	function sampleScatterPreviewSamplesOnLine(anchorPoint: THREE.Vector3, currentPoint: THREE.Vector3): ScatterPreviewSample[] {
+		const session = scatterSession
+		if (!session) {
 			return []
 		}
 		scatterLocalAnchorHelper.copy(anchorPoint)
-		scatterSession.groundMesh.worldToLocal(scatterLocalAnchorHelper)
+		session.groundMesh.worldToLocal(scatterLocalAnchorHelper)
 		scatterLocalCurrentHelper.copy(currentPoint)
-		scatterSession.groundMesh.worldToLocal(scatterLocalCurrentHelper)
-		scatterDirectionHelper.copy(scatterLocalCurrentHelper).sub(scatterLocalAnchorHelper)
-		const length = scatterDirectionHelper.length()
-		const spacing = scatterSession.spacing
+		session.groundMesh.worldToLocal(scatterLocalCurrentHelper)
+		const deltaX = scatterLocalCurrentHelper.x - scatterLocalAnchorHelper.x
+		const deltaZ = scatterLocalCurrentHelper.z - scatterLocalAnchorHelper.z
+		const length = Math.hypot(deltaX, deltaZ)
+		const spacing = session.spacing
 		if (length <= 1e-4) {
 			const projected = projectScatterPoint(anchorPoint)
-			return projected ? [projected] : []
+			return projected ? [{ key: 'slot:0', point: projected }] : []
 		}
-		scatterDirectionHelper.normalize()
-		const pointCount = Math.max(1, Math.floor(length / spacing) + 1)
-		const accepted: THREE.Vector3[] = []
-		const stampNeighborhood = createScatterStampNeighborhood(spacing)
-		const existingBudget = { totalChecks: 0 }
-		for (let index = 0; index < pointCount; index += 1) {
-			scatterPlacementCandidateLocalHelper
-				.copy(scatterLocalAnchorHelper)
-				.addScaledVector(scatterDirectionHelper, index * spacing)
-			scatterSession.groundMesh.localToWorld(scatterPlacementCandidateLocalHelper)
+		const accepted: ScatterPreviewSample[] = []
+		const dirX = deltaX / length
+		const dirZ = deltaZ / length
+		const minDistanceSq = Math.max(1e-6, (spacing * 0.8) * (spacing * 0.8))
+		let lastAcceptedPoint: THREE.Vector3 | null = null
+		const appendSampleAtDistance = (distanceOnLine: number, key: string) => {
+			scatterPlacementCandidateLocalHelper.set(
+				scatterLocalAnchorHelper.x + dirX * distanceOnLine,
+				THREE.MathUtils.lerp(scatterLocalAnchorHelper.y, scatterLocalCurrentHelper.y, clamp01(distanceOnLine / length)),
+				scatterLocalAnchorHelper.z + dirZ * distanceOnLine,
+			)
+			session.groundMesh.localToWorld(scatterPlacementCandidateLocalHelper)
 			const projected = projectScatterPoint(scatterPlacementCandidateLocalHelper)
-			if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
-				continue
+			if (!projected) {
+				return
+			}
+			if (lastAcceptedPoint) {
+				const dx = projected.x - lastAcceptedPoint.x
+				const dz = projected.z - lastAcceptedPoint.z
+				if ((dx * dx) + (dz * dz) < minDistanceSq) {
+					return
+				}
+			}
+			if (!canAcceptScatterPoint(projected, session, { totalChecks: 0 })) {
+				return
 			}
 			const point = projected.clone()
-			accepted.push(point)
-			stampNeighborhood.insert(point)
+			accepted.push({ key, point })
+			lastAcceptedPoint = point
+		}
+		const pointCount = Math.max(1, Math.floor(length / spacing) + 1)
+		for (let index = 0; index < pointCount; index += 1) {
+			appendSampleAtDistance(Math.min(length, index * spacing), `slot:${index}`)
+		}
+		const lastSlotDistance = (pointCount - 1) * spacing
+		if (length - lastSlotDistance > Math.max(1e-4, spacing * 0.2)) {
+			appendSampleAtDistance(length, 'end')
 		}
 		return accepted
 	}

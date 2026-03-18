@@ -225,7 +225,7 @@
 
                   <div class="scatter-spacing-item scatter-spacing--compact">
                     <div class="scatter-spacing-labels">
-                      <span>Scatter Spacing</span>
+                      <span>Spacing</span>
                     </div>
                     <v-text-field
                       v-model="groundScatterSpacingInput"
