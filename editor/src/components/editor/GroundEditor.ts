@@ -3997,6 +3997,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (stampNeighborhood?.hasNeighborTooClose(projected)) {
 			return false
 		}
+		// Shape tools (line/rectangle/polygon) intentionally force placement
+		// over already placed instances; keep only intra-stamp spacing checks.
+		if (session.brushShape === 'line' || session.brushShape === 'rectangle' || session.brushShape === 'polygon') {
+			return true
+		}
 		scatterPlacementCandidateLocalHelper.copy(projected)
 		session.groundMesh.worldToLocal(scatterPlacementCandidateLocalHelper)
 		if (
