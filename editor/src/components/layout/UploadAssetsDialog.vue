@@ -1050,7 +1050,8 @@ function registerPreviewRef(entryId: string, instance: InstanceType<typeof Asset
   }
   previewRefs.set(entryId, instance)
   const entry = uploadEntries.value.find((item) => item.assetId === entryId)
-  if (entry && isModelAsset(entry.asset) && !entry.thumbnailFile) {
+  const hasExistingThumbnail = typeof entry?.asset.thumbnail === 'string' && entry.asset.thumbnail.trim().length > 0
+  if (entry && isModelAsset(entry.asset) && !entry.thumbnailFile && !hasExistingThumbnail) {
     // Capture default snapshot once preview becomes ready.
     void nextTick(() => capturePreviewThumbnail(entry, { silent: true }))
   }

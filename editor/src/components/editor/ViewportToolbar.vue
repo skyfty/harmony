@@ -186,10 +186,9 @@
                           v-model="groundScatterRegularPolygonSidesInput"
                           type="number"
                           density="compact"
-                          variant="outlined"
+                          variant="underlined"
                           hide-details
                           class="wall-regular-polygon-input"
-                          suffix="s"
                           :min="0"
                           :max="WALL_REGULAR_POLYGON_SIDES_MAX"
                           :disabled="buildToolsDisabled || !hasGroundNode || groundScatterBrushShape !== 'circle'"
