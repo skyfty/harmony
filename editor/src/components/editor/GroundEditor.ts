@@ -3990,6 +3990,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const scaleFactor = Number.isFinite(existingScale)
 			? Number(existingScale)
 			: THREE.MathUtils.lerp(session.minScale, session.maxScale, Math.random())
+		const existingYaw = existing?.localRotation?.y
+		const resolvedYaw = Number.isFinite(existingYaw)
+			? Number(existingYaw)
+			: (Number.isFinite(yaw) ? yaw : 0)
 		const instance: TerrainScatterInstance = {
 			id: existing?.id ?? `scatter_preview_${session.pointerId}_${index}`,
 			assetId: session.asset.id,
@@ -4001,7 +4005,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				y: scatterPlacementCandidateLocalHelper.y,
 				z: scatterPlacementCandidateLocalHelper.z,
 			},
-			localRotation: { x: 0, y: yaw, z: 0 },
+			localRotation: { x: 0, y: resolvedYaw, z: 0 },
 			localScale: { x: scaleFactor, y: scaleFactor, z: scaleFactor },
 			groundCoords: {
 				x: scatterPlacementCandidateLocalHelper.x,
@@ -4015,7 +4019,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return instance
 	}
 
-	function syncScatterSessionPreviewInstances(session: ScatterSessionState, points: THREE.Vector3[], yaw: number): void {
+	function syncScatterSessionPreviewInstances(
+		session: ScatterSessionState,
+		points: THREE.Vector3[],
+		yaw: number,
+		options: { randomizeYaw?: boolean } = {},
+	): void {
 		const existing = session.previewInstances
 		const next: TerrainScatterInstance[] = []
 		for (let index = 0; index < points.length; index += 1) {
@@ -4024,7 +4033,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			const previous = existing[index]
-			const preview = createScatterPreviewInstance(session, point, index, yaw, previous)
+			const previewYaw = options.randomizeYaw
+				? (Number.isFinite(previous?.localRotation?.y)
+					? Number(previous?.localRotation?.y)
+					: Math.random() * Math.PI * 2)
+				: yaw
+			const preview = createScatterPreviewInstance(session, point, index, previewYaw, previous)
 			const matrix = composeScatterMatrix(preview, session.groundMesh, scatterWorldMatrixHelper)
 			if (!preview.binding?.nodeId) {
 				if (!bindScatterInstance(preview, matrix, session.bindingAssetId)) {
@@ -4077,6 +4091,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const points = sampleScatterPointsInBrush(center)
+		if (session.brushShape === 'line') {
+			syncScatterSessionPreviewInstances(session, points, 0, { randomizeYaw: true })
+			return
+		}
 		syncScatterSessionPreviewInstances(session, points, resolveScatterStampYaw(session))
 	}
 
@@ -4299,30 +4317,45 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const accepted: THREE.Vector3[] = []
 		const stampNeighborhood = createScatterStampNeighborhood(spacing)
 		const existingBudget = { totalChecks: 0 }
-		const startX = minX + Math.max(0.01, spacing * 0.5)
-		const startZ = minZ + Math.max(0.01, spacing * 0.5)
-		for (let z = startZ; z <= maxZ; z += spacing) {
-			for (let x = startX; x <= maxX; x += spacing) {
-				scatterPlacementCandidateWorldHelper.set(x, polygonPoints[0]?.y ?? 0, z)
-				if (!isPointInsidePolygonXZ(scatterPlacementCandidateWorldHelper, polygonPoints)) {
-					continue
-				}
-				const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
-				if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
-					continue
-				}
-				const point = projected.clone()
-				accepted.push(point)
-				stampNeighborhood.insert(point)
+
+		// Polygon placement should be stochastic, not grid-aligned.
+		// Estimate target count from area/spacing and sample randomly inside bbox.
+		const estimatedCount = Math.max(1, Math.floor(polygonArea / Math.max(1e-6, spacing * spacing)))
+		const targetCount = Math.min(SCATTER_MAX_INSTANCES_PER_STAMP, estimatedCount)
+		const maxAttempts = Math.min(20000, Math.max(2000, targetCount * 120))
+
+		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
+			scatterPlacementCandidateWorldHelper.set(
+				THREE.MathUtils.lerp(minX, maxX, Math.random()),
+				polygonPoints[0]?.y ?? 0,
+				THREE.MathUtils.lerp(minZ, maxZ, Math.random()),
+			)
+			if (!isPointInsidePolygonXZ(scatterPlacementCandidateWorldHelper, polygonPoints)) {
+				continue
 			}
+			const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
+			if (!projected) {
+				continue
+			}
+			// Guard against projection-induced drift beyond the polygon boundary.
+			if (!isPointInsidePolygonXZ(projected, polygonPoints)) {
+				continue
+			}
+			if (!canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
+				continue
+			}
+			const point = projected.clone()
+			accepted.push(point)
+			stampNeighborhood.insert(point)
 		}
+
 		if (!accepted.length) {
 			const centroid = polygonPoints.reduce(
 				(acc, point) => acc.add(point),
 				new THREE.Vector3(),
 			).multiplyScalar(1 / polygonPoints.length)
 			const projected = projectScatterPoint(centroid)
-			if (projected) {
+			if (projected && isPointInsidePolygonXZ(projected, polygonPoints)) {
 				accepted.push(projected)
 			}
 		}
@@ -4526,13 +4559,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const points = sampleScatterPointsInBrush(worldCenterPoint)
-		const lineYaw = resolveScatterStampYaw(scatterSession)
 		for (const point of points) {
 			applyScatterPlacement(
 				point,
 				scatterSession.brushShape === 'circle'
 					? undefined
-					: { yaw: scatterSession.brushShape === 'line' ? lineYaw : 0 },
+					: { yaw: 0 },
 			)
 		}
 	}
