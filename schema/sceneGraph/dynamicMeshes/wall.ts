@@ -186,23 +186,14 @@ export async function buildWallMesh(
     });
   });
 
-  const resolveLoadedAssetHeight = (group: ModelInstanceGroup | null | undefined): number | undefined => {
-    const bounds = group?.boundingBox;
-    if (!bounds) {
-      return undefined;
-    }
-    const height = bounds.max.y - bounds.min.y;
-    return Number.isFinite(height) && height > 0 ? height : undefined;
-  };
-
   const bodyMaterialConfigId = resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps);
   const buildProceduralWallGroup = async (): Promise<THREE.Group> => {
     const group = createWallGroup(meshInfo, {
       wallRenderMode: wallProps.wallRenderMode,
       repeatInstanceStep: wallProps.repeatInstanceStep,
       bodyMaterialConfigId,
-      headAssetHeight: resolveLoadedAssetHeight(headGroup),
-      footAssetHeight: resolveLoadedAssetHeight(footGroup),
+      headAssetHeight: wallProps.headAssetHeight,
+      footAssetHeight: wallProps.footAssetHeight,
     });
     group.name = node.name ?? (group.name || 'Wall');
     const nodeMaterialConfigs = Array.isArray(node.materials) ? node.materials : [];

@@ -2843,24 +2843,11 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
       const wallProps = wallComponent
         ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
         : null
-      const resolveCachedWallAssetHeight = (assetId: string | null | undefined): number | undefined => {
-        const id = typeof assetId === 'string' ? assetId.trim() : ''
-        if (!id) {
-          return undefined
-        }
-        const bounds = getCachedModelObject(id)?.boundingBox ?? null
-        if (!bounds) {
-          return undefined
-        }
-        const height = bounds.max.y - bounds.min.y
-        return Number.isFinite(height) && height > 0 ? height : undefined
-      }
-
       runtime = createWallGroup(meshDefinition as WallDynamicMesh, {
         wallRenderMode: resolveWallRenderMode(node),
         repeatInstanceStep: resolveWallRepeatInstanceStep(node),
-        headAssetHeight: resolveCachedWallAssetHeight(wallProps?.headAssetId),
-        footAssetHeight: resolveCachedWallAssetHeight(wallProps?.footAssetId),
+        headAssetHeight: wallProps?.headAssetHeight,
+        footAssetHeight: wallProps?.footAssetHeight,
       });
     }
 
@@ -13100,7 +13087,17 @@ export const useSceneStore = defineStore('scene', {
         ? buildWallComponentPropsPatchFromPreset(payload.wallPresetData.wallProps)
         : (payload.wallComponentProps ?? null)
 
-      const wallGroup = createWallGroup(defaultMesh)
+        const initialWallProps = clampWallProps({
+          ...resolveWallComponentPropsFromMesh(defaultMesh),
+          ...(initialWallComponentPatch ?? {}),
+        })
+
+        const wallGroup = createWallGroup(defaultMesh, {
+          wallRenderMode: initialWallProps.wallRenderMode,
+          repeatInstanceStep: initialWallProps.repeatInstanceStep,
+          headAssetHeight: initialWallProps.headAssetHeight,
+          footAssetHeight: initialWallProps.footAssetHeight,
+        })
       const nodeName = payload.name ?? this.generateWallNodeName()
 
       this.captureHistorySnapshot()
@@ -14162,7 +14159,9 @@ export const useSceneStore = defineStore('scene', {
         const hasBodyMaterialConfigId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyMaterialConfigId')
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
+        const hasHeadAssetHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetHeight')
         const hasFootAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footAssetId')
+        const hasFootAssetHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'footAssetHeight')
         const hasWallBaseOffsetLocal = Object.prototype.hasOwnProperty.call(typedPatch, 'wallBaseOffsetLocal')
         const hasBodyEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapAssetId')
         const hasHeadEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapAssetId')
@@ -14348,9 +14347,15 @@ export const useSceneStore = defineStore('scene', {
           headAssetId: hasHeadAssetId
             ? (typedPatch.headAssetId as string | null | undefined)
             : currentProps.headAssetId,
+          headAssetHeight: hasHeadAssetHeight
+            ? (typedPatch.headAssetHeight as number | undefined)
+            : currentProps.headAssetHeight,
           footAssetId: hasFootAssetId
             ? (typedPatch.footAssetId as string | null | undefined)
             : currentProps.footAssetId,
+          footAssetHeight: hasFootAssetHeight
+            ? (typedPatch.footAssetHeight as number | undefined)
+            : currentProps.footAssetHeight,
           bodyEndCapAssetId: hasBodyEndCapAssetId
             ? (typedPatch.bodyEndCapAssetId as string | null | undefined)
             : currentProps.bodyEndCapAssetId,
@@ -14412,7 +14417,9 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.repeatInstanceStep - merged.repeatInstanceStep) <= 1e-6 &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
+          Math.abs(currentProps.headAssetHeight - merged.headAssetHeight) <= 1e-6 &&
           (currentProps.footAssetId ?? null) === (merged.footAssetId ?? null) &&
+          Math.abs(currentProps.footAssetHeight - merged.footAssetHeight) <= 1e-6 &&
           (currentProps.bodyEndCapAssetId ?? null) === (merged.bodyEndCapAssetId ?? null) &&
           offsetLocalEqual(currentProps.bodyEndCapOffsetLocal, merged.bodyEndCapOffsetLocal) &&
           (currentProps.headEndCapAssetId ?? null) === (merged.headEndCapAssetId ?? null) &&

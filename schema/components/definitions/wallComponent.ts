@@ -100,12 +100,16 @@ export interface WallComponentProps {
   bodyUvAxis: WallUvAxis
   /** Upper wall head model asset id (optional; rendered independently when set). */
   headAssetId: string | null
+  /** Persisted wall head model height (meters). */
+  headAssetHeight: number
   /** Orientation overrides for the head model. */
   headOrientation: WallModelOrientation
   /** UV repeat axis for the head model stretch-tiling. */
   headUvAxis: WallUvAxis
   /** Lower wall foot model asset id (optional; rendered independently when set). */
   footAssetId: string | null
+  /** Persisted wall foot model height (meters). */
+  footAssetHeight: number
   /** Orientation overrides for the foot model. */
   footOrientation: WallModelOrientation
   /** UV repeat axis for the foot model stretch-tiling. */
@@ -318,7 +322,9 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
   const headAssetId = requiredAssetIdOrNull('headAssetId')
+  const headAssetHeight = Math.max(0, requiredNumber('headAssetHeight'))
   const footAssetId = requiredAssetIdOrNull('footAssetId')
+  const footAssetHeight = Math.max(0, requiredNumber('footAssetHeight'))
 
   const bodyEndCapAssetId = requiredAssetIdOrNull('bodyEndCapAssetId')
   const bodyEndCapOffsetLocal = normalizeOffsetLocal((props as any).bodyEndCapOffsetLocal)
@@ -350,9 +356,11 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     bodyOrientation,
     bodyUvAxis,
     headAssetId,
+    headAssetHeight,
     headOrientation,
     headUvAxis,
     footAssetId,
+    footAssetHeight,
     footOrientation,
     footUvAxis,
     bodyEndCapAssetId,
@@ -383,9 +391,11 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       bodyUvAxis: 'auto',
       headAssetId: null,
+      headAssetHeight: 0,
       headOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headUvAxis: 'auto',
       footAssetId: null,
+      footAssetHeight: 0,
       footOrientation: { forwardAxis: '+z', yawDeg: 0 },
       footUvAxis: 'auto',
       bodyEndCapAssetId: null,
@@ -414,7 +424,9 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     bodyAssetId: null,
     headAssetId: null,
+    headAssetHeight: 0,
     footAssetId: null,
+    footAssetHeight: 0,
     bodyUvAxis: 'auto',
     headUvAxis: 'auto',
     footUvAxis: 'auto',
@@ -474,12 +486,14 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     },
     bodyUvAxis: props.bodyUvAxis === 'v' ? 'v' : props.bodyUvAxis === 'u' ? 'u' : 'auto',
     headAssetId: props.headAssetId ?? null,
+    headAssetHeight: Math.max(0, Number(props.headAssetHeight) || 0),
     headOrientation: {
       forwardAxis: props.headOrientation.forwardAxis,
       yawDeg: props.headOrientation.yawDeg,
     },
     headUvAxis: props.headUvAxis === 'v' ? 'v' : props.headUvAxis === 'u' ? 'u' : 'auto',
     footAssetId: props.footAssetId ?? null,
+    footAssetHeight: Math.max(0, Number(props.footAssetHeight) || 0),
     footOrientation: {
       forwardAxis: props.footOrientation.forwardAxis,
       yawDeg: props.footOrientation.yawDeg,
@@ -614,9 +628,11 @@ export function createWallComponentState(
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     bodyUvAxis: (overrides as any)?.bodyUvAxis ?? defaults.bodyUvAxis,
     headAssetId: overrides?.headAssetId ?? defaults.headAssetId,
+    headAssetHeight: overrides?.headAssetHeight ?? defaults.headAssetHeight,
     headOrientation: (overrides as any)?.headOrientation ?? defaults.headOrientation,
     headUvAxis: (overrides as any)?.headUvAxis ?? defaults.headUvAxis,
     footAssetId: overrides?.footAssetId ?? defaults.footAssetId,
+    footAssetHeight: overrides?.footAssetHeight ?? defaults.footAssetHeight,
     footOrientation: (overrides as any)?.footOrientation ?? defaults.footOrientation,
     footUvAxis: (overrides as any)?.footUvAxis ?? defaults.footUvAxis,
     bodyEndCapAssetId: overrides?.bodyEndCapAssetId ?? defaults.bodyEndCapAssetId,

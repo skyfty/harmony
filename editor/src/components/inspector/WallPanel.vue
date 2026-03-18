@@ -241,6 +241,14 @@ function normalizeOffsetLocal(value: unknown): { x: number; y: number; z: number
   return { x: read('x'), y: read('y'), z: read('z') }
 }
 
+function normalizeWallAssetHeight(value: unknown): number {
+  const raw = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(raw)) {
+    return 0
+  }
+  return Math.max(0, toFixedTwoDecimals(raw))
+}
+
 function writeWallForwardVector(out: Vector3, forwardAxis: WallForwardAxis): Vector3 {
   switch (forwardAxis) {
     case '+x':
@@ -541,6 +549,60 @@ async function autoFitBodyAssetDimensions(assetId?: string | null): Promise<bool
   } finally {
     isAutoFittingBodyAsset.value = false
   }
+}
+
+async function resolveWallAssetMeasuredHeight(assetId: string): Promise<number | null> {
+  const bounds = await sceneStore.measureModelAssetBoundingBox(assetId)
+  if (!bounds) {
+    return null
+  }
+  const height = bounds.max.y - bounds.min.y
+  return Number.isFinite(height) && height > 0 ? normalizeWallAssetHeight(height) : null
+}
+
+function updateWallAssetHeight(
+  key: 'headAssetHeight' | 'footAssetHeight',
+  rawValue: unknown,
+): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextValue = normalizeWallAssetHeight(rawValue)
+  const currentValue = normalizeWallAssetHeight((component.props as any)?.[key])
+  if (Math.abs(currentValue - nextValue) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: nextValue } as any)
+}
+
+async function applyWallHeadOrFootAsset(target: 'head' | 'foot', assetId: string | null): Promise<void> {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+
+  const assetKey = target === 'head' ? 'headAssetId' : 'footAssetId'
+  const heightKey = target === 'head' ? 'headAssetHeight' : 'footAssetHeight'
+  const feedback = target === 'head' ? headFeedbackMessage : footFeedbackMessage
+
+  if (!assetId) {
+    feedback.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, {
+      [assetKey]: null,
+      [heightKey]: 0,
+    } as any)
+    return
+  }
+
+  const measuredHeight = await resolveWallAssetMeasuredHeight(assetId)
+  feedback.value = measuredHeight == null ? 'Assigned asset could not be measured. Default height set to 0.' : null
+  sceneStore.updateNodeComponentProps(nodeId, component.id, {
+    [assetKey]: assetId,
+    [heightKey]: normalizeWallAssetHeight(measuredHeight ?? 0),
+  } as any)
 }
 
 async function applyBodyAssetAndAutofit(assetId: string): Promise<void> {
@@ -873,11 +935,9 @@ async function handleWallAssetDialogUpdate(asset: ProjectAsset | null): Promise<
       bodyFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: null })
     } else if (target === 'head') {
-      headFeedbackMessage.value = null
-      sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: null } as any)
+      await applyWallHeadOrFootAsset('head', null)
     } else if (target === 'foot') {
-      footFeedbackMessage.value = null
-      sceneStore.updateNodeComponentProps(nodeId, component.id, { footAssetId: null } as any)
+      await applyWallHeadOrFootAsset('foot', null)
     } else if (target === 'bodyCap') {
       capFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: null } as any)
@@ -910,11 +970,9 @@ async function handleWallAssetDialogUpdate(asset: ProjectAsset | null): Promise<
   if (target === 'body') {
     await applyBodyAssetAndAutofit(asset.id)
   } else if (target === 'head') {
-    headFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: asset.id } as any)
+    await applyWallHeadOrFootAsset('head', asset.id)
   } else if (target === 'foot') {
-    footFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { footAssetId: asset.id } as any)
+    await applyWallHeadOrFootAsset('foot', asset.id)
   } else if (target === 'bodyCap') {
     capFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: asset.id } as any)
@@ -1037,9 +1095,9 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'foot
     if (target === 'body') {
       await applyBodyAssetAndAutofit(assetId)
     } else if (target === 'head') {
-      sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: assetId } as any)
+      await applyWallHeadOrFootAsset('head', assetId)
     } else if (target === 'foot') {
-      sceneStore.updateNodeComponentProps(nodeId, component.id, { footAssetId: assetId } as any)
+      await applyWallHeadOrFootAsset('foot', assetId)
     } else if (target === 'bodyCap') {
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: assetId } as any)
     } else if (target === 'headCap') {
@@ -1532,6 +1590,18 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                         :model-value="(wallComponent.props as any).headUvAxis ?? 'auto'"
                         @update:modelValue="(value) => updateWallUvAxis('headUvAxis', value)"
                       />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Height (m)"
+                        hide-details
+                        step="0.01"
+                        min="0"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).headAssetHeight ?? 0"
+                        @update:modelValue="(value) => updateWallAssetHeight('headAssetHeight', value)"
+                      />
                     </div>
                   </div>
 
@@ -1594,6 +1664,18 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                         hide-details
                         :model-value="(wallComponent.props as any).footUvAxis ?? 'auto'"
                         @update:modelValue="(value) => updateWallUvAxis('footUvAxis', value)"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Height (m)"
+                        hide-details
+                        step="0.01"
+                        min="0"
+                        inputmode="decimal"
+                        :model-value="(wallComponent.props as any).footAssetHeight ?? 0"
+                        @update:modelValue="(value) => updateWallAssetHeight('footAssetHeight', value)"
                       />
                     </div>
                   </div>

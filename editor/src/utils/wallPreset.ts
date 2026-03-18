@@ -5,7 +5,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const WALL_PRESET_FORMAT_VERSION = 7
+export const WALL_PRESET_FORMAT_VERSION = 8
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 export type WallUvAxis = 'auto' | 'u' | 'v'
@@ -56,9 +56,11 @@ export type StrictWallPresetWallProps = {
   bodyOrientation: WallModelOrientation
   bodyUvAxis: WallUvAxis
   headAssetId: string | null
+  headAssetHeight: number
   headOrientation: WallModelOrientation
   headUvAxis: WallUvAxis
   footAssetId: string | null
+  footAssetHeight: number
   footOrientation: WallModelOrientation
   footUvAxis: WallUvAxis
   bodyEndCapAssetId: string | null
