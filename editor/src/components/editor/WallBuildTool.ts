@@ -20,7 +20,7 @@ import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { WallPreviewRenderData } from './WallRenderer'
-import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -862,7 +862,9 @@ export function createWallBuildTool(options: {
     session.shapeDraft.end.copy(end)
 
     if (kind === 'rectangle' && !session.shapeDraft.direction) {
-      session.shapeDraft.direction = resolveRectangleDirection(start, end)
+      const rawDirectionPoint = rawPointer.clone()
+      rawDirectionPoint.y = start.y
+      session.shapeDraft.direction = resolveRectangleDragDirection(start, rawDirectionPoint)
     }
 
     const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0

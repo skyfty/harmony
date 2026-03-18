@@ -7,7 +7,7 @@ import {
   createFloorPreviewRenderer,
   type FloorPreviewSession,
 } from './FloorPreviewRenderer'
-import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
@@ -248,7 +248,10 @@ export function createFloorBuildTool(options: {
     alignPointYToSession(next, session)
 
     if (session.shape === 'rectangle' && !session.rectangleDirection) {
-      session.rectangleDirection = resolveRectangleDirection(session.points[0] ?? next, next)
+      const start = session.points[0] ?? next
+      const rawDirectionPoint = raw.clone()
+      alignPointYToSession(rawDirectionPoint, session)
+      session.rectangleDirection = resolveRectangleDragDirection(start, rawDirectionPoint)
     }
 
     const previous = session.previewEnd

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 
 const MIN_DIRECTION_LENGTH = 1e-6
+const MIN_DIRECTION_LOCK_LENGTH = 1e-2
 const MIN_RECT_SIZE = 1e-6
 
 export type RotatedRectangleBuild = {
@@ -26,6 +27,18 @@ export function resolveRectangleDirection(
     return null
   }
   return basis.normalize()
+}
+
+export function resolveRectangleDragDirection(
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+): THREE.Vector3 | null {
+  const delta = end.clone().sub(start)
+  delta.y = 0
+  if (delta.lengthSq() <= MIN_DIRECTION_LOCK_LENGTH * MIN_DIRECTION_LOCK_LENGTH) {
+    return null
+  }
+  return resolveRectangleDirection(start, end)
 }
 
 export function buildRotatedRectangleFromCorner(

@@ -48,7 +48,7 @@ import {
 	updateScatterInstanceMatrix,
 	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
-import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -3711,6 +3711,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return projectScatterPointToGround(definition, groundMesh, snapped) ?? projected
 	}
 
+	function resolveRawScatterPointFromEvent(
+		event: PointerEvent,
+		definition: GroundDynamicMesh,
+		groundMesh: THREE.Object3D,
+	): THREE.Vector3 | null {
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			return null
+		}
+		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+			return null
+		}
+		return projectScatterPointToGround(definition, groundMesh, scatterPointerHelper)
+	}
+
 	function projectScatterPoint(worldPoint: THREE.Vector3): THREE.Vector3 | null {
 		if (!scatterSession) {
 			return null
@@ -4757,7 +4771,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		scatterSession.currentPoint = nextPoint.clone()
 		if (scatterSession.brushShape === 'rectangle' && scatterSession.anchorPoint && !scatterSession.rectangleDirection) {
-			scatterSession.rectangleDirection = resolveRectangleDirection(scatterSession.anchorPoint, nextPoint)
+			const rawPoint = resolveRawScatterPointFromEvent(event, scatterSession.definition, scatterSession.groundMesh)
+			if (rawPoint) {
+				rawPoint.y = scatterSession.anchorPoint.y
+				scatterSession.rectangleDirection = resolveRectangleDragDirection(scatterSession.anchorPoint, rawPoint)
+			}
 		}
 		if (scatterSession.brushShape === 'circle') {
 			traceScatterPath(nextPoint)

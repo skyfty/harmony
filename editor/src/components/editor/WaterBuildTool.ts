@@ -4,7 +4,7 @@ import type { BuildTool } from '@/types/build-tool'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { useSceneStore } from '@/stores/sceneStore'
 import { createWaterPreviewRenderer, type WaterPreviewSession } from './WaterPreviewRenderer'
-import { buildRotatedRectangleFromCorner, resolveRectangleDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 
 export type WaterBuildToolHandle = {
   getSession: () => WaterPreviewSession | null
@@ -181,7 +181,10 @@ export function createWaterBuildTool(options: {
     alignPointYToSession(next, session)
 
     if (session.shape === 'rectangle' && !session.rectangleDirection) {
-      session.rectangleDirection = resolveRectangleDirection(session.points[0] ?? next, next)
+      const start = session.points[0] ?? next
+      const rawDirectionPoint = raw.clone()
+      alignPointYToSession(rawDirectionPoint, session)
+      session.rectangleDirection = resolveRectangleDragDirection(start, rawDirectionPoint)
     }
 
     const previous = session.previewEnd
