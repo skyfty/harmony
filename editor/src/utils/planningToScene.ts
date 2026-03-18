@@ -12,36 +12,24 @@ import {
   removeTerrainScatterLayer,
   replaceTerrainScatterInstances,
   serializeTerrainScatterStore,
-  upsertTerrainScatterLayer,
-  type TerrainScatterCategory,
   type TerrainScatterInstance,
   type TerrainScatterStore,
   type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
-import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { sampleGroundHeight } from '@schema/groundMesh'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 import {
-  buildRandom,
-  generateUniformCandidatesInPolygon,
   getPointsBounds,
-  hashSeedFromString,
   polygonCentroid,
-  selectFarthestPointsFromCandidates,
 } from '@/utils/scatterSampling'
-import { terrainScatterPresets } from '@/resources/projectProviders/asset'
-import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import type {
   PlanningImageData,
   PlanningPolygonData,
   PlanningPolylineData,
   PlanningSceneData,
-  PlanningScatterAssignmentData,
 } from '@/types/planning-scene-data'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
-import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { useSceneStore } from '@/stores/sceneStore'
-import { loadObjectFromFile } from '@schema/assetImport'
 import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   PLANNING_IMAGES_COMPONENT_TYPE,
@@ -177,11 +165,7 @@ function monotonicUpdatedAt(previousSnapshot: SnapshotWithUpdatedAt | null | und
   return next <= prev ? prev + 1 : next
 }
 
-// Safety cap to avoid runaway instance generation on huge polygons.
-// NOTE: This should be high enough so densityPercent behaves proportionally for common use-cases.
-const MAX_SCATTER_INSTANCES_PER_POLYGON = 20000
-
-type LayerKind = 'terrain' | 'guide-route' | 'green'
+type LayerKind = 'terrain' | 'guide-route'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -207,7 +191,7 @@ async function createAirWallFromSegments(options: {
   name: string
   planningLayerId: string
   ownerFeatureId: string
-  ownerFeatureKind: 'green' | 'terrain'
+  ownerFeatureKind: 'terrain'
   segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
 }) {
   const { sceneStore, rootNodeId, name, planningLayerId, ownerFeatureId, ownerFeatureKind, segments } = options
@@ -378,98 +362,6 @@ async function createTerrainWaterSurface(options: {
   })
 
   return waterNode
-}
-
-type ScatterAssignment = {
-  assetId: string
-  category: TerrainScatterCategory
-  name?: string
-  densityPercent?: number
-  footprintAreaM2?: number
-  footprintMaxSizeM?: number
-}
-
-function computeFootprintFromCachedModelBounds(assetId: string): { footprintAreaM2: number; footprintMaxSizeM: number } | null {
-  const group = getCachedModelObject(assetId)
-  const box = group?.boundingBox
-  if (!group || !box || box.isEmpty()) {
-    return null
-  }
-  const sizeX = Math.abs(box.max.x - box.min.x)
-  const sizeZ = Math.abs(box.max.z - box.min.z)
-  if (!Number.isFinite(sizeX) || !Number.isFinite(sizeZ) || sizeX <= 1e-4 || sizeZ <= 1e-4) {
-    return null
-  }
-  const footprintAreaM2 = Math.max(0.0001, sizeX * sizeZ)
-  const footprintMaxSizeM = Math.max(0.01, Math.max(sizeX, sizeZ))
-  return { footprintAreaM2, footprintMaxSizeM }
-}
-
-async function ensureModelBoundsCachedForAssetId(assetId: string, assetCacheStore: ReturnType<typeof useAssetCacheStore>): Promise<void> {
-  if (!assetId) {
-    return
-  }
-  if (getCachedModelObject(assetId)) {
-    return
-  }
-  try {
-    await assetCacheStore.loadFromIndexedDb(assetId)
-  } catch (_error) {
-    return
-  }
-  const file = assetCacheStore.createFileFromCache(assetId)
-  if (!file) {
-    return
-  }
-  try {
-    const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
-    await getOrLoadModelObject(assetId, async () => loadObjectFromFile(file, ext))
-  } catch (_error) {
-    // noop
-  } finally {
-    assetCacheStore.releaseInMemoryBlob(assetId)
-  }
-}
-
-function defaultFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory): number {
-  void category
-  if (assetId) {
-    const cached = computeFootprintFromCachedModelBounds(assetId)
-    if (cached) {
-      return cached.footprintAreaM2
-    }
-  }
-  return 1
-}
-
-function clampFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory, value: number | null | undefined): number {
-  const num = typeof value === 'number' ? value : Number.NaN
-  if (!Number.isFinite(num) || num <= 0) {
-    return defaultFootprintAreaM2(assetId, category)
-  }
-  return Math.min(1e6, Math.max(0.0001, num))
-}
-
-function defaultFootprintMaxSizeM(assetId: string | null, category: TerrainScatterCategory): number {
-  void category
-  if (assetId) {
-    const cached = computeFootprintFromCachedModelBounds(assetId)
-    if (cached) {
-      return cached.footprintMaxSizeM
-    }
-  }
-  return 1
-}
-
-function clampFootprintMaxSizeM(assetId: string | null, category: TerrainScatterCategory, value: number | null | undefined, fallbackAreaM2?: number): number {
-  const num = typeof value === 'number' ? value : Number.NaN
-  if (!Number.isFinite(num) || num <= 0) {
-    if (Number.isFinite(fallbackAreaM2) && (fallbackAreaM2 as number) > 0) {
-      return Math.max(0.05, Math.sqrt(fallbackAreaM2 as number))
-    }
-    return defaultFootprintMaxSizeM(assetId, category)
-  }
-  return Math.min(1000, Math.max(0.01, num))
 }
 
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
@@ -751,7 +643,8 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
-  return planningData.layers.find((layer) => layer.id === layerId)?.kind ?? null
+  const kind = planningData.layers.find((layer) => layer.id === layerId)?.kind
+  return kind === 'terrain' || kind === 'guide-route' ? kind : null
 }
 
 function resolveLayerNameFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
@@ -2055,308 +1948,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         } finally {
           await updateProgressForUnit(label)
         }
-      }
-    } else if (kind === 'green') {
-      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-      for (const poly of group.polygons) { 
-        throwIfAborted(options.signal)
-        const unitLabel = `Converting greenery: ${poly.name?.trim() || poly.id}`
-        emitUnitProgress(unitLabel, 0)
-        await yieldController.maybeYield()
-
-        if (Boolean(poly.airWallEnabled)) {
-          const baseName = poly.name?.trim()
-            ? poly.name.trim()
-            : (layerName ? `${layerName} Green` : 'Planning Green')
-          const segments = polygonEdges(poly.points).map((edge) => {
-            const start = toWorldPoint(edge.start, groundWidth, groundDepth, 0)
-            const end = toWorldPoint(edge.end, groundWidth, groundDepth, 0)
-            start.y = groundHeightAt(start.x, start.z)
-            end.y = groundHeightAt(end.x, end.z)
-            return { start, end }
-          })
-          await createAirWallFromSegments({
-            sceneStore,
-            rootNodeId: root.id,
-            name: `${baseName} (Air Wall)`,
-            planningLayerId: layerId,
-            ownerFeatureId: poly.id,
-            ownerFeatureKind: 'green',
-            segments,
-          })
-        }
-
-        const scatter = normalizeScatter(poly.scatter)
-        if (scatter) {
-          const preset = terrainScatterPresets[scatter.category] ?? {
-            label: 'Scatter',
-            icon: 'mdi-cube-outline',
-            minScale: 0.9,
-            maxScale: 1.1,
-          }
-          const layer = upsertPlanningScatterLayer(store, {
-            category: scatter.category,
-            assetId: scatter.assetId,
-            label: scatter.name ?? 'Planning Scatter',
-          })
-
-          if (!layer) {
-            // If upsert failed for any reason, ensure we remain idempotent and continue.
-            await updateProgressForUnit(unitLabel)
-            continue
-          }
-
-          const layerParams = layer.params as {
-            alignToNormal?: boolean
-            randomYaw?: boolean
-            minSlope?: number
-            maxSlope?: number
-            minHeight?: number
-            maxHeight?: number
-            minScale?: number
-            maxScale?: number
-            seed?: number | null
-          }
-
-          const densityPercent = Number.isFinite(scatter.densityPercent) ? Number(scatter.densityPercent) : 50
-
-          // Estimate capacity from:
-          // - polygon area
-          // - model footprint (bounding-box base area)
-          const presetMinScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 1
-          const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
-          const minScaleForCapacity = Number.isFinite(layerParams.minScale) ? Number(layerParams.minScale) : presetMinScale
-          const maxScaleForCapacity = Number.isFinite(layerParams.maxScale) ? Number(layerParams.maxScale) : presetMaxScale
-          const baseFootprintAreaM2 = clampFootprintAreaM2(scatter.assetId, scatter.category, scatter.footprintAreaM2)
-          const baseFootprintMaxSizeM = clampFootprintMaxSizeM(
-            scatter.assetId,
-            scatter.category,
-            scatter.footprintMaxSizeM,
-            baseFootprintAreaM2,
-          )
-
-          // New semantics:
-          // - densityPercent (0-100) is the occupancy percentage of a non-overlap-like packing capacity.
-          // - capacity is estimated by polygonArea / (footprintArea * E[scale^2])
-          //   (assuming uniform scale distribution in [minScale, maxScale]).
-          const area = polygonArea2D(poly.points)
-
-          const minScale = minScaleForCapacity
-          const maxScale = maxScaleForCapacity
-          const { targetCount } = computeOccupancyTargetCount({
-            areaM2: area,
-            footprintAreaM2: baseFootprintAreaM2,
-            densityPercent,
-            minScale,
-            maxScale,
-            maxCap: MAX_SCATTER_INSTANCES_PER_POLYGON,
-          })
-
-          if (targetCount <= 0) {
-            // Still remove previously generated instances for this feature to stay idempotent.
-            const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
-            const removed = existingRaw.filter((instance) => {
-              const meta = instance.metadata
-              if (!meta) return false
-              return meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id
-            })
-            removed.forEach((instance) => releaseScatterInstance(instance))
-            const existing = existingRaw.filter((instance) => {
-              const meta = instance.metadata
-              if (!meta) return true
-              return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
-            })
-            replaceTerrainScatterInstances(store, layer.id, existing)
-            await updateProgressForUnit(unitLabel)
-            continue
-          }
-          if (targetCount > 0) {
-            const { minDistance } = computeOccupancyMinDistance({
-              footprintMaxSizeM: baseFootprintMaxSizeM,
-              minScale,
-              maxScale,
-              minFloor: 0.05,
-            })
-
-            const seedBase = layerParams.seed != null
-              ? Math.floor(Number(layerParams.seed))
-              : hashSeedFromString(`${PLANNING_CONVERSION_SOURCE}:${layer.id}:${poly.id}`)
-            const randomProps = buildRandom(hashSeedFromString(`${seedBase}:props`))
-
-            const minHeight = Number.isFinite(layerParams.minHeight) ? Number(layerParams.minHeight) : -10000
-            const maxHeight = Number.isFinite(layerParams.maxHeight) ? Number(layerParams.maxHeight) : 10000
-            const minSlope = Number.isFinite(layerParams.minSlope) ? Number(layerParams.minSlope) : 0
-            const maxSlope = Number.isFinite(layerParams.maxSlope) ? Number(layerParams.maxSlope) : 90
-            const randomYawEnabled = layerParams.randomYaw !== false
-
-            const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
-            // Keep conversion idempotent per feature even when overwriteExisting=false.
-            const removed = existingRaw.filter((instance) => {
-              const meta = instance.metadata
-              if (!meta) return false
-              return meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id
-            })
-            removed.forEach((instance) => releaseScatterInstance(instance))
-            const existing = existingRaw.filter((instance) => {
-              const meta = instance.metadata
-              if (!meta) return true
-              return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
-            })
-
-            const bounds = getPointsBounds(poly.points)
-            const centroid = polygonCentroid(poly.points)
-              ?? (bounds ? { x: bounds.minX + bounds.width * 0.5, y: bounds.minY + bounds.height * 0.5 } : null)
-
-            const additions: TerrainScatterInstance[] = []
-            const acceptedSamples: PlanningPoint[] = []
-
-            const cellSize = minDistance
-            const cellKey = (p: PlanningPoint) => {
-              const cx = Math.floor(p.x / cellSize)
-              const cy = Math.floor(p.y / cellSize)
-              return `${cx},${cy}`
-            }
-            const spatial = new Map<string, PlanningPoint[]>()
-            const addToSpatial = (p: PlanningPoint) => {
-              const key = cellKey(p)
-              const bucket = spatial.get(key)
-              if (bucket) bucket.push(p)
-              else spatial.set(key, [p])
-            }
-            const isFarEnough = (p: PlanningPoint) => {
-              const cx = Math.floor(p.x / cellSize)
-              const cy = Math.floor(p.y / cellSize)
-              const minDistSq = minDistance * minDistance
-              for (let dx = -1; dx <= 1; dx += 1) {
-                for (let dy = -1; dy <= 1; dy += 1) {
-                  const bucket = spatial.get(`${cx + dx},${cy + dy}`)
-                  if (!bucket) continue
-                  for (const q of bucket) {
-                    const ox = p.x - q.x
-                    const oy = p.y - q.y
-                    if (ox * ox + oy * oy < minDistSq) {
-                      return false
-                    }
-                  }
-                }
-              }
-              return true
-            }
-
-            const MAX_PASSES = 5
-            for (let pass = 0; pass < MAX_PASSES && acceptedSamples.length < targetCount; pass += 1) {
-              if (!centroid) {
-                break
-              }
-
-              throwIfAborted(options.signal)
-              emitUnitProgress(`${unitLabel} (pass ${pass + 1}/${MAX_PASSES})`, Math.min(0.85, acceptedSamples.length / Math.max(1, targetCount)))
-              await yieldController.maybeYield(true)
-
-              const needed = targetCount - acceptedSamples.length
-              const randomPoints = buildRandom(hashSeedFromString(`${seedBase}:points:${pass}`))
-              const maxAttemptsMultiplier = 4 + pass * 2
-              const maxCandidates = Math.min(
-                60000,
-                Math.max(2000, Math.ceil((targetCount + 10) * (12 + pass * 6))),
-              )
-
-              const candidates = generateUniformCandidatesInPolygon(
-                poly.points,
-                randomPoints,
-                maxCandidates,
-                { maxAttemptsMultiplier },
-              )
-              if (!candidates.length) {
-                continue
-              }
-
-              await yieldController.maybeYield()
-
-              const filtered: PlanningPoint[] = []
-              for (let i = 0; i < candidates.length; i += 1) {
-                if ((i & 2047) === 0) {
-                  throwIfAborted(options.signal)
-                  emitUnitProgress(unitLabel, Math.min(0.9, acceptedSamples.length / Math.max(1, targetCount)))
-                  await yieldController.maybeYield()
-                }
-                const p = candidates[i] as PlanningPoint
-                if (isFarEnough(p)) {
-                  filtered.push(p)
-                }
-              }
-              if (!filtered.length) {
-                continue
-              }
-
-              const selected = selectFarthestPointsFromCandidates(filtered, needed, minDistance, centroid)
-              if (!selected.length) {
-                continue
-              }
-
-              for (const sample of selected) {
-                if ((acceptedSamples.length & 127) === 0) {
-                  throwIfAborted(options.signal)
-                  emitUnitProgress(unitLabel, Math.min(0.95, acceptedSamples.length / Math.max(1, targetCount)))
-                  await yieldController.maybeYield()
-                }
-                const localXZ = toWorldPoint(sample as PlanningPoint, groundWidth, groundDepth, 0)
-                const height = groundDefinition ? sampleGroundHeight(groundDefinition, localXZ.x, localXZ.z) : 0
-                if (height < minHeight || height > maxHeight) {
-                  continue
-                }
-                const normal = groundDefinition
-                  ? sampleGroundNormal(groundDefinition as GroundRuntimeDynamicMesh, localXZ.x, localXZ.z)
-                  : null
-                const slopeDeg = normal ? (Math.acos(THREE.MathUtils.clamp(normal.y, -1, 1)) * (180 / Math.PI)) : 0
-                if (slopeDeg < minSlope || slopeDeg > maxSlope) {
-                  continue
-                }
-
-                const samplePoint: PlanningPoint = { x: sample.x, y: sample.y }
-                if (!isFarEnough(samplePoint)) {
-                  continue
-                }
-
-                acceptedSamples.push(samplePoint)
-                addToSpatial(samplePoint)
-
-                const yaw = randomYawEnabled ? (randomProps() * Math.PI * 2) : 0
-                const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, randomProps())
-                additions.push({
-                  id: generateUuid(),
-                  assetId: scatter.assetId,
-                  layerId: layer.id,
-                  profileId: layer.profileId ?? scatter.assetId,
-                  seed: Math.floor(randomProps() * Number.MAX_SAFE_INTEGER),
-                  localPosition: { x: localXZ.x, y: height, z: localXZ.z },
-                  localRotation: { x: 0, y: yaw, z: 0 },
-                  localScale: { x: scaleFactor, y: scaleFactor, z: scaleFactor },
-                  groundCoords: {
-                    x: localXZ.x,
-                    z: localXZ.z,
-                    height,
-                    normal: normal ? { x: normal.x, y: normal.y, z: normal.z } : null,
-                  },
-                  binding: null,
-                  metadata: {
-                    source: PLANNING_CONVERSION_SOURCE,
-                    featureId: poly.id,
-                    planningLayerId: layerId,
-                  },
-                })
-
-                if (acceptedSamples.length >= targetCount) {
-                  break
-                }
-              }
-            }
-
-            replaceTerrainScatterInstances(store, layer.id, [...existing, ...additions])
-          }
-        }
-
-        await updateProgressForUnit(unitLabel)
       }
     }
   }

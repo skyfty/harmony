@@ -1,27 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import { storeToRefs } from 'pinia'
 import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
-import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import PlanningRulers from '@/components/layout/PlanningRulers.vue'
-import { terrainScatterPresets } from '@/resources/projectProviders/asset'
-import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { WATER_PRESETS, type WaterPresetId } from '@schema/components'
-import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
-import { generateFpsScatterPointsInPolygon, buildRandom, hashSeedFromString, getPointsBounds, polygonCentroid } from '@/utils/scatterSampling'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
-import { loadObjectFromFile } from '@schema/assetImport'
-import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
 
 import type {
   PlanningGuideData,
-  PlanningScatterAssignmentData,
   PlanningPolygonData,
   PlanningPolylineData,
   PlanningSceneData,
@@ -51,59 +41,16 @@ const dialogOpen = computed({
 const sceneStore = useSceneStore()
 const { currentSceneId } = storeToRefs(sceneStore)
 const uiStore = useUiStore()
-const assetCacheStore = useAssetCacheStore()
-
-function computeFootprintFromCachedModelBounds(assetId: string): { footprintAreaM2: number; footprintMaxSizeM: number } | null {
-  const group = getCachedModelObject(assetId)
-  const box = group?.boundingBox
-  if (!group || !box || box.isEmpty()) {
-    return null
-  }
-  const sizeX = Math.abs(box.max.x - box.min.x)
-  const sizeZ = Math.abs(box.max.z - box.min.z)
-  if (!Number.isFinite(sizeX) || !Number.isFinite(sizeZ) || sizeX <= 1e-4 || sizeZ <= 1e-4) {
-    return null
-  }
-  const footprintAreaM2 = Math.max(0.0001, sizeX * sizeZ)
-  const footprintMaxSizeM = Math.max(0.01, Math.max(sizeX, sizeZ))
-  return { footprintAreaM2, footprintMaxSizeM }
-}
-
-async function ensureModelBoundsCachedForAsset(asset: ProjectAsset): Promise<void> {
-  if (!asset?.id) {
-    return
-  }
-  if (getCachedModelObject(asset.id)) {
-    return
-  }
-  try {
-    await assetCacheStore.downloaProjectAsset(asset)
-  } catch (_error) {
-    return
-  }
-  const file = assetCacheStore.createFileFromCache(asset.id)
-  if (!file) {
-    return
-  }
-  try {
-    await getOrLoadModelObject(asset.id, async () => loadObjectFromFile(file, asset.extension ?? undefined))
-  } catch (_error) {
-    // noop
-  } finally {
-    assetCacheStore.releaseInMemoryBlob(asset.id)
-  }
-}
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
-type LayerKind = 'terrain' | 'guide-route' | 'green'
+type LayerKind = 'terrain' | 'guide-route'
 
 const layerKindLabels: Record<LayerKind, string> = {
   terrain: 'Terrain',
   'guide-route': 'Guide Route',
-  green: 'Green',
 }
 
-const addableLayerKinds: LayerKind[] = ['terrain', 'guide-route', 'green']
+const addableLayerKinds: LayerKind[] = ['terrain', 'guide-route']
 
 interface PlanningLayer {
   id: string
@@ -130,8 +77,6 @@ type RectResizeConstraint = {
   cornerKeyByIndex: Record<number, RectCornerKey>
 }
 
-type PlanningScatterAssignment = PlanningScatterAssignmentData
-
 interface PlanningPolygon {
   id: string
   name: string
@@ -143,7 +88,6 @@ interface PlanningPolygon {
   terrainBlendMeters?: number
   /** Optional pond water preset (only meaningful when layer kind is 'terrain'). */
   terrainWaterPresetId?: WaterPresetId | null
-  scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
 }
@@ -156,63 +100,6 @@ function normalizeTerrainWaterPresetId(value: unknown): WaterPresetId | null {
     : null
 }
 
-function normalizePlanningScatterAssignment(raw: PlanningScatterAssignmentData | null | undefined): PlanningScatterAssignment | undefined {
-  if (!raw || typeof raw !== 'object') {
-    return undefined
-  }
-
-  const assetId = typeof raw.assetId === 'string' ? raw.assetId.trim() : ''
-  const providerAssetId = typeof raw.providerAssetId === 'string' ? raw.providerAssetId.trim() : ''
-  const category = raw.category
-  if (!assetId || !providerAssetId || !(category in terrainScatterPresets)) {
-    return undefined
-  }
-
-  const footprintAreaM2 = clampFootprintAreaM2(assetId, category, raw.footprintAreaM2)
-  const footprintMaxSizeM = clampFootprintMaxSizeM(
-    assetId,
-    category,
-    raw.footprintMaxSizeM,
-    footprintAreaM2,
-  )
-
-  return {
-    providerAssetId,
-    assetId,
-    category,
-    name: typeof raw.name === 'string' ? raw.name : '',
-    thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : null,
-    densityPercent: clampDensityPercent(raw.densityPercent),
-    footprintAreaM2,
-    footprintMaxSizeM,
-  }
-}
-
-function serializePlanningScatterAssignment(scatter: PlanningScatterAssignment | null | undefined): PlanningScatterAssignmentData | undefined {
-  if (!scatter) {
-    return undefined
-  }
-
-  const footprintAreaM2 = clampFootprintAreaM2(scatter.assetId, scatter.category, scatter.footprintAreaM2)
-  const footprintMaxSizeM = clampFootprintMaxSizeM(
-    scatter.assetId,
-    scatter.category,
-    scatter.footprintMaxSizeM,
-    footprintAreaM2,
-  )
-
-  return {
-    providerAssetId: scatter.providerAssetId,
-    assetId: scatter.assetId,
-    category: scatter.category,
-    name: scatter.name,
-    thumbnail: scatter.thumbnail,
-    densityPercent: clampDensityPercent(scatter.densityPercent),
-    footprintAreaM2,
-    footprintMaxSizeM,
-  }
-}
-
 interface PlanningPolyline {
   id: string
   name: string
@@ -220,7 +107,6 @@ interface PlanningPolyline {
   points: PlanningPoint[]
   /** Guide-route waypoint metadata aligned with points (only meaningful when layer kind is 'guide-route'). */
   waypoints?: Array<{ name?: string; dock?: boolean }>
-  scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
 }
@@ -344,7 +230,6 @@ interface LineDraft {
 const layerPresets: PlanningLayer[] = [
   { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#6D4C41', locked: false, conversionEnabled: true },
   { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false, conversionEnabled: true },
-  { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false, conversionEnabled: true },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -352,7 +237,7 @@ const imageAccentPalette = layerPresets.map((layer) => layer.color)
 const layers = ref<PlanningLayer[]>(layerPresets.map((layer) => ({ ...layer })))
 // Single shared active list item for both layers and images.
 // Represented as { type: 'layer'|'image', id: string } or null.
-const activeListItem = ref<{ type: 'layer' | 'image'; id: string } | null>({ type: 'layer', id: layers.value[0]?.id ?? 'green-layer' })
+const activeListItem = ref<{ type: 'layer' | 'image'; id: string } | null>({ type: 'layer', id: layers.value[0]?.id ?? 'terrain-layer' })
 const activeLayerId = computed<string | null>({
   get: () => (activeListItem.value?.type === 'layer' ? activeListItem.value.id : null),
   set: (v: string | null) => {
@@ -506,63 +391,9 @@ const visiblePolylines = computed(() => {
   return polylines.value.filter((line) => line.layerId === activeId)
 })
 
-type ScatterThumbPlacement = { x: number; y: number; size: number }
-
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min
   return Math.min(max, Math.max(min, value))
-}
-
-function clampDensityPercent(value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num)) return 50
-  return Math.round(clampNumber(num, 0, 100))
-}
-
-function defaultFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory): number {
-  void category
-  if (assetId) {
-    const derived = computeFootprintFromCachedModelBounds(assetId)
-    if (derived) {
-      return derived.footprintAreaM2
-    }
-  }
-  return 1
-}
-
-function clampFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory, value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num) || num <= 0) {
-    return defaultFootprintAreaM2(assetId, category)
-  }
-  return Math.min(1e6, Math.max(0.0001, num))
-}
-
-function defaultFootprintMaxSizeM(assetId: string | null, category: TerrainScatterCategory): number {
-  void category
-  if (assetId) {
-    const derived = computeFootprintFromCachedModelBounds(assetId)
-    if (derived) {
-      return derived.footprintMaxSizeM
-    }
-  }
-  return 1
-}
-
-function clampFootprintMaxSizeM(
-  assetId: string | null,
-  category: TerrainScatterCategory,
-  value: unknown,
-  fallbackAreaM2?: number,
-): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num) || num <= 0) {
-    if (Number.isFinite(fallbackAreaM2) && (fallbackAreaM2 as number) > 0) {
-      return Math.max(0.05, Math.sqrt(fallbackAreaM2 as number))
-    }
-    return defaultFootprintMaxSizeM(assetId, category)
-  }
-  return Math.min(1000, Math.max(0.01, num))
 }
 
 
@@ -685,399 +516,6 @@ function polylineLength(points: PlanningPoint[]) {
   return total
 }
 
-function polylinePointAtDistance(points: PlanningPoint[], distance: number): PlanningPoint | null {
-  if (points.length < 2) return null
-  const total = polylineLength(points)
-  if (total <= 1e-9) return null
-  const target = clampNumber(distance, 0, total)
-  let traveled = 0
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const a = points[i]!
-    const b = points[i + 1]!
-    const seg = Math.hypot(b.x - a.x, b.y - a.y)
-    if (traveled + seg >= target) {
-      const t = seg > 1e-9 ? (target - traveled) / seg : 0
-      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
-    }
-    traveled += seg
-  }
-  return points[points.length - 1] ?? null
-}
-
-function computePolygonScatterThumbPlacement(poly: PlanningPolygon): ScatterThumbPlacement | null {
-  const thumb = poly.scatter?.thumbnail
-  if (!thumb) return null
-  const bounds = getPointsBounds(poly.points)
-  if (!bounds) return null
-  const minSide = Math.min(bounds.width, bounds.height)
-
-  // Too small -> hide to avoid visual clutter.
-  if (minSide < 8) return null
-
-  const centroid = polygonCentroid(poly.points)
-  if (!centroid) return null
-
-  const size = clampNumber(minSide * 0.38, 7, 26)
-  const padding = Math.max(0.5, size * 0.12)
-
-  if (bounds.width < size + padding * 2 || bounds.height < size + padding * 2) {
-    return null
-  }
-
-  const x = clampNumber(centroid.x - size * 0.5, bounds.minX + padding, bounds.maxX - size - padding)
-  const y = clampNumber(centroid.y - size * 0.5, bounds.minY + padding, bounds.maxY - size - padding)
-  return { x, y, size }
-}
-
-function computePolylineScatterThumbPlacement(line: PlanningPolyline): ScatterThumbPlacement | null {
-  const thumb = line.scatter?.thumbnail
-  if (!thumb) return null
-  if (line.points.length < 2) return null
-
-  const total = polylineLength(line.points)
-  // Too short -> hide.
-  if (total < 12) return null
-
-  const mid = polylinePointAtDistance(line.points, total * 0.5)
-  if (!mid) return null
-
-  const bounds = getPointsBounds(line.points)
-  const fallbackSize = clampNumber(total * 0.06, 7, 20)
-  const size = bounds ? clampNumber(Math.min(fallbackSize, Math.max(bounds.width, bounds.height) * 0.35), 7, 20) : fallbackSize
-
-  // Keep inside the canvas (lines are 1D so we clamp to stage bounds rather than the polyline bounds).
-  const canvas = effectiveCanvasSize.value
-  const padding = Math.max(0.5, size * 0.12)
-  if (canvas.width < size + padding * 2 || canvas.height < size + padding * 2) {
-    return null
-  }
-  const x = clampNumber(mid.x - size * 0.5, padding, canvas.width - size - padding)
-  const y = clampNumber(mid.y - size * 0.5, padding, canvas.height - size - padding)
-  return { x, y, size }
-}
-
-const polygonScatterThumbPlacements = computed<Record<string, ScatterThumbPlacement>>(() => {
-  const result: Record<string, ScatterThumbPlacement> = {}
-  for (const poly of visiblePolygons.value) {
-    if (!poly.scatter?.thumbnail) continue
-    const placement = computePolygonScatterThumbPlacement(poly)
-    if (placement) {
-      result[poly.id] = placement
-    }
-  }
-  return result
-})
-
-const polylineScatterThumbPlacements = computed<Record<string, ScatterThumbPlacement>>(() => {
-  const result: Record<string, ScatterThumbPlacement> = {}
-  for (const line of visiblePolylines.value) {
-    if (!line.scatter?.thumbnail) continue
-    const placement = computePolylineScatterThumbPlacement(line)
-    if (placement) {
-      result[line.id] = placement
-    }
-  }
-  return result
-})
-
-// Performance: green-layer scatter density dots are expensive (Poisson sampling).
-// When users resize a green polygon, we suspend re-computation during the drag and
-// only compute once after the drag finishes.
-const suspendPolygonScatterDensityDots = ref(false)
-const suspendedPolygonScatterDensityDotsKey = ref<{ pointerId: number; polygonId: string } | null>(null)
-
-const polygonScatterDensityDotsCache = new Map<string, { key: string; dots: PlanningPoint[] }>()
-
-function hashPlanningPoints(points: PlanningPoint[]): number {
-  // Fast-ish stable hash for point arrays. Quantize to centimeters to avoid churn
-  // from tiny floating differences.
-  let hash = 2166136261
-  for (const p of points) {
-    const x = Math.round(p.x * 100)
-    const y = Math.round(p.y * 100)
-    hash ^= x
-    hash = Math.imul(hash, 16777619)
-    hash ^= y
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
-const SCATTER_CONTROLS_SUSPEND_KEY = '__scatter-controls__'
-let scatterControlsPointerId: number | null = null
-let scatterControlsListenersAttached = false
-
-const scatterControlsTargetPolygonId = ref<string | null>(null)
-const scatterDensityPercentDraft = ref<number | null>(null)
-
-const scatterControlsInteracting = computed(() =>
-  suspendedPolygonScatterDensityDotsKey.value?.polygonId === SCATTER_CONTROLS_SUSPEND_KEY,
-)
-
-function commitScatterControlsDraft() {
-  if (propertyPanelDisabled.value) {
-    scatterDensityPercentDraft.value = null
-    scatterControlsTargetPolygonId.value = null
-    return
-  }
-
-  const polygonId = scatterControlsTargetPolygonId.value
-  if (!polygonId) {
-    scatterDensityPercentDraft.value = null
-    return
-  }
-
-  const polygon = polygons.value.find((item) => item.id === polygonId)
-  if (!polygon?.scatter) {
-    scatterDensityPercentDraft.value = null
-    scatterControlsTargetPolygonId.value = null
-    return
-  }
-
-  // Only meaningful for green polygons (planning -> terrain scatter).
-  const layer = layers.value.find((item) => item.id === polygon.layerId)
-  if (layer?.kind !== 'green') {
-    scatterDensityPercentDraft.value = null
-    scatterControlsTargetPolygonId.value = null
-    return
-  }
-
-  let changed = false
-  if (typeof scatterDensityPercentDraft.value === 'number') {
-    const nextDensity = clampDensityPercent(scatterDensityPercentDraft.value)
-    if (polygon.scatter.densityPercent !== nextDensity) {
-      polygon.scatter.densityPercent = nextDensity
-      changed = true
-    }
-  }
-
-  scatterDensityPercentDraft.value = null
-  scatterControlsTargetPolygonId.value = null
-
-  if (changed) {
-    markPlanningDirty()
-  }
-}
-
-function handleScatterControlsBlur() {
-  endScatterControlsInteraction()
-}
-
-function handleScatterControlsPointerEnd(event: PointerEvent) {
-  if (scatterControlsPointerId != null && event.pointerId !== scatterControlsPointerId) {
-    return
-  }
-  endScatterControlsInteraction()
-}
-
-function detachScatterControlsPointerListeners() {
-  if (!scatterControlsListenersAttached) {
-    return
-  }
-  scatterControlsListenersAttached = false
-  window.removeEventListener('pointerup', handleScatterControlsPointerEnd, true)
-  window.removeEventListener('pointercancel', handleScatterControlsPointerEnd, true)
-  window.removeEventListener('blur', handleScatterControlsBlur, true)
-}
-
-function beginScatterControlsInteraction(event: PointerEvent) {
-  if (!scatterDensityEnabled.value) {
-    return
-  }
-
-  // Don't clobber a polygon drag suspension; that path manages its own resume.
-  if (
-    suspendPolygonScatterDensityDots.value &&
-    suspendedPolygonScatterDensityDotsKey.value?.polygonId !== SCATTER_CONTROLS_SUSPEND_KEY
-  ) {
-    return
-  }
-
-  // Snapshot which polygon we're editing so we can commit on pointer-up.
-  scatterControlsTargetPolygonId.value = selectedPolygon.value?.id ?? null
-  scatterDensityPercentDraft.value = null
-
-  suspendPolygonScatterDensityDots.value = true
-  suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId: SCATTER_CONTROLS_SUSPEND_KEY }
-  scatterControlsPointerId = event.pointerId
-
-  if (!scatterControlsListenersAttached) {
-    scatterControlsListenersAttached = true
-    window.addEventListener('pointerup', handleScatterControlsPointerEnd, true)
-    window.addEventListener('pointercancel', handleScatterControlsPointerEnd, true)
-    window.addEventListener('blur', handleScatterControlsBlur, true)
-  }
-}
-
-function endScatterControlsInteraction() {
-  if (suspendedPolygonScatterDensityDotsKey.value?.polygonId !== SCATTER_CONTROLS_SUSPEND_KEY) {
-    detachScatterControlsPointerListeners()
-    scatterControlsPointerId = null
-    return
-  }
-
-  // Commit while still suspended to avoid triggering expensive recompute per tick.
-  commitScatterControlsDraft()
-
-  suspendPolygonScatterDensityDots.value = false
-  suspendedPolygonScatterDensityDotsKey.value = null
-  scatterControlsPointerId = null
-  detachScatterControlsPointerListeners()
-}
-
-onBeforeUnmount(() => {
-  detachScatterControlsPointerListeners()
-})
-
-function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
-  const result: Record<string, PlanningPoint[]> = {}
-  const selected = selectedFeature.value
-  let targetPolygonId: string | null = selected && selected.type === 'polygon' ? selected.id : null
-  if (!targetPolygonId) {
-    const state = dragState.value
-    if (state.type === 'move-polygon') {
-      targetPolygonId = state.polygonId
-    } else if (state.type === 'drag-vertex' && state.feature === 'polygon') {
-      targetPolygonId = state.targetId
-    }
-  }
-
-  const visibleIds = new Set<string>()
-  for (const poly of visiblePolygons.value) {
-    visibleIds.add(poly.id)
-
-    // Performance: only compute dots for the currently selected / edited polygon.
-    if (targetPolygonId && poly.id !== targetPolygonId) {
-      continue
-    }
-
-    // If there's no scatter configuration, ensure no cache entry exists and skip
-    if (!poly.scatter) {
-      polygonScatterDensityDotsCache.delete(poly.id)
-      continue
-    }
-
-    // Only show density preview for green layers (planning -> terrain scatter)
-    const layerKind = getLayerKind(poly.layerId)
-    if (layerKind !== 'green') {
-      polygonScatterDensityDotsCache.delete(poly.id)
-      continue
-    }
-
-    // Normalize density percent (0-100). 0 or negative means generate no points
-    const densityPercent = clampDensityPercent(poly.scatter.densityPercent)
-    if (densityPercent <= 0) {
-      polygonScatterDensityDotsCache.delete(poly.id)
-      continue
-    }
-
-    // Compute model footprint values: prefer cached bounding-box inference, fallback to asset metadata
-    const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.assetId, poly.scatter.category, poly.scatter.footprintAreaM2)
-    const footprintMaxSizeM = clampFootprintMaxSizeM(
-      poly.scatter.assetId,
-      poly.scatter.category,
-      poly.scatter.footprintMaxSizeM,
-      footprintAreaM2,
-    )
-
-    // Read selected scatter preset (for scale range and capacity estimation)
-    const preset = terrainScatterPresets[poly.scatter.category]
-    const minScale = preset && Number.isFinite(preset.minScale) ? preset.minScale : 1
-    const maxScale = preset && Number.isFinite(preset.maxScale) ? preset.maxScale : 1
-
-    // Polygon geometry filtering: skip if no bounds
-    const bounds = getPointsBounds(poly.points)
-    if (!bounds) {
-      polygonScatterDensityDotsCache.delete(poly.id)
-      continue
-    }
-    const area = polygonArea(poly.points)
-    if (!Number.isFinite(area) || area <= 0) {
-      polygonScatterDensityDotsCache.delete(poly.id)
-      continue
-    }
-
-    const { targetCount: targetDots } = computeOccupancyTargetCount({
-      areaM2: area,
-      footprintAreaM2,
-      densityPercent,
-      minScale,
-      maxScale,
-    })
-    if (targetDots <= 0) {
-      polygonScatterDensityDotsCache.delete(poly.id)
-      continue
-    }
-
-    const { minDistance, expectedScaleSq } = computeOccupancyMinDistance({
-      footprintMaxSizeM,
-      minScale,
-      maxScale,
-      minFloor: 0.05,
-    })
-
-    // Build cache key from polygon points and parameters to avoid repeated expensive computation
-    const pointsHash = hashPlanningPoints(poly.points)
-    const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${targetDots}|${Math.round(footprintAreaM2 * 1000)}|${Math.round(footprintMaxSizeM * 1000)}|${Math.round(expectedScaleSq * 1000)}`
-    const cached = polygonScatterDensityDotsCache.get(poly.id)
-    if (cached?.key === cacheKey) {
-      if (cached.dots.length) {
-        result[poly.id] = cached.dots
-      }
-      continue
-    }
-
-    // Cap preview point count to maintain interactivity
-    const cappedTarget = Math.min(800, targetDots)
-    // Use stable RNG seed so previews are reproducible for identical inputs
-    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${targetDots}:${Math.round(footprintAreaM2 * 1000)}:${Math.round(footprintMaxSizeM * 1000)}:${Math.round(expectedScaleSq * 1000)}`))
-
-    // Apply a lower bound to minimum distance to avoid sampling issues with very small values
-    const minDistanceForDots = Math.max(minDistance, 0.05)
-    const selected = generateFpsScatterPointsInPolygon({
-      polygon: poly.points,
-      targetCount: cappedTarget,
-      minDistance: minDistanceForDots,
-      random,
-      // maxCandidates controls the number of attempts in the FPS algorithm; adjusted by target count to trade off performance and quality
-      maxCandidates: Math.min(4000, Math.max(800, Math.ceil(cappedTarget * 6))),
-    })
-
-    // Cache results to hit on repeated short-term requests
-    polygonScatterDensityDotsCache.set(poly.id, { key: cacheKey, dots: selected })
-    if (selected.length) {
-      result[poly.id] = selected
-    }
-  }
-
-  // Prune cache entries for polygons that are no longer visible.
-  if (polygonScatterDensityDotsCache.size) {
-    for (const key of polygonScatterDensityDotsCache.keys()) {
-      if (!visibleIds.has(key)) {
-        polygonScatterDensityDotsCache.delete(key)
-      }
-    }
-  }
-  return result
-}
-
-const polygonScatterDensityDots = shallowRef<Record<string, PlanningPoint[]>>({})
-watchEffect(() => {
-  if (suspendPolygonScatterDensityDots.value) {
-    return
-  }
-  polygonScatterDensityDots.value = computePolygonScatterDensityDots()
-})
-
-function hidePolygonScatterDensityDots(polygonId: string) {
-  const current = polygonScatterDensityDots.value
-  if (!(polygonId in current)) {
-    return
-  }
-  const next = { ...current }
-  delete next[polygonId]
-  polygonScatterDensityDots.value = next
-}
 
 const selectedPolygon = computed(() => {
   const feature = selectedFeature.value
@@ -1144,10 +582,6 @@ const VERTEX_HANDLE_STROKE_PX = 1
 const VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX = 6
 const VERTEX_HIGHLIGHT_STROKE_PX = 2
 
-// Scatter density dots should stay readable at any zoom level.
-const SCATTER_DENSITY_DOT_RADIUS_PX = 3.5
-const SCATTER_DENSITY_DOT_STROKE_PX = 1
-
 // Canvas "world" coordinates are in meters (to match the 3D scene ground settings).
 // For screen rendering we map meters -> CSS pixels using BASE_PIXELS_PER_METER.
 const canvasSize = computed(() => ({
@@ -1186,9 +620,6 @@ const vertexHandleHitRadiusWorld = computed(() => pxToWorld(VERTEX_HIT_RADIUS_PX
 const vertexHandleStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HANDLE_STROKE_PX))
 const vertexHighlightRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX + VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX))
 const vertexHighlightStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HIGHLIGHT_STROKE_PX))
-
-const scatterDensityDotRadiusWorld = computed(() => pxToWorld(SCATTER_DENSITY_DOT_RADIUS_PX))
-const scatterDensityDotStrokeWidthWorld = computed(() => pxToWorld(SCATTER_DENSITY_DOT_STROKE_PX))
 
 type ScaleBarSpec = { meters: number; pixels: number; label: string }
 
@@ -1448,7 +879,6 @@ function buildPlanningSnapshot(): PlanningSceneData {
         ? normalizeTerrainWaterPresetId(poly.terrainWaterPresetId)
         : undefined,
       airWallEnabled: poly.airWallEnabled ? true : undefined,
-      scatter: serializePlanningScatterAssignment(poly.scatter),
     })),
     polylines: polylines.value.map((line) => ({
       id: line.id,
@@ -1563,8 +993,6 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
 async function handleConvertTo3DScene() {
   if (convertingTo3DScene.value) return
 
-  endScatterControlsInteraction()
-
   // Ensure latest edits are persisted before conversion.
   persistPlanningToSceneIfDirty({ force: true })
 
@@ -1678,7 +1106,7 @@ function resetPlanningState() {
   selectedFeature.value = null
   activeImageId.value = null
   layers.value = layerPresets.map((layer) => ({ ...layer }))
-  activeLayerId.value = layers.value[0]?.id ?? 'green-layer'
+  activeLayerId.value = layers.value[0]?.id ?? 'terrain-layer'
   viewTransform.scale = 1
   viewTransform.offset.x = 0
   viewTransform.offset.y = 0
@@ -1835,15 +1263,21 @@ function loadPlanningFromScene() {
   if (data.activeLayerId) {
     activeLayerId.value = data.activeLayerId
   }
-  layers.value = data.layers.map((layer) => ({
-    id: layer.id,
-    name: layer.name,
-    kind: layer.kind,
-    visible: layer.visible,
-    color: layer.color,
-    locked: layer.locked,
-    conversionEnabled: layer.conversionEnabled !== false,
-  }))
+  layers.value = data.layers
+    .filter((layer) => layer.kind === 'terrain' || layer.kind === 'guide-route')
+    .map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      kind: layer.kind === 'terrain' ? 'terrain' : 'guide-route',
+      visible: layer.visible,
+      color: layer.color,
+      locked: layer.locked,
+      conversionEnabled: layer.conversionEnabled !== false,
+    }))
+
+  if (!layers.value.length) {
+    layers.value = layerPresets.map((layer) => ({ ...layer }))
+  }
 
   if (!layers.value.find((l) => l.id === activeLayerId.value)) {
     activeLayerId.value = layers.value[0]?.id ?? activeLayerId.value
@@ -1884,7 +1318,6 @@ function loadPlanningFromScene() {
       })(),
       terrainWaterPresetId: normalizeTerrainWaterPresetId(poly.terrainWaterPresetId),
       airWallEnabled: Boolean(poly.airWallEnabled),
-      scatter: normalizePlanningScatterAssignment(poly.scatter),
     }))
     : []
 
@@ -2111,20 +1544,10 @@ const canUseLineTool = computed(() => {
 
 const canUseAreaTools = computed(() => {
   const kind = activeLayer.value?.kind
-  return kind === 'terrain' || kind === 'green'
+  return kind === 'terrain'
 })
 
 const canDeleteSelection = computed(() => !!selectedFeature.value)
-
-const scatterTabs = computed(() =>
-  (Object.keys(terrainScatterPresets) as TerrainScatterCategory[]).map((key) => ({
-    key,
-    label: terrainScatterPresets[key].label,
-    icon: terrainScatterPresets[key].icon,
-  })),
-)
-
-const propertyScatterTab = ref<TerrainScatterCategory>('flora')
 
 const selectedScatterTarget = computed<ScatterTarget | null>(() => {
   const polygon = selectedPolygon.value
@@ -2138,14 +1561,6 @@ const selectedScatterTarget = computed<ScatterTarget | null>(() => {
     return { type: 'polyline', shape: polyline, layer }
   }
   return null
-})
-
-const selectedGreenScatterTarget = computed<Extract<ScatterTarget, { type: 'polygon' }> | null>(() => {
-  const target = selectedScatterTarget.value
-  if (!target || target.type !== 'polygon' || target.layer?.kind !== 'green') {
-    return null
-  }
-  return target
 })
 
 function isGuideRoutePolyline(line: PlanningPolyline | null | undefined): boolean {
@@ -2225,8 +1640,6 @@ const guideRouteWaypointDockModel = computed<boolean>({
   },
 })
 
-const selectedScatterAssignment = computed(() => selectedGreenScatterTarget.value?.shape.scatter ?? null)
-
 const selectedImage = computed<PlanningImage | null>(() => {
   return planningImages.value.find((img) => img.id === activeImageId.value) ?? null
 })
@@ -2246,10 +1659,6 @@ const propertyPanelDisabledReason = computed(() => {
 })
 
 const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !== null)
-
-const propertyPanelLayerKind = computed<LayerKind | null>(() => {
-  return selectedScatterTarget.value?.layer?.kind ?? null
-})
 
 const selectedTerrainContourPolygon = computed<PlanningPolygon | null>(() => {
   const poly = selectedPolygon.value
@@ -2508,7 +1917,7 @@ const airWallEnabledModel = computed<boolean>({
   get: () => {
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || (kind !== 'green' && kind !== 'terrain')) {
+    if (!target || kind !== 'terrain') {
       return false
     }
     return Boolean(target.shape.airWallEnabled)
@@ -2517,7 +1926,7 @@ const airWallEnabledModel = computed<boolean>({
     if (propertyPanelDisabled.value) return
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || (kind !== 'green' && kind !== 'terrain')) {
+    if (!target || kind !== 'terrain') {
       return
     }
     target.shape.airWallEnabled = Boolean(value)
@@ -2580,16 +1989,6 @@ const canvasBoundaryStyle = computed<CSSProperties>(() => {
   }
 })
 
-watch(
-  selectedScatterAssignment,
-  (assignment) => {
-    if (assignment && assignment.category in terrainScatterPresets) {
-      propertyScatterTab.value = assignment.category
-    }
-  },
-  { immediate: true },
-)
-
 watch(dialogOpen, (open) => {
   if (open) {
     nextTick(() => {
@@ -2597,7 +1996,6 @@ watch(dialogOpen, (open) => {
       requestAnimationFrame(() => updateEditorRect())
     })
   } else {
-    endScatterControlsInteraction()
     cancelActiveDrafts()
     selectedFeature.value = null
     // Persist on close even if some edits forgot to mark dirty.
@@ -3552,7 +2950,7 @@ function startRectangleDrag(worldPoint: PlanningPoint, event: PointerEvent) {
     pointerId: event.pointerId,
     start: worldPoint,
     current: worldPoint,
-    layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer',
+    layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer',
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
@@ -3576,7 +2974,7 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
   if (points.length < 3) {
     return
   }
-  const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
+  const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer'
   const targetKind = getLayerKind(targetLayerId)
   const newId = createPlanningFeatureId()
   const newName = `${labelPrefix ?? getLayerName(targetLayerId)} ${polygonCounter.value++}`
@@ -3685,7 +3083,7 @@ function startLineDraft(point: PlanningPoint) {
     }
   }
 
-  const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
+  const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer'
   const targetKind = getLayerKind(targetLayerId)
   // Guide-route disallows shared endpoints (no branching). Do not reuse endpoints across polylines.
   const reuse = targetKind === 'guide-route'
@@ -3964,130 +3362,6 @@ function handleLayerSelection(layerId: string) {
   }
   ensureSelectionWithinActiveLayer()
 }
-
-async function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetId: string }) {
-  // If the property panel is not editable, return early (e.g., no selection or layer is locked)
-  if (propertyPanelDisabled.value) {
-    return
-  }
-
-  const target = selectedGreenScatterTarget.value
-  if (!target) {
-    return
-  }
-
-  // The selected scatter category (e.g., flora/vegetation) must be a known preset
-  const category = propertyScatterTab.value
-  if (!(category in terrainScatterPresets)) {
-    return
-  }
-
-  // Thumbnail may be used for UI preview (null if the asset doesn't have one)
-  const thumbnail = payload.asset.thumbnail ?? null
-
-  // If the target already has a density set, preserve it; otherwise use the green-polygon default.
-  const existingDensity = target.shape.scatter?.densityPercent
-  const defaultDensity = 100
-
-  // Ensure model bounds are cached (may trigger async download/parse) so footprint can be inferred from the bounding box
-  await ensureModelBoundsCachedForAsset(payload.asset)
-  // Read cached footprint info inferred from the model bounding box (may be null)
-  const cachedFootprint = computeFootprintFromCachedModelBounds(payload.asset.id)
-
-  // If asset metadata provides length/width, use them as a fallback to compute raw area/max side
-  const length = payload.asset.dimensionLength ?? null
-  const width = payload.asset.dimensionWidth ?? null
-  const rawArea = (
-    typeof length === 'number'
-    && typeof width === 'number'
-    && Number.isFinite(length)
-    && Number.isFinite(width)
-    && length > 0
-    && width > 0
-  )
-    ? length * width
-    : undefined
-
-  // Prefer footprint area inferred from cached bounding box; otherwise fall back to asset metadata and clamp to a reasonable range
-  const footprintAreaM2 = clampFootprintAreaM2(
-    payload.asset.id,
-    category,
-    cachedFootprint?.footprintAreaM2 ?? rawArea,
-  )
-
-  // Same for max side length: prefer cached inference, otherwise use max(length, width) from metadata
-  const rawMaxSize = (
-    typeof length === 'number'
-    && typeof width === 'number'
-    && Number.isFinite(length)
-    && Number.isFinite(width)
-    && length > 0
-    && width > 0
-  )
-    ? Math.max(length, width)
-    : undefined
-  const footprintMaxSizeM = clampFootprintMaxSizeM(
-    payload.asset.id,
-    category,
-    cachedFootprint?.footprintMaxSizeM ?? rawMaxSize,
-    footprintAreaM2,
-  )
-
-  // Write scatter assignment object into the selected green polygon's scatter field.
-  // Field meanings: providerAssetId/assetId locate the model during conversion; category specifies the scatter preset type,
-  // name/thumbnail used for UI display; densityPercent controls generation proportion; footprint* used for capacity estimation to avoid overlaps.
-  target.shape.scatter = {
-    providerAssetId: payload.providerAssetId,
-    assetId: payload.asset.id,
-    category,
-    name: payload.asset.name,
-    thumbnail,
-    // Preserve existing density (if present); otherwise use default and clamp to 0-100
-    densityPercent: clampDensityPercent(typeof existingDensity === 'number' ? existingDensity : defaultDensity),
-    footprintAreaM2,
-    footprintMaxSizeM,
-  }
-
-  // Mark the planning as changed so it will be persisted or converted later
-  enableLayerConversion(target.shape.layerId)
-  markPlanningDirty()
-}
-
-const scatterDensityPercentModel = computed<number>({
-  get: () => clampDensityPercent(selectedScatterAssignment.value?.densityPercent),
-  set: (value) => {
-    if (propertyPanelDisabled.value) {
-      return
-    }
-    const target = selectedGreenScatterTarget.value
-    if (!target?.shape.scatter) {
-      return
-    }
-    target.shape.scatter.densityPercent = clampDensityPercent(value)
-    enableLayerConversion(target.shape.layerId)
-    markPlanningDirty()
-  },
-})
-
-const scatterDensityPercentSliderModel = computed<number>({
-  get: () => (scatterControlsInteracting.value
-    ? (scatterDensityPercentDraft.value ?? scatterDensityPercentModel.value)
-    : scatterDensityPercentModel.value),
-  set: (value) => {
-    if (scatterControlsInteracting.value) {
-      scatterDensityPercentDraft.value = clampDensityPercent(value)
-      return
-    }
-    scatterDensityPercentModel.value = value
-  },
-})
-
-const scatterDensityEnabled = computed(() => {
-  const target = selectedGreenScatterTarget.value
-  return !propertyPanelDisabled.value
-    && !!target
-    && !!target.shape.scatter
-})
 
 // Image property models for the property panel when an image is selected
 const imageNameModel = computed({
@@ -4522,11 +3796,6 @@ async function handlePointerUp(event: PointerEvent) {
     }
   }
 
-  if (suspendedPolygonScatterDensityDotsKey.value?.pointerId === event.pointerId) {
-    suspendPolygonScatterDensityDots.value = false
-    suspendedPolygonScatterDensityDotsKey.value = null
-  }
-
   if (
     lineVertexClickState.value &&
     lineVertexClickState.value.pointerId === event.pointerId &&
@@ -4568,10 +3837,6 @@ function handleWheel(event: WheelEvent) {
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
-
-  // Ensure we never leave scatter preview suspended.
-  suspendPolygonScatterDensityDots.value = false
-  suspendedPolygonScatterDensityDotsKey.value = null
 
   const draft = lineDraft.value
   const draftLine = getDraftLine()
@@ -4695,14 +3960,6 @@ function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
     return
   }
 
-  // Moving green polygons triggers expensive scatter density dot sampling.
-  // Suspend during the drag and compute once after pointerup.
-  if (candidate.scatter && getLayerKind(candidate.layerId) === 'green') {
-    suspendPolygonScatterDensityDots.value = true
-    suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId: candidate.id }
-    hidePolygonScatterDensityDots(candidate.id)
-  }
-
   dragState.value = {
     type: 'move-polygon',
     pointerId: event.pointerId,
@@ -4723,13 +3980,6 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
   const polygon = polygons.value.find((item) => item.id === polygonId)
   if (!polygon || !isActiveLayer(polygon.layerId)) {
     return
-  }
-
-  // Resizing green polygons triggers expensive scatter density dot sampling.
-  // Suspend during the drag and compute once after pointerup.
-  if (polygon.scatter && getLayerKind(polygon.layerId) === 'green') {
-    suspendPolygonScatterDensityDots.value = true
-    suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId }
   }
 
   const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
@@ -6044,36 +5294,6 @@ onBeforeUnmount(() => {
                       @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
                     />
 
-                    <!-- Green scatter density preview (faint dots) -->
-                    <g
-                      v-if="polygonScatterDensityDots[poly.id]?.length"
-                      class="scatter-density-dots"
-                      :class="{ 'inactive-layer-feature': !isActiveLayer(poly.layerId) }"
-                      pointer-events="none"
-                    >
-                      <circle
-                        v-for="(p, idx) in polygonScatterDensityDots[poly.id]"
-                        :key="`${poly.id}-density-dot-${idx}`"
-                        :cx="p.x"
-                        :cy="p.y"
-                        :r="scatterDensityDotRadiusWorld"
-                        :fill="getLayerColor(poly.layerId, 0.36)"
-                        :stroke="getLayerColor(poly.layerId, 0.78)"
-                        :stroke-width="scatterDensityDotStrokeWidthWorld"
-                      />
-                    </g>
-
-                    <image
-                      v-if="poly.scatter?.thumbnail && polygonScatterThumbPlacements[poly.id]"
-                      class="scatter-thumb"
-                      :class="{ 'inactive-layer-feature': !isActiveLayer(poly.layerId) }"
-                      :href="poly.scatter.thumbnail"
-                      :x="polygonScatterThumbPlacements[poly.id]!.x"
-                      :y="polygonScatterThumbPlacements[poly.id]!.y"
-                      :width="polygonScatterThumbPlacements[poly.id]!.size"
-                      :height="polygonScatterThumbPlacements[poly.id]!.size"
-                      preserveAspectRatio="xMidYMid meet"
-                    />
                   </g>
 
                   
@@ -6136,18 +5356,6 @@ onBeforeUnmount(() => {
                       )"
                       stroke-linecap="round"
                       @pointerdown="handleLineSegmentPointerDown(line.id, segIndex, $event as PointerEvent)"
-                    />
-
-                    <image
-                      v-if="line.scatter?.thumbnail && polylineScatterThumbPlacements[line.id]"
-                      class="scatter-thumb"
-                      :class="{ 'inactive-layer-feature': !isActiveLayer(line.layerId) }"
-                      :href="line.scatter.thumbnail"
-                      :x="polylineScatterThumbPlacements[line.id]!.x"
-                      :y="polylineScatterThumbPlacements[line.id]!.y"
-                      :width="polylineScatterThumbPlacements[line.id]!.size"
-                      :height="polylineScatterThumbPlacements[line.id]!.size"
-                      preserveAspectRatio="xMidYMid meet"
                     />
 
                     <!-- Endpoint hit area: allows clicking endpoints to continue drawing/drag endpoints -->
@@ -6538,7 +5746,7 @@ onBeforeUnmount(() => {
             </div>
 
             <!-- Air Wall control block (separate) -->
-            <div v-if="selectedTerrainContourPolygon || propertyPanelLayerKind === 'green'" class="property-panel__block">
+            <div v-if="selectedTerrainContourPolygon" class="property-panel__block">
               <v-switch
                 v-model="airWallEnabledModel"
                 density="compact"
@@ -6546,64 +5754,7 @@ onBeforeUnmount(() => {
                 label="Air Wall"
               />
             </div>
-            <template v-if="selectedGreenScatterTarget">
-
-
-              <div class="property-panel__density">
-                <div class="property-panel__density-title">Density</div>
-                <div class="property-panel__density-row">
-                  <div @pointerdown.capture="beginScatterControlsInteraction">
-                    <v-slider
-                      v-model="scatterDensityPercentSliderModel"
-                      min="0"
-                      max="100"
-                      step="1"
-                      density="compact"
-                      hide-details
-                      :disabled="!scatterDensityEnabled"
-                    />
-                  </div>
-                  <div class="property-panel__density-value">{{ scatterDensityPercentSliderModel }}%</div>
-                </div>
-              </div>
-
-              <v-tabs
-                v-model="propertyScatterTab"
-                density="compact"
-                :transition="false"
-                class="property-panel__tabs"
-              >
-                <v-tab
-                  v-for="tab in scatterTabs"
-                  :key="tab.key"
-                  :value="tab.key"
-                  :title="tab.label"
-                >
-                  <v-icon :icon="tab.icon" size="16" />
-                </v-tab>
-              </v-tabs>
-
-              <v-window v-model="propertyScatterTab" :transition="false" class="property-panel__window">
-                <v-window-item
-                  v-for="tab in scatterTabs"
-                  :key="`scatter-panel-${tab.key}`"
-                  :value="tab.key"
-                >
-                  <GroundAssetPainter
-                    v-if="propertyScatterTab === tab.key"
-                    :category="tab.key"
-                    :update-terrain-selection="false"
-                    :selected-provider-asset-id="selectedScatterAssignment ? selectedScatterAssignment.providerAssetId : null"
-                    :thumbnail-size="68"
-                    @asset-select="handleScatterAssetSelect"
-                  />
-                </v-window-item>
-              </v-window>
-            </template>
-
-            <template v-else>
-              <!-- terrain / guide-route: no extra property controls -->
-            </template>
+            <!-- terrain / guide-route: no extra property controls -->
           </template>
           </div>
         </aside>
