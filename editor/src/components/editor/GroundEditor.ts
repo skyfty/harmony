@@ -45,6 +45,7 @@ import {
 	getScatterInstanceWorldPosition,
 	releaseScatterInstance,
 	resetScatterInstanceBinding,
+	updateScatterInstanceMatrix,
 	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
@@ -638,6 +639,8 @@ type ScatterSessionState = {
 	lastPoint: THREE.Vector3 | null
 	anchorPoint: THREE.Vector3 | null
 	currentPoint: THREE.Vector3 | null
+	previewLayerId: string
+	previewInstances: TerrainScatterInstance[]
 }
 
 let scatterSession: ScatterSessionState | null = null
@@ -3742,6 +3745,164 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function resolveScatterStampYaw(session: ScatterSessionState): number {
+		if (session.brushShape !== 'line' || !session.anchorPoint || !session.currentPoint) {
+			return 0
+		}
+		return Math.atan2(
+			session.currentPoint.x - session.anchorPoint.x,
+			session.currentPoint.z - session.anchorPoint.z,
+		)
+	}
+
+	function clearScatterSessionPreviewInstances(session: ScatterSessionState | null): void {
+		if (!session?.previewInstances.length) {
+			return
+		}
+		for (const instance of session.previewInstances) {
+			releaseScatterInstance(instance)
+		}
+		session.previewInstances = []
+	}
+
+	function createScatterPreviewInstance(
+		session: ScatterSessionState,
+		point: THREE.Vector3,
+		index: number,
+		yaw: number,
+		existing?: TerrainScatterInstance,
+	): TerrainScatterInstance {
+		scatterPlacementCandidateLocalHelper.copy(point)
+		session.groundMesh.worldToLocal(scatterPlacementCandidateLocalHelper)
+		const existingScale = existing?.localScale?.x
+		const scaleFactor = Number.isFinite(existingScale)
+			? Number(existingScale)
+			: THREE.MathUtils.lerp(session.minScale, session.maxScale, Math.random())
+		const instance: TerrainScatterInstance = {
+			id: existing?.id ?? `scatter_preview_${session.pointerId}_${index}`,
+			assetId: session.asset.id,
+			layerId: session.previewLayerId,
+			profileId: session.lodPresetAssetId ?? session.layer.profileId ?? session.asset.id,
+			seed: existing?.seed ?? Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
+			localPosition: {
+				x: scatterPlacementCandidateLocalHelper.x,
+				y: scatterPlacementCandidateLocalHelper.y,
+				z: scatterPlacementCandidateLocalHelper.z,
+			},
+			localRotation: { x: 0, y: yaw, z: 0 },
+			localScale: { x: scaleFactor, y: scaleFactor, z: scaleFactor },
+			groundCoords: {
+				x: scatterPlacementCandidateLocalHelper.x,
+				z: scatterPlacementCandidateLocalHelper.z,
+				height: scatterPlacementCandidateLocalHelper.y,
+				normal: null,
+			},
+			binding: existing?.binding ?? null,
+			metadata: null,
+		}
+		return instance
+	}
+
+	function syncScatterSessionPreviewInstances(session: ScatterSessionState, points: THREE.Vector3[], yaw: number): void {
+		const existing = session.previewInstances
+		const next: TerrainScatterInstance[] = []
+		for (let index = 0; index < points.length; index += 1) {
+			const point = points[index]
+			if (!point) {
+				continue
+			}
+			const previous = existing[index]
+			const preview = createScatterPreviewInstance(session, point, index, yaw, previous)
+			const matrix = composeScatterMatrix(preview, session.groundMesh, scatterWorldMatrixHelper)
+			if (!preview.binding?.nodeId) {
+				if (!bindScatterInstance(preview, matrix, session.bindingAssetId)) {
+					continue
+				}
+			} else {
+				updateScatterInstanceMatrix(preview, session.groundMesh, scatterWorldMatrixHelper)
+			}
+			next.push(preview)
+		}
+
+		for (let index = next.length; index < existing.length; index += 1) {
+			const stale = existing[index]
+			if (stale) {
+				releaseScatterInstance(stale)
+			}
+		}
+
+		session.previewInstances = next
+	}
+
+	function refreshScatterSessionPreview(session: ScatterSessionState): void {
+		if (session.brushShape === 'circle') {
+			return
+		}
+		const center = session.currentPoint ?? session.anchorPoint
+		if (!center) {
+			clearScatterSessionPreviewInstances(session)
+			return
+		}
+		const points = sampleScatterPointsInBrush(center)
+		syncScatterSessionPreviewInstances(session, points, resolveScatterStampYaw(session))
+	}
+
+	function commitScatterSessionPreview(session: ScatterSessionState): number {
+		if (!session.layer || !session.previewInstances.length) {
+			return 0
+		}
+
+		const drafts = session.previewInstances.map((preview) => ({
+			id: generateScatterInstanceId(),
+			assetId: session.asset.id,
+			layerId: session.layer.id,
+			profileId: session.lodPresetAssetId ?? session.layer.profileId ?? session.asset.id,
+			seed: preview.seed ?? Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
+			localPosition: { ...preview.localPosition },
+			localRotation: { ...preview.localRotation },
+			localScale: { ...preview.localScale },
+			groundCoords: preview.groundCoords ? { ...preview.groundCoords, normal: preview.groundCoords.normal ?? null } : null,
+			binding: null,
+			metadata: null,
+		}))
+		if (!drafts.length) {
+			clearScatterSessionPreviewInstances(session)
+			return 0
+		}
+
+		const nextLayer = persistScatterInstances(session.layer, [...session.layer.instances, ...drafts])
+		if (!nextLayer) {
+			clearScatterSessionPreviewInstances(session)
+			return 0
+		}
+		session.layer = nextLayer
+
+		const appended = nextLayer.instances.slice(Math.max(0, nextLayer.instances.length - drafts.length))
+		const failedIds = new Set<string>()
+		for (const stored of appended) {
+			const matrix = composeScatterMatrix(stored, session.groundMesh, scatterWorldMatrixHelper)
+			if (!bindScatterInstance(stored, matrix, session.bindingAssetId)) {
+				failedIds.add(stored.id)
+				continue
+			}
+			scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(nextLayer.id, stored.id), session.bindingAssetId)
+			addScatterInstanceToNeighborIndex(session, stored)
+		}
+
+		let committedCount = appended.length
+		if (failedIds.size) {
+			const repaired = nextLayer.instances.filter((entry) => !failedIds.has(entry.id))
+			const repairedLayer = persistScatterInstances(nextLayer, repaired)
+			if (repairedLayer) {
+				session.layer = repairedLayer
+			}
+			committedCount -= failedIds.size
+		}
+
+		clearScatterSessionPreviewInstances(session)
+		return Math.max(0, committedCount)
+	}
+
 	function createScatterStampNeighborhood(spacing: number) {
 		const spacingSq = spacing * spacing
 		const cellSize = Math.max(1e-6, spacing)
@@ -3970,12 +4131,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const points = sampleScatterPointsInBrush(worldCenterPoint)
-		const lineYaw = scatterSession.brushShape === 'line' && scatterSession.anchorPoint && scatterSession.currentPoint
-			? Math.atan2(
-				scatterSession.currentPoint.x - scatterSession.anchorPoint.x,
-				scatterSession.currentPoint.z - scatterSession.anchorPoint.z,
-			)
-			: 0
+		const lineYaw = resolveScatterStampYaw(scatterSession)
 		for (const point of points) {
 			applyScatterPlacement(
 				point,
@@ -4109,9 +4265,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			lastPoint: null,
 			anchorPoint: startPoint.clone(),
 			currentPoint: startPoint.clone(),
+			previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}`,
+			previewInstances: [],
 		}
 		if (brushShape === 'circle') {
 			traceScatterPath(startPoint)
+		} else {
+			refreshScatterSessionPreview(scatterSession)
 		}
 		try {
 			options.canvasRef.value?.setPointerCapture(event.pointerId)
@@ -4285,6 +4445,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (scatterSession.brushShape === 'circle') {
 			traceScatterPath(nextPoint)
 		} else {
+			refreshScatterSessionPreview(scatterSession)
 			updateBrush(event)
 		}
 		event.preventDefault()
@@ -4297,8 +4458,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
 			return false
 		}
-		if (scatterSession.brushShape !== 'circle' && scatterSession.anchorPoint) {
-			paintScatterStamp(scatterSession.currentPoint ?? scatterSession.anchorPoint)
+		if (scatterSession.brushShape !== 'circle') {
+			commitScatterSessionPreview(scatterSession)
 		}
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(event.pointerId)
@@ -4322,6 +4483,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession) {
 			return false
 		}
+		clearScatterSessionPreviewInstances(scatterSession)
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(scatterSession.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(scatterSession.pointerId)
 		}

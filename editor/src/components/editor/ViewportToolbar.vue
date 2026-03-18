@@ -24,7 +24,7 @@
               :variant="groundTerrainButtonActive ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
-              @click="handleMenuActivatorClick(menuProps, $event, () => handleGroundButtonClick('terrain'))"
+              @click="handleGroundButtonClick('terrain')"
               @contextmenu.prevent.stop="handleGroundButtonCancel('terrain')"
             />
           </template>
@@ -79,7 +79,7 @@
               :variant="groundPaintButtonActive ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
-              @click="handleMenuActivatorClick(menuProps, $event, () => handleGroundButtonClick('paint'))"
+              @click="handleGroundButtonClick('paint')"
               @contextmenu.prevent.stop="handleGroundButtonCancel('paint')"
             />
           </template>
@@ -129,7 +129,7 @@
               :variant="groundScatterButtonActive ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
-              @click="handleMenuActivatorClick(menuProps, $event, () => handleGroundButtonClick('scatter'))"
+              @click="handleGroundButtonClick('scatter')"
               @contextmenu.prevent.stop="handleGroundButtonCancel('scatter')"
             />
           </template>
@@ -276,7 +276,7 @@
               :variant="displayBoardToolButtonActive ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled"
-              @click="handleMenuActivatorClick(menuProps, $event, handleDisplayBoardToolButtonClick)"
+              @click="handleDisplayBoardToolButtonClick"
               @contextmenu.prevent.stop="handleDisplayBoardToolButtonCancel"
             />
           </template>
@@ -334,7 +334,7 @@
               :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled"
-              @click="handleMenuActivatorClick(menuProps, $event, () => handleBuildToolToggle(tool.id))"
+              @click="handleBuildToolToggle(tool.id)"
               @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
             />
           </template>
@@ -431,7 +431,7 @@
               :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled"
-              @click="handleMenuActivatorClick(menuProps, $event, () => handleBuildToolToggle(tool.id))"
+              @click="handleBuildToolToggle(tool.id)"
               @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
             />
           </template>
@@ -528,7 +528,7 @@
               :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled"
-              @click="handleMenuActivatorClick(menuProps, $event, () => handleBuildToolToggle(tool.id))"
+              @click="handleBuildToolToggle(tool.id)"
               @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
             />
           </template>
@@ -602,7 +602,7 @@
             :color="viewportPlacementActive || viewportPlacementMenuOpen ? 'primary' : undefined"
             :variant="viewportPlacementActive || viewportPlacementMenuOpen ? 'flat' : 'text'"
             title="Add Node"
-            @click="handleMenuActivatorClick(menuProps, $event, () => emit('update:viewport-placement-menu-open', true))"
+            @click="emit('update:viewport-placement-menu-open', true)"
             @contextmenu.prevent.stop="handleViewportPlacementButtonContextMenu"
           />
         </template>
@@ -681,7 +681,7 @@
             :variant="scatterEraseModeActive ? 'flat' : 'text'"
             :disabled="!canEraseScatterEffective"
             :title="scatterEraseButtonTitle"
-            @click="handleMenuActivatorClick(menuProps, $event, handleScatterEraseButtonClick)"
+            @click="handleScatterEraseButtonClick"
             @contextmenu.prevent.stop="handleScatterEraseContextMenu"
           />
         </template>
@@ -1057,7 +1057,7 @@
             variant="text"
             class="toolbar-button"
             title="Reset to Default View (Shift+F: focus visible; Alt+1..6: directional views)"
-            @click="handleMenuActivatorClick(menuProps, $event, () => emit('reset-camera'))"
+            @click="emit('reset-camera')"
             @contextmenu.prevent.stop="handleCameraResetContextMenu"
           />
         </template>
@@ -1573,10 +1573,6 @@ type RotationAction = {
   degrees: number
 }
 
-type MenuActivatorProps = {
-  onClick?: (event: MouseEvent) => void
-}
-
 const rotationSections = [
   {
     id: 'vertical',
@@ -1911,15 +1907,6 @@ const scatterShapeOptions = (Object.keys(TERRAIN_SCATTER_BRUSH_SHAPE_LABELS) as 
 
 function toggleFixedPrimaryAsAnchor() {
   fixedPrimaryAsAnchor.value = !fixedPrimaryAsAnchor.value
-}
-
-function handleMenuActivatorClick(
-  menuProps: MenuActivatorProps,
-  event: MouseEvent,
-  handler: () => void,
-) {
-  menuProps.onClick?.(event)
-  handler()
 }
 
 function handleAlignCommand(command: AlignCommand | AlignMode) {
