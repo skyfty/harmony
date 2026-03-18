@@ -1039,16 +1039,8 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
     }
   }
 
-  const headAssetHeight = (() => {
-    if (!wallProps.headAssetId) return 0
-    const box = params.getAssetBounds(wallProps.headAssetId)
-    return box ? Math.max(0, box.max.y - box.min.y) : 0
-  })()
-  const footAssetHeight = (() => {
-    if (!wallProps.footAssetId) return 0
-    const box = params.getAssetBounds(wallProps.footAssetId)
-    return box ? Math.max(0, box.max.y - box.min.y) : 0
-  })()
+  const headAssetHeight = Math.max(0, Number(wallProps.headAssetHeight) || 0)
+  const footAssetHeight = Math.max(0, Number(wallProps.footAssetHeight) || 0)
   const verticalLayoutOptions: WallVerticalLayoutOptions = { headAssetHeight, footAssetHeight }
 
   if (wallProps.bodyAssetId) {

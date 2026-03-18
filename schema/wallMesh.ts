@@ -158,7 +158,7 @@ function resolveWallVerticalLayout(totalHeightRaw: number, options: WallVertical
   const footAssetHeight = Math.max(0, Number.isFinite(options.footAssetHeight) ? (options.footAssetHeight as number) : 0)
   const bodyHeight = Math.max(0, totalHeight - headAssetHeight - footAssetHeight)
   return {
-    bodyBaseY: footAssetHeight,
+    bodyBaseY: 0,
     bodyHeight,
     headBaseY: totalHeight - headAssetHeight,
     footBaseY: 0,
