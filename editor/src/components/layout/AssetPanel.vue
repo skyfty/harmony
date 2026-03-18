@@ -1465,24 +1465,6 @@ const displayedAssets = computed(() => {
 const directoryTitleElements = ref<Record<string, HTMLElement>>({})
 const truncatedDirectoryNameIds = ref<Set<string>>(new Set())
 
-function isDirectoryNameTruncated(directoryId: string): boolean {
-  return truncatedDirectoryNameIds.value.has(directoryId)
-}
-
-function setDirectoryTitleElement(directoryId: string, element: unknown): void {
-  if (element instanceof HTMLElement) {
-    directoryTitleElements.value = { ...directoryTitleElements.value, [directoryId]: element }
-    updateDirectoryNameTruncation(directoryId)
-    return
-  }
-  if (!(directoryId in directoryTitleElements.value)) {
-    return
-  }
-  const nextElements = { ...directoryTitleElements.value }
-  delete nextElements[directoryId]
-  directoryTitleElements.value = nextElements
-}
-
 function updateDirectoryNameTruncation(directoryId: string): void {
   const element = directoryTitleElements.value[directoryId]
   if (!element) {
@@ -1500,10 +1482,6 @@ function updateDirectoryNameTruncation(directoryId: string): void {
     next.delete(directoryId)
   }
   truncatedDirectoryNameIds.value = next
-}
-
-function handleDirectoryTitlePointerEnter(directoryId: string): void {
-  updateDirectoryNameTruncation(directoryId)
 }
 
 function refreshDirectoryNameTruncation(): void {
