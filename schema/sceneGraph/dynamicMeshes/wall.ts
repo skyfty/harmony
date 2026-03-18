@@ -187,7 +187,7 @@ export async function buildWallMesh(
   });
 
   const bodyMaterialConfigId = resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps);
-  const buildProceduralWallGroup = async (): Promise<THREE.Group> => {
+  const buildProceduralWallGroupLocal = async (): Promise<THREE.Group> => {
     const group = createWallGroup(meshInfo, {
       wallRenderMode: wallProps.wallRenderMode,
       repeatInstanceStep: wallProps.repeatInstanceStep,
@@ -202,6 +202,11 @@ export async function buildWallMesh(
       const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
       applyWallMaterialConfigAssignment(group, materialByConfigId);
     }
+    return group;
+  };
+
+  const buildProceduralWallGroup = async (): Promise<THREE.Group> => {
+    const group = await buildProceduralWallGroupLocal();
     deps.applyTransform(group, node);
     deps.applyVisibility(group, node);
     if (wallProps.isAirWall) {
@@ -246,7 +251,7 @@ export async function buildWallMesh(
   container.userData = { ...(container.userData ?? {}), dynamicMeshType: 'Wall', isAirWall: false, hidden: false };
 
   if (plan.hasProceduralBodyFallback) {
-    const proceduralGroup = await buildProceduralWallGroup();
+    const proceduralGroup = await buildProceduralWallGroupLocal();
     container.add(proceduralGroup);
   }
 

@@ -7,7 +7,7 @@ import type { WallWorldSegment } from '../wallPreviewGroupUtils'
 
 export type EndpointGizmoDragMode = 'free' | 'axis'
 
-export type RectangleCornerSide = { x: 'min' | 'max'; z: 'min' | 'max' }
+export type RectangleCornerSide = { u: 'min' | 'max'; v: 'min' | 'max' }
 
 export type RectangleEditConstraint = {
   cornerSides: [
@@ -17,7 +17,10 @@ export type RectangleEditConstraint = {
     RectangleCornerSide,
   ]
   draggedCornerIndex: 0 | 1 | 2 | 3
-  oppositeCornerWorld: THREE.Vector3
+  originWorld: THREE.Vector3
+  axisUWorld: THREE.Vector3
+  axisVWorld: THREE.Vector3
+  boundsStart: { uMin: number; uMax: number; vMin: number; vMax: number }
 }
 
 export type InstancedEraseDragState = {

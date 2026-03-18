@@ -323,9 +323,12 @@ function applyRectangleConstraintToChain(options: {
   chainStartIndex: number
   chainEndIndex: number
   constraint: {
-    cornerSides: Array<{ x: 'min' | 'max'; z: 'min' | 'max' }>
+    cornerSides: Array<{ u: 'min' | 'max'; v: 'min' | 'max' }>
     draggedCornerIndex: 0 | 1 | 2 | 3
-    oppositeCornerWorld: THREE.Vector3
+    originWorld: THREE.Vector3
+    axisUWorld: THREE.Vector3
+    axisVWorld: THREE.Vector3
+    boundsStart: { uMin: number; uMax: number; vMin: number; vMax: number }
   }
   desiredCornerWorld: THREE.Vector3
   y: number
@@ -344,18 +347,42 @@ function applyRectangleConstraintToChain(options: {
     return false
   }
 
-  const moved = desiredCornerWorld
-  const opposite = constraint.oppositeCornerWorld
+  const rel = desiredCornerWorld.clone().sub(constraint.originWorld)
+  rel.y = 0
 
-  const minX = Math.min(moved.x, opposite.x)
-  const maxX = Math.max(moved.x, opposite.x)
-  const minZ = Math.min(moved.z, opposite.z)
-  const maxZ = Math.max(moved.z, opposite.z)
+  const cornerSide = constraint.cornerSides[constraint.draggedCornerIndex]
+  if (!cornerSide) {
+    return false
+  }
+
+  const eps = 1e-4
+  let uMin = constraint.boundsStart.uMin
+  let uMax = constraint.boundsStart.uMax
+  let vMin = constraint.boundsStart.vMin
+  let vMax = constraint.boundsStart.vMax
+
+  const projectedU = rel.dot(constraint.axisUWorld)
+  const projectedV = rel.dot(constraint.axisVWorld)
+
+  if (cornerSide.u === 'min') {
+    uMin = Math.min(projectedU, uMax - eps)
+  } else {
+    uMax = Math.max(projectedU, uMin + eps)
+  }
+
+  if (cornerSide.v === 'min') {
+    vMin = Math.min(projectedV, vMax - eps)
+  } else {
+    vMax = Math.max(projectedV, vMin + eps)
+  }
 
   for (let i = 0; i < 4; i += 1) {
     const side = constraint.cornerSides[i]!
     const corner = rectDragCornersTmp[i]!
-    corner.set(side.x === 'min' ? minX : maxX, y, side.z === 'min' ? minZ : maxZ)
+    corner.copy(constraint.originWorld)
+    corner.addScaledVector(constraint.axisUWorld, side.u === 'min' ? uMin : uMax)
+    corner.addScaledVector(constraint.axisVWorld, side.v === 'min' ? vMin : vMax)
+    corner.y = y
   }
 
   // Rebuild only the currently dragged chain (keeps other chains intact).
