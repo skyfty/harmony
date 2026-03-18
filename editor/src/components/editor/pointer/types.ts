@@ -65,8 +65,12 @@ export type FloorVertexDragState = {
     | null
     | {
         kind: 'rectangle'
-        boundsStart: { minX: number; maxX: number; minZ: number; maxZ: number }
-        draggedSide: { x: 'min' | 'max'; z: 'min' | 'max' }
+        originLocal: { x: number; z: number }
+        axisULocal: { x: number; z: number }
+        axisVLocal: { x: number; z: number }
+        boundsStart: { uMin: number; uMax: number; vMin: number; vMax: number }
+        cornerSides: Array<{ u: 'min' | 'max'; v: 'min' | 'max' }>
+        draggedSide: { u: 'min' | 'max'; v: 'min' | 'max' }
       }
     | {
         kind: 'circle'

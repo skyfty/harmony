@@ -256,11 +256,15 @@ type WallVisualChain = {
   closed: boolean
 }
 
-function buildWallChainDefinitions(definition: WallDynamicMesh): WallVisualChain[] {
-  const renderSegs = compileWallSegmentsFromDefinition(definition)
+type WallArcInterval = {
+  chainIndex: number
+  start: number
+  end: number
+}
+
+function buildWallVisualChainsFromSegs(renderSegs: WallRenderSeg[]): WallVisualChain[] {
   if (!renderSegs.length) return []
 
-  // Group into chains: consecutive segments whose endpoints connect (gap ≤ WALL_EPSILON).
   const result: WallVisualChain[] = []
   let current: WallRenderSeg[] = []
 
@@ -287,6 +291,149 @@ function buildWallChainDefinitions(definition: WallDynamicMesh): WallVisualChain
     const closedDist = wallDistanceSqXZ(first.start as any, last.end as any)
     result.push({ segs: current, closed: closedDist <= WALL_EPSILON })
   }
+
+  return result
+}
+
+function buildWallChainDefinitions(definition: WallDynamicMesh): WallVisualChain[] {
+  const renderSegs = compileWallSegmentsFromDefinition(definition)
+  return buildWallVisualChainsFromSegs(renderSegs)
+}
+
+function mergeWallArcIntervals(intervals: WallArcInterval[]): WallArcInterval[] {
+  const byChain = new Map<number, WallArcInterval[]>()
+  intervals.forEach((interval) => {
+    const chainIndex = Math.max(0, Math.trunc(Number(interval.chainIndex ?? 0)))
+    const start = Number(interval.start)
+    const end = Number(interval.end)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start <= WALL_EPSILON) {
+      return
+    }
+    const bucket = byChain.get(chainIndex) ?? []
+    if (!byChain.has(chainIndex)) {
+      byChain.set(chainIndex, bucket)
+    }
+    bucket.push({ chainIndex, start: Math.min(start, end), end: Math.max(start, end) })
+  })
+
+  const merged: WallArcInterval[] = []
+  byChain.forEach((bucket, chainIndex) => {
+    bucket.sort((a, b) => a.start - b.start)
+    let current: WallArcInterval | null = null
+    bucket.forEach((entry) => {
+      if (!current) {
+        current = { ...entry, chainIndex }
+        return
+      }
+      if (entry.start <= current.end + WALL_EPSILON) {
+        current.end = Math.max(current.end, entry.end)
+      } else {
+        merged.push(current)
+        current = { ...entry, chainIndex }
+      }
+    })
+    if (current) {
+      merged.push(current)
+    }
+  })
+
+  return merged
+}
+
+function clipWallSegmentToArcInterval(
+  seg: WallRenderSeg,
+  clipStart: number,
+  clipEnd: number,
+): WallRenderSeg | null {
+  const baseArcStart = Number(seg.chainArcStart ?? 0)
+  const dx = Number(seg.end.x) - Number(seg.start.x)
+  const dy = Number(seg.end.y) - Number(seg.start.y)
+  const dz = Number(seg.end.z) - Number(seg.start.z)
+  const len = Math.sqrt(dx * dx + dz * dz)
+  if (!Number.isFinite(len) || len <= WALL_EPSILON) {
+    return null
+  }
+
+  const segArcEnd = baseArcStart + len
+  const startArc = Math.max(baseArcStart, Math.min(segArcEnd, clipStart))
+  const endArc = Math.max(baseArcStart, Math.min(segArcEnd, clipEnd))
+  if (endArc - startArc <= WALL_EPSILON) {
+    return null
+  }
+
+  const t0 = (startArc - baseArcStart) / len
+  const t1 = (endArc - baseArcStart) / len
+  const lerpPoint = (t: number) => ({
+    x: Number(seg.start.x) + dx * t,
+    y: Number(seg.start.y) + dy * t,
+    z: Number(seg.start.z) + dz * t,
+  })
+
+  return {
+    ...seg,
+    start: lerpPoint(t0),
+    end: lerpPoint(t1),
+    chainArcStart: startArc,
+  }
+}
+
+function subtractWallArcIntervalsFromSegs(
+  segs: WallRenderSeg[],
+  intervals: WallArcInterval[],
+): WallRenderSeg[] {
+  if (!segs.length || !intervals.length) {
+    return segs.slice()
+  }
+
+  const byChain = new Map<number, WallArcInterval[]>()
+  intervals.forEach((interval) => {
+    const chainIndex = Math.max(0, Math.trunc(Number(interval.chainIndex ?? 0)))
+    const bucket = byChain.get(chainIndex) ?? []
+    if (!byChain.has(chainIndex)) {
+      byChain.set(chainIndex, bucket)
+    }
+    bucket.push(interval)
+  })
+
+  const result: WallRenderSeg[] = []
+  segs.forEach((seg) => {
+    const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
+    const chainIntervals = byChain.get(chainIndex)
+    if (!chainIntervals?.length) {
+      result.push(seg)
+      return
+    }
+
+    const baseArcStart = Number(seg.chainArcStart ?? 0)
+    const dx = Number(seg.end.x) - Number(seg.start.x)
+    const dz = Number(seg.end.z) - Number(seg.start.z)
+    const len = Math.sqrt(dx * dx + dz * dz)
+    if (!Number.isFinite(len) || len <= WALL_EPSILON) {
+      return
+    }
+    const segArcEnd = baseArcStart + len
+    let cursor = baseArcStart
+    chainIntervals.forEach((interval) => {
+      if (interval.end <= cursor + WALL_EPSILON || interval.start >= segArcEnd - WALL_EPSILON) {
+        return
+      }
+      const visibleEnd = Math.min(segArcEnd, interval.start)
+      if (visibleEnd - cursor > WALL_EPSILON) {
+        const clipped = clipWallSegmentToArcInterval(seg, cursor, visibleEnd)
+        if (clipped) {
+          result.push(clipped)
+        }
+      }
+      cursor = Math.max(cursor, Math.min(segArcEnd, interval.end))
+    })
+
+    if (segArcEnd - cursor > WALL_EPSILON) {
+      const clipped = clipWallSegmentToArcInterval(seg, cursor, segArcEnd)
+      if (clipped) {
+        result.push(clipped)
+      }
+    }
+  })
 
   return result
 }
@@ -874,6 +1021,80 @@ function buildRepeatedWallInstancesForSegs(
   }
 
   return instances
+}
+
+function buildRepeatedWallArcIntervalsForSegs(
+  segs: WallRenderSeg[],
+  mode: 'body' | 'head' | 'foot',
+  tileLengthLocal: number,
+  verticalLayoutOptions: WallVerticalLayoutOptions,
+  repeatInstanceStep: number,
+  erasedSlotSet: Set<string>,
+  rules: WallCornerModelRule[] = [],
+): WallArcInterval[] {
+  if (!segs.length || !erasedSlotSet.size) {
+    return []
+  }
+
+  const intervals: WallArcInterval[] = []
+  const trims = computeWallSegmentJointTrimForChain(segs, rules, mode)
+  const repeatSlotByChain = new Map<number, number>()
+  const start = new THREE.Vector3()
+  const end = new THREE.Vector3()
+  const dir = new THREE.Vector3()
+
+  for (let segmentIndex = 0; segmentIndex < segs.length; segmentIndex += 1) {
+    const seg = segs[segmentIndex]!
+    const trim = trims[segmentIndex] ?? { start: 0, end: 0 }
+    start.set(seg.start.x, seg.start.y, seg.start.z)
+    end.set(seg.end.x, seg.end.y, seg.end.z)
+    dir.subVectors(end, start)
+    dir.y = 0
+    const length = dir.length()
+    if (length <= WALL_INSTANCING_DIR_EPSILON) continue
+
+    const trimStart = Math.max(0, trim.start)
+    const trimEnd = Math.max(0, trim.end)
+    const trimmedLength = Math.max(0, length - trimStart - trimEnd)
+    if (trimmedLength <= WALL_INSTANCING_DIR_EPSILON) continue
+
+    const segmentTotalHeight = resolveWallBodyHeight(seg)
+    const layout = resolveWallVerticalLayout(segmentTotalHeight, verticalLayoutOptions)
+    if (mode === 'body' && layout.bodyHeight <= WALL_EPSILON) {
+      continue
+    }
+
+    const maxLocalStart = trimmedLength - tileLengthLocal
+    if (maxLocalStart < -WALL_EPSILON) {
+      continue
+    }
+
+    const chainIndex = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
+    for (
+      let localStart = 0;
+      localStart <= maxLocalStart + WALL_EPSILON;
+      localStart += repeatInstanceStep
+    ) {
+      const snappedLocalStart = Math.max(0, Math.min(maxLocalStart, localStart))
+      const repeatSlotIndex = (() => {
+        const next = (repeatSlotByChain.get(chainIndex) ?? 0) + 1
+        repeatSlotByChain.set(chainIndex, next)
+        return next - 1
+      })()
+      const erasedKey = `${chainIndex}:${repeatSlotIndex}`
+      if (!erasedSlotSet.has(erasedKey)) {
+        continue
+      }
+
+      intervals.push({
+        chainIndex,
+        start: Number(seg.chainArcStart ?? 0) + trimStart + snappedLocalStart,
+        end: Number(seg.chainArcStart ?? 0) + trimStart + snappedLocalStart + tileLengthLocal,
+      })
+    }
+  }
+
+  return intervals
 }
 
 function applyWallShadowSide(
@@ -1662,6 +1883,7 @@ function rebuildWallGroup(
           .filter((value): value is string => Boolean(value))
       : [],
   )
+  const resolvedCornerModels = Array.isArray(options.cornerModels) ? options.cornerModels : []
   const bodyUvAxis = normalizeWallUvAxis(options.bodyUvAxis, 'auto')
   const headUvAxis = normalizeWallUvAxis(options.headUvAxis, bodyUvAxis)
   const footUvAxis = normalizeWallUvAxis(options.footUvAxis, bodyUvAxis)
@@ -1669,6 +1891,64 @@ function rebuildWallGroup(
     ?? normalizeWallMaterialConfigId(options.materialConfigId)
     ?? normalizeWallMaterialConfigId(definition.bodyMaterialConfigId)
   const materialVariantCache: WallMaterialVariantCache = new Map()
+
+  const repeatErasedIntervals = (() => {
+    if (wallRenderMode !== 'repeatInstances' || !repeatErasedSlotSet.size) {
+      return [] as WallArcInterval[]
+    }
+
+    const intervals: WallArcInterval[] = []
+    const bodyOrientation = bodyTemplate ? requireWallOrientation(options.bodyOrientation, 'bodyOrientation') : null
+    const headOrientation = headTemplate ? requireWallOrientation(options.headOrientation, 'headOrientation') : null
+    const footOrientation = footTemplate ? requireWallOrientation(options.footOrientation, 'footOrientation') : null
+
+    const pushTemplateIntervals = (
+      template: InstancedAssetTemplate | null,
+      orientation: WallModelOrientation | null,
+      mode: 'body' | 'head' | 'foot',
+    ) => {
+      if (!template || !orientation) {
+        return
+      }
+      const { tileLengthLocal } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+      chainDefinitions.forEach((chainDef) => {
+        intervals.push(...buildRepeatedWallArcIntervalsForSegs(
+          chainDef.segs,
+          mode,
+          tileLengthLocal,
+          { headAssetHeight, footAssetHeight },
+          repeatInstanceStep,
+          repeatErasedSlotSet,
+          resolvedCornerModels,
+        ))
+      })
+    }
+
+    pushTemplateIntervals(bodyTemplate, bodyOrientation, 'body')
+    pushTemplateIntervals(headTemplate, headOrientation, 'head')
+    pushTemplateIntervals(footTemplate, footOrientation, 'foot')
+
+    if (!intervals.length) {
+      chainDefinitions.forEach((chainDef) => {
+        intervals.push(...buildRepeatedWallArcIntervalsForSegs(
+          chainDef.segs,
+          'body',
+          repeatInstanceStep,
+          { headAssetHeight, footAssetHeight },
+          repeatInstanceStep,
+          repeatErasedSlotSet,
+          resolvedCornerModels,
+        ))
+      })
+    }
+
+    return mergeWallArcIntervals(intervals)
+  })()
+  const proceduralChainDefinitions = wallRenderMode === 'repeatInstances' && repeatErasedIntervals.length
+    ? chainDefinitions.flatMap((chainDef) => buildWallVisualChainsFromSegs(
+        subtractWallArcIntervalsFromSegs(chainDef.segs, repeatErasedIntervals),
+      ))
+    : chainDefinitions
 
   const pushSegmentQuad = (
     positions: number[],
@@ -1809,14 +2089,14 @@ function rebuildWallGroup(
     return geometry
   }
 
-  for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
-    const chainDef = chainDefinitions[chainIndex]!
+  for (let chainIndex = 0; chainIndex < proceduralChainDefinitions.length; chainIndex += 1) {
+    const chainDef = proceduralChainDefinitions[chainIndex]!
     const geometry = proceduralGeometryByChain(chainDef.segs, chainDef.closed)
     if (!geometry) {
       continue
     }
     const mesh = new THREE.Mesh(geometry, createWallMaterial())
-    mesh.name = chainDefinitions.length > 1 ? `WallMesh:${chainIndex}` : 'WallMesh'
+    mesh.name = proceduralChainDefinitions.length > 1 ? `WallMesh:${chainIndex}` : 'WallMesh'
     mesh.userData.dynamicMeshType = 'Wall'
     mesh.userData[MATERIAL_CONFIG_ID_KEY] = bodyMaterialConfigId
     mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = {
@@ -1892,9 +2172,9 @@ function rebuildWallGroup(
               { headAssetHeight, footAssetHeight },
               repeatInstanceStep,
               repeatErasedSlotSet,
-              Array.isArray(options.cornerModels) ? options.cornerModels : [],
+              resolvedCornerModels,
             )
-          : buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, { headAssetHeight, footAssetHeight }, Array.isArray(options.cornerModels) ? options.cornerModels : [])
+          : buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, { headAssetHeight, footAssetHeight }, resolvedCornerModels)
       ))
     }
     const bodyAssets = createWallRepeatedAssetMeshes('WallBodyMesh', bodyTemplate, instances, materialVariantCache, bodyOrientation, resolvedBodyUvAxis)
@@ -1920,9 +2200,9 @@ function rebuildWallGroup(
               { headAssetHeight, footAssetHeight },
               repeatInstanceStep,
               repeatErasedSlotSet,
-              Array.isArray(options.cornerModels) ? options.cornerModels : [],
+              resolvedCornerModels,
             )
-          : buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation, { headAssetHeight, footAssetHeight }, Array.isArray(options.cornerModels) ? options.cornerModels : [])
+          : buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation, { headAssetHeight, footAssetHeight }, resolvedCornerModels)
       ))
     }
     const headAssets = createWallRepeatedAssetMeshes('WallHeadMesh', headTemplate, instances, materialVariantCache, headOrientation, resolvedHeadUvAxis)
@@ -1947,9 +2227,9 @@ function rebuildWallGroup(
               { headAssetHeight, footAssetHeight },
               repeatInstanceStep,
               repeatErasedSlotSet,
-              Array.isArray(options.cornerModels) ? options.cornerModels : [],
+              resolvedCornerModels,
             )
-          : buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation, { headAssetHeight, footAssetHeight }, Array.isArray(options.cornerModels) ? options.cornerModels : [])
+          : buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation, { headAssetHeight, footAssetHeight }, resolvedCornerModels)
       ))
     }
     const footAssets = createWallRepeatedAssetMeshes('WallFootMesh', footTemplate, instances, materialVariantCache, footOrientation, resolvedFootUvAxis)

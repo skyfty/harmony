@@ -11,9 +11,7 @@ import { GRID_MAJOR_SPACING, WALL_ANGLE_STEP_CONSTRAINTS_ENABLED } from '../cons
 import { distanceSqXZ, splitWallSegmentsIntoChains } from '../wallSegmentUtils'
 import {
   buildCirclePlanarPoints,
-  buildRectanglePlanarPoints,
   computeApproxCircleFromPlanarPoints,
-  computePlanarBounds,
   computePlanarMeanCenter,
   sanitizePlanarPoints,
 } from '../planarEditMath'
@@ -468,18 +466,6 @@ type FloorEdgeDragStateLike = {
 
 const sanitizeFloorVertices = sanitizePlanarPoints
 
-function computeBoundsXZ(vertices: Array<[number, number]>): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
-  const bounds = computePlanarBounds(vertices)
-  if (!bounds) {
-    return null
-  }
-  return { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minY, maxZ: bounds.maxY }
-}
-
-function buildRectangleVertices(bounds: { minX: number; maxX: number; minZ: number; maxZ: number }): Array<[number, number]> {
-  return buildRectanglePlanarPoints({ minX: bounds.minX, maxX: bounds.maxX, minY: bounds.minZ, maxY: bounds.maxZ })
-}
-
 function computeMeanCenter(vertices: Array<[number, number]>): { x: number; z: number } | null {
   const center = computePlanarMeanCenter(vertices)
   if (!center) {
@@ -496,6 +482,115 @@ function buildCircleVertices(options: { centerX: number; centerZ: number; radius
     segments: options.segments,
   })
 }
+
+function buildOrientedRectangleVertices(options: {
+  originLocal: { x: number; z: number }
+  axisULocal: { x: number; z: number }
+  axisVLocal: { x: number; z: number }
+  cornerSides: Array<{ u: 'min' | 'max'; v: 'min' | 'max' }>
+  bounds: { uMin: number; uMax: number; vMin: number; vMax: number }
+}): Array<[number, number]> {
+  const { originLocal, axisULocal, axisVLocal, cornerSides, bounds } = options
+  return cornerSides.map((side) => {
+    const u = side.u === 'min' ? bounds.uMin : bounds.uMax
+    const v = side.v === 'min' ? bounds.vMin : bounds.vMax
+    return [
+      originLocal.x + axisULocal.x * u + axisVLocal.x * v,
+      originLocal.z + axisULocal.z * u + axisVLocal.z * v,
+    ]
+  })
+}
+
+function deriveFloorRectangleConstraint(options: {
+  vertices: Array<[number, number]>
+  draggedCornerIndex: number
+}): {
+  originLocal: { x: number; z: number }
+  axisULocal: { x: number; z: number }
+  axisVLocal: { x: number; z: number }
+  boundsStart: { uMin: number; uMax: number; vMin: number; vMax: number }
+  cornerSides: Array<{ u: 'min' | 'max'; v: 'min' | 'max' }>
+  draggedSide: { u: 'min' | 'max'; v: 'min' | 'max' }
+} | null {
+  const vertices = sanitizeFloorVertices(options.vertices)
+  if (vertices.length !== 4) {
+    return null
+  }
+
+  const draggedCornerIndex = Math.trunc(options.draggedCornerIndex)
+  if (draggedCornerIndex < 0 || draggedCornerIndex >= vertices.length) {
+    return null
+  }
+
+  const center = computeMeanCenter(vertices)
+  if (!center) {
+    return null
+  }
+
+  const originLocal = { x: center.x, z: center.z }
+  const edgeVectors = vertices.map((point, index) => {
+    const next = vertices[(index + 1) % vertices.length]!
+    return { x: next[0] - point[0], z: next[1] - point[1] }
+  })
+
+  let axisU = edgeVectors[0]!
+  let axisULengthSq = axisU.x * axisU.x + axisU.z * axisU.z
+  for (const edge of edgeVectors) {
+    const lengthSq = edge.x * edge.x + edge.z * edge.z
+    if (lengthSq > axisULengthSq) {
+      axisU = edge
+      axisULengthSq = lengthSq
+    }
+  }
+
+  if (!Number.isFinite(axisULengthSq) || axisULengthSq <= 1e-10) {
+    return null
+  }
+
+  const axisULength = Math.sqrt(axisULengthSq)
+  const axisULocal = { x: axisU.x / axisULength, z: axisU.z / axisULength }
+  const axisVLocal = { x: -axisULocal.z, z: axisULocal.x }
+
+  const projected = vertices.map((point) => {
+    const relX = point[0] - originLocal.x
+    const relZ = point[1] - originLocal.z
+    return {
+      u: relX * axisULocal.x + relZ * axisULocal.z,
+      v: relX * axisVLocal.x + relZ * axisVLocal.z,
+    }
+  })
+
+  const uValues = projected.map((entry) => entry.u)
+  const vValues = projected.map((entry) => entry.v)
+  const uMin = Math.min(...uValues)
+  const uMax = Math.max(...uValues)
+  const vMin = Math.min(...vValues)
+  const vMax = Math.max(...vValues)
+  if ((uMax - uMin) <= 1e-6 || (vMax - vMin) <= 1e-6) {
+    return null
+  }
+
+  const uMid = (uMin + uMax) * 0.5
+  const vMid = (vMin + vMax) * 0.5
+  const cornerSides = projected.map((entry) => ({
+    u: entry.u <= uMid ? 'min' : 'max' as 'min' | 'max',
+    v: entry.v <= vMid ? 'min' : 'max' as 'min' | 'max',
+  }))
+  const draggedSide = cornerSides[draggedCornerIndex]
+  if (!draggedSide) {
+    return null
+  }
+
+  return {
+    originLocal,
+    axisULocal,
+    axisVLocal,
+    boundsStart: { uMin, uMax, vMin, vMax },
+    cornerSides,
+    draggedSide,
+  }
+}
+
 export function handlePointerMoveDrag(
   event: PointerEvent,
   ctx: {
@@ -1584,25 +1679,24 @@ export function handlePointerMoveDrag(
     if ((shape === 'rectangle' || shape === 'circle') && !state.editConstraint) {
       const baseVerts = sanitizeFloorVertices((state.baseDefinition as any)?.vertices)
       if (shape === 'rectangle') {
-        if (baseVerts.length !== 4) {
+        const rectangleConstraint = deriveFloorRectangleConstraint({
+          vertices: baseVerts,
+          draggedCornerIndex: state.vertexIndex,
+        })
+        if (!rectangleConstraint) {
           // Only constrain to rectangle when the geometry is actually a rectangle (4 corners).
           // This avoids leaving stale extra handles during drag.
           state.editConstraint = null
         } else {
-        const bounds = computeBoundsXZ(baseVerts)
-        if (bounds) {
-          const midX = (bounds.minX + bounds.maxX) * 0.5
-          const midZ = (bounds.minZ + bounds.maxZ) * 0.5
-          const [startVX, startVZ] = state.startVertex
           state.editConstraint = {
             kind: 'rectangle',
-            boundsStart: bounds,
-            draggedSide: {
-              x: startVX <= midX ? 'min' : 'max',
-              z: startVZ <= midZ ? 'min' : 'max',
-            },
+            originLocal: rectangleConstraint.originLocal,
+            axisULocal: rectangleConstraint.axisULocal,
+            axisVLocal: rectangleConstraint.axisVLocal,
+            boundsStart: rectangleConstraint.boundsStart,
+            cornerSides: rectangleConstraint.cornerSides,
+            draggedSide: rectangleConstraint.draggedSide,
           }
-        }
         }
       }
 
@@ -1628,24 +1722,35 @@ export function handlePointerMoveDrag(
     if (shape === 'rectangle' && constraint?.kind === 'rectangle') {
       const eps = 1e-4
       const b = constraint.boundsStart
-      let minX = b.minX
-      let maxX = b.maxX
-      let minZ = b.minZ
-      let maxZ = b.maxZ
+      let uMin = b.uMin
+      let uMax = b.uMax
+      let vMin = b.vMin
+      let vMax = b.vMax
 
-      if (constraint.draggedSide.x === 'min') {
-        minX = Math.min(local.x, maxX - eps)
+      const relX = local.x - constraint.originLocal.x
+      const relZ = local.z - constraint.originLocal.z
+      const projectedU = relX * constraint.axisULocal.x + relZ * constraint.axisULocal.z
+      const projectedV = relX * constraint.axisVLocal.x + relZ * constraint.axisVLocal.z
+
+      if (constraint.draggedSide.u === 'min') {
+        uMin = Math.min(projectedU, uMax - eps)
       } else {
-        maxX = Math.max(local.x, minX + eps)
+        uMax = Math.max(projectedU, uMin + eps)
       }
 
-      if (constraint.draggedSide.z === 'min') {
-        minZ = Math.min(local.z, maxZ - eps)
+      if (constraint.draggedSide.v === 'min') {
+        vMin = Math.min(projectedV, vMax - eps)
       } else {
-        maxZ = Math.max(local.z, minZ + eps)
+        vMax = Math.max(projectedV, vMin + eps)
       }
 
-      working.vertices = buildRectangleVertices({ minX, maxX, minZ, maxZ })
+      working.vertices = buildOrientedRectangleVertices({
+        originLocal: constraint.originLocal,
+        axisULocal: constraint.axisULocal,
+        axisVLocal: constraint.axisVLocal,
+        cornerSides: constraint.cornerSides,
+        bounds: { uMin, uMax, vMin, vMax },
+      })
       ctx.forceRebuildFloorVertexHandles?.()
     } else if (shape === 'circle' && constraint?.kind === 'circle') {
       const cx = constraint.centerLocal.x
