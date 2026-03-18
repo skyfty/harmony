@@ -4285,6 +4285,59 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return Math.abs(sum) * 0.5
 	}
 
+	function getPolygonPointDistanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
+		const dx = a.x - b.x
+		const dz = a.z - b.z
+		return (dx * dx) + (dz * dz)
+	}
+
+	function normalizeScatterPolygonPointsXZ(polygonPoints: THREE.Vector3[]): THREE.Vector3[] {
+		if (polygonPoints.length < 3) {
+			return []
+		}
+		const epsilonSq = 1e-8
+		const normalized: THREE.Vector3[] = []
+		for (const point of polygonPoints) {
+			if (!point) {
+				continue
+			}
+			const previous = normalized[normalized.length - 1]
+			if (previous && getPolygonPointDistanceSqXZ(previous, point) <= epsilonSq) {
+				continue
+			}
+			normalized.push(point)
+		}
+		if (normalized.length >= 2) {
+			const first = normalized[0]
+			const last = normalized[normalized.length - 1]
+			if (first && last && getPolygonPointDistanceSqXZ(first, last) <= epsilonSq) {
+				normalized.pop()
+			}
+		}
+		return normalized.length >= 3 ? normalized : []
+	}
+
+	function isPointOnPolygonSegmentXZ(point: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): boolean {
+		const epsilon = 1e-5
+		const abX = b.x - a.x
+		const abZ = b.z - a.z
+		const apX = point.x - a.x
+		const apZ = point.z - a.z
+		const segmentLengthSq = (abX * abX) + (abZ * abZ)
+		if (segmentLengthSq <= 1e-8) {
+			return getPolygonPointDistanceSqXZ(point, a) <= (epsilon * epsilon)
+		}
+		const cross = (apX * abZ) - (apZ * abX)
+		if (Math.abs(cross) > epsilon * Math.sqrt(segmentLengthSq)) {
+			return false
+		}
+		const dot = (apX * abX) + (apZ * abZ)
+		if (dot < -epsilon || dot > segmentLengthSq + epsilon) {
+			return false
+		}
+		return true
+	}
+
 	function isPointInsidePolygonXZ(point: THREE.Vector3, polygonPoints: THREE.Vector3[]): boolean {
 		if (polygonPoints.length < 3) {
 			return false
@@ -4296,9 +4349,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!a || !b) {
 				continue
 			}
+			if (isPointOnPolygonSegmentXZ(point, a, b)) {
+				return true
+			}
 			const intersects =
 				((a.z > point.z) !== (b.z > point.z))
-				&& (point.x < (((b.x - a.x) * (point.z - a.z)) / Math.max(1e-8, b.z - a.z)) + a.x)
+				&& (point.x < (a.x + (((point.z - a.z) * (b.x - a.x)) / (b.z - a.z))))
 			if (intersects) {
 				inside = !inside
 			}
@@ -4310,7 +4366,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession || polygonPoints.length < 3) {
 			return []
 		}
-		const polygonArea = computePolygonAreaXZ(polygonPoints)
+		const normalizedPolygonPoints = normalizeScatterPolygonPointsXZ(polygonPoints)
+		if (normalizedPolygonPoints.length < 3) {
+			return []
+		}
+		const polygonArea = computePolygonAreaXZ(normalizedPolygonPoints)
 		if (!Number.isFinite(polygonArea) || polygonArea <= 1e-6) {
 			return []
 		}
@@ -4318,7 +4378,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		let maxX = Number.NEGATIVE_INFINITY
 		let minZ = Number.POSITIVE_INFINITY
 		let maxZ = Number.NEGATIVE_INFINITY
-		for (const point of polygonPoints) {
+		for (const point of normalizedPolygonPoints) {
 			if (!point) {
 				continue
 			}
@@ -4344,10 +4404,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
 			scatterPlacementCandidateWorldHelper.set(
 				THREE.MathUtils.lerp(minX, maxX, Math.random()),
-				polygonPoints[0]?.y ?? 0,
+				normalizedPolygonPoints[0]?.y ?? 0,
 				THREE.MathUtils.lerp(minZ, maxZ, Math.random()),
 			)
-			if (!isPointInsidePolygonXZ(scatterPlacementCandidateWorldHelper, polygonPoints)) {
+			if (!isPointInsidePolygonXZ(scatterPlacementCandidateWorldHelper, normalizedPolygonPoints)) {
 				continue
 			}
 			const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
@@ -4355,7 +4415,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			// Guard against projection-induced drift beyond the polygon boundary.
-			if (!isPointInsidePolygonXZ(projected, polygonPoints)) {
+			if (!isPointInsidePolygonXZ(projected, normalizedPolygonPoints)) {
 				continue
 			}
 			if (!canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
@@ -4364,17 +4424,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const point = projected.clone()
 			accepted.push(point)
 			stampNeighborhood.insert(point)
-		}
-
-		if (!accepted.length) {
-			const centroid = polygonPoints.reduce(
-				(acc, point) => acc.add(point),
-				new THREE.Vector3(),
-			).multiplyScalar(1 / polygonPoints.length)
-			const projected = projectScatterPoint(centroid)
-			if (projected && isPointInsidePolygonXZ(projected, polygonPoints)) {
-				accepted.push(projected)
-			}
 		}
 		return accepted
 	}
