@@ -22,6 +22,7 @@ import {
   getPointsBounds,
   polygonCentroid,
 } from '@/utils/scatterSampling'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type {
   PlanningImageData,
   PlanningPolygonData,
