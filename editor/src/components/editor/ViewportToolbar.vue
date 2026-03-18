@@ -217,7 +217,7 @@
                       hide-details
                       inputmode="decimal"
                       class="scatter-spacing-input"
-                      :disabled="buildToolsDisabled || !hasGroundNode"
+                      :disabled="buildToolsDisabled || !hasGroundNode || groundScatterUsesSpacing"
                       @blur="commitGroundScatterBrushRadiusInput"
                       @keydown.enter.prevent="commitGroundScatterBrushRadiusInput"
                     />

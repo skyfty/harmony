@@ -5448,38 +5448,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				brushMesh.scale.set(scale, scale, 1)
 			} else if (scatterModeEnabled()) {
 				const shape = resolveScatterBrushShape()
-				if (shape === 'rectangle' && scatterSession?.anchorPoint && scatterSession.currentPoint) {
-					const previewDirection = scatterSession.rectangleDirection
-						?? resolveRectangleDragDirection(scatterSession.anchorPoint, scatterSession.currentPoint)
-					const rectangle = buildRotatedRectangleFromCorner(
-						scatterSession.anchorPoint,
-						scatterSession.currentPoint,
-						previewDirection,
-					)
-					if (rectangle) {
-						brushMesh.position.copy(rectangle.center)
-						brushMesh.rotation.set(-Math.PI / 2, rectangle.yaw, 0)
-						brushMesh.scale.set(
-							Math.max(0.1, rectangle.width * 0.5),
-							Math.max(0.1, rectangle.depth * 0.5),
-							1,
-						)
-					} else {
-						brushMesh.position.copy(scatterSession.anchorPoint)
-						brushMesh.rotation.set(-Math.PI / 2, 0, 0)
-						brushMesh.scale.set(0.1, 0.1, 1)
-					}
-				} else if (shape === 'line') {
-					const anchor = scatterSession?.anchorPoint ?? targetPoint
-					const current = scatterSession?.currentPoint ?? targetPoint
-					scatterMidpointHelper.copy(anchor).add(current).multiplyScalar(0.5)
-					brushMesh.position.copy(scatterMidpointHelper)
-					brushMesh.rotation.set(-Math.PI / 2, Math.atan2(current.x - anchor.x, current.z - anchor.z) + Math.PI / 2, 0)
-					brushMesh.scale.set(Math.max(0.1, anchor.distanceTo(current) * 0.5), 1, 1)
-				} else {
-					const scale = resolveScatterBrushRadius()
-					brushMesh.scale.set(scale, scale, 1)
+				if (shape !== 'circle') {
+					// Rectangle/polygon/line scatter tools rely on dedicated area previews.
+					// Keep brush mesh hidden to avoid showing an unrelated circular indicator.
+					brushMesh.visible = false
+					return
 				}
+				const scale = resolveScatterBrushRadius()
+				brushMesh.scale.set(scale, scale, 1)
 			} else {
 				const scale = options.brushRadius.value
 				brushMesh.scale.set(scale, scale, 1)
