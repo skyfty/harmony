@@ -539,6 +539,14 @@ const groundScatterRuntimeVersion = computed(() => {
   return useGroundScatterStore().getSceneRuntimeVersion(sceneId)
 })
 
+const groundPaintRuntimeVersion = computed(() => {
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return 0
+  }
+  return useGroundPaintStore().getSceneRuntimeVersion(sceneId)
+})
+
 const viewportEl = ref<HTMLDivElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -9552,6 +9560,14 @@ async function restoreGroundScatterGuarded(): Promise<void> {
   }
 }
 
+async function restoreGroundPaintGuarded(): Promise<void> {
+  const tokenSnapshot = sceneStore.sceneSwitchToken
+  await restoreGroundPaint()
+  if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
+    return
+  }
+}
+
 let initialGridVisibilityApplied = false
 
 watch(isSceneReady, (ready) => {
@@ -9584,6 +9600,22 @@ watch(
       return
     }
     void restoreGroundScatterGuarded()
+  },
+)
+
+watch(
+  [isSceneReady, groundPaintRuntimeVersion],
+  ([ready, version], [prevReady, prevVersion]) => {
+    if (!ready) {
+      return
+    }
+    if (version <= 0) {
+      return
+    }
+    if (prevReady && prevVersion === version) {
+      return
+    }
+    void restoreGroundPaintGuarded()
   },
 )
 
