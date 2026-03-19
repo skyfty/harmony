@@ -204,7 +204,10 @@ export function useScenePicking(
     return true
   }
 
-  function pickNodeAtPointer(event: { clientX: number; clientY: number }): NodeHitResult | null {
+  function pickNodeAtPointer(
+    event: { clientX: number; clientY: number },
+    options?: { includeSelectionLocked?: boolean },
+  ): NodeHitResult | null {
     if (!canvasRef.value || !camera.value) {
       return null
     }
@@ -229,7 +232,7 @@ export function useScenePicking(
       if (!nodeId) {
         continue
       }
-      if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      if (!options?.includeSelectionLocked && sceneStore.isNodeSelectionLocked(nodeId)) {
         continue
       }
       const baseObject = objectMap.get(nodeId)

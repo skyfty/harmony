@@ -68,7 +68,7 @@ export async function handlePointerDownSelection(
 
     objectMap: Map<string, THREE.Object3D>
 
-    pickNodeAtPointer: (event: PointerEvent) => NodeHitResult | null
+    pickNodeAtPointer: (event: PointerEvent, options?: { includeSelectionLocked?: boolean }) => NodeHitResult | null
     pickActiveSelectionBoundingBoxHit: (event: PointerEvent) => SelectionHit | null
 
     transformControlsDragging: boolean
@@ -90,7 +90,10 @@ export async function handlePointerDownSelection(
   }
 
   const shouldPickForRightClick = button === 2 && ctx.activeTool === 'select'
-  let hit: NodeHitResult | null = button === 0 || shouldPickForRightClick ? ctx.pickNodeAtPointer(event) : null
+  const allowLockedSelectionPick = Boolean(event.ctrlKey || event.metaKey)
+  let hit: NodeHitResult | null = button === 0 || shouldPickForRightClick
+    ? ctx.pickNodeAtPointer(event, { includeSelectionLocked: allowLockedSelectionPick })
+    : null
   const initialHitPoint = hit ? hit.point.clone() : null
 
   const primaryBeforeDuplicate = ctx.sceneSelectedNodeId ?? ctx.selectedNodeIdProp ?? null
@@ -120,7 +123,7 @@ export async function handlePointerDownSelection(
       await ctx.nextTick()
       await ctx.nextTick()
 
-      const updatedHit = ctx.pickNodeAtPointer(event)
+      const updatedHit = ctx.pickNodeAtPointer(event, { includeSelectionLocked: allowLockedSelectionPick })
       if (updatedHit && duplicateIds.includes(updatedHit.nodeId)) {
         hit = updatedHit
       } else {
