@@ -34,7 +34,13 @@ const GROUND_SURFACE_PREVIEW_STATS_KEY = '__HARMONY_GROUND_SURFACE_PREVIEW_STATS
 
 type Canvas2DContext = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D
 
-type CanvasLike = OffscreenCanvas | HTMLCanvasElement
+type RuntimeCanvasLike = {
+  width: number
+  height: number
+  getContext: (contextId: '2d') => Canvas2DContext | null
+}
+
+type CanvasLike = OffscreenCanvas | HTMLCanvasElement | RuntimeCanvasLike
 
 export type GroundSurfaceLiveChunkPreview = {
   chunkKey: string
@@ -200,6 +206,35 @@ function clamp01(value: number): number {
   return value
 }
 
+function createWeChatOffscreenCanvas(width: number, height: number): CanvasLike | null {
+  const globalScope = globalThis as typeof globalThis & {
+    wx?: {
+      createOffscreenCanvas?: (options?: { type?: '2d'; width?: number; height?: number }) => RuntimeCanvasLike | null
+      getSystemInfoSync?: () => unknown
+    }
+  }
+  const factory = globalScope.wx?.createOffscreenCanvas
+  if (typeof factory !== 'function') {
+    return null
+  }
+  try {
+    const canvas = factory({ type: '2d', width, height }) ?? factory()
+    if (!canvas || typeof canvas.getContext !== 'function') {
+      return null
+    }
+    canvas.width = width
+    canvas.height = height
+    return canvas
+  } catch (error) {
+    console.warn('[groundSurfacePreview] Failed to create WeChat offscreen canvas', {
+      width,
+      height,
+      error,
+    })
+    return null
+  }
+}
+
 function createCompositionCanvas(width: number, height: number): { canvas: CanvasLike; context: Canvas2DContext } | null {
   const normalizedWidth = Math.max(1, Math.round(width))
   const normalizedHeight = Math.max(1, Math.round(height))
@@ -210,15 +245,33 @@ function createCompositionCanvas(width: number, height: number): { canvas: Canva
       return { canvas, context }
     }
   }
+  const weChatCanvas = createWeChatOffscreenCanvas(normalizedWidth, normalizedHeight)
+  if (weChatCanvas) {
+    const context = weChatCanvas.getContext('2d') as Canvas2DContext | null
+    if (context) {
+      console.log('[groundSurfacePreview] Using WeChat offscreen canvas for preview composition', {
+        width: normalizedWidth,
+        height: normalizedHeight,
+      })
+      return { canvas: weChatCanvas, context }
+    }
+  }
   if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
     const canvas = document.createElement('canvas')
     canvas.width = normalizedWidth
     canvas.height = normalizedHeight
-    const context = canvas.getContext('2d')
+    const context = canvas.getContext('2d') as Canvas2DContext | null
     if (context) {
       return { canvas, context }
     }
   }
+  console.warn('[groundSurfacePreview] Unable to create composition canvas', {
+    width: normalizedWidth,
+    height: normalizedHeight,
+    hasOffscreenCanvas: typeof OffscreenCanvas !== 'undefined',
+    hasWeChatOffscreenCanvas: Boolean((globalThis as { wx?: { createOffscreenCanvas?: unknown } }).wx?.createOffscreenCanvas),
+    hasDocumentCanvas: typeof document !== 'undefined' && typeof document.createElement === 'function',
+  })
   return null
 }
 
@@ -307,10 +360,21 @@ function loadPreviewSourceFromTexture(texture: THREE.Texture | null): LoadedPrev
   const startTime = nowMs()
   const source = (texture?.image as CanvasImageSource | undefined) ?? null
   if (!source) {
+    console.warn('[groundSurfacePreview] Texture missing drawable image source', {
+      textureUuid: texture?.uuid ?? null,
+      imageType: texture?.image ? (texture.image as { constructor?: { name?: string } }).constructor?.name ?? typeof texture.image : null,
+    })
     return null
   }
   const size = resolveCanvasImageSourceSize(source)
   if (!size) {
+    const candidate = source as { width?: number; height?: number; videoWidth?: number; videoHeight?: number; naturalWidth?: number; naturalHeight?: number; constructor?: { name?: string } }
+    console.warn('[groundSurfacePreview] Texture image source has invalid size', {
+      textureUuid: texture?.uuid ?? null,
+      sourceType: candidate.constructor?.name ?? typeof source,
+      width: candidate.width ?? candidate.videoWidth ?? candidate.naturalWidth ?? null,
+      height: candidate.height ?? candidate.videoHeight ?? candidate.naturalHeight ?? null,
+    })
     return null
   }
   recordGroundSurfacePreviewPerf('load-texture-source', nowMs() - startTime, {
@@ -525,7 +589,7 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
     // Replace the whole chunk footprint each live update.
     // Using source-over here repeatedly compounds edge alpha and makes strokes look sharper until final rebuild.
     context.clearRect(drawX, drawY, drawWidth, drawHeight)
-    context.drawImage(preview.canvas, drawX, drawY, drawWidth, drawHeight)
+    context.drawImage(preview.canvas as unknown as CanvasImageSource, drawX, drawY, drawWidth, drawHeight)
   }
 
   const nextTexture = liveTexture && canReuseCanvas
@@ -609,6 +673,10 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
 
   for (let batchStart = 0; batchStart < drawableChunks.length; batchStart += batchSize) {
     if (shouldAbort()) {
+      console.log('[groundSurfacePreview] Aborting chunk composition before batch', {
+        batchStart,
+        drawableChunkCount: drawableChunks.length,
+      })
       return false
     }
     const batch = drawableChunks.slice(batchStart, batchStart + batchSize)
@@ -632,6 +700,10 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
       }
     }))
     if (shouldAbort()) {
+      console.log('[groundSurfacePreview] Aborting chunk composition after batch load', {
+        batchStart,
+        drawableChunkCount: drawableChunks.length,
+      })
       return false
     }
     for (const { entry, loaded } of loadedBatch) {
@@ -659,6 +731,13 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
     previewHeight: height,
     totalSourcePixels,
   })
+
+  if (!drewAny && drawableChunks.length) {
+    console.warn('[groundSurfacePreview] No terrain paint chunks were drawable', {
+      drawableChunkCount: drawableChunks.length,
+      chunkAssetIds: drawableChunks.slice(0, 8).map((entry) => entry.textureAssetId),
+    })
+  }
 
   return drewAny
 }
@@ -702,6 +781,11 @@ export async function composeGroundSurfacePreviewCanvas(
     })()
     : createCompositionCanvas(previewSize.width, previewSize.height)
   if (!composition) {
+    console.warn('[groundSurfacePreview] Preview canvas composition unavailable', {
+      previewWidth: previewSize.width,
+      previewHeight: previewSize.height,
+      previewRevision: options.previewRevision ?? null,
+    })
     return null
   }
   const { canvas, context } = composition
@@ -976,12 +1060,21 @@ export function syncGroundSurfacePreviewForGround(
   pending.then((texture) => {
     groundSurfacePreviewRequests.delete(signature)
     if (getToken() !== token) {
+      console.log('[groundSurfacePreview] Dropping composed preview because token changed', {
+        previewRevision: options.previewRevision ?? null,
+      })
       texture?.dispose()
       return
     }
     if (!texture) {
       console.log('[groundSurfacePreview] preview missing texture', {
         previewRevision: options.previewRevision ?? null,
+        hasTerrainPaint,
+        hasLandforms,
+        terrainPaintChunkCount: Object.keys(dynamicMesh.groundSurfaceChunks ?? {}).length,
+        surfaceRevision: Number.isFinite((dynamicMesh as { surfaceRevision?: number }).surfaceRevision)
+          ? Math.trunc((dynamicMesh as { surfaceRevision?: number }).surfaceRevision as number)
+          : null,
       })
       return
     }

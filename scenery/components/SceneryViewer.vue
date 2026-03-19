@@ -829,11 +829,49 @@ const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?:
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 
+function classifyResolvedAssetUrl(url: string | null | undefined): string {
+  const normalized = typeof url === 'string' ? url.trim() : '';
+  if (!normalized) {
+    return 'none';
+  }
+  if (normalized.startsWith('blob:')) {
+    return 'blob';
+  }
+  if (normalized.startsWith('data:')) {
+    return 'data';
+  }
+  if (normalized.startsWith('wxfile://')) {
+    return 'wxfile';
+  }
+  if (/^https?:\/\//i.test(normalized)) {
+    return 'http';
+  }
+  if (normalized.startsWith('/')) {
+    return 'absolute';
+  }
+  return 'other';
+}
+
+function logGroundSurfacePreviewAssetResolution(assetId: string, entry: AssetCacheEntry | null, resolved: ResolvedAssetUrl | null): void {
+  console.log('[SceneryViewer] ground surface preview asset resolved', {
+    assetId,
+    isWeChatMiniProgram,
+    entryStatus: entry?.status ?? null,
+    hasBlob: Boolean(entry?.blob),
+    hasBlobUrl: Boolean(entry?.blobUrl),
+    hasDownloadUrl: Boolean(entry?.downloadUrl),
+    mimeType: resolved?.mimeType ?? entry?.mimeType ?? null,
+    filename: entry?.filename ?? null,
+    resolvedUrlKind: classifyResolvedAssetUrl(resolved?.url),
+    resolvedUrlPreview: resolved?.url ? resolved.url.slice(0, 160) : null,
+  });
+}
+
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
 const debugEnabled = ref(true);
 // debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show all debug info
-const debugMode = ref<'off' | 'fps' | 'full'>('fps');
+const debugMode = ref<'off' | 'fps' | 'full'>('full');
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
 
@@ -1118,6 +1156,17 @@ const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>
 
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
 
+async function resolveGroundSurfacePreviewAssetUrlFromCache(assetId: string): Promise<ResolvedAssetUrl | null> {
+  const normalizedId = assetId.trim();
+  if (!normalizedId) {
+    return null;
+  }
+  const entry = await acquireViewerAssetEntry(normalizedId);
+  const resolved = buildResolvedAssetUrl(normalizedId, entry);
+  logGroundSurfacePreviewAssetResolution(normalizedId, entry, resolved);
+  return resolved;
+}
+
 async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
   const normalizedId = assetId.trim();
   if (!normalizedId) {
@@ -1157,7 +1206,7 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
   return await request;
 }
 
-const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
+const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveGroundSurfacePreviewAssetUrlFromCache)
 const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
 const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 
