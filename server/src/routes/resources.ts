@@ -39,6 +39,7 @@ import {
   updateAssetDirectory,
   updateAssetTag,
   uploadAsset,
+  uploadAssetBundle,
 } from '@/controllers/resourceController'
 import { koaBody } from '@/utils/bodyParser'
 
@@ -72,6 +73,16 @@ resourceRouter.delete('/series/:id', requireAnyPermission(['resource:write']), d
 resourceRouter.get('/directories', requireAnyPermission(['resource:read']), getProjectDirectories)
 resourceRouter.get('/assets', requireAnyPermission(['resource:read']), listAssets)
 resourceRouter.get('/assets/:id', requireAnyPermission(['resource:read']), getAsset)
+resourceRouter.post(
+  '/asset-bundles',
+  requireAnyPermission(['resource:write']),
+  koaBody({
+    multipart: true,
+    urlencoded: true,
+    formidable: { keepExtensions: true },
+  }),
+  uploadAssetBundle,
+)
 resourceRouter.post(
   '/assets',
   requireAnyPermission(['resource:write']),

@@ -67,6 +67,11 @@ export interface AssetSummary {
   downloadUrl: string
   previewUrl?: string | null
   thumbnailUrl?: string | null
+  contentHash?: string | null
+  contentHashAlgorithm?: AssetBundleHashAlgorithm | null
+  sourceLocalAssetId?: string | null
+  bundleRole?: AssetBundlePersistedRole | null
+  bundlePrimaryAssetId?: string | null
   description?: string | null
   originalFilename?: string | null
   mimeType?: string | null
@@ -169,4 +174,67 @@ export interface PagedResponse<T> {
 
 export interface AssetUploadResponse {
   asset: AssetSummary
+}
+
+export const ASSET_BUNDLE_FORMAT = 'harmony-asset-bundle' as const
+export const ASSET_BUNDLE_VERSION = 1 as const
+export const ASSET_BUNDLE_MANIFEST_FILENAME = 'asset-bundle.json' as const
+export const ASSET_BUNDLE_HASH_ALGORITHM = 'fnv1a-64-compat' as const
+
+export type AssetBundleHashAlgorithm = typeof ASSET_BUNDLE_HASH_ALGORITHM
+export type AssetBundlePersistedRole = 'primary' | 'dependency'
+export type AssetBundleFileRole = AssetBundlePersistedRole | 'thumbnail' | 'metadata'
+
+export interface AssetBundleFileEntry {
+  logicalId: string
+  path: string
+  filename: string
+  role: AssetBundleFileRole
+  assetType?: AssetType
+  sourceLocalAssetId?: string | null
+  mimeType?: string | null
+  extension?: string | null
+  hash: string
+  hashAlgorithm: AssetBundleHashAlgorithm
+  size: number
+  rewriteTarget?: boolean
+}
+
+export interface AssetBundlePrimaryAsset {
+  logicalId: string
+  sourceLocalAssetId?: string | null
+  name: string
+  type: AssetType
+  extension?: string | null
+  description?: string | null
+  thumbnailLogicalId?: string | null
+  metadataLogicalId?: string | null
+  dependencyLogicalIds: string[]
+  categoryId?: string | null
+  categoryPathSegments?: string[]
+  tagIds?: string[]
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  imageWidth?: number | null
+  imageHeight?: number | null
+  terrainScatterPreset?: TerrainScatterCategory | null
+  metadata?: Record<string, unknown> | null
+  rewriteReferences?: boolean
+}
+
+export interface AssetBundleManifest {
+  format: typeof ASSET_BUNDLE_FORMAT
+  version: typeof ASSET_BUNDLE_VERSION
+  bundleId: string
+  createdAt: string
+  primaryAsset: AssetBundlePrimaryAsset
+  files: AssetBundleFileEntry[]
+}
+
+export interface AssetBundleUploadResponse {
+  asset: AssetSummary
+  importedAssets: AssetSummary[]
+  assetIdMap: Record<string, string>
 }

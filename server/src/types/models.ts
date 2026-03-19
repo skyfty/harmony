@@ -1,4 +1,8 @@
-import type { AssetType as SchemaAssetType } from '@harmony/schema'
+import type {
+  AssetBundleHashAlgorithm,
+  AssetBundlePersistedRole,
+  AssetType as SchemaAssetType,
+} from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { Document, Types } from 'mongoose'
 
@@ -783,6 +787,16 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   previewUrl?: string | null
   /** 中文：缩略图 URL（可选） */
   thumbnailUrl?: string | null
+  /** 中文：原始内容哈希（来自 bundle/source 文件） */
+  contentHash?: string | null
+  /** 中文：原始内容哈希算法 */
+  contentHashAlgorithm?: AssetBundleHashAlgorithm | null
+  /** 中文：导入时的本地资产 ID（可选） */
+  sourceLocalAssetId?: string | null
+  /** 中文：bundle 持久化角色 */
+  bundleRole?: AssetBundlePersistedRole | null
+  /** 中文：所属主资源 ID（依赖资源可选） */
+  bundlePrimaryAssetId?: Types.ObjectId | null
   /** 中文：资源描述（可选） */
   description?: string | null
   /** 中文：原始文件名（可选） */

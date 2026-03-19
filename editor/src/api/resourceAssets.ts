@@ -1,4 +1,5 @@
 import { buildServerApiUrl } from './serverApiConfig'
+import type { AssetBundleUploadResponse } from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
@@ -599,6 +600,42 @@ export interface UploadAssetOptions {
   imageHeight?: number | null
   seriesId?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
+}
+
+export interface UploadAssetBundleOptions {
+  bundleFile: File
+}
+
+export async function uploadAssetBundleToServer(options: UploadAssetBundleOptions): Promise<AssetBundleUploadResponse> {
+  const url = buildServerApiUrl('/resources/asset-bundles')
+  const formData = new FormData()
+  const bundleName = options.bundleFile.name && options.bundleFile.name.trim().length ? options.bundleFile.name : 'asset-bundle.zip'
+  formData.append('bundle', options.bundleFile, bundleName)
+
+  const authStore = useAuthStore()
+  const headers = new Headers()
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: formData,
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `上传资源包失败（${response.status}）`)
+  }
+
+  const payload = await parseJsonResponse<AssetBundleUploadResponse>(response)
+  if (!payload?.asset || !Array.isArray(payload.importedAssets) || !payload.assetIdMap || typeof payload.assetIdMap !== 'object') {
+    throw new Error('服务器返回的资源包数据无效')
+  }
+  return payload
 }
 
 export async function uploadAssetToServer(options: UploadAssetOptions): Promise<ServerAssetDto> {
