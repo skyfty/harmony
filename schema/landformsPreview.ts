@@ -26,7 +26,12 @@ const DEFAULT_LANDFORMS_PREVIEW_MAX_RESOLUTION = 1024
 const MIN_LANDFORMS_PREVIEW_RESOLUTION = 256
 
 type Canvas2DContext = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D
-type CanvasLike = OffscreenCanvas | HTMLCanvasElement
+type RuntimeCanvasLike = {
+	width: number
+	height: number
+	getContext: (contextId: '2d') => Canvas2DContext | null
+}
+type CanvasLike = OffscreenCanvas | HTMLCanvasElement | RuntimeCanvasLike
 
 export type LandformsPreviewLoaders = {
 	loadLandformsTextureFromAssetId: (assetId: string) => Promise<THREE.Texture | null>
@@ -40,6 +45,29 @@ function normalizeDimension(value: number): number {
 	return Math.max(1, normalizeFinite(value, 1))
 }
 
+function createWeChatOffscreenCanvas(width: number, height: number): CanvasLike | null {
+	const globalScope = globalThis as typeof globalThis & {
+		wx?: {
+			createOffscreenCanvas?: (options?: { type?: '2d'; width?: number; height?: number }) => RuntimeCanvasLike | null
+		}
+	}
+	const factory = globalScope.wx?.createOffscreenCanvas
+	if (typeof factory !== 'function') {
+		return null
+	}
+	try {
+		const canvas = factory({ type: '2d', width, height }) ?? factory()
+		if (!canvas || typeof canvas.getContext !== 'function') {
+			return null
+		}
+		canvas.width = width
+		canvas.height = height
+		return canvas
+	} catch (_error) {
+		return null
+	}
+}
+
 function createCompositionCanvas(width: number, height: number): { canvas: CanvasLike; context: Canvas2DContext } | null {
 	const normalizedWidth = Math.max(1, Math.round(width))
 	const normalizedHeight = Math.max(1, Math.round(height))
@@ -50,11 +78,18 @@ function createCompositionCanvas(width: number, height: number): { canvas: Canva
 			return { canvas, context }
 		}
 	}
+	const weChatCanvas = createWeChatOffscreenCanvas(normalizedWidth, normalizedHeight)
+	if (weChatCanvas) {
+		const context = weChatCanvas.getContext('2d') as Canvas2DContext | null
+		if (context) {
+			return { canvas: weChatCanvas, context }
+		}
+	}
 	if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
 		const canvas = document.createElement('canvas')
 		canvas.width = normalizedWidth
 		canvas.height = normalizedHeight
-		const context = canvas.getContext('2d')
+		const context = canvas.getContext('2d') as Canvas2DContext | null
 		if (context) {
 			return { canvas, context }
 		}

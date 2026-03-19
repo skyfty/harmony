@@ -1,4 +1,5 @@
 import { DEFAULT_ASSET_TYPE, isAssetType } from '@schema'
+import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole } from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset, ProjectAssetMetadata, ServerAssetType } from '@/types/project-asset'
 import { extractExtension } from '@/utils/blob'
@@ -30,6 +31,11 @@ export interface ServerAssetDto {
   sizeCategory?: string | null
   imageWidth?: number | null
   imageHeight?: number | null
+  contentHash?: string | null
+  contentHashAlgorithm?: AssetBundleHashAlgorithm | null
+  sourceLocalAssetId?: string | null
+  bundleRole?: AssetBundlePersistedRole | null
+  bundlePrimaryAssetId?: string | null
   metadata?: ProjectAssetMetadata | null
   size?: number | null
   seriesId?: string | null
@@ -105,6 +111,11 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     sizeCategory: typeof asset.sizeCategory === 'string' ? asset.sizeCategory : undefined,
     imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : undefined,
     imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : undefined,
+    contentHash: typeof asset.contentHash === 'string' ? asset.contentHash : undefined,
+    contentHashAlgorithm: typeof asset.contentHashAlgorithm === 'string' ? asset.contentHashAlgorithm : undefined,
+    sourceLocalAssetId: typeof asset.sourceLocalAssetId === 'string' ? asset.sourceLocalAssetId : undefined,
+    bundleRole: typeof asset.bundleRole === 'string' ? asset.bundleRole : undefined,
+    bundlePrimaryAssetId: typeof asset.bundlePrimaryAssetId === 'string' ? asset.bundlePrimaryAssetId : undefined,
     metadata: asset.metadata && typeof asset.metadata === 'object' ? { ...asset.metadata } : undefined,
     seriesId: 'seriesId' in asset ? (typeof asset.seriesId === 'string' ? asset.seriesId : null) : undefined,
     seriesName: typeof asset.seriesName === 'string' ? asset.seriesName : undefined,

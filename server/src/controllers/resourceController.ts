@@ -1,7 +1,17 @@
-import { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema'
+import {
+  ASSET_BUNDLE_FORMAT,
+  ASSET_BUNDLE_MANIFEST_FILENAME,
+  ASSET_BUNDLE_VERSION,
+  AssetTypes,
+  DEFAULT_ASSET_TYPE,
+  isAssetType,
+} from '@harmony/schema'
 import type { AssetType } from '@harmony/schema'
 import type {
   AssetCategory as AssetCategoryDto,
+  AssetBundleFileEntry,
+  AssetBundleManifest,
+  AssetBundleUploadResponse,
   AssetDirectory,
   AssetSeries,
   AssetSummary,
@@ -13,6 +23,7 @@ import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { Context } from 'koa'
 import path from 'node:path'
 import fs from 'fs-extra'
+import { strFromU8, unzipSync } from 'fflate'
 import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
 import type {
@@ -62,6 +73,7 @@ import { appConfig } from '@/config/env'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
+const JSON_REWRITE_EXTENSIONS = new Set(['json', 'prefab', 'wall', 'floor', 'material'])
 
 const ASSET_COLORS: Record<string, string> = {
   model: '#26c6da',
@@ -348,6 +360,11 @@ type AssetSummaryWithDirectory = AssetSummary & {
   directoryId?: string | null
   directoryPath?: CategoryPathItemDto[]
   directoryPathString?: string
+  contentHash?: string | null
+  contentHashAlgorithm?: string | null
+  sourceLocalAssetId?: string | null
+  bundleRole?: 'primary' | 'dependency' | null
+  bundlePrimaryAssetId?: string | null
 }
 
 async function loadCategoryInfoMap(categoryIds: Array<Types.ObjectId | string>): Promise<Map<string, CategoryInfo>> {
@@ -672,6 +689,175 @@ async function storeUploadedFile(file: UploadedFile, options: { prefix?: string 
   }
 }
 
+async function storeBufferAsFile(
+  buffer: Uint8Array,
+  options: { filename: string; mimeType?: string | null; prefix?: string },
+): Promise<{
+  fileKey: string
+  url: string
+  size: number
+  mimeType: string | null
+  originalFilename: string | null
+}> {
+  await ensureStorageDir()
+  const originalName = sanitizeString(options.filename) ?? 'asset.bin'
+  const extension = path.extname(originalName)
+  const fileKey = `${options.prefix ?? ''}${nanoid(16)}${extension}`
+  const targetPath = path.join(appConfig.assetStoragePath, fileKey)
+  await fs.writeFile(targetPath, buffer)
+  return {
+    fileKey,
+    url: buildPublicUrl(fileKey),
+    size: buffer.byteLength,
+    mimeType: sanitizeString(options.mimeType),
+    originalFilename: originalName,
+  }
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeAssetBundleManifest(value: unknown): AssetBundleManifest {
+  if (!isObjectRecord(value)) {
+    throw new Error('Asset bundle manifest is invalid')
+  }
+  if (value.format !== ASSET_BUNDLE_FORMAT || value.version !== ASSET_BUNDLE_VERSION) {
+    throw new Error('Asset bundle format is not supported')
+  }
+  if (!isObjectRecord(value.primaryAsset) || !Array.isArray(value.files)) {
+    throw new Error('Asset bundle manifest is incomplete')
+  }
+  return value as AssetBundleManifest
+}
+
+async function readUploadedAssetBundle(file: UploadedFile): Promise<{
+  manifest: AssetBundleManifest
+  archiveEntries: Map<string, Uint8Array>
+}> {
+  if (!file.filepath) {
+    throw new Error('Bundle file is missing')
+  }
+  const sourcePath = file.filepath
+  const buffer = await fs.readFile(sourcePath)
+  await fs.remove(sourcePath).catch(() => undefined)
+  const archive = unzipSync(new Uint8Array(buffer))
+  const manifestBytes = archive[ASSET_BUNDLE_MANIFEST_FILENAME]
+  if (!manifestBytes) {
+    throw new Error('Asset bundle manifest is missing')
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(strFromU8(manifestBytes))
+  } catch {
+    throw new Error('Asset bundle manifest is not valid JSON')
+  }
+
+  return {
+    manifest: normalizeAssetBundleManifest(parsed),
+    archiveEntries: new Map(Object.entries(archive)),
+  }
+}
+
+function resolveBundleFileEntry(manifest: AssetBundleManifest, logicalId: string | null | undefined): AssetBundleFileEntry | null {
+  if (!logicalId) {
+    return null
+  }
+  return manifest.files.find((entry) => entry.logicalId === logicalId) ?? null
+}
+
+function resolveBundleFileBytes(
+  manifest: AssetBundleManifest,
+  archiveEntries: Map<string, Uint8Array>,
+  logicalId: string | null | undefined,
+): { entry: AssetBundleFileEntry; bytes: Uint8Array } | null {
+  const entry = resolveBundleFileEntry(manifest, logicalId)
+  if (!entry) {
+    return null
+  }
+  const bytes = archiveEntries.get(entry.path)
+  if (!bytes) {
+    throw new Error(`Bundle file is missing: ${entry.path}`)
+  }
+  return { entry, bytes }
+}
+
+function rewriteAssetReferenceString(value: string, assetIdMap: Map<string, string>): string {
+  const direct = assetIdMap.get(value)
+  if (direct) {
+    return direct
+  }
+  const prefixedMatch = /^(asset:\/\/|local::)(.+)$/.exec(value)
+  if (prefixedMatch) {
+    const mapped = assetIdMap.get(prefixedMatch[2] ?? '')
+    return mapped ?? value
+  }
+  return value
+}
+
+function rewriteJsonAssetReferences(value: unknown, assetIdMap: Map<string, string>, parentKey?: string): unknown {
+  if (typeof value === 'string') {
+    return rewriteAssetReferenceString(value, assetIdMap)
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewriteJsonAssetReferences(entry, assetIdMap, parentKey))
+  }
+  if (!isObjectRecord(value)) {
+    return value
+  }
+
+  const next: Record<string, unknown> = {}
+  for (const [key, entryValue] of Object.entries(value)) {
+    let nextKey = key
+    if (parentKey === 'assetIndex') {
+      nextKey = assetIdMap.get(key) ?? key
+    } else if (parentKey === 'packageAssetMap') {
+      const packageKeyMatch = /^(url::|local::)(.+)$/.exec(key)
+      if (packageKeyMatch) {
+        const mapped = assetIdMap.get(packageKeyMatch[2] ?? '')
+        if (mapped) {
+          nextKey = `${packageKeyMatch[1]}${mapped}`
+        }
+      }
+    }
+    next[nextKey] = rewriteJsonAssetReferences(entryValue, assetIdMap, key)
+  }
+  return next
+}
+
+function maybeRewriteJsonBundleAsset(
+  entry: AssetBundleFileEntry,
+  bytes: Uint8Array,
+  assetIdMap: Map<string, string>,
+): Uint8Array {
+  const extension = sanitizeString(entry.extension)?.toLowerCase() ?? path.extname(entry.filename).replace(/^\./, '').toLowerCase()
+  if (!JSON_REWRITE_EXTENSIONS.has(extension) || !assetIdMap.size) {
+    return bytes
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(strFromU8(bytes))
+  } catch {
+    return bytes
+  }
+  const rewritten = rewriteJsonAssetReferences(parsed, assetIdMap)
+  return Buffer.from(JSON.stringify(rewritten, null, 2), 'utf8')
+}
+
+function parseBundleMetadataPayload(bytes: Uint8Array): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(strFromU8(bytes)) as unknown
+    if (!isObjectRecord(parsed)) {
+      return null
+    }
+    const metadata = parsed.metadata
+    return isObjectRecord(metadata) ? metadata : null
+  } catch {
+    return null
+  }
+}
+
 async function deleteStoredFile(fileKey: string | null | undefined): Promise<void> {
   if (!fileKey) {
     return
@@ -867,6 +1053,13 @@ function mapAssetDocument(
   const description = sanitizeString(asset.description) ?? null
   const originalFilename = sanitizeString(asset.originalFilename)
   const mimeType = sanitizeString(asset.mimeType)
+  const contentHash = sanitizeString((asset as AssetDocument).contentHash)
+  const contentHashAlgorithm = sanitizeString((asset as AssetDocument).contentHashAlgorithm)
+  const sourceLocalAssetId = sanitizeString((asset as AssetDocument).sourceLocalAssetId)
+  const bundleRoleRaw = sanitizeString((asset as AssetDocument).bundleRole)
+  const bundleRole = bundleRoleRaw === 'primary' || bundleRoleRaw === 'dependency' ? bundleRoleRaw : null
+  const rawBundlePrimaryId = (asset as AssetDocument).bundlePrimaryAssetId as Types.ObjectId | string | null | undefined
+  const bundlePrimaryAssetId = rawBundlePrimaryId ? rawBundlePrimaryId.toString() : null
 
   const createdAt =
     asset.createdAt instanceof Date ? asset.createdAt.toISOString() : new Date(asset.createdAt).toISOString()
@@ -901,6 +1094,11 @@ function mapAssetDocument(
     downloadUrl: asset.url,
     previewUrl,
     thumbnailUrl: asset.thumbnailUrl ?? previewUrl,
+    contentHash,
+    contentHashAlgorithm,
+    sourceLocalAssetId,
+    bundleRole,
+    bundlePrimaryAssetId,
     description,
     originalFilename,
     mimeType,
@@ -2216,6 +2414,223 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   const response = mapAssetDocument(populated, categoryLookup, directoryLookup)
   await refreshManifest()
   ctx.body = { asset: response }
+}
+
+export async function uploadAssetBundle(ctx: Context): Promise<void> {
+  const files = ctx.request.files as Record<string, unknown> | undefined
+  const bundleFile = extractUploadedFile(files, 'bundle')
+  if (!bundleFile) {
+    ctx.throw(400, 'Asset bundle is required')
+  }
+
+  const { manifest, archiveEntries } = await readUploadedAssetBundle(bundleFile)
+  const primaryBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.logicalId)
+  if (!primaryBundleFile) {
+    ctx.throw(400, 'Primary asset file is missing from bundle')
+  }
+
+  const payload: AssetMutationPayload = {
+    name: sanitizeString(manifest.primaryAsset.name) ?? primaryBundleFile.entry.filename,
+    type: manifest.primaryAsset.type,
+    description: sanitizeString(manifest.primaryAsset.description) ?? null,
+    tagIds: Array.isArray(manifest.primaryAsset.tagIds) ? manifest.primaryAsset.tagIds : [],
+    categoryId: sanitizeString(manifest.primaryAsset.categoryId) ?? null,
+    categoryPathSegments: Array.isArray(manifest.primaryAsset.categoryPathSegments)
+      ? manifest.primaryAsset.categoryPathSegments
+      : [],
+    color: sanitizeHexColor(manifest.primaryAsset.color),
+    dimensionLength: sanitizeNonNegativeNumber(manifest.primaryAsset.dimensionLength),
+    dimensionWidth: sanitizeNonNegativeNumber(manifest.primaryAsset.dimensionWidth),
+    dimensionHeight: sanitizeNonNegativeNumber(manifest.primaryAsset.dimensionHeight),
+    imageWidth: sanitizeNonNegativeInteger(manifest.primaryAsset.imageWidth),
+    imageHeight: sanitizeNonNegativeInteger(manifest.primaryAsset.imageHeight),
+    terrainScatterPreset: sanitizeTerrainScatterPreset(manifest.primaryAsset.terrainScatterPreset),
+    metadata: isObjectRecord(manifest.primaryAsset.metadata) ? manifest.primaryAsset.metadata : null,
+  }
+
+  const tagObjectIds = (payload.tagIds ?? [])
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id))
+  if ((payload.tagIds ?? []).length !== tagObjectIds.length) {
+    ctx.throw(400, 'Invalid tag ids provided')
+  }
+  if (tagObjectIds.length) {
+    const count = await AssetTagModel.countDocuments({ _id: { $in: tagObjectIds } })
+    if (count !== tagObjectIds.length) {
+      ctx.throw(400, 'One or more tag ids do not exist')
+    }
+  }
+
+  let categoryDoc: AssetCategoryDocument
+  try {
+    categoryDoc = await resolveCategoryForPayload(normalizeAssetType(payload.type), payload)
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code
+    if (code === 'INVALID_CATEGORY_ID') {
+      ctx.throw(400, 'Invalid category identifier')
+    }
+    if (code === 'CATEGORY_NOT_FOUND') {
+      ctx.throw(404, 'Category not found')
+    }
+    throw error
+  }
+
+  const directoryDoc = await resolveDirectoryForPayload(payload)
+  const categoryId = categoryDoc._id as Types.ObjectId
+  const directoryId = directoryDoc._id as Types.ObjectId
+  const assetIdMap = new Map<string, string>()
+  const persistedAssetIds = new Set<string>()
+
+  for (const dependencyEntry of manifest.files.filter((entry) => entry.role === 'dependency')) {
+    const dependencyBytes = archiveEntries.get(dependencyEntry.path)
+    if (!dependencyBytes) {
+      ctx.throw(400, `Bundle file is missing: ${dependencyEntry.path}`)
+    }
+
+    let dependencyAsset = await AssetModel.findOne({
+      contentHash: dependencyEntry.hash,
+      contentHashAlgorithm: dependencyEntry.hashAlgorithm,
+    }).exec()
+
+    if (!dependencyAsset) {
+      const storedDependency = await storeBufferAsFile(dependencyBytes, {
+        filename: dependencyEntry.filename,
+        mimeType: dependencyEntry.mimeType ?? null,
+      })
+      const dependencyType = normalizeAssetType(dependencyEntry.assetType ?? 'file', 'file')
+      dependencyAsset = await AssetModel.create({
+        name: path.parse(dependencyEntry.filename).name || dependencyEntry.filename,
+        categoryId,
+        directoryId,
+        type: dependencyType,
+        tags: [],
+        size: storedDependency.size,
+        color: null,
+        dimensionLength: null,
+        dimensionWidth: null,
+        dimensionHeight: null,
+        sizeCategory: null,
+        imageWidth: null,
+        imageHeight: null,
+        url: storedDependency.url,
+        fileKey: storedDependency.fileKey,
+        previewUrl: dependencyType === 'image' ? storedDependency.url : null,
+        thumbnailUrl: dependencyType === 'image' ? storedDependency.url : null,
+        description: dependencyEntry.filename,
+        originalFilename: storedDependency.originalFilename,
+        mimeType: storedDependency.mimeType,
+        metadata: undefined,
+        terrainScatterPreset: null,
+        contentHash: dependencyEntry.hash,
+        contentHashAlgorithm: dependencyEntry.hashAlgorithm,
+        sourceLocalAssetId: sanitizeString(dependencyEntry.sourceLocalAssetId) ?? null,
+        bundleRole: 'dependency',
+        bundlePrimaryAssetId: null,
+      })
+    }
+
+    persistedAssetIds.add(dependencyAsset._id.toString())
+    const sourceLocalAssetId = sanitizeString(dependencyEntry.sourceLocalAssetId)
+    if (sourceLocalAssetId) {
+      assetIdMap.set(sourceLocalAssetId, dependencyAsset._id.toString())
+    }
+  }
+
+  const metadataBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.metadataLogicalId)
+  const sidecarMetadata = metadataBundleFile ? parseBundleMetadataPayload(metadataBundleFile.bytes) : null
+  const primaryMetadata = payload.metadata ?? sidecarMetadata ?? undefined
+
+  let primaryAsset = await AssetModel.findOne({
+    contentHash: primaryBundleFile.entry.hash,
+    contentHashAlgorithm: primaryBundleFile.entry.hashAlgorithm,
+  }).exec()
+
+  if (!primaryAsset) {
+    const rewrittenPrimaryBytes = manifest.primaryAsset.rewriteReferences
+      ? maybeRewriteJsonBundleAsset(primaryBundleFile.entry, primaryBundleFile.bytes, assetIdMap)
+      : primaryBundleFile.bytes
+    const storedPrimary = await storeBufferAsFile(rewrittenPrimaryBytes, {
+      filename: primaryBundleFile.entry.filename,
+      mimeType: primaryBundleFile.entry.mimeType ?? null,
+    })
+
+    const thumbnailBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.thumbnailLogicalId)
+    const thumbnailInfo = thumbnailBundleFile
+      ? await storeBufferAsFile(thumbnailBundleFile.bytes, {
+          filename: thumbnailBundleFile.entry.filename,
+          mimeType: thumbnailBundleFile.entry.mimeType ?? null,
+          prefix: THUMBNAIL_PREFIX,
+        })
+      : null
+
+    const primaryType = normalizeAssetType(payload.type, normalizeAssetType(primaryBundleFile.entry.assetType ?? 'file', 'file'))
+    const dimensionLength = payload.dimensionLength ?? null
+    const dimensionWidth = payload.dimensionWidth ?? null
+    const dimensionHeight = payload.dimensionHeight ?? null
+    primaryAsset = await AssetModel.create({
+      name: payload.name ?? storedPrimary.originalFilename ?? storedPrimary.fileKey,
+      categoryId,
+      directoryId,
+      type: primaryType,
+      tags: tagObjectIds,
+      seriesId: null,
+      size: storedPrimary.size,
+      color: payload.color ?? null,
+      dimensionLength,
+      dimensionWidth,
+      dimensionHeight,
+      sizeCategory: determineSizeCategory(dimensionLength, dimensionWidth, dimensionHeight),
+      imageWidth: payload.imageWidth ?? null,
+      imageHeight: payload.imageHeight ?? null,
+      url: storedPrimary.url,
+      fileKey: storedPrimary.fileKey,
+      previewUrl: thumbnailInfo?.url ?? (primaryType === 'image' ? storedPrimary.url : null),
+      thumbnailUrl: thumbnailInfo?.url ?? (primaryType === 'image' ? storedPrimary.url : null),
+      description: payload.description ?? null,
+      originalFilename: storedPrimary.originalFilename,
+      mimeType: storedPrimary.mimeType,
+      metadata: primaryMetadata,
+      terrainScatterPreset: payload.terrainScatterPreset ?? null,
+      contentHash: primaryBundleFile.entry.hash,
+      contentHashAlgorithm: primaryBundleFile.entry.hashAlgorithm,
+      sourceLocalAssetId: sanitizeString(manifest.primaryAsset.sourceLocalAssetId) ?? sanitizeString(primaryBundleFile.entry.sourceLocalAssetId) ?? null,
+      bundleRole: 'primary',
+      bundlePrimaryAssetId: null,
+    })
+  }
+
+  persistedAssetIds.add(primaryAsset._id.toString())
+  const primarySourceLocalAssetId = sanitizeString(manifest.primaryAsset.sourceLocalAssetId) ?? sanitizeString(primaryBundleFile.entry.sourceLocalAssetId)
+  if (primarySourceLocalAssetId) {
+    assetIdMap.set(primarySourceLocalAssetId, primaryAsset._id.toString())
+  }
+
+  await AssetModel.updateMany(
+    {
+      _id: { $in: Array.from(persistedAssetIds).filter((id) => id !== primaryAsset!._id.toString()) },
+      bundleRole: 'dependency',
+    },
+    { $set: { bundlePrimaryAssetId: primaryAsset._id } },
+  ).exec()
+
+  const populatedAssets = await AssetModel.find({ _id: { $in: Array.from(persistedAssetIds) } })
+    .populate([{ path: 'tags' }, { path: 'seriesId' }])
+    .exec()
+  const categoryLookup = await loadCategoryInfoMap(populatedAssets.map((asset) => asset.categoryId as Types.ObjectId))
+  const directoryLookup = await loadDirectoryInfoMap(populatedAssets.map((asset) => asset.directoryId as Types.ObjectId | null | undefined))
+  const mappedAssets = populatedAssets.map((asset) => mapAssetDocument(asset, categoryLookup, directoryLookup))
+  const primaryResponse = mappedAssets.find((asset) => asset.id === primaryAsset!._id.toString())
+  if (!primaryResponse) {
+    ctx.throw(500, 'Failed to resolve uploaded primary asset')
+  }
+
+  await refreshManifest()
+  const response: AssetBundleUploadResponse = {
+    asset: primaryResponse,
+    importedAssets: mappedAssets,
+    assetIdMap: Object.fromEntries(assetIdMap.entries()),
+  }
+  ctx.body = response
 }
 
 export async function updateAsset(ctx: Context): Promise<void> {

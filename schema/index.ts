@@ -61,6 +61,13 @@ export {
 export type { TerrainScatterCategory } from './terrain-scatter'
 export type {
   AssetCategory,
+  AssetBundleFileEntry,
+  AssetBundleFileRole,
+  AssetBundleHashAlgorithm,
+  AssetBundleManifest,
+  AssetBundlePersistedRole,
+  AssetBundlePrimaryAsset,
+  AssetBundleUploadResponse,
   AssetCategoryPathItem,
   AssetDirectory,
   AssetManifest,
@@ -78,6 +85,12 @@ export type {
   LegacyAssetManifestEntry,
   PagedRequest,
   PagedResponse,
+} from './asset-api'
+export {
+  ASSET_BUNDLE_FORMAT,
+  ASSET_BUNDLE_HASH_ALGORITHM,
+  ASSET_BUNDLE_MANIFEST_FILENAME,
+  ASSET_BUNDLE_VERSION,
 } from './asset-api'
 
 export {

@@ -30,6 +30,11 @@ const assetSchema = new Schema<AssetDocument>(
     fileKey: { type: String, required: true },
     previewUrl: { type: String },
     thumbnailUrl: { type: String },
+    contentHash: { type: String, default: null },
+    contentHashAlgorithm: { type: String, default: null },
+    sourceLocalAssetId: { type: String, default: null },
+    bundleRole: { type: String, enum: ['primary', 'dependency', null], default: null },
+    bundlePrimaryAssetId: { type: Schema.Types.ObjectId, ref: 'Asset', default: null },
     description: { type: String },
     originalFilename: { type: String },
     mimeType: { type: String },
@@ -49,5 +54,7 @@ assetSchema.index({ type: 1, createdAt: -1 })
 assetSchema.index({ tags: 1 })
 assetSchema.index({ seriesId: 1 })
 assetSchema.index({ terrainScatterPreset: 1 })
+assetSchema.index({ contentHash: 1, contentHashAlgorithm: 1 })
+assetSchema.index({ bundlePrimaryAssetId: 1, bundleRole: 1 })
 
 export const AssetModel = model<AssetDocument>('Asset', assetSchema)

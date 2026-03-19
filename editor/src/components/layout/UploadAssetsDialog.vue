@@ -16,15 +16,17 @@ import {
   generateAssetTagSuggestions,
   mapServerAssetToProjectAsset,
   fetchResourceCategories,
-  uploadAssetToServer,
+  uploadAssetBundleToServer,
 } from '@/api/resourceAssets'
 import { ensureAuthenticatedForResourceUpload } from '@/utils/uploadGuard'
+import { buildAssetBundle } from '@/utils/assetBundle'
 import {
   generateAssetThumbnail,
   ASSET_THUMBNAIL_HEIGHT,
   ASSET_THUMBNAIL_WIDTH,
   createThumbnailFromCanvas,
 } from '@/utils/assetThumbnail'
+import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
@@ -641,6 +643,130 @@ function resolvePersistedThumbnailUrl(entry: UploadAssetEntry, asset: ProjectAss
     }
   }
   return null
+}
+
+function createThumbnailFileForBundle(prepared: PreparedEntryMetadata): File | null {
+  if (prepared.thumbnailFile) {
+    return prepared.thumbnailFile
+  }
+  if (!prepared.thumbnailUrl || !prepared.thumbnailUrl.startsWith('data:')) {
+    return null
+  }
+  const blob = dataUrlToBlob(prepared.thumbnailUrl)
+  const extension = extractExtension(`thumbnail.${blob.type.split('/')[1] ?? 'png'}`) ?? 'png'
+  return new File([blob], `${prepared.name || prepared.asset.name}-thumbnail.${extension}`, {
+    type: blob.type || 'image/png',
+  })
+}
+
+function shouldRewriteBundleReferences(asset: ProjectAsset, file: File): boolean {
+  const extension = (asset.extension ?? extractExtension(file.name) ?? '').trim().toLowerCase()
+  return ['json', 'prefab', 'wall', 'floor', 'material'].includes(extension)
+}
+
+function normalizeAssetReferenceCandidate(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed.length || trimmed.length > 512) {
+    return null
+  }
+  if (/^(https?:|data:|blob:)/i.test(trimmed)) {
+    return null
+  }
+  if (trimmed.startsWith('asset://')) {
+    const id = trimmed.slice('asset://'.length).trim()
+    return id.length ? id : null
+  }
+  if (trimmed.startsWith('local::')) {
+    const id = trimmed.slice('local::'.length).trim()
+    return id.length ? id : null
+  }
+  return trimmed
+}
+
+function collectAssetReferencesFromUnknown(value: unknown, bucket: Set<string>, parentKey = ''): void {
+  if (typeof value === 'string') {
+    const normalized = normalizeAssetReferenceCandidate(value)
+    if (!normalized) {
+      return
+    }
+    if (/assetid|asset_id|asset$/i.test(parentKey) || parentKey === 'id') {
+      bucket.add(normalized)
+      return
+    }
+    if (/^[a-z0-9_-]{8,}$/i.test(normalized)) {
+      bucket.add(normalized)
+    }
+    return
+  }
+  if (!value || typeof value !== 'object') {
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectAssetReferencesFromUnknown(entry, bucket, parentKey))
+    return
+  }
+  Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
+    collectAssetReferencesFromUnknown(entry, bucket, key)
+  })
+}
+
+async function collectDependencyAssetIdsFromFile(file: File): Promise<string[]> {
+  const extension = (extractExtension(file.name) ?? '').toLowerCase()
+  if (!['json', 'prefab', 'wall', 'floor', 'material'].includes(extension)) {
+    return []
+  }
+  try {
+    const text = await file.text()
+    const parsed = JSON.parse(text) as unknown
+    const bucket = new Set<string>()
+    collectAssetReferencesFromUnknown(parsed, bucket)
+    return Array.from(bucket)
+  } catch {
+    return []
+  }
+}
+
+async function resolveBundleDependencies(
+  primaryAsset: ProjectAsset,
+  primaryFile: File,
+): Promise<Array<{ asset: ProjectAsset; file: File; rewriteTarget?: boolean }>> {
+  const queue = await collectDependencyAssetIdsFromFile(primaryFile)
+  const visited = new Set<string>()
+  const dependencies: Array<{ asset: ProjectAsset; file: File; rewriteTarget?: boolean }> = []
+
+  while (queue.length) {
+    const nextId = (queue.shift() ?? '').trim()
+    if (!nextId || nextId === primaryAsset.id || visited.has(nextId)) {
+      continue
+    }
+    visited.add(nextId)
+    const asset = sceneStore.getAsset(nextId)
+    if (!asset) {
+      continue
+    }
+    let file: File
+    try {
+      file = await createUploadFileFromCache(asset)
+    } catch {
+      continue
+    }
+
+    dependencies.push({
+      asset,
+      file,
+      rewriteTarget: shouldRewriteBundleReferences(asset, file),
+    })
+
+    const nestedIds = await collectDependencyAssetIdsFromFile(file)
+    nestedIds.forEach((id) => {
+      const trimmed = id.trim()
+      if (trimmed && !visited.has(trimmed)) {
+        queue.push(trimmed)
+      }
+    })
+  }
+
+  return dependencies
 }
 
 type PreparedEntryMetadata = {
@@ -1315,16 +1441,18 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
           throw new Error('Asset source file is not available for upload')
         }
         const tagIds = tagMap.get(entry.assetId) ?? []
+        const dependencies = await resolveBundleDependencies(prepared.asset, prepared.file)
 
-        const serverAsset = await uploadAssetToServer({
-          file: prepared.file,
-          thumbnailFile: prepared.thumbnailFile,
+        const bundle = await buildAssetBundle({
+          primaryAsset: prepared.asset,
+          primaryFile: prepared.file,
+          thumbnailFile: createThumbnailFileForBundle(prepared),
+          dependencies,
           name: prepared.name,
-          type: prepared.asset.type,
-          description: prepared.description.length ? prepared.description : undefined,
-          tagIds,
+          description: prepared.description.length ? prepared.description : null,
           categoryId: prepared.categoryId,
-          categoryPathSegments: prepared.categoryPathSegments.length ? prepared.categoryPathSegments : undefined,
+          categoryPathSegments: prepared.categoryPathSegments,
+          tagIds,
           color: prepared.color,
           dimensionLength: prepared.dimensionLength,
           dimensionWidth: prepared.dimensionWidth,
@@ -1332,8 +1460,15 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
           imageWidth: prepared.imageWidth,
           imageHeight: prepared.imageHeight,
           terrainScatterPreset: prepared.terrainScatterPreset,
+          metadata:
+            prepared.asset.metadata && typeof prepared.asset.metadata === 'object'
+              ? { ...prepared.asset.metadata }
+              : null,
+          rewriteReferences: shouldRewriteBundleReferences(prepared.asset, prepared.file),
         })
-        const mapped = mapServerAssetToProjectAsset(serverAsset)
+
+        const uploaded = await uploadAssetBundleToServer({ bundleFile: bundle.file })
+        const mapped = mapServerAssetToProjectAsset(uploaded.asset)
         entry.status = 'success'
         entry.uploadedAssetId = mapped.id
         entry.uploadedServerAsset = mapped

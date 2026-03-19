@@ -345,64 +345,66 @@
         </view>
       </view>
 
-      <view v-if="debugOverlayVisible" class="viewer-debug-overlay">
+      <view v-if="debugOverlayVisible && debugMode !== 'off'" class="viewer-debug-overlay">
         <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
-        <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
-        <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
-        <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
-        <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
-        <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
-        <text class="viewer-debug-line">Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}</text>
-        <text class="viewer-debug-line">Instanced matrix upload est: {{ instancingDebug.instanceMatrixUploadKb }} KB/frame</text>
-        <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
-        <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
-        <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
-        <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
-        <text class="viewer-debug-line">Ground size (W × D): {{ debugGroundDims.width }} m × {{ debugGroundDims.depth }} m</text>
+        <template v-if="debugMode === 'full'">
+          <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
+          <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
+          <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
+          <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
+          <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
+          <text class="viewer-debug-line">Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}</text>
+          <text class="viewer-debug-line">Instanced matrix upload est: {{ instancingDebug.instanceMatrixUploadKb }} KB/frame</text>
+          <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
+          <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
+          <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
+          <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
+          <text class="viewer-debug-line">Ground size (W × D): {{ debugGroundDims.width }} m × {{ debugGroundDims.depth }} m</text>
 
-        <view class="viewer-debug-shadow" v-if="debugShadowLightLabels.length">
-          <text class="viewer-debug-line">[Light Shadow]</text>
-          <picker :range="debugShadowLightLabels" :value="debugShadowSelectedLightIndex" @change="handleDebugShadowLightPick">
-            <text class="viewer-debug-line">Light: {{ debugShadowSelectedLightLabel }}</text>
-          </picker>
-          <view class="viewer-debug-line">
-            <text>Cast Shadow: </text>
-            <switch
-              :checked="debugShadowForm.castShadow"
-              :disabled="debugShadowCastShadowDisabled"
-              @change="handleDebugShadowCastShadowChange"
-            />
-            <text v-if="debugShadowPointShadowPolicyActive"> (Point shadow disabled)</text>
-          </view>
-          <view class="viewer-debug-line">
-            <text>Map Size: </text>
-            <picker :range="debugShadowMapSizeLabels" :value="debugShadowSelectedMapSizeIndex" @change="handleDebugShadowMapSizePick">
-              <text>{{ debugShadowMapSizeLabels[debugShadowSelectedMapSizeIndex] }}</text>
+          <view class="viewer-debug-shadow" v-if="debugShadowLightLabels.length">
+            <text class="viewer-debug-line">[Light Shadow]</text>
+            <picker :range="debugShadowLightLabels" :value="debugShadowSelectedLightIndex" @change="handleDebugShadowLightPick">
+              <text class="viewer-debug-line">Light: {{ debugShadowSelectedLightLabel }}</text>
             </picker>
+            <view class="viewer-debug-line">
+              <text>Cast Shadow: </text>
+              <switch
+                :checked="debugShadowForm.castShadow"
+                :disabled="debugShadowCastShadowDisabled"
+                @change="handleDebugShadowCastShadowChange"
+              />
+              <text v-if="debugShadowPointShadowPolicyActive"> (Point shadow disabled)</text>
+            </view>
+            <view class="viewer-debug-line">
+              <text>Map Size: </text>
+              <picker :range="debugShadowMapSizeLabels" :value="debugShadowSelectedMapSizeIndex" @change="handleDebugShadowMapSizePick">
+                <text>{{ debugShadowMapSizeLabels[debugShadowSelectedMapSizeIndex] }}</text>
+              </picker>
+            </view>
+            <view class="viewer-debug-line">
+              <text>Bias: {{ debugShadowForm.bias.toFixed(5) }}</text>
+              <slider min="-0.005" max="0.005" step="0.00005" :value="debugShadowForm.bias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowBiasChange" />
+            </view>
+            <view class="viewer-debug-line">
+              <text>NormalBias: {{ debugShadowForm.normalBias.toFixed(3) }}</text>
+              <slider min="0" max="0.2" step="0.001" :value="debugShadowForm.normalBias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowNormalBiasChange" />
+            </view>
+            <view class="viewer-debug-line">
+              <text>Radius: {{ debugShadowForm.radius.toFixed(1) }}</text>
+              <slider min="0" max="10" step="0.1" :value="debugShadowForm.radius" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowRadiusChange" />
+            </view>
+            <view class="viewer-debug-line">
+              <text>Near: </text>
+              <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraNear" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowNearInput" />
+              <text> Far: </text>
+              <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraFar" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowFarInput" />
+            </view>
+            <view class="viewer-debug-line" v-if="debugShadowSelectedLightType === 'Directional'">
+              <text>Ortho Size: </text>
+              <input class="viewer-debug-input" type="number" :value="debugShadowForm.orthoSize" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowOrthoSizeInput" />
+            </view>
           </view>
-          <view class="viewer-debug-line">
-            <text>Bias: {{ debugShadowForm.bias.toFixed(5) }}</text>
-            <slider min="-0.005" max="0.005" step="0.00005" :value="debugShadowForm.bias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowBiasChange" />
-          </view>
-          <view class="viewer-debug-line">
-            <text>NormalBias: {{ debugShadowForm.normalBias.toFixed(3) }}</text>
-            <slider min="0" max="0.2" step="0.001" :value="debugShadowForm.normalBias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowNormalBiasChange" />
-          </view>
-          <view class="viewer-debug-line">
-            <text>Radius: {{ debugShadowForm.radius.toFixed(1) }}</text>
-            <slider min="0" max="10" step="0.1" :value="debugShadowForm.radius" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowRadiusChange" />
-          </view>
-          <view class="viewer-debug-line">
-            <text>Near: </text>
-            <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraNear" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowNearInput" />
-            <text> Far: </text>
-            <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraFar" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowFarInput" />
-          </view>
-          <view class="viewer-debug-line" v-if="debugShadowSelectedLightType === 'Directional'">
-            <text>Ortho Size: </text>
-            <input class="viewer-debug-input" type="number" :value="debugShadowForm.orthoSize" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowOrthoSizeInput" />
-          </view>
-        </view>
+        </template>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -826,10 +828,13 @@ let sceneDownloadTask: SceneRequestTask | null = null;
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
+const DEFAULT_DEBUG_PLACEHOLDER = null
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
 const debugEnabled = ref(true);
+// debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show all debug info
+const debugMode = ref<'off' | 'fps' | 'full'>('fps');
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
 
@@ -1113,6 +1118,8 @@ const bakedGroundTextureCache = new Map<string, THREE.Texture | null>();
 const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
 
 const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
+
+// debug hooks removed
 
 async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
   const normalizedId = assetId.trim();
