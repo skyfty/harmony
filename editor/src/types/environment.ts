@@ -46,6 +46,7 @@ export interface EnvironmentSettings {
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
+  viewportPerformanceMode?: boolean
 }
 
 export type EnvironmentSettingsPatch = Partial<Omit<EnvironmentSettings, 'background'>> & {

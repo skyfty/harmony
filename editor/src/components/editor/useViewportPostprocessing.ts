@@ -9,6 +9,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 export type ViewportPostprocessing = {
   init: (width: number, height: number) => void
   setSize: (width: number, height: number) => void
+  setPerformanceMode: (enabled: boolean) => void
   setOutlineTargets: (targets: THREE.Object3D[]) => void
   render: () => void
   dispose: () => void
@@ -18,6 +19,7 @@ type Options = {
   getRenderer: () => THREE.WebGLRenderer | null
   getScene: () => THREE.Scene | null
   getCamera: () => THREE.Camera | null
+  getPerformanceMode?: () => boolean
 }
 
 function configureOutlinePassAppearance(pass: OutlinePass) {
@@ -65,6 +67,26 @@ export function useViewportPostprocessing(options: Options): ViewportPostprocess
   let fxaaPass: ShaderPass | null = null
   let outputPass: OutputPass | null = null
   let pendingOutlineTargets: THREE.Object3D[] | null = null
+  let hasOutlineTargets = false
+  let performanceMode = false
+  let currentWidth = 1
+  let currentHeight = 1
+
+  const resolveComposerPixelRatio = (renderer: THREE.WebGLRenderer): number => {
+    if (performanceMode) {
+      return 1
+    }
+    return renderer.getPixelRatio?.() ?? 1
+  }
+
+  const updatePassState = () => {
+    if (outlinePass) {
+      outlinePass.enabled = hasOutlineTargets
+    }
+    if (fxaaPass) {
+      fxaaPass.enabled = !performanceMode
+    }
+  }
 
   const dispose = () => {
     if (composer) {
@@ -91,9 +113,12 @@ export function useViewportPostprocessing(options: Options): ViewportPostprocess
 
     const safeWidth = Math.max(1, width)
     const safeHeight = Math.max(1, height)
+    currentWidth = safeWidth
+    currentHeight = safeHeight
+    performanceMode = Boolean(options.getPerformanceMode?.())
 
     composer = new EffectComposer(renderer)
-    composer.setPixelRatio(renderer.getPixelRatio())
+    composer.setPixelRatio(resolveComposerPixelRatio(renderer))
     composer.setSize(safeWidth, safeHeight)
 
     renderPass = new RenderPass(scene, camera)
@@ -116,8 +141,11 @@ export function useViewportPostprocessing(options: Options): ViewportPostprocess
 
     if (pendingOutlineTargets) {
       outlinePass.selectedObjects = pendingOutlineTargets
+      hasOutlineTargets = pendingOutlineTargets.length > 0
       pendingOutlineTargets = null
     }
+
+    updatePassState()
   }
 
   const setSize = (width: number, height: number) => {
@@ -128,18 +156,42 @@ export function useViewportPostprocessing(options: Options): ViewportPostprocess
 
     const safeWidth = Math.max(1, width)
     const safeHeight = Math.max(1, height)
+    currentWidth = safeWidth
+    currentHeight = safeHeight
 
     composer.setSize(safeWidth, safeHeight)
     outlinePass?.setSize(safeWidth, safeHeight)
     if (fxaaPass) {
       updateFxaaResolution(renderer, fxaaPass, safeWidth, safeHeight)
     }
+    updatePassState()
+  }
+
+  const setPerformanceMode = (enabled: boolean) => {
+    const next = Boolean(enabled)
+    if (next === performanceMode) {
+      return
+    }
+    performanceMode = next
+
+    const renderer = options.getRenderer()
+    if (renderer && composer) {
+      composer.setPixelRatio(resolveComposerPixelRatio(renderer))
+      composer.setSize(currentWidth, currentHeight)
+      outlinePass?.setSize(currentWidth, currentHeight)
+      if (fxaaPass) {
+        updateFxaaResolution(renderer, fxaaPass, currentWidth, currentHeight)
+      }
+    }
+    updatePassState()
   }
 
   const setOutlineTargets = (targets: THREE.Object3D[]) => {
     const next = targets.slice()
+    hasOutlineTargets = next.length > 0
     if (outlinePass) {
       outlinePass.selectedObjects = next
+      updatePassState()
       return
     }
     pendingOutlineTargets = next
@@ -164,6 +216,7 @@ export function useViewportPostprocessing(options: Options): ViewportPostprocess
   return {
     init,
     setSize,
+    setPerformanceMode,
     setOutlineTargets,
     render,
     dispose,

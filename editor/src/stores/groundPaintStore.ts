@@ -87,16 +87,27 @@ export function attachGroundPaintRuntimeToNode(
 }
 
 export const useGroundPaintStore = defineStore('groundPaint', {
+  state: () => ({
+    sceneRuntimeVersions: {} as Record<string, number>,
+  }),
   actions: {
     async hydrateSceneDocument(sceneId: string, groundNode: SceneNode | null, sidecar: ArrayBuffer | null): Promise<void> {
       replaceRuntimeState(sceneId, groundNode, sidecar ? deserializeGroundPaintSidecar(sidecar) : null)
+      this.sceneRuntimeVersions = {
+        ...this.sceneRuntimeVersions,
+        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
+      }
     },
     clearSceneDocument(sceneId?: string): void {
       if (sceneId) {
         runtimeGroundPaints.delete(sceneId)
+        const nextVersions = { ...this.sceneRuntimeVersions }
+        delete nextVersions[sceneId]
+        this.sceneRuntimeVersions = nextVersions
         return
       }
       runtimeGroundPaints.clear()
+      this.sceneRuntimeVersions = {}
     },
     buildSceneDocumentSidecar(sceneId: string, groundNode: SceneNode | null): ArrayBuffer | null {
       const payload = buildPayload(sceneId, groundNode)
@@ -105,9 +116,16 @@ export const useGroundPaintStore = defineStore('groundPaint', {
     getSceneGroundPaint(sceneId: string): GroundPaintRuntimeState | null {
       return runtimeGroundPaints.get(sceneId) ?? null
     },
+    getSceneRuntimeVersion(sceneId: string): number {
+      return this.sceneRuntimeVersions[sceneId] ?? 0
+    },
     replaceGroundSurfaceChunks(sceneId: string, nodeId: string, groundSurfaceChunks: GroundSurfaceChunkTextureMap | null): GroundPaintRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
       state.groundSurfaceChunks = normalizeGroundSurfaceChunkTextureMap(groundSurfaceChunks)
+      this.sceneRuntimeVersions = {
+        ...this.sceneRuntimeVersions,
+        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
+      }
       return state
     },
     replaceGroundSurfaceChunk(
@@ -133,6 +151,10 @@ export const useGroundPaintStore = defineStore('groundPaint', {
         }
       }
       state.groundSurfaceChunks = nextChunks
+      this.sceneRuntimeVersions = {
+        ...this.sceneRuntimeVersions,
+        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
+      }
       return state
     },
   },

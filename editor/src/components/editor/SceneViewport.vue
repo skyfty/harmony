@@ -539,6 +539,14 @@ const groundScatterRuntimeVersion = computed(() => {
   return useGroundScatterStore().getSceneRuntimeVersion(sceneId)
 })
 
+const groundPaintRuntimeVersion = computed(() => {
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return 0
+  }
+  return useGroundPaintStore().getSceneRuntimeVersion(sceneId)
+})
+
 const viewportEl = ref<HTMLDivElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -982,6 +990,7 @@ const postprocessing = useViewportPostprocessing({
   getRenderer: () => renderer,
   getScene: () => scene,
   getCamera: () => camera,
+  getPerformanceMode: () => Boolean(environmentSettings.value.viewportPerformanceMode),
 })
 const skySunPosition = new THREE.Vector3()
 let backgroundTexture: THREE.Texture | null = null
@@ -8903,6 +8912,14 @@ function renderViewportFrame() {
   protagonistPreview.render()
 }
 
+function resolveViewportPixelRatio(): number {
+  const devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  if (Boolean(environmentSettings.value.viewportPerformanceMode)) {
+    return 1
+  }
+  return devicePixelRatio
+}
+
 function applyGridVisibility(visible: boolean) {
   terrainGridHelper.setOverlayVisible(visible)
   terrainGridHelper.visible = visible
@@ -9552,6 +9569,14 @@ async function restoreGroundScatterGuarded(): Promise<void> {
   }
 }
 
+async function restoreGroundPaintGuarded(): Promise<void> {
+  const tokenSnapshot = sceneStore.sceneSwitchToken
+  await restoreGroundPaint()
+  if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
+    return
+  }
+}
+
 let initialGridVisibilityApplied = false
 
 watch(isSceneReady, (ready) => {
@@ -9584,6 +9609,22 @@ watch(
       return
     }
     void restoreGroundScatterGuarded()
+  },
+)
+
+watch(
+  [isSceneReady, groundPaintRuntimeVersion],
+  ([ready, version], [prevReady, prevVersion]) => {
+    if (!ready) {
+      return
+    }
+    if (version <= 0) {
+      return
+    }
+    if (prevReady && prevVersion === version) {
+      return
+    }
+    void restoreGroundPaintGuarded()
   },
 )
 
@@ -10293,7 +10334,7 @@ function initScene() {
     powerPreference: 'high-performance',
     preserveDrawingBuffer: false,
   })
-  const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const pixelRatio = resolveViewportPixelRatio()
   renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
@@ -10397,6 +10438,7 @@ function initScene() {
     if (w <= 0 || h <= 0) {
       return
     }
+    renderer.setPixelRatio(resolveViewportPixelRatio())
     renderer.setSize(w, h)
     postprocessing.setSize(w, h)
     if (perspectiveCamera) {
@@ -18311,6 +18353,24 @@ watch(
 watch(shadowsEnabled, () => {
   applyRendererShadowSetting()
 })
+
+watch(
+  () => Boolean(environmentSettings.value.viewportPerformanceMode),
+  () => {
+    if (!renderer || !viewportEl.value) {
+      return
+    }
+    renderer.setPixelRatio(resolveViewportPixelRatio())
+    const w = viewportEl.value.clientWidth
+    const h = viewportEl.value.clientHeight
+    if (w <= 0 || h <= 0) {
+      return
+    }
+    renderer.setSize(w, h)
+    postprocessing.setPerformanceMode(Boolean(environmentSettings.value.viewportPerformanceMode))
+    postprocessing.setSize(w, h)
+  },
+)
 
 watch(
   () => props.selectedNodeId,

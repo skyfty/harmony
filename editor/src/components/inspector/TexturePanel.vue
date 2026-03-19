@@ -26,6 +26,7 @@ const wrapOptions: Array<{ label: string; value: SceneTextureWrapMode }> = [
 ]
 
 const localSettings = reactive<SceneMaterialTextureSettings>(createTextureSettings())
+const ROTATION_DECIMALS = 2
 
 const isDisabled = computed(() => props.disabled || !props.modelValue)
 const hasTexture = computed(() => !!props.modelValue)
@@ -66,20 +67,37 @@ function coerceNumber(value: unknown, fallback: number): number {
   return Number.isFinite(numeric) ? numeric : fallback
 }
 
+function roundToDecimals(value: number, decimals: number): number {
+  const factor = 10 ** decimals
+  return Math.round(value * factor) / factor
+}
+
 function handleVectorChange(
   key: 'offset' | 'repeat' | 'center' | 'tileSizeMeters',
   axis: 'x' | 'y',
   value: string | number,
 ) {
   const numeric = coerceNumber(value, localSettings[key][axis])
-  localSettings[key][axis] = numeric
+  localSettings[key][axis] = key === 'center'
+    ? roundToDecimals(numeric, ROTATION_DECIMALS)
+    : numeric
   emitSettings()
 }
 
 function handleRotationChange(value: string | number) {
   const numeric = coerceNumber(value, localSettings.rotation)
-  localSettings.rotation = numeric
+  localSettings.rotation = roundToDecimals(numeric, ROTATION_DECIMALS)
   emitSettings()
+}
+
+function formatRotationValue(): string {
+  const numeric = coerceNumber(localSettings.rotation, 0)
+  return roundToDecimals(numeric, ROTATION_DECIMALS).toFixed(ROTATION_DECIMALS)
+}
+
+function formatCenterValue(axis: 'x' | 'y'): string {
+  const numeric = coerceNumber(localSettings.center[axis], 0)
+  return roundToDecimals(numeric, ROTATION_DECIMALS).toFixed(ROTATION_DECIMALS)
 }
 
 function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premultiplyAlpha' | 'flipY', value: boolean | null) {
@@ -247,7 +265,8 @@ function handleSyncFromAlbedo() {
                 variant="underlined"
                 hide-details
                 suffix="X"
-                :model-value="localSettings.center.x"
+                :model-value="formatCenterValue('x')"
+                :step="0.01"
                 :disabled="isDisabled"
                 @update:model-value="(value) => handleVectorChange('center', 'x', value as string | number)"
               />
@@ -257,7 +276,8 @@ function handleSyncFromAlbedo() {
                 variant="underlined"
                 hide-details
                 suffix="Y"
-                :model-value="localSettings.center.y"
+                :model-value="formatCenterValue('y')"
+                :step="0.01"
                 :disabled="isDisabled"
                 @update:model-value="(value) => handleVectorChange('center', 'y', value as string | number)"
               />
@@ -270,7 +290,8 @@ function handleSyncFromAlbedo() {
               density="compact"
               variant="underlined"
               hide-details
-              :model-value="localSettings.rotation"
+              :model-value="formatRotationValue()"
+              :step="0.01"
               :disabled="isDisabled"
               @update:model-value="(value) => handleRotationChange(value as string | number)"
             />

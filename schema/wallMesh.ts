@@ -262,6 +262,13 @@ type WallArcInterval = {
   end: number
 }
 
+type WallRepeatedArcSlot = {
+  chainIndex: number
+  slotIndex: number
+  start: number
+  end: number
+}
+
 function buildWallVisualChainsFromSegs(renderSegs: WallRenderSeg[]): WallVisualChain[] {
   if (!renderSegs.length) return []
 
@@ -1023,20 +1030,19 @@ function buildRepeatedWallInstancesForSegs(
   return instances
 }
 
-function buildRepeatedWallArcIntervalsForSegs(
+function buildRepeatedWallArcSlotsForSegs(
   segs: WallRenderSeg[],
   mode: 'body' | 'head' | 'foot',
   tileLengthLocal: number,
   verticalLayoutOptions: WallVerticalLayoutOptions,
   repeatInstanceStep: number,
-  erasedSlotSet: Set<string>,
   rules: WallCornerModelRule[] = [],
-): WallArcInterval[] {
-  if (!segs.length || !erasedSlotSet.size) {
+): WallRepeatedArcSlot[] {
+  if (!segs.length) {
     return []
   }
 
-  const intervals: WallArcInterval[] = []
+  const slots: WallRepeatedArcSlot[] = []
   const trims = computeWallSegmentJointTrimForChain(segs, rules, mode)
   const repeatSlotByChain = new Map<number, number>()
   const start = new THREE.Vector3()
@@ -1081,18 +1087,72 @@ function buildRepeatedWallArcIntervalsForSegs(
         repeatSlotByChain.set(chainIndex, next)
         return next - 1
       })()
-      const erasedKey = `${chainIndex}:${repeatSlotIndex}`
-      if (!erasedSlotSet.has(erasedKey)) {
-        continue
-      }
 
-      intervals.push({
+      slots.push({
         chainIndex,
+        slotIndex: repeatSlotIndex,
         start: Number(seg.chainArcStart ?? 0) + trimStart + snappedLocalStart,
         end: Number(seg.chainArcStart ?? 0) + trimStart + snappedLocalStart + tileLengthLocal,
       })
     }
   }
+
+  return slots
+}
+
+function buildRepeatedWallGapIntervalsFromSlots(
+  slots: WallRepeatedArcSlot[],
+  erasedSlotSet: Set<string>,
+): WallArcInterval[] {
+  if (!slots.length || !erasedSlotSet.size) {
+    return []
+  }
+
+  const byChain = new Map<number, WallRepeatedArcSlot[]>()
+  slots.forEach((slot) => {
+    const bucket = byChain.get(slot.chainIndex) ?? []
+    if (!byChain.has(slot.chainIndex)) {
+      byChain.set(slot.chainIndex, bucket)
+    }
+    bucket.push(slot)
+  })
+
+  const intervals: WallArcInterval[] = []
+  byChain.forEach((chainSlots, chainIndex) => {
+    chainSlots.sort((a, b) => a.slotIndex - b.slotIndex)
+    let index = 0
+    while (index < chainSlots.length) {
+      const slot = chainSlots[index]!
+      const key = `${chainIndex}:${slot.slotIndex}`
+      if (!erasedSlotSet.has(key)) {
+        index += 1
+        continue
+      }
+
+      const blockStartIndex = index
+      let blockEndIndex = index
+      while (blockEndIndex + 1 < chainSlots.length) {
+        const next = chainSlots[blockEndIndex + 1]!
+        const nextKey = `${chainIndex}:${next.slotIndex}`
+        if (!erasedSlotSet.has(nextKey)) {
+          break
+        }
+        blockEndIndex += 1
+      }
+
+      const firstErased = chainSlots[blockStartIndex]!
+      const lastErased = chainSlots[blockEndIndex]!
+      const prevKept = blockStartIndex > 0 ? chainSlots[blockStartIndex - 1]! : null
+      const nextKept = blockEndIndex + 1 < chainSlots.length ? chainSlots[blockEndIndex + 1]! : null
+      const gapStart = Math.max(firstErased.start, prevKept ? prevKept.end : firstErased.start)
+      const gapEnd = Math.min(lastErased.end, nextKept ? nextKept.start : lastErased.end)
+      if (gapEnd - gapStart > WALL_EPSILON) {
+        intervals.push({ chainIndex, start: gapStart, end: gapEnd })
+      }
+
+      index = blockEndIndex + 1
+    }
+  })
 
   return intervals
 }
@@ -1897,12 +1957,12 @@ function rebuildWallGroup(
       return [] as WallArcInterval[]
     }
 
-    const intervals: WallArcInterval[] = []
+    const candidateSlots: WallRepeatedArcSlot[][] = []
     const bodyOrientation = bodyTemplate ? requireWallOrientation(options.bodyOrientation, 'bodyOrientation') : null
     const headOrientation = headTemplate ? requireWallOrientation(options.headOrientation, 'headOrientation') : null
     const footOrientation = footTemplate ? requireWallOrientation(options.footOrientation, 'footOrientation') : null
 
-    const pushTemplateIntervals = (
+    const collectTemplateSlots = (
       template: InstancedAssetTemplate | null,
       orientation: WallModelOrientation | null,
       mode: 'body' | 'head' | 'foot',
@@ -1911,38 +1971,45 @@ function rebuildWallGroup(
         return
       }
       const { tileLengthLocal } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+      const slots: WallRepeatedArcSlot[] = []
       chainDefinitions.forEach((chainDef) => {
-        intervals.push(...buildRepeatedWallArcIntervalsForSegs(
+        slots.push(...buildRepeatedWallArcSlotsForSegs(
           chainDef.segs,
           mode,
           tileLengthLocal,
           { headAssetHeight, footAssetHeight },
           repeatInstanceStep,
-          repeatErasedSlotSet,
           resolvedCornerModels,
         ))
       })
+      if (slots.length) {
+        candidateSlots.push(slots)
+      }
     }
 
-    pushTemplateIntervals(bodyTemplate, bodyOrientation, 'body')
-    pushTemplateIntervals(headTemplate, headOrientation, 'head')
-    pushTemplateIntervals(footTemplate, footOrientation, 'foot')
+    collectTemplateSlots(headTemplate, headOrientation, 'head')
+    collectTemplateSlots(footTemplate, footOrientation, 'foot')
+    collectTemplateSlots(bodyTemplate, bodyOrientation, 'body')
 
-    if (!intervals.length) {
+    if (!candidateSlots.length) {
+      const fallbackSlots: WallRepeatedArcSlot[] = []
       chainDefinitions.forEach((chainDef) => {
-        intervals.push(...buildRepeatedWallArcIntervalsForSegs(
+        fallbackSlots.push(...buildRepeatedWallArcSlotsForSegs(
           chainDef.segs,
           'body',
           repeatInstanceStep,
           { headAssetHeight, footAssetHeight },
           repeatInstanceStep,
-          repeatErasedSlotSet,
           resolvedCornerModels,
         ))
       })
+      if (fallbackSlots.length) {
+        candidateSlots.push(fallbackSlots)
+      }
     }
 
-    return mergeWallArcIntervals(intervals)
+    const referenceSlots = candidateSlots.find((slots) => slots.length) ?? []
+    return mergeWallArcIntervals(buildRepeatedWallGapIntervalsFromSlots(referenceSlots, repeatErasedSlotSet))
   })()
   const proceduralChainDefinitions = wallRenderMode === 'repeatInstances' && repeatErasedIntervals.length
     ? chainDefinitions.flatMap((chainDef) => buildWallVisualChainsFromSegs(

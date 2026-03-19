@@ -1103,6 +1103,8 @@ export interface EnvironmentSettings {
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
+  /** Prefer viewport FPS over visual quality in editor postprocessing. */
+  viewportPerformanceMode?: boolean
 }
 
 export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
