@@ -1065,27 +1065,39 @@ export const useScenesStore = defineStore('scenes', {
     async loadGroundPaintSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundPaintSidecar(this.workspaceId, sceneId)
     },
-    async saveSceneGroundHeightSidecar(sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
+    async saveSceneGroundHeightSidecar(
+      sceneId: string,
+      sidecar: ArrayBuffer | null,
+      options: { syncServer?: boolean } = {},
+    ): Promise<void> {
       await writeSceneGroundHeightSidecar(this.workspaceId, sceneId, sidecar)
-      if (this.workspaceType === 'user') {
+      if (options.syncServer !== false && this.workspaceType === 'user') {
         const document = await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
         if (document) {
           await this.syncSceneToServer(document)
         }
       }
     },
-    async saveSceneGroundScatterSidecar(sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
+    async saveSceneGroundScatterSidecar(
+      sceneId: string,
+      sidecar: ArrayBuffer | null,
+      options: { syncServer?: boolean } = {},
+    ): Promise<void> {
       await writeSceneGroundScatterSidecar(this.workspaceId, sceneId, sidecar)
-      if (this.workspaceType === 'user') {
+      if (options.syncServer !== false && this.workspaceType === 'user') {
         const document = await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
         if (document) {
           await this.syncSceneToServer(document)
         }
       }
     },
-    async saveSceneGroundPaintSidecar(sceneId: string, sidecar: ArrayBuffer | null): Promise<void> {
+    async saveSceneGroundPaintSidecar(
+      sceneId: string,
+      sidecar: ArrayBuffer | null,
+      options: { syncServer?: boolean } = {},
+    ): Promise<void> {
       await writeSceneGroundPaintSidecar(this.workspaceId, sceneId, sidecar)
-      if (this.workspaceType === 'user') {
+      if (options.syncServer !== false && this.workspaceType === 'user') {
         const document = await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
         if (document) {
           await this.syncSceneToServer(document)

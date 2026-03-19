@@ -52,6 +52,7 @@ import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from '
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useScenesStore } from '@/stores/scenesStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
@@ -1016,6 +1017,9 @@ type ScatterEraseState = {
 }
 
 let scatterEraseState: ScatterEraseState | null = null
+let scatterSidecarPersistPending = false
+let pendingScatterSidecarSave: Promise<void> | null = null
+let scatterSidecarSaveQueued = false
 
 type SculptSessionState = {
 	nodeId: string
@@ -2814,10 +2818,55 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterLayer = result
 		}
 		if (result) {
-			syncTerrainScatterSnapshotToScene(store, { bumpInstancesUpdatedAt: true })
+			syncTerrainScatterSnapshotToScene(store, { bumpInstancesUpdatedAt: true, markSceneDirty: true })
+			scatterSidecarPersistPending = true
 			scatterChunkIndexDirty = true
 		}
 		return result
+	}
+
+	function queueScatterSidecarSave(): void {
+		if (!scatterSidecarPersistPending) {
+			return
+		}
+		scatterSidecarSaveQueued = true
+		if (pendingScatterSidecarSave) {
+			return
+		}
+
+		const savePromise = (async () => {
+			while (scatterSidecarSaveQueued) {
+				scatterSidecarSaveQueued = false
+				if (!scatterSidecarPersistPending) {
+					continue
+				}
+				const groundNode = getGroundNodeFromScene()
+				const sceneId = typeof options.sceneStore.currentSceneId === 'string'
+					? options.sceneStore.currentSceneId.trim()
+					: ''
+				if (!sceneId || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+					continue
+				}
+				const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(sceneId, groundNode)
+				try {
+					await useScenesStore().saveSceneGroundScatterSidecar(sceneId, sidecar, { syncServer: false })
+					scatterSidecarPersistPending = false
+				} catch (error) {
+					console.warn('保存散布 sidecar 失败', error)
+					return
+				}
+			}
+		})()
+
+		pendingScatterSidecarSave = savePromise
+		void savePromise.finally(() => {
+			if (pendingScatterSidecarSave === savePromise) {
+				pendingScatterSidecarSave = null
+			}
+			if (scatterSidecarSaveQueued && scatterSidecarPersistPending) {
+				queueScatterSidecarSave()
+			}
+		})
 	}
 
 	function generateScatterInstanceId(): string {
@@ -2916,7 +2965,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function syncTerrainScatterSnapshotToScene(
 		storeOverride?: TerrainScatterStore | null,
-		options: { bumpInstancesUpdatedAt?: boolean } = {},
+		syncOptions: { bumpInstancesUpdatedAt?: boolean; markSceneDirty?: boolean } = {},
 	): void {
 		const store = storeOverride ?? scatterStore
 		if (!store) {
@@ -2927,7 +2976,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
-		const shouldBumpInstances = options.bumpInstancesUpdatedAt === true
+		const shouldBumpInstances = syncOptions.bumpInstancesUpdatedAt === true
 		const nextMesh: GroundDynamicMesh = {
 			...(groundNode.dynamicMesh as GroundDynamicMesh),
 			terrainScatter: snapshot,
@@ -2936,7 +2985,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				: (groundNode.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt,
 		}
 		groundNode.dynamicMesh = nextMesh
+		const sceneId = typeof options.sceneStore.currentSceneId === 'string'
+			? options.sceneStore.currentSceneId.trim()
+			: ''
+		if (sceneId) {
+			useGroundScatterStore().replaceTerrainScatter(sceneId, groundNode.id, snapshot)
+		}
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
+		if (syncOptions.markSceneDirty) {
+			options.sceneStore.markSceneDirty({ updateNodes: false })
+		}
 	}
 
 	function getGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
@@ -5125,6 +5183,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				scatterSession.polygonPreviewEnd = null
 				refreshScatterSessionPreview(scatterSession)
 				commitScatterSessionPreview(scatterSession)
+				queueScatterSidecarSave()
 				clearScatterAreaPreview()
 				options.clearVertexSnap?.()
 				scatterSession = null
@@ -5156,6 +5215,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		} catch (error) {
 			console.warn('Failed to register scatter asset into scene assets', error)
 		}
+		queueScatterSidecarSave()
 		clearScatterAreaPreview()
 		options.clearVertexSnap?.()
 		scatterSession = null
@@ -5176,6 +5236,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		options.clearVertexSnap?.()
 		scatterRightClickState = null
 		scatterSession = null
+		queueScatterSidecarSave()
 		return true
 	}
 
@@ -5244,6 +5305,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			layer.instances.forEach((instance) => releaseScatterInstance(instance))
 			persistScatterInstances(layer, [])
 			removed = true
+		}
+		if (removed) {
+			queueScatterSidecarSave()
 		}
 		return removed
 	}
@@ -5322,6 +5386,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			options.canvasRef.value.releasePointerCapture(event.pointerId)
 		}
 		scatterEraseState = null
+		queueScatterSidecarSave()
 		return true
 	}
 
@@ -5333,6 +5398,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			options.canvasRef.value.releasePointerCapture(scatterEraseState.pointerId)
 		}
 		scatterEraseState = null
+		queueScatterSidecarSave()
 		return true
 	}
 
@@ -5889,6 +5955,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		performPaint(event)
+		void commitPaintSession(options.sceneStore.selectedNode ?? null)
 		isPainting.value = false
 		paintStrokePointerId = null
 		paintStrokeLastLocalPoint = null

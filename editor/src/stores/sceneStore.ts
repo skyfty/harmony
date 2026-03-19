@@ -1364,7 +1364,15 @@ function persistGroundHeightSidecarForNode(groundNode: SceneNode | null): boolea
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return false
   }
-  void useScenesStore().saveGroundHeightSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
+  const currentSceneId = useSceneStore().currentSceneId
+  const sceneId = typeof currentSceneId === 'string'
+    ? currentSceneId.trim()
+    : ''
+  if (!sceneId) {
+    return false
+  }
+  const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
+  void useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar, { syncServer: false }).catch((error: unknown) => {
     console.warn('[SceneStore] Failed to persist ground height sidecar', error)
   })
   return true
@@ -1452,7 +1460,15 @@ function persistGroundPaintSidecarForNode(groundNode: SceneNode | null): boolean
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return false
   }
-  void useScenesStore().saveGroundPaintSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
+  const currentSceneId = useSceneStore().currentSceneId
+  const sceneId = typeof currentSceneId === 'string'
+    ? currentSceneId.trim()
+    : ''
+  if (!sceneId) {
+    return false
+  }
+  const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, groundNode)
+  void useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false }).catch((error: unknown) => {
     console.warn('[SceneStore] Failed to persist ground paint sidecar', error)
   })
   return true
@@ -10125,6 +10141,9 @@ export const useSceneStore = defineStore('scene', {
       if (options?.commitSnapshot) {
         commitSceneSnapshot(this, { updateNodes: !!options.updateNodes })
       }
+    },
+    markSceneDirty(options: { updateNodes?: boolean } = {}) {
+      commitSceneSnapshot(this, { updateNodes: options.updateNodes === true })
     },
     // Helper: find asset by id inside catalog using assetIndex.categoryId
     findAssetInCatalog(assetId: string): ProjectAsset | null {
