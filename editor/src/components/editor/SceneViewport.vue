@@ -990,6 +990,7 @@ const postprocessing = useViewportPostprocessing({
   getRenderer: () => renderer,
   getScene: () => scene,
   getCamera: () => camera,
+  getPerformanceMode: () => Boolean(environmentSettings.value.viewportPerformanceMode),
 })
 const skySunPosition = new THREE.Vector3()
 let backgroundTexture: THREE.Texture | null = null
@@ -8911,6 +8912,14 @@ function renderViewportFrame() {
   protagonistPreview.render()
 }
 
+function resolveViewportPixelRatio(): number {
+  const devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  if (Boolean(environmentSettings.value.viewportPerformanceMode)) {
+    return 1
+  }
+  return devicePixelRatio
+}
+
 function applyGridVisibility(visible: boolean) {
   terrainGridHelper.setOverlayVisible(visible)
   terrainGridHelper.visible = visible
@@ -10325,7 +10334,7 @@ function initScene() {
     powerPreference: 'high-performance',
     preserveDrawingBuffer: false,
   })
-  const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const pixelRatio = resolveViewportPixelRatio()
   renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
@@ -10429,6 +10438,7 @@ function initScene() {
     if (w <= 0 || h <= 0) {
       return
     }
+    renderer.setPixelRatio(resolveViewportPixelRatio())
     renderer.setSize(w, h)
     postprocessing.setSize(w, h)
     if (perspectiveCamera) {
@@ -18343,6 +18353,24 @@ watch(
 watch(shadowsEnabled, () => {
   applyRendererShadowSetting()
 })
+
+watch(
+  () => Boolean(environmentSettings.value.viewportPerformanceMode),
+  () => {
+    if (!renderer || !viewportEl.value) {
+      return
+    }
+    renderer.setPixelRatio(resolveViewportPixelRatio())
+    const w = viewportEl.value.clientWidth
+    const h = viewportEl.value.clientHeight
+    if (w <= 0 || h <= 0) {
+      return
+    }
+    renderer.setSize(w, h)
+    postprocessing.setPerformanceMode(Boolean(environmentSettings.value.viewportPerformanceMode))
+    postprocessing.setSize(w, h)
+  },
+)
 
 watch(
   () => props.selectedNodeId,

@@ -495,6 +495,16 @@ function handleShadowsToggle(enabled: boolean | null) {
   sceneStore.setShadowsEnabled(enabled)
 }
 
+function handleViewportPerformanceModeToggle(enabled: boolean | null) {
+  if (typeof enabled !== 'boolean') {
+    return
+  }
+  if (enabled === Boolean(environmentSettings.value.viewportPerformanceMode)) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ viewportPerformanceMode: enabled })
+}
+
 function handleFogModeChange(mode: EnvironmentFogMode | null) {
   if (!mode || mode === environmentSettings.value.fogMode) {
     return
@@ -1625,6 +1635,21 @@ function handleBackgroundDrop(event: DragEvent) {
               color="primary"
               size="small"
               @update:model-value="handleShadowsToggle"
+            />
+          </div>
+        </section>
+
+        <section class="environment-section">
+          <div class="section-title">Viewport</div>
+          <div class="toggle-row">
+            <span class="toggle-label">Performance Mode</span>
+            <v-switch
+              :model-value="Boolean(environmentSettings.viewportPerformanceMode)"
+              density="compact"
+              hide-details
+              color="primary"
+              size="small"
+              @update:model-value="handleViewportPerformanceModeToggle"
             />
           </div>
         </section>

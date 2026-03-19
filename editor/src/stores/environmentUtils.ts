@@ -124,7 +124,8 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs(a.fogFar - b.fogFar) <= epsilon &&
     Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&
     Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
-    Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon
+    Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon &&
+    Boolean(a.viewportPerformanceMode) === Boolean(b.viewportPerformanceMode)
   )
 }
 

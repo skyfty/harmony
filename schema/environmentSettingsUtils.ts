@@ -17,6 +17,7 @@ export const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
 
 export const DEFAULT_ENVIRONMENT_GRADIENT_OFFSET = 33
 export const DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT = 0.6
+export const DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE = false
 
 export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
@@ -44,6 +45,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
   fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
   fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
+  viewportPerformanceMode: DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE,
   gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
   collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
   collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
@@ -251,6 +253,10 @@ export function cloneEnvironmentSettings(
     fogDensity: clampNumber(normalizedSource.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
     fogNear,
     fogFar: normalizedFogFar,
+    viewportPerformanceMode:
+      typeof (normalizedSource as any)?.viewportPerformanceMode === 'boolean'
+        ? (normalizedSource as any).viewportPerformanceMode
+        : DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE,
     gravityStrength: clampNumber(normalizedSource.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
     collisionRestitution: clampNumber(
       normalizedSource.collisionRestitution,
