@@ -4778,13 +4778,26 @@ export async function cloneSceneDocumentForExport(
   })
 }
 
-async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument): Promise<void> {
+type EmbeddedAssetHydrationResult = {
+  migratedEmbeddedAssets: boolean
+  migratedAssetCount: number
+  skippedAssetCount: number
+  reclaimedBytes: number
+}
+
+async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument): Promise<EmbeddedAssetHydrationResult> {
+  const result: EmbeddedAssetHydrationResult = {
+    migratedEmbeddedAssets: false,
+    migratedAssetCount: 0,
+    skippedAssetCount: 0,
+    reclaimedBytes: 0,
+  }
   if (!scene.packageAssetMap || !Object.keys(scene.packageAssetMap).length) {
-    return
+    return result
   }
   const entries = Object.entries(scene.packageAssetMap)
   if (!entries.some(([key]) => key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX))) {
-    return
+    return result
   }
 
   const assetCache = useAssetCacheStore()
@@ -4811,6 +4824,7 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
       blob = dataUrlToBlob(dataUrl)
     } catch (error) {
       console.warn('Failed to parse local asset data', error)
+      result.skippedAssetCount += 1
       nextPackageMap[key] = dataUrl
       continue
     }
@@ -4838,6 +4852,7 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
         })
       } catch (error) {
         console.warn('Failed to write to local asset cache', error)
+        result.skippedAssetCount += 1
         nextPackageMap[key] = dataUrl
         continue
       }
@@ -4854,10 +4869,19 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
       })
     }
 
-    nextPackageMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${computedId}`] = dataUrl
+    result.migratedEmbeddedAssets = true
+    result.migratedAssetCount += 1
+    result.reclaimedBytes += estimateInlineAssetByteSize(dataUrl)
   }
 
   scene.packageAssetMap = nextPackageMap
+  if (result.migratedEmbeddedAssets) {
+    const reclaimedKb = Math.round(result.reclaimedBytes / 1024)
+    console.info(
+      `[SceneStore] Migrated legacy embedded local assets for scene ${scene.id}: migrated=${result.migratedAssetCount}, skipped=${result.skippedAssetCount}, reclaimed~${reclaimedKb}KB`,
+    )
+  }
+  return result
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -10845,20 +10869,16 @@ export const useSceneStore = defineStore('scene', {
           ?? normalizeRemoteCandidate(asset.thumbnail)
           ?? normalizeRemoteCandidate(asset.id)
 
-        if (remoteCandidate) {
+        if (remoteCandidate && source?.type !== 'local') {
           const remoteKey = `url::${asset.id}`
           updates[remoteKey] = remoteCandidate
           removals.push(`${LOCAL_EMBEDDED_ASSET_PREFIX}${asset.id}`)
         }
 
-        const shouldEmbedLocal = source?.type === 'local' && !remoteCandidate
-        if (shouldEmbedLocal) {
-          const dataUrl = await this.createLocalAssetDataUrl(asset)
-          if (dataUrl) {
-            const embeddedKey = `${LOCAL_EMBEDDED_ASSET_PREFIX}${asset.id}`
-            updates[embeddedKey] = dataUrl
-            removals.push(`url::${asset.id}`)
-          }
+        const skipEmbeddedForLocalAsset = source?.type === 'local'
+        if (skipEmbeddedForLocalAsset) {
+          removals.push(`${LOCAL_EMBEDDED_ASSET_PREFIX}${asset.id}`)
+          removals.push(`url::${asset.id}`)
         }
 
         if (!Object.keys(updates).length && !removals.length) {
@@ -15851,7 +15871,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      await hydrateSceneDocumentWithEmbeddedAssets(scene)
+      const embeddedMigration = await hydrateSceneDocumentWithEmbeddedAssets(scene)
 
       this.nodes.forEach((node) => releaseRuntimeTree(node))
 
@@ -15873,6 +15893,11 @@ export const useSceneStore = defineStore('scene', {
       const setLastEdited = options.setLastEdited !== false
       if (setLastEdited && projectsStore.activeProjectId && projectsStore.activeProjectId === scene.projectId) {
         await projectsStore.setLastEditedScene(scene.projectId, scene.id)
+      }
+      if (embeddedMigration.migratedEmbeddedAssets) {
+        void this.saveActiveScene({ force: true }).catch((error) => {
+          console.warn('[SceneStore] Failed to persist embedded-asset migration result', error)
+        })
       }
       return true
     },

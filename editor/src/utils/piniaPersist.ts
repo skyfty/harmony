@@ -1,11 +1,12 @@
 import type { PiniaPluginContext, StateTree } from 'pinia'
-import { watch, type WatchStopHandle } from 'vue'
+import { toRaw, watch, type WatchStopHandle } from 'vue'
 
 type MaybePromise<T> = T | Promise<T>
 
 type StorageAdapter = {
-  getItem(key: string): MaybePromise<string | null>
-  setItem(key: string, value: string): MaybePromise<void>
+  mode?: 'string' | 'raw'
+  getItem(key: string): MaybePromise<unknown>
+  setItem(key: string, value: unknown): MaybePromise<void>
   removeItem(key: string): MaybePromise<void>
 }
 
@@ -13,8 +14,9 @@ const isClient = typeof window !== 'undefined'
 const hasIndexedDb = isClient && typeof window.indexedDB !== 'undefined'
 
 const memoryStorage: StorageAdapter = (() => {
-  const storage = new Map<string, string>()
+  const storage = new Map<string, unknown>()
   return {
+    mode: 'string',
     getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => {
       storage.set(key, value)
@@ -69,6 +71,7 @@ function idbRequestToPromise<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 const indexedDbStorage: StorageAdapter = {
+  mode: 'raw',
   async getItem(key: string) {
     if (!hasIndexedDb) {
       return memoryStorage.getItem(key)
@@ -80,9 +83,9 @@ const indexedDbStorage: StorageAdapter = {
     if (value == null) {
       return null
     }
-    return typeof value === 'string' ? value : String(value)
+    return value
   },
-  async setItem(key: string, value: string) {
+  async setItem(key: string, value: unknown) {
     if (!hasIndexedDb) {
       memoryStorage.setItem(key, value)
       return
@@ -157,8 +160,28 @@ function resolveStorageResolver(resolver: StorageResolver | string | undefined, 
   const target = resolver ?? 'local'
   if (typeof target === 'string') {
     if (storages?.[target]) return storages[target]
-    if (target === 'local') return isClient ? window.localStorage : memoryStorage
-    if (target === 'session') return isClient ? window.sessionStorage : memoryStorage
+    if (target === 'local') {
+      if (!isClient) return memoryStorage
+      return {
+        mode: 'string',
+        getItem: (key: string) => window.localStorage.getItem(key),
+        setItem: (key: string, value: unknown) => {
+          window.localStorage.setItem(key, typeof value === 'string' ? value : String(value))
+        },
+        removeItem: (key: string) => window.localStorage.removeItem(key),
+      }
+    }
+    if (target === 'session') {
+      if (!isClient) return memoryStorage
+      return {
+        mode: 'string',
+        getItem: (key: string) => window.sessionStorage.getItem(key),
+        setItem: (key: string, value: unknown) => {
+          window.sessionStorage.setItem(key, typeof value === 'string' ? value : String(value))
+        },
+        removeItem: (key: string) => window.sessionStorage.removeItem(key),
+      }
+    }
     if (target === 'memory') return memoryStorage
     if (target === 'indexeddb') {
       if (!hasIndexedDb) {
@@ -258,6 +281,217 @@ function cloneDeep<T>(value: T): T {
   return result as T
 }
 
+function cloneForStorage<T>(value: T, seen = new WeakMap<object, any>()): T {
+  if (value === null || typeof value !== 'object') {
+    return value
+  }
+
+  if (value instanceof Date) {
+    return new Date(value.getTime()) as T
+  }
+
+  if (value instanceof RegExp) {
+    return new RegExp(value.source, value.flags) as T
+  }
+
+  if (value instanceof URL) {
+    return new URL(value.toString()) as T
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return value.slice(0) as T
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    if (value instanceof DataView) {
+      return new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength) as T
+    }
+    const ctor = (value as any).constructor as { new (buffer: ArrayBufferLike | ArrayLike<unknown>): any }
+    return new ctor(value as any) as T
+  }
+
+  const rawObject = toRaw(value as object)
+  if (seen.has(rawObject)) {
+    return seen.get(rawObject)
+  }
+
+  if (rawObject instanceof Map) {
+    const clone = new Map()
+    seen.set(rawObject, clone)
+    rawObject.forEach((mapValue, mapKey) => {
+      clone.set(cloneForStorage(mapKey, seen), cloneForStorage(mapValue, seen))
+    })
+    return clone as unknown as T
+  }
+
+  if (rawObject instanceof Set) {
+    const clone = new Set()
+    seen.set(rawObject, clone)
+    rawObject.forEach((setValue) => {
+      clone.add(cloneForStorage(setValue, seen))
+    })
+    return clone as unknown as T
+  }
+
+  if (Array.isArray(rawObject)) {
+    const clone: unknown[] = []
+    seen.set(rawObject, clone)
+    rawObject.forEach((item) => {
+      clone.push(cloneForStorage(item, seen))
+    })
+    return clone as T
+  }
+
+  const clone: Record<string, unknown> = {}
+  seen.set(rawObject, clone)
+  Object.keys(rawObject).forEach((key) => {
+    clone[key] = cloneForStorage((rawObject as Record<string, unknown>)[key], seen)
+  })
+  return clone as T
+}
+
+function isPersistPayload<S extends StateTree = StateTree>(value: unknown): value is PersistPayload<S> {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const payload = value as PersistPayload<S>
+  return typeof payload.version === 'number' && payload.state !== undefined
+}
+
+function bufferEquals(a: ArrayBuffer, b: ArrayBuffer): boolean {
+  if (a.byteLength !== b.byteLength) {
+    return false
+  }
+  const left = new Uint8Array(a)
+  const right = new Uint8Array(b)
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) {
+      return false
+    }
+  }
+  return true
+}
+
+function viewBytes(view: ArrayBufferView): Uint8Array {
+  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+}
+
+function isEqualForPersist(a: unknown, b: unknown, seen = new WeakMap<object, Set<object>>()): boolean {
+  if (Object.is(a, b)) {
+    return true
+  }
+
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return false
+  }
+
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() === b.getTime()
+  }
+
+  if (a instanceof RegExp && b instanceof RegExp) {
+    return a.source === b.source && a.flags === b.flags
+  }
+
+  if (a instanceof URL && b instanceof URL) {
+    return a.toString() === b.toString()
+  }
+
+  if (a instanceof ArrayBuffer && b instanceof ArrayBuffer) {
+    return bufferEquals(a, b)
+  }
+
+  if (ArrayBuffer.isView(a) && ArrayBuffer.isView(b)) {
+    if (a.constructor !== b.constructor) {
+      return false
+    }
+    const left = viewBytes(a)
+    const right = viewBytes(b)
+    if (left.byteLength !== right.byteLength) {
+      return false
+    }
+    for (let i = 0; i < left.byteLength; i += 1) {
+      if (left[i] !== right[i]) {
+        return false
+      }
+    }
+    return true
+  }
+
+  const leftRaw = toRaw(a as object)
+  const rightRaw = toRaw(b as object)
+  const visited = seen.get(leftRaw)
+  if (visited?.has(rightRaw)) {
+    return true
+  }
+  if (visited) {
+    visited.add(rightRaw)
+  } else {
+    seen.set(leftRaw, new Set([rightRaw]))
+  }
+
+  if (leftRaw instanceof Map && rightRaw instanceof Map) {
+    if (leftRaw.size !== rightRaw.size) {
+      return false
+    }
+    for (const [leftKey, leftValue] of leftRaw.entries()) {
+      if (!rightRaw.has(leftKey)) {
+        return false
+      }
+      if (!isEqualForPersist(leftValue, rightRaw.get(leftKey), seen)) {
+        return false
+      }
+    }
+    return true
+  }
+
+  if (leftRaw instanceof Set && rightRaw instanceof Set) {
+    if (leftRaw.size !== rightRaw.size) {
+      return false
+    }
+    for (const leftValue of leftRaw.values()) {
+      let hasMatch = false
+      for (const rightValue of rightRaw.values()) {
+        if (isEqualForPersist(leftValue, rightValue, seen)) {
+          hasMatch = true
+          break
+        }
+      }
+      if (!hasMatch) {
+        return false
+      }
+    }
+    return true
+  }
+
+  if (Array.isArray(leftRaw) && Array.isArray(rightRaw)) {
+    if (leftRaw.length !== rightRaw.length) {
+      return false
+    }
+    for (let i = 0; i < leftRaw.length; i += 1) {
+      if (!isEqualForPersist(leftRaw[i], rightRaw[i], seen)) {
+        return false
+      }
+    }
+    return true
+  }
+
+  const leftKeys = Object.keys(leftRaw)
+  const rightKeys = Object.keys(rightRaw)
+  if (leftKeys.length !== rightKeys.length) {
+    return false
+  }
+  for (const key of leftKeys) {
+    if (!Object.prototype.hasOwnProperty.call(rightRaw, key)) {
+      return false
+    }
+    if (!isEqualForPersist((leftRaw as Record<string, unknown>)[key], (rightRaw as Record<string, unknown>)[key], seen)) {
+      return false
+    }
+  }
+  return true
+}
+
 function runMigrations<S extends StateTree>(
   state: Partial<S>,
   fromVersion: number,
@@ -319,6 +553,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     const version = persistOptions.version ?? 1
     const serializer = persistOptions.serializer ?? defaultSerializer
     const debug = persistOptions.debug ?? false
+    const storesRawValues = storage.mode === 'raw'
     const shouldPersist = persistOptions.shouldPersist ?? (() => true)
     const flushDebounce = Math.max(0, persistOptions.flushDebounce ?? 250)
     const flushEvents = persistOptions.flushEvents ?? ['visibilitychange', 'pagehide', 'beforeunload']
@@ -328,6 +563,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
 
     let fromVersion = 0
     let lastPersistedValue: string | null = null
+    let lastPersistedPayload: PersistPayload | null = null
     let lastPersistedState: Partial<StateTree> | null = null
     let pendingPayload: PersistPayload | null = null
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -383,13 +619,26 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
           return
         }
 
+        if (storesRawValues) {
+          const rawPayload = cloneForStorage(payload)
+          if (lastPersistedPayload && rawPayload.version === lastPersistedPayload.version && isEqualForPersist(rawPayload.state, lastPersistedPayload.state)) {
+            return
+          }
+
+          await storage.setItem(key, rawPayload)
+          lastPersistedPayload = cloneForStorage(rawPayload)
+          lastPersistedState = cloneForStorage(payload.state as Partial<StateTree>)
+          return
+        }
+
         const serialized = serializer.serialize(payload)
         if (serialized === lastPersistedValue) {
           return
         }
 
-        storage.setItem(key, serialized)
+        await storage.setItem(key, serialized)
         lastPersistedValue = serialized
+        lastPersistedPayload = null
         lastPersistedState = cloneDeep(payload.state)
 
       } catch (error) {
@@ -425,12 +674,16 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     const hydrate = async () => {
       try {
         const raw = await storage.getItem(key)
-        lastPersistedValue = raw ?? null
+        lastPersistedValue = typeof raw === 'string' ? raw : null
         if (!raw) {
           return
         }
 
-        const payload = serializer.deserialize(raw)
+        const payload = isPersistPayload(raw)
+          ? raw
+          : typeof raw === 'string'
+            ? serializer.deserialize(raw)
+            : null
         if (!payload) {
           return
         }
@@ -461,7 +714,8 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         //   }
         // }
 
-        lastPersistedState = cloneDeep(stateToHydrate)
+        lastPersistedPayload = storesRawValues ? cloneForStorage(payload) : null
+        lastPersistedState = storesRawValues ? cloneForStorage(stateToHydrate) : cloneDeep(stateToHydrate)
       } catch (error) {
         if (debug) {
           console.warn(`[pinia-persist] Failed to hydrate store "${store.$id}"`, error)
