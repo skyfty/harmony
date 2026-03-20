@@ -32,11 +32,19 @@ export function handlePointerDownScatter(
     handleGroundEditorPointerDown: (event: PointerEvent) => boolean
   },
 ): PointerDownResult | null {
+  const terrainScatterEraseActive = ctx.scatterEraseModeActive && ctx.activeBuildTool === 'scatter'
+
   // Scatter erase mode: left click (and drag) erases continuous instanced instances.
-  // - If Ground is selected and we're not hovering an instanced target, allow ground-scatter erase to handle left click.
-  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 0) {
+  // Keep instance-target erase only when terrain scatter erase is not active.
+  if (
+    ctx.scatterEraseModeActive &&
+    !terrainScatterEraseActive &&
+    ctx.hasInstancedMeshes &&
+    event.button === 0 &&
+    !ctx.selectedNodeIsGround
+  ) {
     const hit = ctx.pickSceneInstancedTargetAtPointer(event)
-    if (hit || !ctx.selectedNodeIsGround) {
+    if (hit) {
       const dragState: InstancedEraseDragState = {
         pointerId: event.pointerId,
         lastKey: null,
@@ -59,14 +67,19 @@ export function handlePointerDownScatter(
         stopImmediatePropagation: true,
       }
     }
-    // If Ground is selected and no instanced target is under the cursor, fall through
-    // so the ground-scatter erase can handle left click.
+    // No instanced hit in instance target mode: allow repair-click session path below.
   }
 
   // Scatter erase mode: if continuous instanced models exist, allow camera controls.
   // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
   // If Ground is selected, let ground-scatter erase handle the click instead.
-  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 0 && !ctx.selectedNodeIsGround) {
+  if (
+    ctx.scatterEraseModeActive &&
+    !terrainScatterEraseActive &&
+    ctx.hasInstancedMeshes &&
+    event.button === 0 &&
+    !ctx.selectedNodeIsGround
+  ) {
     ctx.beginRepairClick(event)
     return { handled: true, clearPointerTrackingState: true }
   }

@@ -3175,7 +3175,9 @@ function toggleScatterEraseMode() {
     sceneStore.selectAsset(null)
   }
   terrainStore.setBrushOperation(null)
-  if (selectedNodeIsGround.value) {
+  // Prefer terrain scatter erase whenever possible so ground erase works even
+  // when the current selection is not the ground node.
+  if (!selectedNodeIsWall.value) {
     if (activeBuildTool.value !== 'scatter') {
       handleBuildToolChange('scatter')
     }
@@ -5797,20 +5799,43 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
     return false
   }
 
-  const tool = activeBuildTool.value
-  if (!tool) {
-    return false
-  }
-
   const dragState = pointerInteraction.get()
   const isTrackedRightClick = dragState?.kind === 'buildToolRightClick' && dragState.pointerId === event.pointerId
-  const clickWasDrag = isTrackedRightClick ? (dragState.moved || pointerInteraction.ensureMoved(event)) : false
+  const trackingState = pointerTrackingState
+  const isTrackedPointerRightClick =
+    trackingState &&
+    trackingState.pointerId === event.pointerId &&
+    trackingState.button === 2
+  const pointerTrackingMoved = (() => {
+    if (!isTrackedPointerRightClick || !trackingState) {
+      return false
+    }
+    const dx = event.clientX - trackingState.startX
+    const dy = event.clientY - trackingState.startY
+    return trackingState.moved || Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
+  })()
+  const clickWasDrag = isTrackedRightClick
+    ? (dragState.moved || pointerInteraction.ensureMoved(event))
+    : pointerTrackingMoved
 
   if (clickWasDrag) {
     return false
   }
 
   pointerInteraction.clearIfKind('buildToolRightClick')
+
+  if (scatterEraseModeActive.value) {
+    exitScatterEraseMode()
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return true
+  }
+
+  const tool = activeBuildTool.value
+  if (!tool) {
+    return false
+  }
 
   let handled = false
   switch (tool) {
@@ -13979,6 +14004,28 @@ async function handlePointerUp(event: PointerEvent) {
       }
     }
 
+    // Scatter erase mode: right-click without dragging exits erase mode.
+    // Right-drag still belongs to camera orbit controls and should not cancel the mode.
+    if (
+      scatterEraseModeActive.value &&
+      pointerTrackingState &&
+      pointerTrackingState.pointerId === event.pointerId &&
+      pointerTrackingState.button === 2 &&
+      !pointerTrackingState.moved &&
+      event.pointerType === 'mouse' &&
+      isPointerUpOnCanvas
+    ) {
+      exitScatterEraseMode()
+      pointerTrackingState = null
+      pointerInteraction.clearIfKind('buildToolRightClick')
+      pointerInteraction.releaseIfCaptured(event.pointerId)
+
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
     // Selection-based asset preview: right click (without moving) rotates the preview.
     // Keep right-drag behavior for orbit controls by only reacting when `moved` is false.
     if (
@@ -14145,10 +14192,18 @@ async function handlePointerUp(event: PointerEvent) {
 
     // If middle mouse was released and no other handler processed the event,
     // cancel active tools and restore select, but only if this was a click (no drag).
+    // In scatter/scatter-erase contexts, middle click should not cancel the tool state.
     // Middle drag is reserved for camera panning.
     if (event.button === 1 && middleClickSessionState?.pointerId === event.pointerId) {
       const wasDrag = Boolean(middleClickSessionState.moved)
       if (wasDrag) {
+        return
+      }
+      const isScatterContext =
+        scatterEraseModeActive.value ||
+        activeBuildTool.value === 'scatter' ||
+        uiStore.activeSelectionContext === 'scatter-erase'
+      if (isScatterContext) {
         return
       }
       try {
