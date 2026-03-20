@@ -4627,6 +4627,18 @@ function resolveNodeFocusPoint(nodeId: string | null, fallback: THREE.Vector3): 
 	return fallback
 }
 
+function resolveNodeAnchorPoint(nodeId: string | null, fallback: THREE.Vector3): THREE.Vector3 | null {
+	if (!nodeId) {
+		return null
+	}
+	const object = nodeObjectMap.get(nodeId)
+	if (!object) {
+		return null
+	}
+	object.getWorldPosition(fallback)
+	return fallback
+}
+
 function resetProtagonistPoseState() {
 	protagonistPoseSynced = false
 }
@@ -4860,15 +4872,16 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
 		return
 	}
-	const focus = resolveNodeFocusPoint(event.targetNodeId ?? event.nodeId, tempTarget)
-	if (!focus) {
+	const targetNodeId = event.targetNodeId ?? event.nodeId
+	const anchorPoint = resolveNodeAnchorPoint(targetNodeId, tempTarget) ?? resolveNodeFocusPoint(targetNodeId, tempTarget)
+	if (!anchorPoint) {
 		resolveBehaviorToken(event.token, {
 			type: 'fail',
 			message: 'Behavior target object not found.',
 		})
 		return
 	}
-	const focusPoint = focus.clone()
+	const focusPoint = anchorPoint.clone()
 	const startPosition = activeCamera.position.clone()
 	const startQuaternion = activeCamera.quaternion.clone()
 	const orbitControls = mapControls ?? null
@@ -5051,7 +5064,7 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 		return { success: true }
 	}
 	activeCameraLookTween = null
-	const focus = resolveNodeFocusPoint(resolvedTarget, tempTarget)
+	const focus = resolveNodeAnchorPoint(resolvedTarget, tempTarget) ?? resolveNodeFocusPoint(resolvedTarget, tempTarget)
 	if (!focus) {
 		return { success: false, message: 'Target node not found' }
 	}
@@ -6458,7 +6471,6 @@ function resetCameraToLevelView() {
 	activeCameraLookTween = null
 	setCameraCaging(false)
 	if (controlMode.value === 'first-person' && firstPersonControls) {
-		camera.position.y = CAMERA_HEIGHT
 		tempDirection.set(0, 0, 0)
 		camera.getWorldDirection(tempDirection)
 		const startTarget = camera.position.clone().add(tempDirection)
@@ -6582,7 +6594,6 @@ function applyControlMode(mode: ControlMode) {
 	}
 	if (mode === 'first-person') {
 		activeCamera.position.copy(lastFirstPersonState.position)
-		activeCamera.position.y = CAMERA_HEIGHT
 		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
 		activeCamera.lookAt(target)
 		clampFirstPersonPitch(true)
@@ -6889,7 +6900,6 @@ function updateCameraControlsForFrame(
 		firstPersonControls.update(delta)
 		updateFirstPersonCameraLookTween(delta)
 		clampFirstPersonPitch()
-		activeCamera.position.y = CAMERA_HEIGHT
 		syncLastFirstPersonStateFromCamera()
 		return
 	}
