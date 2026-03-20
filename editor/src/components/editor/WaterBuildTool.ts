@@ -533,9 +533,6 @@ export function createWaterBuildTool(options: {
           const clickWasDrag = rightClickState.moved
           rightClickState = null
           if (!clickWasDrag && session) {
-            if (session.shape === 'polygon') {
-              return false
-            }
             clearSession(true)
             return true
           }

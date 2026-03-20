@@ -5580,16 +5580,6 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
   return true
 }
 
-const RIGHT_DOUBLE_CLICK_MS = 320
-
-type BuildToolRightClickCandidate = {
-  atMs: number
-  x: number
-  y: number
-}
-
-let buildToolRightClickCandidate: BuildToolRightClickCandidate | null = null
-
 type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water' | 'displayBoard' | 'warpGate'
 type GroundBuildTool = 'terrain' | 'paint' | 'scatter'
 
@@ -5782,19 +5772,17 @@ function handleViewportWheel(event: WheelEvent) {
   applyGroundBrushRadiusWheelDelta(event)
 }
 
-function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
+function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
   if (event.button !== 2) {
     return false
   }
 
   if (isAltOverrideActive) {
-    buildToolRightClickCandidate = null
     return false
   }
 
   const tool = activeBuildTool.value
-  if (!isBuildToolBlockedDuringGroundSculptConfig(tool)) {
-    buildToolRightClickCandidate = null
+  if (!tool) {
     return false
   }
 
@@ -5802,38 +5790,68 @@ function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
   const isTrackedRightClick = dragState?.kind === 'buildToolRightClick' && dragState.pointerId === event.pointerId
   const clickWasDrag = isTrackedRightClick ? (dragState.moved || pointerInteraction.ensureMoved(event)) : false
 
-  // Don't treat drags as clicks; let camera controls + existing finalize logic proceed.
   if (clickWasDrag) {
-    buildToolRightClickCandidate = null
     return false
   }
 
-  const now = nowMs()
-  const previous = buildToolRightClickCandidate
-  if (previous && now - previous.atMs <= RIGHT_DOUBLE_CLICK_MS) {
-    const dx = event.clientX - previous.x
-    const dy = event.clientY - previous.y
-    if (Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
-      buildToolRightClickCandidate = null
-      pointerInteraction.clearIfKind('buildToolRightClick')
-      const previousTransformTool = transformToolBeforeBuild
-      const handled = cancelActiveBuildOperation({ restoreTransformTool: previousTransformTool })
-      transformToolBeforeBuild = null
+  pointerInteraction.clearIfKind('buildToolRightClick')
+
+  let handled = false
+  switch (tool) {
+    case 'wall':
+      handled = wallBuildTool.cancel()
+      break
+    case 'road':
+      handled = roadBuildTool.cancel()
+      break
+    case 'floor':
+      handled = floorBuildTool.cancel()
+      break
+    case 'water':
+      handled = waterBuildTool.cancel()
+      break
+    case 'displayBoard':
+      handled = displayBoardBuildTool.cancel()
       if (handled) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
+        clearDisplayBoardSizeHud()
       }
-      return handled
+      break
+    case 'billboard':
+      handled = billboardBuildTool.cancel()
+      break
+    case 'warpGate':
+      if (warpGatePlacementClickSessionState) {
+        warpGatePlacementClickSessionState = null
+        hideWarpGatePlacementPreview()
+        handled = true
+      }
+      break
+    case 'scatter':
+      handled = cancelGroundEditorScatterPlacement()
+      break
+    case 'terrain':
+    case 'paint':
+      handled = false
+      break
+    default:
+      handled = false
+      break
+  }
+
+  if (!handled) {
+    const previousTransformTool = transformToolBeforeBuild
+    handled = cancelActiveBuildOperation({ restoreTransformTool: previousTransformTool })
+    if (handled) {
+      transformToolBeforeBuild = null
     }
   }
 
-  buildToolRightClickCandidate = {
-    atMs: now,
-    x: event.clientX,
-    y: event.clientY,
+  if (handled) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
   }
-  return false
+  return handled
 }
 
 const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
@@ -13917,7 +13935,7 @@ async function handlePointerUp(event: PointerEvent) {
       }
 
       const tools = handlePointerUpTools(event, {
-        maybeCancelBuildToolOnRightDoubleClick,
+        maybeHandleBuildToolRightClick,
         handleGroundEditorPointerUp,
         displayBoardBuildToolHandlePointerUp: (e) => displayBoardBuildTool.handlePointerUp(e),
         billboardBuildToolHandlePointerUp: (e) => billboardBuildTool.handlePointerUp(e),
@@ -18555,7 +18573,6 @@ watch(activeBuildTool, (tool, previous) => {
   }
 
   if (!isBuildToolBlockedDuringGroundSculptConfig(tool)) {
-    buildToolRightClickCandidate = null
     pointerInteraction.clearIfKind('buildToolRightClick')
   }
   if (tool !== 'wall') {

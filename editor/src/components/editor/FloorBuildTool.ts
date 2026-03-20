@@ -586,14 +586,8 @@ export function createFloorBuildTool(options: {
           const clickWasDrag = rightClickState.moved
           rightClickState = null
           if (!clickWasDrag && session) {
-            // Rectangle/circle: right click cancels the current draft only.
-            if (session.shape !== 'polygon') {
-              clearSession(true)
-              return true
-            }
-
-            // Polygon completion uses left-button double click.
-            return false
+            clearSession(true)
+            return true
           }
         }
         return false

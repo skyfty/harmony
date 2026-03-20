@@ -5211,8 +5211,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return true
 			}
 			if (event.button === 2 && scatterRightClickState && scatterRightClickState.pointerId === event.pointerId) {
+				cancelScatterPlacement()
 				scatterRightClickState = null
-				return false
+				return true
 			}
 			return false
 		}

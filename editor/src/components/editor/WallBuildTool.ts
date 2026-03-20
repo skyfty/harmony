@@ -1509,11 +1509,11 @@ export function createWallBuildTool(options: {
             const shape = getShape()
             if (shape !== 'line' && shape !== 'polygon' && session.shapeDraft) {
               cancelShapeDraft()
-              clearSession(true)
-              event.preventDefault()
-              event.stopPropagation()
-              event.stopImmediatePropagation()
             }
+            clearSession(true)
+            event.preventDefault()
+            event.stopPropagation()
+            event.stopImmediatePropagation()
           }
           // Treat both click and drag as handled so the right-button release does not
           // fall through to selection tools.

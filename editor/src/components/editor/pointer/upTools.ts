@@ -3,7 +3,7 @@ import type { PointerUpResult } from './types'
 export function handlePointerUpTools(
   event: PointerEvent,
   ctx: {
-    maybeCancelBuildToolOnRightDoubleClick: (event: PointerEvent) => boolean
+    maybeHandleBuildToolRightClick: (event: PointerEvent) => boolean
 
     handleGroundEditorPointerUp: (event: PointerEvent) => boolean
     displayBoardBuildToolHandlePointerUp: (event: PointerEvent) => boolean
@@ -21,7 +21,7 @@ export function handlePointerUpTools(
     floorBuildToolHandlePointerUp: (event: PointerEvent) => boolean
   },
 ): PointerUpResult | null {
-  if (event.button === 2 && ctx.maybeCancelBuildToolOnRightDoubleClick(event)) {
+  if (event.button === 2 && ctx.maybeHandleBuildToolRightClick(event)) {
     return { handled: true }
   }
 
