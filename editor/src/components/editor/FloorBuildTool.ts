@@ -537,6 +537,9 @@ export function createFloorBuildTool(options: {
         }
         const handled = handlePlacementClick(event)
         if (handled) {
+          if ((event.detail ?? 0) >= 2 && (session?.shape === 'polygon') && (session.points.length >= 3)) {
+            finalize()
+          }
           event.preventDefault()
           event.stopPropagation()
           event.stopImmediatePropagation()
@@ -558,9 +561,8 @@ export function createFloorBuildTool(options: {
               return true
             }
 
-            // Polygon: right click finalizes.
-            finalize()
-            return true
+            // Polygon completion uses left-button double click.
+            return false
           }
         }
         return false

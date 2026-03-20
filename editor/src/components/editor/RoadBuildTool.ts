@@ -621,6 +621,9 @@ export function createRoadBuildTool(options: {
         }
         const handled = handlePlacementClick(event)
         if (handled) {
+          if ((event.detail ?? 0) >= 2 && (session?.points.length ?? 0) >= 2) {
+            finalize()
+          }
           event.preventDefault()
           event.stopPropagation()
           event.stopImmediatePropagation()
@@ -634,10 +637,7 @@ export function createRoadBuildTool(options: {
         }
         const active = options.pointerInteraction.get()
         if (active?.kind === 'buildToolRightClick' && active.pointerId === event.pointerId && active.roadCancelEligible) {
-          const clickWasDrag = active.moved || options.pointerInteraction.ensureMoved(event)
-          if (!clickWasDrag && session) {
-            finalize()
-          }
+          options.pointerInteraction.ensureMoved(event)
         }
         return Boolean(active?.kind === 'buildToolRightClick' && active.pointerId === event.pointerId)
       }

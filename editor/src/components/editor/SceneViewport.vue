@@ -11319,24 +11319,24 @@ function animate() {
   waterBuildTool.flushPreviewIfNeeded(scene)
   updatePendingBuildStartIndicator()
   ensureDisplayBoardCornerHandlesForSelectedNode()
-  // Endpoint gizmos: keep a large, click-friendly on-screen size.
-  roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 30 })
+  // Endpoint gizmos: enlarge hit area to make dragging easier in edit modes.
+  roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 46 })
   wallEndpointRenderer.updateScreenSize({
     camera,
     canvas: canvasRef.value,
-    diameterPx: 36,
+    diameterPx: 52,
     freezeCircleFacing: !!wallCircleCenterDragState || !!wallCircleRadiusDragState,
   })
-  floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
+  floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   floorCircleHandleRenderer.updateScreenSize({
     camera,
     canvas: canvasRef.value,
-    diameterPx: 36,
+    diameterPx: 54,
     freezeCircleFacing: !!floorCircleCenterDragState || !!floorCircleRadiusDragState,
   })
-  displayBoardCornerHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
-  waterVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
-  waterCircleHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 36 })
+  displayBoardCornerHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
+  waterVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
+  waterCircleHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 54 })
   // Directional light target handles: keep readable in very large scenes.
   directionalLightTargetHandleManager.updateScreenSize({ camera, canvas: canvasRef.value })
   updateVertexSnapHintPulse(performance.now())
@@ -12240,23 +12240,6 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
   const hit = pickNodeAtPointer(event) ?? trackingState.hitResult
   const isToggle = event.ctrlKey || event.metaKey || trackingState.ctrlKey || trackingState.metaKey
   const isRange = event.shiftKey || trackingState.shiftKey
-  const currentSelection = sceneStore.selectedNodeIds
-  const allowDeselectOnReselect = options?.allowDeselectOnReselect ?? true
-
-  // Road segment sub-selection: only in select tool mode, left click, no modifiers.
-  if (
-    props.activeTool === 'select' &&
-    hit &&
-    typeof hit.roadSegmentIndex === 'number' &&
-    Number.isFinite(hit.roadSegmentIndex) &&
-    hit.roadSegmentIndex >= 0 &&
-    !isToggle &&
-    !isRange
-  ) {
-    sceneStore.setSelectedRoadSegment(hit.nodeId, hit.roadSegmentIndex)
-    emitSelectionChange([hit.nodeId])
-    return
-  }
 
   if (!hit) {
     sceneStore.clearSelectedRoadSegment()
@@ -12266,27 +12249,9 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
     return
   }
 
-  const nodeId = hit.nodeId
-  const alreadySelected = currentSelection.includes(nodeId)
-
-  // Clicking anything else clears road segment selection.
+  // Keep current selection when left-clicking a node. Selection happens on double-click.
   sceneStore.clearSelectedRoadSegment()
-
-  if (isToggle || isRange) {
-    if (alreadySelected) {
-      emitSelectionChange(currentSelection.filter((id) => id !== nodeId))
-    } else {
-      emitSelectionChange([...currentSelection, nodeId])
-    }
-    return
-  }
-
-  if (allowDeselectOnReselect && currentSelection.length === 1 && alreadySelected) {
-    emitSelectionChange([])
-    return
-  }
-
-  emitSelectionChange([nodeId])
+  void options
 }
 
 function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
@@ -12645,17 +12610,26 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
-  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
+  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2 && !activeBuildTool.value) {
     flushPendingScenePatchesForInteraction()
     const hit = pickNodeAtPointer(event)
     if (hit) {
-      const toolForNode = resolveBuildToolForNodeId(hit.nodeId)
-      if (tryEnterNodeBuildToolEditMode(hit.nodeId, toolForNode)) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return
+      const hitNodeId = hit.nodeId
+      const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === hitNodeId
+      emitSelectionChange([hitNodeId])
+      if (wasAlreadySingleSelected) {
+        const toolForNode = resolveBuildToolForNodeId(hitNodeId)
+        if (tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)) {
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+          return
+        }
       }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
     }
   }
 
@@ -14590,6 +14564,10 @@ function handleCanvasDoubleClick(event: MouseEvent) {
     }
   }
 
+  if (activeBuildTool.value) {
+    return
+  }
+
   flushPendingScenePatchesForInteraction()
   const hit = pickNodeAtPointer(event)
   if (!hit) {
@@ -14597,13 +14575,12 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   const hitNodeId = hit.nodeId
-  const toolForNode = resolveBuildToolForNodeId(hitNodeId)
+  const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === hitNodeId
 
-  // UX: double-click an unlocked Wall/Floor/Road node to immediately enter its edit mode.
-  if (!tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)) {
-    const nextSelection = sceneStore.handleNodeDoubleClick(hitNodeId)
-    const appliedSelection = Array.isArray(nextSelection) && nextSelection.length ? nextSelection : [hitNodeId]
-    emitSelectionChange(appliedSelection)
+  emitSelectionChange([hitNodeId])
+  if (wasAlreadySingleSelected) {
+    const toolForNode = resolveBuildToolForNodeId(hitNodeId)
+    tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)
   }
   event.preventDefault()
   event.stopPropagation()

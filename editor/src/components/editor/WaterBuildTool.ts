@@ -483,6 +483,9 @@ export function createWaterBuildTool(options: {
         if (shape === 'polygon') {
           const handled = handlePlacementClick(event)
           if (handled) {
+            if ((event.detail ?? 0) >= 2 && (session?.shape === 'polygon') && (session.points.length >= 3)) {
+              finalizePolygon()
+            }
             event.preventDefault()
             event.stopPropagation()
             event.stopImmediatePropagation()
@@ -500,8 +503,7 @@ export function createWaterBuildTool(options: {
           rightClickState = null
           if (!clickWasDrag && session) {
             if (session.shape === 'polygon') {
-              finalizePolygon()
-              return true
+              return false
             }
             clearSession(true)
             return true

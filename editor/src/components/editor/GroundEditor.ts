@@ -5168,26 +5168,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		if (scatterSession.brushShape === 'polygon') {
 			if (event.button === 0 && event.pointerId === scatterSession.pointerId) {
+				if ((event.detail ?? 0) >= 2 && scatterSession.polygonPoints.length >= 3) {
+					scatterSession.polygonPreviewEnd = null
+					refreshScatterSessionPreview(scatterSession)
+					commitScatterSessionPreview(scatterSession)
+					queueScatterSidecarSave()
+					clearScatterAreaPreview()
+					options.clearVertexSnap?.()
+					scatterSession = null
+				}
 				return true
 			}
 			if (event.button === 2 && scatterRightClickState && scatterRightClickState.pointerId === event.pointerId) {
-				const clickWasDrag = scatterRightClickState.moved
 				scatterRightClickState = null
-				if (clickWasDrag) {
-					return false
-				}
-				if (scatterSession.polygonPoints.length < 3) {
-					cancelScatterPlacement()
-					return true
-				}
-				scatterSession.polygonPreviewEnd = null
-				refreshScatterSessionPreview(scatterSession)
-				commitScatterSessionPreview(scatterSession)
-				queueScatterSidecarSave()
-				clearScatterAreaPreview()
-				options.clearVertexSnap?.()
-				scatterSession = null
-				return true
+				return false
 			}
 			return false
 		}

@@ -1441,18 +1441,24 @@ export function createWallBuildTool(options: {
           return false
         }
         const shape = getShape()
-        const handled = shape === 'line'
-          ? handleLinePlacementClick(event)
-          : shape === 'polygon'
-          ? handlePolygonPlacementClick(event)
-          : (() => {
-            const hadDraft = Boolean(session?.shapeDraft)
-            if (hadDraft) {
-              commitShapeDraft()
-              return true
-            }
-            return false
-          })()
+        let handled = false
+        if (shape === 'line') {
+          handled = handleLinePlacementClick(event)
+          if (handled && (event.detail ?? 0) >= 2) {
+            clearSession(true)
+          }
+        } else if (shape === 'polygon') {
+          handled = handlePolygonPlacementClick(event)
+          if (handled && (event.detail ?? 0) >= 2 && (session?.polygonPoints.length ?? 0) >= 3) {
+            finalizePolygon()
+          }
+        } else {
+          const hadDraft = Boolean(session?.shapeDraft)
+          if (hadDraft) {
+            commitShapeDraft()
+            handled = true
+          }
+        }
         if (handled) {
           event.preventDefault()
           event.stopPropagation()
@@ -1470,17 +1476,13 @@ export function createWallBuildTool(options: {
           const clickWasDrag = active.moved || options.pointerInteraction.ensureMoved(event)
           if (!clickWasDrag && session) {
             const shape = getShape()
-            if (shape === 'polygon') {
-              finalizePolygon()
-            } else if (shape === 'line') {
-              clearSession(true)
-            } else if (session.shapeDraft) {
+            if (shape !== 'line' && shape !== 'polygon' && session.shapeDraft) {
               cancelShapeDraft()
               clearSession(true)
+              event.preventDefault()
+              event.stopPropagation()
+              event.stopImmediatePropagation()
             }
-            event.preventDefault()
-            event.stopPropagation()
-            event.stopImmediatePropagation()
           }
           // Treat both click and drag as handled so the right-button release does not
           // fall through to selection tools.
