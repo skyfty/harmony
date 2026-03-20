@@ -37,6 +37,12 @@ type LeftDragState = {
   kind: Exclude<WaterBuildShape, 'polygon'>
 }
 
+type LeftClickState = {
+  atMs: number
+  clientX: number
+  clientY: number
+}
+
 type VertexSnapResolverOptions = {
   excludeNodeIds?: readonly string[]
   keepSourceY?: boolean
@@ -67,6 +73,8 @@ export function createWaterBuildTool(options: {
   }) => void
   clickDragThresholdPx: number
 }): WaterBuildToolHandle {
+  const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
+  const DOUBLE_CLICK_MAX_DISTANCE_PX = 8
   const previewRenderer = createWaterPreviewRenderer({ rootGroup: options.rootGroup })
   const groundPointerHelper = new THREE.Vector3()
   const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
@@ -79,6 +87,29 @@ export function createWaterBuildTool(options: {
   let session: Session | null = null
   let rightClickState: RightClickState | null = null
   let leftDragState: LeftDragState | null = null
+  let leftClickState: LeftClickState | null = null
+
+  const isLeftDoubleClick = (event: PointerEvent): boolean => {
+    if (event.button !== 0) {
+      return false
+    }
+    const now = Number.isFinite(event.timeStamp) ? Number(event.timeStamp) : Date.now()
+    const previous = leftClickState
+    leftClickState = {
+      atMs: now,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    }
+    if (!previous) {
+      return false
+    }
+    const dt = now - previous.atMs
+    if (dt < 0 || dt > DOUBLE_CLICK_MAX_INTERVAL_MS) {
+      return false
+    }
+    const distance = Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY)
+    return distance <= DOUBLE_CLICK_MAX_DISTANCE_PX
+  }
 
   const hideStartIndicator = () => {
     options.hideStartIndicator?.()
@@ -483,7 +514,7 @@ export function createWaterBuildTool(options: {
         if (shape === 'polygon') {
           const handled = handlePlacementClick(event)
           if (handled) {
-            if ((event.detail ?? 0) >= 2 && (session?.shape === 'polygon') && (session.points.length >= 3)) {
+            if (isLeftDoubleClick(event) && (session?.shape === 'polygon') && (session.points.length >= 3)) {
               finalizePolygon()
             }
             event.preventDefault()

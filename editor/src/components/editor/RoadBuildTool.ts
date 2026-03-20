@@ -20,6 +20,12 @@ export type RoadBuildToolSession = RoadPreviewSession & {
   startVertexIndex: number | null
 }
 
+type LeftClickState = {
+  atMs: number
+  clientX: number
+  clientY: number
+}
+
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
   ensureMoved: (event: PointerEvent) => boolean
@@ -90,6 +96,8 @@ export function createRoadBuildTool(options: {
   createRoadNodeMaterials: () => any[]
   ensureRoadVertexHandlesForSelectedNode: (options?: { force?: boolean }) => void
 }): RoadBuildToolHandle {
+  const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
+  const DOUBLE_CLICK_MAX_DISTANCE_PX = 8
   const previewRenderer = createRoadPreviewRenderer({
     rootGroup: options.rootGroup,
     heightSampler: options.heightSampler,
@@ -98,6 +106,29 @@ export function createRoadBuildTool(options: {
   const groundPointerHelper = new THREE.Vector3()
 
   let session: RoadBuildToolSession | null = null
+  let leftClickState: LeftClickState | null = null
+
+  const isLeftDoubleClick = (event: PointerEvent): boolean => {
+    if (event.button !== 0) {
+      return false
+    }
+    const now = Number.isFinite(event.timeStamp) ? Number(event.timeStamp) : Date.now()
+    const previous = leftClickState
+    leftClickState = {
+      atMs: now,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    }
+    if (!previous) {
+      return false
+    }
+    const dt = now - previous.atMs
+    if (dt < 0 || dt > DOUBLE_CLICK_MAX_INTERVAL_MS) {
+      return false
+    }
+    const distance = Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY)
+    return distance <= DOUBLE_CLICK_MAX_DISTANCE_PX
+  }
 
   const hideStartIndicator = () => {
     options.hideStartIndicator?.()
@@ -621,7 +652,7 @@ export function createRoadBuildTool(options: {
         }
         const handled = handlePlacementClick(event)
         if (handled) {
-          if ((event.detail ?? 0) >= 2 && (session?.points.length ?? 0) >= 2) {
+          if (isLeftDoubleClick(event) && (session?.points.length ?? 0) >= 2) {
             finalize()
           }
           event.preventDefault()

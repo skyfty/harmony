@@ -4756,8 +4756,6 @@ export async function cloneSceneDocumentForExport(
   return createSceneDocument(scene.name, {
     id: scene.id,
     nodes: runtimeAwareScene.nodes,
-    selectedNodeId: scene.selectedNodeId,
-    selectedNodeIds: scene.selectedNodeIds,
     camera: scene.camera,
     resourceProviderId: scene.resourceProviderId,
     createdAt: scene.createdAt,
@@ -6172,11 +6170,10 @@ function migrateScenePersistedState(
     }
   }
 
-  if (!Array.isArray(next.selectedNodeIds)) {
-    next.selectedNodeIds = []
-  } else {
-    next.selectedNodeIds = (next.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
-  }
+  // Runtime-only interaction state should never be restored from persistence.
+  next.selectedNodeId = null
+  next.selectedNodeIds = []
+  next.activeTool = 'select'
 
   if (typeof next.hasUnsavedChanges !== 'boolean') {
     next.hasUnsavedChanges = false
@@ -6775,14 +6772,6 @@ function createSceneDocument(
   // Sky node is optional: only auto-create it for new scenes without explicit nodes.
   const nodes = ensureEnvironmentNode(groundedNodes, environmentSettings)
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
-  const findDefaultSelectableNode = () => nodes.find((node) => !isGroundNode(node) && !isEnvironmentNode(node))?.id ?? null
-  let selectedNodeId = options.selectedNodeId !== undefined
-    ? options.selectedNodeId
-    : findDefaultSelectableNode()
-  if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
-    selectedNodeId = findDefaultSelectableNode()
-  }
-  const selectedNodeIds = normalizeSelectionIds(nodes, options.selectedNodeIds ?? (selectedNodeId ? [selectedNodeId] : []))
   const now = new Date().toISOString()
   const createdAt = options.createdAt ?? now
   const updatedAt = options.updatedAt ?? createdAt
@@ -6806,8 +6795,6 @@ function createSceneDocument(
     projectId: options.projectId ?? '',
     nodes,
     materials,
-    selectedNodeId,
-    selectedNodeIds,
     camera,
     viewportSettings,
   skybox,
@@ -6877,8 +6864,6 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     projectId,
     nodes,
     materials: cloneSceneMaterials(store.materials),
-    selectedNodeId: store.selectedNodeId,
-    selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: cloneCameraState(store.camera),
     viewportSettings: cloneViewportSettings(store.viewportSettings),
     skybox: cloneSkyboxSettings(store.skybox),
@@ -7969,7 +7954,7 @@ export const useSceneStore = defineStore('scene', {
       replaceSceneNodes(this, normalizedNodes)
       this.rebuildGeneratedMeshRuntimes()
       this.planningData = clonePlanningData(scene.planningData)
-      this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
+      this.setSelection([])
       this.camera = cloneCameraState(scene.camera)
       this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
       this.skybox = resolveDocumentSkybox(scene)
@@ -16026,10 +16011,6 @@ export const useSceneStore = defineStore('scene', {
         const sceneDocument = createSceneDocument(uniqueName, {
           nodes: entry.nodes as SceneNode[],
           projectId,
-          selectedNodeId: typeof entry.selectedNodeId === 'string' ? entry.selectedNodeId : null,
-          selectedNodeIds: Array.isArray(entry.selectedNodeIds)
-            ? (entry.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
-            : undefined,
           camera: normalizeCameraStateInput(entry.camera),
           resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
           createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
@@ -16125,10 +16106,6 @@ export const useSceneStore = defineStore('scene', {
         const sceneDocument = createSceneDocument(uniqueName, {
           nodes: entry.nodes as SceneNode[],
           projectId,
-          selectedNodeId: typeof entry.selectedNodeId === 'string' ? entry.selectedNodeId : null,
-          selectedNodeIds: Array.isArray(entry.selectedNodeIds)
-            ? (entry.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
-            : undefined,
           camera: normalizeCameraStateInput(entry.camera),
           resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
           createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,

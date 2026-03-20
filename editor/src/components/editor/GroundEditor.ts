@@ -663,7 +663,14 @@ type ScatterRightClickState = {
 	moved: boolean
 }
 
+type ScatterLeftClickState = {
+	atMs: number
+	clientX: number
+	clientY: number
+}
+
 let scatterRightClickState: ScatterRightClickState | null = null
+let scatterLeftClickState: ScatterLeftClickState | null = null
 
 type PaintImageDataSource = {
 	width: number
@@ -756,6 +763,30 @@ let pendingTerrainPaintFlush: Promise<boolean> | null = null
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
 const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
 const SCATTER_CLICK_DRAG_THRESHOLD_PX = 6
+const SCATTER_DOUBLE_CLICK_INTERVAL_MS = 320
+const SCATTER_DOUBLE_CLICK_DISTANCE_PX = 8
+
+function isScatterLeftDoubleClick(event: PointerEvent): boolean {
+	if (event.button !== 0) {
+		return false
+	}
+	const now = Number.isFinite(event.timeStamp) ? Number(event.timeStamp) : Date.now()
+	const previous = scatterLeftClickState
+	scatterLeftClickState = {
+		atMs: now,
+		clientX: event.clientX,
+		clientY: event.clientY,
+	}
+	if (!previous) {
+		return false
+	}
+	const dt = now - previous.atMs
+	if (dt < 0 || dt > SCATTER_DOUBLE_CLICK_INTERVAL_MS) {
+		return false
+	}
+	const distance = Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY)
+	return distance <= SCATTER_DOUBLE_CLICK_DISTANCE_PX
+}
 
 // Safety cap to avoid runaway interactive placement on tiny assets / huge brushes.
 // Keep this high so densityPercent remains proportional for common use-cases.
@@ -5168,7 +5199,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		if (scatterSession.brushShape === 'polygon') {
 			if (event.button === 0 && event.pointerId === scatterSession.pointerId) {
-				if ((event.detail ?? 0) >= 2 && scatterSession.polygonPoints.length >= 3) {
+				if (isScatterLeftDoubleClick(event) && scatterSession.polygonPoints.length >= 3) {
 					scatterSession.polygonPreviewEnd = null
 					refreshScatterSessionPreview(scatterSession)
 					commitScatterSessionPreview(scatterSession)

@@ -12240,6 +12240,7 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
   const hit = pickNodeAtPointer(event) ?? trackingState.hitResult
   const isToggle = event.ctrlKey || event.metaKey || trackingState.ctrlKey || trackingState.metaKey
   const isRange = event.shiftKey || trackingState.shiftKey
+  const currentSelection = sceneStore.selectedNodeIds
 
   if (!hit) {
     sceneStore.clearSelectedRoadSegment()
@@ -12249,8 +12250,17 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
     return
   }
 
-  // Keep current selection when left-clicking a node. Selection happens on double-click.
+  // Single click should never select nodes. If user clicks elsewhere in scene,
+  // clear current selection to avoid requiring a ground-only deselect click.
   sceneStore.clearSelectedRoadSegment()
+  const hitNodeId = typeof hit?.nodeId === 'string' ? hit.nodeId : null
+  const hitIsCurrentlySelected = Boolean(hitNodeId && currentSelection.includes(hitNodeId))
+  if (hitIsCurrentlySelected) {
+    return
+  }
+  if (!isToggle && !isRange) {
+    emitSelectionChange([])
+  }
   void options
 }
 
@@ -12543,26 +12553,82 @@ function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | 
   return true
 }
 
-function tryExitActiveNodeBuildToolEditMode(): boolean {
+function refreshBuildStartIndicatorAfterEditExit(event?: MouseEvent | PointerEvent): void {
+  hideBuildStartIndicator()
+  if (!event || !activeBuildTool.value) {
+    return
+  }
+  if (activeBuildTool.value !== 'wall' && activeBuildTool.value !== 'road' && activeBuildTool.value !== 'floor' && activeBuildTool.value !== 'water') {
+    return
+  }
+  if (isAltOverrideActive) {
+    return
+  }
+  if (activeBuildTool.value === 'wall' && isSelectedWallEditMode()) {
+    return
+  }
+  if (activeBuildTool.value === 'road' && isSelectedRoadEditMode()) {
+    return
+  }
+  if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode()) {
+    return
+  }
+  if (activeBuildTool.value === 'water' && isSelectedWaterEditMode()) {
+    return
+  }
+
+  const point = new THREE.Vector3()
+  if (resolveBuildPlacementPoint(event as PointerEvent, point)) {
+    showBuildStartIndicator(point)
+  }
+}
+
+function tryExitActiveNodeBuildToolEditMode(event?: MouseEvent | PointerEvent): boolean {
   if (activeBuildTool.value === 'wall' && isSelectedWallEditMode()) {
     clearWallEditMode()
+    setActiveWallEndpointHandle(null)
+    wallEndpointRenderer.clearHover()
+    wallEndpointRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
   if (activeBuildTool.value === 'road' && isSelectedRoadEditMode()) {
     clearRoadEditMode()
+    setActiveRoadVertexHandle(null)
+    roadVertexRenderer.clearHover()
+    roadVertexRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
   if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode()) {
     clearFloorEditMode()
+    setActiveFloorVertexHandle(null)
+    setActiveFloorCircleHandle(null)
+    floorVertexRenderer.clearHover()
+    floorCircleHandleRenderer.clearHover()
+    floorVertexRenderer.clear()
+    floorCircleHandleRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
   if (activeBuildTool.value === 'water' && isSelectedWaterEditMode()) {
     clearWaterEditMode()
+    setActiveWaterVertexHandle(null)
+    setActiveWaterCircleHandle(null)
+    waterVertexRenderer.clearHover()
+    waterCircleHandleRenderer.clearHover()
+    waterVertexRenderer.clear()
+    waterCircleHandleRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
   if (activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()) {
     emitSelectionChange([])
     clearDisplayBoardSizeHud()
+    setActiveDisplayBoardCornerHandle(null)
+    displayBoardCornerHandleRenderer.clearHover()
+    displayBoardCornerHandleRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
   return false
@@ -12636,7 +12702,7 @@ async function handlePointerDown(event: PointerEvent) {
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
   if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
-    if (activeBuildTool.value && tryExitActiveNodeBuildToolEditMode()) {
+    if (activeBuildTool.value && tryExitActiveNodeBuildToolEditMode(event)) {
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -14624,7 +14690,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   if (activeBuildTool.value) {
-    if (tryExitActiveNodeBuildToolEditMode()) {
+    if (tryExitActiveNodeBuildToolEditMode(event)) {
       event.preventDefault()
       event.stopPropagation()
     }

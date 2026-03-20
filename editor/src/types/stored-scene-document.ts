@@ -22,7 +22,8 @@ export interface StoredSceneDocument {
   thumbnail?: string | null
   nodes: SceneNode[]
   materials: SceneMaterial[]
-  selectedNodeId: string | null
+  // Legacy persisted fields. Selection is runtime-only and should not be serialized.
+  selectedNodeId?: string | null
   selectedNodeIds?: string[]
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings

@@ -37,6 +37,12 @@ type LeftDragState = {
   kind: Exclude<FloorBuildShape, 'polygon'>
 }
 
+type LeftClickState = {
+  atMs: number
+  clientX: number
+  clientY: number
+}
+
 type VertexSnapResolverOptions = {
   excludeNodeIds?: readonly string[]
   keepSourceY?: boolean
@@ -68,6 +74,8 @@ export function createFloorBuildTool(options: {
   syncCreatedFloorMaterials?: (nodeId: string) => void
   clickDragThresholdPx: number
 }): FloorBuildToolHandle {
+  const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
+  const DOUBLE_CLICK_MAX_DISTANCE_PX = 8
   const getRegularPolygonSides = (): number => {
     const raw = options.floorRegularPolygonSides?.value ?? 0
     if (!Number.isFinite(raw)) {
@@ -123,6 +131,29 @@ export function createFloorBuildTool(options: {
   let session: FloorPreviewSession | null = null
   let rightClickState: RightClickState | null = null
   let leftDragState: LeftDragState | null = null
+  let leftClickState: LeftClickState | null = null
+
+  const isLeftDoubleClick = (event: PointerEvent): boolean => {
+    if (event.button !== 0) {
+      return false
+    }
+    const now = Number.isFinite(event.timeStamp) ? Number(event.timeStamp) : Date.now()
+    const previous = leftClickState
+    leftClickState = {
+      atMs: now,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    }
+    if (!previous) {
+      return false
+    }
+    const dt = now - previous.atMs
+    if (dt < 0 || dt > DOUBLE_CLICK_MAX_INTERVAL_MS) {
+      return false
+    }
+    const distance = Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY)
+    return distance <= DOUBLE_CLICK_MAX_DISTANCE_PX
+  }
 
   const hideStartIndicator = () => {
     options.hideStartIndicator?.()
@@ -537,7 +568,7 @@ export function createFloorBuildTool(options: {
         }
         const handled = handlePlacementClick(event)
         if (handled) {
-          if ((event.detail ?? 0) >= 2 && (session?.shape === 'polygon') && (session.points.length >= 3)) {
+          if (isLeftDoubleClick(event) && (session?.shape === 'polygon') && (session.points.length >= 3)) {
             finalize()
           }
           event.preventDefault()

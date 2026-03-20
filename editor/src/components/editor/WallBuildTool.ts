@@ -32,6 +32,12 @@ type VertexSnapResolverOptions = {
   keepSourceY?: boolean
 }
 
+type LeftClickState = {
+  atMs: number
+  clientX: number
+  clientY: number
+}
+
 export type WallBuildToolHandle = {
   getSession: () => WallBuildToolSession | null
   syncBrushPreset: () => void
@@ -120,6 +126,8 @@ export function createWallBuildTool(options: {
   }) => void
   disposeExactWallPreview?: (container: THREE.Object3D | null | undefined) => void
 }) : WallBuildToolHandle {
+  const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
+  const DOUBLE_CLICK_MAX_DISTANCE_PX = 8
   const previewRenderer = createWallPreviewRenderer({
     rootGroup: options.rootGroup,
     normalizeWallDimensionsForViewport: options.normalizeWallDimensionsForViewport,
@@ -140,6 +148,29 @@ export function createWallBuildTool(options: {
   }
 
   let session: WallBuildToolSession | null = null
+  let leftClickState: LeftClickState | null = null
+
+  const isLeftDoubleClick = (event: PointerEvent): boolean => {
+    if (event.button !== 0) {
+      return false
+    }
+    const now = Number.isFinite(event.timeStamp) ? Number(event.timeStamp) : Date.now()
+    const previous = leftClickState
+    leftClickState = {
+      atMs: now,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    }
+    if (!previous) {
+      return false
+    }
+    const dt = now - previous.atMs
+    if (dt < 0 || dt > DOUBLE_CLICK_MAX_INTERVAL_MS) {
+      return false
+    }
+    const distance = Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY)
+    return distance <= DOUBLE_CLICK_MAX_DISTANCE_PX
+  }
 
   const hideStartIndicator = () => {
     options.hideStartIndicator?.()
@@ -1444,12 +1475,12 @@ export function createWallBuildTool(options: {
         let handled = false
         if (shape === 'line') {
           handled = handleLinePlacementClick(event)
-          if (handled && (event.detail ?? 0) >= 2) {
+          if (handled && isLeftDoubleClick(event)) {
             clearSession(true)
           }
         } else if (shape === 'polygon') {
           handled = handlePolygonPlacementClick(event)
-          if (handled && (event.detail ?? 0) >= 2 && (session?.polygonPoints.length ?? 0) >= 3) {
+          if (handled && isLeftDoubleClick(event) && (session?.polygonPoints.length ?? 0) >= 3) {
             finalizePolygon()
           }
         } else {
