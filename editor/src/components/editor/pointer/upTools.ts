@@ -11,6 +11,11 @@ export function handlePointerUpTools(
     waterBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     wallBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     roadBuildToolHandlePointerUp: (event: PointerEvent) => boolean
+    displayBoardEditModeActive?: boolean
+    waterEditModeActive?: boolean
+    wallEditModeActive?: boolean
+    roadEditModeActive?: boolean
+    floorEditModeActive?: boolean
 
     activeBuildTool: string | null
     floorBuildToolHandlePointerUp: (event: PointerEvent) => boolean
@@ -24,7 +29,7 @@ export function handlePointerUpTools(
     return { handled: true }
   }
 
-  if (ctx.displayBoardBuildToolHandlePointerUp(event)) {
+  if (!ctx.displayBoardEditModeActive && ctx.displayBoardBuildToolHandlePointerUp(event)) {
     return {
       handled: true,
       preventDefault: true,
@@ -42,7 +47,7 @@ export function handlePointerUpTools(
     }
   }
 
-  if (ctx.waterBuildToolHandlePointerUp(event)) {
+  if (!ctx.waterEditModeActive && ctx.waterBuildToolHandlePointerUp(event)) {
     return {
       handled: true,
       preventDefault: true,
@@ -51,16 +56,16 @@ export function handlePointerUpTools(
     }
   }
 
-  if (ctx.wallBuildToolHandlePointerUp(event)) {
+  if (!ctx.wallEditModeActive && ctx.wallBuildToolHandlePointerUp(event)) {
     return { handled: true }
   }
 
-  if (ctx.roadBuildToolHandlePointerUp(event)) {
+  if (!ctx.roadEditModeActive && ctx.roadBuildToolHandlePointerUp(event)) {
     return { handled: true }
   }
 
   if (ctx.activeBuildTool === 'floor') {
-    const handled = ctx.floorBuildToolHandlePointerUp(event)
+    const handled = ctx.floorEditModeActive ? false : ctx.floorBuildToolHandlePointerUp(event)
     if (handled) {
       return {
         handled: true,

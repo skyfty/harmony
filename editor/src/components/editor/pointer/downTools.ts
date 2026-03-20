@@ -289,6 +289,9 @@ export function handlePointerDownTools(
     activeBuildTool: string | null
     wallBuildShape: WallBuildShape
     floorBuildShape: FloorBuildShape
+    wallEditModeActive?: boolean
+    floorEditModeActive?: boolean
+    roadEditModeActive?: boolean
     floorCircleEditModeActive?: boolean
     isAltOverrideActive: boolean
 
@@ -972,7 +975,7 @@ export function handlePointerDownTools(
       }
     }
 
-    if (ctx.wallBuildToolHandlePointerDown(event)) {
+    if (!ctx.wallEditModeActive && ctx.wallBuildToolHandlePointerDown(event)) {
       return { handled: true, clearPointerTrackingState: true }
     }
 
@@ -1316,7 +1319,9 @@ export function handlePointerDownTools(
       }
     }
 
-    ctx.floorBuildToolHandlePointerDown(event)
+    if (!ctx.floorEditModeActive) {
+      ctx.floorBuildToolHandlePointerDown(event)
+    }
 
     if (button === 0 && !ctx.isAltOverrideActive) {
       return {
@@ -1430,7 +1435,7 @@ export function handlePointerDownTools(
         stopImmediatePropagation: true,
       }
     }
-    const roadCancelEligible = button === 2 && Boolean(ctx.roadBuildToolGetSession())
+    const roadCancelEligible = !ctx.roadEditModeActive && button === 2 && Boolean(ctx.roadBuildToolGetSession())
 
     // Road build uses left click for placement; block camera controls unless Alt override is active.
     if (button === 0 && !ctx.isAltOverrideActive) {

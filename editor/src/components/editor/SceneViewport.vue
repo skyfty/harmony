@@ -12543,6 +12543,31 @@ function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | 
   return true
 }
 
+function tryExitActiveNodeBuildToolEditMode(): boolean {
+  if (activeBuildTool.value === 'wall' && isSelectedWallEditMode()) {
+    clearWallEditMode()
+    return true
+  }
+  if (activeBuildTool.value === 'road' && isSelectedRoadEditMode()) {
+    clearRoadEditMode()
+    return true
+  }
+  if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode()) {
+    clearFloorEditMode()
+    return true
+  }
+  if (activeBuildTool.value === 'water' && isSelectedWaterEditMode()) {
+    clearWaterEditMode()
+    return true
+  }
+  if (activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()) {
+    emitSelectionChange([])
+    clearDisplayBoardSizeHud()
+    return true
+  }
+  return false
+}
+
 async function handlePointerDown(event: PointerEvent) {
   const applyPointerDownResult = (result: PointerDownResult) => {
     if (result.clearPointerTrackingState) {
@@ -12610,7 +12635,17 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
-  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2 && !activeBuildTool.value) {
+  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
+    if (activeBuildTool.value && tryExitActiveNodeBuildToolEditMode()) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+    if (activeBuildTool.value) {
+      return
+    }
+
     flushPendingScenePatchesForInteraction()
     const hit = pickNodeAtPointer(event)
     if (hit) {
@@ -12791,6 +12826,12 @@ async function handlePointerDown(event: PointerEvent) {
     waterShapeMenuOpen.value = false
   }
 
+  const wallEditModeLocked = activeBuildTool.value === 'wall' && isSelectedWallEditMode()
+  const floorEditModeLocked = activeBuildTool.value === 'floor' && isSelectedFloorEditMode()
+  const roadEditModeLocked = activeBuildTool.value === 'road' && isSelectedRoadEditMode()
+  const waterEditModeLocked = activeBuildTool.value === 'water' && isSelectedWaterEditMode()
+  const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
+
   if (activeBuildTool.value === 'displayBoard') {
     if (event.button === 0 && !isAltOverrideActive && !displayBoardBuildTool.getSession()) {
       ensureDisplayBoardCornerHandlesForSelectedNode()
@@ -12802,7 +12843,13 @@ async function handlePointerDown(event: PointerEvent) {
       }
     }
     if (event.button === 0 && !isAltOverrideActive) {
-      if (displayBoardBuildTool.handlePointerDown(event)) {
+      if (!displayBoardEditModeLocked && displayBoardBuildTool.handlePointerDown(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+      if (displayBoardEditModeLocked) {
         event.preventDefault()
         event.stopPropagation()
         event.stopImmediatePropagation()
@@ -12842,7 +12889,9 @@ async function handlePointerDown(event: PointerEvent) {
         return
       }
 
-      waterBuildTool.handlePointerDown(event)
+      if (!waterEditModeLocked) {
+        waterBuildTool.handlePointerDown(event)
+      }
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -12850,7 +12899,9 @@ async function handlePointerDown(event: PointerEvent) {
     }
 
     if (event.button === 2) {
-      waterBuildTool.handlePointerDown(event)
+      if (!waterEditModeLocked) {
+        waterBuildTool.handlePointerDown(event)
+      }
       pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
       return
     }
@@ -12860,6 +12911,9 @@ async function handlePointerDown(event: PointerEvent) {
     activeBuildTool: activeBuildTool.value,
     wallBuildShape: wallBuildShape.value,
     floorBuildShape: floorBuildShape.value,
+    wallEditModeActive: wallEditModeLocked,
+    floorEditModeActive: floorEditModeLocked,
+    roadEditModeActive: roadEditModeLocked,
     floorCircleEditModeActive: isSelectedFloorCircleEditMode(),
     isAltOverrideActive,
     nodePickerActive: nodePickerStore.isActive,
@@ -13804,6 +13858,11 @@ async function handlePointerUp(event: PointerEvent) {
         waterBuildToolHandlePointerUp: (e) => waterBuildTool.handlePointerUp(e),
         wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
         roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
+        displayBoardEditModeActive: activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode(),
+        waterEditModeActive: activeBuildTool.value === 'water' && isSelectedWaterEditMode(),
+        wallEditModeActive: activeBuildTool.value === 'wall' && isSelectedWallEditMode(),
+        roadEditModeActive: activeBuildTool.value === 'road' && isSelectedRoadEditMode(),
+        floorEditModeActive: activeBuildTool.value === 'floor' && isSelectedFloorEditMode(),
         activeBuildTool: activeBuildTool.value,
         floorBuildToolHandlePointerUp: (e) => floorBuildTool.handlePointerUp(e),
       })
@@ -14565,6 +14624,10 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   if (activeBuildTool.value) {
+    if (tryExitActiveNodeBuildToolEditMode()) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
     return
   }
 
