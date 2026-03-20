@@ -6228,6 +6228,18 @@ function resolveNodeFocusPoint(nodeId: string | null | undefined): THREE.Vector3
   return tempSphere.center.clone();
 }
 
+function resolveNodeAnchorPoint(nodeId: string | null | undefined): THREE.Vector3 | null {
+  if (!nodeId) {
+    return null;
+  }
+  const object = nodeObjectMap.get(nodeId);
+  if (!object) {
+    return null;
+  }
+  object.getWorldPosition(tempVector);
+  return tempVector.clone();
+}
+
 function normalizeNodeId(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;
@@ -6366,7 +6378,6 @@ function applyCameraWatchTween(deltaSeconds: number): void {
     withControlsVerticalFreedom(controls, () => {
       controls.target.copy(tempMovementVec);
       camera.position.copy(tween.startPosition);
-      camera.position.y = HUMAN_EYE_HEIGHT;
       camera.lookAt(controls.target);
       controls.update();
     });
@@ -6719,13 +6730,14 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     return;
   }
   const { camera, controls } = context;
-  const focus = resolveNodeFocusPoint(event.targetNodeId ?? event.nodeId);
-  if (!focus) {
+  const targetNodeId = event.targetNodeId ?? event.nodeId;
+  const anchorPoint = resolveNodeAnchorPoint(targetNodeId) ?? resolveNodeFocusPoint(targetNodeId);
+  if (!anchorPoint) {
     resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
     return;
   }
 
-  const focusPoint = focus.clone();
+  const focusPoint = anchorPoint.clone();
   const startPosition = camera.position.clone();
   const startTarget = controls.target.clone();
   const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + HUMAN_EYE_HEIGHT, focusPoint.z);
@@ -6895,7 +6907,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
     return { success: true };
   }
   const { camera, controls } = context;
-  const focus = resolveNodeFocusPoint(targetNodeId);
+  const focus = resolveNodeAnchorPoint(targetNodeId) ?? resolveNodeFocusPoint(targetNodeId);
   if (!focus) {
     return { success: false, message: '未找到目标节点' };
   }
@@ -6907,10 +6919,6 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
   };
   activeCameraWatchTween = null;
   const startPosition = camera.position.clone();
-  if (Math.abs(startPosition.y - HUMAN_EYE_HEIGHT) > 1e-6) {
-    startPosition.y = HUMAN_EYE_HEIGHT;
-  }
-  camera.position.y = HUMAN_EYE_HEIGHT;
 
   tempMovementVec.copy(focus).sub(startPosition);
   if (tempMovementVec.lengthSq() < 1e-8) {
@@ -7021,14 +7029,12 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   activeCameraWatchTween = null;
   markInstancedCullingDirty();
   setCameraCaging(false);
-  camera.position.y = HUMAN_EYE_HEIGHT;
   const startTarget = controls.target.clone();
   const levelTarget = startTarget.clone();
   levelTarget.y = camera.position.y;
   const finishSuccess = () => {
     purposeActiveMode.value = 'level';
     setCameraViewState('level');
-    syncProtagonistCameraPose({ force: true, applyToCamera: true });
     return { success: true };
   };
   if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
@@ -7043,7 +7049,6 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     return finishSuccess();
   }
   const startPosition = camera.position.clone();
-  startPosition.y = HUMAN_EYE_HEIGHT;
   activeCameraWatchTween = {
     from: startTarget,
     to: levelTarget.clone(),
@@ -7933,8 +7938,6 @@ function handleVehicleAutoTourResumeTap(options: { rotateOnly?: boolean } = {}):
       setCameraViewState('level', null);
 
       runWithProgrammaticCameraMutationAndAnchor(() => {
-        camera.position.y = HUMAN_EYE_HEIGHT;
-        controls.target.y = HUMAN_EYE_HEIGHT;
         controls.update();
       });
 

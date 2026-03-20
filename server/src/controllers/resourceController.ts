@@ -1,5 +1,6 @@
 import {
   ASSET_BUNDLE_FORMAT,
+  ASSET_BUNDLE_HASH_ALGORITHM,
   ASSET_BUNDLE_MANIFEST_FILENAME,
   ASSET_BUNDLE_VERSION,
   AssetTypes,
@@ -728,7 +729,7 @@ function normalizeAssetBundleManifest(value: unknown): AssetBundleManifest {
   if (!isObjectRecord(value.primaryAsset) || !Array.isArray(value.files)) {
     throw new Error('Asset bundle manifest is incomplete')
   }
-  return value as AssetBundleManifest
+  return value as unknown as AssetBundleManifest
 }
 
 async function readUploadedAssetBundle(file: UploadedFile): Promise<{
@@ -1054,7 +1055,9 @@ function mapAssetDocument(
   const originalFilename = sanitizeString(asset.originalFilename)
   const mimeType = sanitizeString(asset.mimeType)
   const contentHash = sanitizeString((asset as AssetDocument).contentHash)
-  const contentHashAlgorithm = sanitizeString((asset as AssetDocument).contentHashAlgorithm)
+  const rawContentHashAlgorithm = sanitizeString((asset as AssetDocument).contentHashAlgorithm)
+  const contentHashAlgorithm =
+    rawContentHashAlgorithm === ASSET_BUNDLE_HASH_ALGORITHM ? rawContentHashAlgorithm : null
   const sourceLocalAssetId = sanitizeString((asset as AssetDocument).sourceLocalAssetId)
   const bundleRoleRaw = sanitizeString((asset as AssetDocument).bundleRole)
   const bundleRole = bundleRoleRaw === 'primary' || bundleRoleRaw === 'dependency' ? bundleRoleRaw : null
