@@ -4,19 +4,21 @@
   "type": "module",
   "scripts": {
     "prepare:shared": "node ./scripts/prepare-shared.mjs",
-    "predev:mp-weixin": "pnpm run prepare:shared && harmony-tools sync-scenery --mode subpackage-uni-modules",
-    "dev:mp-weixin": "cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
-    "prebuild:mp-weixin": "pnpm run prepare:shared && harmony-tools sync-scenery --mode subpackage-uni-modules",
+    "prepare:tools": "pnpm --dir ../tools run build",
+    "sync:scenery": "node ../tools/dist/cli-bin.js sync-scenery --mode subpackage-uni-modules",
+    "predev:mp-weixin": "pnpm run prepare:shared && pnpm run prepare:tools && pnpm run sync:scenery",
+    "dev:mp-weixin": "pnpm exec cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
+    "prebuild:mp-weixin": "pnpm run prepare:shared && pnpm run prepare:tools && pnpm run sync:scenery",
     "build:mp-weixin": "uni build -p mp-weixin",
-    "predev:h5": "pnpm run prepare:shared && harmony-tools sync-scenery --mode subpackage-uni-modules",
-    "dev:h5": "cross-env DEBUG=none uni -p h5",
-    "prebuild:h5": "pnpm run prepare:shared && harmony-tools sync-scenery --mode subpackage-uni-modules",
+    "predev:h5": "pnpm run prepare:shared && pnpm run prepare:tools && pnpm run sync:scenery",
+    "dev:h5": "pnpm exec cross-env DEBUG=none uni -p h5",
+    "prebuild:h5": "pnpm run prepare:shared && pnpm run prepare:tools && pnpm run sync:scenery",
     "build:h5": "uni build -p h5",
     "type-check": "vue-tsc -b",
     "lint": "eslint --ext .ts,.js,.vue src || true",
     "lint:fix": "eslint --ext .ts,.js,.vue src --fix || true",
     "check": "pnpm run type-check && pnpm run lint",
-    "generate:svg-icons": "harmony-tools process-svg-icons --project . --clean --verbose"
+    "generate:svg-icons": "pnpm run prepare:tools && node ../tools/dist/cli-bin.js process-svg-icons --project . --clean --verbose"
   },
   "engines": {
     "pnpm": ">=10.0.0"
