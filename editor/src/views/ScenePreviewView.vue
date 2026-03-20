@@ -195,6 +195,7 @@ import type {
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
 	addBehaviorRuntimeListener,
+	getBehaviorNodeVisible,
 	hasRegisteredBehaviors,
 	listRegisteredBehaviorActions,
 	updateBehaviorVisibility,
@@ -1136,7 +1137,7 @@ let activeLazyLoadCount = 0
 const tempOutlineSphere = new THREE.Sphere()
 const tempOutlineScale = new THREE.Vector3()
 
-const CAMERA_HEIGHT = 1.6
+const CAMERA_HEIGHT = 1.7
 const FIRST_PERSON_ROTATION_SPEED = 25
 const FIRST_PERSON_MOVE_SPEED = 5
 const FIRST_PERSON_LOOK_SPEED = 0.06
@@ -4868,48 +4869,47 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		return
 	}
 	const focusPoint = focus.clone()
-	const ownerObject = nodeObjectMap.get(event.targetNodeId ?? event.nodeId) ?? null
-	if (ownerObject) {
-		ownerObject.getWorldQuaternion(tempQuaternion)
-	} else {
-		tempQuaternion.identity()
-	}
-	const lookPoint = focusPoint.clone()
-	lookPoint.y = CAMERA_HEIGHT
 	const startPosition = activeCamera.position.clone()
+	const startQuaternion = activeCamera.quaternion.clone()
 	const orbitControls = mapControls ?? null
-	const destinationOffset = startPosition.clone().sub(lookPoint)
-	destinationOffset.y = 0
-	if (destinationOffset.lengthSq() < 1e-6) {
-		const fallbackForward = new THREE.Vector3(0, 0, 1).applyQuaternion(tempQuaternion)
-		destinationOffset.set(fallbackForward.x, 0, fallbackForward.z)
-	}
-	if (destinationOffset.lengthSq() < 1e-6) {
-		destinationOffset.set(0, 0, 1)
-	}
-	const controlTargetDistance = orbitControls ? Math.max(orbitControls.minDistance + 0.05, 0.1) : 0.1
-	destinationOffset.normalize().multiplyScalar(controlTargetDistance)
-	const recoveryLookTarget = lookPoint.clone().add(destinationOffset)
-	const destination = lookPoint.clone()
+	const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + CAMERA_HEIGHT, focusPoint.z)
 	const startTarget = orbitControls ? orbitControls.target.clone() : null
+	const translation = destination.clone().sub(startPosition)
+	const targetDestination = startTarget ? startTarget.clone().add(translation) : null
+	const forwardDirection = new THREE.Vector3(0, 0, 0)
+	activeCamera.getWorldDirection(forwardDirection)
+	forwardDirection.y = 0
+	if (forwardDirection.lengthSq() < 1e-8) {
+		forwardDirection.set(0, 0, -1)
+	} else {
+		forwardDirection.normalize()
+	}
+	const recoveryLookTarget = destination.clone().addScaledVector(forwardDirection, 1)
+	if (targetDestination && targetDestination.distanceToSquared(destination) < 1e-6) {
+		targetDestination.copy(recoveryLookTarget)
+	}
 	const durationSeconds = Math.max(0, event.duration ?? 0)
 	const updateFrame = (alpha: number) => {
 		activeCamera.position.lerpVectors(startPosition, destination, alpha)
-		if (orbitControls && startTarget) {
+		if (orbitControls && startTarget && targetDestination) {
 			orbitControls.target.copy(startTarget)
-			orbitControls.target.lerp(lookPoint, alpha)
+			orbitControls.target.lerp(targetDestination, alpha)
 			orbitControls.update()
+		} else {
+			activeCamera.quaternion.copy(startQuaternion)
 		}
-		activeCamera.lookAt(lookPoint)
 	}
 	const finalize = () => {
 		activeCamera.position.copy(destination)
-		if (orbitControls) {
-			orbitControls.target.copy(recoveryLookTarget)
+		if (orbitControls && targetDestination) {
+			orbitControls.target.copy(targetDestination)
 			orbitControls.update()
-			activeCamera.lookAt(recoveryLookTarget)
+			if (orbitControls.target.distanceToSquared(activeCamera.position) < 1e-6) {
+				orbitControls.target.copy(recoveryLookTarget)
+				orbitControls.update()
+			}
 		} else {
-			activeCamera.lookAt(recoveryLookTarget)
+			activeCamera.quaternion.copy(startQuaternion)
 		}
 		syncLastFirstPersonStateFromCamera()
 		resolveBehaviorToken(event.token, { type: 'continue' })
@@ -6359,6 +6359,9 @@ function handleCanvasClick(event: MouseEvent) {
 	for (const intersection of intersections) {
 		const resolvedId = resolveNodeIdFromIntersection(intersection)
 		if (!resolvedId) {
+			continue
+		}
+		if (!getBehaviorNodeVisible(resolvedId)) {
 			continue
 		}
 

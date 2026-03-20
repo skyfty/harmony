@@ -1,7 +1,12 @@
 import * as THREE from 'three'
-import type { SceneNode, SceneNodeComponentState } from '@schema'
-import { WARP_GATE_COMPONENT_TYPE } from '@schema/components'
+import type { SceneBehavior, SceneNode, SceneNodeComponentState } from '@schema'
+import {
+  BEHAVIOR_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
+} from '@schema/components'
+import { createBehaviorSequenceId, ensureBehaviorParams } from '@schema/behaviors/definitions'
 import type { WarpGateComponentProps } from '@schema/components'
+import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from './sceneStore'
 
 type SceneStoreLike = ReturnType<typeof useSceneStore>
@@ -104,6 +109,62 @@ export async function createWarpGateNode(
   if (!warpGateComponent) {
     const added = sceneStore.addNodeComponent<typeof WARP_GATE_COMPONENT_TYPE>(created.id, WARP_GATE_COMPONENT_TYPE)
     warpGateComponent = added?.component
+  }
+
+  let behaviorComponent = created.components?.[BEHAVIOR_COMPONENT_TYPE] as
+    | SceneNodeComponentState<{ behaviors: SceneBehavior[] }>
+    | undefined
+  if (!behaviorComponent) {
+    const added = sceneStore.addNodeComponent<typeof BEHAVIOR_COMPONENT_TYPE>(created.id, BEHAVIOR_COMPONENT_TYPE)
+    behaviorComponent = added?.component as SceneNodeComponentState<{ behaviors: SceneBehavior[] }> | undefined
+  }
+
+  const existingBehaviors = behaviorComponent?.props?.behaviors
+  if (behaviorComponent && (!Array.isArray(existingBehaviors) || existingBehaviors.length === 0)) {
+    const clickSequenceId = createBehaviorSequenceId()
+    const approachSequenceId = createBehaviorSequenceId()
+    const departSequenceId = createBehaviorSequenceId()
+    const behaviors: SceneBehavior[] = [
+      {
+        id: generateUuid(),
+        name: '',
+        action: 'click',
+        sequenceId: clickSequenceId,
+        script: ensureBehaviorParams({
+          type: 'moveTo',
+          params: {
+            targetNodeId: created.id,
+            duration: 0.8,
+          },
+        }),
+      },
+      {
+        id: generateUuid(),
+        name: '',
+        action: 'approach',
+        sequenceId: approachSequenceId,
+        script: ensureBehaviorParams({
+          type: 'hide',
+          params: {
+            targetNodeId: created.id,
+          },
+        }),
+      },
+      {
+        id: generateUuid(),
+        name: '',
+        action: 'depart',
+        sequenceId: departSequenceId,
+        script: ensureBehaviorParams({
+          type: 'show',
+          params: {
+            targetNodeId: created.id,
+          },
+        }),
+      },
+    ]
+
+    sceneStore.updateNodeComponentProps(created.id, behaviorComponent.id, { behaviors })
   }
 
   return created

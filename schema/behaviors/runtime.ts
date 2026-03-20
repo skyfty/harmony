@@ -926,6 +926,14 @@ export function updateBehaviorVisibility(nodeId: string, visible: boolean): void
   entry.visible = visible
 }
 
+export function getBehaviorNodeVisible(nodeId: string): boolean {
+  const entry = registry.get(nodeId)
+  if (!entry) {
+    return true
+  }
+  return entry.visible !== false
+}
+
 export function unregisterBehaviorComponent(nodeId: string): void {
   cancelSequencesForNode(nodeId)
   registry.delete(nodeId)

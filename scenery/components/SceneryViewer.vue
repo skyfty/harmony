@@ -358,52 +358,8 @@
           <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
           <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
           <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
-          <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
-          <text class="viewer-debug-line">Ground size (W × D): {{ debugGroundDims.width }} m × {{ debugGroundDims.depth }} m</text>
 
-          <view class="viewer-debug-shadow" v-if="debugShadowLightLabels.length">
-            <text class="viewer-debug-line">[Light Shadow]</text>
-            <picker :range="debugShadowLightLabels" :value="debugShadowSelectedLightIndex" @change="handleDebugShadowLightPick">
-              <text class="viewer-debug-line">Light: {{ debugShadowSelectedLightLabel }}</text>
-            </picker>
-            <view class="viewer-debug-line">
-              <text>Cast Shadow: </text>
-              <switch
-                :checked="debugShadowForm.castShadow"
-                :disabled="debugShadowCastShadowDisabled"
-                @change="handleDebugShadowCastShadowChange"
-              />
-              <text v-if="debugShadowPointShadowPolicyActive"> (Point shadow disabled)</text>
-            </view>
-            <view class="viewer-debug-line">
-              <text>Map Size: </text>
-              <picker :range="debugShadowMapSizeLabels" :value="debugShadowSelectedMapSizeIndex" @change="handleDebugShadowMapSizePick">
-                <text>{{ debugShadowMapSizeLabels[debugShadowSelectedMapSizeIndex] }}</text>
-              </picker>
-            </view>
-            <view class="viewer-debug-line">
-              <text>Bias: {{ debugShadowForm.bias.toFixed(5) }}</text>
-              <slider min="-0.005" max="0.005" step="0.00005" :value="debugShadowForm.bias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowBiasChange" />
-            </view>
-            <view class="viewer-debug-line">
-              <text>NormalBias: {{ debugShadowForm.normalBias.toFixed(3) }}</text>
-              <slider min="0" max="0.2" step="0.001" :value="debugShadowForm.normalBias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowNormalBiasChange" />
-            </view>
-            <view class="viewer-debug-line">
-              <text>Radius: {{ debugShadowForm.radius.toFixed(1) }}</text>
-              <slider min="0" max="10" step="0.1" :value="debugShadowForm.radius" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowRadiusChange" />
-            </view>
-            <view class="viewer-debug-line">
-              <text>Near: </text>
-              <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraNear" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowNearInput" />
-              <text> Far: </text>
-              <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraFar" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowFarInput" />
-            </view>
-            <view class="viewer-debug-line" v-if="debugShadowSelectedLightType === 'Directional'">
-              <text>Ortho Size: </text>
-              <input class="viewer-debug-input" type="number" :value="debugShadowForm.orthoSize" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowOrthoSizeInput" />
-            </view>
-          </view>
+          
         </template>
       </view>
     </view>
@@ -653,6 +609,7 @@ import type {
 } from '@harmony/schema/components';
 import {
   addBehaviorRuntimeListener,
+  getBehaviorNodeVisible,
   hasRegisteredBehaviors,
   listRegisteredBehaviorActions,
   updateBehaviorVisibility,
@@ -830,13 +787,12 @@ let sceneDownloadTask: SceneRequestTask | null = null;
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
-const DEFAULT_DEBUG_PLACEHOLDER = null
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
 const debugEnabled = ref(true);
 // debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show all debug info
-const debugMode = ref<'off' | 'fps' | 'full'>('fps');
+const debugMode = ref<'off' | 'fps' | 'full'>('full');
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
 
@@ -898,25 +854,6 @@ const groundChunkDebug = reactive({
   unloaded: 0,
 });
 
-const debugGroundDims = computed(() => {
-  const cached = dynamicGroundCache;
-  if (!cached || !cached.dynamicMesh) {
-    return { width: '0.00', depth: '0.00' };
-  }
-  // Try to resolve the scene node so we can compute accurate width/depth
-  const node = previewNodeMap.get(cached.nodeId) ?? null;
-  if (node) {
-    const data = buildGroundHeightfieldData(node, cached.dynamicMesh);
-    if (data) {
-      return { width: data.width.toFixed(2), depth: data.depth.toFixed(2) };
-    }
-  }
-  // Fallback: if mesh already contains width/depth fields, use them; otherwise show 0
-  const def = cached.dynamicMesh as any;
-  const w = Number.isFinite(def.width) ? def.width : 0;
-  const d = Number.isFinite(def.depth) ? def.depth : 0;
-  return { width: w.toFixed(2), depth: d.toFixed(2) };
-});
 let debugFpsFrames = 0;
 let debugFpsAccumSeconds = 0;
 let debugFpsLastSyncAt = 0;
@@ -1715,12 +1652,15 @@ const instancedCullingBox = new THREE.Box3();
 const instancedCullingSphere = new THREE.Sphere();
 const instancedCullingWorldPosition = new THREE.Vector3();
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
+const TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 320 : 200;
+const TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 120 : 33;
+const TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE = isWeChatMiniProgram ? 120 : 200;
 const terrainScatterRuntime = createTerrainScatterLodRuntime({
-  lodUpdateIntervalMs: 200,
-  visibilityUpdateIntervalMs: 33,
+  lodUpdateIntervalMs: TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS,
+  visibilityUpdateIntervalMs: TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS,
   cullGraceMs: 300,
   cullRadiusMultiplier: 1.2,
-  maxBindingChangesPerUpdate: 200,
+  maxBindingChangesPerUpdate: TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE,
   chunkStreaming: {
     enabled: true,
   },
@@ -1731,6 +1671,65 @@ const INSTANCED_CULL_GRACE_MS = 250;
 const INSTANCED_CULL_RADIUS_MULTIPLIER = 1.15;
 
 const scenePreviewPerf = createScenePreviewPerfController({ isWeChatMiniProgram });
+const TERRAIN_SCATTER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.12 : 0.06;
+const TERRAIN_SCATTER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0.3;
+const TERRAIN_SCATTER_MAX_STALE_MS = isWeChatMiniProgram ? 280 : 140;
+const TERRAIN_SCATTER_ROT_THRESHOLD_RAD = (TERRAIN_SCATTER_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const terrainScatterLastCameraPos = new THREE.Vector3();
+const terrainScatterLastCameraQuat = new THREE.Quaternion();
+const terrainScatterCameraPosScratch = new THREE.Vector3();
+const terrainScatterCameraQuatScratch = new THREE.Quaternion();
+let terrainScatterLastUpdateAtMs = 0;
+let terrainScatterForceNextUpdate = true;
+
+function markTerrainScatterUpdateDirty(): void {
+  terrainScatterForceNextUpdate = true;
+}
+
+function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boolean {
+  if (!camera) {
+    return true;
+  }
+  camera.updateMatrixWorld(true);
+  camera.getWorldPosition(terrainScatterCameraPosScratch);
+  camera.getWorldQuaternion(terrainScatterCameraQuatScratch);
+
+  if (terrainScatterForceNextUpdate) {
+    terrainScatterForceNextUpdate = false;
+    terrainScatterLastUpdateAtMs = nowMs;
+    terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
+    terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
+    return true;
+  }
+
+  if (TERRAIN_SCATTER_MAX_STALE_MS > 0 && nowMs - terrainScatterLastUpdateAtMs >= TERRAIN_SCATTER_MAX_STALE_MS) {
+    terrainScatterLastUpdateAtMs = nowMs;
+    terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
+    terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
+    return true;
+  }
+
+  const moveThresholdSq = TERRAIN_SCATTER_MOVE_THRESHOLD_M * TERRAIN_SCATTER_MOVE_THRESHOLD_M;
+  if (moveThresholdSq > 0 && terrainScatterCameraPosScratch.distanceToSquared(terrainScatterLastCameraPos) >= moveThresholdSq) {
+    terrainScatterLastUpdateAtMs = nowMs;
+    terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
+    terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
+    return true;
+  }
+
+  if (TERRAIN_SCATTER_ROT_THRESHOLD_RAD > 0) {
+    const dot = Math.min(1, Math.abs(terrainScatterLastCameraQuat.dot(terrainScatterCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    if (Number.isFinite(angle) && angle >= TERRAIN_SCATTER_ROT_THRESHOLD_RAD) {
+      terrainScatterLastUpdateAtMs = nowMs;
+      terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
+      terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
+      return true;
+    }
+  }
+
+  return false;
+}
 
 function markInstancedCullingDirty(): void {
   scenePreviewPerf.markInstancedCullingDirty();
@@ -4255,6 +4254,7 @@ function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
 
 function releaseTerrainScatterInstances(): void {
   terrainScatterRuntime.dispose();
+  markTerrainScatterUpdateDirty();
 }
 
 async function syncTerrainScatterInstances(
@@ -4262,10 +4262,12 @@ async function syncTerrainScatterInstances(
   resourceCache: ResourceCache | null,
 ): Promise<void> {
   terrainScatterRuntime.dispose();
+  markTerrainScatterUpdateDirty();
   if (!resourceCache) {
     return;
   }
   await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject);
+  markTerrainScatterUpdateDirty();
 }
 
 function resolveGuideboardComponent(
@@ -6726,9 +6728,19 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   const focusPoint = focus.clone();
   const startPosition = camera.position.clone();
   const startTarget = controls.target.clone();
-  const destination = new THREE.Vector3(focusPoint.x, startPosition.y, focusPoint.z);
+  const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + HUMAN_EYE_HEIGHT, focusPoint.z);
   const translation = destination.clone().sub(startPosition);
   const targetDestination = startTarget.clone().add(translation);
+  if (targetDestination.distanceToSquared(destination) < 1e-6) {
+    tempDirection.copy(startTarget).sub(startPosition);
+    tempDirection.y = 0;
+    if (tempDirection.lengthSq() < 1e-8) {
+      tempDirection.set(0, 0, -1);
+    } else {
+      tempDirection.normalize();
+    }
+    targetDestination.copy(destination).addScaledVector(tempDirection, 1);
+  }
   const durationSeconds = Math.max(0, event.duration ?? 0);
   
   const updateFrame = (alpha: number) => {
@@ -8420,6 +8432,9 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       if (!nodeId) {
         continue;
       }
+      if (!getBehaviorNodeVisible(nodeId)) {
+        continue;
+      }
       const directActions = listRegisteredBehaviorActions(nodeId);
       const behaviorTargetId = directActions.includes('click') ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
       if (!behaviorTargetId) {
@@ -9921,8 +9936,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
-  renderer.shadowMap.enabled = true
-  renderer.shadowMap.enabled = true
+  renderer.shadowMap.enabled = false
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   pmremGenerator?.dispose();
   pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -10327,11 +10341,13 @@ function startRenderLoop(
           }
         }
 
-        updateLazyPlaceholders(deltaSeconds);
-        terrainScatterRuntime.update(camera, resolveGroundMeshObject);
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
           ? performance.now()
           : Date.now();
+        updateLazyPlaceholders(deltaSeconds);
+        if (shouldRunTerrainScatterUpdate(camera, instancingNow)) {
+          terrainScatterRuntime.update(camera, resolveGroundMeshObject);
+        }
         if (shouldRunInstancedCulling(camera, instancingNow)) {
           updateInstancedCullingAndLod();
         }

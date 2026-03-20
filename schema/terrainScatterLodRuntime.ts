@@ -93,7 +93,6 @@ function composeScatterMatrix(
   groundMesh: THREE.Mesh,
   target?: THREE.Matrix4,
 ): THREE.Matrix4 {
-  groundMesh.updateMatrixWorld(true)
   scatterLocalPositionHelper.set(
     instance.localPosition?.x ?? 0,
     instance.localPosition?.y ?? 0,
@@ -470,6 +469,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       if (!groundMesh) {
         continue
       }
+      groundMesh.updateMatrixWorld(true)
 
       for (const layer of entry.snapshot.layers ?? []) {
         const layerAssetId = normalizeText(layer?.assetId)
@@ -657,6 +657,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
     // 准备返回的可见实例 id 集合
     const visibleIds = new Set<string>()
+    const preparedGroundNodeIds = new Set<string>()
 
     // 如果启用了分块流式（chunk streaming），我们只对当前活跃块的实例做裁剪；
     // 这样可以避免对整个地面上所有散布实例遍历，提升性能。
@@ -673,6 +674,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
         if (!groundMesh) {
           continue
+        }
+        if (!preparedGroundNodeIds.has(runtime.groundNodeId)) {
+          groundMesh.updateMatrixWorld(true)
+          preparedGroundNodeIds.add(runtime.groundNodeId)
         }
 
         // 计算实例的世界变换矩阵（groundMesh.matrixWorld * instanceLocalMatrix）
@@ -706,6 +711,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
       if (!groundMesh) {
         return
+      }
+      if (!preparedGroundNodeIds.has(runtime.groundNodeId)) {
+        groundMesh.updateMatrixWorld(true)
+        preparedGroundNodeIds.add(runtime.groundNodeId)
       }
       // 与上面分块流式路径完全相同的处理逻辑，但这里遍历的是全部 runtimeInstances（非仅活跃块）
       // 1) 合成实例世界矩阵
@@ -742,6 +751,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
   ): void {
     const now = nowMs()
+    const preparedGroundNodeIds = new Set<string>()
 
     // Update last-seen timestamps for frustum-visible instances.
     visibleIds.forEach((nodeId) => {
@@ -797,6 +807,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       if (!groundMesh) {
         return
       }
+      if (!preparedGroundNodeIds.has(runtime.groundNodeId)) {
+        groundMesh.updateMatrixWorld(true)
+        preparedGroundNodeIds.add(runtime.groundNodeId)
+      }
 
       const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
       updateModelInstanceMatrix(runtime.nodeId, matrix)
@@ -808,6 +822,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     if (!cache) {
       return
     }
+    const preparedGroundNodeIds = new Set<string>()
 
     const cameraPosition = (camera as THREE.Camera & { position: THREE.Vector3 }).position
     if (!cameraPosition || typeof cameraPosition.distanceTo !== 'function') {
@@ -834,6 +849,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
       if (!groundMesh) {
         continue
+      }
+      if (!preparedGroundNodeIds.has(runtime.groundNodeId)) {
+        groundMesh.updateMatrixWorld(true)
+        preparedGroundNodeIds.add(runtime.groundNodeId)
       }
 
       const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
