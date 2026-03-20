@@ -34,12 +34,21 @@ const PINIA_IDB_VERSION = 1
 let piniaDbPromise: Promise<IDBDatabase> | null = null
 
 const activeHydrations = new Set<Promise<void>>()
+const activeFlushes = new Set<Promise<void>>()
 
 export function waitForPiniaHydration(): Promise<void> {
   if (activeHydrations.size === 0) {
     return Promise.resolve()
   }
   const tasks = Array.from(activeHydrations)
+  return Promise.allSettled(tasks).then(() => undefined)
+}
+
+export function waitForPiniaFlush(): Promise<void> {
+  if (activeFlushes.size === 0) {
+    return Promise.resolve()
+  }
+  const tasks = Array.from(activeFlushes)
   return Promise.allSettled(tasks).then(() => undefined)
 }
 
@@ -70,6 +79,14 @@ function idbRequestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   })
 }
 
+function idbTransactionToPromise(transaction: IDBTransaction): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed'))
+    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted'))
+  })
+}
+
 const indexedDbStorage: StorageAdapter = {
   mode: 'raw',
   async getItem(key: string) {
@@ -94,6 +111,7 @@ const indexedDbStorage: StorageAdapter = {
     const tx = db.transaction(PINIA_IDB_STORE, 'readwrite')
     const store = tx.objectStore(PINIA_IDB_STORE)
     store.put(value, key)
+    await idbTransactionToPromise(tx)
   },
   async removeItem(key: string) {
     if (!hasIndexedDb) {
@@ -104,6 +122,7 @@ const indexedDbStorage: StorageAdapter = {
     const tx = db.transaction(PINIA_IDB_STORE, 'readwrite')
     const store = tx.objectStore(PINIA_IDB_STORE)
     store.delete(key)
+    await idbTransactionToPromise(tx)
   },
 }
 
@@ -583,7 +602,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         return
       }
 
-      void flushPendingPayload()
+      void runFlushPendingPayload()
     }
 
     const registerFlushListeners = () => {
@@ -610,6 +629,9 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       if (!pendingPayload) return
       const payload = pendingPayload
       pendingPayload = null
+      const startedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now()
 
       try {
         await hydrationPromise.catch(() => undefined)
@@ -628,6 +650,16 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
           await storage.setItem(key, rawPayload)
           lastPersistedPayload = cloneForStorage(rawPayload)
           lastPersistedState = cloneForStorage(payload.state as Partial<StateTree>)
+          if (debug) {
+            const endedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+              ? performance.now()
+              : Date.now()
+            console.info('[pinia-persist] Flushed raw payload', {
+              storeId: store.$id,
+              key,
+              durationMs: Math.round((endedAt - startedAt) * 100) / 100,
+            })
+          }
           return
         }
 
@@ -640,12 +672,31 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         lastPersistedValue = serialized
         lastPersistedPayload = null
         lastPersistedState = cloneDeep(payload.state)
+        if (debug) {
+          const endedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+            ? performance.now()
+            : Date.now()
+          console.info('[pinia-persist] Flushed string payload', {
+            storeId: store.$id,
+            key,
+            durationMs: Math.round((endedAt - startedAt) * 100) / 100,
+            serializedBytes: serialized.length,
+          })
+        }
 
       } catch (error) {
         if (debug) {
           console.warn(`[pinia-persist] Failed to persist store "${store.$id}"`, error)
         }
       }
+    }
+
+    const runFlushPendingPayload = (): Promise<void> => {
+      const task = flushPendingPayload()
+      activeFlushes.add(task)
+      return task.finally(() => {
+        activeFlushes.delete(task)
+      })
     }
 
     const schedulePersist = (state: StateTree) => {
@@ -661,13 +712,13 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       }
 
       if (flushDebounce === 0) {
-        void flushPendingPayload()
+        void runFlushPendingPayload()
         return
       }
 
       debounceTimer = setTimeout(() => {
         debounceTimer = null
-        void flushPendingPayload()
+        void runFlushPendingPayload()
       }, flushDebounce)
     }
 
@@ -793,7 +844,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         debounceTimer = null
       }
 
-      void flushPendingPayload()
+      void runFlushPendingPayload()
       removeFlushListeners()
       cleanupObservers()
       originalDispose()

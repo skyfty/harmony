@@ -1,6 +1,7 @@
 import { zipSync, strToU8 } from 'fflate'
 import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@schema'
 import {
+  encodeScenePackageSceneDocument,
   GROUND_SCATTER_SIDECAR_FILENAME,
   GROUND_PAINT_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
@@ -487,7 +488,7 @@ export async function exportScenePackageZip(payload: {
   for (let sIndex = 0; sIndex < payload.scenes.length; sIndex += 1) {
     const scene = payload.scenes[sIndex]!
     const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document)
-    const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
+    const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
     let groundHeightsPath: string | undefined
     let groundScatterPath: string | undefined
@@ -559,8 +560,8 @@ export async function exportScenePackageZip(payload: {
       })
     }
 
-    // Add the (possibly modified) scene JSON to files and manifest
-    files[scenePath] = jsonBytes(docClone)
+    // Add the prepared binary scene document to files and manifest.
+    files[scenePath] = encodeScenePackageSceneDocument(docClone)
     if (groundHeightSidecar) {
       groundHeightsPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
       files[groundHeightsPath] = new Uint8Array(groundHeightSidecar)

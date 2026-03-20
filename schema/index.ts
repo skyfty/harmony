@@ -144,9 +144,15 @@ export type {
 export {
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
+  readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
 } from './scenePackageZip'
 export type { AssetOverrideBytes, AssetOverrideValue, ScenePackageUnzipped } from './scenePackageZip'
+
+export {
+  encodeScenePackageSceneDocument,
+  decodeScenePackageSceneDocument,
+} from './scenePackageSceneCodec'
 
 export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuserContext'
 

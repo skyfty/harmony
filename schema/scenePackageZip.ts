@@ -70,10 +70,14 @@ export function buildAssetOverridesFromScenePackage(pkg: ScenePackageUnzipped): 
   return overrides;
 }
 
-export function readTextFileFromScenePackage(pkg: ScenePackageUnzipped, path: string): string {
+export function readBinaryFileFromScenePackage(pkg: ScenePackageUnzipped, path: string): Uint8Array {
   const bytes = pkg.files[path];
   if (!bytes) {
     throw new Error(`Missing file in scene package: ${path}`);
   }
-  return decodeUtf8(bytes);
+  return bytes;
+}
+
+export function readTextFileFromScenePackage(pkg: ScenePackageUnzipped, path: string): string {
+  return decodeUtf8(readBinaryFileFromScenePackage(pkg, path));
 }

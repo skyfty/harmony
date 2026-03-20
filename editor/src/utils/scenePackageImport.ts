@@ -1,4 +1,10 @@
-import { readTextFileFromScenePackage, unzipScenePackage, type ScenePackageSceneEntry } from '@schema'
+import {
+  decodeScenePackageSceneDocument,
+  readBinaryFileFromScenePackage,
+  readTextFileFromScenePackage,
+  unzipScenePackage,
+  type ScenePackageSceneEntry,
+} from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
@@ -196,7 +202,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const groundPaintSidecars: Record<string, ArrayBuffer | null> = {}
 
   for (const sceneEntry of zip.manifest.scenes ?? []) {
-    const rawScene = JSON.parse(readTextFileFromScenePackage(zip, sceneEntry.path)) as unknown
+    const rawScene = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(zip, sceneEntry.path)) as unknown
     if (!isPlainObject(rawScene)) {
       throw new Error(`Invalid scene document in scene bundle: ${sceneEntry.path}`)
     }

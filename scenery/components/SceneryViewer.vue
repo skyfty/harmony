@@ -553,8 +553,10 @@ import {
   disposeGradientBackgroundDome,
   loadSkyCubeTexture,
 		extractSkycubeZipFaces,
+  decodeScenePackageSceneDocument,
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
+  readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
   type EnvironmentSettings,
@@ -9470,8 +9472,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
 
   const scenes: ScenePackageSceneEntry[] = [];
   pkg.manifest.scenes.forEach((sceneEntry) => {
-    const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path);
-    const sceneRaw = JSON.parse(sceneText) as unknown;
+    const sceneRaw = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as unknown;
     if (!sceneRaw || typeof sceneRaw !== 'object') {
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }

@@ -1,5 +1,5 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 5 as const;
+export const SCENE_PACKAGE_VERSION = 6 as const;
 
 export type ScenePackageResourceType =
   | 'localAsset'
@@ -12,7 +12,7 @@ export type ScenePackageResourceType =
 
 export interface ScenePackageSceneEntry {
   sceneId: string;
-  /** Path within ZIP, e.g. `scenes/<sceneId>/scene.json` */
+  /** Path within ZIP, e.g. `scenes/<sceneId>/scene.bin` */
   path: string;
   /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
   planningPath?: string;
