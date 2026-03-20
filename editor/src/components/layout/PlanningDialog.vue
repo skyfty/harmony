@@ -9,7 +9,9 @@ import PlanningRulers from '@/components/layout/PlanningRulers.vue'
 import { WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
-
+import {
+  getPointsBounds
+} from '@/utils/scatterSampling'
 import type {
   PlanningGuideData,
   PlanningPolygonData,
@@ -390,13 +392,6 @@ const visiblePolylines = computed(() => {
   if (!activeId) return []
   return polylines.value.filter((line) => line.layerId === activeId)
 })
-
-function clampNumber(value: number, min: number, max: number) {
-  if (!Number.isFinite(value)) return min
-  return Math.min(max, Math.max(min, value))
-}
-
-
 
 function polygonArea(points: PlanningPoint[]) {
   if (points.length < 3) return 0
