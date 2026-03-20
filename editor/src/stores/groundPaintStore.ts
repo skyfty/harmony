@@ -16,6 +16,7 @@ type GroundPaintRuntimeState = {
   sceneId: string
   nodeId: string
   groundSurfaceChunks: GroundSurfaceChunkTextureMap | null
+  lastSyncReason: string
 }
 
 const runtimeGroundPaints = new Map<string, GroundPaintRuntimeState>()
@@ -37,6 +38,7 @@ function ensureRuntimeState(sceneId: string, nodeId: string): GroundPaintRuntime
     sceneId,
     nodeId,
     groundSurfaceChunks: null,
+    lastSyncReason: 'init',
   }
   runtimeGroundPaints.set(sceneId, created)
   return created
@@ -89,14 +91,26 @@ export function attachGroundPaintRuntimeToNode(
 export const useGroundPaintStore = defineStore('groundPaint', {
   state: () => ({
     sceneRuntimeVersions: {} as Record<string, number>,
+    sceneRuntimeReasons: {} as Record<string, string>,
   }),
   actions: {
-    async hydrateSceneDocument(sceneId: string, groundNode: SceneNode | null, sidecar: ArrayBuffer | null): Promise<void> {
-      replaceRuntimeState(sceneId, groundNode, sidecar ? deserializeGroundPaintSidecar(sidecar) : null)
+    bumpSceneRuntimeVersion(sceneId: string, reason = 'unknown'): void {
       this.sceneRuntimeVersions = {
         ...this.sceneRuntimeVersions,
         [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
       }
+      this.sceneRuntimeReasons = {
+        ...this.sceneRuntimeReasons,
+        [sceneId]: reason,
+      }
+    },
+    async hydrateSceneDocument(sceneId: string, groundNode: SceneNode | null, sidecar: ArrayBuffer | null): Promise<void> {
+      replaceRuntimeState(sceneId, groundNode, sidecar ? deserializeGroundPaintSidecar(sidecar) : null)
+      const runtimeState = runtimeGroundPaints.get(sceneId)
+      if (runtimeState) {
+        runtimeState.lastSyncReason = 'hydrate'
+      }
+      this.bumpSceneRuntimeVersion(sceneId, 'hydrate')
     },
     clearSceneDocument(sceneId?: string): void {
       if (sceneId) {
@@ -104,10 +118,14 @@ export const useGroundPaintStore = defineStore('groundPaint', {
         const nextVersions = { ...this.sceneRuntimeVersions }
         delete nextVersions[sceneId]
         this.sceneRuntimeVersions = nextVersions
+        const nextReasons = { ...this.sceneRuntimeReasons }
+        delete nextReasons[sceneId]
+        this.sceneRuntimeReasons = nextReasons
         return
       }
       runtimeGroundPaints.clear()
       this.sceneRuntimeVersions = {}
+      this.sceneRuntimeReasons = {}
     },
     buildSceneDocumentSidecar(sceneId: string, groundNode: SceneNode | null): ArrayBuffer | null {
       const payload = buildPayload(sceneId, groundNode)
@@ -119,12 +137,28 @@ export const useGroundPaintStore = defineStore('groundPaint', {
     getSceneRuntimeVersion(sceneId: string): number {
       return this.sceneRuntimeVersions[sceneId] ?? 0
     },
-    replaceGroundSurfaceChunks(sceneId: string, nodeId: string, groundSurfaceChunks: GroundSurfaceChunkTextureMap | null): GroundPaintRuntimeState {
+    getSceneRuntimeReason(sceneId: string): string {
+      return this.sceneRuntimeReasons[sceneId] ?? 'unknown'
+    },
+    replaceGroundSurfaceChunks(
+      sceneId: string,
+      nodeId: string,
+      groundSurfaceChunks: GroundSurfaceChunkTextureMap | null,
+      options: { bumpRuntimeVersion?: boolean; reason?: string } = {},
+    ): GroundPaintRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
+      const reason = typeof options.reason === 'string' && options.reason.trim().length > 0
+        ? options.reason.trim()
+        : 'unknown'
       state.groundSurfaceChunks = normalizeGroundSurfaceChunkTextureMap(groundSurfaceChunks)
-      this.sceneRuntimeVersions = {
-        ...this.sceneRuntimeVersions,
-        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
+      state.lastSyncReason = reason
+      if (options.bumpRuntimeVersion !== false) {
+        this.bumpSceneRuntimeVersion(sceneId, reason)
+      } else {
+        this.sceneRuntimeReasons = {
+          ...this.sceneRuntimeReasons,
+          [sceneId]: reason,
+        }
       }
       return state
     },
@@ -151,10 +185,8 @@ export const useGroundPaintStore = defineStore('groundPaint', {
         }
       }
       state.groundSurfaceChunks = nextChunks
-      this.sceneRuntimeVersions = {
-        ...this.sceneRuntimeVersions,
-        [sceneId]: (this.sceneRuntimeVersions[sceneId] ?? 0) + 1,
-      }
+      state.lastSyncReason = 'chunk-edit'
+      this.bumpSceneRuntimeVersion(sceneId, 'chunk-edit')
       return state
     },
   },

@@ -539,12 +539,28 @@ const groundScatterRuntimeVersion = computed(() => {
   return useGroundScatterStore().getSceneRuntimeVersion(sceneId)
 })
 
+const groundScatterRuntimeReason = computed(() => {
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return 'none'
+  }
+  return useGroundScatterStore().getSceneRuntimeReason(sceneId)
+})
+
 const groundPaintRuntimeVersion = computed(() => {
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
   if (!sceneId) {
     return 0
   }
   return useGroundPaintStore().getSceneRuntimeVersion(sceneId)
+})
+
+const groundPaintRuntimeReason = computed(() => {
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return 'none'
+  }
+  return useGroundPaintStore().getSceneRuntimeReason(sceneId)
 })
 
 const viewportEl = ref<HTMLDivElement | null>(null)
@@ -9615,15 +9631,18 @@ watch(isSceneReady, (ready) => {
 
 // Rebind scatter instances when terrainScatter snapshot changes (e.g. planning->3D conversion).
 watch(
-  [isSceneReady, groundScatterRuntimeVersion],
-  ([ready, version], [prevReady, prevVersion]) => {
+  [isSceneReady, groundScatterRuntimeVersion, groundScatterRuntimeReason],
+  ([ready, version, reason], [prevReady, prevVersion, prevReason]) => {
     if (!ready) {
       return
     }
     if (version <= 0) {
       return
     }
-    if (prevReady && prevVersion === version) {
+    if (prevReady && prevVersion === version && prevReason === reason) {
+      return
+    }
+    if (typeof reason === 'string' && reason.startsWith('editor-local')) {
       return
     }
     void restoreGroundScatterGuarded()
@@ -9631,15 +9650,18 @@ watch(
 )
 
 watch(
-  [isSceneReady, groundPaintRuntimeVersion],
-  ([ready, version], [prevReady, prevVersion]) => {
+  [isSceneReady, groundPaintRuntimeVersion, groundPaintRuntimeReason],
+  ([ready, version, reason], [prevReady, prevVersion, prevReason]) => {
     if (!ready) {
       return
     }
     if (version <= 0) {
       return
     }
-    if (prevReady && prevVersion === version) {
+    if (prevReady && prevVersion === version && prevReason === reason) {
+      return
+    }
+    if (typeof reason === 'string' && reason.startsWith('editor-local')) {
       return
     }
     void restoreGroundPaintGuarded()

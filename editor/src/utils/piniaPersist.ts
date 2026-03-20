@@ -635,6 +635,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
 
       try {
         await hydrationPromise.catch(() => undefined)
+      console.log('flushPendingPayload persist for state change')
 
         if (!shouldPersist(payload.state, lastPersistedState)) {
 

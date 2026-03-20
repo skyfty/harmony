@@ -1417,7 +1417,12 @@ function commitGroundScatterRuntimeEdit(
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
-  useGroundScatterStore().replaceTerrainScatter(store.currentSceneId, nodeId, manualDeepClone(terrainScatter) as TerrainScatterStoreSnapshot | null)
+  useGroundScatterStore().replaceTerrainScatter(
+    store.currentSceneId,
+    nodeId,
+    manualDeepClone(terrainScatter) as TerrainScatterStoreSnapshot | null,
+    { reason: 'scene-runtime-patch' },
+  )
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundScatterSidecarForNode(target)
   return true
@@ -1440,7 +1445,9 @@ function commitGroundPaintRuntimeEdit(
   const nextGroundSurfaceChunks = manualDeepClone(groundSurfaceChunks ?? null) as Parameters<
     ReturnType<typeof useGroundPaintStore>['replaceGroundSurfaceChunks']
   >[2]
-  useGroundPaintStore().replaceGroundSurfaceChunks(store.currentSceneId, nodeId, nextGroundSurfaceChunks)
+  useGroundPaintStore().replaceGroundSurfaceChunks(store.currentSceneId, nodeId, nextGroundSurfaceChunks, {
+    reason: 'scene-runtime-patch',
+  })
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundPaintSidecarForNode(target)
   return true
@@ -8851,6 +8858,7 @@ export const useSceneStore = defineStore('scene', {
             this.currentSceneId,
             nodeId,
             manualDeepClone((incoming as Record<string, unknown>).terrainScatter) as TerrainScatterStoreSnapshot | null,
+            { reason: 'scene-dynamic-mesh-update' },
           )
           delete (incoming as Record<string, unknown>).terrainScatter
           shouldPersistScatterSidecar = true
@@ -8863,6 +8871,7 @@ export const useSceneStore = defineStore('scene', {
             this.currentSceneId,
             nodeId,
             nextGroundSurfaceChunks,
+            { reason: 'scene-dynamic-mesh-update' },
           )
           delete (incoming as Record<string, unknown>).groundSurfaceChunks
           shouldPersistPaintSidecar = true

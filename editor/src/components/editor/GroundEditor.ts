@@ -173,6 +173,7 @@ const scatterMidpointHelper = new THREE.Vector3()
 const scatterLocalAnchorHelper = new THREE.Vector3()
 const scatterLocalCurrentHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
+const scatterGroundWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
 const scatterBboxSizeHelper = new THREE.Vector3()
 const scatterPreviewProjectedHelper = new THREE.Vector3()
@@ -765,6 +766,8 @@ const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
 const SCATTER_CLICK_DRAG_THRESHOLD_PX = 6
 const SCATTER_DOUBLE_CLICK_INTERVAL_MS = 320
 const SCATTER_DOUBLE_CLICK_DISTANCE_PX = 8
+const SCATTER_ERASE_COMMIT_INTERVAL_MS = 16
+const SCATTER_PERF_REPORT_INTERVAL_MS = 1000
 
 function isScatterLeftDoubleClick(event: PointerEvent): boolean {
 	if (event.button !== 0) {
@@ -1045,12 +1048,95 @@ type ScatterEraseState = {
 	definition: GroundDynamicMesh
 	groundMesh: THREE.Object3D
 	radius: number
+	pendingPoint: THREE.Vector3 | null
+	pendingCommitRafId: number | null
+	pendingCommitTimerId: ReturnType<typeof setTimeout> | null
+	lastCommitAt: number
 }
 
 let scatterEraseState: ScatterEraseState | null = null
 let scatterSidecarPersistPending = false
 let pendingScatterSidecarSave: Promise<void> | null = null
 let scatterSidecarSaveQueued = false
+
+type ScatterPerfMetrics = {
+	eraseCommits: number
+	eraseDurationMs: number
+	eraseRemovedLayers: number
+	eraseRemovedInstances: number
+	restoreCalls: number
+	restoreDurationMs: number
+	lastReportAt: number
+}
+
+const scatterPerfMetrics: ScatterPerfMetrics = {
+	eraseCommits: 0,
+	eraseDurationMs: 0,
+	eraseRemovedLayers: 0,
+	eraseRemovedInstances: 0,
+	restoreCalls: 0,
+	restoreDurationMs: 0,
+	lastReportAt: 0,
+}
+
+function isScatterPerfDebugEnabled(): boolean {
+	const flag = (globalThis as { __HARMONY_SCATTER_PERF__?: unknown }).__HARMONY_SCATTER_PERF__
+	return flag === true
+}
+
+function flushScatterPerfMetricsIfNeeded(force = false): void {
+	if (!isScatterPerfDebugEnabled()) {
+		return
+	}
+	const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+		? performance.now()
+		: Date.now()
+	if (!force && now - scatterPerfMetrics.lastReportAt < SCATTER_PERF_REPORT_INTERVAL_MS) {
+		return
+	}
+	scatterPerfMetrics.lastReportAt = now
+	if (
+		scatterPerfMetrics.eraseCommits <= 0
+		&& scatterPerfMetrics.restoreCalls <= 0
+		&& scatterPerfMetrics.eraseRemovedInstances <= 0
+	) {
+		return
+	}
+	console.info('[ScatterPerf]', {
+		eraseCommits: scatterPerfMetrics.eraseCommits,
+		eraseDurationMs: Number(scatterPerfMetrics.eraseDurationMs.toFixed(2)),
+		eraseRemovedLayers: scatterPerfMetrics.eraseRemovedLayers,
+		eraseRemovedInstances: scatterPerfMetrics.eraseRemovedInstances,
+		restoreCalls: scatterPerfMetrics.restoreCalls,
+		restoreDurationMs: Number(scatterPerfMetrics.restoreDurationMs.toFixed(2)),
+	})
+	scatterPerfMetrics.eraseCommits = 0
+	scatterPerfMetrics.eraseDurationMs = 0
+	scatterPerfMetrics.eraseRemovedLayers = 0
+	scatterPerfMetrics.eraseRemovedInstances = 0
+	scatterPerfMetrics.restoreCalls = 0
+	scatterPerfMetrics.restoreDurationMs = 0
+}
+
+function recordScatterErasePerf(durationMs: number, removedLayers: number, removedInstances: number): void {
+	if (!isScatterPerfDebugEnabled()) {
+		return
+	}
+	scatterPerfMetrics.eraseCommits += 1
+	scatterPerfMetrics.eraseDurationMs += Math.max(0, durationMs)
+	scatterPerfMetrics.eraseRemovedLayers += Math.max(0, removedLayers)
+	scatterPerfMetrics.eraseRemovedInstances += Math.max(0, removedInstances)
+	flushScatterPerfMetricsIfNeeded(false)
+}
+
+function recordScatterRestorePerf(durationMs: number): void {
+	if (!isScatterPerfDebugEnabled()) {
+		return
+	}
+	scatterPerfMetrics.restoreCalls += 1
+	scatterPerfMetrics.restoreDurationMs += Math.max(0, durationMs)
+	flushScatterPerfMetricsIfNeeded(false)
+}
 
 type SculptSessionState = {
 	nodeId: string
@@ -2139,6 +2225,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	async function restoreGroupdScatter(): Promise<void> {
+		const perfStart = nowMs()
+		try {
 		const store = ensureScatterStoreRef()
 		const groundMesh = getGroundObject()
 		const definition = getGroundDynamicMeshDefinition()
@@ -2226,6 +2314,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!layer.instances?.length) {
 				continue
 			}
+			groundMesh.updateMatrixWorld(true)
+			scatterGroundWorldMatrixHelper.copy(groundMesh.matrixWorld)
 			const lodPresetId = getScatterLayerLodPresetId(layer)
 			if (lodPresetId) {
 				await ensureScatterLodPresetCached(lodPresetId)
@@ -2260,7 +2350,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (!group) {
 					continue
 				}
-				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 				if (!bindScatterInstance(instance, matrix, group.assetId)) {
 					console.warn('绑定地面散布实例失败', {
 						layerId: layer.id,
@@ -2271,6 +2361,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(layer.id, instance.id), group.assetId)
 			}
+		}
+		} finally {
+			recordScatterRestorePerf(nowMs() - perfStart)
 		}
 	}
 
@@ -2522,7 +2615,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterChunkStreamingLastFrustumVisibleIds.has(nodeId)) {
 			return
 		}
-		const matrix = composeScatterMatrix(entry.instance, groundMesh, scatterWorldMatrixHelper)
+		groundMesh.updateMatrixWorld(true)
+		scatterGroundWorldMatrixHelper.copy(groundMesh.matrixWorld)
+		const matrix = composeScatterMatrix(entry.instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 		if (!bindScatterInstance(entry.instance, matrix, group.assetId)) {
 			return
 		}
@@ -2842,6 +2937,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function persistScatterInstances(
 		layer: TerrainScatterLayer,
 		instances: TerrainScatterInstance[],
+		optionsOverride: { markChunkIndexDirty?: boolean } = {},
 	): TerrainScatterLayer | null {
 		const store = ensureScatterStoreRef()
 		const result = replaceTerrainScatterInstances(store, layer.id, instances)
@@ -2849,9 +2945,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterLayer = result
 		}
 		if (result) {
-			syncTerrainScatterSnapshotToScene(store, { bumpInstancesUpdatedAt: true, markSceneDirty: true })
+			syncTerrainScatterSnapshotToScene(store, {
+				bumpRuntimeVersion: false,
+				runtimeSyncReason: 'editor-local-edit',
+			})
 			scatterSidecarPersistPending = true
-			scatterChunkIndexDirty = true
+			if (optionsOverride.markChunkIndexDirty !== false) {
+				scatterChunkIndexDirty = true
+			}
 		}
 		return result
 	}
@@ -2970,20 +3071,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (node?.dynamicMesh?.type !== 'Ground') {
 			return null
 		}
-		const definition = node.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
-		const embeddedSnapshot = definition.terrainScatter ?? null
-		if (embeddedSnapshot) {
-			return embeddedSnapshot
-		}
 		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
-		if (!sceneId) {
-			return null
+		if (sceneId) {
+			const runtimeState = useGroundScatterStore().getSceneGroundScatter(sceneId)
+			if (runtimeState && runtimeState.nodeId === node.id && runtimeState.terrainScatter) {
+				return runtimeState.terrainScatter
+			}
 		}
-		const runtimeState = useGroundScatterStore().getSceneGroundScatter(sceneId)
-		if (!runtimeState || runtimeState.nodeId !== node.id) {
-			return null
-		}
-		return runtimeState.terrainScatter ?? null
+		const definition = node.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
+		return definition.terrainScatter ?? null
 	}
 
 	function getScatterSnapshotTimestamp(snapshot: TerrainScatterStoreSnapshot | null | undefined): number | null {
@@ -2996,7 +3092,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function syncTerrainScatterSnapshotToScene(
 		storeOverride?: TerrainScatterStore | null,
-		syncOptions: { bumpInstancesUpdatedAt?: boolean; markSceneDirty?: boolean } = {},
+		syncOptions: {
+			bumpRuntimeVersion?: boolean
+			runtimeSyncReason?: string
+		} = {},
 	): void {
 		const store = storeOverride ?? scatterStore
 		if (!store) {
@@ -3007,25 +3106,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
-		const shouldBumpInstances = syncOptions.bumpInstancesUpdatedAt === true
-		const nextMesh: GroundDynamicMesh = {
-			...(groundNode.dynamicMesh as GroundDynamicMesh),
-			terrainScatter: snapshot,
-			terrainScatterInstancesUpdatedAt: shouldBumpInstances
-				? Date.now()
-				: (groundNode.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt,
-		}
-		groundNode.dynamicMesh = nextMesh
 		const sceneId = typeof options.sceneStore.currentSceneId === 'string'
 			? options.sceneStore.currentSceneId.trim()
 			: ''
 		if (sceneId) {
-			useGroundScatterStore().replaceTerrainScatter(sceneId, groundNode.id, snapshot)
+			useGroundScatterStore().replaceTerrainScatter(sceneId, groundNode.id, snapshot, {
+				bumpRuntimeVersion: syncOptions.bumpRuntimeVersion,
+				reason: syncOptions.runtimeSyncReason,
+			})
 		}
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
-		if (syncOptions.markSceneDirty) {
-			options.sceneStore.markSceneDirty({ updateNodes: false })
-		}
 	}
 
 	function getGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
@@ -3662,9 +3752,22 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (token !== paintCommitToken) {
 				return false
 			}
-			options.sceneStore.updateGroundNodeDynamicMesh(session.nodeId, {
-				terrainPaint: null,
-				groundSurfaceChunks: nextGroundSurfaceChunks,
+			const sceneId = typeof options.sceneStore.currentSceneId === 'string'
+				? options.sceneStore.currentSceneId.trim()
+				: ''
+			if (!sceneId) {
+				return false
+			}
+			useGroundPaintStore().replaceGroundSurfaceChunks(sceneId, session.nodeId, nextGroundSurfaceChunks, {
+				bumpRuntimeVersion: true,
+				reason: 'editor-local-paint',
+			})
+			if (targetNode.dynamicMesh?.type === 'Ground') {
+				targetNode.dynamicMesh.terrainPaint = null
+			}
+			const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, targetNode)
+			void useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false }).catch((error) => {
+				console.warn('保存地形 paint sidecar 失败', error)
 			})
 			paintSessionState = null
 			return true
@@ -3899,7 +4002,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!stored) {
 			return false
 		}
-		const matrix = composeScatterMatrix(stored, scatterSession.groundMesh, scatterWorldMatrixHelper)
+		scatterSession.groundMesh.updateMatrixWorld(true)
+		scatterGroundWorldMatrixHelper.copy(scatterSession.groundMesh.matrixWorld)
+		const matrix = composeScatterMatrix(stored, scatterSession.groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 		const bound = bindScatterInstance(stored, matrix, scatterSession.bindingAssetId)
 		if (!bound) {
 			persistScatterInstances(nextLayer, nextLayer.instances.filter((entry) => entry.id !== stored.id))
@@ -4123,6 +4228,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const existingById = new Map(existing.map((instance) => [instance.id, instance]))
 		const next: TerrainScatterInstance[] = []
 		const nextIds = new Set<string>()
+		session.groundMesh.updateMatrixWorld(true)
+		scatterGroundWorldMatrixHelper.copy(session.groundMesh.matrixWorld)
 		for (const sample of samples) {
 			const point = sample.point
 			if (!point) {
@@ -4136,13 +4243,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					: Math.random() * Math.PI * 2)
 				: yaw
 			const preview = createScatterPreviewInstance(session, point, sample.key, previewYaw, previous)
-			const matrix = composeScatterMatrix(preview, session.groundMesh, scatterWorldMatrixHelper)
+			const matrix = composeScatterMatrix(preview, session.groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 			if (!preview.binding?.nodeId) {
 				if (!bindScatterInstance(preview, matrix, session.bindingAssetId)) {
 					continue
 				}
 			} else {
-				updateScatterInstanceMatrix(preview, session.groundMesh, scatterWorldMatrixHelper)
+				updateScatterInstanceMatrix(preview, session.groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 			}
 			nextIds.add(preview.id)
 			next.push(preview)
@@ -4236,8 +4343,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const appended = nextLayer.instances.slice(Math.max(0, nextLayer.instances.length - drafts.length))
 		const failedIds = new Set<string>()
+		session.groundMesh.updateMatrixWorld(true)
+		scatterGroundWorldMatrixHelper.copy(session.groundMesh.matrixWorld)
 		for (const stored of appended) {
-			const matrix = composeScatterMatrix(stored, session.groundMesh, scatterWorldMatrixHelper)
+			const matrix = composeScatterMatrix(stored, session.groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 			if (!bindScatterInstance(stored, matrix, session.bindingAssetId)) {
 				failedIds.add(stored.id)
 				continue
@@ -4991,6 +5100,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterLodImmediateSyncNeeded = false
 		lastScatterLodUpdateAt = now
 		scatterLodCameraPosition.copy(camera.position)
+		groundMesh.updateMatrixWorld(true)
+		scatterGroundWorldMatrixHelper.copy(groundMesh.matrixWorld)
 
 		camera.updateMatrixWorld(true)
 		scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
@@ -5038,7 +5149,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					continue
 				}
 				releaseScatterInstance(instance)
-				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 				if (!bindScatterInstance(instance, matrix, desired)) {
 					continue
 				}
@@ -5110,7 +5221,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (current !== desired) {
 				releaseScatterInstance(instance)
 			}
-			const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+			const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
 			if (!bindScatterInstance(instance, matrix, desired)) {
 				continue
 			}
@@ -5266,7 +5377,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
-	function eraseScatterInstances(worldPoint: THREE.Vector3, radius: number, groundMesh: THREE.Object3D): boolean {
+	function eraseScatterInstances(
+		worldPoint: THREE.Vector3,
+		radius: number,
+		groundMesh: THREE.Object3D,
+		definition: GroundDynamicMesh,
+	): boolean {
+		const perfStart = nowMs()
 		const store = ensureScatterStoreRef()
 		const selectedCategory = options.scatterCategory.value
 		let layers = Array.from(store.layers.values()).filter((layer) => layer.category === selectedCategory)
@@ -5277,21 +5394,67 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			layers = Array.from(store.layers.values())
 		}
 		if (!layers.length) {
+			recordScatterErasePerf(nowMs() - perfStart, 0, 0)
 			return false
 		}
 		const radiusSq = radius * radius
 		let removed = false
+		let removedLayerCount = 0
+		let removedInstanceCount = 0
+		let mutatedLayers = 0
 		// Compute distance on ground-local XZ plane so the brush radius works regardless of terrain height.
 		scatterEraseLocalPointHelper.copy(worldPoint)
 		groundMesh.updateMatrixWorld(true)
 		groundMesh.worldToLocal(scatterEraseLocalPointHelper)
+
+		if (scatterChunkIndexDirty) {
+			const chunkCells = resolveChunkCellsForDefinition(definition)
+			rebuildScatterChunkIndexForStore(store, definition, chunkCells)
+		}
+
+		const chunkCells = resolveChunkCellsForDefinition(definition)
+		const chunkKeys = computeScatterChunkKeysInRadius(
+			definition,
+			chunkCells,
+			scatterEraseLocalPointHelper.x,
+			scatterEraseLocalPointHelper.z,
+			radius,
+		)
+		if (chunkKeys.size === 0) {
+			recordScatterErasePerf(nowMs() - perfStart, 0, 0)
+			return false
+		}
+		const candidateIdsByLayer = new Map<string, Set<string>>()
+		for (const chunkKey of chunkKeys) {
+			const bucket = scatterChunkIndex.get(chunkKey)
+			if (!bucket?.length) {
+				continue
+			}
+			for (const entry of bucket) {
+				let set = candidateIdsByLayer.get(entry.layer.id)
+				if (!set) {
+					set = new Set<string>()
+					candidateIdsByLayer.set(entry.layer.id, set)
+				}
+				set.add(entry.instance.id)
+			}
+		}
+
 		for (const layer of layers) {
 			if (!layer.instances.length) {
+				continue
+			}
+			const candidateIds = candidateIdsByLayer.get(layer.id)
+			if (!candidateIds || candidateIds.size === 0) {
 				continue
 			}
 			const survivors: TerrainScatterInstance[] = []
 			const removedInstances: TerrainScatterInstance[] = []
 			for (const instance of layer.instances) {
+				if (!candidateIds.has(instance.id)) {
+					survivors.push(instance)
+					continue
+				}
 				const local = instance.localPosition
 				const dx = (local?.x ?? 0) - scatterEraseLocalPointHelper.x
 				const dz = (local?.z ?? 0) - scatterEraseLocalPointHelper.z
@@ -5305,10 +5468,102 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			removed = true
-			removedInstances.forEach((instance) => releaseScatterInstance(instance))
-			persistScatterInstances(layer, survivors)
+			removedLayerCount += 1
+			removedInstanceCount += removedInstances.length
+			for (const instance of removedInstances) {
+				releaseScatterInstance(instance)
+				const nodeId = buildScatterNodeId(layer.id, instance.id)
+				const chunkEntry = scatterChunkEntryByNodeId.get(nodeId)
+				if (chunkEntry) {
+					const bucket = scatterChunkIndex.get(chunkEntry.chunkKey)
+					if (bucket) {
+						for (let index = bucket.length - 1; index >= 0; index -= 1) {
+							const entry = bucket[index]
+							if (entry && entry.layer.id === layer.id && entry.instance.id === instance.id) {
+								bucket.splice(index, 1)
+							}
+						}
+						if (bucket.length === 0) {
+							scatterChunkIndex.delete(chunkEntry.chunkKey)
+						}
+					}
+					scatterChunkEntryByNodeId.delete(nodeId)
+				}
+				scatterRuntimeAssetIdByNodeId.delete(nodeId)
+				scatterChunkStreamingAllocatedNodeIds.delete(nodeId)
+				scatterChunkStreamingPendingBindIds.delete(nodeId)
+				scatterChunkStreamingLastVisibleAt.delete(nodeId)
+				scatterChunkStreamingLastFrustumVisibleIds.delete(nodeId)
+			}
+					const nextLayer = replaceTerrainScatterInstances(store, layer.id, survivors)
+					if (nextLayer && scatterLayer && scatterLayer.id === layer.id) {
+						scatterLayer = nextLayer
+					}
+					if (nextLayer) {
+						mutatedLayers += 1
+					}
 		}
+				if (mutatedLayers > 0) {
+					syncTerrainScatterSnapshotToScene(store, {
+						bumpRuntimeVersion: false,
+						runtimeSyncReason: 'editor-local-erase',
+					})
+					scatterSidecarPersistPending = true
+				}
+		recordScatterErasePerf(nowMs() - perfStart, removedLayerCount, removedInstanceCount)
 		return removed
+	}
+
+	function flushScatterErasePending(state: ScatterEraseState): boolean {
+		if (!state.pendingPoint) {
+			return false
+		}
+		const removed = eraseScatterInstances(state.pendingPoint, state.radius, state.groundMesh, state.definition)
+		state.pendingPoint = null
+		state.lastCommitAt = nowMs()
+		return removed
+	}
+
+	function clearScatterErasePendingSchedule(state: ScatterEraseState): void {
+		if (state.pendingCommitRafId != null) {
+			cancelAnimationFrame(state.pendingCommitRafId)
+			state.pendingCommitRafId = null
+		}
+		if (state.pendingCommitTimerId == null) {
+			return
+		}
+		clearTimeout(state.pendingCommitTimerId)
+		state.pendingCommitTimerId = null
+	}
+
+	function scheduleScatterErase(state: ScatterEraseState, worldPoint: THREE.Vector3): void {
+		if (!state.pendingPoint) {
+			state.pendingPoint = new THREE.Vector3()
+		}
+		state.pendingPoint.copy(worldPoint)
+		if (state.pendingCommitRafId != null || state.pendingCommitTimerId != null) {
+			return
+		}
+		if (typeof requestAnimationFrame === 'function') {
+			state.pendingCommitRafId = requestAnimationFrame(() => {
+				state.pendingCommitRafId = null
+				if (!scatterEraseState || scatterEraseState.pointerId !== state.pointerId) {
+					clearScatterErasePendingSchedule(state)
+					return
+				}
+				flushScatterErasePending(state)
+			})
+			return
+		}
+		const delay = Math.max(1, SCATTER_ERASE_COMMIT_INTERVAL_MS)
+		state.pendingCommitTimerId = setTimeout(() => {
+			if (!scatterEraseState || scatterEraseState.pointerId !== state.pointerId) {
+				clearScatterErasePendingSchedule(state)
+				return
+			}
+			state.pendingCommitTimerId = null
+			flushScatterErasePending(state)
+		}, delay)
 	}
 
 	function resolveScatterEraseRadius(): number {
@@ -5364,12 +5619,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const eraseRadius = resolveScatterEraseRadius()
-		eraseScatterInstances(scatterPointerHelper.clone(), eraseRadius, groundMesh)
+		eraseScatterInstances(scatterPointerHelper, eraseRadius, groundMesh, definition)
 		scatterEraseState = {
 			pointerId: event.pointerId,
 			definition,
 			groundMesh,
 			radius: eraseRadius,
+			pendingPoint: null,
+			pendingCommitRafId: null,
+			pendingCommitTimerId: null,
+			lastCommitAt: nowMs(),
 		}
 		options.onScatterEraseStart?.()
 		try {
@@ -5397,7 +5656,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 		scatterEraseState.radius = resolveScatterEraseRadius()
-		eraseScatterInstances(scatterPointerHelper.clone(), scatterEraseState.radius, scatterEraseState.groundMesh)
+		scheduleScatterErase(scatterEraseState, scatterPointerHelper)
 		event.preventDefault()
 		event.stopPropagation()
 		event.stopImmediatePropagation()
@@ -5411,6 +5670,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(event.pointerId)
 		}
+		flushScatterErasePending(scatterEraseState)
+		clearScatterErasePendingSchedule(scatterEraseState)
 		scatterEraseState = null
 		queueScatterSidecarSave()
 		return true
@@ -5423,6 +5684,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(scatterEraseState.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(scatterEraseState.pointerId)
 		}
+		clearScatterErasePendingSchedule(scatterEraseState)
 		scatterEraseState = null
 		queueScatterSidecarSave()
 		return true
@@ -5642,7 +5904,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		updateGroundChunks(groundObject, definition, options.getCamera(), { force: true })
+		updateGroundChunks(groundObject, definition, options.getCamera())
 
 		options.pointer.set(x, y)
 		options.raycaster.setFromCamera(options.pointer, camera)
