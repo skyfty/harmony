@@ -10693,6 +10693,7 @@ export const useSceneStore = defineStore('scene', {
         internal?: boolean | ((asset: ProjectAsset) => boolean)
         isEditorOnly?: boolean | ((asset: ProjectAsset) => boolean)
         commitOptions?: { updateNodes?: boolean }
+        autoSave?: boolean
       } = {},
     ): ProjectAsset[] {
       const normalizedAssets = Array.isArray(assets) ? assets.filter(Boolean) : []
@@ -10761,8 +10762,10 @@ export const useSceneStore = defineStore('scene', {
         void this.syncAssetPackageMapEntry(asset, sourceByAssetId[asset.id])
       })
 
-      // Persist scene immediately after registering new assets so they survive reload
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      if (options.autoSave !== false) {
+        // Persist scene immediately after registering new assets so they survive reload.
+        void this.saveActiveScene({ force: true }).catch(() => {})
+      }
 
       return registeredAssets
     },
@@ -10775,6 +10778,7 @@ export const useSceneStore = defineStore('scene', {
         internal?: boolean
         isEditorOnly?: boolean
         commitOptions?: { updateNodes?: boolean }
+        autoSave?: boolean
       } = {},
     ) {
       const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
@@ -10784,6 +10788,7 @@ export const useSceneStore = defineStore('scene', {
         internal: options.internal,
         isEditorOnly: options.isEditorOnly,
         commitOptions: options.commitOptions,
+        autoSave: options.autoSave,
       })
       return registered[0] ?? { ...asset }
     },

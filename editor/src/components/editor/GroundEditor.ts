@@ -555,18 +555,19 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 	dirtyChunks: PaintChunkState[]
 	previewRevision: number
 	groundSurfaceChunks: GroundSurfaceChunkTextureMap | null
-	registerAsset: typeof useSceneStore extends () => infer T
-		? T extends { registerAsset: infer F }
+	registerAssets: typeof useSceneStore extends () => infer T
+		? T extends { registerAssets: infer F }
 			? F
 			: never
 		: never
 }): Promise<GroundSurfaceChunkTextureMap | null> {
-	const { session, dirtyChunks, previewRevision, registerAsset } = params
+	const { session, dirtyChunks, previewRevision, registerAssets } = params
 	if (!dirtyChunks.length) {
 		return params.groundSurfaceChunks
 	}
 	const nextChunks = params.groundSurfaceChunks ? JSON.parse(JSON.stringify(params.groundSurfaceChunks)) as GroundSurfaceChunkTextureMap : {}
 	const cache = useAssetCacheStore()
+	const assetsToRegister: ProjectAsset[] = []
 	for (const chunk of dirtyChunks) {
 		const blob = await encodePaintSurfaceDataToBlob(chunk.surfaceData, chunk.resolution)
 		if (!blob) {
@@ -579,27 +580,28 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 			mimeType: 'image/png',
 			filename,
 		})
-		registerAsset(
-			{
-				id: textureAssetId,
-				name: filename,
-				type: 'file',
-				downloadUrl: textureAssetId,
-				previewColor: '#ffffff',
-				thumbnail: null,
-				description: `Ground surface chunk (${session.nodeId}:${chunk.key})`,
-				gleaned: true,
-			},
-			{
-				source: { type: 'local' },
-				internal: true,
-				commitOptions: { updateNodes: false },
-			},
-		)
+		assetsToRegister.push({
+			id: textureAssetId,
+			name: filename,
+			type: 'file',
+			downloadUrl: textureAssetId,
+			previewColor: '#ffffff',
+			thumbnail: null,
+			description: `Ground surface chunk (${session.nodeId}:${chunk.key})`,
+			gleaned: true,
+		})
 		nextChunks[chunk.key] = {
 			textureAssetId,
 			revision: previewRevision,
 		}
+	}
+	if (assetsToRegister.length) {
+		registerAssets(assetsToRegister, {
+			source: { type: 'local' },
+			internal: true,
+			commitOptions: { updateNodes: false },
+			autoSave: false,
+		})
 	}
 	return nextChunks
 }
@@ -3719,6 +3721,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				options.sceneStore.registerAssets([paintAsset], {
 					source: { type: 'package', providerId: assetProvider.id, originalAssetId: paintAsset.id },
 					commitOptions: { updateNodes: false },
+					autoSave: false,
 				})
 			}
 		}
@@ -3747,7 +3750,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				dirtyChunks,
 				previewRevision: session.terrainPaintSurfacePreviewRevision,
 				groundSurfaceChunks: nextGroundSurfaceChunks,
-				registerAsset: options.sceneStore.registerAsset.bind(options.sceneStore),
+				registerAssets: options.sceneStore.registerAssets.bind(options.sceneStore),
 			})
 			if (token !== paintCommitToken) {
 				return false

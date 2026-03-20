@@ -1072,7 +1072,10 @@ export const useScenesStore = defineStore('scenes', {
     ): Promise<void> {
       await writeSceneGroundHeightSidecar(this.workspaceId, sceneId, sidecar)
       if (options.syncServer !== false && this.workspaceType === 'user') {
-        const document = await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
+        const sceneStore = useSceneStore()
+        const document = sceneStore.currentSceneId === sceneId
+          ? sceneStore.createSceneDocumentSnapshot()
+          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
         if (document) {
           await this.syncSceneToServer(document)
         }
@@ -1085,7 +1088,10 @@ export const useScenesStore = defineStore('scenes', {
     ): Promise<void> {
       await writeSceneGroundScatterSidecar(this.workspaceId, sceneId, sidecar)
       if (options.syncServer !== false && this.workspaceType === 'user') {
-        const document = await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
+        const sceneStore = useSceneStore()
+        const document = sceneStore.currentSceneId === sceneId
+          ? sceneStore.createSceneDocumentSnapshot()
+          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
         if (document) {
           await this.syncSceneToServer(document)
         }
@@ -1098,7 +1104,10 @@ export const useScenesStore = defineStore('scenes', {
     ): Promise<void> {
       await writeSceneGroundPaintSidecar(this.workspaceId, sceneId, sidecar)
       if (options.syncServer !== false && this.workspaceType === 'user') {
-        const document = await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
+        const sceneStore = useSceneStore()
+        const document = sceneStore.currentSceneId === sceneId
+          ? sceneStore.createSceneDocumentSnapshot()
+          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
         if (document) {
           await this.syncSceneToServer(document)
         }
