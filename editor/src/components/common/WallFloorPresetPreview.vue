@@ -13,18 +13,20 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import Loader from '@schema/loader'
-import type { FloorDynamicMesh, SceneMaterial, SceneMaterialProps, SceneMaterialTextureRef, SceneMaterialType, SceneNodeMaterial, WallDynamicMesh } from '@schema'
+import type { FloorDynamicMesh, SceneMaterial, SceneMaterialProps, SceneMaterialTextureRef, SceneMaterialType, SceneNodeMaterial } from '@schema'
 import { applyMaterialOverrides, DEFAULT_SCENE_MATERIAL_TYPE, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { createFloorGroup } from '@schema/floorMesh'
-import { createWallRenderGroup } from '@schema/wallMesh'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { parseFloorPresetData } from '@/stores/floorPresetActions'
 import { parseWallPresetData } from '@/stores/wallPresetActions'
-import { buildWallDynamicMeshFromWorldSegments } from '@/stores/wallUtils'
-import { applyAirWallVisualToWallGroup } from '@/components/editor/WallRenderer'
+import {
+  buildWallPresetPreviewObject,
+  prepareWallPreviewImportedObject,
+  WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY,
+} from '@/utils/wallPresetSceneGraphPreview'
 import type { FloorPresetData, FloorPresetMaterialPatch } from '@/utils/floorPreset'
-import type { WallPresetData, WallPresetMaterialPatch } from '@/utils/wallPreset'
+import type { WallPresetData } from '@/utils/wallPreset'
 
 const props = defineProps<{
   file: File | null
@@ -40,7 +42,6 @@ type ParsedPreset =
   | { kind: 'floor'; data: FloorPresetData }
 
 const DEFAULT_RECT_HALF_SIZE = 2
-const DEFAULT_WALL_HALF_LENGTH = 2
 
 const container = ref<HTMLDivElement | null>(null)
 const error = ref<string | null>(null)
@@ -55,9 +56,6 @@ let controls: OrbitControls | null = null
 let animationHandle = 0
 let currentRoot: THREE.Object3D | null = null
 let loadToken = 0
-
-const assetObjectCache = new Map<string, THREE.Object3D | null>()
-const pendingAssetObjectLoads = new Map<string, Promise<THREE.Object3D | null>>()
 
 const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   resolveTexture: resolveMaterialTexture,
@@ -149,7 +147,7 @@ function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneM
 
 function createNodeMaterialFromPatch(
   slotId: string,
-  patch: FloorPresetMaterialPatch | WallPresetMaterialPatch,
+  patch: FloorPresetMaterialPatch,
 ): SceneNodeMaterial {
   const sharedMaterialId = patch.materialId === null ? null : typeof patch.materialId === 'string' ? patch.materialId.trim() : null
   const sharedMaterial = sharedMaterialId
@@ -168,22 +166,6 @@ function createNodeMaterialFromPatch(
     type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : sharedMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
     ...mergedProps,
   }
-}
-
-function buildWallNodeMaterials(preset: WallPresetData): SceneNodeMaterial[] {
-  return (preset.materialOrder ?? [])
-    .map((slotId) => {
-      const normalizedId = typeof slotId === 'string' ? slotId.trim() : ''
-      if (!normalizedId) {
-        return null
-      }
-      const patch = preset.materialPatches?.[normalizedId]
-      if (!patch) {
-        return null
-      }
-      return createNodeMaterialFromPatch(normalizedId, patch)
-    })
-    .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
 }
 
 function buildFloorNodeMaterials(preset: FloorPresetData): SceneNodeMaterial[] {
@@ -252,6 +234,9 @@ function disposeObject(object: THREE.Object3D | null): void {
     if (!mesh?.isMesh) {
       return
     }
+    if ((mesh.userData as Record<string, unknown> | undefined)?.[WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY]) {
+      return
+    }
     mesh.geometry?.dispose?.()
     const material = mesh.material
     if (Array.isArray(material)) {
@@ -288,7 +273,8 @@ async function ensureAssetFile(assetId: string): Promise<File | null> {
     return null
   }
   await assetCacheStore.downloaProjectAsset(asset)
-  return assetCacheStore.createFileFromCache(assetId)
+  const downloaded = assetCacheStore.createFileFromCache(assetId)
+  return downloaded
 }
 
 async function loadModelObjectFromFile(file: File): Promise<THREE.Object3D | null> {
@@ -300,7 +286,7 @@ async function loadModelObjectFromFile(file: File): Promise<THREE.Object3D | nul
         reject(new Error('模型加载失败'))
         return
       }
-      resolve(object)
+      resolve(prepareWallPreviewImportedObject(object))
     }
     loader.addEventListener('loaded', handleLoaded)
     try {
@@ -310,36 +296,6 @@ async function loadModelObjectFromFile(file: File): Promise<THREE.Object3D | nul
       reject(loadError)
     }
   })
-}
-
-async function loadAssetObject(assetId: string | null | undefined): Promise<THREE.Object3D | null> {
-  const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
-  if (!normalizedId) {
-    return null
-  }
-  if (assetObjectCache.has(normalizedId)) {
-    return assetObjectCache.get(normalizedId) ?? null
-  }
-  if (pendingAssetObjectLoads.has(normalizedId)) {
-    return pendingAssetObjectLoads.get(normalizedId) ?? null
-  }
-
-  const pending = (async () => {
-    const file = await ensureAssetFile(normalizedId)
-    if (!file) {
-      return null
-    }
-    const object = await loadModelObjectFromFile(file)
-    assetObjectCache.set(normalizedId, object)
-    return object
-  })()
-
-  pendingAssetObjectLoads.set(normalizedId, pending)
-  try {
-    return await pending
-  } finally {
-    pendingAssetObjectLoads.delete(normalizedId)
-  }
 }
 
 async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THREE.Texture | null> {
@@ -371,25 +327,6 @@ async function parsePreset(file: File): Promise<ParsedPreset> {
   return { kind: 'floor', data: parseFloorPresetData(text) }
 }
 
-function buildDefaultWallDefinition(preset: WallPresetData): WallDynamicMesh {
-  const bodyMaterialConfigId = preset.wallProps.bodyMaterialConfigId ?? preset.materialOrder?.[0] ?? null
-  const built = buildWallDynamicMeshFromWorldSegments(
-    [{ start: { x: -DEFAULT_WALL_HALF_LENGTH, y: 0, z: 0 }, end: { x: DEFAULT_WALL_HALF_LENGTH, y: 0, z: 0 } }],
-    {
-      height: preset.wallProps.height,
-      width: preset.wallProps.width,
-      thickness: preset.wallProps.thickness,
-    },
-  )
-  if (!built) {
-    throw new Error('无法构建墙体预览几何')
-  }
-  return {
-    ...built.definition,
-    bodyMaterialConfigId,
-  }
-}
-
 function buildDefaultFloorDefinition(preset: FloorPresetData): FloorDynamicMesh {
   return {
     type: 'Floor',
@@ -411,65 +348,20 @@ function buildDefaultFloorDefinition(preset: FloorPresetData): FloorDynamicMesh 
 }
 
 async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Object3D> {
-  const definition = buildDefaultWallDefinition(preset)
-  const wallProps = preset.wallProps
-
-  const [bodyObject, headObject, footObject, bodyEndCapObject, headEndCapObject, footEndCapObject] = await Promise.all([
-    loadAssetObject(wallProps.bodyAssetId),
-    loadAssetObject(wallProps.headAssetId),
-    loadAssetObject(wallProps.footAssetId),
-    loadAssetObject(wallProps.bodyEndCapAssetId),
-    loadAssetObject(wallProps.headEndCapAssetId),
-    loadAssetObject(wallProps.footEndCapAssetId),
-  ])
-
-  const bodyCornerIds = Array.from(
-    new Set((wallProps.cornerModels ?? []).map((entry) => entry?.bodyAssetId).filter((value): value is string => typeof value === 'string' && value.trim().length > 0)),
-  )
-  const headCornerIds = Array.from(
-    new Set((wallProps.cornerModels ?? []).map((entry) => entry?.headAssetId).filter((value): value is string => typeof value === 'string' && value.trim().length > 0)),
-  )
-  const footCornerIds = Array.from(
-    new Set((wallProps.cornerModels ?? []).map((entry) => entry?.footAssetId).filter((value): value is string => typeof value === 'string' && value.trim().length > 0)),
-  )
-
-  const [bodyCornerObjects, headCornerObjects, footCornerObjects] = await Promise.all([
-    Promise.all(bodyCornerIds.map(async (assetId) => [assetId, await loadAssetObject(assetId)] as const)),
-    Promise.all(headCornerIds.map(async (assetId) => [assetId, await loadAssetObject(assetId)] as const)),
-    Promise.all(footCornerIds.map(async (assetId) => [assetId, await loadAssetObject(assetId)] as const)),
-  ])
-
-  const group = createWallRenderGroup(
-    definition,
-    {
-      bodyObject,
-      headObject,
-      footObject,
-      bodyEndCapObject,
-      headEndCapObject,
-      footEndCapObject,
-      bodyCornerObjectsByAssetId: Object.fromEntries(bodyCornerObjects),
-      headCornerObjectsByAssetId: Object.fromEntries(headCornerObjects),
-      footCornerObjectsByAssetId: Object.fromEntries(footCornerObjects),
+  const object = await buildWallPresetPreviewObject({
+    preset,
+    loadAssetMesh: async (assetId: string) => {
+      const file = await ensureAssetFile(assetId)
+      if (!file) {
+        return null
+      }
+      return await loadModelObjectFromFile(file)
     },
-    {
-      bodyMaterialConfigId: wallProps.bodyMaterialConfigId ?? preset.materialOrder?.[0] ?? null,
-      cornerModels: wallProps.cornerModels,
-      bodyUvAxis: wallProps.bodyUvAxis,
-      headUvAxis: wallProps.headUvAxis,
-      footUvAxis: wallProps.footUvAxis,
-      bodyOrientation: wallProps.bodyOrientation,
-      headOrientation: wallProps.headOrientation,
-      footOrientation: wallProps.footOrientation,
-      bodyEndCapOrientation: wallProps.bodyEndCapOrientation,
-      headEndCapOrientation: wallProps.headEndCapOrientation,
-      footEndCapOrientation: wallProps.footEndCapOrientation,
-    },
-  )
-
-  applyMaterialOverrides(group, buildWallNodeMaterials(preset), materialOverrideOptions)
-  applyAirWallVisualToWallGroup(group, Boolean(wallProps.isAirWall))
-  return group
+  })
+  if (!object) {
+    throw new Error('无法构建墙体预览对象')
+  }
+  return object
 }
 
 async function buildFloorPreviewObject(preset: FloorPresetData): Promise<THREE.Object3D> {
@@ -587,8 +479,6 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(animationHandle)
   window.removeEventListener('resize', handleResize)
   clearScene()
-  assetObjectCache.forEach((object) => disposeObject(object))
-  assetObjectCache.clear()
   controls?.dispose()
   controls = null
   renderer?.dispose()

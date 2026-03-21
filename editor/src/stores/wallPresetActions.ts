@@ -1,3 +1,5 @@
+import type { Object3D } from 'three'
+import Loader from '@schema/loader'
 import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
 import {
   WALL_COMPONENT_TYPE,
@@ -10,6 +12,8 @@ import {
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { extractExtension } from '@/utils/blob'
+import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
+import { prepareWallPreviewImportedObject, renderWallPresetThumbnailDataUrl } from '@/utils/wallPresetSceneGraphPreview'
 import {
   WALL_PRESET_FORMAT_VERSION,
   buildWallPresetFilename,
@@ -533,6 +537,79 @@ export function parseWallPresetData(text: string): WallPresetData {
   }
 }
 
+async function generateWallPresetThumbnailDataUrl(
+  store: WallPresetStoreLike,
+  presetData: WallPresetData,
+): Promise<string | null> {
+  const loadModelObjectFromFile = async (file: File): Promise<Object3D | null> => {
+    const loader = new Loader()
+    return await new Promise<Object3D | null>(
+      (resolve: (value: Object3D | null) => void, reject: (reason?: unknown) => void) => {
+        const handleLoaded = (object: Object3D | null) => {
+          loader.removeEventListener('loaded', handleLoaded)
+          if (!object) {
+            reject(new Error('Model load failed'))
+            return
+          }
+          resolve(prepareWallPreviewImportedObject(object))
+        }
+        loader.addEventListener('loaded', handleLoaded)
+        try {
+          loader.loadFiles([file])
+        } catch (error) {
+          loader.removeEventListener('loaded', handleLoaded)
+          reject(error)
+        }
+      },
+    )
+  }
+
+  const assetCache = useAssetCacheStore()
+
+  const ensureAssetFile = async (assetId: string): Promise<File | null> => {
+    const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedId.length) {
+      return null
+    }
+
+    let file = assetCache.createFileFromCache(normalizedId)
+    if (file) {
+      return file
+    }
+
+    await assetCache.loadFromIndexedDb(normalizedId)
+    file = assetCache.createFileFromCache(normalizedId)
+    if (file) {
+      return file
+    }
+
+    const asset = store.getAsset(normalizedId)
+    if (!asset) {
+      return null
+    }
+
+    try {
+      await assetCache.downloaProjectAsset(asset)
+    } catch {
+      return null
+    }
+    const downloaded = assetCache.createFileFromCache(normalizedId)
+    return downloaded
+  }
+  return await renderWallPresetThumbnailDataUrl({
+    preset: presetData,
+    width: ASSET_THUMBNAIL_WIDTH,
+    height: ASSET_THUMBNAIL_HEIGHT,
+    loadAssetMesh: async (assetId: string) => {
+      const file = await ensureAssetFile(assetId)
+      if (!file) {
+        return null
+      }
+      return await loadModelObjectFromFile(file)
+    },
+  })
+}
+
 export function createWallPresetActions(deps: WallPresetActionsDeps) {
   return {
     findWallPresetAssetByFilename(store: WallPresetStoreLike, filename: string): ProjectAsset | null {
@@ -707,6 +784,13 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         filename: fileName,
       })
 
+      let thumbnailDataUrl: string | null = null
+      try {
+        thumbnailDataUrl = await generateWallPresetThumbnailDataUrl(store, presetData)
+      } catch (thumbnailError) {
+        console.warn('Failed to generate wall preset thumbnail', thumbnailError)
+      }
+
       if (payload.assetId) {
         const existing = store.getAsset(assetId)
         if (!existing) {
@@ -720,6 +804,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           name: sanitizedName,
           description: fileName,
           previewColor: deps.WALL_PRESET_PREVIEW_COLOR,
+          thumbnail: thumbnailDataUrl ?? existing.thumbnail ?? null,
         }
         const categoryId = store.resolveConfigAssetSaveDirectoryId()
         const sourceMeta = (store.assetIndex as any)[assetId]?.source
@@ -736,7 +821,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         type: 'prefab',
         downloadUrl: assetId,
         previewColor: deps.WALL_PRESET_PREVIEW_COLOR,
-        thumbnail: null,
+        thumbnail: thumbnailDataUrl,
         description: fileName,
         gleaned: true,
         extension: extractExtension(fileName) ?? null,
