@@ -232,7 +232,8 @@ export async function buildAssetBundle(options: BuildAssetBundleOptions): Promis
   files[ASSET_BUNDLE_MANIFEST_FILENAME] = strToU8(JSON.stringify(manifest, null, 2))
   const archive = zipSync(files, { level: 6 })
   const bundleFileName = normalizeFilename(`${primaryName || 'asset'}-${bundleId}.zip`, `asset-${bundleId}`, 'zip')
-  const archiveBuffer = archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength)
+  const archiveBuffer = new ArrayBuffer(archive.byteLength)
+  new Uint8Array(archiveBuffer).set(archive)
 
   return {
     manifest,

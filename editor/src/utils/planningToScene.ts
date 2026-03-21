@@ -22,7 +22,6 @@ import {
   getPointsBounds,
   polygonCentroid,
 } from '@/utils/scatterSampling'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type {
   PlanningImageData,
   PlanningPolygonData,
@@ -790,17 +789,6 @@ function toWorldPoint(
   }
 }
 
-function polygonEdges(points: PlanningPoint[]): Array<{ start: PlanningPoint; end: PlanningPoint }> {
-  if (!Array.isArray(points) || points.length < 2) return []
-  const edges: Array<{ start: PlanningPoint; end: PlanningPoint }> = []
-  for (let i = 0; i < points.length; i += 1) {
-    const start = points[i]!
-    const end = points[(i + 1) % points.length]!
-    edges.push({ start, end })
-  }
-  return edges
-}
-
 function expandWorldPolygonRadially(
   points: Array<{ x: number; y: number; z: number }>,
   expandMeters: number,
@@ -834,25 +822,6 @@ function expandWorldPolygonRadially(
   })
 }
 
-function normalizeScatter(raw: PlanningScatterAssignmentData | null | undefined): ScatterAssignment | null {
-  if (!raw) return null
-  const assetId = typeof raw.assetId === 'string' ? raw.assetId.trim() : ''
-  const category = raw.category ?? null
-  if (!assetId || !category) return null
-  const name = typeof raw.name === 'string' ? raw.name : undefined
-  const densityPercent = typeof raw.densityPercent === 'number' ? raw.densityPercent : Number.NaN
-  const normalizedDensity = Number.isFinite(densityPercent)
-    ? THREE.MathUtils.clamp(Math.round(densityPercent), 0, 100)
-    : 50
-  const footprintAreaM2 = clampFootprintAreaM2(assetId, category, raw.footprintAreaM2)
-  const footprintMaxSizeM = clampFootprintMaxSizeM(assetId, category, raw.footprintMaxSizeM, footprintAreaM2)
-  return { assetId, category, name, densityPercent: normalizedDensity, footprintAreaM2, footprintMaxSizeM }
-}
-
-function extractScatterAssetId(raw: PlanningScatterAssignmentData | null | undefined): string | null {
-  const assetId = typeof raw?.assetId === 'string' ? raw.assetId.trim() : ''
-  return assetId.length ? assetId : null
-}
 
 function polygonArea2D(points: PlanningPoint[]): number {
   if (points.length < 3) return 0
@@ -1475,9 +1444,6 @@ function ensureScatterStore(groundNodeId: string, snapshot: TerrainScatterStoreS
   return store
 }
 
-// Reference to avoid "declared but never read" compile error during refactor.
-void ensureScatterStore
-
 function removePlanningScatterLayers(store: TerrainScatterStore) {
   const layersToRemove: string[] = []
   store.layers.forEach((layer) => {
@@ -1493,47 +1459,9 @@ function removePlanningScatterLayers(store: TerrainScatterStore) {
   layersToRemove.forEach((id) => removeTerrainScatterLayer(store, id))
 }
 
-function upsertPlanningScatterLayer(
-  store: TerrainScatterStore,
-  payload: { category: TerrainScatterCategory; assetId: string; label?: string },
-) {
-  const layerId = `planning:${payload.category}:${payload.assetId}`
-  const preset = (terrainScatterPresets && terrainScatterPresets[payload.category]) ? terrainScatterPresets[payload.category] : null
-  return upsertTerrainScatterLayer(store, {
-    id: layerId,
-    label: payload.label ?? 'Planning Scatter',
-    category: payload.category,
-    assetId: payload.assetId,
-    profileId: null,
-    params: {
-      alignToNormal: true,
-      randomYaw: true,
-      minSlope: 0,
-      maxSlope: 90,
-      minHeight: -10000,
-      maxHeight: 10000,
-      minScale: preset?.minScale ?? 0.85,
-      maxScale: preset?.maxScale ?? 1.15,
-      density: 1,
-      seed: null,
-      jitter: {
-        position: 0.25,
-        rotation: 1,
-        scale: 0.25,
-      },
-      payload: {
-        source: PLANNING_CONVERSION_SOURCE,
-      },
-    },
-  })
-}
-
-
 
 export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOptions): Promise<{ rootNodeId: string }> {
   const { sceneStore, planningData } = options
-  const assetCacheStore = useAssetCacheStore()
-
   const yieldController = createYieldController({ signal: options.signal, minIntervalMs: 12 })
 
   return await sceneStore.withScenePatchesSuppressed(async () => {
@@ -1617,30 +1545,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // coordinates/sizes (`position`, `width * scale`, `height * scale`).
   // Convert them directly so the 3D helper planes exactly match the editor overlay.
   const images = Array.isArray(planningData.images) ? planningData.images : []
-
-  const referencedScatterAssetIds = new Set<string>()
-  for (const poly of polygons) {
-    if (!activeLayerIdSet.has(poly.layerId)) {
-      continue
-    }
-    const id = extractScatterAssetId(poly.scatter)
-    if (id) referencedScatterAssetIds.add(id)
-  }
-  for (const line of polylines) {
-    if (!activeLayerIdSet.has(line.layerId)) {
-      continue
-    }
-    const id = extractScatterAssetId(line.scatter)
-    if (id) referencedScatterAssetIds.add(id)
-  }
-  if (referencedScatterAssetIds.size) {
-    emitProgress(options, 'Caching scatter models…', 18)
-    for (const assetId of referencedScatterAssetIds) {
-      throwIfAborted(options.signal)
-      await ensureModelBoundsCachedForAssetId(assetId, assetCacheStore)
-      await yieldController.maybeYield()
-    }
-  }
 
   const layerOrder: string[] = resolveLayerOrderFromPlanningData(planningData)
 
