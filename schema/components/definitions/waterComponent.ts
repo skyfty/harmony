@@ -231,6 +231,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     const effectiveMode = resolveEffectiveImplementationMode(props.implementationMode)
 
     if (effectiveMode === 'dynamic' && this.waterInstance) {
+      this.ensureArtifactsAttachedToHostParent()
       this.syncWaterTransform(this.waterInstance)
       const material = this.waterInstance.material as ShaderMaterial
       if (material.uniforms?.time) {
@@ -241,6 +242,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
 
     if (effectiveMode === 'static' && this.staticWaterMesh) {
+      this.ensureArtifactsAttachedToHostParent()
       this.syncWaterTransform(this.staticWaterMesh)
       this.tickStaticShaderTime(deltaTime, props.flowSpeed)
       this.markStaticEnvCaptureIfMoved()
@@ -269,14 +271,30 @@ class WaterComponent extends Component<WaterComponentProps> {
       this.lastSignature = signature
       if (effectiveMode === 'dynamic') {
         this.createDynamicWater(mesh, props, material)
+        if (this.waterInstance) {
+          this.syncWaterTransform(this.waterInstance)
+        }
       } else {
         this.createStaticWater(mesh, props, material)
+        if (this.staticWaterMesh) {
+          this.syncWaterTransform(this.staticWaterMesh)
+        }
       }
       return
     }
+
+    this.hostMesh = mesh
+    this.ensureArtifactsAttachedToHostParent()
+
     if (effectiveMode === 'dynamic') {
+      if (this.waterInstance) {
+        this.syncWaterTransform(this.waterInstance)
+      }
       this.applyDynamicUniforms(props, material)
     } else {
+      if (this.staticWaterMesh) {
+        this.syncWaterTransform(this.staticWaterMesh)
+      }
       this.applyStaticUniforms(props, material)
     }
   }
@@ -366,6 +384,48 @@ class WaterComponent extends Component<WaterComponentProps> {
     return [effectiveMode, props.textureWidth, props.textureHeight, materialSignature].join('_')
   }
 
+  private resolveArtifactParent(): Object3D | null {
+    if (!this.hostMesh) {
+      return null
+    }
+    return this.hostMesh.parent ?? this.hostMesh
+  }
+
+  private attachArtifactToParent(artifact: Object3D | null, nextParent: Object3D | null): boolean {
+    if (!artifact || !nextParent) {
+      return false
+    }
+    if (artifact.parent === nextParent) {
+      return false
+    }
+    artifact.parent?.remove(artifact)
+    nextParent.add(artifact)
+    return true
+  }
+
+  private ensureArtifactsAttachedToHostParent(): void {
+    const nextParent = this.resolveArtifactParent()
+    if (!nextParent) {
+      this.waterParent = null
+      return
+    }
+
+    let changed = false
+    changed = this.attachArtifactToParent(this.waterInstance, nextParent) || changed
+    changed = this.attachArtifactToParent(this.staticWaterMesh, nextParent) || changed
+    changed = this.attachArtifactToParent(this.staticMirrorCamera, nextParent) || changed
+
+    this.waterParent = nextParent
+    const artifactUsesSiblingParent = Boolean(this.hostMesh && this.hostMesh.parent)
+    if (this.waterInstance || this.staticWaterMesh) {
+      this.meshVisibility(!artifactUsesSiblingParent)
+    }
+
+    if (changed) {
+      nextParent.updateMatrixWorld(true)
+    }
+  }
+
   private createDynamicWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
     const sourceNormalMap = this.resolveMaterialNormalMap(material)
     if (!sourceNormalMap) {
@@ -408,6 +468,7 @@ class WaterComponent extends Component<WaterComponentProps> {
       // Don't hide the host mesh here; a hidden parent would also hide the Water child.
     }
     this.waterInstance = water
+    this.ensureArtifactsAttachedToHostParent()
     this.applyDynamicUniforms(props, material)
     this.syncSunUniforms()
   }
@@ -619,6 +680,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
 
     this.staticWaterMesh = typedWaterMesh
+    this.ensureArtifactsAttachedToHostParent()
     this.staticEnvHasCaptured = false
     this.staticEnvNeedsCapture = false
     this.staticEnvLastCapturedWorldPos = null
@@ -644,10 +706,30 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (!this.hostMesh) {
       return
     }
-    // Keep the surface aligned with the host mesh even though it's not parented under it.
-    target.position.copy(this.hostMesh.position)
-    target.quaternion.copy(this.hostMesh.quaternion)
-    target.scale.copy(this.hostMesh.scale)
+
+    this.hostMesh.updateMatrix()
+    this.hostMesh.updateMatrixWorld(true)
+
+    const hostWorldPosition = new Vector3()
+    const hostWorldQuaternion = new Quaternion()
+    const hostWorldScale = new Vector3()
+    this.hostMesh.matrixWorld.decompose(hostWorldPosition, hostWorldQuaternion, hostWorldScale)
+
+    const targetParent = target.parent
+    if (!targetParent) {
+      target.position.copy(hostWorldPosition)
+      target.quaternion.copy(hostWorldQuaternion)
+      target.scale.copy(hostWorldScale)
+      target.updateMatrix()
+      target.updateMatrixWorld(true)
+      return
+    }
+
+    targetParent.updateMatrixWorld(true)
+    const hostWorldMatrix = new Matrix4().compose(hostWorldPosition, hostWorldQuaternion, hostWorldScale)
+    const parentInverseWorld = targetParent.matrixWorld.clone().invert()
+    const targetLocalMatrix = new Matrix4().multiplyMatrices(parentInverseWorld, hostWorldMatrix)
+    targetLocalMatrix.decompose(target.position, target.quaternion, target.scale)
     target.updateMatrix()
     target.updateMatrixWorld(true)
   }
