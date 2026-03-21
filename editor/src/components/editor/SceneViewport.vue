@@ -10114,9 +10114,9 @@ function syncControlsConstraintsAndSpeeds() {
   const speedScale = distanceScale * boostScale
 
   // Slightly increased over original defaults but conservative to avoid oversensitivity
-  mapControls.rotateSpeed = 0.6
+  mapControls.rotateSpeed = 0.6 * speedScale
   mapControls.zoomSpeed = 0.6
-  mapControls.panSpeed = 1
+  mapControls.panSpeed = 1 * speedScale
   // @ts-ignore
   ;(mapControls as any).keyPanSpeed = 7.5 * speedScale
 

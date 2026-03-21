@@ -645,6 +645,39 @@ function resolvePersistedThumbnailUrl(entry: UploadAssetEntry, asset: ProjectAss
   return null
 }
 
+async function createFileFromPersistedThumbnailUrl(
+  url: string,
+  options: { fallbackName: string },
+): Promise<File | null> {
+  const candidate = url.trim()
+  if (!candidate.length) {
+    return null
+  }
+
+  if (candidate.startsWith('data:')) {
+    const blob = dataUrlToBlob(candidate)
+    const extension = extractExtension(`thumbnail.${blob.type.split('/')[1] ?? 'png'}`) ?? 'png'
+    return new File([blob], `${options.fallbackName}-thumbnail.${extension}`, {
+      type: blob.type || 'image/png',
+    })
+  }
+
+  try {
+    const response = await fetch(candidate, { credentials: 'include' })
+    if (!response.ok) {
+      return null
+    }
+    const blob = await response.blob()
+    const mimeSubtype = blob.type.split('/')[1] ?? ''
+    const extension = extractExtension(`thumbnail.${mimeSubtype}`) ?? extractExtension(candidate) ?? 'png'
+    return new File([blob], `${options.fallbackName}-thumbnail.${extension}`, {
+      type: blob.type || 'image/png',
+    })
+  } catch {
+    return null
+  }
+}
+
 function createThumbnailFileForBundle(prepared: PreparedEntryMetadata): File | null {
   if (prepared.thumbnailFile) {
     return prepared.thumbnailFile
@@ -774,6 +807,8 @@ type PreparedEntryMetadata = {
   file: File | null
   thumbnailFile: File | null
   thumbnailUrl: string | null
+  thumbnailSource: 'manual' | 'generated' | 'persisted' | 'none'
+  thumbnailGenerationHint: 'model-default-placeholder' | 'auto-generated' | null
   name: string
   description: string
   categoryId: string | null
@@ -822,7 +857,20 @@ async function buildPreparedEntryMetadata(
   }
 
   let thumbnailFile = entry.thumbnailFile
-  if (!thumbnailFile && options.ensureThumbnail && file) {
+  let thumbnailSource: PreparedEntryMetadata['thumbnailSource'] = thumbnailFile ? 'manual' : 'none'
+  let thumbnailGenerationHint: PreparedEntryMetadata['thumbnailGenerationHint'] = null
+  const persistedThumbnailUrl = thumbnailFile ? null : resolvePersistedThumbnailUrl(entry, asset)
+  if (!thumbnailFile && persistedThumbnailUrl) {
+    const persistedThumbnailFile = await createFileFromPersistedThumbnailUrl(persistedThumbnailUrl, {
+      fallbackName: name || asset.name,
+    })
+    if (persistedThumbnailFile) {
+      thumbnailFile = persistedThumbnailFile
+      thumbnailSource = 'persisted'
+    }
+  }
+
+  if (!thumbnailFile && !persistedThumbnailUrl && options.ensureThumbnail && file) {
     const thumbnailAsset: ProjectAsset = {
       ...asset,
       color: color ?? asset.color,
@@ -834,15 +882,19 @@ async function buildPreparedEntryMetadata(
       width: ASSET_THUMBNAIL_WIDTH,
       height: ASSET_THUMBNAIL_HEIGHT,
     })
+    thumbnailSource = 'generated'
+    thumbnailGenerationHint = ['model', 'mesh', 'prefab'].includes(thumbnailAsset.type) ? 'model-default-placeholder' : 'auto-generated'
   }
 
-  const thumbnailUrl = thumbnailFile ? await readBlobAsDataUrl(thumbnailFile) : resolvePersistedThumbnailUrl(entry, asset)
+  const thumbnailUrl = thumbnailFile ? await readBlobAsDataUrl(thumbnailFile) : persistedThumbnailUrl
 
   return {
     asset,
     file,
     thumbnailFile,
     thumbnailUrl,
+    thumbnailSource,
+    thumbnailGenerationHint,
     name,
     description,
     categoryId: category.categoryId,
