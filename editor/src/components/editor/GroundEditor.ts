@@ -3316,6 +3316,32 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 	}
 
+	function emitCommittedTerrainPaintSurfacePreview(
+		session: PaintSessionState,
+		groundSurfaceChunks: GroundSurfaceChunkTextureMap | null,
+	): void {
+		if (!options.onTerrainPaintSurfacePreviewChanged) {
+			return
+		}
+		const groundObject = getGroundObject()
+		const groundNode = getGroundNodeFromScene()
+		if (!groundObject || !groundNode || groundNode.id !== session.nodeId || groundNode.dynamicMesh?.type !== 'Ground') {
+			return
+		}
+		options.onTerrainPaintSurfacePreviewChanged({
+			groundObject,
+			groundNode,
+			dynamicMesh: {
+				...session.definition,
+				terrainPaint: null,
+				groundSurfaceChunks,
+			},
+			previewRevision: session.terrainPaintSurfacePreviewRevision,
+			mode: 'surface-rebuild',
+			liveChunkPreviews: null,
+		})
+	}
+
 	function scheduleTerrainPaintSurfacePreviewRebuild(session: PaintSessionState): void {
 		if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
 			window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
@@ -3756,12 +3782,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				bumpRuntimeVersion: true,
 				reason: 'editor-local-paint',
 			})
+			session.previewGroundSurfaceChunks = nextGroundSurfaceChunks
+			session.liveSurfacePreviewPendingChunkKeys.clear()
+			if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
+				window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
+				session.terrainPaintSurfacePreviewDebounceTimerId = null
+			}
 			if (targetNode.dynamicMesh?.type === 'Ground') {
 				targetNode.dynamicMesh.terrainPaint = null
 			}
 			const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, targetNode)
 			await useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false })
 			await options.sceneStore.saveActiveScene({ force: true })
+			emitCommittedTerrainPaintSurfacePreview(session, nextGroundSurfaceChunks)
 			paintSessionState = null
 			return true
 		} catch (error) {

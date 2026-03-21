@@ -17102,6 +17102,9 @@ function updateGroundChunkStreaming() {
     refreshPlacementSurfaceTargetsForNode(node.id)
     placementSurfaceTargetsDirty = true
 
+    // Reapply the current ground preview to newly streamed chunk meshes.
+    syncGroundLandformsPreview(groundObject, node, groundDefinition)
+
     // Chunk meshes stream in/out without scene patches; notify GroundEditor so
     // terrain paint preview can bind to new chunk meshes and load newly visible weightmaps.
     onGroundChunkSetChanged()
