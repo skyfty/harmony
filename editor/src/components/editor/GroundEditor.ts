@@ -427,19 +427,10 @@ function createTerrainPaintSamplingSettings(settings: TerrainPaintBrushSettings)
 		blendMode: settings.blendMode,
 	}
 }
+
 function normalizeSurfaceDataToStraightAlpha(surfaceData: Uint8ClampedArray): Uint8ClampedArray {
-	for (let offset = 0; offset < surfaceData.length; offset += 4) {
-		const alpha = clamp01((surfaceData[offset + 3] ?? 0) / 255)
-		if (alpha <= 0) {
-			surfaceData[offset] = 0
-			surfaceData[offset + 1] = 0
-			surfaceData[offset + 2] = 0
-			continue
-		}
-		surfaceData[offset] = Math.round(clamp01(((surfaceData[offset] ?? 0) / 255) / alpha) * 255)
-		surfaceData[offset + 1] = Math.round(clamp01(((surfaceData[offset + 1] ?? 0) / 255) / alpha) * 255)
-		surfaceData[offset + 2] = Math.round(clamp01(((surfaceData[offset + 2] ?? 0) / 255) / alpha) * 255)
-	}
+	// Canvas getImageData() already returns straight-alpha RGBA in modern runtimes.
+	// Repeatedly unpremultiplying here amplifies soft edges across save/reload cycles.
 	return surfaceData
 }
 

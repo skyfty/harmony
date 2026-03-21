@@ -206,6 +206,19 @@ function clamp01(value: number): number {
   return value
 }
 
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min
+  }
+  if (value <= min) {
+    return min
+  }
+  if (value >= max) {
+    return max
+  }
+  return Math.trunc(value)
+}
+
 function createWeChatOffscreenCanvas(width: number, height: number): CanvasLike | null {
   const globalScope = globalThis as typeof globalThis & {
     wx?: {
@@ -545,7 +558,8 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
   const previewSize = computePreviewTextureSize(dynamicMesh, maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION)
   const persistedTexture = getLandformsPreviewTexture(groundObject)
   let liveTexture = getGroundSurfacePreviewLiveTexture(groundObject)
-  const seedTexture = persistedTexture ?? liveTexture
+  // Seed from the persisted preview only so live passes do not recursively bootstrap prior live blending artifacts.
+  const seedTexture = persistedTexture ?? null
   const seedSource = resolveTextureImageSource(seedTexture)
   const seedSize = seedSource ? resolveCanvasImageSourceSize(seedSource) : null
   const targetWidth = Math.max(previewSize.width, seedSize?.width ?? 0)
@@ -582,14 +596,35 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
   const halfWidth = groundWidth * 0.5
   const halfDepth = groundDepth * 0.5
   for (const preview of validPreviews) {
-    const drawX = Math.floor(((preview.bounds.minX + halfWidth) / groundWidth) * width)
-    const drawY = Math.floor(((preview.bounds.minZ + halfDepth) / groundDepth) * height)
-    const drawWidth = Math.max(1, Math.ceil((preview.bounds.width / groundWidth) * width))
-    const drawHeight = Math.max(1, Math.ceil((preview.bounds.depth / groundDepth) * height))
-    // Replace the whole chunk footprint each live update.
-    // Using source-over here repeatedly compounds edge alpha and makes strokes look sharper until final rebuild.
-    context.clearRect(drawX, drawY, drawWidth, drawHeight)
+    const minPxX = ((preview.bounds.minX + halfWidth) / groundWidth) * width
+    const minPxY = ((preview.bounds.minZ + halfDepth) / groundDepth) * height
+    const maxPxX = ((preview.bounds.minX + preview.bounds.width + halfWidth) / groundWidth) * width
+    const maxPxY = ((preview.bounds.minZ + preview.bounds.depth + halfDepth) / groundDepth) * height
+    const drawX = clampInt(Math.floor(minPxX), 0, Math.max(0, width - 1))
+    const drawY = clampInt(Math.floor(minPxY), 0, Math.max(0, height - 1))
+    const drawRight = clampInt(Math.ceil(maxPxX), drawX + 1, width)
+    const drawBottom = clampInt(Math.ceil(maxPxY), drawY + 1, height)
+    const drawWidth = drawRight - drawX
+    const drawHeight = drawBottom - drawY
+    if (drawWidth <= 0 || drawHeight <= 0) {
+      continue
+    }
+
+    // Feathered brush pixels can sit on chunk boundaries; clear a 1px safety ring to avoid stale halos.
+    const clearX = Math.max(0, drawX - 1)
+    const clearY = Math.max(0, drawY - 1)
+    const clearRight = Math.min(width, drawRight + 1)
+    const clearBottom = Math.min(height, drawBottom + 1)
+    context.clearRect(clearX, clearY, clearRight - clearX, clearBottom - clearY)
+
+    // Use copy in a clipped chunk rect so repeated live syncs overwrite pixels instead of alpha-compositing.
+    context.save()
+    context.beginPath()
+    context.rect(drawX, drawY, drawWidth, drawHeight)
+    context.clip()
+    context.globalCompositeOperation = 'copy'
     context.drawImage(preview.canvas as unknown as CanvasImageSource, drawX, drawY, drawWidth, drawHeight)
+    context.restore()
   }
 
   const nextTexture = liveTexture && canReuseCanvas

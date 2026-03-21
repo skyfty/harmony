@@ -1024,10 +1024,12 @@ let backgroundLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
 let landformsPreviewLoadToken = 0
 let lastGroundSurfacePreviewRequestKey: string | null = null
+let lastTerrainPaintSurfacePreviewRequestKey: string | null = null
 
 function invalidateGroundSurfacePreviewRequests(): void {
   landformsPreviewLoadToken += 1
   lastGroundSurfacePreviewRequestKey = null
+  lastTerrainPaintSurfacePreviewRequestKey = null
 }
 
 function bumpGroundSurfacePreviewTokenIfNeeded(requestKey: string): void {
@@ -10769,13 +10771,21 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   mode: 'live' | 'surface-rebuild'
   liveChunkPreviews?: GroundSurfaceLiveChunkPreview[] | null
 }): void {
+  const liveChunkPreviewSignature = payload.mode === 'live'
+    ? (payload.liveChunkPreviews ?? []).map((entry) => `${entry.chunkKey}:${entry.revision}`).join('|')
+    : ''
   const requestKey = stableSerialize({
     mode: payload.mode,
     nodeId: payload.groundNode.id,
     previewRevision: payload.previewRevision,
     groundSignature: computeGroundDynamicMeshSignature(payload.dynamicMesh),
     liveChunkPreviewCount: payload.liveChunkPreviews?.length ?? 0,
+    liveChunkPreviewSignature,
   })
+  if (lastTerrainPaintSurfacePreviewRequestKey === requestKey) {
+    return
+  }
+  lastTerrainPaintSurfacePreviewRequestKey = requestKey
   bumpGroundSurfacePreviewTokenIfNeeded(requestKey)
   if (payload.mode === 'live' && payload.liveChunkPreviews?.length) {
     const applied = syncGroundSurfaceLiveChunkPreviews({
