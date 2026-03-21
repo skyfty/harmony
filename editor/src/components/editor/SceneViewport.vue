@@ -4479,6 +4479,15 @@ type WarpGatePlacementClickSessionState = {
 
 let warpGatePlacementClickSessionState: WarpGatePlacementClickSessionState | null = null
 
+type ShiftOrbitPivotSessionState = {
+  pointerId: number
+  pivot: THREE.Vector3
+  orbitDistance: number
+}
+
+let shiftOrbitPivotSessionState: ShiftOrbitPivotSessionState | null = null
+const shiftOrbitOffsetHelper = new THREE.Vector3()
+
 let wallDoorRectangleSelectionState: WallDoorRectangleSelectionState | null = null
 const wallDoorSelectionPayload = ref<WallDoorSelectionPayload | null>(null)
 const wallDoorSelectionOverlayBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
@@ -6737,11 +6746,13 @@ type CameraTransitionState = {
   startTarget: THREE.Vector3
   endPosition: THREE.Vector3
   endTarget: THREE.Vector3
+  relativeOffset: THREE.Vector3 | null
   startTime: number
   duration: number
 }
 
 let cameraTransitionState: CameraTransitionState | null = null
+const SHIFT_ORBIT_FOCUS_TRANSITION_MS = 260
 
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
@@ -10316,9 +10327,165 @@ function handleDirectionalCameraShortcut(code: string): boolean {
 
 function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
+
+  if (camera && mapControls && shiftOrbitPivotSessionState) {
+    const session = shiftOrbitPivotSessionState
+    const currentOffset = shiftOrbitOffsetHelper.copy(camera.position).sub(session.pivot)
+    const currentDistance = currentOffset.length()
+    if (currentDistance > 1e-6 && session.orbitDistance > 1e-6) {
+      const deviation = Math.abs(currentDistance - session.orbitDistance)
+      const tolerance = Math.max(1e-3, session.orbitDistance * 0.005)
+      if (deviation > tolerance) {
+        currentOffset.multiplyScalar(session.orbitDistance / currentDistance)
+        camera.position.copy(session.pivot).add(currentOffset)
+      }
+    }
+    mapControls.target.copy(session.pivot)
+  }
+
   syncControlsConstraintsAndSpeeds()
   gizmoControls?.cameraUpdate()
   terrainGridController.markCameraDirty()
+}
+
+function clearShiftOrbitPivotSession(pointerId?: number) {
+  if (!shiftOrbitPivotSessionState) {
+    return
+  }
+  if (typeof pointerId === 'number' && shiftOrbitPivotSessionState.pointerId !== pointerId) {
+    return
+  }
+  shiftOrbitPivotSessionState = null
+}
+
+function beginCameraTransition(params: {
+  endPosition: THREE.Vector3
+  endTarget: THREE.Vector3
+  relativeOffset?: THREE.Vector3 | null
+  durationMs?: number
+}): boolean {
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  const endTarget = params.endTarget.clone()
+  endTarget.y = Math.max(endTarget.y, MIN_TARGET_HEIGHT)
+
+  const endPosition = params.endPosition.clone()
+  if (endPosition.y < MIN_CAMERA_HEIGHT) {
+    endPosition.y = MIN_CAMERA_HEIGHT
+  }
+
+  cameraTransitionState = {
+    startPosition: camera.position.clone(),
+    startTarget: mapControls.target.clone(),
+    endPosition,
+    endTarget,
+    relativeOffset: params.relativeOffset ? params.relativeOffset.clone() : null,
+    startTime: performance.now(),
+    duration: Math.max(0, params.durationMs ?? 0),
+  }
+
+  return true
+}
+
+function resolveShiftOrbitPivotPoint(event: PointerEvent): THREE.Vector3 | null {
+  const sceneHit = pickNodeAtPointer(event)
+  if (sceneHit?.point) {
+    return sceneHit.point.clone()
+  }
+
+  const groundPoint = new THREE.Vector3()
+  if (raycastGroundPoint(event, groundPoint)) {
+    return groundPoint.clone()
+  }
+
+  return null
+}
+
+function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
+  if (!camera || !mapControls || !mapControls.enabled) {
+    return
+  }
+  if (!event.shiftKey || isApplyingCameraState || isAltOverrideActive) {
+    return
+  }
+  if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
+    return
+  }
+  if (scatterEraseModeActive.value || hasPlacementPreviewActive()) {
+    return
+  }
+  if (Boolean(transformControls?.dragging)) {
+    return
+  }
+
+  const mode = sceneStore.viewportSettings.cameraControlMode
+  const isRotateGesture = (mode === 'orbit' && event.button === 1) || (mode === 'map' && event.button === 2)
+  if (!isRotateGesture) {
+    return
+  }
+
+  const pivot = resolveShiftOrbitPivotPoint(event)
+  if (!pivot) {
+    return
+  }
+
+  const orbitDistance = camera.position.distanceTo(pivot)
+  if (!Number.isFinite(orbitDistance) || orbitDistance <= 1e-6) {
+    return
+  }
+
+  shiftOrbitPivotSessionState = {
+    pointerId: event.pointerId,
+    pivot,
+    orbitDistance,
+  }
+
+  mapControls.target.copy(pivot)
+  syncControlsConstraintsAndSpeeds()
+  mapControls.update()
+}
+
+function maybeApplyShiftOrbitLeftClickFocus(event: PointerEvent): void {
+  if (!camera || !mapControls || !mapControls.enabled) {
+    return
+  }
+  if (!event.shiftKey || event.button !== 0 || isApplyingCameraState || isAltOverrideActive) {
+    return
+  }
+  if (sceneStore.viewportSettings.cameraControlMode !== 'orbit') {
+    return
+  }
+  if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
+    return
+  }
+  if (scatterEraseModeActive.value || hasPlacementPreviewActive()) {
+    return
+  }
+  if (Boolean(transformControls?.dragging)) {
+    return
+  }
+
+  const pivot = resolveShiftOrbitPivotPoint(event)
+  if (!pivot) {
+    return
+  }
+
+  const cameraOffset = new THREE.Vector3().copy(camera.position).sub(mapControls.target)
+  const endTarget = pivot.clone()
+  const endPosition = endTarget.clone().add(cameraOffset)
+
+  if (!beginCameraTransition({
+    endPosition,
+    endTarget,
+    relativeOffset: cameraOffset,
+    durationMs: SHIFT_ORBIT_FOCUS_TRANSITION_MS,
+  })) {
+    return
+  }
+
+  lastCameraFocusRadius = Math.max(0.25, endPosition.distanceTo(endTarget) / 10)
 }
 
 function applyCameraControlMode() {
@@ -10336,6 +10503,7 @@ function applyCameraControlMode() {
     previousControls.removeEventListener('change', handleControlsChange)
     previousControls.dispose()
   }
+  clearShiftOrbitPivotSession()
 
   const domElement = canvasRef.value
   mapControls = cameraControlMode === 'map'
@@ -11404,13 +11572,17 @@ function animate() {
 
   if (cameraTransitionState && mapControls) {
     const t_cam0 = performance.now()
-    const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
+    const { startTime, duration, startPosition, startTarget, endPosition, endTarget, relativeOffset } = cameraTransitionState
     const elapsed = Math.max(performance.now() - startTime, 0)
     const progress = duration === 0 ? 1 : Math.min(elapsed / duration, 1)
     const eased = easeInOutCubic(progress)
 
-    cameraTransitionCurrentPosition.copy(startPosition).lerp(endPosition, eased)
     cameraTransitionCurrentTarget.copy(startTarget).lerp(endTarget, eased)
+    if (relativeOffset) {
+      cameraTransitionCurrentPosition.copy(cameraTransitionCurrentTarget).add(relativeOffset)
+    } else {
+      cameraTransitionCurrentPosition.copy(startPosition).lerp(endPosition, eased)
+    }
 
     const previousApplying = isApplyingCameraState
     if (!previousApplying) {
@@ -12916,6 +13088,9 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  maybeApplyShiftOrbitLeftClickFocus(event)
+  maybeBeginShiftOrbitPivotSession(event)
+
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
   if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
     if (activeBuildTool.value && tryExitActiveNodeBuildToolEditMode(event)) {
@@ -13301,6 +13476,10 @@ function handlePointerMove(event: PointerEvent) {
   lastPointerType = event.pointerType
 
   // (debug hover capture removed)
+
+  if (shiftOrbitPivotSessionState && shiftOrbitPivotSessionState.pointerId === event.pointerId && !event.shiftKey) {
+    clearShiftOrbitPivotSession(event.pointerId)
+  }
 
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
     const dx = event.clientX - middleClickSessionState.startX
@@ -14401,6 +14580,8 @@ async function handlePointerUp(event: PointerEvent) {
     if (wallDoorRectangleSelectionState && wallDoorRectangleSelectionState.pointerId === event.pointerId) {
       clearWallDoorRectangleSelectionState()
     }
+
+    clearShiftOrbitPivotSession(event.pointerId)
   }
 }
 
@@ -14438,6 +14619,7 @@ function handlePointerCancel(event: PointerEvent) {
   if (wallDoorRectangleSelectionState && wallDoorRectangleSelectionState.pointerId === event.pointerId) {
     clearWallDoorRectangleSelectionState()
   }
+  clearShiftOrbitPivotSession(event.pointerId)
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
     const state = roadVertexDragState
     roadVertexDragState = null

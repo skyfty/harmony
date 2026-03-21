@@ -18,7 +18,7 @@ export class CameraControlsTrackball extends TrackballControls {
     // TrackballControls uses `staticMoving`/`dynamicDampingFactor` instead of OrbitControls damping.
     // The editor previously ran OrbitControls with `enableDamping = false`, so default to no inertia.
     this.staticMoving = true
-    this.dynamicDampingFactor = 0.08
+    this.dynamicDampingFactor =0.05
 
     // Speeds.
     this.rotateSpeed = 0.6

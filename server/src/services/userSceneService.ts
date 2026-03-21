@@ -7,7 +7,7 @@ import { SceneModel } from '@/models/Scene'
 import { appConfig } from '@/config/env'
 import type { UploadedFilePayload } from '@/services/sceneService'
 import type { UserSceneBundleRecord, UserSceneSummary } from '@/types/userScene'
-import { readTextFileFromScenePackage, unzipScenePackage } from '@harmony/schema'
+import { decodeScenePackageSceneDocument, readBinaryFileFromScenePackage, unzipScenePackage } from '@harmony/schema'
 
 export type { UploadedFilePayload } from '@/services/sceneService'
 
@@ -110,10 +110,17 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   if (sanitizeString(sceneEntry.sceneId) !== expectedSceneId) {
     throw new Error('Scene id mismatch between path and bundle manifest')
   }
-  if (!groundHeightsPath) {
-    throw new Error('Scene bundle missing ground height sidecar path')
+  const sceneRaw = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as any
+  const hasGroundNode = Array.isArray(sceneRaw?.nodes)
+    && sceneRaw.nodes.some((node: unknown) => {
+      const record = node as { dynamicMesh?: { type?: unknown } }
+      return record?.dynamicMesh?.type === 'Ground'
+    })
+
+  if (hasGroundNode && !groundHeightsPath) {
+    throw new Error('Scene bundle missing ground height sidecar path for Ground scene')
   }
-  if (!pkg.files[groundHeightsPath]) {
+  if (groundHeightsPath && !pkg.files[groundHeightsPath]) {
     throw new Error('Scene bundle missing ground height sidecar file')
   }
   if (groundScatterPath && !pkg.files[groundScatterPath]) {
@@ -122,15 +129,14 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   if (groundPaintPath && !pkg.files[groundPaintPath]) {
     throw new Error('Scene bundle missing ground paint sidecar file')
   }
-  const sceneRaw = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as any
   const id = sanitizeString(sceneRaw?.id) || expectedSceneId
   if (id !== expectedSceneId) {
-    throw new Error('Scene id mismatch between path and scene.json')
+    throw new Error('Scene id mismatch between path and scene document')
   }
   const name = sanitizeString(sceneRaw?.name) || '未命名场景'
   const projectId = sanitizeString(sceneRaw?.projectId)
   if (!projectId) {
-    throw new Error('scene.json missing projectId')
+    throw new Error('Scene document missing projectId')
   }
   const thumbnail = typeof sceneRaw?.thumbnail === 'string' ? sceneRaw.thumbnail : null
   const updatedAt = toIsoString(sceneRaw?.updatedAt)

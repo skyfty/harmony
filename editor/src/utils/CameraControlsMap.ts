@@ -16,7 +16,7 @@ export class CameraControlsMap extends MapControls {
 
     // Smooth camera movement.
     this.enableDamping = false
-    this.dampingFactor = 0.08
+    this.dampingFactor =  0.05
 
     // Speeds.
     this.rotateSpeed = 0.6

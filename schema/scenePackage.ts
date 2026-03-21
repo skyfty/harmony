@@ -16,7 +16,7 @@ export interface ScenePackageSceneEntry {
   path: string;
   /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
   planningPath?: string;
-  /** Required ground height sidecar path, e.g. `scenes/<sceneId>/ground-heightmaps.bin` */
+  /** Ground height sidecar path for scenes with Ground nodes, e.g. `scenes/<sceneId>/ground-heightmaps.bin` */
   groundHeightsPath?: string;
   /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
   groundScatterPath?: string;

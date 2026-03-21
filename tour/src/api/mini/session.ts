@@ -123,6 +123,10 @@ export async function loginWithCredentials(username: string, password: string): 
 
 export async function loginWithWechatCode(code: string): Promise<string> {
   const miniAppId = getMiniAppId()
+  console.log(`${MINI_AUTH_LOG_PREFIX} 
+    
+    
+    `, { code, miniAppId: miniAppId || '(empty)' })
   logMiniAuth('requesting /mini-auth/wechat-login', {
     miniAppId: miniAppId || '(empty)',
   })

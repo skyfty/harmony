@@ -65,6 +65,51 @@ type UserSceneBundleSummaryDto = {
   }
 }
 
+type ApiEnvelope<T> = {
+  code: number
+  data: T
+  message: string
+}
+
+function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.code === 'number' && 'data' in candidate && typeof candidate.message === 'string'
+}
+
+async function readResponseErrorMessage(response: Response): Promise<string | null> {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    const payload = await response.json().catch(() => null)
+    if (isApiEnvelope<unknown>(payload)) {
+      return payload.message || null
+    }
+    if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
+      return (payload as { message: string }).message
+    }
+    return null
+  }
+
+  const text = await response.text().catch(() => '')
+  if (!text) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (isApiEnvelope<unknown>(parsed)) {
+      return parsed.message || null
+    }
+    if (parsed && typeof parsed === 'object' && typeof (parsed as { message?: unknown }).message === 'string') {
+      return (parsed as { message: string }).message
+    }
+  } catch (_error) {
+    return text
+  }
+  return text
+}
+
 function resolveWorkspaceDescriptor(user: SessionUser | null | undefined): SceneWorkspaceDescriptor {
   if (!user) {
     return { ...LOCAL_WORKSPACE_DESCRIPTOR }
@@ -549,7 +594,9 @@ async function uploadSceneToServer(document: StoredSceneDocument, authStore: Ret
     body: form,
   })
   if (!response.ok) {
-    throw new Error(`Failed to upload scene bundle (${response.status})`)
+    const serverMessage = await readResponseErrorMessage(response)
+    const detail = serverMessage ? `: ${serverMessage}` : ''
+    throw new Error(`Failed to upload scene bundle (${response.status})${detail}`)
   }
 }
 
