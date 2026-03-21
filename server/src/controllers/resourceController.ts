@@ -2542,6 +2542,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   const metadataBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.metadataLogicalId)
   const sidecarMetadata = metadataBundleFile ? parseBundleMetadataPayload(metadataBundleFile.bytes) : null
   const primaryMetadata = payload.metadata ?? sidecarMetadata ?? undefined
+  const thumbnailBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.thumbnailLogicalId)
 
   let primaryAsset = await AssetModel.findOne({
     contentHash: primaryBundleFile.entry.hash,
@@ -2557,7 +2558,6 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       mimeType: primaryBundleFile.entry.mimeType ?? null,
     })
 
-    const thumbnailBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.thumbnailLogicalId)
     const thumbnailInfo = thumbnailBundleFile
       ? await storeBufferAsFile(thumbnailBundleFile.bytes, {
           filename: thumbnailBundleFile.entry.filename,
@@ -2600,6 +2600,20 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       bundleRole: 'primary',
       bundlePrimaryAssetId: null,
     })
+  } else if (thumbnailBundleFile) {
+    const thumbnailInfo = await storeBufferAsFile(thumbnailBundleFile.bytes, {
+      filename: thumbnailBundleFile.entry.filename,
+      mimeType: thumbnailBundleFile.entry.mimeType ?? null,
+      prefix: THUMBNAIL_PREFIX,
+    })
+    const previousThumbnailKey = resolveThumbnailFileKey(primaryAsset)
+    const primaryFileKey = resolveAssetFileKey(primaryAsset)
+    primaryAsset.previewUrl = thumbnailInfo.url
+    primaryAsset.thumbnailUrl = thumbnailInfo.url
+    await primaryAsset.save()
+    if (previousThumbnailKey && previousThumbnailKey !== thumbnailInfo.fileKey && previousThumbnailKey !== primaryFileKey) {
+      await deleteStoredFile(previousThumbnailKey)
+    }
   }
 
   persistedAssetIds.add(primaryAsset._id.toString())

@@ -499,7 +499,7 @@ export async function exportScenePackageZip(payload: {
       ? structuredClone(preparedDocument)
       : JSON.parse(JSON.stringify(preparedDocument))
     const groundNode = findGroundNode(sidecarSource.nodes)
-    const groundHeightSidecar = scene.id === sceneStore.currentSceneId
+    let groundHeightSidecar = scene.id === sceneStore.currentSceneId
       ? groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
       : await scenesStore.loadGroundHeightSidecar(scene.id)
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
@@ -508,6 +508,10 @@ export async function exportScenePackageZip(payload: {
     const groundPaintSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundPaintStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundPaintSidecar(scene.id)
+    // New scenes can contain Ground nodes before sidecar persistence runs; generate a fallback sidecar for upload consistency.
+    if (groundNode && !groundHeightSidecar) {
+      groundHeightSidecar = groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
+    }
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
     stripEditorOnlySceneFields(docClone)
