@@ -427,19 +427,10 @@ function createTerrainPaintSamplingSettings(settings: TerrainPaintBrushSettings)
 		blendMode: settings.blendMode,
 	}
 }
+
 function normalizeSurfaceDataToStraightAlpha(surfaceData: Uint8ClampedArray): Uint8ClampedArray {
-	for (let offset = 0; offset < surfaceData.length; offset += 4) {
-		const alpha = clamp01((surfaceData[offset + 3] ?? 0) / 255)
-		if (alpha <= 0) {
-			surfaceData[offset] = 0
-			surfaceData[offset + 1] = 0
-			surfaceData[offset + 2] = 0
-			continue
-		}
-		surfaceData[offset] = Math.round(clamp01(((surfaceData[offset] ?? 0) / 255) / alpha) * 255)
-		surfaceData[offset + 1] = Math.round(clamp01(((surfaceData[offset + 1] ?? 0) / 255) / alpha) * 255)
-		surfaceData[offset + 2] = Math.round(clamp01(((surfaceData[offset + 2] ?? 0) / 255) / alpha) * 255)
-	}
+	// Canvas getImageData() already returns straight-alpha RGBA in modern runtimes.
+	// Repeatedly unpremultiplying here amplifies soft edges across save/reload cycles.
 	return surfaceData
 }
 
@@ -3325,6 +3316,32 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 	}
 
+	function emitCommittedTerrainPaintSurfacePreview(
+		session: PaintSessionState,
+		groundSurfaceChunks: GroundSurfaceChunkTextureMap | null,
+	): void {
+		if (!options.onTerrainPaintSurfacePreviewChanged) {
+			return
+		}
+		const groundObject = getGroundObject()
+		const groundNode = getGroundNodeFromScene()
+		if (!groundObject || !groundNode || groundNode.id !== session.nodeId || groundNode.dynamicMesh?.type !== 'Ground') {
+			return
+		}
+		options.onTerrainPaintSurfacePreviewChanged({
+			groundObject,
+			groundNode,
+			dynamicMesh: {
+				...session.definition,
+				terrainPaint: null,
+				groundSurfaceChunks,
+			},
+			previewRevision: session.terrainPaintSurfacePreviewRevision,
+			mode: 'surface-rebuild',
+			liveChunkPreviews: null,
+		})
+	}
+
 	function scheduleTerrainPaintSurfacePreviewRebuild(session: PaintSessionState): void {
 		if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
 			window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
@@ -3765,13 +3782,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				bumpRuntimeVersion: true,
 				reason: 'editor-local-paint',
 			})
+			session.previewGroundSurfaceChunks = nextGroundSurfaceChunks
+			session.liveSurfacePreviewPendingChunkKeys.clear()
+			if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
+				window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
+				session.terrainPaintSurfacePreviewDebounceTimerId = null
+			}
 			if (targetNode.dynamicMesh?.type === 'Ground') {
 				targetNode.dynamicMesh.terrainPaint = null
 			}
 			const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, targetNode)
-			void useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false }).catch((error) => {
-				console.warn('保存地形 paint sidecar 失败', error)
-			})
+			await useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false })
+			await options.sceneStore.saveActiveScene({ force: true })
+			emitCommittedTerrainPaintSurfacePreview(session, nextGroundSurfaceChunks)
 			paintSessionState = null
 			return true
 		} catch (error) {

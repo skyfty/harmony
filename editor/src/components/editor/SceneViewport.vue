@@ -1023,6 +1023,25 @@ let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
 let landformsPreviewLoadToken = 0
+let lastGroundSurfacePreviewRequestKey: string | null = null
+let lastTerrainPaintSurfacePreviewRequestKey: string | null = null
+
+function invalidateGroundSurfacePreviewRequests(): void {
+  landformsPreviewLoadToken += 1
+  lastGroundSurfacePreviewRequestKey = null
+  lastTerrainPaintSurfacePreviewRequestKey = null
+}
+
+function bumpGroundSurfacePreviewTokenIfNeeded(requestKey: string): void {
+  if (!requestKey) {
+    return
+  }
+  if (lastGroundSurfacePreviewRequestKey === requestKey) {
+    return
+  }
+  landformsPreviewLoadToken += 1
+  lastGroundSurfacePreviewRequestKey = requestKey
+}
 
 function disposeGradientBackgroundResources() {
   disposeGradientBackgroundDome(gradientBackgroundDome)
@@ -10697,6 +10716,16 @@ async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string 
   }
   const asset = sceneStore.getAsset(normalized)
   if (!asset) {
+    try {
+      const cachedEntry = await assetCacheStore.loadFromIndexedDb(normalized)
+      if (cachedEntry?.blobUrl) {
+        assetCacheStore.touch(normalized)
+        return { url: cachedEntry.blobUrl }
+      }
+    } catch (error) {
+      console.warn('[SceneViewport] Failed to restore asset from IndexedDB', normalized, error)
+      return null
+    }
     return { url: normalized }
   }
   try {
@@ -10726,16 +10755,25 @@ function syncGroundLandformsPreview(
     return
   }
   restoreGroundSurfacePreviewMaterialMap(groundObject)
-  landformsPreviewLoadToken += 1
   const runtimeDefinition = runtimeDefinitionOverride
     ?? ((groundNode.dynamicMesh?.type === 'Ground' && getGroundNodeFromStore()?.id === groundNode.id)
       ? resolveGroundDynamicMeshDefinition()
       : null)
   const previewDefinition = runtimeDefinition ?? (groundNode.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : null)
+  const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
+  const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
+  const activeLandformLayers = (landformsProps?.layers ?? [])
+    .filter((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length)
+    .map((layer) => layer)
+  const requestKey = stableSerialize({
+    mode: 'ground-landforms-preview',
+    nodeId: groundNode.id,
+    groundSignature: previewDefinition?.type === 'Ground' ? computeGroundDynamicMeshSignature(previewDefinition) : null,
+    activeLandformLayers,
+  })
+  bumpGroundSurfacePreviewTokenIfNeeded(requestKey)
   if (previewDefinition?.type === 'Ground') {
     const hasTerrainPaint = Boolean(Object.keys(previewDefinition.groundSurfaceChunks ?? {}).length)
-    const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
-    const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
     const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
     syncGroundSurfacePreviewForGround(
       groundObject,
@@ -10767,7 +10805,22 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   mode: 'live' | 'surface-rebuild'
   liveChunkPreviews?: GroundSurfaceLiveChunkPreview[] | null
 }): void {
-  landformsPreviewLoadToken += 1
+  const liveChunkPreviewSignature = payload.mode === 'live'
+    ? (payload.liveChunkPreviews ?? []).map((entry) => `${entry.chunkKey}:${entry.revision}`).join('|')
+    : ''
+  const requestKey = stableSerialize({
+    mode: payload.mode,
+    nodeId: payload.groundNode.id,
+    previewRevision: payload.previewRevision,
+    groundSignature: computeGroundDynamicMeshSignature(payload.dynamicMesh),
+    liveChunkPreviewCount: payload.liveChunkPreviews?.length ?? 0,
+    liveChunkPreviewSignature,
+  })
+  if (lastTerrainPaintSurfacePreviewRequestKey === requestKey) {
+    return
+  }
+  lastTerrainPaintSurfacePreviewRequestKey = requestKey
+  bumpGroundSurfacePreviewTokenIfNeeded(requestKey)
   if (payload.mode === 'live' && payload.liveChunkPreviews?.length) {
     const applied = syncGroundSurfaceLiveChunkPreviews({
       groundObject: payload.groundObject,
@@ -10796,7 +10849,7 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
 }
 
 function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {
-  landformsPreviewLoadToken += 1
+  invalidateGroundSurfacePreviewRequests()
   restoreGroundSurfacePreviewMaterialMap(groundObject)
   clearLandformsPreviewForGround(groundObject)
 }
@@ -17149,6 +17202,9 @@ function updateGroundChunkStreaming() {
     lastGroundChunkSetSignatureForPlacement = signature
     refreshPlacementSurfaceTargetsForNode(node.id)
     placementSurfaceTargetsDirty = true
+
+    // Reapply the current ground preview to newly streamed chunk meshes.
+    syncGroundLandformsPreview(groundObject, node, groundDefinition)
 
     // Chunk meshes stream in/out without scene patches; notify GroundEditor so
     // terrain paint preview can bind to new chunk meshes and load newly visible weightmaps.
