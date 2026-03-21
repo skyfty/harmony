@@ -7958,6 +7958,13 @@ export const useSceneStore = defineStore('scene', {
         ensureGroundNode(clonedNodes, effectiveGroundSettings),
         this.environment,
       )
+      const normalizedGroundNode = findGroundNode(normalizedNodes)
+      if (normalizedGroundNode) {
+        // Re-attach runtime sidecars after clone/normalize so hydrated terrain paint
+        // remains visible on first scene load after browser refresh.
+        attachGroundScatterRuntimeToNode(scene.id, normalizedGroundNode)
+        attachGroundPaintRuntimeToNode(scene.id, normalizedGroundNode)
+      }
       replaceSceneNodes(this, normalizedNodes)
       this.rebuildGeneratedMeshRuntimes()
       this.planningData = clonePlanningData(scene.planningData)

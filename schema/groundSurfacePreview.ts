@@ -919,6 +919,8 @@ export function createDefaultGroundSurfacePreviewLoaders(
       const loadStartTime = nowMs()
       const resolved = await resolveAssetUrlFromCache(assetId)
       if (!resolved?.url) {
+        // Cache miss can be transient while assets hydrate; allow future retries.
+        terrainTextureCache.delete(key)
         return null
       }
       try {
@@ -953,6 +955,8 @@ export function createDefaultGroundSurfacePreviewLoaders(
     const pending = (async () => {
       const resolved = await resolveAssetUrlFromCache(assetId)
       if (!resolved?.url) {
+        // Cache miss can be transient while assets hydrate; allow future retries.
+        landformsTextureCache.delete(key)
         return null
       }
       try {

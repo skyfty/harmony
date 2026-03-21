@@ -3769,9 +3769,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				targetNode.dynamicMesh.terrainPaint = null
 			}
 			const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, targetNode)
-			void useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false }).catch((error) => {
-				console.warn('保存地形 paint sidecar 失败', error)
-			})
+			await useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false })
+			await options.sceneStore.saveActiveScene({ force: true })
 			paintSessionState = null
 			return true
 		} catch (error) {
