@@ -8362,6 +8362,7 @@ function applyPendingScenePatches(): boolean {
   const needsPlaceholderOverlayRefresh = shouldRefreshPlaceholderOverlaysFromPatches(patches as Array<{ type: string }>)
   if (patches.some((patch) => patch.type === 'structure')) {
     syncSceneGraph()
+    sceneStore.syncAllNodeComponents()
 
     if (needsPlaceholderOverlayRefresh) {
       refreshPlaceholderOverlays()

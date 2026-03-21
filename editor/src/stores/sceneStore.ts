@@ -7829,6 +7829,11 @@ export const useSceneStore = defineStore('scene', {
       return patches
     },
 
+    syncAllNodeComponents() {
+      reattachRuntimeObjectsForNodes(this.nodes)
+      componentManager.syncScene(this.nodes)
+    },
+
     initialize() {
       if (workspaceScopeStopHandle) {
         return
@@ -15386,6 +15391,7 @@ export const useSceneStore = defineStore('scene', {
         tree = nextTree
       }
       this.nodes = tree
+
       // The viewport relies on structure patches to reconcile its Object3D tree.
       // Without this, the newly created group node may not exist in `objectMap` yet,
       // which prevents TransformControls from attaching when the group is selected.
