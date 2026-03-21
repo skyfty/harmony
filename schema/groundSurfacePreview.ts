@@ -73,6 +73,15 @@ type GroundSurfaceChunkDrawEntry = {
   bounds: TerrainPaintChunkBounds
 }
 
+type GroundSurfaceChunkPixelRect = {
+  drawX: number
+  drawY: number
+  drawRight: number
+  drawBottom: number
+  drawWidth: number
+  drawHeight: number
+}
+
 type GroundSurfacePreviewPerfBucket = {
   count: number
   totalMs: number
@@ -217,6 +226,41 @@ function clampInt(value: number, min: number, max: number): number {
     return max
   }
   return Math.trunc(value)
+}
+
+function resolveGroundChunkPixelRect(
+  bounds: TerrainPaintChunkBounds,
+  groundWidth: number,
+  groundDepth: number,
+  halfWidth: number,
+  halfDepth: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): GroundSurfaceChunkPixelRect | null {
+  if (!(canvasWidth > 0) || !(canvasHeight > 0)) {
+    return null
+  }
+  const minPxX = ((bounds.minX + halfWidth) / groundWidth) * canvasWidth
+  const minPxY = ((bounds.minZ + halfDepth) / groundDepth) * canvasHeight
+  const maxPxX = ((bounds.minX + bounds.width + halfWidth) / groundWidth) * canvasWidth
+  const maxPxY = ((bounds.minZ + bounds.depth + halfDepth) / groundDepth) * canvasHeight
+  const drawX = clampInt(Math.floor(minPxX), 0, Math.max(0, canvasWidth - 1))
+  const drawY = clampInt(Math.floor(minPxY), 0, Math.max(0, canvasHeight - 1))
+  const drawRight = clampInt(Math.ceil(maxPxX), drawX + 1, canvasWidth)
+  const drawBottom = clampInt(Math.ceil(maxPxY), drawY + 1, canvasHeight)
+  const drawWidth = drawRight - drawX
+  const drawHeight = drawBottom - drawY
+  if (drawWidth <= 0 || drawHeight <= 0) {
+    return null
+  }
+  return {
+    drawX,
+    drawY,
+    drawRight,
+    drawBottom,
+    drawWidth,
+    drawHeight,
+  }
 }
 
 function createWeChatOffscreenCanvas(width: number, height: number): CanvasLike | null {
@@ -591,31 +635,56 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
     }
   }
 
+  // Restoring edge pixels from a stable base avoids transparent seams at chunk joins during live paint.
+  let boundaryRestoreSource: CanvasImageSource | null = seedSource
+  if (!boundaryRestoreSource && canReuseCanvas) {
+    const snapshot = createCompositionCanvas(width, height)
+    if (snapshot) {
+      snapshot.context.drawImage(canvas as unknown as CanvasImageSource, 0, 0, width, height)
+      boundaryRestoreSource = snapshot.canvas as unknown as CanvasImageSource
+    }
+  }
+
   const groundWidth = Math.max(1e-6, normalizeDimension(dynamicMesh.width))
   const groundDepth = Math.max(1e-6, normalizeDimension(dynamicMesh.depth))
   const halfWidth = groundWidth * 0.5
   const halfDepth = groundDepth * 0.5
   for (const preview of validPreviews) {
-    const minPxX = ((preview.bounds.minX + halfWidth) / groundWidth) * width
-    const minPxY = ((preview.bounds.minZ + halfDepth) / groundDepth) * height
-    const maxPxX = ((preview.bounds.minX + preview.bounds.width + halfWidth) / groundWidth) * width
-    const maxPxY = ((preview.bounds.minZ + preview.bounds.depth + halfDepth) / groundDepth) * height
-    const drawX = clampInt(Math.floor(minPxX), 0, Math.max(0, width - 1))
-    const drawY = clampInt(Math.floor(minPxY), 0, Math.max(0, height - 1))
-    const drawRight = clampInt(Math.ceil(maxPxX), drawX + 1, width)
-    const drawBottom = clampInt(Math.ceil(maxPxY), drawY + 1, height)
-    const drawWidth = drawRight - drawX
-    const drawHeight = drawBottom - drawY
-    if (drawWidth <= 0 || drawHeight <= 0) {
+    const drawRect = resolveGroundChunkPixelRect(
+      preview.bounds,
+      groundWidth,
+      groundDepth,
+      halfWidth,
+      halfDepth,
+      width,
+      height,
+    )
+    if (!drawRect) {
       continue
     }
+    const { drawX, drawY, drawRight, drawBottom, drawWidth, drawHeight } = drawRect
 
-    // Feathered brush pixels can sit on chunk boundaries; clear a 1px safety ring to avoid stale halos.
+    // Feathered brush pixels can sit on chunk boundaries; restore a 1px safety ring from base pixels.
     const clearX = Math.max(0, drawX - 1)
     const clearY = Math.max(0, drawY - 1)
     const clearRight = Math.min(width, drawRight + 1)
     const clearBottom = Math.min(height, drawBottom + 1)
-    context.clearRect(clearX, clearY, clearRight - clearX, clearBottom - clearY)
+    const clearWidth = clearRight - clearX
+    const clearHeight = clearBottom - clearY
+    if (clearWidth > 0 && clearHeight > 0) {
+      if (boundaryRestoreSource) {
+        context.save()
+        context.beginPath()
+        context.rect(clearX, clearY, clearWidth, clearHeight)
+        context.clip()
+        context.globalCompositeOperation = 'source-over'
+        context.drawImage(boundaryRestoreSource, 0, 0, width, height)
+        context.restore()
+      } else {
+        // Avoid punching transparent gutters when no base texture is available yet.
+        context.clearRect(drawX, drawY, drawWidth, drawHeight)
+      }
+    }
 
     // Use copy in a clipped chunk rect so repeated live syncs overwrite pixels instead of alpha-compositing.
     context.save()
@@ -745,10 +814,19 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
       if (!loaded) {
         continue
       }
-      const drawX = Math.floor(((entry.bounds.minX + halfWidth) / groundWidth) * width)
-      const drawY = Math.floor(((entry.bounds.minZ + halfDepth) / groundDepth) * height)
-      const drawWidth = Math.max(1, Math.ceil((entry.bounds.width / groundWidth) * width))
-      const drawHeight = Math.max(1, Math.ceil((entry.bounds.depth / groundDepth) * height))
+      const drawRect = resolveGroundChunkPixelRect(
+        entry.bounds,
+        groundWidth,
+        groundDepth,
+        halfWidth,
+        halfDepth,
+        width,
+        height,
+      )
+      if (!drawRect) {
+        continue
+      }
+      const { drawX, drawY, drawWidth, drawHeight } = drawRect
       context.drawImage(loaded.source, drawX, drawY, drawWidth, drawHeight)
       drewAny = true
       drawnChunkCount += 1
