@@ -110,10 +110,17 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   if (sanitizeString(sceneEntry.sceneId) !== expectedSceneId) {
     throw new Error('Scene id mismatch between path and bundle manifest')
   }
-  if (!groundHeightsPath) {
-    throw new Error('Scene bundle missing ground height sidecar path')
+  const sceneRaw = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as any
+  const hasGroundNode = Array.isArray(sceneRaw?.nodes)
+    && sceneRaw.nodes.some((node: unknown) => {
+      const record = node as { dynamicMesh?: { type?: unknown } }
+      return record?.dynamicMesh?.type === 'Ground'
+    })
+
+  if (hasGroundNode && !groundHeightsPath) {
+    throw new Error('Scene bundle missing ground height sidecar path for Ground scene')
   }
-  if (!pkg.files[groundHeightsPath]) {
+  if (groundHeightsPath && !pkg.files[groundHeightsPath]) {
     throw new Error('Scene bundle missing ground height sidecar file')
   }
   if (groundScatterPath && !pkg.files[groundScatterPath]) {
@@ -122,7 +129,6 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   if (groundPaintPath && !pkg.files[groundPaintPath]) {
     throw new Error('Scene bundle missing ground paint sidecar file')
   }
-  const sceneRaw = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as any
   const id = sanitizeString(sceneRaw?.id) || expectedSceneId
   if (id !== expectedSceneId) {
     throw new Error('Scene id mismatch between path and scene document')
