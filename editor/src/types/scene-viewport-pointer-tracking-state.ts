@@ -1,6 +1,11 @@
 import type { NodeHitResult } from './scene-viewport-node-hit-result'
 import type { SelectionDragState } from './scene-viewport-selection-drag'
 
+export interface DeferredDuplicateDragState {
+  nodeIds: string[]
+  primaryId: string
+}
+
 export interface PointerTrackingState {
   pointerId: number
   startX: number
@@ -13,4 +18,6 @@ export interface PointerTrackingState {
   metaKey: boolean
   shiftKey: boolean
   transformAxis: string | null
+  deferredDuplicateDrag: DeferredDuplicateDragState | null
+  deferredDuplicateInFlight: boolean
 }

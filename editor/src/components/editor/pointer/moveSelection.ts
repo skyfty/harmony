@@ -19,6 +19,10 @@ export function handlePointerMoveSelection(
 
     sceneStoreBeginTransformInteraction: (nodeId: string) => void
     onSelectionDragStart?: (nodeId: string) => void
+    beginDeferredDuplicateDrag?: (
+      event: PointerEvent,
+      trackingState: PointerTrackingState,
+    ) => Promise<SelectionDragLike | null>
 
     updateSelectDragPosition: (drag: any, event: PointerEvent) => boolean
   },
@@ -60,8 +64,47 @@ export function handlePointerMoveSelection(
       if (distance < ctx.clickDragThresholdPx) {
         return
       }
-      drag.hasDragged = true
       ctx.pointerTrackingState.moved = true
+
+      if (ctx.pointerTrackingState.deferredDuplicateDrag) {
+        if (!ctx.beginDeferredDuplicateDrag) {
+          ctx.pointerTrackingState.deferredDuplicateDrag = null
+        } else if (ctx.pointerTrackingState.deferredDuplicateInFlight) {
+          return
+        } else {
+          const trackingState = ctx.pointerTrackingState
+          trackingState.deferredDuplicateInFlight = true
+          void ctx.beginDeferredDuplicateDrag(event, trackingState)
+            .then((nextDrag) => {
+              if (!ctx.pointerTrackingState || ctx.pointerTrackingState !== trackingState) {
+                return
+              }
+              trackingState.deferredDuplicateInFlight = false
+              trackingState.deferredDuplicateDrag = null
+
+              const activeDrag = (nextDrag ?? drag) as SelectionDragLike
+              trackingState.selectionDrag = activeDrag as any
+              activeDrag.hasDragged = true
+              ctx.sceneStoreBeginTransformInteraction(activeDrag.nodeId)
+              ctx.onSelectionDragStart?.(activeDrag.nodeId)
+              void ctx.updateSelectDragPosition(activeDrag as any, event)
+            })
+            .catch(() => {
+              if (!ctx.pointerTrackingState || ctx.pointerTrackingState !== trackingState) {
+                return
+              }
+              trackingState.deferredDuplicateInFlight = false
+              trackingState.deferredDuplicateDrag = null
+              drag.hasDragged = true
+              ctx.sceneStoreBeginTransformInteraction(drag.nodeId)
+              ctx.onSelectionDragStart?.(drag.nodeId)
+              void ctx.updateSelectDragPosition(drag as any, event)
+            })
+          return
+        }
+      }
+
+      drag.hasDragged = true
       ctx.sceneStoreBeginTransformInteraction(drag.nodeId)
       ctx.onSelectionDragStart?.(drag.nodeId)
     }

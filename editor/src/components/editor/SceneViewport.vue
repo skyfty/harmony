@@ -5786,8 +5786,42 @@ function applyGroundBrushRadiusWheelDelta(event: WheelEvent): boolean {
   return true
 }
 
+// Walk-zoom: move camera + target together along the view direction so orbit radius
+// remains constant. This prevents the usual dolly-to-minDistance freeze and keeps
+// pan/rotate speeds consistent regardless of how close the camera is.
+const WALK_ZOOM_STEP_RATIO = 0.10   // fraction of orbit radius per normalised scroll step
+const WALK_ZOOM_MAX_STEP_M = 500    // hard cap (metres) per wheel event
+
+const _walkZoomForward = new THREE.Vector3()
+
+function applyWalkZoom(event: WheelEvent): boolean {
+  if (!camera || !mapControls || !mapControls.enabled || isApplyingCameraState) return false
+  if (props.previewActive) return false
+
+  // Normalise delta: LINE (deltaMode 1) ~= 3× the pixel scale we expect.
+  const raw = event.deltaMode === 1 ? event.deltaY / 3 : event.deltaY / 100
+  const step = Math.max(-1, Math.min(1, raw))   // clamp to [-1, 1] to tame large trackpad steps
+  if (step === 0) return false
+
+  const orbitRadius = camera.position.distanceTo(mapControls.target)
+  // Amount to move: 10% of orbit radius per full scroll step, capped so a single
+  // event never teleports more than WALK_ZOOM_MAX_STEP_M metres.
+  let amount = orbitRadius * WALK_ZOOM_STEP_RATIO * step
+  amount = Math.max(-WALK_ZOOM_MAX_STEP_M, Math.min(WALK_ZOOM_MAX_STEP_M, amount))
+
+  camera.getWorldDirection(_walkZoomForward)
+  // deltaY > 0 → scroll down → zoom out (move camera backward = subtract forward)
+  camera.position.addScaledVector(_walkZoomForward, -amount)
+  mapControls.target.addScaledVector(_walkZoomForward, -amount)
+
+  mapControls.update()
+  event.preventDefault()
+  return true
+}
+
 function handleViewportWheel(event: WheelEvent) {
-  applyGroundBrushRadiusWheelDelta(event)
+  if (applyGroundBrushRadiusWheelDelta(event)) return
+  applyWalkZoom(event)
 }
 
 function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
@@ -12319,7 +12353,19 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
   // clear current selection to avoid requiring a ground-only deselect click.
   sceneStore.clearSelectedRoadSegment()
   const hitNodeId = typeof hit?.nodeId === 'string' ? hit.nodeId : null
+  if (!hitNodeId) {
+    return
+  }
   const hitIsCurrentlySelected = Boolean(hitNodeId && currentSelection.includes(hitNodeId))
+
+  if (isToggle) {
+    const nextSelection = hitIsCurrentlySelected
+      ? currentSelection.filter((id) => id !== hitNodeId)
+      : [...currentSelection, hitNodeId]
+    emitSelectionChange(nextSelection)
+    return
+  }
+
   if (hitIsCurrentlySelected) {
     return
   }
@@ -12327,6 +12373,57 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
     emitSelectionChange([])
   }
   void options
+}
+
+async function beginDeferredDuplicateSelectionDrag(event: PointerEvent, trackingState: PointerTrackingState) {
+  const deferred = trackingState.deferredDuplicateDrag
+  const fallbackDrag = trackingState.selectionDrag
+  if (!deferred?.nodeIds.length) {
+    return fallbackDrag as any
+  }
+
+  const duplicateIds = sceneStore.duplicateNodes(deferred.nodeIds, { select: true })
+  if (!duplicateIds.length) {
+    return fallbackDrag as any
+  }
+
+  const duplicateNodes = duplicateIds
+    .map((id) => findSceneNode(sceneStore.nodes, id))
+    .filter((node): node is SceneNode => Boolean(node))
+
+  if (duplicateNodes.length) {
+    await sceneStore.ensureSceneAssetsReady({
+      nodes: duplicateNodes,
+      showOverlay: false,
+      refreshViewport: false,
+    })
+  }
+
+  await nextTick()
+  await nextTick()
+
+  const duplicatePrimaryId =
+    sceneStore.selectedNodeId && duplicateIds.includes(sceneStore.selectedNodeId)
+      ? sceneStore.selectedNodeId
+      : duplicateIds[0] ?? null
+  if (!duplicatePrimaryId) {
+    return fallbackDrag as any
+  }
+
+  const object = objectMap.get(duplicatePrimaryId) ?? null
+  if (!object) {
+    return fallbackDrag as any
+  }
+
+  object.updateMatrixWorld(true)
+  const dragPoint = trackingState.hitResult?.point?.clone()
+    ?? (() => {
+      const world = new THREE.Vector3()
+      object.getWorldPosition(world)
+      return world
+    })()
+
+  return createSelectionDragState(duplicatePrimaryId, object, dragPoint, event) as any
 }
 
 function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
@@ -13594,6 +13691,7 @@ function handlePointerMove(event: PointerEvent) {
       updateOutlineSelectionTargets()
     },
     onSelectionDragStart: (nodeId) => wallRenderer.beginWallDrag(nodeId),
+    beginDeferredDuplicateDrag: (e, trackingState) => beginDeferredDuplicateSelectionDrag(e, trackingState),
     updateSelectDragPosition,
   })
 
@@ -14764,6 +14862,9 @@ function handleCanvasDoubleClick(event: MouseEvent) {
     return
   }
   if (transformControls?.dragging) {
+    return
+  }
+  if (event.ctrlKey || event.metaKey) {
     return
   }
 

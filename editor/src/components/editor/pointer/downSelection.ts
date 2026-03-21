@@ -94,61 +94,8 @@ export async function handlePointerDownSelection(
   let hit: NodeHitResult | null = button === 0 || shouldPickForRightClick
     ? ctx.pickNodeAtPointer(event, { includeSelectionLocked: allowLockedSelectionPick })
     : null
-  const initialHitPoint = hit ? hit.point.clone() : null
 
   const primaryBeforeDuplicate = ctx.sceneSelectedNodeId ?? ctx.selectedNodeIdProp ?? null
-
-  if (
-    button === 0 &&
-    ctx.activeTool === 'select' &&
-    hit &&
-    (event.ctrlKey || event.metaKey) &&
-    primaryBeforeDuplicate &&
-    hit.nodeId === primaryBeforeDuplicate &&
-    !ctx.isNodeSelectionLocked(hit.nodeId)
-  ) {
-    const unlockedSelection = ctx.selectedNodeIds.filter((id) => !ctx.isNodeSelectionLocked(id))
-    const idsToDuplicate = unlockedSelection.length ? unlockedSelection : [hit.nodeId]
-    const duplicateIds = ctx.duplicateNodes(idsToDuplicate, { select: true })
-
-    if (duplicateIds.length) {
-      const duplicateNodes = duplicateIds
-        .map((id) => ctx.findSceneNode(ctx.nodes, id))
-        .filter((node): node is SceneNode => Boolean(node))
-
-      if (duplicateNodes.length) {
-        await ctx.ensureSceneAssetsReady({ nodes: duplicateNodes, showOverlay: false, refreshViewport: false })
-      }
-
-      await ctx.nextTick()
-      await ctx.nextTick()
-
-      const updatedHit = ctx.pickNodeAtPointer(event, { includeSelectionLocked: allowLockedSelectionPick })
-      if (updatedHit && duplicateIds.includes(updatedHit.nodeId)) {
-        hit = updatedHit
-      } else {
-        const primaryId = ctx.sceneSelectedNodeId ?? null
-        if (primaryId) {
-          const object = ctx.objectMap.get(primaryId) ?? null
-          if (object) {
-            object.updateMatrixWorld(true)
-            const fallbackPoint = initialHitPoint
-              ? initialHitPoint.clone()
-              : (() => {
-                  const world = new THREE.Vector3()
-                  object.getWorldPosition(world)
-                  return world
-                })()
-            hit = {
-              nodeId: primaryId,
-              object,
-              point: fallbackPoint,
-            } as unknown as NodeHitResult
-          }
-        }
-      }
-    }
-  }
 
   if (!hit && shouldPickForRightClick) {
     const boundingHit = ctx.pickActiveSelectionBoundingBoxHit(event)
@@ -230,6 +177,25 @@ export async function handlePointerDownSelection(
     ctx.disableOrbitForSelectDrag()
   }
 
+  const deferredDuplicateDrag =
+    button === 0 &&
+    ctx.activeTool === 'select' &&
+    selectionDrag &&
+    hit &&
+    (event.ctrlKey || event.metaKey) &&
+    primaryBeforeDuplicate &&
+    hit.nodeId === primaryBeforeDuplicate &&
+    !ctx.isNodeSelectionLocked(hit.nodeId)
+      ? (() => {
+          const unlockedSelection = ctx.selectedNodeIds.filter((id) => !ctx.isNodeSelectionLocked(id))
+          const nodeIds = unlockedSelection.length ? unlockedSelection : [hit.nodeId]
+          return {
+            nodeIds,
+            primaryId: hit.nodeId,
+          }
+        })()
+      : null
+
   const nextPointerTrackingState: PointerTrackingState = {
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -242,6 +208,8 @@ export async function handlePointerDownSelection(
     metaKey: event.metaKey,
     shiftKey: event.shiftKey,
     transformAxis: activeTransformAxis,
+    deferredDuplicateDrag,
+    deferredDuplicateInFlight: false,
   }
 
   return {

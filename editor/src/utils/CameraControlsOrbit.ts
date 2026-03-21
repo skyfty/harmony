@@ -37,5 +37,9 @@ export class CameraControlsOrbit extends OrbitControls {
     }
 
     this.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE
+
+    // Disable built-in scroll-dolly; walk-zoom is handled manually in SceneViewport
+    // so that orbit radius never shrinks to zero and controls never get stuck.
+    this.enableZoom = false
   }
 }
