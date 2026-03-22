@@ -23,7 +23,6 @@ export type FloorPresetStoreLike = {
   selectedNodeId: string | null
   assetCatalog: Record<string, ProjectAsset[]> | null
   assetRegistry: Record<string, any>
-  assetIndex: Record<string, any>
   materials: Array<{ id: string; name: string; type: string } & Record<string, any>>
 
   getAsset: (id: string) => ProjectAsset | null
@@ -489,7 +488,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
           thumbnail: thumbnailDataUrl ?? existing.thumbnail ?? null,
         }
         const categoryId = store.resolveConfigAssetSaveDirectoryId()
-        const sourceMeta = (store.assetIndex as any)[assetId]?.source
+        const sourceMeta = existing.source
         return store.registerAsset(updated, {
           categoryId,
           source: sourceMeta,

@@ -1,7 +1,6 @@
 import type { Object3D } from 'three'
 import type {
   SceneNode,
-  AssetIndexEntry,
   GroundSettings,
   EnvironmentSettings,
   SceneSkyboxSettings,
@@ -43,7 +42,6 @@ export interface SceneState {
   assetCatalog: Record<string, ProjectAsset[]>
   assetManifest: AssetManifest | null
   assetRegistry: Record<string, SceneAssetRegistryEntry>
-  assetIndex: Record<string, AssetIndexEntry>
   packageDirectoryCache: Record<string, ProjectDirectory[]>
   packageDirectoryLoaded: Record<string, boolean>
   activeDirectoryId: string | null

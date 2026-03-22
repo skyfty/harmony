@@ -244,7 +244,7 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
     const hasRemoteRegistry = registryEntry?.sourceType === 'url'
       || (registryEntry?.sourceType === 'server' && typeof registryEntry.resolvedUrl === 'string' && registryEntry.resolvedUrl.trim().length > 0)
     if (!hasRemoteRegistry && existing.downloadUrl && existing.downloadUrl.trim().length) {
-      void sceneStore.syncAssetRegistryEntry(existing, sceneStore.assetIndex[existing.id]?.source)
+      void sceneStore.syncAssetRegistryEntry(existing, existing.source)
     }
     return existing
   }

@@ -1,7 +1,6 @@
 import { watch, type WatchStopHandle } from 'vue'
 import { Box3, Euler, Matrix4, Quaternion, Vector3, Object3D } from 'three'
 import type {
-  AssetIndexEntry,
   SceneAssetRegistryEntry,
   BehaviorComponentProps,
   BehaviorEventType,
@@ -39,7 +38,6 @@ export type PrefabStoreLike = {
   nodes: SceneNode[]
   camera: SceneCameraState | null | undefined
   assetRegistry: Record<string, SceneAssetRegistryEntry>
-  assetIndex: Record<string, AssetIndexEntry>
   prefabAssetDownloadProgress: Record<
     string,
     { active: boolean; progress: number; error: string | null; assetIds: string[] }

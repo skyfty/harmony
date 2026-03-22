@@ -274,20 +274,10 @@ async function importAssetFromUrl(normalizedUrl: string) {
       extension: extractExtension(displayName) ?? extractExtension(normalizedUrl) ?? null,
     }
     const categoryId = determineAssetCategoryId(importedAsset)
-    const registeredAsset = sceneStore.registerAsset(importedAsset, {
+    sceneStore.registerAsset(importedAsset, {
       categoryId,
       source: { type: 'url' },
       commitOptions: { updateNodes: false },
-    })
-
-    sceneStore.$patch((state) => {
-      state.assetIndex = {
-        ...state.assetIndex,
-        [registeredAsset.id]: {
-          categoryId,
-          source: { type: 'url' },
-        },
-      }
     })
 
     uiStore.updateLoadingOverlay({
@@ -442,19 +432,6 @@ function handleMenuImportFromFile() {
 
     if (localAssetHandled && assetId) {
       assetCacheStore.touch(assetId)
-    }
-
-    if (registeredAsset) {
-      const categoryId = determineAssetCategoryId(registeredAsset)
-      sceneStore.$patch((state) => {
-        state.assetIndex = {
-          ...state.assetIndex,
-          [registeredAsset.id]: {
-            categoryId,
-            source: { type: 'local' },
-          },
-        }
-      })
     }
 
     const displayName = registeredAsset?.name ?? imported.name ?? matchedFile?.name ?? 'Imported Asset'

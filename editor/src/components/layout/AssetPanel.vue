@@ -67,7 +67,6 @@ const {
   currentDirectory,
   projectPanelTreeSize,
   draggingAssetId,
-  assetIndex,
   selectedNodeId,
 } = storeToRefs(sceneStore)
 
@@ -396,7 +395,7 @@ function isPanelVisibleAsset(asset: ProjectAsset | null | undefined): boolean {
   if (!asset?.id) {
     return false
   }
-  return sceneStore.assetIndex?.[asset.id]?.internal !== true
+  return asset.internal !== true
 }
 
 function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
@@ -504,7 +503,7 @@ function isAssetDownloading(asset: ProjectAsset) {
 }
 
 function canDeleteAsset(asset: ProjectAsset) {
-  if (sceneStore.assetIndex?.[asset.id]?.internal) {
+  if (asset.internal === true) {
     return false
   }
   if (providerIdForAsset(asset) === PRESET_PROVIDER_ID) {
@@ -1437,7 +1436,7 @@ const filteredTagOptions = computed(() => {
 })
 
 const uploadableSelectedAssets = computed(() =>
-  selectedAssets.value.filter((asset) => assetIndex.value?.[asset.id]?.source?.type === 'local'),
+  selectedAssets.value.filter((asset) => asset.source?.type === 'local'),
 )
 
 const uploadDialogAssets = computed(() => {

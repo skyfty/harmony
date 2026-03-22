@@ -820,10 +820,10 @@ function resolveHierarchyAssetFromEvent(event: DragEvent): ProjectAsset | null {
   if (!asset) {
     return null
   }
-  const meta = sceneStore.assetIndex?.[asset.id]
-  if (meta?.source?.type === 'package' && meta.source.providerId) {
-    asset = sceneStore.copyPackageAssetToAssets(meta.source.providerId, asset, {
-      packagePathSegments: Array.isArray(meta.source.packagePathSegments) ? meta.source.packagePathSegments : [],
+  const sourceMeta = asset.source
+  if (sourceMeta?.type === 'package' && sourceMeta.providerId) {
+    asset = sceneStore.copyPackageAssetToAssets(sourceMeta.providerId, asset, {
+      packagePathSegments: Array.isArray(sourceMeta.packagePathSegments) ? sourceMeta.packagePathSegments : [],
     })
   }
   return asset.type === 'model' || asset.type === 'prefab' ? asset : null

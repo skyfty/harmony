@@ -2,7 +2,6 @@ import type {
   AssetManifest,
   GroundSettings,
   SceneNode,
-  AssetIndexEntry,
   EnvironmentSettings,
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
@@ -43,7 +42,6 @@ export interface StoredSceneDocument {
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
   projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
   sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
-  assetIndex: Record<string, AssetIndexEntry>
   resourceSummary?: SceneResourceSummary
   // Optional planning data (2D planning annotations) associated with the scene.
   planningData?: PlanningSceneData | null

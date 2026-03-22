@@ -1,4 +1,4 @@
-import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole, AssetType } from '@schema'
+import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole, AssetSourceMetadata, AssetType } from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 
 export type ServerAssetType = AssetType
@@ -50,6 +50,9 @@ export interface ProjectAsset {
   seriesName?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
   metadata?: ProjectAssetMetadata | null
+  source?: AssetSourceMetadata
+  internal?: boolean
+  isEditorOnly?: boolean
   createdAt?: string
   updatedAt?: string
   gleaned: boolean

@@ -9406,12 +9406,6 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     const existingAssets = Array.isArray(existingSummary?.assets) ? existingSummary.assets : [];
     const sceneAssetIds = new Set<string>();
 
-    Object.keys(document.assetIndex ?? {}).forEach((assetId) => {
-      const normalized = assetId.trim();
-      if (normalized) {
-        sceneAssetIds.add(normalized);
-      }
-    });
     Object.keys(document.assetRegistry ?? {}).forEach((assetId) => {
       const normalized = assetId.trim();
       if (normalized) {
