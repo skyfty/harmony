@@ -3730,6 +3730,9 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       @click.stop="promptDeleteDirectory(directory.id)"
                     />
                   </div>
+                  <div class="directory-info-overlay">
+                    <span class="directory-card-title">{{ directory.name }}</span>
+                  </div>
                   
                 </div>
               </v-card>
