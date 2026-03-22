@@ -75,21 +75,3 @@ services:
         bind:
           create_host_path: false
     restart: unless-stopped
-
-  uploader:
-    build:
-      context: .
-      dockerfile: uploader/Dockerfile
-    container_name: harmony-uploader
-    depends_on:
-      - server
-    ports:
-      - "8090:80" # 可通过反向代理映射到 http://uploader.v.touchmagic.cn
-    volumes:
-      - type: bind
-        source: /www/web/v_touchmagic_cn/harmony/config/uploader-app-config.json
-        target: /usr/share/nginx/html/config/app-config.json
-        read_only: true
-        bind:
-          create_host_path: false
-    restart: unless-stopped
