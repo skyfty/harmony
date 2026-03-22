@@ -86,18 +86,6 @@ function collectLocalAssetIdsForExport(document: SceneJsonExportDocument): strin
     }
   })
 
-  const indexMap = document.assetIndex ?? {}
-
-  Object.entries(indexMap).forEach(([assetId, entry]) => {
-    const normalized = typeof assetId === 'string' ? assetId.trim() : ''
-    if (!normalized) {
-      return
-    }
-    if (entry?.source?.type === 'local') {
-      localIds.add(normalized)
-    }
-  })
-
   return Array.from(localIds)
 }
 
@@ -271,21 +259,6 @@ function stripEditorOnlySceneFields(
     delete document.planningData
   }
 
-  if (document.assetIndex && typeof document.assetIndex === 'object') {
-    const nextAssetIndex: NonNullable<SceneJsonExportDocument['assetIndex']> = {}
-    Object.entries(document.assetIndex).forEach(([assetId, entry]) => {
-      if (!entry || entry.isEditorOnly) {
-        return
-      }
-      nextAssetIndex[assetId] = {
-        categoryId: entry.categoryId,
-        source: entry.source ? { ...entry.source } : undefined,
-        internal: entry.internal,
-      }
-    })
-    document.assetIndex = nextAssetIndex
-  }
-
 }
 
 function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<string, ResolvedEmbedAsset> {
@@ -297,13 +270,18 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
       continue
     }
 
-    const indexMap: NonNullable<SceneJsonExportDocument['assetIndex']> = doc.assetIndex ?? {}
     const effectiveRegistry = buildEffectiveAssetRegistry(doc)
     const resourceAssets = Array.isArray(doc.resourceSummary?.assets) ? doc.resourceSummary.assets : []
 
     // Prefer resourceSummary entries (they often include downloadUrl).
-    const entryHasLocalSource = (entry: NonNullable<SceneJsonExportDocument['assetIndex']>[string] | undefined): boolean =>
-      entry?.source?.type === 'local'
+    const entryHasLocalSource = (assetId: string): boolean => {
+      const entry = effectiveRegistry[assetId]
+      if (!entry || entry.sourceType !== 'package') {
+        return false
+      }
+      const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : ''
+      return zipPath.startsWith('local::')
+    }
 
     for (const item of resourceAssets) {
       const assetId = typeof item?.assetId === 'string' ? item.assetId.trim() : ''
@@ -312,7 +290,7 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
       if (!downloadUrl) continue
 
       // Skip already-known local assets.
-      if (entryHasLocalSource(indexMap?.[assetId])) {
+      if (entryHasLocalSource(assetId)) {
         continue
       }
 
@@ -333,7 +311,7 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
         continue
       }
 
-      if (entryHasLocalSource(indexMap?.[normalized])) {
+      if (entryHasLocalSource(normalized)) {
         continue
       }
 
@@ -351,20 +329,6 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
       out.set(normalized, { assetId: normalized, downloadUrl })
     }
 
-    // Fallback: include all non-local assetIndex entries.
-    // If we cannot resolve a downloadUrl, export will fail unless the bytes are already cached.
-    for (const assetId of Object.keys(indexMap ?? {})) {
-      const trimmed = assetId?.trim()
-      if (!trimmed || out.has(trimmed)) {
-        continue
-      }
-      if (entryHasLocalSource(indexMap?.[trimmed])) {
-        continue
-      }
-      // If the assetId itself is a URL, we can embed it directly.
-      const url = /^(https?:)?\/\//i.test(trimmed) ? trimmed : null
-      out.set(trimmed, { assetId: trimmed, downloadUrl: url })
-    }
   }
 
   return out

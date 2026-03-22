@@ -1,4 +1,4 @@
-import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@schema'
+import type { SceneJsonExportDocument, SceneNode } from '@schema'
 import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
 import {
   buildAssetDependencySubset,
@@ -9,7 +9,6 @@ type PrefabFilePayload = {
   name?: unknown
   root?: unknown
   assetRegistry?: unknown
-  assetIndex?: unknown
 }
 
 function generatePreviewId(): string {
@@ -58,32 +57,6 @@ function cloneDeep<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-function sanitizeAssetIndex(value: unknown): Record<string, AssetIndexEntry> | undefined {
-  if (!isPlainObject(value)) {
-    return undefined
-  }
-  const result: Record<string, AssetIndexEntry> = {}
-  Object.entries(value).forEach(([assetId, entry]) => {
-    if (!isPlainObject(entry)) {
-      return
-    }
-    const clonedEntry = cloneDeep(entry) as Partial<AssetIndexEntry> & Record<string, unknown>
-    const categoryId = typeof clonedEntry.categoryId === 'string' ? clonedEntry.categoryId.trim() : ''
-    if (!categoryId) {
-      return
-    }
-    const normalized: AssetIndexEntry = { categoryId }
-    if (clonedEntry.source && typeof clonedEntry.source === 'object') {
-      normalized.source = clonedEntry.source as AssetIndexEntry['source']
-    }
-    if (clonedEntry.isEditorOnly === true) {
-      normalized.isEditorOnly = true
-    }
-    result[assetId] = normalized
-  })
-  return Object.keys(result).length ? result : undefined
-}
-
 export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocument {
   if (!isPlainObject(raw)) {
     throw new Error('Prefab 资源文件格式不正确')
@@ -105,15 +78,10 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
   }
   const nodes: SceneNode[] = [clonedRoot]
   const inputAssetRegistry = sanitizeSceneAssetRegistry(payload.assetRegistry)
-  const inputAssetIndex = sanitizeAssetIndex(payload.assetIndex)
-  const dependencyAssetIds = new Set<string>([
-    ...Object.keys(inputAssetRegistry ?? {}),
-    ...Object.keys(inputAssetIndex ?? {}),
-  ])
+  const dependencyAssetIds = new Set<string>(Object.keys(inputAssetRegistry ?? {}))
   const dependencySubset = buildAssetDependencySubset({
     assetIds: dependencyAssetIds,
     assetRegistry: inputAssetRegistry,
-    assetIndex: inputAssetIndex,
   })
 
   return {
@@ -125,7 +93,6 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
     nodes,
     materials: [],
     assetRegistry: dependencySubset.assetRegistry,
-    assetIndex: dependencySubset.assetIndex,
   }
 }
 

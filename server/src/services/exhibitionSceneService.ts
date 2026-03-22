@@ -3,7 +3,6 @@ import fs from 'fs-extra'
 import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
 import type {
-  AssetIndexEntry,
   SceneAssetRegistryEntry,
   AssetSourceMetadata,
   LanternBehaviorParams,
@@ -20,8 +19,6 @@ import type { SceneDocument } from '@/types/models'
 import { resolveSceneFilePath } from '@/services/sceneService'
 
 const SCENE_INSTANCE_PREFIX = 'scene-instances'
-// Align with editor asset catalog's Images category id so generated entries remain consistent.
-const EXHIBITION_IMAGE_CATEGORY_ID = 'dir-assets-root-images'
 
 export type ExhibitionWorkMedia = {
   fileUrl?: string | null
@@ -233,13 +230,6 @@ function updateAssetReferences(document: SceneJsonExportDocument, assetId: strin
     name: existingEntry?.name,
   }
 
-  const entry = ensureAssetIndexEntry(document, normalizedAssetId)
-  entry.downloadUrl = normalizedUrl
-  entry.url = normalizedUrl
-  if (!entry.source || entry.source.type !== 'url') {
-    entry.source = { type: 'url' }
-  }
-
   const summary = document.resourceSummary
   if (summary && Array.isArray(summary.assets)) {
     summary.assets.forEach((item: SceneResourceSummaryEntry) => {
@@ -307,40 +297,11 @@ function collectWorkImageUrls(works: ExhibitionWorkMedia[]): string[] {
   return urls
 }
 
-type MutableAssetIndexEntry = AssetIndexEntry & {
-  downloadUrl?: string | null
-  url?: string | null
-  [key: string]: unknown
-}
-
 function ensureAssetRegistry(document: SceneJsonExportDocument): Record<string, SceneAssetRegistryEntry> {
   if (!document.assetRegistry || typeof document.assetRegistry !== 'object') {
     document.assetRegistry = {}
   }
   return document.assetRegistry
-}
-
-function ensureAssetIndex(document: SceneJsonExportDocument): Record<string, MutableAssetIndexEntry> {
-  if (!document.assetIndex || typeof document.assetIndex !== 'object') {
-    document.assetIndex = {}
-  }
-  return document.assetIndex as Record<string, MutableAssetIndexEntry>
-}
-
-function ensureAssetIndexEntry(document: SceneJsonExportDocument, assetId: string): MutableAssetIndexEntry {
-  const assetIndex = ensureAssetIndex(document)
-  const existing = assetIndex[assetId]
-  if (existing) {
-    if (!existing.categoryId) {
-      existing.categoryId = EXHIBITION_IMAGE_CATEGORY_ID
-    }
-    return existing
-  }
-  const entry: MutableAssetIndexEntry = {
-    categoryId: EXHIBITION_IMAGE_CATEGORY_ID,
-  }
-  assetIndex[assetId] = entry
-  return entry
 }
 
 function createGeneratedAssetId(): string {

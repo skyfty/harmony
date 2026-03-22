@@ -1,5 +1,4 @@
 import type {
-  AssetIndexEntry,
   GroundSettings,
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
@@ -43,7 +42,6 @@ export interface PresetSceneDocument {
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
   projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
   sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
-  assetIndex?: Record<string, AssetIndexEntry>
 }
 
 export interface PresetSceneDetail extends PresetSceneSummary {

@@ -797,12 +797,12 @@ function rewriteAssetReferenceString(value: string, assetIdMap: Map<string, stri
   return value
 }
 
-function rewriteJsonAssetReferences(value: unknown, assetIdMap: Map<string, string>, parentKey?: string): unknown {
+function rewriteJsonAssetReferences(value: unknown, assetIdMap: Map<string, string>): unknown {
   if (typeof value === 'string') {
     return rewriteAssetReferenceString(value, assetIdMap)
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => rewriteJsonAssetReferences(entry, assetIdMap, parentKey))
+    return value.map((entry) => rewriteJsonAssetReferences(entry, assetIdMap))
   }
   if (!isObjectRecord(value)) {
     return value
@@ -810,11 +810,7 @@ function rewriteJsonAssetReferences(value: unknown, assetIdMap: Map<string, stri
 
   const next: Record<string, unknown> = {}
   for (const [key, entryValue] of Object.entries(value)) {
-    let nextKey = key
-    if (parentKey === 'assetIndex') {
-      nextKey = assetIdMap.get(key) ?? key
-    }
-    next[nextKey] = rewriteJsonAssetReferences(entryValue, assetIdMap, key)
+    next[key] = rewriteJsonAssetReferences(entryValue, assetIdMap)
   }
   return next
 }

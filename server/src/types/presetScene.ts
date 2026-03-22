@@ -23,7 +23,6 @@ export interface PresetSceneDocument {
   createdAt?: string
   updatedAt?: string
   assetCatalog?: Record<string, unknown>
-  assetIndex?: Record<string, unknown>
 }
 
 export interface PresetSceneDetail extends PresetSceneSummary {

@@ -1,14 +1,7 @@
-import type { AssetIndexEntry, SceneAssetRegistryEntry } from '@schema'
-
-type AssetLike = {
-  type?: string | null
-  name?: string | null
-  downloadUrl?: string | null
-}
+import type { SceneAssetRegistryEntry } from '@schema'
 
 export type AssetDependencySubset = {
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
-  assetIndex?: Record<string, AssetIndexEntry>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -195,7 +188,7 @@ function collectAssetReferencesFromConfigValue(value: unknown, bucket: Set<strin
     return
   }
   Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
-    if (parentKey === 'assetIndex' || parentKey === 'assetRegistry') {
+    if (parentKey === 'assetRegistry') {
       const normalized = normalizeAssetReferenceCandidate(key)
       if (normalized) {
         bucket.add(normalized)
@@ -251,96 +244,9 @@ export function resolveConfigAssetReferenceId(
   return null
 }
 
-function normalizeHttpUrl(value: string | null | undefined): string | null {
-  if (!value) {
-    return null
-  }
-  const trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  if (/^(?:https?:|data:|blob:)/i.test(trimmed)) {
-    return trimmed
-  }
-  return null
-}
-
-function cloneAssetIndexSubset(source: Record<string, AssetIndexEntry>): Record<string, AssetIndexEntry> | undefined {
-  const subset: Record<string, AssetIndexEntry> = {}
-  Object.entries(source).forEach(([assetId, entry]) => {
-    const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
-    if (!normalizedAssetId || !entry || typeof entry.categoryId !== 'string' || !entry.categoryId.trim().length) {
-      return
-    }
-    subset[normalizedAssetId] = {
-      categoryId: entry.categoryId,
-      source: entry.source ? { ...entry.source } : undefined,
-      internal: entry.internal,
-      isEditorOnly: entry.isEditorOnly,
-    }
-  })
-  return Object.keys(subset).length ? subset : undefined
-}
-
-function buildAssetRegistryEntryFromLegacy(
-  assetId: string,
-  indexEntry: AssetIndexEntry | undefined,
-  asset: AssetLike | null | undefined,
-): SceneAssetRegistryEntry | null {
-  if (indexEntry?.source?.type === 'local') {
-    return null
-  }
-
-  if (indexEntry?.source?.type === 'url') {
-    const resolvedUrl = normalizeHttpUrl(asset?.downloadUrl)
-    if (!resolvedUrl) {
-      return null
-    }
-    return {
-      sourceType: 'url',
-      url: resolvedUrl,
-      assetType: (asset?.type ?? undefined) as SceneAssetRegistryEntry['assetType'],
-      name: asset?.name ?? undefined,
-    }
-  }
-
-  return {
-    sourceType: 'server',
-    serverAssetId:
-      indexEntry?.source?.type === 'package' && typeof indexEntry.source.originalAssetId === 'string' && indexEntry.source.originalAssetId.trim().length
-        ? indexEntry.source.originalAssetId.trim()
-        : assetId,
-    resolvedUrl: normalizeHttpUrl(asset?.downloadUrl),
-    assetType: (asset?.type ?? undefined) as SceneAssetRegistryEntry['assetType'],
-    name: asset?.name ?? undefined,
-  }
-}
-
-function buildAssetIndexSubsetForIds(
-  source: Record<string, AssetIndexEntry>,
-  assetIds: string[],
-): Record<string, AssetIndexEntry> | undefined {
-  const subset: Record<string, AssetIndexEntry> = {}
-  assetIds.forEach((assetId) => {
-    const entry = source[assetId]
-    if (!entry) {
-      return
-    }
-    subset[assetId] = {
-      categoryId: entry.categoryId,
-      source: entry.source ? { ...entry.source } : undefined,
-      internal: entry.internal,
-      isEditorOnly: entry.isEditorOnly,
-    }
-  })
-  return Object.keys(subset).length ? subset : undefined
-}
-
 export function buildAssetDependencySubset(payload: {
   assetIds: Iterable<string>
   assetRegistry?: Record<string, SceneAssetRegistryEntry> | null
-  assetIndex?: Record<string, AssetIndexEntry> | null
-  resolveAsset?: (assetId: string) => AssetLike | null | undefined
 }): AssetDependencySubset {
   const normalizedAssetIds = Array.from(
     new Set(
@@ -355,34 +261,22 @@ export function buildAssetDependencySubset(payload: {
   }
 
   const assetRegistrySource = payload.assetRegistry ?? {}
-  const assetIndexSource = payload.assetIndex ?? {}
   const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
 
   normalizedAssetIds.forEach((assetId) => {
     const existingRegistryEntry = assetRegistrySource[assetId]
     if (existingRegistryEntry) {
       assetRegistry[assetId] = cloneRegistryEntry(existingRegistryEntry)
-      return
-    }
-    const registryEntry = buildAssetRegistryEntryFromLegacy(
-      assetId,
-      assetIndexSource[assetId],
-      payload.resolveAsset?.(assetId) ?? null,
-    )
-    if (registryEntry) {
-      assetRegistry[assetId] = registryEntry
     }
   })
 
   return {
     assetRegistry: Object.keys(assetRegistry).length ? assetRegistry : undefined,
-    assetIndex: buildAssetIndexSubsetForIds(assetIndexSource, normalizedAssetIds),
   }
 }
 
 export function cloneAssetDependencySubset(subset: AssetDependencySubset): AssetDependencySubset {
   return {
     assetRegistry: subset.assetRegistry ? cloneSceneAssetRegistrySubset(subset.assetRegistry) : undefined,
-    assetIndex: subset.assetIndex ? cloneAssetIndexSubset(subset.assetIndex) : undefined,
   }
 }

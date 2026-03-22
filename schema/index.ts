@@ -956,7 +956,6 @@ export interface SceneJsonExportDocument {
   projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>;
   /** Scene-level source override map (higher priority than project overrides). */
   sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>;
-  assetIndex?: Record<string, AssetIndexEntry>;
   assetUrlOverrides?: Record<string, string>;
   resourceSummary?: SceneResourceSummary;
   lazyLoadMeshes?: boolean;

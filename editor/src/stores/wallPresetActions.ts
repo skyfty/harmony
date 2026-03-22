@@ -31,6 +31,7 @@ export type WallPresetStoreLike = {
   nodes: SceneNode[]
   selectedNodeId: string | null
   assetCatalog: Record<string, ProjectAsset[]> | null
+  assetRegistry: Record<string, any>
   assetIndex: Record<string, any>
   materials: Array<{ id: string; name: string; type: string } & Record<string, any>>
 
@@ -63,10 +64,6 @@ export type WallPresetActionsDeps = {
   createMaterialProps: (overrides?: any) => any
   createNodeMaterial: (materialId: string | null, props: any, options: { id?: string; name?: string; type?: any }) => SceneNodeMaterial
   DEFAULT_SCENE_MATERIAL_TYPE: string
-
-  // Prefab dependency helpers
-  mergeAssetIndexEntries: (existing: any, incoming: any, filter?: Set<string>) => { next: any; changed: boolean }
-  isAssetIndex: (value: unknown) => boolean
 }
 
 export const BUILTIN_AIR_WALL_PRESET_ASSET_ID = 'builtin:wall-preset:air-wall'
@@ -529,7 +526,6 @@ export function parseWallPresetData(text: string): WallPresetData {
     materialOrder,
     materialPatches,
     assetRegistry: record.assetRegistry,
-    assetIndex: record.assetIndex,
   }
 }
 
@@ -761,14 +757,10 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         const dependencySubset = buildAssetDependencySubset({
           assetIds: dependencyAssetIds,
           assetRegistry: store.assetRegistry,
-          assetIndex: store.assetIndex,
           resolveAsset: (dependencyAssetId: string) => store.getAsset(dependencyAssetId),
         })
         if (dependencySubset.assetRegistry) {
           presetData.assetRegistry = dependencySubset.assetRegistry
-        }
-        if (dependencySubset.assetIndex) {
-          presetData.assetIndex = dependencySubset.assetIndex
         }
       }
 
@@ -875,9 +867,6 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       if (preset.assetRegistry !== undefined && preset.assetRegistry !== null && !isSceneAssetRegistry(preset.assetRegistry)) {
         throw new Error('墙体预设 assetRegistry 格式无效')
       }
-      if (preset.assetIndex !== undefined && preset.assetIndex !== null && !deps.isAssetIndex(preset.assetIndex)) {
-        throw new Error('墙体预设 assetIndex 格式无效')
-      }
       return preset
     },
 
@@ -937,34 +926,14 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         ),
       )
 
-      const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry)
         ? preset.assetRegistry
         : undefined
-      const presetAssetIndex = preset.assetIndex && deps.isAssetIndex(preset.assetIndex) ? preset.assetIndex : undefined
-
-      const legacyDependencyFilter = dependencyFilter
-        ? new Set(
-            Array.from(dependencyFilter).filter((assetId) => !presetAssetRegistry?.[assetId]),
-          )
-        : undefined
-
-      if (presetAssetIndex) {
-        const { next: mergedIndex, changed: assetIndexChanged } = deps.mergeAssetIndexEntries(
-          store.assetIndex,
-          presetAssetIndex,
-          legacyDependencyFilter,
-        )
-        if (assetIndexChanged) {
-          store.assetIndex = mergedIndex
-        }
-      }
 
       if (dependencyAssetIds.length) {
         await store.ensurePrefabDependencies(dependencyAssetIds, {
           prefabAssetIdForDownloadProgress: assetId,
           prefabAssetRegistry: presetAssetRegistry ?? null,
-          prefabAssetIndex: presetAssetIndex ?? null,
         })
       }
 

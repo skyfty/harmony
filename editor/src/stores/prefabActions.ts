@@ -148,19 +148,6 @@ export type PrefabActionsDeps = {
   isPlainRecord: (value: unknown) => value is Record<string, unknown>
   clonePlainRecord: (source?: Record<string, unknown> | null) => Record<string, unknown> | undefined
 
-  // Asset index helpers (owned by sceneStore)
-  isAssetIndex: (value: unknown) => value is Record<string, AssetIndexEntry>
-  cloneAssetIndex: (source: Record<string, AssetIndexEntry>) => Record<string, AssetIndexEntry>
-  buildAssetIndexSubsetForPrefab: (
-    source: Record<string, AssetIndexEntry>,
-    assetIds: Iterable<string>,
-  ) => Record<string, AssetIndexEntry> | undefined
-  mergeAssetIndexEntries: (
-    current: Record<string, AssetIndexEntry>,
-    additions?: Record<string, AssetIndexEntry>,
-    filter?: Set<string>,
-  ) => { next: Record<string, AssetIndexEntry>; changed: boolean }
-
   // Scene duplication helpers (owned by sceneStore)
   duplicateNodeTree: (root: SceneNode, context: DuplicateContext) => SceneNode
 
@@ -513,9 +500,6 @@ export function parseNodePrefab(deps: PrefabActionsDeps, raw: string): NodePrefa
   const normalizedName = normalizePrefabName(typeof candidate.name === 'string' ? candidate.name : '') || 'Unnamed Prefab'
   const root = prepareNodePrefabRoot(deps, candidate.root as SceneNode, { regenerateIds: false })
   const assetRegistry = sanitizeSceneAssetRegistry(candidate.assetRegistry)
-  const assetIndex = candidate.assetIndex && deps.isAssetIndex(candidate.assetIndex)
-    ? deps.cloneAssetIndex(candidate.assetIndex as Record<string, AssetIndexEntry>)
-    : undefined
   const prefab: NodePrefabData = {
     formatVersion: deps.NODE_PREFAB_FORMAT_VERSION,
     name: normalizedName,
@@ -523,9 +507,6 @@ export function parseNodePrefab(deps: PrefabActionsDeps, raw: string): NodePrefa
   }
   if (assetRegistry && Object.keys(assetRegistry).length) {
     prefab.assetRegistry = assetRegistry
-  }
-  if (assetIndex && Object.keys(assetIndex).length) {
-    prefab.assetIndex = assetIndex
   }
   return prefab
 }
@@ -560,9 +541,7 @@ export function buildSerializedPrefabPayload(
   context: {
     name?: string
     assetRegistry: Record<string, SceneAssetRegistryEntry>
-    assetIndex: Record<string, AssetIndexEntry>
     sceneNodes: SceneNode[]
-    resolveAssetById?: (assetId: string) => ProjectAsset | null
   },
 ): SerializedPrefabPayload {
   const prefabRoot = ensurePrefabRoot(deps, node)
@@ -573,22 +552,14 @@ export function buildSerializedPrefabPayload(
     const dependencySubset = buildAssetDependencySubset({
       assetIds: dependencyAssetIds,
       assetRegistry: context.assetRegistry,
-      assetIndex: context.assetIndex,
-      resolveAsset: context.resolveAssetById,
     })
     if (dependencySubset.assetRegistry) {
       prefabData.assetRegistry = dependencySubset.assetRegistry
     } else {
       delete (prefabData as any).assetRegistry
     }
-    if (dependencySubset.assetIndex) {
-      prefabData.assetIndex = dependencySubset.assetIndex
-    } else {
-      delete (prefabData as any).assetIndex
-    }
   } else {
     delete (prefabData as any).assetRegistry
-    delete (prefabData as any).assetIndex
   }
   const serialized = serializeNodePrefab(prefabData)
   return {
@@ -609,9 +580,7 @@ export function createNodePrefabHelpers(deps: PrefabActionsDeps) {
       context: {
         name?: string
         assetRegistry: Record<string, SceneAssetRegistryEntry>
-        assetIndex: Record<string, AssetIndexEntry>
         sceneNodes: SceneNode[]
-        resolveAssetById?: (assetId: string) => ProjectAsset | null
       },
     ) => buildSerializedPrefabPayload(deps, node, context),
   }
@@ -721,9 +690,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       const payload = buildSerializedPrefabPayload(deps, node, {
         name: options.name ?? node.name ?? '',
         assetRegistry: store.assetRegistry,
-        assetIndex: store.assetIndex,
         sceneNodes: store.nodes,
-        resolveAssetById: (assetId: string) => store.getAsset(assetId),
       })
 
       const registered = await this.registerPrefabAssetFromData(store, payload.prefab, payload.serialized, {
@@ -782,7 +749,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         providerId?: string | null
         prefabAssetIdForDownloadProgress?: string | null
         prefabAssetRegistry?: Record<string, SceneAssetRegistryEntry> | null
-        prefabAssetIndex?: Record<string, AssetIndexEntry> | null
       } = {},
     ) {
       const providerId = options.providerId ?? null
@@ -803,9 +769,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
 
       const prefabAssetRegistry = options.prefabAssetRegistry && typeof options.prefabAssetRegistry === 'object'
         ? options.prefabAssetRegistry
-        : null
-      const prefabAssetIndex = options.prefabAssetIndex && typeof options.prefabAssetIndex === 'object'
-        ? options.prefabAssetIndex
         : null
 
       const parseProviderKey = (key: string): { providerId: string; originalAssetId: string } | null => {
@@ -856,18 +819,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         if (registryResolved) {
           return registryResolved
         }
-
-        const indexSource = prefabAssetIndex?.[assetId]?.source
-        if (indexSource && indexSource.type === 'package') {
-          const providerId = typeof indexSource.providerId === 'string' ? indexSource.providerId.trim() : ''
-          const originalAssetId = typeof indexSource.originalAssetId === 'string' && indexSource.originalAssetId.trim().length
-            ? indexSource.originalAssetId.trim()
-            : assetId
-          if (providerId && originalAssetId) {
-            return { providerId, originalAssetId }
-          }
-        }
-
         return null
       }
 
@@ -884,14 +835,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
           const parsed = resolveProviderFromRegistry(assetId)
           if (parsed?.originalAssetId) {
             return parsed.originalAssetId
-          }
-        }
-
-        const legacySource = prefabAssetIndex?.[assetId]?.source
-        if (legacySource && legacySource.type === 'package') {
-          const originalAssetId = typeof legacySource.originalAssetId === 'string' ? legacySource.originalAssetId.trim() : ''
-          if (originalAssetId) {
-            return originalAssetId
           }
         }
         return assetId
@@ -911,10 +854,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         const registryEntry = resolveRegistryEntry(assetId)
         if (registryEntry?.sourceType === 'url' || registryEntry?.sourceType === 'server') {
           return { type: 'url' }
-        }
-        const legacySource = prefabAssetIndex?.[assetId]?.source
-        if (legacySource && (legacySource.type === 'package' || legacySource.type === 'url' || legacySource.type === 'local')) {
-          return legacySource
         }
         return undefined
       }
@@ -1215,31 +1154,12 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       const prefabAssetRegistry = prefab.assetRegistry && Object.keys(prefab.assetRegistry).length
         ? prefab.assetRegistry
         : undefined
-      const prefabAssetIndex = prefab.assetIndex && deps.isAssetIndex(prefab.assetIndex) ? prefab.assetIndex : undefined
-
-      const legacyDependencyFilter = dependencyFilter
-        ? new Set(
-            Array.from(dependencyFilter).filter((assetId) => !prefabAssetRegistry?.[assetId]),
-          )
-        : undefined
-
-      if (prefabAssetIndex) {
-        const { next: mergedIndex, changed: assetIndexChanged } = deps.mergeAssetIndexEntries(
-          store.assetIndex,
-          prefabAssetIndex,
-          legacyDependencyFilter,
-        )
-        if (assetIndexChanged) {
-          store.assetIndex = mergedIndex
-        }
-      }
 
       if (normalizedDependencyAssetIds.length) {
         await this.ensurePrefabDependencies(store, normalizedDependencyAssetIds, {
           providerId,
           prefabAssetIdForDownloadProgress: options.prefabAssetIdForDownloadProgress ?? null,
           prefabAssetRegistry: prefabAssetRegistry ?? null,
-          prefabAssetIndex: prefabAssetIndex ?? null,
         })
       }
 

@@ -1,4 +1,4 @@
-import type { AssetIndexEntry, SceneAssetRegistryEntry, SceneNode, Vector3Like } from '@schema'
+import type { SceneAssetRegistryEntry, SceneNode, Vector3Like } from '@schema'
 import type { NodePrefabData } from '@/types/node-prefab'
 
 export type ClipboardMode = 'copy' | 'cut'
@@ -29,7 +29,6 @@ export interface ClipboardEnvelope {
   root?: SceneNode
   roots?: SceneNode[]
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
-  assetIndex?: Record<string, AssetIndexEntry>
   clipboard?: ClipboardMeta
 }
 

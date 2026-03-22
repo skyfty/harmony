@@ -670,8 +670,6 @@ const wallPresetActions = createWallPresetActions({
   createMaterialProps,
   createNodeMaterial,
   DEFAULT_SCENE_MATERIAL_TYPE,
-  mergeAssetIndexEntries,
-  isAssetIndex,
 })
 
 const floorPresetActions = createFloorPresetActions({
@@ -686,8 +684,6 @@ const floorPresetActions = createFloorPresetActions({
   createMaterialProps,
   createNodeMaterial,
   DEFAULT_SCENE_MATERIAL_TYPE,
-  mergeAssetIndexEntries,
-  isAssetIndex,
 })
 
 const lodPresetActions = createLodPresetActions({
@@ -729,11 +725,6 @@ const prefabDeps: PrefabActionsDeps = {
 
   isPlainRecord,
   clonePlainRecord,
-
-  isAssetIndex,
-  cloneAssetIndex,
-  buildAssetIndexSubsetForPrefab,
-  mergeAssetIndexEntries,
 
   duplicateNodeTree,
   syncNode: (node) => componentManager.syncNode(node),
@@ -5318,87 +5309,6 @@ function filterAssetIndexByUsage(
   return filtered
 }
 
-function buildAssetIndexSubsetForPrefab(
-  source: Record<string, AssetIndexEntry>,
-  assetIds: Iterable<string>,
-): Record<string, AssetIndexEntry> | undefined {
-  const subset: Record<string, AssetIndexEntry> = {}
-  for (const rawId of assetIds) {
-    const assetId = typeof rawId === 'string' ? rawId.trim() : ''
-    if (!assetId) {
-      continue
-    }
-    const entry = source[assetId]
-    if (!entry) {
-      continue
-    }
-    subset[assetId] = {
-      categoryId: entry.categoryId,
-      source: entry.source ? { ...entry.source } : undefined,
-      isEditorOnly: entry.isEditorOnly,
-    }
-  }
-  return Object.keys(subset).length ? subset : undefined
-}
-
-function mergeAssetIndexEntries(
-  current: Record<string, AssetIndexEntry>,
-  additions?: Record<string, AssetIndexEntry>,
-  filter?: Set<string>,
-): { next: Record<string, AssetIndexEntry>; changed: boolean } {
-  if (!additions || !Object.keys(additions).length) {
-    return { next: current, changed: false }
-  }
-  const next: Record<string, AssetIndexEntry> = { ...current }
-  let changed = false
-  Object.entries(additions).forEach(([assetId, entry]) => {
-    if (!entry || typeof entry.categoryId !== 'string') {
-      return
-    }
-    if (filter && filter.size && !filter.has(assetId)) {
-      return
-    }
-    const existing = next[assetId]
-    if (!existing) {
-      next[assetId] = {
-        categoryId: entry.categoryId,
-        source: entry.source ? { ...entry.source } : undefined,
-        internal: entry.internal,
-        isEditorOnly: entry.isEditorOnly,
-      }
-      changed = true
-      return
-    }
-    let updated: AssetIndexEntry | null = null
-    if (!existing.categoryId && entry.categoryId) {
-      updated = { ...(updated ?? existing), categoryId: entry.categoryId }
-    }
-    if (!existing.source && entry.source) {
-      updated = {
-        ...(updated ?? existing),
-        source: { ...entry.source },
-      }
-    }
-    if (existing.internal !== true && entry.internal === true) {
-      updated = {
-        ...(updated ?? existing),
-        internal: true,
-      }
-    }
-    if (existing.isEditorOnly !== true && entry.isEditorOnly === true) {
-      updated = {
-        ...(updated ?? existing),
-        isEditorOnly: true,
-      }
-    }
-    if (updated) {
-      next[assetId] = updated
-      changed = true
-    }
-  })
-  return { next, changed }
-}
-
 function parseVector3Like(value: unknown): THREE.Vector3 | null {
   if (!isPlainObject(value)) {
     return null
@@ -5507,13 +5417,6 @@ function isAssetCatalog(value: unknown): value is Record<string, ProjectAsset[]>
     return false
   }
   return Object.values(value).every((entry) => Array.isArray(entry))
-}
-
-function isAssetIndex(value: unknown): value is Record<string, AssetIndexEntry> {
-  if (!isPlainObject(value)) {
-    return false
-  }
-  return Object.values(value).every((entry) => isPlainObject(entry))
 }
 
 function resolveUniqueSceneName(baseName: string, existing: Set<string>): string {
@@ -6108,16 +6011,6 @@ function cloneAssetIndex(index: Record<string, AssetIndexEntry>): Record<string,
     }
   })
   return clone
-}
-
-function stripAssetIndexSourceMetadata(index: Record<string, AssetIndexEntry>): Record<string, AssetIndexEntry> {
-  const stripped = cloneAssetIndex(index)
-  Object.values(stripped).forEach((entry) => {
-    if ('source' in entry) {
-      delete (entry as Partial<AssetIndexEntry>).source
-    }
-  })
-  return stripped
 }
 
 function cloneSceneAssetRegistry(
@@ -7532,19 +7425,12 @@ export const useSceneStore = defineStore('scene', {
 
       const roots: SceneNode[] = []
       let mergedAssetRegistry: Record<string, SceneAssetRegistryEntry> | undefined
-      let mergedAssetIndex: Record<string, AssetIndexEntry> | undefined
 
       const mergePrefabMeta = (prefab: NodePrefabData) => {
         if (prefab.assetRegistry && Object.keys(prefab.assetRegistry).length) {
           mergedAssetRegistry = {
             ...(mergedAssetRegistry ?? {}),
             ...prefab.assetRegistry,
-          }
-        }
-        if (prefab.assetIndex && Object.keys(prefab.assetIndex).length) {
-          mergedAssetIndex = {
-            ...(mergedAssetIndex ?? {}),
-            ...prefab.assetIndex,
           }
         }
       }
@@ -7556,9 +7442,7 @@ export const useSceneStore = defineStore('scene', {
         const payload = nodePrefabHelpers.buildSerializedPrefabPayload(node, {
           name: node.name ?? '',
           assetRegistry: this.assetRegistry,
-          assetIndex: this.assetIndex,
           sceneNodes: this.nodes,
-          resolveAssetById: (assetId: string) => this.getAsset(assetId),
         })
         mergePrefabMeta(payload.prefab)
         roots.push(payload.prefab.root)
@@ -7593,9 +7477,6 @@ export const useSceneStore = defineStore('scene', {
         if (mergedAssetRegistry && Object.keys(mergedAssetRegistry).length) {
           envelope.assetRegistry = mergedAssetRegistry
         }
-        if (mergedAssetIndex && Object.keys(mergedAssetIndex).length) {
-          envelope.assetIndex = mergedAssetIndex
-        }
         const serialized = JSON.stringify(envelope, null, 2)
         return { serialized, cut: mode === 'cut' }
       }
@@ -7612,9 +7493,7 @@ export const useSceneStore = defineStore('scene', {
         const payload = nodePrefabHelpers.buildSerializedPrefabPayload(source, {
           name: source.name ?? '',
           assetRegistry: this.assetRegistry,
-          assetIndex: this.assetIndex,
           sceneNodes: this.nodes,
-          resolveAssetById: (assetId: string) => this.getAsset(assetId),
         })
         mergePrefabMeta(payload.prefab)
         const cloned = nodePrefabHelpers.prepareNodePrefabRoot(payload.prefab.root, { regenerateIds: false })
@@ -7648,9 +7527,6 @@ export const useSceneStore = defineStore('scene', {
 
       if (mergedAssetRegistry && Object.keys(mergedAssetRegistry).length) {
         envelope.assetRegistry = mergedAssetRegistry
-      }
-      if (mergedAssetIndex && Object.keys(mergedAssetIndex).length) {
-        envelope.assetIndex = mergedAssetIndex
       }
 
       const serialized = JSON.stringify(envelope, null, 2)
@@ -10954,7 +10830,6 @@ export const useSceneStore = defineStore('scene', {
         providerId?: string | null
         prefabAssetIdForDownloadProgress?: string | null
         prefabAssetRegistry?: Record<string, SceneAssetRegistryEntry> | null
-        prefabAssetIndex?: Record<string, AssetIndexEntry> | null
       } = {},
     ) {
       return prefabActions.ensurePrefabDependencies(this as unknown as PrefabStoreLike, assetIds, options)
@@ -15583,9 +15458,6 @@ export const useSceneStore = defineStore('scene', {
       const rootWorldPosition = metaPayload?.rootWorldPosition
       const hasMultiRoots = rootsFromPayload.length > 1
 
-      const commonPrefabAssetIndex = parsedEnvelope?.assetIndex && isAssetIndex(parsedEnvelope.assetIndex)
-        ? cloneAssetIndex(parsedEnvelope.assetIndex)
-        : undefined
       const commonPrefabAssetRegistry = sanitizeSceneAssetRegistry(parsedEnvelope?.assetRegistry) ?? {}
 
       const applyWorldToParentLocal = (node: SceneNode, worldMatrix: Matrix4, targetParentId: string | null) => {
@@ -15627,9 +15499,6 @@ export const useSceneStore = defineStore('scene', {
         }
         if (commonPrefabAssetRegistry && Object.keys(commonPrefabAssetRegistry).length) {
           prefabForRoot.assetRegistry = commonPrefabAssetRegistry
-        }
-        if (commonPrefabAssetIndex && Object.keys(commonPrefabAssetIndex).length) {
-          prefabForRoot.assetIndex = commonPrefabAssetIndex
         }
 
         const duplicate = await this.instantiatePrefabData(prefabForRoot, {
@@ -15989,9 +15858,6 @@ export const useSceneStore = defineStore('scene', {
         const importedAssetCatalog = isAssetCatalog(entry.assetCatalog)
           ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
           : undefined
-        const importedAssetIndex = isAssetIndex(entry.assetIndex)
-          ? stripAssetIndexSourceMetadata(entry.assetIndex as Record<string, AssetIndexEntry>)
-          : undefined
         const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
 
         const sceneDocument = createSceneDocument(uniqueName, {
@@ -16006,7 +15872,6 @@ export const useSceneStore = defineStore('scene', {
             ? ((entry as { assetManifest?: AssetManifest }).assetManifest ?? null)
             : undefined,
           assetRegistry: importedAssetRegistry,
-          assetIndex: importedAssetIndex,
           planningData: entry.planningData ?? null,
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
@@ -16086,9 +15951,6 @@ export const useSceneStore = defineStore('scene', {
         const importedAssetCatalog = isAssetCatalog(entry.assetCatalog)
           ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
           : undefined
-        const importedAssetIndex = isAssetIndex(entry.assetIndex)
-          ? stripAssetIndexSourceMetadata(entry.assetIndex as Record<string, AssetIndexEntry>)
-          : undefined
         const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
 
         const sceneDocument = createSceneDocument(uniqueName, {
@@ -16103,7 +15965,6 @@ export const useSceneStore = defineStore('scene', {
             ? ((entry as { assetManifest?: AssetManifest }).assetManifest ?? null)
             : undefined,
           assetRegistry: importedAssetRegistry,
-          assetIndex: importedAssetIndex,
           planningData: isPlainObject((entry as { planningData?: unknown }).planningData)
             ? ((entry as { planningData?: PlanningSceneData | null }).planningData ?? null)
             : null,

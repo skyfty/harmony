@@ -42,8 +42,6 @@ export type FloorPresetData = {
   /** Patches keyed by SceneNodeMaterial.id. */
   materialPatches: Record<string, FloorPresetMaterialPatch>
   assetRegistry?: unknown
-  /** Optional dependency helpers (validated by sceneStore). */
-  assetIndex?: unknown
 }
 
 export function buildFloorPresetFilename(name: string): string {
