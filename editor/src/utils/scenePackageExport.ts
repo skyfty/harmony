@@ -20,6 +20,8 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
+import { fetchResourceAsset } from '@/api/resourceAssets'
+import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import {
   GROUND_HEIGHTMAP_SIDECAR_FILENAME,
   stripGroundHeightMapsFromSceneDocument,
@@ -108,6 +110,7 @@ type SceneResourceSummaryAsset = {
 
 type SceneResourceSummary = {
   assets?: SceneResourceSummaryAsset[] | null
+  unknownAssetIds?: string[] | null
 }
 
 type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
@@ -149,6 +152,37 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
   editable.packageAssetMap = packageAssetMap
   editable.assetIndex = assetIndex
   editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
+
+  const unknownAssetIds = Array.isArray(editable.resourceSummary?.unknownAssetIds)
+    ? editable.resourceSummary.unknownAssetIds
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0)
+    : []
+
+  if (unknownAssetIds.length) {
+    let mapPatched = false
+    await Promise.all(
+      unknownAssetIds.map(async (assetId) => {
+        try {
+          const serverAsset = await fetchResourceAsset(assetId)
+          const mapped = mapServerAssetToProjectAsset(serverAsset)
+          const downloadUrl = typeof mapped.downloadUrl === 'string' ? mapped.downloadUrl.trim() : ''
+          if (!downloadUrl) {
+            return
+          }
+          editable.packageAssetMap[`url::${assetId}`] = downloadUrl
+          mapPatched = true
+        } catch {
+          // Keep unresolved ids; downstream export will report explicit missing downloadUrl if still required.
+        }
+      }),
+    )
+
+    if (mapPatched) {
+      editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
+    }
+  }
+
   return editable
 }
 

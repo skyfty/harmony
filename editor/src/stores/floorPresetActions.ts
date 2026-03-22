@@ -1,8 +1,12 @@
+import * as THREE from 'three'
 import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
 import { FLOOR_COMPONENT_TYPE, clampFloorComponentProps, type FloorComponentProps } from '@schema/components'
+import type { SceneMaterialTextureRef } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { extractExtension } from '@/utils/blob'
+import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
+import { renderFloorPresetThumbnailDataUrl } from '@/utils/floorPresetThumbnail'
 import {
   FLOOR_PRESET_FORMAT_VERSION,
   buildFloorPresetFilename,
@@ -63,6 +67,47 @@ export type FloorPresetActionsDeps = {
 function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   return raw.length ? raw : null
+}
+
+function extractAssetIdsFromPackageMapKey(key: string): string | null {
+  const normalized = typeof key === 'string' ? key.trim() : ''
+  if (!normalized) {
+    return null
+  }
+  if (normalized.startsWith('local::')) {
+    const assetId = normalized.slice('local::'.length).trim()
+    return assetId || null
+  }
+  if (normalized.startsWith('url::')) {
+    const assetId = normalized.slice('url::'.length).trim()
+    return assetId || null
+  }
+  const separator = normalized.indexOf('::')
+  if (separator >= 0 && separator < normalized.length - 2) {
+    const assetId = normalized.slice(separator + 2).trim()
+    return assetId || null
+  }
+  return null
+}
+
+function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
+  if (!value || typeof value !== 'object') {
+    return []
+  }
+  const textures = (value as { textures?: Record<string, unknown> }).textures
+  if (!textures || typeof textures !== 'object') {
+    return []
+  }
+  const out = new Set<string>()
+  Object.values(textures).forEach((entry) => {
+    const assetId = typeof (entry as { assetId?: unknown } | null | undefined)?.assetId === 'string'
+      ? ((entry as { assetId?: string }).assetId ?? '').trim()
+      : ''
+    if (assetId) {
+      out.add(assetId)
+    }
+  })
+  return Array.from(out)
 }
 
 function assertStrictFloorPresetFloorProps(value: unknown): StrictFloorPresetFloorProps {
@@ -219,6 +264,73 @@ export function parseFloorPresetData(text: string): FloorPresetData {
   }
 }
 
+async function generateFloorPresetThumbnailDataUrl(
+  store: FloorPresetStoreLike,
+  presetData: FloorPresetData,
+): Promise<string | null> {
+  const assetCache = useAssetCacheStore()
+
+  const ensureAssetFile = async (assetId: string): Promise<File | null> => {
+    const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedId.length) {
+      return null
+    }
+
+    let file = assetCache.createFileFromCache(normalizedId)
+    if (file) {
+      return file
+    }
+
+    await assetCache.loadFromIndexedDb(normalizedId)
+    file = assetCache.createFileFromCache(normalizedId)
+    if (file) {
+      return file
+    }
+
+    const asset = store.getAsset(normalizedId)
+    if (!asset) {
+      return null
+    }
+
+    try {
+      await assetCache.downloaProjectAsset(asset)
+    } catch {
+      return null
+    }
+    return assetCache.createFileFromCache(normalizedId)
+  }
+
+  const resolveTexture = async (ref: SceneMaterialTextureRef) => {
+    const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+    if (!assetId) {
+      return null
+    }
+    const file = await ensureAssetFile(assetId)
+    if (!file) {
+      return null
+    }
+
+    const blobUrl = URL.createObjectURL(file)
+    try {
+      const loader = new THREE.TextureLoader()
+      const texture = await loader.loadAsync(blobUrl)
+      texture.name = ref.name ?? file.name ?? assetId
+      texture.needsUpdate = true
+      return texture
+    } finally {
+      URL.revokeObjectURL(blobUrl)
+    }
+  }
+
+  return await renderFloorPresetThumbnailDataUrl({
+    preset: presetData,
+    sharedMaterials: store.materials as any,
+    resolveTexture,
+    width: ASSET_THUMBNAIL_WIDTH,
+    height: ASSET_THUMBNAIL_HEIGHT,
+  })
+}
+
 export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
   return {
     findFloorPresetAssetByFilename(store: FloorPresetStoreLike, filename: string): ProjectAsset | null {
@@ -331,17 +443,17 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
 
       const dependencyAssetIds = Array.from(
         new Set(
-          [
-            ...nodeMaterials.flatMap((material) => {
-              const textures = ((material as any).textures ?? null) as Record<string, any> | null
-              if (!textures || typeof textures !== 'object') {
-                return []
+          nodeMaterials
+            .flatMap((material) => {
+              const localTextureAssetIds = collectTextureAssetIdsFromMaterialLike(material)
+              const sharedMaterialId = typeof (material as any)?.materialId === 'string' ? (material as any).materialId.trim() : ''
+              if (!sharedMaterialId) {
+                return localTextureAssetIds
               }
-              return Object.values(textures)
-                .map((ref) => (typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''))
-                .filter((value) => value.length > 0)
-            }),
-          ]
+              const sharedMaterial = store.materials.find((entry) => entry.id === sharedMaterialId)
+              const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
+              return [...localTextureAssetIds, ...sharedTextureAssetIds]
+            })
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
             .filter((value) => value.length > 0),
         ),
@@ -383,6 +495,13 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
         filename: fileName,
       })
 
+      let thumbnailDataUrl: string | null = null
+      try {
+        thumbnailDataUrl = await generateFloorPresetThumbnailDataUrl(store, presetData)
+      } catch (thumbnailError) {
+        console.warn('Failed to generate floor preset thumbnail', thumbnailError)
+      }
+
       if (payload.assetId) {
         const existing = store.getAsset(assetId)
         if (!existing) {
@@ -396,6 +515,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
           name: sanitizedName,
           description: fileName,
           previewColor: deps.FLOOR_PRESET_PREVIEW_COLOR,
+          thumbnail: thumbnailDataUrl ?? existing.thumbnail ?? null,
         }
         const categoryId = store.resolveConfigAssetSaveDirectoryId()
         const sourceMeta = (store.assetIndex as any)[assetId]?.source
@@ -412,7 +532,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
         type: 'prefab',
         downloadUrl: assetId,
         previewColor: deps.FLOOR_PRESET_PREVIEW_COLOR,
-        thumbnail: null,
+        thumbnail: thumbnailDataUrl,
         description: fileName,
         gleaned: true,
         extension: extractExtension(fileName) ?? null,
@@ -425,7 +545,6 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       })
 
       if (payload.select !== false) {
-        store.setActiveDirectory(categoryId)
         store.selectAsset(registered.id)
       }
 
@@ -494,13 +613,26 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
         new Set(
           [
             ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
-              const textures = ((patch as any)?.props as any)?.textures as Record<string, any> | null | undefined
-              if (!textures || typeof textures !== 'object') {
-                return []
+              const patchTextureAssetIds = collectTextureAssetIdsFromMaterialLike((patch as any)?.props)
+              const sharedMaterialId = typeof patch?.materialId === 'string' ? patch.materialId.trim() : ''
+              if (!sharedMaterialId) {
+                return patchTextureAssetIds
               }
-              return Object.values(textures)
-                .map((ref) => (typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''))
-                .filter((value) => value.length > 0)
+              const sharedMaterial = store.materials.find((entry) => entry.id === sharedMaterialId)
+              const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
+              return [...patchTextureAssetIds, ...sharedTextureAssetIds]
+            }),
+            ...Object.keys((preset.assetIndex ?? {}) as Record<string, unknown>),
+            ...Object.entries((preset.packageAssetMap ?? {}) as Record<string, unknown>).flatMap(([key, value]) => {
+              const out: string[] = []
+              if (typeof value === 'string' && value.trim().length) {
+                out.push(value.trim())
+              }
+              const derived = extractAssetIdsFromPackageMapKey(key)
+              if (derived) {
+                out.push(derived)
+              }
+              return out
             }),
           ]
             .map((value) => (typeof value === 'string' ? value.trim() : ''))

@@ -834,7 +834,6 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       })
 
       if (payload.select !== false) {
-        store.setActiveDirectory(categoryId)
         store.selectAsset(registered.id)
       }
 

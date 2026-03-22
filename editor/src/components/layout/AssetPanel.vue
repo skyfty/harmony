@@ -177,6 +177,7 @@ const dropImportProgress = ref<DropImportProgressState | null>(null)
 let dropFeedbackTimer: number | null = null
 let dropImportAbortController: AbortController | null = null
 const uploadDialogOpen = ref(false)
+const uploadDialogTargetAssetId = ref<string | null>(null)
 
 const providerLoadingState = ref<Record<string, boolean>>({})
 const providerErrorState = ref<Record<string, string | null>>({})
@@ -460,6 +461,12 @@ async function selectAsset(asset: ProjectAsset) {
     if (isWallPreset || isFloorPreset) {
       sceneStore.selectAsset(asset.id)
       sceneStore.setSelection([])
+
+      if (isWallPreset) {
+        buildToolsStore.setWallBuildShape('line')
+      } else {
+        buildToolsStore.setFloorBuildShape('polygon')
+      }
 
       const activated = isWallPreset
         ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
@@ -1433,6 +1440,18 @@ const uploadableSelectedAssets = computed(() =>
   selectedAssets.value.filter((asset) => assetIndex.value?.[asset.id]?.source?.type === 'local'),
 )
 
+const uploadDialogAssets = computed(() => {
+  const targetId = uploadDialogTargetAssetId.value
+  if (!targetId) {
+    return uploadableSelectedAssets.value
+  }
+  const target = displayedAssets.value.find((asset) => asset.id === targetId) ?? sceneStore.getAsset(targetId)
+  if (!target) {
+    return []
+  }
+  return [target]
+})
+
 const canEditSelectedAssetMetadata = computed(() => uploadableSelectedAssets.value.length > 0)
 
 function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[]): boolean {
@@ -1816,8 +1835,16 @@ async function confirmDeleteDirectory() {
 
 function promptRenameAsset(assetId?: string) {
   if (!assetId) return
-  assetRenameTargetId.value = assetId
   const asset = displayedAssets.value.find((a) => a.id === assetId) ?? sceneStore.getAsset(assetId)
+  if (!asset) {
+    return
+  }
+  if (getAssetMutationScope(asset) === 'local') {
+    uploadDialogTargetAssetId.value = asset.id
+    uploadDialogOpen.value = true
+    return
+  }
+  assetRenameTargetId.value = assetId
   assetRenameValue.value = asset?.name ?? ''
   assetRenameDialogOpen.value = true
 }
@@ -2188,8 +2215,15 @@ function openUploadDialog() {
   if (!canEditSelectedAssetMetadata.value) {
     return
   }
+  uploadDialogTargetAssetId.value = null
   uploadDialogOpen.value = true
 }
+
+watch(uploadDialogOpen, (open) => {
+  if (!open) {
+    uploadDialogTargetAssetId.value = null
+  }
+})
 
 function handleUploadCompleted(payload: { successCount: number; replacementMap: Record<string, string> }) {
   const replacement = new Map<string, string>(Object.entries(payload?.replacementMap ?? {}))
@@ -3809,7 +3843,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
     <UploadAssetsDialog
       v-model="uploadDialogOpen"
-      :assets="uploadableSelectedAssets"
+      :assets="uploadDialogAssets"
       :tag-options="tagOptions"
       @uploaded="handleUploadCompleted"
     />

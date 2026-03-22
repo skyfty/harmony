@@ -22,6 +22,8 @@ import type { DuplicateContext } from '@/types/duplicate-context'
 import { useAssetCacheStore, type AssetCacheEntry } from './assetCacheStore'
 import { determineAssetCategoryId } from './assetCatalog'
 import { extractExtension } from '@/utils/blob'
+import { fetchResourceAsset } from '@/api/resourceAssets'
+import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import {
   buildBehaviorPrefabFilename,
   createBehaviorPrefabData,
@@ -62,6 +64,8 @@ export type PrefabStoreLike = {
       commitOptions?: { updateNodes?: boolean }
     },
   ) => ProjectAsset[]
+
+  syncAssetPackageMapEntry?: (asset: ProjectAsset, source?: AssetSourceMetadata) => Promise<void> | void
 
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
@@ -699,7 +703,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         commitOptions: { updateNodes: false },
       })
       if (options.select !== false) {
-        store.setActiveDirectory(categoryId)
         store.selectAsset(registered.id)
       }
       return registered
@@ -850,6 +853,52 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
             categoryId: (asset: ProjectAsset) => determineAssetCategoryId(asset),
             commitOptions: { updateNodes: false },
           })
+        }
+
+        const stillUnresolvedIds = unresolvedIds.filter((assetId) => !store.findAssetInCatalog(assetId))
+        if (stillUnresolvedIds.length) {
+          const fetchedRemoteAssets: Array<{ asset: ProjectAsset; source: AssetSourceMetadata }> = []
+          await Promise.all(
+            stillUnresolvedIds.map(async (assetId) => {
+              try {
+                const serverAsset = await fetchResourceAsset(assetId)
+                const projectAsset = mapServerAssetToProjectAsset(serverAsset)
+                fetchedRemoteAssets.push({ asset: projectAsset, source: { type: 'url' } })
+              } catch {
+                // Ignore missing/unauthorized assets; export flow will surface unresolved ids if still needed.
+              }
+            }),
+          )
+
+          if (fetchedRemoteAssets.length) {
+            const sourceByAssetId = new Map<string, AssetSourceMetadata>()
+            fetchedRemoteAssets.forEach((entry) => {
+              sourceByAssetId.set(entry.asset.id, entry.source)
+            })
+
+            const registered = store.registerAssets(
+              fetchedRemoteAssets.map((entry) => entry.asset),
+              {
+                categoryId: (asset: ProjectAsset) => determineAssetCategoryId(asset),
+                source: (asset: ProjectAsset) => sourceByAssetId.get(asset.id),
+                commitOptions: { updateNodes: false },
+              },
+            )
+
+            if (store.syncAssetPackageMapEntry) {
+              for (const asset of registered) {
+                const source = sourceByAssetId.get(asset.id)
+                if (!source) {
+                  continue
+                }
+                try {
+                  await store.syncAssetPackageMapEntry(asset, source)
+                } catch {
+                  // Ignore map sync failures; downstream resource summary may still resolve via asset.downloadUrl.
+                }
+              }
+            }
+          }
         }
       }
 
