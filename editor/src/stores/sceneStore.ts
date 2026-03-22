@@ -178,7 +178,7 @@ import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
-import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
+import { computeBlobHash, blobToDataUrl, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
   type LodPresetData,
@@ -670,12 +670,8 @@ const wallPresetActions = createWallPresetActions({
   createMaterialProps,
   createNodeMaterial,
   DEFAULT_SCENE_MATERIAL_TYPE,
-  buildAssetIndexSubsetForPrefab,
-  buildPackageAssetMapSubsetForPrefab,
   mergeAssetIndexEntries,
-  mergePackageAssetMapEntries,
   isAssetIndex,
-  isPackageAssetMap,
 })
 
 const floorPresetActions = createFloorPresetActions({
@@ -690,12 +686,8 @@ const floorPresetActions = createFloorPresetActions({
   createMaterialProps,
   createNodeMaterial,
   DEFAULT_SCENE_MATERIAL_TYPE,
-  buildAssetIndexSubsetForPrefab,
-  buildPackageAssetMapSubsetForPrefab,
   mergeAssetIndexEntries,
-  mergePackageAssetMapEntries,
   isAssetIndex,
-  isPackageAssetMap,
 })
 
 const lodPresetActions = createLodPresetActions({
@@ -739,13 +731,9 @@ const prefabDeps: PrefabActionsDeps = {
   clonePlainRecord,
 
   isAssetIndex,
-  isPackageAssetMap,
   cloneAssetIndex,
-  clonePackageAssetMap,
   buildAssetIndexSubsetForPrefab,
-  buildPackageAssetMapSubsetForPrefab,
   mergeAssetIndexEntries,
-  mergePackageAssetMapEntries,
 
   duplicateNodeTree,
   syncNode: (node) => componentManager.syncNode(node),
@@ -4446,76 +4434,92 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-export async function buildPackageAssetMapForExport(
-  scene: StoredSceneDocument,
-  _options?: { embedResources?: boolean },
-): Promise<{ packageAssetMap: Record<string, string>; assetIndex: Record<string, AssetIndexEntry> }> {
-  const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
-  const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
-  let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(runtimeAwareScene.packageAssetMap)),usedAssetIds)
-  const assetIndex = filterAssetIndexByUsage(runtimeAwareScene.assetIndex, usedAssetIds)
-
-  return { packageAssetMap, assetIndex }
-}
-
 function buildSceneAssetRegistryEntry(
   assetId: string,
   indexEntry: AssetIndexEntry | undefined,
   asset: ProjectAsset | null,
-  packageMap: Record<string, string>,
   summaryEntry: SceneResourceSummaryEntry | undefined,
+  existingEntry: SceneAssetRegistryEntry | undefined,
 ): SceneAssetRegistryEntry | null {
-  const packageInlineKey = `local::${assetId}`
-  const inlineValue = packageMap[packageInlineKey]
-  if (typeof inlineValue === 'string' && inlineValue.trim().length > 0) {
-    return {
-      sourceType: 'package',
-      zipPath: packageInlineKey,
-      bytes: Math.max(
-        0,
-        estimateInlineAssetByteSize(inlineValue) || (typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : 0),
-      ),
-      assetType: asset?.type ?? summaryEntry?.type,
-      name: asset?.name ?? summaryEntry?.name,
-    }
-  }
+  const summaryBytes = typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined
+  const assetType = asset?.type ?? summaryEntry?.type
+  const name = asset?.name ?? summaryEntry?.name
 
-  const explicitUrl = normalizeHttpUrl(packageMap[`url::${assetId}`])
-  if (explicitUrl) {
-    return {
-      sourceType: 'url',
-      url: explicitUrl,
-      bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
-      assetType: asset?.type ?? summaryEntry?.type,
-      name: asset?.name ?? summaryEntry?.name,
+  if (existingEntry) {
+    const nextEntry: SceneAssetRegistryEntry = { ...existingEntry }
+    if (typeof nextEntry.bytes !== 'number' && typeof summaryBytes === 'number') {
+      nextEntry.bytes = summaryBytes
     }
+    if (!nextEntry.assetType && assetType) {
+      nextEntry.assetType = assetType
+    }
+    if (!nextEntry.name && name) {
+      nextEntry.name = name
+    }
+    if (nextEntry.sourceType === 'url') {
+      const resolvedUrl = normalizeHttpUrl(nextEntry.url) ?? resolveAssetDownloadUrl(assetId, indexEntry, asset)
+      if (resolvedUrl) {
+        nextEntry.url = resolvedUrl
+      }
+    } else if (nextEntry.sourceType === 'server') {
+      const resolvedUrl = nextEntry.resolvedUrl ?? resolveAssetDownloadUrl(assetId, indexEntry, asset)
+      nextEntry.resolvedUrl = resolvedUrl ?? null
+    }
+    return nextEntry
   }
 
   if (indexEntry?.source?.type === 'local') {
     return {
       sourceType: 'package',
-      zipPath: packageInlineKey,
-      bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
-      assetType: asset?.type ?? summaryEntry?.type,
-      name: asset?.name ?? summaryEntry?.name,
+      zipPath: `local::${assetId}`,
+      bytes: summaryBytes,
+      assetType,
+      name,
     }
   }
 
+  if (indexEntry?.source?.type === 'package') {
+    const providerId = typeof indexEntry.source.providerId === 'string' ? indexEntry.source.providerId.trim() : ''
+    const originalAssetId =
+      typeof indexEntry.source.originalAssetId === 'string' && indexEntry.source.originalAssetId.trim().length
+        ? indexEntry.source.originalAssetId.trim()
+        : assetId
+    if (providerId) {
+      return {
+        sourceType: 'package',
+        zipPath: `${providerId}::${originalAssetId}`,
+        bytes: summaryBytes,
+        assetType,
+        name,
+      }
+    }
+  }
+
+  const resolvedUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset)
+
   if (indexEntry?.source?.type === 'url') {
-    const resolvedUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset, packageMap)
     if (!resolvedUrl) {
       return null
     }
     return {
       sourceType: 'url',
       url: resolvedUrl,
-      bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
-      assetType: asset?.type ?? summaryEntry?.type,
-      name: asset?.name ?? summaryEntry?.name,
+      bytes: summaryBytes,
+      assetType,
+      name,
     }
   }
 
-  const resolvedUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset, packageMap)
+  if (!indexEntry?.source && resolvedUrl) {
+    return {
+      sourceType: 'url',
+      url: resolvedUrl,
+      bytes: summaryBytes,
+      assetType,
+      name,
+    }
+  }
+
   return {
     sourceType: 'server',
     serverAssetId:
@@ -4523,9 +4527,9 @@ function buildSceneAssetRegistryEntry(
         ? indexEntry.source.originalAssetId.trim()
         : assetId,
     resolvedUrl: resolvedUrl ?? null,
-    bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
-    assetType: asset?.type ?? summaryEntry?.type,
-    name: asset?.name ?? summaryEntry?.name,
+    bytes: summaryBytes,
+    assetType,
+    name,
   }
 }
 
@@ -4534,12 +4538,9 @@ export async function buildAssetRegistryForExport(
 ): Promise<Record<string, SceneAssetRegistryEntry>> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
-  const packageAssetMap = filterPackageAssetMapByUsage(
-    stripAssetEntries(clonePackageAssetMap(runtimeAwareScene.packageAssetMap)),
-    usedAssetIds,
-  )
   const assetIndex = filterAssetIndexByUsage(runtimeAwareScene.assetIndex, usedAssetIds)
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
+  const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
   const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
 
   ;(runtimeAwareScene.resourceSummary?.assets ?? []).forEach((entry) => {
@@ -4555,8 +4556,8 @@ export async function buildAssetRegistryForExport(
       assetId,
       assetIndex[assetId],
       getAssetFromCatalog(assetCatalog, assetId),
-      packageAssetMap,
       summaryEntries.get(assetId),
+      existingRegistry[assetId],
     )
     if (entry) {
       assetRegistry[assetId] = entry
@@ -4564,32 +4565,6 @@ export async function buildAssetRegistryForExport(
   })
 
   return assetRegistry
-}
-
-function estimateInlineAssetByteSize(raw: string | null | undefined): number {
-  if (!raw) {
-    return 0
-  }
-  const trimmed = raw.trim()
-  if (!trimmed.length) {
-    return 0
-  }
-  if (trimmed.startsWith('data:')) {
-    try {
-      return dataUrlToBlob(trimmed).size
-    } catch (_error) {
-      return 0
-    }
-  }
-  if (/^[A-Za-z0-9+/=\s-]+$/.test(trimmed) && trimmed.length >= 12) {
-    const sanitized = trimmed.replace(/[^A-Za-z0-9+/=]/g, '')
-    if (!sanitized.length) {
-      return 0
-    }
-    const padding = sanitized.endsWith('==') ? 2 : sanitized.endsWith('=') ? 1 : 0
-    return Math.max(0, Math.floor((sanitized.length * 3) / 4) - padding)
-  }
-  return 0
 }
 
 function normalizeHttpUrl(value: string | null | undefined): string | null {
@@ -4610,7 +4585,6 @@ function resolveAssetDownloadUrl(
   assetId: string,
   indexEntry: AssetIndexEntry | undefined,
   asset: ProjectAsset|null,
-  packageMap: Record<string, string>,
 ): string | null {
   const pickUrl = (input: unknown): string | null => {
     if (!input || typeof input !== 'object') {
@@ -4638,11 +4612,6 @@ function resolveAssetDownloadUrl(
     return fromIndex
   }
 
-  const mapUrl = normalizeHttpUrl(packageMap[`url::${assetId}`])
-  if (mapUrl) {
-    return mapUrl
-  }
-
   if (asset) {
     const candidate = normalizeHttpUrl(asset.downloadUrl) ?? normalizeHttpUrl(asset.description)
     if (candidate) {
@@ -4658,9 +4627,9 @@ export async function calculateSceneResourceSummary(
   options: SceneBundleExportOptions,
 ): Promise<SceneResourceSummary> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
-  const packageMap = runtimeAwareScene.packageAssetMap ?? {}
   const assetIndex = runtimeAwareScene.assetIndex ?? {}
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
+  const assetRegistry = await buildAssetRegistryForExport(runtimeAwareScene)
 
   const summary: SceneResourceSummary = {
     totalBytes: 0,
@@ -4832,39 +4801,31 @@ export async function calculateSceneResourceSummary(
   traverseNodesForTextures(runtimeAwareScene.nodes ?? [])
 
   const processed = new Set<string>()
-  const packageEntriesByAsset = new Map<string, Array<{ key: string; value: string }>>()
+  const assetCache = useAssetCacheStore()
 
-  Object.entries(packageMap).forEach(([key, value]) => {
-    const separator = key.indexOf('::')
-    if (separator === -1) {
-      return
-    }
-    const assetId = key.slice(separator + 2)
-    if (!assetId) {
-      return
-    }
-    const list = packageEntriesByAsset.get(assetId) ?? []
-    list.push({ key, value })
-    packageEntriesByAsset.set(assetId, list)
-  })
-
-  Object.entries(packageMap).forEach(([key, value]) => {
-    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
-      return
-    }
-    const assetId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
-    if (!assetId || processed.has(assetId)) {
+  Object.entries(assetRegistry).forEach(([assetId, registryEntry]) => {
+    if (
+      processed.has(assetId)
+      || registryEntry.sourceType !== 'package'
+      || !registryEntry.zipPath.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)
+    ) {
       return
     }
     const asset = getAssetFromCatalog(assetCatalog, assetId)
-    const bytes = estimateInlineAssetByteSize(value)
+    const cacheEntry = assetCache.getEntry(assetId)
+    const bytes = typeof registryEntry.bytes === 'number'
+      ? registryEntry.bytes
+      : cacheEntry?.status === 'cached' && cacheEntry.size > 0
+        ? cacheEntry.size
+        : 0
     const entry: SceneResourceSummaryEntry = {
-       assetId, 
-       bytes,
-       type: asset?.type ?? undefined,
-      embedded: true, 
-      source: 'embedded' 
-      }
+      assetId,
+      name: asset?.name ?? registryEntry.name ?? undefined,
+      bytes,
+      type: asset?.type ?? registryEntry.assetType ?? undefined,
+      embedded: true,
+      source: 'embedded',
+    }
     summary.assets.push(entry)
     recordTextureAssetEntry(assetId, entry)
     summary.totalBytes += bytes
@@ -4877,13 +4838,11 @@ export async function calculateSceneResourceSummary(
       assetIds.add(assetId)
     }
   })
-  packageEntriesByAsset.forEach((_entries, assetId) => {
+  Object.keys(assetRegistry).forEach((assetId) => {
     if (assetId) {
       assetIds.add(assetId)
     }
   })
-
-  const assetCache = useAssetCacheStore()
 
   for (const assetId of assetIds) {
     if (!assetId || processed.has(assetId)) {
@@ -4891,20 +4850,47 @@ export async function calculateSceneResourceSummary(
     }
     const indexEntry = assetIndex[assetId]
     const cacheEntry = assetCache.getEntry(assetId)
-    let bytes = cacheEntry?.status === 'cached' && cacheEntry.size > 0 ? cacheEntry.size : 0
     const asset = getAssetFromCatalog(assetCatalog, assetId)
-    const downloadUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset, packageMap)
+    const registryEntry = assetRegistry[assetId]
+    let bytes = typeof registryEntry?.bytes === 'number'
+      ? registryEntry.bytes
+      : cacheEntry?.status === 'cached' && cacheEntry.size > 0
+        ? cacheEntry.size
+        : 0
 
     if (!bytes && options.embedResources) {
       // If resources are embedded, fall back to cached blob size if available.
       bytes = cacheEntry?.blob?.size ?? bytes
     }
 
+    if (registryEntry?.sourceType === 'package') {
+      const entry: SceneResourceSummaryEntry = {
+        assetId,
+        name: asset?.name ?? registryEntry.name ?? undefined,
+        type: asset?.type ?? registryEntry.assetType ?? undefined,
+        bytes,
+        embedded: true,
+        source: 'embedded',
+      }
+      summary.assets.push(entry)
+      recordTextureAssetEntry(assetId, entry)
+      summary.totalBytes += bytes
+      summary.embeddedBytes += bytes
+      processed.add(assetId)
+      continue
+    }
+
+    const downloadUrl = registryEntry?.sourceType === 'url'
+      ? normalizeHttpUrl(registryEntry.url)
+      : registryEntry?.sourceType === 'server'
+        ? registryEntry.resolvedUrl ?? resolveAssetDownloadUrl(assetId, indexEntry, asset)
+        : resolveAssetDownloadUrl(assetId, indexEntry, asset)
+
     if (bytes > 0 || downloadUrl) {
       const entry: SceneResourceSummaryEntry = {
         assetId,
-        name: asset?.name ?? undefined,
-        type: asset?.type ?? undefined,
+        name: asset?.name ?? registryEntry?.name ?? undefined,
+        type: asset?.type ?? registryEntry?.assetType ?? undefined,
         bytes,
         embedded: false,
         source: 'remote',
@@ -4964,7 +4950,6 @@ export async function calculateSceneResourceSummary(
 export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
 ): Promise<StoredSceneDocument> {
-  const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene)
   const assetRegistry = await buildAssetRegistryForExport(scene)
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   return createSceneDocument(scene.name, {
@@ -4978,8 +4963,7 @@ export async function cloneSceneDocumentForExport(
     assetRegistry,
     projectOverrideAssets: scene.projectOverrideAssets,
     sceneOverrideAssets: scene.sceneOverrideAssets,
-    assetIndex: assetIndex,
-    packageAssetMap,
+    assetIndex: scene.assetIndex,
     resourceSummary: scene.resourceSummary,
     planningData: scene.planningData,
     materials: scene.materials,
@@ -5007,10 +4991,8 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
     skippedAssetCount: 0,
     reclaimedBytes: 0,
   }
-  if (!scene.packageAssetMap || !Object.keys(scene.packageAssetMap).length) {
-    return result
-  }
-  throw new Error('Legacy scene packageAssetMap format is no longer supported')
+  void scene
+  return result
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -5313,30 +5295,6 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
   return bucket
 }
 
-function filterPackageAssetMapByUsage(
-  map: Record<string, string>,
-  usedAssetIds: Set<string>,
-): Record<string, string> {
-  if (!usedAssetIds.size) {
-    return {}
-  }
-  const filtered: Record<string, string> = {}
-  Object.entries(map).forEach(([rawKey, rawValue]) => {
-    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
-    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
-    if (!key || !value) {
-      return
-    }
-    const derivedId = extractAssetIdFromPackageMapKey(key)
-    const valueUsed = usedAssetIds.has(value)
-    const derivedUsed = derivedId ? usedAssetIds.has(derivedId) : false
-    if (valueUsed || derivedUsed || !derivedId) {
-      filtered[key] = rawValue
-    }
-  })
-  return filtered
-}
-
 function filterAssetIndexByUsage(
   assetIndex: Record<string, AssetIndexEntry> | undefined,
   usedAssetIds: Set<string>,
@@ -5360,26 +5318,6 @@ function filterAssetIndexByUsage(
   return filtered
 }
 
-function extractAssetIdFromPackageMapKey(key: string): string | null {
-  if (!key) {
-    return null
-  }
-  if (key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
-    const embeddedId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
-    return embeddedId.trim().length ? embeddedId.trim() : null
-  }
-  if (key.startsWith('url::')) {
-    const remoteId = key.slice('url::'.length)
-    return remoteId.trim().length ? remoteId.trim() : null
-  }
-  const separatorIndex = key.indexOf('::')
-  if (separatorIndex >= 0 && separatorIndex < key.length - 2) {
-    const suffix = key.slice(separatorIndex + 2)
-    return suffix.trim().length ? suffix.trim() : null
-  }
-  return null
-}
-
 function buildAssetIndexSubsetForPrefab(
   source: Record<string, AssetIndexEntry>,
   assetIds: Iterable<string>,
@@ -5400,36 +5338,6 @@ function buildAssetIndexSubsetForPrefab(
       isEditorOnly: entry.isEditorOnly,
     }
   }
-  return Object.keys(subset).length ? subset : undefined
-}
-
-function buildPackageAssetMapSubsetForPrefab(
-  source: Record<string, string>,
-  assetIds: Iterable<string>,
-): Record<string, string> | undefined {
-  const normalizedIds = Array.from(assetIds)
-    .map((value) => (typeof value === 'string' ? value.trim() : ''))
-    .filter((value): value is string => value.length > 0)
-  if (!normalizedIds.length) {
-    return undefined
-  }
-  const assetIdSet = new Set(normalizedIds)
-  const subset: Record<string, string> = {}
-  Object.entries(source).forEach(([rawKey, rawValue]) => {
-    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
-    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
-    if (!key || !value) {
-      return
-    }
-    if (assetIdSet.has(value)) {
-      subset[key] = value
-      return
-    }
-    const derivedId = extractAssetIdFromPackageMapKey(key)
-    if (derivedId && assetIdSet.has(derivedId)) {
-      subset[key] = value
-    }
-  })
   return Object.keys(subset).length ? subset : undefined
 }
 
@@ -5487,39 +5395,6 @@ function mergeAssetIndexEntries(
       next[assetId] = updated
       changed = true
     }
-  })
-  return { next, changed }
-}
-
-function mergePackageAssetMapEntries(
-  current: Record<string, string>,
-  additions?: Record<string, string>,
-  filter?: Set<string>,
-): { next: Record<string, string>; changed: boolean } {
-  if (!additions || !Object.keys(additions).length) {
-    return { next: current, changed: false }
-  }
-  const next: Record<string, string> = { ...current }
-  let changed = false
-  Object.entries(additions).forEach(([rawKey, rawValue]) => {
-    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
-    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
-    if (!key || !value) {
-      return
-    }
-    if (filter && filter.size) {
-      if (!filter.has(value)) {
-        const derived = extractAssetIdFromPackageMapKey(key)
-        if (!derived || !filter.has(derived)) {
-          return
-        }
-      }
-    }
-    if (key in next) {
-      return
-    }
-    next[key] = value
-    changed = true
   })
   return { next, changed }
 }
@@ -5639,13 +5514,6 @@ function isAssetIndex(value: unknown): value is Record<string, AssetIndexEntry> 
     return false
   }
   return Object.values(value).every((entry) => isPlainObject(entry))
-}
-
-function isPackageAssetMap(value: unknown): value is Record<string, string> {
-  if (!isPlainObject(value)) {
-    return false
-  }
-  return Object.values(value).every((entry) => typeof entry === 'string')
 }
 
 function resolveUniqueSceneName(baseName: string, existing: Set<string>): string {
@@ -6272,20 +6140,6 @@ function cloneSceneAssetOverrides(
   return clone
 }
 
-function clonePackageAssetMap(map: Record<string, string>): Record<string, string> {
-  return { ...map }
-}
-
-function stripAssetEntries(map: Record<string, string>): Record<string, string> {
-  const result: Record<string, string> = {}
-  Object.entries(map).forEach(([key, value]) => {
-    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
-      result[key] = value
-    }
-  })
-  return result
-}
-
 function migrateScenePersistedState(
   state: Partial<SceneState> | undefined,
   _fromVersion: number,
@@ -6355,7 +6209,6 @@ function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetRegistry = cloneSceneAssetRegistry(scene.assetRegistry ?? {})
   store.assetIndex = normalizeAssetIndexCategoryIds(cloneAssetIndex(scene.assetIndex), store.assetCatalog)
   ensureBuiltinWallPresetAssets(store.assetCatalog, store.assetIndex)
-  store.packageAssetMap = clonePackageAssetMap(scene.packageAssetMap)
   store.materials = cloneSceneMaterials(Array.isArray(scene.materials) ? scene.materials : initialMaterials)
   const nextTree = buildSceneProjectTree(store.assetManifest, store.assetCatalog, store.assetIndex, store.packageDirectoryCache)
   store.projectTree = nextTree
@@ -6906,7 +6759,6 @@ function createSceneDocument(
     projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
     sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
     assetIndex?: Record<string, AssetIndexEntry>
-    packageAssetMap?: Record<string, string>
     resourceSummary?: SceneResourceSummary
     planningData?: PlanningSceneData | null
     viewportSettings?: Partial<SceneViewportSettings>
@@ -6950,7 +6802,6 @@ function createSceneDocument(
     ? cloneSceneAssetOverrides(options.sceneOverrideAssets)
     : undefined
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
-  const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
   let resourceSummary: SceneResourceSummary | undefined
   if (options.resourceSummary) {
     resourceSummary = options.resourceSummary
@@ -6984,7 +6835,6 @@ function createSceneDocument(
     projectOverrideAssets,
     sceneOverrideAssets,
     assetIndex,
-    packageAssetMap,
     resourceSummary,
     planningData: clonePlanningData(options.planningData),
   }
@@ -7054,7 +6904,6 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     assetManifest: cloneAssetManifest(store.assetManifest) ?? buildSceneAssetManifest(store.assetCatalog),
     assetRegistry: cloneSceneAssetRegistry(store.assetRegistry),
     assetIndex: cloneAssetIndex(store.assetIndex),
-    packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
     planningData: normalizedPlanningData ?? undefined,
   }
 }
@@ -7156,7 +7005,6 @@ function createInitialSceneState(): SceneState {
     assetManifest,
     assetRegistry: {},
     assetIndex,
-    packageAssetMap: {},
     packageDirectoryCache,
     packageDirectoryLoaded: {},
     projectTree: buildSceneProjectTree(assetManifest, assetCatalog, assetIndex, packageDirectoryCache),
@@ -7212,7 +7060,6 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.assetCatalog = cloneAssetCatalog(initialState.assetCatalog)
   store.assetRegistry = cloneSceneAssetRegistry(initialState.assetRegistry)
   store.assetIndex = cloneAssetIndex(initialState.assetIndex)
-  store.packageAssetMap = {}
   store.packageDirectoryCache = {}
   store.packageDirectoryLoaded = {}
   store.projectTree = createProjectTreeFromCache(
@@ -10310,7 +10157,7 @@ export const useSceneStore = defineStore('scene', {
         this.selectedAssetId = null
       }
     },
-    // Helper: atomically apply catalog/index/packageMap updates and refresh tree
+    // Helper: atomically apply catalog/index/registry updates and refresh tree
     applyCatalogUpdate(
       nextCatalog: Record<string, ProjectAsset[]>,
       options?: {
@@ -11028,7 +10875,7 @@ export const useSceneStore = defineStore('scene', {
 
       return { removedAssetIds }
     },
-    async syncAssetPackageMapEntry(asset: ProjectAsset, source?: AssetSourceMetadata) {
+    async syncAssetRegistryEntry(asset: ProjectAsset, source?: AssetSourceMetadata) {
       if (!asset?.id) {
         return
       }
@@ -11397,7 +11244,7 @@ export const useSceneStore = defineStore('scene', {
         delete nextIndex[assetId]
       })
 
-      // Apply catalog/index/packageMap update and refresh project tree
+      // Apply catalog/index update and refresh project tree
       this.applyCatalogUpdate(nextCatalog, { nextIndex })
       this.ensureActiveDirectoryAndSelectionValid()
       if (this.selectedAssetId && assetIdSet.has(this.selectedAssetId)) {
@@ -11452,7 +11299,7 @@ export const useSceneStore = defineStore('scene', {
         nextAssetRegistry[storedAsset.id] = replacementRegistryEntry
       }
 
-      // Atomically apply catalog/index/packageMap and rebuild project tree
+      // Atomically apply catalog/index/registry and rebuild project tree
       this.applyCatalogUpdate(nextCatalog, { nextAssetRegistry, nextIndex })
 
       replaceAssetIdInMaterials(this.materials, localAssetId, storedAsset.id)
@@ -15739,9 +15586,6 @@ export const useSceneStore = defineStore('scene', {
       const commonPrefabAssetIndex = parsedEnvelope?.assetIndex && isAssetIndex(parsedEnvelope.assetIndex)
         ? cloneAssetIndex(parsedEnvelope.assetIndex)
         : undefined
-      if (parsedEnvelope?.packageAssetMap && isPackageAssetMap(parsedEnvelope.packageAssetMap)) {
-        throw new Error('Legacy clipboard packageAssetMap format is no longer supported')
-      }
       const commonPrefabAssetRegistry = sanitizeSceneAssetRegistry(parsedEnvelope?.assetRegistry) ?? {}
 
       const applyWorldToParentLocal = (node: SceneNode, worldMatrix: Matrix4, targetParentId: string | null) => {
@@ -15958,7 +15802,6 @@ export const useSceneStore = defineStore('scene', {
         groundSettings,
         assetCatalog: baseAssetCatalog,
         assetIndex: baseAssetIndex,
-        packageAssetMap: {},
         panelVisibility: this.panelVisibility,
         panelPlacement: this.panelPlacement,
       })
@@ -16149,9 +15992,6 @@ export const useSceneStore = defineStore('scene', {
         const importedAssetIndex = isAssetIndex(entry.assetIndex)
           ? stripAssetIndexSourceMetadata(entry.assetIndex as Record<string, AssetIndexEntry>)
           : undefined
-        if (isPackageAssetMap(entry.packageAssetMap)) {
-          throw new Error('Legacy scene packageAssetMap format is no longer supported')
-        }
         const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
 
         const sceneDocument = createSceneDocument(uniqueName, {
@@ -16167,7 +16007,6 @@ export const useSceneStore = defineStore('scene', {
             : undefined,
           assetRegistry: importedAssetRegistry,
           assetIndex: importedAssetIndex,
-          packageAssetMap: {},
           planningData: entry.planningData ?? null,
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
@@ -16250,9 +16089,6 @@ export const useSceneStore = defineStore('scene', {
         const importedAssetIndex = isAssetIndex(entry.assetIndex)
           ? stripAssetIndexSourceMetadata(entry.assetIndex as Record<string, AssetIndexEntry>)
           : undefined
-        if (isPackageAssetMap(entry.packageAssetMap)) {
-          throw new Error('Legacy scene packageAssetMap format is no longer supported')
-        }
         const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
 
         const sceneDocument = createSceneDocument(uniqueName, {
@@ -16268,7 +16104,6 @@ export const useSceneStore = defineStore('scene', {
             : undefined,
           assetRegistry: importedAssetRegistry,
           assetIndex: importedAssetIndex,
-          packageAssetMap: {},
           planningData: isPlainObject((entry as { planningData?: unknown }).planningData)
             ? ((entry as { planningData?: PlanningSceneData | null }).planningData ?? null)
             : null,
@@ -16337,7 +16172,6 @@ export const useSceneStore = defineStore('scene', {
       'resourceProviderId',
       'assetCatalog',
       'assetIndex',
-      'packageAssetMap',
       'groundSettings',
       'skybox',
       'shadowsEnabled',

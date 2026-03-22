@@ -21,7 +21,6 @@ import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import {
   buildAssetRegistryForExport,
-  buildPackageAssetMapForExport,
   calculateSceneResourceSummary,
   cloneSceneDocumentWithRuntimeGroundSidecars,
   useSceneStore,
@@ -42,22 +41,6 @@ import {
   BUILTIN_WATER_NORMAL_FILENAME,
   isBuiltinWaterNormalAsset,
 } from '@/constants/builtinAssets'
-
-function extractAssetIdFromPackageMapKey(key: string): string | null {
-  const normalized = typeof key === 'string' ? key.trim() : ''
-  if (!normalized) {
-    return null
-  }
-  if (normalized.startsWith('local::')) {
-    const assetId = normalized.slice('local::'.length).trim()
-    return assetId || null
-  }
-  if (normalized.startsWith('url::')) {
-    const assetId = normalized.slice('url::'.length).trim()
-    return assetId || null
-  }
-  return null
-}
 
 function buildEffectiveAssetRegistry(
   document: SceneJsonExportDocument | null | undefined,
@@ -114,15 +97,6 @@ function collectLocalAssetIdsForExport(document: SceneJsonExportDocument): strin
       localIds.add(normalized)
     }
   })
-
-  if (document.packageAssetMap && typeof document.packageAssetMap === 'object') {
-    Object.keys(document.packageAssetMap).forEach((key) => {
-      const derived = extractAssetIdFromPackageMapKey(key)
-      if (derived && key.startsWith('local::')) {
-        localIds.add(derived)
-      }
-    })
-  }
 
   return Array.from(localIds)
 }
@@ -228,9 +202,6 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
   }
   const editable = cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
   editable.assetRegistry = await buildAssetRegistryForExport(editable)
-  const initialLegacy = await buildPackageAssetMapForExport(editable)
-  editable.packageAssetMap = initialLegacy.packageAssetMap
-  editable.assetIndex = initialLegacy.assetIndex
   editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
 
   const unknownAssetIds = Array.isArray(editable.resourceSummary?.unknownAssetIds)
@@ -265,9 +236,6 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
     )
 
     if (registryPatched) {
-      const regeneratedLegacy = await buildPackageAssetMapForExport(editable)
-      editable.packageAssetMap = regeneratedLegacy.packageAssetMap
-      editable.assetIndex = regeneratedLegacy.assetIndex
       editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
     }
   }
@@ -318,25 +286,6 @@ function stripEditorOnlySceneFields(
     document.assetIndex = nextAssetIndex
   }
 
-  if (document.packageAssetMap && typeof document.packageAssetMap === 'object') {
-    const effectiveRegistry = buildEffectiveAssetRegistry(document)
-    const retainedAssetIds = new Set(
-      Object.keys(effectiveRegistry).length ? Object.keys(effectiveRegistry) : Object.keys(document.assetIndex ?? {}),
-    )
-    const nextPackageAssetMap: Record<string, string> = {}
-    Object.entries(document.packageAssetMap).forEach(([key, value]) => {
-      const normalizedValue = typeof value === 'string' ? value.trim() : ''
-      const derivedAssetId = extractAssetIdFromPackageMapKey(key)
-      if (normalizedValue && retainedAssetIds.has(normalizedValue)) {
-        nextPackageAssetMap[key] = value
-        return
-      }
-      if (derivedAssetId && retainedAssetIds.has(derivedAssetId)) {
-        nextPackageAssetMap[key] = value
-      }
-    })
-    document.packageAssetMap = nextPackageAssetMap
-  }
 }
 
 function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<string, ResolvedEmbedAsset> {
@@ -646,7 +595,7 @@ export async function exportScenePackageZip(payload: {
     let groundScatterPath: string | undefined
     let groundPaintPath: string | undefined
 
-    // Collect local asset IDs from effective registry first, then legacy compatibility fields.
+    // Collect local asset IDs from effective registry and explicit local source metadata.
     const sidecarSource = typeof structuredClone === 'function'
       ? structuredClone(preparedDocument)
       : JSON.parse(JSON.stringify(preparedDocument))

@@ -24,7 +24,6 @@ export interface PresetSceneDocument {
   updatedAt?: string
   assetCatalog?: Record<string, unknown>
   assetIndex?: Record<string, unknown>
-  packageAssetMap?: Record<string, string>
 }
 
 export interface PresetSceneDetail extends PresetSceneSummary {

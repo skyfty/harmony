@@ -11,7 +11,6 @@ import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectC
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
 import { buildAssetRegistryForExport } from '@/stores/sceneStore'
-import { buildPackageAssetMapForExport } from '@/stores/sceneStore'
 import { calculateSceneResourceSummary, cloneSceneDocumentForExport } from '@/stores/sceneStore'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -316,7 +315,6 @@ function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
 
 export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneJsonExportDocument> {
   const assetRegistry = await buildAssetRegistryForExport(snapshot)
-  const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot)
 
   const environment: EnvironmentSettings | undefined = snapshot.environment ? { ...snapshot.environment } : undefined
 
@@ -333,8 +331,7 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     assetRegistry,
     projectOverrideAssets: snapshot.projectOverrideAssets,
     sceneOverrideAssets: snapshot.sceneOverrideAssets,
-    assetIndex,
-    packageAssetMap,
+    assetIndex: snapshot.assetIndex,
     resourceSummary: snapshot.resourceSummary,
     lazyLoadMeshes: options.lazyLoadMeshes ?? true,
   }

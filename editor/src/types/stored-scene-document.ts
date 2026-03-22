@@ -44,7 +44,6 @@ export interface StoredSceneDocument {
   projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
   sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
   assetIndex: Record<string, AssetIndexEntry>
-  packageAssetMap: Record<string, string>
   resourceSummary?: SceneResourceSummary
   // Optional planning data (2D planning annotations) associated with the scene.
   planningData?: PlanningSceneData | null

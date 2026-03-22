@@ -813,14 +813,6 @@ function rewriteJsonAssetReferences(value: unknown, assetIdMap: Map<string, stri
     let nextKey = key
     if (parentKey === 'assetIndex') {
       nextKey = assetIdMap.get(key) ?? key
-    } else if (parentKey === 'packageAssetMap') {
-      const packageKeyMatch = /^(url::|local::)(.+)$/.exec(key)
-      if (packageKeyMatch) {
-        const mapped = assetIdMap.get(packageKeyMatch[2] ?? '')
-        if (mapped) {
-          nextKey = `${packageKeyMatch[1]}${mapped}`
-        }
-      }
     }
     next[nextKey] = rewriteJsonAssetReferences(entryValue, assetIdMap, key)
   }

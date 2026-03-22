@@ -23,7 +23,6 @@ export type FloorPresetStoreLike = {
   selectedNodeId: string | null
   assetCatalog: Record<string, ProjectAsset[]> | null
   assetIndex: Record<string, any>
-  packageAssetMap: Record<string, any>
   materials: Array<{ id: string; name: string; type: string } & Record<string, any>>
 
   getAsset: (id: string) => ProjectAsset | null
@@ -57,38 +56,13 @@ export type FloorPresetActionsDeps = {
   DEFAULT_SCENE_MATERIAL_TYPE: string
 
   // Prefab dependency helpers
-  buildAssetIndexSubsetForPrefab: (assetIndex: any, dependencyAssetIds: string[]) => any
-  buildPackageAssetMapSubsetForPrefab: (packageAssetMap: any, dependencyAssetIds: string[]) => any
   mergeAssetIndexEntries: (existing: any, incoming: any, filter?: Set<string>) => { next: any; changed: boolean }
-  mergePackageAssetMapEntries: (existing: any, incoming: any, filter?: Set<string>) => { next: any; changed: boolean }
   isAssetIndex: (value: unknown) => boolean
-  isPackageAssetMap: (value: unknown) => boolean
 }
 
 function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   return raw.length ? raw : null
-}
-
-function extractAssetIdsFromPackageMapKey(key: string): string | null {
-  const normalized = typeof key === 'string' ? key.trim() : ''
-  if (!normalized) {
-    return null
-  }
-  if (normalized.startsWith('local::')) {
-    const assetId = normalized.slice('local::'.length).trim()
-    return assetId || null
-  }
-  if (normalized.startsWith('url::')) {
-    const assetId = normalized.slice('url::'.length).trim()
-    return assetId || null
-  }
-  const separator = normalized.indexOf('::')
-  if (separator >= 0 && separator < normalized.length - 2) {
-    const assetId = normalized.slice(separator + 2).trim()
-    return assetId || null
-  }
-  return null
 }
 
 function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
@@ -262,7 +236,6 @@ export function parseFloorPresetData(text: string): FloorPresetData {
     materialPatches,
     assetRegistry: record.assetRegistry,
     assetIndex: record.assetIndex,
-    packageAssetMap: record.packageAssetMap,
   }
 }
 

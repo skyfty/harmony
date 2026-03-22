@@ -144,26 +144,6 @@ export function cloneSceneAssetRegistrySubset(
   return clone
 }
 
-export function extractAssetIdFromPackageMapKey(key: string): string | null {
-  if (!key) {
-    return null
-  }
-  if (key.startsWith('local::')) {
-    const embeddedId = key.slice('local::'.length).trim()
-    return embeddedId || null
-  }
-  if (key.startsWith('url::')) {
-    const remoteId = key.slice('url::'.length).trim()
-    return remoteId || null
-  }
-  const separatorIndex = key.indexOf('::')
-  if (separatorIndex >= 0 && separatorIndex < key.length - 2) {
-    const suffix = key.slice(separatorIndex + 2).trim()
-    return suffix || null
-  }
-  return null
-}
-
 export function isConfigAssetExtension(extension: string | null | undefined): boolean {
   const normalized = typeof extension === 'string' ? extension.trim().toLowerCase() : ''
   return ['json', 'prefab', 'wall', 'floor', 'material'].includes(normalized)

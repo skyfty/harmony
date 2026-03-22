@@ -44,7 +44,6 @@ export interface SceneState {
   assetManifest: AssetManifest | null
   assetRegistry: Record<string, SceneAssetRegistryEntry>
   assetIndex: Record<string, AssetIndexEntry>
-  packageAssetMap: Record<string, string>
   packageDirectoryCache: Record<string, ProjectDirectory[]>
   packageDirectoryLoaded: Record<string, boolean>
   activeDirectoryId: string | null

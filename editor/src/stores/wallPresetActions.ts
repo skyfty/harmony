@@ -32,7 +32,6 @@ export type WallPresetStoreLike = {
   selectedNodeId: string | null
   assetCatalog: Record<string, ProjectAsset[]> | null
   assetIndex: Record<string, any>
-  packageAssetMap: Record<string, any>
   materials: Array<{ id: string; name: string; type: string } & Record<string, any>>
 
   getAsset: (id: string) => ProjectAsset | null
@@ -66,12 +65,8 @@ export type WallPresetActionsDeps = {
   DEFAULT_SCENE_MATERIAL_TYPE: string
 
   // Prefab dependency helpers
-  buildAssetIndexSubsetForPrefab: (assetIndex: any, dependencyAssetIds: string[]) => any
-  buildPackageAssetMapSubsetForPrefab: (packageAssetMap: any, dependencyAssetIds: string[]) => any
   mergeAssetIndexEntries: (existing: any, incoming: any, filter?: Set<string>) => { next: any; changed: boolean }
-  mergePackageAssetMapEntries: (existing: any, incoming: any, filter?: Set<string>) => { next: any; changed: boolean }
   isAssetIndex: (value: unknown) => boolean
-  isPackageAssetMap: (value: unknown) => boolean
 }
 
 export const BUILTIN_AIR_WALL_PRESET_ASSET_ID = 'builtin:wall-preset:air-wall'
@@ -535,7 +530,6 @@ export function parseWallPresetData(text: string): WallPresetData {
     materialPatches,
     assetRegistry: record.assetRegistry,
     assetIndex: record.assetIndex,
-    packageAssetMap: record.packageAssetMap,
   }
 }
 

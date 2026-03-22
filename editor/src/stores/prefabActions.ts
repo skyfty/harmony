@@ -40,7 +40,6 @@ export type PrefabStoreLike = {
   camera: SceneCameraState | null | undefined
   assetRegistry: Record<string, SceneAssetRegistryEntry>
   assetIndex: Record<string, AssetIndexEntry>
-  packageAssetMap: Record<string, string>
   prefabAssetDownloadProgress: Record<
     string,
     { active: boolean; progress: number; error: string | null; assetIds: string[] }
@@ -67,8 +66,6 @@ export type PrefabStoreLike = {
       commitOptions?: { updateNodes?: boolean }
     },
   ) => ProjectAsset[]
-
-  syncAssetPackageMapEntry?: (asset: ProjectAsset, source?: AssetSourceMetadata) => Promise<void> | void
 
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
@@ -153,24 +150,16 @@ export type PrefabActionsDeps = {
 
   // Asset index helpers (owned by sceneStore)
   isAssetIndex: (value: unknown) => value is Record<string, AssetIndexEntry>
-  isPackageAssetMap: (value: unknown) => value is Record<string, string>
   cloneAssetIndex: (source: Record<string, AssetIndexEntry>) => Record<string, AssetIndexEntry>
-  clonePackageAssetMap: (source: Record<string, string>) => Record<string, string>
   buildAssetIndexSubsetForPrefab: (
     source: Record<string, AssetIndexEntry>,
     assetIds: Iterable<string>,
   ) => Record<string, AssetIndexEntry> | undefined
-  buildPackageAssetMapSubsetForPrefab: (source: Record<string, string>, assetIds: Iterable<string>) => Record<string, string> | undefined
   mergeAssetIndexEntries: (
     current: Record<string, AssetIndexEntry>,
     additions?: Record<string, AssetIndexEntry>,
     filter?: Set<string>,
   ) => { next: Record<string, AssetIndexEntry>; changed: boolean }
-  mergePackageAssetMapEntries: (
-    current: Record<string, string>,
-    additions?: Record<string, string>,
-    filter?: Set<string>,
-  ) => { next: Record<string, string>; changed: boolean }
 
   // Scene duplication helpers (owned by sceneStore)
   duplicateNodeTree: (root: SceneNode, context: DuplicateContext) => SceneNode
@@ -521,9 +510,6 @@ export function parseNodePrefab(deps: PrefabActionsDeps, raw: string): NodePrefa
   if (!candidate.root || typeof candidate.root !== 'object') {
     throw new Error('节点预制件缺少有效的节点数据')
   }
-  if (candidate.packageAssetMap && deps.isPackageAssetMap(candidate.packageAssetMap)) {
-    throw new Error('Legacy prefab packageAssetMap format is no longer supported')
-  }
   const normalizedName = normalizePrefabName(typeof candidate.name === 'string' ? candidate.name : '') || 'Unnamed Prefab'
   const root = prepareNodePrefabRoot(deps, candidate.root as SceneNode, { regenerateIds: false })
   const assetRegistry = sanitizeSceneAssetRegistry(candidate.assetRegistry)
@@ -603,7 +589,6 @@ export function buildSerializedPrefabPayload(
   } else {
     delete (prefabData as any).assetRegistry
     delete (prefabData as any).assetIndex
-    delete (prefabData as any).packageAssetMap
   }
   const serialized = serializeNodePrefab(prefabData)
   return {
@@ -1058,19 +1043,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
               },
             )
 
-            if (store.syncAssetPackageMapEntry) {
-              for (const asset of registered) {
-                const source = sourceByAssetId.get(asset.id)
-                if (!source) {
-                  continue
-                }
-                try {
-                  await store.syncAssetPackageMapEntry(asset, source)
-                } catch {
-                  // Ignore map sync failures; downstream resource summary may still resolve via asset.downloadUrl.
-                }
-              }
-            }
           }
         }
       }

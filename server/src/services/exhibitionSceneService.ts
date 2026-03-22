@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
 import type {
   AssetIndexEntry,
+  SceneAssetRegistryEntry,
   AssetSourceMetadata,
   LanternBehaviorParams,
   LanternSlideDefinition,
@@ -222,8 +223,15 @@ function updateAssetReferences(document: SceneJsonExportDocument, assetId: strin
     return
   }
 
-  const packageMap = ensurePackageAssetMap(document)
-  packageMap[`url::${normalizedAssetId}`] = normalizedUrl
+  const assetRegistry = ensureAssetRegistry(document)
+  const existingEntry = assetRegistry[normalizedAssetId]
+  assetRegistry[normalizedAssetId] = {
+    sourceType: 'url',
+    url: normalizedUrl,
+    bytes: existingEntry?.bytes,
+    assetType: existingEntry?.assetType,
+    name: existingEntry?.name,
+  }
 
   const entry = ensureAssetIndexEntry(document, normalizedAssetId)
   entry.downloadUrl = normalizedUrl
@@ -305,11 +313,11 @@ type MutableAssetIndexEntry = AssetIndexEntry & {
   [key: string]: unknown
 }
 
-function ensurePackageAssetMap(document: SceneJsonExportDocument): Record<string, string> {
-  if (!document.packageAssetMap || typeof document.packageAssetMap !== 'object') {
-    document.packageAssetMap = {}
+function ensureAssetRegistry(document: SceneJsonExportDocument): Record<string, SceneAssetRegistryEntry> {
+  if (!document.assetRegistry || typeof document.assetRegistry !== 'object') {
+    document.assetRegistry = {}
   }
-  return document.packageAssetMap
+  return document.assetRegistry
 }
 
 function ensureAssetIndex(document: SceneJsonExportDocument): Record<string, MutableAssetIndexEntry> {
