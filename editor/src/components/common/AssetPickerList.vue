@@ -240,8 +240,10 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
 
   const existing = sceneStore.getAsset(asset.id)
   if (existing) {
-    const remoteKey = `url::${existing.id}`
-    if (!sceneStore.packageAssetMap[remoteKey] && existing.downloadUrl && existing.downloadUrl.trim().length) {
+    const registryEntry = sceneStore.assetRegistry?.[existing.id]
+    const hasRemoteRegistry = registryEntry?.sourceType === 'url'
+      || (registryEntry?.sourceType === 'server' && typeof registryEntry.resolvedUrl === 'string' && registryEntry.resolvedUrl.trim().length > 0)
+    if (!hasRemoteRegistry && existing.downloadUrl && existing.downloadUrl.trim().length) {
       void sceneStore.syncAssetPackageMapEntry(existing, sceneStore.assetIndex[existing.id]?.source)
     }
     return existing

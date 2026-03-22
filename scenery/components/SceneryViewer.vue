@@ -521,6 +521,7 @@ import {
   type SceneNodeComponentState,
   type SceneSkyboxSettings,
   type SceneJsonExportDocument,
+  type SceneAssetRegistryEntry,
   type LanternSlideDefinition,
   type SceneMaterialTextureRef,
   type GroundDynamicMesh,
@@ -9411,6 +9412,24 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
         sceneAssetIds.add(normalized);
       }
     });
+    Object.keys(document.assetRegistry ?? {}).forEach((assetId) => {
+      const normalized = assetId.trim();
+      if (normalized) {
+        sceneAssetIds.add(normalized);
+      }
+    });
+    Object.keys(document.sceneOverrideAssets ?? {}).forEach((assetId) => {
+      const normalized = assetId.trim();
+      if (normalized) {
+        sceneAssetIds.add(normalized);
+      }
+    });
+    Object.keys(document.projectOverrideAssets ?? {}).forEach((assetId) => {
+      const normalized = assetId.trim();
+      if (normalized) {
+        sceneAssetIds.add(normalized);
+      }
+    });
     existingAssets.forEach((entry) => {
       const assetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : '';
       if (assetId) {
@@ -9495,6 +9514,35 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
+    const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
+      ...(document.assetRegistry ?? {}),
+    };
+    pkg.manifest.resources.forEach((resourceEntry) => {
+      if (resourceEntry.resourceType === 'planningImage') {
+        return;
+      }
+      const assetId = resourceEntry.logicalId?.trim();
+      if (!assetId) {
+        return;
+      }
+      const fileBytes = pkg.files[resourceEntry.path];
+      const byteSize = typeof resourceEntry.size === 'number' && Number.isFinite(resourceEntry.size)
+        ? resourceEntry.size
+        : (fileBytes?.byteLength ?? 0);
+      const filename = `${assetId}.${resourceEntry.ext}`;
+      assetRegistry[assetId] = {
+        ...(assetRegistry[assetId] ?? {}),
+        sourceType: 'package',
+        zipPath: resourceEntry.path,
+        bytes: Math.max(0, byteSize),
+        assetType: inferAssetTypeOrNull({
+          mimeType: resourceEntry.mimeType,
+          nameOrUrl: filename,
+        }) ?? undefined,
+        name: filename,
+      };
+    });
+    document.assetRegistry = assetRegistry;
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;

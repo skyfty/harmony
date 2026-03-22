@@ -53,6 +53,8 @@ import type {
   SceneNodeEditorFlags,
   SceneNodeInstanceLayout,
   SceneNodeType,
+  SceneAssetOverrideEntry,
+  SceneAssetRegistryEntry,
   Vector3Like,
   WallDynamicMesh,
   RoadDynamicMesh,
@@ -115,6 +117,7 @@ import {
 export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
+import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import {
   buildFloorDynamicMeshPresetPatch,
@@ -471,21 +474,109 @@ type AssetRegistrationOptions = {
   editorOnlyForAsset: (asset: ProjectAsset) => boolean | undefined
 }
 
+function buildRegistryEntryFromSource(
+  asset: ProjectAsset,
+  source: AssetSourceMetadata | undefined,
+): SceneAssetRegistryEntry | null {
+  const assetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
+  if (!assetId) {
+    return null
+  }
+
+  const assetType = asset.type
+  const name = typeof asset.name === 'string' ? asset.name : undefined
+  const remoteCandidate =
+    normalizeRemoteCandidate(asset.downloadUrl)
+    ?? normalizeRemoteCandidate(asset.description)
+    ?? normalizeRemoteCandidate(asset.thumbnail)
+
+  if (source?.type === 'local') {
+    return {
+      sourceType: 'package',
+      zipPath: `${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`,
+      assetType,
+      name,
+    }
+  }
+
+  if (source?.type === 'package' && source.providerId) {
+    return {
+      sourceType: 'package',
+      zipPath: `${source.providerId}::${source.originalAssetId ?? assetId}`,
+      assetType,
+      name,
+    }
+  }
+
+  if (source?.type === 'url' && remoteCandidate) {
+    return {
+      sourceType: 'url',
+      url: remoteCandidate,
+      assetType,
+      name,
+    }
+  }
+
+  if (remoteCandidate) {
+    return {
+      sourceType: 'url',
+      url: remoteCandidate,
+      assetType,
+      name,
+    }
+  }
+
+  if (source?.type === 'url') {
+    return {
+      sourceType: 'server',
+      serverAssetId: assetId,
+      assetType,
+      name,
+    }
+  }
+
+  return null
+}
+
+function filterAssetRegistryByCatalog(
+  assetRegistry: Record<string, SceneAssetRegistryEntry>,
+  assetCatalog: Record<string, ProjectAsset[]>,
+): Record<string, SceneAssetRegistryEntry> {
+  const retainedIds = new Set<string>()
+  Object.values(assetCatalog).forEach((list) => {
+    list.forEach((asset) => {
+      if (asset?.id) {
+        retainedIds.add(asset.id)
+      }
+    })
+  })
+
+  const nextRegistry: Record<string, SceneAssetRegistryEntry> = {}
+  Object.entries(assetRegistry).forEach(([assetId, entry]) => {
+    if (!retainedIds.has(assetId) || !entry) {
+      return
+    }
+    nextRegistry[assetId] = { ...entry }
+  })
+  return nextRegistry
+}
+
 function upsertAssetsIntoCatalogAndIndex(
   currentCatalog: Record<string, ProjectAsset[]>,
+  currentAssetRegistry: Record<string, SceneAssetRegistryEntry>,
   currentIndex: Record<string, AssetIndexEntry>,
   assets: ProjectAsset[],
   options: AssetRegistrationOptions,
 ): {
   nextCatalog: Record<string, ProjectAsset[]>
+  nextAssetRegistry: Record<string, SceneAssetRegistryEntry>
   nextIndex: Record<string, AssetIndexEntry>
   registeredAssets: ProjectAsset[]
-  sourceByAssetId: Record<string, AssetSourceMetadata | undefined>
 } {
   const nextCatalog: Record<string, ProjectAsset[]> = { ...currentCatalog }
+  const nextAssetRegistry: Record<string, SceneAssetRegistryEntry> = { ...currentAssetRegistry }
   const nextIndex: Record<string, AssetIndexEntry> = { ...currentIndex }
   const registeredAssets: ProjectAsset[] = []
-  const sourceByAssetId: Record<string, AssetSourceMetadata | undefined> = {}
 
   const seen = new Set<string>()
   assets.forEach((asset) => {
@@ -497,7 +588,7 @@ function upsertAssetsIntoCatalogAndIndex(
 
     const categoryId = options.categoryIdForAsset(asset)
     const existingEntry = nextIndex[assetId]
-    const source = options.sourceForAsset(asset) ?? existingEntry?.source
+  const source = options.sourceForAsset(asset)
     const internal = options.internalForAsset(asset) ?? existingEntry?.internal
     const isEditorOnly = options.editorOnlyForAsset(asset) ?? existingEntry?.isEditorOnly
     if (existingEntry?.categoryId && nextCatalog[existingEntry.categoryId]) {
@@ -510,16 +601,20 @@ function upsertAssetsIntoCatalogAndIndex(
 
     nextIndex[assetId] = {
       categoryId,
-      source,
+      source: existingEntry?.source,
       internal,
       isEditorOnly,
     }
 
+    const nextRegistryEntry = buildRegistryEntryFromSource(registeredAsset, source)
+    if (nextRegistryEntry) {
+      nextAssetRegistry[assetId] = nextRegistryEntry
+    }
+
     registeredAssets.push(registeredAsset)
-    sourceByAssetId[assetId] = source
   })
 
-  return { nextCatalog, nextIndex, registeredAssets, sourceByAssetId }
+  return { nextCatalog, nextAssetRegistry, nextIndex, registeredAssets }
 }
 
 function buildVisibleAssetCatalog(
@@ -4308,24 +4403,27 @@ function replaceAssetIdReferences(scene: StoredSceneDocument, previousId: string
     if (previousIndex) {
       scene.assetIndex[nextId] = {
         categoryId: previousIndex.categoryId,
-        source: { type: 'local' },
         internal: previousIndex.internal,
         isEditorOnly: previousIndex.isEditorOnly,
       }
     } else if (extracted) {
       scene.assetIndex[nextId] = {
         categoryId: extracted.categoryId,
-        source: { type: 'local' },
       }
     }
   }
-  if (scene.assetIndex[nextId]) {
-    scene.assetIndex[nextId] = {
-      ...scene.assetIndex[nextId],
-      source: { type: 'local' },
-    }
-  }
   delete scene.assetIndex[previousId]
+
+  const previousRegistryEntry = scene.assetRegistry?.[previousId]
+  if (!scene.assetRegistry) {
+    scene.assetRegistry = {}
+  }
+  if (!scene.assetRegistry[nextId]) {
+    scene.assetRegistry[nextId] = previousRegistryEntry
+      ? { ...previousRegistryEntry }
+      : { type: 'local' }
+  }
+  delete scene.assetRegistry[previousId]
 
   replaceAssetIdInMaterials(scene.materials, previousId, nextId)
   replaceAssetIdInNodes(scene.nodes, previousId, nextId)
@@ -4358,6 +4456,114 @@ export async function buildPackageAssetMapForExport(
   const assetIndex = filterAssetIndexByUsage(runtimeAwareScene.assetIndex, usedAssetIds)
 
   return { packageAssetMap, assetIndex }
+}
+
+function buildSceneAssetRegistryEntry(
+  assetId: string,
+  indexEntry: AssetIndexEntry | undefined,
+  asset: ProjectAsset | null,
+  packageMap: Record<string, string>,
+  summaryEntry: SceneResourceSummaryEntry | undefined,
+): SceneAssetRegistryEntry | null {
+  const packageInlineKey = `local::${assetId}`
+  const inlineValue = packageMap[packageInlineKey]
+  if (typeof inlineValue === 'string' && inlineValue.trim().length > 0) {
+    return {
+      sourceType: 'package',
+      zipPath: packageInlineKey,
+      bytes: Math.max(
+        0,
+        estimateInlineAssetByteSize(inlineValue) || (typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : 0),
+      ),
+      assetType: asset?.type ?? summaryEntry?.type,
+      name: asset?.name ?? summaryEntry?.name,
+    }
+  }
+
+  const explicitUrl = normalizeHttpUrl(packageMap[`url::${assetId}`])
+  if (explicitUrl) {
+    return {
+      sourceType: 'url',
+      url: explicitUrl,
+      bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
+      assetType: asset?.type ?? summaryEntry?.type,
+      name: asset?.name ?? summaryEntry?.name,
+    }
+  }
+
+  if (indexEntry?.source?.type === 'local') {
+    return {
+      sourceType: 'package',
+      zipPath: packageInlineKey,
+      bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
+      assetType: asset?.type ?? summaryEntry?.type,
+      name: asset?.name ?? summaryEntry?.name,
+    }
+  }
+
+  if (indexEntry?.source?.type === 'url') {
+    const resolvedUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset, packageMap)
+    if (!resolvedUrl) {
+      return null
+    }
+    return {
+      sourceType: 'url',
+      url: resolvedUrl,
+      bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
+      assetType: asset?.type ?? summaryEntry?.type,
+      name: asset?.name ?? summaryEntry?.name,
+    }
+  }
+
+  const resolvedUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset, packageMap)
+  return {
+    sourceType: 'server',
+    serverAssetId:
+      indexEntry?.source?.type === 'package' && typeof indexEntry.source.originalAssetId === 'string' && indexEntry.source.originalAssetId.trim().length
+        ? indexEntry.source.originalAssetId.trim()
+        : assetId,
+    resolvedUrl: resolvedUrl ?? null,
+    bytes: typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined,
+    assetType: asset?.type ?? summaryEntry?.type,
+    name: asset?.name ?? summaryEntry?.name,
+  }
+}
+
+export async function buildAssetRegistryForExport(
+  scene: StoredSceneDocument,
+): Promise<Record<string, SceneAssetRegistryEntry>> {
+  const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
+  const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
+  const packageAssetMap = filterPackageAssetMapByUsage(
+    stripAssetEntries(clonePackageAssetMap(runtimeAwareScene.packageAssetMap)),
+    usedAssetIds,
+  )
+  const assetIndex = filterAssetIndexByUsage(runtimeAwareScene.assetIndex, usedAssetIds)
+  const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
+  const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
+
+  ;(runtimeAwareScene.resourceSummary?.assets ?? []).forEach((entry) => {
+    const summaryAssetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''
+    if (summaryAssetId) {
+      summaryEntries.set(summaryAssetId, entry)
+    }
+  })
+
+  const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
+  usedAssetIds.forEach((assetId) => {
+    const entry = buildSceneAssetRegistryEntry(
+      assetId,
+      assetIndex[assetId],
+      getAssetFromCatalog(assetCatalog, assetId),
+      packageAssetMap,
+      summaryEntries.get(assetId),
+    )
+    if (entry) {
+      assetRegistry[assetId] = entry
+    }
+  })
+
+  return assetRegistry
 }
 
 function estimateInlineAssetByteSize(raw: string | null | undefined): number {
@@ -4759,6 +4965,7 @@ export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
 ): Promise<StoredSceneDocument> {
   const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene)
+  const assetRegistry = await buildAssetRegistryForExport(scene)
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   return createSceneDocument(scene.name, {
     id: scene.id,
@@ -4768,6 +4975,9 @@ export async function cloneSceneDocumentForExport(
     createdAt: scene.createdAt,
     updatedAt: scene.updatedAt,
     assetCatalog: scene.assetCatalog,
+    assetRegistry,
+    projectOverrideAssets: scene.projectOverrideAssets,
+    sceneOverrideAssets: scene.sceneOverrideAssets,
     assetIndex: assetIndex,
     packageAssetMap,
     resourceSummary: scene.resourceSummary,
@@ -4800,93 +5010,7 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
   if (!scene.packageAssetMap || !Object.keys(scene.packageAssetMap).length) {
     return result
   }
-  const entries = Object.entries(scene.packageAssetMap)
-  if (!entries.some(([key]) => key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX))) {
-    return result
-  }
-
-  const assetCache = useAssetCacheStore()
-  const nextPackageMap: Record<string, string> = {}
-
-  entries.forEach(([key, value]) => {
-    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
-      nextPackageMap[key] = value
-    }
-  })
-
-  for (const [key, dataUrl] of entries) {
-    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
-      continue
-    }
-    const originalId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
-    if (!originalId) {
-      nextPackageMap[key] = dataUrl
-      continue
-    }
-
-    let blob: Blob
-    try {
-      blob = dataUrlToBlob(dataUrl)
-    } catch (error) {
-      console.warn('Failed to parse local asset data', error)
-      result.skippedAssetCount += 1
-      nextPackageMap[key] = dataUrl
-      continue
-    }
-
-    let computedId = originalId
-    try {
-      computedId = await computeBlobHash(blob)
-    } catch (error) {
-      console.warn('Failed to compute resource hash', error)
-    }
-
-    const filename = resolveEmbeddedAssetFilename(scene, originalId, blob)
-
-    let entry = assetCache.hasCache(computedId) ? assetCache.getEntry(computedId) : null
-    if (!entry || entry.status !== 'cached' || !entry.blob) {
-      entry = await assetCache.loadFromIndexedDb(computedId)
-    }
-    if (!entry || entry.status !== 'cached' || !entry.blob) {
-      try {
-        entry = await assetCache.storeAssetBlob(computedId, {
-          blob,
-          mimeType: blob.type || null,
-          filename,
-          downloadUrl: computedId,
-        })
-      } catch (error) {
-        console.warn('Failed to write to local asset cache', error)
-        result.skippedAssetCount += 1
-        nextPackageMap[key] = dataUrl
-        continue
-      }
-    }
-
-    assetCache.touch(computedId)
-
-    if (computedId !== originalId) {
-      replaceAssetIdReferences(scene, originalId, computedId)
-      Object.entries(nextPackageMap).forEach(([mapKey, mapValue]) => {
-        if (!mapKey.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX) && mapValue === originalId) {
-          nextPackageMap[mapKey] = computedId
-        }
-      })
-    }
-
-    result.migratedEmbeddedAssets = true
-    result.migratedAssetCount += 1
-    result.reclaimedBytes += estimateInlineAssetByteSize(dataUrl)
-  }
-
-  scene.packageAssetMap = nextPackageMap
-  if (result.migratedEmbeddedAssets) {
-    const reclaimedKb = Math.round(result.reclaimedBytes / 1024)
-    console.info(
-      `[SceneStore] Migrated legacy embedded local assets for scene ${scene.id}: migrated=${result.migratedAssetCount}, skipped=${result.skippedAssetCount}, reclaimed~${reclaimedKb}KB`,
-    )
-  }
-  return result
+  throw new Error('Legacy scene packageAssetMap format is no longer supported')
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -6118,6 +6242,36 @@ function cloneAssetIndex(index: Record<string, AssetIndexEntry>): Record<string,
   return clone
 }
 
+function stripAssetIndexSourceMetadata(index: Record<string, AssetIndexEntry>): Record<string, AssetIndexEntry> {
+  const stripped = cloneAssetIndex(index)
+  Object.values(stripped).forEach((entry) => {
+    if ('source' in entry) {
+      delete (entry as Partial<AssetIndexEntry>).source
+    }
+  })
+  return stripped
+}
+
+function cloneSceneAssetRegistry(
+  registry: Record<string, SceneAssetRegistryEntry>,
+): Record<string, SceneAssetRegistryEntry> {
+  const clone: Record<string, SceneAssetRegistryEntry> = {}
+  Object.entries(registry).forEach(([assetId, entry]) => {
+    clone[assetId] = { ...entry }
+  })
+  return clone
+}
+
+function cloneSceneAssetOverrides(
+  overrides: Record<string, SceneAssetOverrideEntry>,
+): Record<string, SceneAssetOverrideEntry> {
+  const clone: Record<string, SceneAssetOverrideEntry> = {}
+  Object.entries(overrides).forEach(([assetId, entry]) => {
+    clone[assetId] = { ...entry }
+  })
+  return clone
+}
+
 function clonePackageAssetMap(map: Record<string, string>): Record<string, string> {
   return { ...map }
 }
@@ -6198,6 +6352,7 @@ function migrateScenePersistedState(
 function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetManifest = cloneAssetManifest(scene.assetManifest) ?? buildSceneAssetManifest(scene.assetCatalog)
   store.assetCatalog = buildAssetCatalogFromManifest(store.assetManifest, cloneAssetCatalog(scene.assetCatalog))
+  store.assetRegistry = cloneSceneAssetRegistry(scene.assetRegistry ?? {})
   store.assetIndex = normalizeAssetIndexCategoryIds(cloneAssetIndex(scene.assetIndex), store.assetCatalog)
   ensureBuiltinWallPresetAssets(store.assetCatalog, store.assetIndex)
   store.packageAssetMap = clonePackageAssetMap(scene.packageAssetMap)
@@ -6747,6 +6902,9 @@ function createSceneDocument(
     updatedAt?: string
     assetCatalog?: Record<string, ProjectAsset[]>
     assetManifest?: AssetManifest | null
+    assetRegistry?: Record<string, SceneAssetRegistryEntry>
+    projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
+    sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
     resourceSummary?: SceneResourceSummary
@@ -6784,6 +6942,13 @@ function createSceneDocument(
   const updatedAt = options.updatedAt ?? createdAt
   const assetCatalog = options.assetCatalog ? cloneAssetCatalog(options.assetCatalog) : createEmptyAssetCatalog()
   const assetManifest = cloneAssetManifest(options.assetManifest) ?? buildSceneAssetManifest(assetCatalog)
+  const assetRegistry = options.assetRegistry ? cloneSceneAssetRegistry(options.assetRegistry) : {}
+  const projectOverrideAssets = options.projectOverrideAssets
+    ? cloneSceneAssetOverrides(options.projectOverrideAssets)
+    : undefined
+  const sceneOverrideAssets = options.sceneOverrideAssets
+    ? cloneSceneAssetOverrides(options.sceneOverrideAssets)
+    : undefined
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
   let resourceSummary: SceneResourceSummary | undefined
@@ -6815,6 +6980,9 @@ function createSceneDocument(
     updatedAt,
     assetCatalog,
     assetManifest,
+    assetRegistry,
+    projectOverrideAssets,
+    sceneOverrideAssets,
     assetIndex,
     packageAssetMap,
     resourceSummary,
@@ -6884,6 +7052,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     updatedAt: now,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
     assetManifest: cloneAssetManifest(store.assetManifest) ?? buildSceneAssetManifest(store.assetCatalog),
+    assetRegistry: cloneSceneAssetRegistry(store.assetRegistry),
     assetIndex: cloneAssetIndex(store.assetIndex),
     packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
     planningData: normalizedPlanningData ?? undefined,
@@ -6985,6 +7154,7 @@ function createInitialSceneState(): SceneState {
     activeTool: 'select',
     assetCatalog,
     assetManifest,
+    assetRegistry: {},
     assetIndex,
     packageAssetMap: {},
     packageDirectoryCache,
@@ -7040,6 +7210,7 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.selectedNodeIds = []
   store.selectedRoadSegment = null
   store.assetCatalog = cloneAssetCatalog(initialState.assetCatalog)
+  store.assetRegistry = cloneSceneAssetRegistry(initialState.assetRegistry)
   store.assetIndex = cloneAssetIndex(initialState.assetIndex)
   store.packageAssetMap = {}
   store.packageDirectoryCache = {}
@@ -7513,20 +7684,20 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const roots: SceneNode[] = []
+      let mergedAssetRegistry: Record<string, SceneAssetRegistryEntry> | undefined
       let mergedAssetIndex: Record<string, AssetIndexEntry> | undefined
-      let mergedPackageAssetMap: Record<string, string> | undefined
 
       const mergePrefabMeta = (prefab: NodePrefabData) => {
+        if (prefab.assetRegistry && Object.keys(prefab.assetRegistry).length) {
+          mergedAssetRegistry = {
+            ...(mergedAssetRegistry ?? {}),
+            ...prefab.assetRegistry,
+          }
+        }
         if (prefab.assetIndex && Object.keys(prefab.assetIndex).length) {
           mergedAssetIndex = {
             ...(mergedAssetIndex ?? {}),
             ...prefab.assetIndex,
-          }
-        }
-        if (prefab.packageAssetMap && Object.keys(prefab.packageAssetMap).length) {
-          mergedPackageAssetMap = {
-            ...(mergedPackageAssetMap ?? {}),
-            ...prefab.packageAssetMap,
           }
         }
       }
@@ -7537,9 +7708,10 @@ export const useSceneStore = defineStore('scene', {
 
         const payload = nodePrefabHelpers.buildSerializedPrefabPayload(node, {
           name: node.name ?? '',
+          assetRegistry: this.assetRegistry,
           assetIndex: this.assetIndex,
-          packageAssetMap: this.packageAssetMap,
           sceneNodes: this.nodes,
+          resolveAssetById: (assetId: string) => this.getAsset(assetId),
         })
         mergePrefabMeta(payload.prefab)
         roots.push(payload.prefab.root)
@@ -7571,11 +7743,11 @@ export const useSceneStore = defineStore('scene', {
             },
           },
         }
+        if (mergedAssetRegistry && Object.keys(mergedAssetRegistry).length) {
+          envelope.assetRegistry = mergedAssetRegistry
+        }
         if (mergedAssetIndex && Object.keys(mergedAssetIndex).length) {
           envelope.assetIndex = mergedAssetIndex
-        }
-        if (mergedPackageAssetMap && Object.keys(mergedPackageAssetMap).length) {
-          envelope.packageAssetMap = mergedPackageAssetMap
         }
         const serialized = JSON.stringify(envelope, null, 2)
         return { serialized, cut: mode === 'cut' }
@@ -7592,9 +7764,10 @@ export const useSceneStore = defineStore('scene', {
         const sourceWorld = computeWorldMatrixForNode(this.nodes, id)
         const payload = nodePrefabHelpers.buildSerializedPrefabPayload(source, {
           name: source.name ?? '',
+          assetRegistry: this.assetRegistry,
           assetIndex: this.assetIndex,
-          packageAssetMap: this.packageAssetMap,
           sceneNodes: this.nodes,
+          resolveAssetById: (assetId: string) => this.getAsset(assetId),
         })
         mergePrefabMeta(payload.prefab)
         const cloned = nodePrefabHelpers.prepareNodePrefabRoot(payload.prefab.root, { regenerateIds: false })
@@ -7626,11 +7799,11 @@ export const useSceneStore = defineStore('scene', {
         },
       }
 
+      if (mergedAssetRegistry && Object.keys(mergedAssetRegistry).length) {
+        envelope.assetRegistry = mergedAssetRegistry
+      }
       if (mergedAssetIndex && Object.keys(mergedAssetIndex).length) {
         envelope.assetIndex = mergedAssetIndex
-      }
-      if (mergedPackageAssetMap && Object.keys(mergedPackageAssetMap).length) {
-        envelope.packageAssetMap = mergedPackageAssetMap
       }
 
       const serialized = JSON.stringify(envelope, null, 2)
@@ -10141,8 +10314,8 @@ export const useSceneStore = defineStore('scene', {
     applyCatalogUpdate(
       nextCatalog: Record<string, ProjectAsset[]>,
       options?: {
+        nextAssetRegistry?: Record<string, SceneAssetRegistryEntry>
         nextIndex?: Record<string, AssetIndexEntry>
-        nextPackageMap?: Record<string, string>
         nextManifest?: AssetManifest | null
         preferredDirectoryId?: string | null
         commitSnapshot?: boolean
@@ -10159,13 +10332,15 @@ export const useSceneStore = defineStore('scene', {
         : nextCatalog
       this.assetManifest = nextManifest
       this.assetCatalog = normalizedCatalog
+      if (options?.nextAssetRegistry) {
+        this.assetRegistry = filterAssetRegistryByCatalog(options.nextAssetRegistry, normalizedCatalog)
+      } else {
+        this.assetRegistry = filterAssetRegistryByCatalog(this.assetRegistry, normalizedCatalog)
+      }
       if (options?.nextIndex) {
         this.assetIndex = normalizeAssetIndexCategoryIds(options.nextIndex, normalizedCatalog)
       } else {
         this.assetIndex = normalizeAssetIndexCategoryIds(this.assetIndex, normalizedCatalog)
-      }
-      if (options?.nextPackageMap) {
-        this.packageAssetMap = options.nextPackageMap
       }
       this.refreshProjectTree()
       if (options?.commitSnapshot) {
@@ -10428,12 +10603,10 @@ export const useSceneStore = defineStore('scene', {
       assetIdsToRemove.forEach((assetId) => {
         delete nextAssetIndex[assetId]
       })
-      const nextPackageMap = filterPackageAssetMapByUsage(this.packageAssetMap, new Set(Object.keys(nextAssetIndex)))
 
       this.applyCatalogUpdate(nextCatalog, {
         nextManifest: manifest,
         nextIndex: nextAssetIndex,
-        nextPackageMap,
         commitSnapshot: true,
         updateNodes: false,
       })
@@ -10754,8 +10927,9 @@ export const useSceneStore = defineStore('scene', {
         return Boolean(options.isEditorOnly)
       }
 
-      const { nextCatalog, nextIndex, registeredAssets, sourceByAssetId } = upsertAssetsIntoCatalogAndIndex(
+      const { nextCatalog, nextAssetRegistry, nextIndex, registeredAssets } = upsertAssetsIntoCatalogAndIndex(
         this.assetCatalog,
+        this.assetRegistry,
         this.assetIndex,
         normalizedAssets,
         { categoryIdForAsset, sourceForAsset, internalForAsset, editorOnlyForAsset },
@@ -10766,12 +10940,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.applyCatalogUpdate(nextCatalog, {
+        nextAssetRegistry,
         nextIndex,
         preferredDirectoryId: resolveManifestDirectoryIdFromProjectDirectoryId(this.assetManifest, this.activeDirectoryId),
-      })
-
-      registeredAssets.forEach((asset) => {
-        void this.syncAssetPackageMapEntry(asset, sourceByAssetId[asset.id])
       })
 
       if (options.autoSave !== false) {
@@ -10841,17 +11012,13 @@ export const useSceneStore = defineStore('scene', {
         ? filterAssetIndexByUsage(this.assetIndex, retainedAssetIds)
         : this.assetIndex
 
-      const nextPackageAssetMap = filterPackageAssetMapByUsage(this.packageAssetMap, retainedAssetIds)
-      const packageMapChanged = Object.keys(this.packageAssetMap).length !== Object.keys(nextPackageAssetMap).length
-        || Object.entries(this.packageAssetMap).some(([key, value]) => nextPackageAssetMap[key] !== value)
-
       const shouldResetSelection = this.selectedAssetId ? !retainedAssetIds.has(this.selectedAssetId) : false
 
-      if (!catalogChanged && !assetIndexChanged && !packageMapChanged) {
+      if (!catalogChanged && !assetIndexChanged) {
         return { removedAssetIds: [] }
       }
 
-      this.applyCatalogUpdate(nextCatalog, { nextIndex: nextAssetIndex, nextPackageMap: nextPackageAssetMap })
+      this.applyCatalogUpdate(nextCatalog, { nextIndex: nextAssetIndex })
       if (shouldResetSelection) {
         this.selectedAssetId = null
       }
@@ -10867,63 +11034,26 @@ export const useSceneStore = defineStore('scene', {
       }
 
       try {
-        const updates: Record<string, string> = {}
-        const removals: string[] = []
-
-        if (source?.type === 'package' && source.providerId) {
-          const mapKey = `${source.providerId}::${source.originalAssetId ?? asset.id}`
-          updates[mapKey] = asset.id
-        }
-
-        const remoteCandidate = normalizeRemoteCandidate(asset.downloadUrl)
-          ?? normalizeRemoteCandidate(asset.description)
-          ?? normalizeRemoteCandidate(asset.thumbnail)
-          ?? normalizeRemoteCandidate(asset.id)
-
-        if (remoteCandidate && source?.type !== 'local') {
-          const remoteKey = `url::${asset.id}`
-          updates[remoteKey] = remoteCandidate
-          removals.push(`${LOCAL_EMBEDDED_ASSET_PREFIX}${asset.id}`)
-        }
-
-        const skipEmbeddedForLocalAsset = source?.type === 'local'
-        if (skipEmbeddedForLocalAsset) {
-          removals.push(`${LOCAL_EMBEDDED_ASSET_PREFIX}${asset.id}`)
-          removals.push(`url::${asset.id}`)
-        }
-
-        if (!Object.keys(updates).length && !removals.length) {
+        const entry = buildRegistryEntryFromSource(asset, source)
+        if (!entry) {
           return
         }
 
-        const nextMap: Record<string, string> = { ...this.packageAssetMap }
-        let changed = false
-
-        removals.forEach((key) => {
-          if (key in nextMap) {
-            delete nextMap[key]
-            changed = true
-          }
-        })
-
-        Object.entries(updates).forEach(([key, value]) => {
-          if (typeof value !== 'string' || !value.trim().length) {
-            return
-          }
-          if (nextMap[key] !== value) {
-            nextMap[key] = value
-            changed = true
-          }
-        })
-
-        if (!changed) {
+        const prev = this.assetRegistry[asset.id]
+        const unchanged = prev
+          && prev.sourceType === entry.sourceType
+          && JSON.stringify(prev) === JSON.stringify(entry)
+        if (unchanged) {
           return
         }
 
-        this.packageAssetMap = nextMap
+        this.assetRegistry = {
+          ...this.assetRegistry,
+          [asset.id]: entry,
+        }
         commitSceneSnapshot(this, { updateNodes: false })
       } catch (error) {
-        console.warn('Failed to synchronize package asset map for asset', asset.id, error)
+        console.warn('Failed to synchronize asset registry entry for asset', asset.id, error)
       }
     },
     async createLocalAssetDataUrl(asset: ProjectAsset): Promise<string | null> {
@@ -10976,8 +11106,8 @@ export const useSceneStore = defineStore('scene', {
       options: {
         providerId?: string | null
         prefabAssetIdForDownloadProgress?: string | null
+        prefabAssetRegistry?: Record<string, SceneAssetRegistryEntry> | null
         prefabAssetIndex?: Record<string, AssetIndexEntry> | null
-        prefabPackageAssetMap?: Record<string, string> | null
       } = {},
     ) {
       return prefabActions.ensurePrefabDependencies(this as unknown as PrefabStoreLike, assetIds, options)
@@ -11132,12 +11262,27 @@ export const useSceneStore = defineStore('scene', {
         return []
       }
 
-      const nextPackageMap: Record<string, string> = { ...this.packageAssetMap }
-      let packageMapChanged = false
       const resolved: ProjectAsset[] = []
       const toRegister: Array<{ asset: ProjectAsset; originalAssetId: string; packagePathSegments: string[] }> = []
       const targetCategoryIdByAssetId = new Map<string, string>()
       const packagePathByAssetId: Record<string, string[]> = {}
+
+      const findExistingByPackageLookupKey = (lookupKey: string): ProjectAsset | null => {
+        for (const [existingAssetId, entry] of Object.entries(this.assetRegistry ?? {})) {
+          if (entry?.sourceType !== 'package') {
+            continue
+          }
+          const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : ''
+          if (!zipPath || zipPath !== lookupKey) {
+            continue
+          }
+          const existingAsset = this.getAsset(existingAssetId)
+          if (existingAsset) {
+            return existingAsset
+          }
+        }
+        return null
+      }
 
       const resolvePackagePathSegments = (assetId: string): string[] => {
         if (options.packagePathByAssetId && Array.isArray(options.packagePathByAssetId[assetId])) {
@@ -11152,15 +11297,10 @@ export const useSceneStore = defineStore('scene', {
 
       normalized.forEach((asset) => {
         const mapKey = `${providerId}::${asset.id}`
-        const existingId = nextPackageMap[mapKey]
-        if (existingId) {
-          const existingAsset = this.getAsset(existingId)
-          if (existingAsset) {
-            resolved.push(existingAsset)
-            return
-          }
-          delete nextPackageMap[mapKey]
-          packageMapChanged = true
+        const existingAsset = findExistingByPackageLookupKey(mapKey)
+        if (existingAsset) {
+          resolved.push(existingAsset)
+          return
         }
 
         const packagePathSegments = resolvePackagePathSegments(asset.id)
@@ -11189,20 +11329,7 @@ export const useSceneStore = defineStore('scene', {
           }),
           commitOptions: { updateNodes: false },
         })
-
-        toRegister.forEach((entry) => {
-          const registeredAsset = registered.find((asset) => asset.id === entry.asset.id)
-          if (!registeredAsset) {
-            return
-          }
-          nextPackageMap[`${providerId}::${entry.originalAssetId}`] = registeredAsset.id
-        })
-        packageMapChanged = true
         resolved.push(...registered)
-      }
-
-      if (packageMapChanged) {
-        this.packageAssetMap = nextPackageMap
       }
 
       return resolved
@@ -11270,22 +11397,8 @@ export const useSceneStore = defineStore('scene', {
         delete nextIndex[assetId]
       })
 
-      const nextPackageMap: Record<string, string> = {}
-      Object.entries(this.packageAssetMap).forEach(([key, value]) => {
-        if (key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
-          const embeddedId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
-          if (embeddedId && assetIdSet.has(embeddedId)) {
-            return
-          }
-        }
-        if (assetIdSet.has(value)) {
-          return
-        }
-        nextPackageMap[key] = value
-      })
-
       // Apply catalog/index/packageMap update and refresh project tree
-      this.applyCatalogUpdate(nextCatalog, { nextIndex, nextPackageMap })
+      this.applyCatalogUpdate(nextCatalog, { nextIndex })
       this.ensureActiveDirectoryAndSelectionValid()
       if (this.selectedAssetId && assetIdSet.has(this.selectedAssetId)) {
         this.selectedAssetId = null
@@ -11330,23 +11443,17 @@ export const useSceneStore = defineStore('scene', {
       delete nextIndex[localAssetId]
       nextIndex[storedAsset.id] = {
         categoryId: nextCategoryId,
-        source: options.source ?? { type: 'url' },
       }
 
-      const nextPackageMap: Record<string, string> = {}
-      Object.entries(this.packageAssetMap).forEach(([key, value]) => {
-        if (key === `${LOCAL_EMBEDDED_ASSET_PREFIX}${localAssetId}`) {
-          return
-        }
-        if (value === localAssetId) {
-          nextPackageMap[key] = storedAsset.id
-          return
-        }
-        nextPackageMap[key] = value
-      })
+      const nextAssetRegistry = { ...this.assetRegistry }
+      delete nextAssetRegistry[localAssetId]
+      const replacementRegistryEntry = buildRegistryEntryFromSource(storedAsset, options.source ?? { type: 'url' })
+      if (replacementRegistryEntry) {
+        nextAssetRegistry[storedAsset.id] = replacementRegistryEntry
+      }
 
       // Atomically apply catalog/index/packageMap and rebuild project tree
-      this.applyCatalogUpdate(nextCatalog, { nextIndex, nextPackageMap })
+      this.applyCatalogUpdate(nextCatalog, { nextAssetRegistry, nextIndex })
 
       replaceAssetIdInMaterials(this.materials, localAssetId, storedAsset.id)
       replaceAssetIdInNodes(this.nodes, localAssetId, storedAsset.id)
@@ -15632,9 +15739,10 @@ export const useSceneStore = defineStore('scene', {
       const commonPrefabAssetIndex = parsedEnvelope?.assetIndex && isAssetIndex(parsedEnvelope.assetIndex)
         ? cloneAssetIndex(parsedEnvelope.assetIndex)
         : undefined
-      const commonPrefabPackageAssetMap = parsedEnvelope?.packageAssetMap && isPackageAssetMap(parsedEnvelope.packageAssetMap)
-        ? clonePackageAssetMap(parsedEnvelope.packageAssetMap)
-        : undefined
+      if (parsedEnvelope?.packageAssetMap && isPackageAssetMap(parsedEnvelope.packageAssetMap)) {
+        throw new Error('Legacy clipboard packageAssetMap format is no longer supported')
+      }
+      const commonPrefabAssetRegistry = sanitizeSceneAssetRegistry(parsedEnvelope?.assetRegistry) ?? {}
 
       const applyWorldToParentLocal = (node: SceneNode, worldMatrix: Matrix4, targetParentId: string | null) => {
         let parentInverse = new Matrix4().identity()
@@ -15673,11 +15781,11 @@ export const useSceneStore = defineStore('scene', {
           name: normalizePrefabName(parsedEnvelope?.name ?? preparedRoot.name ?? 'Clipboard') || 'Clipboard',
           root: preparedRoot,
         }
+        if (commonPrefabAssetRegistry && Object.keys(commonPrefabAssetRegistry).length) {
+          prefabForRoot.assetRegistry = commonPrefabAssetRegistry
+        }
         if (commonPrefabAssetIndex && Object.keys(commonPrefabAssetIndex).length) {
           prefabForRoot.assetIndex = commonPrefabAssetIndex
-        }
-        if (commonPrefabPackageAssetMap && Object.keys(commonPrefabPackageAssetMap).length) {
-          prefabForRoot.packageAssetMap = commonPrefabPackageAssetMap
         }
 
         const duplicate = await this.instantiatePrefabData(prefabForRoot, {
@@ -16035,6 +16143,17 @@ export const useSceneStore = defineStore('scene', {
         }
         existingNames.add(uniqueName)
 
+        const importedAssetCatalog = isAssetCatalog(entry.assetCatalog)
+          ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
+          : undefined
+        const importedAssetIndex = isAssetIndex(entry.assetIndex)
+          ? stripAssetIndexSourceMetadata(entry.assetIndex as Record<string, AssetIndexEntry>)
+          : undefined
+        if (isPackageAssetMap(entry.packageAssetMap)) {
+          throw new Error('Legacy scene packageAssetMap format is no longer supported')
+        }
+        const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
+
         const sceneDocument = createSceneDocument(uniqueName, {
           nodes: entry.nodes as SceneNode[],
           projectId,
@@ -16042,18 +16161,13 @@ export const useSceneStore = defineStore('scene', {
           resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
           createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
           updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
-          assetCatalog: isAssetCatalog(entry.assetCatalog)
-            ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
-            : undefined,
+          assetCatalog: importedAssetCatalog,
           assetManifest: isStoredAssetManifest((entry as { assetManifest?: unknown }).assetManifest)
             ? ((entry as { assetManifest?: AssetManifest }).assetManifest ?? null)
             : undefined,
-          assetIndex: isAssetIndex(entry.assetIndex)
-            ? (entry.assetIndex as Record<string, AssetIndexEntry>)
-            : undefined,
-          packageAssetMap: isPackageAssetMap(entry.packageAssetMap)
-            ? (entry.packageAssetMap as Record<string, string>)
-            : undefined,
+          assetRegistry: importedAssetRegistry,
+          assetIndex: importedAssetIndex,
+          packageAssetMap: {},
           planningData: entry.planningData ?? null,
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
@@ -16130,6 +16244,17 @@ export const useSceneStore = defineStore('scene', {
         }
         existingNames.add(uniqueName)
 
+        const importedAssetCatalog = isAssetCatalog(entry.assetCatalog)
+          ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
+          : undefined
+        const importedAssetIndex = isAssetIndex(entry.assetIndex)
+          ? stripAssetIndexSourceMetadata(entry.assetIndex as Record<string, AssetIndexEntry>)
+          : undefined
+        if (isPackageAssetMap(entry.packageAssetMap)) {
+          throw new Error('Legacy scene packageAssetMap format is no longer supported')
+        }
+        const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
+
         const sceneDocument = createSceneDocument(uniqueName, {
           nodes: entry.nodes as SceneNode[],
           projectId,
@@ -16137,18 +16262,13 @@ export const useSceneStore = defineStore('scene', {
           resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
           createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
           updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
-          assetCatalog: isAssetCatalog(entry.assetCatalog)
-            ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
-            : undefined,
+          assetCatalog: importedAssetCatalog,
           assetManifest: isStoredAssetManifest((entry as { assetManifest?: unknown }).assetManifest)
             ? ((entry as { assetManifest?: AssetManifest }).assetManifest ?? null)
             : undefined,
-          assetIndex: isAssetIndex(entry.assetIndex)
-            ? (entry.assetIndex as Record<string, AssetIndexEntry>)
-            : undefined,
-          packageAssetMap: isPackageAssetMap(entry.packageAssetMap)
-            ? (entry.packageAssetMap as Record<string, string>)
-            : undefined,
+          assetRegistry: importedAssetRegistry,
+          assetIndex: importedAssetIndex,
+          packageAssetMap: {},
           planningData: isPlainObject((entry as { planningData?: unknown }).planningData)
             ? ((entry as { planningData?: PlanningSceneData | null }).planningData ?? null)
             : null,

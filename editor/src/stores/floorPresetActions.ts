@@ -16,6 +16,7 @@ import {
   type StrictFloorPresetFloorProps,
   type StrictFloorPresetMaterialConfig,
 } from '@/utils/floorPreset'
+import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 
 export type FloorPresetStoreLike = {
   nodes: SceneNode[]
@@ -259,6 +260,7 @@ export function parseFloorPresetData(text: string): FloorPresetData {
     materialConfig,
     materialOrder,
     materialPatches,
+    assetRegistry: record.assetRegistry,
     assetIndex: record.assetIndex,
     packageAssetMap: record.packageAssetMap,
   }
@@ -473,13 +475,17 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       }
 
       if (dependencyAssetIds.length) {
-        const assetIndexSubset = deps.buildAssetIndexSubsetForPrefab(store.assetIndex, dependencyAssetIds)
-        if (assetIndexSubset) {
-          presetData.assetIndex = assetIndexSubset
+        const dependencySubset = buildAssetDependencySubset({
+          assetIds: dependencyAssetIds,
+          assetRegistry: store.assetRegistry,
+          assetIndex: store.assetIndex,
+          resolveAsset: (dependencyAssetId: string) => store.getAsset(dependencyAssetId),
+        })
+        if (dependencySubset.assetRegistry) {
+          presetData.assetRegistry = dependencySubset.assetRegistry
         }
-        const packageAssetMapSubset = deps.buildPackageAssetMapSubsetForPrefab(store.packageAssetMap, dependencyAssetIds)
-        if (packageAssetMapSubset) {
-          presetData.packageAssetMap = packageAssetMapSubset
+        if (dependencySubset.assetIndex) {
+          presetData.assetIndex = dependencySubset.assetIndex
         }
       }
 
@@ -581,13 +587,12 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       const text = await entry.blob.text()
       const preset = parseFloorPresetData(text)
 
+      if (preset.assetRegistry !== undefined && preset.assetRegistry !== null && !isSceneAssetRegistry(preset.assetRegistry)) {
+        throw new Error('地板预设 assetRegistry 格式无效')
+      }
       if (preset.assetIndex !== undefined && preset.assetIndex !== null && !deps.isAssetIndex(preset.assetIndex)) {
         throw new Error('地板预设 assetIndex 格式无效')
       }
-      if (preset.packageAssetMap !== undefined && preset.packageAssetMap !== null && !deps.isPackageAssetMap(preset.packageAssetMap)) {
-        throw new Error('地板预设 packageAssetMap 格式无效')
-      }
-
       return preset
     },
 
@@ -622,18 +627,8 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
               const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
               return [...patchTextureAssetIds, ...sharedTextureAssetIds]
             }),
+            ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
             ...Object.keys((preset.assetIndex ?? {}) as Record<string, unknown>),
-            ...Object.entries((preset.packageAssetMap ?? {}) as Record<string, unknown>).flatMap(([key, value]) => {
-              const out: string[] = []
-              if (typeof value === 'string' && value.trim().length) {
-                out.push(value.trim())
-              }
-              const derived = extractAssetIdsFromPackageMapKey(key)
-              if (derived) {
-                out.push(derived)
-              }
-              return out
-            }),
           ]
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
             .filter((value) => value.length > 0),
@@ -641,33 +636,33 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       )
 
       const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
+      const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry)
+        ? preset.assetRegistry
+        : undefined
       const presetAssetIndex = preset.assetIndex && deps.isAssetIndex(preset.assetIndex) ? preset.assetIndex : undefined
-      const presetPackageAssetMap = preset.packageAssetMap && deps.isPackageAssetMap(preset.packageAssetMap) ? preset.packageAssetMap : undefined
 
-      if (presetAssetIndex || presetPackageAssetMap) {
+      const legacyDependencyFilter = dependencyFilter
+        ? new Set(
+            Array.from(dependencyFilter).filter((assetId) => !presetAssetRegistry?.[assetId]),
+          )
+        : undefined
+
+      if (presetAssetIndex) {
         const { next: mergedIndex, changed: assetIndexChanged } = deps.mergeAssetIndexEntries(
           store.assetIndex,
           presetAssetIndex,
-          dependencyFilter,
+          legacyDependencyFilter,
         )
         if (assetIndexChanged) {
           store.assetIndex = mergedIndex
-        }
-        const { next: mergedPackageMap, changed: packageMapChanged } = deps.mergePackageAssetMapEntries(
-          store.packageAssetMap,
-          presetPackageAssetMap,
-          dependencyFilter,
-        )
-        if (packageMapChanged) {
-          store.packageAssetMap = mergedPackageMap
         }
       }
 
       if (dependencyAssetIds.length) {
         await store.ensurePrefabDependencies(dependencyAssetIds, {
           prefabAssetIdForDownloadProgress: assetId,
+          prefabAssetRegistry: presetAssetRegistry ?? null,
           prefabAssetIndex: presetAssetIndex ?? null,
-          prefabPackageAssetMap: presetPackageAssetMap ?? null,
         })
       }
 

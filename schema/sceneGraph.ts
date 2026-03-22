@@ -5,6 +5,7 @@ import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import ResourceCache from './ResourceCache';
 import type {
+  SceneAssetRegistryEntry,
   SceneJsonExportDocument,
   SceneMaterial,
   SceneNode,
@@ -141,10 +142,11 @@ class SceneGraphBuilder {
       warn: (message) => this.warn(message),
       reportDownloadProgress: (payload) => this.reportAssetDownloadProgress(payload.assetId, payload.progress),
     });
+    const runtimeResources = this.buildRuntimeResourceEntries();
     const materialFactoryOverrides = options.materialFactoryOptions ?? {};
     this.materialFactory = new SceneMaterialFactory({
       provider: this.resourceCache,
-      resources: document.resourceSummary?.assets ?? [],
+      resources: runtimeResources,
       loadingManager: this.loadingManager,
       warn: (message) => this.warn(message),
       textureLoader: materialFactoryOverrides.textureLoader,
@@ -156,43 +158,166 @@ class SceneGraphBuilder {
     const nodes = Array.isArray(document.nodes) ? (document.nodes as SceneNodeWithExtras[]) : [];
     this.computeExpectedDownloadAssetIds(nodes, materials);
 
-    const summary = document.resourceSummary;
-    if (summary && Array.isArray(summary.assets)) {
-      let aggregatedTotal = 0;
+    runtimeResources.forEach((entry) => {
+      if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
+        return;
+      }
 
-      summary.assets.forEach((entry) => {
-        if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
+      const assetId = entry.assetId.trim();
+      if (!assetId) {
+        return;
+      }
+
+      if (this.isSummaryAssetPreloaded(entry)) {
+        this.preloadedAssetIds.add(assetId);
+      }
+
+      if (!this.expectedDownloadAssetIds.has(assetId)) {
+        return;
+      }
+
+      const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
+      if (size > 0) {
+        this.updateAssetSize(assetId, size);
+      }
+    });
+
+    // New source model fallback: seed preload bytes directly from effective asset registry.
+    // This keeps preload progress meaningful even when summary metadata is absent.
+    this.primeAssetSizeFromRegistry();
+  }
+
+  private buildRuntimeResourceEntries(): SceneResourceSummaryEntry[] {
+    const entriesByAssetId = new Map<string, SceneResourceSummaryEntry>();
+
+    const registry = this.document.assetRegistry ?? {};
+    Object.keys(registry).forEach((assetId) => {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : '';
+      if (!normalizedAssetId) {
+        return;
+      }
+      const descriptor = this.resolveEffectiveAssetRegistryEntry(normalizedAssetId);
+      if (!descriptor) {
+        return;
+      }
+      entriesByAssetId.set(normalizedAssetId, this.registryEntryToResourceSummaryEntry(normalizedAssetId, descriptor));
+    });
+
+    const summaryAssets = this.document.resourceSummary?.assets;
+    if (Array.isArray(summaryAssets)) {
+      summaryAssets.forEach((entry) => {
+        if (!entry || typeof entry.assetId !== 'string') {
           return;
         }
-
-        const assetId = entry.assetId.trim();
-        if (!assetId) {
+        const normalizedAssetId = entry.assetId.trim();
+        if (!normalizedAssetId || entriesByAssetId.has(normalizedAssetId)) {
           return;
         }
-
-        if (this.isSummaryAssetPreloaded(entry)) {
-          this.preloadedAssetIds.add(assetId);
-        }
-
-        // Only count assets expected to be requested during build.
-        if (!this.expectedDownloadAssetIds.has(assetId)) {
-          return;
-        }
-
-        const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
-        if (size > 0) {
-          this.assetSizeMap.set(assetId, size);
-        }
-
-        // Only network/downloaded assets should contribute to total bytes.
-        if (!this.preloadedAssetIds.has(assetId)) {
-          aggregatedTotal += size;
-        }
+        entriesByAssetId.set(normalizedAssetId, entry);
       });
-
-      this.progressBytesTotal = aggregatedTotal;
-      this.progressBytesLoaded = 0;
     }
+
+    return Array.from(entriesByAssetId.values());
+  }
+
+  private registryEntryToResourceSummaryEntry(
+    assetId: string,
+    entry: SceneAssetRegistryEntry,
+  ): SceneResourceSummaryEntry {
+    const bytes = typeof entry.bytes === 'number' && Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
+    if (entry.sourceType === 'package') {
+      const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
+      const looksRemote = zipPath.startsWith('http://') || zipPath.startsWith('https://') || zipPath.startsWith('/');
+      return {
+        assetId,
+        bytes,
+        type: entry.assetType,
+        name: entry.name,
+        inline: Boolean(entry.inline),
+        embedded: !looksRemote,
+        source: looksRemote ? 'remote' : entry.inline ? 'inline' : 'embedded',
+        downloadUrl: looksRemote ? zipPath : undefined,
+      };
+    }
+    if (entry.sourceType === 'url') {
+      return {
+        assetId,
+        bytes,
+        type: entry.assetType,
+        name: entry.name,
+        source: 'remote',
+        downloadUrl: entry.url,
+      };
+    }
+    return {
+      assetId,
+      bytes,
+      type: entry.assetType,
+      name: entry.name,
+      source: 'remote',
+      downloadUrl: entry.resolvedUrl ?? undefined,
+    };
+  }
+
+  private primeAssetSizeFromRegistry(): void {
+    this.expectedDownloadAssetIds.forEach((assetId) => {
+      if (!assetId) {
+        return;
+      }
+      const entry = this.resolveEffectiveAssetRegistryEntry(assetId);
+      if (!entry) {
+        return;
+      }
+      if (this.isRegistryAssetPreloaded(entry)) {
+        this.preloadedAssetIds.add(assetId);
+      }
+      const size = this.resolveRegistryAssetSize(entry);
+      if (size <= 0) {
+        return;
+      }
+      this.updateAssetSize(assetId, size);
+    });
+  }
+
+  private resolveEffectiveAssetRegistryEntry(assetId: string): SceneAssetRegistryEntry | null {
+    if (!assetId) {
+      return null;
+    }
+    const sceneOverride = this.document.sceneOverrideAssets?.[assetId];
+    if (sceneOverride && typeof sceneOverride === 'object' && typeof sceneOverride.sourceType === 'string') {
+      return sceneOverride;
+    }
+    const projectOverride = this.document.projectOverrideAssets?.[assetId];
+    if (projectOverride && typeof projectOverride === 'object' && typeof projectOverride.sourceType === 'string') {
+      return projectOverride;
+    }
+    const registry = this.document.assetRegistry?.[assetId];
+    if (registry && typeof registry === 'object' && typeof registry.sourceType === 'string') {
+      return registry;
+    }
+    return null;
+  }
+
+  private resolveRegistryAssetSize(entry: SceneAssetRegistryEntry): number {
+    const bytes = entry.bytes;
+    if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > 0) {
+      return bytes;
+    }
+    return 0;
+  }
+
+  private isRegistryAssetPreloaded(entry: SceneAssetRegistryEntry): boolean {
+    if (entry.sourceType !== 'package') {
+      return false;
+    }
+    const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
+    if (!zipPath.length) {
+      return false;
+    }
+    if (zipPath.startsWith('/') || zipPath.startsWith('http://') || zipPath.startsWith('https://')) {
+      return false;
+    }
+    return true;
   }
 
   private computeExpectedDownloadAssetIds(nodes: SceneNodeWithExtras[], materials: SceneMaterial[]): void {

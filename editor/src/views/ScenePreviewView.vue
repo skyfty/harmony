@@ -53,12 +53,11 @@ import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
-import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from '@/stores/groundPaintStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
-import { buildPackageAssetMapForExport, calculateSceneResourceSummary, cloneSceneDocumentWithRuntimeGroundSidecars } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
@@ -5220,14 +5219,7 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
-	document = cloneSceneDocumentWithRuntimeGroundSidecars(document)
-	if (ENABLE_SCENE_PREVIEW_BAKED_GROUND) {
-		const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document)
-		document.packageAssetMap = packageAssetMap
-		document.assetIndex = assetIndex
-	}
-	document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-	return await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+	return await prepareStoredSceneJsonExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
 }
 
 function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument {

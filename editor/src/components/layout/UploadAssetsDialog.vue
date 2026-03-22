@@ -28,6 +28,11 @@ import {
 } from '@/utils/assetThumbnail'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
+import {
+  collectConfigAssetDependencyIds,
+  isConfigAssetExtension,
+  resolveConfigAssetReferenceId,
+} from '@/utils/assetDependencySubset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
@@ -694,106 +699,18 @@ function createThumbnailFileForBundle(prepared: PreparedEntryMetadata): File | n
 
 function shouldRewriteBundleReferences(asset: ProjectAsset, file: File): boolean {
   const extension = (asset.extension ?? extractExtension(file.name) ?? '').trim().toLowerCase()
-  return ['json', 'prefab', 'wall', 'floor', 'material'].includes(extension)
-}
-
-function extractAssetIdFromPackageAssetMapKey(key: string): string | null {
-  const normalized = typeof key === 'string' ? key.trim() : ''
-  if (!normalized) {
-    return null
-  }
-  if (normalized.startsWith('local::')) {
-    const assetId = normalized.slice('local::'.length).trim()
-    return assetId || null
-  }
-  if (normalized.startsWith('url::')) {
-    const assetId = normalized.slice('url::'.length).trim()
-    return assetId || null
-  }
-  if (normalized.startsWith('asset://')) {
-    const assetId = normalized.slice('asset://'.length).trim()
-    return assetId || null
-  }
-  const separator = normalized.indexOf('::')
-  if (separator >= 0 && separator < normalized.length - 2) {
-    const assetId = normalized.slice(separator + 2).trim()
-    return assetId || null
-  }
-  return null
-}
-
-function normalizeAssetReferenceCandidate(value: string): string | null {
-  const trimmed = value.trim()
-  if (!trimmed.length || trimmed.length > 512) {
-    return null
-  }
-  if (/^(https?:|data:|blob:)/i.test(trimmed)) {
-    return null
-  }
-  if (trimmed.startsWith('asset://')) {
-    const id = trimmed.slice('asset://'.length).trim()
-    return id.length ? id : null
-  }
-  if (trimmed.startsWith('local::')) {
-    const id = trimmed.slice('local::'.length).trim()
-    return id.length ? id : null
-  }
-  if (trimmed.startsWith('url::')) {
-    const id = trimmed.slice('url::'.length).trim()
-    return id.length ? id : null
-  }
-  return trimmed
-}
-
-function collectAssetReferencesFromUnknown(value: unknown, bucket: Set<string>, parentKey = ''): void {
-  if (typeof value === 'string') {
-    const normalized = normalizeAssetReferenceCandidate(value)
-    if (!normalized) {
-      return
-    }
-    if (/assetid|asset_id|asset$/i.test(parentKey) || parentKey === 'id') {
-      bucket.add(normalized)
-      return
-    }
-    if (/^[a-z0-9_-]{8,}$/i.test(normalized)) {
-      bucket.add(normalized)
-    }
-    return
-  }
-  if (!value || typeof value !== 'object') {
-    return
-  }
-  if (Array.isArray(value)) {
-    value.forEach((entry) => collectAssetReferencesFromUnknown(entry, bucket, parentKey))
-    return
-  }
-  Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
-    if (parentKey === 'assetIndex') {
-      const normalized = normalizeAssetReferenceCandidate(key)
-      if (normalized) {
-        bucket.add(normalized)
-      }
-    } else if (parentKey === 'packageAssetMap') {
-      const assetId = extractAssetIdFromPackageAssetMapKey(key)
-      if (assetId) {
-        bucket.add(assetId)
-      }
-    }
-    collectAssetReferencesFromUnknown(entry, bucket, key)
-  })
+  return isConfigAssetExtension(extension)
 }
 
 async function collectDependencyAssetIdsFromFile(file: File): Promise<string[]> {
   const extension = (extractExtension(file.name) ?? '').toLowerCase()
-  if (!['json', 'prefab', 'wall', 'floor', 'material'].includes(extension)) {
+  if (!isConfigAssetExtension(extension)) {
     return []
   }
   try {
     const text = await file.text()
     const parsed = JSON.parse(text) as unknown
-    const bucket = new Set<string>()
-    collectAssetReferencesFromUnknown(parsed, bucket)
-    return Array.from(bucket)
+    return collectConfigAssetDependencyIds(parsed)
   } catch {
     return []
   }
@@ -804,52 +721,14 @@ async function resolveBundleDependencies(
   primaryFile: File,
 ): Promise<Array<{ asset: ProjectAsset; file: File; rewriteTarget?: boolean }>> {
   const resolveDependencyAsset = (reference: string): ProjectAsset | null => {
-    const normalizedReference = reference.trim()
-    if (!normalizedReference.length) {
+    const resolvedAssetId = resolveConfigAssetReferenceId(reference, {
+      assetRegistry: sceneStore.assetRegistry,
+      hasAssetId: (assetId: string) => Boolean(sceneStore.getAsset(assetId)),
+    })
+    if (!resolvedAssetId) {
       return null
     }
-
-    const normalizedCandidate = normalizeAssetReferenceCandidate(normalizedReference)
-    const directAsset = sceneStore.getAsset(normalizedReference)
-      ?? (normalizedCandidate ? sceneStore.getAsset(normalizedCandidate) : null)
-    if (directAsset) {
-      return directAsset
-    }
-
-    const packageMapRaw = sceneStore.packageAssetMap
-    const packageMap = packageMapRaw && typeof packageMapRaw === 'object'
-      ? (packageMapRaw as Record<string, unknown>)
-      : null
-    if (!packageMap) {
-      return null
-    }
-
-    const directMapValue = packageMap[normalizedReference]
-    if (typeof directMapValue === 'string') {
-      const mappedCandidate = normalizeAssetReferenceCandidate(directMapValue)
-      if (mappedCandidate) {
-        const mappedAsset = sceneStore.getAsset(mappedCandidate)
-        if (mappedAsset) {
-          return mappedAsset
-        }
-      }
-    }
-
-    for (const [key, value] of Object.entries(packageMap)) {
-      if (value !== normalizedReference) {
-        continue
-      }
-      const mappedId = extractAssetIdFromPackageAssetMapKey(key)
-      if (!mappedId) {
-        continue
-      }
-      const mappedAsset = sceneStore.getAsset(mappedId)
-      if (mappedAsset) {
-        return mappedAsset
-      }
-    }
-
-    return null
+    return sceneStore.getAsset(resolvedAssetId)
   }
 
   const queue = await collectDependencyAssetIdsFromFile(primaryFile)

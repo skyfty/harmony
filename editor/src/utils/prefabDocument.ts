@@ -1,11 +1,15 @@
 import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@schema'
 import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
+import {
+  buildAssetDependencySubset,
+  sanitizeSceneAssetRegistry,
+} from '@/utils/assetDependencySubset'
 
 type PrefabFilePayload = {
   name?: unknown
   root?: unknown
+  assetRegistry?: unknown
   assetIndex?: unknown
-  packageAssetMap?: unknown
 }
 
 function generatePreviewId(): string {
@@ -80,19 +84,6 @@ function sanitizeAssetIndex(value: unknown): Record<string, AssetIndexEntry> | u
   return Object.keys(result).length ? result : undefined
 }
 
-function sanitizePackageAssetMap(value: unknown): Record<string, string> | undefined {
-  if (!isPlainObject(value)) {
-    return undefined
-  }
-  const result: Record<string, string> = {}
-  Object.entries(value).forEach(([assetId, mapped]) => {
-    if (typeof mapped === 'string' && mapped.trim().length) {
-      result[assetId] = mapped.trim()
-    }
-  })
-  return Object.keys(result).length ? result : undefined
-}
-
 export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocument {
   if (!isPlainObject(raw)) {
     throw new Error('Prefab 资源文件格式不正确')
@@ -113,8 +104,17 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
     throw new Error('Prefab 根节点数据无效')
   }
   const nodes: SceneNode[] = [clonedRoot]
-  const assetIndex = sanitizeAssetIndex(payload.assetIndex)
-  const packageAssetMap = sanitizePackageAssetMap(payload.packageAssetMap)
+  const inputAssetRegistry = sanitizeSceneAssetRegistry(payload.assetRegistry)
+  const inputAssetIndex = sanitizeAssetIndex(payload.assetIndex)
+  const dependencyAssetIds = new Set<string>([
+    ...Object.keys(inputAssetRegistry ?? {}),
+    ...Object.keys(inputAssetIndex ?? {}),
+  ])
+  const dependencySubset = buildAssetDependencySubset({
+    assetIds: dependencyAssetIds,
+    assetRegistry: inputAssetRegistry,
+    assetIndex: inputAssetIndex,
+  })
 
   return {
     id,
@@ -124,8 +124,8 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
     skybox,
     nodes,
     materials: [],
-    assetIndex,
-    packageAssetMap,
+    assetRegistry: dependencySubset.assetRegistry,
+    assetIndex: dependencySubset.assetIndex,
   }
 }
 

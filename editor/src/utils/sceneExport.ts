@@ -10,6 +10,9 @@ import { findObjectByPath } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
+import { buildAssetRegistryForExport } from '@/stores/sceneStore'
+import { buildPackageAssetMapForExport } from '@/stores/sceneStore'
+import { calculateSceneResourceSummary, cloneSceneDocumentForExport } from '@/stores/sceneStore'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
@@ -312,6 +315,8 @@ function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
 }
 
 export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneJsonExportDocument> {
+  const assetRegistry = await buildAssetRegistryForExport(snapshot)
+  const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot)
 
   const environment: EnvironmentSettings | undefined = snapshot.environment ? { ...snapshot.environment } : undefined
 
@@ -325,8 +330,11 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     nodes: snapshot.nodes,
     materials: snapshot.materials,
     groundSettings: snapshot.groundSettings,
-    assetIndex: snapshot.assetIndex,
-    packageAssetMap: snapshot.packageAssetMap,
+    assetRegistry,
+    projectOverrideAssets: snapshot.projectOverrideAssets,
+    sceneOverrideAssets: snapshot.sceneOverrideAssets,
+    assetIndex,
+    packageAssetMap,
     resourceSummary: snapshot.resourceSummary,
     lazyLoadMeshes: options.lazyLoadMeshes ?? true,
   }
@@ -336,6 +344,16 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
   }
   return await sanitizeSceneDocumentForJsonExport(exportDocument, options)
 }
+
+export async function prepareStoredSceneJsonExport(
+  snapshot: StoredSceneDocument,
+  options: SceneExportOptions,
+): Promise<SceneJsonExportDocument> {
+  const exportableScene = await cloneSceneDocumentForExport(snapshot)
+  exportableScene.resourceSummary = await calculateSceneResourceSummary(exportableScene, { embedResources: true })
+  return await prepareJsonSceneExport(exportableScene, options)
+}
+
 export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')

@@ -1,4 +1,13 @@
-import type { AssetIndexEntry, GroundSettings, SceneMaterial, SceneNode, EnvironmentSettings, SceneSkyboxSettings } from '@schema'
+import type {
+  AssetIndexEntry,
+  GroundSettings,
+  SceneAssetOverrideEntry,
+  SceneAssetRegistryEntry,
+  SceneMaterial,
+  SceneNode,
+  EnvironmentSettings,
+  SceneSkyboxSettings,
+} from '@schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'
@@ -31,8 +40,10 @@ export interface PresetSceneDocument {
   createdAt?: string
   updatedAt?: string
   assetCatalog?: Record<string, ProjectAsset[]>
+  assetRegistry?: Record<string, SceneAssetRegistryEntry>
+  projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
+  sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
   assetIndex?: Record<string, AssetIndexEntry>
-  packageAssetMap?: Record<string, string>
 }
 
 export interface PresetSceneDetail extends PresetSceneSummary {

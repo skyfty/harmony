@@ -3121,8 +3121,14 @@ function resolveAssetCacheId(asset: ProjectAsset): string {
   if (!providerId) {
     return asset.id
   }
-  const mapKey = `${providerId}::${asset.id}`
-  return sceneStore.packageAssetMap[mapKey] ?? asset.id
+  const registryEntry = sceneStore.assetRegistry?.[asset.id]
+  if (registryEntry?.sourceType === 'package') {
+    const zipPath = typeof registryEntry.zipPath === 'string' ? registryEntry.zipPath.trim() : ''
+    if (zipPath === `${providerId}::${asset.id}`) {
+      return asset.id
+    }
+  }
+  return asset.id
 }
 
 function prepareAssetForOperations(asset: ProjectAsset): ProjectAsset {

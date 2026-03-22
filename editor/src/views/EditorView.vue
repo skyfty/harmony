@@ -24,7 +24,7 @@ import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 
-import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
@@ -34,9 +34,6 @@ import {
   type SceneBundleImportPayload,
   type SceneBundleImportScene,
   SCENE_BUNDLE_FORMAT_VERSION,
-  buildPackageAssetMapForExport,
-  calculateSceneResourceSummary,
-  cloneSceneDocumentWithRuntimeGroundSidecars,
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { useProjectsStore } from '@/stores/projectsStore'
@@ -1092,18 +1089,12 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
     updateProgress?.(progressBase + Math.round(progressSpan * ratio), `导出场景 ${localSummary?.name ?? meta?.name ?? id}…`)
 
     if (localSummary) {
-      let document = await ensureExportableSceneDocument(id)
+      const document = await ensureExportableSceneDocument(id)
       if (!document) {
         throw new Error(`无法读取场景：${id}`)
       }
 
-      document = cloneSceneDocumentWithRuntimeGroundSidecars(document)
-      const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
-      document.packageAssetMap = packageAssetMap
-      document.assetIndex = assetIndex
-      document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-
-      const exportDocument = await prepareJsonSceneExport(document, { ...options, format: 'json' })
+      const exportDocument = await prepareStoredSceneJsonExport(document, { ...options, format: 'json' })
       embeddedScenes.push({ id, document: exportDocument, planningData: document.planningData ?? null })
       continue
     }
@@ -1276,20 +1267,10 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     if (isStale?.()) {
       return
     }
-
-    document = cloneSceneDocumentWithRuntimeGroundSidecars(document)
-    const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
     if (isStale?.()) {
       return
     }
-
-    document.packageAssetMap = packageAssetMap
-    document.assetIndex = assetIndex
-    document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-    if (isStale?.()) {
-      return
-    }
-    const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+    const exportDocument = await prepareStoredSceneJsonExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
     if (isStale?.()) {
       return
     }

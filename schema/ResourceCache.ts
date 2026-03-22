@@ -2,7 +2,11 @@ import { AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCach
 import { inferMimeTypeFromAssetId } from './assetTypeConversion';
 import { collectBuiltinAssetLookupIds } from './builtinAssetMapping';
 import type { SceneGraphBuildOptions } from './sceneGraph';
-import type { SceneJsonExportDocument } from './index';
+import type {
+  SceneAssetOverrideEntry,
+  SceneAssetRegistryEntry,
+  SceneJsonExportDocument,
+} from './index';
 
 const NodeBuffer: { from: (data: string, encoding: string) => any } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer
@@ -27,8 +31,6 @@ const defaultWarnHandler = (message: string): void => {
 };
 
 export default class ResourceCache {
-  private packageEntries: Map<string, { provider: string; value: string } | null> = new Map();
-  private resourceSummaryDownloadUrls: Map<string, string> | null = null;
   private readonly assetEntryCache = new Map<string, Promise<AssetCacheEntry | null>>();
   private document: SceneJsonExportDocument;
   private options: SceneGraphBuildOptions;
@@ -50,15 +52,18 @@ export default class ResourceCache {
   }
 
   setContext(document: SceneJsonExportDocument, options: SceneGraphBuildOptions): void {
+    const documentOverridesChanged =
+      this.document?.assetRegistry !== document.assetRegistry ||
+      this.document?.projectOverrideAssets !== document.projectOverrideAssets ||
+      this.document?.sceneOverrideAssets !== document.sceneOverrideAssets ||
+      this.document?.assetUrlOverrides !== document.assetUrlOverrides;
     const overridesChanged =
       this.options?.assetOverrides !== options.assetOverrides ||
       this.options?.builtinAssetPathMap !== options.builtinAssetPathMap ||
       this.options?.resolveBuiltinAssetPath !== options.resolveBuiltinAssetPath;
     this.document = document;
     this.options = options;
-    this.packageEntries.clear();
-    this.resourceSummaryDownloadUrls = null;
-    if (overridesChanged) {
+    if (overridesChanged || documentOverridesChanged) {
       this.assetEntryCache.clear();
     }
   }
@@ -169,6 +174,13 @@ export default class ResourceCache {
       }
     }
 
+    for (const lookupAssetId of lookupAssetIds) {
+      const registryResolved = await this.resolveFromUnifiedAssetRegistry(lookupAssetId);
+      if (registryResolved) {
+        return registryResolved;
+      }
+    }
+
     const documentOverride = this.resolveDocumentAssetUrlOverride(lookupAssetIds);
     if (documentOverride) {
       return documentOverride;
@@ -182,37 +194,6 @@ export default class ResourceCache {
     // Remote URL should be resolved only after overrides, so embedded packages can override URL-like IDs.
     if (this.isRemoteUrl(assetId)) {
       return { kind: 'remote-url', url: assetId };
-    }
-
-    for (const lookupAssetId of lookupAssetIds) {
-      const embedded = this.resolveEmbedded(lookupAssetId);
-      if (embedded) {
-        return embedded;
-      }
-    }
-
-    for (const lookupAssetId of lookupAssetIds) {
-      const packageEntry = this.getPackageEntry(lookupAssetId);
-      if (packageEntry) {
-        const resolved = await this.resolvePackageEntry(lookupAssetId, packageEntry.provider, packageEntry.value);
-        if (resolved) {
-          return resolved;
-        }
-      }
-    }
-
-    for (const lookupAssetId of lookupAssetIds) {
-      const indexSource = await this.resolveAssetIndexSource(lookupAssetId);
-      if (indexSource) {
-        return indexSource;
-      }
-    }
-
-    for (const lookupAssetId of lookupAssetIds) {
-      const summaryUrl = this.getResourceSummaryDownloadUrl(lookupAssetId);
-      if (summaryUrl) {
-        return { kind: 'remote-url', url: summaryUrl };
-      }
     }
 
     if (typeof this.options.resolveAssetUrl === 'function') {
@@ -229,6 +210,106 @@ export default class ResourceCache {
 
     this.warn(`未找到资源 ${assetId}`);
     return null;
+  }
+
+  private async resolveFromUnifiedAssetRegistry(assetId: string): Promise<AssetSource | null> {
+    const descriptor = this.resolveEffectiveAssetDescriptor(assetId);
+    if (!descriptor) {
+      return null;
+    }
+
+    if (descriptor.sourceType === 'url') {
+      const candidate = this.pickUrlCandidate(descriptor.url, (descriptor as any).downloadUrl);
+      if (!candidate) {
+        return null;
+      }
+      if (candidate.startsWith('data:')) {
+        return { kind: 'data-url', dataUrl: candidate };
+      }
+      return { kind: 'remote-url', url: candidate };
+    }
+
+    if (descriptor.sourceType === 'server') {
+      const directUrl = this.pickUrlCandidate(
+        descriptor.resolvedUrl,
+        (descriptor as any).url,
+        (descriptor as any).downloadUrl,
+      );
+      if (directUrl) {
+        if (directUrl.startsWith('data:')) {
+          return { kind: 'data-url', dataUrl: directUrl };
+        }
+        return { kind: 'remote-url', url: directUrl };
+      }
+
+      const serverAssetId =
+        typeof descriptor.serverAssetId === 'string' && descriptor.serverAssetId.trim().length
+          ? descriptor.serverAssetId.trim()
+          : assetId;
+      if (typeof this.options.resolveAssetUrl === 'function') {
+        const resolved = await this.options.resolveAssetUrl(serverAssetId);
+        if (resolved) {
+          if (resolved.startsWith('data:')) {
+            return { kind: 'data-url', dataUrl: resolved };
+          }
+          return { kind: 'remote-url', url: resolved };
+        }
+      }
+      return null;
+    }
+
+    const inline = typeof descriptor.inline === 'string' ? descriptor.inline.trim() : '';
+    if (inline.length) {
+      const inlineResolved = this.resolveInlineStringAsset(assetId, inline);
+      if (inlineResolved) {
+        return inlineResolved;
+      }
+    }
+
+    const zipPath = typeof descriptor.zipPath === 'string' ? descriptor.zipPath.trim() : '';
+    if (!zipPath.length) {
+      return null;
+    }
+    if (zipPath.startsWith('data:')) {
+      return { kind: 'data-url', dataUrl: zipPath };
+    }
+    if (this.isRemoteUrl(zipPath) || zipPath.startsWith('/')) {
+      return { kind: 'remote-url', url: zipPath };
+    }
+
+    return null;
+  }
+
+  private resolveEffectiveAssetDescriptor(assetId: string): SceneAssetRegistryEntry | null {
+    const sceneOverride = this.resolveOverrideEntry(this.document.sceneOverrideAssets?.[assetId]);
+    if (sceneOverride) {
+      return sceneOverride;
+    }
+
+    const projectOverride = this.resolveOverrideEntry(this.document.projectOverrideAssets?.[assetId]);
+    if (projectOverride) {
+      return projectOverride;
+    }
+
+    return this.resolveRegistryEntry(this.document.assetRegistry?.[assetId]);
+  }
+
+  private resolveOverrideEntry(entry: SceneAssetOverrideEntry | undefined): SceneAssetRegistryEntry | null {
+    if (!entry || typeof entry !== 'object') {
+      return null;
+    }
+    return this.resolveRegistryEntry(entry);
+  }
+
+  private resolveRegistryEntry(entry: SceneAssetRegistryEntry | undefined): SceneAssetRegistryEntry | null {
+    if (!entry || typeof entry !== 'object') {
+      return null;
+    }
+    const sourceType = entry.sourceType;
+    if (sourceType !== 'server' && sourceType !== 'package' && sourceType !== 'url') {
+      return null;
+    }
+    return entry;
   }
 
   private collectAssetLookupIds(assetId: string): string[] {
@@ -309,32 +390,6 @@ export default class ResourceCache {
       return { kind: 'data-url', dataUrl: value };
     }
     return { kind: 'remote-url', url: value };
-  }
-
-  private getResourceSummaryDownloadUrl(assetId: string): string | null {
-    if (!assetId) {
-      return null;
-    }
-
-    if (!this.resourceSummaryDownloadUrls) {
-      this.resourceSummaryDownloadUrls = new Map();
-      const assets = (this.document as any)?.resourceSummary?.assets;
-      if (Array.isArray(assets)) {
-        for (const item of assets) {
-          if (!item || typeof item !== 'object') {
-            continue;
-          }
-          const id = typeof (item as any).assetId === 'string' ? (item as any).assetId.trim() : '';
-          const downloadUrl =
-            typeof (item as any).downloadUrl === 'string' ? (item as any).downloadUrl.trim() : '';
-          if (id.length && downloadUrl.length) {
-            this.resourceSummaryDownloadUrls.set(id, downloadUrl);
-          }
-        }
-      }
-    }
-
-    return this.resourceSummaryDownloadUrls.get(assetId) ?? null;
   }
 
   private resolveOverride(assetId: string): AssetSource | null {
@@ -418,179 +473,6 @@ export default class ResourceCache {
     return null;
   }
 
-  private resolveEmbedded(assetId: string): AssetSource | null {
-    const map = this.document.packageAssetMap ?? {};
-    const keys = [`local::${assetId}`, assetId];
-    for (const key of keys) {
-      const candidate = map[key];
-      if (typeof candidate !== 'string') {
-        continue;
-      }
-      const resolved = this.resolveInlineStringAsset(assetId, candidate);
-      if (resolved) {
-        return resolved;
-      }
-    }
-    return null;
-  }
-
-  private getPackageEntry(assetId: string): { provider: string; value: string } | null {
-    if (this.packageEntries.has(assetId)) {
-      return this.packageEntries.get(assetId) ?? null;
-    }
-
-    const map = this.document.packageAssetMap ?? {};
-    const entries = Object.entries(map);
-    for (const [key, value] of entries) {
-      const separator = key.indexOf('::');
-      if (separator === -1) {
-        continue;
-      }
-      const provider = key.slice(0, separator);
-      const id = key.slice(separator + 2);
-
-      // Reserved providers are handled elsewhere (embedded/url override).
-      if (provider === 'local' || provider === 'url') {
-        continue;
-      }
-
-      if (id === assetId && typeof value === 'string') {
-        const result = { provider, value };
-        this.packageEntries.set(assetId, result);
-        return result;
-      }
-    }
-
-    this.packageEntries.set(assetId, null);
-    return null;
-  }
-
-  private async resolvePackageEntry(
-    assetId: string,
-    provider: string,
-    value: string,
-  ): Promise<AssetSource | null> {
-    if (typeof value === 'string' && value.startsWith('data:')) {
-      return { kind: 'data-url', dataUrl: value };
-    }
-
-    if (value && (value.startsWith('http://') || value.startsWith('https://'))) {
-      return { kind: 'remote-url', url: value };
-    }
-
-    const map = this.document.packageAssetMap ?? {};
-    const key = `url::${assetId}`;
-    const candidate = map[key];
-    if (typeof candidate === 'string') {
-      return { kind: 'remote-url', url: candidate };
-    }
-
-    // Fallback: some package providers store an indirection id here.
-    // Try to resolve real download url from exported resourceSummary.
-    const directSummaryUrl = this.getResourceSummaryDownloadUrl(assetId);
-    if (directSummaryUrl) {
-      return { kind: 'remote-url', url: directSummaryUrl };
-    }
-    const indirectKey = typeof value === 'string' ? value.trim() : '';
-    if (indirectKey.length) {
-      const indirectSummaryUrl = this.getResourceSummaryDownloadUrl(indirectKey);
-      if (indirectSummaryUrl) {
-        return { kind: 'remote-url', url: indirectSummaryUrl };
-      }
-    }
-
-    if (value) {
-      const buffer = this.base64ToArrayBuffer(value);
-      if (buffer) {
-        return { kind: 'arraybuffer', data: buffer };
-      }
-      const encoded = this.encodeInlineText(value);
-      if (encoded) {
-        return {
-          kind: 'arraybuffer',
-          data: encoded,
-          mimeType: inferMimeTypeFromAssetId(assetId),
-        };
-      }
-    }
-
-    this.warn(`未解析资源映射 ${provider}::${assetId}`);
-    return null;
-  }
-
-  private async resolveAssetIndexSource(assetId: string): Promise<AssetSource | null> {
-    const assetIndex = this.document.assetIndex as Record<string, any> | undefined;
-    if (!assetIndex || typeof assetIndex !== 'object') {
-      return null;
-    }
-    const entry = assetIndex[assetId];
-    if (!entry || typeof entry !== 'object') {
-      return null;
-    }
-
-    const inlineValue = typeof entry.inline === 'string' ? entry.inline.trim() : '';
-    if (inlineValue) {
-      const resolvedInline = this.resolveInlineStringAsset(assetId, inlineValue);
-      if (resolvedInline) {
-        return resolvedInline;
-      }
-    }
-
-    const directUrl = this.pickUrlCandidate(entry.url, entry.downloadUrl);
-    if (directUrl) {
-      return { kind: 'remote-url', url: directUrl };
-    }
-
-    const source = entry.source;
-    if (source && typeof source === 'object') {
-      const sourceInline = typeof source.inline === 'string' ? source.inline.trim() : '';
-      if (sourceInline) {
-        const resolvedInline = this.resolveInlineStringAsset(assetId, sourceInline);
-        if (resolvedInline) {
-          return resolvedInline;
-        }
-      }
-
-      const sourceUrl = this.pickUrlCandidate(source.url, source.downloadUrl);
-      if (sourceUrl) {
-        return { kind: 'remote-url', url: sourceUrl };
-      }
-
-      const providerId = typeof source.providerId === 'string' ? source.providerId.trim() : '';
-      const originalAssetId =
-        typeof source.originalAssetId === 'string' && source.originalAssetId.trim().length
-          ? source.originalAssetId.trim()
-          : assetId;
-      const providerValue = typeof source.value === 'string' ? source.value.trim() : '';
-
-      // If we have an original id, try to resolve from resourceSummary first.
-      // This covers "assetId != originalAssetId" cases where only summary carries the real url.
-      if (originalAssetId !== assetId) {
-        const originalSummaryUrl = this.getResourceSummaryDownloadUrl(originalAssetId);
-        if (originalSummaryUrl) {
-          return { kind: 'remote-url', url: originalSummaryUrl };
-        }
-      }
-      const selfSummaryUrl = this.getResourceSummaryDownloadUrl(assetId);
-      if (selfSummaryUrl) {
-        return { kind: 'remote-url', url: selfSummaryUrl };
-      }
-
-      if (providerId) {
-        const map = this.document.packageAssetMap ?? {};
-        const mapped = map[`${providerId}::${originalAssetId}`];
-        const candidate =
-          typeof mapped === 'string' && mapped.trim().length ? mapped.trim() : providerValue || originalAssetId;
-        const resolved = await this.resolvePackageEntry(originalAssetId, providerId, candidate);
-        if (resolved) {
-          return resolved;
-        }
-      }
-    }
-
-    return null;
-  }
-
   private resolveInlineStringAsset(assetId: string, rawValue: string): AssetSource | null {
     const value = typeof rawValue === 'string' ? rawValue.trim() : '';
     if (!value.length) {
@@ -657,4 +539,5 @@ export default class ResourceCache {
   private isRemoteUrl(value: string): boolean {
     return REMOTE_URL_PATTERN.test(value);
   }
+
 }

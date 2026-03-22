@@ -30,7 +30,6 @@ import {
   type Vector3Like,
 } from '@schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
-import { blobToDataUrl } from '@/utils/blob'
 import { extractExtension } from '@/utils/blob'
 import {
   BEHAVIOR_COMPONENT_TYPE,
@@ -281,12 +280,7 @@ async function importAssetFromUrl(normalizedUrl: string) {
       commitOptions: { updateNodes: false },
     })
 
-    const packageKey = `url::${registeredAsset.id}`
     sceneStore.$patch((state) => {
-      state.packageAssetMap = {
-        ...state.packageAssetMap,
-        [packageKey]: normalizedUrl,
-      }
       state.assetIndex = {
         ...state.assetIndex,
         [registeredAsset.id]: {
@@ -452,35 +446,7 @@ function handleMenuImportFromFile() {
 
     if (registeredAsset) {
       const categoryId = determineAssetCategoryId(registeredAsset)
-      let packageValue: string | null = null
-
-      if (matchedFile) {
-        try {
-          packageValue = await blobToDataUrl(matchedFile)
-        } catch (error) {
-          console.warn('无法序列化导入文件为数据 URL', error)
-        }
-      }
-
-      if (!packageValue && assetId) {
-        const cacheEntry = assetCacheStore.getEntry(assetId)
-        if (cacheEntry?.blob) {
-          try {
-            packageValue = await blobToDataUrl(cacheEntry.blob)
-          } catch (error) {
-            console.warn('无法序列化缓存资源为数据 URL', error)
-          }
-        }
-      }
-
-      const packageKey = `local::${registeredAsset.id}`
-      const resolvedValue = packageValue ?? registeredAsset.downloadUrl ?? registeredAsset.id
-
       sceneStore.$patch((state) => {
-        state.packageAssetMap = {
-          ...state.packageAssetMap,
-          [packageKey]: resolvedValue,
-        }
         state.assetIndex = {
           ...state.assetIndex,
           [registeredAsset.id]: {

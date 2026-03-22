@@ -1,5 +1,10 @@
 import { zipSync, strToU8 } from 'fflate'
-import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@schema'
+import type {
+  SceneAssetOverrideEntry,
+  SceneAssetRegistryEntry,
+  SceneJsonExportDocument,
+  ProjectExportBundleProjectConfig,
+} from '@schema'
 import {
   encodeScenePackageSceneDocument,
   GROUND_SCATTER_SIDECAR_FILENAME,
@@ -14,7 +19,13 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
-import { buildPackageAssetMapForExport, calculateSceneResourceSummary, cloneSceneDocumentWithRuntimeGroundSidecars, useSceneStore } from '@/stores/sceneStore'
+import {
+  buildAssetRegistryForExport,
+  buildPackageAssetMapForExport,
+  calculateSceneResourceSummary,
+  cloneSceneDocumentWithRuntimeGroundSidecars,
+  useSceneStore,
+} from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
@@ -46,6 +57,74 @@ function extractAssetIdFromPackageMapKey(key: string): string | null {
     return assetId || null
   }
   return null
+}
+
+function buildEffectiveAssetRegistry(
+  document: SceneJsonExportDocument | null | undefined,
+): Record<string, SceneAssetRegistryEntry> {
+  const out: Record<string, SceneAssetRegistryEntry> = {}
+  if (!document || typeof document !== 'object') {
+    return out
+  }
+
+  const applyEntries = (entries: Record<string, SceneAssetRegistryEntry | SceneAssetOverrideEntry> | null | undefined): void => {
+    if (!entries || typeof entries !== 'object') {
+      return
+    }
+    Object.entries(entries).forEach(([assetId, entry]) => {
+      if (!entry || typeof entry !== 'object') {
+        return
+      }
+      out[assetId] = { ...entry }
+    })
+  }
+
+  applyEntries(document.assetRegistry ?? undefined)
+  applyEntries(document.projectOverrideAssets ?? undefined)
+  applyEntries(document.sceneOverrideAssets ?? undefined)
+  return out
+}
+
+function collectLocalAssetIdsForExport(document: SceneJsonExportDocument): string[] {
+  const localIds = new Set<string>()
+  const effectiveRegistry = buildEffectiveAssetRegistry(document)
+
+  Object.entries(effectiveRegistry).forEach(([assetId, entry]) => {
+    const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalized) {
+      return
+    }
+    if (entry.sourceType !== 'package') {
+      return
+    }
+    const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : ''
+    if (zipPath === `local::${normalized}` || zipPath.startsWith('local::')) {
+      localIds.add(normalized)
+    }
+  })
+
+  const indexMap = document.assetIndex ?? {}
+
+  Object.entries(indexMap).forEach(([assetId, entry]) => {
+    const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalized) {
+      return
+    }
+    if (entry?.source?.type === 'local') {
+      localIds.add(normalized)
+    }
+  })
+
+  if (document.packageAssetMap && typeof document.packageAssetMap === 'object') {
+    Object.keys(document.packageAssetMap).forEach((key) => {
+      const derived = extractAssetIdFromPackageMapKey(key)
+      if (derived && key.startsWith('local::')) {
+        localIds.add(derived)
+      }
+    })
+  }
+
+  return Array.from(localIds)
 }
 
 export type ScenePackageExportScene = {
@@ -143,14 +222,15 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
     return document
   }
   stripGroundBakedTextureAssetIds(cloned.nodes ?? [])
-  const looksEditableScene = 'assetIndex' in cloned && 'packageAssetMap' in cloned
+  const looksEditableScene = 'assetCatalog' in cloned
   if (!looksEditableScene) {
     return cloned
   }
   const editable = cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
-  const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(editable)
-  editable.packageAssetMap = packageAssetMap
-  editable.assetIndex = assetIndex
+  editable.assetRegistry = await buildAssetRegistryForExport(editable)
+  const initialLegacy = await buildPackageAssetMapForExport(editable)
+  editable.packageAssetMap = initialLegacy.packageAssetMap
+  editable.assetIndex = initialLegacy.assetIndex
   editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
 
   const unknownAssetIds = Array.isArray(editable.resourceSummary?.unknownAssetIds)
@@ -160,7 +240,7 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
     : []
 
   if (unknownAssetIds.length) {
-    let mapPatched = false
+    let registryPatched = false
     await Promise.all(
       unknownAssetIds.map(async (assetId) => {
         try {
@@ -170,15 +250,24 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
           if (!downloadUrl) {
             return
           }
-          editable.packageAssetMap[`url::${assetId}`] = downloadUrl
-          mapPatched = true
+          editable.assetRegistry = {
+            ...(editable.assetRegistry ?? {}),
+            [assetId]: {
+              sourceType: 'url',
+              url: downloadUrl,
+            },
+          }
+          registryPatched = true
         } catch {
           // Keep unresolved ids; downstream export will report explicit missing downloadUrl if still required.
         }
       }),
     )
 
-    if (mapPatched) {
+    if (registryPatched) {
+      const regeneratedLegacy = await buildPackageAssetMapForExport(editable)
+      editable.packageAssetMap = regeneratedLegacy.packageAssetMap
+      editable.assetIndex = regeneratedLegacy.assetIndex
       editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
     }
   }
@@ -230,7 +319,10 @@ function stripEditorOnlySceneFields(
   }
 
   if (document.packageAssetMap && typeof document.packageAssetMap === 'object') {
-    const retainedAssetIds = new Set(Object.keys(document.assetIndex ?? {}))
+    const effectiveRegistry = buildEffectiveAssetRegistry(document)
+    const retainedAssetIds = new Set(
+      Object.keys(effectiveRegistry).length ? Object.keys(effectiveRegistry) : Object.keys(document.assetIndex ?? {}),
+    )
     const nextPackageAssetMap: Record<string, string> = {}
     Object.entries(document.packageAssetMap).forEach(([key, value]) => {
       const normalizedValue = typeof value === 'string' ? value.trim() : ''
@@ -257,6 +349,7 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
     }
 
     const indexMap: NonNullable<SceneJsonExportDocument['assetIndex']> = doc.assetIndex ?? {}
+    const effectiveRegistry = buildEffectiveAssetRegistry(doc)
     const resourceAssets = Array.isArray(doc.resourceSummary?.assets) ? doc.resourceSummary.assets : []
 
     // Prefer resourceSummary entries (they often include downloadUrl).
@@ -282,6 +375,31 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
           filenameHint: typeof item?.filename === 'string' ? item.filename : null,
         })
       }
+    }
+
+    // Registry-first: collect non-local candidate ids from effective registry.
+    for (const [assetId, registryEntry] of Object.entries(effectiveRegistry)) {
+      const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalized || out.has(normalized)) {
+        continue
+      }
+
+      if (entryHasLocalSource(indexMap?.[normalized])) {
+        continue
+      }
+
+      let downloadUrl: string | null = null
+      if (registryEntry.sourceType === 'url') {
+        const resolvedUrl = typeof registryEntry.url === 'string' ? registryEntry.url.trim() : ''
+        if (resolvedUrl) {
+          downloadUrl = resolvedUrl
+        }
+      }
+      if (!downloadUrl && /^(https?:)?\/\//i.test(normalized)) {
+        downloadUrl = normalized
+      }
+
+      out.set(normalized, { assetId: normalized, downloadUrl })
     }
 
     // Fallback: include all non-local assetIndex entries.
@@ -528,7 +646,7 @@ export async function exportScenePackageZip(payload: {
     let groundScatterPath: string | undefined
     let groundPaintPath: string | undefined
 
-    // Collect local asset IDs from the scene's assetIndex (scene-scoped)
+    // Collect local asset IDs from effective registry first, then legacy compatibility fields.
     const sidecarSource = typeof structuredClone === 'function'
       ? structuredClone(preparedDocument)
       : JSON.parse(JSON.stringify(preparedDocument))
@@ -550,8 +668,7 @@ export async function exportScenePackageZip(payload: {
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
     stripEditorOnlySceneFields(docClone)
 
-    const indexMap = docClone.assetIndex ?? {}
-    const localAssetIds: string[] = Object.keys(indexMap).filter((assetId) => indexMap[assetId]?.source?.type === 'local')
+    const localAssetIds = collectLocalAssetIdsForExport(docClone)
 
     if (!Array.isArray(docClone.punchPoints) || docClone.punchPoints.length === 0) {
       const computedPunchPoints = collectPunchPointsFromNodes(docClone.nodes)

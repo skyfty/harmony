@@ -474,6 +474,42 @@ export interface AssetIndexEntry {
   isEditorOnly?: boolean
 }
 
+export type SceneAssetSourceType = 'server' | 'package' | 'url'
+
+type SceneAssetCommonEntry = {
+  assetType?: AssetType
+  name?: string
+  bytes?: number
+}
+
+export type SceneAssetServerEntry = SceneAssetCommonEntry & {
+  sourceType: 'server'
+  /** Stable server-side asset id. Defaults to document asset id when omitted. */
+  serverAssetId?: string
+  /** Optional resolved url cache for runtime fast path. */
+  resolvedUrl?: string | null
+}
+
+export type SceneAssetPackageEntry = SceneAssetCommonEntry & {
+  sourceType: 'package'
+  /** Relative resource path in scene package zip. */
+  zipPath: string
+  /** Optional inline fallback for temporary compatibility paths. */
+  inline?: string
+}
+
+export type SceneAssetUrlEntry = SceneAssetCommonEntry & {
+  sourceType: 'url'
+  url: string
+}
+
+export type SceneAssetRegistryEntry =
+  | SceneAssetServerEntry
+  | SceneAssetPackageEntry
+  | SceneAssetUrlEntry
+
+export type SceneAssetOverrideEntry = SceneAssetRegistryEntry
+
 export interface SceneOutlineMesh {
   positions: number[]
   indices: number[]
@@ -914,8 +950,13 @@ export interface SceneJsonExportDocument {
   materials: SceneMaterial[];
   groundSettings?: GroundSettings;
   outlineMeshMap?: SceneOutlineMeshMap;
+  /** Canonical asset source registry (single source of truth). */
+  assetRegistry?: Record<string, SceneAssetRegistryEntry>;
+  /** Project-level source override map. */
+  projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>;
+  /** Scene-level source override map (higher priority than project overrides). */
+  sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>;
   assetIndex?: Record<string, AssetIndexEntry>;
-  packageAssetMap?: Record<string, string>;
   assetUrlOverrides?: Record<string, string>;
   resourceSummary?: SceneResourceSummary;
   lazyLoadMeshes?: boolean;

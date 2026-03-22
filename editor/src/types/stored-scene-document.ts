@@ -4,6 +4,8 @@ import type {
   SceneNode,
   AssetIndexEntry,
   EnvironmentSettings,
+  SceneAssetOverrideEntry,
+  SceneAssetRegistryEntry,
   SceneSkyboxSettings,
   SceneResourceSummary,
 } from '@schema'
@@ -38,6 +40,9 @@ export interface StoredSceneDocument {
   updatedAt: string
   assetCatalog: Record<string, ProjectAsset[]>
   assetManifest?: AssetManifest | null
+  assetRegistry?: Record<string, SceneAssetRegistryEntry>
+  projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
+  sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
   assetIndex: Record<string, AssetIndexEntry>
   packageAssetMap: Record<string, string>
   resourceSummary?: SceneResourceSummary

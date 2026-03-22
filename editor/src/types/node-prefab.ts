@@ -1,9 +1,9 @@
-import type { AssetIndexEntry, SceneNode } from '@schema'
+import type { AssetIndexEntry, SceneAssetRegistryEntry, SceneNode } from '@schema'
 
 export interface NodePrefabData {
   formatVersion: number
   name: string
   root: SceneNode
+  assetRegistry?: Record<string, SceneAssetRegistryEntry>
   assetIndex?: Record<string, AssetIndexEntry>
-  packageAssetMap?: Record<string, string>
 }

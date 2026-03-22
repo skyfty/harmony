@@ -97,9 +97,9 @@ export type WallPresetData = {
   materialOrder: string[]
   /** Patches keyed by SceneNodeMaterial.id. */
   materialPatches: Record<string, WallPresetMaterialPatch>
+  assetRegistry?: unknown
   /** Optional dependency helpers (validated by sceneStore). */
   assetIndex?: unknown
-  packageAssetMap?: unknown
 }
 
 export function buildWallPresetFilename(name: string): string {
