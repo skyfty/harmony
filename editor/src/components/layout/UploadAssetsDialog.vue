@@ -768,21 +768,21 @@ function collectAssetReferencesFromUnknown(value: unknown, bucket: Set<string>, 
     return
   }
   Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
+    if (parentKey === 'assetIndex') {
+      const normalized = normalizeAssetReferenceCandidate(key)
+      if (normalized) {
+        bucket.add(normalized)
+      }
+    } else if (parentKey === 'packageAssetMap') {
+      const assetId = extractAssetIdFromPackageAssetMapKey(key)
+      if (assetId) {
+        bucket.add(assetId)
+      }
+    }
     collectAssetReferencesFromUnknown(entry, bucket, key)
   })
 }
 
-      if (parentKey === 'assetIndex') {
-        const normalized = normalizeAssetReferenceCandidate(key)
-        if (normalized) {
-          bucket.add(normalized)
-        }
-      } else if (parentKey === 'packageAssetMap') {
-        const assetId = extractAssetIdFromPackageAssetMapKey(key)
-        if (assetId) {
-          bucket.add(assetId)
-        }
-      }
 async function collectDependencyAssetIdsFromFile(file: File): Promise<string[]> {
   const extension = (extractExtension(file.name) ?? '').toLowerCase()
   if (!['json', 'prefab', 'wall', 'floor', 'material'].includes(extension)) {

@@ -789,7 +789,7 @@ function rewriteAssetReferenceString(value: string, assetIdMap: Map<string, stri
   if (direct) {
     return direct
   }
-  const prefixedMatch = /^(asset:\/\/|local::)(.+)$/.exec(value)
+  const prefixedMatch = /^(asset:\/\/|local::|url::)(.+)$/.exec(value)
   if (prefixedMatch) {
     const mapped = assetIdMap.get(prefixedMatch[2] ?? '')
     return mapped ?? value
