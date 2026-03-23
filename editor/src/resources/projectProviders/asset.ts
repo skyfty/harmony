@@ -100,6 +100,7 @@ function mapManifestEntry(entry: AssetManifestAsset): ProjectAsset {
     seriesName: entry.seriesName ?? null,
     downloadUrl,
     url: downloadUrl,
+    fileKey: entry.resource?.fileKey ?? entry.fileKey ?? null,
     previewUrl: thumbnailUrl,
     thumbnailUrl,
     description: entry.description ?? undefined,
@@ -114,6 +115,7 @@ function mapManifestEntry(entry: AssetManifestAsset): ProjectAsset {
     imageHeight: entry.imageHeight ?? null,
     size: entry.size,
     terrainScatterPreset: entry.terrainScatterPreset ?? null,
+    metadata: entry.metadata,
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
   })

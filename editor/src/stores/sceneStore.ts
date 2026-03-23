@@ -531,6 +531,7 @@ function buildRegistryEntryFromSource(
     return {
       sourceType: 'server',
       serverAssetId: assetId,
+      fileKey: asset.fileKey ?? null,
       assetType,
       name,
     }
@@ -5364,6 +5365,7 @@ function mapProjectAssetToManifestAsset(
   generatedAt: string,
 ): AssetManifestAsset {
   const downloadUrl = typeof asset.downloadUrl === 'string' ? asset.downloadUrl : ''
+  const fileKey = typeof asset.fileKey === 'string' && asset.fileKey.trim().length ? asset.fileKey.trim() : null
   const thumbnailUrl = typeof asset.thumbnail === 'string' && asset.thumbnail.trim().length ? asset.thumbnail : null
   const tagNames = Array.isArray(asset.tags) ? asset.tags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0) : []
   const tagIds = Array.isArray(asset.tagIds) ? asset.tagIds.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0) : []
@@ -5390,10 +5392,12 @@ function mapProjectAssetToManifestAsset(
     imageWidth: asset.imageWidth ?? null,
     imageHeight: asset.imageHeight ?? null,
     downloadUrl,
+    fileKey,
     thumbnailUrl,
     resource: {
       kind: inferAssetManifestResourceKind(downloadUrl),
       url: downloadUrl || null,
+      fileKey,
       exportable: true,
     },
     thumbnail: thumbnailUrl
@@ -5534,6 +5538,15 @@ function mapManifestAssetToProjectAsset(
     type: manifestAsset.type,
     description: manifestAsset.description ?? undefined,
     downloadUrl,
+    fileKey:
+      (typeof manifestAsset.resource?.fileKey === 'string' && manifestAsset.resource.fileKey.trim().length
+        ? manifestAsset.resource.fileKey.trim()
+        : null)
+      ?? (typeof manifestAsset.fileKey === 'string' && manifestAsset.fileKey.trim().length
+        ? manifestAsset.fileKey.trim()
+        : null)
+      ?? existingAsset?.fileKey
+      ?? null,
     previewColor: existingAsset?.previewColor ?? '#90A4AE',
     thumbnail: thumbnailUrl,
     tags: manifestAsset.tags?.map((tag) => tag.name).filter((name): name is string => typeof name === 'string' && name.length > 0),
