@@ -83,7 +83,7 @@ function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
 
 export function collectFloorPresetDependencyAssetIds(
   preset: FloorPresetData | null | undefined,
-  sharedMaterials: readonly Array<{ id: string } & Record<string, unknown>> = [],
+  sharedMaterials: ReadonlyArray<{ id: string } & Record<string, unknown>> = [],
 ): string[] {
   if (!preset) {
     return []
