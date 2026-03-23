@@ -3,7 +3,12 @@ import type { Object3D } from 'three'
 import type { SceneNode } from '@schema'
 import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
+import type { SceneMaterial } from '@/types/material'
 import type { ModelInstanceGroup } from '@schema/modelObjectCache'
+import {
+  collectRuntimeModelNodesByAssetId,
+  collectSceneNodeDependencyAssetIds,
+} from '@/utils/sceneAssetCollectors'
 
 type WatchFn = typeof import('vue').watch
 
@@ -69,13 +74,13 @@ type PrefabProgressCallbacks = {
 export async function updateSceneAssets(args: {
   options: EnsureSceneAssetsOptions
   defaultNodes: SceneNode[]
+  defaultMaterials: SceneMaterial[]
 
   assetCache: AssetCacheLike
   ui: OverlayController
   watch: WatchFn
 
   getAsset: (assetId: string) => ProjectAsset | null
-  collectNodesByAssetId: (nodes: SceneNode[]) => Map<string, SceneNode[]>
 
   // model/object helpers
   getCachedModelObject: (assetId: string) => ModelInstanceGroup | null
@@ -99,11 +104,11 @@ export async function updateSceneAssets(args: {
   const {
     options,
     defaultNodes,
+    defaultMaterials,
     assetCache,
     ui,
     watch,
     getAsset,
-    collectNodesByAssetId,
     getCachedModelObject,
     getOrLoadModelObject,
     loadObjectFromFile,
@@ -130,6 +135,7 @@ export async function updateSceneAssets(args: {
   }
 
   const targetNodes = Array.isArray(options.nodes) ? options.nodes : defaultNodes
+  const targetMaterials = defaultMaterials
   if (!targetNodes.length) {
     if (options.showOverlay) {
       ui.hideLoadingOverlay(true)
@@ -137,8 +143,14 @@ export async function updateSceneAssets(args: {
     return { queuedRuntimeRefreshPatches: false }
   }
 
-  const assetNodeMap = collectNodesByAssetId(targetNodes)
-  if (assetNodeMap.size === 0) {
+  const runtimeAssetNodeMap = collectRuntimeModelNodesByAssetId(targetNodes)
+  const dependencyAssetIds = collectSceneNodeDependencyAssetIds(targetNodes, targetMaterials)
+  const allAssetIds = Array.from(new Set<string>([
+    ...runtimeAssetNodeMap.keys(),
+    ...dependencyAssetIds,
+  ]))
+
+  if (allAssetIds.length === 0) {
     if (options.showOverlay) {
       ui.hideLoadingOverlay(true)
     }
@@ -153,7 +165,7 @@ export async function updateSceneAssets(args: {
     : ''
   const shouldReportPrefabProgress = prefabProgressKey.length > 0
 
-  const trackedAssetIds = shouldReportPrefabProgress ? Array.from(assetNodeMap.keys()) : []
+  const trackedAssetIds = shouldReportPrefabProgress ? allAssetIds : []
   let stopPrefabProgressWatcher: WatchStopHandle | null = null
   let prefabProgressEntry: PrefabProgressEntry | null = null
 
@@ -268,15 +280,53 @@ export async function updateSceneAssets(args: {
     }
   }
 
-  const resolveAssetBaseObject = async (resolveArgs: {
+  const ensureAssetCached = async (resolveArgs: {
     assetId: string
     assetLabel: string
     fallbackDownloadUrl: string | null
-    shouldCacheModelObject: boolean
     completedBeforeAsset: number
     overlayTotal: number
+  }): Promise<void> => {
+    const { assetId, assetLabel, fallbackDownloadUrl, completedBeforeAsset, overlayTotal } = resolveArgs
+    let entry = assetCache.getEntry(assetId)
+    ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
+
+    if (entry.status !== 'cached') {
+      await assetCache.loadFromIndexedDb(assetId)
+      entry = assetCache.getEntry(assetId)
+      ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
+    }
+
+    const downloadUrl = normalizeUrl(entry?.downloadUrl) ?? fallbackDownloadUrl
+    if (!assetCache.hasCache(assetId)) {
+      if (!downloadUrl) {
+        throw new Error('Missing asset download URL')
+      }
+      let stopDownloadWatcher: WatchStopHandle | null = null
+      try {
+        if (shouldShowOverlay) {
+          stopDownloadWatcher = startAssetDownloadOverlayWatcher({
+            assetId,
+            assetLabel,
+            completedBeforeAsset,
+            overlayTotal,
+          })
+        }
+        await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
+      } finally {
+        stopDownloadWatcher?.()
+      }
+      return
+    }
+
+    assetCache.touch(assetId)
+  }
+
+  const resolveAssetBaseObject = async (resolveArgs: {
+    assetId: string
+    shouldCacheModelObject: boolean
   }): Promise<{ baseObjectResolved: Object3D; modelGroup: ModelInstanceGroup | null; canUseInstancing: boolean }> => {
-    const { assetId, assetLabel, fallbackDownloadUrl, shouldCacheModelObject, completedBeforeAsset, overlayTotal } = resolveArgs
+    const { assetId, shouldCacheModelObject } = resolveArgs
 
     let modelGroup: ModelInstanceGroup | null = null
     let baseObject: Object3D | null = null
@@ -290,47 +340,7 @@ export async function updateSceneAssets(args: {
       }
     }
 
-    let stopDownloadWatcher: WatchStopHandle | null = null
     if (!baseObject) {
-      let entry = assetCache.getEntry(assetId)
-      ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
-
-      if (entry.status !== 'cached') {
-        await assetCache.loadFromIndexedDb(assetId)
-        entry = assetCache.getEntry(assetId)
-        ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
-      }
-
-      const downloadUrl = normalizeUrl(entry?.downloadUrl) ?? fallbackDownloadUrl
-
-      try {
-        if (!assetCache.hasCache(assetId)) {
-          if (!downloadUrl) {
-            throw new Error('Missing asset download URL')
-          }
-
-          if (shouldShowOverlay) {
-            stopDownloadWatcher = startAssetDownloadOverlayWatcher({
-              assetId,
-              assetLabel,
-              completedBeforeAsset,
-              overlayTotal,
-            })
-          }
-
-          await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
-          if (shouldShowOverlay) {
-            ui.updateLoadingOverlay({
-              message: `Loading asset: ${assetLabel}`,
-            })
-          }
-        } else {
-          assetCache.touch(assetId)
-        }
-      } finally {
-        stopDownloadWatcher?.()
-      }
-
       const file = assetCache.createFileFromCache(assetId)
       if (!file) {
         throw new Error('Missing asset file in cache')
@@ -445,13 +455,15 @@ export async function updateSceneAssets(args: {
     })
   }
 
-  const total = assetNodeMap.size
+  const total = allAssetIds.length
   let completed = 0
   const errors: AssetLoadError[] = []
   let queuedRuntimeRefreshPatches = false
 
   try {
-    for (const [assetId, nodesForAsset] of assetNodeMap.entries()) {
+    for (const assetId of allAssetIds) {
+      const nodesForAsset = runtimeAssetNodeMap.get(assetId) ?? []
+      const shouldBuildRuntime = nodesForAsset.length > 0
       const asset = getAsset(assetId)
       const assetLabel = normalizeUrl(asset?.name) ?? nodesForAsset[0]?.name ?? assetId
       const fallbackDownloadUrl = normalizeUrl(asset?.downloadUrl) ?? normalizeUrl(asset?.description)
@@ -463,17 +475,26 @@ export async function updateSceneAssets(args: {
           })
         }
 
-        const shouldCacheModelObject = asset?.type === 'model' || asset?.type === 'mesh'
+        const shouldCacheModelObject = shouldBuildRuntime && (asset?.type === 'model' || asset?.type === 'mesh')
         const completedBeforeAsset = completed
         const overlayTotal = total > 0 ? total : 1
 
-        const { baseObjectResolved, modelGroup, canUseInstancing } = await resolveAssetBaseObject({
+        await ensureAssetCached({
           assetId,
           assetLabel,
           fallbackDownloadUrl,
-          shouldCacheModelObject,
           completedBeforeAsset,
           overlayTotal,
+        })
+
+        // Component/material dependencies should be prefetched but do not produce runtime objects.
+        if (!shouldBuildRuntime) {
+          continue
+        }
+
+        const { baseObjectResolved, modelGroup, canUseInstancing } = await resolveAssetBaseObject({
+          assetId,
+          shouldCacheModelObject,
         })
 
         const runtimeObjects = buildRuntimeObjectsForAssetNodes({
@@ -554,7 +575,7 @@ export async function updateSceneAssets(args: {
     // Avoid forcing a full scene graph reconcile.
     // Signal consumers (viewport) to refresh/recreate affected runtime objects incrementally.
     let queued = false
-    assetNodeMap.forEach((nodesForAsset) => {
+    runtimeAssetNodeMap.forEach((nodesForAsset) => {
       nodesForAsset.forEach((node) => {
         const ok = queueSceneNodePatch(node.id, ['runtime'], { bumpVersion: false })
         queued = queued || ok

@@ -418,6 +418,52 @@ const materialEditHistoryTimers = new Map<string, ReturnType<typeof setTimeout>>
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
+
+function inferPackageSourceFromAssetId(assetId: string): AssetSourceMetadata | undefined {
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedAssetId || normalizedAssetId.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+    return undefined
+  }
+  const delimiterIndex = normalizedAssetId.indexOf('::')
+  if (delimiterIndex <= 0 || delimiterIndex >= normalizedAssetId.length - 2) {
+    return undefined
+  }
+  const providerId = normalizedAssetId.slice(0, delimiterIndex).trim()
+  const originalAssetId = normalizedAssetId.slice(delimiterIndex + 2).trim()
+  if (!providerId || !originalAssetId) {
+    return undefined
+  }
+  return {
+    type: 'package',
+    providerId,
+    originalAssetId,
+  }
+}
+
+function inferPackageSourceFromSceneProvider(
+  assetId: string,
+  providerId: string | null | undefined,
+): AssetSourceMetadata | undefined {
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  const normalizedProviderId = typeof providerId === 'string' ? providerId.trim() : ''
+  if (!normalizedAssetId || !normalizedProviderId) {
+    return undefined
+  }
+  if (normalizedAssetId.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+    return undefined
+  }
+  if (normalizedAssetId.includes('://')) {
+    return undefined
+  }
+  if (normalizedAssetId.includes('::')) {
+    return undefined
+  }
+  return {
+    type: 'package',
+    providerId: normalizedProviderId,
+    originalAssetId: normalizedAssetId,
+  }
+}
 let builtinWaterNormalBlobPromise: Promise<Blob> | null = null
 
 function buildMaterialEditHistoryKey(nodeId: string, nodeMaterialId: string): string {
@@ -3404,6 +3450,7 @@ function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup)
 // restoreRuntimeFromSnapshot removed (unused)
 
 function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
+  // Keep this collector sourceAssetId-only for delete-asset behavior.
   const map = new Map<string, SceneNode[]>()
 
   const ensureNodeAssetId = (assetId: string, node: SceneNode) => {
@@ -4417,9 +4464,10 @@ function buildSceneAssetRegistryEntry(
   const summaryBytes = typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined
   const assetType = asset?.type ?? summaryEntry?.type
   const name = asset?.name ?? summaryEntry?.name
+  const resolvedSourceMeta = sourceMeta ?? inferPackageSourceFromAssetId(assetId)
 
-  if (sourceMeta?.type === 'server' || (sourceMeta?.type === 'package' && isServerBackedProviderId(sourceMeta.providerId))) {
-    return buildServerRegistryEntry(assetId, asset, sourceMeta, { bytes: summaryBytes, assetType, name })
+  if (resolvedSourceMeta?.type === 'server' || (resolvedSourceMeta?.type === 'package' && isServerBackedProviderId(resolvedSourceMeta.providerId))) {
+    return buildServerRegistryEntry(assetId, asset, resolvedSourceMeta, { bytes: summaryBytes, assetType, name })
   }
 
   if (existingEntry) {
@@ -4448,7 +4496,7 @@ function buildSceneAssetRegistryEntry(
     return nextEntry
   }
 
-  if (sourceMeta?.type === 'local') {
+  if (resolvedSourceMeta?.type === 'local') {
     return {
       sourceType: 'package',
       zipPath: `local::${assetId}`,
@@ -4458,11 +4506,11 @@ function buildSceneAssetRegistryEntry(
     }
   }
 
-  if (sourceMeta?.type === 'package') {
-    const providerId = typeof sourceMeta.providerId === 'string' ? sourceMeta.providerId.trim() : ''
+  if (resolvedSourceMeta?.type === 'package') {
+    const providerId = typeof resolvedSourceMeta.providerId === 'string' ? resolvedSourceMeta.providerId.trim() : ''
     const originalAssetId =
-      typeof sourceMeta.originalAssetId === 'string' && sourceMeta.originalAssetId.trim().length
-        ? sourceMeta.originalAssetId.trim()
+      typeof resolvedSourceMeta.originalAssetId === 'string' && resolvedSourceMeta.originalAssetId.trim().length
+        ? resolvedSourceMeta.originalAssetId.trim()
         : assetId
     if (providerId) {
       return {
@@ -4477,7 +4525,7 @@ function buildSceneAssetRegistryEntry(
 
   const resolvedUrl = resolveAssetDownloadUrl(asset)
 
-  if (sourceMeta?.type === 'url') {
+  if (resolvedSourceMeta?.type === 'url') {
     if (!resolvedUrl) {
       return null
     }
@@ -4490,7 +4538,7 @@ function buildSceneAssetRegistryEntry(
     }
   }
 
-  if (!sourceMeta && resolvedUrl) {
+  if (!resolvedSourceMeta && resolvedUrl) {
     return {
       sourceType: 'url',
       url: resolvedUrl,
@@ -4500,7 +4548,7 @@ function buildSceneAssetRegistryEntry(
     }
   }
 
-  return buildServerRegistryEntry(assetId, asset, sourceMeta, { bytes: summaryBytes, assetType, name })
+  return buildServerRegistryEntry(assetId, asset, resolvedSourceMeta, { bytes: summaryBytes, assetType, name })
 }
 
 export async function buildAssetRegistryForExport(
@@ -4522,9 +4570,13 @@ export async function buildAssetRegistryForExport(
   const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
   usedAssetIds.forEach((assetId) => {
     const asset = getAssetFromCatalog(assetCatalog, assetId)
+    const sourceMeta =
+      asset?.source
+      ?? inferPackageSourceFromAssetId(assetId)
+      ?? inferPackageSourceFromSceneProvider(assetId, runtimeAwareScene.resourceProviderId)
     const entry = buildSceneAssetRegistryEntry(
       assetId,
-      asset?.source,
+      sourceMeta,
       asset,
       summaryEntries.get(assetId),
       existingRegistry[assetId],
@@ -9700,11 +9752,11 @@ export const useSceneStore = defineStore('scene', {
       const result = await updateSceneAssets({
         options,
         defaultNodes: this.nodes,
+        defaultMaterials: this.materials,
         assetCache,
         ui: uiStore,
         watch,
         getAsset: (assetId) => this.getAsset(assetId),
-        collectNodesByAssetId,
         getCachedModelObject,
         getOrLoadModelObject,
         loadObjectFromFile,

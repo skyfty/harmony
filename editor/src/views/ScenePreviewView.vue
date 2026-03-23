@@ -54,6 +54,7 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
+import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { useScenesStore } from '@/stores/scenesStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from '@/stores/groundPaintStore'
@@ -3205,33 +3206,6 @@ function normalizeNodeId(value: unknown): string | null {
 }
 
 
-function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
-	const map = new Map<string, SceneNode[]>()
-	if (!Array.isArray(nodes)) {
-		return map
-	}
-	const stack: SceneNode[] = [...nodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
-		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
-		const assetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
-		if (assetId) {
-			if (!map.has(assetId)) {
-				map.set(assetId, [])
-			}
-			map.get(assetId)!.push(node)
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return map
-}
-
 function serializeBoundingBox(box: THREE.Box3): { min: [number, number, number]; max: [number, number, number] } {
 	return {
 		min: [box.min.x, box.min.y, box.min.z],
@@ -3312,7 +3286,7 @@ async function prepareInstancedNodesForDocument(
 ): Promise<void> {
 	const includeNodeIds = options.includeNodeIds ?? null
 	const skipNodeIds = options.skipNodeIds ?? null
-	const grouped = collectNodesByAssetId(document.nodes ?? [])
+	const grouped = collectRuntimeModelNodesByAssetId(document.nodes ?? [])
 	if (!grouped.size) {
 		return
 	}
