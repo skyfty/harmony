@@ -179,7 +179,7 @@ import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
-import { computeBlobHash, blobToDataUrl, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
+import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
   type LodPresetData,
