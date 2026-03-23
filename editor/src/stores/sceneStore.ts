@@ -118,6 +118,7 @@ export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NOD
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import { createServerAssetSource, isServerBackedProviderId } from '@/utils/serverAssetSource'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import {
@@ -475,6 +476,48 @@ type AssetRegistrationOptions = {
   editorOnlyForAsset: (asset: ProjectAsset) => boolean | undefined
 }
 
+function resolveServerAssetIdFromSource(
+  assetId: string,
+  source: AssetSourceMetadata | undefined,
+): string {
+  if (source?.type === 'server') {
+    const explicitServerAssetId = typeof source.serverAssetId === 'string' ? source.serverAssetId.trim() : ''
+    if (explicitServerAssetId.length) {
+      return explicitServerAssetId
+    }
+  }
+
+  if (source?.type === 'package' && isServerBackedProviderId(source.providerId)) {
+    const originalAssetId = typeof source.originalAssetId === 'string' ? source.originalAssetId.trim() : ''
+    if (originalAssetId.length) {
+      return originalAssetId
+    }
+  }
+
+  return assetId
+}
+
+function buildServerRegistryEntry(
+  assetId: string,
+  asset: ProjectAsset | null,
+  source: AssetSourceMetadata | undefined,
+  options: {
+    bytes?: number
+    assetType?: ProjectAsset['type']
+    name?: string
+  } = {},
+): SceneAssetRegistryEntry {
+  return {
+    sourceType: 'server',
+    serverAssetId: resolveServerAssetIdFromSource(assetId, source),
+    fileKey: asset?.fileKey ?? null,
+    resolvedUrl: resolveAssetDownloadUrl(asset) ?? null,
+    bytes: options.bytes,
+    assetType: options.assetType,
+    name: options.name,
+  }
+}
+
 function buildRegistryEntryFromSource(
   asset: ProjectAsset,
   source: AssetSourceMetadata | undefined,
@@ -498,6 +541,10 @@ function buildRegistryEntryFromSource(
       assetType,
       name,
     }
+  }
+
+  if (source?.type === 'server' || (source?.type === 'package' && isServerBackedProviderId(source.providerId))) {
+    return buildServerRegistryEntry(assetId, asset, source, { assetType, name })
   }
 
   if (source?.type === 'package' && source.providerId) {
@@ -528,13 +575,7 @@ function buildRegistryEntryFromSource(
   }
 
   if (source?.type === 'url') {
-    return {
-      sourceType: 'server',
-      serverAssetId: assetId,
-      fileKey: asset.fileKey ?? null,
-      assetType,
-      name,
-    }
+    return buildServerRegistryEntry(assetId, asset, source, { assetType, name })
   }
 
   return null
@@ -4377,6 +4418,10 @@ function buildSceneAssetRegistryEntry(
   const assetType = asset?.type ?? summaryEntry?.type
   const name = asset?.name ?? summaryEntry?.name
 
+  if (sourceMeta?.type === 'server' || (sourceMeta?.type === 'package' && isServerBackedProviderId(sourceMeta.providerId))) {
+    return buildServerRegistryEntry(assetId, asset, sourceMeta, { bytes: summaryBytes, assetType, name })
+  }
+
   if (existingEntry) {
     const nextEntry: SceneAssetRegistryEntry = { ...existingEntry }
     if (typeof nextEntry.bytes !== 'number' && typeof summaryBytes === 'number') {
@@ -4455,18 +4500,7 @@ function buildSceneAssetRegistryEntry(
     }
   }
 
-  return {
-    sourceType: 'server',
-    serverAssetId:
-      sourceMeta?.type === 'package' && typeof sourceMeta.originalAssetId === 'string' && sourceMeta.originalAssetId.trim().length
-        ? sourceMeta.originalAssetId.trim()
-        : assetId,
-    fileKey: asset?.fileKey ?? null,
-    resolvedUrl: resolvedUrl ?? null,
-    bytes: summaryBytes,
-    assetType,
-    name,
-  }
+  return buildServerRegistryEntry(assetId, asset, sourceMeta, { bytes: summaryBytes, assetType, name })
 }
 
 export async function buildAssetRegistryForExport(
@@ -10877,6 +10911,14 @@ export const useSceneStore = defineStore('scene', {
       }
 
       normalized.forEach((asset) => {
+        if (isServerBackedProviderId(providerId)) {
+          const existingServerAsset = this.getAsset(asset.id)
+          if (existingServerAsset) {
+            resolved.push(existingServerAsset)
+            return
+          }
+        }
+
         const mapKey = `${providerId}::${asset.id}`
         const existingAsset = findExistingByPackageLookupKey(mapKey)
         if (existingAsset) {
@@ -10902,12 +10944,17 @@ export const useSceneStore = defineStore('scene', {
       if (toRegister.length) {
         const registered = this.registerAssets(toRegister.map((entry) => entry.asset), {
           categoryId: (asset) => targetCategoryIdByAssetId.get(asset.id) ?? determineAssetCategoryId(asset),
-          source: (asset) => ({
-            type: 'package',
-            providerId,
-            originalAssetId: asset.id,
-            packagePathSegments: packagePathByAssetId[asset.id] ?? [],
-          }),
+          source: (asset) => {
+            if (isServerBackedProviderId(providerId)) {
+              return createServerAssetSource(asset.id)
+            }
+            return {
+              type: 'package',
+              providerId,
+              originalAssetId: asset.id,
+              packagePathSegments: packagePathByAssetId[asset.id] ?? [],
+            }
+          },
           commitOptions: { updateNodes: false },
         })
         resolved.push(...registered)
@@ -11028,7 +11075,10 @@ export const useSceneStore = defineStore('scene', {
 
       const nextAssetRegistry = { ...this.assetRegistry }
       delete nextAssetRegistry[localAssetId]
-      const replacementRegistryEntry = buildRegistryEntryFromSource(storedAsset, options.source ?? { type: 'url' })
+      const replacementRegistryEntry = buildRegistryEntryFromSource(
+        storedAsset,
+        options.source ?? createServerAssetSource(remoteAsset.id),
+      )
       if (replacementRegistryEntry) {
         nextAssetRegistry[storedAsset.id] = replacementRegistryEntry
       }

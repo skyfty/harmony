@@ -7,6 +7,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { assetProvider } from '@/resources/projectProviders/asset'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
+import { createServerAssetSource } from '@/utils/serverAssetSource'
 
 const props = withDefaults(
   defineProps<{
@@ -68,6 +69,16 @@ function assetDownloadError(asset: ProjectAsset): string | null {
     return null
   }
   return assetCacheStore.getError(asset.id)
+}
+
+function isServerProviderAsset(asset: ProjectAsset): boolean {
+  if (!asset?.id) {
+    return false
+  }
+  if (typeof asset.fileKey === 'string' && asset.fileKey.trim().length > 0) {
+    return true
+  }
+  return remoteAssets.value.some((candidate) => candidate.id === asset.id)
 }
 
 function flattenCatalog(catalog: Record<string, ProjectAsset[]> | undefined): ProjectAsset[] {
@@ -256,7 +267,9 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
     }
     return sceneStore.registerAsset(normalizedAsset, {
       categoryId: determineAssetCategoryId(normalizedAsset),
-      source: { type: 'url' },
+      source: isServerProviderAsset(normalizedAsset)
+        ? createServerAssetSource(normalizedAsset.id)
+        : { type: 'url' },
       commitOptions: { updateNodes: false },
     })
   } catch (error) {

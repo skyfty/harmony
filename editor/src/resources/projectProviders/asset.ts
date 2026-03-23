@@ -11,6 +11,7 @@ import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { mapServerAssetToProjectAsset, normalizeServerAssetType } from '@/api/serverAssetTypes'
 import { useAuthStore } from '@/stores/authStore'
 import { useSceneStore } from '@/stores/sceneStore'
+import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import type { ResourceProvider } from './types'
 
 interface ApiEnvelope<T> {
@@ -275,7 +276,7 @@ function buildDirectories(manifest: AssetManifest): ProjectDirectory[] {
 }
 
 export const assetProvider: ResourceProvider = {
-  id: 'server-assets',
+  id: SERVER_ASSET_PROVIDER_ID,
   name: 'Preset',
   url: null,
   includeInPackages: true,

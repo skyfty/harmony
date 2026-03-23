@@ -33,6 +33,7 @@ import {
   type BehaviorPrefabData,
 } from '@/utils/behaviorPrefab'
 import { buildAssetDependencySubset, sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import { createServerAssetSource, isServerBackedProviderId } from '@/utils/serverAssetSource'
 
 export type PrefabStoreLike = {
   nodes: SceneNode[]
@@ -841,6 +842,9 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       const resolveDependencySourceMeta = (assetId: string): AssetSourceMetadata | undefined => {
         const providerHint = resolveProviderHint(assetId)
         if (providerHint) {
+          if (isServerBackedProviderId(providerHint.providerId)) {
+            return createServerAssetSource(providerHint.originalAssetId)
+          }
           const packagePathSegments = store.getPackageAssetPathSegments(providerHint.providerId, providerHint.originalAssetId)
           return {
             type: 'package',
@@ -850,7 +854,11 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
           }
         }
         const registryEntry = resolveRegistryEntry(assetId)
-        if (registryEntry?.sourceType === 'url' || registryEntry?.sourceType === 'server') {
+        if (registryEntry?.sourceType === 'server') {
+          const serverAssetId = typeof registryEntry.serverAssetId === 'string' ? registryEntry.serverAssetId.trim() : ''
+          return createServerAssetSource(serverAssetId || assetId)
+        }
+        if (registryEntry?.sourceType === 'url') {
           return { type: 'url' }
         }
         return undefined
@@ -956,7 +964,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
                 const projectAsset = mappedAsset.id === assetId ? mappedAsset : { ...mappedAsset, id: assetId }
                 fetchedRemoteAssets.push({
                   asset: projectAsset,
-                  source: resolveDependencySourceMeta(assetId) ?? { type: 'url' },
+                  source: resolveDependencySourceMeta(assetId) ?? createServerAssetSource(remoteLookupAssetId),
                   targetAssetId: assetId,
                 })
               } catch {

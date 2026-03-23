@@ -13,6 +13,7 @@ import {
 } from '@/utils/lodPreset'
 import { generateUuid } from '@/utils/uuid'
 import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
+import { createServerAssetSource } from '@/utils/serverAssetSource'
 
 export type LodPresetStoreLike = {
   nodes: SceneNode[]
@@ -169,7 +170,7 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
 
           store.registerAsset(projectAsset, {
             categoryId: determineAssetCategoryId(projectAsset),
-            source: { type: 'url' },
+            source: createServerAssetSource(ref.assetId),
             commitOptions: { updateNodes: false },
           })
         })

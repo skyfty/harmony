@@ -1546,7 +1546,7 @@ async function confirmReplaceUploaded(): Promise<void> {
   try {
     const replacementMap = new Map<string, string>()
     for (const candidate of pendingReplacementCandidates.value) {
-      const replaced = sceneStore.replaceLocalAssetWithServerAsset(candidate.localAssetId, candidate.remoteAsset, { source: { type: 'url' } })
+      const replaced = sceneStore.replaceLocalAssetWithServerAsset(candidate.localAssetId, candidate.remoteAsset)
       if (!replaced) {
         throw new Error('Failed to update asset reference')
       }

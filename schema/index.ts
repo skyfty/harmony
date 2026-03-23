@@ -460,6 +460,10 @@ export interface SceneNodeMaterial extends SceneMaterialProps {
 }
 export type AssetSourceMetadata =
   | {
+      type: 'server'
+      serverAssetId?: string
+    }
+  | {
       type: 'package'
       providerId: string
       originalAssetId: string
