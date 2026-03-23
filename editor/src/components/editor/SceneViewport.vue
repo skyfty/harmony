@@ -154,6 +154,7 @@ import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMateri
 import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import { collectFloorPresetDependencyAssetIds } from '@/stores/floorPresetActions'
+import { collectWallPresetDependencyAssetIds } from '@/stores/wallPresetActions'
 import { isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
@@ -6101,11 +6102,31 @@ watch(wallBrushPresetAssetId, (assetId) => {
 
   void sceneStore
     .loadWallPreset(id)
-    .then((data) => {
+    .then(async (data) => {
       if (token !== wallBrushPresetLoadToken) {
         return
       }
-      wallBrushPresetData.value = data as WallPresetData
+      const presetData = data as WallPresetData
+      const dependencyAssetIds = collectWallPresetDependencyAssetIds(presetData)
+
+      if (dependencyAssetIds.length) {
+        const presetAssetRegistry = isSceneAssetRegistry(presetData.assetRegistry)
+          ? presetData.assetRegistry
+          : null
+        try {
+          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
+            prefabAssetIdForDownloadProgress: id,
+            prefabAssetRegistry: presetAssetRegistry,
+          })
+        } catch (dependencyError) {
+          console.warn('Failed to hydrate wall preset dependencies for brush', id, dependencyError)
+        }
+      }
+
+      if (token !== wallBrushPresetLoadToken) {
+        return
+      }
+      wallBrushPresetData.value = presetData
       wallBuildTool.syncBrushPreset()
     })
     .catch((error) => {

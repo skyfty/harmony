@@ -129,6 +129,40 @@ function normalizeOptionalAssetId(value: unknown): string | null {
   return raw.length ? raw : null
 }
 
+export function collectWallPresetDependencyAssetIds(
+  preset: WallPresetData | null | undefined,
+): string[] {
+  if (!preset) {
+    return []
+  }
+
+  const wallProps = preset.wallProps
+  return Array.from(
+    new Set(
+      [
+        wallProps.bodyAssetId,
+        wallProps.headAssetId,
+        wallProps.footAssetId,
+        wallProps.bodyEndCapAssetId,
+        wallProps.headEndCapAssetId,
+        wallProps.footEndCapAssetId,
+        ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+        ...(((wallProps as any).cornerModels ?? []) as any[])
+          .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId]),
+        ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
+          const textures = ((patch as any)?.props as any)?.textures as Record<string, any> | null | undefined
+          if (!textures || typeof textures !== 'object') {
+            return []
+          }
+          return Object.values(textures).map((ref) => (typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''))
+        }),
+      ]
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0),
+    ),
+  )
+}
+
 function deduplicateNodeMaterialsById(materials: SceneNodeMaterial[]): SceneNodeMaterial[] {
   const seen = new Set<string>()
   const deduplicated: SceneNodeMaterial[] = []
@@ -895,34 +929,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         throw new Error('Wall 组件不可用')
       }
 
-      const dependencyAssetIds = Array.from(
-        new Set(
-          [
-            wallProps.bodyAssetId,
-            wallProps.headAssetId,
-            wallProps.footAssetId,
-            wallProps.bodyEndCapAssetId,
-            wallProps.headEndCapAssetId,
-            wallProps.footEndCapAssetId,
-            ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
-            ...(((wallProps as any).cornerModels ?? []) as any[])
-              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
-              .map((value) => (typeof value === 'string' ? value.trim() : ''))
-              .filter((value) => value.length > 0),
-            ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
-              const textures = ((patch as any)?.props as any)?.textures as Record<string, any> | null | undefined
-              if (!textures || typeof textures !== 'object') {
-                return []
-              }
-              return Object.values(textures)
-                .map((ref) => (typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''))
-                .filter((value) => value.length > 0)
-            }),
-          ]
-            .map((value) => (typeof value === 'string' ? value.trim() : ''))
-            .filter((value) => value.length > 0),
-        ),
-      )
+      const dependencyAssetIds = collectWallPresetDependencyAssetIds(preset)
 
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry)
         ? preset.assetRegistry
