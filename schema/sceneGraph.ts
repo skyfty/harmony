@@ -82,7 +82,7 @@ export interface SceneGraphResourceProgress {
 export interface SceneGraphBuildOptions {
   enableGround?: boolean;
   presetAssetBaseUrl?: string;
-  resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null | undefined;
+  serverAssetBaseUrl?: string;
   builtinAssetPathMap?: Record<string, string>;
   resolveBuiltinAssetPath?: (assetId: string) => string | Promise<string | null> | null | undefined;
   assetOverrides?: Record<

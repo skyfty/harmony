@@ -1,6 +1,8 @@
 import { DEFAULT_ASSET_TYPE, isAssetType } from '@schema'
 import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole } from '@schema'
+import { resolveServerAssetDownloadUrl } from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
+import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import type { ProjectAsset, ProjectAssetMetadata, ServerAssetType } from '@/types/project-asset'
 import { extractExtension } from '@/utils/blob'
 
@@ -19,6 +21,7 @@ export interface ServerAssetDto {
   type: string
   downloadUrl?: string | null
   url?: string | null
+  fileKey?: string | null
   previewUrl?: string | null
   thumbnailUrl?: string | null
   description?: string | null
@@ -84,7 +87,12 @@ export function normalizeServerAssetType(type: string | undefined): ProjectAsset
 
 export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsset {
   const type = normalizeServerAssetType(asset.type)
-  const downloadUrl = asset.downloadUrl ?? asset.url ?? ''
+  const downloadUrl = resolveServerAssetDownloadUrl({
+    assetBaseUrl: readServerDownloadBaseUrl(),
+    fileKey: asset.fileKey,
+    downloadUrl: asset.downloadUrl,
+    url: asset.url,
+  }) ?? asset.downloadUrl ?? asset.url ?? ''
   const rawTags = Array.isArray(asset.tags) ? asset.tags.filter((tag): tag is ServerAssetTagDto => !!tag && typeof tag.id === 'string') : []
   const tagIds = Array.isArray(asset.tagIds) && asset.tagIds.length ? asset.tagIds.filter((id): id is string => typeof id === 'string') : rawTags.map((tag) => tag.id)
   const tagNames = rawTags.map((tag) => tag.name).filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
@@ -100,6 +108,7 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     type,
     description: asset.description ?? undefined,
     downloadUrl,
+    fileKey: typeof asset.fileKey === 'string' ? asset.fileKey : null,
     previewColor: SERVER_ASSET_PREVIEW_COLORS[type],
     thumbnail: asset.thumbnailUrl ?? asset.previewUrl ?? null,
     tags: tagNames.length ? tagNames : undefined,

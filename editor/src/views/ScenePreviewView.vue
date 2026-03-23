@@ -214,6 +214,7 @@ import {
 } from '@schema/behaviors/runtime'
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
+import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 
 
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
@@ -10587,6 +10588,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	let resourceCache: ResourceCache | null = null
 	try {
 		const buildOptions: SceneGraphBuildOptions = {
+			serverAssetBaseUrl: readServerDownloadBaseUrl(),
 			onProgress: (info) => {
 				resourceProgress.total = info.total
 				resourceProgress.loaded = info.loaded

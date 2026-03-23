@@ -31,6 +31,7 @@ function cloneRegistryEntry(entry: SceneAssetRegistryEntry): SceneAssetRegistryE
   return {
     sourceType: 'server',
     serverAssetId: entry.serverAssetId,
+    fileKey: entry.fileKey,
     resolvedUrl: entry.resolvedUrl,
     bytes: entry.bytes,
     assetType: entry.assetType,
@@ -82,6 +83,11 @@ function sanitizeSceneAssetRegistryEntry(value: unknown): SceneAssetRegistryEntr
     const serverAssetId = typeof value.serverAssetId === 'string' && value.serverAssetId.trim().length
       ? value.serverAssetId.trim()
       : undefined
+    const fileKey = typeof value.fileKey === 'string'
+      ? value.fileKey.trim() || null
+      : value.fileKey === null
+        ? null
+        : undefined
     const resolvedUrl = typeof value.resolvedUrl === 'string'
       ? value.resolvedUrl.trim() || null
       : value.resolvedUrl === null
@@ -90,6 +96,7 @@ function sanitizeSceneAssetRegistryEntry(value: unknown): SceneAssetRegistryEntr
     return {
       sourceType: 'server',
       serverAssetId,
+      fileKey,
       resolvedUrl,
       bytes,
       assetType: assetType as SceneAssetRegistryEntry['assetType'],

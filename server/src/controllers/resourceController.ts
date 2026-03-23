@@ -173,6 +173,7 @@ type AssetManifestAssetDto = {
   imageWidth?: number | null
   imageHeight?: number | null
   downloadUrl: string
+  fileKey?: string | null
   thumbnailUrl: string | null
   resource?: AssetManifestResourceDto | null
   thumbnail?: AssetManifestResourceDto | null
@@ -262,6 +263,7 @@ type ProjectDirectoryAsset = {
   name: string
   type: AssetType
   downloadUrl: string
+  fileKey?: string | null
   previewColor: string
   thumbnail: string | null
   description: string | null
@@ -1083,6 +1085,7 @@ function mapAssetDocument(
     size: asset.size ?? 0,
     url: asset.url,
     downloadUrl: asset.url,
+    fileKey: resolveAssetFileKey(asset),
     previewUrl,
     thumbnailUrl: asset.thumbnailUrl ?? previewUrl,
     contentHash,
@@ -1143,6 +1146,7 @@ function mapManifestAsset(asset: AssetSource, categoryLookup?: Map<string, Categ
     imageWidth: response.imageWidth ?? null,
     imageHeight: response.imageHeight ?? null,
     downloadUrl: response.downloadUrl,
+    fileKey: assetFileKey,
     thumbnailUrl: response.thumbnailUrl ?? null,
     resource: {
       kind: 'remote',
@@ -1540,6 +1544,7 @@ function mapDirectory(categories: AssetCategoryData[], assets: AssetData[]): Pro
           name: asset.name,
           type: asset.type,
           downloadUrl: asset.url,
+          fileKey: resolveAssetFileKey(asset),
           previewColor: ASSET_COLORS[asset.type] ?? '#546e7a',
           thumbnail,
           description,

@@ -3,6 +3,7 @@
     <SceneryViewer
       :project-id="projectId"
       :package-url="packageUrl"
+      :server-asset-base-url="serverAssetBaseUrl"
       @punch="handlePunch"
     />
   </view>
@@ -12,7 +13,7 @@
 import { ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from '@harmony/scenery/components/SceneryViewer.vue';
-import { createPunchRecord, trackAnalyticsEvent } from '@harmony/utils';
+import { createPunchRecord, getDownloadCdnBaseUrl, trackAnalyticsEvent } from '@harmony/utils';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -20,6 +21,7 @@ const packageUrl = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
+const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 
 type PunchEventPayload = {
   eventName: 'punch';

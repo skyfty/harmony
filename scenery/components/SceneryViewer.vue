@@ -392,6 +392,7 @@ type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
   physicsInterpolation?: boolean;
+  serverAssetBaseUrl?: string;
 };
 
 const props = defineProps<SceneryProps>();
@@ -641,7 +642,6 @@ interface ScenePreviewPayload {
   createdAt?: string;
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
-  resolveAssetUrl?: SceneGraphBuildOptions['resolveAssetUrl'];
   enableGround?: boolean;
 }
 
@@ -10130,8 +10130,8 @@ async function buildSceneGraphWithProgress(
     if (payload.assetOverrides) {
       buildOptions.assetOverrides = payload.assetOverrides;
     }
-    if (payload.resolveAssetUrl) {
-      buildOptions.resolveAssetUrl = payload.resolveAssetUrl;
+    if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
+      buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
     }
 
     resourceCache = ensureResourceCache(payload.document, buildOptions);

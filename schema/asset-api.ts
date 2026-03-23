@@ -65,6 +65,7 @@ export interface AssetSummary {
   size: number
   url: string
   downloadUrl: string
+  fileKey?: string | null
   previewUrl?: string | null
   thumbnailUrl?: string | null
   contentHash?: string | null
@@ -113,6 +114,7 @@ export interface AssetManifestAsset {
   imageWidth?: number | null
   imageHeight?: number | null
   downloadUrl: string
+  fileKey?: string | null
   thumbnailUrl: string | null
   resource?: AssetManifestResource | null
   thumbnail?: AssetManifestResource | null

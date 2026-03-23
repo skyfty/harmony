@@ -48,7 +48,12 @@ declare module 'v-viewer' {
 	export default plugin
 }
 
-interface ImportMetaEnv {}
+interface ImportMetaEnv {
+	readonly VITE_SERVER_API_BASE_URL?: string
+	readonly VITE_SERVER_API_PREFIX?: string
+	readonly VITE_SERVER_DOWNLOAD_BASE_URL?: string
+	readonly DEV?: boolean
+}
 
 interface ImportMeta {
 	readonly env: ImportMetaEnv

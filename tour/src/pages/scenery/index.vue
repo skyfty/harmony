@@ -4,7 +4,12 @@
       <text class="floating-back__icon">‹</text>
     </view>
 
-    <SceneryViewer :project-id="projectId" :package-url="packageUrl" @punch="handlePunch" />
+    <SceneryViewer
+      :project-id="projectId"
+      :package-url="packageUrl"
+      :server-asset-base-url="serverAssetBaseUrl"
+      @punch="handlePunch"
+    />
 
   </view>
 </template>
@@ -13,7 +18,13 @@
 import { ref } from 'vue';
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
-import { completeTravelLeaveRecord, createPunchRecord, createTravelEnterRecord, trackAnalyticsEvent } from '@harmony/utils';
+import {
+  completeTravelLeaveRecord,
+  createPunchRecord,
+  createTravelEnterRecord,
+  getDownloadCdnBaseUrl,
+  trackAnalyticsEvent,
+} from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 
 const projectId = ref<string>('');
@@ -23,6 +34,7 @@ const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
 const selectedVehicleId = ref<string>('');
 const backButtonTop = ref<number>(8);
+const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 
 function syncBackButtonTop(): void {
   const metrics = getTopSafeAreaMetrics();

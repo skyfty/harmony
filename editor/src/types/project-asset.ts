@@ -30,6 +30,7 @@ export interface ProjectAsset {
   type: ServerAssetType | 'behavior'
   description?: string
   downloadUrl: string
+  fileKey?: string | null
   previewColor: string
   thumbnail?: string | null
   tags?: string[]

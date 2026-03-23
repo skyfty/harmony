@@ -16,6 +16,7 @@ import {
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { hashString } from '@schema/stableSerialize'
 import { PinnedLruCache, cloneObject3DShared } from '@/utils/prefabPreviewCache'
+import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 
 type AssetCacheStoreLike = {
   hasCache: (assetId: string) => boolean
@@ -299,6 +300,7 @@ async function buildPrefabPreviewBaseRoot(options: PrefabPreviewOptions, fileTex
   const buildOptions: SceneGraphBuildOptions = {
     enableGround: true,
     lazyLoadMeshes: false,
+    serverAssetBaseUrl: readServerDownloadBaseUrl(),
   }
 
   const assetLoader = createAssetLoader(assetCacheStore, cacheOnly)

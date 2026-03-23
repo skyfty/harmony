@@ -2,6 +2,7 @@ import { AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCach
 import { inferMimeTypeFromAssetId } from './assetTypeConversion';
 import { collectBuiltinAssetLookupIds } from './builtinAssetMapping';
 import type { SceneGraphBuildOptions } from './sceneGraph';
+import { resolveServerAssetDownloadUrl } from './serverAssetUrl';
 import type {
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
@@ -196,18 +197,6 @@ export default class ResourceCache {
       return { kind: 'remote-url', url: assetId };
     }
 
-    if (typeof this.options.resolveAssetUrl === 'function') {
-      for (const lookupAssetId of lookupAssetIds) {
-        const external = await this.options.resolveAssetUrl(lookupAssetId);
-        if (external) {
-          if (external.startsWith('data:')) {
-            return { kind: 'data-url', dataUrl: external };
-          }
-          return { kind: 'remote-url', url: external };
-        }
-      }
-    }
-
     this.warn(`未找到资源 ${assetId}`);
     return null;
   }
@@ -230,30 +219,22 @@ export default class ResourceCache {
     }
 
     if (descriptor.sourceType === 'server') {
-      const directUrl = this.pickUrlCandidate(
-        descriptor.resolvedUrl,
-        (descriptor as any).url,
-        (descriptor as any).downloadUrl,
-      );
+      const serverAssetId =
+        typeof descriptor.serverAssetId === 'string' && descriptor.serverAssetId.trim().length
+          ? descriptor.serverAssetId.trim()
+          : assetId;
+      const directUrl = resolveServerAssetDownloadUrl({
+        assetBaseUrl: this.options.serverAssetBaseUrl,
+        fileKey: typeof (descriptor as any).fileKey === 'string' ? (descriptor as any).fileKey : null,
+        resolvedUrl: descriptor.resolvedUrl,
+        downloadUrl: typeof (descriptor as any).downloadUrl === 'string' ? (descriptor as any).downloadUrl : null,
+        url: typeof (descriptor as any).url === 'string' ? (descriptor as any).url : null,
+      });
       if (directUrl) {
         if (directUrl.startsWith('data:')) {
           return { kind: 'data-url', dataUrl: directUrl };
         }
         return { kind: 'remote-url', url: directUrl };
-      }
-
-      const serverAssetId =
-        typeof descriptor.serverAssetId === 'string' && descriptor.serverAssetId.trim().length
-          ? descriptor.serverAssetId.trim()
-          : assetId;
-      if (typeof this.options.resolveAssetUrl === 'function') {
-        const resolved = await this.options.resolveAssetUrl(serverAssetId);
-        if (resolved) {
-          if (resolved.startsWith('data:')) {
-            return { kind: 'data-url', dataUrl: resolved };
-          }
-          return { kind: 'remote-url', url: resolved };
-        }
       }
       return null;
     }

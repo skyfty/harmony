@@ -201,6 +201,13 @@ export {
 
 export * from './assetTypeConversion'
 
+export {
+  buildAssetFileUrl,
+  resolveServerAssetDownloadUrl,
+  rewriteServerAssetUrlToBase,
+} from './serverAssetUrl'
+export type { ResolveServerAssetDownloadUrlOptions } from './serverAssetUrl'
+
 export * from './mirror'
 
 export {
@@ -477,6 +484,8 @@ export type SceneAssetServerEntry = SceneAssetCommonEntry & {
   sourceType: 'server'
   /** Stable server-side asset id. Defaults to document asset id when omitted. */
   serverAssetId?: string
+  /** Optional storage-relative file key for rebuilding CDN/static URLs. */
+  fileKey?: string | null
   /** Optional resolved url cache for runtime fast path. */
   resolvedUrl?: string | null
 }

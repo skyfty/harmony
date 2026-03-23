@@ -1,8 +1,8 @@
 const TOKEN_STORAGE_KEY = 'miniapp:authToken';
 const DEFAULT_DEV_API_BASE_URL = 'http://localhost:4000/api/mini';
 const DEFAULT_PROD_API_BASE_URL = 'https://v.touchmagic.cn/api/mini';
-const DEFAULT_DEV_DOWNLOAD_CDN_BASE = 'http://localhost:4000';
-const DEFAULT_PROD_DOWNLOAD_CDN_BASE = 'https://cdn.touchmagic.cn';
+const DEFAULT_DEV_DOWNLOAD_CDN_BASE = 'http://localhost:4000/uploads';
+const DEFAULT_PROD_DOWNLOAD_CDN_BASE = 'https://cdn.touchmagic.cn/uploads';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
 

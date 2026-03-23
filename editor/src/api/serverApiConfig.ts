@@ -3,11 +3,15 @@ export interface ServerApiConfig {
   prefix: string
 }
 
+const DEFAULT_DEV_DOWNLOAD_BASE_URL = 'http://localhost:4000/uploads'
+const DEFAULT_PROD_DOWNLOAD_BASE_URL = 'https://v.touchmagic.cn/uploads'
+
 const DEFAULT_PREFIX = '/api'
 
 type RuntimeConfig = {
   serverApiBaseUrl?: string
   serverApiPrefix?: string
+  serverDownloadBaseUrl?: string
 } | undefined
 
 function readRuntimeConfig(): RuntimeConfig {
@@ -35,6 +39,16 @@ export function readServerApiConfig(): ServerApiConfig {
     baseUrl: normalizedBase,
     prefix: normalizedPrefix,
   }
+}
+
+export function readServerDownloadBaseUrl(): string {
+  const runtime = readRuntimeConfig()
+  const candidate = pickFirstNonEmpty(
+    runtime?.serverDownloadBaseUrl,
+    import.meta.env?.VITE_SERVER_DOWNLOAD_BASE_URL as string | undefined,
+    import.meta.env?.DEV ? DEFAULT_DEV_DOWNLOAD_BASE_URL : DEFAULT_PROD_DOWNLOAD_BASE_URL,
+  )
+  return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate
 }
 
 export function buildServerApiUrl(path: string): string {

@@ -27,6 +27,7 @@ import {
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
   createPrimitiveMesh,
+  resolveServerAssetDownloadUrl,
   WATER_SURFACE_MESH_USERDATA_KEY,
   cloneWaterSurfaceMeshMetadata,
   createWaterSurfaceRuntimeMesh,
@@ -118,6 +119,7 @@ export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NOD
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
+import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import {
   buildFloorDynamicMeshPresetPatch,
   buildFloorNodeMaterialsFromPreset,
@@ -4409,6 +4411,9 @@ function buildSceneAssetRegistryEntry(
       }
     } else if (nextEntry.sourceType === 'server') {
       const resolvedUrl = nextEntry.resolvedUrl ?? resolveAssetDownloadUrl(asset)
+      if (!nextEntry.fileKey && asset?.fileKey) {
+        nextEntry.fileKey = asset.fileKey
+      }
       nextEntry.resolvedUrl = resolvedUrl ?? null
     }
     return nextEntry
@@ -4472,6 +4477,7 @@ function buildSceneAssetRegistryEntry(
       sourceMeta?.type === 'package' && typeof sourceMeta.originalAssetId === 'string' && sourceMeta.originalAssetId.trim().length
         ? sourceMeta.originalAssetId.trim()
         : assetId,
+    fileKey: asset?.fileKey ?? null,
     resolvedUrl: resolvedUrl ?? null,
     bytes: summaryBytes,
     assetType,
@@ -4530,14 +4536,15 @@ function normalizeHttpUrl(value: string | null | undefined): string | null {
 function resolveAssetDownloadUrl(
   asset: ProjectAsset | null,
 ): string | null {
-  if (asset) {
-    const candidate = normalizeHttpUrl(asset.downloadUrl) ?? normalizeHttpUrl(asset.description)
-    if (candidate) {
-      return candidate
-    }
+  if (!asset) {
+    return null
   }
-
-  return null
+  const candidate = normalizeHttpUrl(asset.downloadUrl) ?? normalizeHttpUrl(asset.description)
+  return resolveServerAssetDownloadUrl({
+    assetBaseUrl: readServerDownloadBaseUrl(),
+    fileKey: asset.fileKey,
+    downloadUrl: candidate,
+  }) ?? candidate
 }
 
 export async function calculateSceneResourceSummary(

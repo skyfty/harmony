@@ -1,4 +1,5 @@
 {
   "serverApiBaseUrl": "https://v.touchmagic.cn",
-  "serverApiPrefix": "/api"
+  "serverApiPrefix": "/api",
+  "serverDownloadBaseUrl": "https://v.touchmagic.cn/uploads"
 }
