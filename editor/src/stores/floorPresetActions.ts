@@ -446,7 +446,6 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
         const dependencySubset = buildAssetDependencySubset({
           assetIds: dependencyAssetIds,
           assetRegistry: store.assetRegistry,
-          resolveAsset: (dependencyAssetId: string) => store.getAsset(dependencyAssetId),
         })
         if (dependencySubset.assetRegistry) {
           presetData.assetRegistry = dependencySubset.assetRegistry

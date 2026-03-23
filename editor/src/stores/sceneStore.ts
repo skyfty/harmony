@@ -4365,23 +4365,6 @@ function replaceAssetIdInNodes(nodes: SceneNode[], previousId: string, nextId: s
   })
 }
 
-function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: string, blob: Blob): string {
-  const asset = getAssetFromCatalog(scene.assetCatalog, assetId)
-  const extensionCandidates = [
-    extractExtension(asset?.description ?? undefined),
-    extractExtension(asset?.name ?? undefined),
-    extractExtension(asset?.downloadUrl ?? undefined),
-  ]
-  const mimeExtension = blob.type ? blob.type.split('/').pop() ?? null : null
-  if (mimeExtension) {
-    extensionCandidates.push(mimeExtension)
-  }
-  const extension = extensionCandidates.find((value) => value && value.length) ?? 'bin'
-  const fallback = `${assetId}.${extension}`
-  const filename = inferBlobFilename([asset?.description ?? null, asset?.name ?? null], fallback)
-  return ensureExtension(filename, extension)
-}
-
 function buildSceneAssetRegistryEntry(
   assetId: string,
   sourceMeta: AssetSourceMetadata | undefined,

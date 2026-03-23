@@ -971,7 +971,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
               sourceByAssetId.set(entry.targetAssetId, entry.source)
             })
 
-            const registered = store.registerAssets(
+            store.registerAssets(
               fetchedRemoteAssets.map((entry) => entry.asset),
               {
                 categoryId: (asset: ProjectAsset) => determineAssetCategoryId(asset),
@@ -1147,7 +1147,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
           ...Object.keys(prefab.assetRegistry ?? {}),
         ].map((value) => (typeof value === 'string' ? value.trim() : '')).filter((value) => value.length > 0)),
       )
-      const dependencyFilter = normalizedDependencyAssetIds.length ? new Set(normalizedDependencyAssetIds) : undefined
       const providerId = options.providerId ?? null
       const prefabAssetRegistry = prefab.assetRegistry && Object.keys(prefab.assetRegistry).length
         ? prefab.assetRegistry
