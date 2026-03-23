@@ -219,10 +219,6 @@ export default class ResourceCache {
     }
 
     if (descriptor.sourceType === 'server') {
-      const serverAssetId =
-        typeof descriptor.serverAssetId === 'string' && descriptor.serverAssetId.trim().length
-          ? descriptor.serverAssetId.trim()
-          : assetId;
       const directUrl = resolveServerAssetDownloadUrl({
         assetBaseUrl: this.options.serverAssetBaseUrl,
         fileKey: typeof (descriptor as any).fileKey === 'string' ? (descriptor as any).fileKey : null,

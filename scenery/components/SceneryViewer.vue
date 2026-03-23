@@ -642,7 +642,6 @@ interface ScenePreviewPayload {
   createdAt?: string;
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
-  enableGround?: boolean;
 }
 
 type RequestedMode = 'project' | null;
@@ -10103,7 +10102,6 @@ async function buildSceneGraphWithProgress(
   try {
     lazyLoadMeshesEnabled = payload.document.lazyLoadMeshes !== false;
     const buildOptions: SceneGraphBuildOptions = {
-      enableGround: payload.enableGround ?? true,
       materialFactoryOptions: {
         hdrLoader: rgbeLoader,
       },

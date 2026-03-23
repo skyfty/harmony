@@ -298,7 +298,6 @@ async function buildPrefabPreviewBaseRoot(options: PrefabPreviewOptions, fileTex
   }
 
   const buildOptions: SceneGraphBuildOptions = {
-    enableGround: true,
     lazyLoadMeshes: false,
     serverAssetBaseUrl: readServerDownloadBaseUrl(),
   }

@@ -80,8 +80,6 @@ export interface SceneGraphResourceProgress {
 }
 
 export interface SceneGraphBuildOptions {
-  enableGround?: boolean;
-  presetAssetBaseUrl?: string;
   serverAssetBaseUrl?: string;
   builtinAssetPathMap?: Record<string, string>;
   resolveBuiltinAssetPath?: (assetId: string) => string | Promise<string | null> | null | undefined;

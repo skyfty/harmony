@@ -79,9 +79,11 @@ function extractRelativeAssetPathFromPath(pathname: string, basePathname: string
     }
 
     const baseLeaf = baseSegments[baseSegments.length - 1]
-    const leafIndex = candidateSegments.lastIndexOf(baseLeaf)
-    if (leafIndex >= 0 && leafIndex < candidateSegments.length - 1) {
-      return candidateSegments.slice(leafIndex + 1).join('/')
+    if (baseLeaf) {
+      const leafIndex = candidateSegments.lastIndexOf(baseLeaf)
+      if (leafIndex >= 0 && leafIndex < candidateSegments.length - 1) {
+        return candidateSegments.slice(leafIndex + 1).join('/')
+      }
     }
   }
 
