@@ -153,6 +153,8 @@ import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
 import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
 import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import { isWallPresetFilename } from '@/utils/wallPreset'
+import { collectFloorPresetDependencyAssetIds } from '@/stores/floorPresetActions'
+import { isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
@@ -6128,11 +6130,32 @@ watch(floorBrushPresetAssetId, (assetId) => {
 
   void sceneStore
     .loadFloorPreset(id)
-    .then((data) => {
+    .then(async (data) => {
       if (token !== floorBrushPresetLoadToken) {
         return
       }
-      floorBrushPresetData.value = data as FloorPresetData
+      const presetData = data as FloorPresetData
+      const dependencyAssetIds = collectFloorPresetDependencyAssetIds(presetData, sceneStore.materials)
+
+      if (dependencyAssetIds.length) {
+        const presetAssetRegistry = isSceneAssetRegistry(presetData.assetRegistry)
+          ? presetData.assetRegistry
+          : null
+        try {
+          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
+            prefabAssetIdForDownloadProgress: id,
+            prefabAssetRegistry: presetAssetRegistry,
+          })
+        } catch (dependencyError) {
+          // Keep floor brush usable even if dependency hydration partially fails.
+          console.warn('Failed to hydrate floor preset dependencies for brush', id, dependencyError)
+        }
+      }
+
+      if (token !== floorBrushPresetLoadToken) {
+        return
+      }
+      floorBrushPresetData.value = presetData
     })
     .catch((error) => {
       if (token !== floorBrushPresetLoadToken) {
