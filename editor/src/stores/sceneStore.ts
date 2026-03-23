@@ -10943,7 +10943,7 @@ export const useSceneStore = defineStore('scene', {
           if (!zipPath || zipPath !== lookupKey) {
             continue
           }
-          const existingAsset = this.getAsset(existingAssetId)
+          const existingAsset = this.findAssetInCatalog(existingAssetId)
           if (existingAsset) {
             return existingAsset
           }
@@ -10964,7 +10964,8 @@ export const useSceneStore = defineStore('scene', {
 
       normalized.forEach((asset) => {
         if (isServerBackedProviderId(providerId)) {
-          const existingServerAsset = this.getAsset(asset.id)
+          // Only skip registration when the asset already exists in scene assets.
+          const existingServerAsset = this.findAssetInCatalog(asset.id)
           if (existingServerAsset) {
             resolved.push(existingServerAsset)
             return
