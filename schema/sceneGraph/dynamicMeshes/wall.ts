@@ -186,7 +186,11 @@ export async function buildWallMesh(
     });
   });
 
-  const bodyMaterialConfigId = resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps);
+  const preferredBodyMaterialConfigId = resolveWallBodyMaterialConfigIdForRender(meshInfo, wallProps);
+  const fallbackNodeMaterialConfigId = Array.isArray(node.materials)
+    ? (node.materials.find((entry) => typeof entry?.id === 'string' && entry.id.trim().length > 0)?.id ?? null)
+    : null;
+  const bodyMaterialConfigId = preferredBodyMaterialConfigId ?? fallbackNodeMaterialConfigId;
   const buildProceduralWallGroupLocal = async (): Promise<THREE.Group> => {
     const group = createWallGroup(meshInfo, {
       wallRenderMode: wallProps.wallRenderMode,
