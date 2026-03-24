@@ -44,8 +44,7 @@ export class CameraControlsMap extends MapControls {
 
     this.mouseButtons.MIDDLE = THREE.MOUSE.PAN
 
-    // Disable built-in scroll-dolly; walk-zoom is handled manually in SceneViewport
-    // so that orbit radius never shrinks to zero and controls never get stuck.
-    this.enableZoom = false
+    // Use native wheel dolly zoom in the viewport.
+    this.enableZoom = true
   }
 }

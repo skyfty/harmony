@@ -5817,42 +5817,8 @@ function applyGroundBrushRadiusWheelDelta(event: WheelEvent): boolean {
   return true
 }
 
-// Walk-zoom: move camera + target together along the view direction so orbit radius
-// remains constant. This prevents the usual dolly-to-minDistance freeze and keeps
-// pan/rotate speeds consistent regardless of how close the camera is.
-const WALK_ZOOM_STEP_RATIO = 0.10   // fraction of orbit radius per normalised scroll step
-const WALK_ZOOM_MAX_STEP_M = 500    // hard cap (metres) per wheel event
-
-const _walkZoomForward = new THREE.Vector3()
-
-function applyWalkZoom(event: WheelEvent): boolean {
-  if (!camera || !mapControls || !mapControls.enabled || isApplyingCameraState) return false
-  if (props.previewActive) return false
-
-  // Normalise delta: LINE (deltaMode 1) ~= 3× the pixel scale we expect.
-  const raw = event.deltaMode === 1 ? event.deltaY / 3 : event.deltaY / 100
-  const step = Math.max(-1, Math.min(1, raw))   // clamp to [-1, 1] to tame large trackpad steps
-  if (step === 0) return false
-
-  const orbitRadius = camera.position.distanceTo(mapControls.target)
-  // Amount to move: 10% of orbit radius per full scroll step, capped so a single
-  // event never teleports more than WALK_ZOOM_MAX_STEP_M metres.
-  let amount = orbitRadius * WALK_ZOOM_STEP_RATIO * step
-  amount = Math.max(-WALK_ZOOM_MAX_STEP_M, Math.min(WALK_ZOOM_MAX_STEP_M, amount))
-
-  camera.getWorldDirection(_walkZoomForward)
-  // deltaY > 0 → scroll down → zoom out (move camera backward = subtract forward)
-  camera.position.addScaledVector(_walkZoomForward, -amount)
-  mapControls.target.addScaledVector(_walkZoomForward, -amount)
-
-  mapControls.update()
-  event.preventDefault()
-  return true
-}
-
 function handleViewportWheel(event: WheelEvent) {
   if (applyGroundBrushRadiusWheelDelta(event)) return
-  applyWalkZoom(event)
 }
 
 function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
