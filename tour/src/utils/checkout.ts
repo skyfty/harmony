@@ -19,7 +19,10 @@ export function isPhoneBindingRequiredError(error: unknown): boolean {
 }
 
 export function isProfileCompletionRequiredError(error: unknown): boolean {
-  return error instanceof Error && /完善头像和昵称|完善个人资料/.test(error.message)
+  // Previously we blocked checkout when the user had not set avatar/nickname.
+  // For vehicle purchases we only require phone binding, so do not treat
+  // avatar/nickname as a blocking error on the client side.
+  return false
 }
 
 export async function promptBindPhoneBeforeCheckout(): Promise<void> {

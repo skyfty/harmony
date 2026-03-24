@@ -10095,6 +10095,72 @@ function computeRadiusUsed(radius: number | null | undefined, fallbackDistance?:
   return clampNumber(Math.max(raw, 0.001), 0.25, 20000)
 }
 
+function getViewportHeightForControls(): number {
+  const viewportHeight = viewportEl.value?.clientHeight
+  if (typeof viewportHeight === 'number' && Number.isFinite(viewportHeight) && viewportHeight > 0) {
+    return viewportHeight
+  }
+  const rendererHeight = renderer?.domElement?.clientHeight
+  if (typeof rendererHeight === 'number' && Number.isFinite(rendererHeight) && rendererHeight > 0) {
+    return rendererHeight
+  }
+  return 1
+}
+
+function computeAdaptiveNavigationScales(params: {
+  distance: number
+  radiusUsed: number
+  mode: 'map' | 'orbit'
+}): { panScale: number; rotateScale: number } {
+  if (!camera) {
+    return { panScale: 1, rotateScale: 1 }
+  }
+
+  const { distance, radiusUsed, mode } = params
+  const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
+  const viewportHeightPx = getViewportHeightForControls()
+  const worldUnitsPerPixel = computeWorldUnitsPerPixel({
+    camera,
+    distance,
+    viewportHeightPx,
+  })
+  const dragTravelRatio = (worldUnitsPerPixel * 180) / Math.max(radiusUsed, 1e-6)
+
+  if (mode === 'map') {
+    const farDistanceScale = normalizedDistance >= 1
+      ? clampNumber(Math.pow(normalizedDistance, 0.44), 1, 3.8)
+      : clampNumber(Math.pow(Math.max(normalizedDistance, 1e-6), 0.5), 0.68, 1)
+    const screenTravelScale = dragTravelRatio >= 0.08
+      ? clampNumber(Math.pow(dragTravelRatio / 0.08, 0.34), 1, 1.95)
+      : clampNumber(Math.pow(Math.max(dragTravelRatio, 1e-6) / 0.08, 0.36), 0.82, 1)
+
+    return {
+      panScale: clampNumber(farDistanceScale * screenTravelScale, 0.7, 5.6),
+      rotateScale: clampNumber(
+        Math.pow(farDistanceScale, 0.62) * Math.pow(screenTravelScale, 0.52),
+        0.82,
+        2.1,
+      ),
+    }
+  }
+
+  const orbitFarDistanceScale = normalizedDistance >= 1
+    ? clampNumber(Math.pow(normalizedDistance, 0.28), 1, 1.95)
+    : clampNumber(Math.pow(Math.max(normalizedDistance, 1e-6), 0.72), 0.48, 1)
+  const orbitScreenTravelScale = dragTravelRatio >= 0.08
+    ? clampNumber(Math.pow(dragTravelRatio / 0.08, 0.18), 1, 1.18)
+    : clampNumber(Math.pow(Math.max(dragTravelRatio, 1e-6) / 0.08, 0.52), 0.62, 1)
+
+  return {
+    panScale: clampNumber(orbitFarDistanceScale * orbitScreenTravelScale, 0.38, 2.1),
+    rotateScale: clampNumber(
+      Math.pow(orbitFarDistanceScale, 0.42) * Math.pow(orbitScreenTravelScale, 0.34),
+      0.56,
+      1.18,
+    ),
+  }
+}
+
 function computeFitDistanceForSphere(params: {
   camera: THREE.PerspectiveCamera
   radius: number
@@ -10149,20 +10215,18 @@ function syncControlsConstraintsAndSpeeds() {
   mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
   mapControls.maxDistance = Math.max(maxDistanceBase, distance * 1.05)
 
-  // Keep local-detail edits precise while making far-away browsing much faster.
-  const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
-  const distanceScale = normalizedDistance >= 1
-    ? clampNumber(Math.pow(normalizedDistance, 0.22), 1, 1.5)
-    : clampNumber(0.9 + normalizedDistance * 0.1, 0.9, 1)
   const boostScale = navigationSpeedBoostModifierActive.value ? 1.35 : 1
-  const speedScale = distanceScale * boostScale
+  const { panScale, rotateScale } = computeAdaptiveNavigationScales({
+    distance,
+    radiusUsed,
+    mode,
+  })
 
-  // Slightly increased over original defaults but conservative to avoid oversensitivity
-  mapControls.rotateSpeed = 0.6 * speedScale
+  mapControls.rotateSpeed = 0.6 * rotateScale * boostScale
   mapControls.zoomSpeed = 0.6
-  mapControls.panSpeed = 1 * speedScale
+  mapControls.panSpeed = 1 * panScale * boostScale
   // @ts-ignore
-  ;(mapControls as any).keyPanSpeed = 7.5 * speedScale
+  ;(mapControls as any).keyPanSpeed = 7.5 * panScale * boostScale
 
   // debug logs removed
 
