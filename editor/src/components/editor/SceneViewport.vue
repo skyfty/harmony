@@ -1715,6 +1715,16 @@ let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const defaultCameraStatusDistance = new THREE.Vector3(
+  DEFAULT_CAMERA_POSITION.x,
+  DEFAULT_CAMERA_POSITION.y,
+  DEFAULT_CAMERA_POSITION.z,
+).distanceTo(new THREE.Vector3(
+  DEFAULT_CAMERA_TARGET.x,
+  Math.max(DEFAULT_CAMERA_TARGET.y, MIN_TARGET_HEIGHT),
+  DEFAULT_CAMERA_TARGET.z,
+))
+const cameraStatusDistance = ref(defaultCameraStatusDistance)
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -1739,6 +1749,14 @@ const canRotateSelection = computed(() =>
 const canDropSelection = computed(() =>
   sceneStore.selectedNodeIds.some((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
 )
+const cameraStatusModeText = computed(() =>
+  sceneStore.viewportSettings.cameraControlMode === 'map' ? '地图' : '轨道'
+)
+const cameraStatusZoomRatioText = computed(() => {
+  const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
+  const ratio = cameraStatusDistance.value / base
+  return `${Math.max(0, ratio).toFixed(2)}x`
+})
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const buildToolsStore = useBuildToolsStore()
@@ -9954,6 +9972,7 @@ function resetCameraView() {
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(target) / 10)
   syncControlsConstraintsAndSpeeds()
   mapControls.update()
+  updateCameraStatusDistance()
   isApplyingCameraState = false
 
 }
@@ -10045,6 +10064,7 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
   syncControlsConstraintsAndSpeeds()
   mapControls.update()
+  updateCameraStatusDistance()
   gizmoControls?.cameraUpdate()
   isApplyingCameraState = false
 }
@@ -10354,8 +10374,21 @@ function handleControlsChange() {
   }
 
   syncControlsConstraintsAndSpeeds()
+  updateCameraStatusDistance()
   gizmoControls?.cameraUpdate()
   terrainGridController.markCameraDirty()
+}
+
+function updateCameraStatusDistance() {
+  if (!camera || !mapControls) {
+    cameraStatusDistance.value = defaultCameraStatusDistance
+    return
+  }
+  cameraStatusDistance.value = camera.position.distanceTo(mapControls.target)
+}
+
+function handleResetCameraStatusZoomClick() {
+  resetCameraView()
 }
 
 function clearShiftOrbitPivotSession(pointerId?: number) {
@@ -10542,6 +10575,7 @@ function applyCameraControlMode() {
   }
   updateMapControlsEnabled()
   mapControls.update()
+  updateCameraStatusDistance()
   gizmoControls?.cameraUpdate()
 
 }
@@ -10696,6 +10730,7 @@ function initScene() {
   camera = perspectiveCamera
 
   applyCameraControlMode()
+  updateCameraStatusDistance()
 
   transformControls = new TransformControls(camera, canvasRef.value)
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
@@ -19269,6 +19304,18 @@ defineExpose<SceneViewportHandle>({
           }"
         />
       </div>
+      <div class="camera-status-hud">
+        <span class="camera-status-hud__text">镜头：{{ cameraStatusModeText }}</span>
+        <span class="camera-status-hud__divider">·</span>
+        <button
+          type="button"
+          class="camera-status-hud__ratio"
+          title="点击重置缩放"
+          @click="handleResetCameraStatusZoomClick"
+        >
+          缩放：{{ cameraStatusZoomRatioText }}
+        </button>
+      </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
         </div>
@@ -19514,6 +19561,60 @@ defineExpose<SceneViewportHandle>({
   pointer-events: none;
   overflow: hidden;
   z-index: 9;
+}
+
+.camera-status-hud {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 15, 21, 0.72);
+  color: rgba(236, 241, 248, 0.95);
+  font-size: 12px;
+  line-height: 1.2;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px) saturate(140%);
+  z-index: 9;
+  pointer-events: auto;
+}
+
+.camera-status-hud__text,
+.camera-status-hud__divider {
+  pointer-events: none;
+}
+
+.camera-status-hud__ratio {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: rgba(134, 218, 255, 0.96);
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.camera-status-hud__ratio:hover {
+  color: rgba(174, 232, 255, 1);
+}
+
+.camera-status-hud__ratio:active {
+  color: rgba(113, 202, 246, 1);
+}
+
+.camera-status-hud__ratio:focus-visible {
+  outline: 2px solid rgba(134, 218, 255, 0.72);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .protagonist-preview__label {
