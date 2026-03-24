@@ -5,4 +5,5 @@ export interface SceneSummary {
   thumbnail: string | null
   createdAt: string
   updatedAt: string
+  bundleEtag?: string | null
 }

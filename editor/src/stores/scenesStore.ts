@@ -49,6 +49,7 @@ const LOCAL_WORKSPACE_DESCRIPTOR: SceneWorkspaceDescriptor = {
 }
 
 const USER_SCENE_API_PREFIX = '/api/user-scenes'
+const SCENE_BUNDLE_SYNC_CONCURRENCY = 4
 
 type UserSceneBundleSummaryDto = {
   id: string
@@ -122,6 +123,32 @@ function resolveWorkspaceDescriptor(user: SessionUser | null | undefined): Scene
     userId: user.id,
     username: user.username ?? null,
   }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  iteratee: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (!items.length) {
+    return []
+  }
+  const limit = Math.max(1, Math.min(concurrency, items.length))
+  const results: R[] = new Array(items.length)
+  let cursor = 0
+  const runWorker = async () => {
+    while (true) {
+      const index = cursor
+      cursor += 1
+      if (index >= items.length) {
+        return
+      }
+      const item = items[index] as T
+      results[index] = await iteratee(item, index)
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, () => runWorker()))
+  return results
 }
 
 const DB_NAME = 'harmony-editor-scenes'
@@ -725,6 +752,57 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
   }
 }
 
+function toMetadataWithBundleEtag(document: StoredSceneDocument, bundleEtag: string | null): SceneSummary {
+  return {
+    ...toMetadata(document),
+    bundleEtag,
+  }
+}
+
+async function readSceneBundleFromWorkspace(
+  workspaceId: string,
+  sceneId: string,
+): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; groundPaintSidecar: ArrayBuffer | null } | null> {
+  const document = await readSceneDocument(workspaceId, sceneId, { hydrateGroundRuntime: false })
+  if (!document) {
+    return null
+  }
+  return {
+    document,
+    groundHeightSidecar: await readSceneGroundHeightSidecar(workspaceId, sceneId),
+    groundScatterSidecar: await readSceneGroundScatterSidecar(workspaceId, sceneId),
+    groundPaintSidecar: await readSceneGroundPaintSidecar(workspaceId, sceneId),
+  }
+}
+
+async function writeSceneBundleEtags(
+  workspaceId: string,
+  bundleEtags: Record<string, string | null>,
+): Promise<void> {
+  const entries = Object.entries(bundleEtags)
+  if (!entries.length) {
+    return
+  }
+  if (!isIndexedDbAvailable()) {
+    return
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_METADATA, 'readwrite')
+  const store = tx.objectStore(STORE_METADATA)
+  for (const [sceneId, bundleEtag] of entries) {
+    const existing = await requestToPromise<SceneSummary | undefined>(store.get(sceneId))
+    if (!existing) {
+      continue
+    }
+    store.put({ ...existing, bundleEtag })
+  }
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene bundle etags'))
+    tx.onabort = () => reject(tx.error ?? new Error('Scene bundle etag write aborted'))
+  })
+}
+
 async function writeSceneDocument(workspaceId: string, document: StoredSceneDocument): Promise<void> {
   const prepared = prepareSceneDocumentForPersistence(document)
   const sidecar = await resolveSceneGroundHeightSidecarForWrite(workspaceId, document)
@@ -1170,13 +1248,50 @@ export const useScenesStore = defineStore('scenes', {
         if (!remoteScenes) {
           return
         }
+        const localMetadataById = new Map(this.metadata.map((entry) => [entry.id, entry]))
+        const syncResults = await mapWithConcurrency(remoteScenes, SCENE_BUNDLE_SYNC_CONCURRENCY, async (entry) => {
+          const localEtag = localMetadataById.get(entry.id)?.bundleEtag ?? null
+          const bundle = await downloadSceneBundleZip(entry.bundle.url, authStore, { etag: localEtag })
+          if (bundle) {
+            return {
+              sceneId: entry.id,
+              downloaded: await unpackSceneBundleIntoStores(bundle.bytes),
+              bundleEtag: bundle.etag ?? entry.bundle.etag ?? null,
+            }
+          }
+          return {
+            sceneId: entry.id,
+            downloaded: null,
+            bundleEtag: localEtag ?? entry.bundle.etag ?? null,
+          }
+        })
+
         const downloaded: Array<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; groundPaintSidecar: ArrayBuffer | null }> = []
-        for (const entry of remoteScenes) {
-          const bundle = await downloadSceneBundleZip(entry.bundle.url, authStore)
-          if (!bundle) {
+        const syncedBundleEtags: Record<string, string | null> = {}
+        for (const result of syncResults) {
+          syncedBundleEtags[result.sceneId] = result.bundleEtag
+          if (result.downloaded) {
+            downloaded.push(result.downloaded)
             continue
           }
-          downloaded.push(await unpackSceneBundleIntoStores(bundle.bytes))
+          if (!options.replace) {
+            continue
+          }
+          const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, result.sceneId)
+          if (localBundle) {
+            downloaded.push(localBundle)
+            continue
+          }
+          const remoteEntry = remoteScenes.find((entry) => entry.id === result.sceneId)
+          if (!remoteEntry) {
+            continue
+          }
+          const fallbackBundle = await downloadSceneBundleZip(remoteEntry.bundle.url, authStore)
+          if (!fallbackBundle) {
+            continue
+          }
+          downloaded.push(await unpackSceneBundleIntoStores(fallbackBundle.bytes))
+          syncedBundleEtags[result.sceneId] = fallbackBundle.etag ?? remoteEntry.bundle.etag ?? null
         }
 
         if (options.replace) {
@@ -1196,8 +1311,9 @@ export const useScenesStore = defineStore('scenes', {
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundPaintSidecar ?? null])),
           )
         }
+        await writeSceneBundleEtags(this.workspaceId, syncedBundleEtags)
         if (options.replace) {
-          this.metadata = downloaded.map((entry) => toMetadata(entry.document))
+          this.metadata = downloaded.map((entry) => toMetadataWithBundleEtag(entry.document, syncedBundleEtags[entry.document.id] ?? null))
         } else {
           await this.refreshMetadata()
         }
