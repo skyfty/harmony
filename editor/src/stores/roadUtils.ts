@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh, Vector3Like } from '@schema'
-import { ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH } from '@schema/components'
+import type { RoadComponentProps } from '@schema/components'
+import { ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH, clampRoadProps } from '@schema/components'
 import { updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import type { Object3D } from 'three'
 
@@ -110,7 +111,7 @@ export function applyRoadComponentPropsToNode(
   if (node.dynamicMesh?.type !== 'Road') {
     return false
   }
-  const normalized = props && typeof props === 'object' ? props : props
+  const normalized = clampRoadProps((props && typeof props === 'object' ? props : null) as Partial<RoadComponentProps> | null)
   // Road geometry (vertices/segments) is edited directly via dynamicMesh.
   const existing = node.dynamicMesh
   const existingWidth = existing && typeof (existing as any).width === 'number' ? Number((existing as any).width) : NaN
@@ -123,7 +124,7 @@ export function applyRoadComponentPropsToNode(
 
   const runtime = deps.getRuntimeObject(node.id)
   if (runtime) {
-    const heightSampler = resolveRoadLocalHeightSampler(node, groundNode)
+    const heightSampler = normalized.snapToTerrain ? resolveRoadLocalHeightSampler(node, groundNode) : null
 
     runtime.traverse((child: Object3D & { type?: string }) => {
       if (child.type === 'Group' && node.dynamicMesh && node.dynamicMesh.type === 'Road') {

@@ -41,7 +41,10 @@ import {
   PRELOADABLE_COMPONENT_TYPE,
   type PreloadableComponentProps,
   WALL_COMPONENT_TYPE,
+  ROAD_COMPONENT_TYPE,
+  type RoadComponentProps,
   type WallComponentProps,
+  clampRoadProps,
   clampWallProps,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
@@ -880,8 +883,10 @@ function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): 
     }
     case 'Road':
       {
+        const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+        const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
         return createRoadGroup(mesh, {
-          heightSampler: resolveRoadLocalHeightSampler(node, groundNode),
+          heightSampler: roadProps.snapToTerrain ? resolveRoadLocalHeightSampler(node, groundNode) : null,
         }).clone(true)
       }
     default:

@@ -3047,8 +3047,12 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
   try {
     let runtime: Object3D;
     if (meshType === 'Road') {
+      const roadState = node.components?.[ROAD_COMPONENT_TYPE] as
+        | SceneNodeComponentState<RoadComponentProps>
+        | undefined
+      const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
       runtime = createRoadGroup(meshDefinition as RoadDynamicMesh, {
-        heightSampler: resolveRoadLocalHeightSampler(node, groundNode),
+        heightSampler: roadProps.snapToTerrain ? resolveRoadLocalHeightSampler(node, groundNode) : null,
       });
     } else if (meshType === 'Floor') {
       runtime = createFloorGroup(meshDefinition as FloorDynamicMesh);

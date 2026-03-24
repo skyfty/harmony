@@ -1445,6 +1445,11 @@ function resolveRoadShouldersEnabled(node: SceneNode): boolean {
   return Boolean(component?.props?.shoulders)
 }
 
+function resolveRoadSnapToTerrainEnabled(node: SceneNode): boolean {
+  const component = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+  return Boolean(component?.props?.snapToTerrain)
+}
+
 function resolveRoadMaterialConfigId(node: SceneNode): string | null {
   const first = node.materials?.[0]
   const id = typeof first?.id === 'string' ? first.id.trim() : ''
@@ -1471,6 +1476,7 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const junctionSmoothing = resolveRoadJunctionSmoothing(node)
   const laneLines = resolveRoadLaneLinesEnabled(node)
   const shoulders = resolveRoadShouldersEnabled(node)
+  const snapToTerrain = resolveRoadSnapToTerrainEnabled(node)
   const materialConfigId = resolveRoadMaterialConfigId(node)
   const groundNode = getGroundNodeFromStore()
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
@@ -1525,7 +1531,7 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
     // Road vertices are stored in the node's local XZ plane.
     // When sampling terrain height we must convert local -> world (include yaw), then sample ground in its local XZ,
     // then convert sampled world height -> road local Y.
-    heightSampler: groundDefinition
+    heightSampler: snapToTerrain && groundDefinition
       ? ((x: number, z: number) => {
           const rotatedX = x * cosYaw - z * sinYaw
           const rotatedZ = x * sinYaw + z * cosYaw
@@ -17252,6 +17258,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     const junctionSmoothing = resolveRoadJunctionSmoothing(node)
     const laneLines = resolveRoadLaneLinesEnabled(node)
     const shoulders = resolveRoadShouldersEnabled(node)
+    const snapToTerrain = resolveRoadSnapToTerrainEnabled(node)
     const materialConfigId = resolveRoadMaterialConfigId(node)
     const groundDefinition = resolveGroundDynamicMeshDefinition()
     const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
@@ -17265,6 +17272,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
 
     const groundNode = getGroundNodeFromStore()
     const heightSamplerSignature = {
+      snapToTerrain,
       roadPosition: node.position ?? null,
       roadRotation: node.rotation ?? null,
       groundPosition: groundNode?.position ?? null,
@@ -18216,6 +18224,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const junctionSmoothing = resolveRoadJunctionSmoothing(node)
       const laneLines = resolveRoadLaneLinesEnabled(node)
       const shoulders = resolveRoadShouldersEnabled(node)
+      const snapToTerrain = resolveRoadSnapToTerrainEnabled(node)
       const materialConfigId = resolveRoadMaterialConfigId(node)
       const groundDefinition = resolveGroundDynamicMeshDefinition()
       const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
@@ -18229,6 +18238,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
       const groundNode = getGroundNodeFromStore()
       const heightSamplerSignature = {
+        snapToTerrain,
         roadPosition: node.position ?? null,
         roadRotation: node.rotation ?? null,
         groundPosition: groundNode?.position ?? null,
