@@ -28,6 +28,9 @@ import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
+import { findGroundNode } from '@/stores/groundUtils'
+import { attachGroundScatterRuntimeToNode } from '@/stores/groundScatterStore'
+import { attachGroundPaintRuntimeToNode } from '@/stores/groundPaintStore'
 import {
   useSceneStore,
   type EditorPanel,
@@ -1273,6 +1276,11 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     const exportDocument = await prepareStoredSceneJsonExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
     if (isStale?.()) {
       return
+    }
+    const groundNode = findGroundNode(exportDocument.nodes)
+    if (groundNode) {
+      attachGroundScatterRuntimeToNode(exportDocument.id, groundNode)
+      attachGroundPaintRuntimeToNode(exportDocument.id, groundNode)
     }
 
     let revision = Date.now()

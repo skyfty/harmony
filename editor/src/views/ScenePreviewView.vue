@@ -5213,12 +5213,57 @@ async function buildPreviewRuntimeDocument(
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
 	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
 	const groundNode = findGroundNode(document.nodes)
+	const scatterStore = useGroundScatterStore()
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	}
 	if (groundNode) {
-		await useGroundScatterStore().hydrateSceneDocument(document.id, groundNode, scatterSidecar)
-		await useGroundPaintStore().hydrateSceneDocument(document.id, groundNode, paintSidecar)
+		const paintStore = useGroundPaintStore()
+		const dynamicGround = isGroundDynamicMesh(groundNode.dynamicMesh)
+			? (groundNode.dynamicMesh as GroundDynamicMesh & {
+				terrainScatter?: unknown
+				groundSurfaceChunks?: unknown
+			})
+			: null
+		const embeddedScatter = dynamicGround?.terrainScatter
+		const hasEmbeddedScatter = Boolean(
+			embeddedScatter
+			&& typeof embeddedScatter === 'object'
+			&& Array.isArray((embeddedScatter as { layers?: unknown[] }).layers)
+			&& (embeddedScatter as { layers: unknown[] }).layers.length > 0,
+		)
+		if (scatterSidecar) {
+			await scatterStore.hydrateSceneDocument(document.id, groundNode, scatterSidecar)
+		} else if (hasEmbeddedScatter) {
+			scatterStore.replaceTerrainScatter(
+				document.id,
+				groundNode.id,
+				JSON.parse(JSON.stringify(embeddedScatter)),
+				{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
+			)
+		} else {
+			await scatterStore.hydrateSceneDocument(document.id, groundNode, null)
+		}
+
+		const embeddedPaintChunks = dynamicGround?.groundSurfaceChunks
+		const hasEmbeddedPaintChunks = Boolean(
+			embeddedPaintChunks
+			&& typeof embeddedPaintChunks === 'object'
+			&& !Array.isArray(embeddedPaintChunks)
+			&& Object.keys(embeddedPaintChunks as Record<string, unknown>).length > 0,
+		)
+		if (paintSidecar) {
+			await paintStore.hydrateSceneDocument(document.id, groundNode, paintSidecar)
+		} else if (hasEmbeddedPaintChunks) {
+			paintStore.replaceGroundSurfaceChunks(
+				document.id,
+				groundNode.id,
+				JSON.parse(JSON.stringify(embeddedPaintChunks)) as Record<string, { textureAssetId?: string; revision?: number }>,
+				{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
+			)
+		} else {
+			await paintStore.hydrateSceneDocument(document.id, groundNode, null)
+		}
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
 	}
