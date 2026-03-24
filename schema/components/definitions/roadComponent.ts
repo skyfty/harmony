@@ -15,6 +15,8 @@ export interface RoadComponentProps {
   segments: RoadSegment[]
   width: number
   junctionSmoothing: number
+  /** Whether road surface adapts to ground undulation. Default false (temporarily disabled). */
+  snapToTerrain: boolean
   laneLines: boolean
   shoulders: boolean
   bodyAssetId?: string | null
@@ -73,6 +75,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
 
   const laneLines = Boolean(props?.laneLines)
   const shoulders = Boolean(props?.shoulders)
+  const snapToTerrain = Boolean((props as RoadComponentProps | undefined)?.snapToTerrain)
 
   const normalizeAssetId = (value: unknown): string | null => {
     return typeof value === 'string' && value.trim().length ? value : null
@@ -108,6 +111,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     segments,
     width,
     junctionSmoothing,
+    snapToTerrain,
     laneLines,
     shoulders,
     bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
@@ -122,6 +126,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
 export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefined | null): RoadComponentProps {
   if (!mesh) {
     return {
+      snapToTerrain: false,
       laneLines: false,
       shoulders: false,
       vertices: [],
@@ -146,6 +151,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     segments: segments as any,
     width: mesh.width,
     junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
+    snapToTerrain: false,
     laneLines: false,
     shoulders: false,
     samplingDensityFactor: 1.0,
@@ -160,6 +166,7 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     segments: props.segments.map((s) => ({ a: s.a, b: s.b })),
     width: props.width,
     junctionSmoothing: props.junctionSmoothing,
+    snapToTerrain: props.snapToTerrain,
     laneLines: props.laneLines,
     shoulders: props.shoulders,
     bodyAssetId: props.bodyAssetId ?? null,
@@ -200,6 +207,7 @@ const roadComponentDefinition: ComponentDefinition<RoadComponentProps> = {
       id: 'details',
       label: 'Details',
       fields: [
+        { kind: 'boolean', key: 'snapToTerrain', label: 'Adapt To Ground Terrain' },
         { kind: 'boolean', key: 'laneLines', label: 'Show Lane Lines' },
         { kind: 'boolean', key: 'shoulders', label: 'Show Shoulders' },
       ],
@@ -229,6 +237,7 @@ export function createRoadComponentState(
     segments: overrides?.segments ?? defaults.segments,
     width: overrides?.width ?? defaults.width,
     junctionSmoothing: overrides?.junctionSmoothing ?? defaults.junctionSmoothing,
+    snapToTerrain: overrides?.snapToTerrain ?? defaults.snapToTerrain,
     laneLines: overrides?.laneLines ?? defaults.laneLines,
     shoulders: overrides?.shoulders ?? defaults.shoulders,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,

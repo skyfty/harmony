@@ -46,7 +46,9 @@ export async function buildRoadMesh(
 
   const documentNodes = deps.getDocumentNodes();
   const groundNode = findGroundNodeInNodes(documentNodes);
-  roadOptions.heightSampler = resolveRoadLocalHeightSampler(node, groundNode);
+  roadOptions.heightSampler = roadProps.snapToTerrain
+    ? resolveRoadLocalHeightSampler(node, groundNode)
+    : null;
 
   const group = createRoadRenderGroup(meshInfo, { bodyObject }, roadOptions);
   group.name = node.name ?? (group.name || 'Road');

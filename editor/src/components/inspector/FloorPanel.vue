@@ -312,15 +312,20 @@ function applyThicknessUpdate() {
             <span>Corner Smoothness</span>
             <span>{{ smoothDisplay }}</span>
           </div>
-          <v-slider
-            :model-value="localSmooth"
+          <v-text-field
+            v-model.number="localSmooth"
+            label="Corner Smoothness"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            inputmode="decimal"
             :min="0"
             :max="1"
-            :step="0.01"
-            density="compact"
-            track-color="rgba(77, 208, 225, 0.4)"
-            color="primary"
+            step="0.01"
             @update:modelValue="(value) => { localSmooth = Number(value); applySmoothUpdate(value) }"
+            @blur="applySmoothUpdate(localSmooth)"
+            @keydown.enter.prevent="applySmoothUpdate(localSmooth)"
           />
 
           <v-text-field

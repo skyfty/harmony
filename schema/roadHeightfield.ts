@@ -57,6 +57,11 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 	const smoothingStrengthFactor = roadProps.smoothingStrengthFactor ?? 1.0
 	const minClearance = roadProps.minClearance ?? 0.01
 	const junctionSmoothing = roadProps.junctionSmoothing ?? 0
+	const snapToTerrain = roadProps.snapToTerrain
+
+	if (!snapToTerrain) {
+		return null
+	}
 
 	const heightSampler = resolveRoadLocalHeightSampler(roadNode, groundNode)
 	if (!heightSampler) {

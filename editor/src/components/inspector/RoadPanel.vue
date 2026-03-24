@@ -30,6 +30,7 @@ const localWidth = ref<number>(2)
 const localJunctionSmoothing = ref<number>(ROAD_DEFAULT_JUNCTION_SMOOTHING)
 const localLaneLines = ref<boolean>(false)
 const localShoulders = ref<boolean>(false)
+const localSnapToTerrain = ref<boolean>(false)
 const localSamplingDensityFactor = ref<number>(1.0)
 const localSmoothingStrengthFactor = ref<number>(1.0)
 const localMinClearance = ref<number>(0.01)
@@ -66,6 +67,7 @@ watch(
       localJunctionSmoothing.value = ROAD_DEFAULT_JUNCTION_SMOOTHING
       localLaneLines.value = false
       localShoulders.value = false
+      localSnapToTerrain.value = false
       localSamplingDensityFactor.value = 1.0
       localSmoothingStrengthFactor.value = 1.0
       localMinClearance.value = 0.01
@@ -82,6 +84,7 @@ watch(
     localJunctionSmoothing.value = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : ROAD_DEFAULT_JUNCTION_SMOOTHING
     localLaneLines.value = Boolean(component.props?.laneLines)
     localShoulders.value = Boolean(component.props?.shoulders)
+    localSnapToTerrain.value = Boolean(component.props?.snapToTerrain)
 
     const samplingDensityRaw = component.props?.samplingDensityFactor
     const samplingDensity = typeof samplingDensityRaw === 'number' ? samplingDensityRaw : Number(samplingDensityRaw)
@@ -142,6 +145,22 @@ function applyShouldersUpdate(rawValue: unknown) {
   sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulders: nextState })
 }
 
+function applySnapToTerrainUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextState = Boolean(rawValue)
+  if (component.props.snapToTerrain === nextState) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { snapToTerrain: nextState })
+}
+
 const junctionSmoothingDisplay = computed(() => `${Math.round(localJunctionSmoothing.value * 100)}%`)
 const samplingDensityDisplay = computed(() => localSamplingDensityFactor.value.toFixed(2))
 const smoothingStrengthDisplay = computed(() => localSmoothingStrengthFactor.value.toFixed(2))
@@ -167,6 +186,12 @@ function onShouldersModelUpdate(value: unknown) {
   const next = Boolean(value)
   localShoulders.value = next
   applyShouldersUpdate(next)
+}
+
+function onSnapToTerrainModelUpdate(value: unknown) {
+  const next = Boolean(value)
+  localSnapToTerrain.value = next
+  applySnapToTerrainUpdate(next)
 }
 
 function onSamplingDensityModelUpdate(value: unknown) {
@@ -402,6 +427,13 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
         <v-divider class="my-2" />
 
         <div class="road-section-header">Terrain Adaptation</div>
+
+        <v-switch
+          :model-value="localSnapToTerrain"
+          density="compact"
+          label="Adapt To Ground Terrain"
+          @update:modelValue="onSnapToTerrainModelUpdate"
+        />
 
         <div class="road-field-labels">
           <span>Sampling Density</span>
