@@ -39,7 +39,7 @@ services:
       mongo:
         condition: service_healthy
     ports:
-      - "4000:4000" # 可选：仅用于本机调试；线上建议通过 Nginx/反向代理暴露域名
+      - "127.0.0.1:4000:4000" # 仅允许宿主机本地访问；通过 Nginx/反向代理对外暴露
     volumes:
       - /www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads
       - ./server/.env.production:/app/server/.env.production:ro
@@ -72,7 +72,7 @@ services:
     depends_on:
       - server
     ports:
-      - "8087:80" # 通过反向代理映射到 http://v.touchmagic.cn
+      - "127.0.0.1:8087:80" # 仅允许宿主机本地访问；通过反向代理对外暴露
     volumes:
       - type: bind
         source: /www/web/v_touchmagic_cn/harmony/config/admin-app-config.js
@@ -90,7 +90,7 @@ services:
     depends_on:
       - server
     ports:
-      - "8088:80" # 通过反向代理映射到 http://editor.v.touchmagic.cn
+      - "127.0.0.1:8088:80" # 仅允许宿主机本地访问；通过反向代理对外暴露
     volumes:
       - type: bind
         source: /www/web/v_touchmagic_cn/harmony/config/editor-app-config.json

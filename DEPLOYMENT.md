@@ -55,6 +55,7 @@ MONGODB_URI=mongodb://<MONGO_APP_USERNAME>:<MONGO_APP_PASSWORD>@mongo:27017/<MON
 说明：Mongo 首次初始化时会执行 `server/mongo-init/01-create-app-user.js`，为业务库创建 `readWrite` 最小权限账号。
 
 网络隔离：`mongo` 仅加入 `harmony-backend`（`internal: true`）内部网络，默认不对宿主机开放端口；仅 `server` / `server-seed` 可通过容器网络访问 Mongo。
+对外暴露策略：`server/admin/editor` 端口仅绑定 `127.0.0.1`，不可被外网直接访问；请统一通过 Nginx/反向代理暴露域名入口。
 - `editor`/`uploader`：挂载 `config/*.json`，修改后无需重建镜像
 	- `editor` 生产示例：`serverApiBaseUrl=http://editor.v.touchmagic.cn`
 	- `uploader` 生产示例：`serverApiBaseUrl=http://uploader.v.touchmagic.cn`
