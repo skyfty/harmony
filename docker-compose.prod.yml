@@ -2,13 +2,30 @@ services:
   mongo:
     image: mongo:7
     container_name: harmony-mongo
-    command: ["--bind_ip_all"]
-    ports:
-      - "27018:27017" # 将宿主机的 27018 转发到容器内默认 27017，避免与现有服务冲突
+    command: ["--bind_ip_all", "--auth"]
+    expose:
+      - "27017"
     environment:
-      - MONGO_INITDB_DATABASE=harmony
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:?MONGO_ROOT_USERNAME is required}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}
+      - MONGO_INITDB_DATABASE=${MONGO_APP_DATABASE:-harmony}
+      - MONGO_APP_USERNAME=${MONGO_APP_USERNAME:?MONGO_APP_USERNAME is required}
+      - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD:?MONGO_APP_PASSWORD is required}
     volumes:
       - /www/web/v_touchmagic_cn/harmony/server/mongo-data:/data/db
+      - ./server/mongo-init/01-create-app-user.js:/docker-entrypoint-initdb.d/01-create-app-user.js:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "echo 'db.runCommand(\"ping\").ok' | mongosh --quiet --host 127.0.0.1 --port 27017 -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin | grep 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - harmony-backend
     restart: unless-stopped
 
   server:
@@ -19,12 +36,16 @@ services:
     env_file:
       - ./server/.env.production
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     ports:
       - "4000:4000" # 可选：仅用于本机调试；线上建议通过 Nginx/反向代理暴露域名
     volumes:
       - /www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads
       - ./server/.env.production:/app/server/.env.production:ro
+    networks:
+      - harmony-backend
+      - default
     restart: unless-stopped
 
   server-seed:
@@ -34,10 +55,13 @@ services:
     env_file:
       - ./server/.env.production
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     command: ["node", "dist/scripts/seed.js"]
     profiles:
       - ops
+    networks:
+      - harmony-backend
     restart: "no"
 
   admin:
@@ -75,3 +99,7 @@ services:
         bind:
           create_host_path: false
     restart: unless-stopped
+
+networks:
+  harmony-backend:
+    internal: true

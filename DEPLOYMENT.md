@@ -35,6 +35,26 @@ docker compose -f docker-compose.prod.yml up -d server
 ## 运行时要点
 - `server/.env.production`：设置 `NODE_ENV`, `PORT`, `MONGODB_URI`, `JWT_SECRET`, `ASSET_STORAGE_PATH`, `ASSET_PUBLIC_URL`, `MULTIUSER_PORT`
 	- 示例：`ASSET_PUBLIC_URL=https://v.touchmagic.cn/uploads`
+
+### MongoDB 鉴权（生产强化）
+
+`docker-compose.prod.yml` 已启用 MongoDB 鉴权与应用账号初始化，部署前需在当前目录 `.env`（或 CI/CD 环境变量）设置：
+
+- `MONGO_ROOT_USERNAME`
+- `MONGO_ROOT_PASSWORD`
+- `MONGO_APP_DATABASE`（可选，默认 `harmony`）
+- `MONGO_APP_USERNAME`
+- `MONGO_APP_PASSWORD`
+
+建议 `server/.env.production` 中 `MONGODB_URI` 使用业务账号而非 root，例如：
+
+```env
+MONGODB_URI=mongodb://<MONGO_APP_USERNAME>:<MONGO_APP_PASSWORD>@mongo:27017/<MONGO_APP_DATABASE>?authSource=<MONGO_APP_DATABASE>
+```
+
+说明：Mongo 首次初始化时会执行 `server/mongo-init/01-create-app-user.js`，为业务库创建 `readWrite` 最小权限账号。
+
+网络隔离：`mongo` 仅加入 `harmony-backend`（`internal: true`）内部网络，默认不对宿主机开放端口；仅 `server` / `server-seed` 可通过容器网络访问 Mongo。
 - `editor`/`uploader`：挂载 `config/*.json`，修改后无需重建镜像
 	- `editor` 生产示例：`serverApiBaseUrl=http://editor.v.touchmagic.cn`
 	- `uploader` 生产示例：`serverApiBaseUrl=http://uploader.v.touchmagic.cn`
