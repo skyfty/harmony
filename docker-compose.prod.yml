@@ -108,6 +108,9 @@ services:
     networks:
       - harmony-backend            # 加入已有网络，以便连接 mongo
     restart: unless-stopped
+    volumes:
+      # 挂载配置文件（可选，如果不需要自定义配置可以注释掉）
+      - /www/web/v_touchmagic_cn/harmony/mayfly.yml:/mayfly/config.yml:ro
 
 networks:
   harmony-backend:
