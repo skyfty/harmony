@@ -34,7 +34,7 @@ function mapMiniApp(row: any): ResolvedMiniApp {
       serialNo: String(row.wechatPay?.serialNo ?? '').trim(),
       privateKey: String(row.wechatPay?.privateKey ?? '').replace(/\\n/g, '\n'),
       apiV3Key: String(row.wechatPay?.apiV3Key ?? '').trim(),
-      notifyUrl: String(row.wechatPay?.notifyUrl ?? '').trim(),
+      notifyUrl: String(row.wechatPay?.notifyUrl ?? 'https://v.touchmagic.cn/wechat/pay/notify').trim(),
       baseUrl: String(row.wechatPay?.baseUrl ?? 'https://api.mch.weixin.qq.com').trim(),
       platformPublicKey: String(row.wechatPay?.platformPublicKey ?? '').replace(/\\n/g, '\n'),
       callbackSkipVerifyInDev: row.wechatPay?.callbackSkipVerifyInDev === true,
@@ -70,65 +70,4 @@ export async function resolveMiniAppConfig(miniAppId?: string): Promise<Resolved
 export async function listEnabledMiniApps(): Promise<ResolvedMiniApp[]> {
   const rows = await MiniAppModel.find({ enabled: true }).sort({ createdAt: 1 }).lean().exec()
   return rows.map(mapMiniApp)
-}
-
-export async function ensureDefaultMiniAppBootstrap(): Promise<void> {
-  const seedMiniAppId = appConfig.miniAuth.defaultMiniAppId?.trim() || 'tour'
-  const seedAppSecret = appConfig.miniAuth.wechatMiniAppSecret?.trim() || 'please-set-wechat-mini-app-secret'
-  const seedName = seedMiniAppId === 'tour' ? 'Tour 小程序' : `MiniApp ${seedMiniAppId}`
-
-  let target = await MiniAppModel.findOne({ miniAppId: seedMiniAppId }).exec()
-
-  if (!target) {
-    target = await MiniAppModel.create({
-      miniAppId: seedMiniAppId,
-      name: seedName,
-      appSecret: seedAppSecret,
-      enabled: true,
-      isDefault: true,
-      wechatPay: {
-        enabled: appConfig.wechatPay.enabled,
-        mchId: appConfig.wechatPay.mchId,
-        serialNo: appConfig.wechatPay.serialNo,
-        privateKey: appConfig.wechatPay.privateKey,
-        apiV3Key: appConfig.wechatPay.apiV3Key,
-        notifyUrl: appConfig.wechatPay.notifyUrl,
-        baseUrl: appConfig.wechatPay.baseUrl,
-        platformPublicKey: appConfig.wechatPay.platformPublicKey,
-        callbackSkipVerifyInDev: appConfig.wechatPay.callbackSkipVerifyInDev,
-        mockPlatformPrivateKey: appConfig.wechatPay.mockPlatformPrivateKey,
-      },
-    })
-  }
-
-  const hasDefaultEnabledApp = await MiniAppModel.exists({ enabled: true, isDefault: true })
-  let shouldSaveTarget = false
-
-  if (!target.enabled) {
-    target.enabled = true
-    shouldSaveTarget = true
-  }
-
-  if (!hasDefaultEnabledApp) {
-    target.isDefault = true
-    shouldSaveTarget = true
-  }
-
-  if (!target.name?.trim()) {
-    target.name = seedName
-    shouldSaveTarget = true
-  }
-
-  if (!target.appSecret?.trim()) {
-    target.appSecret = seedAppSecret
-    shouldSaveTarget = true
-  }
-
-  if (shouldSaveTarget) {
-    await target.save()
-  }
-
-  if (target.isDefault) {
-    await MiniAppModel.updateMany({ _id: { $ne: target._id }, isDefault: true }, { $set: { isDefault: false } }).exec()
-  }
 }
