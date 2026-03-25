@@ -32,6 +32,7 @@ import {
 	disposeGradientBackgroundDome,
 	type GradientBackgroundDome,
 	type GroundDynamicMesh,
+	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
@@ -5258,7 +5259,7 @@ async function buildPreviewRuntimeDocument(
 			paintStore.replaceGroundSurfaceChunks(
 				document.id,
 				groundNode.id,
-				JSON.parse(JSON.stringify(embeddedPaintChunks)) as Record<string, { textureAssetId?: string; revision?: number }>,
+				JSON.parse(JSON.stringify(embeddedPaintChunks)) as GroundSurfaceChunkTextureMap,
 				{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
 			)
 		} else {
