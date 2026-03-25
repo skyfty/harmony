@@ -21,6 +21,8 @@
 
 ```bash
 ./bootstrap-prod-config.sh
+docker compose -f docker-compose.prod.yml config
+
 docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed

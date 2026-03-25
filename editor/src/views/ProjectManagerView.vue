@@ -12,6 +12,7 @@ import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
 import {type ProjectCreateParams} from '@/types/project-summary'
 
 import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
+import type { DuplicateProjectResolution } from '@/utils/projectPackageWorkflow'
 import { runProjectExportWorkflow, runProjectImportWorkflow } from '@/utils/projectPackageWorkflow'
 
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
@@ -42,6 +43,10 @@ const importingProject = ref(false)
 const confirmDeleteOpen = ref(false)
 const pendingDeleteProjectId = ref<string | null>(null)
 const pendingDeleteProjectName = ref('')
+const duplicateImportDialogOpen = ref(false)
+const duplicateImportProjectName = ref('')
+const duplicateImportProjectCount = ref(0)
+const duplicateImportResolver = ref<((value: DuplicateProjectResolution) => void) | null>(null)
 
 const isLoggedIn = computed(() => !!authStore.user)
 const projects = computed(() => projectsStore.sortedMetadata)
@@ -146,6 +151,28 @@ async function handleSync() {
   ])
 }
 
+function openDuplicateImportDialog(payload: {
+  incomingName: string
+  duplicates: Array<{ id: string; name: string }>
+}): Promise<DuplicateProjectResolution> {
+  duplicateImportProjectName.value = payload.incomingName
+  duplicateImportProjectCount.value = payload.duplicates.length
+  duplicateImportDialogOpen.value = true
+
+  return new Promise<DuplicateProjectResolution>((resolve) => {
+    duplicateImportResolver.value = resolve
+  })
+}
+
+function closeDuplicateImportDialogWith(value: DuplicateProjectResolution): void {
+  const resolver = duplicateImportResolver.value
+  duplicateImportResolver.value = null
+  duplicateImportDialogOpen.value = false
+  duplicateImportProjectName.value = ''
+  duplicateImportProjectCount.value = 0
+  resolver?.(value)
+}
+
 function requestProjectImport(): void {
   if (importingProject.value) {
     return
@@ -176,6 +203,7 @@ async function handleProjectImportFileChange(event: Event): Promise<void> {
       projectsStore,
       scenesStore,
       uiStore,
+      onDuplicateProjectName: openDuplicateImportDialog,
     })
   } catch (error) {
     console.warn('[ProjectManager] import project package failed', error)
@@ -304,6 +332,25 @@ async function handleExportProject(projectId: string): Promise<void> {
           >
             Delete
           </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+    <v-dialog v-model="duplicateImportDialogOpen" max-width="520" persistent>
+      <v-card>
+        <v-card-title>检测到同名工程</v-card-title>
+        <v-card-text>
+          发现同名工程「{{ duplicateImportProjectName }}」
+          <span v-if="duplicateImportProjectCount > 1">（共 {{ duplicateImportProjectCount }} 个）</span>。
+          请选择导入方式：
+          <br>
+          1) 替换覆盖：删除现有同名工程后导入。
+          <br>
+          2) 新建副本：保留现有工程，并创建新的导入副本。
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="closeDuplicateImportDialogWith('create')">新建副本</v-btn>
+          <v-btn color="warning" variant="flat" @click="closeDuplicateImportDialogWith('replace')">替换覆盖</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

@@ -12,6 +12,13 @@ type ProjectsStore = ReturnType<typeof useProjectsStore>
 type ScenesStore = ReturnType<typeof useScenesStore>
 type UiStore = ReturnType<typeof useUiStore>
 
+export type DuplicateProjectResolution = 'replace' | 'create'
+
+type DuplicateProjectInfo = {
+  incomingName: string
+  duplicates: Array<{ id: string; name: string }>
+}
+
 function readFileAsArrayBuffer(file: File, onProgress?: (percent: number) => void): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -101,8 +108,9 @@ export async function runProjectImportWorkflow(options: {
   projectsStore: ProjectsStore
   scenesStore: ScenesStore
   uiStore: UiStore
+  onDuplicateProjectName?: (info: DuplicateProjectInfo) => DuplicateProjectResolution | Promise<DuplicateProjectResolution>
 }): Promise<{ projectName: string; sceneCount: number }> {
-  const { file, projectsStore, scenesStore, uiStore } = options
+  const { file, projectsStore, scenesStore, uiStore, onDuplicateProjectName } = options
 
   uiStore.showLoadingOverlay({
     title: '导入工程',
@@ -133,7 +141,32 @@ export async function runProjectImportWorkflow(options: {
     const importedProjectName = typeof projectRaw.name === 'string' && projectRaw.name.trim().length
       ? projectRaw.name.trim()
       : sanitizeExportFileName(file.name.replace(/\.[^./\\]+$/, ''))
-    const nextProjectName = resolveUniqueName(importedProjectName, existingProjectNames)
+
+    const duplicateProjects = projectsStore.metadata
+      .filter((entry) => entry.name === importedProjectName)
+      .map((entry) => ({ id: entry.id, name: entry.name }))
+
+    let nextProjectName: string
+    if (duplicateProjects.length) {
+      const resolution = onDuplicateProjectName
+        ? await onDuplicateProjectName({ incomingName: importedProjectName, duplicates: duplicateProjects })
+        : 'create'
+
+      if (resolution === 'replace') {
+        uiStore.updateLoadingOverlay({ message: '正在替换已有同名工程…' })
+        uiStore.updateLoadingProgress(55)
+        for (const duplicate of duplicateProjects) {
+          await projectsStore.deleteProjectCascade(duplicate.id)
+        }
+        await Promise.all([projectsStore.refreshMetadata(), scenesStore.refreshMetadata()])
+        nextProjectName = importedProjectName
+      } else {
+        nextProjectName = resolveUniqueName(importedProjectName, existingProjectNames)
+      }
+    } else {
+      nextProjectName = resolveUniqueName(importedProjectName, existingProjectNames)
+    }
+
     const createdProject = await projectsStore.createProject(nextProjectName)
 
     uiStore.updateLoadingOverlay({ message: '写入场景数据…' })
