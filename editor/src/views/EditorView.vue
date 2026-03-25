@@ -114,7 +114,7 @@ const panelPlacement = computed<PanelPlacementState>(() => {
 })
 
 const isSceneManagerOpen = ref(false)
-const isExportDialogOpen = ref(false)
+const isPublishDialogOpen = ref(false)
 const isExporting = ref(false)
 const exportProgress = ref(0)
 const exportProgressMessage = ref('')
@@ -965,7 +965,7 @@ async function captureViewportScreenshot(): Promise<Blob | null> {
 }
 
 
-function openExportDialog() {
+function openPublishDialog() {
   const activeProjectId = projectsStore.activeProjectId
   const projectName = activeProjectId
     ? projectsStore.metadata.find((entry) => entry.id === activeProjectId)?.name
@@ -976,7 +976,7 @@ function openExportDialog() {
   exportProgressMessage.value = ''
   exportErrorMessage.value = null
   // Resource summary UI removed — skip summary calculation
-  isExportDialogOpen.value = true
+  isPublishDialogOpen.value = true
 }
 
 function sanitizeExportFileName(input: string): string {
@@ -1188,7 +1188,7 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
     isExporting.value = false
     if (workflowSucceeded) {
       setTimeout(() => {
-        isExportDialogOpen.value = false
+        isPublishDialogOpen.value = false
         exportProgress.value = 0
         exportProgressMessage.value = ''
       }, 600)
@@ -1196,7 +1196,7 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
   }
 }
 
-async function handleExportDialogConfirm(options: SceneExportOptions) {
+async function handlePublishDialogConfirm(options: SceneExportOptions) {
   await runSceneExportWorkflow(options, {
     action: 'export',
     startMessage: 'Preparing export...',
@@ -1210,13 +1210,13 @@ async function handleExportDialogConfirm(options: SceneExportOptions) {
   })
 }
 
-function handleExportDialogCancel() {
+function handlePublishDialogCancel() {
   exportProgress.value = 0
   exportProgressMessage.value = ''
   exportErrorMessage.value = null
 }
 
-watch(isExportDialogOpen, (open) => {
+watch(isPublishDialogOpen, (open) => {
   if (!open && !isExporting.value) {
     exportProgress.value = 0
     exportProgressMessage.value = ''
@@ -1535,9 +1535,9 @@ async function handleAction(action: string) {
       }
       break
     }
-    case 'Export':
-    case 'Export:GLB': {
-      openExportDialog()
+    case 'Publish':
+    case 'Publish:GLB': {
+      openPublishDialog()
       break
     }
     default:
@@ -2349,15 +2349,15 @@ onBeforeUnmount(() => {
     />
     <!-- OpenProjectDialog removed; use Project Manager page to select/open projects -->
     <SceneExportDialog
-      v-model="isExportDialogOpen"
+      v-model="isPublishDialogOpen"
       :default-file-name="exportDialogFileName"
       :initial-options="exportPreferences"
       :exporting="isExporting"
       :progress="exportProgress"
       :progress-message="exportProgressMessage"
       :error-message="exportErrorMessage"
-      @confirm="handleExportDialogConfirm"
-      @cancel="handleExportDialogCancel"
+      @confirm="handlePublishDialogConfirm"
+      @cancel="handlePublishDialogCancel"
     />
 
     <div

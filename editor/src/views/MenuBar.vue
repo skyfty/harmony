@@ -103,8 +103,8 @@ function openPlanningDialog() {
                     Save as
                   </v-list-item>       -->
                   <v-divider />
-                  <v-list-item @click="handleMenuAction('Export')" class="menu-list-item">
-                    Export
+                  <v-list-item @click="handleMenuAction('Publish')" class="menu-list-item">
+                    Publish
                   </v-list-item>
        
               </v-list>
