@@ -100,6 +100,20 @@ services:
           create_host_path: false
     restart: unless-stopped
 
+  mayfly-go:
+    image: ccr.ccs.tencentyun.com/mayfly/mayfly-go:v1.10.0
+    container_name: harmony-mayfly
+    ports:
+      - "127.0.0.1:18888:18888"  # 仅宿主机访问，和你现有的 admin/editor 保持一致
+    environment:
+      TZ: Asia/Shanghai
+    # volumes:
+      # 挂载配置文件（可选，如果不需要自定义配置可以注释掉）
+      # - ./mayfly/config.yml:/mayfly/config.yml:ro
+    networks:
+      - harmony-backend  # 加入同一个内部网络，这样才能访问 mongo 容器
+    restart: unless-stopped
+
 networks:
   harmony-backend:
     internal: true
