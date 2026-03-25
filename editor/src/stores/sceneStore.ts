@@ -199,6 +199,7 @@ import { createSceneStoreWallHelpers } from './sceneStoreWall'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import {
+  collectPrefabAssetReferences,
   createNodePrefabHelpers,
   createPrefabActions,
   normalizePrefabName,
@@ -5023,6 +5024,23 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
 }
 
 const ASSET_REFERENCE_SKIP_KEYS = new Set<string>([PREFAB_SOURCE_METADATA_KEY])
+const ASSET_REFERENCE_EXACT_KEYS = new Set<string>([
+  'assetid',
+  'assetids',
+  'sourceassetid',
+  'providerassetid',
+  'imageassetid',
+  'descriptionassetid',
+  'textureassetid',
+  'hdriassetid',
+  'skycubezipassetid',
+  'positivexassetid',
+  'negativexassetid',
+  'positiveyassetid',
+  'negativeyassetid',
+  'positivezassetid',
+  'negativezassetid',
+])
 
 function isAssetReferenceKey(key: string | null | undefined): boolean {
   if (!key) {
@@ -5032,7 +5050,10 @@ function isAssetReferenceKey(key: string | null | undefined): boolean {
   if (!normalized) {
     return false
   }
-  return normalized.includes('assetid')
+  if (ASSET_REFERENCE_EXACT_KEYS.has(normalized)) {
+    return true
+  }
+  return normalized.endsWith('assetid') || normalized.endsWith('assetids')
 }
 
 function normalizePrefabAssetIdCandidate(value: unknown): string | null {
@@ -5094,6 +5115,16 @@ function collectAssetIdsFromUnknown(value: unknown, bucket: Set<string>) {
       collectAssetIdsFromUnknown(entry, bucket)
     }
   })
+}
+
+function collectPlanningAssetDependencies(
+  planningData: PlanningSceneData | null | undefined,
+  bucket: Set<string>,
+) {
+  if (!planningData) {
+    return
+  }
+  collectAssetIdsFromUnknown(planningData, bucket)
 }
 
 function collectTerrainScatterAssetDependencies(
@@ -5205,14 +5236,14 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
       collectAssetIdsFromUnknown(node.userData, bucket)
     }
   }
+  if (node.dynamicMesh) {
+    collectAssetIdsFromUnknown(node.dynamicMesh as unknown, bucket)
+  }
   if (node.dynamicMesh?.type === 'Ground') {
     const definition = node.dynamicMesh as GroundDynamicMesh & {
       terrainScatter?: TerrainScatterStoreSnapshot | null
     }
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
-  }
-  if (node.children?.length) {
-    node.children.forEach((child) => collectNodeAssetDependencies(child, bucket))
   }
 }
 
@@ -5272,6 +5303,7 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
   collectAssetIdsFromUnknown(scene.skybox, bucket)
   collectAssetIdsFromUnknown(sanitizeEnvironmentAssetReferences(scene.environment), bucket)
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)
+  collectPlanningAssetDependencies(scene.planningData, bucket)
 
   const catalog = scene.assetCatalog ?? {}
   const removable: string[] = []
@@ -5284,6 +5316,150 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
   removable.forEach((assetId) => bucket.delete(assetId))
 
   return bucket
+}
+
+function collectInternalAssetIdsFromCatalog(catalog: Record<string, ProjectAsset[]>): Set<string> {
+  const internalAssetIds = new Set<string>()
+  Object.values(catalog).forEach((assets) => {
+    assets.forEach((asset) => {
+      if (asset?.internal && asset.id) {
+        internalAssetIds.add(asset.id)
+      }
+    })
+  })
+  return internalAssetIds
+}
+
+function collectRetainedAssetIdsForSceneCleanup(
+  scene: StoredSceneDocument,
+  catalog: Record<string, ProjectAsset[]>,
+): Set<string> {
+  const retainedAssetIds = new Set<string>(collectSceneAssetReferences(scene))
+  collectInternalAssetIdsFromCatalog(catalog).forEach((assetId) => retainedAssetIds.add(assetId))
+  return retainedAssetIds
+}
+
+function pruneAssetCatalogByRetainedIds(
+  catalog: Record<string, ProjectAsset[]>,
+  retainedAssetIds: Set<string>,
+): {
+  nextCatalog: Record<string, ProjectAsset[]>
+  removedAssetIds: string[]
+  catalogChanged: boolean
+} {
+  const removedAssetIds: string[] = []
+  const nextCatalog: Record<string, ProjectAsset[]> = {}
+  let catalogChanged = false
+
+  Object.entries(catalog).forEach(([categoryId, list]) => {
+    const filtered = list.filter((asset) => {
+      const keep = retainedAssetIds.has(asset.id)
+      if (!keep) {
+        removedAssetIds.push(asset.id)
+      }
+      return keep
+    })
+    if (filtered.length !== list.length) {
+      catalogChanged = true
+    }
+    nextCatalog[categoryId] = filtered
+  })
+
+  return {
+    nextCatalog,
+    removedAssetIds,
+    catalogChanged,
+  }
+}
+
+function collectPrefabAssetIdsFromSceneReferences(
+  scene: StoredSceneDocument,
+  catalog: Record<string, ProjectAsset[]>,
+): Set<string> {
+  const prefabAssetIds = new Set<string>()
+
+  const registerIfPrefab = (value: unknown) => {
+    const assetId = normalizePrefabAssetIdCandidate(value)
+    if (!assetId) {
+      return
+    }
+    const asset = getAssetFromCatalog(catalog, assetId)
+    if (asset?.type === 'prefab') {
+      prefabAssetIds.add(assetId)
+    }
+  }
+
+  const traverseNodes = (nodes: SceneNode[] | null | undefined): void => {
+    if (!Array.isArray(nodes) || !nodes.length) {
+      return
+    }
+    nodes.forEach((node) => {
+      if (!node) {
+        return
+      }
+      registerIfPrefab(node.sourceAssetId)
+      registerIfPrefab(node.importMetadata?.assetId)
+      if (isPlainObject(node.userData)) {
+        registerIfPrefab((node.userData as Record<string, unknown>)[PREFAB_SOURCE_METADATA_KEY])
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        traverseNodes(node.children)
+      }
+    })
+  }
+
+  traverseNodes(scene.nodes ?? [])
+  return prefabAssetIds
+}
+
+async function collectPrefabTransitiveDependencyAssetIds(
+  prefabAssetIds: Iterable<string>,
+  catalog: Record<string, ProjectAsset[]>,
+  loadPrefab: (assetId: string) => Promise<NodePrefabData>,
+): Promise<Set<string>> {
+  const dependencyAssetIds = new Set<string>()
+  const visitedPrefabs = new Set<string>()
+  const queue = Array.from(prefabAssetIds)
+
+  while (queue.length) {
+    const prefabAssetId = queue.shift()
+    if (!prefabAssetId || visitedPrefabs.has(prefabAssetId)) {
+      continue
+    }
+    visitedPrefabs.add(prefabAssetId)
+
+    try {
+      const prefabData = await loadPrefab(prefabAssetId)
+      const directDependencies = collectPrefabAssetReferences(prefabData.root)
+      directDependencies.forEach((assetId) => {
+        const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+        if (!normalized) {
+          return
+        }
+        dependencyAssetIds.add(normalized)
+        const dependencyAsset = getAssetFromCatalog(catalog, normalized)
+        if (dependencyAsset?.type === 'prefab' && !visitedPrefabs.has(normalized)) {
+          queue.push(normalized)
+        }
+      })
+
+      Object.keys(prefabData.assetRegistry ?? {}).forEach((assetId) => {
+        const normalized = assetId.trim()
+        if (!normalized) {
+          return
+        }
+        dependencyAssetIds.add(normalized)
+        const dependencyAsset = getAssetFromCatalog(catalog, normalized)
+        if (dependencyAsset?.type === 'prefab' && !visitedPrefabs.has(normalized)) {
+          queue.push(normalized)
+        }
+      })
+    } catch (error) {
+      console.warn('Failed to collect prefab dependencies during cleanup', prefabAssetId, error)
+    }
+  }
+
+  return dependencyAssetIds
 }
 
 function parseVector3Like(value: unknown): THREE.Vector3 | null {
@@ -10657,32 +10833,21 @@ export const useSceneStore = defineStore('scene', {
 
       normalizeCurrentSceneMeta(this)
       const document = buildSceneDocumentFromState(this)
-      const usedAssetIds = collectSceneAssetReferences(document)
-      const retainedAssetIds = new Set<string>(usedAssetIds)
-      Object.values(this.assetCatalog).forEach((assets) => {
-        assets.forEach((asset) => {
-          if (asset?.internal && asset.id) {
-            retainedAssetIds.add(asset.id)
-          }
-        })
-      })
-      const removedAssetIds: string[] = []
-      const nextCatalog: Record<string, ProjectAsset[]> = {}
-      let catalogChanged = false
-
-      Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
-        const filtered = list.filter((asset) => {
-          const keep = retainedAssetIds.has(asset.id)
-          if (!keep) {
-            removedAssetIds.push(asset.id)
-          }
-          return keep
-        })
-        if (filtered.length !== list.length) {
-          catalogChanged = true
-        }
-        nextCatalog[categoryId] = filtered
-      })
+      const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
+      const prefabAssetIds = collectPrefabAssetIdsFromSceneReferences(document, this.assetCatalog)
+      if (prefabAssetIds.size) {
+        const prefabDependencyAssetIds = await collectPrefabTransitiveDependencyAssetIds(
+          prefabAssetIds,
+          this.assetCatalog,
+          (assetId) => this.loadNodePrefab(assetId),
+        )
+        prefabDependencyAssetIds.forEach((assetId) => retainedAssetIds.add(assetId))
+      }
+      const {
+        nextCatalog,
+        removedAssetIds,
+        catalogChanged,
+      } = pruneAssetCatalogByRetainedIds(this.assetCatalog, retainedAssetIds)
 
       const shouldResetSelection = this.selectedAssetId ? !retainedAssetIds.has(this.selectedAssetId) : false
 
