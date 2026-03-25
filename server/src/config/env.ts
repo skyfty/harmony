@@ -170,11 +170,6 @@ export const appConfig = {
     password: process.env.EDITOR_USER_PASSWORD ?? 'editor123',
     displayName: process.env.EDITOR_USER_DISPLAY_NAME ?? 'Editor 用户',
   },
-  uploaderUser: {
-    username: process.env.UPLOADER_USER_USERNAME ?? 'uploader',
-    password: process.env.UPLOADER_USER_PASSWORD ?? 'uploader123',
-    displayName: process.env.UPLOADER_USER_DISPLAY_NAME ?? '资源上传员',
-  },
   miniProgramTestUser: {
     username: process.env.MINIPROGRAM_TEST_USER_USERNAME ?? 'test',
     password: process.env.MINIPROGRAM_TEST_USER_PASSWORD ?? 'test1234',

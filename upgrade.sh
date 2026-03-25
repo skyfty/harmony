@@ -12,7 +12,7 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_DIR"
 
 COMPOSE_FILE="docker-compose.prod.yml"
-ALLOWED_SERVICES=("server" "admin" "editor" "uploader")
+ALLOWED_SERVICES=("server" "admin" "editor")
 BOOTSTRAP_SCRIPT="./bootstrap-prod-config.sh"
 
 usage() {
@@ -21,7 +21,6 @@ usage() {
   ./upgrade.sh all           # 升级所有服务（server, admin, editor, uploader）
   ./upgrade.sh server        # 仅升级 server
   ./upgrade.sh admin editor  # 升级指定多个服务
-  ./upgrade.sh uploader      # 仅升级 uploader
   ./upgrade.sh -h | --help   # 查看帮助
 EOF
 }

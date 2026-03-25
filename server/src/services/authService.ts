@@ -71,12 +71,6 @@ const AUTH_ROLE_SEEDS: AuthRoleSeed[] = [
     description: '编辑器账号，具备资源读写能力',
     permissionCodes: ['resource:read', 'resource:write'],
   },
-  {
-    code: 'uploader',
-    name: '上传账号',
-    description: '资源上传账号，具备资源读写能力',
-    permissionCodes: ['resource:read', 'resource:write'],
-  },
 ]
 
 export interface SessionUserRole {
@@ -321,12 +315,6 @@ export async function ensureEditorAuthBootstrap(): Promise<void> {
     roleCodes: ['editor'],
   })
 
-  await ensureNamedUser({
-    username: appConfig.uploaderUser.username,
-    password: appConfig.uploaderUser.password,
-    displayName: appConfig.uploaderUser.displayName,
-    roleCodes: ['uploader'],
-  })
 }
 
 export async function loginWithPassword(username: string, password: string): Promise<AuthSessionResponse> {

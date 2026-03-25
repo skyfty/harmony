@@ -16,7 +16,6 @@
 - Editor dev/build: `cd editor && pnpm run dev` / `pnpm run build`.
   - `editor` build runs `pnpm --dir ../schema run build` first (don’t skip when changing `schema/`).
 - Admin dev/build: `cd admin && pnpm run dev` / `pnpm run build`.
-- Uploader dev/build: `cd uploader && pnpm run dev` / `pnpm run build`.
 - Scene viewer: `cd viewer && pnpm run dev:mp-weixin`.
 - Exhibition: `cd exhibition && pnpm run dev:mp-weixin`.
 
