@@ -33,6 +33,13 @@ import {
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
 
+function tagWallInternalGroup(group: THREE.Object3D, ownerNodeId: string): void {
+  const userData = group.userData ?? (group.userData = {})
+  delete userData.nodeId
+  userData.ownerNodeId = ownerNodeId
+  userData.dynamicMeshType = 'Wall'
+}
+
 type AirWallMaterialOriginalState = {
   transparent?: boolean
   opacity?: number
@@ -756,11 +763,12 @@ export function createWallRenderer(options: WallRendererOptions) {
     const userData = container.userData ?? (container.userData = {})
     let wallGroup = userData.wallGroup as THREE.Group | undefined
     if (wallGroup) {
+      tagWallInternalGroup(wallGroup, node.id)
       return wallGroup
     }
 
     wallGroup = createWallGroup(wallDefinition, renderOptions)
-    wallGroup.userData.nodeId = node.id
+    tagWallInternalGroup(wallGroup, node.id)
     wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, {
       wallRenderMode: renderOptions.wallRenderMode,
     })
@@ -778,6 +786,12 @@ export function createWallRenderer(options: WallRendererOptions) {
     options: WallRenderOptions = {},
   ): void {
     const groupData = wallGroup.userData ?? (wallGroup.userData = {})
+    const ownerNodeId = typeof groupData.ownerNodeId === 'string' && groupData.ownerNodeId.length
+      ? groupData.ownerNodeId
+      : null
+    if (ownerNodeId) {
+      tagWallInternalGroup(wallGroup, ownerNodeId)
+    }
     const nextSignature = computeWallDynamicMeshSignature(definition, {
       wallRenderMode: options.wallRenderMode,
     })

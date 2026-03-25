@@ -1228,6 +1228,13 @@ const usesRuntimeObjectTypes = new Set<string>([
   'Sphere',
 ])
 
+function tagInternalRuntimeGroup(group: THREE.Object3D, ownerNodeId: string, dynamicMeshType: string): void {
+  const userData = group.userData ?? (group.userData = {})
+  delete userData.nodeId
+  userData.ownerNodeId = ownerNodeId
+  userData.dynamicMeshType = dynamicMeshType
+}
+
 function disposeCachedTextures() {
   textureCache.forEach((texture) => texture.dispose())
   textureCache.clear()
@@ -17223,11 +17230,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     let floorGroup = userData.floorGroup as THREE.Group | undefined
     if (!floorGroup) {
       floorGroup = createFloorGroup(floorDefinition)
-      floorGroup.userData.nodeId = node.id
+      tagInternalRuntimeGroup(floorGroup, node.id, 'Floor')
       floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
       object.add(floorGroup)
       userData.floorGroup = floorGroup
     } else {
+      tagInternalRuntimeGroup(floorGroup, node.id, 'Floor')
       const groupData = floorGroup.userData ?? (floorGroup.userData = {})
       const nextSignature = computeFloorDynamicMeshSignature(floorDefinition)
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
@@ -17241,11 +17249,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     let guideGroup = userData.guideRouteGroup as THREE.Group | undefined
     if (!guideGroup) {
       guideGroup = createGuideRouteGroup(guideDefinition)
-      guideGroup.userData.nodeId = node.id
+      tagInternalRuntimeGroup(guideGroup, node.id, 'GuideRoute')
       guideGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGuideRouteDynamicMeshSignature(guideDefinition)
       object.add(guideGroup)
       userData.guideRouteGroup = guideGroup
     } else {
+      tagInternalRuntimeGroup(guideGroup, node.id, 'GuideRoute')
       const groupData = guideGroup.userData ?? (guideGroup.userData = {})
       const nextSignature = computeGuideRouteDynamicMeshSignature(guideDefinition)
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
@@ -17282,7 +17291,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     let roadGroup = userData.roadGroup as THREE.Group | undefined
     if (!roadGroup) {
       roadGroup = createRoadGroup(roadDefinition, roadOptions)
-      roadGroup.userData.nodeId = node.id
+      tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
       roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(
         roadDefinition,
         junctionSmoothing,
@@ -17300,6 +17309,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       object.add(roadGroup)
       userData.roadGroup = roadGroup
     } else {
+      tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
       const groupData = roadGroup.userData ?? (roadGroup.userData = {})
       const nextSignature = computeRoadDynamicMeshSignature(
         roadDefinition,
@@ -18247,7 +18257,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       }
       const roadGroup = createRoadGroup(roadDefinition, roadOptions)
       roadGroup.removeFromParent()
-      roadGroup.userData.nodeId = node.id
+      tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
       roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(
         roadDefinition,
         junctionSmoothing,
@@ -18269,7 +18279,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const floorDefinition = node.dynamicMesh as FloorDynamicMesh
       const floorGroup = createFloorGroup(floorDefinition)
       floorGroup.removeFromParent()
-      floorGroup.userData.nodeId = node.id
+      tagInternalRuntimeGroup(floorGroup, node.id, 'Floor')
       floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
       container.add(floorGroup)
       containerData.floorGroup = floorGroup
@@ -18278,7 +18288,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const guideDefinition = node.dynamicMesh as GuideRouteDynamicMesh
       const guideGroup = createGuideRouteGroup(guideDefinition)
       guideGroup.removeFromParent()
-      guideGroup.userData.nodeId = node.id
+      tagInternalRuntimeGroup(guideGroup, node.id, 'GuideRoute')
       guideGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGuideRouteDynamicMeshSignature(guideDefinition)
       container.add(guideGroup)
       ;(containerData as any).guideRouteGroup = guideGroup
@@ -18385,12 +18395,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   objectMap.set(node.id, object)
 
   applyViewPointScaleConstraint(object, node)
-
-  if (node.children) {
-    for (const child of node.children) {
-      object.add(createObjectFromNode(child))
-    }
-  }
 
   const userData = object.userData ?? (object.userData = {})
   userData.nodeId = node.id
