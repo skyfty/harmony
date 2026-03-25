@@ -5,17 +5,20 @@ import { useRouter } from 'vue-router'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useScenesStore } from '@/stores/scenesStore'
+import { useUiStore } from '@/stores/uiStore'
 import LoginDialog from '@/components/layout/LoginDialog.vue'
 import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
 // OpenProjectDialog removed — opening projects is handled on the Project Manager page
 import {type ProjectCreateParams} from '@/types/project-summary'
 
 import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
+import { runProjectExportWorkflow, runProjectImportWorkflow } from '@/utils/projectPackageWorkflow'
 
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 
 const router = useRouter()
 const projectsStore = useProjectsStore()
+const uiStore = useUiStore()
 
   async function handleSignOut() {
     try {
@@ -31,8 +34,11 @@ const route = useRoute()
 
 const loginOpen = ref(false)
 const newProjectOpen = ref(false)
+const projectImportInputRef = ref<HTMLInputElement | null>(null)
 // OpenProjectDialog removed — opening projects is handled on the Project Manager page
 const deletingId = ref<string | null>(null)
+const exportingId = ref<string | null>(null)
+const importingProject = ref(false)
 const confirmDeleteOpen = ref(false)
 const pendingDeleteProjectId = ref<string | null>(null)
 const pendingDeleteProjectName = ref('')
@@ -139,6 +145,66 @@ async function handleSync() {
     scenesStore.syncUserWorkspaceFromServer({ replace: true }),
   ])
 }
+
+function requestProjectImport(): void {
+  if (importingProject.value) {
+    return
+  }
+  const input = projectImportInputRef.value
+  if (!input) {
+    return
+  }
+  input.value = ''
+  input.click()
+}
+
+async function handleProjectImportFileChange(event: Event): Promise<void> {
+  const input = (event.target as HTMLInputElement | null) ?? projectImportInputRef.value
+  const file = input?.files?.[0] ?? null
+  if (!input || !file || importingProject.value) {
+    if (input) {
+      input.value = ''
+    }
+    return
+  }
+
+  importingProject.value = true
+
+  try {
+    await runProjectImportWorkflow({
+      file,
+      projectsStore,
+      scenesStore,
+      uiStore,
+    })
+  } catch (error) {
+    console.warn('[ProjectManager] import project package failed', error)
+  } finally {
+    importingProject.value = false
+    input.value = ''
+  }
+}
+
+async function handleExportProject(projectId: string): Promise<void> {
+  if (exportingId.value || importingProject.value) {
+    return
+  }
+
+  exportingId.value = projectId
+
+  try {
+    await runProjectExportWorkflow({
+      projectId,
+      projectsStore,
+      scenesStore,
+      uiStore,
+    })
+  } catch (error) {
+    console.warn('[ProjectManager] export project package failed', error)
+  } finally {
+    exportingId.value = null
+  }
+}
 </script>
 
 <template>
@@ -161,6 +227,7 @@ async function handleSync() {
         <v-btn v-if="!isLoggedIn" variant="text" @click="openLogin">Sign In</v-btn>
         <v-btn v-else variant="text" @click="handleSignOut">Sign Out</v-btn>
         <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Sync</v-btn>
+        <v-btn variant="text" :disabled="importingProject || deletingId !== null || exportingId !== null" @click="requestProjectImport">Import</v-btn>
         <v-btn color="primary" variant="flat" @click="newProjectOpen = true">New Project</v-btn>
       </div>
     </div>
@@ -185,12 +252,20 @@ async function handleSync() {
             <v-card-text class="pm-project__meta">{{ p.id }}</v-card-text>
             <v-card-actions>
               <v-btn color="primary" variant="flat" @click="handleOpenProject({ projectId: p.id, sceneId: p.lastEditedSceneId })">Open</v-btn>
+              <v-btn
+                variant="text"
+                :loading="exportingId === p.id"
+                :disabled="deletingId !== null || importingProject || (exportingId !== null && exportingId !== p.id)"
+                @click="handleExportProject(p.id)"
+              >
+                Export
+              </v-btn>
               <v-spacer />
               <v-btn
                 color="error"
                 variant="text"
                 :loading="deletingId === p.id"
-                :disabled="deletingId !== null"
+                :disabled="deletingId !== null || exportingId !== null || importingProject"
                 @click="requestDeleteProject(p.id, p.name)"
               >
                 Delete (cascade)
@@ -202,6 +277,13 @@ async function handleSync() {
     </div>
 
     <LoginDialog v-model="loginOpen" />
+    <input
+      ref="projectImportInputRef"
+      type="file"
+      accept=".zip,application/zip"
+      style="display: none"
+      @change="handleProjectImportFileChange"
+    >
     <NewProjectDialog v-model="newProjectOpen" @confirm="handleCreateProject" />
     <v-dialog v-model="confirmDeleteOpen" max-width="420" :persistent="deletingId !== null">
       <v-card>

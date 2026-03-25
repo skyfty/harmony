@@ -48,14 +48,11 @@ ensure_file_from_template \
 ensure_file_from_template \
   "$REPO_DIR/editor/public/config/app-config.example.json" \
   "$CONFIG_DIR/editor-app-config.json"
-ensure_file_from_template \
-  "$REPO_DIR/uploader/public/config/app-config.example.json" \
-  "$CONFIG_DIR/uploader-app-config.json"
+
 
 echo "[3/3] 输出文件类型"
 stat -c '%F %n' \
   "$CONFIG_DIR/admin-app-config.js" \
-  "$CONFIG_DIR/editor-app-config.json" \
-  "$CONFIG_DIR/uploader-app-config.json"
-
+  "$CONFIG_DIR/editor-app-config.json" 
+  
 echo "\n完成。可继续执行: docker compose -f docker-compose.prod.yml up -d"
