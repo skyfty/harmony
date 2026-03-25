@@ -35,6 +35,9 @@ docker compose -f docker-compose.prod.yml logs -f mayfly-go
 docker compose -f docker-compose.prod.yml build server
 docker compose -f docker-compose.prod.yml up -d server
 
+docker system prune -a -f --volumes   # 谨慎：会删除所有未使用的卷
+docker system prune -a -f
+
 ```
 
 说明：`bootstrap-prod-config.sh` 会创建缺失挂载文件和目录。
