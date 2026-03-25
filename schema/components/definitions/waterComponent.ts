@@ -303,7 +303,11 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (!root) {
       return null
     }
-    if ((root as Mesh).isMesh) {
+    const rootUserData = (root as Object3D & { userData?: Record<string, unknown> }).userData
+    const isComponentArtifact = rootUserData?.[COMPONENT_ARTIFACT_KEY] === true
+      && rootUserData?.[COMPONENT_ARTIFACT_NODE_ID_KEY] === this.context.nodeId
+
+    if ((root as Mesh).isMesh && !isComponentArtifact) {
       return root as Mesh
     }
     for (const child of root.children) {

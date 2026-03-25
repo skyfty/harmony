@@ -17144,8 +17144,10 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     if (waterMetadata) {
       const waterContourSignature = computeWaterContourSignature(waterMetadata)
       if (userData.waterSurfaceContourSignature !== waterContourSignature) {
-        updateWaterSurfaceRuntimeMesh(object, waterMetadata)
-        userData.waterSurfaceContourSignature = waterContourSignature
+        const updated = updateWaterSurfaceRuntimeMesh(object, waterMetadata)
+        if (updated) {
+          userData.waterSurfaceContourSignature = waterContourSignature
+        }
       }
     } else {
       delete userData.waterSurfaceContourSignature

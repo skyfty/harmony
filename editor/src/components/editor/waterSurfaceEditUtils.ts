@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import type { SceneNode, Vector3Like, WaterSurfaceMeshMetadata } from '@schema'
 import {
+  COMPONENT_ARTIFACT_KEY,
+  COMPONENT_ARTIFACT_NODE_ID_KEY,
   WATER_SURFACE_MESH_USERDATA_KEY,
   cloneWaterSurfaceMeshMetadata,
   createWaterSurfaceBufferGeometryFromMetadata,
@@ -99,21 +101,51 @@ export function updateWaterSurfaceRuntimeMesh(
   runtimeObject: THREE.Object3D,
   metadata: WaterSurfaceMeshMetadata,
 ): boolean {
-  const mesh = (runtimeObject as THREE.Mesh).isMesh
-    ? (runtimeObject as THREE.Mesh)
-    : (runtimeObject.getObjectByProperty('isMesh', true) as THREE.Mesh | null)
+  const runtimeNodeId = typeof runtimeObject.userData?.nodeId === 'string'
+    ? runtimeObject.userData.nodeId
+    : null
 
-  if (!mesh) {
+  const meshTargets: THREE.Mesh[] = []
+  runtimeObject.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+
+    const hasWaterMetadata = Boolean(extractWaterSurfaceMeshMetadataFromUserData(mesh.userData))
+    const belongsToWaterComponent = mesh.userData?.[COMPONENT_ARTIFACT_KEY] === true
+      && (runtimeNodeId === null || mesh.userData?.[COMPONENT_ARTIFACT_NODE_ID_KEY] === runtimeNodeId)
+
+    if (hasWaterMetadata || belongsToWaterComponent) {
+      meshTargets.push(mesh)
+    }
+  })
+
+  if (!meshTargets.length) {
+    const fallbackMesh = (runtimeObject as THREE.Mesh).isMesh
+      ? (runtimeObject as THREE.Mesh)
+      : (runtimeObject.getObjectByProperty('isMesh', true) as THREE.Mesh | null)
+    if (fallbackMesh) {
+      meshTargets.push(fallbackMesh)
+    }
+  }
+
+  if (!meshTargets.length) {
     return false
   }
 
-  const nextGeometry = createWaterSurfaceBufferGeometryFromMetadata(metadata)
-  mesh.geometry?.dispose?.()
-  mesh.geometry = nextGeometry
-  mesh.userData = {
-    ...(mesh.userData ?? {}),
-    [WATER_SURFACE_MESH_USERDATA_KEY]: cloneWaterSurfaceMeshMetadata(metadata),
-  }
-  mesh.updateMatrixWorld(true)
-  return true
+  let updated = false
+  meshTargets.forEach((mesh) => {
+    const nextGeometry = createWaterSurfaceBufferGeometryFromMetadata(metadata)
+    mesh.geometry?.dispose?.()
+    mesh.geometry = nextGeometry
+    mesh.userData = {
+      ...(mesh.userData ?? {}),
+      [WATER_SURFACE_MESH_USERDATA_KEY]: cloneWaterSurfaceMeshMetadata(metadata),
+    }
+    mesh.updateMatrixWorld(true)
+    updated = true
+  })
+
+  return updated
 }

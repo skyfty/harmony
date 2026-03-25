@@ -22,7 +22,12 @@ import './definitions/sceneStateAnchorComponent'
 import './definitions/preloadableComponent'
 import './definitions/planningImagesComponent'
 
-export { componentManager } from './componentManager'
+export {
+	componentManager,
+	COMPONENT_ARTIFACT_KEY,
+	COMPONENT_ARTIFACT_NODE_ID_KEY,
+	COMPONENT_ARTIFACT_COMPONENT_ID_KEY,
+} from './componentManager'
 export type { ComponentDefinition } from './componentManager'
 export * from './Component'
 export * from './definitions/wallComponent'
