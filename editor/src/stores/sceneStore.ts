@@ -163,7 +163,6 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
-  clampSceneNodeInstanceLayout,
   computeInstanceLayoutGridCenterOffsetLocal,
   resolveInstanceLayoutTemplateAssetId,
 } from '@schema/instanceLayout'
