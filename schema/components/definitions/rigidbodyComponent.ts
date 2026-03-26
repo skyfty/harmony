@@ -102,6 +102,14 @@ export const DEFAULT_ANGULAR_DAMPING = 0.4
 export const DEFAULT_RIGIDBODY_RESTITUTION = 0.2
 export const DEFAULT_RIGIDBODY_FRICTION = 0.5
 
+function resolveDefaultRigidbodyBodyType(node: SceneNode): RigidbodyBodyType {
+  const dynamicMeshType = node.dynamicMesh?.type
+  if (dynamicMeshType === 'Wall' || dynamicMeshType === 'Floor') {
+    return 'STATIC'
+  }
+  return DEFAULT_RIGIDBODY_BODY_TYPE
+}
+
 export function clampRigidbodyComponentProps(
   props: Partial<RigidbodyComponentProps> | null | undefined,
 ): RigidbodyComponentProps {
@@ -184,6 +192,7 @@ const rigidbodyComponentDefinition: ComponentDefinition<RigidbodyComponentProps>
   },
   createDefaultProps(node: SceneNode) {
     return clampRigidbodyComponentProps({
+      bodyType: resolveDefaultRigidbodyBodyType(node),
       targetNodeId: node.id ?? null,
     })
   },
