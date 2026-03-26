@@ -10,7 +10,6 @@
         </view>
       </view>
       <view v-if="typeof progressPercent === 'number'" class="progress-row">
-        <text class="progress-label">{{ progressText || '打卡进度' }}</text>
         <view class="progress-bar-wrap">
           <view
             class="progress-bar-bg"
@@ -47,28 +46,47 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 
 <style scoped lang="scss">
 .card {
-  background: #ffffff;
-  border-radius: 16px;
-  overflow: visible;
-  -webkit-box-shadow: 0 6px 18px rgba(26, 31, 46, 0.08), 0 2px 6px rgba(31, 122, 236, 0.06);
-  box-shadow: 0 6px 18px rgba(26, 31, 46, 0.08), 0 2px 6px rgba(31, 122, 236, 0.06);
+  position: relative;
+  height: 140px;
+  border-radius: 10px;
+  overflow: hidden;
+  -webkit-box-shadow: 0 10px 30px rgba(26, 31, 46, 0.14), 0 6px 20px rgba(31, 122, 236, 0.08);
+  box-shadow: 0 10px 30px rgba(26, 31, 46, 0.14), 0 6px 20px rgba(31, 122, 236, 0.08);
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
 .card:active {
   transform: translateY(1px) scale(0.998);
-  -webkit-box-shadow: 0 10px 26px rgba(26, 31, 46, 0.12), 0 4px 10px rgba(31, 122, 236, 0.08);
-  box-shadow: 0 10px 26px rgba(26, 31, 46, 0.12), 0 4px 10px rgba(31, 122, 236, 0.08);
+  -webkit-box-shadow: 0 12px 36px rgba(26, 31, 46, 0.18), 0 6px 18px rgba(31, 122, 236, 0.1);
+  box-shadow: 0 12px 36px rgba(26, 31, 46, 0.18), 0 6px 18px rgba(31, 122, 236, 0.1);
+}
+
+.card:hover {
+  transform: translateY(-4px) scale(1.01);
+  -webkit-box-shadow: 0 18px 48px rgba(26, 31, 46, 0.22), 0 8px 28px rgba(31, 122, 236, 0.12);
+  box-shadow: 0 18px 48px rgba(26, 31, 46, 0.22), 0 8px 28px rgba(31, 122, 236, 0.12);
 }
 
 .cover {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 120px;
+  height: 100%;
   display: block;
+  object-fit: cover;
 }
 
 .body {
-  padding: 12px;
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.35);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .title-row {
@@ -79,7 +97,7 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 }
 
 .name {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   color: #1a1f2e;
 }
@@ -104,7 +122,7 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   display: block;
   margin-top: 6px;
   font-size: 12px;
-  color: #8a94a6;
+  color: #5f6b83;
   line-height: 18px;
 }
 
@@ -135,7 +153,7 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 60%;
+  width: 100%;
 }
 
 .progress-bar-bg {
