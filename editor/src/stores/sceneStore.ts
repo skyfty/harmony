@@ -125,6 +125,7 @@ import {
   buildFloorDynamicMeshPresetPatch,
   buildFloorNodeMaterialsFromPreset,
 } from '@/utils/floorPresetNodeMaterials'
+import { buildRoadNodeMaterialsFromPreset } from '@/utils/roadPresetNodeMaterials'
 import { createWallNodeMaterials } from '@/utils/wallNodeMaterials'
 import type {
   SceneMaterial,
@@ -187,12 +188,14 @@ import {
 import { createLodPresetActions } from './lodPresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
+import { type RoadPresetData, buildRoadComponentPatchFromPreset } from '@/utils/roadPreset'
 import {
   BUILTIN_WALL_PRESET_ASSETS,
   buildWallComponentPropsPatchFromPreset,
   createWallPresetActions,
 } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
+import { createRoadPresetActions } from './roadPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
@@ -779,6 +782,7 @@ const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 const LOD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const WALL_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const FLOOR_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
+const ROAD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const PREFAB_PLACEMENT_EPSILON = 1e-3
 
 const GRID_CELL_SIZE = 1
@@ -810,6 +814,15 @@ const floorPresetActions = createFloorPresetActions({
   createMaterialProps,
   createNodeMaterial,
   DEFAULT_SCENE_MATERIAL_TYPE,
+})
+
+const roadPresetActions = createRoadPresetActions({
+  ROAD_PRESET_PREVIEW_COLOR,
+  generateUuid,
+  normalizePrefabName,
+  findNodeById,
+  nodeSupportsMaterials,
+  extractMaterialProps,
 })
 
 const lodPresetActions = createLodPresetActions({
@@ -10594,6 +10607,35 @@ export const useSceneStore = defineStore('scene', {
       await floorPresetActions.applyFloorPresetToSelectedFloor(this as any, assetId)
     },
 
+    findRoadPresetAssetByFilename(filename: string): ProjectAsset | null {
+      return roadPresetActions.findRoadPresetAssetByFilename(this as any, filename)
+    },
+
+    async saveRoadPreset(payload: {
+      name: string
+      nodeId?: string | null
+      assetId?: string | null
+      select?: boolean
+    }): Promise<ProjectAsset> {
+      return roadPresetActions.saveRoadPreset(this as any, payload)
+    },
+
+    async loadRoadPreset(assetId: string): Promise<RoadPresetData> {
+      return roadPresetActions.loadRoadPreset(this as any, assetId)
+    },
+
+    async applyRoadPresetToNode(
+      nodeId: string,
+      assetId: string,
+      presetData?: RoadPresetData | null,
+    ): Promise<RoadComponentProps> {
+      return roadPresetActions.applyRoadPresetToNode(this as any, nodeId, assetId, presetData)
+    },
+
+    async applyRoadPresetToSelectedRoad(assetId: string): Promise<void> {
+      await roadPresetActions.applyRoadPresetToSelectedRoad(this as any, assetId)
+    },
+
     async loadLodPreset(assetId: string): Promise<LodPresetData> {
       return lodPresetActions.loadLodPreset(this as any, assetId)
     },
@@ -12750,12 +12792,19 @@ export const useSceneStore = defineStore('scene', {
       width?: number
       name?: string
       bodyAssetId?: string | null,
+      roadPresetData?: RoadPresetData | null
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
-      const build = buildRoadDynamicMeshFromWorldPoints(payload.points, payload.width)
+      const presetWidth = Number.isFinite(payload.roadPresetData?.width)
+        ? Math.max(ROAD_MIN_WIDTH, Number(payload.roadPresetData!.width))
+        : undefined
+      const requestedWidth = Number.isFinite(payload.width) ? payload.width : presetWidth
+      const build = buildRoadDynamicMeshFromWorldPoints(payload.points, requestedWidth)
       if (!build) {
         return null
       }
+
+      const presetMaterials = buildRoadNodeMaterialsFromPreset(payload.roadPresetData, this.materials)
 
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
@@ -12808,6 +12857,19 @@ export const useSceneStore = defineStore('scene', {
           if (!roadComponent?.id) {
             this.addNodeComponent(desiredId, ROAD_COMPONENT_TYPE)
           }
+
+          const refreshedExisting = findNodeById(this.nodes, desiredId)
+          const refreshedRoadComponent = refreshedExisting?.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined
+          if (refreshedRoadComponent?.id) {
+            const componentPatch = payload.roadPresetData
+              ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
+              : { bodyAssetId: typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length ? payload.bodyAssetId : null }
+            this.updateNodeComponentProps(desiredId, refreshedRoadComponent.id, componentPatch)
+          }
+
+          if (presetMaterials.length) {
+            this.setNodeMaterials(desiredId, presetMaterials)
+          }
           return findNodeById(this.nodes, desiredId)
         }
 
@@ -12826,16 +12888,24 @@ export const useSceneStore = defineStore('scene', {
         if (node) {
           const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
             ? payload.bodyAssetId
-            : null
+            : (payload.roadPresetData?.roadProps.bodyAssetId ?? null)
 
           const result = this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE)
           const component = result?.component
 
           if (component?.id) {
+            const componentPatch = payload.roadPresetData
+              ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
+              : null
             this.updateNodeComponentProps(node.id, component.id, {
               ...resolveRoadComponentPropsFromMesh(build.definition),
+              ...(componentPatch ?? {}),
               bodyAssetId,
             })
+          }
+
+          if (presetMaterials.length) {
+            this.setNodeMaterials(node.id, presetMaterials)
           }
         }
 

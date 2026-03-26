@@ -14,6 +14,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
+import { isRoadPresetFilename } from '@/utils/roadPreset'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import { ASSETS_ROOT_DIRECTORY_ID, PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -457,22 +458,25 @@ async function selectAsset(asset: ProjectAsset) {
     const filename = asset.description ?? asset.name
     const isWallPreset = extension === 'wall' || isWallPresetFilename(filename)
     const isFloorPreset = extension === 'floor' || isFloorPresetFilename(filename)
-    if (isWallPreset || isFloorPreset) {
+    const isRoadPreset = extension === 'road' || isRoadPresetFilename(filename)
+    if (isWallPreset || isFloorPreset || isRoadPreset) {
       sceneStore.selectAsset(asset.id)
       sceneStore.setSelection([])
 
       if (isWallPreset) {
         buildToolsStore.setWallBuildShape('line')
-      } else {
+      } else if (isFloorPreset) {
         buildToolsStore.setFloorBuildShape('polygon')
       }
 
       const activated = isWallPreset
         ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
-        : buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
+        : isFloorPreset
+          ? buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
+          : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
 
       if (activated) {
-        uiStore.setActiveSelectionContext(`build-tool:${isWallPreset ? 'wall' : 'floor'}`)
+        uiStore.setActiveSelectionContext(`build-tool:${isWallPreset ? 'wall' : isFloorPreset ? 'floor' : 'road'}`)
       } else {
         uiStore.setActiveSelectionContext('asset-panel')
       }

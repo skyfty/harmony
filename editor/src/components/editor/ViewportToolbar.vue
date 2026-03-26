@@ -537,6 +537,60 @@
           </v-list>
         </v-menu>
         <v-menu
+          v-else-if="tool.id === 'road'"
+          :activator="menuActivators.road"
+          :model-value="roadShapeMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+          @update:modelValue="handleRoadShapeMenuModelUpdate"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('road', el)"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="activeBuildTool === tool.id ? 'primary' : undefined"
+              :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled"
+              @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
+            />
+          </template>
+          <v-list density="compact" class="wall-shape-menu">
+            <div
+              class="wall-shape-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Road Brush</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:road-shape-menu-open', false)" />
+              </v-toolbar>
+
+              <AssetPickerList
+                :active="true"
+                assetType="prefab"
+                :extensions="['road']"
+                :asset-id="roadBrushPresetAssetId"
+                :thumbnailSize="30"
+                :showSearch="true"
+                @update:asset="handleRoadPresetSelect"
+              />
+            </div>
+          </v-list>
+        </v-menu>
+        <v-menu
           v-else-if="tool.id === 'water'"
           :activator="menuActivators.water"
           :model-value="waterShapeMenuOpen"
@@ -1188,6 +1242,7 @@ const props = withDefaults(
   cameraResetMenuOpen: boolean
   floorShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
+  roadShapeMenuOpen: boolean
   wallDoorSelectModeActive?: boolean
   waterShapeMenuOpen: boolean
   groundTerrainMenuOpen: boolean
@@ -1200,6 +1255,7 @@ const props = withDefaults(
   waterBuildShape: WaterBuildShape
   floorBrushPresetAssetId?: string
   wallBrushPresetAssetId?: string
+  roadBrushPresetAssetId?: string
   groundPanelTab: GroundPanelTab
   groundBrushRadius: number
   groundBrushStrength: number
@@ -1236,6 +1292,7 @@ const emit = defineEmits<{
   (event: 'open-wall-preset-picker', anchor: { x: number; y: number }): void
   (event: 'select-wall-preset', asset: any): void
   (event: 'select-floor-preset', asset: any): void
+  (event: 'select-road-preset', asset: any): void
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
@@ -1245,6 +1302,7 @@ const emit = defineEmits<{
   (event: 'update:viewport-placement-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
   (event: 'update:wall-shape-menu-open', value: boolean): void
+  (event: 'update:road-shape-menu-open', value: boolean): void
   (event: 'update:water-shape-menu-open', value: boolean): void
   (event: 'update:ground-terrain-menu-open', value: boolean): void
   (event: 'update:ground-paint-menu-open', value: boolean): void
@@ -1297,6 +1355,7 @@ const {
   cameraResetMenuOpen,
   floorShapeMenuOpen,
   wallShapeMenuOpen,
+  roadShapeMenuOpen,
   waterShapeMenuOpen,
   groundTerrainMenuOpen,
   groundPaintMenuOpen,
@@ -1308,6 +1367,7 @@ const {
   waterBuildShape,
   floorBrushPresetAssetId,
   wallBrushPresetAssetId,
+  roadBrushPresetAssetId,
   groundPanelTab,
   groundBrushRadius,
   groundBrushStrength,
@@ -1354,6 +1414,7 @@ type MenuActivatorKey =
   | 'displayBoard'
   | 'floor'
   | 'wall'
+  | 'road'
   | 'water'
   | 'viewportPlacement'
   | 'scatterErase'
@@ -1366,6 +1427,7 @@ const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined
   displayBoard: undefined,
   floor: undefined,
   wall: undefined,
+  road: undefined,
   water: undefined,
   viewportPlacement: undefined,
   scatterErase: undefined,
@@ -1756,6 +1818,9 @@ watch(buildToolsDisabled, (disabled) => {
   if (disabled && wallShapeMenuOpen.value) {
     emit('update:wall-shape-menu-open', false)
   }
+  if (disabled && roadShapeMenuOpen.value) {
+    emit('update:road-shape-menu-open', false)
+  }
   if (disabled && waterShapeMenuOpen.value) {
     emit('update:water-shape-menu-open', false)
   }
@@ -1781,6 +1846,7 @@ function closeExternalMenus() {
   emit('update:camera-reset-menu-open', false)
   emit('update:floor-shape-menu-open', false)
   emit('update:wall-shape-menu-open', false)
+  emit('update:road-shape-menu-open', false)
   emit('update:water-shape-menu-open', false)
 }
 
@@ -2022,7 +2088,7 @@ function handleBuildToolToggle(tool: BuildTool) {
   if (buildToolsDisabled.value) {
     return
   }
-  const reopensMenuOnLeftClick = tool === 'wall' || tool === 'floor' || tool === 'water'
+  const reopensMenuOnLeftClick = tool === 'wall' || tool === 'floor' || tool === 'road' || tool === 'water'
   const next = activeBuildTool.value === tool && !reopensMenuOnLeftClick ? null : tool
 
   const selectionIds = sceneStore.selectedNodeIds ?? []
@@ -2109,7 +2175,7 @@ function handleBuildToolCancel(tool: BuildTool) {
   if (buildToolsDisabled.value) {
     return
   }
-  if (tool !== 'wall' && tool !== 'floor' && tool !== 'water') {
+  if (tool !== 'wall' && tool !== 'floor' && tool !== 'road' && tool !== 'water') {
     return
   }
   setBuildToolMenuOpen(tool, false)
@@ -2170,6 +2236,10 @@ function setBuildToolMenuOpen(tool: BuildTool, open: boolean) {
   }
   if (tool === 'floor') {
     emit('update:floor-shape-menu-open', open)
+    return
+  }
+  if (tool === 'road') {
+    emit('update:road-shape-menu-open', open)
     return
   }
   if (tool === 'water') {
@@ -2290,6 +2360,18 @@ function handleFloorShapeMenuModelUpdate(value: boolean) {
     closeAllMenus()
   }
   emit('update:floor-shape-menu-open', open)
+}
+
+function handleRoadShapeMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+  }
+  emit('update:road-shape-menu-open', open)
+}
+
+function handleRoadPresetSelect(asset: any) {
+  emit('select-road-preset', asset)
 }
 
 function handleFloorShapeSelect(shape: FloorBuildShape) {

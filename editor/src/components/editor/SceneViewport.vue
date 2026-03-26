@@ -162,6 +162,7 @@ import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMateri
 import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import { collectFloorPresetDependencyAssetIds } from '@/stores/floorPresetActions'
+import { collectRoadPresetDependencyAssetIds } from '@/stores/roadPresetActions'
 import { collectWallPresetDependencyAssetIds } from '@/stores/wallPresetActions'
 import { isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
@@ -1805,9 +1806,11 @@ const {
   wallDoorSelectModeActive,
   wallBrushPresetAssetId,
   floorBrushPresetAssetId,
+  roadBrushPresetAssetId,
 } = storeToRefs(buildToolsStore)
 const floorShapeMenuOpen = ref(false)
 const wallShapeMenuOpen = ref(false)
+const roadShapeMenuOpen = ref(false)
 const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
@@ -6091,6 +6094,7 @@ const wallBuildTool = createWallBuildTool({
 
 type WallPresetData = import('@/utils/wallPreset').WallPresetData
 type FloorPresetData = import('@/utils/floorPreset').FloorPresetData
+type RoadPresetData = import('@/utils/roadPreset').RoadPresetData
 
 const wallPresetDialogOpen = ref(false)
 const wallPresetDialogAnchor = ref<{ x: number; y: number } | null>(null)
@@ -6099,6 +6103,9 @@ let wallBrushPresetLoadToken = 0
 
 const floorBrushPresetData = ref<FloorPresetData | null>(null)
 let floorBrushPresetLoadToken = 0
+
+const roadBrushPresetData = ref<RoadPresetData | null>(null)
+let roadBrushPresetLoadToken = 0
 
 function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
   wallPresetDialogOpen.value = false
@@ -6128,6 +6135,16 @@ function handleFloorPresetDialogUpdate(asset: ProjectAsset | null): void {
     buildToolsStore.setFloorBrushPresetAssetId(assetId, { activate: true })
   } else {
     buildToolsStore.setFloorBrushPresetAssetId(null)
+  }
+}
+
+function handleRoadPresetDialogUpdate(asset: ProjectAsset | null): void {
+  const assetId = asset?.id ?? null
+  if (assetId) {
+    sceneStore.setSelection([])
+    buildToolsStore.setRoadBrushPresetAssetId(assetId, { activate: true })
+  } else {
+    buildToolsStore.setRoadBrushPresetAssetId(null)
   }
 }
 
@@ -6181,6 +6198,16 @@ watch(wallBrushPresetAssetId, (assetId) => {
     })
 })
 
+watch(activeBuildTool, (tool) => {
+  if (tool !== 'road') {
+    return
+  }
+  const desiredContext = resolveSelectionContextForBuildTool(tool)
+  if (desiredContext) {
+    uiStore.setActiveSelectionContext(desiredContext)
+  }
+})
+
 watch(floorBrushPresetAssetId, (assetId) => {
   const id = typeof assetId === 'string' ? assetId.trim() : ''
   floorBrushPresetLoadToken += 1
@@ -6229,6 +6256,53 @@ watch(floorBrushPresetAssetId, (assetId) => {
     })
 })
 
+watch(roadBrushPresetAssetId, (assetId) => {
+  const id = typeof assetId === 'string' ? assetId.trim() : ''
+  roadBrushPresetLoadToken += 1
+  const token = roadBrushPresetLoadToken
+
+  if (!id) {
+    roadBrushPresetData.value = null
+    return
+  }
+
+  void sceneStore
+    .loadRoadPreset(id)
+    .then(async (data) => {
+      if (token !== roadBrushPresetLoadToken) {
+        return
+      }
+      const presetData = data as RoadPresetData
+      const dependencyAssetIds = collectRoadPresetDependencyAssetIds(presetData, sceneStore.materials)
+
+      if (dependencyAssetIds.length) {
+        const presetAssetRegistry = isSceneAssetRegistry(presetData.assetRegistry)
+          ? presetData.assetRegistry
+          : null
+        try {
+          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
+            prefabAssetIdForDownloadProgress: id,
+            prefabAssetRegistry: presetAssetRegistry,
+          })
+        } catch (dependencyError) {
+          console.warn('Failed to hydrate road preset dependencies for brush', id, dependencyError)
+        }
+      }
+
+      if (token !== roadBrushPresetLoadToken) {
+        return
+      }
+      roadBrushPresetData.value = presetData
+    })
+    .catch((error) => {
+      if (token !== roadBrushPresetLoadToken) {
+        return
+      }
+      console.warn('Failed to load road preset for brush', id, error)
+      roadBrushPresetData.value = null
+    })
+})
+
 const roadBuildTool = createRoadBuildTool({
   activeBuildTool,
   pointerInteraction,
@@ -6258,6 +6332,10 @@ const roadBuildTool = createRoadBuildTool({
   createRoadNode: (payload) => sceneStore.createRoadNode(payload),
   setNodeMaterials: (nodeId, materials) => sceneStore.setNodeMaterials(nodeId, materials),
   selectNode: (nodeId) => sceneStore.selectNode(nodeId),
+  getRoadBrush: () => ({
+    presetAssetId: roadBrushPresetAssetId.value,
+    presetData: roadBrushPresetData.value,
+  }),
   createRoadNodeMaterials,
   ensureRoadVertexHandlesForSelectedNode,
  })
@@ -6415,6 +6493,10 @@ function handleFloorShapeMenuOpen(value: boolean) {
 
 function handleWallShapeMenuOpen(value: boolean) {
   wallShapeMenuOpen.value = Boolean(value)
+}
+
+function handleRoadShapeMenuOpen(value: boolean) {
+  roadShapeMenuOpen.value = Boolean(value)
 }
 
 function toggleWallDoorSelectMode() {
@@ -13683,6 +13765,10 @@ async function handlePointerDown(event: PointerEvent) {
     wallShapeMenuOpen.value = false
   }
 
+  if (event.button === 0 && activeBuildTool.value === 'road' && roadShapeMenuOpen.value) {
+    roadShapeMenuOpen.value = false
+  }
+
   if (event.button === 0 && activeBuildTool.value === 'water' && waterShapeMenuOpen.value) {
     waterShapeMenuOpen.value = false
   }
@@ -19554,6 +19640,7 @@ defineExpose<SceneViewportHandle>({
         :camera-reset-menu-open="cameraResetMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
+        :road-shape-menu-open="roadShapeMenuOpen"
         :wall-door-select-mode-active="wallDoorSelectModeActive"
         :water-shape-menu-open="waterShapeMenuOpen"
         :ground-terrain-menu-open="groundTerrainMenuOpen"
@@ -19566,6 +19653,7 @@ defineExpose<SceneViewportHandle>({
         :water-build-shape="waterBuildShape"
         :floor-brush-preset-asset-id="floorBrushPresetAssetId ?? ''"
         :wall-brush-preset-asset-id="wallBrushPresetAssetId ?? ''"
+        :road-brush-preset-asset-id="roadBrushPresetAssetId ?? ''"
         :ground-panel-tab="groundPanelTab"
         :ground-brush-radius="brushRadius"
         :ground-brush-strength="brushStrength"
@@ -19594,6 +19682,7 @@ defineExpose<SceneViewportHandle>({
         @change-build-tool="handleBuildToolChange"
         @select-wall-preset="handleWallPresetDialogUpdate"
         @select-floor-preset="handleFloorPresetDialogUpdate"
+        @select-road-preset="handleRoadPresetDialogUpdate"
         @toggle-scatter-erase="toggleScatterEraseMode"
         @toggle-wall-door-select-mode="toggleWallDoorSelectMode"
         @start-viewport-placement="handleStartViewportPlacement"
@@ -19608,6 +19697,7 @@ defineExpose<SceneViewportHandle>({
           @update:ground-scatter-menu-open="handleGroundScatterMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
           @update:wall-shape-menu-open="handleWallShapeMenuOpen"
+          @update:road-shape-menu-open="handleRoadShapeMenuOpen"
           @update:water-shape-menu-open="handleWaterShapeMenuOpen"
           @activate-ground-tab="handleActivateGroundTab"
           @update:ground-brush-radius="handleGroundBrushRadiusUpdate"

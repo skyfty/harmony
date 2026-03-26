@@ -3,6 +3,7 @@ import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
 import type { RoadDynamicMesh, SceneNode } from '@schema'
+import type { RoadPresetData } from '@/utils/roadPreset'
 import { createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
 import {
   findConnectableRoadNodeId,
@@ -89,10 +90,15 @@ export function createRoadBuildTool(options: {
   sceneNodes: () => SceneNode[]
 
   updateNodeDynamicMesh: (nodeId: string, mesh: RoadDynamicMesh) => void
-  createRoadNode: (options: { points: Array<{ x: number; y: number; z: number }>; width: number }) => SceneNode | null
+  createRoadNode: (options: {
+    points: Array<{ x: number; y: number; z: number }>
+    width: number
+    roadPresetData?: RoadPresetData | null
+  }) => SceneNode | null
   setNodeMaterials: (nodeId: string, materials: any[]) => void
   selectNode: (nodeId: string) => void
 
+  getRoadBrush?: () => { presetAssetId: string | null; presetData: RoadPresetData | null }
   createRoadNodeMaterials: () => any[]
   ensureRoadVertexHandlesForSelectedNode: (options?: { force?: boolean }) => void
 }): RoadBuildToolHandle {
@@ -181,11 +187,15 @@ export function createRoadBuildTool(options: {
     if (session) {
       return session
     }
+    const presetWidth = Number(options.getRoadBrush?.()?.presetData?.width)
+    const defaultWidth = Number.isFinite(presetWidth)
+      ? Math.max(0.2, presetWidth)
+      : (Number.isFinite(options.defaultWidth) ? options.defaultWidth : 2)
     session = {
       points: [],
       previewEnd: null,
       previewGroup: null,
-      width: Number.isFinite(options.defaultWidth) ? options.defaultWidth : 2,
+      width: defaultWidth,
       snapVertices: options.collectRoadSnapVertices(),
       targetNodeId: null,
       startVertexIndex: null,
@@ -584,9 +594,10 @@ export function createRoadBuildTool(options: {
     const created = options.createRoadNode({
       points: committed.map((p) => ({ x: p.x, y: 0, z: p.z })),
       width: session.width,
+      roadPresetData: options.getRoadBrush?.()?.presetData ?? null,
     })
 
-    if (created) {
+    if (created && !options.getRoadBrush?.()?.presetData) {
       const roadMaterials = options.createRoadNodeMaterials()
       if (roadMaterials.length) {
         options.setNodeMaterials(created.id, roadMaterials)

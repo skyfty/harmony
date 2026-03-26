@@ -9,6 +9,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
   const activeBuildTool = ref<BuildTool | null>(null)
   const wallBrushPresetAssetId = ref<string | null>(null)
   const floorBrushPresetAssetId = ref<string | null>(null)
+  const roadBrushPresetAssetId = ref<string | null>(null)
   const wallBuildShape = ref<WallBuildShape>('line')
   const wallRegularPolygonSides = ref(0)
   const wallDoorSelectModeActive = ref(false)
@@ -48,6 +49,17 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     floorBrushPresetAssetId.value = assetId
     if (options.activate) {
       return setActiveBuildTool('floor')
+    }
+    return true
+  }
+
+  function setRoadBrushPresetAssetId(
+    assetId: string | null,
+    options: { activate?: boolean } = {},
+  ): boolean {
+    roadBrushPresetAssetId.value = assetId
+    if (options.activate) {
+      return setActiveBuildTool('road')
     }
     return true
   }
@@ -104,6 +116,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     activeBuildTool,
     wallBrushPresetAssetId,
     floorBrushPresetAssetId,
+    roadBrushPresetAssetId,
     wallBuildShape,
     wallRegularPolygonSides,
     wallDoorSelectModeActive,
@@ -115,6 +128,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     setActiveBuildTool,
     setWallBrushPresetAssetId,
     setFloorBrushPresetAssetId,
+    setRoadBrushPresetAssetId,
     setFloorBuildShape,
     setFloorRegularPolygonSides,
     setWallBuildShape,

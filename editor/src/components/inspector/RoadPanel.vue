@@ -6,9 +6,12 @@ import type { RoadDynamicMesh } from '@schema'
 import type { SceneNodeComponentState } from '@schema'
 import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING } from '@schema/components'
 import type { RoadComponentProps } from '@schema/components'
+import type { ProjectAsset } from '@/types/project-asset'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { buildRoadPresetFilename, isRoadPresetFilename } from '@/utils/roadPreset'
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
 const roadDynamicMesh = computed(() => {
   const mesh = selectedNode.value?.dynamicMesh
@@ -37,6 +40,168 @@ const localMinClearance = ref<number>(0.01)
 const localLaneLineWidth = ref<number | undefined>(undefined)
 const localShoulderWidth = ref<number | undefined>(undefined)
 const isSyncingFromScene = ref(false)
+
+const panelDropAreaRef = ref<HTMLElement | null>(null)
+const roadPresetDropActive = ref(false)
+const roadPresetFeedbackMessage = ref<string | null>(null)
+
+const savePresetDialogVisible = ref(false)
+const savePresetName = ref('')
+const overwriteConfirmDialogVisible = ref(false)
+const overwriteTargetAssetId = ref<string | null>(null)
+const overwriteTargetFilename = ref<string | null>(null)
+
+function serializeAssetDragPayload(raw: string | null): string | null {
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as { assetId?: string }
+    if (parsed?.assetId) {
+      return parsed.assetId
+    }
+  } catch (error) {
+    console.warn('Unable to parse asset drag payload', error)
+  }
+  return null
+}
+
+function resolveDragAssetId(event: DragEvent): string | null {
+  if (event.dataTransfer) {
+    const payload = serializeAssetDragPayload(event.dataTransfer.getData(ASSET_DRAG_MIME))
+    if (payload) {
+      return payload
+    }
+  }
+  return draggingAssetId.value ?? null
+}
+
+function shouldDeactivateDropArea(target: HTMLElement | null, event: DragEvent): boolean {
+  const related = event.relatedTarget as Node | null
+  if (!target || (related && target.contains(related))) {
+    return false
+  }
+  return true
+}
+
+function isRoadPresetAsset(asset: ProjectAsset | null): boolean {
+  if (!asset) {
+    return false
+  }
+  return isRoadPresetFilename(asset.description ?? asset.name ?? null)
+}
+
+function resolveRoadPresetAssetId(event: DragEvent): string | null {
+  const assetId = resolveDragAssetId(event)
+  if (!assetId) {
+    return null
+  }
+  const asset = sceneStore.getAsset(assetId)
+  if (!isRoadPresetAsset(asset)) {
+    return null
+  }
+  return assetId
+}
+
+function handleRoadPresetDragEnterCapture(event: DragEvent): void {
+  const presetId = resolveRoadPresetAssetId(event)
+  if (!presetId) {
+    return
+  }
+  roadPresetDropActive.value = true
+  roadPresetFeedbackMessage.value = null
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function handleRoadPresetDragOverCapture(event: DragEvent): void {
+  const presetId = resolveRoadPresetAssetId(event)
+  if (!presetId) {
+    return
+  }
+  roadPresetDropActive.value = true
+  roadPresetFeedbackMessage.value = null
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function handleRoadPresetDragLeaveCapture(event: DragEvent): void {
+  if (shouldDeactivateDropArea(panelDropAreaRef.value, event)) {
+    roadPresetDropActive.value = false
+  }
+}
+
+async function handleRoadPresetDropCapture(event: DragEvent): Promise<void> {
+  const presetId = resolveRoadPresetAssetId(event)
+  if (!presetId) {
+    return
+  }
+
+  roadPresetDropActive.value = false
+  roadPresetFeedbackMessage.value = null
+  event.preventDefault()
+  event.stopPropagation()
+
+  try {
+    await sceneStore.applyRoadPresetToSelectedRoad(presetId)
+  } catch (error) {
+    console.error('Failed to apply road preset', error)
+    roadPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to apply road preset.'
+  }
+}
+
+function openSaveRoadPresetDialog(): void {
+  if (!roadComponent.value || !roadDynamicMesh.value) {
+    return
+  }
+  roadPresetFeedbackMessage.value = null
+  overwriteConfirmDialogVisible.value = false
+  overwriteTargetAssetId.value = null
+  overwriteTargetFilename.value = null
+  savePresetName.value = (selectedNode.value?.name?.trim() ? selectedNode.value!.name!.trim() : 'Road Preset')
+  savePresetDialogVisible.value = true
+}
+
+async function confirmSaveRoadPreset(): Promise<void> {
+  const name = savePresetName.value?.trim() ?? ''
+  const filename = buildRoadPresetFilename(name)
+  const existing = sceneStore.findRoadPresetAssetByFilename(filename)
+  if (existing) {
+    overwriteTargetAssetId.value = existing.id
+    overwriteTargetFilename.value = filename
+    overwriteConfirmDialogVisible.value = true
+    return
+  }
+  await performSaveRoadPreset(null)
+}
+
+async function performSaveRoadPreset(overwriteAssetId: string | null): Promise<void> {
+  const name = savePresetName.value?.trim() ?? ''
+  try {
+    await sceneStore.saveRoadPreset({
+      name,
+      nodeId: selectedNodeId.value ?? null,
+      assetId: overwriteAssetId,
+      select: true,
+    })
+    savePresetDialogVisible.value = false
+    overwriteConfirmDialogVisible.value = false
+    overwriteTargetAssetId.value = null
+    overwriteTargetFilename.value = null
+  } catch (error) {
+    console.error('Failed to save road preset', error)
+    roadPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to save road preset.'
+  }
+}
+
+function cancelOverwriteRoadPreset(): void {
+  overwriteConfirmDialogVisible.value = false
+  overwriteTargetAssetId.value = null
+  overwriteTargetFilename.value = null
+}
 
 watch(
   () => roadDynamicMesh.value,
@@ -112,6 +277,14 @@ watch(
   },
   { immediate: true },
 )
+
+watch(selectedNode, () => {
+  roadPresetDropActive.value = false
+  roadPresetFeedbackMessage.value = null
+  overwriteConfirmDialogVisible.value = false
+  overwriteTargetAssetId.value = null
+  overwriteTargetFilename.value = null
+})
 
 function applyLaneLinesUpdate(rawValue: unknown) {
   if (isSyncingFromScene.value) {
@@ -380,137 +553,195 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
     <v-expansion-panel-title>
       <div class="road-panel-header">
         <span class="road-panel-title">Road</span>
+        <v-spacer />
+        <v-btn
+          v-if="roadComponent"
+          icon
+          variant="text"
+          size="small"
+          class="component-menu-btn"
+          @click.stop="openSaveRoadPresetDialog"
+        >
+          <v-icon size="18">mdi-content-save</v-icon>
+        </v-btn>
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="road-field-grid">
-        <div class="road-field-labels">
-          <span>Junction Smoothness</span>
-          <span>{{ junctionSmoothingDisplay }}</span>
+      <div
+        class="road-panel-drop-surface"
+        ref="panelDropAreaRef"
+        :class="{ 'is-road-preset-active': roadPresetDropActive }"
+        @dragenter.capture="handleRoadPresetDragEnterCapture"
+        @dragover.capture="handleRoadPresetDragOverCapture"
+        @dragleave.capture="handleRoadPresetDragLeaveCapture"
+        @drop.capture="handleRoadPresetDropCapture"
+      >
+        <p v-if="roadPresetFeedbackMessage" class="asset-feedback road-preset-feedback">{{ roadPresetFeedbackMessage }}</p>
+
+        <div class="road-field-grid">
+          <div class="road-field-labels">
+            <span>Junction Smoothness</span>
+            <span>{{ junctionSmoothingDisplay }}</span>
+          </div>
+          <v-slider
+            :model-value="localJunctionSmoothing"
+            :min="0"
+            :max="1"
+            :step="0.01"
+            density="compact"
+            track-color="rgba(77, 208, 225, 0.4)"
+            color="primary"
+            @update:modelValue="onJunctionSmoothingModelUpdate"
+          />
+
+          <v-text-field
+            :model-value="localWidth"
+            type="number"
+            label="Width (m)"
+            density="compact"
+            variant="underlined"
+            min="0.2"
+            step="0.1"
+            @update:modelValue="onWidthModelUpdate"
+          />
+
+          <v-switch
+            :model-value="localLaneLines"
+            density="compact"
+            label="Show Lane Lines"
+            @update:modelValue="onLaneLinesModelUpdate"
+          />
+
+          <v-switch
+            :model-value="localShoulders"
+            density="compact"
+            label="Show Shoulders"
+            @update:modelValue="onShouldersModelUpdate"
+          />
+
+          <v-divider class="my-2" />
+
+          <div class="road-section-header">Terrain Adaptation</div>
+
+          <v-switch
+            :model-value="localSnapToTerrain"
+            density="compact"
+            label="Adapt To Ground Terrain"
+            @update:modelValue="onSnapToTerrainModelUpdate"
+          />
+
+          <div class="road-field-labels">
+            <span>Sampling Density</span>
+            <span>{{ samplingDensityDisplay }}</span>
+          </div>
+          <v-slider
+            :model-value="localSamplingDensityFactor"
+            :min="0.1"
+            :max="5"
+            :step="0.1"
+            density="compact"
+            track-color="rgba(77, 208, 225, 0.4)"
+            color="primary"
+            @update:modelValue="onSamplingDensityModelUpdate"
+          />
+
+          <div class="road-field-labels">
+            <span>Smoothing Strength</span>
+            <span>{{ smoothingStrengthDisplay }}</span>
+          </div>
+          <v-slider
+            :model-value="localSmoothingStrengthFactor"
+            :min="0.1"
+            :max="5"
+            :step="0.1"
+            density="compact"
+            track-color="rgba(77, 208, 225, 0.4)"
+            color="primary"
+            @update:modelValue="onSmoothingStrengthModelUpdate"
+          />
+
+          <div class="road-field-labels">
+            <span>Min Clearance</span>
+            <span>{{ minClearanceDisplay }}</span>
+          </div>
+          <v-slider
+            :model-value="localMinClearance"
+            :min="0"
+            :max="2"
+            :step="0.01"
+            density="compact"
+            track-color="rgba(77, 208, 225, 0.4)"
+            color="primary"
+            @update:modelValue="onMinClearanceModelUpdate"
+          />
+
+          <v-divider class="my-2" />
+
+          <div class="road-section-header">Overlay Dimensions</div>
+
+          <v-text-field
+            :model-value="localLaneLineWidth"
+            type="number"
+            label="Lane Line Width (m)"
+            density="compact"
+            variant="underlined"
+            min="0.01"
+            max="1"
+            step="0.01"
+            placeholder="Auto"
+            clearable
+            @update:modelValue="onLaneLineWidthModelUpdate"
+          />
+
+          <v-text-field
+            :model-value="localShoulderWidth"
+            type="number"
+            label="Shoulder Width (m)"
+            density="compact"
+            variant="underlined"
+            min="0.01"
+            max="2"
+            step="0.01"
+            placeholder="Auto"
+            clearable
+            @update:modelValue="onShoulderWidthModelUpdate"
+          />
         </div>
-        <v-slider
-          :model-value="localJunctionSmoothing"
-          :min="0"
-          :max="1"
-          :step="0.01"
-          density="compact"
-          track-color="rgba(77, 208, 225, 0.4)"
-          color="primary"
-          @update:modelValue="onJunctionSmoothingModelUpdate"
-        />
 
-        <v-text-field
-          :model-value="localWidth"
-          type="number"
-          label="Width (m)"
-          density="compact"
-          variant="underlined"
-          min="0.2"
-          step="0.1"
-          @update:modelValue="onWidthModelUpdate"
-        />
+        <v-dialog v-model="savePresetDialogVisible" max-width="420">
+          <v-card>
+            <v-card-title>Save Road Preset</v-card-title>
+            <v-card-text>
+              <v-text-field
+                v-model="savePresetName"
+                label="Preset Name"
+                density="compact"
+                variant="underlined"
+                autofocus
+                @keydown.enter.prevent="confirmSaveRoadPreset"
+              />
+            </v-card-text>
+            <v-card-actions>
+              <v-spacer />
+              <v-btn variant="text" @click="savePresetDialogVisible = false">Cancel</v-btn>
+              <v-btn color="primary" @click="confirmSaveRoadPreset">Save</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
 
-        <v-switch
-          :model-value="localLaneLines"
-          density="compact"
-          label="Show Lane Lines"
-          @update:modelValue="onLaneLinesModelUpdate"
-        />
-
-        <v-switch
-          :model-value="localShoulders"
-          density="compact"
-          label="Show Shoulders"
-          @update:modelValue="onShouldersModelUpdate"
-        />
-
-        <v-divider class="my-2" />
-
-        <div class="road-section-header">Terrain Adaptation</div>
-
-        <v-switch
-          :model-value="localSnapToTerrain"
-          density="compact"
-          label="Adapt To Ground Terrain"
-          @update:modelValue="onSnapToTerrainModelUpdate"
-        />
-
-        <div class="road-field-labels">
-          <span>Sampling Density</span>
-          <span>{{ samplingDensityDisplay }}</span>
-        </div>
-        <v-slider
-          :model-value="localSamplingDensityFactor"
-          :min="0.1"
-          :max="5"
-          :step="0.1"
-          density="compact"
-          track-color="rgba(77, 208, 225, 0.4)"
-          color="primary"
-          @update:modelValue="onSamplingDensityModelUpdate"
-        />
-
-        <div class="road-field-labels">
-          <span>Smoothing Strength</span>
-          <span>{{ smoothingStrengthDisplay }}</span>
-        </div>
-        <v-slider
-          :model-value="localSmoothingStrengthFactor"
-          :min="0.1"
-          :max="5"
-          :step="0.1"
-          density="compact"
-          track-color="rgba(77, 208, 225, 0.4)"
-          color="primary"
-          @update:modelValue="onSmoothingStrengthModelUpdate"
-        />
-
-        <div class="road-field-labels">
-          <span>Min Clearance</span>
-          <span>{{ minClearanceDisplay }}</span>
-        </div>
-        <v-slider
-          :model-value="localMinClearance"
-          :min="0"
-          :max="2"
-          :step="0.01"
-          density="compact"
-          track-color="rgba(77, 208, 225, 0.4)"
-          color="primary"
-          @update:modelValue="onMinClearanceModelUpdate"
-        />
-
-        <v-divider class="my-2" />
-
-        <div class="road-section-header">Overlay Dimensions</div>
-
-        <v-text-field
-          :model-value="localLaneLineWidth"
-          type="number"
-          label="Lane Line Width (m)"
-          density="compact"
-          variant="underlined"
-          min="0.01"
-          max="1"
-          step="0.01"
-          placeholder="Auto"
-          clearable
-          @update:modelValue="onLaneLineWidthModelUpdate"
-        />
-
-        <v-text-field
-          :model-value="localShoulderWidth"
-          type="number"
-          label="Shoulder Width (m)"
-          density="compact"
-          variant="underlined"
-          min="0.01"
-          max="2"
-          step="0.01"
-          placeholder="Auto"
-          clearable
-          @update:modelValue="onShoulderWidthModelUpdate"
-        />
+        <v-dialog v-model="overwriteConfirmDialogVisible" max-width="420">
+          <v-card>
+            <v-card-title>Overwrite preset?</v-card-title>
+            <v-card-text>
+              This preset already exists: <strong>{{ overwriteTargetFilename }}</strong>. Overwrite it?
+            </v-card-text>
+            <v-card-actions>
+              <v-spacer />
+              <v-btn variant="text" @click="cancelOverwriteRoadPreset">Cancel</v-btn>
+              <v-btn color="primary" @click="performSaveRoadPreset(overwriteTargetAssetId)">Overwrite</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -542,6 +773,20 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
 .road-field-grid {
   display: grid;
   gap: 0.4rem;
+}
+
+.asset-feedback {
+  font-size: 0.75rem;
+  color: #f97316;
+}
+
+.road-panel-drop-surface.is-road-preset-active {
+  outline: 2px dashed rgba(110, 231, 183, 0.75);
+  outline-offset: 6px;
+}
+
+.road-preset-feedback {
+  margin: 0 0 0.5rem;
 }
 
 .road-field-labels {
