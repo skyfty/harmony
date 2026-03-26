@@ -201,3 +201,55 @@ export function pickNearestPlanarEdge(options: {
     initialProjection: projection,
   }
 }
+
+function normalizeRadiansToPi(value: number): number {
+  let angle = value
+  while (angle <= -Math.PI) {
+    angle += Math.PI * 2
+  }
+  while (angle > Math.PI) {
+    angle -= Math.PI * 2
+  }
+  return angle
+}
+
+export function snapPointToRelativeAngleStep(options: {
+  anchor: THREE.Vector3
+  previous: THREE.Vector3
+  target: THREE.Vector3
+  angleStepRadians?: number
+  minVectorLength?: number
+}): THREE.Vector3 {
+  const angleStep = Number.isFinite(options.angleStepRadians)
+    ? Math.max(1e-6, Number(options.angleStepRadians))
+    : (Math.PI / 4)
+  const minVectorLength = Number.isFinite(options.minVectorLength)
+    ? Math.max(1e-6, Number(options.minVectorLength))
+    : 1e-4
+
+  const prevDx = options.anchor.x - options.previous.x
+  const prevDz = options.anchor.z - options.previous.z
+  const prevLen = Math.hypot(prevDx, prevDz)
+  if (!(prevLen > minVectorLength)) {
+    return options.target.clone()
+  }
+
+  const curDx = options.target.x - options.anchor.x
+  const curDz = options.target.z - options.anchor.z
+  const curLen = Math.hypot(curDx, curDz)
+  if (!(curLen > minVectorLength)) {
+    return options.target.clone()
+  }
+
+  const prevAngle = Math.atan2(prevDz, prevDx)
+  const curAngle = Math.atan2(curDz, curDx)
+  const relative = normalizeRadiansToPi(curAngle - prevAngle)
+  const snappedRelative = Math.round(relative / angleStep) * angleStep
+  const snappedAngle = prevAngle + snappedRelative
+
+  return new THREE.Vector3(
+    options.anchor.x + Math.cos(snappedAngle) * curLen,
+    options.target.y,
+    options.anchor.z + Math.sin(snappedAngle) * curLen,
+  )
+}

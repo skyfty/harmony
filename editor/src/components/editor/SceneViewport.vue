@@ -1863,6 +1863,7 @@ const scatterEraseModeActive = ref(false)
 const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
+const relativeAngleSnapCModifierActive = ref(false)
 const navigationSpeedBoostModifierActive = ref(false)
 const wallEditNodeId = ref<string | null>(null)
 const roadEditNodeId = ref<string | null>(null)
@@ -6072,6 +6073,7 @@ const wallBuildTool = createWallBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isRelativeAngleSnapActive: () => relativeAngleSnapCModifierActive.value,
   isEditReferenceVisible: () => isSelectedWallEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
@@ -6273,6 +6275,7 @@ const floorBuildTool = createFloorBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isRelativeAngleSnapActive: () => relativeAngleSnapCModifierActive.value,
   isEditReferenceVisible: () => isSelectedFloorEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
@@ -19132,6 +19135,33 @@ function handleVertexSnapShiftBlur() {
   }
 }
 
+function handleRelativeAngleSnapCKeyDown(event: KeyboardEvent) {
+  if (!shouldHandleViewportShortcut(event)) {
+    return
+  }
+  if (event.repeat) {
+    return
+  }
+  if (event.code !== 'KeyC') {
+    return
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return
+  }
+  relativeAngleSnapCModifierActive.value = true
+}
+
+function handleRelativeAngleSnapCKeyUp(event: KeyboardEvent) {
+  if (event.code !== 'KeyC') {
+    return
+  }
+  relativeAngleSnapCModifierActive.value = false
+}
+
+function handleRelativeAngleSnapCBlur() {
+  relativeAngleSnapCModifierActive.value = false
+}
+
 onMounted(() => {
   initScene()
   if (canvasRef.value) {
@@ -19147,6 +19177,9 @@ onMounted(() => {
   window.addEventListener('keydown', handleVertexSnapShiftKeyDown, { capture: true })
   window.addEventListener('keyup', handleVertexSnapShiftKeyUp, { capture: true })
   window.addEventListener('blur', handleVertexSnapShiftBlur, { capture: true })
+    window.addEventListener('keydown', handleRelativeAngleSnapCKeyDown, { capture: true })
+    window.addEventListener('keyup', handleRelativeAngleSnapCKeyUp, { capture: true })
+    window.addEventListener('blur', handleRelativeAngleSnapCBlur, { capture: true })
   window.addEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.addEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.addEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
@@ -19191,6 +19224,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleVertexSnapShiftKeyDown, { capture: true })
   window.removeEventListener('keyup', handleVertexSnapShiftKeyUp, { capture: true })
   window.removeEventListener('blur', handleVertexSnapShiftBlur, { capture: true })
+  window.removeEventListener('keydown', handleRelativeAngleSnapCKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleRelativeAngleSnapCKeyUp, { capture: true })
+  window.removeEventListener('blur', handleRelativeAngleSnapCBlur, { capture: true })
   window.removeEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.removeEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.removeEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })

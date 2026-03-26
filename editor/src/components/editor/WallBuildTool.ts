@@ -21,6 +21,7 @@ import type { WallBuildShape } from '@/types/wall-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { WallPreviewRenderData } from './WallRenderer'
 import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import { snapPointToRelativeAngleStep } from './planarEditMath'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -97,6 +98,7 @@ export function createWallBuildTool(options: {
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
+  isRelativeAngleSnapActive?: () => boolean
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
@@ -662,11 +664,40 @@ export function createWallBuildTool(options: {
 
   const constrainWallEndPointForBuild = (
     start: THREE.Vector3,
+    previous: THREE.Vector3 | null,
     target: THREE.Vector3,
     rawTarget: THREE.Vector3 | undefined,
     constrainActive: boolean,
+    relativeAngleSnapActive: boolean,
   ): THREE.Vector3 => {
     if (!constrainActive) {
+      if (!relativeAngleSnapActive || !previous) {
+        return target.clone()
+      }
+      const relativeSnapped = snapPointToRelativeAngleStep({
+        anchor: start,
+        previous,
+        target,
+        angleStepRadians: Math.PI / 4,
+      })
+      if (relativeSnapped.equals(start)) {
+        return relativeSnapped
+      }
+      return snapToSameNodeChainEndpointIfClose(relativeSnapped)
+    }
+    if (relativeAngleSnapActive && previous) {
+      const relativeSnapped = snapPointToRelativeAngleStep({
+        anchor: start,
+        previous,
+        target,
+        angleStepRadians: Math.PI / 4,
+      })
+      if (relativeSnapped.equals(start)) {
+        return relativeSnapped
+      }
+      return snapToSameNodeChainEndpointIfClose(relativeSnapped)
+    }
+    if (relativeAngleSnapActive) {
       return target.clone()
     }
     const shouldConstrainAngle = shouldConstrainWallAngleForActiveSegment()
@@ -677,6 +708,34 @@ export function createWallBuildTool(options: {
       return base
     }
     return snapToSameNodeChainEndpointIfClose(base)
+  }
+
+  const resolveRelativeSnapPreviousPointForLine = (targetSession: WallBuildToolSession): THREE.Vector3 | null => {
+    const start = targetSession.dragStart
+    if (!start) {
+      return null
+    }
+    const lastCommitted = targetSession.lastCommittedSegment
+    if (lastCommitted && lastCommitted.end.distanceToSquared(start) <= 1e-6) {
+      return lastCommitted.start.clone()
+    }
+    for (let index = targetSession.segments.length - 1; index >= 0; index -= 1) {
+      const segment = targetSession.segments[index]
+      if (!segment) {
+        continue
+      }
+      if (segment.end.distanceToSquared(start) <= 1e-6) {
+        return segment.start.clone()
+      }
+    }
+    return null
+  }
+
+  const resolveRelativeSnapPreviousPointForPolygon = (targetSession: WallBuildToolSession): THREE.Vector3 | null => {
+    if (targetSession.polygonPoints.length < 2) {
+      return null
+    }
+    return targetSession.polygonPoints[targetSession.polygonPoints.length - 2]?.clone() ?? null
   }
 
   const hydrateFromSelection = (target: WallBuildToolSession) => {
@@ -1151,9 +1210,11 @@ export function createWallBuildTool(options: {
 
     const constrained = constrainWallEndPointForBuild(
       current.dragStart,
+      resolveRelativeSnapPreviousPointForLine(current),
       snappedPoint,
       rawPointer,
-      Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED),
+      Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED && !options.isRelativeAngleSnapActive?.()),
+      Boolean(options.isRelativeAngleSnapActive?.()),
     )
     constrained.y = resolveLockedSegmentY(current, current.dragStart.y)
     const previous = current.dragEnd
@@ -1195,9 +1256,10 @@ export function createWallBuildTool(options: {
     current.committedNewSegmentCount = 0
 
     const excludeNodeId = current.nodeId ?? options.getWallEditNodeId()
-    const point = alignPointYToPolygonDraft(snapPlacementPoint(event, groundPointerHelper.clone(), {
+    const initialPoint = alignPointYToPolygonDraft(snapPlacementPoint(event, groundPointerHelper.clone(), {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
     }), current)
+    let point = initialPoint
     const firstPoint = current.polygonPoints[0]
     const lastPoint = current.polygonPoints[current.polygonPoints.length - 1]
 
@@ -1212,6 +1274,20 @@ export function createWallBuildTool(options: {
       current.polygonPreviewEnd = firstPoint.clone()
       syncPolygonPreviewSegments(current)
       return true
+    }
+
+    if (options.isRelativeAngleSnapActive?.()) {
+      const anchor = lastPoint
+      const previous = resolveRelativeSnapPreviousPointForPolygon(current)
+      if (anchor && previous) {
+        point = snapPointToRelativeAngleStep({
+          anchor,
+          previous,
+          target: point,
+          angleStepRadians: Math.PI / 4,
+        })
+        alignPointYToPolygonDraft(point, current)
+      }
     }
 
     current.polygonPoints.push(point.clone())
@@ -1236,6 +1312,20 @@ export function createWallBuildTool(options: {
     const next = alignPointYToPolygonDraft(snapPlacementPoint(event, groundPointerHelper.clone(), {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
     }), session)
+    if (options.isRelativeAngleSnapActive?.()) {
+      const anchor = session.polygonPoints[session.polygonPoints.length - 1]
+      const previous = resolveRelativeSnapPreviousPointForPolygon(session)
+      if (anchor && previous) {
+        const relativeSnapped = snapPointToRelativeAngleStep({
+          anchor,
+          previous,
+          target: next,
+          angleStepRadians: Math.PI / 4,
+        })
+        next.copy(relativeSnapped)
+        alignPointYToPolygonDraft(next, session)
+      }
+    }
     const previous = session.polygonPreviewEnd
     if (previous && previous.equals(next)) {
       return false
@@ -1267,9 +1357,11 @@ export function createWallBuildTool(options: {
     alignPointYToLineDraft(pointer, session)
     const constrained = constrainWallEndPointForBuild(
       session.dragStart,
+      resolveRelativeSnapPreviousPointForLine(session),
       pointer,
       rawPointer,
-      Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED),
+      Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED && !options.isRelativeAngleSnapActive?.()),
+      Boolean(options.isRelativeAngleSnapActive?.()),
     )
     constrained.y = resolveLockedSegmentY(session, session.dragStart.y)
     const previous = session.dragEnd

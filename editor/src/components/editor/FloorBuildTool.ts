@@ -13,6 +13,7 @@ import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import { buildFloorDynamicMeshPresetPatch } from '@/utils/floorPresetNodeMaterials'
+import { snapPointToRelativeAngleStep } from './planarEditMath'
 
 export type FloorBuildToolHandle = {
   getSession: () => FloorPreviewSession | null
@@ -61,6 +62,7 @@ export function createFloorBuildTool(options: {
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
+  isRelativeAngleSnapActive?: () => boolean
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
@@ -301,6 +303,21 @@ export function createFloorBuildTool(options: {
       : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
 
+    if (session.shape === 'polygon' && options.isRelativeAngleSnapActive?.() && session.points.length >= 2) {
+      const anchor = session.points[session.points.length - 1]
+      const previous = session.points[session.points.length - 2]
+      if (anchor && previous) {
+        const relativeSnapped = snapPointToRelativeAngleStep({
+          anchor,
+          previous,
+          target: next,
+          angleStepRadians: Math.PI / 4,
+        })
+        next.copy(relativeSnapped)
+        alignPointYToSession(next, session)
+      }
+    }
+
     if (session.shape === 'rectangle' && !session.rectangleDirection) {
       const start = session.points[0] ?? next
       const rawDirectionPoint = raw.clone()
@@ -329,11 +346,24 @@ export function createFloorBuildTool(options: {
     }
 
     const raw = groundPointerHelper.clone()
-    const point = resolvePlacementPoint(event, raw)
+    let point = resolvePlacementPoint(event, raw)
 
     const current = ensureSession()
     alignPointYToSession(point, current)
     current.shape = 'polygon'
+    if (options.isRelativeAngleSnapActive?.() && current.points.length >= 2) {
+      const anchor = current.points[current.points.length - 1]
+      const previous = current.points[current.points.length - 2]
+      if (anchor && previous) {
+        point = snapPointToRelativeAngleStep({
+          anchor,
+          previous,
+          target: point,
+          angleStepRadians: Math.PI / 4,
+        })
+        alignPointYToSession(point, current)
+      }
+    }
     if (current.points.length > 0) {
       const last = current.points[current.points.length - 1]!
       if (last.distanceToSquared(point) <= 1e-6) {
