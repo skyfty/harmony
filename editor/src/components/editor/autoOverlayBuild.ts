@@ -2,16 +2,19 @@ import * as THREE from 'three'
 import type { FloorDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from '@schema'
 import type { Object3D } from 'three'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { readFloorBuildShapeFromNode, readWallBuildShapeFromNode } from '@/utils/dynamicMeshBuildShapeUserData'
+import { isWaterSurfaceNode, readWaterBuildShapeFromNode } from '@/utils/waterBuildShapeUserData'
+import { getWaterContourLocalPoints } from './waterSurfaceEditUtils'
 
 const FLOOR_SURFACE_Y_OFFSET = 0.01
 const AUTO_OVERLAY_WORLD_GAP = 0.02
 const POINT_EPSILON_SQ = 1e-8
 
-export type AutoOverlayTool = 'floor' | 'wall'
-export type AutoOverlayReferenceType = 'floor' | 'wall'
-export type AutoOverlayTargetBuildShape = FloorBuildShape | Exclude<WallBuildShape, 'line'>
+export type AutoOverlayTool = 'floor' | 'wall' | 'water'
+export type AutoOverlayReferenceType = 'floor' | 'wall' | 'water'
+export type AutoOverlayTargetBuildShape = FloorBuildShape | Exclude<WallBuildShape, 'line'> | WaterBuildShape
 
 export type AutoOverlayBuildPlan = {
   supported: boolean
@@ -19,7 +22,7 @@ export type AutoOverlayBuildPlan = {
   referenceNodeId: string
   referenceNodeName: string
   referenceType: AutoOverlayReferenceType
-  referenceBuildShape: FloorBuildShape | WallBuildShape | null
+  referenceBuildShape: FloorBuildShape | WallBuildShape | WaterBuildShape | null
   targetTool: AutoOverlayTool
   targetBuildShape: AutoOverlayTargetBuildShape
   worldPoints: Vector3Like[]
@@ -78,7 +81,7 @@ function sanitizeWorldPoints(points: THREE.Vector3[]): Vector3Like[] {
 }
 
 function normalizeTargetBuildShape(
-  sourceShape: FloorBuildShape | WallBuildShape | null,
+  sourceShape: FloorBuildShape | WallBuildShape | WaterBuildShape | null,
   pointCount: number,
 ): AutoOverlayTargetBuildShape {
   if (sourceShape === 'rectangle' && pointCount === 4) {
@@ -88,6 +91,53 @@ function normalizeTargetBuildShape(
     return 'circle'
   }
   return 'polygon'
+}
+
+function buildWaterOverlayPlan(
+  node: SceneNode,
+  runtimeObject: Object3D | null | undefined,
+  targetTool: AutoOverlayTool,
+): AutoOverlayBuildPlan {
+  const contourLocal = getWaterContourLocalPoints(node)
+  const contour = sanitizeWorldPoints(
+    contourLocal
+      .map(([x, y]) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          return null
+        }
+        // Water local contour lies in XY with local Z=0; raise by a small local Z gap.
+        return worldPointFromLocal(node, runtimeObject, new THREE.Vector3(x, y, AUTO_OVERLAY_WORLD_GAP))
+      })
+      .filter((entry): entry is THREE.Vector3 => Boolean(entry)),
+  )
+
+  const buildShape = readWaterBuildShapeFromNode(node)
+
+  if (contour.length < 3) {
+    return {
+      supported: false,
+      reason: '参考 water 轮廓无效，无法自动铺设。',
+      referenceNodeId: node.id,
+      referenceNodeName: node.name,
+      referenceType: 'water',
+      referenceBuildShape: buildShape,
+      targetTool,
+      targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
+      worldPoints: contour,
+    }
+  }
+
+  return {
+    supported: true,
+    reason: null,
+    referenceNodeId: node.id,
+    referenceNodeName: node.name,
+    referenceType: 'water',
+    referenceBuildShape: buildShape,
+    targetTool,
+    targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
+    worldPoints: contour,
+  }
 }
 
 function buildFloorOverlayPlan(
@@ -236,6 +286,9 @@ export function resolveAutoOverlayBuildPlan(options: {
   }
   if (referenceNode.dynamicMesh?.type === 'Wall') {
     return buildWallOverlayPlan(referenceNode, runtimeObject, targetTool)
+  }
+  if (isWaterSurfaceNode(referenceNode)) {
+    return buildWaterOverlayPlan(referenceNode, runtimeObject, targetTool)
   }
   return null
 }

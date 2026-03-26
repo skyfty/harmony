@@ -12,7 +12,11 @@ import {
   readFloorBuildShapeFromNode,
   readWallBuildShapeFromNode,
 } from '@/utils/dynamicMeshBuildShapeUserData'
-import { isWaterSurfaceNode, readWaterBuildShapeFromNode } from '@/utils/waterBuildShapeUserData'
+import {
+  isWaterSurfaceNode,
+  mergeUserDataWithWaterBuildShape,
+  readWaterBuildShapeFromNode,
+} from '@/utils/waterBuildShapeUserData'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
@@ -1821,7 +1825,13 @@ const autoOverlayDialogTitle = computed(() => {
   if (!plan) {
     return '自动铺设'
   }
-  return `自动铺设 ${plan.targetTool === 'wall' ? 'Wall' : 'Floor'}`
+  if (plan.targetTool === 'wall') {
+    return '自动铺设 Wall'
+  }
+  if (plan.targetTool === 'floor') {
+    return '自动铺设 Floor'
+  }
+  return '自动铺设 Water'
 })
 const autoOverlayConfirmDisabled = computed(() => {
   const plan = autoOverlayPlan.value
@@ -2223,7 +2233,7 @@ watch(
 watch(
   () => activeBuildTool.value,
   (tool) => {
-    if (tool !== 'wall' && tool !== 'floor') {
+    if (tool !== 'wall' && tool !== 'floor' && tool !== 'water') {
       clearAutoOverlayDialog()
     }
     hideBuildStartIndicator({ preservePending: tool === pendingBuildStartIndicator?.tool })
@@ -6816,6 +6826,9 @@ function isAutoOverlayBlockedBySelectionContext(targetTool: BuildTool | null): b
   if (context === 'build-tool:floor' && targetTool === 'floor') {
     return false
   }
+  if (context === 'build-tool:water' && targetTool === 'water') {
+    return false
+  }
   return true
 }
 
@@ -6847,6 +6860,29 @@ function hasAutoOverlayHandleConflict(event: PointerEvent): boolean {
     }
   }
 
+  if (activeBuildTool.value === 'water' && isSelectedWaterEditMode() && selectedNodeIsWater.value) {
+    ensureWaterCircleHandlesForSelectedNode()
+    if (pickWaterCircleHandleAtPointer(event)) {
+      return true
+    }
+
+    ensureWaterVertexHandlesForSelectedNode()
+    if (pickWaterVertexHandleAtPointer(event)) {
+      return true
+    }
+
+    const selectedNode = sceneStore.selectedNode ?? null
+    const runtimeObject = selectedNode ? objectMap.get(selectedNode.id) ?? null : null
+    if (
+      selectedNode
+      && runtimeObject
+      && isWaterSurfaceNode(selectedNode)
+      && pickWaterContourEdgeAtPointer(event, selectedNode, runtimeObject)
+    ) {
+      return true
+    }
+  }
+
   return false
 }
 
@@ -6855,7 +6891,7 @@ function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
   if (event.button !== 0 || isAltOverrideActive || !(event.ctrlKey || event.metaKey)) {
     return false
   }
-  if (targetTool !== 'wall' && targetTool !== 'floor') {
+  if (targetTool !== 'wall' && targetTool !== 'floor' && targetTool !== 'water') {
     return false
   }
   if (nodePickerStore.isActive || isAutoOverlayBlockedBySelectionContext(targetTool)) {
@@ -6874,7 +6910,7 @@ function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
   }
 
   const node = resolveSceneNodeById(hit.nodeId)
-  if (!node || (node.dynamicMesh?.type !== 'Floor' && node.dynamicMesh?.type !== 'Wall')) {
+  if (!node || (node.dynamicMesh?.type !== 'Floor' && node.dynamicMesh?.type !== 'Wall' && !isWaterSurfaceNode(node))) {
     return false
   }
   if (node.locked || sceneStore.isNodeSelectionLocked(node.id)) {
@@ -6959,7 +6995,7 @@ async function handleConfirmAutoOverlay(): Promise<void> {
         }
         sceneStore.selectNode(created.id)
       }
-    } else {
+    } else if (plan.targetTool === 'floor') {
       const targetShape = plan.targetBuildShape as FloorBuildShape
       buildToolsStore.setFloorBuildShape(targetShape, { activate: true })
 
@@ -6977,6 +7013,22 @@ async function handleConfirmAutoOverlay(): Promise<void> {
         if (runtimeObject) {
           refreshFloorRuntimeMaterials(created.id, runtimeObject)
         }
+        sceneStore.selectNode(created.id)
+      }
+    } else {
+      const targetShape = plan.targetBuildShape as WaterBuildShape
+      buildToolsStore.setWaterBuildShape(targetShape, { activate: true })
+
+      const created = sceneStore.createWaterSurfaceMeshNode({
+        points: plan.worldPoints,
+        buildShape: targetShape,
+      })
+
+      if (created) {
+        sceneStore.updateNodeUserData(
+          created.id,
+          mergeUserDataWithWaterBuildShape(created.userData, targetShape),
+        )
         sceneStore.selectNode(created.id)
       }
     }
