@@ -7,7 +7,11 @@ import * as THREE from 'three'
 import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
 import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
 import { CameraControlsMap } from '@/utils/CameraControlsMap'
-import { readFloorBuildShapeFromNode, readWallBuildShapeFromNode } from '@/utils/dynamicMeshBuildShapeUserData'
+import {
+  mergeUserDataWithDynamicMeshBuildShape,
+  readFloorBuildShapeFromNode,
+  readWallBuildShapeFromNode,
+} from '@/utils/dynamicMeshBuildShapeUserData'
 import { isWaterSurfaceNode, readWaterBuildShapeFromNode } from '@/utils/waterBuildShapeUserData'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
@@ -236,6 +240,11 @@ import { createFloorBuildTool } from './FloorBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
 import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
+import {
+  buildClosedWallSegmentsFromWorldPoints,
+  resolveAutoOverlayBuildPlan,
+  type AutoOverlayBuildPlan,
+} from './autoOverlayBuild'
 import { createCameraResetDirectionController, type CameraResetDirection } from './cameraResetDirection'
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
 import {
@@ -1796,6 +1805,9 @@ const {
 const floorShapeMenuOpen = ref(false)
 const wallShapeMenuOpen = ref(false)
 const waterShapeMenuOpen = ref(false)
+const autoOverlayDialogOpen = ref(false)
+const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
+const autoOverlaySubmitting = ref(false)
 const groundTerrainMenuOpen = ref(false)
 const groundPaintMenuOpen = ref(false)
 const groundScatterMenuOpen = ref(false)
@@ -1804,6 +1816,17 @@ const pendingViewportPlacement = ref<ViewportPlacementItem | null>(null)
 const viewportPlacementActive = computed(() => Boolean(pendingViewportPlacement.value))
 const cameraResetMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
+const autoOverlayDialogTitle = computed(() => {
+  const plan = autoOverlayPlan.value
+  if (!plan) {
+    return '自动铺设'
+  }
+  return `自动铺设 ${plan.targetTool === 'wall' ? 'Wall' : 'Floor'}`
+})
+const autoOverlayConfirmDisabled = computed(() => {
+  const plan = autoOverlayPlan.value
+  return !plan?.supported || autoOverlaySubmitting.value
+})
 const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'wall') {
     return 'cursor-wall'
@@ -2200,6 +2223,9 @@ watch(
 watch(
   () => activeBuildTool.value,
   (tool) => {
+    if (tool !== 'wall' && tool !== 'floor') {
+      clearAutoOverlayDialog()
+    }
     hideBuildStartIndicator({ preservePending: tool === pendingBuildStartIndicator?.tool })
     if (tool !== 'wall' && wallDoorSelectModeActive.value) {
       buildToolsStore.setWallDoorSelectModeActive(false)
@@ -6771,6 +6797,192 @@ function handleWallRegularPolygonSidesUpdate(value: number) {
 
 function handleFloorRegularPolygonSidesUpdate(value: number) {
   buildToolsStore.setFloorRegularPolygonSides(value)
+}
+
+function clearAutoOverlayDialog(): void {
+  autoOverlayDialogOpen.value = false
+  autoOverlayPlan.value = null
+  autoOverlaySubmitting.value = false
+}
+
+function isAutoOverlayBlockedBySelectionContext(targetTool: BuildTool | null): boolean {
+  const context = uiStore.activeSelectionContext
+  if (!context) {
+    return false
+  }
+  if (context === 'build-tool:wall' && targetTool === 'wall') {
+    return false
+  }
+  if (context === 'build-tool:floor' && targetTool === 'floor') {
+    return false
+  }
+  return true
+}
+
+function hasAutoOverlayHandleConflict(event: PointerEvent): boolean {
+  if (activeBuildTool.value === 'wall' && isSelectedWallEditMode() && selectedNodeIsWall.value) {
+    ensureWallEndpointHandlesForSelectedNode()
+    if (pickWallEndpointHandleAtPointer(event)) {
+      return true
+    }
+  }
+
+  if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode() && selectedNodeIsFloor.value) {
+    ensureFloorVertexHandlesForSelectedNode()
+    if (pickFloorVertexHandleAtPointer(event)) {
+      return true
+    }
+
+    if (isSelectedFloorCircleEditMode()) {
+      ensureFloorCircleHandlesForSelectedNode()
+      if (pickFloorCircleHandleAtPointer(event)) {
+        return true
+      }
+    }
+
+    const selectedNode = sceneStore.selectedNode ?? null
+    const runtimeObject = selectedNode ? objectMap.get(selectedNode.id) ?? null : null
+    if (selectedNode?.dynamicMesh?.type === 'Floor' && runtimeObject && pickFloorEdgeAtPointer(event, selectedNode, runtimeObject)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
+  const targetTool = activeBuildTool.value
+  if (event.button !== 0 || isAltOverrideActive || !(event.ctrlKey || event.metaKey)) {
+    return false
+  }
+  if (targetTool !== 'wall' && targetTool !== 'floor') {
+    return false
+  }
+  if (nodePickerStore.isActive || isAutoOverlayBlockedBySelectionContext(targetTool)) {
+    return false
+  }
+  if (targetTool === 'wall' && wallDoorSelectModeActive.value) {
+    return false
+  }
+  if (hasAutoOverlayHandleConflict(event)) {
+    return false
+  }
+
+  const hit = pickNodeAtPointer(event)
+  if (!hit) {
+    return false
+  }
+
+  const node = resolveSceneNodeById(hit.nodeId)
+  if (!node || (node.dynamicMesh?.type !== 'Floor' && node.dynamicMesh?.type !== 'Wall')) {
+    return false
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(node.id)) {
+    return false
+  }
+
+  const plan = resolveAutoOverlayBuildPlan({
+    referenceNode: node,
+    runtimeObject: objectMap.get(node.id) ?? null,
+    targetTool,
+  })
+  if (!plan) {
+    return false
+  }
+
+  autoOverlayPlan.value = plan
+  autoOverlayDialogOpen.value = true
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+  return true
+}
+
+function resolveAutoOverlayWallBrush() {
+  const presetAssetId = typeof wallBrushPresetAssetId.value === 'string' && wallBrushPresetAssetId.value.trim().length
+    ? wallBrushPresetAssetId.value.trim()
+    : null
+  const presetData = wallBrushPresetData.value
+  const rawWallProps = (presetData?.wallProps ?? null) as Partial<WallComponentProps> | null
+  const toFiniteOrUndefined = (value: unknown): number | undefined => {
+    const numeric = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(numeric) ? numeric : undefined
+  }
+  return {
+    presetAssetId,
+    presetData,
+    wallComponentProps: rawWallProps,
+    dimensions: normalizeWallDimensionsForViewport({
+      height: toFiniteOrUndefined(rawWallProps?.height),
+      width: toFiniteOrUndefined(rawWallProps?.width),
+      thickness: toFiniteOrUndefined(rawWallProps?.thickness),
+    }),
+    bodyAssetId: typeof rawWallProps?.bodyAssetId === 'string' && rawWallProps.bodyAssetId.trim().length
+      ? rawWallProps.bodyAssetId.trim()
+      : null,
+  }
+}
+
+async function handleConfirmAutoOverlay(): Promise<void> {
+  const plan = autoOverlayPlan.value
+  if (!plan || !plan.supported || autoOverlaySubmitting.value) {
+    return
+  }
+
+  autoOverlaySubmitting.value = true
+  try {
+    if (plan.targetTool === 'wall') {
+      const brush = resolveAutoOverlayWallBrush()
+      const targetShape = plan.targetBuildShape as WallBuildShape
+      buildToolsStore.setWallBuildShape(targetShape, { activate: true })
+
+      const created = sceneStore.createWallNode({
+        segments: buildClosedWallSegmentsFromWorldPoints(plan.worldPoints),
+        closed: true,
+        dimensions: brush.dimensions,
+        bodyAssetId: brush.bodyAssetId,
+        wallComponentProps: brush.wallComponentProps,
+        wallPresetData: brush.presetData,
+      })
+
+      if (created) {
+        sceneStore.updateNodeUserData(
+          created.id,
+          mergeUserDataWithDynamicMeshBuildShape(created.userData, targetShape),
+        )
+        if (brush.presetAssetId) {
+          try {
+            await sceneStore.applyWallPresetToNode(created.id, brush.presetAssetId, brush.presetData)
+          } catch (error) {
+            console.warn('Failed to apply auto overlay wall preset', brush.presetAssetId, error)
+          }
+        }
+        sceneStore.selectNode(created.id)
+      }
+    } else {
+      const targetShape = plan.targetBuildShape as FloorBuildShape
+      buildToolsStore.setFloorBuildShape(targetShape, { activate: true })
+
+      const created = sceneStore.createFloorNode({
+        points: plan.worldPoints,
+        floorPresetData: floorBrushPresetData.value,
+      })
+
+      if (created) {
+        sceneStore.updateNodeUserData(
+          created.id,
+          mergeUserDataWithDynamicMeshBuildShape(created.userData, targetShape),
+        )
+        const runtimeObject = objectMap.get(created.id) ?? null
+        if (runtimeObject) {
+          refreshFloorRuntimeMaterials(created.id, runtimeObject)
+        }
+        sceneStore.selectNode(created.id)
+      }
+    }
+  } finally {
+    clearAutoOverlayDialog()
+  }
 }
 
 function handleSelectWaterBuildShape(shape: WaterBuildShape) {
@@ -13352,6 +13564,10 @@ async function handlePointerDown(event: PointerEvent) {
     waterShapeMenuOpen.value = false
   }
 
+  if (tryOpenAutoOverlayDialog(event)) {
+    return
+  }
+
   const wallEditModeLocked = activeBuildTool.value === 'wall' && isSelectedWallEditMode()
   const floorEditModeLocked = activeBuildTool.value === 'floor' && isSelectedFloorEditMode()
   const roadEditModeLocked = activeBuildTool.value === 'road' && isSelectedRoadEditMode()
@@ -19378,6 +19594,35 @@ defineExpose<SceneViewportHandle>({
       @update:asset="handleWallPresetDialogUpdate"
       @cancel="handleWallPresetDialogCancel"
     />
+
+    <v-dialog v-model="autoOverlayDialogOpen" max-width="460">
+      <v-card>
+        <v-card-title>{{ autoOverlayDialogTitle }}</v-card-title>
+        <v-card-text>
+          <div v-if="autoOverlayPlan">
+            <div>参考节点：{{ autoOverlayPlan.referenceNodeName || autoOverlayPlan.referenceNodeId }}</div>
+            <div>参考类型：{{ autoOverlayPlan.referenceType }}</div>
+            <div>目标类型：{{ autoOverlayPlan.targetTool }}</div>
+            <div>参考形状：{{ autoOverlayPlan.referenceBuildShape ?? 'unknown' }}</div>
+            <div>目标形状：{{ autoOverlayPlan.targetBuildShape }}</div>
+            <div v-if="autoOverlayPlan.supported">确认后将沿参考节点轮廓自动创建新的叠加节点。</div>
+            <div v-else class="text-error">{{ autoOverlayPlan.reason }}</div>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="clearAutoOverlayDialog">取消</v-btn>
+          <v-btn
+            color="primary"
+            :disabled="autoOverlayConfirmDisabled"
+            :loading="autoOverlaySubmitting"
+            @click="handleConfirmAutoOverlay"
+          >
+            自动铺设
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
