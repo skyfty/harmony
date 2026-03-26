@@ -50,21 +50,21 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   height: 140px;
   border-radius: 10px;
   overflow: hidden;
-  -webkit-box-shadow: 0 10px 30px rgba(26, 31, 46, 0.14), 0 6px 20px rgba(31, 122, 236, 0.08);
-  box-shadow: 0 10px 30px rgba(26, 31, 46, 0.14), 0 6px 20px rgba(31, 122, 236, 0.08);
+  -webkit-box-shadow: 0 6px 16px rgba(26, 31, 46, 0.10), 0 3px 10px rgba(31, 122, 236, 0.06);
+  box-shadow: 0 6px 16px rgba(26, 31, 46, 0.10), 0 3px 10px rgba(31, 122, 236, 0.06);
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
 .card:active {
   transform: translateY(1px) scale(0.998);
-  -webkit-box-shadow: 0 12px 36px rgba(26, 31, 46, 0.18), 0 6px 18px rgba(31, 122, 236, 0.1);
-  box-shadow: 0 12px 36px rgba(26, 31, 46, 0.18), 0 6px 18px rgba(31, 122, 236, 0.1);
+  -webkit-box-shadow: 0 8px 20px rgba(26, 31, 46, 0.12), 0 4px 12px rgba(31, 122, 236, 0.08);
+  box-shadow: 0 8px 20px rgba(26, 31, 46, 0.12), 0 4px 12px rgba(31, 122, 236, 0.08);
 }
 
 .card:hover {
-  transform: translateY(-4px) scale(1.01);
-  -webkit-box-shadow: 0 18px 48px rgba(26, 31, 46, 0.22), 0 8px 28px rgba(31, 122, 236, 0.12);
-  box-shadow: 0 18px 48px rgba(26, 31, 46, 0.22), 0 8px 28px rgba(31, 122, 236, 0.12);
+  transform: translateY(-2px) scale(1.005);
+  -webkit-box-shadow: 0 10px 24px rgba(26, 31, 46, 0.14), 0 5px 16px rgba(31, 122, 236, 0.09);
+  box-shadow: 0 10px 24px rgba(26, 31, 46, 0.14), 0 5px 16px rgba(31, 122, 236, 0.09);
 }
 
 .cover {
