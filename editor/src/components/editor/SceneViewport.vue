@@ -1812,6 +1812,13 @@ const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
+const autoOverlayHoverNodeId = ref<string | null>(null)
+const autoOverlayHoverIndicator = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  label: '自动铺设',
+})
 const groundTerrainMenuOpen = ref(false)
 const groundPaintMenuOpen = ref(false)
 const groundScatterMenuOpen = ref(false)
@@ -1821,17 +1828,7 @@ const viewportPlacementActive = computed(() => Boolean(pendingViewportPlacement.
 const cameraResetMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const autoOverlayDialogTitle = computed(() => {
-  const plan = autoOverlayPlan.value
-  if (!plan) {
-    return '自动铺设'
-  }
-  if (plan.targetTool === 'wall') {
-    return '自动铺设 Wall'
-  }
-  if (plan.targetTool === 'floor') {
-    return '自动铺设 Floor'
-  }
-  return '自动铺设 Water'
+  return '自动铺设？'
 })
 const autoOverlayConfirmDisabled = computed(() => {
   const plan = autoOverlayPlan.value
@@ -2235,6 +2232,7 @@ watch(
   (tool) => {
     if (tool !== 'wall' && tool !== 'floor' && tool !== 'water') {
       clearAutoOverlayDialog()
+      clearAutoOverlayHoverIndicator()
     }
     hideBuildStartIndicator({ preservePending: tool === pendingBuildStartIndicator?.tool })
     if (tool !== 'wall' && wallDoorSelectModeActive.value) {
@@ -6815,6 +6813,19 @@ function clearAutoOverlayDialog(): void {
   autoOverlaySubmitting.value = false
 }
 
+function setAutoOverlayHoverNodeId(nodeId: string | null): void {
+  if (autoOverlayHoverNodeId.value === nodeId) {
+    return
+  }
+  autoOverlayHoverNodeId.value = nodeId
+  updateOutlineSelectionTargets()
+}
+
+function clearAutoOverlayHoverIndicator(): void {
+  autoOverlayHoverIndicator.visible = false
+  setAutoOverlayHoverNodeId(null)
+}
+
 function isAutoOverlayBlockedBySelectionContext(targetTool: BuildTool | null): boolean {
   const context = uiStore.activeSelectionContext
   if (!context) {
@@ -6886,46 +6897,98 @@ function hasAutoOverlayHandleConflict(event: PointerEvent): boolean {
   return false
 }
 
-function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
+function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPlan | null {
   const targetTool = activeBuildTool.value
-  if (event.button !== 0 || isAltOverrideActive || !(event.ctrlKey || event.metaKey)) {
-    return false
-  }
   if (targetTool !== 'wall' && targetTool !== 'floor' && targetTool !== 'water') {
-    return false
+    return null
+  }
+  if (isAltOverrideActive) {
+    return null
   }
   if (nodePickerStore.isActive || isAutoOverlayBlockedBySelectionContext(targetTool)) {
-    return false
+    return null
   }
   if (targetTool === 'wall' && wallDoorSelectModeActive.value) {
-    return false
+    return null
   }
   if (hasAutoOverlayHandleConflict(event)) {
-    return false
+    return null
   }
 
   const hit = pickNodeAtPointer(event)
   if (!hit) {
-    return false
+    return null
   }
 
   const node = resolveSceneNodeById(hit.nodeId)
   if (!node || (node.dynamicMesh?.type !== 'Floor' && node.dynamicMesh?.type !== 'Wall' && !isWaterSurfaceNode(node))) {
-    return false
+    return null
   }
   if (node.locked || sceneStore.isNodeSelectionLocked(node.id)) {
-    return false
+    return null
   }
 
-  const plan = resolveAutoOverlayBuildPlan({
+  return resolveAutoOverlayBuildPlan({
     referenceNode: node,
     runtimeObject: objectMap.get(node.id) ?? null,
     targetTool,
   })
+}
+
+function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
+  const hasActiveDrag = Boolean(
+    roadVertexDragState
+    || floorVertexDragState
+    || displayBoardCornerDragState
+    || waterContourVertexDragState
+    || waterCircleCenterDragState
+    || waterCircleRadiusDragState
+    || waterEdgeDragState
+    || floorThicknessDragState
+    || floorCircleCenterDragState
+    || floorCircleRadiusDragState
+    || wallCircleCenterDragState
+    || wallCircleRadiusDragState
+    || wallEndpointDragState
+    || wallJointDragState
+    || wallHeightDragState,
+  )
+
+  if (
+    event.pointerType !== 'mouse'
+    || autoOverlayDialogOpen.value
+    || hasActiveDrag
+    || !(event.ctrlKey || event.metaKey)
+    || !isStrictPointOnCanvas(event.clientX, event.clientY)
+  ) {
+    clearAutoOverlayHoverIndicator()
+    return
+  }
+
+  const plan = resolveAutoOverlayPlanForEvent(event)
+  if (!plan?.supported || !surfaceRef.value) {
+    clearAutoOverlayHoverIndicator()
+    return
+  }
+
+  const rect = surfaceRef.value.getBoundingClientRect()
+  setAutoOverlayHoverNodeId(plan.referenceNodeId)
+  autoOverlayHoverIndicator.visible = true
+  autoOverlayHoverIndicator.x = event.clientX - rect.left + 14
+  autoOverlayHoverIndicator.y = event.clientY - rect.top + 18
+  autoOverlayHoverIndicator.label = `自动铺设 ${plan.targetTool}`
+}
+
+function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
+  if (event.button !== 0 || isAltOverrideActive || !(event.ctrlKey || event.metaKey)) {
+    return false
+  }
+  const plan = resolveAutoOverlayPlanForEvent(event)
   if (!plan) {
     return false
   }
 
+  clearAutoOverlayHoverIndicator()
   autoOverlayPlan.value = plan
   autoOverlayDialogOpen.value = true
   event.preventDefault()
@@ -12600,17 +12663,11 @@ function updateOutlineSelectionTargets() {
 
   const meshSet = new Set<THREE.Object3D>()
   const activeInstancedNodeIds = new Set<string>()
-  const idSources: Array<string | null | undefined> = [
-    ...sceneStore.selectedNodeIds,
-    props.selectedNodeId,
-    sceneStore.selectedNodeId,
-  ]
-
-  idSources.forEach((id) => {
+  const collectNodeOutline = (id: string | null | undefined, forceHighlight = false) => {
     if (!id) {
       return
     }
-    if (shouldSuppressNodeHighlightDuringBuildOrEdit(id)) {
+    if (!forceHighlight && shouldSuppressNodeHighlightDuringBuildOrEdit(id)) {
       return
     }
     const node = resolveSceneNodeById(id)
@@ -12625,7 +12682,18 @@ function updateOutlineSelectionTargets() {
       return
     }
     collectVisibleMeshesForOutline(target, meshSet, activeInstancedNodeIds)
+  }
+  const idSources: Array<string | null | undefined> = [
+    ...sceneStore.selectedNodeIds,
+    props.selectedNodeId,
+    sceneStore.selectedNodeId,
+  ]
+
+  idSources.forEach((id) => {
+    collectNodeOutline(id, false)
   })
+
+  collectNodeOutline(autoOverlayHoverNodeId.value, true)
 
   const releaseCandidates: string[] = []
   instancedOutlineManager.getEntryNodeIds().forEach((nodeId) => {
@@ -13811,6 +13879,7 @@ function handlePointerMove(event: PointerEvent) {
   lastPointerClientX = event.clientX
   lastPointerClientY = event.clientY
   lastPointerType = event.pointerType
+  updateAutoOverlayHoverIndicator(event)
 
   // (debug hover capture removed)
 
@@ -19616,12 +19685,20 @@ defineExpose<SceneViewportHandle>({
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
         </div>
+        <div
+          v-if="autoOverlayHoverIndicator.visible"
+          class="auto-overlay-hover-badge"
+          :style="{ left: autoOverlayHoverIndicator.x + 'px', top: autoOverlayHoverIndicator.y + 'px' }"
+        >
+          {{ autoOverlayHoverIndicator.label }}
+        </div>
       <canvas
         ref="canvasRef"
         :class="[
           'viewport-canvas',
           buildToolCursorClass,
           {
+              'cursor-auto-overlay': autoOverlayHoverIndicator.visible,
             'cursor-scatter-hammer': scatterRepairModifierActive,
             'cursor-scatter-erase': scatterEraseModeActive && !scatterRepairModifierActive,
           },
@@ -19652,12 +19729,9 @@ defineExpose<SceneViewportHandle>({
         <v-card-title>{{ autoOverlayDialogTitle }}</v-card-title>
         <v-card-text>
           <div v-if="autoOverlayPlan">
-            <div>参考节点：{{ autoOverlayPlan.referenceNodeName || autoOverlayPlan.referenceNodeId }}</div>
-            <div>参考类型：{{ autoOverlayPlan.referenceType }}</div>
-            <div>目标类型：{{ autoOverlayPlan.targetTool }}</div>
-            <div>参考形状：{{ autoOverlayPlan.referenceBuildShape ?? 'unknown' }}</div>
-            <div>目标形状：{{ autoOverlayPlan.targetBuildShape }}</div>
-            <div v-if="autoOverlayPlan.supported">确认后将沿参考节点轮廓自动创建新的叠加节点。</div>
+            <div v-if="autoOverlayPlan.supported">
+              沿“{{ autoOverlayPlan.referenceNodeName || autoOverlayPlan.referenceNodeId }}”轮廓创建新的 {{ autoOverlayPlan.targetTool }}。
+            </div>
             <div v-else class="text-error">{{ autoOverlayPlan.reason }}</div>
           </div>
         </v-card-text>
@@ -19796,6 +19870,22 @@ defineExpose<SceneViewportHandle>({
   user-select: none;
 }
 
+.auto-overlay-hover-badge {
+  position: absolute;
+  transform: translate(10px, 10px);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(94, 234, 212, 0.5);
+  color: rgba(204, 251, 241, 0.98);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(8, 15, 29, 0.35);
+  pointer-events: none;
+  user-select: none;
+}
+
 .wall-door-selection-overlay {
   position: absolute;
   border: 1px solid rgba(187, 222, 251, 0.95);
@@ -19848,6 +19938,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-water,
 .viewport-canvas.cursor-water:active {
   cursor: alias !important;
+}
+
+.viewport-canvas.cursor-auto-overlay,
+.viewport-canvas.cursor-auto-overlay:active {
+  cursor: copy !important;
 }
 
 .viewport-canvas.cursor-display-board,
