@@ -8,6 +8,9 @@
       :project-id="projectId"
       :package-url="packageUrl"
       :server-asset-base-url="serverAssetBaseUrl"
+      :debug-console-enabled="false"
+      :debug-console-default-expanded="true"
+      :debug-console-max-entries="200"
       @punch="handlePunch"
     />
 
