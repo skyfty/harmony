@@ -121,9 +121,9 @@ function applyWallMeshMaterialConfigId(meshes: THREE.Mesh[], materialConfigId: s
 }
 
 const WALL_DEFAULT_COLOR = 0xcfd2d6
-const WALL_MIN_HEIGHT = 0.5
-const WALL_MIN_WIDTH = 0.1
-const WALL_DEFAULT_HEIGHT = 3
+const WALL_MIN_HEIGHT = 0.0
+const WALL_MIN_WIDTH = 0.0
+const WALL_DEFAULT_HEIGHT = 1
 // (WALL_DEFAULT_WIDTH removed: unused after refactor)
 const WALL_EPSILON = 1e-6
 

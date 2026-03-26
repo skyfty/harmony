@@ -14,6 +14,8 @@ import type {
 	RigidbodyVector3Tuple,
 } from './components'
 import {
+	WALL_COMPONENT_TYPE,
+	clampWallProps,
 	DEFAULT_LINEAR_DAMPING,
 	DEFAULT_ANGULAR_DAMPING,
 	DEFAULT_RIGIDBODY_FRICTION,
@@ -245,6 +247,8 @@ export function isAirWallRenderObject(object: THREE.Object3D | null | undefined)
 	const userData = (object as any)?.userData as Record<string, unknown> | undefined
 	return Boolean(userData && userData[PHYSICS_AIR_WALL_USERDATA_KEY] === true)
 }
+
+const WALL_FORBIDDEN_COLLIDER_HEIGHT = 100
 
 export type GroundHeightfieldCacheEntry = {
 	signature: string
@@ -653,6 +657,11 @@ function resolveWallShape(params: {
 	}
 
 	const visibleSegments: any[] = rawSegments
+	const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<Record<string, unknown>> | undefined
+	const wallProps = wallComponent?.props
+		? clampWallProps(wallComponent.props as Partial<ReturnType<typeof clampWallProps>>)
+		: null
+	const forbiddenCollider = Boolean(wallComponent?.enabled !== false && wallProps?.forbidden)
 
 	// Signature for caching: quantize to reduce float jitter.
 	const cached = cache.get(nodeId)
@@ -677,6 +686,10 @@ function resolveWallShape(params: {
 			const q = Number.isFinite(v) ? Math.round(v * quantize) : 0
 			fnv(q | 0)
 		}
+	}
+	fnv(forbiddenCollider ? 1 : 0)
+	if (forbiddenCollider) {
+		fnv(Math.round(WALL_FORBIDDEN_COLLIDER_HEIGHT * quantize) | 0)
 	}
 	const signature = `s:${rawSegments.length}:${hash.toString(16)}`
 	if (cached && cached.signature === signature) {
@@ -713,7 +726,8 @@ function resolveWallShape(params: {
 			const rawHeight = Number((segment as any)?.height)
 			const rawWidth = Number((segment as any)?.width)
 			const rawThickness = Number((segment as any)?.thickness)
-			const height = Number.isFinite(rawHeight) ? Math.max(eps, rawHeight) : 3
+			const visibleHeight = Number.isFinite(rawHeight) ? Math.max(eps, rawHeight) : 3
+			const height = forbiddenCollider ? Math.max(visibleHeight, WALL_FORBIDDEN_COLLIDER_HEIGHT) : visibleHeight
 			// Wall geometry currently uses "width" as the ribbon thickness.
 			const thickness = Number.isFinite(rawWidth) ? Math.max(eps, rawWidth) : (Number.isFinite(rawThickness) ? Math.max(eps, rawThickness) : 0.2)
 

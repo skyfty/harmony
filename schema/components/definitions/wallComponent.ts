@@ -83,6 +83,8 @@ export interface WallComponentProps {
   wallBaseOffsetLocal: WallOffsetLocal
   /** Material config id used for the wall body mesh (editor-defined). */
   bodyMaterialConfigId: string | null
+  /** When enabled, collision should extend far upward without changing visible wall size. */
+  forbidden: boolean
   /**
    * When enabled, the wall is rendered as an invisible "air wall".
    * The mesh structure should still exist for rigidbody collision generation.
@@ -311,6 +313,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     } satisfies WallCornerModelRule
   })
 
+  const normalizedForbidden = requiredBoolean('forbidden')
   const normalizedIsAirWall = requiredBoolean('isAirWall')
   const normalizeRepeatInstanceStep = (value: unknown): number => {
     const raw = typeof value === 'number' ? value : Number(value)
@@ -349,6 +352,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     thickness,
     wallBaseOffsetLocal,
     bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
+    forbidden: normalizedForbidden,
     isAirWall: normalizedIsAirWall,
     wallRenderMode: requiredRenderMode((props as any).wallRenderMode, 'wallRenderMode'),
     repeatInstanceStep: normalizeRepeatInstanceStep((props as any).repeatInstanceStep),
@@ -384,6 +388,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       thickness: WALL_DEFAULT_THICKNESS,
       wallBaseOffsetLocal: { x: 0, y: 0, z: 0 },
       bodyMaterialConfigId: null,
+      forbidden: false,
       isAirWall: false,
       wallRenderMode: 'stretch',
       repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
@@ -419,6 +424,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     bodyMaterialConfigId: typeof mesh.bodyMaterialConfigId === 'string' && mesh.bodyMaterialConfigId.trim().length
       ? mesh.bodyMaterialConfigId.trim()
       : null,
+    forbidden: false,
     isAirWall: false,
     wallRenderMode: 'stretch',
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
@@ -474,6 +480,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
       z: Number((props as any)?.wallBaseOffsetLocal?.z) || 0,
     },
     bodyMaterialConfigId: props.bodyMaterialConfigId ?? null,
+    forbidden: Boolean(props.forbidden),
     isAirWall: Boolean(props.isAirWall),
     wallRenderMode: props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
     repeatInstanceStep: Number.isFinite(props.repeatInstanceStep)
@@ -621,6 +628,7 @@ export function createWallComponentState(
     thickness: overrides?.thickness ?? defaults.thickness,
     wallBaseOffsetLocal: (overrides as any)?.wallBaseOffsetLocal ?? defaults.wallBaseOffsetLocal,
     bodyMaterialConfigId: overrides?.bodyMaterialConfigId ?? defaults.bodyMaterialConfigId,
+    forbidden: overrides?.forbidden ?? defaults.forbidden,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     wallRenderMode: overrides?.wallRenderMode ?? defaults.wallRenderMode,
     repeatInstanceStep: overrides?.repeatInstanceStep ?? defaults.repeatInstanceStep,

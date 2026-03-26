@@ -577,6 +577,23 @@ function updateWallAssetHeight(
   sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: nextValue } as any)
 }
 
+function updateWallBooleanProp(
+  key: 'forbidden',
+  value: unknown,
+): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextValue = value === true
+  const currentValue = Boolean((component.props as any)?.[key])
+  if (currentValue === nextValue) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: nextValue } as any)
+}
+
 async function applyWallHeadOrFootAsset(target: 'head' | 'foot', assetId: string | null): Promise<void> {
   const nodeId = selectedNodeId.value
   const component = wallComponent.value
@@ -1383,7 +1400,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 variant="underlined"
                 class="slider-input"
                 step="0.1"
-                min="0.5"
+                :min="WALL_MIN_HEIGHT"
                 @blur="applyDimensions"
                 inputmode="decimal"
                 @keydown.enter.prevent="applyDimensions"
@@ -1396,7 +1413,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 variant="underlined"
                 class="slider-input"
                 step="0.05"
-                min="0.1"
+                :min="WALL_MIN_WIDTH"
                 @blur="applyDimensions"
                 inputmode="decimal"
                 @keydown.enter.prevent="applyDimensions"
@@ -1424,6 +1441,16 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 @click="handleAutoFitBodyDimensions"
               />
             </div>
+            <v-switch
+              density="compact"
+              hide-details
+              inset
+              color="warning"
+              label="Forbidden Collider"
+              :disabled="!wallComponent"
+              :model-value="Boolean((wallComponent?.props as any)?.forbidden)"
+              @update:modelValue="(value) => updateWallBooleanProp('forbidden', value)"
+            />
           </div>
           <div v-if="!isAirWallNode" class="wall-render-mode-row">
             <v-select

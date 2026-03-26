@@ -13722,6 +13722,7 @@ export const useSceneStore = defineStore('scene', {
         const hasBodyEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapOrientation')
         const hasHeadEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapOrientation')
         const hasFootEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapOrientation')
+        const hasForbidden = Object.prototype.hasOwnProperty.call(typedPatch, 'forbidden')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasWallRenderMode = Object.prototype.hasOwnProperty.call(typedPatch, 'wallRenderMode')
         const hasRepeatInstanceStep = Object.prototype.hasOwnProperty.call(typedPatch, 'repeatInstanceStep')
@@ -13876,6 +13877,9 @@ export const useSceneStore = defineStore('scene', {
           bodyMaterialConfigId: hasBodyMaterialConfigId
             ? (typedPatch.bodyMaterialConfigId as string | null | undefined)
             : currentProps.bodyMaterialConfigId,
+          forbidden: hasForbidden
+            ? (typedPatch.forbidden as boolean | undefined)
+            : currentProps.forbidden,
           isAirWall: hasIsAirWall
             ? (typedPatch.isAirWall as boolean | undefined)
             : currentProps.isAirWall,
@@ -13956,6 +13960,7 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
           offsetLocalEqual(currentProps.wallBaseOffsetLocal, merged.wallBaseOffsetLocal) &&
           (currentProps.bodyMaterialConfigId ?? null) === (merged.bodyMaterialConfigId ?? null) &&
+          currentProps.forbidden === merged.forbidden &&
           currentProps.isAirWall === merged.isAirWall &&
           currentProps.wallRenderMode === merged.wallRenderMode &&
           Math.abs(currentProps.repeatInstanceStep - merged.repeatInstanceStep) <= 1e-6 &&

@@ -51,6 +51,7 @@ export type StrictWallPresetWallProps = {
   bodyMaterialConfigId: string | null
   wallRenderMode: WallRenderMode
   repeatInstanceStep: number
+  forbidden: boolean
   isAirWall: boolean
   bodyAssetId: string | null
   bodyOrientation: WallModelOrientation

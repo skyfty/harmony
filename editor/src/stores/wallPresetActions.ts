@@ -83,6 +83,7 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     bodyMaterialConfigId: null,
     wallRenderMode: 'stretch',
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
+    forbidden: false,
     isAirWall: true,
     bodyAssetId: null,
     bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
@@ -228,6 +229,7 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
     bodyMaterialConfigId: wallProps.bodyMaterialConfigId ?? null,
     wallRenderMode: normalizeWallRenderMode(wallProps.wallRenderMode, 'stretch'),
     repeatInstanceStep: wallProps.repeatInstanceStep,
+    forbidden: wallProps.forbidden,
     isAirWall: wallProps.isAirWall,
     bodyAssetId: wallProps.bodyAssetId ?? null,
     bodyOrientation: wallProps.bodyOrientation,
@@ -273,6 +275,10 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
       throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}`)
     }
     return raw
+  }
+  const optionalBoolean = (key: string, fallback = false): boolean => {
+    const raw = record[key]
+    return typeof raw === 'boolean' ? raw : fallback
   }
   const optionalMaterialConfigId = (key: string): string | null => {
     const raw = record[key]
@@ -442,6 +448,7 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     bodyMaterialConfigId: optionalMaterialConfigId('bodyMaterialConfigId'),
     wallRenderMode: normalizeWallRenderMode(record.wallRenderMode, 'stretch'),
     repeatInstanceStep: optionalRepeatInstanceStep(),
+    forbidden: optionalBoolean('forbidden', false),
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
     bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
