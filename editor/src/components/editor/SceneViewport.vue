@@ -1328,15 +1328,24 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   },
 }
 
+function resolveFloorMaterialTarget(targetObject: THREE.Object3D): THREE.Object3D {
+  const floorGroup = targetObject.userData?.floorGroup as THREE.Object3D | undefined
+  if (floorGroup?.isObject3D) {
+    return floorGroup
+  }
+  return targetObject
+}
+
 function refreshFloorRuntimeMaterials(nodeId: string, targetObject: THREE.Object3D): void {
   const node = findSceneNode(sceneStore.nodes, nodeId)
   if (!node || node.dynamicMesh?.type !== 'Floor') {
     return
   }
+  const materialTarget = resolveFloorMaterialTarget(targetObject)
   if (node.materials && node.materials.length) {
-    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
+    applyMaterialOverrides(materialTarget, node.materials, materialOverrideOptions)
   } else {
-    resetMaterialOverrides(targetObject)
+    resetMaterialOverrides(materialTarget)
   }
 }
 
@@ -8232,7 +8241,9 @@ function applyNodeMaterialsOnly(object: THREE.Object3D, node: SceneNode): void {
   userData.nodeId = node.id
   userData.nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   userData.dynamicMeshType = node.dynamicMesh?.type ?? userData.dynamicMeshType ?? null
-  if (node.materials && node.materials.length) {
+  if (node.dynamicMesh?.type === 'Floor') {
+    refreshFloorRuntimeMaterials(node.id, object)
+  } else if (node.materials && node.materials.length) {
     applyMaterialOverrides(object, node.materials, materialOverrideOptions)
   } else {
     resetMaterialOverrides(object)
@@ -17343,7 +17354,9 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   }
 
-  if (node.materials && node.materials.length) {
+  if (node.dynamicMesh?.type === 'Floor') {
+    refreshFloorRuntimeMaterials(node.id, object)
+  } else if (node.materials && node.materials.length) {
     applyMaterialOverrides(object, node.materials, materialOverrideOptions)
   } else {
     resetMaterialOverrides(object)
