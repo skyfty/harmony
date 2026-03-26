@@ -153,10 +153,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
 
   const requiredBoolean = (key: keyof WallComponentProps): boolean => {
     const raw = (props as any)?.[key]
-    if (typeof raw !== 'boolean') {
-      throw new Error(`WallComponentProps missing/invalid boolean: ${String(key)}`)
-    }
-    return raw
+    return Boolean(raw)
   }
 
   const requiredAssetIdOrNull = (key: keyof WallComponentProps): string | null => {
