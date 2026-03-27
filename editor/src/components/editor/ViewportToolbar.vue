@@ -591,6 +591,105 @@
           </v-list>
         </v-menu>
         <v-menu
+          v-else-if="tool.id === 'landform'"
+          :activator="menuActivators.landform"
+          :model-value="landformShapeMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+          @update:modelValue="handleLandformShapeMenuModelUpdate"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :ref="(el: unknown) => setMenuActivator('landform', el)"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="activeBuildTool === tool.id ? 'primary' : undefined"
+              :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled"
+              @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleBuildToolCancel(tool.id)"
+            />
+          </template>
+          <v-list density="compact" class="floor-shape-menu">
+            <div
+              class="floor-shape-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Landform Brush</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:landform-shape-menu-open', false)" />
+              </v-toolbar>
+
+              <div class="floor-shape-grid">
+                <v-list-item
+                  v-for="shape in landformShapeOptions"
+                  :key="shape.id"
+                  :class="['floor-shape-item', shape.id === 'circle' ? 'wall-shape-item--polygon-tool' : '']"
+                >
+                  <div :class="shape.id === 'circle' ? 'wall-regular-polygon-control' : undefined">
+                    <v-btn
+                      density="compact"
+                      size="small"
+                      variant="text"
+                      :title="shape.label"
+                      :class="['floor-shape-btn', shape.id === landformBuildShape ? 'floor-shape-selected' : '']"
+                      @click.stop="handleLandformShapeSelect(shape.id)"
+                    >
+                      <span v-html="shape.svg" />
+                    </v-btn>
+                    <v-text-field
+                      v-if="shape.id === 'circle'"
+                      v-model="landformRegularPolygonSidesInput"
+                      type="number"
+                      min="0"
+                      :max="WALL_REGULAR_POLYGON_SIDES_MAX"
+                      step="1"
+                      variant="underlined"
+                      density="compact"
+                      hide-details
+                      inputmode="numeric"
+                      placeholder="0"
+                      class="wall-regular-polygon-input"
+                      :disabled="buildToolsDisabled"
+                      @click.stop
+                      @pointerdown.stop
+                      @mousedown.stop
+                      @blur="commitLandformRegularPolygonSidesInput"
+                      @keydown.enter.prevent="commitLandformRegularPolygonSidesInput"
+                    />
+                  </div>
+                </v-list-item>
+              </div>
+
+              <v-divider class="floor-shape-menu__divider" />
+
+              <div class="floor-preset-menu__list">
+                <AssetPickerList
+                  :active="true"
+                  assetType="prefab"
+                  :extensions="['landform']"
+                  :asset-id="landformBrushPresetAssetId"
+                  :thumbnailSize="30"
+                  :showSearch="true"
+                  @update:asset="handleLandformPresetSelect"
+                />
+              </div>
+            </div>
+          </v-list>
+        </v-menu>
+        <v-menu
           v-else-if="tool.id === 'water'"
           :activator="menuActivators.water"
           :model-value="waterShapeMenuOpen"
@@ -1196,6 +1295,8 @@ import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import { FLOOR_BUILD_SHAPE_LABELS } from '@/types/floor-build-shape'
+import type { LandformBuildShape } from '@/types/landform-build-shape'
+import { LANDFORM_BUILD_SHAPE_LABELS } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import { WATER_BUILD_SHAPE_LABELS } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
@@ -1241,6 +1342,7 @@ const props = withDefaults(
   viewportPlacementActive: boolean
   cameraResetMenuOpen: boolean
   floorShapeMenuOpen: boolean
+  landformShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
   roadShapeMenuOpen: boolean
   wallDoorSelectModeActive?: boolean
@@ -1250,10 +1352,13 @@ const props = withDefaults(
   groundScatterMenuOpen: boolean
   floorBuildShape: FloorBuildShape
   floorRegularPolygonSides: number
+  landformBuildShape: LandformBuildShape
+  landformRegularPolygonSides: number
   wallBuildShape: WallBuildShape
   wallRegularPolygonSides: number
   waterBuildShape: WaterBuildShape
   floorBrushPresetAssetId?: string
+  landformBrushPresetAssetId?: string
   wallBrushPresetAssetId?: string
   roadBrushPresetAssetId?: string
   groundPanelTab: GroundPanelTab
@@ -1292,6 +1397,7 @@ const emit = defineEmits<{
   (event: 'open-wall-preset-picker', anchor: { x: number; y: number }): void
   (event: 'select-wall-preset', asset: any): void
   (event: 'select-floor-preset', asset: any): void
+  (event: 'select-landform-preset', asset: any): void
   (event: 'select-road-preset', asset: any): void
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
@@ -1301,6 +1407,7 @@ const emit = defineEmits<{
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:viewport-placement-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
+  (event: 'update:landform-shape-menu-open', value: boolean): void
   (event: 'update:wall-shape-menu-open', value: boolean): void
   (event: 'update:road-shape-menu-open', value: boolean): void
   (event: 'update:water-shape-menu-open', value: boolean): void
@@ -1309,6 +1416,8 @@ const emit = defineEmits<{
   (event: 'update:ground-scatter-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
   (event: 'update:floor-regular-polygon-sides', value: number): void
+  (event: 'select-landform-build-shape', shape: LandformBuildShape): void
+  (event: 'update:landform-regular-polygon-sides', value: number): void
   (event: 'select-wall-build-shape', shape: WallBuildShape): void
   (event: 'update:wall-regular-polygon-sides', value: number): void
   (event: 'toggle-wall-door-select-mode'): void
@@ -1354,6 +1463,7 @@ const {
   viewportPlacementActive,
   cameraResetMenuOpen,
   floorShapeMenuOpen,
+  landformShapeMenuOpen,
   wallShapeMenuOpen,
   roadShapeMenuOpen,
   waterShapeMenuOpen,
@@ -1362,10 +1472,13 @@ const {
   groundScatterMenuOpen,
   floorBuildShape,
   floorRegularPolygonSides,
+  landformBuildShape,
+  landformRegularPolygonSides,
   wallBuildShape,
   wallRegularPolygonSides,
   waterBuildShape,
   floorBrushPresetAssetId,
+  landformBrushPresetAssetId,
   wallBrushPresetAssetId,
   roadBrushPresetAssetId,
   groundPanelTab,
@@ -1413,6 +1526,7 @@ type MenuActivatorKey =
   | 'scatter'
   | 'displayBoard'
   | 'floor'
+  | 'landform'
   | 'wall'
   | 'road'
   | 'water'
@@ -1426,6 +1540,7 @@ const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined
   scatter: undefined,
   displayBoard: undefined,
   floor: undefined,
+  landform: undefined,
   wall: undefined,
   road: undefined,
   water: undefined,
@@ -1459,6 +1574,7 @@ const groundScatterDensityInput = ref(Math.round(groundScatterDensityPercent.val
 const groundScatterRegularPolygonSidesInput = ref(groundScatterRegularPolygonSides.value.toString())
 const scatterEraseRadiusInput = ref(scatterEraseRadius.value.toFixed(2))
 const floorRegularPolygonSidesInput = ref(floorRegularPolygonSides.value.toString())
+const landformRegularPolygonSidesInput = ref(landformRegularPolygonSides.value.toString())
 const wallRegularPolygonSidesInput = ref(wallRegularPolygonSides.value.toString())
 const viewportPlacementTab = ref<ViewportPlacementTab>('geometry')
 
@@ -1584,6 +1700,26 @@ function commitFloorRegularPolygonSidesInput() {
   floorRegularPolygonSidesInput.value = resolved.toString()
 }
 
+function normalizeLandformRegularPolygonSides(value: number): number {
+  const rounded = Math.round(value)
+  const clamped = clampValue(rounded, 0, WALL_REGULAR_POLYGON_SIDES_MAX)
+  return clamped >= 3 ? clamped : 0
+}
+
+function commitLandformRegularPolygonSidesInput() {
+  const normalized = parseAndNormalize(
+    landformRegularPolygonSidesInput.value,
+    landformRegularPolygonSides.value,
+    0,
+    WALL_REGULAR_POLYGON_SIDES_MAX,
+    1,
+    0,
+  )
+  const resolved = normalizeLandformRegularPolygonSides(normalized)
+  emit('update:landform-regular-polygon-sides', resolved)
+  landformRegularPolygonSidesInput.value = resolved.toString()
+}
+
 function normalizeWallRegularPolygonSides(value: number): number {
   const rounded = Math.round(value)
   const clamped = clampValue(rounded, 0, WALL_REGULAR_POLYGON_SIDES_MAX)
@@ -1626,6 +1762,10 @@ watch(scatterEraseRadius, (value) => {
 
 watch(floorRegularPolygonSides, (value) => {
   floorRegularPolygonSidesInput.value = normalizeFloorRegularPolygonSides(value).toString()
+})
+
+watch(landformRegularPolygonSides, (value) => {
+  landformRegularPolygonSidesInput.value = normalizeLandformRegularPolygonSides(value).toString()
 })
 
 watch(wallRegularPolygonSides, (value) => {
@@ -1815,6 +1955,9 @@ watch(buildToolsDisabled, (disabled) => {
   if (disabled && floorShapeMenuOpen.value) {
     emit('update:floor-shape-menu-open', false)
   }
+  if (disabled && landformShapeMenuOpen.value) {
+    emit('update:landform-shape-menu-open', false)
+  }
   if (disabled && wallShapeMenuOpen.value) {
     emit('update:wall-shape-menu-open', false)
   }
@@ -1845,6 +1988,7 @@ function closeExternalMenus() {
   emit('update:viewport-placement-menu-open', false)
   emit('update:camera-reset-menu-open', false)
   emit('update:floor-shape-menu-open', false)
+  emit('update:landform-shape-menu-open', false)
   emit('update:wall-shape-menu-open', false)
   emit('update:road-shape-menu-open', false)
   emit('update:water-shape-menu-open', false)
@@ -2017,6 +2161,7 @@ const buildToolButtons = [
   { id: 'scatter', icon: 'mdi-sprout', label: 'Terrain Scatter' },
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Brush' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Brush' },
+  { id: 'landform', icon: 'mdi-image-filter-hdr', label: 'Landform Brush' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
   { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
   { id: 'displayBoard', icon: 'mdi-advertisements', label: 'Display Surface Tools' },
@@ -2030,6 +2175,17 @@ const displayBoardToolButtonActive = computed(
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
   id,
   label: FLOOR_BUILD_SHAPE_LABELS[id],
+  svg:
+    id === 'polygon'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
+      : id === 'rectangle'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="currentColor" rx="1" ry="1"/></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 19.61,8.5 16.71,17.5 7.29,17.5 4.39,8.5"/></svg>',
+}))
+
+const landformShapeOptions = (Object.keys(LANDFORM_BUILD_SHAPE_LABELS) as LandformBuildShape[]).map((id) => ({
+  id,
+  label: LANDFORM_BUILD_SHAPE_LABELS[id],
   svg:
     id === 'polygon'
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
@@ -2088,7 +2244,7 @@ function handleBuildToolToggle(tool: BuildTool) {
   if (buildToolsDisabled.value) {
     return
   }
-  const reopensMenuOnLeftClick = tool === 'wall' || tool === 'floor' || tool === 'road' || tool === 'water'
+  const reopensMenuOnLeftClick = tool === 'wall' || tool === 'floor' || tool === 'landform' || tool === 'road' || tool === 'water'
   const next = activeBuildTool.value === tool && !reopensMenuOnLeftClick ? null : tool
 
   const selectionIds = sceneStore.selectedNodeIds ?? []
@@ -2175,7 +2331,7 @@ function handleBuildToolCancel(tool: BuildTool) {
   if (buildToolsDisabled.value) {
     return
   }
-  if (tool !== 'wall' && tool !== 'floor' && tool !== 'road' && tool !== 'water') {
+  if (tool !== 'wall' && tool !== 'floor' && tool !== 'landform' && tool !== 'road' && tool !== 'water') {
     return
   }
   setBuildToolMenuOpen(tool, false)
@@ -2236,6 +2392,10 @@ function setBuildToolMenuOpen(tool: BuildTool, open: boolean) {
   }
   if (tool === 'floor') {
     emit('update:floor-shape-menu-open', open)
+    return
+  }
+  if (tool === 'landform') {
+    emit('update:landform-shape-menu-open', open)
     return
   }
   if (tool === 'road') {
@@ -2354,12 +2514,24 @@ function handleFloorPresetSelect(asset: any) {
   emit('select-floor-preset', asset)
 }
 
+function handleLandformPresetSelect(asset: any) {
+  emit('select-landform-preset', asset)
+}
+
 function handleFloorShapeMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
   if (open) {
     closeAllMenus()
   }
   emit('update:floor-shape-menu-open', open)
+}
+
+function handleLandformShapeMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+  }
+  emit('update:landform-shape-menu-open', open)
 }
 
 function handleRoadShapeMenuModelUpdate(value: boolean) {
@@ -2380,6 +2552,14 @@ function handleFloorShapeSelect(shape: FloorBuildShape) {
     return
   }
   emit('select-floor-build-shape', shape)
+}
+
+function handleLandformShapeSelect(shape: LandformBuildShape) {
+  if (buildToolsDisabled.value) {
+    emit('update:landform-shape-menu-open', false)
+    return
+  }
+  emit('select-landform-build-shape', shape)
 }
 
 function handleWaterShapeMenuModelUpdate(value: boolean) {

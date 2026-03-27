@@ -1160,7 +1160,7 @@ export interface EnvironmentSettings {
 export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'GuideRoute'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute'
 
 export type GroundHeightMap = Float64Array
 
@@ -1503,13 +1503,33 @@ export interface FloorDynamicMesh {
   sideUvScale?: Vector2Like | null
 }
 
+export interface LandformDynamicMesh {
+  type: 'Landform'
+  /** Original closed footprint polygon in local XZ space. */
+  footprint: FloorVertex2D[]
+  /** Terrain-conforming local-space surface vertices. */
+  surfaceVertices: Vector3Like[]
+  /** Triangle indices for the terrain-conforming surface. */
+  surfaceIndices: number[]
+  /** Optional UV coordinates per surface vertex. */
+  surfaceUvs?: Vector2Like[] | null
+  /** Optional feather weight per surface vertex. 0 = transparent edge, 1 = full opacity. */
+  surfaceFeather?: number[] | null
+  /** Material config id used for the landform surface mesh. */
+  materialConfigId?: string | null
+  /** Feather width in meters used when computing surfaceFeather. */
+  feather?: number
+  /** Surface UV repeats per meter (U/V). */
+  uvScale?: Vector2Like | null
+}
+
 export interface GuideRouteDynamicMesh {
   type: 'GuideRoute'
   /** Ordered waypoint vertices in local space relative to the node origin. */
   vertices: Vector3Like[]
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh | GuideRouteDynamicMesh
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh | LandformDynamicMesh | GuideRouteDynamicMesh
 
 export interface ClipboardEntry {
   sourceId: string

@@ -8,6 +8,7 @@ import AssetModelPanel from '@/components/inspector/AssetModelPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import RoadPanel from '@/components/inspector/RoadPanel.vue'
 import FloorPanel from '@/components/inspector/FloorPanel.vue'
+import LandformPanel from '@/components/inspector/LandformPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
@@ -56,6 +57,7 @@ import {
   componentManager,
   type RigidbodyColliderType,
   FLOOR_COMPONENT_TYPE,
+  LANDFORM_COMPONENT_TYPE,
   
   LOD_COMPONENT_TYPE,
 } from '@schema/components'
@@ -571,6 +573,7 @@ watch(
                 @open-suspension-editor="handleOpenVehicleSuspensionEditor"
               />
               <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
+              <LandformPanel v-else-if="component.type === LANDFORM_COMPONENT_TYPE" />
               <LodPanel v-else-if="component.type === LOD_COMPONENT_TYPE" />
               <GuideRoutePanel v-else-if="component.type === GUIDE_ROUTE_COMPONENT_TYPE" />
               <AutoTourPanel v-else-if="component.type === AUTO_TOUR_COMPONENT_TYPE" />

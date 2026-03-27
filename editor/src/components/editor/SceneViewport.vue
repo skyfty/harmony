@@ -159,9 +159,11 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
 import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
+import { buildLandformNodeMaterialsFromPreset } from '@/utils/landformPresetNodeMaterials'
 import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import { collectFloorPresetDependencyAssetIds } from '@/stores/floorPresetActions'
+import { collectLandformPresetDependencyAssetIds } from '@/stores/landformPresetActions'
 import { collectRoadPresetDependencyAssetIds } from '@/stores/roadPresetActions'
 import { collectWallPresetDependencyAssetIds } from '@/stores/wallPresetActions'
 import { isSceneAssetRegistry } from '@/utils/assetDependencySubset'
@@ -186,6 +188,7 @@ import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracki
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
@@ -235,6 +238,7 @@ import {
 } from './wallDoorSelectionController'
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
+import { createLandformBuildTool } from './LandformBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
 import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
@@ -1359,6 +1363,18 @@ function applyFloorPreviewMaterials(targetObject: THREE.Object3D, presetData: im
   }
 }
 
+function applyLandformPreviewMaterials(
+  targetObject: THREE.Object3D,
+  presetData: import('@/utils/landformPreset').LandformPresetData | null,
+): void {
+  const materials = buildLandformNodeMaterialsFromPreset(presetData, sceneStore.materials)
+  if (materials.length) {
+    applyMaterialOverrides(targetObject, materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(targetObject)
+  }
+}
+
 function applyWallPreviewMaterials(targetObject: THREE.Object3D, presetData: import('@/utils/wallPreset').WallPresetData | null): void {
   const materials = buildWallNodeMaterialsFromPreset(presetData, sceneStore.materials)
   if (materials.length) {
@@ -1787,15 +1803,19 @@ const {
   activeBuildTool,
   floorBuildShape,
   floorRegularPolygonSides,
+  landformBuildShape,
+  landformRegularPolygonSides,
   waterBuildShape,
   wallBuildShape,
   wallRegularPolygonSides,
   wallDoorSelectModeActive,
   wallBrushPresetAssetId,
   floorBrushPresetAssetId,
+  landformBrushPresetAssetId,
   roadBrushPresetAssetId,
 } = storeToRefs(buildToolsStore)
 const floorShapeMenuOpen = ref(false)
+const landformShapeMenuOpen = ref(false)
 const wallShapeMenuOpen = ref(false)
 const roadShapeMenuOpen = ref(false)
 const waterShapeMenuOpen = ref(false)
@@ -1832,6 +1852,9 @@ const buildToolCursorClass = computed(() => {
     return 'cursor-road'
   }
   if (activeBuildTool.value === 'floor') {
+    return 'cursor-floor'
+  }
+  if (activeBuildTool.value === 'landform') {
     return 'cursor-floor'
   }
   if (activeBuildTool.value === 'water') {
@@ -5694,13 +5717,13 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
   return true
 }
 
-type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water' | 'displayBoard' | 'warpGate'
+type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'landform' | 'water' | 'displayBoard' | 'warpGate'
 type GroundBuildTool = 'terrain' | 'paint' | 'scatter'
 
 function isBuildToolBlockedDuringGroundSculptConfig(
   tool: BuildTool | null,
 ): tool is GroundSculptBlockedBuildTool {
-  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water' || tool === 'displayBoard' || tool === 'warpGate'
+  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'landform' || tool === 'water' || tool === 'displayBoard' || tool === 'warpGate'
 }
 
 function isGroundBuildTool(tool: BuildTool | null): tool is GroundBuildTool {
@@ -5944,6 +5967,9 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
     case 'floor':
       handled = floorBuildTool.cancel()
       break
+    case 'landform':
+      handled = landformBuildTool.cancel()
+      break
     case 'water':
       handled = waterBuildTool.cancel()
       break
@@ -6081,6 +6107,7 @@ const wallBuildTool = createWallBuildTool({
 
 type WallPresetData = import('@/utils/wallPreset').WallPresetData
 type FloorPresetData = import('@/utils/floorPreset').FloorPresetData
+type LandformPresetData = import('@/utils/landformPreset').LandformPresetData
 type RoadPresetData = import('@/utils/roadPreset').RoadPresetData
 
 const wallPresetDialogOpen = ref(false)
@@ -6090,6 +6117,9 @@ let wallBrushPresetLoadToken = 0
 
 const floorBrushPresetData = ref<FloorPresetData | null>(null)
 let floorBrushPresetLoadToken = 0
+
+const landformBrushPresetData = ref<LandformPresetData | null>(null)
+let landformBrushPresetLoadToken = 0
 
 const roadBrushPresetData = ref<RoadPresetData | null>(null)
 let roadBrushPresetLoadToken = 0
@@ -6122,6 +6152,16 @@ function handleFloorPresetDialogUpdate(asset: ProjectAsset | null): void {
     buildToolsStore.setFloorBrushPresetAssetId(assetId, { activate: true })
   } else {
     buildToolsStore.setFloorBrushPresetAssetId(null)
+  }
+}
+
+function handleLandformPresetDialogUpdate(asset: ProjectAsset | null): void {
+  const assetId = asset?.id ?? null
+  if (assetId) {
+    sceneStore.setSelection([])
+    buildToolsStore.setLandformBrushPresetAssetId(assetId, { activate: true })
+  } else {
+    buildToolsStore.setLandformBrushPresetAssetId(null)
   }
 }
 
@@ -6243,6 +6283,53 @@ watch(floorBrushPresetAssetId, (assetId) => {
     })
 })
 
+watch(landformBrushPresetAssetId, (assetId) => {
+  const id = typeof assetId === 'string' ? assetId.trim() : ''
+  landformBrushPresetLoadToken += 1
+  const token = landformBrushPresetLoadToken
+
+  if (!id) {
+    landformBrushPresetData.value = null
+    return
+  }
+
+  void sceneStore
+    .loadLandformPreset(id)
+    .then(async (data) => {
+      if (token !== landformBrushPresetLoadToken) {
+        return
+      }
+      const presetData = data as LandformPresetData
+      const dependencyAssetIds = collectLandformPresetDependencyAssetIds(presetData, sceneStore.materials)
+
+      if (dependencyAssetIds.length) {
+        const presetAssetRegistry = isSceneAssetRegistry(presetData.assetRegistry)
+          ? presetData.assetRegistry
+          : null
+        try {
+          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
+            prefabAssetIdForDownloadProgress: id,
+            prefabAssetRegistry: presetAssetRegistry,
+          })
+        } catch (dependencyError) {
+          console.warn('Failed to hydrate landform preset dependencies for brush', id, dependencyError)
+        }
+      }
+
+      if (token !== landformBrushPresetLoadToken) {
+        return
+      }
+      landformBrushPresetData.value = presetData
+    })
+    .catch((error) => {
+      if (token !== landformBrushPresetLoadToken) {
+        return
+      }
+      console.warn('Failed to load landform preset for brush', id, error)
+      landformBrushPresetData.value = null
+    })
+})
+
 watch(roadBrushPresetAssetId, (assetId) => {
   const id = typeof assetId === 'string' ? assetId.trim() : ''
   roadBrushPresetLoadToken += 1
@@ -6356,6 +6443,32 @@ const floorBuildTool = createFloorBuildTool({
       refreshFloorRuntimeMaterials(nodeId, runtimeObject)
     }
   },
+  clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+})
+
+const landformBuildTool = createLandformBuildTool({
+  activeBuildTool,
+  landformBuildShape,
+  landformRegularPolygonSides,
+  getDefaultCircleRadius: () => GRID_MAJOR_SPACING,
+  sceneStore,
+  rootGroup,
+  raycastGroundPoint,
+  resolveBuildPlacementPoint,
+  snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
+  isAltOverrideActive: () => isAltOverrideActive,
+  isRelativeAngleSnapActive: () => relativeAngleSnapCModifierActive.value,
+  showStartIndicator: showBuildStartIndicator,
+  hideStartIndicator: hideBuildStartIndicator,
+  holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
+  getLandformBrush: () => ({
+    presetAssetId: landformBrushPresetAssetId.value,
+    presetData: landformBrushPresetData.value,
+  }),
+  applyLandformPresetToNode: (nodeId, assetId, presetData) => sceneStore.applyLandformPresetToNode(nodeId, assetId, presetData),
+  applyPreviewMaterials: (group, presetData) => applyLandformPreviewMaterials(group, presetData),
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
@@ -6476,6 +6589,10 @@ const billboardBuildTool = createDisplayBoardBuildTool({
 
 function handleFloorShapeMenuOpen(value: boolean) {
   floorShapeMenuOpen.value = Boolean(value)
+}
+
+function handleLandformShapeMenuOpen(value: boolean) {
+  landformShapeMenuOpen.value = Boolean(value)
 }
 
 function handleWallShapeMenuOpen(value: boolean) {
@@ -6862,6 +6979,12 @@ function handleSelectFloorBuildShape(shape: FloorBuildShape) {
   sceneStore.setSelection([])
 }
 
+function handleSelectLandformBuildShape(shape: LandformBuildShape) {
+  landformBuildTool.cancel()
+  buildToolsStore.setLandformBuildShape(shape, { activate: true })
+  sceneStore.setSelection([])
+}
+
 function handleSelectWallBuildShape(shape: WallBuildShape) {
   // Switching shapes should start from a clean slate.
   wallBuildTool.cancel()
@@ -6877,6 +7000,10 @@ function handleWallRegularPolygonSidesUpdate(value: number) {
 
 function handleFloorRegularPolygonSidesUpdate(value: number) {
   buildToolsStore.setFloorRegularPolygonSides(value)
+}
+
+function handleLandformRegularPolygonSidesUpdate(value: number) {
+  buildToolsStore.setLandformRegularPolygonSides(value)
 }
 
 function clearAutoOverlayDialog(): void {
@@ -6993,7 +7120,7 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
   }
 
   const node = resolveSceneNodeById(hit.nodeId)
-  if (!node || (node.dynamicMesh?.type !== 'Floor' && node.dynamicMesh?.type !== 'Wall' && !isWaterSurfaceNode(node))) {
+  if (!node || (node.dynamicMesh?.type !== 'Floor' && node.dynamicMesh?.type !== 'Landform' && node.dynamicMesh?.type !== 'Wall' && !isWaterSurfaceNode(node))) {
     return null
   }
   if (node.locked || sceneStore.isNodeSelectionLocked(node.id)) {
@@ -12051,6 +12178,7 @@ function animate() {
   wallBuildTool.flushPreviewIfNeeded(scene)
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
+  landformBuildTool.flushPreviewIfNeeded(scene)
   waterBuildTool.flushPreviewIfNeeded(scene)
   updatePendingBuildStartIndicator()
   ensureDisplayBoardCornerHandlesForSelectedNode()
@@ -12299,6 +12427,7 @@ function disposeScene() {
   wallBuildTool.dispose()
   roadBuildTool.dispose()
   floorBuildTool.dispose()
+  landformBuildTool.dispose()
   buildStartIndicatorRenderer?.dispose()
   buildStartIndicatorRenderer = null
   waterBuildTool.dispose()
@@ -13688,6 +13817,10 @@ async function handlePointerDown(event: PointerEvent) {
     floorShapeMenuOpen.value = false
   }
 
+  if (event.button === 0 && activeBuildTool.value === 'landform' && landformShapeMenuOpen.value) {
+    landformShapeMenuOpen.value = false
+  }
+
   // If the wall shape menu is open, close it when the user starts drawing in the viewport.
   // This prevents the menu from covering the scene while placing wall points.
   if (event.button === 0 && activeBuildTool.value === 'wall' && wallShapeMenuOpen.value) {
@@ -13711,6 +13844,19 @@ async function handlePointerDown(event: PointerEvent) {
   const roadEditModeLocked = activeBuildTool.value === 'road' && isSelectedRoadEditMode()
   const waterEditModeLocked = activeBuildTool.value === 'water' && isSelectedWaterEditMode()
   const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
+
+  if (activeBuildTool.value === 'landform') {
+    if (event.button === 0 || event.button === 2) {
+      landformBuildTool.handlePointerDown(event)
+      if (event.button === 2) {
+        pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
 
   if (activeBuildTool.value === 'displayBoard') {
     if (event.button === 0 && !isAltOverrideActive && !displayBoardBuildTool.getSession()) {
@@ -14321,6 +14467,7 @@ function handlePointerMove(event: PointerEvent) {
   const buildTools = handlePointerMoveBuildTools(event, {
     displayBoardBuildToolHandlePointerMove: (e) => displayBoardBuildTool.handlePointerMove(e),
     billboardBuildToolHandlePointerMove: (e) => billboardBuildTool.handlePointerMove(e),
+    landformBuildToolHandlePointerMove: (e) => landformBuildTool.handlePointerMove(e),
     waterBuildToolHandlePointerMove: (e) => waterBuildTool.handlePointerMove(e),
     floorBuildToolHandlePointerMove: (e) => floorBuildTool.handlePointerMove(e),
     wallBuildToolHandlePointerMove: (e) => wallBuildTool.handlePointerMove(e),
@@ -14741,6 +14888,7 @@ async function handlePointerUp(event: PointerEvent) {
         handleGroundEditorPointerUp,
         displayBoardBuildToolHandlePointerUp: (e) => displayBoardBuildTool.handlePointerUp(e),
         billboardBuildToolHandlePointerUp: (e) => billboardBuildTool.handlePointerUp(e),
+        landformBuildToolHandlePointerUp: (e) => landformBuildTool.handlePointerUp(e),
         waterBuildToolHandlePointerUp: (e) => waterBuildTool.handlePointerUp(e),
         wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
         roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
@@ -15428,6 +15576,15 @@ function handlePointerCancel(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'landform') {
+    if (landformBuildTool.handlePointerCancel(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
   if (activeBuildTool.value === 'water') {
     if (waterBuildTool.handlePointerCancel(event)) {
       event.preventDefault()
@@ -15670,6 +15827,11 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'landform':
+      landformBuildTool.cancel()
+      handleBuildToolChange(null)
+      handled = true
+      break
     case 'road':
       roadBuildTool.cancel()
       handleBuildToolChange(null)
@@ -15717,6 +15879,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'floor' && tool !== 'floor') {
     floorBuildTool.cancel()
+  }
+  if (activeBuildTool.value === 'landform' && tool !== 'landform') {
+    landformBuildTool.cancel()
   }
   if (activeBuildTool.value === 'water' && tool !== 'water') {
     waterBuildTool.cancel()
@@ -19456,6 +19621,9 @@ watch(activeBuildTool, (tool, previous) => {
   if (tool !== 'floor') {
     floorBuildTool.cancel()
   }
+  if (tool !== 'landform') {
+    landformBuildTool.cancel()
+  }
   if (tool !== 'water') {
     waterBuildTool.cancel()
   }
@@ -19561,6 +19729,7 @@ defineExpose<SceneViewportHandle>({
           :viewport-placement-active="viewportPlacementActive"
         :camera-reset-menu-open="cameraResetMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
+        :landform-shape-menu-open="landformShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
         :road-shape-menu-open="roadShapeMenuOpen"
         :wall-door-select-mode-active="wallDoorSelectModeActive"
@@ -19570,10 +19739,13 @@ defineExpose<SceneViewportHandle>({
         :ground-scatter-menu-open="groundScatterMenuOpen"
         :floor-build-shape="floorBuildShape"
         :floor-regular-polygon-sides="floorRegularPolygonSides"
+        :landform-build-shape="landformBuildShape"
+        :landform-regular-polygon-sides="landformRegularPolygonSides"
         :wall-build-shape="wallBuildShape"
         :wall-regular-polygon-sides="wallRegularPolygonSides"
         :water-build-shape="waterBuildShape"
         :floor-brush-preset-asset-id="floorBrushPresetAssetId ?? ''"
+        :landform-brush-preset-asset-id="landformBrushPresetAssetId ?? ''"
         :wall-brush-preset-asset-id="wallBrushPresetAssetId ?? ''"
         :road-brush-preset-asset-id="roadBrushPresetAssetId ?? ''"
         :ground-panel-tab="groundPanelTab"
@@ -19604,6 +19776,7 @@ defineExpose<SceneViewportHandle>({
         @change-build-tool="handleBuildToolChange"
         @select-wall-preset="handleWallPresetDialogUpdate"
         @select-floor-preset="handleFloorPresetDialogUpdate"
+        @select-landform-preset="handleLandformPresetDialogUpdate"
         @select-road-preset="handleRoadPresetDialogUpdate"
         @toggle-scatter-erase="toggleScatterEraseMode"
         @toggle-wall-door-select-mode="toggleWallDoorSelectMode"
@@ -19618,6 +19791,7 @@ defineExpose<SceneViewportHandle>({
           @update:ground-paint-menu-open="handleGroundPaintMenuOpen"
           @update:ground-scatter-menu-open="handleGroundScatterMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
+          @update:landform-shape-menu-open="handleLandformShapeMenuOpen"
           @update:wall-shape-menu-open="handleWallShapeMenuOpen"
           @update:road-shape-menu-open="handleRoadShapeMenuOpen"
           @update:water-shape-menu-open="handleWaterShapeMenuOpen"
@@ -19639,6 +19813,8 @@ defineExpose<SceneViewportHandle>({
           @ground-scatter-asset-select="handleGroundScatterAssetSelect"
           @select-floor-build-shape="handleSelectFloorBuildShape"
           @update:floor-regular-polygon-sides="handleFloorRegularPolygonSidesUpdate"
+          @select-landform-build-shape="handleSelectLandformBuildShape"
+          @update:landform-regular-polygon-sides="handleLandformRegularPolygonSidesUpdate"
           @select-wall-build-shape="handleSelectWallBuildShape"
             @update:wall-regular-polygon-sides="handleWallRegularPolygonSidesUpdate"
           @select-water-build-shape="handleSelectWaterBuildShape"

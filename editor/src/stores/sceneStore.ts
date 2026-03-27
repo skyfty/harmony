@@ -55,10 +55,12 @@ import type {
   SceneNodeType,
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
+  Vector2Like,
   Vector3Like,
   WallDynamicMesh,
   RoadDynamicMesh,
   FloorDynamicMesh,
+  LandformDynamicMesh,
   GuideRouteDynamicMesh,
 } from '@schema'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
@@ -120,6 +122,7 @@ import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { createServerAssetSource, isServerBackedProviderId } from '@/utils/serverAssetSource'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
+import { createLandformNodeMaterials } from '@/utils/landformNodeMaterials'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import {
   buildFloorDynamicMeshPresetPatch,
@@ -179,6 +182,7 @@ import {
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
+import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
 import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
@@ -188,6 +192,7 @@ import {
 import { createLodPresetActions } from './lodPresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
+import { type LandformPresetData } from '@/utils/landformPreset'
 import { type RoadPresetData, buildRoadComponentPatchFromPreset } from '@/utils/roadPreset'
 import {
   BUILTIN_WALL_PRESET_ASSETS,
@@ -195,8 +200,10 @@ import {
   createWallPresetActions,
 } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
+import { createLandformPresetActions } from './landformPresetActions'
 import { createRoadPresetActions } from './roadPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
+import { createSceneStoreLandformHelpers } from './sceneStoreLandform'
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import type { WaterBuildShape } from '@/types/water-build-shape'
@@ -255,6 +262,7 @@ import type {
   WallComponentProps,
   RoadComponentProps,
   FloorComponentProps,
+  LandformComponentProps,
   PlanningImagesComponentProps,
   WarpGateComponentProps,
   WaterComponentProps,
@@ -309,6 +317,10 @@ import {
   FLOOR_DEFAULT_SIDE_UV_SCALE,
   FLOOR_MAX_THICKNESS,
   FLOOR_MIN_THICKNESS,
+  LANDFORM_COMPONENT_TYPE,
+  clampLandformComponentProps,
+  cloneLandformComponentProps,
+  resolveLandformComponentPropsFromMesh,
   
   WATER_COMPONENT_TYPE,
   clampWaterComponentProps,
@@ -332,6 +344,7 @@ type NodeComponentPropsByType = {
   [WALL_COMPONENT_TYPE]: WallComponentProps
   [ROAD_COMPONENT_TYPE]: RoadComponentProps
   [FLOOR_COMPONENT_TYPE]: FloorComponentProps
+  [LANDFORM_COMPONENT_TYPE]: LandformComponentProps
   [WATER_COMPONENT_TYPE]: WaterComponentProps
   [GUIDE_ROUTE_COMPONENT_TYPE]: GuideRouteComponentProps
   [GUIDEBOARD_COMPONENT_TYPE]: GuideboardComponentProps
@@ -778,6 +791,7 @@ const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 const LOD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const WALL_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const FLOOR_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
+const LANDFORM_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const ROAD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const PREFAB_PLACEMENT_EPSILON = 1e-3
 
@@ -808,6 +822,19 @@ const floorPresetActions = createFloorPresetActions({
   materialUpdateToProps,
   mergeMaterialProps,
   createMaterialProps,
+  createNodeMaterial,
+  DEFAULT_SCENE_MATERIAL_TYPE,
+})
+
+const landformPresetActions = createLandformPresetActions({
+  LANDFORM_PRESET_PREVIEW_COLOR,
+  generateUuid,
+  normalizePrefabName,
+  findNodeById,
+  nodeSupportsMaterials,
+  extractMaterialProps,
+  materialUpdateToProps,
+  mergeMaterialProps,
   createNodeMaterial,
   DEFAULT_SCENE_MATERIAL_TYPE,
 })
@@ -875,6 +902,13 @@ const floorHelpers = createSceneStoreFloorHelpers({
   createNodeMaterial,
   getRuntimeObject,
   updateFloorGroup,
+})
+
+const landformHelpers = createSceneStoreLandformHelpers({
+  createLandformNodeMaterials,
+  createNodeMaterial,
+  getRuntimeObject,
+  updateLandformGroup,
 })
 
 const wallHelpers = createSceneStoreWallHelpers({
@@ -1876,6 +1910,45 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         smooth: Number.isFinite(floorMesh.smooth) ? floorMesh.smooth : FLOOR_DEFAULT_SMOOTH,
         thickness,
         sideUvScale: { x: Math.max(0, sideU), y: Math.max(0, sideV) },
+      }
+    }
+    case 'Landform': {
+      const landformMesh = mesh as LandformDynamicMesh
+      const footprint = (Array.isArray(landformMesh.footprint) ? landformMesh.footprint : [])
+        .map(normalizeVertex2D)
+        .filter((value): value is [number, number] => !!value)
+      const surfaceVertices = (Array.isArray(landformMesh.surfaceVertices) ? landformMesh.surfaceVertices : [])
+        .map(cloneDynamicMeshVector3)
+        .filter((value): value is Vector3Like => !!value)
+      const surfaceIndices = (Array.isArray(landformMesh.surfaceIndices) ? landformMesh.surfaceIndices : [])
+        .map((entry) => Math.trunc(Number(entry)))
+        .filter((entry) => Number.isFinite(entry) && entry >= 0)
+      const surfaceUvs = (Array.isArray(landformMesh.surfaceUvs) ? landformMesh.surfaceUvs : [])
+        .map((entry) => {
+          const x = Number((entry as any)?.x)
+          const y = Number((entry as any)?.y)
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null
+          }
+          return { x, y }
+        })
+        .filter((value): value is Vector2Like => !!value)
+      const surfaceFeather = (Array.isArray(landformMesh.surfaceFeather) ? landformMesh.surfaceFeather : [])
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isFinite(entry))
+      const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
+      const uvScaleX = Number.isFinite((landformMesh.uvScale as any)?.x) ? Number((landformMesh.uvScale as any).x) : 1
+      const uvScaleY = Number.isFinite((landformMesh.uvScale as any)?.y) ? Number((landformMesh.uvScale as any).y) : 1
+      return {
+        type: 'Landform',
+        footprint,
+        surfaceVertices,
+        surfaceIndices,
+        surfaceUvs,
+        surfaceFeather,
+        materialConfigId: normalizeId(landformMesh.materialConfigId),
+        feather: Number.isFinite(landformMesh.feather) ? Number(landformMesh.feather) : 1,
+        uvScale: { x: Math.max(1e-3, uvScaleX), y: Math.max(1e-3, uvScaleY) },
       }
     }
     case 'GuideRoute': {
@@ -3047,7 +3120,7 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
   }
 
   const meshType = normalizeDynamicMeshType(meshDefinition.type)
-  if (meshType !== 'Wall' && meshType !== 'Road' && meshType !== 'Floor' && meshType !== 'GuideRoute') {
+  if (meshType !== 'Wall' && meshType !== 'Road' && meshType !== 'Floor' && meshType !== 'Landform' && meshType !== 'GuideRoute') {
     return false
   }
 
@@ -3067,6 +3140,8 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
       });
     } else if (meshType === 'Floor') {
       runtime = createFloorGroup(meshDefinition as FloorDynamicMesh);
+    } else if (meshType === 'Landform') {
+      runtime = createLandformGroup(meshDefinition as LandformDynamicMesh)
     } else if (meshType === 'GuideRoute') {
       runtime = createGuideRouteGroup(meshDefinition as GuideRouteDynamicMesh)
     } else {
@@ -10599,6 +10674,35 @@ export const useSceneStore = defineStore('scene', {
       await floorPresetActions.applyFloorPresetToSelectedFloor(this as any, assetId)
     },
 
+    findLandformPresetAssetByFilename(filename: string): ProjectAsset | null {
+      return landformPresetActions.findLandformPresetAssetByFilename(this as any, filename)
+    },
+
+    async saveLandformPreset(payload: {
+      name: string
+      nodeId?: string | null
+      assetId?: string | null
+      select?: boolean
+    }): Promise<ProjectAsset> {
+      return landformPresetActions.saveLandformPreset(this as any, payload)
+    },
+
+    async loadLandformPreset(assetId: string): Promise<LandformPresetData> {
+      return landformPresetActions.loadLandformPreset(this as any, assetId)
+    },
+
+    async applyLandformPresetToNode(
+      nodeId: string,
+      assetId: string,
+      presetData?: LandformPresetData | null,
+    ): Promise<LandformComponentProps> {
+      return landformPresetActions.applyLandformPresetToNode(this as any, nodeId, assetId, presetData)
+    },
+
+    async applyLandformPresetToSelectedLandform(assetId: string): Promise<void> {
+      await landformPresetActions.applyLandformPresetToSelectedLandform(this as any, assetId)
+    },
+
     findRoadPresetAssetByFilename(filename: string): ProjectAsset | null {
       return roadPresetActions.findRoadPresetAssetByFilename(this as any, filename)
     },
@@ -12507,6 +12611,38 @@ export const useSceneStore = defineStore('scene', {
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
 
+    generateLandformNodeName() {
+      const prefix = 'Landform '
+      const pattern = /^Landform\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
+
     generateWaterNodeName() {
       const prefix = 'Water '
       const pattern = /^Water\s(\d{2})$/
@@ -12931,7 +13067,6 @@ export const useSceneStore = defineStore('scene', {
       const presetMeshPatch = buildFloorDynamicMeshPresetPatch(payload.floorPresetData)
       const defaultTopId = presetMeshPatch?.topBottomMaterialConfigId ?? defaultMaterials[0]?.id ?? null
       const defaultSideId = presetMeshPatch?.sideMaterialConfigId ?? defaultMaterials[1]?.id ?? defaultTopId
-
       const defaultMesh: FloorDynamicMesh = {
         ...build.definition,
         smooth: presetMeshPatch?.smooth ?? build.definition.smooth,
@@ -13036,6 +13171,124 @@ export const useSceneStore = defineStore('scene', {
               smooth: nextProps.smooth,
               thickness: nextProps.thickness,
               sideUvScale: nextProps.sideUvScale,
+            })
+          }
+        }
+
+        return node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    createLandformNode(payload: {
+      nodeId?: string
+      points: Vector3Like[]
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+      componentProps?: Partial<LandformComponentProps>
+    }): SceneNode | null {
+      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+        ? (groundNode.dynamicMesh as GroundDynamicMesh)
+        : null
+      const build = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
+        payload.points,
+        groundDefinition,
+        groundNode,
+        payload.componentProps,
+      )
+      if (!build) {
+        return null
+      }
+
+      const defaultMaterials = createLandformNodeMaterials({ surfaceName: 'Surface' })
+      const defaultMesh: LandformDynamicMesh = {
+        ...build.definition,
+        materialConfigId: defaultMaterials[0]?.id ?? null,
+      }
+
+      const landformGroup = createLandformGroup(defaultMesh)
+      const nodeName = payload.name ?? this.generateLandformNodeName()
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
+
+        if (existing && desiredId) {
+          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+            this.renameNode(desiredId, payload.name.trim())
+          }
+          this.updateNodeTransform({
+            id: desiredId,
+            position: createVector(build.center.x, build.center.y, build.center.z),
+            rotation: createVector(0, 0, 0),
+            scale: createVector(1, 1, 1),
+          })
+
+          const existingMesh = existing.dynamicMesh?.type === 'Landform' ? (existing.dynamicMesh as LandformDynamicMesh) : null
+          this.updateNodeDynamicMesh(desiredId, {
+            ...defaultMesh,
+            materialConfigId: existingMesh?.materialConfigId ?? defaultMesh.materialConfigId,
+          } as LandformDynamicMesh)
+
+          const existingComponent = findNodeById(this.nodes, desiredId)?.components?.[LANDFORM_COMPONENT_TYPE] as { id?: string } | undefined
+          if (!existingComponent?.id) {
+            this.addNodeComponent(desiredId, LANDFORM_COMPONENT_TYPE)
+          }
+          const updated = findNodeById(this.nodes, desiredId)
+          const component = updated?.components?.[LANDFORM_COMPONENT_TYPE] as { id?: string } | undefined
+          if (component?.id) {
+            const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
+            this.updateNodeComponentProps(desiredId, component.id, {
+              feather: nextProps.feather,
+              uvScale: nextProps.uvScale,
+            })
+          }
+
+          let materialsChanged = false
+          let meshChanged = false
+          visitNode(this.nodes, desiredId, (node) => {
+            const result = landformHelpers.ensureLandformMaterialConvention(node)
+            materialsChanged ||= result.materialsChanged
+            meshChanged ||= result.meshChanged
+          })
+          if (materialsChanged) {
+            this.queueSceneNodePatch(desiredId, ['materials'])
+          }
+          if (meshChanged) {
+            this.queueSceneNodePatch(desiredId, ['dynamicMesh'])
+          }
+          if (materialsChanged || meshChanged) {
+            this.nodes = [...this.nodes]
+            commitSceneSnapshot(this)
+          }
+          return updated
+        }
+
+        const node = this.addSceneNode({
+          nodeId: desiredId ?? undefined,
+          nodeType: 'Mesh',
+          object: landformGroup,
+          name: nodeName,
+          position: createVector(build.center.x, build.center.y, build.center.z),
+          rotation: createVector(0, 0, 0),
+          scale: createVector(1, 1, 1),
+          dynamicMesh: defaultMesh,
+          editorFlags: payload.editorFlags,
+        })
+
+        if (node) {
+          this.setNodeMaterials(node.id, defaultMaterials)
+          const result = this.addNodeComponent(node.id, LANDFORM_COMPONENT_TYPE)
+          const component = result?.component
+          if (component?.id) {
+            const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
+            this.updateNodeComponentProps(node.id, component.id, {
+              feather: nextProps.feather,
+              uvScale: nextProps.uvScale,
             })
           }
         }
@@ -13643,6 +13896,8 @@ export const useSceneStore = defineStore('scene', {
             )
           } else if (componentState.type === FLOOR_COMPONENT_TYPE) {
             floorHelpers.applyFloorComponentPropsToNode(node, componentState.props as FloorComponentProps)
+          } else if (componentState.type === LANDFORM_COMPONENT_TYPE) {
+            landformHelpers.applyLandformComponentPropsToNode(node, componentState.props as LandformComponentProps)
           }else if (componentState.type === ROAD_COMPONENT_TYPE) {
             const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
             applyRoadComponentPropsToNode(node, componentState.props as RoadComponentProps, groundNode)
@@ -13752,6 +14007,7 @@ export const useSceneStore = defineStore('scene', {
         | PlanningImagesComponentProps
         | WarpGateComponentProps
         | FloorComponentProps
+        | LandformComponentProps
         | EffectComponentProps
         | RigidbodyComponentProps
         | VehicleComponentProps
@@ -14203,6 +14459,30 @@ export const useSceneStore = defineStore('scene', {
         }
 
         nextProps = cloneFloorComponentProps(merged)
+      } else if (type === LANDFORM_COMPONENT_TYPE) {
+        const currentProps = component.props as LandformComponentProps
+        const typedPatch = patch as Partial<LandformComponentProps>
+        const hasFeatherPatch = Object.prototype.hasOwnProperty.call(typedPatch, 'feather')
+        const hasUvScalePatch = Object.prototype.hasOwnProperty.call(typedPatch, 'uvScale')
+
+        const merged = clampLandformComponentProps({
+          feather: hasFeatherPatch ? (typedPatch.feather ?? undefined) : currentProps.feather,
+          uvScale: hasUvScalePatch ? (typedPatch.uvScale ?? undefined) : currentProps.uvScale,
+        })
+
+        const currentFeather = Number.isFinite(currentProps.feather) ? Number(currentProps.feather) : merged.feather
+        const currentU = Number.isFinite(currentProps.uvScale?.x) ? Number(currentProps.uvScale.x) : merged.uvScale.x
+        const currentV = Number.isFinite(currentProps.uvScale?.y) ? Number(currentProps.uvScale.y) : merged.uvScale.y
+
+        const unchanged =
+          Math.abs(currentFeather - merged.feather) <= 1e-6 &&
+          Math.abs(currentU - merged.uvScale.x) <= 1e-6 &&
+          Math.abs(currentV - merged.uvScale.y) <= 1e-6
+        if (unchanged) {
+          return false
+        }
+
+        nextProps = cloneLandformComponentProps(merged)
       } else if (type === EFFECT_COMPONENT_TYPE) {
         const currentProps = clampEffectComponentProps(component.props as EffectComponentProps)
         const typedPatch = patch as Partial<EffectComponentProps>
@@ -14369,6 +14649,8 @@ export const useSceneStore = defineStore('scene', {
           applyDisplayBoardComponentPropsToNode(node, nextProps as DisplayBoardComponentProps)
         } else if (currentType === FLOOR_COMPONENT_TYPE) {
           floorHelpers.applyFloorComponentPropsToNode(node, nextProps as FloorComponentProps)
+        } else if (currentType === LANDFORM_COMPONENT_TYPE) {
+          landformHelpers.applyLandformComponentPropsToNode(node, nextProps as unknown as LandformComponentProps)
         }
       })
 
