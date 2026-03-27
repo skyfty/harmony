@@ -33,6 +33,10 @@ async function preloadRuntimeConfig() {
 		console.warn('[editor] runtime config preload failed', err)
 	}
 
+	// Editor runs in a static-friendly mode to keep scene editing responsive.
+	;(globalThis as any).__HARMONY_EDITOR_DISABLE_REALTIME_EFFECTS__ = true
+	;(globalThis as any).__HARMONY_EDITOR_WATER_SURFACE_ONLY__ = true
+
 	configureAssetBlobDownloader(
 		createWorkerAssetBlobDownloader(() => {
 			if (typeof Worker === 'undefined') {

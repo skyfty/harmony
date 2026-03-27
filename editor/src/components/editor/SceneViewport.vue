@@ -1770,6 +1770,7 @@ const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
 const cloudPreviewEnabled = computed(() => sceneStore.cloudPreviewEnabled)
+const realtimeEffectsEnabled = (globalThis as Record<string, unknown>).__HARMONY_EDITOR_DISABLE_REALTIME_EFFECTS__ !== true
 const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
 const shadowsActiveInViewport = computed(() => shadowsEnabled.value)
 const canAlignSelection = computed(() => {
@@ -7430,6 +7431,7 @@ function updateInstancedCullingAndBinding(): void {
 
   const candidateIds: string[] = []
   const candidateObjects = new Map<string, THREE.Object3D>()
+  const candidateNodes = new Map<string, SceneNode>()
 
   objectMap.forEach((object, nodeId) => {
     if (!object?.userData?.instancedAssetId) {
@@ -7450,6 +7452,7 @@ function updateInstancedCullingAndBinding(): void {
     }
     candidateIds.push(nodeId)
     candidateObjects.set(nodeId, object)
+    candidateNodes.set(nodeId, node)
   })
 
   candidateIds.sort()
@@ -7473,7 +7476,7 @@ function updateInstancedCullingAndBinding(): void {
     if (!object) {
       return
     }
-    const node = resolveSceneNodeById(nodeId)
+    const node = candidateNodes.get(nodeId)
     if (!node) {
       return
     }
@@ -10448,7 +10451,7 @@ function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | nu
   if (!nodeId) {
     return null
   }
-  return findSceneNode(sceneStore.nodes, nodeId) ?? findSceneNode(props.sceneNodes, nodeId)
+  return sceneStore.getNodeById(nodeId) ?? findSceneNode(props.sceneNodes, nodeId)
 }
 
 function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | undefined) {
@@ -12161,7 +12164,7 @@ function animate() {
   if (props.activeTool === 'translate') {
     // alignment hint visuals disabled
   }
-  if (effectiveDelta > 0 && effectRuntimeTickers.length) {
+  if (realtimeEffectsEnabled && effectiveDelta > 0 && effectRuntimeTickers.length) {
     const t0 = performance.now()
     effectRuntimeTickers.forEach((tick) => {
       try {
@@ -12172,7 +12175,7 @@ function animate() {
     })
     prof.effectTickers = performance.now() - t0
   }
-  if (effectiveDelta > 0 && cloudRenderer) {
+  if (realtimeEffectsEnabled && effectiveDelta > 0 && cloudRenderer) {
     const t0 = performance.now()
     cloudRenderer.update(effectiveDelta)
     prof.cloudRenderer = performance.now() - t0

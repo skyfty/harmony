@@ -69,6 +69,7 @@ const DEFAULT_FLOW_DIRECTION: FlowDirection = { x: 0.7071, y: 0.7071 }
 const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
+const EDITOR_WATER_SURFACE_ONLY_FLAG = '__HARMONY_EDITOR_WATER_SURFACE_ONLY__'
 
 const WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ = 0.15 * 0.15
 // Allow ~35° rotation change before forcing re-capture.
@@ -121,6 +122,10 @@ function resolveEffectiveImplementationMode(mode: WaterImplementationMode): Excl
   }
   const isMobile = isWeChatMiniProgramRuntime() || isMobileUserAgentRuntime()
   return isMobile ? 'static' : 'dynamic'
+}
+
+function isEditorWaterSurfaceOnlyRuntime(): boolean {
+  return (globalThis as Record<string, unknown>)[EDITOR_WATER_SURFACE_ONLY_FLAG] === true
 }
 
 export function clampWaterComponentProps(
@@ -227,6 +232,16 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   onUpdate(deltaTime: number): void {
+    if (isEditorWaterSurfaceOnlyRuntime()) {
+      if (this.waterInstance || this.staticWaterMesh) {
+        this.destroyWater()
+      }
+      if (this.hostMesh) {
+        this.hostMesh.visible = true
+      }
+      return
+    }
+
     const props = clampWaterComponentProps(this.context.getProps())
     const effectiveMode = resolveEffectiveImplementationMode(props.implementationMode)
 
@@ -260,6 +275,17 @@ class WaterComponent extends Component<WaterComponentProps> {
       this.destroyWater()
       return
     }
+
+    if (isEditorWaterSurfaceOnlyRuntime()) {
+      if (this.waterInstance || this.staticWaterMesh) {
+        this.destroyWater()
+      }
+      this.hostMesh = mesh
+      this.meshVisibility(true)
+      this.lastSignature = 'material-only'
+      return
+    }
+
     const props = clampWaterComponentProps(this.context.getProps())
     const effectiveMode = resolveEffectiveImplementationMode(props.implementationMode)
     const material = this.selectPrimaryMaterial(mesh.material)
