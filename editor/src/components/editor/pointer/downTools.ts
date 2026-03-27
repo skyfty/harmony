@@ -193,6 +193,7 @@ export function handlePointerDownTools(
     // Build tools
     wallBuildToolHandlePointerDown: (event: PointerEvent) => boolean
     floorBuildToolHandlePointerDown: (event: PointerEvent) => void
+    roadBuildToolHandlePointerDown: (event: PointerEvent) => boolean
     roadBuildToolGetSession: () => unknown | null
 
     beginBuildToolRightClick: (event: PointerEvent, options: { roadCancelEligible: boolean }) => void
@@ -1198,6 +1199,8 @@ export function handlePointerDownTools(
           }
         }
       }
+
+      ctx.roadBuildToolHandlePointerDown(event)
 
       return {
         handled: true,

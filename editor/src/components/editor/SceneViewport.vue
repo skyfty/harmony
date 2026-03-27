@@ -1384,10 +1384,38 @@ function computeRoadDynamicMeshSignature(
   groundSignature: string | null,
   heightSamplerSignature: unknown,
 ): string {
+  const roadSurfaceChunkSignature = stableSerialize(
+    Object.entries(definition.roadSurfaceChunks ?? {})
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([chunkKey, chunkRef]) => {
+        if (!chunkRef || typeof chunkRef !== 'object') {
+          return [chunkKey, null]
+        }
+        return [chunkKey, {
+          revision: Number.isFinite(chunkRef.revision) ? Math.max(0, Math.trunc(chunkRef.revision)) : 0,
+          resolution: Number.isFinite(chunkRef.resolution) ? Math.max(1, Math.trunc(chunkRef.resolution)) : 1,
+          coverageAssetId: typeof chunkRef.coverageAssetId === 'string' ? chunkRef.coverageAssetId : null,
+          heightAssetId: typeof chunkRef.heightAssetId === 'string' ? chunkRef.heightAssetId : null,
+          // Keep signature stable and cheap: rely on revision for content changes.
+          hasCoverageData: typeof chunkRef.coverageData === 'string' && chunkRef.coverageData.length > 0,
+          hasHeightData: typeof chunkRef.heightData === 'string' && chunkRef.heightData.length > 0,
+        }]
+      }),
+  )
+
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
     Array.isArray(definition.segments) ? definition.segments : [],
     Number.isFinite(definition.width) ? definition.width : null,
+    Number.isFinite(definition.version) ? Math.max(1, Math.trunc(definition.version!)) : null,
+    Number.isFinite(definition.chunkSizeMeters) ? definition.chunkSizeMeters : null,
+    Number.isFinite(definition.sampleSpacingMeters) ? definition.sampleSpacingMeters : null,
+    Number.isFinite(definition.surfaceOffset) ? definition.surfaceOffset : null,
+    Number.isFinite(definition.brushFalloff) ? definition.brushFalloff : null,
+    definition.previewMode === 'mesh' ? 'mesh' : 'overlay',
+    definition.bounds ?? null,
+    definition.sidecar ?? null,
+    roadSurfaceChunkSignature,
     Number.isFinite(junctionSmoothing) ? junctionSmoothing : null,
     typeof materialConfigId === 'string' ? materialConfigId : null,
     Boolean(laneLines),
@@ -10714,6 +10742,7 @@ async function handlePointerDown(event: PointerEvent) {
     pickNodeAtPointer: (e) => pickNodeAtPointer(e),
     wallBuildToolHandlePointerDown: (e) => wallBuildTool.handlePointerDown(e),
     floorBuildToolHandlePointerDown: (e) => floorBuildTool.handlePointerDown(e),
+    roadBuildToolHandlePointerDown: (e) => roadBuildTool.handlePointerDown(e),
     roadBuildToolGetSession: () => roadBuildTool.getSession(),
     beginBuildToolRightClick: (e, options) => pointerInteraction.beginBuildToolRightClick(e, options),
     tryBeginFloorEdgeDrag,

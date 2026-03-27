@@ -59,15 +59,25 @@ function mergeBounds(
   }
 }
 
-function collectStrokeLocalPolyline(runtime: THREE.Object3D | null, worldPoints: THREE.Vector3[]): Array<{ x: number; z: number }> {
-  if (!runtime || worldPoints.length === 0) {
+function collectStrokeLocalPolyline(
+  runtime: THREE.Object3D | null,
+  worldPoints: THREE.Vector3[],
+  fallbackOrigin?: { x: number; z: number } | null,
+): Array<{ x: number; z: number }> {
+  if (worldPoints.length === 0) {
     return []
   }
   const helper = new THREE.Vector3()
   const localPoints: Array<{ x: number; z: number }> = []
   for (const point of worldPoints) {
-    helper.copy(point)
-    runtime.worldToLocal(helper)
+    if (runtime) {
+      helper.copy(point)
+      runtime.worldToLocal(helper)
+    } else if (fallbackOrigin) {
+      helper.set(point.x - fallbackOrigin.x, 0, point.z - fallbackOrigin.z)
+    } else {
+      continue
+    }
     if (!Number.isFinite(helper.x) || !Number.isFinite(helper.z)) {
       continue
     }
@@ -115,9 +125,10 @@ function buildRoadMeshWithSurfaceMetadata(params: {
   worldPoints: THREE.Vector3[]
   strokeWidth: number
   erase?: boolean
+  fallbackOrigin?: { x: number; z: number } | null
 }): RoadDynamicMesh {
   const { base, next, runtime, worldPoints, strokeWidth } = params
-  const strokeLocalPolyline = collectStrokeLocalPolyline(runtime, worldPoints)
+  const strokeLocalPolyline = collectStrokeLocalPolyline(runtime, worldPoints, params.fallbackOrigin)
   const strokeBounds = collectStrokeLocalBounds(strokeLocalPolyline)
   const mergedBounds = mergeBounds(base.bounds, strokeBounds)
   const mergedForChunks: RoadDynamicMesh = {
@@ -170,6 +181,7 @@ export type RoadBuildToolSession = RoadPreviewSession & {
 
 const ROAD_DRAG_APPEND_DISTANCE = 0.2
 const ROAD_LIVE_UPDATE_INTERVAL_MS = 66
+const ROAD_DEBUG_PREFIX = '[RoadBuildDebug]'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -181,6 +193,7 @@ export type RoadBuildToolHandle = {
   getSession: () => RoadBuildToolSession | null
   flushPreviewIfNeeded: (scene: THREE.Scene | null) => void
   flushPreview: (scene: THREE.Scene | null) => void
+  handlePointerDown: (event: PointerEvent) => boolean
   handlePointerMove: (event: PointerEvent) => boolean
   handlePointerUp: (event: PointerEvent) => boolean
   handlePointerCancel: (event: PointerEvent) => boolean
@@ -290,10 +303,79 @@ export function createRoadBuildTool(options: {
   }
 
   const cloneRoadDynamicMesh = (mesh: RoadDynamicMesh): RoadDynamicMesh => {
-    if (typeof structuredClone === 'function') {
-      return structuredClone(mesh)
+    const cloneChunkMap = (input: RoadDynamicMesh['roadSurfaceChunks']): RoadDynamicMesh['roadSurfaceChunks'] => {
+      if (!input || typeof input !== 'object') {
+        return null
+      }
+      const next: NonNullable<RoadDynamicMesh['roadSurfaceChunks']> = {}
+      for (const [key, value] of Object.entries(input)) {
+        if (!value || typeof value !== 'object') {
+          continue
+        }
+        next[key] = {
+          revision: Number.isFinite(value.revision) ? Math.max(0, Math.trunc(value.revision)) : 0,
+          resolution: Number.isFinite(value.resolution) ? Math.max(1, Math.trunc(value.resolution)) : 1,
+          coverageAssetId: typeof value.coverageAssetId === 'string' ? value.coverageAssetId : null,
+          heightAssetId: typeof value.heightAssetId === 'string' ? value.heightAssetId : null,
+          coverageData: typeof value.coverageData === 'string' ? value.coverageData : null,
+          heightData: typeof value.heightData === 'string' ? value.heightData : null,
+        }
+      }
+      return Object.keys(next).length ? next : null
     }
-    return JSON.parse(JSON.stringify(mesh)) as RoadDynamicMesh
+
+    return {
+      type: 'Road',
+      version: Number.isFinite(mesh.version) ? Math.max(1, Math.trunc(mesh.version!)) : 1,
+      width: Number.isFinite(mesh.width) ? mesh.width : 2,
+      chunkSizeMeters: Number.isFinite(mesh.chunkSizeMeters) ? mesh.chunkSizeMeters : undefined,
+      sampleSpacingMeters: Number.isFinite(mesh.sampleSpacingMeters) ? mesh.sampleSpacingMeters : undefined,
+      surfaceOffset: Number.isFinite(mesh.surfaceOffset) ? mesh.surfaceOffset : undefined,
+      brushFalloff: Number.isFinite(mesh.brushFalloff) ? mesh.brushFalloff : undefined,
+      previewMode: mesh.previewMode === 'mesh' ? 'mesh' : 'overlay',
+      bounds: mesh.bounds
+        ? {
+            minX: mesh.bounds.minX,
+            minZ: mesh.bounds.minZ,
+            maxX: mesh.bounds.maxX,
+            maxZ: mesh.bounds.maxZ,
+          }
+        : null,
+      sidecar: mesh.sidecar
+        ? {
+            filename: mesh.sidecar.filename,
+            version: Number.isFinite(mesh.sidecar.version) ? Math.trunc(mesh.sidecar.version) : 1,
+          }
+        : null,
+      roadSurfaceChunks: cloneChunkMap(mesh.roadSurfaceChunks),
+      vertices: Array.isArray(mesh.vertices)
+        ? mesh.vertices
+            .map((vertex) => {
+              if (!Array.isArray(vertex) || vertex.length < 2) {
+                return null
+              }
+              const x = Number(vertex[0])
+              const z = Number(vertex[1])
+              if (!Number.isFinite(x) || !Number.isFinite(z)) {
+                return null
+              }
+              return [x, z] as [number, number]
+            })
+            .filter((vertex): vertex is [number, number] => Boolean(vertex))
+        : undefined,
+      segments: Array.isArray(mesh.segments)
+        ? mesh.segments
+            .map((segment) => {
+              const a = Number((segment as any)?.a)
+              const b = Number((segment as any)?.b)
+              if (!Number.isInteger(a) || !Number.isInteger(b)) {
+                return null
+              }
+              return { a, b }
+            })
+            .filter((segment): segment is { a: number; b: number } => Boolean(segment))
+        : undefined,
+    }
   }
 
   const applyLiveTransientUpdate = () => {
@@ -453,6 +535,70 @@ export function createRoadBuildTool(options: {
     return true
   }
 
+  const beginStrokeAtPointerDown = (event: PointerEvent): boolean => {
+    if (options.activeBuildTool.value !== 'road') {
+      return false
+    }
+    if (event.button !== 0 || options.isAltOverrideActive()) {
+      return false
+    }
+
+    const current = ensureSession()
+    if (current.points.length > 0) {
+      return true
+    }
+
+    current.eraseMode = Boolean(event.shiftKey)
+    current.draggedStroke = false
+
+    const hit = options.pickNodeAtPointer(event)
+    if (hit?.nodeId) {
+      const node = options.findSceneNode(options.sceneNodes(), hit.nodeId)
+      const runtime = options.getRuntimeObject(hit.nodeId)
+      if (node?.dynamicMesh?.type === 'Road' && runtime) {
+        const worldProjected = hit.point.clone()
+        worldProjected.y = 0
+        current.livePreviewNodeId = null
+        current.liveOriginalMesh = null
+        current.liveApplied = false
+        current.liveCommitted = false
+        current.lastLiveUpdateAt = 0
+        current.targetNodeId = hit.nodeId
+        current.snapVertices = options.collectRoadSnapVertices()
+        current.points = [worldProjected.clone()]
+        current.previewEnd = worldProjected.clone()
+        updatePreview({ immediate: true })
+        console.log(ROAD_DEBUG_PREFIX, 'pointerdown initialized from road hit', {
+          targetNodeId: current.targetNodeId,
+        })
+        return true
+      }
+    }
+
+    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+      console.log(ROAD_DEBUG_PREFIX, 'pointerdown init failed: ground raycast miss')
+      return false
+    }
+
+    const snapped = groundPointerHelper.clone()
+    snapped.y = 0
+    current.snapVertices = options.collectRoadSnapVertices()
+    const snappedResult = options.snapRoadPointToVertices(snapped, current.snapVertices, options.vertexSnapDistance)
+    const point = snappedResult.position
+    if (snappedResult.nodeId) {
+      current.targetNodeId = snappedResult.nodeId
+    }
+    current.points = [point.clone()]
+    current.previewEnd = point.clone()
+    updatePreview({ immediate: true })
+    console.log(ROAD_DEBUG_PREFIX, 'pointerdown initialized from ground snap', {
+      targetNodeId: current.targetNodeId,
+      x: point.x,
+      z: point.z,
+    })
+    return true
+  }
+
   const finalize = () => {
     if (!session) {
       return
@@ -460,6 +606,9 @@ export function createRoadBuildTool(options: {
 
     const committed = session.points.map((p) => p.clone())
     if (committed.length < 2) {
+      console.log(ROAD_DEBUG_PREFIX, 'finalize cancelled: insufficient points', {
+        pointCount: committed.length,
+      })
       clearSession()
       return
     }
@@ -500,6 +649,11 @@ export function createRoadBuildTool(options: {
           })
           options.updateNodeDynamicMesh(targetNodeId, merged)
           session.liveCommitted = true
+          console.log(ROAD_DEBUG_PREFIX, 'finalize committed branch-extend', {
+            targetNodeId,
+            chunkCount: Object.keys(merged.roadSurfaceChunks ?? {}).length,
+            committedPointCount: committed.length,
+          })
           options.onRoadSurfaceMeshCommitted?.({
             nodeId: targetNodeId,
             mesh: merged,
@@ -537,8 +691,17 @@ export function createRoadBuildTool(options: {
         worldPoints: committed,
         strokeWidth: next.width,
         erase: session.eraseMode,
+        fallbackOrigin: {
+          x: Number.isFinite(created.position?.x as number) ? (created.position!.x as number) : 0,
+          z: Number.isFinite(created.position?.z as number) ? (created.position!.z as number) : 0,
+        },
       })
       options.updateNodeDynamicMesh(created.id, merged)
+      console.log(ROAD_DEBUG_PREFIX, 'finalize committed new-road', {
+        nodeId: created.id,
+        chunkCount: Object.keys(merged.roadSurfaceChunks ?? {}).length,
+        committedPointCount: committed.length,
+      })
       options.onRoadSurfaceMeshCommitted?.({
         nodeId: created.id,
         mesh: merged,
@@ -563,6 +726,10 @@ export function createRoadBuildTool(options: {
 
     flushPreview: (scene: THREE.Scene | null) => {
       previewRenderer.flush(scene, session)
+    },
+
+    handlePointerDown: (event: PointerEvent) => {
+      return beginStrokeAtPointerDown(event)
     },
 
     handlePointerMove: (event: PointerEvent) => {
