@@ -3,7 +3,8 @@ import type { LandformDynamicMesh, Vector2Like, Vector3Like } from './index'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
 
 const LANDFORM_DEFAULT_COLOR = 0xffffff
-const LANDFORM_SURFACE_Y_OFFSET = 0.01
+const LANDFORM_SURFACE_Y_OFFSET = 0.015
+const LANDFORM_RENDER_ORDER = 2
 const LANDFORM_CONTENT_GROUP = '__LandformContent'
 const LANDFORM_MESH_NAME = '__LandformSurface'
 
@@ -44,10 +45,13 @@ function createLandformMaterial(): THREE.MeshStandardMaterial {
   const material = new THREE.MeshStandardMaterial({
     color: LANDFORM_DEFAULT_COLOR,
     metalness: 0,
-    roughness: 0.25,
+    roughness: 1.0,
     transparent: true,
     depthWrite: false,
-    side: THREE.DoubleSide,
+    side: THREE.BackSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   })
   material.name = 'LandformMaterial'
   return material
@@ -164,8 +168,9 @@ function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMes
 
   const mesh = new THREE.Mesh(geometry, materialTemplate.clone())
   mesh.name = LANDFORM_MESH_NAME
-  mesh.castShadow = true
+  mesh.castShadow = false
   mesh.receiveShadow = true
+  mesh.renderOrder = LANDFORM_RENDER_ORDER
   mesh.userData = {
     ...(mesh.userData ?? {}),
     [MATERIAL_CONFIG_ID_KEY]: normalizeMaterialConfigId(definition.materialConfigId),
@@ -201,6 +206,9 @@ export function applyLandformFeatherMaterial(material: THREE.Material | null | u
   const clone = (material as THREE.MeshStandardMaterial).clone()
   clone.transparent = true
   clone.depthWrite = false
+  clone.polygonOffset = true
+  clone.polygonOffsetFactor = -1
+  clone.polygonOffsetUnits = -1
   clone.alphaTest = Math.max(clone.alphaTest ?? 0, 0.001)
   const originalOnBeforeCompile = clone.onBeforeCompile
   clone.onBeforeCompile = (shader, renderer) => {

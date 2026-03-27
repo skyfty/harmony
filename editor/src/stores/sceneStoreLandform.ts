@@ -9,7 +9,6 @@ import {
 } from '@schema/components'
 import type { Object3D } from 'three'
 import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
-import { logLandformDebug } from '@/utils/landformDebug'
 
 export type SceneStoreLandformHelpersDeps = {
   createLandformNodeMaterials: (options: { surfaceName: string }) => SceneNodeMaterial[]
@@ -176,46 +175,67 @@ function isPointInsidePolygon2D(pointX: number, pointZ: number, polygon: Vector3
   return inside
 }
 
-function summarizeVector3Bounds(points: Vector3[]): {
-  count: number
-  minX: number
-  maxX: number
-  minY: number
-  maxY: number
-  minZ: number
-  maxZ: number
-} | null {
-  if (!points.length) {
-    return null
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
   }
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-  points.forEach((point) => {
-    minX = Math.min(minX, point.x)
-    maxX = Math.max(maxX, point.x)
-    minY = Math.min(minY, point.y)
-    maxY = Math.max(maxY, point.y)
-    minZ = Math.min(minZ, point.z)
-    maxZ = Math.max(maxZ, point.z)
-  })
-  return { count: points.length, minX, maxX, minY, maxY, minZ, maxZ }
+  return Math.min(1, Math.max(0, value))
 }
 
-function summarizeNumericRange(values: number[]): { count: number; min: number; max: number } | null {
-  if (!values.length) {
-    return null
+function pointToSegmentDistance2D(
+  pointX: number,
+  pointZ: number,
+  startX: number,
+  startZ: number,
+  endX: number,
+  endZ: number,
+): number {
+  const abX = endX - startX
+  const abZ = endZ - startZ
+  const apX = pointX - startX
+  const apZ = pointZ - startZ
+  const abLengthSq = abX * abX + abZ * abZ
+  if (abLengthSq <= 1e-12) {
+    return Math.hypot(apX, apZ)
   }
-  let min = Number.POSITIVE_INFINITY
-  let max = Number.NEGATIVE_INFINITY
-  values.forEach((value) => {
-    min = Math.min(min, value)
-    max = Math.max(max, value)
+  const projection = clamp01((apX * abX + apZ * abZ) / abLengthSq)
+  const closestX = startX + abX * projection
+  const closestZ = startZ + abZ * projection
+  return Math.hypot(pointX - closestX, pointZ - closestZ)
+}
+
+function distanceToFootprintBoundary(pointX: number, pointZ: number, footprint: Array<[number, number]>): number {
+  if (footprint.length < 2) {
+    return 0
+  }
+  let minDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < footprint.length; index += 1) {
+    const a = footprint[index]!
+    const b = footprint[(index + 1) % footprint.length]!
+    const distance = pointToSegmentDistance2D(pointX, pointZ, a[0], a[1], b[0], b[1])
+    if (distance < minDistance) {
+      minDistance = distance
+    }
+  }
+  return Number.isFinite(minDistance) ? minDistance : 0
+}
+
+function buildLandformSurfaceFeather(
+  footprint: Array<[number, number]>,
+  surfaceVertices: Array<{ x: number; z: number }>,
+  featherWidth: number,
+): number[] {
+  const normalizedWidth = Number.isFinite(featherWidth) ? Math.max(0, featherWidth) : 0
+  if (normalizedWidth <= 1e-6 || footprint.length < 3 || !surfaceVertices.length) {
+    return surfaceVertices.map(() => 1)
+  }
+
+  return surfaceVertices.map((vertex) => {
+    const distance = distanceToFootprintBoundary(vertex.x, vertex.z, footprint)
+    const t = clamp01(distance / normalizedWidth)
+    // smoothstep for a softer, more natural transition.
+    return t * t * (3 - 2 * t)
   })
-  return { count: values.length, min, max }
 }
 
 export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersDeps) {
@@ -245,11 +265,27 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       const mesh = node.dynamicMesh as LandformDynamicMesh
-      const meshChanged = mesh.materialConfigId !== materialConfigId
+      const footprint = Array.isArray(mesh.footprint)
+        ? mesh.footprint
+          .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
+          .filter((entry) => Number.isFinite(entry[0]) && Number.isFinite(entry[1]))
+        : []
+      const surfaceVertices = Array.isArray(mesh.surfaceVertices)
+        ? mesh.surfaceVertices
+          .map((entry) => ({ x: Number(entry?.x), z: Number(entry?.z) }))
+          .filter((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.z))
+        : []
+      const expectedFeather = buildLandformSurfaceFeather(footprint, surfaceVertices, Number(mesh.feather))
+      const currentFeather = Array.isArray(mesh.surfaceFeather) ? mesh.surfaceFeather : []
+      const featherNeedsSync = expectedFeather.length !== currentFeather.length
+        || expectedFeather.some((value, index) => Math.abs(value - Number(currentFeather[index])) > 1e-5)
+
+      const meshChanged = mesh.materialConfigId !== materialConfigId || featherNeedsSync
       if (meshChanged) {
         node.dynamicMesh = {
           ...mesh,
           materialConfigId,
+          surfaceFeather: expectedFeather,
         }
       }
 
@@ -261,19 +297,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       groundDefinition: GroundDynamicMesh | null,
       groundNode: SceneNode | null,
       options: Partial<LandformComponentProps> = {},
-      debugContext?: {
-        reason?: string
-        nodeId?: string | null
-      },
     ): { center: Vector3; definition: LandformDynamicMesh } | null {
       const worldPoints = normalizePolygonWinding(buildWorldPoints(points))
       if (worldPoints.length < 3) {
-        logLandformDebug('skip build: insufficient world points', {
-          reason: debugContext?.reason ?? 'unknown',
-          nodeId: debugContext?.nodeId ?? null,
-          inputPointCount: Array.isArray(points) ? points.length : 0,
-          normalizedPointCount: worldPoints.length,
-        })
         return null
       }
 
@@ -284,11 +310,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       if (!groundDefinition) {
         const triangulation = buildShapeTriangulation(worldPoints)
         if (!triangulation) {
-          logLandformDebug('skip build: flat triangulation failed', {
-            reason: debugContext?.reason ?? 'unknown',
-            nodeId: debugContext?.nodeId ?? null,
-            worldBounds: summarizeVector3Bounds(worldPoints),
-          })
           return null
         }
 
@@ -308,15 +329,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           x: (point.x - center.x) / normalizedProps.uvScale.x,
           y: (point.z - center.z) / normalizedProps.uvScale.y,
         }) satisfies Vector2Like)
-        logLandformDebug('build landform without ground adaptation', {
-          reason: debugContext?.reason ?? 'unknown',
-          nodeId: debugContext?.nodeId ?? null,
-          center: { x: center.x, y: center.y, z: center.z },
-          worldBounds: summarizeVector3Bounds(worldPoints),
-          triangulatedVertexCount: surfaceVertices.length,
-          triangleCount: Math.floor(surfaceIndices.length / 3),
-          sampledHeightRange: summarizeNumericRange(surfaceWorldVertices.map((point) => point.y)),
-        })
         return {
           center,
           definition: {
@@ -328,7 +340,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             materialConfigId: null,
             feather: normalizedProps.feather,
             uvScale: { ...normalizedProps.uvScale },
-            surfaceFeather: surfaceVertices.map(() => 1),
+            surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, normalizedProps.feather),
           },
         }
       }
@@ -390,14 +402,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
-        logLandformDebug('skip build: no interior sampled triangles on ground', {
-          reason: debugContext?.reason ?? 'unknown',
-          nodeId: debugContext?.nodeId ?? null,
-          groundNodeId: groundNode?.id ?? null,
-          polygonLocalBounds: summarizeVector3Bounds(polygonLocal),
-          sampledVertexCount: surfaceWorldVertices.length,
-          sampledTriangleCount: Math.floor(surfaceIndices.length / 3),
-        })
         return null
       }
 
@@ -410,18 +414,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         x: (point.x - center.x) / normalizedProps.uvScale.x,
         y: (point.z - center.z) / normalizedProps.uvScale.y,
       }) satisfies Vector2Like)
-      logLandformDebug('build landform with ground adaptation', {
-        reason: debugContext?.reason ?? 'unknown',
-        nodeId: debugContext?.nodeId ?? null,
-        groundNodeId: groundNode?.id ?? null,
-        groundSurfaceRevision: Number.isFinite(groundDefinition.surfaceRevision) ? groundDefinition.surfaceRevision : null,
-        center: { x: center.x, y: center.y, z: center.z },
-        worldBounds: summarizeVector3Bounds(worldPoints),
-        polygonLocalBounds: summarizeVector3Bounds(polygonLocal),
-        triangulatedVertexCount: surfaceVertices.length,
-        triangleCount: Math.floor(surfaceIndices.length / 3),
-        sampledHeightRange: summarizeNumericRange(surfaceWorldVertices.map((point) => point.y)),
-      })
 
       return {
         center,
@@ -431,7 +423,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           surfaceVertices,
           surfaceIndices,
           surfaceUvs,
-          surfaceFeather: surfaceVertices.map(() => 1),
+          surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, normalizedProps.feather),
           materialConfigId: null,
           feather: normalizedProps.feather,
           uvScale: { ...normalizedProps.uvScale },
@@ -459,6 +451,19 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         ...mesh,
         feather: normalized.feather,
         uvScale: { x: normalized.uvScale.x, y: normalized.uvScale.y },
+        surfaceFeather: buildLandformSurfaceFeather(
+          Array.isArray(mesh.footprint)
+            ? mesh.footprint
+              .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
+              .filter((entry) => Number.isFinite(entry[0]) && Number.isFinite(entry[1]))
+            : [],
+          Array.isArray(mesh.surfaceVertices)
+            ? mesh.surfaceVertices
+              .map((entry) => ({ x: Number(entry?.x), z: Number(entry?.z) }))
+              .filter((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.z))
+            : [],
+          normalized.feather,
+        ),
       }
       node.dynamicMesh = nextMesh
       const runtime = deps.getRuntimeObject(node.id)

@@ -2,9 +2,9 @@ import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { Vector3Like } from '@schema'
+import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import {
   buildFloorCircleOrRegularPolygonPoints,
-  createFloorPreviewRenderer,
   type FloorPreviewSession as LandformPreviewSession,
 } from './FloorPreviewRenderer'
 import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
@@ -47,6 +47,38 @@ type LeftClickState = {
 type VertexSnapResolverOptions = {
   excludeNodeIds?: readonly string[]
   keepSourceY?: boolean
+}
+
+const PREVIEW_SIGNATURE_PRECISION = 1000
+
+function disposePreviewGroup(group: THREE.Group): void {
+  group.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+    mesh.geometry?.dispose?.()
+    const material = mesh.material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry?.dispose?.())
+    } else {
+      material?.dispose?.()
+    }
+  })
+}
+
+function encodePreviewNumber(value: number): string {
+  return `${Math.round(value * PREVIEW_SIGNATURE_PRECISION)}`
+}
+
+function computePreviewSignature(points: THREE.Vector3[], presetSignature: string): string {
+  if (!points.length) {
+    return `empty|${presetSignature}`
+  }
+  const geometrySignature = points
+    .map((point) => [encodePreviewNumber(point.x), encodePreviewNumber(point.y), encodePreviewNumber(point.z)].join(','))
+    .join(';')
+  return `${geometrySignature}|${presetSignature}`
 }
 
 export function createLandformBuildTool(options: {
@@ -109,15 +141,128 @@ export function createLandformBuildTool(options: {
     })
   }
 
-  const previewRenderer = createFloorPreviewRenderer({
-    rootGroup: options.rootGroup,
-    getRegularPolygonSides: () => getRegularPolygonSides(),
-    getPreviewPresetData: () => null,
-    getPreviewSignature: () => buildPreviewSignature(),
-    applyPreviewMaterials: (group) => {
-      options.applyPreviewMaterials?.(group, options.getLandformBrush?.().presetData ?? null)
+  const buildPreviewVertices = (targetSession: LandformPreviewSession): THREE.Vector3[] => {
+    if (!targetSession.points.length) {
+      return []
+    }
+    if (targetSession.shape === 'rectangle' && targetSession.previewEnd) {
+      const start = targetSession.points[0]
+      if (start) {
+        const rectangle = buildRotatedRectangleFromCorner(start, targetSession.previewEnd, targetSession.rectangleDirection)
+        if (rectangle?.corners?.length) {
+          return rectangle.corners.map((point) => point.clone())
+        }
+      }
+    }
+    if (targetSession.shape === 'circle' && targetSession.previewEnd) {
+      const center = targetSession.points[0]
+      if (center) {
+        return buildFloorCircleOrRegularPolygonPoints(center, targetSession.previewEnd, getRegularPolygonSides())
+      }
+    }
+    const combined = targetSession.points.map((point) => point.clone())
+    if (targetSession.previewEnd) {
+      const last = combined[combined.length - 1] ?? null
+      if (!last || last.distanceToSquared(targetSession.previewEnd) > 1e-10) {
+        combined.push(targetSession.previewEnd.clone())
+      }
+    }
+    return combined
+  }
+
+  let previewNeedsSync = false
+  let previewSignature: string | null = null
+  let lastPresetSignature = buildPreviewSignature()
+  let lastRegularPolygonSides = getRegularPolygonSides()
+
+  const clearPreview = (targetSession: LandformPreviewSession | null): void => {
+    if (targetSession?.previewGroup) {
+      const group = targetSession.previewGroup
+      group.removeFromParent()
+      disposePreviewGroup(group)
+      targetSession.previewGroup = null
+    }
+    previewSignature = null
+  }
+
+  const flushPreview = (scene: THREE.Scene | null, targetSession: LandformPreviewSession | null): void => {
+    previewNeedsSync = false
+    lastPresetSignature = buildPreviewSignature()
+    lastRegularPolygonSides = getRegularPolygonSides()
+
+    if (!scene || !targetSession) {
+      clearPreview(targetSession)
+      return
+    }
+
+    const previewPoints = buildPreviewVertices(targetSession)
+    if (previewPoints.length < 3) {
+      clearPreview(targetSession)
+      return
+    }
+
+    const nextSignature = computePreviewSignature(previewPoints, lastPresetSignature)
+    if (nextSignature === previewSignature) {
+      return
+    }
+
+    const build = options.sceneStore.buildLandformPreviewMesh({
+      points: previewPoints.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
+      reason: 'landform-preview',
+    })
+    if (!build) {
+      clearPreview(targetSession)
+      return
+    }
+
+    if (!targetSession.previewGroup) {
+      const previewGroup = createLandformGroup(build.definition)
+      previewGroup.userData.isLandformPreview = true
+      targetSession.previewGroup = previewGroup
+      options.rootGroup.add(previewGroup)
+    } else {
+      updateLandformGroup(targetSession.previewGroup, build.definition)
+      if (!options.rootGroup.children.includes(targetSession.previewGroup)) {
+        options.rootGroup.add(targetSession.previewGroup)
+      }
+    }
+
+    options.applyPreviewMaterials?.(targetSession.previewGroup, options.getLandformBrush?.().presetData ?? null)
+    targetSession.previewGroup.position.set(build.center.x, build.center.y, build.center.z)
+    previewSignature = nextSignature
+  }
+
+  const previewRenderer = {
+    markDirty: () => {
+      previewNeedsSync = true
     },
-  })
+    flushIfNeeded: (scene: THREE.Scene | null, targetSession: LandformPreviewSession | null) => {
+      const currentPresetSignature = buildPreviewSignature()
+      const currentRegularPolygonSides = getRegularPolygonSides()
+      if (currentPresetSignature !== lastPresetSignature || currentRegularPolygonSides !== lastRegularPolygonSides) {
+        previewNeedsSync = true
+      }
+      if (!previewNeedsSync) {
+        return
+      }
+      flushPreview(scene, targetSession)
+    },
+    flush: flushPreview,
+    clear: clearPreview,
+    reset: () => {
+      previewNeedsSync = false
+      previewSignature = null
+      lastPresetSignature = buildPreviewSignature()
+      lastRegularPolygonSides = getRegularPolygonSides()
+    },
+    dispose: (targetSession: LandformPreviewSession | null) => {
+      clearPreview(targetSession)
+      previewNeedsSync = false
+      previewSignature = null
+      lastPresetSignature = buildPreviewSignature()
+      lastRegularPolygonSides = getRegularPolygonSides()
+    },
+  }
 
   const groundPointerHelper = new THREE.Vector3()
 

@@ -205,7 +205,6 @@ import { createRoadPresetActions } from './roadPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
 import { createSceneStoreLandformHelpers } from './sceneStoreLandform'
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
-import { logLandformDebug } from '@/utils/landformDebug'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import {
@@ -1642,13 +1641,7 @@ function commitGroundHeightMapRuntimeEdit(
   target.dynamicMesh.surfaceRevision = nextRevision
   definition.surfaceRevision = nextRevision
   useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
-  const rebuiltLandformCount = refreshLandformNodesForGroundChange(store, nodeId)
-  logLandformDebug('ground height edit committed', {
-    groundNodeId: nodeId,
-    previousSurfaceRevision: currentRevision,
-    nextSurfaceRevision: nextRevision,
-    rebuiltLandformCount,
-  })
+  refreshLandformNodesForGroundChange(store, nodeId)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
@@ -2157,6 +2150,52 @@ function buildLandformFootprintWorldPoints(node: SceneNode, mesh: LandformDynami
     .filter((entry): entry is Vector3Like => Boolean(entry))
 }
 
+function rebuildLandformNodeForTerrain(store: {
+  nodes: SceneNode[]
+  currentSceneId?: string | null
+}, nodeId: string): boolean {
+  const node = findNodeById(store.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Landform') {
+    return false
+  }
+
+  const groundNode = resolveGroundNodeForHeightSampling(store.nodes)
+  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+    ? resolveGroundRuntimeDefinition(store, groundNode.id)
+    : null
+  if (!groundNode || !groundDefinition) {
+    return false
+  }
+
+  const mesh = node.dynamicMesh as LandformDynamicMesh
+  const worldPoints = buildLandformFootprintWorldPoints(node, mesh)
+  if (worldPoints.length < 3) {
+    return false
+  }
+
+  const componentState = node.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
+  const componentProps = clampLandformComponentProps(
+    (componentState?.props as Partial<LandformComponentProps> | undefined)
+      ?? resolveLandformComponentPropsFromMesh(mesh),
+  )
+  const rebuilt = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
+    worldPoints,
+    groundDefinition,
+    groundNode,
+    componentProps,
+  )
+  if (!rebuilt) {
+    return false
+  }
+
+  node.dynamicMesh = {
+    ...rebuilt.definition,
+    materialConfigId: mesh.materialConfigId ?? rebuilt.definition.materialConfigId ?? null,
+  }
+  node.position = createVector(rebuilt.center.x, rebuilt.center.y, rebuilt.center.z)
+  return true
+}
+
 function refreshLandformNodesForGroundChange(store: {
   nodes: SceneNode[]
   currentSceneId?: string | null
@@ -2166,45 +2205,16 @@ function refreshLandformNodesForGroundChange(store: {
   const groundNode = findNodeById(store.nodes, groundNodeId)
   const groundDefinition = resolveGroundRuntimeDefinition(store, groundNodeId)
   if (!groundNode || !groundDefinition) {
-    logLandformDebug('skip landform refresh after ground change', {
-      groundNodeId,
-      hasGroundNode: Boolean(groundNode),
-      hasGroundDefinition: Boolean(groundDefinition),
-    })
     return 0
   }
 
   const changedNodeIds: string[] = []
-  logLandformDebug('refresh landforms for ground change', {
-    groundNodeId,
-    groundSurfaceRevision: Number.isFinite(groundDefinition.surfaceRevision) ? groundDefinition.surfaceRevision : null,
-  })
   const walk = (nodes: SceneNode[]) => {
     nodes.forEach((node) => {
       if (node.dynamicMesh?.type === 'Landform') {
-        const mesh = node.dynamicMesh as LandformDynamicMesh
-        const worldPoints = buildLandformFootprintWorldPoints(node, mesh)
-        if (worldPoints.length >= 3) {
-          const componentState = node.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
-          const componentProps = clampLandformComponentProps(
-            (componentState?.props as Partial<LandformComponentProps> | undefined)
-              ?? resolveLandformComponentPropsFromMesh(mesh),
-          )
-          const rebuilt = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
-            worldPoints,
-            groundDefinition,
-            groundNode,
-            componentProps,
-            { reason: 'ground-height-edit', nodeId: node.id },
-          )
-          if (rebuilt) {
-            node.dynamicMesh = {
-              ...rebuilt.definition,
-              materialConfigId: mesh.materialConfigId ?? rebuilt.definition.materialConfigId ?? null,
-            }
-            node.position = createVector(rebuilt.center.x, rebuilt.center.y, rebuilt.center.z)
-            changedNodeIds.push(node.id)
-          }
+        const rebuilt = rebuildLandformNodeForTerrain(store, node.id)
+        if (rebuilt) {
+          changedNodeIds.push(node.id)
         }
       }
       if (Array.isArray(node.children) && node.children.length) {
@@ -2225,11 +2235,6 @@ function refreshLandformNodesForGroundChange(store: {
   if (patchQueued) {
     store.bumpSceneNodePropertyVersion()
   }
-  logLandformDebug('finished landform refresh after ground change', {
-    groundNodeId,
-    rebuiltLandformCount: changedNodeIds.length,
-    rebuiltLandformIds: changedNodeIds,
-  })
   return changedNodeIds.length
 }
 
@@ -8333,7 +8338,8 @@ export const useSceneStore = defineStore('scene', {
             }
           : cloneVector(payload.scale)
       })
-      this.queueSceneNodePatch(payload.id, ['transform'])
+      const landformRebuilt = rebuildLandformNodeForTerrain(this, payload.id)
+      this.queueSceneNodePatch(payload.id, landformRebuilt ? ['transform', 'dynamicMesh'] : ['transform'])
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -8385,7 +8391,8 @@ export const useSceneStore = defineStore('scene', {
             : cloneVector(payload.scale)
         }
       })
-      this.queueSceneNodePatch(payload.id, ['transform'])
+      const landformRebuilt = rebuildLandformNodeForTerrain(this, payload.id)
+      this.queueSceneNodePatch(payload.id, landformRebuilt ? ['transform', 'dynamicMesh'] : ['transform'])
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -8604,10 +8611,23 @@ export const useSceneStore = defineStore('scene', {
           }
         })
       })
+
+      const rebuiltLandformIds: string[] = []
+      prepared.forEach((update) => {
+        const rebuilt = rebuildLandformNodeForTerrain(this, update.id)
+        if (rebuilt) {
+          rebuiltLandformIds.push(update.id)
+        }
+      })
+
       let patchQueued = false
       prepared.forEach((update) => {
-        patchQueued =
-          this.queueSceneNodePatch(update.id, ['transform'], { bumpVersion: false }) || patchQueued
+        const isLandformRebuilt = rebuiltLandformIds.includes(update.id)
+        patchQueued = this.queueSceneNodePatch(
+          update.id,
+          isLandformRebuilt ? ['transform', 'dynamicMesh'] : ['transform'],
+          { bumpVersion: false },
+        ) || patchQueued
       })
       if (patchQueued) {
         this.bumpSceneNodePropertyVersion()
@@ -11382,7 +11402,11 @@ export const useSceneStore = defineStore('scene', {
       let patchQueued = false
       patchQueued = this.queueSceneNodePatch(groupId, ['transform'], { bumpVersion: false }) || patchQueued
       childAdjustments.forEach((adjustment) => {
+        const landformRebuilt = rebuildLandformNodeForTerrain(this, adjustment.id)
         patchQueued = this.queueSceneNodePatch(adjustment.id, ['transform'], { bumpVersion: false }) || patchQueued
+        if (landformRebuilt) {
+          patchQueued = this.queueSceneNodePatch(adjustment.id, ['dynamicMesh'], { bumpVersion: false }) || patchQueued
+        }
       })
       if (patchQueued) {
         this.bumpSceneNodePropertyVersion()
@@ -13316,27 +13340,13 @@ export const useSceneStore = defineStore('scene', {
       const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
         ? resolveGroundRuntimeDefinition(this, groundNode.id)
         : null
-      logLandformDebug('create landform requested', {
-        requestedNodeId: payload.nodeId ?? null,
-        inputPointCount: Array.isArray(payload.points) ? payload.points.length : 0,
-        groundNodeId: groundNode?.id ?? null,
-        hasGroundDefinition: Boolean(groundDefinition),
-        groundSurfaceRevision: groundDefinition && Number.isFinite(groundDefinition.surfaceRevision)
-          ? groundDefinition.surfaceRevision
-          : null,
-      })
       const build = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
         payload.points,
         groundDefinition,
         groundNode,
         payload.componentProps,
-        { reason: 'create-landform-node', nodeId: payload.nodeId ?? null },
       )
       if (!build) {
-        logLandformDebug('create landform aborted: build returned null', {
-          requestedNodeId: payload.nodeId ?? null,
-          groundNodeId: groundNode?.id ?? null,
-        })
         return null
       }
 
@@ -13348,13 +13358,6 @@ export const useSceneStore = defineStore('scene', {
 
       const landformGroup = createLandformGroup(defaultMesh)
       const nodeName = payload.name ?? this.generateLandformNodeName()
-      logLandformDebug('create landform built mesh', {
-        requestedNodeId: payload.nodeId ?? null,
-        nodeName,
-        center: { x: build.center.x, y: build.center.y, z: build.center.z },
-        surfaceVertexCount: Array.isArray(defaultMesh.surfaceVertices) ? defaultMesh.surfaceVertices.length : 0,
-        surfaceTriangleCount: Array.isArray(defaultMesh.surfaceIndices) ? Math.floor(defaultMesh.surfaceIndices.length / 3) : 0,
-      })
 
       this.captureHistorySnapshot()
       this.beginHistoryCaptureSuppression()
@@ -13441,6 +13444,30 @@ export const useSceneStore = defineStore('scene', {
         return node
       } finally {
         this.endHistoryCaptureSuppression()
+      }
+    },
+
+    buildLandformPreviewMesh(payload: {
+      points: Vector3Like[]
+      componentProps?: Partial<LandformComponentProps>
+      reason?: string
+    }): { center: Vector3Like; definition: LandformDynamicMesh } | null {
+      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+        ? resolveGroundRuntimeDefinition(this, groundNode.id)
+        : null
+      const build = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
+        payload.points,
+        groundDefinition,
+        groundNode,
+        payload.componentProps,
+      )
+      if (!build) {
+        return null
+      }
+      return {
+        center: { x: build.center.x, y: build.center.y, z: build.center.z },
+        definition: build.definition,
       }
     },
 

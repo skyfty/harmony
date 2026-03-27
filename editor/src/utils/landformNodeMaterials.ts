@@ -13,10 +13,10 @@ function buildMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneMater
     color: '#ffffff',
     transparent: true,
     opacity: 1,
-    side: 'double',
+    side: 'back',
     wireframe: false,
-    metalness: 0.05,
-    roughness: 0.9,
+    metalness: 0.00,
+    roughness: 1.0,
     emissive: '#000000',
     emissiveIntensity: 0,
     aoStrength: 1,
@@ -46,11 +46,11 @@ export function createLandformNodeMaterials(options: { color?: string; surfaceNa
   const surfaceName = options.surfaceName ?? 'Surface'
   const surface = createNodeMaterial(surfaceName, 'MeshStandardMaterial', {
     color,
-    metalness: 0.05,
-    roughness: 0.9,
+    metalness: 0.00,
+    roughness: 1.0,
     transparent: true,
     opacity: 1,
-    side: 'double',
+    side: 'back',
   })
   return [surface]
 }
