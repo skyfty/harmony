@@ -21,6 +21,9 @@ export type SceneStoreLandformHelpersDeps = {
   updateLandformGroup: (runtime: Object3D, mesh: LandformDynamicMesh) => void
 }
 
+const LANDFORM_TARGET_TRI_EDGE_LENGTH = 0.5
+const LANDFORM_MAX_CELL_SUBDIVISIONS = 4
+
 type GroundTransform = {
   position: { x: number; y: number; z: number }
   scale: { x: number; y: number; z: number }
@@ -238,6 +241,14 @@ function buildLandformSurfaceFeather(
   })
 }
 
+function resolveLandformCellSubdivisions(cellSize: number): number {
+  if (!Number.isFinite(cellSize) || cellSize <= 1e-6) {
+    return 1
+  }
+  const subdivisions = Math.ceil(cellSize / LANDFORM_TARGET_TRI_EDGE_LENGTH)
+  return Math.min(LANDFORM_MAX_CELL_SUBDIVISIONS, Math.max(1, subdivisions))
+}
+
 export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersDeps) {
   return {
     ensureLandformMaterialConvention(node: SceneNode): { materialsChanged: boolean; meshChanged: boolean } {
@@ -350,6 +361,8 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const halfWidth = groundDefinition.width * 0.5
       const halfDepth = groundDefinition.depth * 0.5
       const cellSize = Math.max(1e-6, groundDefinition.cellSize)
+      const cellSubdivisions = resolveLandformCellSubdivisions(cellSize)
+      const subCellSize = cellSize / cellSubdivisions
       const columns = Math.max(1, Math.trunc(groundDefinition.columns))
       const rows = Math.max(1, Math.trunc(groundDefinition.rows))
 
@@ -392,12 +405,18 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
 
       for (let row = minRow; row <= maxRow; row += 1) {
         const z0 = -halfDepth + row * cellSize
-        const z1 = -halfDepth + (row + 1) * cellSize
         for (let column = minColumn; column <= maxColumn; column += 1) {
           const x0 = -halfWidth + column * cellSize
-          const x1 = -halfWidth + (column + 1) * cellSize
-          pushTriangleIfInside(new Vector3(x0, 0, z0), new Vector3(x1, 0, z0), new Vector3(x1, 0, z1))
-          pushTriangleIfInside(new Vector3(x0, 0, z0), new Vector3(x1, 0, z1), new Vector3(x0, 0, z1))
+          for (let subRow = 0; subRow < cellSubdivisions; subRow += 1) {
+            const subZ0 = z0 + subRow * subCellSize
+            const subZ1 = subZ0 + subCellSize
+            for (let subColumn = 0; subColumn < cellSubdivisions; subColumn += 1) {
+              const subX0 = x0 + subColumn * subCellSize
+              const subX1 = subX0 + subCellSize
+              pushTriangleIfInside(new Vector3(subX0, 0, subZ0), new Vector3(subX1, 0, subZ0), new Vector3(subX1, 0, subZ1))
+              pushTriangleIfInside(new Vector3(subX0, 0, subZ0), new Vector3(subX1, 0, subZ1), new Vector3(subX0, 0, subZ1))
+            }
+          }
         }
       }
 

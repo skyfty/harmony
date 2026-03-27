@@ -417,9 +417,29 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   const rows = Math.max(1, runtimeDefinition.rows)
   const halfWidth = runtimeDefinition.width * 0.5
   const halfDepth = runtimeDefinition.depth * 0.5
-  const localColumn = clampVertexIndex(Math.round((x + halfWidth) / runtimeDefinition.cellSize), columns)
-  const localRow = clampVertexIndex(Math.round((z + halfDepth) / runtimeDefinition.cellSize), rows)
-  return resolveGroundEffectiveHeightAtVertex(runtimeDefinition, localRow, localColumn)
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+
+  const localColumnFloat = clampInclusive((x + halfWidth) / cellSize, 0, columns)
+  const localRowFloat = clampInclusive((z + halfDepth) / cellSize, 0, rows)
+
+  const column0 = clampVertexIndex(Math.floor(localColumnFloat), columns)
+  const row0 = clampVertexIndex(Math.floor(localRowFloat), rows)
+  const column1 = clampVertexIndex(column0 + 1, columns)
+  const row1 = clampVertexIndex(row0 + 1, rows)
+
+  const tx = clampInclusive(localColumnFloat - column0, 0, 1)
+  const tz = clampInclusive(localRowFloat - row0, 0, 1)
+
+  const h00 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row0, column0)
+  const h10 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row0, column1)
+  const h01 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row1, column0)
+  const h11 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row1, column1)
+
+  const hx0 = h00 + (h10 - h00) * tx
+  const hx1 = h01 + (h11 - h01) * tx
+  return hx0 + (hx1 - hx0) * tz
 }
 
 export function sampleGroundNormal(
