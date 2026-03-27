@@ -1,4 +1,4 @@
-import { Vector3 } from 'three'
+import { Shape, ShapeGeometry, Vector2, Vector3 } from 'three'
 import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import {
@@ -9,6 +9,7 @@ import {
 } from '@schema/components'
 import type { Object3D } from 'three'
 import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
+import { logLandformDebug } from '@/utils/landformDebug'
 
 export type SceneStoreLandformHelpersDeps = {
   createLandformNodeMaterials: (options: { surfaceName: string }) => SceneNodeMaterial[]
@@ -101,13 +102,73 @@ function groundLocalToWorld(point: Vector3, transform: GroundTransform): Vector3
   )
 }
 
-function isPointInsidePolygon2D(point: Vector3, polygon: Vector3[]): boolean {
+function computeSignedAreaXZ(points: Vector3[]): number {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    area += current.x * next.z - next.x * current.z
+  }
+  return area * 0.5
+}
+
+function normalizePolygonWinding(points: Vector3[]): Vector3[] {
+  if (points.length < 3) {
+    return points
+  }
+  const area = computeSignedAreaXZ(points)
+  if (Number.isFinite(area) && area < 0) {
+    return [...points].reverse()
+  }
+  return points
+}
+
+function buildShapeTriangulation(points: Vector3[]): { vertices: Vector2[]; indices: number[] } | null {
+  if (points.length < 3) {
+    return null
+  }
+
+  const contour = points.map((point) => new Vector2(point.x, point.z))
+  const shape = new Shape(contour)
+  const geometry = new ShapeGeometry(shape)
+  const position = geometry.getAttribute('position')
+  if (!position || position.count < 3) {
+    geometry.dispose()
+    return null
+  }
+
+  const vertices: Vector2[] = []
+  for (let index = 0; index < position.count; index += 1) {
+    vertices.push(new Vector2(position.getX(index), position.getY(index)))
+  }
+
+  const indexAttribute = geometry.getIndex()
+  const indices: number[] = []
+  if (indexAttribute && indexAttribute.count >= 3) {
+    for (let index = 0; index < indexAttribute.count; index += 1) {
+      indices.push(indexAttribute.getX(index))
+    }
+  } else {
+    for (let index = 0; index < position.count; index += 1) {
+      indices.push(index)
+    }
+  }
+
+  geometry.dispose()
+  if (indices.length < 3) {
+    return null
+  }
+
+  return { vertices, indices }
+}
+
+function isPointInsidePolygon2D(pointX: number, pointZ: number, polygon: Vector3[]): boolean {
   let inside = false
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
     const a = polygon[i]!
     const b = polygon[j]!
-    const intersects = ((a.z > point.z) !== (b.z > point.z))
-      && (point.x < ((b.x - a.x) * (point.z - a.z)) / ((b.z - a.z) || 1e-12) + a.x)
+    const intersects = ((a.z > pointZ) !== (b.z > pointZ))
+      && (pointX < ((b.x - a.x) * (pointZ - a.z)) / ((b.z - a.z) || 1e-12) + a.x)
     if (intersects) {
       inside = !inside
     }
@@ -115,33 +176,46 @@ function isPointInsidePolygon2D(point: Vector3, polygon: Vector3[]): boolean {
   return inside
 }
 
-function distancePointToSegment2D(point: Vector3, start: Vector3, end: Vector3): number {
-  const dx = end.x - start.x
-  const dz = end.z - start.z
-  const lengthSq = dx * dx + dz * dz
-  if (lengthSq <= 1e-12) {
-    return Math.hypot(point.x - start.x, point.z - start.z)
+function summarizeVector3Bounds(points: Vector3[]): {
+  count: number
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+  minZ: number
+  maxZ: number
+} | null {
+  if (!points.length) {
+    return null
   }
-  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSq))
-  const projX = start.x + dx * t
-  const projZ = start.z + dz * t
-  return Math.hypot(point.x - projX, point.z - projZ)
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  points.forEach((point) => {
+    minX = Math.min(minX, point.x)
+    maxX = Math.max(maxX, point.x)
+    minY = Math.min(minY, point.y)
+    maxY = Math.max(maxY, point.y)
+    minZ = Math.min(minZ, point.z)
+    maxZ = Math.max(maxZ, point.z)
+  })
+  return { count: points.length, minX, maxX, minY, maxY, minZ, maxZ }
 }
 
-function computeFeatherWeight(point: Vector3, polygon: Vector3[], feather: number): number {
-  if (!(feather > 1e-6) || polygon.length < 2) {
-    return 1
+function summarizeNumericRange(values: number[]): { count: number; min: number; max: number } | null {
+  if (!values.length) {
+    return null
   }
-  let distance = Number.POSITIVE_INFINITY
-  for (let index = 0; index < polygon.length; index += 1) {
-    const start = polygon[index]!
-    const end = polygon[(index + 1) % polygon.length]!
-    distance = Math.min(distance, distancePointToSegment2D(point, start, end))
-  }
-  if (!Number.isFinite(distance)) {
-    return 1
-  }
-  return Math.max(0, Math.min(1, distance / feather))
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  values.forEach((value) => {
+    min = Math.min(min, value)
+    max = Math.max(max, value)
+  })
+  return { count: values.length, min, max }
 }
 
 export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersDeps) {
@@ -187,9 +261,19 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       groundDefinition: GroundDynamicMesh | null,
       groundNode: SceneNode | null,
       options: Partial<LandformComponentProps> = {},
+      debugContext?: {
+        reason?: string
+        nodeId?: string | null
+      },
     ): { center: Vector3; definition: LandformDynamicMesh } | null {
-      const worldPoints = buildWorldPoints(points)
+      const worldPoints = normalizePolygonWinding(buildWorldPoints(points))
       if (worldPoints.length < 3) {
+        logLandformDebug('skip build: insufficient world points', {
+          reason: debugContext?.reason ?? 'unknown',
+          nodeId: debugContext?.nodeId ?? null,
+          inputPointCount: Array.isArray(points) ? points.length : 0,
+          normalizedPointCount: worldPoints.length,
+        })
         return null
       }
 
@@ -198,11 +282,41 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const footprint = worldPoints.map((point) => [point.x - center.x, point.z - center.z] as [number, number])
 
       if (!groundDefinition) {
-        const surfaceVertices = worldPoints.map((point) => ({ x: point.x - center.x, y: point.y - center.y, z: point.z - center.z }))
-        const surfaceIndices: number[] = []
-        for (let index = 1; index < worldPoints.length - 1; index += 1) {
-          surfaceIndices.push(0, index, index + 1)
+        const triangulation = buildShapeTriangulation(worldPoints)
+        if (!triangulation) {
+          logLandformDebug('skip build: flat triangulation failed', {
+            reason: debugContext?.reason ?? 'unknown',
+            nodeId: debugContext?.nodeId ?? null,
+            worldBounds: summarizeVector3Bounds(worldPoints),
+          })
+          return null
         }
+
+        const yByKey = new Map<string, number>()
+        worldPoints.forEach((point) => {
+          yByKey.set(`${point.x.toFixed(6)},${point.z.toFixed(6)}`, point.y)
+        })
+        const surfaceWorldVertices = triangulation.vertices.map((vertex) => {
+          const key = `${vertex.x.toFixed(6)},${vertex.y.toFixed(6)}`
+          const y = yByKey.get(key)
+          return new Vector3(vertex.x, Number.isFinite(y as number) ? (y as number) : center.y, vertex.y)
+        })
+
+        const surfaceVertices = surfaceWorldVertices.map((point) => ({ x: point.x - center.x, y: point.y - center.y, z: point.z - center.z }))
+        const surfaceIndices = [...triangulation.indices]
+        const surfaceUvs = surfaceWorldVertices.map((point) => ({
+          x: (point.x - center.x) / normalizedProps.uvScale.x,
+          y: (point.z - center.z) / normalizedProps.uvScale.y,
+        }) satisfies Vector2Like)
+        logLandformDebug('build landform without ground adaptation', {
+          reason: debugContext?.reason ?? 'unknown',
+          nodeId: debugContext?.nodeId ?? null,
+          center: { x: center.x, y: center.y, z: center.z },
+          worldBounds: summarizeVector3Bounds(worldPoints),
+          triangulatedVertexCount: surfaceVertices.length,
+          triangleCount: Math.floor(surfaceIndices.length / 3),
+          sampledHeightRange: summarizeNumericRange(surfaceWorldVertices.map((point) => point.y)),
+        })
         return {
           center,
           definition: {
@@ -210,25 +324,28 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             footprint,
             surfaceVertices,
             surfaceIndices,
+            surfaceUvs,
             materialConfigId: null,
             feather: normalizedProps.feather,
             uvScale: { ...normalizedProps.uvScale },
-            surfaceFeather: surfaceVertices.map((_value, index) => index === 0 ? 1 : 1),
+            surfaceFeather: surfaceVertices.map(() => 1),
           },
         }
       }
 
       const transform = getGroundTransform(groundNode)
-      const polygonLocal = worldPoints.map((point) => worldToGroundLocal(point, transform))
+      const polygonLocal = normalizePolygonWinding(worldPoints.map((point) => worldToGroundLocal(point, transform)))
       const halfWidth = groundDefinition.width * 0.5
       const halfDepth = groundDefinition.depth * 0.5
       const cellSize = Math.max(1e-6, groundDefinition.cellSize)
       const columns = Math.max(1, Math.trunc(groundDefinition.columns))
       const rows = Math.max(1, Math.trunc(groundDefinition.rows))
+
       const minX = Math.min(...polygonLocal.map((point) => point.x))
       const maxX = Math.max(...polygonLocal.map((point) => point.x))
       const minZ = Math.min(...polygonLocal.map((point) => point.z))
       const maxZ = Math.max(...polygonLocal.map((point) => point.z))
+
       const minColumn = Math.max(0, Math.min(columns - 1, Math.floor((minX + halfWidth) / cellSize)))
       const maxColumn = Math.max(0, Math.min(columns - 1, Math.ceil((maxX + halfWidth) / cellSize)))
       const minRow = Math.max(0, Math.min(rows - 1, Math.floor((minZ + halfDepth) / cellSize)))
@@ -237,7 +354,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const vertexIndexByKey = new Map<string, number>()
       const surfaceWorldVertices: Vector3[] = []
       const surfaceIndices: number[] = []
-      const surfaceFeather: number[] = []
 
       const resolveVertexIndex = (localX: number, localZ: number): number => {
         const key = `${localX.toFixed(6)},${localZ.toFixed(6)}`
@@ -249,14 +365,14 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         const world = groundLocalToWorld(new Vector3(localX, localHeight, localZ), transform)
         const index = surfaceWorldVertices.length
         surfaceWorldVertices.push(world)
-        surfaceFeather.push(computeFeatherWeight(worldToGroundLocal(world, transform), polygonLocal, normalizedProps.feather))
         vertexIndexByKey.set(key, index)
         return index
       }
 
       const pushTriangleIfInside = (a: Vector3, b: Vector3, c: Vector3): void => {
-        const centroid = new Vector3((a.x + b.x + c.x) / 3, 0, (a.z + b.z + c.z) / 3)
-        if (!isPointInsidePolygon2D(centroid, polygonLocal)) {
+        const centroidX = (a.x + b.x + c.x) / 3
+        const centroidZ = (a.z + b.z + c.z) / 3
+        if (!isPointInsidePolygon2D(centroidX, centroidZ, polygonLocal)) {
           return
         }
         surfaceIndices.push(resolveVertexIndex(a.x, a.z), resolveVertexIndex(b.x, b.z), resolveVertexIndex(c.x, c.z))
@@ -274,6 +390,14 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
+        logLandformDebug('skip build: no interior sampled triangles on ground', {
+          reason: debugContext?.reason ?? 'unknown',
+          nodeId: debugContext?.nodeId ?? null,
+          groundNodeId: groundNode?.id ?? null,
+          polygonLocalBounds: summarizeVector3Bounds(polygonLocal),
+          sampledVertexCount: surfaceWorldVertices.length,
+          sampledTriangleCount: Math.floor(surfaceIndices.length / 3),
+        })
         return null
       }
 
@@ -286,6 +410,18 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         x: (point.x - center.x) / normalizedProps.uvScale.x,
         y: (point.z - center.z) / normalizedProps.uvScale.y,
       }) satisfies Vector2Like)
+      logLandformDebug('build landform with ground adaptation', {
+        reason: debugContext?.reason ?? 'unknown',
+        nodeId: debugContext?.nodeId ?? null,
+        groundNodeId: groundNode?.id ?? null,
+        groundSurfaceRevision: Number.isFinite(groundDefinition.surfaceRevision) ? groundDefinition.surfaceRevision : null,
+        center: { x: center.x, y: center.y, z: center.z },
+        worldBounds: summarizeVector3Bounds(worldPoints),
+        polygonLocalBounds: summarizeVector3Bounds(polygonLocal),
+        triangulatedVertexCount: surfaceVertices.length,
+        triangleCount: Math.floor(surfaceIndices.length / 3),
+        sampledHeightRange: summarizeNumericRange(surfaceWorldVertices.map((point) => point.y)),
+      })
 
       return {
         center,
@@ -295,7 +431,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           surfaceVertices,
           surfaceIndices,
           surfaceUvs,
-          surfaceFeather,
+          surfaceFeather: surfaceVertices.map(() => 1),
           materialConfigId: null,
           feather: normalizedProps.feather,
           uvScale: { ...normalizedProps.uvScale },
