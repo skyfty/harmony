@@ -82,12 +82,6 @@ import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
-	createDefaultLandformsPreviewLoaders,
-	clearLandformsPreviewForGround,
-	setLandformsPreviewTexture,
-	syncLandformsPreviewForGround,
-} from '@schema/landformsPreview'
-import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
 	syncBodyFromObject as syncSharedBodyFromObject,
@@ -134,7 +128,6 @@ import {
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
 	floorComponentDefinition,
-	landformsComponentDefinition,
 	wallComponentDefinition,
 	roadComponentDefinition,
 	viewPointComponentDefinition,
@@ -167,7 +160,7 @@ import {
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
-} from '@schema/components'
+	} from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
 import type { VehicleDriveRuntimeState } from '@schema/VehicleDriveController'
 import {
@@ -756,7 +749,6 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(floorComponentDefinition)
-previewComponentManager.registerDefinition(landformsComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
@@ -1007,52 +999,11 @@ const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const textureLoader = new THREE.TextureLoader()
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
-const bakedGroundTextureCache = new Map<string, THREE.Texture | null>()
-const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
-const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
-const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
 const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 
-async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
-	const normalizedId = assetId.trim()
-	if (!normalizedId) {
-		return null
-	}
-	const cached = bakedGroundTextureCache.get(normalizedId)
-	if (cached !== undefined) {
-		return cached
-	}
-	const pending = bakedGroundTextureRequests.get(normalizedId)
-	if (pending) {
-		return pending
-	}
-	const request = (async () => {
-		const resolved = await resolveAssetUrlFromCache(normalizedId)
-		if (!resolved?.url) {
-			return null
-		}
-		try {
-			const texture = await textureLoader.loadAsync(resolved.url)
-			;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
-			texture.needsUpdate = true
-			return texture
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to load baked ground texture', normalizedId, error)
-			return null
-		}
-	})()
-	bakedGroundTextureRequests.set(normalizedId, request)
-	request.then((texture) => {
-		bakedGroundTextureRequests.delete(normalizedId)
-		bakedGroundTextureCache.set(normalizedId, texture)
-	}).catch(() => {
-		bakedGroundTextureRequests.delete(normalizedId)
-		bakedGroundTextureCache.set(normalizedId, null)
-	})
-	return await request
-}
+// Baked ground preview loader disabled — function removed.
 
 
 
@@ -1060,28 +1011,6 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
 
 
 function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
-	const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
-		? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
-		: ''
-	if (ENABLE_SCENE_PREVIEW_BAKED_GROUND && bakedAssetId) {
-		const token = groundSurfacePreviewLoadToken
-		void loadBakedGroundTexture(bakedAssetId).then((texture) => {
-			if (groundSurfacePreviewLoadToken !== token) {
-				return
-			}
-			if (texture) {
-				setLandformsPreviewTexture(groundObject, `ground-baked:${bakedAssetId}`, texture)
-				return
-			}
-			syncLandformsPreviewForGround(
-				groundObject,
-				groundNode,
-				landformsPreviewLoaders,
-					() => groundSurfacePreviewLoadToken,
-			)
-		})
-		return
-	}
 	const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
 		? syncGroundSurfacePreviewForGround(
 			groundObject,
@@ -1097,12 +1026,6 @@ function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, gro
 	if (usesSurfacePreview) {
 		return
 	}
-	syncLandformsPreviewForGround(
-		groundObject,
-		groundNode,
-		landformsPreviewLoaders,
-		() => groundSurfacePreviewLoadToken,
-	)
 }
 
 const MAX_CONCURRENT_LAZY_LOADS = 2
@@ -1725,8 +1648,6 @@ function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null
 
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
 	clearGroundSurfacePreviewRetryTimers()
-	const previousGroundObject = cachedGroundNodeId ? nodeObjectMap.get(cachedGroundNodeId) ?? null : null
-	clearLandformsPreviewForGround(previousGroundObject)
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
 	cachedGroundNode = null

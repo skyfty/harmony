@@ -255,7 +255,6 @@ import type {
   WallComponentProps,
   RoadComponentProps,
   FloorComponentProps,
-  LandformsComponentProps,
   PlanningImagesComponentProps,
   WarpGateComponentProps,
   WaterComponentProps,
@@ -310,9 +309,7 @@ import {
   FLOOR_DEFAULT_SIDE_UV_SCALE,
   FLOOR_MAX_THICKNESS,
   FLOOR_MIN_THICKNESS,
-  LANDFORMS_COMPONENT_TYPE,
-  clampLandformsComponentProps,
-  cloneLandformsComponentProps,
+  
   WATER_COMPONENT_TYPE,
   clampWaterComponentProps,
   cloneWaterComponentProps,
@@ -335,7 +332,6 @@ type NodeComponentPropsByType = {
   [WALL_COMPONENT_TYPE]: WallComponentProps
   [ROAD_COMPONENT_TYPE]: RoadComponentProps
   [FLOOR_COMPONENT_TYPE]: FloorComponentProps
-  [LANDFORMS_COMPONENT_TYPE]: LandformsComponentProps
   [WATER_COMPONENT_TYPE]: WaterComponentProps
   [GUIDE_ROUTE_COMPONENT_TYPE]: GuideRouteComponentProps
   [GUIDEBOARD_COMPONENT_TYPE]: GuideboardComponentProps
@@ -1924,9 +1920,7 @@ function createGroundSceneNode(
     createMaterialProps,
     generateUuid,
     clampRigidbodyComponentProps,
-    clampLandformsComponentProps,
     RIGIDBODY_COMPONENT_TYPE,
-    LANDFORMS_COMPONENT_TYPE,
     GROUND_NODE_ID,
   }, overrides, settings) as SceneNode
 }
@@ -1954,9 +1948,7 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
     createMaterialProps,
     generateUuid,
     clampRigidbodyComponentProps,
-    clampLandformsComponentProps,
     RIGIDBODY_COMPONENT_TYPE,
-    LANDFORMS_COMPONENT_TYPE,
     GROUND_NODE_ID,
     getPrimaryNodeMaterial,
     cloneNode,
@@ -13755,7 +13747,6 @@ export const useSceneStore = defineStore('scene', {
         | Record<string, unknown>
         | WallComponentProps
         | RoadComponentProps
-        | LandformsComponentProps
         | BillboardComponentProps
         | DisplayBoardComponentProps
         | PlanningImagesComponentProps
@@ -14212,18 +14203,6 @@ export const useSceneStore = defineStore('scene', {
         }
 
         nextProps = cloneFloorComponentProps(merged)
-      } else if (type === LANDFORMS_COMPONENT_TYPE) {
-        const currentProps = clampLandformsComponentProps(component.props as LandformsComponentProps)
-        const typedPatch = patch as Partial<LandformsComponentProps>
-        const merged = clampLandformsComponentProps({
-          layers: Array.isArray(typedPatch.layers) ? typedPatch.layers : currentProps.layers,
-        })
-        const unchanged = JSON.stringify(currentProps) === JSON.stringify(merged)
-        if (unchanged) {
-          return false
-        }
-
-        nextProps = cloneLandformsComponentProps(merged)
       } else if (type === EFFECT_COMPONENT_TYPE) {
         const currentProps = clampEffectComponentProps(component.props as EffectComponentProps)
         const typedPatch = patch as Partial<EffectComponentProps>

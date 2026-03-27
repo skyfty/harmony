@@ -201,18 +201,11 @@ import {
 } from '@schema/groundMesh'
 import {
   createDefaultGroundSurfacePreviewLoaders,
-  restoreGroundSurfacePreviewMaterialMap,
   syncGroundSurfaceLiveChunkPreviews,
   syncGroundSurfacePreviewForGround,
   type GroundSurfaceLiveChunkPreview,
 } from '@schema/groundSurfacePreview'
-import {
-  clearLandformsPreviewForGround,
-  createDefaultLandformsPreviewLoaders,
-  syncLandformsPreviewForGround,
-} from '@schema/landformsPreview'
-import { resolveEnabledComponentState } from '@schema/componentRuntimeUtils'
-import { LANDFORMS_COMPONENT_TYPE, clampLandformsComponentProps, type LandformsComponentProps } from '@schema/components'
+// resolveEnabledComponentState removed from here; import not used
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
@@ -1039,15 +1032,10 @@ let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
-let landformsPreviewLoadToken = 0
 let lastGroundSurfacePreviewRequestKey: string | null = null
 let lastTerrainPaintSurfacePreviewRequestKey: string | null = null
 
-function invalidateGroundSurfacePreviewRequests(): void {
-  landformsPreviewLoadToken += 1
-  lastGroundSurfacePreviewRequestKey = null
-  lastTerrainPaintSurfacePreviewRequestKey = null
-}
+// Ground preview request invalidation not required here; helper removed.
 
 function bumpGroundSurfacePreviewTokenIfNeeded(requestKey: string): void {
   if (!requestKey) {
@@ -1056,7 +1044,6 @@ function bumpGroundSurfacePreviewTokenIfNeeded(requestKey: string): void {
   if (lastGroundSurfacePreviewRequestKey === requestKey) {
     return
   }
-  landformsPreviewLoadToken += 1
   lastGroundSurfacePreviewRequestKey = requestKey
 }
 
@@ -8978,9 +8965,8 @@ function disposeObjectResources(object: THREE.Object3D) {
 
   object.traverse((child) => {
     const meshChild = child as THREE.Mesh
-    if (meshChild?.isMesh) {
+      if (meshChild?.isMesh) {
       if (meshChild.userData?.dynamicMeshType === 'Ground') {
-        clearGroundLandformsPreview(meshChild)
         return
       }
       if (meshChild.geometry) {
@@ -11392,60 +11378,9 @@ async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string 
   }
 }
 
-const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
 const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
 const LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION = 512
 
-function syncGroundLandformsPreview(
-  groundObject: THREE.Object3D | null | undefined,
-  groundNode: SceneNode,
-  runtimeDefinitionOverride?: GroundRuntimeDynamicMesh | null,
-): void {
-  if (!groundObject) {
-    return
-  }
-  restoreGroundSurfacePreviewMaterialMap(groundObject)
-  const runtimeDefinition = runtimeDefinitionOverride
-    ?? ((groundNode.dynamicMesh?.type === 'Ground' && getGroundNodeFromStore()?.id === groundNode.id)
-      ? resolveGroundDynamicMeshDefinition()
-      : null)
-  const previewDefinition = runtimeDefinition ?? (groundNode.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : null)
-  const landformsComponent = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
-  const landformsProps = landformsComponent ? clampLandformsComponentProps(landformsComponent.props) : null
-  const activeLandformLayers = (landformsProps?.layers ?? [])
-    .filter((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length)
-    .map((layer) => layer)
-  const requestKey = stableSerialize({
-    mode: 'ground-landforms-preview',
-    nodeId: groundNode.id,
-    groundSignature: previewDefinition?.type === 'Ground' ? computeGroundDynamicMeshSignature(previewDefinition) : null,
-    activeLandformLayers,
-  })
-  bumpGroundSurfacePreviewTokenIfNeeded(requestKey)
-  if (previewDefinition?.type === 'Ground') {
-    const hasTerrainPaint = Boolean(Object.keys(previewDefinition.groundSurfaceChunks ?? {}).length)
-    const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
-    syncGroundSurfacePreviewForGround(
-      groundObject,
-      groundNode,
-      previewDefinition,
-      groundSurfacePreviewLoaders,
-      () => landformsPreviewLoadToken,
-      {
-        applyToMaterialMap: hasTerrainPaint || hasLandforms,
-      },
-    )
-    if (hasTerrainPaint && !hasLandforms) {
-      return
-    }
-  }
-  syncLandformsPreviewForGround(
-    groundObject,
-    groundNode,
-    landformsPreviewLoaders,
-    () => landformsPreviewLoadToken,
-  )
-}
 
 function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
   groundObject: THREE.Object3D
@@ -11489,19 +11424,13 @@ function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
     payload.groundNode,
     payload.dynamicMesh,
     groundSurfacePreviewLoaders,
-    () => landformsPreviewLoadToken,
+    () => 0,
     {
       previewRevision: payload.previewRevision,
       maxResolution: payload.mode === 'live' ? LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION : undefined,
       applyToMaterialMap: true,
     },
   )
-}
-
-function clearGroundLandformsPreview(groundObject: THREE.Object3D | null | undefined): void {
-  invalidateGroundSurfacePreviewRequests()
-  restoreGroundSurfacePreviewMaterialMap(groundObject)
-  clearLandformsPreviewForGround(groundObject)
 }
 
 async function resolveCloudAssetUrl(source: string): Promise<{ url: string; dispose?: () => void } | null> {
@@ -17604,7 +17533,6 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       const groundData = groundObject.userData ?? (groundObject.userData = {})
       const groundDefinition = resolveGroundDynamicMeshDefinition()
       if (!groundDefinition) {
-        clearGroundLandformsPreview(groundObject)
         return
       }
       const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
@@ -17627,7 +17555,6 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
       syncGroundChunkLoadingMode(groundObject, groundDefinition, camera)
-      syncGroundLandformsPreview(groundObject, node, groundDefinition)
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
@@ -17890,9 +17817,6 @@ function updateGroundChunkStreaming() {
     refreshPlacementSurfaceTargetsForNode(node.id)
     placementSurfaceTargetsDirty = true
 
-    // Reapply the current ground preview to newly streamed chunk meshes.
-    syncGroundLandformsPreview(groundObject, node, groundDefinition)
-
     // Chunk meshes stream in/out without scene patches; notify GroundEditor so
     // terrain paint preview can bind to new chunk meshes and load newly visible weightmaps.
     onGroundChunkSetChanged()
@@ -18022,7 +17946,6 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
     } else {
       child.removeFromParent()
       if (child.userData?.dynamicMeshType === 'Ground') {
-        clearGroundLandformsPreview(child)
         disposeGroundObjectGeometries(child)
         continue
       }
@@ -18663,7 +18586,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       groundMesh.userData.nodeId = node.id
       groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
       syncGroundChunkLoadingMode(groundMesh, groundDefinition, camera)
-      syncGroundLandformsPreview(groundMesh, node, groundDefinition)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'

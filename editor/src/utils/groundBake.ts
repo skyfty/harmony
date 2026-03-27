@@ -1,17 +1,4 @@
-import {
-  resolveEnabledComponentState,
-  parseTerrainPaintChunkKey,
-  resolveTerrainPaintChunkBounds,
-  type GroundDynamicMesh,
-  type SceneNode,
-} from '@schema'
-import {
-  LANDFORMS_COMPONENT_TYPE,
-  clampLandformsComponentProps,
-  type LandformsBlendMode,
-  type LandformsComponentProps,
-  type LandformsLayer,
-} from '@schema/components'
+import { parseTerrainPaintChunkKey, resolveTerrainPaintChunkBounds, type GroundDynamicMesh, type SceneNode } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { computeBlobHash } from '@/utils/blob'
@@ -50,18 +37,6 @@ function normalizeDimension(value: number): number {
   return Math.max(1, normalizeFinite(value, 1))
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0
-  }
-  if (value <= 0) {
-    return 0
-  }
-  if (value >= 1) {
-    return 1
-  }
-  return value
-}
 
 function createCompositionCanvas(width: number, height: number): { canvas: CanvasLike; context: Canvas2DContext } | null {
   const normalizedWidth = Math.max(1, Math.round(width))
@@ -234,60 +209,6 @@ async function loadImageFromBlob(blob: Blob): Promise<LoadedBakedImage | null> {
   return { source, imageData }
 }
 
-function resolveLayerCompositeOperation(mode: LandformsBlendMode): GlobalCompositeOperation {
-  switch (mode) {
-    case 'multiply':
-      return 'multiply'
-    case 'screen':
-      return 'screen'
-    case 'overlay':
-      return 'overlay'
-    default:
-      return 'source-over'
-  }
-}
-
-function applyLayerMask(context: Canvas2DContext, layer: LandformsLayer, width: number, height: number): void {
-  const shape = layer.mask.shape
-  if (shape === 'none') {
-    return
-  }
-  const centerX = width * normalizeFinite(layer.mask.center.x, 0.5)
-  const centerY = height * normalizeFinite(layer.mask.center.y, 0.5)
-  const sizeX = width * Math.max(0, normalizeFinite(layer.mask.size.x, 1))
-  const sizeY = height * Math.max(0, normalizeFinite(layer.mask.size.y, 1))
-  context.beginPath()
-  if (shape === 'circle') {
-    context.ellipse(centerX, centerY, Math.max(1, sizeX * 0.5), Math.max(1, sizeY * 0.5), 0, 0, Math.PI * 2)
-  } else {
-    context.rect(centerX - sizeX * 0.5, centerY - sizeY * 0.5, Math.max(1, sizeX), Math.max(1, sizeY))
-  }
-  context.clip()
-}
-
-function drawLayerTiled(
-  context: Canvas2DContext,
-  image: CanvasImageSource,
-  layer: LandformsLayer,
-  width: number,
-  height: number,
-): void {
-  const repeatX = Math.max(0.001, normalizeFinite(layer.tileScale.x, 1))
-  const repeatY = Math.max(0.001, normalizeFinite(layer.tileScale.y, 1))
-  const tileWidth = layer.worldSpace ? width / repeatX : Math.min(width, height) / repeatX
-  const tileHeight = layer.worldSpace ? height / repeatY : Math.min(width, height) / repeatY
-  const offsetX = normalizeFinite(layer.offset.x, 0) * tileWidth
-  const offsetY = normalizeFinite(layer.offset.y, 0) * tileHeight
-  const drawStartX = -tileWidth * 2 + offsetX
-  const drawStartY = -tileHeight * 2 + offsetY
-  const drawEndX = width + tileWidth * 2
-  const drawEndY = height + tileHeight * 2
-  for (let y = drawStartY; y < drawEndY; y += tileHeight) {
-    for (let x = drawStartX; x < drawEndX; x += tileWidth) {
-      context.drawImage(image, x, y, tileWidth, tileHeight)
-    }
-  }
-}
 
 async function renderBaseTexture(
   context: Canvas2DContext,
@@ -316,46 +237,9 @@ async function renderBaseTexture(
   context.drawImage(loaded.source, 0, 0, width, height)
 }
 
-async function renderLandforms(
-  scene: StoredSceneDocument,
-  groundNode: SceneNode,
-  context: Canvas2DContext,
-  width: number,
-  height: number,
-): Promise<boolean> {
-  const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
-  if (!component) {
-    return false
-  }
-  const props = clampLandformsComponentProps(component.props)
-  const activeLayers = props.layers.filter((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length)
-  if (!activeLayers.length) {
-    return false
-  }
-  for (const layer of activeLayers) {
-    const assetId = layer.assetId?.trim()
-    if (!assetId) {
-      continue
-    }
-    const blob = await resolveSceneAssetBlob(scene, assetId)
-    if (!blob) {
-      continue
-    }
-    const loaded = await loadImageFromBlob(blob)
-    if (!loaded) {
-      continue
-    }
-    context.save()
-    context.globalAlpha = clamp01(normalizeFinite(layer.opacity, 1))
-    context.globalCompositeOperation = resolveLayerCompositeOperation(layer.blendMode)
-    applyLayerMask(context, layer, width, height)
-    context.translate(width * 0.5, height * 0.5)
-    context.rotate((normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180)
-    context.translate(-width * 0.5, -height * 0.5)
-    drawLayerTiled(context, loaded.source, layer, width, height)
-    context.restore()
-  }
-  return true
+// Landforms feature removed — previously implemented here; keep as no-op.
+async function renderLandforms(): Promise<boolean> {
+  return false
 }
 
 async function renderGroundSurfaceChunks(
@@ -420,14 +304,7 @@ async function canvasToBlob(canvas: CanvasLike): Promise<Blob | null> {
   return null
 }
 
-function hasLandformsContent(groundNode: SceneNode): boolean {
-  const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
-  if (!component) {
-    return false
-  }
-  const props = clampLandformsComponentProps(component.props)
-  return props.layers.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length)
-}
+// Landforms feature removed — no-op helper removed.
 
 function hasTerrainPaintContent(definition: GroundDynamicMesh): boolean {
   return Object.values(definition.groundSurfaceChunks ?? {}).some((chunkRef) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length)
@@ -442,7 +319,7 @@ export async function bakeGroundSurfaceTexture(
   if (!groundNode || !definition || definition.type !== 'Ground') {
     return null
   }
-  const hasBakeContent = hasLandformsContent(groundNode) || hasTerrainPaintContent(definition)
+  const hasBakeContent = hasTerrainPaintContent(definition)
   if (!hasBakeContent) {
     return null
   }
@@ -454,7 +331,7 @@ export async function bakeGroundSurfaceTexture(
   }
   const { canvas, context } = composition
   await renderBaseTexture(context, definition, size.width, size.height)
-  await renderLandforms(scene, groundNode, context, size.width, size.height)
+  await renderLandforms()
   await renderGroundSurfaceChunks(scene, definition, context, size.width, size.height)
   const blob = await canvasToBlob(canvas)
   if (!blob) {
