@@ -1770,7 +1770,6 @@ const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
 const cloudPreviewEnabled = computed(() => sceneStore.cloudPreviewEnabled)
-const realtimeEffectsEnabled = (globalThis as Record<string, unknown>).__HARMONY_EDITOR_DISABLE_REALTIME_EFFECTS__ !== true
 const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
 const shadowsActiveInViewport = computed(() => shadowsEnabled.value)
 const canAlignSelection = computed(() => {
@@ -12164,7 +12163,7 @@ function animate() {
   if (props.activeTool === 'translate') {
     // alignment hint visuals disabled
   }
-  if (realtimeEffectsEnabled && effectiveDelta > 0 && effectRuntimeTickers.length) {
+  if (effectiveDelta > 0 && effectRuntimeTickers.length) {
     const t0 = performance.now()
     effectRuntimeTickers.forEach((tick) => {
       try {
@@ -12174,11 +12173,6 @@ function animate() {
       }
     })
     prof.effectTickers = performance.now() - t0
-  }
-  if (realtimeEffectsEnabled && effectiveDelta > 0 && cloudRenderer) {
-    const t0 = performance.now()
-    cloudRenderer.update(effectiveDelta)
-    prof.cloudRenderer = performance.now() - t0
   }
   if (typeof updateGroundChunkStreaming === 'function') {
     const t_gc0 = performance.now()
