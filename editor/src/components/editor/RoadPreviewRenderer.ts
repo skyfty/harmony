@@ -7,6 +7,7 @@ export type RoadPreviewSession = {
   previewEnd: THREE.Vector3 | null
   previewGroup: THREE.Group | null
   width: number
+  eraseMode?: boolean
 }
 
 export type RoadPreviewRenderer = {
@@ -25,7 +26,12 @@ function encodeRoadPreviewNumber(value: number): string {
   return `${Math.round(value * ROAD_PREVIEW_SIGNATURE_PRECISION)}`
 }
 
-function computeRoadPreviewSignature(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null, width: number): string {
+function computeRoadPreviewSignature(
+  points: THREE.Vector3[],
+  previewEnd: THREE.Vector3 | null,
+  width: number,
+  eraseMode = false,
+): string {
   if (!points.length && !previewEnd) {
     return 'empty'
   }
@@ -38,7 +44,8 @@ function computeRoadPreviewSignature(points: THREE.Vector3[], previewEnd: THREE.
     ? [encodeRoadPreviewNumber(previewEnd.x), encodeRoadPreviewNumber(previewEnd.z)].join(',')
     : 'none'
 
-  return `${widthSignature}|${pSignature}|${endSignature}`
+  const modeSignature = eraseMode ? 'erase' : 'paint'
+  return `${widthSignature}|${pSignature}|${endSignature}|${modeSignature}`
 }
 
 function disposeRoadPreviewGroup(group: THREE.Group) {
@@ -59,7 +66,7 @@ function disposeRoadPreviewGroup(group: THREE.Group) {
   })
 }
 
-function applyRoadPreviewStyling(group: THREE.Group) {
+function applyRoadPreviewStyling(group: THREE.Group, eraseMode = false) {
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (!mesh?.isMesh) {
@@ -81,7 +88,7 @@ function applyRoadPreviewStyling(group: THREE.Group) {
         needsUpdate?: boolean
       }
 
-      const ROAD_PREVIEW_COLOR = 0x8fd3ff
+      const ROAD_PREVIEW_COLOR = eraseMode ? 0xff6b6b : 0x8fd3ff
 
       if ('opacity' in material) {
         material.opacity = 0.75
@@ -209,7 +216,7 @@ export function createRoadPreviewRenderer(options: {
       return
     }
 
-    const nextSignature = computeRoadPreviewSignature(session.points, session.previewEnd, session.width)
+    const nextSignature = computeRoadPreviewSignature(session.points, session.previewEnd, session.width, Boolean(session.eraseMode))
     if (nextSignature === signature) {
       return
     }
@@ -221,13 +228,13 @@ export function createRoadPreviewRenderer(options: {
 
     if (!session.previewGroup) {
       const preview = createRoadGroup(build.definition, { heightSampler: localHeightSampler })
-      applyRoadPreviewStyling(preview)
+      applyRoadPreviewStyling(preview, Boolean(session.eraseMode))
       preview.userData.isRoadPreview = true
       session.previewGroup = preview
       options.rootGroup.add(preview)
     } else {
       updateRoadGroup(session.previewGroup, build.definition, { heightSampler: localHeightSampler })
-      applyRoadPreviewStyling(session.previewGroup)
+      applyRoadPreviewStyling(session.previewGroup, Boolean(session.eraseMode))
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)
       }

@@ -24,7 +24,9 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
+  deserializeRoadSurfaceSidecar,
   createPrimitiveMesh,
+  serializeRoadSurfaceSidecar,
   WATER_SURFACE_MESH_USERDATA_KEY,
   cloneWaterSurfaceMeshMetadata,
   createWaterSurfaceRuntimeMesh,
@@ -83,7 +85,7 @@ import type {
   SceneHistoryTransformSnapshot,
 } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
-import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import type { RoadSurfaceSidecarMap, StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -141,6 +143,7 @@ import { cloudSettingsEqual } from '@schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
+import { attachRoadSurfaceRuntimeToNode, useRoadSurfaceStore } from './roadSurfaceStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -4261,6 +4264,7 @@ export async function cloneSceneDocumentForExport(
     assetCatalog: scene.assetCatalog,
     assetIndex: assetIndex,
     packageAssetMap,
+    roadSurfaceSidecars: scene.roadSurfaceSidecars,
     resourceSummary: scene.resourceSummary,
     materials: scene.materials,
     viewportSettings: scene.viewportSettings,
@@ -5648,6 +5652,201 @@ function areSelectionsEqual(a: string[], b: string[]): boolean {
   return true
 }
 
+function cloneRoadSurfaceSidecarMap(input: RoadSurfaceSidecarMap | null | undefined): RoadSurfaceSidecarMap | undefined {
+  if (!input || typeof input !== 'object') {
+    return undefined
+  }
+  const entries = Object.entries(input).filter(([nodeId, encoded]) => {
+    return typeof nodeId === 'string'
+      && nodeId.trim().length > 0
+      && typeof encoded === 'string'
+      && encoded.trim().length > 0
+  })
+  if (!entries.length) {
+    return undefined
+  }
+  return Object.fromEntries(entries)
+}
+
+function collectRoadNodes(nodes: SceneNode[]): SceneNode[] {
+  const roads: SceneNode[] = []
+  const visit = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      if (node.dynamicMesh?.type === 'Road') {
+        roads.push(node)
+      }
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    })
+  }
+  visit(nodes)
+  return roads
+}
+
+function encodeArrayBufferAsBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length))
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
+}
+
+function decodeBase64ToArrayBuffer(encoded: string): ArrayBuffer | null {
+  try {
+    const binary = atob(encoded.trim())
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index)
+    }
+    return bytes.buffer
+  } catch (_error) {
+    return null
+  }
+}
+
+const ROAD_SURFACE_COVERAGE_PACKAGE_KEY_PREFIX = 'roadSurfaceCoverage/'
+const ROAD_SURFACE_COVERAGE_VALUE_PREFIX = 'b64:'
+
+function sanitizeRoadSurfaceChunkKeyForMap(chunkKey: string): string {
+  return chunkKey.trim().replace(/[^a-zA-Z0-9:_-]/g, '_')
+}
+
+function buildRoadSurfaceCoveragePackageKey(nodeId: string, chunkKey: string): string {
+  return `${ROAD_SURFACE_COVERAGE_PACKAGE_KEY_PREFIX}${nodeId}/${sanitizeRoadSurfaceChunkKeyForMap(chunkKey)}`
+}
+
+function extractRoadSurfaceCoverageFromSidecarToPackageMap(
+  nodeId: string,
+  sidecarEncoded: string,
+  packageMap: Record<string, string>,
+): string {
+  const sidecarBuffer = decodeBase64ToArrayBuffer(sidecarEncoded)
+  if (!sidecarBuffer) {
+    return sidecarEncoded
+  }
+  let payload: ReturnType<typeof deserializeRoadSurfaceSidecar>
+  try {
+    payload = deserializeRoadSurfaceSidecar(sidecarBuffer)
+  } catch (_error) {
+    return sidecarEncoded
+  }
+
+  const chunks = payload.roadSurfaceChunks ?? {}
+  let changed = false
+  for (const [chunkKey, chunkRef] of Object.entries(chunks)) {
+    const coverageData = typeof chunkRef.coverageData === 'string' ? chunkRef.coverageData.trim() : ''
+    if (!coverageData) {
+      continue
+    }
+    const packageKey = buildRoadSurfaceCoveragePackageKey(nodeId, chunkKey)
+    packageMap[packageKey] = `${ROAD_SURFACE_COVERAGE_VALUE_PREFIX}${coverageData}`
+    chunks[chunkKey] = {
+      ...chunkRef,
+      coverageAssetId: packageKey,
+      coverageData: null,
+    }
+    changed = true
+  }
+
+  if (!changed) {
+    return sidecarEncoded
+  }
+  return encodeArrayBufferAsBase64(serializeRoadSurfaceSidecar(payload))
+}
+
+function hydrateRoadSurfaceCoverageFromPackageMap(
+  sidecarEncoded: string,
+  packageMap: Record<string, string> | null | undefined,
+): string {
+  const sidecarBuffer = decodeBase64ToArrayBuffer(sidecarEncoded)
+  if (!sidecarBuffer) {
+    return sidecarEncoded
+  }
+
+  let payload: ReturnType<typeof deserializeRoadSurfaceSidecar>
+  try {
+    payload = deserializeRoadSurfaceSidecar(sidecarBuffer)
+  } catch (_error) {
+    return sidecarEncoded
+  }
+
+  const map = packageMap ?? {}
+  const chunks = payload.roadSurfaceChunks ?? {}
+  let changed = false
+  for (const [chunkKey, chunkRef] of Object.entries(chunks)) {
+    const coverageAssetId = typeof chunkRef.coverageAssetId === 'string' ? chunkRef.coverageAssetId.trim() : ''
+    if (!coverageAssetId || !coverageAssetId.startsWith(ROAD_SURFACE_COVERAGE_PACKAGE_KEY_PREFIX)) {
+      continue
+    }
+    const encoded = map[coverageAssetId]
+    if (typeof encoded !== 'string' || !encoded.startsWith(ROAD_SURFACE_COVERAGE_VALUE_PREFIX)) {
+      continue
+    }
+    const coverageData = encoded.slice(ROAD_SURFACE_COVERAGE_VALUE_PREFIX.length).trim()
+    if (!coverageData.length) {
+      continue
+    }
+    chunks[chunkKey] = {
+      ...chunkRef,
+      coverageData,
+    }
+    changed = true
+  }
+
+  if (!changed) {
+    return sidecarEncoded
+  }
+  return encodeArrayBufferAsBase64(serializeRoadSurfaceSidecar(payload))
+}
+
+function buildRoadSurfaceSidecarMap(
+  sceneId: string,
+  nodes: SceneNode[],
+  packageMap: Record<string, string>,
+): RoadSurfaceSidecarMap | undefined {
+  const roadSurfaceStore = useRoadSurfaceStore()
+  const encodedEntries = collectRoadNodes(nodes)
+    .map((roadNode) => {
+      const sidecar = roadSurfaceStore.buildSceneDocumentSidecar(sceneId, roadNode)
+      if (!sidecar) {
+        return null
+      }
+      const encoded = encodeArrayBufferAsBase64(sidecar)
+      const assetized = extractRoadSurfaceCoverageFromSidecarToPackageMap(roadNode.id, encoded, packageMap)
+      return [roadNode.id, assetized] as const
+    })
+    .filter((entry): entry is readonly [string, string] => Boolean(entry))
+  if (!encodedEntries.length) {
+    return undefined
+  }
+  return Object.fromEntries(encodedEntries)
+}
+
+function hydrateRoadSurfaceSidecarMap(
+  sceneId: string,
+  nodes: SceneNode[],
+  sidecars: RoadSurfaceSidecarMap | null | undefined,
+  packageMap?: Record<string, string> | null,
+): void {
+  const roadSurfaceStore = useRoadSurfaceStore()
+  roadSurfaceStore.clearSceneDocument(sceneId)
+  const encodedMap = cloneRoadSurfaceSidecarMap(sidecars)
+  const roadNodes = collectRoadNodes(nodes)
+  roadNodes.forEach((roadNode) => {
+    const encoded = encodedMap?.[roadNode.id]
+    const hydrated = typeof encoded === 'string'
+      ? hydrateRoadSurfaceCoverageFromPackageMap(encoded, packageMap)
+      : null
+    const sidecar = typeof hydrated === 'string' ? decodeBase64ToArrayBuffer(hydrated) : null
+    roadSurfaceStore.hydrateSceneDocument(sceneId, roadNode, sidecar)
+    attachRoadSurfaceRuntimeToNode(sceneId, roadNode)
+  })
+}
+
 function createSceneDocument(
   name: string,
   options: {
@@ -5664,6 +5863,7 @@ function createSceneDocument(
     assetCatalog?: Record<string, ProjectAsset[]>
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
+    roadSurfaceSidecars?: RoadSurfaceSidecarMap
     resourceSummary?: SceneResourceSummary
     viewportSettings?: Partial<SceneViewportSettings>
     skybox?: Partial<SceneSkyboxSettings>
@@ -5707,6 +5907,7 @@ function createSceneDocument(
   const assetCatalog = options.assetCatalog ? cloneAssetCatalog(options.assetCatalog) : createEmptyAssetCatalog()
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
+  const roadSurfaceSidecars = cloneRoadSurfaceSidecarMap(options.roadSurfaceSidecars)
   let resourceSummary: SceneResourceSummary | undefined
   if (options.resourceSummary) {
     resourceSummary = options.resourceSummary
@@ -5739,6 +5940,7 @@ function createSceneDocument(
     assetCatalog,
     assetIndex,
     packageAssetMap,
+    roadSurfaceSidecars,
     resourceSummary,
   }
 }
@@ -5782,6 +5984,8 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   const projectId = typeof meta.projectId === 'string' ? meta.projectId : ''
   const environment = cloneEnvironmentSettings(store.environment)
   const nodes = ensureEnvironmentNode(cloneSceneNodes(store.nodes), environment)
+  const packageAssetMap = clonePackageAssetMap(store.packageAssetMap)
+  const roadSurfaceSidecars = buildRoadSurfaceSidecarMap(store.currentSceneId, nodes, packageAssetMap)
 
   const planningData = store.planningData
   const normalizedPlanningData = planningData && isPlanningDataEmpty(planningData) ? null : planningData
@@ -5807,7 +6011,8 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     updatedAt: now,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
     assetIndex: cloneAssetIndex(store.assetIndex),
-    packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
+    packageAssetMap,
+    roadSurfaceSidecars,
     planningData: normalizedPlanningData ?? undefined,
   }
 }
@@ -6818,6 +7023,7 @@ export const useSceneStore = defineStore('scene', {
       applyCurrentSceneMeta(this, scene)
       applySceneAssetState(this, scene)
       this.nodes = cloneSceneNodes(scene.nodes)
+      hydrateRoadSurfaceSidecarMap(scene.id, this.nodes, scene.roadSurfaceSidecars, scene.packageAssetMap)
       this.environment = resolveSceneDocumentEnvironment(scene)
       this.rebuildGeneratedMeshRuntimes()
       this.planningData = clonePlanningData(scene.planningData)
@@ -7763,6 +7969,65 @@ export const useSceneStore = defineStore('scene', {
         }
       }
       commitSceneSnapshot(this)
+    },
+    updateNodeDynamicMeshTransient(nodeId: string, dynamicMesh: any) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return
+      }
+
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!dynamicMesh || typeof dynamicMesh !== 'object') {
+          node.dynamicMesh = dynamicMesh
+          return
+        }
+
+        const incoming = dynamicMesh as Record<string, any>
+        const existing = node.dynamicMesh
+
+        if (!existing || typeof existing !== 'object') {
+          ;(node as any).dynamicMesh = { ...incoming }
+          return
+        }
+
+        const existingRecord = existing as Record<string, any>
+        const incomingType = typeof incoming.type === 'string' ? incoming.type : null
+        const existingType = typeof existingRecord.type === 'string' ? existingRecord.type : null
+
+        if (incomingType && existingType && incomingType !== existingType) {
+          ;(node as any).dynamicMesh = { ...incoming }
+          return
+        }
+
+        if (incomingType) {
+          for (const key of Object.keys(existingRecord)) {
+            if (!(key in incoming)) {
+              delete existingRecord[key]
+            }
+          }
+        }
+
+        for (const [key, value] of Object.entries(incoming)) {
+          existingRecord[key] = value
+        }
+      })
+
+      this.nodes = [...this.nodes]
+
+      const updatedMeshType = typeof (target as any)?.dynamicMesh?.type === 'string'
+        ? (target as any).dynamicMesh.type
+        : null
+      if (
+        updatedMeshType === 'Road'
+        || updatedMeshType === 'Wall'
+        || updatedMeshType === 'Floor'
+        || updatedMeshType === 'Ground'
+      ) {
+        const queued = this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+        if (!queued) {
+          this.bumpSceneNodePropertyVersion()
+        }
+      }
     },
     setNodeLocked(nodeId: string, locked: boolean) {
       const target = findNodeById(this.nodes, nodeId)
@@ -13964,6 +14229,11 @@ export const useSceneStore = defineStore('scene', {
           packageAssetMap: isPackageAssetMap(entry.packageAssetMap)
             ? (entry.packageAssetMap as Record<string, string>)
             : undefined,
+          roadSurfaceSidecars: cloneRoadSurfaceSidecarMap(
+            isPlainRecord((entry as { roadSurfaceSidecars?: unknown }).roadSurfaceSidecars)
+              ? (entry as { roadSurfaceSidecars?: RoadSurfaceSidecarMap }).roadSurfaceSidecars
+              : undefined,
+          ),
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
           panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),

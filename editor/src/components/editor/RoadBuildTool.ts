@@ -2,23 +2,174 @@ import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
-import type { RoadDynamicMesh, SceneNode } from '@schema'
-import { createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
 import {
-  findConnectableRoadNodeId,
-  integrateWorldPolylineIntoRoadMesh,
-  splitRoadSelfIntersectionsMesh,
-} from './RoadBuildGeometry'
+  ROAD_SURFACE_SIDECAR_FILENAME,
+  ROAD_SURFACE_SIDECAR_VERSION,
+  type RoadDynamicMesh,
+  type SceneNode,
+} from '@schema'
+import { createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
+import { applyRoadSurfaceStrokeToChunks } from './roadSurfaceRaster'
+
+const ROAD_DEFAULT_CHUNK_SIZE_METERS = 32
+const ROAD_DEFAULT_SAMPLE_SPACING_METERS = 0.5
+const ROAD_DEFAULT_SURFACE_OFFSET = 0.01
+const ROAD_DEFAULT_BRUSH_FALLOFF = 0.5
+
+function normalizeChunkSizeMeters(mesh: RoadDynamicMesh): number {
+  const raw = Number(mesh.chunkSizeMeters)
+  return Number.isFinite(raw) ? Math.max(1, raw) : ROAD_DEFAULT_CHUNK_SIZE_METERS
+}
+
+function normalizeSampleSpacingMeters(mesh: RoadDynamicMesh): number {
+  const raw = Number(mesh.sampleSpacingMeters)
+  return Number.isFinite(raw) ? Math.max(0.05, raw) : ROAD_DEFAULT_SAMPLE_SPACING_METERS
+}
+
+function normalizeSurfaceOffset(mesh: RoadDynamicMesh): number {
+  const raw = Number(mesh.surfaceOffset)
+  return Number.isFinite(raw) ? Math.max(0, raw) : ROAD_DEFAULT_SURFACE_OFFSET
+}
+
+function normalizeBrushFalloff(mesh: RoadDynamicMesh): number {
+  const raw = Number(mesh.brushFalloff)
+  return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : ROAD_DEFAULT_BRUSH_FALLOFF
+}
+
+function mergeBounds(
+  current: RoadDynamicMesh['bounds'] | null | undefined,
+  next: { minX: number; minZ: number; maxX: number; maxZ: number } | null,
+): RoadDynamicMesh['bounds'] | null {
+  if (!next) {
+    return current ?? null
+  }
+  if (!current) {
+    return {
+      minX: next.minX,
+      minZ: next.minZ,
+      maxX: next.maxX,
+      maxZ: next.maxZ,
+    }
+  }
+  return {
+    minX: Math.min(current.minX, next.minX),
+    minZ: Math.min(current.minZ, next.minZ),
+    maxX: Math.max(current.maxX, next.maxX),
+    maxZ: Math.max(current.maxZ, next.maxZ),
+  }
+}
+
+function collectStrokeLocalPolyline(runtime: THREE.Object3D | null, worldPoints: THREE.Vector3[]): Array<{ x: number; z: number }> {
+  if (!runtime || worldPoints.length === 0) {
+    return []
+  }
+  const helper = new THREE.Vector3()
+  const localPoints: Array<{ x: number; z: number }> = []
+  for (const point of worldPoints) {
+    helper.copy(point)
+    runtime.worldToLocal(helper)
+    if (!Number.isFinite(helper.x) || !Number.isFinite(helper.z)) {
+      continue
+    }
+    const prev = localPoints[localPoints.length - 1]
+    if (prev && Math.abs(prev.x - helper.x) <= 1e-6 && Math.abs(prev.z - helper.z) <= 1e-6) {
+      continue
+    }
+    localPoints.push({ x: helper.x, z: helper.z })
+  }
+  return localPoints
+}
+
+function collectStrokeLocalBounds(localPoints: Array<{ x: number; z: number }>): {
+  minX: number
+  minZ: number
+  maxX: number
+  maxZ: number
+} | null {
+  if (localPoints.length === 0) {
+    return null
+  }
+  let minX = Number.POSITIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  for (const point of localPoints) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.z)) {
+      continue
+    }
+    minX = Math.min(minX, point.x)
+    minZ = Math.min(minZ, point.z)
+    maxX = Math.max(maxX, point.x)
+    maxZ = Math.max(maxZ, point.z)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minZ) || !Number.isFinite(maxX) || !Number.isFinite(maxZ)) {
+    return null
+  }
+  return { minX, minZ, maxX, maxZ }
+}
+
+function buildRoadMeshWithSurfaceMetadata(params: {
+  base: RoadDynamicMesh
+  next: RoadDynamicMesh
+  runtime: THREE.Object3D | null
+  worldPoints: THREE.Vector3[]
+  strokeWidth: number
+  erase?: boolean
+}): RoadDynamicMesh {
+  const { base, next, runtime, worldPoints, strokeWidth } = params
+  const strokeLocalPolyline = collectStrokeLocalPolyline(runtime, worldPoints)
+  const strokeBounds = collectStrokeLocalBounds(strokeLocalPolyline)
+  const mergedBounds = mergeBounds(base.bounds, strokeBounds)
+  const mergedForChunks: RoadDynamicMesh = {
+    ...base,
+    ...next,
+    type: 'Road',
+    width: Number.isFinite(next.width) ? Math.max(0.2, next.width) : Math.max(0.2, base.width),
+    version: Number.isFinite(base.version) ? Math.max(1, Math.trunc(base.version!)) : 1,
+    chunkSizeMeters: normalizeChunkSizeMeters(base),
+    sampleSpacingMeters: normalizeSampleSpacingMeters(base),
+    surfaceOffset: normalizeSurfaceOffset(base),
+    brushFalloff: normalizeBrushFalloff(base),
+    previewMode: base.previewMode === 'mesh' ? 'mesh' : 'overlay',
+    sidecar: base.sidecar ?? {
+      filename: ROAD_SURFACE_SIDECAR_FILENAME,
+      version: ROAD_SURFACE_SIDECAR_VERSION,
+    },
+    bounds: mergedBounds,
+  }
+  const result: RoadDynamicMesh = {
+    ...mergedForChunks,
+    roadSurfaceChunks: applyRoadSurfaceStrokeToChunks({
+      mesh: mergedForChunks,
+      localPolyline: strokeLocalPolyline,
+      strokeWidth,
+      erase: Boolean(params.erase),
+    }),
+  }
+  if (result.roadSurfaceChunks && Object.keys(result.roadSurfaceChunks).length > 0) {
+    delete (result as Partial<RoadDynamicMesh>).vertices
+    delete (result as Partial<RoadDynamicMesh>).segments
+  }
+  return result
+}
 
 export type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
 
 export type RoadBuildToolSession = RoadPreviewSession & {
   snapVertices: RoadSnapVertex[]
+  eraseMode: boolean
+  draggedStroke: boolean
+  livePreviewNodeId: string | null
+  liveOriginalMesh: RoadDynamicMesh | null
+  liveApplied: boolean
+  liveCommitted: boolean
+  lastLiveUpdateAt: number
   /** When set, edits an existing Road node (branch build). */
   targetNodeId: string | null
-  /** Vertex index in the target node to branch from. */
-  startVertexIndex: number | null
 }
+
+const ROAD_DRAG_APPEND_DISTANCE = 0.2
+const ROAD_LIVE_UPDATE_INTERVAL_MS = 66
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -68,12 +219,18 @@ export function createRoadBuildTool(options: {
   sceneNodes: () => SceneNode[]
 
   updateNodeDynamicMesh: (nodeId: string, mesh: RoadDynamicMesh) => void
+  updateNodeDynamicMeshTransient?: (nodeId: string, mesh: RoadDynamicMesh) => void
   createRoadNode: (options: { points: Array<{ x: number; y: number; z: number }>; width: number }) => SceneNode | null
   setNodeMaterials: (nodeId: string, materials: any[]) => void
   selectNode: (nodeId: string) => void
 
   createRoadNodeMaterials: () => any[]
   ensureRoadVertexHandlesForSelectedNode: (options?: { force?: boolean }) => void
+  onRoadSurfaceMeshCommitted?: (payload: {
+    nodeId: string
+    mesh: RoadDynamicMesh
+    reason: 'branch-extend' | 'new-road'
+  }) => void
 }): RoadBuildToolHandle {
   const previewRenderer = createRoadPreviewRenderer({
     rootGroup: options.rootGroup,
@@ -97,6 +254,9 @@ export function createRoadBuildTool(options: {
   }
 
   const clearSession = (clearOptions: { disposePreview?: boolean } = {}) => {
+    if (session?.liveApplied && !session.liveCommitted && session.livePreviewNodeId && session.liveOriginalMesh && options.updateNodeDynamicMeshTransient) {
+      options.updateNodeDynamicMeshTransient(session.livePreviewNodeId, session.liveOriginalMesh)
+    }
     if (clearOptions.disposePreview ?? true) {
       clearPreview()
     } else if (session?.previewGroup) {
@@ -117,10 +277,67 @@ export function createRoadBuildTool(options: {
       previewGroup: null,
       width: Number.isFinite(options.defaultWidth) ? options.defaultWidth : 2,
       snapVertices: options.collectRoadSnapVertices(),
+      eraseMode: false,
+      draggedStroke: false,
+      livePreviewNodeId: null,
+      liveOriginalMesh: null,
+      liveApplied: false,
+      liveCommitted: false,
+      lastLiveUpdateAt: 0,
       targetNodeId: null,
-      startVertexIndex: null,
     }
     return session
+  }
+
+  const cloneRoadDynamicMesh = (mesh: RoadDynamicMesh): RoadDynamicMesh => {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(mesh)
+    }
+    return JSON.parse(JSON.stringify(mesh)) as RoadDynamicMesh
+  }
+
+  const applyLiveTransientUpdate = () => {
+    if (!session || !options.updateNodeDynamicMeshTransient) {
+      return
+    }
+    const targetNodeId = session.targetNodeId
+    if (!targetNodeId || session.points.length < 2) {
+      return
+    }
+    const now = Date.now()
+    if (now - session.lastLiveUpdateAt < ROAD_LIVE_UPDATE_INTERVAL_MS) {
+      return
+    }
+    const node = options.findSceneNode(options.sceneNodes(), targetNodeId)
+    if (node?.dynamicMesh?.type !== 'Road') {
+      return
+    }
+    const runtime = options.getRuntimeObject(targetNodeId)
+    if (!runtime) {
+      return
+    }
+
+    if (session.livePreviewNodeId !== targetNodeId || !session.liveOriginalMesh) {
+      session.livePreviewNodeId = targetNodeId
+      session.liveOriginalMesh = cloneRoadDynamicMesh(node.dynamicMesh)
+    }
+    const baseMesh = session.liveOriginalMesh ?? node.dynamicMesh
+    const width = Number.isFinite(baseMesh.width) ? baseMesh.width : session.width
+    const next: RoadDynamicMesh = {
+      type: 'Road',
+      width,
+    }
+    const merged = buildRoadMeshWithSurfaceMetadata({
+      base: baseMesh,
+      next,
+      runtime,
+      worldPoints: session.points,
+      strokeWidth: width,
+      erase: session.eraseMode,
+    })
+    options.updateNodeDynamicMeshTransient(targetNodeId, merged)
+    session.liveApplied = true
+    session.lastLiveUpdateAt = now
   }
 
   const updateCursorPreview = (event: PointerEvent) => {
@@ -158,6 +375,10 @@ export function createRoadBuildTool(options: {
     }
 
     const current = ensureSession()
+    if (current.points.length === 0) {
+      current.eraseMode = Boolean(event.shiftKey)
+      current.draggedStroke = false
+    }
 
     // If this is the first point, prefer raycast-based interaction:
     // - If clicking on an existing road surface, start a branch by splitting the nearest segment.
@@ -168,150 +389,19 @@ export function createRoadBuildTool(options: {
         const node = options.findSceneNode(options.sceneNodes(), hit.nodeId)
         const runtime = options.getRuntimeObject(hit.nodeId)
         if (node?.dynamicMesh?.type === 'Road' && runtime) {
-          const base = node.dynamicMesh
-          const vertices = Array.isArray(base.vertices)
-            ? base.vertices.map((v) => [Number(v[0]), Number(v[1])] as [number, number])
-            : ([] as [number, number][]) 
-          const segments = Array.isArray(base.segments)
-            ? base.segments.map((s) => ({ a: Math.trunc(Number((s as any).a)), b: Math.trunc(Number((s as any).b)) }))
-            : ([] as Array<{ a: number; b: number }>)
-
-          if (vertices.length >= 2 && segments.length >= 1) {
-            const localHit = runtime.worldToLocal(hit.point.clone())
-            const clickX = localHit.x
-            const clickZ = localHit.z
-
-            const EPS2 = 1e-6
-            const findExistingVertexIndex = (x: number, z: number): number => {
-              for (let i = 0; i < vertices.length; i += 1) {
-                const v = vertices[i]!
-                const dx = (v[0] ?? 0) - x
-                const dz = (v[1] ?? 0) - z
-                if (dx * dx + dz * dz <= EPS2) {
-                  return i
-                }
-              }
-              return -1
-            }
-
-            // Find nearest segment and compute closest-point projection in local XZ.
-            let bestSegmentIndex = -1
-            let bestDist2 = Number.POSITIVE_INFINITY
-            let bestAx = 0
-            let bestAz = 0
-            let bestBx = 0
-            let bestBz = 0
-            let bestProjX = 0
-            let bestProjZ = 0
-            let bestAIndex = -1
-            let bestBIndex = -1
-
-            for (let i = 0; i < segments.length; i += 1) {
-              const seg = segments[i]!
-              const a = seg.a
-              const b = seg.b
-              if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a === b) {
-                continue
-              }
-              if (a >= vertices.length || b >= vertices.length) {
-                continue
-              }
-              const va = vertices[a]
-              const vb = vertices[b]
-              if (!va || !vb) {
-                continue
-              }
-              const ax = va[0]
-              const az = va[1]
-              const bx = vb[0]
-              const bz = vb[1]
-              if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
-                continue
-              }
-
-              const dx = bx - ax
-              const dz = bz - az
-              const len2 = dx * dx + dz * dz
-              if (len2 <= EPS2) {
-                continue
-              }
-              const tRaw = ((clickX - ax) * dx + (clickZ - az) * dz) / len2
-              const t = Math.max(0, Math.min(1, tRaw))
-              const px = ax + dx * t
-              const pz = az + dz * t
-              const ddx = clickX - px
-              const ddz = clickZ - pz
-              const dist2 = ddx * ddx + ddz * ddz
-              if (dist2 < bestDist2) {
-                bestDist2 = dist2
-                bestSegmentIndex = i
-                bestAx = ax
-                bestAz = az
-                bestBx = bx
-                bestBz = bz
-                bestProjX = px
-                bestProjZ = pz
-                bestAIndex = a
-                bestBIndex = b
-              }
-            }
-
-            if (bestSegmentIndex >= 0 && bestAIndex >= 0 && bestBIndex >= 0) {
-              const endpointSnap2 = options.vertexSnapDistance * options.vertexSnapDistance
-              const daX = bestProjX - bestAx
-              const daZ = bestProjZ - bestAz
-              const dbX = bestProjX - bestBx
-              const dbZ = bestProjZ - bestBz
-              const dist2ToA = daX * daX + daZ * daZ
-              const dist2ToB = dbX * dbX + dbZ * dbZ
-
-              let startIndex = -1
-
-              // If projection is near an endpoint, prefer reusing that endpoint.
-              if (dist2ToA <= endpointSnap2) {
-                startIndex = bestAIndex
-              } else if (dist2ToB <= endpointSnap2) {
-                startIndex = bestBIndex
-              } else {
-                const existingIndex = findExistingVertexIndex(bestProjX, bestProjZ)
-                if (existingIndex >= 0) {
-                  startIndex = existingIndex
-                } else {
-                  // Insert a new vertex and split the nearest segment.
-                  const newIndex = vertices.length
-                  vertices.push([bestProjX, bestProjZ])
-                  const originalA = bestAIndex
-                  const originalB = bestBIndex
-                  segments[bestSegmentIndex] = { a: originalA, b: newIndex }
-                  segments.push({ a: newIndex, b: originalB })
-                  startIndex = newIndex
-                }
-              }
-
-              if (startIndex >= 0) {
-                const next: RoadDynamicMesh = {
-                  type: 'Road',
-                  width: Number.isFinite(base.width) ? Math.max(0.2, base.width) : current.width,
-                  vertices,
-                  segments,
-                }
-
-                // Persist the split immediately so subsequent clicks/commit can extend from this vertex.
-                options.updateNodeDynamicMesh(hit.nodeId, next)
-
-                const worldProjected = runtime.localToWorld(new THREE.Vector3(bestProjX, 0, bestProjZ))
-                worldProjected.y = 0
-
-                current.targetNodeId = hit.nodeId
-                current.startVertexIndex = startIndex
-                current.snapVertices = options.collectRoadSnapVertices()
-                current.points.push(worldProjected.clone())
-                current.previewEnd = worldProjected.clone()
-                updatePreview()
-                return true
-              }
-            }
-          }
+          const worldProjected = hit.point.clone()
+          worldProjected.y = 0
+          current.livePreviewNodeId = null
+          current.liveOriginalMesh = null
+          current.liveApplied = false
+          current.liveCommitted = false
+          current.lastLiveUpdateAt = 0
+          current.targetNodeId = hit.nodeId
+          current.snapVertices = options.collectRoadSnapVertices()
+          current.points.push(worldProjected.clone())
+          current.previewEnd = worldProjected.clone()
+          updatePreview()
+          return true
         }
       }
     }
@@ -329,14 +419,8 @@ export function createRoadBuildTool(options: {
     let point = snappedResult.position
 
     // If starting on an existing road vertex, branch into that road node.
-    if (
-      current.points.length === 0 &&
-      snappedResult.nodeId &&
-      typeof snappedResult.vertexIndex === 'number' &&
-      snappedResult.vertexIndex >= 0
-    ) {
+    if (current.points.length === 0 && snappedResult.nodeId) {
       current.targetNodeId = snappedResult.nodeId
-      current.startVertexIndex = snappedResult.vertexIndex
     }
 
     if (current.points.length === 0) {
@@ -392,60 +476,40 @@ export function createRoadBuildTool(options: {
     }
 
     const targetNodeId = session.targetNodeId
-    const startVertexIndex = session.startVertexIndex
-    if (targetNodeId && typeof startVertexIndex === 'number' && Number.isFinite(startVertexIndex) && startVertexIndex >= 0) {
+    if (targetNodeId) {
       const node = options.findSceneNode(options.sceneNodes(), targetNodeId)
       if (node?.dynamicMesh?.type === 'Road') {
         const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
         const runtime = options.getRuntimeObject(targetNodeId)
+        if (session.liveApplied && session.liveOriginalMesh && options.updateNodeDynamicMeshTransient) {
+          options.updateNodeDynamicMeshTransient(targetNodeId, session.liveOriginalMesh)
+        }
+        const baseMesh = session.liveOriginalMesh ?? node.dynamicMesh
         if (runtime) {
-          const next = integrateWorldPolylineIntoRoadMesh({
-            baseMesh: node.dynamicMesh,
+          const next: RoadDynamicMesh = {
+            type: 'Road',
+            width,
+          }
+          const merged = buildRoadMeshWithSurfaceMetadata({
+            base: baseMesh,
+            next,
             runtime,
             worldPoints: committed,
-            width,
-            defaultWidth: options.defaultWidth,
+            strokeWidth: width,
+            erase: session.eraseMode,
           })
-          if (next) {
-            options.updateNodeDynamicMesh(targetNodeId, next)
-          }
+          options.updateNodeDynamicMesh(targetNodeId, merged)
+          session.liveCommitted = true
+          options.onRoadSurfaceMeshCommitted?.({
+            nodeId: targetNodeId,
+            mesh: merged,
+            reason: 'branch-extend',
+          })
         }
         options.ensureRoadVertexHandlesForSelectedNode({ force: true })
         clearSession()
         return
       }
-    }
-
-    const connectNodeId = findConnectableRoadNodeId({
-      worldPoints: committed,
-      nodes: options.sceneNodes(),
-      getRuntimeObject: options.getRuntimeObject,
-      collectRoadSnapVertices: options.collectRoadSnapVertices,
-      snapRoadPointToVertices: options.snapRoadPointToVertices,
-      vertexSnapDistance: options.vertexSnapDistance,
-    })
-    if (connectNodeId) {
-      const node = options.findSceneNode(options.sceneNodes(), connectNodeId)
-      const width = node?.dynamicMesh?.type === 'Road' && Number.isFinite(node.dynamicMesh.width)
-        ? node.dynamicMesh.width
-        : session.width
-      const runtime = options.getRuntimeObject(connectNodeId)
-      if (node?.dynamicMesh?.type === 'Road' && runtime) {
-        const next = integrateWorldPolylineIntoRoadMesh({
-          baseMesh: node.dynamicMesh,
-          runtime,
-          worldPoints: committed,
-          width,
-          defaultWidth: options.defaultWidth,
-        })
-        if (next) {
-          options.updateNodeDynamicMesh(connectNodeId, next)
-        }
-      }
-      options.selectNode(connectNodeId)
-      options.ensureRoadVertexHandlesForSelectedNode({ force: true })
-      clearSession()
-      return
     }
 
     const created = options.createRoadNode({
@@ -461,10 +525,25 @@ export function createRoadBuildTool(options: {
     }
 
     if (created?.dynamicMesh?.type === 'Road') {
-      const split = splitRoadSelfIntersectionsMesh(created.dynamicMesh, options.defaultWidth)
-      if (split) {
-        options.updateNodeDynamicMesh(created.id, split)
+      const runtime = options.getRuntimeObject(created.id)
+      const next: RoadDynamicMesh = {
+        type: 'Road',
+        width: Number.isFinite(created.dynamicMesh.width) ? created.dynamicMesh.width : session.width,
       }
+      const merged = buildRoadMeshWithSurfaceMetadata({
+        base: created.dynamicMesh,
+        next,
+        runtime,
+        worldPoints: committed,
+        strokeWidth: next.width,
+        erase: session.eraseMode,
+      })
+      options.updateNodeDynamicMesh(created.id, merged)
+      options.onRoadSurfaceMeshCommitted?.({
+        nodeId: created.id,
+        mesh: merged,
+        reason: 'new-road',
+      })
     }
 
     if (created?.dynamicMesh?.type === 'Road') {
@@ -494,6 +573,23 @@ export function createRoadBuildTool(options: {
       if (session?.points.length) {
         const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
         if (!isCameraNavActive) {
+          if ((event.buttons & 1) !== 0 && !options.isAltOverrideActive()) {
+            if (options.raycastGroundPoint(event, groundPointerHelper)) {
+              session.snapVertices = options.collectRoadSnapVertices()
+              const rawPointer = groundPointerHelper.clone()
+              rawPointer.y = 0
+              const snapped = options.snapRoadPointToVertices(rawPointer, session.snapVertices, options.vertexSnapDistance).position
+              const last = session.points[session.points.length - 1] ?? null
+              if (!last || last.distanceToSquared(snapped) >= ROAD_DRAG_APPEND_DISTANCE * ROAD_DRAG_APPEND_DISTANCE) {
+                session.points.push(snapped.clone())
+                session.draggedStroke = true
+              }
+              session.previewEnd = snapped.clone()
+              applyLiveTransientUpdate()
+              updatePreview()
+              return true
+            }
+          }
           updateCursorPreview(event)
           return true
         }
@@ -510,6 +606,13 @@ export function createRoadBuildTool(options: {
       if (event.button === 0) {
         if (options.isAltOverrideActive()) {
           return false
+        }
+        if (session?.draggedStroke && session.points.length >= 2) {
+          finalize()
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+          return true
         }
         const handled = handlePlacementClick(event)
         if (handled) {
@@ -559,7 +662,7 @@ export function createRoadBuildTool(options: {
       return true
     },
 
-    beginBranchFromVertex: ({ nodeId, vertexIndex, worldPoint, width }) => {
+    beginBranchFromVertex: ({ nodeId, vertexIndex: _vertexIndex, worldPoint, width }) => {
       if (options.activeBuildTool.value !== 'road') {
         return false
       }
@@ -569,7 +672,6 @@ export function createRoadBuildTool(options: {
       current.width = Number.isFinite(width) ? width : current.width
       current.snapVertices = options.collectRoadSnapVertices()
       current.targetNodeId = nodeId
-      current.startVertexIndex = vertexIndex
       updatePreview({ immediate: true })
       return true
     },

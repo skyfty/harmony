@@ -1,6 +1,13 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh, Vector3Like } from '@schema'
-import { ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH } from '@schema/components'
+import {
+  ROAD_DEFAULT_BRUSH_FALLOFF,
+  ROAD_DEFAULT_CHUNK_SIZE_METERS,
+  ROAD_DEFAULT_SAMPLE_SPACING_METERS,
+  ROAD_DEFAULT_SURFACE_OFFSET,
+  ROAD_DEFAULT_WIDTH,
+  ROAD_MIN_WIDTH,
+} from '@schema/components'
 import { updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import type { Object3D } from 'three'
 
@@ -93,7 +100,14 @@ export function buildRoadDynamicMeshFromWorldPoints(
 
   const definition: RoadDynamicMesh = {
     type: 'Road',
+    version: 1,
     width: normalizedWidth,
+    chunkSizeMeters: ROAD_DEFAULT_CHUNK_SIZE_METERS,
+    sampleSpacingMeters: ROAD_DEFAULT_SAMPLE_SPACING_METERS,
+    surfaceOffset: ROAD_DEFAULT_SURFACE_OFFSET,
+    brushFalloff: ROAD_DEFAULT_BRUSH_FALLOFF,
+    previewMode: 'overlay',
+    roadSurfaceChunks: null,
     vertices,
     segments,
   }
@@ -116,9 +130,26 @@ export function applyRoadComponentPropsToNode(
   const existingWidth = existing && typeof (existing as any).width === 'number' ? Number((existing as any).width) : NaN
   node.dynamicMesh = {
     type: 'Road',
+    version: Number.isFinite((existing as any).version) ? Math.max(1, Math.trunc((existing as any).version)) : 1,
     vertices: Array.isArray(existing.vertices) ? existing.vertices : normalized.vertices,
     segments: Array.isArray(existing.segments) ? existing.segments : normalized.segments,
     width: Number.isFinite(existingWidth) ? existingWidth : normalized.width,
+    chunkSizeMeters: Number.isFinite((existing as any).chunkSizeMeters)
+      ? Math.max(1, Number((existing as any).chunkSizeMeters))
+      : normalized.chunkSizeMeters,
+    sampleSpacingMeters: Number.isFinite((existing as any).sampleSpacingMeters)
+      ? Math.max(0.05, Number((existing as any).sampleSpacingMeters))
+      : normalized.sampleSpacingMeters,
+    surfaceOffset: Number.isFinite((existing as any).surfaceOffset)
+      ? Math.max(0, Number((existing as any).surfaceOffset))
+      : normalized.surfaceOffset,
+    brushFalloff: Number.isFinite((existing as any).brushFalloff)
+      ? Math.max(0, Math.min(1, Number((existing as any).brushFalloff)))
+      : normalized.brushFalloff,
+    previewMode: (existing as any).previewMode === 'mesh' ? 'mesh' : 'overlay',
+    bounds: (existing as any).bounds ?? null,
+    sidecar: (existing as any).sidecar ?? null,
+    roadSurfaceChunks: (existing as any).roadSurfaceChunks ?? null,
   }
 
   const runtime = deps.getRuntimeObject(node.id)

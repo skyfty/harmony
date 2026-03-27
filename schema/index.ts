@@ -91,6 +91,24 @@ export {
 } from './scenePackageZip'
 export type { AssetOverrideBytes, AssetOverrideValue, ScenePackageUnzipped } from './scenePackageZip'
 
+export {
+  ROAD_SURFACE_SIDECAR_FILENAME,
+  ROAD_SURFACE_SIDECAR_VERSION,
+  serializeRoadSurfaceSidecar,
+  deserializeRoadSurfaceSidecar,
+} from './roadSurfaceSidecar'
+export type { RoadSurfaceSidecarPayload } from './roadSurfaceSidecar'
+
+export {
+  formatRoadSurfaceChunkKey,
+  parseRoadSurfaceChunkKey,
+  resolveRoadSurfaceChunkBounds,
+  resolveRoadSurfaceChunkKeyForLocalPoint,
+  collectRoadSurfaceChunkKeysForCircle,
+  collectRoadSurfaceChunkKeysForStrip,
+} from './roadSurfaceTiles'
+export type { RoadSurfaceChunkBounds, RoadSurfaceChunkKeyParts } from './roadSurfaceTiles'
+
 export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuserContext'
 
 export { createGradientBackgroundDome, disposeGradientBackgroundDome } from './gradientBackground'
@@ -1197,20 +1215,102 @@ export type RoadSegment = {
   b: number
 }
 
+export type RoadSurfacePreviewMode = 'overlay' | 'mesh'
+
+export interface RoadSurfaceBounds {
+  minX: number
+  minZ: number
+  maxX: number
+  maxZ: number
+}
+
+export interface RoadSurfaceSidecarRef {
+  filename: string
+  version: number
+}
+
+export interface RoadSurfaceChunkAssetRef {
+  revision: number
+  resolution: number
+  coverageAssetId?: string | null
+  heightAssetId?: string | null
+  /** Optional inline occupancy bitset payload (base64). */
+  coverageData?: string | null
+  /** Optional inline height payload (base64). */
+  heightData?: string | null
+}
+
+export type RoadSurfaceChunkAssetMap = Record<string, RoadSurfaceChunkAssetRef>
+
+function clampRoadSurfaceFinite(value: unknown, fallback = 0): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+export function normalizeRoadSurfaceChunkAssetMap(
+  value: RoadSurfaceChunkAssetMap | null | undefined,
+): RoadSurfaceChunkAssetMap {
+  return Object.fromEntries(
+    Object.entries(value ?? {})
+      .map(([chunkKey, chunkRef]) => {
+        const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+        if (!normalizedChunkKey || !chunkRef || typeof chunkRef !== 'object') {
+          return null
+        }
+        const revision = Math.max(0, Math.trunc(clampRoadSurfaceFinite(chunkRef.revision, 0)))
+        const resolution = Math.max(1, Math.trunc(clampRoadSurfaceFinite(chunkRef.resolution, 1)))
+        const coverageAssetId = typeof chunkRef.coverageAssetId === 'string' ? chunkRef.coverageAssetId.trim() : ''
+        const heightAssetId = typeof chunkRef.heightAssetId === 'string' ? chunkRef.heightAssetId.trim() : ''
+        const coverageData = typeof chunkRef.coverageData === 'string' ? chunkRef.coverageData.trim() : ''
+        const heightData = typeof chunkRef.heightData === 'string' ? chunkRef.heightData.trim() : ''
+        if (!coverageAssetId && !heightAssetId && !coverageData && !heightData) {
+          return null
+        }
+        return [normalizedChunkKey, {
+          revision,
+          resolution,
+          coverageAssetId: coverageAssetId || null,
+          heightAssetId: heightAssetId || null,
+          coverageData: coverageData || null,
+          heightData: heightData || null,
+        }] as const
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+  )
+}
+
 export interface RoadDynamicMesh {
   type: 'Road'
+  /** Schema version for the chunked road surface rewrite. */
+  version?: number
   /** Default road width in meters. */
   width: number
+  /** Canonical chunk size for road surface editing and reconstruction. */
+  chunkSizeMeters?: number
+  /** Canonical sample spacing used by the road surface field. */
+  sampleSpacingMeters?: number
+  /** Small vertical offset above the terrain to avoid z-fighting. */
+  surfaceOffset?: number
+  /** Brush falloff used by road field writers. */
+  brushFalloff?: number
+  /** Preferred preview path while editing. */
+  previewMode?: RoadSurfacePreviewMode
+  /** Aggregate local-space bounds of authored road coverage. */
+  bounds?: RoadSurfaceBounds | null
+  /** Sidecar descriptor for persisted road surface data. */
+  sidecar?: RoadSurfaceSidecarRef | null
+  /** Runtime-attached chunk references resolved from the road sidecar. */
+  roadSurfaceChunks?: RoadSurfaceChunkAssetMap | null
 
   /**
    * Road graph vertices projected onto the ground.
    * Each entry is a 2D point: [x, y] where y maps to world-space z.
    * Height is implicitly 0.
    */
-  vertices: RoadVertex2D[]
+  vertices?: RoadVertex2D[]
 
   /** Connections between vertices. Supports branching roads. */
-  segments: RoadSegment[]
+  segments?: RoadSegment[]
 }
 
 export type FloorVertex2D = [number, number]

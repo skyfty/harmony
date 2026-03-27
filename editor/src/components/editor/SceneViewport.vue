@@ -95,6 +95,7 @@ import {
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneCameraState } from '@/types/scene-camera-state'
+import { useRoadSurfaceStore } from '@/stores/roadSurfaceStore'
 
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -357,6 +358,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+const roadSurfaceStore = useRoadSurfaceStore()
 const protagonistPreviewNodeId = computed(() => {
   const selectedId = sceneStore.selectedNodeId
   if (!selectedId) {
@@ -393,6 +395,52 @@ const {
   scatterDensityPercent,
 } =
   storeToRefs(terrainStore)
+
+function syncRoadSurfaceRuntimeFromScene(reason = 'scene-sync'): void {
+  const sceneId = sceneStore.currentSceneId
+  if (!sceneId) {
+    return
+  }
+  const roadNodes = sceneStore.nodes.filter((node): node is SceneNode => node.dynamicMesh?.type === 'Road')
+  if (!roadNodes.length) {
+    roadSurfaceStore.clearSceneDocument(sceneId)
+    return
+  }
+  for (const roadNode of roadNodes) {
+    const dynamicMesh = roadNode.dynamicMesh
+    if (!dynamicMesh || dynamicMesh.type !== 'Road') {
+      continue
+    }
+    roadSurfaceStore.replaceRoadSurfaceChunks(sceneId, roadNode.id, dynamicMesh.roadSurfaceChunks ?? null, {
+      bumpRuntimeVersion: false,
+      reason,
+    })
+  }
+}
+
+watch(
+  () => sceneStore.currentSceneId,
+  (sceneId, previousSceneId) => {
+    if (previousSceneId && previousSceneId !== sceneId) {
+      roadSurfaceStore.clearSceneDocument(previousSceneId)
+    }
+    if (!sceneId) {
+      return
+    }
+    syncRoadSurfaceRuntimeFromScene('scene-switch')
+  },
+  { immediate: true },
+)
+
+watch(
+  [sceneGraphStructureVersion, sceneNodePropertyVersion],
+  () => {
+    if (!sceneStore.currentSceneId) {
+      return
+    }
+    syncRoadSurfaceRuntimeFromScene('scene-runtime-sync')
+  },
+)
 
 const hasGroundNode = computed(() => {
   const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
@@ -5046,11 +5094,21 @@ const roadBuildTool = createRoadBuildTool({
   getRuntimeObject: (nodeId) => objectMap.get(nodeId) ?? null,
   sceneNodes: () => sceneStore.nodes,
   updateNodeDynamicMesh: (nodeId, mesh) => sceneStore.updateNodeDynamicMesh(nodeId, mesh),
+  updateNodeDynamicMeshTransient: (nodeId, mesh) => sceneStore.updateNodeDynamicMeshTransient(nodeId, mesh),
   createRoadNode: (payload) => sceneStore.createRoadNode(payload),
   setNodeMaterials: (nodeId, materials) => sceneStore.setNodeMaterials(nodeId, materials),
   selectNode: (nodeId) => sceneStore.selectNode(nodeId),
   createRoadNodeMaterials,
   ensureRoadVertexHandlesForSelectedNode,
+  onRoadSurfaceMeshCommitted: ({ nodeId, mesh, reason }) => {
+    const sceneId = sceneStore.currentSceneId
+    if (!sceneId) {
+      return
+    }
+    roadSurfaceStore.replaceRoadSurfaceChunks(sceneId, nodeId, mesh.roadSurfaceChunks ?? null, {
+      reason,
+    })
+  },
  })
 
 const floorBuildTool = createFloorBuildTool({

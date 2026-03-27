@@ -27,6 +27,10 @@ const roadComponent = computed(() => {
 })
 
 const localWidth = ref<number>(2)
+const localChunkSizeMeters = ref<number>(32)
+const localSampleSpacingMeters = ref<number>(0.5)
+const localSurfaceOffset = ref<number>(0.01)
+const localBrushFalloff = ref<number>(0.5)
 const localJunctionSmoothing = ref<number>(ROAD_DEFAULT_JUNCTION_SMOOTHING)
 const localLaneLines = ref<boolean>(false)
 const localShoulders = ref<boolean>(false)
@@ -43,6 +47,10 @@ watch(
     isSyncingFromScene.value = true
     if (!mesh) {
       localWidth.value = 2
+      localChunkSizeMeters.value = 32
+      localSampleSpacingMeters.value = 0.5
+      localSurfaceOffset.value = 0.01
+      localBrushFalloff.value = 0.5
       nextTick(() => {
         isSyncingFromScene.value = false
       })
@@ -51,6 +59,14 @@ watch(
 
     const width = Number((mesh as RoadDynamicMesh).width)
     localWidth.value = Number.isFinite(width) ? Math.max(0.2, width) : 2
+    const chunkSizeMeters = Number((mesh as RoadDynamicMesh).chunkSizeMeters)
+    localChunkSizeMeters.value = Number.isFinite(chunkSizeMeters) ? Math.max(1, Math.min(256, chunkSizeMeters)) : 32
+    const sampleSpacingMeters = Number((mesh as RoadDynamicMesh).sampleSpacingMeters)
+    localSampleSpacingMeters.value = Number.isFinite(sampleSpacingMeters) ? Math.max(0.05, Math.min(4, sampleSpacingMeters)) : 0.5
+    const surfaceOffset = Number((mesh as RoadDynamicMesh).surfaceOffset)
+    localSurfaceOffset.value = Number.isFinite(surfaceOffset) ? Math.max(0, Math.min(1, surfaceOffset)) : 0.01
+    const brushFalloff = Number((mesh as RoadDynamicMesh).brushFalloff)
+    localBrushFalloff.value = Number.isFinite(brushFalloff) ? Math.max(0, Math.min(1, brushFalloff)) : 0.5
     nextTick(() => {
       isSyncingFromScene.value = false
     })
@@ -157,6 +173,26 @@ function onWidthModelUpdate(v: unknown) {
   applyWidthUpdate(v)
 }
 
+function onChunkSizeMetersModelUpdate(v: unknown) {
+  localChunkSizeMeters.value = Number(v)
+  applyChunkSizeMetersUpdate(v)
+}
+
+function onSampleSpacingMetersModelUpdate(v: unknown) {
+  localSampleSpacingMeters.value = Number(v)
+  applySampleSpacingMetersUpdate(v)
+}
+
+function onSurfaceOffsetModelUpdate(v: unknown) {
+  localSurfaceOffset.value = Number(v)
+  applySurfaceOffsetUpdate(v)
+}
+
+function onBrushFalloffModelUpdate(v: unknown) {
+  localBrushFalloff.value = Number(v)
+  applyBrushFalloffUpdate(v)
+}
+
 function onLaneLinesModelUpdate(value: unknown) {
   const next = Boolean(value)
   localLaneLines.value = next
@@ -239,6 +275,94 @@ function applyWidthUpdate(rawValue: unknown) {
   }
 
   sceneStore.updateNodeDynamicMesh(nodeId, { width: clamped })
+}
+
+function applyChunkSizeMetersUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const mesh = roadDynamicMesh.value
+  if (!nodeId || !mesh) {
+    return
+  }
+
+  const nextValue = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(nextValue)) {
+    return
+  }
+  const clamped = Math.max(1, Math.min(256, nextValue))
+  const current = Number(mesh.chunkSizeMeters)
+  if (Number.isFinite(current) && Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeDynamicMesh(nodeId, { chunkSizeMeters: clamped })
+}
+
+function applySampleSpacingMetersUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const mesh = roadDynamicMesh.value
+  if (!nodeId || !mesh) {
+    return
+  }
+
+  const nextValue = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(nextValue)) {
+    return
+  }
+  const clamped = Math.max(0.05, Math.min(4, nextValue))
+  const current = Number(mesh.sampleSpacingMeters)
+  if (Number.isFinite(current) && Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeDynamicMesh(nodeId, { sampleSpacingMeters: clamped })
+}
+
+function applySurfaceOffsetUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const mesh = roadDynamicMesh.value
+  if (!nodeId || !mesh) {
+    return
+  }
+
+  const nextValue = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(nextValue)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(1, nextValue))
+  const current = Number(mesh.surfaceOffset)
+  if (Number.isFinite(current) && Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeDynamicMesh(nodeId, { surfaceOffset: clamped })
+}
+
+function applyBrushFalloffUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const mesh = roadDynamicMesh.value
+  if (!nodeId || !mesh) {
+    return
+  }
+
+  const nextValue = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(nextValue)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(1, nextValue))
+  const current = Number(mesh.brushFalloff)
+  if (Number.isFinite(current) && Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeDynamicMesh(nodeId, { brushFalloff: clamped })
 }
 
 function applySamplingDensityUpdate(rawValue: unknown) {
@@ -383,6 +507,58 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           min="0.2"
           step="0.1"
           @update:modelValue="onWidthModelUpdate"
+        />
+
+        <v-divider class="my-2" />
+
+        <div class="road-section-header">Surface Source</div>
+
+        <v-text-field
+          :model-value="localChunkSizeMeters"
+          type="number"
+          label="Chunk Size (m)"
+          density="compact"
+          variant="underlined"
+          min="1"
+          max="256"
+          step="1"
+          @update:modelValue="onChunkSizeMetersModelUpdate"
+        />
+
+        <v-text-field
+          :model-value="localSampleSpacingMeters"
+          type="number"
+          label="Sample Spacing (m)"
+          density="compact"
+          variant="underlined"
+          min="0.05"
+          max="4"
+          step="0.05"
+          @update:modelValue="onSampleSpacingMetersModelUpdate"
+        />
+
+        <v-text-field
+          :model-value="localSurfaceOffset"
+          type="number"
+          label="Surface Offset (m)"
+          density="compact"
+          variant="underlined"
+          min="0"
+          max="1"
+          step="0.005"
+          @update:modelValue="onSurfaceOffsetModelUpdate"
+        />
+
+        <v-text-field
+          :model-value="localBrushFalloff"
+          type="number"
+          label="Brush Falloff"
+          density="compact"
+          variant="underlined"
+          min="0"
+          max="1"
+          step="0.05"
+          @update:modelValue="onBrushFalloffModelUpdate"
         />
 
         <v-switch

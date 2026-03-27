@@ -7,6 +7,10 @@ export const ROAD_COMPONENT_TYPE = 'road'
 export const ROAD_DEFAULT_WIDTH = 2
 export const ROAD_MIN_WIDTH = 0.2
 export const ROAD_DEFAULT_JUNCTION_SMOOTHING = 0
+export const ROAD_DEFAULT_CHUNK_SIZE_METERS = 32
+export const ROAD_DEFAULT_SAMPLE_SPACING_METERS = 0.5
+export const ROAD_DEFAULT_SURFACE_OFFSET = 0.01
+export const ROAD_DEFAULT_BRUSH_FALLOFF = 0.5
 
 export type RoadPoint2D = [number, number]
 
@@ -14,6 +18,10 @@ export interface RoadComponentProps {
   vertices: RoadPoint2D[]
   segments: RoadSegment[]
   width: number
+  chunkSizeMeters: number
+  sampleSpacingMeters: number
+  surfaceOffset: number
+  brushFalloff: number
   junctionSmoothing: number
   laneLines: boolean
   shoulders: boolean
@@ -44,6 +52,25 @@ function normalizePoint(value: unknown): RoadPoint2D | null {
 
 export function clampRoadProps(props: Partial<RoadComponentProps> | null | undefined): RoadComponentProps {
   const width = Number.isFinite(props?.width) ? Math.max(ROAD_MIN_WIDTH, props!.width!) : ROAD_DEFAULT_WIDTH
+  const chunkSizeMetersRaw = (props as RoadComponentProps | undefined)?.chunkSizeMeters
+  const chunkSizeMeters = Number.isFinite(chunkSizeMetersRaw)
+    ? Math.max(1, Math.min(256, chunkSizeMetersRaw as number))
+    : ROAD_DEFAULT_CHUNK_SIZE_METERS
+
+  const sampleSpacingMetersRaw = (props as RoadComponentProps | undefined)?.sampleSpacingMeters
+  const sampleSpacingMeters = Number.isFinite(sampleSpacingMetersRaw)
+    ? Math.max(0.05, Math.min(4, sampleSpacingMetersRaw as number))
+    : ROAD_DEFAULT_SAMPLE_SPACING_METERS
+
+  const surfaceOffsetRaw = (props as RoadComponentProps | undefined)?.surfaceOffset
+  const surfaceOffset = Number.isFinite(surfaceOffsetRaw)
+    ? Math.max(0, Math.min(1, surfaceOffsetRaw as number))
+    : ROAD_DEFAULT_SURFACE_OFFSET
+
+  const brushFalloffRaw = (props as RoadComponentProps | undefined)?.brushFalloff
+  const brushFalloff = Number.isFinite(brushFalloffRaw)
+    ? Math.max(0, Math.min(1, brushFalloffRaw as number))
+    : ROAD_DEFAULT_BRUSH_FALLOFF
 
   const smoothingRaw = (props as RoadComponentProps | undefined)?.junctionSmoothing
   const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
@@ -107,6 +134,10 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     vertices,
     segments,
     width,
+    chunkSizeMeters,
+    sampleSpacingMeters,
+    surfaceOffset,
+    brushFalloff,
     junctionSmoothing,
     laneLines,
     shoulders,
@@ -127,6 +158,10 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
       vertices: [],
       segments: [],
       width: ROAD_DEFAULT_WIDTH,
+      chunkSizeMeters: ROAD_DEFAULT_CHUNK_SIZE_METERS,
+      sampleSpacingMeters: ROAD_DEFAULT_SAMPLE_SPACING_METERS,
+      surfaceOffset: ROAD_DEFAULT_SURFACE_OFFSET,
+      brushFalloff: ROAD_DEFAULT_BRUSH_FALLOFF,
       junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
       bodyAssetId: null,
       samplingDensityFactor: 1.0,
@@ -145,6 +180,10 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     vertices: vertices as any,
     segments: segments as any,
     width: mesh.width,
+    chunkSizeMeters: mesh.chunkSizeMeters,
+    sampleSpacingMeters: mesh.sampleSpacingMeters,
+    surfaceOffset: mesh.surfaceOffset,
+    brushFalloff: mesh.brushFalloff,
     junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
     laneLines: false,
     shoulders: false,
@@ -159,6 +198,10 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     vertices: props.vertices.map((p) => [p[0], p[1]]),
     segments: props.segments.map((s) => ({ a: s.a, b: s.b })),
     width: props.width,
+    chunkSizeMeters: props.chunkSizeMeters,
+    sampleSpacingMeters: props.sampleSpacingMeters,
+    surfaceOffset: props.surfaceOffset,
+    brushFalloff: props.brushFalloff,
     junctionSmoothing: props.junctionSmoothing,
     laneLines: props.laneLines,
     shoulders: props.shoulders,
@@ -197,6 +240,16 @@ const roadComponentDefinition: ComponentDefinition<RoadComponentProps> = {
       fields: [{ kind: 'number', key: 'width', label: 'Width (m)', min: ROAD_MIN_WIDTH, step: 0.1 }],
     },
     {
+      id: 'surface-source',
+      label: 'Surface Source',
+      fields: [
+        { kind: 'number', key: 'chunkSizeMeters', label: 'Chunk Size (m)', min: 1, step: 1 },
+        { kind: 'number', key: 'sampleSpacingMeters', label: 'Sample Spacing (m)', min: 0.05, step: 0.05 },
+        { kind: 'number', key: 'surfaceOffset', label: 'Surface Offset (m)', min: 0, step: 0.005 },
+        { kind: 'number', key: 'brushFalloff', label: 'Brush Falloff', min: 0, max: 1, step: 0.05 },
+      ],
+    },
+    {
       id: 'details',
       label: 'Details',
       fields: [
@@ -228,6 +281,10 @@ export function createRoadComponentState(
     vertices: overrides?.vertices ?? defaults.vertices,
     segments: overrides?.segments ?? defaults.segments,
     width: overrides?.width ?? defaults.width,
+    chunkSizeMeters: overrides?.chunkSizeMeters ?? defaults.chunkSizeMeters,
+    sampleSpacingMeters: overrides?.sampleSpacingMeters ?? defaults.sampleSpacingMeters,
+    surfaceOffset: overrides?.surfaceOffset ?? defaults.surfaceOffset,
+    brushFalloff: overrides?.brushFalloff ?? defaults.brushFalloff,
     junctionSmoothing: overrides?.junctionSmoothing ?? defaults.junctionSmoothing,
     laneLines: overrides?.laneLines ?? defaults.laneLines,
     shoulders: overrides?.shoulders ?? defaults.shoulders,

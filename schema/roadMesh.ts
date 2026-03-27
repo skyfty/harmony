@@ -12,6 +12,7 @@ import { sampleGroundHeight } from './groundMesh'
 import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
 import { buildRoadGraph, getJunctionIncidentDirectionsXZ } from './roadGraph'
 import { buildJunctionLoopXZ, triangulateJunctionPatchXZ } from './roadJunctionPatch'
+import { parseRoadSurfaceChunkKey, resolveRoadSurfaceChunkBounds } from './roadSurfaceTiles'
 
 export function resolveRoadLocalHeightSampler(
   roadNode: SceneNode,
@@ -104,6 +105,175 @@ const ROAD_CORNER_MIN_SEGMENTS_BASE = 12
 const ROAD_CORNER_MIN_SEGMENTS_EXTRA = 12
 
 const ROAD_OFFSET_MITER_LIMIT = 4
+
+function decodeBase64Bytes(base64: string): Uint8Array | null {
+  const normalized = typeof base64 === 'string' ? base64.trim() : ''
+  if (!normalized.length) {
+    return null
+  }
+  try {
+    const maybeBuffer = (globalThis as { Buffer?: { from: (input: string, encoding: string) => Uint8Array } }).Buffer
+    if (maybeBuffer && typeof maybeBuffer.from === 'function') {
+      const nodeBuffer = maybeBuffer.from(normalized, 'base64')
+      return new Uint8Array(nodeBuffer.buffer, nodeBuffer.byteOffset, nodeBuffer.byteLength).slice()
+    }
+    if (typeof atob === 'function') {
+      const binary = atob(normalized)
+      const out = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i += 1) {
+        out[i] = binary.charCodeAt(i)
+      }
+      return out
+    }
+  } catch (_error) {
+    return null
+  }
+  return null
+}
+
+function getBitFromPackedBytes(bytes: Uint8Array, index: number): 0 | 1 {
+  const byteIndex = index >> 3
+  const bitMask = 1 << (index & 7)
+  return (bytes[byteIndex]! & bitMask) !== 0 ? 1 : 0
+}
+
+function buildRoadGeometryFromSurfaceChunks(
+  definition: RoadDynamicMesh,
+  options: RoadJunctionSmoothingOptions,
+): THREE.BufferGeometry | null {
+  const chunks = definition.roadSurfaceChunks && typeof definition.roadSurfaceChunks === 'object'
+    ? definition.roadSurfaceChunks
+    : null
+  if (!chunks) {
+    return null
+  }
+
+  const entries = Object.entries(chunks)
+    .map(([chunkKey, chunkRef]) => {
+      const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+      if (!normalizedChunkKey || !chunkRef || typeof chunkRef !== 'object') {
+        return null
+      }
+      const resolution = Number.isFinite(chunkRef.resolution) ? Math.max(1, Math.trunc(chunkRef.resolution)) : 64
+      const coverageData = typeof chunkRef.coverageData === 'string' ? chunkRef.coverageData.trim() : ''
+      if (!coverageData) {
+        return null
+      }
+      return [normalizedChunkKey, { ...chunkRef, resolution, coverageData }] as const
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+
+  if (!entries.length) {
+    return null
+  }
+
+  const patchGeometries: THREE.BufferGeometry[] = []
+
+  const baseOffset = Number.isFinite(definition.surfaceOffset) ? Math.max(0, definition.surfaceOffset!) : ROAD_SURFACE_Y_OFFSET
+  const extraClearance = Number.isFinite(options.minClearance) ? Math.max(0, options.minClearance!) : 0
+  const sampler = typeof options.heightSampler === 'function' ? options.heightSampler : null
+
+  const chunkPolygons: PolygonClippingMultiPolygon[] = []
+
+  for (const [chunkKey, chunkRef] of entries) {
+    const parts = parseRoadSurfaceChunkKey(chunkKey)
+    if (!parts) {
+      continue
+    }
+    const bounds = resolveRoadSurfaceChunkBounds(definition, parts.chunkRow, parts.chunkColumn)
+    const resolution = chunkRef.resolution
+    const expectedBytes = Math.ceil((resolution * resolution) / 8)
+    const coverageBytes = decodeBase64Bytes(chunkRef.coverageData)
+    if (!coverageBytes || coverageBytes.length !== expectedBytes) {
+      continue
+    }
+
+    const cellSizeX = bounds.width / resolution
+    const cellSizeZ = bounds.depth / resolution
+    const occupiedRects: PolygonClippingMultiPolygon[] = []
+
+    for (let row = 0; row < resolution; row += 1) {
+      const z0 = bounds.minZ + row * cellSizeZ
+      const z1 = z0 + cellSizeZ
+      for (let column = 0; column < resolution; column += 1) {
+        const index = row * resolution + column
+        if (!getBitFromPackedBytes(coverageBytes, index)) {
+          continue
+        }
+        const x0 = bounds.minX + column * cellSizeX
+        const x1 = x0 + cellSizeX
+        occupiedRects.push([[[
+          [x0, z0],
+          [x1, z0],
+          [x1, z1],
+          [x0, z1],
+          [x0, z0],
+        ]]])
+      }
+    }
+
+    if (!occupiedRects.length) {
+      continue
+    }
+    const chunkUnion = occupiedRects.reduce<PolygonClippingMultiPolygon | null>((acc, entry) => {
+      if (!acc) {
+        return entry
+      }
+      return polygonClipping.union(acc as any, entry as any) as PolygonClippingMultiPolygon
+    }, null)
+    if (chunkUnion && chunkUnion.length) {
+      chunkPolygons.push(chunkUnion)
+    }
+  }
+
+  if (!chunkPolygons.length) {
+    return null
+  }
+
+  const unioned = chunkPolygons.reduce<PolygonClippingMultiPolygon | null>((acc, entry) => {
+    if (!acc) {
+      return entry
+    }
+    return polygonClipping.union(acc as any, entry as any) as PolygonClippingMultiPolygon
+  }, null)
+
+  if (!unioned || !unioned.length) {
+    return null
+  }
+
+  for (const poly of unioned) {
+    if (!Array.isArray(poly) || !poly.length) {
+      continue
+    }
+    const contour = clippingRingToVector2Loop(poly[0] as PolygonClippingRing)
+    if (contour.length < 3) {
+      continue
+    }
+    const holes = poly
+      .slice(1)
+      .map((ring) => clippingRingToVector2Loop(ring as PolygonClippingRing))
+      .filter((ring) => ring.length >= 3)
+
+    const patch = triangulateJunctionPatchXZ({
+      contour,
+      holes,
+      heightSampler: sampler,
+      yOffset: baseOffset,
+      minClearance: extraClearance,
+    })
+    if (patch) {
+      patchGeometries.push(patch)
+    }
+  }
+
+  if (!patchGeometries.length) {
+    return null
+  }
+
+  const merged = mergeGeometries(patchGeometries, false)
+  patchGeometries.forEach((geometry) => geometry.dispose())
+  return merged ?? null
+}
 
 
 function computeHeightSmoothingPasses(divisions: number, strengthFactor = 1.0): number {
@@ -912,6 +1082,20 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
 
   const smoothing = normalizeJunctionSmoothing(options.junctionSmoothing)
   const width = Math.max(ROAD_MIN_WIDTH, Number.isFinite(definition.width) ? definition.width : ROAD_DEFAULT_WIDTH)
+
+  const chunkSurfaceGeometry = buildRoadGeometryFromSurfaceChunks(definition, options)
+  if (chunkSurfaceGeometry) {
+    const roadMesh = new THREE.Mesh(chunkSurfaceGeometry, createRoadMaterial())
+    roadMesh.castShadow = false
+    roadMesh.receiveShadow = true
+    roadMesh.name = 'RoadMesh'
+    group.add(roadMesh)
+
+    const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
+    roadMesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
+    return
+  }
+
   const buildData = collectRoadBuildData(definition)
   if (!buildData) {
     return
