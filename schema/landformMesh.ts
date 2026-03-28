@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { LandformDynamicMesh, Vector2Like, Vector3Like } from './index'
-import { MATERIAL_CONFIG_ID_KEY } from './material'
+import { MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from './material'
 
 const LANDFORM_DEFAULT_COLOR = 0xffffff
 const LANDFORM_SURFACE_Y_OFFSET = 0.1
@@ -93,10 +93,17 @@ function resolveUvScale(value: unknown): { x: number; y: number } {
 
 function buildFallbackUvs(vertices: THREE.Vector3[], uvScale: { x: number; y: number }): Float32Array {
   const uvs = new Float32Array(vertices.length * 2)
+  if (vertices.length === 0) {
+    return uvs
+  }
+
+  // Match the editor-authored UVs: local-space X/Z divided by the configured UV scale.
   for (let index = 0; index < vertices.length; index += 1) {
     const vertex = vertices[index]!
-    uvs[index * 2] = vertex.x / uvScale.x
-    uvs[index * 2 + 1] = vertex.z / uvScale.y
+    const u = vertex.x / uvScale.x
+    const v = vertex.z / uvScale.y
+    uvs[index * 2] = u
+    uvs[index * 2 + 1] = v
   }
   return uvs
 }
@@ -180,6 +187,10 @@ function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMes
   mesh.userData = {
     ...(mesh.userData ?? {}),
     [MATERIAL_CONFIG_ID_KEY]: normalizeMaterialConfigId(definition.materialConfigId),
+    [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: {
+      uvMetersPerUnit: { x: 1, y: 1 },
+      repeatScale: { x: 1, y: 1 },
+    },
     landformSurface: true,
   }
   mesh.onBeforeRender = () => {

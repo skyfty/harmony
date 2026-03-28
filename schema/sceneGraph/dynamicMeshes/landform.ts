@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { LandformDynamicMesh, SceneNodeMaterial } from '../../index'
 import type { SceneNodeWithExtras } from '../types'
 import { createLandformRenderGroup, applyLandformFeatherMaterial } from '../../landformMesh'
-import { createAutoTiledMaterialVariant, MATERIAL_CONFIG_ID_KEY } from '../../material'
+import { createAutoTiledMaterialVariant, MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from '../../material'
 import { buildMaterialConfigMap } from '../materialAssignment'
 
 function applyLandformMaterialConfigAssignment(
@@ -14,17 +14,22 @@ function applyLandformMaterialConfigAssignment(
 ): void {
   const variantCache = new Map<string, THREE.Material | THREE.Material[]>()
 
-  const resolveAssignedMaterial = (source: THREE.Material | THREE.Material[]): THREE.Material | THREE.Material[] => {
+  const resolveAssignedMaterial = (
+    source: THREE.Material | THREE.Material[],
+    repeatInfo: unknown,
+  ): THREE.Material | THREE.Material[] => {
     const materialKey = Array.isArray(source)
       ? source.map((entry) => entry.uuid).join(',')
       : source.uuid
-    const cached = variantCache.get(materialKey)
+    const repeatKey = repeatInfo ? JSON.stringify(repeatInfo) : ''
+    const cacheKey = `${materialKey}|${repeatKey}`
+    const cached = variantCache.get(cacheKey)
     if (cached) {
       return cached
     }
-    const variant = createAutoTiledMaterialVariant(source, null)
+    const variant = createAutoTiledMaterialVariant(source, repeatInfo)
     const assigned = variant.shared ? source : variant.material
-    variantCache.set(materialKey, assigned)
+    variantCache.set(cacheKey, assigned)
     return assigned
   }
 
@@ -34,10 +39,11 @@ function applyLandformMaterialConfigAssignment(
       return
     }
     const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown
+    const repeatInfo = mesh.userData?.[MATERIAL_TEXTURE_REPEAT_INFO_KEY] as unknown
     const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : ''
     const assigned = selectorId && options.materialByConfigId.has(selectorId)
-      ? resolveAssignedMaterial(options.materialByConfigId.get(selectorId)!)
-      : resolveAssignedMaterial(options.defaultMaterial)
+      ? resolveAssignedMaterial(options.materialByConfigId.get(selectorId)!, repeatInfo)
+      : resolveAssignedMaterial(options.defaultMaterial, repeatInfo)
 
     if (Array.isArray(assigned)) {
       mesh.material = assigned.map((entry) => applyLandformFeatherMaterial(entry) ?? entry)

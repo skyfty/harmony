@@ -1522,7 +1522,7 @@ export interface LandformDynamicMesh {
   materialConfigId?: string | null
   /** Feather width in meters used when computing surfaceFeather. */
   feather?: number
-  /** Surface UV repeats per meter (U/V). */
+  /** Surface UV scale in local XZ meters per UV repeat (U/V). */
   uvScale?: Vector2Like | null
 }
 

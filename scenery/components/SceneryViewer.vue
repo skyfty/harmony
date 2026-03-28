@@ -10523,6 +10523,7 @@ function startRenderLoop(
   if (!renderScope) {
     renderScope = effectScope();
   }
+
   renderScope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
