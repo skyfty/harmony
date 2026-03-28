@@ -67,7 +67,11 @@ export async function listVehicles(ctx: Context): Promise<void> {
     total: vehicles.length,
     vehicles: vehicles.map((row) => {
       const vehicleId = row._id.toString()
-      return mapVehicle(row, ownedSet.has(vehicleId), currentVehicleId === vehicleId)
+      return mapVehicle(
+        row,
+        ownedSet.has(vehicleId) || row.isDefault === true,
+        currentVehicleId === vehicleId,
+      )
     }),
   }
 }
@@ -101,7 +105,7 @@ export async function setCurrentVehicle(ctx: Context): Promise<void> {
   if (!vehicle || vehicle.isActive === false) {
     ctx.throw(404, 'Vehicle not found')
   }
-  if (!ownership) {
+  if (!ownership && vehicle.isDefault !== true) {
     ctx.throw(403, 'Vehicle not owned')
   }
 
