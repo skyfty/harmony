@@ -74,6 +74,7 @@ import type {
   GroundSculptOperation,
   RoadDynamicMesh,
   FloorDynamicMesh,
+  LandformDynamicMesh,
   GuideRouteDynamicMesh,
   WallDynamicMesh,
 } from '@schema/index'
@@ -262,6 +263,7 @@ import {
   WALL_ENDPOINT_HANDLE_Y_OFFSET,
 } from './WallEndpointRenderer'
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
+import { createLandformVertexRenderer, type LandformVertexHandlePickResult } from './LandformVertexRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
 import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './WaterVertexRenderer'
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
@@ -1881,12 +1883,14 @@ const navigationSpeedBoostModifierActive = ref(false)
 const wallEditNodeId = ref<string | null>(null)
 const roadEditNodeId = ref<string | null>(null)
 const floorEditNodeId = ref<string | null>(null)
+const landformEditNodeId = ref<string | null>(null)
 const waterEditNodeId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
 const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
+const selectedNodeIsLandform = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Landform')
 const selectedNodeIsWater = computed(() => isWaterSurfaceNode(sceneStore.selectedNode))
 // Shift modifier in scatter-erase mode means "repair/restore".
 // - Walls: repair a segment (hammer)
@@ -1932,6 +1936,20 @@ function resolveEditableFloorNode(nodeId: string | null | undefined): SceneNode 
   }
   const node = findSceneNode(sceneStore.nodes, nodeId)
   if (!node || node.dynamicMesh?.type !== 'Floor') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
+function resolveEditableLandformNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Landform') {
     return null
   }
   if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
@@ -1986,6 +2004,14 @@ function setFloorEditNodeId(nodeId: string | null): void {
   refreshSelectionHighlightsForEditModeChange()
 }
 
+function setLandformEditNodeId(nodeId: string | null): void {
+  if (landformEditNodeId.value === nodeId) {
+    return
+  }
+  landformEditNodeId.value = nodeId
+  refreshSelectionHighlightsForEditModeChange()
+}
+
 function setWaterEditNodeId(nodeId: string | null): void {
   if (waterEditNodeId.value === nodeId) {
     return
@@ -2006,6 +2032,10 @@ function clearFloorEditMode(): void {
   setFloorEditNodeId(null)
 }
 
+function clearLandformEditMode(): void {
+  setLandformEditNodeId(null)
+}
+
 function clearWaterEditMode(): void {
   setWaterEditNodeId(null)
 }
@@ -2013,6 +2043,7 @@ function clearWaterEditMode(): void {
 function enterWallEditMode(nodeId: string | null | undefined): void {
   clearRoadEditMode()
   clearFloorEditMode()
+  clearLandformEditMode()
   clearWaterEditMode()
   setWallEditNodeId(resolveEditableWallNode(nodeId)?.id ?? null)
 }
@@ -2020,6 +2051,7 @@ function enterWallEditMode(nodeId: string | null | undefined): void {
 function enterRoadEditMode(nodeId: string | null | undefined): void {
   clearWallEditMode()
   clearFloorEditMode()
+  clearLandformEditMode()
   clearWaterEditMode()
   setRoadEditNodeId(resolveEditableRoadNode(nodeId)?.id ?? null)
 }
@@ -2027,14 +2059,24 @@ function enterRoadEditMode(nodeId: string | null | undefined): void {
 function enterFloorEditMode(nodeId: string | null | undefined): void {
   clearWallEditMode()
   clearRoadEditMode()
+  clearLandformEditMode()
   clearWaterEditMode()
   setFloorEditNodeId(resolveEditableFloorNode(nodeId)?.id ?? null)
+}
+
+function enterLandformEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearRoadEditMode()
+  clearFloorEditMode()
+  clearWaterEditMode()
+  setLandformEditNodeId(resolveEditableLandformNode(nodeId)?.id ?? null)
 }
 
 function enterWaterEditMode(nodeId: string | null | undefined): void {
   clearWallEditMode()
   clearRoadEditMode()
   clearFloorEditMode()
+  clearLandformEditMode()
   setWaterEditNodeId(resolveEditableWaterNode(nodeId)?.id ?? null)
 }
 
@@ -2072,6 +2114,18 @@ function isSelectedFloorEditMode(): boolean {
     return false
   }
   return Boolean(resolveEditableFloorNode(selectedId))
+}
+
+function isSelectedLandformEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || landformEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableLandformNode(selectedId))
 }
 
 function isSelectedWaterEditMode(): boolean {
@@ -4665,6 +4719,23 @@ type WaterContourVertexDragState = {
   rectangleConstraint: WaterRectangleVertexConstraint | null
 }
 
+type LandformContourVertexDragState = {
+  pointerId: number
+  nodeId: string
+  vertexIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  dragMode: 'free' | 'axis'
+  axisWorld: THREE.Vector3 | null
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+  runtimeObject: THREE.Object3D
+  basePoints: Array<[number, number]>
+  workingPoints: Array<[number, number]>
+}
+
 type WaterCircleCenterDragState = {
   pointerId: number
   nodeId: string
@@ -4748,6 +4819,7 @@ type WaterRectangleEdgeConstraint = WaterRectangleFrame & {
 }
 
 let waterContourVertexDragState: WaterContourVertexDragState | null = null
+let landformContourVertexDragState: LandformContourVertexDragState | null = null
 let waterCircleCenterDragState: WaterCircleCenterDragState | null = null
 let waterCircleRadiusDragState: WaterCircleRadiusDragState | null = null
 let waterEdgeDragState: WaterEdgeDragState | null = null
@@ -4755,6 +4827,7 @@ let waterEdgeDragState: WaterEdgeDragState | null = null
 const roadVertexRenderer = createRoadVertexRenderer()
 const wallEndpointRenderer = createWallEndpointRenderer()
 const floorVertexRenderer = createFloorVertexRenderer()
+const landformVertexRenderer = createLandformVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
 const displayBoardCornerHandleRenderer = createDisplayBoardCornerHandleRenderer()
 const waterVertexRenderer = createWaterVertexRenderer()
@@ -5597,6 +5670,134 @@ function setActiveFloorVertexHandle(active: { nodeId: string; vertexIndex: numbe
 
 function setActiveFloorCircleHandle(active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: any } | null) {
   floorCircleHandleRenderer.setActiveHandle(active as any)
+}
+
+function ensureLandformVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Array<[number, number]> }) {
+  const selectedId = isSelectedLandformEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'landform' && isSelectedLandformEditMode() && !landformBuildTool.getSession()
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveLandformDefinition: (nodeId: string) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      return node?.dynamicMesh?.type === 'Landform' ? (node.dynamicMesh as LandformDynamicMesh) : null
+    },
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+    previewPoints: options?.previewPoints,
+  }
+  if (options?.force) {
+    landformVertexRenderer.forceRebuild(common)
+  } else {
+    landformVertexRenderer.ensure(common)
+  }
+}
+
+function pickLandformVertexHandleAtPointer(event: PointerEvent): LandformVertexHandlePickResult | null {
+  return landformVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function setActiveLandformVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
+  landformVertexRenderer.setActiveHandle(active as any)
+}
+
+function cloneLandformFootprintPoints(node: SceneNode | null | undefined): Array<[number, number]> {
+  if (!node || node.dynamicMesh?.type !== 'Landform') {
+    return []
+  }
+  const footprint = Array.isArray(node.dynamicMesh.footprint) ? node.dynamicMesh.footprint : []
+  return footprint
+    .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
+    .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+}
+
+function buildLandformWorldPointsFromLocalPoints(runtimeObject: THREE.Object3D, points: Array<[number, number]>): THREE.Vector3[] {
+  return points.map(([x, z]) => runtimeObject.localToWorld(new THREE.Vector3(x, 0, z)))
+}
+
+function commitLandformContourNode(nodeId: string, points: Array<[number, number]>): boolean {
+  const runtime = objectMap.get(nodeId) ?? null
+  if (!runtime || points.length < 3) {
+    return false
+  }
+  const worldPoints = buildLandformWorldPointsFromLocalPoints(runtime, points)
+  const updated = sceneStore.updateLandformSurfaceMeshNode({
+    nodeId,
+    points: worldPoints.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+  })
+  return Boolean(updated)
+}
+
+function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
+  if (landformContourVertexDragState) {
+    return false
+  }
+  if (!isSelectedLandformEditMode() || landformBuildTool.getSession()) {
+    return false
+  }
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  const runtime = objectMap.get(selectedId) ?? null
+  if (!node || !runtime || node.dynamicMesh?.type !== 'Landform') {
+    return false
+  }
+
+  ensureLandformVertexHandlesForSelectedNode()
+  const hit = pickLandformVertexHandleAtPointer(event)
+  if (!hit || hit.nodeId !== selectedId) {
+    return false
+  }
+
+  const basePoints = cloneLandformFootprintPoints(node)
+  const startPoint = basePoints[hit.vertexIndex]
+  if (!startPoint) {
+    return false
+  }
+
+  const startPointWorld = runtime.localToWorld(new THREE.Vector3(startPoint[0], 0, startPoint[1]))
+  const worldQuaternion = runtime.getWorldQuaternion(new THREE.Quaternion())
+  const rawAxisWorld = hit.gizmoKind === 'axis' && hit.gizmoAxis
+    ? hit.gizmoAxis.clone().applyQuaternion(worldQuaternion)
+    : null
+  const axisWorld = rawAxisWorld
+    ? new THREE.Vector3(rawAxisWorld.x, 0, rawAxisWorld.z).normalize()
+    : null
+  const dragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? 'axis' : 'free'
+
+  landformContourVertexDragState = {
+    pointerId: event.pointerId,
+    nodeId: selectedId,
+    vertexIndex: hit.vertexIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    dragMode,
+    axisWorld: dragMode === 'axis' ? axisWorld : null,
+    dragPlane: createEndpointDragPlane({
+      mode: dragMode,
+      axisWorld: dragMode === 'axis' ? axisWorld : null,
+      startPointWorld,
+      freePlaneNormal: new THREE.Vector3(0, 1, 0),
+    }),
+    startPointWorld: startPointWorld.clone(),
+    startHitWorld: null,
+    runtimeObject: runtime,
+    basePoints,
+    workingPoints: basePoints.map(([x, z]) => [x, z] as [number, number]),
+  }
+
+  setActiveLandformVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
+  pointerInteraction.capture(event.pointerId)
+  return true
 }
 
 const FLOOR_EDGE_PICK_DISTANCE = 0.3
@@ -7138,6 +7339,7 @@ function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
   const hasActiveDrag = Boolean(
     roadVertexDragState
     || floorVertexDragState
+    || landformContourVertexDragState
     || displayBoardCornerDragState
     || waterContourVertexDragState
     || waterCircleCenterDragState
@@ -12193,6 +12395,7 @@ function animate() {
     freezeCircleFacing: !!wallCircleCenterDragState || !!wallCircleRadiusDragState,
   })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
+  landformVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   floorCircleHandleRenderer.updateScreenSize({
     camera,
     canvas: canvasRef.value,
@@ -13431,6 +13634,10 @@ function cancelBuildSessionForTool(tool: BuildTool): void {
     floorBuildTool.cancel()
     return
   }
+  if (tool === 'landform' && landformBuildTool.getSession()) {
+    landformBuildTool.cancel()
+    return
+  }
   if (tool === 'water' && waterBuildTool.getSession()) {
     waterBuildTool.cancel()
   }
@@ -13446,6 +13653,8 @@ function resolveBuildToolForNode(node: any): BuildTool | null {
     ? 'wall'
     : dynamicMeshType === 'Floor'
     ? 'floor'
+    : dynamicMeshType === 'Landform'
+    ? 'landform'
     : dynamicMeshType === 'Road'
     ? 'road'
     : null
@@ -13473,6 +13682,8 @@ function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | 
     enterRoadEditMode(nodeId)
   } else if (toolForNode === 'floor') {
     enterFloorEditMode(nodeId)
+  } else if (toolForNode === 'landform') {
+    enterLandformEditMode(nodeId)
   } else if (toolForNode === 'water') {
     enterWaterEditMode(nodeId)
   }
@@ -13487,7 +13698,7 @@ function refreshBuildStartIndicatorAfterEditExit(event?: MouseEvent | PointerEve
   if (!event || !activeBuildTool.value) {
     return
   }
-  if (activeBuildTool.value !== 'wall' && activeBuildTool.value !== 'road' && activeBuildTool.value !== 'floor' && activeBuildTool.value !== 'water') {
+  if (activeBuildTool.value !== 'wall' && activeBuildTool.value !== 'road' && activeBuildTool.value !== 'floor' && activeBuildTool.value !== 'landform' && activeBuildTool.value !== 'water') {
     return
   }
   if (isAltOverrideActive) {
@@ -13500,6 +13711,9 @@ function refreshBuildStartIndicatorAfterEditExit(event?: MouseEvent | PointerEve
     return
   }
   if (activeBuildTool.value === 'floor' && isSelectedFloorEditMode()) {
+    return
+  }
+  if (activeBuildTool.value === 'landform' && isSelectedLandformEditMode()) {
     return
   }
   if (activeBuildTool.value === 'water' && isSelectedWaterEditMode()) {
@@ -13537,6 +13751,14 @@ function tryExitActiveNodeBuildToolEditMode(event?: MouseEvent | PointerEvent): 
     floorCircleHandleRenderer.clearHover()
     floorVertexRenderer.clear()
     floorCircleHandleRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
+    return true
+  }
+  if (activeBuildTool.value === 'landform' && isSelectedLandformEditMode()) {
+    clearLandformEditMode()
+    setActiveLandformVertexHandle(null)
+    landformVertexRenderer.clearHover()
+    landformVertexRenderer.clear()
     refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
@@ -13838,19 +14060,37 @@ async function handlePointerDown(event: PointerEvent) {
 
   const wallEditModeLocked = activeBuildTool.value === 'wall' && isSelectedWallEditMode()
   const floorEditModeLocked = activeBuildTool.value === 'floor' && isSelectedFloorEditMode()
+  const landformEditModeLocked = activeBuildTool.value === 'landform' && isSelectedLandformEditMode()
   const roadEditModeLocked = activeBuildTool.value === 'road' && isSelectedRoadEditMode()
   const waterEditModeLocked = activeBuildTool.value === 'water' && isSelectedWaterEditMode()
   const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
 
   if (activeBuildTool.value === 'landform') {
-    if (event.button === 0 || event.button === 2) {
-      landformBuildTool.handlePointerDown(event)
-      if (event.button === 2) {
-        pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+    if (event.button === 0 && !isAltOverrideActive) {
+      if (landformEditModeLocked && selectedNodeIsLandform.value) {
+        ensureLandformVertexHandlesForSelectedNode()
+      }
+      if (tryBeginLandformVertexDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      if (!landformEditModeLocked) {
+        landformBuildTool.handlePointerDown(event)
       }
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
+      return
+    }
+
+    if (event.button === 2) {
+      if (!landformEditModeLocked) {
+        landformBuildTool.handlePointerDown(event)
+      }
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
       return
     }
   }
@@ -14122,6 +14362,7 @@ function handlePointerMove(event: PointerEvent) {
     event.pointerType === 'mouse' &&
     !roadVertexDragState &&
     !floorVertexDragState &&
+    !landformContourVertexDragState &&
     !displayBoardCornerDragState &&
     !waterContourVertexDragState &&
     !waterCircleCenterDragState &&
@@ -14141,6 +14382,7 @@ function handlePointerMove(event: PointerEvent) {
     ensureRoadVertexHandlesForSelectedNode()
     ensureWallEndpointHandlesForSelectedNode()
     ensureFloorVertexHandlesForSelectedNode()
+    ensureLandformVertexHandlesForSelectedNode()
     ensureFloorCircleHandlesForSelectedNode()
     ensureDisplayBoardCornerHandlesForSelectedNode()
     ensureWaterVertexHandlesForSelectedNode()
@@ -14149,6 +14391,7 @@ function handlePointerMove(event: PointerEvent) {
     roadVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     wallEndpointRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    landformVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     displayBoardCornerHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
@@ -14157,6 +14400,7 @@ function handlePointerMove(event: PointerEvent) {
     roadVertexRenderer.clearHover()
     wallEndpointRenderer.clearHover()
     floorVertexRenderer.clearHover()
+    landformVertexRenderer.clearHover()
     floorCircleHandleRenderer.clearHover()
     displayBoardCornerHandleRenderer.clearHover()
     waterVertexRenderer.clearHover()
@@ -14230,6 +14474,48 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (landformContourVertexDragState && event.pointerId === landformContourVertexDragState.pointerId) {
+    const state = landformContourVertexDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      return
+    }
+    state.moved = true
+
+    if ((event.buttons & 1) === 0) {
+      return
+    }
+
+    if (!state.startHitWorld) {
+      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+        return
+      }
+      state.startHitWorld = waterDragIntersectionHelper.clone()
+    }
+    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      return
+    }
+
+    let world = waterDragIntersectionHelper.clone()
+    if (state.dragMode === 'axis' && state.axisWorld) {
+      const axis = state.axisWorld.clone().normalize()
+      const delta = world.clone().sub(state.startHitWorld)
+      const t = axis.dot(delta)
+      world = state.startHitWorld.clone().add(axis.multiplyScalar(t))
+    }
+
+    const local = state.runtimeObject.worldToLocal(world)
+    const nextPoints = state.workingPoints.map(([x, z]) => [x, z] as [number, number])
+    if (!nextPoints[state.vertexIndex]) {
+      return
+    }
+    nextPoints[state.vertexIndex] = [local.x, local.z]
+    state.workingPoints = nextPoints
+    ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    return
+  }
+
   if (waterContourVertexDragState && event.pointerId === waterContourVertexDragState.pointerId) {
     const state = waterContourVertexDragState
     const dx = event.clientX - state.startX
@@ -14276,6 +14562,23 @@ function handlePointerMove(event: PointerEvent) {
     if (buildWaterPreviewFromLocalPoints(state.runtimeObject, nextPoints)) {
       ensureWaterVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
     }
+    return
+  }
+
+  if (landformContourVertexDragState && event.pointerId === landformContourVertexDragState.pointerId) {
+    landformContourVertexDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveLandformVertexHandle(null)
+
+    try {
+      ensureLandformVertexHandlesForSelectedNode({ force: true })
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
     return
   }
 
@@ -14777,6 +15080,28 @@ async function handlePointerUp(event: PointerEvent) {
         } else {
           buildWaterPreviewFromLocalPoints(state.runtimeObject, state.startPoints)
           ensureWaterVertexHandlesForSelectedNode({ force: true })
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      if (landformContourVertexDragState && event.pointerId === landformContourVertexDragState.pointerId && event.button === 0) {
+        const state = landformContourVertexDragState
+        landformContourVertexDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveLandformVertexHandle(null)
+
+        if (state.moved) {
+          commitLandformContourNode(state.nodeId, state.workingPoints)
+          ensureLandformVertexHandlesForSelectedNode({ force: true })
+          void nextTick(() => {
+            ensureLandformVertexHandlesForSelectedNode({ force: true })
+          })
+        } else {
+          ensureLandformVertexHandlesForSelectedNode({ force: true })
         }
 
         event.preventDefault()

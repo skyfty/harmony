@@ -26,6 +26,7 @@ export type WaterPreviewRenderer = {
 const PREVIEW_SIGNATURE_PRECISION = 1000
 const PREVIEW_Y_OFFSET = 0.02
 const CIRCLE_SEGMENTS = 32
+const WATER_LINE_PREVIEW_Y_OFFSET = 0.02
 
 function encodePreviewNumber(value: number): string {
   return `${Math.round(value * PREVIEW_SIGNATURE_PRECISION)}`
@@ -246,9 +247,11 @@ function updatePreviewGroupGeometry(group: THREE.Group, geometry: THREE.BufferGe
 function disposePreviewGroup(group: THREE.Group): void {
   const fill = group.userData.fill as THREE.Mesh | undefined
   const outline = group.userData.outline as THREE.LineSegments | undefined
+  const line = group.userData.line as THREE.Line | undefined
 
   fill?.geometry?.dispose?.()
   outline?.geometry?.dispose?.()
+  line?.geometry?.dispose?.()
 
   const fillMaterial = fill?.material as THREE.Material | THREE.Material[] | undefined
   if (Array.isArray(fillMaterial)) {
@@ -263,6 +266,41 @@ function disposePreviewGroup(group: THREE.Group): void {
   } else {
     outlineMaterial?.dispose?.()
   }
+
+  const lineMaterial = line?.material as THREE.Material | THREE.Material[] | undefined
+  if (Array.isArray(lineMaterial)) {
+    lineMaterial.forEach((material) => material?.dispose?.())
+  } else {
+    lineMaterial?.dispose?.()
+  }
+}
+
+function createLinePreviewGroup(points: THREE.Vector3[]): THREE.Group {
+  const group = new THREE.Group()
+  group.name = '__WaterLinePreview'
+  group.userData.isWaterLinePreview = true
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({
+      color: 0x81d4fa,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    }),
+  )
+  line.renderOrder = 101
+  group.userData.line = line
+  group.add(line)
+  return group
+}
+
+function updateLinePreviewGroup(group: THREE.Group, points: THREE.Vector3[]): void {
+  const line = group.userData.line as THREE.Line | undefined
+  if (!line) {
+    return
+  }
+  line.geometry?.dispose?.()
+  line.geometry = new THREE.BufferGeometry().setFromPoints(points)
 }
 
 export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }): WaterPreviewRenderer {
@@ -293,13 +331,26 @@ export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }):
       session.previewEnd,
       session.rectangleDirection,
     )
-    if (previewVertices.length < 3) {
+    if (previewVertices.length < 2) {
       clear(session)
       return
     }
 
     const nextSignature = computePreviewSignature(previewVertices)
     if (nextSignature === signature) {
+      return
+    }
+
+    const linePoints = previewVertices.map((point) => new THREE.Vector3(point.x, point.y + WATER_LINE_PREVIEW_Y_OFFSET, point.z))
+    if (previewVertices.length < 3) {
+      if (!session.previewGroup || session.previewGroup.userData?.isWaterLinePreview !== true) {
+        clear(session)
+        session.previewGroup = createLinePreviewGroup(linePoints)
+        options.rootGroup.add(session.previewGroup)
+      } else {
+        updateLinePreviewGroup(session.previewGroup, linePoints)
+      }
+      signature = nextSignature
       return
     }
 
@@ -312,13 +363,19 @@ export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }):
 
     const geometry = buildPreviewGeometry(previewVertices, center)
     if (!geometry) {
-      clear(session)
+      if (!session.previewGroup || session.previewGroup.userData?.isWaterLinePreview !== true) {
+        clear(session)
+        session.previewGroup = createLinePreviewGroup(linePoints)
+        options.rootGroup.add(session.previewGroup)
+      } else {
+        updateLinePreviewGroup(session.previewGroup, linePoints)
+      }
+      signature = nextSignature
       return
     }
 
-    signature = nextSignature
-
-    if (!session.previewGroup) {
+    if (!session.previewGroup || session.previewGroup.userData?.isWaterLinePreview === true) {
+      clear(session)
       session.previewGroup = createPreviewGroup(geometry)
       options.rootGroup.add(session.previewGroup)
     } else {
@@ -331,6 +388,7 @@ export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }):
     session.previewGroup.position.copy(center)
     session.previewGroup.position.y += PREVIEW_Y_OFFSET
     session.previewGroup.rotation.set(-Math.PI / 2, 0, 0)
+    signature = nextSignature
   }
 
   return {

@@ -7,6 +7,7 @@ const LANDFORM_SURFACE_Y_OFFSET = 0.1
 const LANDFORM_RENDER_ORDER = 8
 const LANDFORM_CONTENT_GROUP = '__LandformContent'
 const LANDFORM_MESH_NAME = '__LandformSurface'
+const LANDFORM_FEATHER_PATCHED_FLAG = '__landformFeatherPatched'
 
 function normalizeMaterialConfigId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
@@ -166,7 +167,11 @@ function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMes
     return false
   }
 
-  const mesh = new THREE.Mesh(geometry, materialTemplate.clone())
+  const baseMaterial = materialTemplate.clone()
+  const mesh = new THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>(
+    geometry,
+    (applyLandformFeatherMaterial(baseMaterial) ?? baseMaterial) as THREE.Material,
+  )
   mesh.name = LANDFORM_MESH_NAME
   mesh.castShadow = false
   mesh.receiveShadow = true
@@ -175,6 +180,14 @@ function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMes
     ...(mesh.userData ?? {}),
     [MATERIAL_CONFIG_ID_KEY]: normalizeMaterialConfigId(definition.materialConfigId),
     landformSurface: true,
+  }
+  mesh.onBeforeRender = () => {
+    const currentMaterial = mesh.material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(currentMaterial)) {
+      mesh.material = currentMaterial.map((entry) => applyLandformFeatherMaterial(entry) ?? entry)
+      return
+    }
+    mesh.material = applyLandformFeatherMaterial(currentMaterial ?? null) ?? (currentMaterial as THREE.Material)
   }
   content.add(mesh)
   return true
@@ -203,7 +216,14 @@ export function applyLandformFeatherMaterial(material: THREE.Material | null | u
   if (!material || !(material as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
     return material ?? null
   }
+  if ((material as THREE.Material).userData?.[LANDFORM_FEATHER_PATCHED_FLAG] === true) {
+    return material
+  }
   const clone = (material as THREE.MeshStandardMaterial).clone()
+  clone.userData = {
+    ...(clone.userData ?? {}),
+    [LANDFORM_FEATHER_PATCHED_FLAG]: true,
+  }
   clone.transparent = true
   clone.depthWrite = false
   clone.polygonOffset = true

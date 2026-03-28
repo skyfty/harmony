@@ -117,6 +117,7 @@ export const MATERIAL_CONFIG_ID_KEY = '__harmonyMaterialConfigId';
 export const WALL_REPEAT_SCALE_KEY = '__harmonyWallRepeatScale';
 export const WALL_REPEAT_UV_AXIS_KEY = '__harmonyWallRepeatUvAxis';
 export const MATERIAL_TEXTURE_REPEAT_INFO_KEY = '__harmonyTextureRepeatInfo';
+const LANDFORM_FEATHER_PATCHED_FLAG = '__landformFeatherPatched';
 
 export type MaterialTextureRepeatInfo = {
   uvMetersPerUnit: { x: number; y: number };
@@ -1271,6 +1272,17 @@ export function applyMaterialConfigToMaterial(
     const ref = config.textures?.[slot] ?? null;
     assignTextureToMaterial(material, slot, ref, options);
   });
+
+  if (material.userData?.[LANDFORM_FEATHER_PATCHED_FLAG] === true) {
+    if (!typed.transparent) {
+      typed.transparent = true;
+      needsUpdate = true;
+    }
+    if (typed.depthWrite) {
+      typed.depthWrite = false;
+      needsUpdate = true;
+    }
+  }
 
   if (needsUpdate) {
     typed.needsUpdate = true;

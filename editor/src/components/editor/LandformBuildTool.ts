@@ -50,15 +50,45 @@ type VertexSnapResolverOptions = {
 }
 
 const PREVIEW_SIGNATURE_PRECISION = 1000
+const LANDFORM_LINE_PREVIEW_Y_OFFSET = 0.03
+
+function createLinePreviewGroup(points: THREE.Vector3[]): THREE.Group {
+  const group = new THREE.Group()
+  group.name = '__LandformLinePreview'
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({
+      color: 0xffb74d,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    }),
+  )
+  line.renderOrder = 101
+  group.userData.isLandformLinePreview = true
+  group.userData.line = line
+  group.add(line)
+  return group
+}
+
+function updateLinePreviewGroup(group: THREE.Group, points: THREE.Vector3[]): void {
+  const line = group.userData.line as THREE.Line | undefined
+  if (!line) {
+    return
+  }
+  line.geometry?.dispose?.()
+  line.geometry = new THREE.BufferGeometry().setFromPoints(points)
+}
 
 function disposePreviewGroup(group: THREE.Group): void {
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
+    const line = child as THREE.Line
+    if (!mesh?.isMesh && !line?.isLine) {
       return
     }
-    mesh.geometry?.dispose?.()
-    const material = mesh.material as THREE.Material | THREE.Material[] | undefined
+    ;(child as THREE.Mesh | THREE.Line).geometry?.dispose?.()
+    const material = (child as THREE.Mesh | THREE.Line).material as THREE.Material | THREE.Material[] | undefined
     if (Array.isArray(material)) {
       material.forEach((entry) => entry?.dispose?.())
     } else {
@@ -196,13 +226,26 @@ export function createLandformBuildTool(options: {
     }
 
     const previewPoints = buildPreviewVertices(targetSession)
-    if (previewPoints.length < 3) {
+    if (previewPoints.length < 2) {
       clearPreview(targetSession)
       return
     }
 
     const nextSignature = computePreviewSignature(previewPoints, lastPresetSignature)
     if (nextSignature === previewSignature) {
+      return
+    }
+
+    const linePoints = previewPoints.map((point) => new THREE.Vector3(point.x, point.y + LANDFORM_LINE_PREVIEW_Y_OFFSET, point.z))
+    if (previewPoints.length < 3) {
+      if (!targetSession.previewGroup || targetSession.previewGroup.userData?.isLandformLinePreview !== true) {
+        clearPreview(targetSession)
+        targetSession.previewGroup = createLinePreviewGroup(linePoints)
+        options.rootGroup.add(targetSession.previewGroup)
+      } else {
+        updateLinePreviewGroup(targetSession.previewGroup, linePoints)
+      }
+      previewSignature = nextSignature
       return
     }
 
@@ -215,7 +258,8 @@ export function createLandformBuildTool(options: {
       return
     }
 
-    if (!targetSession.previewGroup) {
+    if (!targetSession.previewGroup || targetSession.previewGroup.userData?.isLandformLinePreview === true) {
+      clearPreview(targetSession)
       const previewGroup = createLandformGroup(build.definition)
       previewGroup.userData.isLandformPreview = true
       targetSession.previewGroup = previewGroup

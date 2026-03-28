@@ -26,6 +26,7 @@ export type FloorPreviewRenderer = {
 const FLOOR_PREVIEW_SIGNATURE_PRECISION = 1000
 const FLOOR_PREVIEW_Y_OFFSET = 0.01
 const FLOOR_CIRCLE_PREVIEW_SEGMENTS = 32
+const FLOOR_LINE_PREVIEW_Y_OFFSET = 0.02
 
 function normalizeRegularPolygonSides(value: number): number {
   if (!Number.isFinite(value)) {
@@ -198,16 +199,46 @@ function computeFloorPreviewSignature(vertices: THREE.Vector3[]): string {
 function disposeFloorPreviewGroup(group: THREE.Group) {
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
-    if (mesh?.isMesh) {
-      mesh.geometry?.dispose?.()
-      const mat = mesh.material as THREE.Material | THREE.Material[] | undefined
-      if (Array.isArray(mat)) {
-        mat.forEach((entry) => entry?.dispose?.())
-      } else {
-        mat?.dispose?.()
-      }
+    const line = child as THREE.Line
+    if (!mesh?.isMesh && !line?.isLine) {
+      return
+    }
+    ;(child as THREE.Mesh | THREE.Line).geometry?.dispose?.()
+    const mat = (child as THREE.Mesh | THREE.Line).material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(mat)) {
+      mat.forEach((entry) => entry?.dispose?.())
+    } else {
+      mat?.dispose?.()
     }
   })
+}
+
+function createFloorLinePreviewGroup(points: THREE.Vector3[]): THREE.Group {
+  const group = new THREE.Group()
+  group.name = '__FloorLinePreview'
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({
+      color: 0xffb74d,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    }),
+  )
+  line.renderOrder = 101
+  group.userData.isFloorLinePreview = true
+  group.userData.line = line
+  group.add(line)
+  return group
+}
+
+function updateFloorLinePreviewGroup(group: THREE.Group, points: THREE.Vector3[]): void {
+  const line = group.userData.line as THREE.Line | undefined
+  if (!line) {
+    return
+  }
+  line.geometry?.dispose?.()
+  line.geometry = new THREE.BufferGeometry().setFromPoints(points)
 }
 
 function computePresetSignature(preset: FloorPresetData | null | undefined): string {
@@ -301,7 +332,7 @@ export function createFloorPreviewRenderer(options: {
       session.rectangleDirection,
       lastRegularPolygonSides,
     )
-    if (previewVertices.length < 3) {
+    if (previewVertices.length < 2) {
       if (session.previewGroup) {
         clear(session)
       }
@@ -312,6 +343,19 @@ export function createFloorPreviewRenderer(options: {
     const geometrySignature = computeFloorPreviewSignature(previewVertices)
     const nextSignature = `${geometrySignature}|${lastPresetSignature}`
     if (nextSignature === signature) {
+      return
+    }
+
+    const linePoints = previewVertices.map((point) => new THREE.Vector3(point.x, point.y + FLOOR_LINE_PREVIEW_Y_OFFSET, point.z))
+    if (previewVertices.length < 3) {
+      if (!session.previewGroup || session.previewGroup.userData?.isFloorLinePreview !== true) {
+        clear(session)
+        session.previewGroup = createFloorLinePreviewGroup(linePoints)
+        options.rootGroup.add(session.previewGroup)
+      } else {
+        updateFloorLinePreviewGroup(session.previewGroup, linePoints)
+      }
+      signature = nextSignature
       return
     }
 
@@ -327,16 +371,19 @@ export function createFloorPreviewRenderer(options: {
 
     const build = buildFloorPreviewDefinition(previewVertices, center, presetData)
     if (!build) {
-      if (session.previewGroup) {
+      if (!session.previewGroup || session.previewGroup.userData?.isFloorLinePreview !== true) {
         clear(session)
+        session.previewGroup = createFloorLinePreviewGroup(linePoints)
+        options.rootGroup.add(session.previewGroup)
+      } else {
+        updateFloorLinePreviewGroup(session.previewGroup, linePoints)
       }
-      signature = null
+      signature = nextSignature
       return
     }
 
-    signature = nextSignature
-
-    if (!session.previewGroup) {
+    if (!session.previewGroup || session.previewGroup.userData?.isFloorLinePreview === true) {
+      clear(session)
       const preview = createFloorGroup(build.definition)
       preview.userData.isFloorPreview = true
       session.previewGroup = preview
@@ -352,6 +399,7 @@ export function createFloorPreviewRenderer(options: {
 
     session.previewGroup!.position.copy(build.center)
     session.previewGroup!.position.y += FLOOR_PREVIEW_Y_OFFSET
+    signature = nextSignature
   }
 
   return {

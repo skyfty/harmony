@@ -1591,7 +1591,7 @@ function finalizeDynamicMeshRuntimePatch(store: {
 }, nodeId: string, updatedMeshType: string | null): void {
   // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
   // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
-  if ( updatedMeshType === 'Road' ||  updatedMeshType === 'Wall' || updatedMeshType === 'Floor' || updatedMeshType === 'Ground' ) {
+  if ( updatedMeshType === 'Road' ||  updatedMeshType === 'Wall' || updatedMeshType === 'Floor' || updatedMeshType === 'Landform' || updatedMeshType === 'Ground' ) {
     const queued = store.queueSceneNodePatch(nodeId, ['dynamicMesh'])
 
     // `SceneViewport` applies pending patches only when `sceneNodePropertyVersion` bumps.
@@ -13665,6 +13665,64 @@ export const useSceneStore = defineStore('scene', {
         }, payload.buildShape)
       })
       this.queueSceneNodePatch(payload.nodeId, ['userData'])
+      commitSceneSnapshot(this)
+      return findNodeById(this.nodes, payload.nodeId)
+    },
+
+    updateLandformSurfaceMeshNode(payload: {
+      nodeId: string
+      points: Vector3Like[]
+    }): SceneNode | null {
+      const target = findNodeById(this.nodes, payload.nodeId)
+      if (!target || target.dynamicMesh?.type !== 'Landform') {
+        return null
+      }
+
+      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+        ? resolveGroundRuntimeDefinition(this, groundNode.id)
+        : null
+      const existingMesh = target.dynamicMesh as LandformDynamicMesh
+      const componentState = target.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
+      const componentProps = clampLandformComponentProps(
+        (componentState?.props as Partial<LandformComponentProps> | undefined)
+          ?? resolveLandformComponentPropsFromMesh(existingMesh),
+      )
+      const build = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
+        payload.points,
+        groundDefinition,
+        groundNode,
+        componentProps,
+      )
+      if (!build) {
+        return null
+      }
+
+      this.captureHistorySnapshot()
+      let materialsChanged = false
+      let meshChanged = false
+      visitNode(this.nodes, payload.nodeId, (node) => {
+        if (node.dynamicMesh?.type !== 'Landform') {
+          return
+        }
+        const mesh = node.dynamicMesh as LandformDynamicMesh
+        node.dynamicMesh = {
+          ...build.definition,
+          materialConfigId: mesh.materialConfigId ?? build.definition.materialConfigId ?? null,
+        }
+        node.position = createVector(build.center.x, build.center.y, build.center.z)
+        const result = landformHelpers.ensureLandformMaterialConvention(node)
+        materialsChanged ||= result.materialsChanged
+        meshChanged ||= result.meshChanged
+      })
+      this.queueSceneNodePatch(payload.nodeId, ['dynamicMesh', 'transform'])
+      if (materialsChanged) {
+        this.queueSceneNodePatch(payload.nodeId, ['materials'])
+      }
+      if (meshChanged) {
+        this.queueSceneNodePatch(payload.nodeId, ['dynamicMesh'])
+      }
+      replaceSceneNodes(this, [...this.nodes])
       commitSceneSnapshot(this)
       return findNodeById(this.nodes, payload.nodeId)
     },
