@@ -13727,6 +13727,98 @@ export const useSceneStore = defineStore('scene', {
       return findNodeById(this.nodes, payload.nodeId)
     },
 
+    previewLandformSurfaceMeshNode(payload: {
+      nodeId: string
+      points: Vector3Like[]
+    }): boolean {
+      const target = findNodeById(this.nodes, payload.nodeId)
+      if (!target || target.dynamicMesh?.type !== 'Landform') {
+        return false
+      }
+
+      const runtime = getRuntimeObject(payload.nodeId)
+      if (!runtime) {
+        return false
+      }
+
+      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+        ? resolveGroundRuntimeDefinition(this, groundNode.id)
+        : null
+      const existingMesh = target.dynamicMesh as LandformDynamicMesh
+      const componentState = target.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
+      const componentProps = clampLandformComponentProps(
+        (componentState?.props as Partial<LandformComponentProps> | undefined)
+          ?? resolveLandformComponentPropsFromMesh(existingMesh),
+      )
+      const build = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
+        payload.points,
+        groundDefinition,
+        groundNode,
+        componentProps,
+      )
+      if (!build) {
+        return false
+      }
+
+      const materialConfigId = existingMesh.materialConfigId ?? build.definition.materialConfigId ?? null
+      const previewMesh: LandformDynamicMesh = {
+        ...build.definition,
+        materialConfigId,
+      }
+
+      // Keep runtime transform stable during drag preview; only mesh deforms live.
+      const previewCenterLocal = runtime.worldToLocal(build.center.clone())
+      const offsetX = Number.isFinite(previewCenterLocal.x) ? previewCenterLocal.x : 0
+      const offsetY = Number.isFinite(previewCenterLocal.y) ? previewCenterLocal.y : 0
+      const offsetZ = Number.isFinite(previewCenterLocal.z) ? previewCenterLocal.z : 0
+      if (Math.abs(offsetX) > 1e-8 || Math.abs(offsetY) > 1e-8 || Math.abs(offsetZ) > 1e-8) {
+        previewMesh.footprint = (Array.isArray(previewMesh.footprint) ? previewMesh.footprint : [])
+          .map((entry) => [
+            Number(entry?.[0]) + offsetX,
+            Number(entry?.[1]) + offsetZ,
+          ] as [number, number])
+
+        previewMesh.surfaceVertices = (Array.isArray(previewMesh.surfaceVertices) ? previewMesh.surfaceVertices : [])
+          .map((entry) => ({
+            x: Number(entry?.x) + offsetX,
+            y: Number(entry?.y) + offsetY,
+            z: Number(entry?.z) + offsetZ,
+          }))
+      }
+
+      updateLandformGroup(runtime, previewMesh)
+      return true
+    },
+
+    restoreLandformSurfaceMeshRuntime(nodeId: string): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target || target.dynamicMesh?.type !== 'Landform') {
+        return false
+      }
+      const runtime = getRuntimeObject(nodeId)
+      if (!runtime) {
+        return false
+      }
+      runtime.position.set(
+        Number(target.position?.x) || 0,
+        Number(target.position?.y) || 0,
+        Number(target.position?.z) || 0,
+      )
+      runtime.rotation.set(
+        Number(target.rotation?.x) || 0,
+        Number(target.rotation?.y) || 0,
+        Number(target.rotation?.z) || 0,
+      )
+      runtime.scale.set(
+        Number(target.scale?.x) || 1,
+        Number(target.scale?.y) || 1,
+        Number(target.scale?.z) || 1,
+      )
+      updateLandformGroup(runtime, target.dynamicMesh as LandformDynamicMesh)
+      return true
+    },
+
     createGuideRouteNode(payload: {
       nodeId?: string
       points: Vector3Like[]
