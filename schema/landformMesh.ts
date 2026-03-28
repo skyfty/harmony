@@ -55,6 +55,7 @@ function createLandformMaterial(): THREE.MeshStandardMaterial {
     polygonOffsetUnits: -2,
   })
   material.name = 'LandformMaterial'
+  material.shadowSide = THREE.FrontSide
   return material
 }
 
