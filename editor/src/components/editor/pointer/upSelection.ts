@@ -1,5 +1,6 @@
 import type * as THREE from 'three'
 import type { SceneNode } from '@schema'
+import { isNodeExcludedFromSelectionBoundingBoxFallback } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { PointerUpResult } from './types'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 
@@ -110,6 +111,8 @@ export function handlePointerUpSelection(
     if (!trackingState.moved) {
       if (ctx.activeTool === 'select') {
         const primaryId = ctx.sceneSelectedNodeId ?? ctx.selectedNodeIdProp ?? null
+        const primaryNode = primaryId ? ctx.findSceneNode(ctx.sceneNodes, primaryId) : null
+        const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(primaryNode)
         const unlockedSelected = ctx.selectedNodeIds.filter((id) => !ctx.sceneStoreIsNodeSelectionLocked(id))
         const selectionForRotate = unlockedSelected.slice()
         if (primaryId && !ctx.sceneStoreIsNodeSelectionLocked(primaryId) && !selectionForRotate.includes(primaryId)) {
@@ -118,7 +121,7 @@ export function handlePointerUpSelection(
 
         if (selectionForRotate.length) {
           let hit = ctx.pickNodeAtPointer(event) ?? trackingState.hitResult
-          if (!hit) {
+          if (!hit && allowBoundingBoxFallback) {
             hit = ctx.pickActiveSelectionBoundingBoxHit(event)
           }
 

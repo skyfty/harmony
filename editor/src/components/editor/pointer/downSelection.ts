@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@schema'
+import { isNodeExcludedFromSelectionBoundingBoxFallback } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { PointerDownResult } from './types'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
@@ -105,18 +106,13 @@ export async function handlePointerDownSelection(
   }
 
   const currentPrimaryId = ctx.sceneSelectedNodeId ?? ctx.selectedNodeIdProp ?? null
+  const currentPrimaryNode = currentPrimaryId ? ctx.findSceneNode(ctx.nodes, currentPrimaryId) : null
 
   const allowBoundingBoxDragFallback = (() => {
     if (!currentPrimaryId) {
       return true
     }
-    const node = ctx.findSceneNode(ctx.nodes, currentPrimaryId)
-    // Roads can be highly concave (e.g. arcs). Using an AABB allows drag-starts from empty space
-    // inside the road's bounding box, which feels like dragging "through" the road.
-    if (node?.dynamicMesh?.type === 'Road' || node?.dynamicMesh?.type === 'Wall') {
-      return false
-    }
-    return true
+    return !isNodeExcludedFromSelectionBoundingBoxFallback(currentPrimaryNode)
   })()
 
   let dragHit = hit as unknown as SelectionHit | null

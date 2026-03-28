@@ -8,6 +8,7 @@ const vehicleSchema = new Schema<VehicleDocument>(
     description: { type: String, default: '' },
     coverUrl: { type: String, default: '' },
     isActive: { type: Boolean, default: true },
+    isDefault: { type: Boolean, default: false },
     productId: { type: Schema.Types.ObjectId, ref: 'Product', default: null },
   },
   {

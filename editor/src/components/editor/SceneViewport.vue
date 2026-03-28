@@ -8,6 +8,7 @@ import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
 import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
 import { CameraControlsMap } from '@/utils/CameraControlsMap'
 import {
+  isNodeExcludedFromSelectionBoundingBoxFallback,
   mergeUserDataWithDynamicMeshBuildShape,
   readFloorBuildShapeFromNode,
   readWallBuildShapeFromNode,
@@ -7874,6 +7875,10 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
     return null
   }
 
+  if (isNodeExcludedFromSelectionBoundingBoxFallback(resolveSceneNodeById(primaryId))) {
+    return null
+  }
+
   if (sceneStore.isNodeSelectionLocked(primaryId)) {
     return null
   }
@@ -14237,7 +14242,9 @@ async function handlePointerDown(event: PointerEvent) {
   // Select mode: left click on empty space should clear selection (if it's a click) or pan the camera (if it's a drag).
   // We detect empty-space on pointerdown and decide on pointerup using a drag threshold.
   if (event.button === 0 && effectiveSelectionTool === 'select') {
-    const hit = pickNodeAtPointer(event) ?? pickActiveSelectionBoundingBoxHit(event)
+    const activeSelectionNode = resolveSceneNodeById(sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
+    const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
+    const hit = pickNodeAtPointer(event) ?? (allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null)
     if (!hit) {
       leftEmptyClickSessionState = {
         pointerId: event.pointerId,

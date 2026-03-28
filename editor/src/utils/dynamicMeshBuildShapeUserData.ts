@@ -2,6 +2,7 @@ import type { SceneNode, WallDynamicMesh } from '@schema'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
+import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 
 export const DYNAMIC_MESH_BUILD_SHAPE_USERDATA_KEY = '__harmonyBuildShape'
 
@@ -72,4 +73,18 @@ export function readWallBuildShapeFromNode(node: SceneNode | null | undefined): 
     return 'line'
   }
   return raw
+}
+
+export function isNodeExcludedFromSelectionBoundingBoxFallback(node: SceneNode | null | undefined): boolean {
+  const dynamicMeshType = node?.dynamicMesh?.type
+  if (
+    dynamicMeshType === 'Road'
+    || dynamicMeshType === 'Wall'
+    || dynamicMeshType === 'Floor'
+    || dynamicMeshType === 'Landform'
+  ) {
+    return true
+  }
+
+  return isWaterSurfaceNode(node)
 }

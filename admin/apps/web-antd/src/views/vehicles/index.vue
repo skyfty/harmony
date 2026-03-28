@@ -33,6 +33,7 @@ interface VehicleFormModel {
   description: string;
   coverUrl: string;
   isActive: boolean;
+  isDefault: boolean;
 }
 
 const modalOpen = ref(false);
@@ -46,6 +47,7 @@ const vehicleFormModel = reactive<VehicleFormModel>({
   description: '',
   coverUrl: '',
   isActive: true,
+  isDefault: false,
 });
 
 const imageFileList = ref<UploadFile[]>([]);
@@ -65,6 +67,7 @@ function resetForm() {
   vehicleFormModel.description = '';
   vehicleFormModel.coverUrl = '';
   vehicleFormModel.isActive = true;
+  vehicleFormModel.isDefault = false;
   imageFileList.value = [];
   imagePreview.value = '';
 }
@@ -84,6 +87,7 @@ async function openEditModal(row: VehicleItem) {
     vehicleFormModel.description = data.description || '';
     vehicleFormModel.coverUrl = data.coverUrl || '';
     vehicleFormModel.isActive = data.isActive !== false;
+    vehicleFormModel.isDefault = data.isDefault !== false;
     imageFileList.value = [];
     imagePreview.value = data.coverUrl || '';
     modalOpen.value = true;
@@ -119,6 +123,7 @@ async function submitVehicle() {
       description: vehicleFormModel.description.trim(),
       coverUrl: coverUrl || '',
       isActive: vehicleFormModel.isActive,
+      isDefault: vehicleFormModel.isDefault,
     };
     if (editingId.value) {
       await updateVehicleApi(editingId.value, payload);
@@ -179,6 +184,7 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
       { field: 'coverUrl', minWidth: 120, title: '图片', slots: { default: 'image' } },
       { field: 'description', minWidth: 260, title: '描述' },
       { field: 'isActive', minWidth: 110, title: '状态', slots: { default: 'status' } },
+      { field: 'isDefault', minWidth: 110, title: '默认', slots: { default: 'default' } },
       { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: '创建时间' },
       { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: '更新时间' },
       { align: 'left', fixed: 'right', minWidth: 160, field: 'actions', slots: { default: 'actions' }, title: '操作' },
@@ -221,6 +227,10 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
 
       <template #status="{ row }">
         <span :style="{ color: row.isActive ? '#16a34a' : '#9ca3af' }">{{ row.isActive ? '启用' : '禁用' }}</span>
+      </template>
+
+      <template #default="{ row }">
+        <span :style="{ color: row.isDefault ? '#2563eb' : '#9ca3af' }">{{ row.isDefault ? '默认' : '非默认' }}</span>
       </template>
 
       <template #actions="{ row }">
@@ -277,6 +287,9 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
         </Form.Item>
         <Form.Item label="启用" name="isActive">
           <Switch v-model:checked="vehicleFormModel.isActive" />
+        </Form.Item>
+        <Form.Item label="默认" name="isDefault">
+          <Switch v-model:checked="vehicleFormModel.isDefault" />
         </Form.Item>
       </Form>
     </Modal>
