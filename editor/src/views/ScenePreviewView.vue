@@ -131,6 +131,7 @@ import {
 	floorComponentDefinition,
 	wallComponentDefinition,
 	roadComponentDefinition,
+	landformComponentDefinition,
 	viewPointComponentDefinition,
 	warpGateComponentDefinition,
 	effectComponentDefinition,
@@ -753,6 +754,7 @@ const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(floorComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)
+previewComponentManager.registerDefinition(landformComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
 previewComponentManager.registerDefinition(displayBoardComponentDefinition)
 previewComponentManager.registerDefinition(billboardComponentDefinition)
