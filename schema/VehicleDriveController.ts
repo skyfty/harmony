@@ -169,12 +169,12 @@ const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { 
   && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function')
 // 车辆引擎最大推力
 // WeChat mini-program: lower acceleration to reduce high-speed hitching/jerk.
-const VEHICLE_ENGINE_FORCE = isWeChatMiniProgram ? 200 : 320
+const VEHICLE_ENGINE_FORCE = 320
 // 车辆最大刹车力
 const VEHICLE_BRAKE_FORCE = 42
 // Default soft/hard speed caps used when no component-level max is present.
-const DEFAULT_VEHICLE_SPEED_SOFT_CAP = isWeChatMiniProgram ? 5.5 : 8.5
-const DEFAULT_VEHICLE_SPEED_HARD_CAP = isWeChatMiniProgram ? 7.8 : 12.5
+const DEFAULT_VEHICLE_SPEED_SOFT_CAP = 8.5
+const DEFAULT_VEHICLE_SPEED_HARD_CAP = 12.5
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
@@ -760,16 +760,16 @@ export class VehicleDriveController {
           if (pureComp && pureComp.enabled) {
             const pp = clampPurePursuitComponentProps(pureComp.props ?? null)
             if (Number.isFinite(pp.maxSpeedMps)) {
-              softCap = Math.min(softCap, pp.maxSpeedMps)
-              hardCap = Math.min(hardCap, pp.maxSpeedMps)
+              softCap = Math.max(softCap, pp.maxSpeedMps)
+              hardCap = Math.max(hardCap, pp.maxSpeedMps)
             }
           }
           const autoComp = node.components?.[AUTO_TOUR_COMPONENT_TYPE] as any
           if (autoComp && autoComp.enabled) {
             const at = clampAutoTourComponentProps(autoComp.props ?? null)
             if (Number.isFinite(at.maxSpeedMps)) {
-              softCap = Math.min(softCap, at.maxSpeedMps)
-              hardCap = Math.min(hardCap, at.maxSpeedMps)
+              softCap = Math.max(softCap, at.maxSpeedMps)
+              hardCap = Math.max(hardCap, at.maxSpeedMps)
             }
           }
         }

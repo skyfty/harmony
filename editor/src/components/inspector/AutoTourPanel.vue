@@ -33,8 +33,9 @@ const normalizedProps = computed(() => {
 })
 
 const localRouteNodeId = ref<string | null>(null)
-const localSpeedMps = ref(DEFAULT_AUTO_TOUR_SPEED_MPS)
-const localMaxSpeedMps = ref(DEFAULT_AUTO_TOUR_MAX_SPEED_MPS)
+// Display values in km/h in the UI; stored props remain in m/s.
+const localSpeedMps = ref(DEFAULT_AUTO_TOUR_SPEED_MPS * 3.6)
+const localMaxSpeedMps = ref(DEFAULT_AUTO_TOUR_MAX_SPEED_MPS * 3.6)
 const localLoop = ref(false)
 const localAlignToPath = ref(true)
 
@@ -42,8 +43,8 @@ watch(
   () => normalizedProps.value,
   (props) => {
     localRouteNodeId.value = props.routeNodeId
-    localSpeedMps.value = props.speedMps
-    localMaxSpeedMps.value = props.maxSpeedMps
+    localSpeedMps.value = props.speedMps * 3.6
+    localMaxSpeedMps.value = props.maxSpeedMps * 3.6
     localLoop.value = props.loop
     localAlignToPath.value = props.alignToPath
   },
@@ -72,8 +73,10 @@ function handleSpeedInput(value: string | number) {
   if (!Number.isFinite(numeric)) {
     return
   }
-  const clamped = clampAutoTourComponentProps({ speedMps: numeric }).speedMps
-  localSpeedMps.value = clamped
+  // Input is km/h; convert to m/s for storage and clamping.
+  const mps = numeric / 3.6
+  const clamped = clampAutoTourComponentProps({ speedMps: mps }).speedMps
+  localSpeedMps.value = clamped * 3.6
   if (Math.abs(clamped - normalizedProps.value.speedMps) <= 1e-4) {
     return
   }
@@ -85,8 +88,10 @@ function handleMaxSpeedInput(value: string | number) {
   if (!Number.isFinite(numeric)) {
     return
   }
-  const clamped = clampAutoTourComponentProps({ maxSpeedMps: numeric }).maxSpeedMps
-  localMaxSpeedMps.value = clamped
+  // Input is km/h; convert to m/s for storage and clamping.
+  const mps = numeric / 3.6
+  const clamped = clampAutoTourComponentProps({ maxSpeedMps: mps }).maxSpeedMps
+  localMaxSpeedMps.value = clamped * 3.6
   if (Math.abs(clamped - normalizedProps.value.maxSpeedMps) <= 1e-4) {
     return
   }
@@ -183,26 +188,26 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Speed (m/s)"
+          label="Speed (km/h)"
           type="number"
           density="compact"
           variant="solo"
           hide-details
-          :min="MIN_AUTO_TOUR_SPEED_MPS"
-          :max="MAX_AUTO_TOUR_SPEED_MPS"
+          :min="MIN_AUTO_TOUR_SPEED_MPS * 3.6"
+          :max="MAX_AUTO_TOUR_SPEED_MPS * 3.6"
           :model-value="localSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="handleSpeedInput"
         />
 
         <v-text-field
-          label="Max Speed (m/s)"
+          label="Max Speed (km/h)"
           type="number"
           density="compact"
           variant="solo"
           hide-details
-          :min="MIN_AUTO_TOUR_MAX_SPEED_MPS"
-          :max="MAX_AUTO_TOUR_MAX_SPEED_MPS"
+          :min="MIN_AUTO_TOUR_MAX_SPEED_MPS * 3.6"
+          :max="MAX_AUTO_TOUR_MAX_SPEED_MPS * 3.6"
           :model-value="localMaxSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="handleMaxSpeedInput"

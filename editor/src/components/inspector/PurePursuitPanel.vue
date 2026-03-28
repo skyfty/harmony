@@ -126,7 +126,7 @@ watch(
     localSpeedKp.value = props.speedKp
     localSpeedKi.value = props.speedKi
     localSpeedIntegralMax.value = props.speedIntegralMax
-    localMinSpeedMps.value = props.minSpeedMps
+    localMinSpeedMps.value = props.minSpeedMps * 3.6
     localCurvatureSpeedFactor.value = props.curvatureSpeedFactor
 
     localArrivalDistanceMinMeters.value = props.arrivalDistanceMinMeters
@@ -137,13 +137,13 @@ watch(
 
     localDockingEnabled.value = props.dockingEnabled
     localDockStartDistanceMeters.value = props.dockStartDistanceMeters
-    localDockMaxSpeedMps.value = props.dockMaxSpeedMps
+    localDockMaxSpeedMps.value = props.dockMaxSpeedMps * 3.6
     localDockVelocityKp.value = props.dockVelocityKp
     localDockYawEnabled.value = props.dockYawEnabled
     localDockYawSlerpRate.value = props.dockYawSlerpRate
     localDockStopEpsilonMeters.value = props.dockStopEpsilonMeters
-    localDockStopSpeedEpsilonMps.value = props.dockStopSpeedEpsilonMps
-    localMaxSpeedMps.value = props.maxSpeedMps
+    localDockStopSpeedEpsilonMps.value = props.dockStopSpeedEpsilonMps * 3.6
+    localMaxSpeedMps.value = props.maxSpeedMps * 3.6
   },
   { immediate: true, deep: true },
 )
@@ -193,15 +193,37 @@ function handleNumberField(key: PurePursuitNumericKey, value: string | number): 
     return
   }
 
-  const clamped = clampPurePursuitComponentProps({ [key]: numeric } as Partial<PurePursuitComponentProps>)[key]
-  const localRef = numberLocals[key]
-  if (localRef) {
-    localRef.value = clamped
+  // Keys that represent speeds (stored in m/s). UI shows km/h.
+  const speedKeys = new Set<PurePursuitNumericKey>([
+    'minSpeedMps',
+    'maxSpeedMps' as PurePursuitNumericKey,
+    'dockMaxSpeedMps' as PurePursuitNumericKey,
+    'dockStopSpeedEpsilonMps' as PurePursuitNumericKey,
+  ])
+
+  let clamped: number
+  if (speedKeys.has(key)) {
+    const mps = numeric / 3.6
+    clamped = clampPurePursuitComponentProps({ [key]: mps } as Partial<PurePursuitComponentProps>)[key]
+    const localRef = numberLocals[key]
+    if (localRef) {
+      localRef.value = clamped * 3.6
+    }
+    if (Math.abs(clamped - (normalizedProps.value as any)[key]) <= 1e-4) {
+      return
+    }
+    updateComponent({ [key]: clamped } as Partial<PurePursuitComponentProps>)
+  } else {
+    clamped = clampPurePursuitComponentProps({ [key]: numeric } as Partial<PurePursuitComponentProps>)[key]
+    const localRef = numberLocals[key]
+    if (localRef) {
+      localRef.value = clamped
+    }
+    if (Math.abs(clamped - (normalizedProps.value as any)[key]) <= 1e-4) {
+      return
+    }
+    updateComponent({ [key]: clamped } as Partial<PurePursuitComponentProps>)
   }
-  if (Math.abs(clamped - normalizedProps.value[key]) <= 1e-4) {
-    return
-  }
-  updateComponent({ [key]: clamped } as Partial<PurePursuitComponentProps>)
 }
 
 function handleDockingEnabledChange(value: boolean | null) {
@@ -378,26 +400,26 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Min Speed (m/s)"
+          label="Min Speed (km/h)"
           type="number"
           density="compact"
           variant="solo"
           hide-details
-          :min="MIN_PURE_PURSUIT_MIN_SPEED_MPS"
-          :max="MAX_PURE_PURSUIT_MIN_SPEED_MPS"
+          :min="MIN_PURE_PURSUIT_MIN_SPEED_MPS * 3.6"
+          :max="MAX_PURE_PURSUIT_MIN_SPEED_MPS * 3.6"
           :model-value="localMinSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('minSpeedMps', v)"
         />
 
         <v-text-field
-          label="Max Speed (m/s)"
+          label="Max Speed (km/h)"
           type="number"
           density="compact"
           variant="solo"
           hide-details
-          :min="MIN_PURE_PURSUIT_MAX_SPEED_MPS"
-          :max="MAX_PURE_PURSUIT_MAX_SPEED_MPS"
+          :min="MIN_PURE_PURSUIT_MAX_SPEED_MPS * 3.6"
+          :max="MAX_PURE_PURSUIT_MAX_SPEED_MPS * 3.6"
           :model-value="localMaxSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('maxSpeedMps', v)"
@@ -508,13 +530,13 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Dock Max Speed (m/s)"
+          label="Dock Max Speed (km/h)"
           type="number"
           density="compact"
           variant="solo"
           hide-details
-          :min="MIN_PURE_PURSUIT_DOCK_MAX_SPEED_MPS"
-          :max="MAX_PURE_PURSUIT_DOCK_MAX_SPEED_MPS"
+          :min="MIN_PURE_PURSUIT_DOCK_MAX_SPEED_MPS * 3.6"
+          :max="MAX_PURE_PURSUIT_DOCK_MAX_SPEED_MPS * 3.6"
           :model-value="localDockMaxSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockMaxSpeedMps', v)"
@@ -569,13 +591,13 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Dock Stop Speed Epsilon (m/s)"
+          label="Dock Stop Speed Epsilon (km/h)"
           type="number"
           density="compact"
           variant="solo"
           hide-details
-          :min="MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS"
-          :max="MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS"
+          :min="MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS * 3.6"
+          :max="MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS * 3.6"
           :model-value="localDockStopSpeedEpsilonMps"
           :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockStopSpeedEpsilonMps', v)"

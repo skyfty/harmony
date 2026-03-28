@@ -214,6 +214,7 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
   if (!code) {
     ctx.throw(400, 'code is required')
   }
+  console.log('[mini-wechat-login] code received', { code: typeof code === 'string' ? `${code.slice(0, 6)}***` : code, miniAppId, displayName, avatarUrl })
   try {
     const requestedMiniAppId =
       (typeof miniAppId === 'string' && miniAppId.trim()) ||
