@@ -13671,7 +13671,7 @@ export const useSceneStore = defineStore('scene', {
 
     updateLandformSurfaceMeshNode(payload: {
       nodeId: string
-      points: Vector3Like[]
+      localPoints: Array<[number, number]>
     }): SceneNode | null {
       const target = findNodeById(this.nodes, payload.nodeId)
       if (!target || target.dynamicMesh?.type !== 'Landform') {
@@ -13688,11 +13688,14 @@ export const useSceneStore = defineStore('scene', {
         (componentState?.props as Partial<LandformComponentProps> | undefined)
           ?? resolveLandformComponentPropsFromMesh(existingMesh),
       )
-      const build = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
-        payload.points,
+      const runtime = getRuntimeObject(payload.nodeId)
+      const build = landformHelpers.buildLandformDynamicMeshFromLocalPoints(
+        target,
+        payload.localPoints,
         groundDefinition,
         groundNode,
         componentProps,
+        runtime,
       )
       if (!build) {
         return null
@@ -13707,15 +13710,20 @@ export const useSceneStore = defineStore('scene', {
         }
         const mesh = node.dynamicMesh as LandformDynamicMesh
         node.dynamicMesh = {
-          ...build.definition,
-          materialConfigId: mesh.materialConfigId ?? build.definition.materialConfigId ?? null,
+          ...build,
+          materialConfigId: mesh.materialConfigId ?? build.materialConfigId ?? null,
         }
-        node.position = createVector(build.center.x, build.center.y, build.center.z)
         const result = landformHelpers.ensureLandformMaterialConvention(node)
         materialsChanged ||= result.materialsChanged
         meshChanged ||= result.meshChanged
       })
-      this.queueSceneNodePatch(payload.nodeId, ['dynamicMesh', 'transform'])
+      if (runtime) {
+        const nextNode = findNodeById(this.nodes, payload.nodeId)
+        if (nextNode?.dynamicMesh?.type === 'Landform') {
+          updateLandformGroup(runtime, nextNode.dynamicMesh as LandformDynamicMesh)
+        }
+      }
+      this.queueSceneNodePatch(payload.nodeId, ['dynamicMesh'])
       if (materialsChanged) {
         this.queueSceneNodePatch(payload.nodeId, ['materials'])
       }
@@ -13729,7 +13737,7 @@ export const useSceneStore = defineStore('scene', {
 
     previewLandformSurfaceMeshNode(payload: {
       nodeId: string
-      points: Vector3Like[]
+      localPoints: Array<[number, number]>
     }): boolean {
       const target = findNodeById(this.nodes, payload.nodeId)
       if (!target || target.dynamicMesh?.type !== 'Landform') {
@@ -13751,43 +13759,22 @@ export const useSceneStore = defineStore('scene', {
         (componentState?.props as Partial<LandformComponentProps> | undefined)
           ?? resolveLandformComponentPropsFromMesh(existingMesh),
       )
-      const build = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
-        payload.points,
+      const previewMesh = landformHelpers.buildLandformDynamicMeshFromLocalPoints(
+        target,
+        payload.localPoints,
         groundDefinition,
         groundNode,
         componentProps,
+        runtime,
       )
-      if (!build) {
+      if (!previewMesh) {
         return false
       }
 
-      const materialConfigId = existingMesh.materialConfigId ?? build.definition.materialConfigId ?? null
-      const previewMesh: LandformDynamicMesh = {
-        ...build.definition,
-        materialConfigId,
-      }
-
-      // Keep runtime transform stable during drag preview; only mesh deforms live.
-      const previewCenterLocal = runtime.worldToLocal(build.center.clone())
-      const offsetX = Number.isFinite(previewCenterLocal.x) ? previewCenterLocal.x : 0
-      const offsetY = Number.isFinite(previewCenterLocal.y) ? previewCenterLocal.y : 0
-      const offsetZ = Number.isFinite(previewCenterLocal.z) ? previewCenterLocal.z : 0
-      if (Math.abs(offsetX) > 1e-8 || Math.abs(offsetY) > 1e-8 || Math.abs(offsetZ) > 1e-8) {
-        previewMesh.footprint = (Array.isArray(previewMesh.footprint) ? previewMesh.footprint : [])
-          .map((entry) => [
-            Number(entry?.[0]) + offsetX,
-            Number(entry?.[1]) + offsetZ,
-          ] as [number, number])
-
-        previewMesh.surfaceVertices = (Array.isArray(previewMesh.surfaceVertices) ? previewMesh.surfaceVertices : [])
-          .map((entry) => ({
-            x: Number(entry?.x) + offsetX,
-            y: Number(entry?.y) + offsetY,
-            z: Number(entry?.z) + offsetZ,
-          }))
-      }
-
-      updateLandformGroup(runtime, previewMesh)
+      updateLandformGroup(runtime, {
+        ...previewMesh,
+        materialConfigId: existingMesh.materialConfigId ?? previewMesh.materialConfigId ?? null,
+      })
       return true
     },
 

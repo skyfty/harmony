@@ -1,4 +1,4 @@
-import { Shape, ShapeGeometry, Vector2, Vector3 } from 'three'
+import { Object3D, Shape, ShapeGeometry, Vector2, Vector3 } from 'three'
 import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import {
@@ -7,7 +7,6 @@ import {
   LANDFORM_DEFAULT_UV_SCALE,
   type LandformComponentProps,
 } from '@schema/components'
-import type { Object3D } from 'three'
 import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
 
 export type SceneStoreLandformHelpersDeps = {
@@ -69,6 +68,35 @@ function computeCenter(points: Vector3[]): Vector3 {
   })
   const baseY = points[0] && Number.isFinite(points[0].y) ? points[0].y : 0
   return new Vector3((min.x + max.x) * 0.5, baseY, (min.z + max.z) * 0.5)
+}
+
+function createNodeTransformObject(node: SceneNode): Object3D {
+  const object = new Object3D()
+  object.position.set(
+    Number.isFinite(node.position?.x) ? Number(node.position.x) : 0,
+    Number.isFinite(node.position?.y) ? Number(node.position.y) : 0,
+    Number.isFinite(node.position?.z) ? Number(node.position.z) : 0,
+  )
+  object.rotation.set(
+    Number.isFinite(node.rotation?.x) ? Number(node.rotation.x) : 0,
+    Number.isFinite(node.rotation?.y) ? Number(node.rotation.y) : 0,
+    Number.isFinite(node.rotation?.z) ? Number(node.rotation.z) : 0,
+  )
+  object.scale.set(
+    Number.isFinite(node.scale?.x) && Math.abs(Number(node.scale.x)) > 1e-6 ? Number(node.scale.x) : 1,
+    Number.isFinite(node.scale?.y) && Math.abs(Number(node.scale.y)) > 1e-6 ? Number(node.scale.y) : 1,
+    Number.isFinite(node.scale?.z) && Math.abs(Number(node.scale.z)) > 1e-6 ? Number(node.scale.z) : 1,
+  )
+  object.updateMatrixWorld(true)
+  return object
+}
+
+function resolveLandformFrameObject(node: SceneNode, runtimeObject?: Object3D | null): Object3D {
+  if (runtimeObject) {
+    runtimeObject.updateMatrixWorld(true)
+    return runtimeObject
+  }
+  return createNodeTransformObject(node)
 }
 
 function getGroundTransform(groundNode: SceneNode | null): GroundTransform {
@@ -477,6 +505,101 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           feather: normalizedProps.feather,
           uvScale: { ...normalizedProps.uvScale },
         },
+      }
+    },
+
+    buildLandformDynamicMeshFromLocalPoints(
+      node: SceneNode,
+      points: Array<[number, number]>,
+      groundDefinition: GroundDynamicMesh | null,
+      groundNode: SceneNode | null,
+      options: Partial<LandformComponentProps> = {},
+      runtimeObject?: Object3D | null,
+    ): LandformDynamicMesh | null {
+      const frameObject = resolveLandformFrameObject(node, runtimeObject)
+      const worldPoints = normalizePolygonWinding(buildWorldPoints(
+        points.map(([x, z]) => frameObject.localToWorld(new Vector3(Number(x), 0, Number(z)))),
+      ))
+      if (worldPoints.length < 3) {
+        return null
+      }
+
+      const normalizedProps = clampLandformComponentProps(options)
+      const footprint = worldPoints
+        .map((point) => frameObject.worldToLocal(point.clone()))
+        .map((point) => [point.x, point.z] as [number, number])
+        .filter((entry) => Number.isFinite(entry[0]) && Number.isFinite(entry[1]))
+
+      if (footprint.length < 3) {
+        return null
+      }
+
+      let surfaceWorldVertices: Vector3[] = []
+      let surfaceIndices: number[] = []
+
+      if (!groundDefinition) {
+        const triangulation = buildShapeTriangulation(worldPoints)
+        if (!triangulation) {
+          return null
+        }
+
+        const yByKey = new Map<string, number>()
+        worldPoints.forEach((point) => {
+          yByKey.set(`${point.x.toFixed(6)},${point.z.toFixed(6)}`, point.y)
+        })
+        surfaceWorldVertices = triangulation.vertices.map((vertex) => {
+          const key = `${vertex.x.toFixed(6)},${vertex.y.toFixed(6)}`
+          const y = yByKey.get(key)
+          return new Vector3(vertex.x, Number.isFinite(y as number) ? (y as number) : 0, vertex.y)
+        })
+        surfaceIndices = [...triangulation.indices]
+      } else {
+        const transform = getGroundTransform(groundNode)
+        const polygonLocal = normalizePolygonWinding(worldPoints.map((point) => worldToGroundLocal(point, transform)))
+        const polygonTriangulation = buildShapeTriangulation(polygonLocal)
+        if (!polygonTriangulation) {
+          return null
+        }
+
+        const cellSize = Math.max(1e-6, groundDefinition.cellSize)
+        const subdivisionSteps = resolveLandformSubdivisionSteps(cellSize)
+        const targetEdgeLength = cellSize / Math.max(1, resolveLandformCellSubdivisions(cellSize))
+        const refinedTriangulation = refineTriangulation(
+          polygonTriangulation.vertices,
+          polygonTriangulation.indices,
+          targetEdgeLength,
+          Math.max(1, subdivisionSteps + 3),
+        )
+
+        surfaceIndices = [...refinedTriangulation.indices]
+        surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
+          const localHeight = sampleGroundHeight(groundDefinition, vertex.x, vertex.y)
+          return groundLocalToWorld(new Vector3(vertex.x, localHeight, vertex.y), transform)
+        })
+      }
+
+      if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
+        return null
+      }
+
+      const surfaceVertices = surfaceWorldVertices
+        .map((point) => frameObject.worldToLocal(point.clone()))
+        .map((point) => ({ x: point.x, y: point.y, z: point.z }))
+      const surfaceUvs = surfaceVertices.map((point) => ({
+        x: point.x / normalizedProps.uvScale.x,
+        y: point.z / normalizedProps.uvScale.y,
+      }) satisfies Vector2Like)
+
+      return {
+        type: 'Landform',
+        footprint,
+        surfaceVertices,
+        surfaceIndices,
+        surfaceUvs,
+        materialConfigId: null,
+        feather: normalizedProps.feather,
+        uvScale: { ...normalizedProps.uvScale },
+        surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, normalizedProps.feather),
       }
     },
 

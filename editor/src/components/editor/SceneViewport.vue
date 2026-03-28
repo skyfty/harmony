@@ -5718,34 +5718,26 @@ function cloneLandformFootprintPoints(node: SceneNode | null | undefined): Array
     .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
 }
 
-function buildLandformWorldPointsFromLocalPoints(runtimeObject: THREE.Object3D, points: Array<[number, number]>): THREE.Vector3[] {
-  return points.map(([x, z]) => runtimeObject.localToWorld(new THREE.Vector3(x, 0, z)))
-}
-
 function buildLandformPreviewFromLocalPoints(
   nodeId: string,
-  runtimeObject: THREE.Object3D,
   points: Array<[number, number]>,
 ): boolean {
   if (points.length < 3) {
     return false
   }
-  const worldPoints = buildLandformWorldPointsFromLocalPoints(runtimeObject, points)
   return sceneStore.previewLandformSurfaceMeshNode({
     nodeId,
-    points: worldPoints.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    localPoints: points.map(([x, z]) => [x, z] as [number, number]),
   })
 }
 
 function commitLandformContourNode(nodeId: string, points: Array<[number, number]>): boolean {
-  const runtime = objectMap.get(nodeId) ?? null
-  if (!runtime || points.length < 3) {
+  if (points.length < 3) {
     return false
   }
-  const worldPoints = buildLandformWorldPointsFromLocalPoints(runtime, points)
   const updated = sceneStore.updateLandformSurfaceMeshNode({
     nodeId,
-    points: worldPoints.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    localPoints: points.map(([x, z]) => [x, z] as [number, number]),
   })
   return Boolean(updated)
 }
@@ -14534,7 +14526,7 @@ function handlePointerMove(event: PointerEvent) {
     }
     nextPoints[state.vertexIndex] = [local.x, local.z]
     state.workingPoints = nextPoints
-      if (buildLandformPreviewFromLocalPoints(state.nodeId, state.runtimeObject, nextPoints)) {
+      if (buildLandformPreviewFromLocalPoints(state.nodeId, nextPoints)) {
         ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
       }
     return
