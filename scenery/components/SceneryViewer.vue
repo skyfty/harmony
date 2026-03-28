@@ -481,12 +481,6 @@ import {
   syncGroundSurfacePreviewForGround,
 } from '@harmony/schema/groundSurfacePreview';
 import {
-  createDefaultLandformsPreviewLoaders,
-  clearLandformsPreviewForGround,
-  setLandformsPreviewTexture,
-  syncLandformsPreviewForGround,
-} from '@harmony/schema/landformsPreview';
-import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
   syncBodyFromObject as syncSharedBodyFromObject,
@@ -595,7 +589,6 @@ import {
   guideRouteComponentDefinition,
   autoTourComponentDefinition,
   purePursuitComponentDefinition,
-  landformsComponentDefinition,
   sceneStateAnchorComponentDefinition,
   preloadableComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
@@ -1287,8 +1280,6 @@ const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | n
 const bakedGroundTextureCache = new Map<string, THREE.Texture | null>();
 const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
 
-const landformsPreviewLoaders = createDefaultLandformsPreviewLoaders(resolveAssetUrlFromCache)
-
 // debug hooks removed
 
 async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
@@ -1345,15 +1336,8 @@ function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, gro
         return;
       }
       if (texture) {
-        setLandformsPreviewTexture(groundObject, `ground-baked:${bakedAssetId}`, texture);
         return;
       }
-      syncLandformsPreviewForGround(
-        groundObject,
-        groundNode,
-        landformsPreviewLoaders,
-        () => groundSurfacePreviewLoadToken,
-      );
     });
     return;
   }
@@ -1372,12 +1356,6 @@ function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, gro
   if (usesSurfacePreview) {
     return;
   }
-  syncLandformsPreviewForGround(
-    groundObject,
-    groundNode,
-    landformsPreviewLoaders,
-    () => groundSurfacePreviewLoadToken,
-  )
 }
 
 function ensureResourceCache(
@@ -1860,7 +1838,6 @@ previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
-previewComponentManager.registerDefinition(landformsComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
@@ -4022,7 +3999,6 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
 
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
   const previousGroundObject = dynamicGroundCache ? nodeObjectMap.get(dynamicGroundCache.nodeId) ?? null : null;
-  clearLandformsPreviewForGround(previousGroundObject);
   groundSurfacePreviewLoadToken += 1;
   if (!document) {
     dynamicGroundCache = null;

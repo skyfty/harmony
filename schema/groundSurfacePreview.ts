@@ -4,21 +4,7 @@ import type {
   SceneNode,
 } from './index'
 import { stableSerialize } from './stableSerialize'
-import { resolveEnabledComponentState } from './componentRuntimeUtils'
-import {
-  LANDFORMS_COMPONENT_TYPE,
-  clampLandformsComponentProps,
-  type LandformsBlendMode,
-  type LandformsComponentProps,
-  type LandformsLayer,
-} from './components'
-import {
-  LANDFORMS_PREVIEW_SIGNATURE_USERDATA_KEY,
-  clearLandformsPreviewForGround,
-  getLandformsPreviewTexture,
-  setLandformsPreviewTexture,
-  type LandformsPreviewLoaders,
-} from './landformsPreview'
+// resolveEnabledComponentState removed with Landforms feature
 import {
   parseTerrainPaintChunkKey,
   type TerrainPaintChunkBounds,
@@ -92,7 +78,7 @@ type GroundSurfacePreviewPerfBucket = {
 
 type GroundSurfacePreviewPerfStats = Record<string, GroundSurfacePreviewPerfBucket>
 
-export type GroundSurfacePreviewLoaders = LandformsPreviewLoaders & {
+export type GroundSurfacePreviewLoaders = {
   loadTerrainPaintTextureFromAssetId: (assetId: string, options: { colorSpace: 'srgb' | 'none' }) => Promise<THREE.Texture | null>
   loadGroundSurfaceBaseTextureFromUrl: (url: string) => Promise<THREE.Texture | null>
 }
@@ -202,18 +188,6 @@ function normalizeDimension(value: number): number {
   return Math.max(1, normalizeFinite(value, 1))
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0
-  }
-  if (value <= 0) {
-    return 0
-  }
-  if (value >= 1) {
-    return 1
-  }
-  return value
-}
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -348,60 +322,7 @@ function computePreviewTextureSize(definition: GroundDynamicMesh, maxResolution:
   return { width, height }
 }
 
-function resolveLayerCompositeOperation(mode: LandformsBlendMode): GlobalCompositeOperation {
-  switch (mode) {
-    case 'multiply':
-      return 'multiply'
-    case 'screen':
-      return 'screen'
-    case 'overlay':
-      return 'overlay'
-    default:
-      return 'source-over'
-  }
-}
 
-function applyLayerMask(context: Canvas2DContext, layer: LandformsLayer, width: number, height: number): void {
-  const shape = layer.mask.shape
-  if (shape === 'none') {
-    return
-  }
-  const centerX = width * normalizeFinite(layer.mask.center.x, 0.5)
-  const centerY = height * normalizeFinite(layer.mask.center.y, 0.5)
-  const sizeX = width * Math.max(0, normalizeFinite(layer.mask.size.x, 1))
-  const sizeY = height * Math.max(0, normalizeFinite(layer.mask.size.y, 1))
-  context.beginPath()
-  if (shape === 'circle') {
-    context.ellipse(centerX, centerY, Math.max(1, sizeX * 0.5), Math.max(1, sizeY * 0.5), 0, 0, Math.PI * 2)
-  } else {
-    context.rect(centerX - sizeX * 0.5, centerY - sizeY * 0.5, Math.max(1, sizeX), Math.max(1, sizeY))
-  }
-  context.clip()
-}
-
-function drawLayerTiled(
-  context: Canvas2DContext,
-  image: CanvasImageSource,
-  layer: LandformsLayer,
-  width: number,
-  height: number,
-): void {
-  const repeatX = Math.max(0.001, normalizeFinite(layer.tileScale.x, 1))
-  const repeatY = Math.max(0.001, normalizeFinite(layer.tileScale.y, 1))
-  const tileWidth = layer.worldSpace ? width / repeatX : Math.min(width, height) / repeatX
-  const tileHeight = layer.worldSpace ? height / repeatY : Math.min(width, height) / repeatY
-  const offsetX = normalizeFinite(layer.offset.x, 0) * tileWidth
-  const offsetY = normalizeFinite(layer.offset.y, 0) * tileHeight
-  const drawStartX = -tileWidth * 2 + offsetX
-  const drawStartY = -tileHeight * 2 + offsetY
-  const drawEndX = width + tileWidth * 2
-  const drawEndY = height + tileHeight * 2
-  for (let y = drawStartY; y < drawEndY; y += tileHeight) {
-    for (let x = drawStartX; x < drawEndX; x += tileWidth) {
-      context.drawImage(image, x, y, tileWidth, tileHeight)
-    }
-  }
-}
 
 function resolveCanvasImageSourceSize(source: CanvasImageSource): { width: number; height: number } | null {
   const candidate = source as { width?: number; height?: number; videoWidth?: number; videoHeight?: number; naturalWidth?: number; naturalHeight?: number }
@@ -600,10 +521,8 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
   }
 
   const previewSize = computePreviewTextureSize(dynamicMesh, maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION)
-  const persistedTexture = getLandformsPreviewTexture(groundObject)
   let liveTexture = getGroundSurfacePreviewLiveTexture(groundObject)
-  // Seed from the persisted preview only so live passes do not recursively bootstrap prior live blending artifacts.
-  const seedTexture = persistedTexture ?? null
+  const seedTexture = null
   const seedSource = resolveTextureImageSource(seedTexture)
   const seedSize = seedSource ? resolveCanvasImageSourceSize(seedSource) : null
   const targetWidth = Math.max(previewSize.width, seedSize?.width ?? 0)
@@ -855,22 +774,18 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
   return drewAny
 }
 
-function buildGroundSurfacePreviewSignature(groundNode: SceneNode, definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
-  const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
-  const props = component ? clampLandformsComponentProps(component.props) : { layers: [] }
+function buildGroundSurfacePreviewSignature(definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
   return stableSerialize({
     width: normalizeDimension(definition.width),
     depth: normalizeDimension(definition.depth),
     textureDataUrl: definition.textureDataUrl ?? null,
     groundSurfaceChunks: definition.groundSurfaceChunks ?? null,
-    landforms: props.layers.filter((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length),
     previewRevision: options.previewRevision ?? 0,
     maxResolution: options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION,
   })
 }
 
 export async function composeGroundSurfacePreviewCanvas(
-  groundNode: SceneNode,
   definition: GroundDynamicMesh,
   loaders: GroundSurfacePreviewLoaders,
   options: GroundSurfacePreviewOptions,
@@ -909,44 +824,6 @@ export async function composeGroundSurfacePreviewCanvas(
     context.drawImage(seedImageSource, 0, 0, width, height)
   }
 
-  const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
-  if (component) {
-    const props = clampLandformsComponentProps(component.props)
-    const activeLayers = props.layers.filter((entry) => entry.enabled && typeof entry.assetId === 'string' && entry.assetId.trim().length)
-    const landformsComposeStartTime = nowMs()
-    let drawnLayerCount = 0
-    let totalLandformsSourcePixels = 0
-    for (const layer of activeLayers) {
-      const texture = await loaders.loadLandformsTextureFromAssetId(layer.assetId!.trim())
-      if (shouldAbort()) {
-        return null
-      }
-      const loaded = loadPreviewSourceFromTexture(texture)
-      if (!loaded) {
-        continue
-      }
-      context.save()
-      context.globalAlpha = clamp01(normalizeFinite(layer.opacity, 1))
-      context.globalCompositeOperation = resolveLayerCompositeOperation(layer.blendMode)
-      applyLayerMask(context, layer, width, height)
-      context.translate(width * 0.5, height * 0.5)
-      context.rotate((normalizeFinite(layer.rotationDeg, 0) * Math.PI) / 180)
-      context.translate(-width * 0.5, -height * 0.5)
-      drawLayerTiled(context, loaded.source, layer, width, height)
-      context.restore()
-      drawnLayerCount += 1
-      totalLandformsSourcePixels += loaded.width * loaded.height
-    }
-    if (activeLayers.length) {
-      recordGroundSurfacePreviewPerf('compose-landforms-layers', nowMs() - landformsComposeStartTime, {
-        layerCount: activeLayers.length,
-        drawnLayerCount,
-        previewWidth: width,
-        previewHeight: height,
-        totalSourcePixels: totalLandformsSourcePixels,
-      })
-    }
-  }
 
   await composeGroundSurfaceChunksIntoCanvas({
     context,
@@ -981,14 +858,13 @@ function configureGroundSurfacePreviewTexture(texture: THREE.Texture, canvas: Ca
 }
 
 async function composeGroundSurfacePreviewTexture(
-  groundNode: SceneNode,
   definition: GroundDynamicMesh,
   loaders: GroundSurfacePreviewLoaders,
   options: GroundSurfacePreviewOptions,
   existingTexture: THREE.Texture | null = null,
   shouldAbort: () => boolean = () => false,
 ): Promise<THREE.Texture | null> {
-  const result = await composeGroundSurfacePreviewCanvas(groundNode, definition, loaders, options, shouldAbort)
+  const result = await composeGroundSurfacePreviewCanvas(definition, loaders, options, shouldAbort)
   if (!result) {
     return null
   }
@@ -1015,7 +891,6 @@ export function createDefaultGroundSurfacePreviewLoaders(
 ): GroundSurfacePreviewLoaders {
   const textureLoader = new THREE.TextureLoader()
   const terrainTextureCache = new Map<string, Promise<THREE.Texture | null>>()
-  const landformsTextureCache = new Map<string, Promise<THREE.Texture | null>>()
   const baseTextureCache = new Map<string, Promise<THREE.Texture | null>>()
 
   function loadTerrainTextureCached(assetId: string, options: { colorSpace: 'srgb' | 'none' }): Promise<THREE.Texture | null> {
@@ -1059,33 +934,6 @@ export function createDefaultGroundSurfacePreviewLoaders(
     return pending
   }
 
-  function loadLandformsTextureCached(assetId: string): Promise<THREE.Texture | null> {
-    const key = assetId
-    const cached = landformsTextureCache.get(key)
-    if (cached) {
-      return cached
-    }
-    const pending = (async () => {
-      const resolved = await resolveAssetUrlFromCache(assetId)
-      if (!resolved?.url) {
-        // Cache miss can be transient while assets hydrate; allow future retries.
-        landformsTextureCache.delete(key)
-        return null
-      }
-      try {
-        const texture = await textureLoader.loadAsync(resolved.url)
-        ;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
-        texture.needsUpdate = true
-        return texture
-      } catch (error) {
-        console.warn('[groundSurfacePreview] Failed to load landforms texture', assetId, error)
-        landformsTextureCache.delete(key)
-        return null
-      }
-    })()
-    landformsTextureCache.set(key, pending)
-    return pending
-  }
 
   function loadGroundBaseTextureCached(url: string): Promise<THREE.Texture | null> {
     const key = url
@@ -1115,15 +963,8 @@ export function createDefaultGroundSurfacePreviewLoaders(
     },
   }
 
-  const landformsLoader: LandformsPreviewLoaders = {
-    async loadLandformsTextureFromAssetId(assetId) {
-      return await loadLandformsTextureCached(assetId)
-    },
-  }
-
   return {
     ...terrainLoader,
-    ...landformsLoader,
     async loadGroundSurfaceBaseTextureFromUrl(url) {
       const normalized = typeof url === 'string' ? url.trim() : ''
       if (!normalized) {
@@ -1144,34 +985,20 @@ export function syncGroundSurfacePreviewForGround(
 ): boolean {
   if (!groundObject || !groundNode || dynamicMesh.type !== 'Ground') {
     restoreGroundSurfacePreviewMaterialMap(groundObject)
-    clearLandformsPreviewForGround(groundObject)
     return false
   }
   const hasTerrainPaint = Boolean(
     Object.values(dynamicMesh.groundSurfaceChunks ?? {}).some((chunkRef) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length),
   )
-  const component = resolveEnabledComponentState<LandformsComponentProps>(groundNode, LANDFORMS_COMPONENT_TYPE)
-  const landformsProps = component ? clampLandformsComponentProps(component.props) : null
-  const hasLandforms = Boolean(landformsProps?.layers?.some((layer) => layer.enabled && typeof layer.assetId === 'string' && layer.assetId.trim().length))
-  if (!hasTerrainPaint && !hasLandforms) {
+  if (!hasTerrainPaint) {
     restoreGroundSurfacePreviewMaterialMap(groundObject)
-    clearLandformsPreviewForGround(groundObject)
     return false
   }
-  const signature = buildGroundSurfacePreviewSignature(groundNode, dynamicMesh, options)
-  const currentSignature = ((groundObject.userData as any)?.[LANDFORMS_PREVIEW_SIGNATURE_USERDATA_KEY] as string | null | undefined) ?? null
-  const currentTexture = getLandformsPreviewTexture(groundObject)
-  if (currentSignature === signature && currentTexture) {
-    if (options.applyToMaterialMap === true) {
-      applyGroundSurfacePreviewToMaterialMap(groundObject, currentTexture, dynamicMesh)
-    }
-    releaseGroundSurfacePreviewLiveTextureIfDifferent(groundObject, currentTexture)
-    return true
-  }
+  const signature = buildGroundSurfacePreviewSignature(dynamicMesh, options)
   const token = getToken()
   let pending = groundSurfacePreviewRequests.get(signature)
   if (!pending) {
-    pending = composeGroundSurfacePreviewTexture(groundNode, dynamicMesh, loaders, options, null, () => getToken() !== token)
+    pending = composeGroundSurfacePreviewTexture(dynamicMesh, loaders, options, null, () => getToken() !== token)
     groundSurfacePreviewRequests.set(signature, pending)
   }
   pending.then((texture) => {
@@ -1187,7 +1014,6 @@ export function syncGroundSurfacePreviewForGround(
       console.log('[groundSurfacePreview] preview missing texture', {
         previewRevision: options.previewRevision ?? null,
         hasTerrainPaint,
-        hasLandforms,
         terrainPaintChunkCount: Object.keys(dynamicMesh.groundSurfaceChunks ?? {}).length,
         surfaceRevision: Number.isFinite((dynamicMesh as { surfaceRevision?: number }).surfaceRevision)
           ? Math.trunc((dynamicMesh as { surfaceRevision?: number }).surfaceRevision as number)
@@ -1198,7 +1024,6 @@ export function syncGroundSurfacePreviewForGround(
     if (options.applyToMaterialMap === true) {
       applyGroundSurfacePreviewToMaterialMap(groundObject, texture, dynamicMesh)
     }
-    setLandformsPreviewTexture(groundObject, signature, texture)
     releaseGroundSurfacePreviewLiveTextureIfDifferent(groundObject, texture)
   }).catch((error) => {
     groundSurfacePreviewRequests.delete(signature)

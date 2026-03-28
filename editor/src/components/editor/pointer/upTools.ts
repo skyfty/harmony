@@ -8,6 +8,7 @@ export function handlePointerUpTools(
     handleGroundEditorPointerUp: (event: PointerEvent) => boolean
     displayBoardBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     billboardBuildToolHandlePointerUp: (event: PointerEvent) => boolean
+    landformBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     waterBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     wallBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     roadBuildToolHandlePointerUp: (event: PointerEvent) => boolean
@@ -45,6 +46,23 @@ export function handlePointerUpTools(
       stopPropagation: true,
       stopImmediatePropagation: true,
     }
+  }
+
+  if (ctx.activeBuildTool === 'landform') {
+    const handled = ctx.landformBuildToolHandlePointerUp(event)
+    if (handled) {
+      return {
+        handled: true,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    if (event.button === 0) {
+      return { handled: true }
+    }
+    return null
   }
 
   if (!ctx.waterEditModeActive && ctx.waterBuildToolHandlePointerUp(event)) {

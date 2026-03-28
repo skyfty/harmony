@@ -254,12 +254,21 @@ export function createFloorPreviewRenderer(options: {
   rootGroup: THREE.Group
   getRegularPolygonSides?: () => number
   getPreviewPresetData?: () => FloorPresetData | null
+  getPreviewSignature?: () => string
   applyPreviewMaterials?: (group: THREE.Group, presetData: FloorPresetData | null) => void
 }): FloorPreviewRenderer {
+  const resolvePreviewSignature = (): string => {
+    const custom = options.getPreviewSignature?.()
+    if (typeof custom === 'string') {
+      return custom
+    }
+    return computePresetSignature(options.getPreviewPresetData?.() ?? null)
+  }
+
   let needsSync = false
   let signature: string | null = null
   let lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
-  let lastPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
+  let lastPresetSignature = resolvePreviewSignature()
 
   const clear = (session: FloorPreviewSession | null) => {
     if (session?.previewGroup) {
@@ -275,7 +284,7 @@ export function createFloorPreviewRenderer(options: {
     needsSync = false
     lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
     const presetData = options.getPreviewPresetData?.() ?? null
-    lastPresetSignature = computePresetSignature(presetData)
+    lastPresetSignature = resolvePreviewSignature()
 
     if (!scene || !session) {
       if (signature !== null) {
@@ -300,7 +309,8 @@ export function createFloorPreviewRenderer(options: {
       return
     }
 
-    const nextSignature = computeFloorPreviewSignature(previewVertices)
+    const geometrySignature = computeFloorPreviewSignature(previewVertices)
+    const nextSignature = `${geometrySignature}|${lastPresetSignature}`
     if (nextSignature === signature) {
       return
     }
@@ -350,7 +360,7 @@ export function createFloorPreviewRenderer(options: {
     },
     flushIfNeeded: (scene: THREE.Scene | null, session: FloorPreviewSession | null) => {
       const currentRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
-      const currentPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
+      const currentPresetSignature = resolvePreviewSignature()
       if (currentRegularPolygonSides !== lastRegularPolygonSides) {
         needsSync = true
       }
@@ -368,14 +378,14 @@ export function createFloorPreviewRenderer(options: {
       needsSync = false
       signature = null
       lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
-      lastPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
+      lastPresetSignature = resolvePreviewSignature()
     },
     dispose: (session: FloorPreviewSession | null) => {
       clear(session)
       needsSync = false
       signature = null
       lastRegularPolygonSides = normalizeRegularPolygonSides(options.getRegularPolygonSides?.() ?? 0)
-      lastPresetSignature = computePresetSignature(options.getPreviewPresetData?.() ?? null)
+      lastPresetSignature = resolvePreviewSignature()
     },
   }
 }

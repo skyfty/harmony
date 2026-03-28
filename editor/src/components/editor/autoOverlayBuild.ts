@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from '@schema'
+import type { FloorDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from '@schema'
 import type { Object3D } from 'three'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
@@ -13,7 +13,7 @@ const AUTO_OVERLAY_WORLD_GAP = 0.02
 const POINT_EPSILON_SQ = 1e-8
 
 export type AutoOverlayTool = 'floor' | 'wall' | 'water'
-export type AutoOverlayReferenceType = 'floor' | 'wall' | 'water'
+export type AutoOverlayReferenceType = 'floor' | 'landform' | 'wall' | 'water'
 export type AutoOverlayTargetBuildShape = FloorBuildShape | Exclude<WallBuildShape, 'line'> | WaterBuildShape
 
 export type AutoOverlayBuildPlan = {
@@ -194,6 +194,58 @@ function buildFloorOverlayPlan(
   }
 }
 
+function buildLandformOverlayPlan(
+  node: SceneNode,
+  runtimeObject: Object3D | null | undefined,
+  targetTool: AutoOverlayTool,
+): AutoOverlayBuildPlan {
+  const dynamicMesh = node.dynamicMesh as LandformDynamicMesh
+  const footprint = Array.isArray(dynamicMesh.footprint) ? dynamicMesh.footprint : []
+  const contour = sanitizeWorldPoints(
+    footprint
+      .map((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) {
+          return null
+        }
+        const x = Number(entry[0])
+        const z = Number(entry[1])
+        if (!Number.isFinite(x) || !Number.isFinite(z)) {
+          return null
+        }
+        return worldPointFromLocal(node, runtimeObject, new THREE.Vector3(x, AUTO_OVERLAY_WORLD_GAP, z))
+      })
+      .filter((entry): entry is THREE.Vector3 => Boolean(entry)),
+  )
+
+  const buildShape = readFloorBuildShapeFromNode(node)
+
+  if (contour.length < 3) {
+    return {
+      supported: false,
+      reason: '参考 landform 轮廓无效，无法自动铺设。',
+      referenceNodeId: node.id,
+      referenceNodeName: node.name,
+      referenceType: 'landform',
+      referenceBuildShape: buildShape,
+      targetTool,
+      targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
+      worldPoints: contour,
+    }
+  }
+
+  return {
+    supported: true,
+    reason: null,
+    referenceNodeId: node.id,
+    referenceNodeName: node.name,
+    referenceType: 'landform',
+    referenceBuildShape: buildShape,
+    targetTool,
+    targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
+    worldPoints: contour,
+  }
+}
+
 function buildWallOverlayPlan(
   node: SceneNode,
   runtimeObject: Object3D | null | undefined,
@@ -283,6 +335,9 @@ export function resolveAutoOverlayBuildPlan(options: {
   const { referenceNode, runtimeObject, targetTool } = options
   if (referenceNode.dynamicMesh?.type === 'Floor') {
     return buildFloorOverlayPlan(referenceNode, runtimeObject, targetTool)
+  }
+  if (referenceNode.dynamicMesh?.type === 'Landform') {
+    return buildLandformOverlayPlan(referenceNode, runtimeObject, targetTool)
   }
   if (referenceNode.dynamicMesh?.type === 'Wall') {
     return buildWallOverlayPlan(referenceNode, runtimeObject, targetTool)

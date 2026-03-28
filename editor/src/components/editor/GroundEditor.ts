@@ -3178,7 +3178,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const committedDefinition = sculptSessionState.definition
-		options.sceneStore.commitGroundHeightMapEdit(
+		const committed = options.sceneStore.commitGroundHeightMapEdit(
 			targetNode.id,
 			committedDefinition,
 			sculptSessionState.heightMap,
@@ -3188,7 +3188,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			options.onSculptCommitApplied?.({ groundObject, definition: committedDefinition })
 		}
 		sculptSessionState = null
-		return true
+		return committed
 	}
 
 	function revokePaintPreviewUrls(session: PaintSessionState | null): void {

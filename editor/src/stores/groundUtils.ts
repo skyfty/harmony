@@ -35,8 +35,7 @@ export type GroundDeps = {
   generateUuid: () => string
   clampRigidbodyComponentProps: (p: any) => any
   RIGIDBODY_COMPONENT_TYPE: string
-  clampLandformsComponentProps: (p: any) => any
-  LANDFORMS_COMPONENT_TYPE: string
+  
   GROUND_NODE_ID?: string
   getPrimaryNodeMaterial?: (node: SceneNode) => SceneNodeMaterial | null
   cloneNode?: (node: SceneNode) => SceneNode
