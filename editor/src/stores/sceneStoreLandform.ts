@@ -164,20 +164,6 @@ function buildShapeTriangulation(points: Vector3[]): { vertices: Vector2[]; indi
   return { vertices, indices }
 }
 
-function isPointInsidePolygon2D(pointX: number, pointZ: number, polygon: Vector3[]): boolean {
-  let inside = false
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-    const a = polygon[i]!
-    const b = polygon[j]!
-    const intersects = ((a.z > pointZ) !== (b.z > pointZ))
-      && (pointX < ((b.x - a.x) * (pointZ - a.z)) / ((b.z - a.z) || 1e-12) + a.x)
-    if (intersects) {
-      inside = !inside
-    }
-  }
-  return inside
-}
-
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
     return 0
@@ -247,6 +233,91 @@ function resolveLandformCellSubdivisions(cellSize: number): number {
   }
   const subdivisions = Math.ceil(cellSize / LANDFORM_TARGET_TRI_EDGE_LENGTH)
   return Math.min(LANDFORM_MAX_CELL_SUBDIVISIONS, Math.max(1, subdivisions))
+}
+
+function resolveLandformSubdivisionSteps(cellSize: number): number {
+  const targetSubdivisions = resolveLandformCellSubdivisions(cellSize)
+  return Math.max(0, Math.ceil(Math.log2(targetSubdivisions)))
+}
+
+function refineTriangulation(
+  verticesInput: Vector2[],
+  indicesInput: number[],
+  targetEdgeLength: number,
+  maxSteps: number,
+): { vertices: Vector2[]; indices: number[] } {
+  if (!Number.isFinite(targetEdgeLength) || targetEdgeLength <= 1e-6 || maxSteps <= 0 || indicesInput.length < 3) {
+    return {
+      vertices: verticesInput.map((entry) => entry.clone()),
+      indices: [...indicesInput],
+    }
+  }
+
+  const vertices = verticesInput.map((entry) => entry.clone())
+  let indices = [...indicesInput]
+
+  for (let step = 0; step < maxSteps; step += 1) {
+    const nextIndices: number[] = []
+    const midpointByEdge = new Map<string, number>()
+    let anySplit = false
+
+    const resolveMidpointIndex = (indexA: number, indexB: number): number => {
+      const min = Math.min(indexA, indexB)
+      const max = Math.max(indexA, indexB)
+      const edgeKey = `${min}:${max}`
+      const cached = midpointByEdge.get(edgeKey)
+      if (cached !== undefined) {
+        return cached
+      }
+      const a = vertices[indexA]!
+      const b = vertices[indexB]!
+      const midpoint = new Vector2((a.x + b.x) * 0.5, (a.y + b.y) * 0.5)
+      const nextIndex = vertices.length
+      vertices.push(midpoint)
+      midpointByEdge.set(edgeKey, nextIndex)
+      return nextIndex
+    }
+
+    const shouldSplitTriangle = (i0: number, i1: number, i2: number): boolean => {
+      const v0 = vertices[i0]!
+      const v1 = vertices[i1]!
+      const v2 = vertices[i2]!
+      const d01 = v0.distanceTo(v1)
+      const d12 = v1.distanceTo(v2)
+      const d20 = v2.distanceTo(v0)
+      return d01 > targetEdgeLength || d12 > targetEdgeLength || d20 > targetEdgeLength
+    }
+
+    for (let index = 0; index + 2 < indices.length; index += 3) {
+      const i0 = indices[index]!
+      const i1 = indices[index + 1]!
+      const i2 = indices[index + 2]!
+
+      if (!shouldSplitTriangle(i0, i1, i2)) {
+        nextIndices.push(i0, i1, i2)
+        continue
+      }
+
+      anySplit = true
+      const m01 = resolveMidpointIndex(i0, i1)
+      const m12 = resolveMidpointIndex(i1, i2)
+      const m20 = resolveMidpointIndex(i2, i0)
+
+      nextIndices.push(
+        i0, m01, m20,
+        m01, i1, m12,
+        m20, m12, i2,
+        m01, m12, m20,
+      )
+    }
+
+    indices = nextIndices
+    if (!anySplit) {
+      break
+    }
+  }
+
+  return { vertices, indices }
 }
 
 export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersDeps) {
@@ -358,67 +429,26 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
 
       const transform = getGroundTransform(groundNode)
       const polygonLocal = normalizePolygonWinding(worldPoints.map((point) => worldToGroundLocal(point, transform)))
-      const halfWidth = groundDefinition.width * 0.5
-      const halfDepth = groundDefinition.depth * 0.5
+      const polygonTriangulation = buildShapeTriangulation(polygonLocal)
+      if (!polygonTriangulation) {
+        return null
+      }
+
       const cellSize = Math.max(1e-6, groundDefinition.cellSize)
-      const cellSubdivisions = resolveLandformCellSubdivisions(cellSize)
-      const subCellSize = cellSize / cellSubdivisions
-      const columns = Math.max(1, Math.trunc(groundDefinition.columns))
-      const rows = Math.max(1, Math.trunc(groundDefinition.rows))
+      const subdivisionSteps = resolveLandformSubdivisionSteps(cellSize)
+      const targetEdgeLength = cellSize / Math.max(1, resolveLandformCellSubdivisions(cellSize))
+      const refinedTriangulation = refineTriangulation(
+        polygonTriangulation.vertices,
+        polygonTriangulation.indices,
+        targetEdgeLength,
+        Math.max(1, subdivisionSteps + 3),
+      )
 
-      const minX = Math.min(...polygonLocal.map((point) => point.x))
-      const maxX = Math.max(...polygonLocal.map((point) => point.x))
-      const minZ = Math.min(...polygonLocal.map((point) => point.z))
-      const maxZ = Math.max(...polygonLocal.map((point) => point.z))
-
-      const minColumn = Math.max(0, Math.min(columns - 1, Math.floor((minX + halfWidth) / cellSize)))
-      const maxColumn = Math.max(0, Math.min(columns - 1, Math.ceil((maxX + halfWidth) / cellSize)))
-      const minRow = Math.max(0, Math.min(rows - 1, Math.floor((minZ + halfDepth) / cellSize)))
-      const maxRow = Math.max(0, Math.min(rows - 1, Math.ceil((maxZ + halfDepth) / cellSize)))
-
-      const vertexIndexByKey = new Map<string, number>()
-      const surfaceWorldVertices: Vector3[] = []
-      const surfaceIndices: number[] = []
-
-      const resolveVertexIndex = (localX: number, localZ: number): number => {
-        const key = `${localX.toFixed(6)},${localZ.toFixed(6)}`
-        const cached = vertexIndexByKey.get(key)
-        if (cached !== undefined) {
-          return cached
-        }
-        const localHeight = sampleGroundHeight(groundDefinition, localX, localZ)
-        const world = groundLocalToWorld(new Vector3(localX, localHeight, localZ), transform)
-        const index = surfaceWorldVertices.length
-        surfaceWorldVertices.push(world)
-        vertexIndexByKey.set(key, index)
-        return index
-      }
-
-      const pushTriangleIfInside = (a: Vector3, b: Vector3, c: Vector3): void => {
-        const centroidX = (a.x + b.x + c.x) / 3
-        const centroidZ = (a.z + b.z + c.z) / 3
-        if (!isPointInsidePolygon2D(centroidX, centroidZ, polygonLocal)) {
-          return
-        }
-        surfaceIndices.push(resolveVertexIndex(a.x, a.z), resolveVertexIndex(b.x, b.z), resolveVertexIndex(c.x, c.z))
-      }
-
-      for (let row = minRow; row <= maxRow; row += 1) {
-        const z0 = -halfDepth + row * cellSize
-        for (let column = minColumn; column <= maxColumn; column += 1) {
-          const x0 = -halfWidth + column * cellSize
-          for (let subRow = 0; subRow < cellSubdivisions; subRow += 1) {
-            const subZ0 = z0 + subRow * subCellSize
-            const subZ1 = subZ0 + subCellSize
-            for (let subColumn = 0; subColumn < cellSubdivisions; subColumn += 1) {
-              const subX0 = x0 + subColumn * subCellSize
-              const subX1 = subX0 + subCellSize
-              pushTriangleIfInside(new Vector3(subX0, 0, subZ0), new Vector3(subX1, 0, subZ0), new Vector3(subX1, 0, subZ1))
-              pushTriangleIfInside(new Vector3(subX0, 0, subZ0), new Vector3(subX1, 0, subZ1), new Vector3(subX0, 0, subZ1))
-            }
-          }
-        }
-      }
+      const surfaceIndices = [...refinedTriangulation.indices]
+      const surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
+        const localHeight = sampleGroundHeight(groundDefinition, vertex.x, vertex.y)
+        return groundLocalToWorld(new Vector3(vertex.x, localHeight, vertex.y), transform)
+      })
 
       if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
         return null
