@@ -69,6 +69,9 @@ import {
   DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
+  DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS,
+  MIN_PURE_PURSUIT_MAX_SPEED_MPS,
+  MAX_PURE_PURSUIT_MAX_SPEED_MPS,
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
@@ -111,6 +114,7 @@ const localDockYawEnabled = ref(DEFAULT_PURE_PURSUIT_DOCK_YAW_ENABLED)
 const localDockYawSlerpRate = ref(DEFAULT_PURE_PURSUIT_DOCK_YAW_SLERP_RATE)
 const localDockStopEpsilonMeters = ref(DEFAULT_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS)
 const localDockStopSpeedEpsilonMps = ref(DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS)
+const localMaxSpeedMps = ref(DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS)
 
 watch(
   () => normalizedProps.value,
@@ -139,6 +143,7 @@ watch(
     localDockYawSlerpRate.value = props.dockYawSlerpRate
     localDockStopEpsilonMeters.value = props.dockStopEpsilonMeters
     localDockStopSpeedEpsilonMps.value = props.dockStopSpeedEpsilonMps
+    localMaxSpeedMps.value = props.maxSpeedMps
   },
   { immediate: true, deep: true },
 )
@@ -176,6 +181,7 @@ const numberLocals: Partial<Record<PurePursuitNumericKey, typeof localLookaheadB
   dockStartDistanceMeters: localDockStartDistanceMeters,
   dockMaxSpeedMps: localDockMaxSpeedMps,
   dockVelocityKp: localDockVelocityKp,
+  maxSpeedMps: localMaxSpeedMps,
   dockYawSlerpRate: localDockYawSlerpRate,
   dockStopEpsilonMeters: localDockStopEpsilonMeters,
   dockStopSpeedEpsilonMps: localDockStopSpeedEpsilonMps,
@@ -382,6 +388,19 @@ function handleRemoveComponent() {
           :model-value="localMinSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('minSpeedMps', v)"
+        />
+
+        <v-text-field
+          label="Max Speed (m/s)"
+          type="number"
+          density="compact"
+          variant="solo"
+          hide-details
+          :min="MIN_PURE_PURSUIT_MAX_SPEED_MPS"
+          :max="MAX_PURE_PURSUIT_MAX_SPEED_MPS"
+          :model-value="localMaxSpeedMps"
+          :disabled="!componentEnabled"
+          @update:modelValue="(v) => handleNumberField('maxSpeedMps', v)"
         />
 
         <v-text-field

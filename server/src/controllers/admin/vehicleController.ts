@@ -12,6 +12,7 @@ type VehiclePayload = {
   description?: string
   coverUrl?: string
   isActive?: boolean
+  isDefault?: boolean
 }
 
 type UserVehiclePayload = {
@@ -42,6 +43,7 @@ function mapVehicle(row: any) {
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
     isActive: row.isActive !== false,
+    isDefault: row.isDefault === true,
     productId: row.productId?.toString?.() ?? null,
     createdAt: row.createdAt?.toISOString?.() ?? null,
     updatedAt: row.updatedAt?.toISOString?.() ?? null,
@@ -89,6 +91,7 @@ function mapUserVehicle(row: any) {
           description: vehicle.description ?? '',
           coverUrl: vehicle.coverUrl ?? '',
           isActive: vehicle.isActive !== false,
+          isDefault: vehicle.isDefault === true,
         }
       : null,
     ownedAt: row.ownedAt?.toISOString?.() ?? null,
@@ -98,7 +101,7 @@ function mapUserVehicle(row: any) {
 }
 
 export async function listVehicles(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '10', keyword, isActive } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '10', keyword, isActive, isDefault } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
@@ -110,6 +113,9 @@ export async function listVehicles(ctx: Context): Promise<void> {
   }
   if (isActive === 'true' || isActive === 'false') {
     filter.isActive = isActive === 'true'
+  }
+  if (isDefault === 'true' || isDefault === 'false') {
+    filter.isDefault = isDefault === 'true'
   }
 
   const [rows, total] = await Promise.all([
@@ -182,6 +188,7 @@ export async function createVehicle(ctx: Context): Promise<void> {
       description,
       coverUrl,
       isActive: body.isActive !== false,
+      isDefault: body.isDefault === true,
       productId: product._id,
     })
   } catch (error) {
@@ -232,6 +239,7 @@ export async function updateVehicle(ctx: Context): Promise<void> {
           ? (current as any).coverUrl ?? ''
           : (toStringValue(body.coverUrl) ?? ''),
       isActive: body.isActive === undefined ? current.isActive : body.isActive === true,
+      isDefault: body.isDefault === undefined ? current.isDefault : body.isDefault === true,
     },
     { new: true },
   )
@@ -324,7 +332,7 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
   const [rows, total] = await Promise.all([
     UserVehicleModel.find(filter)
       .populate('userId', 'username displayName')
-      .populate('vehicleId', 'identifier name description coverUrl isActive')
+      .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
       .sort({ ownedAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -348,7 +356,7 @@ export async function getUserVehicle(ctx: Context): Promise<void> {
   }
   const row = await UserVehicleModel.findById(id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'identifier name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
     .lean()
     .exec()
   if (!row) {
@@ -393,7 +401,7 @@ export async function createUserVehicle(ctx: Context): Promise<void> {
 
   const row = await UserVehicleModel.findById(created._id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'identifier name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
     .lean()
     .exec()
 
@@ -455,7 +463,7 @@ export async function updateUserVehicle(ctx: Context): Promise<void> {
     { new: true },
   )
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'identifier name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
     .lean()
     .exec()
 

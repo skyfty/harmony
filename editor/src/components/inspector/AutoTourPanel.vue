@@ -9,8 +9,11 @@ import {
   type AutoTourComponentProps,
   clampAutoTourComponentProps,
   DEFAULT_AUTO_TOUR_SPEED_MPS,
+  DEFAULT_AUTO_TOUR_MAX_SPEED_MPS,
   MIN_AUTO_TOUR_SPEED_MPS,
   MAX_AUTO_TOUR_SPEED_MPS,
+  MIN_AUTO_TOUR_MAX_SPEED_MPS,
+  MAX_AUTO_TOUR_MAX_SPEED_MPS,
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
@@ -31,6 +34,7 @@ const normalizedProps = computed(() => {
 
 const localRouteNodeId = ref<string | null>(null)
 const localSpeedMps = ref(DEFAULT_AUTO_TOUR_SPEED_MPS)
+const localMaxSpeedMps = ref(DEFAULT_AUTO_TOUR_MAX_SPEED_MPS)
 const localLoop = ref(false)
 const localAlignToPath = ref(true)
 
@@ -39,6 +43,7 @@ watch(
   (props) => {
     localRouteNodeId.value = props.routeNodeId
     localSpeedMps.value = props.speedMps
+    localMaxSpeedMps.value = props.maxSpeedMps
     localLoop.value = props.loop
     localAlignToPath.value = props.alignToPath
   },
@@ -73,6 +78,19 @@ function handleSpeedInput(value: string | number) {
     return
   }
   updateComponent({ speedMps: clamped })
+}
+
+function handleMaxSpeedInput(value: string | number) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = clampAutoTourComponentProps({ maxSpeedMps: numeric }).maxSpeedMps
+  localMaxSpeedMps.value = clamped
+  if (Math.abs(clamped - normalizedProps.value.maxSpeedMps) <= 1e-4) {
+    return
+  }
+  updateComponent({ maxSpeedMps: clamped })
 }
 
 function handleLoopChange(value: boolean | null) {
@@ -175,6 +193,19 @@ function handleRemoveComponent() {
           :model-value="localSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="handleSpeedInput"
+        />
+
+        <v-text-field
+          label="Max Speed (m/s)"
+          type="number"
+          density="compact"
+          variant="solo"
+          hide-details
+          :min="MIN_AUTO_TOUR_MAX_SPEED_MPS"
+          :max="MAX_AUTO_TOUR_MAX_SPEED_MPS"
+          :model-value="localMaxSpeedMps"
+          :disabled="!componentEnabled"
+          @update:modelValue="handleMaxSpeedInput"
         />
 
         <v-switch
