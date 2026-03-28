@@ -115,6 +115,7 @@ services:
       - "127.0.0.1:8181:8081"   # 仅本机访问
     networks:
       - harmony-backend
+      - default  # 允许与宿主机及外部通信
     restart: unless-stopped
 
 networks:

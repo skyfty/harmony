@@ -155,37 +155,39 @@ function commitNoiseStrengthInput() {
 
 <template>
   <div class="terrain-panel">
-    <div class="control-group" style="margin: 0 0 10px 0">
-      <div class="text-caption mb-1">Brush Shape</div>
-      <v-btn-toggle v-model="brushShapeModel" density="compact" mandatory divided variant="outlined" color="primary">
-        <v-btn value="circle" icon="mdi-circle-outline" title="Circle"></v-btn>
-        <v-btn value="square" icon="mdi-square-outline" title="Square"></v-btn>
-        <v-btn value="star" icon="mdi-star-outline" title="Star"></v-btn>
-      </v-btn-toggle>
-    </div>
+    <div class="control-row" style="align-items: center; gap: 12px;">
+      <div class="control-group" style="margin: 0;">
+        <div class="text-caption mb-1">Brush Shape</div>
+        <v-btn-toggle v-model="brushShapeModel" density="compact" mandatory divided variant="outlined" color="primary">
+          <v-btn value="circle" icon="mdi-circle-outline" title="Circle"></v-btn>
+          <v-btn value="square" icon="mdi-square-outline" title="Square"></v-btn>
+          <v-btn value="star" icon="mdi-star-outline" title="Star"></v-btn>
+        </v-btn-toggle>
+      </div>
 
-    <div class="control-group">
-      <div class="text-caption mb-1">Operation</div>
-      <v-btn-toggle
-        v-model="brushOperationModel"
-        density="compact"
-        divided
-        variant="outlined"
-        color="primary"
-        :disabled="!props.hasGround"
-        class="icon-toggle-group"
-      >
-        <v-btn
-          v-for="operation in props.terrainOperations"
-          :key="operation.value"
-          :value="operation.value"
-          :title="operation.label"
-          icon
-          :aria-label="operation.label"
+      <div class="control-group" style="margin-left: auto;">
+        <div class="text-caption mb-1">Operation</div>
+        <v-btn-toggle
+          v-model="brushOperationModel"
+          density="compact"
+          divided
+          variant="outlined"
+          color="primary"
+          :disabled="!props.hasGround"
+          class="icon-toggle-group"
         >
-          <v-icon :icon="operation.icon" />
-        </v-btn>
-      </v-btn-toggle>
+          <v-btn
+            v-for="operation in props.terrainOperations"
+            :key="operation.value"
+            :value="operation.value"
+            :title="operation.label"
+            icon
+            :aria-label="operation.label"
+          >
+            <v-icon :icon="operation.icon" />
+          </v-btn>
+        </v-btn-toggle>
+      </div>
     </div>
 
     <div class="control-row">
