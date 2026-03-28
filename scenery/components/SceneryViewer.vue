@@ -535,6 +535,7 @@ import {
   clampSceneNodeInstanceLayout,
   computeInstanceLayoutLocalBoundingBox,
   createAutoTourRuntime,
+  createWaterRuntime,
   createScenePreviewPerfController,
 
   forEachInstanceWorldMatrix,
@@ -4578,6 +4579,8 @@ const autoTourRuntime = createAutoTourRuntime({
     trySleepBody(entry.body);
   },
 });
+
+const waterRuntime = createWaterRuntime();
 
 function extractRigidbodyShape(
   component: SceneNodeComponentState<RigidbodyComponentProps> | null,
@@ -10586,6 +10589,7 @@ function startRenderLoop(
             },
           });
           previewComponentManager.update(deltaSeconds);
+          waterRuntime.update(deltaSeconds, { renderer, scene, camera });
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
 
           effectRuntimeTickers.forEach((tick) => {
@@ -10699,6 +10703,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
 
   previewNodeMap.clear();
   autoTourRuntime.reset();
+  waterRuntime.reset();
   activeAutoTourNodeIds.clear();
   autoTourRotationOnlyHold.value = false;
   autoTourFollowNodeId.value = null;
@@ -11013,6 +11018,7 @@ function cleanupRuntime(): void {
     sceneDownloadTask = null;
   }
   resetSceneDownloadState();
+  waterRuntime.reset();
   sharedResourceCache = null;
   lanternViewerInstance = null;
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];

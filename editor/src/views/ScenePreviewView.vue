@@ -17,6 +17,7 @@ import {
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
 	createAutoTourRuntime,
+	createWaterRuntime,
 	createScenePreviewPerfController,
 	forEachInstanceWorldMatrix,
 	getInstanceLayoutBindingId,
@@ -539,6 +540,7 @@ function clearBehaviorDelayTimers(): void {
 function cleanupForUnrelatedSceneSwitch(): void {
 	clearBehaviorDelayTimers()
 	resetAnimationControllers()
+	waterRuntime.reset()
 	forceInitialDocumentGraphOnNextSnapshot = true
 }
 
@@ -2689,6 +2691,8 @@ const autoTourRuntime = createAutoTourRuntime({
 		syncInstancedTransform(object)
 	},
 })
+
+const waterRuntime = createWaterRuntime()
 
 function resolveLodComponent(
 	node: SceneNode | null | undefined,
@@ -7232,6 +7236,11 @@ function startAnimationLoop() {
 		if (isPlaying.value) {
 			updatePlaybackSystemsForFrame(delta)
 		}
+		waterRuntime.update(delta, {
+			renderer: currentRenderer,
+			scene: currentScene,
+			camera: activeCamera,
+		})
 
 		// 3) Vehicle camera and camera-dependent systems
 		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
@@ -7279,6 +7288,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Scene reset; driving ended.' } })
 	}
 	autoTourRuntime.reset()
+	waterRuntime.reset()
 	activeAutoTourNodeIds.clear()
 	autoTourFollowNodeId.value = null
 	resetCameraFollowState(autoTourCameraFollowState)

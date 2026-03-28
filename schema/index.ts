@@ -162,6 +162,9 @@ export type { GradientBackgroundDome, GradientBackgroundSettingsInput } from './
 export { createAutoTourRuntime } from './autoTourRuntime'
 export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike } from './autoTourRuntime'
 
+export { createWaterRuntime } from './waterRuntime'
+export type { WaterRuntime, WaterRuntimeFrame } from './waterRuntime'
+
 export {
   DEFAULT_CAMERA_FOLLOW_TUNING,
   DEFAULT_OBJECT_SIZE_FALLBACK,

@@ -65,6 +65,28 @@ export interface WaterComponentProps {
   waveStrength: number
 }
 
+export type WaterRuntimeHandle = {
+  key: string
+  nodeId: string
+  getRenderObject: () => Object3D | null
+  getEffectiveMode: () => Exclude<WaterImplementationMode, 'auto'> | null
+  updateTransforms: () => void
+  tickDynamic: (deltaSeconds: number) => void
+  tickStatic: (deltaSeconds: number, renderer: WebGLRenderer, scene: Scene, camera: Camera) => void
+}
+
+const waterRuntimeHandleRegistry = new Map<string, WaterRuntimeHandle>()
+
+export function forEachWaterRuntimeHandle(visitor: (handle: WaterRuntimeHandle) => void): void {
+  for (const handle of waterRuntimeHandleRegistry.values()) {
+    visitor(handle)
+  }
+}
+
+export function clearWaterRuntimeHandles(): void {
+  waterRuntimeHandleRegistry.clear()
+}
+
 const DEFAULT_FLOW_DIRECTION: FlowDirection = { x: 0.7071, y: 0.7071 }
 const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
@@ -202,9 +224,14 @@ class WaterComponent extends Component<WaterComponentProps> {
   private flowOffset = new Vector2()
   private resolvedFlowDirection = new Vector2(1, 1)
   private lastSignature: string | null = null
+  private readonly runtimeHandleKey: string
 
   constructor(context: ComponentRuntimeContext<WaterComponentProps>) {
     super(context)
+    const runtimeComponentId = typeof context.componentId === 'string' ? context.componentId : ''
+    this.runtimeHandleKey = runtimeComponentId
+      ? `${context.nodeId}:${runtimeComponentId}`
+      : `${context.nodeId}:water`
   }
 
   onRuntimeAttached(object: Object3D | null): void {
@@ -227,27 +254,19 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   onUpdate(deltaTime: number): void {
-
+    void deltaTime
     const props = clampWaterComponentProps(this.context.getProps())
     const effectiveMode = resolveEffectiveImplementationMode(props.implementationMode)
 
     if (effectiveMode === 'dynamic' && this.waterInstance) {
       this.ensureArtifactsAttachedToHostParent()
       this.syncWaterTransform(this.waterInstance)
-      const material = this.waterInstance.material as ShaderMaterial
-      if (material.uniforms?.time) {
-        material.uniforms.time.value += deltaTime * props.flowSpeed
-      }
-      this.syncSunUniforms()
       return
     }
 
     if (effectiveMode === 'static' && this.staticWaterMesh) {
       this.ensureArtifactsAttachedToHostParent()
       this.syncWaterTransform(this.staticWaterMesh)
-      this.tickStaticShaderTime(deltaTime, props.flowSpeed)
-      this.markStaticEnvCaptureIfMoved()
-      this.syncSunUniforms()
     }
   }
 
@@ -281,6 +300,7 @@ class WaterComponent extends Component<WaterComponentProps> {
           this.syncWaterTransform(this.staticWaterMesh)
         }
       }
+      this.syncRuntimeHandleRegistration()
       return
     }
 
@@ -297,6 +317,69 @@ class WaterComponent extends Component<WaterComponentProps> {
         this.syncWaterTransform(this.staticWaterMesh)
       }
       this.applyStaticUniforms(props, material)
+    }
+
+    this.syncRuntimeHandleRegistration()
+  }
+
+  private syncRuntimeHandleRegistration(): void {
+    const handle = this.createRuntimeHandle()
+    if (!handle) {
+      waterRuntimeHandleRegistry.delete(this.runtimeHandleKey)
+      return
+    }
+    waterRuntimeHandleRegistry.set(this.runtimeHandleKey, handle)
+  }
+
+  private createRuntimeHandle(): WaterRuntimeHandle | null {
+    const renderObject = this.waterInstance ?? this.staticWaterMesh
+    if (!renderObject) {
+      return null
+    }
+
+    return {
+      key: this.runtimeHandleKey,
+      nodeId: this.context.nodeId,
+      getRenderObject: () => this.waterInstance ?? this.staticWaterMesh,
+      getEffectiveMode: () => {
+        const props = clampWaterComponentProps(this.context.getProps())
+        return resolveEffectiveImplementationMode(props.implementationMode)
+      },
+      updateTransforms: () => {
+        this.ensureArtifactsAttachedToHostParent()
+        if (this.waterInstance) {
+          this.syncWaterTransform(this.waterInstance)
+        }
+        if (this.staticWaterMesh) {
+          this.syncWaterTransform(this.staticWaterMesh)
+        }
+      },
+      tickDynamic: (deltaSeconds: number) => {
+        const props = clampWaterComponentProps(this.context.getProps())
+        if (!this.waterInstance) {
+          return
+        }
+        const material = this.waterInstance.material as ShaderMaterial
+        if (material.uniforms?.time) {
+          material.uniforms.time.value += deltaSeconds * props.flowSpeed
+        }
+        this.syncSunUniforms()
+      },
+      tickStatic: (deltaSeconds: number, renderer: WebGLRenderer, scene: Scene, camera: Camera) => {
+        if (!this.staticWaterMesh) {
+          return
+        }
+        const props = clampWaterComponentProps(this.context.getProps())
+        this.tickStaticShaderTime(deltaSeconds, props.flowSpeed)
+        this.markStaticEnvCaptureIfMoved()
+        this.syncSunUniforms()
+        this.syncStaticEyeUniform(camera)
+        if (!this.isEligibleStaticMirrorCaptureCamera(camera)) {
+          return
+        }
+        this.markStaticEnvCaptureIfCameraChanged(camera)
+        this.maybeCaptureStaticMirror(renderer, scene, camera)
+      },
     }
   }
 
@@ -693,18 +776,9 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.staticEnvLastCapturedCameraQuat = null
     this.staticEnvLastCapturedCameraProjection = null
 
-    const self = this
-    typedWaterMesh.onBeforeRender = function (renderer: WebGLRenderer, scene: Scene, camera: Camera) {
-      self.syncStaticEyeUniform(camera)
-      if (!self.isEligibleStaticMirrorCaptureCamera(camera)) {
-        return
-      }
-      self.markStaticEnvCaptureIfCameraChanged(camera)
-      self.maybeCaptureStaticMirror(renderer, scene, camera)
-    }
-
     this.applyStaticUniforms(props, material)
     this.syncSunUniforms()
+    this.syncRuntimeHandleRegistration()
   }
 
   private syncWaterTransform(target: Object3D): void {
@@ -1109,6 +1183,8 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private destroyWater(): void {
+    waterRuntimeHandleRegistry.delete(this.runtimeHandleKey)
+
     if (this.waterInstance) {
       this.waterParent?.remove(this.waterInstance)
       this.waterParent = null
