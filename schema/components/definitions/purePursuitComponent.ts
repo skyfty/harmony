@@ -86,6 +86,10 @@ export const DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 0.6
 export const MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 0
 export const MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 20
 
+export const DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS = 12.5
+export const MIN_PURE_PURSUIT_MAX_SPEED_MPS = 0
+export const MAX_PURE_PURSUIT_MAX_SPEED_MPS = 50
+
 export interface PurePursuitComponentProps {
   lookaheadBaseMeters: number
   lookaheadSpeedGain: number
@@ -111,6 +115,7 @@ export interface PurePursuitComponentProps {
   dockYawSlerpRate: number
   dockStopEpsilonMeters: number
   dockStopSpeedEpsilonMps: number
+  maxSpeedMps: number
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -259,6 +264,12 @@ export function clampPurePursuitComponentProps(
       MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
       MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
     ),
+    maxSpeedMps: clampNumber(
+      raw.maxSpeedMps,
+      DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS,
+      MIN_PURE_PURSUIT_MAX_SPEED_MPS,
+      MAX_PURE_PURSUIT_MAX_SPEED_MPS,
+    ),
   }
 }
 
@@ -288,6 +299,7 @@ export function clonePurePursuitComponentProps(props: PurePursuitComponentProps)
     dockYawSlerpRate: props.dockYawSlerpRate,
     dockStopEpsilonMeters: props.dockStopEpsilonMeters,
     dockStopSpeedEpsilonMps: props.dockStopSpeedEpsilonMps,
+    maxSpeedMps: props.maxSpeedMps,
   }
 }
 
@@ -302,7 +314,17 @@ const purePursuitComponentDefinition: ComponentDefinition<PurePursuitComponentPr
   label: 'Pure Pursuit',
   icon: 'mdi-crosshairs-gps',
   order: 171,
-  inspector: [],
+  inspector: [
+    {
+      id: 'speed',
+      label: 'Speed',
+      fields: [
+        { kind: 'number', key: 'minSpeedMps', label: 'Min Speed (m/s)', min: MIN_PURE_PURSUIT_MIN_SPEED_MPS, max: MAX_PURE_PURSUIT_MIN_SPEED_MPS, step: 0.1, precision: 2 },
+        { kind: 'number', key: 'maxSpeedMps', label: 'Max Speed (m/s)', min: MIN_PURE_PURSUIT_MAX_SPEED_MPS, max: MAX_PURE_PURSUIT_MAX_SPEED_MPS, step: 0.1, precision: 2 },
+        { kind: 'number', key: 'dockMaxSpeedMps', label: 'Dock Max Speed (m/s)', min: MIN_PURE_PURSUIT_DOCK_MAX_SPEED_MPS, max: MAX_PURE_PURSUIT_DOCK_MAX_SPEED_MPS, step: 0.05, precision: 2 },
+      ],
+    },
+  ],
   canAttach(node: SceneNode) {
     const nodeType = node.nodeType?.toLowerCase?.() ?? ''
     if (nodeType === 'light' || nodeType === 'environment') {

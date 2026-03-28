@@ -12,6 +12,12 @@ import {
 type SceneNode = any
 type SceneNodeComponentState<T> = { props: T } | null | undefined
 import type { VehicleComponentProps, RigidbodyComponentProps } from './components'
+import {
+  PURE_PURSUIT_COMPONENT_TYPE,
+  clampPurePursuitComponentProps,
+  AUTO_TOUR_COMPONENT_TYPE,
+  clampAutoTourComponentProps,
+} from './components'
 import type { BehaviorEventResolution } from './behaviors/runtime'
 
 export type RefLike<T> = { value: T }
@@ -166,11 +172,9 @@ const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { 
 const VEHICLE_ENGINE_FORCE = isWeChatMiniProgram ? 200 : 320
 // 车辆最大刹车力
 const VEHICLE_BRAKE_FORCE = 42
-// 车辆速度软上限（m/s，约30km/h），超过后逐渐限制
-// WeChat mini-program: lower top speed to improve stability.
-const VEHICLE_SPEED_SOFT_CAP = isWeChatMiniProgram ? 5.5 : 8.5
-// 车辆速度硬上限（m/s，约45km/h），绝对不能超过
-const VEHICLE_SPEED_HARD_CAP = isWeChatMiniProgram ? 7.8 : 12.5
+// Default soft/hard speed caps used when no component-level max is present.
+const DEFAULT_VEHICLE_SPEED_SOFT_CAP = isWeChatMiniProgram ? 5.5 : 8.5
+const DEFAULT_VEHICLE_SPEED_HARD_CAP = isWeChatMiniProgram ? 7.8 : 12.5
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
@@ -744,9 +748,39 @@ export class VehicleDriveController {
       // This avoids a physics "fight" that can cause oscillation under constant throttle.
       sameDirection = throttleSign !== 0 ? Math.sign(forwardVelocity) === throttleSign : null
       const acceleratingForward = !!(sameDirection && throttleSign !== 0)
+        
+      // Determine per-node soft/hard speed caps. If a PurePursuit or AutoTour component
+      // defines `maxSpeedMps`, use it to cap soft/hard limits for the currently-driven node.
+      let softCap = DEFAULT_VEHICLE_SPEED_SOFT_CAP
+      let hardCap = DEFAULT_VEHICLE_SPEED_HARD_CAP
+      try {
+        const node = state.nodeId ? this.deps.resolveNodeById(state.nodeId) ?? null : null
+        if (node) {
+          const pureComp = node.components?.[PURE_PURSUIT_COMPONENT_TYPE] as any
+          if (pureComp && pureComp.enabled) {
+            const pp = clampPurePursuitComponentProps(pureComp.props ?? null)
+            if (Number.isFinite(pp.maxSpeedMps)) {
+              softCap = Math.min(softCap, pp.maxSpeedMps)
+              hardCap = Math.min(hardCap, pp.maxSpeedMps)
+            }
+          }
+          const autoComp = node.components?.[AUTO_TOUR_COMPONENT_TYPE] as any
+          if (autoComp && autoComp.enabled) {
+            const at = clampAutoTourComponentProps(autoComp.props ?? null)
+            if (Number.isFinite(at.maxSpeedMps)) {
+              softCap = Math.min(softCap, at.maxSpeedMps)
+              hardCap = Math.min(hardCap, at.maxSpeedMps)
+            }
+          }
+        }
+      } catch {
+        // best-effort: fallback to defaults on any lookup/clamp error
+        softCap = DEFAULT_VEHICLE_SPEED_SOFT_CAP
+        hardCap = DEFAULT_VEHICLE_SPEED_HARD_CAP
+      }
       if (acceleratingForward) {
-        const range = Math.max(0.1, VEHICLE_SPEED_HARD_CAP - VEHICLE_SPEED_SOFT_CAP)
-        const excess = Math.max(0, speedForGovernor - VEHICLE_SPEED_SOFT_CAP)
+        const range = Math.max(0.1, hardCap - softCap)
+        const excess = Math.max(0, speedForGovernor - softCap)
         const t = Math.min(1, excess / range)
         // Smoothstep (0..1), then invert to get scale (1..0)
         const smooth = t * t * (3 - 2 * t)
@@ -757,8 +791,8 @@ export class VehicleDriveController {
 
         // Brake assist kicks in only after crossing hard cap, and ramps smoothly.
         // Add hysteresis around the hard cap to avoid toggling when speed hovers near the threshold.
-        const hardCapEnter = VEHICLE_SPEED_HARD_CAP + 0.15
-        const hardCapExit = VEHICLE_SPEED_HARD_CAP - 0.25
+        const hardCapEnter = hardCap + 0.15
+        const hardCapExit = hardCap - 0.25
         if (!this.speedGovernorOverHardCap) {
           if (speedForGovernor > hardCapEnter) {
             this.speedGovernorOverHardCap = true
@@ -766,7 +800,7 @@ export class VehicleDriveController {
         } else if (speedForGovernor < hardCapExit) {
           this.speedGovernorOverHardCap = false
         }
-        const over = this.speedGovernorOverHardCap ? Math.max(0, speedForGovernor - VEHICLE_SPEED_HARD_CAP) : 0
+        const over = this.speedGovernorOverHardCap ? Math.max(0, speedForGovernor - hardCap) : 0
         const brakeBand = 0.9 // m/s (~3.2km/h)
         const brakeRatio = Math.min(1, over / brakeBand)
         const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * 0.35

@@ -317,7 +317,7 @@ export function applyPurePursuitVehicleControl(params: {
     pursuitProps.lookaheadMinMeters,
     Math.min(
       pursuitProps.lookaheadMaxMeters,
-      pursuitProps.lookaheadBaseMeters + pursuitProps.lookaheadSpeedGain * speedMps,
+      pursuitProps.lookaheadBaseMeters + pursuitProps.lookaheadSpeedGain * (Number.isFinite(pursuitProps.maxSpeedMps) ? Math.min(speedMps, pursuitProps.maxSpeedMps) : speedMps),
     ),
   )
 
@@ -384,7 +384,9 @@ export function applyPurePursuitVehicleControl(params: {
 
   const steerRatio = safeMaxSteer > 1e-6 ? Math.min(1, Math.abs(steering) / safeMaxSteer) : 0
   const turnFactor = 1 / (1 + Math.max(0, pursuitProps.curvatureSpeedFactor) * steerRatio)
-  let speedTarget = Math.max(pursuitProps.minSpeedMps, speedMps * turnFactor)
+  const componentMaxSpeed = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
+  const speed = Math.max(0, Math.min(speedMps, componentMaxSpeed))
+  let speedTarget = Math.max(pursuitProps.minSpeedMps, speed * turnFactor)
 
   if (modeStopping) {
     const approachSpeed = Math.min(
@@ -477,7 +479,7 @@ export function applyPurePursuitVehicleControl(params: {
   // We only apply this brake-distance rule while stopping near the end.
   const brakeThreshold = Math.max(
     pursuitProps.brakeDistanceMinMeters,
-    speedMps * pursuitProps.brakeDistanceSpeedFactor,
+    speed * pursuitProps.brakeDistanceSpeedFactor,
   )
   const shouldBrakeNearEnd = modeStopping && distanceToEnd < brakeThreshold
   if (shouldBrakeNearEnd && !dockActive) {

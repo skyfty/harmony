@@ -14,10 +14,6 @@ async function main(): Promise<void> {
     console.warn('[seed] 跳过创建初始管理员：', error)
   })
 
-  await ensureMiniProgramTestUserV2().catch((error) => {
-    console.warn('[seed] 跳过创建小程序测试账号：', error)
-  })
-
   await ensureEditorAuthBootstrap().catch((error) => {
     console.warn('[seed] 跳过创建编辑器/上传器账号：', error)
   })

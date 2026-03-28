@@ -591,7 +591,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       const endIndex = points.length - 1
 
-      const speed = Math.max(0, tourProps.speedMps)
+      const rawSpeed = Math.max(0, tourProps.speedMps)
+      // Cap speed by PurePursuit.maxSpeedMps (if present) and AutoTour.maxSpeedMps (if present)
+      const pursuitMax = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
+      const tourMax = Number.isFinite(tourProps.maxSpeedMps) ? tourProps.maxSpeedMps : Number.POSITIVE_INFINITY
+      const cap = Math.min(pursuitMax, tourMax)
+      const speed = Math.min(rawSpeed, cap)
       if (speed <= 0) {
         continue
       }
