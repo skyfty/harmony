@@ -4,6 +4,7 @@ import { addWallOpeningToDefinition, removeWallOpeningFromDefinition, compileWal
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
+import { offsetPolyline } from '../../utils/overlayPlacementUtils'
 import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
 import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
 import { CameraControlsMap } from '@/utils/CameraControlsMap'
@@ -1825,6 +1826,8 @@ const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
+const autoOverlayHorizOffset = ref(0)
+const autoOverlayVertOffset = ref(0)
 const autoOverlayHoverNodeId = ref<string | null>(null)
 const autoOverlayHoverIndicator = reactive({
   visible: false,
@@ -7436,16 +7439,21 @@ async function handleConfirmAutoOverlay(): Promise<void> {
   if (!plan || !plan.supported || autoOverlaySubmitting.value) {
     return
   }
+  // compute world points with user-specified horizontal/vertical offsets
 
   autoOverlaySubmitting.value = true
   try {
+    const horiz = Number(autoOverlayHorizOffset.value || 0)
+    const vert = Number(autoOverlayVertOffset.value || 0)
+    const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert)
+
     if (plan.targetTool === 'wall') {
       const brush = resolveAutoOverlayWallBrush()
       const targetShape = plan.targetBuildShape as WallBuildShape
       buildToolsStore.setWallBuildShape(targetShape, { activate: true })
 
       const created = sceneStore.createWallNode({
-        segments: buildClosedWallSegmentsFromWorldPoints(plan.worldPoints),
+        segments: buildClosedWallSegmentsFromWorldPoints(adjustedPoints),
         closed: true,
         dimensions: brush.dimensions,
         bodyAssetId: brush.bodyAssetId,
@@ -7470,9 +7478,8 @@ async function handleConfirmAutoOverlay(): Promise<void> {
     } else if (plan.targetTool === 'floor') {
       const targetShape = plan.targetBuildShape as FloorBuildShape
       buildToolsStore.setFloorBuildShape(targetShape, { activate: true })
-
       const created = sceneStore.createFloorNode({
-        points: plan.worldPoints,
+        points: adjustedPoints,
         floorPresetData: floorBrushPresetData.value,
       })
 
@@ -7490,9 +7497,8 @@ async function handleConfirmAutoOverlay(): Promise<void> {
     } else {
       const targetShape = plan.targetBuildShape as WaterBuildShape
       buildToolsStore.setWaterBuildShape(targetShape, { activate: true })
-
       const created = sceneStore.createWaterSurfaceMeshNode({
-        points: plan.worldPoints,
+        points: adjustedPoints,
         buildShape: targetShape,
       })
 
@@ -20315,6 +20321,26 @@ defineExpose<SceneViewportHandle>({
           <div v-if="autoOverlayPlan">
             <div v-if="autoOverlayPlan.supported">
               沿“{{ autoOverlayPlan.referenceNodeName || autoOverlayPlan.referenceNodeId }}”轮廓创建新的 {{ autoOverlayPlan.targetTool }}。
+            </div>
+            <div v-if="autoOverlayPlan.supported" class="auto-overlay-inputs" style="margin-top:12px;">
+              <v-row>
+                <v-col cols="6">
+                  <v-text-field
+                    label="水平偏移 (m)"
+                    type="number"
+                    v-model.number="autoOverlayHorizOffset"
+                    :step="0.01"
+                  />
+                </v-col>
+                <v-col cols="6">
+                  <v-text-field
+                    label="垂直偏移 (m)"
+                    type="number"
+                    v-model.number="autoOverlayVertOffset"
+                    :step="0.01"
+                  />
+                </v-col>
+              </v-row>
             </div>
             <div v-else class="text-error">{{ autoOverlayPlan.reason }}</div>
           </div>
