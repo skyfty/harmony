@@ -17,9 +17,6 @@ import {
 import { $t } from '#/locales';
 
 import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload, Tooltip } from 'ant-design-vue';
-    phone: '', // Added phone field
-    locationLat: null, // Added location latitude field
-    locationLng: null, // Added location longitude field
 import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface SceneSpotFormModel {
@@ -37,9 +34,7 @@ interface SceneSpotFormModel {
   ratingCount: number;
   favoriteCount: number;
 }
-    sceneSpotFormModel.phone = data.phone ?? ''; // Populate phone value
-    sceneSpotFormModel.locationLat = data.location?.lat ?? null; // Populate location latitude
-    sceneSpotFormModel.locationLng = data.location?.lng ?? null; // Populate location longitude
+ 
 
 const { TextArea } = Input;
 const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
@@ -227,6 +222,9 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.averageRating = Number(data.averageRating ?? 0);
   sceneSpotFormModel.ratingCount = Number(data.ratingCount ?? 0);
   sceneSpotFormModel.favoriteCount = Number(data.favoriteCount ?? 0);
+  sceneSpotFormModel.phone = data.phone ?? '';
+  sceneSpotFormModel.locationLat = data.location?.lat ?? null;
+  sceneSpotFormModel.locationLng = data.location?.lng ?? null;
   originalCoverImageUrl.value = data.coverImage || '';
   originalSlides.value = [...(data.slides || [])];
 
