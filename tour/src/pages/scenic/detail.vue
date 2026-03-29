@@ -63,6 +63,13 @@
           </view>
         </view>
 
+        <view class="meta-rows">
+          <view class="meta-row meta-compact">
+            <text class="meta-address">{{ scenic.address || '未提供' }}</text>
+            <text v-if="scenic.distance" class="meta-distance">{{ scenic.distance }}</text>
+          </view>
+        </view>
+
         <view class="progress-section">
           <view class="progress-badge">
             <text class="progress-badge__value">{{ scenicProgressPercentText }}</text>
@@ -480,7 +487,7 @@ function computeScenicCheckinRatio(): number {
 
 .scenic-name {
   display: block;
-  font-size: 20px;
+  font-size: 27px;
   font-weight: 700;
   color: #1a1f2e;
   line-height: 1.3;
@@ -649,6 +656,56 @@ function computeScenicCheckinRatio(): number {
   font-size: 13px;
   color: #5f6b83;
   line-height: 22px;
+}
+
+/* ---- 地址/距离按行展示 ---- */
+.meta-rows {
+  margin-top: 12px;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  border: 1px solid #f0f3f7;
+}
+.meta-row {
+  display: block;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.03);
+}
+.meta-row:last-child {
+  border-bottom: none;
+}
+.meta-row.meta-compact {
+  border-bottom: none;
+  padding: 6px 0;
+}
+.meta-label {
+  display: block;
+  font-size: 12px;
+  color: #8a94a6;
+}
+.meta-text {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+  color: #1a1f2e;
+  word-break: break-all;
+}
+
+/* 地址显著 */
+.meta-address {
+  display: block;
+  font-size: 16px;
+  font-weight: 700;
+  color: #161925;
+}
+
+/* 距离较小且颜色淡 */
+.meta-distance {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #98a3b3;
 }
 
 .comments-section {
