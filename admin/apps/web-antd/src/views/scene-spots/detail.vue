@@ -51,6 +51,8 @@ onMounted(load);
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.description')">{{ sceneSpot?.description || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.address')">{{ sceneSpot?.address || '-' }}</Descriptions.Item>
         <Descriptions.Item label="距离">{{ sceneSpot?.distance || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="电话">{{ sceneSpot?.phone || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="坐标">{{ sceneSpot?.location ? (sceneSpot.location.lat + ', ' + sceneSpot.location.lng) : '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.order')">{{ sceneSpot?.order ?? '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.averageRating')">{{ sceneSpot?.averageRating ?? '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.ratingCount')">{{ sceneSpot?.ratingCount ?? '-' }}</Descriptions.Item>

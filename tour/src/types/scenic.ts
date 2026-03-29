@@ -8,6 +8,8 @@ export interface ScenicSummary {
   slides: string[];
   isFeatured: boolean;
   distance?: string | null;
+  phone?: string | null;
+  location?: { lat: number; lng: number } | null;
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;

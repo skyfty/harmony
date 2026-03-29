@@ -191,6 +191,11 @@ function buildSceneSpotSummaryDto(spot: any, scene: any) {
     averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
     ratingCount: typeof spot.ratingCount === 'number' ? spot.ratingCount : 0,
     favoriteCount: typeof spot.favoriteCount === 'number' ? spot.favoriteCount : 0,
+    phone: toStringValue(spot.phone, ''),
+    location:
+      spot && spot.location && Array.isArray(spot.location.coordinates) && spot.location.coordinates.length === 2
+        ? { lat: Number(spot.location.coordinates[1]), lng: Number(spot.location.coordinates[0]) }
+        : null,
     favorited: false,
     userRating: null,
     scene: buildSceneDto(scene),

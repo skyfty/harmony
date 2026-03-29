@@ -16,6 +16,11 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
     ratingCount: { type: Number, default: 0, min: 0 },
     favoriteCount: { type: Number, default: 0, min: 0 },
     ratingTotalScore: { type: Number, default: 0, min: 0 },
+    phone: { type: String, default: null },
+    location: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], default: undefined }, // [lng, lat]
+    },
   },
   {
     timestamps: true,
@@ -26,5 +31,6 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
 sceneSpotSchema.index({ sceneId: 1, order: 1 })
 sceneSpotSchema.index({ isFeatured: 1, order: 1, createdAt: -1 })
 sceneSpotSchema.index({ title: 'text', description: 'text', address: 'text' })
+sceneSpotSchema.index({ location: '2dsphere' })
 
 export const SceneSpotModel = model<SceneSpotDocument>('SceneSpot', sceneSpotSchema)

@@ -64,9 +64,23 @@
         </view>
 
         <view class="meta-rows">
-          <view class="meta-row meta-compact">
-            <text class="meta-address">{{ scenic.address || '未提供' }}</text>
-            <text v-if="scenic.distance" class="meta-distance">{{ scenic.distance }}</text>
+          <view class="meta-row meta-compact meta-compact--split">
+            <view class="meta-compact__left">
+              <text class="meta-address">{{ scenic.address || '未提供' }}</text>
+              <text v-if="scenic.distance" class="meta-distance">{{ scenic.distance }}</text>
+            </view>
+            <view class="meta-compact__right">
+              <text
+                v-if="scenic.location"
+                class="meta-action meta-action--map"
+                @tap="openMap(scenic.location.lat, scenic.location.lng)"
+                >📍</text>
+              <text
+                v-if="scenic.phone"
+                class="meta-action meta-action--phone"
+                @tap="callPhone(scenic.phone)"
+                >📞</text>
+            </view>
           </view>
         </view>
 
@@ -394,6 +408,38 @@ function formatCommentTime(input: string): string {
   return `${mm}-${dd} ${hh}:${mi}`;
 }
 
+function openMap(lat?: number | null, lng?: number | null) {
+  if (lat == null || lng == null) {
+    uni.showToast({ title: '定位信息不可用', icon: 'none' })
+    return
+  }
+  try {
+    uni.openLocation({ latitude: Number(lat), longitude: Number(lng), name: scenic.value?.title ?? '', address: scenic.value?.address ?? '' })
+  } catch {
+    uni.showToast({ title: '无法打开地图', icon: 'none' })
+  }
+}
+
+function callPhone(phone?: string | null) {
+  if (!phone) {
+    uni.showToast({ title: '未提供电话', icon: 'none' })
+    return
+  }
+  try {
+    // some runtimes provide makePhoneCall
+    // @ts-ignore
+    if (typeof uni.makePhoneCall === 'function') {
+      // @ts-ignore
+      uni.makePhoneCall({ phoneNumber: phone })
+    } else {
+      uni.setClipboardData({ data: phone })
+      uni.showToast({ title: '已复制电话号码', icon: 'none' })
+    }
+  } catch {
+    uni.showToast({ title: '无法拨号', icon: 'none' })
+  }
+}
+
 function computeScenicCheckinRatio(): number {
   const checked = getSafeCount(scenicCheckinProgress.value?.checkedCount);
   const total = getSafeCount(scenicCheckinProgress.value?.totalCount);
@@ -678,6 +724,35 @@ function computeScenicCheckinRatio(): number {
   border-bottom: none;
   padding: 6px 0;
 }
+.meta-compact--split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.meta-compact__left {
+  flex: 1;
+  min-width: 0;
+}
+.meta-compact__right {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-left: 12px;
+  flex-shrink: 0;
+}
+.meta-action {
+  font-size: 18px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #f4f6fb;
+}
+.meta-action:active { opacity: 0.8; transform: scale(0.96); }
+.meta-action--map { color: #3b82f6 }
+.meta-action--phone { color: #16a34a }
 .meta-label {
   display: block;
   font-size: 12px;

@@ -24,6 +24,10 @@ type SceneSpotMutationPayload = {
   coverImage?: unknown
   slides?: unknown
   distance?: string | null
+  phone?: string | null
+  location?: unknown
+  locationLat?: unknown
+  locationLng?: unknown
 }
 
 type RequestFilesMap = Record<string, unknown> | undefined
@@ -290,6 +294,11 @@ function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
     averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
     ratingCount: typeof spot.ratingCount === 'number' ? spot.ratingCount : 0,
     favoriteCount: typeof spot.favoriteCount === 'number' ? spot.favoriteCount : 0,
+    phone: typeof spot.phone === 'string' ? spot.phone : null,
+    location:
+      spot && spot.location && Array.isArray(spot.location.coordinates) && spot.location.coordinates.length === 2
+        ? { lat: Number(spot.location.coordinates[1]), lng: Number(spot.location.coordinates[0]) }
+        : null,
     createdAt: spot.createdAt instanceof Date ? spot.createdAt.toISOString() : new Date(spot.createdAt).toISOString(),
     updatedAt: spot.updatedAt instanceof Date ? spot.updatedAt.toISOString() : new Date(spot.updatedAt).toISOString(),
   }
@@ -482,6 +491,27 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
       description: toNullableString(body.description) ?? '',
       distance: toNullableString(body.distance) ?? '',
       address: toNullableString(body.address) ?? '',
+      phone: toNullableString(body.phone) ?? null,
+      location: ((): any => {
+        const latRaw = body.locationLat ?? (body.location && (body.location as any).lat)
+        const lngRaw = body.locationLng ?? (body.location && (body.location as any).lng)
+        const lat = typeof latRaw === 'string' ? Number(latRaw) : typeof latRaw === 'number' ? latRaw : NaN
+        const lng = typeof lngRaw === 'string' ? Number(lngRaw) : typeof lngRaw === 'number' ? lngRaw : NaN
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          return { type: 'Point', coordinates: [Number(lng), Number(lat)] }
+        }
+        if (typeof body.location === 'string') {
+          try {
+            const parsed = JSON.parse(body.location)
+            if (parsed && Array.isArray(parsed.coordinates) && parsed.coordinates.length === 2) {
+              return { type: 'Point', coordinates: [Number(parsed.coordinates[0]), Number(parsed.coordinates[1])] }
+            }
+          } catch {
+            // ignore
+          }
+        }
+        return undefined
+      })(),
       order: toNumberOrDefault(body.order, 0),
       isFeatured: toBoolean(body.isFeatured) ?? false,
       averageRating,
@@ -625,6 +655,31 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
     ctx.throw(400, `Slides cannot exceed ${MAX_SLIDES_COUNT} images`)
   }
+  // compute next phone & location values
+  const nextPhone = body.phone === undefined ? (typeof current.phone === 'string' ? current.phone : null) : toNullableString(body.phone) ?? null
+  const nextLocation = (() => {
+    // prefer explicit lat/lng fields
+    const latRaw = body.locationLat ?? (body.location && (body.location as any).lat)
+    const lngRaw = body.locationLng ?? (body.location && (body.location as any).lng)
+    const lat = typeof latRaw === 'string' ? Number(latRaw) : typeof latRaw === 'number' ? latRaw : NaN
+    const lng = typeof lngRaw === 'string' ? Number(lngRaw) : typeof lngRaw === 'number' ? lngRaw : NaN
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { type: 'Point', coordinates: [Number(lng), Number(lat)] }
+    }
+    // try parse JSON string
+    if (typeof body.location === 'string') {
+      try {
+        const parsed = JSON.parse(body.location)
+        if (parsed && Array.isArray(parsed.coordinates) && parsed.coordinates.length === 2) {
+          return { type: 'Point', coordinates: [Number(parsed.coordinates[0]), Number(parsed.coordinates[1])] }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    // keep current location if no update provided
+    return (current as any).location ?? undefined
+  })()
 
   let updated
   try {
@@ -643,6 +698,8 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
         averageRating: nextAverageRating,
         ratingCount: nextRatingCount,
         favoriteCount: nextFavoriteCount,
+        phone: nextPhone,
+        location: nextLocation,
         ratingTotalScore: Number((nextAverageRating * nextRatingCount).toFixed(2)),
       },
       { new: true },
