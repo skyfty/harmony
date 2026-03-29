@@ -70,6 +70,10 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
   for (let i = 1; i < n - 1; i++) {
     const l1 = segLines[i - 1]
     const l2 = segLines[i]
+    if (!l1 || !l2) {
+      // defensive: skip if segments are missing
+      continue
+    }
     const ip = intersectLines(l1, l2)
     if (ip) {
       out.push({ x: ip.x, y: points[i]!.y, z: ip.y })
