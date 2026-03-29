@@ -20,7 +20,8 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
   const CLOSED_EPS = 1e-4
   const first = new THREE.Vector3(points[0]!.x, points[0]!.y, points[0]!.z)
   const last = new THREE.Vector3(points[n - 1]!.x, points[n - 1]!.y, points[n - 1]!.z)
-  const isClosed = first.distanceTo(last) <= CLOSED_EPS
+  // Determine if polyline is closed (not currently used)
+  const _isClosed = first.distanceTo(last) <= CLOSED_EPS
     // offset computation start
 
   type Line2D = { p: THREE.Vector2; d: THREE.Vector2; end: THREE.Vector2 }
@@ -69,7 +70,7 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
   }
 
   // first vertex: start of first offset segment
-  const firstLine = segLines[0]
+  const firstLine = segLines[0]!
   out.push({ x: firstLine.p.x, y: points[0]!.y, z: firstLine.p.y })
 
   // middle vertices: intersection of adjacent offset lines
@@ -94,12 +95,11 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
   }
 
   // last vertex: use the shifted endpoint of the last segment
-  const lastLine = segLines[segLines.length - 1]
+  const lastLine = segLines[segLines.length - 1]!
   const lastPt = { x: lastLine.end.x, y: points[n - 1]!.y, z: lastLine.end.y }
     // last point computed
   out.push(lastPt)
   // Debug per-vertex
-    return out
   return out
 }
 
