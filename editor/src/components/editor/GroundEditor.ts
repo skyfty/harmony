@@ -49,12 +49,14 @@ import {
 	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
 import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import { resolveAutoOverlayBuildPlan } from './autoOverlayBuild'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
+import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
@@ -93,6 +95,7 @@ export type GroundCellSelection = {
 export type GroundEditorOptions = {
 	sceneStore: ReturnType<typeof useSceneStore>
 	getSceneNodes: () => SceneNode[]
+	pickNodeAtPointer?: (event: PointerEvent, options?: { includeSelectionLocked?: boolean }) => NodeHitResult | null
 	canvasRef: Ref<HTMLCanvasElement | null>
 	surfaceRef: Ref<HTMLDivElement | null>
 	raycaster: THREE.Raycaster
@@ -5001,6 +5004,80 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			? spacingStats.minDistance
 			: resolveScatterSpacing()
 		const chunkCells = resolveChunkCellsForDefinition(definition)
+
+		// Ctrl (or Meta) + Scatter: if user pressed Ctrl, try to reuse Auto Overlay's
+		// reference node polygon/rectangle as scatter domain and apply current
+		// scatter configuration within that domain immediately.
+		if ((event.ctrlKey || event.metaKey) && typeof options.pickNodeAtPointer === 'function') {
+			try {
+				const hit = options.pickNodeAtPointer(event, { includeSelectionLocked: false })
+				if (hit && hit.nodeId) {
+					const nodes = options.getSceneNodes()
+					const refNode = nodes.find((n) => n.id === hit.nodeId) ?? null
+					if (refNode) {
+						const runtimeObject = options.objectMap.get(refNode.id) ?? null
+						const targetTool = refNode.dynamicMesh?.type === 'Floor' || refNode.dynamicMesh?.type === 'Landform' ? 'floor' : (refNode.dynamicMesh?.type === 'Wall' ? 'wall' : 'water')
+						const plan = resolveAutoOverlayBuildPlan({ referenceNode: refNode, runtimeObject, targetTool })
+						if (plan && plan.supported && Array.isArray(plan.worldPoints) && plan.worldPoints.length >= 3) {
+							// Ensure model group / layer are ready
+							if (!scatterModelGroup) {
+								console.warn('散布资源仍在加载，请稍后重试')
+								return false
+							}
+							// Build a minimal temporary session context so existing sampling helpers work.
+							const tempSession: ScatterSessionState = {
+								pointerId: event.pointerId,
+								asset,
+								bindingAssetId,
+								lodPresetAssetId: scatterResolvedLodPresetAssetId,
+								category,
+								brushShape: plan.targetBuildShape === 'rectangle' ? 'rectangle' : 'polygon',
+								definition,
+								groundMesh,
+								spacing: effectiveSpacing,
+								radius: effectiveRadius,
+								targetCountPerStamp,
+								minScale: presetMinScale,
+								maxScale: presetMaxScale,
+								store: ensureScatterStoreRef(),
+								layer,
+								modelGroup: scatterModelGroup,
+								chunkCells,
+								neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
+								lastPoint: null,
+								anchorPoint: null,
+								currentPoint: null,
+								rectangleDirection: null,
+								polygonPoints: plan.worldPoints.map((p) => new THREE.Vector3(p.x, p.y, p.z)),
+								polygonPreviewEnd: null,
+								previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}:autooverlay`,
+								previewInstances: [],
+							}
+
+							// Temporarily install the session so existing helpers operate; restore after.
+							const previousSession = scatterSession
+							scatterSession = tempSession
+							try {
+								const sampledPoints = sampleScatterPointsInPolygonArea(scatterSession.polygonPoints)
+								for (const pt of sampledPoints) {
+									applyScatterPlacement(pt, { yaw: 0 })
+								}
+								queueScatterSidecarSave()
+							} finally {
+								scatterSession = previousSession
+							}
+							// Provide immediate feedback and consume the click.
+							event.preventDefault()
+							event.stopPropagation()
+							event.stopImmediatePropagation()
+							return true
+						}
+					}
+				}
+			} catch (err) {
+				console.warn('Auto-overlay scatter failed', err)
+			}
+		}
 		if (brushShape === 'polygon') {
 			if (!scatterSession || scatterSession.brushShape !== 'polygon') {
 				scatterSession = {

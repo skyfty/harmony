@@ -1,4 +1,4 @@
-export const TerrainScatterCategories = ['flora', 'rocks', 'trees'] as const
+export const TerrainScatterCategories = ['flora', 'rocks', 'trees','lamps', 'chairs', 'others'] as const
 
 export type TerrainScatterCategory = (typeof TerrainScatterCategories)[number]
 

@@ -317,6 +317,24 @@ export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatte
     icon: 'mdi-pine-tree',
     minScale: 0.8,
     maxScale: 1.35,
+  },
+  lamps: {
+    label: 'Lamps',
+    icon: 'mdi-lamp',
+    minScale: 0.8,
+    maxScale: 1.35,
+  },
+  chairs: {
+    label: 'Chairs',
+    icon: 'mdi-chair-rolling',
+    minScale: 0.8,
+    maxScale: 1.35,
+  },
+  others: {
+    label: 'Others',
+    icon: 'mdi-dots-horizontal',
+    minScale: 0.8,
+    maxScale: 1.35,
   }
 }
 

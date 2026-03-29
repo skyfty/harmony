@@ -115,6 +115,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
+
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -3233,6 +3234,7 @@ const groundEditor = createGroundEditor({
   pointer,
   groundPlane,
   objectMap,
+  pickNodeAtPointer: pickNodeAtPointer,
   getCamera: () => camera,
   getScene: () => scene,
   brushRadius,
@@ -7346,6 +7348,13 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
   })
 }
 
+function setMeshGeometry(target: { geometry?: THREE.BufferGeometry | null }, nextGeometry: THREE.BufferGeometry) {
+  const previous = (target.geometry as THREE.BufferGeometry | undefined) ?? null
+  target.geometry = nextGeometry
+  if (previous && typeof (previous as any).dispose === 'function') {
+    try { (previous as any).dispose() } catch (e) { /* ignore */ }
+  }
+}
 function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
   const hasActiveDrag = Boolean(
     roadVertexDragState
@@ -7389,6 +7398,50 @@ function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
   autoOverlayHoverIndicator.x = event.clientX - rect.left + 14
   autoOverlayHoverIndicator.y = event.clientY - rect.top + 18
   autoOverlayHoverIndicator.label = `自动铺设 ${plan.targetTool}`
+
+  // Also show the scatter area preview using GroundEditor's preview group.
+  try {
+    const points = (plan.worldPoints ?? []).map((p) => p ? new THREE.Vector3(p.x, p.y, p.z) : undefined).filter((p): p is THREE.Vector3 => Boolean(p))
+    if (points.length >= 3 && scatterAreaPreviewGroup) {
+      // Outline geometry (line loop)
+      const outlinePoints = [...points, points[0]!]
+      const outlineGeom = new THREE.BufferGeometry().setFromPoints(outlinePoints)
+      const fillShape = new THREE.Shape(points.map((pt) => new THREE.Vector2(pt.x, pt.z)))
+      const fillGeom2D = new THREE.ShapeGeometry(fillShape)
+      // Convert 2D shape geometry (XY) into XZ plane at average Y
+      let avgY = 0
+      for (const pt of points) avgY += pt.y
+      avgY = avgY / points.length
+      const fillGeom = new THREE.BufferGeometry()
+      // Copy positions and remap: x->x, y->z, z->ignored; then set z=y
+      const posAttr = fillGeom2D.getAttribute('position')
+      const posArray: number[] = []
+      for (let i = 0; i < posAttr.count; i++) {
+        const x = posAttr.getX(i)
+        const y = posAttr.getY(i)
+        posArray.push(x, avgY, y)
+      }
+      fillGeom.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3))
+
+      const fillMesh = scatterAreaPreviewGroup.children.find((c) => (c as any).isMesh) as THREE.Mesh | undefined
+      const outlineLine = scatterAreaPreviewGroup.children.find((c) => (c as any).type === 'Line') as THREE.Line | undefined
+      if (fillMesh) {
+        setMeshGeometry(fillMesh, fillGeom)
+        fillMesh.visible = true
+      }
+      if (outlineLine) {
+        setMeshGeometry(outlineLine as any, outlineGeom)
+        outlineLine.visible = true
+      }
+      scatterAreaPreviewGroup.visible = true
+    } else if (scatterAreaPreviewGroup) {
+      // hide if invalid
+      scatterAreaPreviewGroup.visible = false
+    }
+  } catch (err) {
+    // ignore preview errors
+    console.warn('Auto overlay preview build failed', err)
+  }
 }
 
 function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
