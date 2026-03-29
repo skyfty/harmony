@@ -35,6 +35,8 @@
             :summary="null"
             :cover-url="scenic.coverImage"
             :rating="scenic.averageRating"
+            :distance="scenic.distance"
+            variant="list"
             :progress-percent="resolveScenicProgress(scenic.id).percent"
             :progress-text="resolveScenicProgress(scenic.id).description"
             @tap="openDetail(scenic.id)"

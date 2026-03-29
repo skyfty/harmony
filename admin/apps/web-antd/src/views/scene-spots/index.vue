@@ -24,6 +24,7 @@ interface SceneSpotFormModel {
   title: string;
   description: string;
   address: string;
+  distance: string;
   order: number;
   isFeatured: boolean;
   averageRating: number;
@@ -61,6 +62,7 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   sceneId: '',
   title: '',
   description: '',
+  distance: '',
   address: '',
   order: 0,
   isFeatured: false,
@@ -87,6 +89,7 @@ function resetForm() {
   sceneSpotFormModel.sceneId = '';
   sceneSpotFormModel.title = '';
   sceneSpotFormModel.description = '';
+  sceneSpotFormModel.distance = '';
   sceneSpotFormModel.address = '';
   sceneSpotFormModel.order = 0;
   sceneSpotFormModel.isFeatured = false;
@@ -202,6 +205,7 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.sceneId = data.sceneId || '';
   sceneSpotFormModel.title = data.title || '';
   sceneSpotFormModel.description = data.description ?? '';
+  sceneSpotFormModel.distance = data.distance ?? '';
   sceneSpotFormModel.address = data.address ?? '';
   sceneSpotFormModel.order = data.order ?? 0;
   sceneSpotFormModel.isFeatured = data.isFeatured === true;
@@ -263,6 +267,7 @@ async function submitSceneSpot() {
   payload.append('averageRating', String(Number(sceneSpotFormModel.averageRating) || 0));
   payload.append('ratingCount', String(Number(sceneSpotFormModel.ratingCount) || 0));
   payload.append('favoriteCount', String(Number(sceneSpotFormModel.favoriteCount) || 0));
+  payload.append('distance', sceneSpotFormModel.distance.trim());
 
   const cover = coverImageFileList.value[0];
   if (cover?.originFileObj) {
@@ -538,6 +543,9 @@ onMounted(async () => {
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.address.label')" name="address">
           <Input v-model:value="sceneSpotFormModel.address" allow-clear />
+        </Form.Item>
+        <Form.Item label="距离" name="distance">
+          <Input v-model:value="sceneSpotFormModel.distance" allow-clear />
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.order.label')" name="order">
           <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />

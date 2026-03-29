@@ -1,33 +1,51 @@
 <template>
-  <view class="card" @tap="emit('tap')">
-    <image class="cover" :src="coverUrl" mode="aspectFill" />
-    <view class="body">
-      <view class="title-row">
-        <text class="name">{{ name }}</text>
-        <view v-if="typeof rating === 'number'" class="rating">
-          <text class="star">★</text>
-          <text class="value">{{ rating.toFixed(1) }}</text>
-        </view>
-      </view>
-      <view v-if="typeof progressPercent === 'number'" class="progress-row">
-        <view class="progress-bar-wrap">
-          <view
-            class="progress-bar-bg"
-            role="progressbar"
-            :aria-valuenow="Math.max(0, Math.min(100, Math.round(progressPercent)))"
-            aria-valuemin="0"
-            aria-valuemax="100"
-          >
-            <view
-              class="progress-bar-fill"
-              :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
-            ></view>
+  <view :class="['card', variant === 'list' ? 'list' : 'card-bg']" @tap="emit('tap')">
+    <template v-if="variant === 'list'">
+      <image class="thumb" :src="coverUrl" mode="aspectFill" />
+      <view class="body-list">
+        <view class="title-row">
+          <text class="name">{{ name }}</text>
+          <view v-if="typeof rating === 'number'" class="rating">
+            <text class="star">★</text>
+            <text class="value">{{ rating.toFixed(1) }}</text>
           </view>
-          <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
         </view>
+        <view class="meta-row">
+          <text v-if="distance" class="distance">{{ distance }}</text>
+        </view>
+        <text v-if="summary" class="summary">{{ summary }}</text>
       </view>
-      <text v-if="summary" class="summary">{{ summary }}</text>
-    </view>
+    </template>
+    <template v-else>
+      <image class="cover" :src="coverUrl" mode="aspectFill" />
+      <view class="body">
+        <view class="title-row">
+          <text class="name">{{ name }}</text>
+          <view v-if="typeof rating === 'number'" class="rating">
+            <text class="star">★</text>
+            <text class="value">{{ rating.toFixed(1) }}</text>
+          </view>
+        </view>
+        <view v-if="typeof progressPercent === 'number'" class="progress-row">
+          <view class="progress-bar-wrap">
+            <view
+              class="progress-bar-bg"
+              role="progressbar"
+              :aria-valuenow="Math.max(0, Math.min(100, Math.round(progressPercent)))"
+              aria-valuemin="0"
+              aria-valuemax="100"
+            >
+              <view
+                class="progress-bar-fill"
+                :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
+              ></view>
+            </view>
+            <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
+          </view>
+        </view>
+        <text v-if="summary" class="summary">{{ summary }}</text>
+      </view>
+    </template>
   </view>
 </template>
 
@@ -39,6 +57,8 @@ defineProps<{
   rating?: number;
   progressPercent?: number;
   progressText?: string;
+  distance?: string | null;
+  variant?: 'card' | 'list';
 }>();
 
 const emit = defineEmits<{ (event: 'tap'): void }>();
@@ -74,6 +94,42 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   height: 100%;
   display: block;
   object-fit: cover;
+}
+
+.list {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  height: 90px;
+  padding: 8px;
+}
+
+.thumb {
+  width: 110px;
+  height: 74px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.body-list {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: 12px;
+  flex: 1;
+}
+
+.meta-row {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.distance {
+  font-size: 12px;
+  color: #8a94a6;
 }
 
 .body {

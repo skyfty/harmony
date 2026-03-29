@@ -8,6 +8,7 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
     coverImage: { type: String, default: null },
     slides: { type: [String], default: [] },
     description: { type: String, default: '' },
+    distance: { type: String, default: null },
     address: { type: String, default: '' },
     order: { type: Number, default: 0 },
     isFeatured: { type: Boolean, default: false },
