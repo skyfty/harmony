@@ -11,6 +11,7 @@
           </view>
         </view>
         <view class="meta-row">
+          <text v-if="typeof ratingCount === 'number'" class="review-count">点评 {{ ratingCount }} 条</text>
           <text v-if="distance" class="distance">{{ distance }}</text>
         </view>
         <text v-if="summary" class="summary">{{ summary }}</text>
@@ -55,6 +56,7 @@ defineProps<{
   summary: string | null;
   coverUrl: string;
   rating?: number;
+  ratingCount?: number;
   progressPercent?: number;
   progressText?: string;
   distance?: string | null;
@@ -115,15 +117,16 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 .body-list {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   padding-left: 12px;
+  padding-top: 6px;
   flex: 1;
 }
 
 .meta-row {
   margin-top: 6px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
 
@@ -132,11 +135,22 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   color: #8a94a6;
 }
 
+.body-list .meta-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.review-count {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
 .body {
   position: absolute;
   left: 10px;
   right: 10px;
-  bottom: 10px;
+  top: 10px;
   padding: 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.35);
@@ -147,14 +161,14 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 
 .title-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 
 .name {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: #1a1f2e;
 }
 
