@@ -21,7 +21,7 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
   const first = new THREE.Vector3(points[0]!.x, points[0]!.y, points[0]!.z)
   const last = new THREE.Vector3(points[n - 1]!.x, points[n - 1]!.y, points[n - 1]!.z)
   const isClosed = first.distanceTo(last) <= CLOSED_EPS
-  console.debug('[overlayPlacementUtils] offsetPolyline start', { count: n, horiz, vert, isClosed })
+    // offset computation start
 
   type Line2D = { p: THREE.Vector2; d: THREE.Vector2; end: THREE.Vector2 }
   const segLines: Line2D[] = []
@@ -46,17 +46,7 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
       d2.set(1, 0)
     }
     segLines.push({ p: p2, d: d2.normalize(), end: end2 })
-    try {
-      console.debug('[overlayPlacementUtils] segLine', {
-        i,
-        a: { x: a.x, y: a.y, z: a.z },
-        b: { x: b.x, y: b.y, z: b.z },
-        dir3: { x: dir3.x, y: dir3.y, z: dir3.z },
-        perp3: { x: perp3.x, y: perp3.y, z: perp3.z },
-        aShift: { x: aShift.x, y: aShift.y, z: aShift.z },
-        bShift: { x: bShift.x, y: bShift.y, z: bShift.z },
-      })
-    } catch (e) {}
+      // segment built
   }
 
   function intersectLines(l1: Line2D, l2: Line2D): THREE.Vector2 | null {
@@ -69,12 +59,12 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
     const f = l2.p.y - l1.p.y
     const det = a * d - b * c
     if (Math.abs(det) < 1e-8) {
-      try { console.debug('[overlayPlacementUtils] intersectLines parallel', { a: l1, b: l2, det }) } catch (e) {}
+        // parallel lines
       return null
     }
     const t = (e * d - b * f) / det
     const ip = new THREE.Vector2(l1.p.x + t * l1.d.x, l1.p.y + t * l1.d.y)
-    try { console.debug('[overlayPlacementUtils] intersectLines', { l1p: l1.p, l1d: l1.d, l2p: l2.p, l2d: l2.d, det, t, ip }) } catch (e) {}
+      // intersection computed
     return ip
   }
 
@@ -89,7 +79,7 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
     const ip = intersectLines(l1, l2)
     if (ip) {
       out.push({ x: ip.x, y: points[i]!.y, z: ip.y })
-      try { console.debug('[overlayPlacementUtils] vertex_intersection', { i, ip }) } catch (e) {}
+        // vertex intersection computed
     } else {
       // parallel or nearly parallel: fallback to average of shifted points
       const a = new THREE.Vector3(points[i]!.x, points[i]!.y, points[i]!.z)
@@ -98,7 +88,7 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
       prevDir.normalize()
       const perp = new THREE.Vector3(-prevDir.z, 0, prevDir.x)
       const fallback = new THREE.Vector3().copy(a).addScaledVector(perp, horiz).addScaledVector(prevDir, vert)
-      try { console.debug('[overlayPlacementUtils] vertex_fallback', { i, fallback }) } catch (e) {}
+        // fallback computed
       out.push({ x: fallback.x, y: a.y, z: fallback.z })
     }
   }
@@ -106,14 +96,10 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
   // last vertex: use the shifted endpoint of the last segment
   const lastLine = segLines[segLines.length - 1]
   const lastPt = { x: lastLine.end.x, y: points[n - 1]!.y, z: lastLine.end.y }
-  try { console.debug('[overlayPlacementUtils] last_point', { lastPt }) } catch (e) {}
+    // last point computed
   out.push(lastPt)
   // Debug per-vertex
-  try {
-    for (let i = 0; i < out.length; i++) {
-      console.debug('[overlayPlacementUtils] vertex_out', { i, out: out[i] })
-    }
-  } catch (e) {}
+    return out
   return out
 }
 
