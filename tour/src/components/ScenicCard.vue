@@ -1,15 +1,32 @@
 <template>
-  <view class="card" @tap="emit('tap')">
-    <image class="cover" :src="coverUrl" mode="aspectFill" />
-    <view class="body">
-      <view class="title-row">
-        <text class="name">{{ name }}</text>
-        <view v-if="typeof rating === 'number'" class="rating">
-          <text class="star">★</text>
-          <text class="value">{{ rating.toFixed(1) }}</text>
+  <view :class="['card', variant === 'list' ? 'list' : 'card-bg']" @tap="emit('tap')">
+    <template v-if="variant === 'list'">
+      <view class="list-row">
+        <image class="thumb" :src="coverUrl" mode="aspectFill" />
+        <view class="body-list">
+          <view class="title-row">
+            <view class="name-fav">
+              <text class="name">{{ name }}</text>
+              <view v-if="typeof favoriteCount === 'number'" class="fav">
+                <text class="fav-icon">♥</text>
+                <text class="fav-count">{{ favoriteCount }}</text>
+              </view>
+            </view>
+            <view v-if="typeof rating === 'number'" class="rating">
+              <text class="star">★</text>
+              <text class="value">{{ rating.toFixed(1) }}</text>
+            </view>
+          </view>
+        <view class="meta-row">
+          <text v-if="typeof ratingCount === 'number'" class="review-count">点评 {{ formatCount(ratingCount) }}</text>
+          <!-- <text v-if="distance" class="distance">{{ distance }}</text> -->
+          <text v-if="address" class="address">{{ address }}</text>
+        </view>
+        <text v-if="summary" class="summary">{{ summary }}</text>
         </view>
       </view>
-      <view v-if="typeof progressPercent === 'number'" class="progress-row">
+      <view v-if="typeof progressPercent === 'number'" class="progress-row list-progress-row">
+        <text class="progress-label">{{ progressText ?? '打卡进度' }}</text>
         <view class="progress-bar-wrap">
           <view
             class="progress-bar-bg"
@@ -26,8 +43,44 @@
           <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
         </view>
       </view>
-      <text v-if="summary" class="summary">{{ summary }}</text>
-    </view>
+    </template>
+    <template v-else>
+      <image class="cover" :src="coverUrl" mode="aspectFill" />
+      <view class="body">
+        <view class="title-row">
+          <view class="name-fav">
+            <text class="name">{{ name }}</text>
+            <view v-if="typeof favoriteCount === 'number'" class="fav">
+              <text class="fav-icon">♥</text>
+              <text class="fav-count">{{ favoriteCount }}</text>
+            </view>
+          </view>
+          <view v-if="typeof rating === 'number'" class="rating">
+            <text class="star">★</text>
+            <text class="value">{{ rating.toFixed(1) }}</text>
+          </view>
+        </view>
+        <view v-if="typeof progressPercent === 'number'" class="progress-row">
+          <text class="progress-label">{{ progressText ?? '打卡进度' }}</text>
+          <view class="progress-bar-wrap">
+            <view
+              class="progress-bar-bg"
+              role="progressbar"
+              :aria-valuenow="Math.max(0, Math.min(100, Math.round(progressPercent)))"
+              aria-valuemin="0"
+              aria-valuemax="100"
+            >
+              <view
+                class="progress-bar-fill"
+                :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
+              ></view>
+            </view>
+            <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
+          </view>
+        </view>
+        <text v-if="summary" class="summary">{{ summary }}</text>
+      </view>
+    </template>
   </view>
 </template>
 
@@ -37,11 +90,26 @@ defineProps<{
   summary: string | null;
   coverUrl: string;
   rating?: number;
+  ratingCount?: number;
+  favoriteCount?: number;
   progressPercent?: number;
   progressText?: string;
+  distance?: string | null;
+  address?: string | null;
+  variant?: 'card' | 'list';
 }>();
 
 const emit = defineEmits<{ (event: 'tap'): void }>();
+
+function formatCount(n?: number): string {
+  if (typeof n !== 'number' || isNaN(n) || n <= 0) return '0条';
+  if (n >= 10000) {
+    // show one decimal place in 万, trim trailing .0
+    const v = (n / 10000).toFixed(1).replace(/\.0$/, '');
+    return `${v}万条`;
+  }
+  return `${n}条`;
+}
 </script>
 
 <style scoped lang="scss">
@@ -76,11 +144,73 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   object-fit: cover;
 }
 
+.list {
+  display: block;
+  padding: 8px;
+}
+
+.thumb {
+  width: 110px;
+  height: 120px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.list-row {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.list-progress-row {
+  margin-top: 8px;
+  padding-left: 0px; /* align with body content after thumb (thumb width + gap) */
+}
+
+.body-list {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding-left: 12px;
+  padding-top: 6px;
+  flex: 1;
+}
+
+.meta-row {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.distance {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.body-list .meta-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.review-count {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.address {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
 .body {
   position: absolute;
   left: 10px;
   right: 10px;
-  bottom: 10px;
+  top: 10px;
   padding: 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.35);
@@ -91,15 +221,39 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 
 .title-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 
 .name {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: #1a1f2e;
+}
+
+.name-fav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #ff6b6b;
+  font-size: 12px;
+}
+
+.fav-icon {
+  font-size: 12px;
+  color: #ff6b6b;
+}
+
+.fav-count {
+  font-size: 12px;
+  color: #8a94a6;
 }
 
 .rating {
@@ -130,14 +284,17 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   margin-top: 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   width: 100%;
-  gap: 6px;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .progress-label {
   font-size: 11px;
   color: #8a94a6;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .progress-tag {
@@ -153,11 +310,12 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  width: auto;
+  flex: 1 1 auto;
 }
 
 .progress-bar-bg {
-  flex: 1;
+  flex: 1 1 auto;
   height: 8px;
   background: #eef3f7;
   border-radius: 8px;
@@ -175,5 +333,9 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   font-size: 11px;
   font-weight: 700;
   color: #16a16d;
+}
+
+.progress-perc {
+  flex: 0 0 auto;
 }
 </style>

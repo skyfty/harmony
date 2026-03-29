@@ -864,6 +864,7 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   ratingCount: number
   favoriteCount: number
   ratingTotalScore: number
+  distance?: string | null
   createdAt: Date
   updatedAt: Date
 }

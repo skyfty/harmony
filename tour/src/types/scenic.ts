@@ -7,6 +7,7 @@ export interface ScenicSummary {
   address: string;
   slides: string[];
   isFeatured: boolean;
+  distance?: string | null;
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;

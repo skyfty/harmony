@@ -23,6 +23,7 @@ type SceneSpotMutationPayload = {
   retainSlides?: unknown
   coverImage?: unknown
   slides?: unknown
+  distance?: string | null
 }
 
 type RequestFilesMap = Record<string, unknown> | undefined
@@ -283,6 +284,7 @@ function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
     checkpointTotal: sceneCheckpointTotal,
     description: typeof spot.description === 'string' ? spot.description : '',
     address: typeof spot.address === 'string' ? spot.address : '',
+    distance: typeof spot.distance === 'string' ? spot.distance : '',
     order: typeof spot.order === 'number' ? spot.order : 0,
     isFeatured: spot.isFeatured === true,
     averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
@@ -478,6 +480,7 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
       coverImage: coverImageUrl,
       slides: slideUrls,
       description: toNullableString(body.description) ?? '',
+      distance: toNullableString(body.distance) ?? '',
       address: toNullableString(body.address) ?? '',
       order: toNumberOrDefault(body.order, 0),
       isFeatured: toBoolean(body.isFeatured) ?? false,
@@ -633,6 +636,7 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
         coverImage: nextCoverImage,
         slides: nextSlides,
         description: body.description === undefined ? current.description : toNullableString(body.description) ?? '',
+        distance: body.distance === undefined ? current.distance : toNullableString(body.distance) ?? '',
         address: body.address === undefined ? current.address : toNullableString(body.address) ?? '',
         order: body.order === undefined ? current.order : toNumberOrDefault(body.order, current.order ?? 0),
         isFeatured: nextIsFeatured === null ? current.isFeatured : nextIsFeatured,

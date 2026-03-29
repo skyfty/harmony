@@ -184,6 +184,7 @@ function buildSceneSpotSummaryDto(spot: any, scene: any) {
     coverImage: toStringValue(spot.coverImage, ''),
     description: toStringValue(spot.description, ''),
     address: toStringValue(spot.address, ''),
+    distance: toStringValue(spot.distance, ''),
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
     order: typeof spot.order === 'number' ? spot.order : 0,
     isFeatured: spot.isFeatured === true,

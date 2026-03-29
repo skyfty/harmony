@@ -21,6 +21,7 @@ export interface SceneSpotItem {
   slides: string[];
   description: string;
   address: string;
+  distance?: string | null;
   order: number;
   isFeatured: boolean;
   averageRating: number;
