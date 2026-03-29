@@ -25,12 +25,16 @@ interface SceneSpotFormModel {
   description: string;
   address: string;
   distance: string;
+  phone?: string | null;
+  locationLat?: number | null;
+  locationLng?: number | null;
   order: number;
   isFeatured: boolean;
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;
 }
+ 
 
 const { TextArea } = Input;
 const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
@@ -64,6 +68,9 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   description: '',
   distance: '',
   address: '',
+  phone: '',
+  locationLat: null,
+  locationLng: null,
   order: 0,
   isFeatured: false,
   averageRating: 0,
@@ -91,6 +98,9 @@ function resetForm() {
   sceneSpotFormModel.description = '';
   sceneSpotFormModel.distance = '';
   sceneSpotFormModel.address = '';
+  sceneSpotFormModel.phone = '';
+  sceneSpotFormModel.locationLat = null;
+  sceneSpotFormModel.locationLng = null;
   sceneSpotFormModel.order = 0;
   sceneSpotFormModel.isFeatured = false;
   sceneSpotFormModel.averageRating = 0;
@@ -212,6 +222,9 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.averageRating = Number(data.averageRating ?? 0);
   sceneSpotFormModel.ratingCount = Number(data.ratingCount ?? 0);
   sceneSpotFormModel.favoriteCount = Number(data.favoriteCount ?? 0);
+  sceneSpotFormModel.phone = data.phone ?? '';
+  sceneSpotFormModel.locationLat = data.location?.lat ?? null;
+  sceneSpotFormModel.locationLng = data.location?.lng ?? null;
   originalCoverImageUrl.value = data.coverImage || '';
   originalSlides.value = [...(data.slides || [])];
 
@@ -268,6 +281,13 @@ async function submitSceneSpot() {
   payload.append('ratingCount', String(Number(sceneSpotFormModel.ratingCount) || 0));
   payload.append('favoriteCount', String(Number(sceneSpotFormModel.favoriteCount) || 0));
   payload.append('distance', sceneSpotFormModel.distance.trim());
+  if (sceneSpotFormModel.phone) {
+    payload.append('phone', String(sceneSpotFormModel.phone).trim())
+  }
+  if (sceneSpotFormModel.locationLat != null && sceneSpotFormModel.locationLng != null) {
+    payload.append('locationLat', String(sceneSpotFormModel.locationLat))
+    payload.append('locationLng', String(sceneSpotFormModel.locationLng))
+  }
 
   const cover = coverImageFileList.value[0];
   if (cover?.originFileObj) {
@@ -546,6 +566,15 @@ onMounted(async () => {
         </Form.Item>
         <Form.Item label="距离" name="distance">
           <Input v-model:value="sceneSpotFormModel.distance" allow-clear />
+        </Form.Item>
+        <Form.Item label="电话" name="phone">
+          <Input v-model:value="sceneSpotFormModel.phone" allow-clear />
+        </Form.Item>
+        <Form.Item label="坐标（纬度 / 经度）" name="location">
+          <div style="display:flex;gap:8px;">
+            <InputNumber v-model:value="sceneSpotFormModel.locationLat" :step="0.000001" placeholder="纬度" style="width:50%" />
+            <InputNumber v-model:value="sceneSpotFormModel.locationLng" :step="0.000001" placeholder="经度" style="width:50%" />
+          </div>
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.order.label')" name="order">
           <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />

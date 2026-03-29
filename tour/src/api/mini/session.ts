@@ -121,7 +121,7 @@ export async function loginWithCredentials(username: string, password: string): 
   return token
 }
 
-export async function loginWithWechatCode(code: string): Promise<string> {
+export async function loginWithWechatCode(code: string, displayName?: string, avatarUrl?: string): Promise<string> {
   const miniAppId = getMiniAppId()
   console.log(`${MINI_AUTH_LOG_PREFIX} 
     
@@ -137,6 +137,9 @@ export async function loginWithWechatCode(code: string): Promise<string> {
     body: {
       code,
       miniAppId: miniAppId || undefined,
+      // optionally include profile fields when available so server can auto-register
+      ...(typeof displayName === 'string' && displayName ? { displayName } : {}),
+      ...(typeof avatarUrl === 'string' && avatarUrl ? { avatarUrl } : {}),
     },
   })
 
@@ -178,7 +181,39 @@ async function performMiniAuth(force = false): Promise<string> {
 
       logMiniAuth('using wechat login flow')
       const code = await getWechatLoginCode()
-      return await loginWithWechatCode(code)
+
+      // Try to obtain displayName and avatarUrl via the WeChat mini-program user profile API.
+      // This requires explicit user consent; if it fails or the user denies, proceed without profile.
+      let displayName: string | undefined
+      let avatarUrl: string | undefined
+      try {
+        if (typeof (uni as any)?.getUserProfile === 'function') {
+          logMiniAuth('calling uni.getUserProfile to request profile')
+          // getUserProfile requires a description string in WeChat
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          const res = await new Promise<any>((resolve, reject) => {
+            ;(uni as any).getUserProfile({
+              desc: '用于完成账号注册与头像同步',
+              lang: 'zh_CN',
+              success: (r: any) => resolve(r),
+              fail: (e: any) => reject(e),
+            })
+          })
+          if (res && res.userInfo) {
+            displayName = typeof res.userInfo.nickName === 'string' ? res.userInfo.nickName : undefined
+            avatarUrl = typeof res.userInfo.avatarUrl === 'string' ? res.userInfo.avatarUrl : undefined
+            logMiniAuth('got user profile from getUserProfile', { displayName: displayName || '(empty)', hasAvatar: Boolean(avatarUrl) })
+          }
+        } else {
+          logMiniAuth('uni.getUserProfile not available, skip profile request')
+        }
+      } catch (err) {
+        // user denied or API not available — continue without profile
+        warnMiniAuth('getUserProfile failed or denied, continuing without profile', err)
+      }
+
+      return await loginWithWechatCode(code, displayName, avatarUrl)
     })()
       .catch((error) => {
         errorMiniAuth('performMiniAuth failed, token cleared', error)

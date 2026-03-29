@@ -151,7 +151,7 @@ function formatCount(n?: number): string {
 
 .thumb {
   width: 110px;
-  height: 120px;
+  height: 110px;
   border-radius: 6px;
   object-fit: cover;
   flex-shrink: 0;

@@ -858,6 +858,8 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   slides: string[]
   description: string
   address: string
+  phone?: string | null
+  location?: { type: 'Point'; coordinates: number[] } | null
   order: number
   isFeatured: boolean
   averageRating: number
