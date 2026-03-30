@@ -83,6 +83,10 @@
         "deleteSuccess": "景点删除成功",
         "loadScenesFailed": "加载场景列表失败"
       },
+      "tabs": {
+        "basic": "基本字段",
+        "other": "其他字段"
+      },
       "confirm": {
         "delete": {
           "title": "确认删除景点\"{name}\"吗？",
@@ -137,6 +141,10 @@
           "label": "所属场景",
           "required": "请选择所属场景",
           "placeholder": "请选择场景"
+        },
+        "category": {
+          "label": "分类",
+          "placeholder": "请选择分类"
         },
         "title": {
           "label": "景点名称",

@@ -123,9 +123,9 @@ async function loadCategoryOptions() {
   if (categoryOptionsLoading.value) return;
   categoryOptionsLoading.value = true;
   try {
-    const res = await listSceneSpotCategoriesApi({ page: 1, pageSize: 200 });
-    const items = res.items || [];
-    categoryOptions.value = items.map((it: any) => ({ label: it.name, value: it.id }));
+    const res = await listSceneSpotCategoriesApi();
+    const items = Array.isArray(res) ? res : (res.items || []);
+    categoryOptions.value = (items || []).map((it: any) => ({ label: it.name, value: it.id }));
   } finally {
     categoryOptionsLoading.value = false;
   }
@@ -607,6 +607,9 @@ onMounted(async () => {
               </Upload>
             </Form.Item>
 
+            <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
+              <Switch v-model:checked="sceneSpotFormModel.isFeatured" />
+            </Form.Item>
             <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">
               <TextArea v-model:value="sceneSpotFormModel.description" :rows="3" />
             </Form.Item>
@@ -639,9 +642,6 @@ onMounted(async () => {
             </Form.Item>
             <Form.Item :label="t('page.sceneSpots.index.formFields.favoriteCount.label')" name="favoriteCount">
               <InputNumber v-model:value="sceneSpotFormModel.favoriteCount" :min="0" :precision="0" style="width: 100%" />
-            </Form.Item>
-            <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
-              <Switch v-model:checked="sceneSpotFormModel.isFeatured" />
             </Form.Item>
           </Tabs.TabPane>
         </Tabs>

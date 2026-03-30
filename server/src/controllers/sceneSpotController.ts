@@ -28,6 +28,8 @@ type SceneSpotMutationPayload = {
   location?: unknown
   locationLat?: unknown
   locationLng?: unknown
+  category?: unknown
+  categoryId?: unknown
 }
 
 type RequestFilesMap = Record<string, unknown> | undefined
@@ -50,6 +52,18 @@ function toNullableString(value: unknown): string | null {
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : null
+}
+
+function parseCoordinate(value: unknown): number {
+  if (value === undefined || value === null) return NaN
+  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return NaN
+    const parsed = Number(trimmed)
+    return Number.isFinite(parsed) ? parsed : NaN
+  }
+  return NaN
 }
 
 function isDataUrl(value: string): boolean {
@@ -443,6 +457,19 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
   } catch {
     ctx.throw(404, 'Scene not found')
   }
+  // category is required for creating a scene spot
+  const rawCategory = (body as any).category ?? (body as any).categoryId
+  if (rawCategory === undefined) {
+    ctx.throw(400, 'Category id is required')
+  }
+  const cat = toNullableString(rawCategory)
+  if (!cat) {
+    ctx.throw(400, 'Category id is required')
+  }
+  if (!Types.ObjectId.isValid(cat)) {
+    ctx.throw(400, 'Invalid category id')
+  }
+  const categoryToSet: string = cat
 
   const title = toNonEmptyString(body.title)
   if (!title) {
@@ -486,7 +513,8 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
 
   let created
   try {
-    created = await SceneSpotModel.create({
+
+    const createPayload: any = {
       sceneId,
       title,
       coverImage: coverImageUrl,
@@ -495,33 +523,46 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
       distance: toNullableString(body.distance) ?? '',
       address: toNullableString(body.address) ?? '',
       phone: toNullableString(body.phone) ?? null,
-      location: ((): any => {
-        const latRaw = body.locationLat ?? (body.location && (body.location as any).lat)
-        const lngRaw = body.locationLng ?? (body.location && (body.location as any).lng)
-        const lat = typeof latRaw === 'string' ? Number(latRaw) : typeof latRaw === 'number' ? latRaw : NaN
-        const lng = typeof lngRaw === 'string' ? Number(lngRaw) : typeof lngRaw === 'number' ? lngRaw : NaN
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          return { type: 'Point', coordinates: [Number(lng), Number(lat)] }
-        }
-        if (typeof body.location === 'string') {
-          try {
-            const parsed = JSON.parse(body.location)
-            if (parsed && Array.isArray(parsed.coordinates) && parsed.coordinates.length === 2) {
-              return { type: 'Point', coordinates: [Number(parsed.coordinates[0]), Number(parsed.coordinates[1])] }
-            }
-          } catch {
-            // ignore
-          }
-        }
-        return undefined
-      })(),
+      // location will be added below only if valid coords exist
       order: toNumberOrDefault(body.order, 0),
       isFeatured: toBoolean(body.isFeatured) ?? false,
       averageRating,
       ratingCount,
       favoriteCount,
       ratingTotalScore: Number((averageRating * ratingCount).toFixed(2)),
-    })
+    }
+
+    createPayload.category = categoryToSet
+
+    // attach location only when both coordinates are present
+    const createLocation = ((): any => {
+      const lat = parseCoordinate(body.locationLat ?? (body.location && (body.location as any).lat))
+      const lng = parseCoordinate(body.locationLng ?? (body.location && (body.location as any).lng))
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        return { type: 'Point', coordinates: [Number(lng), Number(lat)] }
+      }
+      if (typeof body.location === 'string') {
+        try {
+          const parsed = JSON.parse(body.location)
+          if (parsed && Array.isArray(parsed.coordinates) && parsed.coordinates.length === 2) {
+            const px = parseCoordinate(parsed.coordinates[0])
+            const py = parseCoordinate(parsed.coordinates[1])
+            if (Number.isFinite(px) && Number.isFinite(py)) {
+              return { type: 'Point', coordinates: [Number(px), Number(py)] }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return undefined
+    })()
+
+    if (createLocation !== undefined) {
+      createPayload.location = createLocation
+    }
+
+    created = await SceneSpotModel.create(createPayload)
   } catch (error) {
     await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
     throw error
@@ -597,7 +638,19 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
       ctx.throw(404, 'Scene not found')
     }
   }
-
+  // handle optional category update (cannot be cleared to null)
+  const rawCategory = (body as any).category ?? (body as any).categoryId
+  let categoryToSet: string | undefined = undefined
+  if (rawCategory !== undefined) {
+    const cat = toNullableString(rawCategory)
+    if (!cat) {
+      ctx.throw(400, 'Category id is required')
+    }
+    if (!Types.ObjectId.isValid(cat)) {
+      ctx.throw(400, 'Invalid category id')
+    }
+    categoryToSet = cat
+  }
   const nextAverageRating =
     body.averageRating === undefined
       ? typeof current.averageRating === 'number'
@@ -660,55 +713,92 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
   }
   // compute next phone & location values
   const nextPhone = body.phone === undefined ? (typeof current.phone === 'string' ? current.phone : null) : toNullableString(body.phone) ?? null
-  const nextLocation = (() => {
-    // prefer explicit lat/lng fields
-    const latRaw = body.locationLat ?? (body.location && (body.location as any).lat)
-    const lngRaw = body.locationLng ?? (body.location && (body.location as any).lng)
-    const lat = typeof latRaw === 'string' ? Number(latRaw) : typeof latRaw === 'number' ? latRaw : NaN
-    const lng = typeof lngRaw === 'string' ? Number(lngRaw) : typeof lngRaw === 'number' ? lngRaw : NaN
-    if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      return { type: 'Point', coordinates: [Number(lng), Number(lat)] }
-    }
-    // try parse JSON string
-    if (typeof body.location === 'string') {
-      try {
-        const parsed = JSON.parse(body.location)
-        if (parsed && Array.isArray(parsed.coordinates) && parsed.coordinates.length === 2) {
-          return { type: 'Point', coordinates: [Number(parsed.coordinates[0]), Number(parsed.coordinates[1])] }
-        }
-      } catch {
-        // ignore
+  // determine if request intends to change location
+  const hasLocationInput = Object.prototype.hasOwnProperty.call(body, 'location') ||
+    Object.prototype.hasOwnProperty.call(body, 'locationLat') ||
+    Object.prototype.hasOwnProperty.call(body, 'locationLng')
+
+  const parsedNextLocation = (() => {
+    const hasLatProp = Object.prototype.hasOwnProperty.call(body, 'locationLat')
+    const hasLngProp = Object.prototype.hasOwnProperty.call(body, 'locationLng')
+    const hasLocProp = Object.prototype.hasOwnProperty.call(body, 'location')
+
+    // if lat/lng explicit props are present, prefer them
+    if (hasLatProp || hasLngProp) {
+      const latRaw = (body as any).locationLat
+      const lngRaw = (body as any).locationLng
+      const lat = parseCoordinate(latRaw)
+      const lng = parseCoordinate(lngRaw)
+      const latEmpty = latRaw === undefined || latRaw === null || (typeof latRaw === 'string' && latRaw.trim() === '')
+      const lngEmpty = lngRaw === undefined || lngRaw === null || (typeof lngRaw === 'string' && lngRaw.trim() === '')
+
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        return { type: 'Point', coordinates: [Number(lng), Number(lat)] }
       }
+      // explicit both empty -> clear location
+      if ((hasLatProp && latEmpty) && (hasLngProp && lngEmpty)) {
+        return null
+      }
+      // otherwise invalid mix (one provided but not both valid)
+      return undefined
     }
-    // keep current location if no update provided
-    return (current as any).location ?? undefined
+
+    if (hasLocProp) {
+      const raw = (body as any).location
+      if (raw === null) return null
+      if (typeof raw === 'string') {
+        if (raw.trim() === '') return null
+        try {
+          const parsed = JSON.parse(raw)
+          if (parsed && Array.isArray(parsed.coordinates) && parsed.coordinates.length === 2) {
+            const px = parseCoordinate(parsed.coordinates[0])
+            const py = parseCoordinate(parsed.coordinates[1])
+            if (Number.isFinite(px) && Number.isFinite(py)) {
+              return { type: 'Point', coordinates: [Number(px), Number(py)] }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return undefined
+    }
+
+    return undefined
   })()
 
   let updated
   try {
-    updated = await SceneSpotModel.findByIdAndUpdate(
-      id,
-      {
-        sceneId: nextSceneId,
-        title: title ?? current.title,
-        coverImage: nextCoverImage,
-        slides: nextSlides,
-        description: body.description === undefined ? current.description : toNullableString(body.description) ?? '',
-        distance: body.distance === undefined ? current.distance : toNullableString(body.distance) ?? '',
-        address: body.address === undefined ? current.address : toNullableString(body.address) ?? '',
-        order: body.order === undefined ? current.order : toNumberOrDefault(body.order, current.order ?? 0),
-        isFeatured: nextIsFeatured === null ? current.isFeatured : nextIsFeatured,
-        averageRating: nextAverageRating,
-        ratingCount: nextRatingCount,
-        favoriteCount: nextFavoriteCount,
-        phone: nextPhone,
-        location: nextLocation,
-        ratingTotalScore: Number((nextAverageRating * nextRatingCount).toFixed(2)),
-      },
-      { new: true },
-    )
-      .lean()
-      .exec()
+
+    const updatePayload: any = {
+      sceneId: nextSceneId,
+      title: title ?? current.title,
+      coverImage: nextCoverImage,
+      slides: nextSlides,
+      description: body.description === undefined ? current.description : toNullableString(body.description) ?? '',
+      distance: body.distance === undefined ? current.distance : toNullableString(body.distance) ?? '',
+      address: body.address === undefined ? current.address : toNullableString(body.address) ?? '',
+      order: body.order === undefined ? current.order : toNumberOrDefault(body.order, current.order ?? 0),
+      isFeatured: nextIsFeatured === null ? current.isFeatured : nextIsFeatured,
+      averageRating: nextAverageRating,
+      ratingCount: nextRatingCount,
+      favoriteCount: nextFavoriteCount,
+      phone: nextPhone,
+      ratingTotalScore: Number((nextAverageRating * nextRatingCount).toFixed(2)),
+    }
+    if (categoryToSet !== undefined) {
+      updatePayload.category = categoryToSet
+    }
+
+    // attach location only when client provided location inputs
+    if (hasLocationInput) {
+      if (parsedNextLocation === undefined) {
+        ctx.throw(400, 'Invalid location coordinates')
+      }
+      updatePayload.location = parsedNextLocation
+    }
+
+    updated = await SceneSpotModel.findByIdAndUpdate(id, updatePayload, { new: true }).lean().exec()
   } catch (error) {
     await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
     throw error

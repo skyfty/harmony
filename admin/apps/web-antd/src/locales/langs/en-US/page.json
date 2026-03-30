@@ -83,6 +83,10 @@
         "deleteSuccess": "Scene spot deleted successfully",
         "loadScenesFailed": "Failed to load scenes"
       },
+      "tabs": {
+        "basic": "Basic Fields",
+        "other": "Other Fields"
+      },
       "confirm": {
         "delete": {
           "title": "Confirm delete scene spot \"{name}\"?",
