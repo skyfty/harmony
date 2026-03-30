@@ -853,6 +853,8 @@ export interface SceneDocument extends Document<Types.ObjectId> {
 
 export interface SceneSpotDocument extends Document<Types.ObjectId> {
   sceneId: Types.ObjectId
+  /** 中文：景点分类引用 */
+  category?: Types.ObjectId | null
   title: string
   coverImage?: string | null
   slides: string[]
@@ -868,6 +870,27 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   ratingTotalScore: number
   distance?: string | null
   createdAt: Date
+  updatedAt: Date
+}
+
+export interface SceneSpotCategoryDocument extends Document<Types.ObjectId> {
+  /** 中文：分类名称 */
+  name: string
+  /** 中文：分类描述（可选） */
+  description?: string | null
+  /** 中文：用于路由或接口的短标识（可选） */
+  slug?: string | null
+  /** 中文：排序值 */
+  sortOrder: number
+  /** 中文：是否启用 */
+  enabled: boolean
+  /** 中文：规范化名称 */
+  normalizedName?: string | null
+  /** 中文：是否内置 */
+  isBuiltin: boolean
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
   updatedAt: Date
 }
 

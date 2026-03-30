@@ -73,6 +73,7 @@ import {
   applyOrderRefund,
 } from '@/controllers/miniprogram/orderController'
 import { listAchievements } from '@/controllers/miniprogram/achievementController'
+import { listCategories as listSceneSpotCategories } from '@/controllers/miniprogram/sceneSpotCategoryController'
 import {
   listAddresses,
   getAddress,
@@ -105,6 +106,7 @@ miniRouter.get('/scene-spots', optionalMiniAuth, listSceneSpots)
 miniRouter.get('/scene-spots/:id', optionalMiniAuth, getSceneSpot)
 miniRouter.get('/scene-spots/:id/entry', optionalMiniAuth, getSceneSpotEntry)
 miniRouter.get('/scene-spots/:id/comments', optionalMiniAuth, listSceneSpotComments)
+miniRouter.get('/scene-spot-categories', optionalMiniAuth, listSceneSpotCategories)
 miniRouter.get('/scenes/:id/products', optionalMiniAuth, listSceneProducts)
 
 miniRouter.get('/events/hot', optionalMiniAuth, listHotEvents)

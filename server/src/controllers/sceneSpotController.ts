@@ -281,6 +281,8 @@ function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
   return {
     id: String(spot._id),
     sceneId: String(spot.sceneId),
+    categoryId: spot && spot.category ? (typeof spot.category === 'string' ? String(spot.category) : String((spot.category as any)._id ?? '')) : null,
+    category: spot && spot.category && typeof spot.category === 'object' ? { id: String((spot.category as any)._id), name: String((spot.category as any).name ?? ''), slug: String((spot.category as any).slug ?? '') } : null,
     sceneCheckpointTotal,
     title: spot.title,
     coverImage: toNullableString(spot.coverImage),
@@ -364,6 +366,7 @@ export async function listSceneSpots(ctx: Context): Promise<void> {
 
   const [rows, total] = await Promise.all([
     SceneSpotModel.find(query)
+      .populate('category', 'name slug')
       .sort({ order: 1, createdAt: 1 })
       .skip((pageNumber - 1) * limit)
       .limit(limit)
@@ -391,7 +394,7 @@ export async function getSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Invalid scene spot id')
   }
 
-  const row = await SceneSpotModel.findById(id).lean().exec()
+  const row = await SceneSpotModel.findById(id).populate('category', 'name slug').lean().exec()
   if (!row) {
     ctx.throw(404, 'Scene spot not found')
   }
@@ -524,7 +527,7 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     throw error
   }
 
-  const row = await SceneSpotModel.findById(created._id).lean().exec()
+  const row = await SceneSpotModel.findById(created._id).populate('category', 'name slug').lean().exec()
   ctx.status = 201
   const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
   ctx.body = mapSceneSpot(row, checkpointMap.get(sceneId) ?? 0)
@@ -732,9 +735,11 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
   })
   await deleteStoredFilesByUrls(removedUrls)
 
-  const updatedSceneId = String((updated as { sceneId?: unknown }).sceneId ?? '')
+  // ensure category is populated for response
+  const updatedRow = updated ? await SceneSpotModel.findById((updated as any)._id).populate('category', 'name slug').lean().exec() : null
+  const updatedSceneId = String((updatedRow as { sceneId?: unknown })?.sceneId ?? '')
   const checkpointMap = await loadSceneCheckpointTotalMap([updatedSceneId])
-  ctx.body = mapSceneSpot(updated, checkpointMap.get(updatedSceneId) ?? 0)
+  ctx.body = mapSceneSpot(updatedRow ?? updated, checkpointMap.get(updatedSceneId) ?? 0)
 }
 
 export async function deleteSceneSpot(ctx: Context): Promise<void> {

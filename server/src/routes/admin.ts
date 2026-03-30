@@ -22,6 +22,12 @@ import {
   deleteBinding,
 } from '@/controllers/admin/sceneBindingController'
 import {
+  listCategories as listSceneSpotCategories,
+  createCategory as createSceneSpotCategory,
+  updateCategory as updateSceneSpotCategory,
+  removeCategory as removeSceneSpotCategory,
+} from '@/controllers/admin/sceneSpotCategoryController'
+import {
   createProduct,
   deleteProduct,
   getProduct,
@@ -198,6 +204,12 @@ adminRouter.put(
 )
 adminRouter.delete('/scene-spots/:id', requireAnyPermission(['sceneSpot:write']), deleteSceneSpot)
 adminRouter.get('/scene-spots/:sceneSpotId/comments', requireAnyPermission(['comment:read']), listSceneSpotCommentsBySceneSpot)
+
+// Scene spot categories
+adminRouter.get('/scene-spot-categories', requireAnyPermission(['sceneSpotCategory:read']), listSceneSpotCategories)
+adminRouter.post('/scene-spot-categories', requireAnyPermission(['sceneSpotCategory:write']), createSceneSpotCategory)
+adminRouter.put('/scene-spot-categories/:id', requireAnyPermission(['sceneSpotCategory:write']), updateSceneSpotCategory)
+adminRouter.delete('/scene-spot-categories/:id', requireAnyPermission(['sceneSpotCategory:write']), removeSceneSpotCategory)
 
 adminRouter.get('/scene-spot-comments', requireAnyPermission(['comment:read']), listSceneSpotComments)
 adminRouter.get('/scene-spot-comments/:id', requireAnyPermission(['comment:read']), getSceneSpotComment)

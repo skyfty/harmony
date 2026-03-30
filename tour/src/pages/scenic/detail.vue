@@ -104,43 +104,7 @@
           <text class="intro-text">{{ scenic.description }}</text>
         </view>
 
-        <view class="comments-section">
-          <view class="section-header">
-            <view class="section-dot" />
-            <text class="section-title">游客留言</text>
-          </view>
 
-          <view class="comment-editor">
-            <textarea
-              v-model="commentContent"
-              class="comment-editor__input"
-              maxlength="500"
-              placeholder="写下你的留言（审核通过后展示）"
-            />
-            <button class="comment-editor__submit" :disabled="commentSubmitting" @tap="handleSubmitComment">
-              {{ commentSubmitting ? '提交中...' : '发布留言' }}
-            </button>
-          </view>
-
-          <view v-if="commentLoading" class="comments-state">留言加载中...</view>
-          <view v-else-if="comments.length === 0" class="comments-state">暂无留言，快来发布第一条吧</view>
-          <view v-else class="comment-list">
-            <view v-for="item in comments" :key="item.id" class="comment-item">
-              <view class="comment-item__meta">
-                <text class="comment-item__name">{{ item.userDisplayName || '匿名用户' }}</text>
-                <view class="comment-item__right">
-                  <text class="comment-item__status">{{ getScenicCommentStatusLabel(item.status) }}</text>
-                  <text class="comment-item__time">{{ formatCommentTime(item.createdAt) }}</text>
-                  <text v-if="item.canDelete" class="comment-item__delete" @tap="handleDeleteComment(item.id)">删除</text>
-                </view>
-              </view>
-              <text class="comment-item__content">{{ item.content }}</text>
-              <text v-if="item.status === 'rejected' && item.rejectReason" class="comment-item__reject">
-                驳回原因：{{ item.rejectReason }}
-              </text>
-            </view>
-          </view>
-        </view>
 
         <!-- CTA button -->
         <view class="cta-area">
@@ -158,16 +122,11 @@ import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 import { trackAnalyticsEvent } from '@harmony/utils';
 import {
-  createScenicComment,
-  deleteScenicComment,
-  getScenicCommentStatusLabel,
   getScenic,
   listAchievements,
-  listScenicComments,
   toggleScenicFavorite,
 } from '@/api/mini';
 import type { ScenicCheckinProgressItem } from '@/types/achievement';
-import type { ScenicComment } from '@/types/comment';
 import type { ScenicDetail } from '@/types/scenic';
 import { getStatusBarHeight } from '@/utils/systemInfo';
 
@@ -175,10 +134,7 @@ const scenic = ref<ScenicDetail | null>(null);
 const favoriteLoading = ref(false);
 const currentSlide = ref(0);
 const scenicCheckinProgress = ref<ScenicCheckinProgressItem | null>(null);
-const comments = ref<ScenicComment[]>([]);
-const commentLoading = ref(false);
-const commentSubmitting = ref(false);
-const commentContent = ref('');
+
 
 /* Status bar height for floating back button positioning */
 const statusBarHeight = ref(getStatusBarHeight());
@@ -320,58 +276,6 @@ async function handleToggleFavorite(): Promise<void> {
   }
 }
 
-async function loadScenicComments(scenicId: string): Promise<void> {
-  commentLoading.value = true;
-  try {
-    const response = await listScenicComments(scenicId, { page: 1, pageSize: 30 });
-    comments.value = response.items;
-  } catch {
-    comments.value = [];
-  } finally {
-    commentLoading.value = false;
-  }
-}
-
-async function handleSubmitComment(): Promise<void> {
-  if (!scenic.value || commentSubmitting.value) {
-    return;
-  }
-  const normalized = commentContent.value.trim();
-  if (!normalized) {
-    uni.showToast({ title: '请输入留言内容', icon: 'none' });
-    return;
-  }
-  if (normalized.length > 500) {
-    uni.showToast({ title: '留言最多500字', icon: 'none' });
-    return;
-  }
-
-  commentSubmitting.value = true;
-  try {
-    const created = await createScenicComment(scenic.value.id, normalized);
-    commentContent.value = '';
-    comments.value = [created, ...comments.value];
-    uni.showToast({ title: '留言已提交，待审核', icon: 'none' });
-  } catch (err) {
-    uni.showToast({ title: getErrorMessage(err), icon: 'none' });
-  } finally {
-    commentSubmitting.value = false;
-  }
-}
-
-async function handleDeleteComment(commentId: string): Promise<void> {
-  if (!scenic.value || !commentId) {
-    return;
-  }
-  try {
-    await deleteScenicComment(scenic.value.id, commentId);
-    comments.value = comments.value.filter((item) => item.id !== commentId);
-    uni.showToast({ title: '删除成功', icon: 'none' });
-  } catch (err) {
-    uni.showToast({ title: getErrorMessage(err), icon: 'none' });
-  }
-}
-
 /* ---- Helpers ---- */
 
 function formatFavoriteCount(count: number | undefined): string {
@@ -394,18 +298,6 @@ function getSafeCount(value: number | undefined): number {
     return 0;
   }
   return Math.max(Number(value), 0);
-}
-
-function formatCommentTime(input: string): string {
-  const d = new Date(input);
-  if (Number.isNaN(d.getTime())) {
-    return input || '-';
-  }
-  const mm = `${d.getMonth() + 1}`.padStart(2, '0');
-  const dd = `${d.getDate()}`.padStart(2, '0');
-  const hh = `${d.getHours()}`.padStart(2, '0');
-  const mi = `${d.getMinutes()}`.padStart(2, '0');
-  return `${mm}-${dd} ${hh}:${mi}`;
 }
 
 function openMap(lat?: number | null, lng?: number | null) {

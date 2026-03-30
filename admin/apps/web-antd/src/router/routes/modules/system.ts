@@ -22,6 +22,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'SceneSpotCategories',
+    path: '/scene-spot-categories',
+    component: () => import('#/views/scene-spot-categories/index.vue'),
+    meta: {
+      icon: 'lucide:tag',
+      title: '景点分类',
+    },
+  },
+  {
     name: 'SceneSpotComments',
     path: '/scene-spot-comments',
     component: () => import('#/views/scene-spot-comments/index.vue'),

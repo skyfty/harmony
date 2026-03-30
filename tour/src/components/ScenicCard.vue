@@ -24,7 +24,7 @@
         </view>
         <text v-if="summary" class="summary">{{ summary }}</text>
           <view v-if="typeof progressPercent === 'number'" class="progress-row list-progress-row">
-            <image class="progress-icon" src="/assets/checkin.jpg" mode="aspectFit" aria-hidden="true" />
+            <image class="progress-icon" src="/static/images/checkin.jpg" mode="aspectFit" aria-hidden="true" />
             <view class="progress-bar-wrap">
               <view
                 class="progress-bar-bg"
@@ -61,7 +61,7 @@
           </view>
         </view>
         <view v-if="typeof progressPercent === 'number'" class="progress-row">
-          <image class="progress-icon" src="/assets/checkin.jpg" mode="aspectFit" aria-hidden="true" />
+          <image class="progress-icon" src="/static/images/checkin.jpg" mode="aspectFit" aria-hidden="true" />
           <view class="progress-bar-wrap">
             <view
               class="progress-bar-bg"
