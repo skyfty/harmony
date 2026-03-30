@@ -23,24 +23,24 @@
           <text v-if="address" class="address">{{ address }}</text>
         </view>
         <text v-if="summary" class="summary">{{ summary }}</text>
-        </view>
-      </view>
-      <view v-if="typeof progressPercent === 'number'" class="progress-row list-progress-row">
-        <text class="progress-label">{{ progressText ?? '打卡进度' }}</text>
-        <view class="progress-bar-wrap">
-          <view
-            class="progress-bar-bg"
-            role="progressbar"
-            :aria-valuenow="Math.max(0, Math.min(100, Math.round(progressPercent)))"
-            aria-valuemin="0"
-            aria-valuemax="100"
-          >
-            <view
-              class="progress-bar-fill"
-              :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
-            ></view>
+          <view v-if="typeof progressPercent === 'number'" class="progress-row list-progress-row">
+            <image class="progress-icon" src="/assets/checkin.jpg" mode="aspectFit" aria-hidden="true" />
+            <view class="progress-bar-wrap">
+              <view
+                class="progress-bar-bg"
+                role="progressbar"
+                :aria-valuenow="Math.max(0, Math.min(100, Math.round(progressPercent)))"
+                aria-valuemin="0"
+                aria-valuemax="100"
+              >
+                <view
+                  class="progress-bar-fill"
+                  :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
+                ></view>
+              </view>
+              <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
+            </view>
           </view>
-          <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
         </view>
       </view>
     </template>
@@ -61,7 +61,7 @@
           </view>
         </view>
         <view v-if="typeof progressPercent === 'number'" class="progress-row">
-          <text class="progress-label">{{ progressText ?? '打卡进度' }}</text>
+          <image class="progress-icon" src="/assets/checkin.jpg" mode="aspectFit" aria-hidden="true" />
           <view class="progress-bar-wrap">
             <view
               class="progress-bar-bg"
@@ -115,7 +115,7 @@ function formatCount(n?: number): string {
 <style scoped lang="scss">
 .card {
   position: relative;
-  height: 140px;
+  height: 110px;
   border-radius: 10px;
   overflow: hidden;
   -webkit-box-shadow: 0 6px 16px rgba(26, 31, 46, 0.10), 0 3px 10px rgba(31, 122, 236, 0.06);
@@ -165,8 +165,9 @@ function formatCount(n?: number): string {
 }
 
 .list-progress-row {
-  margin-top: 8px;
+  margin-top: auto;
   padding-left: 0px; /* align with body content after thumb (thumb width + gap) */
+  align-self: flex-end;
 }
 
 .body-list {
@@ -249,6 +250,25 @@ function formatCount(n?: number): string {
 .fav-icon {
   font-size: 12px;
   color: #ff6b6b;
+}
+
+.progress-icon {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 50%;
+  background: rgba(22, 161, 109, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+}
+
+.progress-icon .percent-symbol {
+  font-size: 12px;
+  color: #16a16d;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .fav-count {
