@@ -12,6 +12,7 @@ import {
   getSceneSpotApi,
   listSceneSpotsApi,
   listScenesApi,
+  listSceneSpotCategoriesApi,
   updateSceneSpotApi,
 } from '#/api';
 import { $t } from '#/locales';
@@ -33,6 +34,7 @@ interface SceneSpotFormModel {
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;
+  categoryId?: string | null;
 }
  
 
@@ -76,7 +78,11 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   averageRating: 0,
   ratingCount: 0,
   favoriteCount: 0,
+  categoryId: '',
 });
+
+const categoryOptions = ref<Array<{ label: string; value: string }>>([]);
+const categoryOptionsLoading = ref(false);
 
 const featuredLoading = reactive<Record<string, boolean>>({});
 const featuredError = reactive<Record<string, boolean>>({});
@@ -106,10 +112,23 @@ function resetForm() {
   sceneSpotFormModel.averageRating = 0;
   sceneSpotFormModel.ratingCount = 0;
   sceneSpotFormModel.favoriteCount = 0;
+  sceneSpotFormModel.categoryId = '';
   coverImageFileList.value = [];
   slidesFileList.value = [];
   originalCoverImageUrl.value = '';
   originalSlides.value = [];
+}
+
+async function loadCategoryOptions() {
+  if (categoryOptionsLoading.value) return;
+  categoryOptionsLoading.value = true;
+  try {
+    const res = await listSceneSpotCategoriesApi({ page: 1, pageSize: 200 });
+    const items = res.items || [];
+    categoryOptions.value = items.map((it: any) => ({ label: it.name, value: it.id }));
+  } finally {
+    categoryOptionsLoading.value = false;
+  }
 }
 
 function generateUid(prefix: string) {
@@ -225,6 +244,7 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.phone = data.phone ?? '';
   sceneSpotFormModel.locationLat = data.location?.lat ?? null;
   sceneSpotFormModel.locationLng = data.location?.lng ?? null;
+  sceneSpotFormModel.categoryId = data.categoryId ?? '';
   originalCoverImageUrl.value = data.coverImage || '';
   originalSlides.value = [...(data.slides || [])];
 
@@ -287,6 +307,13 @@ async function submitSceneSpot() {
   if (sceneSpotFormModel.locationLat != null && sceneSpotFormModel.locationLng != null) {
     payload.append('locationLat', String(sceneSpotFormModel.locationLat))
     payload.append('locationLng', String(sceneSpotFormModel.locationLng))
+  }
+
+  if (sceneSpotFormModel.categoryId) {
+    payload.append('category', String(sceneSpotFormModel.categoryId));
+  } else if (editingId.value) {
+    // explicit unset when editing and no category selected
+    payload.append('category', '');
   }
 
   const cover = coverImageFileList.value[0];
@@ -405,6 +432,7 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
     columns: [
       { field: 'title', minWidth: 180, title: t('page.sceneSpots.index.table.titleCol') },
       { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId'), slots: { default: 'sceneName' } },
+      { field: 'category', minWidth: 160, title: t('page.sceneSpots.index.table.category'), slots: { default: 'category' } },
       { field: 'isFeatured', minWidth: 120, title: t('page.sceneSpots.index.table.isFeatured'), slots: { default: 'isFeatured' } },
       { field: 'averageRating', minWidth: 120, title: t('page.sceneSpots.index.table.averageRating') },
       { field: 'ratingCount', minWidth: 120, title: t('page.sceneSpots.index.table.ratingCount') },
@@ -454,6 +482,7 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
 onMounted(async () => {
   try {
     await loadSceneOptions(true);
+    await loadCategoryOptions();
   } catch {
     message.error(t('page.sceneSpots.index.message.loadScenesFailed'));
   }
@@ -471,6 +500,10 @@ onMounted(async () => {
 
       <template #sceneName="{ row }">
         {{ sceneNameMap[row.sceneId] || row.sceneId }}
+      </template>
+
+      <template #category="{ row }">
+        {{ row.category?.name || '-' }}
       </template>
 
       <template #isFeatured="{ row }">
@@ -534,6 +567,15 @@ onMounted(async () => {
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.title.label')" name="title" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.title.required') }]">
           <Input v-model:value="sceneSpotFormModel.title" allow-clear />
+        </Form.Item>
+        <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="category">
+          <Select
+            v-model:value="sceneSpotFormModel.categoryId"
+            :options="categoryOptions"
+            :loading="categoryOptionsLoading"
+            allow-clear
+            :placeholder="t('page.sceneSpots.index.formFields.category.placeholder')"
+          />
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage">
           <Upload

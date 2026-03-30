@@ -103,6 +103,7 @@
         "tableTitle": "Scene Spot Management",
         "titleCol": "Title",
         "sceneId": "Scene",
+        "category": "Category",
         "isFeatured": "Home Featured",
         "isFeaturedYes": "Featured",
         "isFeaturedNo": "Not Featured",
@@ -229,6 +230,41 @@
       },
       "title": { "index": "Comments", "sceneSpot": "Scene Spot Comments" }
     }
+  },
+  "sceneSpotCategories": {
+    "title": "Scene Spot Categories",
+    "modal": { "edit": "Edit Category", "create": "New Category", "ok": "Save", "cancel": "Cancel" },
+    "message": {
+      "updateSuccess": "Category updated",
+      "createSuccess": "Category created",
+      "deleteSuccess": "Category deleted",
+      "builtinCannotDelete": "Built-in category cannot be deleted"
+    },
+    "confirm": {
+      "delete": {
+        "title": "Confirm delete category \"{name}\"?",
+        "content": "Associated scene spots will have their category cleared."
+      }
+    },
+    "table": {
+      "name": "Name",
+      "slug": "Slug",
+      "description": "Description",
+      "sortOrder": "Sort Order",
+      "enabled": "Enabled",
+      "isBuiltin": "Built-in",
+      "updatedAt": "Updated At",
+      "actions": "Actions"
+    },
+    "toolbar": { "create": "New Category" },
+    "actions": { "edit": "Edit", "delete": "Delete" },
+    "form": {
+      "name": { "label": "Name", "required": "Please enter category name" },
+      "description": { "label": "Description" },
+      "sortOrder": { "label": "Sort Order" },
+      "enabled": { "label": "Enabled" }
+    },
+    "values": { "yes": "Yes", "no": "No" }
   },
   "loginLogs": { "title": "Login Logs" },
   "travelRecords": {

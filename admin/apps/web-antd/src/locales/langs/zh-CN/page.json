@@ -103,6 +103,7 @@
         "tableTitle": "景点管理",
         "titleCol": "景点名称",
         "sceneId": "所属场景",
+        "category": "分类",
         "isFeatured": "首页推荐",
         "isFeaturedYes": "已推荐",
         "isFeaturedNo": "未推荐",
@@ -229,6 +230,41 @@
       },
       "title": { "index": "留言管理", "sceneSpot": "景点留言" }
     }
+  },
+  "sceneSpotCategories": {
+    "title": "景点分类",
+    "modal": { "edit": "编辑分类", "create": "新增分类", "ok": "保存", "cancel": "取消" },
+    "message": {
+      "updateSuccess": "分类更新成功",
+      "createSuccess": "分类创建成功",
+      "deleteSuccess": "分类已删除",
+      "builtinCannotDelete": "内置分类不可删除"
+    },
+    "confirm": {
+      "delete": {
+        "title": "确认删除分类 \"{name}\"吗？",
+        "content": "已关联的景点会清空该分类。"
+      }
+    },
+    "table": {
+      "name": "名称",
+      "slug": "Slug",
+      "description": "描述",
+      "sortOrder": "排序",
+      "enabled": "启用",
+      "isBuiltin": "内置",
+      "updatedAt": "更新时间",
+      "actions": "操作"
+    },
+    "toolbar": { "create": "新增分类" },
+    "actions": { "edit": "编辑", "delete": "删除" },
+    "form": {
+      "name": { "label": "名称", "required": "请输入分类名称" },
+      "description": { "label": "描述" },
+      "sortOrder": { "label": "排序" },
+      "enabled": { "label": "启用" }
+    },
+    "values": { "yes": "是", "no": "否" }
   },
   "loginLogs": { "title": "登录日志" },
   "travelRecords": {
