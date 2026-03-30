@@ -12,6 +12,9 @@ type LoginResponse = {
 
 let pendingAuthPromise: Promise<string> | null = null
 let miniAuthInitialized = false
+// Temporary profile provided by a user-gesture recovery flow. When set,
+// `performMiniAuth` will include these fields in the next login attempt.
+let pendingRecoveryProfile: { displayName?: string; avatarUrl?: string } | null = null
 const MINI_AUTH_LOG_PREFIX = '[mini-auth]'
 const MINI_AUTH_SESSION_STORAGE_KEYS = [
   'tour:selectedVehicleId',
@@ -172,48 +175,44 @@ async function performMiniAuth(force = false): Promise<string> {
   if (!pendingAuthPromise) {
     logMiniAuth('creating new pending auth promise')
     pendingAuthPromise = (async () => {
-      if (shouldUseTestLogin()) {
-        const username = String(import.meta.env.VITE_MINI_TEST_USERNAME ?? 'test')
-        const password = String(import.meta.env.VITE_MINI_TEST_PASSWORD ?? 'test1234')
-        logMiniAuth('using test login flow', { username })
-        return await loginWithCredentials(username, password)
-      }
-
       logMiniAuth('using wechat login flow')
       const code = await getWechatLoginCode()
+      // If a recovery profile was provided by a user-gesture flow, include it
+      // in the login request so the server can auto-register/sync the profile.
+      const profile = pendingRecoveryProfile
+      pendingRecoveryProfile = null
+      const token = await loginWithWechatCode(code, profile?.displayName, profile?.avatarUrl)
 
-      // Try to obtain displayName and avatarUrl via the WeChat mini-program user profile API.
-      // This requires explicit user consent; if it fails or the user denies, proceed without profile.
-      let displayName: string | undefined
-      let avatarUrl: string | undefined
+      // After successful login, check whether the server-side profile has displayName/avatarUrl.
+      // If missing, prompt the user (user TAP gesture) to authorize profile access and PATCH the profile.
       try {
-        if (typeof (uni as any)?.getUserProfile === 'function') {
-          logMiniAuth('calling uni.getUserProfile to request profile')
-          // getUserProfile requires a description string in WeChat
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-ignore
-          const res = await new Promise<any>((resolve, reject) => {
-            ;(uni as any).getUserProfile({
-              desc: '用于完成账号注册与头像同步',
-              lang: 'zh_CN',
-              success: (r: any) => resolve(r),
-              fail: (e: any) => reject(e),
-            })
-          })
-          if (res && res.userInfo) {
-            displayName = typeof res.userInfo.nickName === 'string' ? res.userInfo.nickName : undefined
-            avatarUrl = typeof res.userInfo.avatarUrl === 'string' ? res.userInfo.avatarUrl : undefined
-            logMiniAuth('got user profile from getUserProfile', { displayName: displayName || '(empty)', hasAvatar: Boolean(avatarUrl) })
+        const resp = await miniRequest<{ user: { displayName?: string; avatarUrl?: string } }>('/mini-auth/profile', {
+          method: 'GET',
+        })
+        const user = resp.user || {}
+        const needsDisplay = !user.displayName || !user.displayName.trim()
+        const needsAvatar = !user.avatarUrl || !user.avatarUrl.trim()
+        if (needsDisplay || needsAvatar) {
+          try {
+            const result = await (await import('@/stores/miniAuthRecovery')).showRecoveryModal()
+            if (result && result.success) {
+              const payload: Record<string, unknown> = {}
+              if (result.displayName && result.displayName.trim()) payload.displayName = result.displayName.trim()
+              if (result.avatarUrl && result.avatarUrl.trim()) payload.avatarUrl = result.avatarUrl.trim()
+              if (Object.keys(payload).length) {
+                await miniRequest('/mini-auth/profile', { method: 'PATCH', body: payload })
+              }
+            }
+          } catch (err) {
+            warnMiniAuth('profile recovery failed or cancelled', err)
           }
-        } else {
-          logMiniAuth('uni.getUserProfile not available, skip profile request')
         }
       } catch (err) {
-        // user denied or API not available — continue without profile
-        warnMiniAuth('getUserProfile failed or denied, continuing without profile', err)
+        // ignore profile fetch errors
+        warnMiniAuth('failed to fetch profile after login', err)
       }
 
-      return await loginWithWechatCode(code, displayName, avatarUrl)
+      return token
     })()
       .catch((error) => {
         errorMiniAuth('performMiniAuth failed, token cleared', error)
@@ -229,6 +228,11 @@ async function performMiniAuth(force = false): Promise<string> {
   }
 
   return await pendingAuthPromise
+}
+
+// Called by recovery handler to provide a profile obtained via user gesture.
+export function setPendingRecoveryProfile(profile: { displayName?: string; avatarUrl?: string } | null): void {
+  pendingRecoveryProfile = profile
 }
 
 export async function ensureMiniAuth(force = false): Promise<string> {
