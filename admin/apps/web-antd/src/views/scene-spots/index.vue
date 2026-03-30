@@ -17,7 +17,7 @@ import {
 } from '#/api';
 import { $t } from '#/locales';
 
-import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload, Tooltip } from 'ant-design-vue';
+import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload, Tooltip, Tabs } from 'ant-design-vue';
 import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface SceneSpotFormModel {
@@ -553,86 +553,98 @@ onMounted(async () => {
       @ok="submitSceneSpot"
     >
       <Form ref="sceneSpotFormRef" :label-col="{ span: 6 }" :model="sceneSpotFormModel" :wrapper-col="{ span: 17 }">
-        <Form.Item :label="t('page.sceneSpots.index.formFields.sceneId.label')" name="sceneId" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.sceneId.required') }]">
-          <Select
-            v-model:value="sceneSpotFormModel.sceneId"
-            :filter-option="false"
-            :loading="sceneOptionsLoading"
-            :options="sceneOptions"
-            @popupScroll="handleScenePopupScroll"
-            @search="handleSceneSearch"
-            show-search
-            :placeholder="t('page.sceneSpots.index.formFields.sceneId.placeholder')"
-          />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.title.label')" name="title" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.title.required') }]">
-          <Input v-model:value="sceneSpotFormModel.title" allow-clear />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="category">
-          <Select
-            v-model:value="sceneSpotFormModel.categoryId"
-            :options="categoryOptions"
-            :loading="categoryOptionsLoading"
-            allow-clear
-            :placeholder="t('page.sceneSpots.index.formFields.category.placeholder')"
-          />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage">
-          <Upload
-            v-bind="uploadProps"
-            :file-list="coverImageFileList"
-            list-type="picture-card"
-            @change="handleCoverImageChange"
-            @preview="handlePreview"
-          >
-            <div v-if="coverImageFileList.length < 1">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
-          </Upload>
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
-          <Upload
-            v-bind="uploadProps"
-            :file-list="slidesFileList"
-            multiple
-            list-type="picture-card"
-            @change="handleSlidesChange"
-            @preview="handlePreview"
-          >
-            <div v-if="slidesFileList.length < MAX_SLIDES_COUNT">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
-          </Upload>
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">
-          <TextArea v-model:value="sceneSpotFormModel.description" :rows="3" />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.address.label')" name="address">
-          <Input v-model:value="sceneSpotFormModel.address" allow-clear />
-        </Form.Item>
-        <Form.Item label="距离" name="distance">
-          <Input v-model:value="sceneSpotFormModel.distance" allow-clear />
-        </Form.Item>
-        <Form.Item label="电话" name="phone">
-          <Input v-model:value="sceneSpotFormModel.phone" allow-clear />
-        </Form.Item>
-        <Form.Item label="坐标（纬度 / 经度）" name="location">
-          <div style="display:flex;gap:8px;">
-            <InputNumber v-model:value="sceneSpotFormModel.locationLat" :step="0.000001" placeholder="纬度" style="width:50%" />
-            <InputNumber v-model:value="sceneSpotFormModel.locationLng" :step="0.000001" placeholder="经度" style="width:50%" />
-          </div>
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.order.label')" name="order">
-          <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.averageRating.label')" name="averageRating">
-          <InputNumber v-model:value="sceneSpotFormModel.averageRating" :min="0" :max="5" :step="0.1" style="width: 100%" />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.ratingCount.label')" name="ratingCount">
-          <InputNumber v-model:value="sceneSpotFormModel.ratingCount" :min="0" :precision="0" style="width: 100%" />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.favoriteCount.label')" name="favoriteCount">
-          <InputNumber v-model:value="sceneSpotFormModel.favoriteCount" :min="0" :precision="0" style="width: 100%" />
-        </Form.Item>
-        <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
-          <Switch v-model:checked="sceneSpotFormModel.isFeatured" />
-        </Form.Item>
+        <Tabs :default-active-key="'basic'">
+          <Tabs.TabPane key="basic" :tab="t('page.sceneSpots.index.tabs.basic')">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.sceneId.label')" name="sceneId" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.sceneId.required') }]">
+              <Select
+                v-model:value="sceneSpotFormModel.sceneId"
+                :filter-option="false"
+                :loading="sceneOptionsLoading"
+                :options="sceneOptions"
+                @popupScroll="handleScenePopupScroll"
+                @search="handleSceneSearch"
+                show-search
+                :placeholder="t('page.sceneSpots.index.formFields.sceneId.placeholder')"
+              />
+            </Form.Item>
+
+            <Form.Item :label="t('page.sceneSpots.index.formFields.title.label')" name="title" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.title.required') }]">
+              <Input v-model:value="sceneSpotFormModel.title" allow-clear />
+            </Form.Item>
+
+            <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="category">
+              <Select
+                v-model:value="sceneSpotFormModel.categoryId"
+                :options="categoryOptions"
+                :loading="categoryOptionsLoading"
+                allow-clear
+                :placeholder="t('page.sceneSpots.index.formFields.category.placeholder')"
+              />
+            </Form.Item>
+
+            <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage">
+              <Upload
+                v-bind="uploadProps"
+                :file-list="coverImageFileList"
+                list-type="picture-card"
+                @change="handleCoverImageChange"
+                @preview="handlePreview"
+              >
+                <div v-if="coverImageFileList.length < 1">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
+              </Upload>
+            </Form.Item>
+
+            <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
+              <Upload
+                v-bind="uploadProps"
+                :file-list="slidesFileList"
+                multiple
+                list-type="picture-card"
+                @change="handleSlidesChange"
+                @preview="handlePreview"
+              >
+                <div v-if="slidesFileList.length < MAX_SLIDES_COUNT">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
+              </Upload>
+            </Form.Item>
+
+            <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">
+              <TextArea v-model:value="sceneSpotFormModel.description" :rows="3" />
+            </Form.Item>
+          </Tabs.TabPane>
+
+          <Tabs.TabPane key="other" :tab="t('page.sceneSpots.index.tabs.other')">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.address.label')" name="address">
+              <Input v-model:value="sceneSpotFormModel.address" allow-clear />
+            </Form.Item>
+            <Form.Item label="距离" name="distance">
+              <Input v-model:value="sceneSpotFormModel.distance" allow-clear />
+            </Form.Item>
+            <Form.Item label="电话" name="phone">
+              <Input v-model:value="sceneSpotFormModel.phone" allow-clear />
+            </Form.Item>
+            <Form.Item label="坐标（纬度 / 经度）" name="location">
+              <div style="display:flex;gap:8px;">
+                <InputNumber v-model:value="sceneSpotFormModel.locationLat" :step="0.000001" placeholder="纬度" style="width:50%" />
+                <InputNumber v-model:value="sceneSpotFormModel.locationLng" :step="0.000001" placeholder="经度" style="width:50%" />
+              </div>
+            </Form.Item>
+            <Form.Item :label="t('page.sceneSpots.index.formFields.order.label')" name="order">
+              <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />
+            </Form.Item>
+            <Form.Item :label="t('page.sceneSpots.index.formFields.averageRating.label')" name="averageRating">
+              <InputNumber v-model:value="sceneSpotFormModel.averageRating" :min="0" :max="5" :step="0.1" style="width: 100%" />
+            </Form.Item>
+            <Form.Item :label="t('page.sceneSpots.index.formFields.ratingCount.label')" name="ratingCount">
+              <InputNumber v-model:value="sceneSpotFormModel.ratingCount" :min="0" :precision="0" style="width: 100%" />
+            </Form.Item>
+            <Form.Item :label="t('page.sceneSpots.index.formFields.favoriteCount.label')" name="favoriteCount">
+              <InputNumber v-model:value="sceneSpotFormModel.favoriteCount" :min="0" :precision="0" style="width: 100%" />
+            </Form.Item>
+            <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
+              <Switch v-model:checked="sceneSpotFormModel.isFeatured" />
+            </Form.Item>
+          </Tabs.TabPane>
+        </Tabs>
       </Form>
     </Modal>
 

@@ -98,6 +98,14 @@
           "label": "所属场景",
           "placeholder": "全部场景"
         }
+        ,"tabs": {
+          "basic": "基本字段",
+          "other": "其他字段"
+        }
+        ,"category": {
+          "label": "分类",
+          "placeholder": "请选择分类"
+        }
       },
       "table": {
         "tableTitle": "景点管理",
@@ -261,6 +269,7 @@
     "form": {
       "name": { "label": "名称", "required": "请输入分类名称" },
       "description": { "label": "描述" },
+      "slug": { "label": "标识", "placeholder": "可选，通常为英文小写" },
       "sortOrder": { "label": "排序" },
       "enabled": { "label": "启用" }
     },

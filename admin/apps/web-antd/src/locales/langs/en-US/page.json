@@ -97,7 +97,11 @@
         "sceneId": {
           "label": "Scene",
           "placeholder": "All scenes"
-        }
+        },
+        "tabs": {
+          "basic": "Basic Fields",
+          "other": "Other Fields"
+        },
       },
       "table": {
         "tableTitle": "Scene Spot Management",
@@ -129,6 +133,10 @@
           "label": "Scene",
           "required": "Please select a scene",
           "placeholder": "Please select a scene"
+        },
+        "category": {
+          "label": "Category",
+          "placeholder": "Select category"
         },
         "title": {
           "label": "Title",
@@ -261,6 +269,7 @@
     "form": {
       "name": { "label": "Name", "required": "Please enter category name" },
       "description": { "label": "Description" },
+      "slug": { "label": "Slug", "placeholder": "Optional unique identifier (lowercase)" },
       "sortOrder": { "label": "Sort Order" },
       "enabled": { "label": "Enabled" }
     },
