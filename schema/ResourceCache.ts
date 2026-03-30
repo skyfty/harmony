@@ -25,17 +25,10 @@ type ResourceCacheHookOptions = {
   reportDownloadProgress?: AssetDownloadReporter | null;
 };
 
-const defaultWarnHandler = (message: string): void => {
-  if (message) {
-    console.warn(message);
-  }
-};
-
 export default class ResourceCache {
   private readonly assetEntryCache = new Map<string, Promise<AssetCacheEntry | null>>();
   private document: SceneJsonExportDocument;
   private options: SceneGraphBuildOptions;
-  private warn: (message: string) => void;
   private readonly assetLoader: AssetLoader;
   private reportDownloadProgress: AssetDownloadReporter | undefined;
 
@@ -48,7 +41,6 @@ export default class ResourceCache {
     this.document = document;
     this.options = options;
     this.assetLoader = assetLoader;
-    this.warn = hooks.warn ?? defaultWarnHandler;
     this.reportDownloadProgress = hooks.reportDownloadProgress ?? undefined;
   }
 
@@ -70,9 +62,7 @@ export default class ResourceCache {
   }
 
   setHandlers(hooks: ResourceCacheHookOptions): void {
-    if (hooks.warn !== undefined) {
-      this.warn = hooks.warn ?? defaultWarnHandler;
-    }
+
     if (hooks.reportDownloadProgress !== undefined) {
       this.reportDownloadProgress = hooks.reportDownloadProgress ?? undefined;
     }
@@ -197,7 +187,6 @@ export default class ResourceCache {
       return { kind: 'remote-url', url: assetId };
     }
 
-    this.warn(`未找到资源 ${assetId}`);
     return null;
   }
 

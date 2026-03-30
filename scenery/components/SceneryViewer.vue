@@ -476,10 +476,7 @@ import {
   updateGroundChunks,
 } from '@harmony/schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
-import {
-  createDefaultGroundSurfacePreviewLoaders,
-  syncGroundSurfacePreviewForGround,
-} from '@harmony/schema/groundSurfacePreview';
+
 import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
@@ -1320,43 +1317,6 @@ async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | 
     bakedGroundTextureCache.set(normalizedId, null);
   });
   return await request;
-}
-
-const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
-const ENABLE_SCENE_PREVIEW_BAKED_GROUND = false
-const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
-
-function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
-  const bakedAssetId = typeof dynamicMesh.terrainPaintBakedTextureAssetId === 'string'
-    ? dynamicMesh.terrainPaintBakedTextureAssetId.trim()
-    : '';
-  if (ENABLE_SCENE_PREVIEW_BAKED_GROUND && bakedAssetId) {
-    const token = groundSurfacePreviewLoadToken;
-    void loadBakedGroundTexture(bakedAssetId).then((texture) => {
-      if (groundSurfacePreviewLoadToken !== token) {
-        return;
-      }
-      if (texture) {
-        return;
-      }
-    });
-    return;
-  }
-  const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
-    ? syncGroundSurfacePreviewForGround(
-      groundObject,
-      groundNode,
-      dynamicMesh,
-      groundSurfacePreviewLoaders,
-      () => groundSurfacePreviewLoadToken,
-      {
-        applyToMaterialMap: true,
-      },
-    )
-    : false;
-  if (usesSurfacePreview) {
-    return;
-  }
 }
 
 function ensureResourceCache(
@@ -10610,7 +10570,6 @@ function startRenderLoop(
             } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
               ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
             }
-            syncGroundSurfacePreviewForGroundNode(groundObject, cachedGround.node, cachedGround.dynamicMesh);
             if (debugEnabled.value) {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }

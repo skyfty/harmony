@@ -1262,7 +1262,6 @@ let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
 let groundSurfacePreviewLoadToken = 0
-let groundSurfacePreviewRetryTimers: number[] = []
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
 let isApplyingSnapshot = false
@@ -1271,45 +1270,6 @@ let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
 
 const environmentAssetRefreshTick = ref(0)
-
-function clearGroundSurfacePreviewRetryTimers(): void {
-	groundSurfacePreviewRetryTimers.forEach((timerId) => {
-		window.clearTimeout(timerId)
-	})
-	groundSurfacePreviewRetryTimers = []
-}
-
-function hasGroundPaintRuntimeChunks(definition: GroundDynamicMesh | null | undefined): boolean {
-	if (!definition || definition.type !== 'Ground') {
-		return false
-	}
-	const chunks = (definition as GroundDynamicMesh & { groundSurfaceChunks?: GroundDynamicMesh['groundSurfaceChunks'] }).groundSurfaceChunks
-	return Object.keys(chunks ?? {}).length > 0
-}
-
-function scheduleGroundSurfacePreviewRetry(sceneId: string, nodeId: string, tokenSnapshot: number): void {
-	clearGroundSurfacePreviewRetryTimers()
-	const retryDelaysMs = [250, 900]
-	retryDelaysMs.forEach((delayMs) => {
-		const timerId = window.setTimeout(() => {
-			if (groundSurfacePreviewLoadToken !== tokenSnapshot) {
-				return
-			}
-			if (!currentDocument || currentDocument.id !== sceneId) {
-				return
-			}
-			if (cachedGroundNodeId !== nodeId || !cachedGroundNode || !cachedGroundDynamicMesh) {
-				return
-			}
-			const groundObject = nodeObjectMap.get(nodeId) ?? null
-			if (!groundObject) {
-				return
-			}
-			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
-		}, delayMs)
-		groundSurfacePreviewRetryTimers.push(timerId)
-	})
-}
 
 function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): string | null {
 	const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
@@ -1651,7 +1611,6 @@ function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null
 }
 
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
-	clearGroundSurfacePreviewRetryTimers()
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
 	cachedGroundNode = null
@@ -1681,11 +1640,6 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	cachedGroundNodeId = groundNode.id
 	cachedGroundDynamicMesh = groundNode.dynamicMesh
 	cachedGroundNode = groundNode
-	if (hasGroundPaintRuntimeChunks(cachedGroundDynamicMesh)) {
-		// Scene load may race asset hydration. Schedule guarded retries so initial preview
-		// can recover without requiring a new paint stroke.
-		scheduleGroundSurfacePreviewRetry(document.id, groundNode.id, loadToken)
-	}
 }
 
 function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamera, delta: number): boolean {
@@ -10731,7 +10685,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
 	rendererInitialized = false
-	clearGroundSurfacePreviewRetryTimers()
 	if (steeringWheelState.dragging) {
 		releaseSteeringWheelPointer()
 	}
