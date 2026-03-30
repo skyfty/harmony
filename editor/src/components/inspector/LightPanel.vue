@@ -291,24 +291,24 @@ function handleShadowMapSizeChange(value: number | string | null) {
   patchShadow({ mapSize: size })
 }
 
-function handleShadowBiasChange(value: number | number[]) {
-  const numeric = coerceNumber(value)
-  if (numeric === null) return
+function handleShadowBiasChange(value: number | number[] | string) {
+  const numeric = typeof value === 'string' ? Number(value) : coerceNumber(value)
+  if (numeric === null || !Number.isFinite(numeric)) return
   lightForm.shadowBias = numeric
   patchShadow({ bias: numeric })
 }
 
-function handleShadowNormalBiasChange(value: number | number[]) {
-  const numeric = coerceNumber(value)
-  if (numeric === null) return
+function handleShadowNormalBiasChange(value: number | number[] | string) {
+  const numeric = typeof value === 'string' ? Number(value) : coerceNumber(value)
+  if (numeric === null || !Number.isFinite(numeric)) return
   const clamped = Math.max(0, numeric)
   lightForm.shadowNormalBias = clamped
   patchShadow({ normalBias: clamped })
 }
 
-function handleShadowRadiusChange(value: number | number[]) {
-  const numeric = coerceNumber(value)
-  if (numeric === null) return
+function handleShadowRadiusChange(value: number | number[] | string) {
+  const numeric = typeof value === 'string' ? Number(value) : coerceNumber(value)
+  if (numeric === null || !Number.isFinite(numeric)) return
   const clamped = Math.max(0, numeric)
   lightForm.shadowRadius = clamped
   patchShadow({ radius: clamped })
@@ -514,52 +514,49 @@ function handleShadowOrthoSizeChange(value: string | number) {
         <div class="section-block material-row">
           <span class="row-label">Bias</span>
           <div class="row-controls">
-            <v-slider
+            <v-text-field
               :model-value="lightForm.shadowBias"
-              min="-0.005"
-              max="0.005"
-              step="0.00005"
+              type="number"
+              density="compact"
+              variant="underlined"
               hide-details
-              class="slider"
-              size="small"
+              style="width: 110px"
               :disabled="props.disabled || !lightForm.castShadow"
+              step="0.00001"
               @update:model-value="handleShadowBiasChange"
             />
-            <div class="slider-value">{{ lightForm.shadowBias.toFixed(5) }}</div>
           </div>
         </div>
         <div class="section-block material-row">
           <span class="row-label">Normal Bias</span>
           <div class="row-controls">
-            <v-slider
+            <v-text-field
               :model-value="lightForm.shadowNormalBias"
-              min="0"
-              max="0.2"
-              step="0.001"
+              type="number"
+              density="compact"
+              variant="underlined"
               hide-details
-              class="slider"
-              size="small"
+              style="width: 110px"
               :disabled="props.disabled || !lightForm.castShadow"
+              step="0.001"
               @update:model-value="handleShadowNormalBiasChange"
             />
-            <div class="slider-value">{{ lightForm.shadowNormalBias.toFixed(3) }}</div>
           </div>
         </div>
         <div class="section-block material-row">
           <span class="row-label">Radius</span>
           <div class="row-controls">
-            <v-slider
+            <v-text-field
               :model-value="lightForm.shadowRadius"
-              min="0"
-              max="10"
-              step="0.1"
+              type="number"
+              density="compact"
+              variant="underlined"
               hide-details
-              class="slider"
-              size="small"
+              style="width: 110px"
               :disabled="props.disabled || !lightForm.castShadow"
+              step="0.1"
               @update:model-value="handleShadowRadiusChange"
             />
-            <div class="slider-value">{{ lightForm.shadowRadius.toFixed(1) }}</div>
           </div>
         </div>
         <div class="section-block material-row">

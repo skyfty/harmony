@@ -91,7 +91,10 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
       directional.shadow.mapSize.set(2048, 2048)
       directional.shadow.camera.near = 0.1
       directional.shadow.camera.far = 200
-      directional.shadow.bias = -0.0002
+      directional.shadow.bias = 0
+      directional.shadow.normalBias = 0
+      directional.shadow.radius = 1
+      directional.shadow.orthoSize = 20
       applyShadowSettings(directional, props)
 
       if (props.target) {
