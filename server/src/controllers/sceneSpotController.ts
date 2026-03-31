@@ -6,6 +6,8 @@ import { nanoid } from 'nanoid'
 import { appConfig } from '@/config/env'
 import { SceneModel } from '@/models/Scene'
 import { SceneSpotModel } from '@/models/SceneSpot'
+import { HotSpotModel } from '@/models/HotSpot'
+import { FeaturedSpotModel } from '@/models/FeaturedSpot'
 import { deleteSceneFile, type UploadedFilePayload } from '@/services/sceneService'
 
 type SceneSpotMutationPayload = {
@@ -855,6 +857,15 @@ export async function deleteSceneSpot(ctx: Context): Promise<void> {
       urlsToDelete.push(...deleted.slides.map((item: unknown) => toNullableString(item)).filter(Boolean))
     }
     await deleteStoredFilesByUrls(urlsToDelete)
+    // remove any HotSpot / FeaturedSpot records referencing this scene spot
+    try {
+      await Promise.all([
+        HotSpotModel.deleteMany({ sceneSpotId: deleted._id }).exec(),
+        FeaturedSpotModel.deleteMany({ sceneSpotId: deleted._id }).exec(),
+      ])
+    } catch (err) {
+      // best-effort: ignore deletion errors to avoid blocking primary delete
+    }
   }
   ctx.status = 200
   ctx.body = {}

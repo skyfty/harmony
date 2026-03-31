@@ -26,17 +26,25 @@
       </view>
 
       <view class="grid">
-        <ScenicCard
+        <view
           v-for="scenic in filtered"
           :key="scenic.id"
-          :name="scenic.title"
-          :summary="scenic.description"
-          :cover-url="(scenic.slides && scenic.slides[0]) || scenic.coverImage || ''"
-          :rating="scenic.averageRating"
-          :is-featured="scenic.isFeatured"
-          :is-hot="scenic.isHot"
-          @tap="openDetail(scenic.id)"
-        />
+          class="card-item"
+        >
+          <ScenicCard
+            :name="scenic.title"
+              :distance="scenic.distance"
+              :rating-count="scenic.ratingCount"
+              :address="scenic.address"
+            :summary="scenic.description"
+            :cover-url="(scenic.slides && scenic.slides[0]) || scenic.coverImage || ''"
+            :rating="scenic.averageRating"
+            :is-featured="scenic.isFeatured"
+            :is-hot="scenic.isHot"
+            variant="list"
+            @tap="openDetail(scenic.id)"
+          />
+        </view>
       </view>
 
       <view v-if="!filtered.length" class="empty">
@@ -117,9 +125,9 @@ function handleNavigate(key: NavKey) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-  padding-bottom: 85px;
-  padding-bottom: calc(85px + constant(safe-area-inset-bottom));
-  padding-bottom: calc(85px + env(safe-area-inset-bottom));
+  padding-bottom: 65px;
+  padding-bottom: calc(65px + constant(safe-area-inset-bottom));
+  padding-bottom: calc(65px + env(safe-area-inset-bottom));
 }
 
 .header {
@@ -127,20 +135,20 @@ function handleNavigate(key: NavKey) {
 }
 
 .search-box {
-  background: #ffffff;
-  border-radius: 14px;
   margin-top: 12px;
-  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.98);
+  border-radius: 14px;
+  padding: 11px 12px;
   display: flex;
   align-items: center;
   gap: 8px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.16);
 }
 
 .search-input {
   flex: 1;
   font-size: 13px;
-  color: #1a1f2e;
+  color: #55617a;
 }
 
 .search-button {
@@ -151,7 +159,7 @@ function handleNavigate(key: NavKey) {
   height: 36px;
   padding: 0;
   border-radius: 50%;
-  background: linear-gradient(135deg, #5b8cff, #8a63ff);
+  background: transparent;
 }
 
 .search-button-text {
@@ -159,10 +167,10 @@ function handleNavigate(key: NavKey) {
 }
 
 .search-icon {
-  width: 16px;
-  height: 16px;
-  color: #ffffff;
-  display: block;
+  width: 18px;
+  height: 18px;
+  color: #7b74e7;
+  flex-shrink: 0;
 }
 
 .clear-icon {
@@ -171,14 +179,14 @@ function handleNavigate(key: NavKey) {
 }
 
 .content {
-  padding: 12px 16px 18px;
+  padding: 0 16px 18px;
 }
 
 .section-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 14px 0 10px;
+  margin: 6px 0 10px;
 }
 
 .section-text {
@@ -191,6 +199,10 @@ function handleNavigate(key: NavKey) {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+}
+
+.card-item {
+  overflow: visible;
 }
 
 .empty {

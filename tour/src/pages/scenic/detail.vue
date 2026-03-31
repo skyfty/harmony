@@ -727,7 +727,6 @@ function computeScenicCheckinRatio(): number {
   font-size: 14px;
   color: #1a1f2e;
 }
-</style>
 
 /* Badges for scenic detail */
 .badge-wrap-detail {
@@ -756,3 +755,4 @@ function computeScenicCheckinRatio(): number {
   background: linear-gradient(90deg, #ffd54f, #ffb340);
   color: #1a1f2e;
 }
+</style>
