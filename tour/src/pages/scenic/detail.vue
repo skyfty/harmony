@@ -174,7 +174,6 @@ onLoad((query) => {
       scenic.value = scenicRes ?? null;
       if (scenicRes) {
         void loadScenicCheckinProgress(scenicRes.id);
-        void loadScenicComments(scenicRes.id);
         void trackAnalyticsEvent({
           eventType: 'view_spot',
           sceneId: scenicRes.sceneId,
@@ -187,7 +186,8 @@ onLoad((query) => {
         });
       }
     })
-    .catch(() => {
+    .catch((e) => {
+      console.error('Failed to load scenic detail', e);
       scenic.value = null;
       uni.showToast({ title: '加载失败', icon: 'none' });
     });
@@ -673,108 +673,6 @@ function computeScenicCheckinRatio(): number {
   font-size: 12px;
   font-weight: 500;
   color: #98a3b3;
-}
-
-.comments-section {
-  margin-top: 24px;
-}
-
-.comment-editor {
-  margin-top: 10px;
-  padding: 12px;
-  background: #f7f9fc;
-  border-radius: 14px;
-}
-
-.comment-editor__input {
-  width: 100%;
-  min-height: 96px;
-  font-size: 13px;
-  color: #1a1f2e;
-  background: #ffffff;
-  border-radius: 10px;
-  padding: 10px;
-  box-sizing: border-box;
-}
-
-.comment-editor__submit {
-  margin-top: 10px;
-  width: 120px;
-  height: 36px;
-  border: none;
-  border-radius: 999px;
-  background: #1f3a5f;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.comment-editor__submit[disabled] {
-  opacity: 0.6;
-}
-
-.comments-state {
-  margin-top: 14px;
-  font-size: 12px;
-  color: #8a94a6;
-}
-
-.comment-list {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.comment-item {
-  background: #ffffff;
-  border: 1px solid #edf0f6;
-  border-radius: 12px;
-  padding: 10px 12px;
-}
-
-.comment-item__meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.comment-item__name {
-  font-size: 13px;
-  font-weight: 600;
-  color: #1a1f2e;
-}
-
-.comment-item__right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.comment-item__status,
-.comment-item__time,
-.comment-item__delete {
-  font-size: 11px;
-  color: #8a94a6;
-}
-
-.comment-item__delete {
-  color: #d9534f;
-}
-
-.comment-item__content {
-  margin-top: 8px;
-  display: block;
-  font-size: 13px;
-  color: #4f5d75;
-  line-height: 1.5;
-}
-
-.comment-item__reject {
-  margin-top: 6px;
-  display: block;
-  font-size: 11px;
-  color: #d9534f;
 }
 
 /* ---- CTA button ---- */

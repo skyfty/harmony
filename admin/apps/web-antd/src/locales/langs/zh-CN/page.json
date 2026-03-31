@@ -180,6 +180,15 @@
           "label": "首页推荐"
         }
       }
+      ,
+      "error": {
+        "coverImageSize": "介绍图尺寸必须为{width}x{height}",
+        "slideImageSize": "幻灯片图片尺寸必须为{width}x{height}"
+      },
+      "help": {
+        "coverImageSize": "图片必须为 {width}x{height} 大小，才能上传",
+        "slideImageSize": "每张幻灯片图片必须为 {width}x{height}，最多可上传 {max} 张"
+      }
     },
     "detail": {
       "title": "景点详情",
