@@ -9,6 +9,13 @@ const vehicleSchema = new Schema<VehicleDocument>(
     coverUrl: { type: String, default: '' },
     isActive: { type: Boolean, default: true },
     isDefault: { type: Boolean, default: false },
+    // Performance / tuning attributes
+    maxSpeed: { type: Number, default: 120, min: 0 },
+    acceleration: { type: Number, default: 6, min: 0 },
+    braking: { type: Number, default: 6, min: 0 },
+    handling: { type: Number, default: 0.5, min: 0 },
+    mass: { type: Number, default: 1500, min: 0 },
+    drag: { type: Number, default: 0.3, min: 0 },
     productId: { type: Schema.Types.ObjectId, ref: 'Product', default: null },
   },
   {

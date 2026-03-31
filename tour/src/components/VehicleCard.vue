@@ -1,12 +1,19 @@
 <template>
-  <view class="card" :class="{ selected }" @tap="emit('tap')">
-    <image class="cover" :src="coverUrl" mode="aspectFill" />
-    <view class="body">
-      <view class="row">
-        <text class="name">{{ name }}</text>
-        <text class="badge" :class="badgeClass">{{ badgeText }}</text>
+  <view class="card list" @tap="emit('tap')">
+    <view class="list-row">
+      <image class="thumb" :src="coverUrl" mode="aspectFill" />
+      <view class="body-list">
+        <view class="row">
+          <text class="name">{{ name }}</text>
+          <text class="badge" :class="badgeClass">{{ badgeText }}</text>
+        </view>
+        <text v-if="summary" class="summary">{{ summary }}</text>
+        <view v-if="hasStats" class="meta-row">
+          <text v-if="typeof maxSpeed === 'number'">速度 {{ maxSpeed }} km/h</text>
+          <text v-if="typeof acceleration === 'number'"> · 加速 {{ acceleration }} m/s²</text>
+          <text v-if="typeof handling === 'number'"> · 操控 {{ handling }}</text>
+        </view>
       </view>
-      <text class="summary">{{ summary }}</text>
     </view>
   </view>
 </template>
@@ -21,6 +28,12 @@ const props = defineProps<{
   coverUrl: string;
   status: VehicleStatus;
   selected: boolean;
+  maxSpeed?: number | null;
+  acceleration?: number | null;
+  braking?: number | null;
+  handling?: number | null;
+  mass?: number | null;
+  drag?: number | null;
 }>();
 
 const emit = defineEmits<{ (event: 'tap'): void }>();
@@ -38,6 +51,14 @@ const badgeClass = computed(() => {
   if (props.status === 'owned') return 'badge--owned';
   return 'badge--available';
 });
+
+const hasStats = computed(() => {
+  return (
+    typeof props.maxSpeed === 'number' ||
+    typeof props.acceleration === 'number' ||
+    typeof props.handling === 'number'
+  )
+});
 </script>
 
 <style scoped lang="scss">
@@ -53,14 +74,61 @@ const badgeClass = computed(() => {
   border-color: rgba(31, 122, 236, 0.35);
 }
 
-.cover {
-  width: 100%;
-  height: 100px;
+.list {
   display: block;
+  padding: 8px;
 }
 
-.body {
-  padding: 12px;
+.thumb {
+  width: 110px;
+  height: 110px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.list-row {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.body-list {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding-left: 10px;
+  padding-top: 8px;
+  flex: 1;
+
+.stat-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+}
+
+.stat-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a1f2e;
+}
+}
+
+.meta-row {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #8a94a6;
+  font-size: 12px;
 }
 
 .row {
@@ -71,14 +139,14 @@ const badgeClass = computed(() => {
 }
 
 .name {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: #1a1f2e;
 }
 
 .badge {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 12px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: #eef4ff;
   color: #1f7aec;
@@ -106,9 +174,9 @@ const badgeClass = computed(() => {
 
 .summary {
   display: block;
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 12px;
-  color: #8a94a6;
+  color: #5f6b83;
   line-height: 18px;
 }
 </style>

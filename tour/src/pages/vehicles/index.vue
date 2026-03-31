@@ -13,6 +13,12 @@
         :cover-url="vehicle.coverUrl"
         :status="vehicle.status"
         :selected="vehicle.id === selectedId"
+        :max-speed="vehicle.maxSpeed"
+        :acceleration="vehicle.acceleration"
+        :braking="vehicle.braking"
+        :handling="vehicle.handling"
+        :mass="vehicle.mass"
+        :drag="vehicle.drag"
         @tap="select(vehicle.id, vehicle.status)"
       />
     </view>

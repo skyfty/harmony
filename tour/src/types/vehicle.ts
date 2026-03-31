@@ -11,6 +11,13 @@ export interface Vehicle {
   owned: boolean;
   isCurrent: boolean;
   productId?: string | null;
+  // Performance attributes
+  maxSpeed?: number;
+  acceleration?: number;
+  braking?: number;
+  handling?: number;
+  mass?: number;
+  drag?: number;
 }
 
 export interface UserVehicle {
@@ -24,5 +31,11 @@ export interface UserVehicle {
     description: string;
     coverUrl: string;
     isActive: boolean;
+    maxSpeed?: number;
+    acceleration?: number;
+    braking?: number;
+    handling?: number;
+    mass?: number;
+    drag?: number;
   } | null;
 }

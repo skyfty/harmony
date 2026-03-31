@@ -13,6 +13,12 @@ type VehicleApiDto = {
   owned?: boolean
   isCurrent?: boolean
   productId?: string | null
+  maxSpeed?: number
+  acceleration?: number
+  braking?: number
+  handling?: number
+  mass?: number
+  drag?: number
 }
 
 type VehiclesResponse = {
@@ -60,6 +66,12 @@ export async function listVehicles(): Promise<Vehicle[]> {
       owned,
       isCurrent: Boolean(vehicle.isCurrent),
       productId: typeof vehicle.productId === 'string' ? vehicle.productId : null,
+      maxSpeed: typeof vehicle.maxSpeed === 'number' ? vehicle.maxSpeed : undefined,
+      acceleration: typeof vehicle.acceleration === 'number' ? vehicle.acceleration : undefined,
+      braking: typeof vehicle.braking === 'number' ? vehicle.braking : undefined,
+      handling: typeof vehicle.handling === 'number' ? vehicle.handling : undefined,
+      mass: typeof vehicle.mass === 'number' ? vehicle.mass : undefined,
+      drag: typeof vehicle.drag === 'number' ? vehicle.drag : undefined,
     }
   })
 }
@@ -140,6 +152,12 @@ export async function listUserVehicles(): Promise<UserVehicle[]> {
           description: row.vehicle.description ?? '',
           coverUrl: row.vehicle.coverUrl ?? '',
           isActive: row.vehicle.isActive !== false,
+          maxSpeed: typeof row.vehicle.maxSpeed === 'number' ? row.vehicle.maxSpeed : undefined,
+          acceleration: typeof row.vehicle.acceleration === 'number' ? row.vehicle.acceleration : undefined,
+          braking: typeof row.vehicle.braking === 'number' ? row.vehicle.braking : undefined,
+          handling: typeof row.vehicle.handling === 'number' ? row.vehicle.handling : undefined,
+          mass: typeof row.vehicle.mass === 'number' ? row.vehicle.mass : undefined,
+          drag: typeof row.vehicle.drag === 'number' ? row.vehicle.drag : undefined,
         }
       : null,
   }))

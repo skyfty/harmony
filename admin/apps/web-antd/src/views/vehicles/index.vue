@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue';
+import { InputNumber } from 'ant-design-vue';
 import type { VehicleItem } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
@@ -23,6 +24,7 @@ import {
   Switch,
   Upload,
   Tooltip,
+  Tabs,
 } from 'ant-design-vue';
 import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import { createResourceAssetApi } from '#/api/core/resources';
@@ -34,6 +36,12 @@ interface VehicleFormModel {
   coverUrl: string;
   isActive: boolean;
   isDefault: boolean;
+  maxSpeed: number;
+  acceleration: number;
+  braking: number;
+  handling: number;
+  mass: number;
+  drag: number;
 }
 
 const modalOpen = ref(false);
@@ -48,6 +56,12 @@ const vehicleFormModel = reactive<VehicleFormModel>({
   coverUrl: '',
   isActive: true,
   isDefault: false,
+  maxSpeed: 120,
+  acceleration: 6,
+  braking: 6,
+  handling: 0.5,
+  mass: 1500,
+  drag: 0.3,
 });
 
 const imageFileList = ref<UploadFile[]>([]);
@@ -58,6 +72,34 @@ const imageUploadProps: UploadProps = {
   maxCount: 1,
   accept: 'image/*',
 };
+
+function handleImageBeforeUpload(file: UploadFile) {
+  const origin = (file as any).originFileObj as File;
+  if (!origin) return false;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = (e.target?.result as string) || '';
+    const img = new Image();
+    img.onload = () => {
+      if (img.width === 110 && img.height === 110) {
+        imageFileList.value = [file];
+        imagePreview.value = dataUrl;
+      } else {
+        imageFileList.value = [];
+        imagePreview.value = '';
+        message.error('图片尺寸必须为 110x110 像素');
+      }
+    };
+    img.onerror = () => {
+      imageFileList.value = [];
+      imagePreview.value = '';
+      message.error('无法读取图片');
+    };
+    img.src = dataUrl;
+  };
+  reader.readAsDataURL(origin);
+  return false;
+}
 
 const modalTitle = computed(() => (editingId.value ? '编辑车辆' : '新增车辆'));
 
@@ -88,6 +130,12 @@ async function openEditModal(row: VehicleItem) {
     vehicleFormModel.coverUrl = data.coverUrl || '';
     vehicleFormModel.isActive = data.isActive !== false;
     vehicleFormModel.isDefault = data.isDefault !== false;
+    vehicleFormModel.maxSpeed = typeof data.maxSpeed === 'number' ? data.maxSpeed : vehicleFormModel.maxSpeed;
+    vehicleFormModel.acceleration = typeof data.acceleration === 'number' ? data.acceleration : vehicleFormModel.acceleration;
+    vehicleFormModel.braking = typeof data.braking === 'number' ? data.braking : vehicleFormModel.braking;
+    vehicleFormModel.handling = typeof data.handling === 'number' ? data.handling : vehicleFormModel.handling;
+    vehicleFormModel.mass = typeof data.mass === 'number' ? data.mass : vehicleFormModel.mass;
+    vehicleFormModel.drag = typeof data.drag === 'number' ? data.drag : vehicleFormModel.drag;
     imageFileList.value = [];
     imagePreview.value = data.coverUrl || '';
     modalOpen.value = true;
@@ -124,6 +172,12 @@ async function submitVehicle() {
       coverUrl: coverUrl || '',
       isActive: vehicleFormModel.isActive,
       isDefault: vehicleFormModel.isDefault,
+      maxSpeed: Number(vehicleFormModel.maxSpeed),
+      acceleration: Number(vehicleFormModel.acceleration),
+      braking: Number(vehicleFormModel.braking),
+      handling: Number(vehicleFormModel.handling),
+      mass: Number(vehicleFormModel.mass),
+      drag: Number(vehicleFormModel.drag),
     };
     if (editingId.value) {
       await updateVehicleApi(editingId.value, payload);
@@ -261,36 +315,61 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
       @ok="submitVehicle"
     >
       <Form ref="vehicleFormRef" :label-col="{ span: 6 }" :model="vehicleFormModel" :wrapper-col="{ span: 17 }">
-        <Form.Item label="标识符" name="identifier" :rules="[{ required: true, message: '请输入唯一标识符' }]">
-          <Input v-model:value="vehicleFormModel.identifier" placeholder="如：car-001 或 1001" />
-        </Form.Item>
-        <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入名称' }]">
-          <Input v-model:value="vehicleFormModel.name" placeholder="如：观光车、跑车" />
-        </Form.Item>
-        <Form.Item label="描述" name="description">
-          <Input.TextArea v-model:value="vehicleFormModel.description" placeholder="用于 tour 展示" rows="4" />
-        </Form.Item>
-        <Form.Item label="商品联动">
-          <span>保存后会自动创建/更新关联商品，并归类到“交通工具”</span>
-        </Form.Item>
-        <Form.Item label="图片上传">
-          <Upload v-bind="imageUploadProps" v-model:file-list="imageFileList" list-type="picture-card">
-            <div>上传</div>
-          </Upload>
-        </Form.Item>
-        <Form.Item v-if="imagePreview" label="当前图片">
-          <img
-            :src="imagePreview"
-            alt="preview"
-            style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px"
-          />
-        </Form.Item>
-        <Form.Item label="启用" name="isActive">
-          <Switch v-model:checked="vehicleFormModel.isActive" />
-        </Form.Item>
-        <Form.Item label="默认" name="isDefault">
-          <Switch v-model:checked="vehicleFormModel.isDefault" />
-        </Form.Item>
+        <Tabs default-active-key="basic">
+          <Tabs.TabPane key="basic" tab="基本字段">
+            <Form.Item label="标识符" name="identifier" :rules="[{ required: true, message: '请输入唯一标识符' }]">
+              <Input v-model:value="vehicleFormModel.identifier" placeholder="如：car-001 或 1001" />
+            </Form.Item>
+            <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入名称' }]">
+              <Input v-model:value="vehicleFormModel.name" placeholder="如：观光车、跑车" />
+            </Form.Item>
+            <Form.Item label="描述" name="description">
+              <Input.TextArea v-model:value="vehicleFormModel.description" placeholder="用于 tour 展示" rows="4" />
+            </Form.Item>
+            <Form.Item label="商品联动">
+              <span>保存后会自动创建/更新关联商品，并归类到“交通工具”</span>
+            </Form.Item>
+            <Form.Item label="图片上传" extra="图片要求：110x110 像素，超出尺寸将被拒绝">
+              <Upload v-bind="imageUploadProps" v-model:file-list="imageFileList" list-type="picture-card" :beforeUpload="handleImageBeforeUpload">
+                <div>上传</div>
+              </Upload>
+            </Form.Item>
+            <Form.Item v-if="imagePreview" label="当前图片">
+              <img
+                :src="imagePreview"
+                alt="preview"
+                style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px"
+              />
+            </Form.Item>
+            <Form.Item label="启用" name="isActive">
+              <Switch v-model:checked="vehicleFormModel.isActive" />
+            </Form.Item>
+            <Form.Item label="默认" name="isDefault">
+              <Switch v-model:checked="vehicleFormModel.isDefault" />
+            </Form.Item>
+          </Tabs.TabPane>
+
+          <Tabs.TabPane key="other" tab="其他字段">
+            <Form.Item label="最大速度 (km/h)">
+              <InputNumber v-model:value="vehicleFormModel.maxSpeed" :min="0" :max="400" style="width: 100%" />
+            </Form.Item>
+            <Form.Item label="加速度 (m/s²)">
+              <InputNumber v-model:value="vehicleFormModel.acceleration" :min="0" :step="0.1" style="width: 100%" />
+            </Form.Item>
+            <Form.Item label="刹车 (m/s²)">
+              <InputNumber v-model:value="vehicleFormModel.braking" :min="0" :step="0.1" style="width: 100%" />
+            </Form.Item>
+            <Form.Item label="操控 (系数)">
+              <InputNumber v-model:value="vehicleFormModel.handling" :min="0" :step="0.05" style="width: 100%" />
+            </Form.Item>
+            <Form.Item label="质量 (kg)">
+              <InputNumber v-model:value="vehicleFormModel.mass" :min="0" :step="1" style="width: 100%" />
+            </Form.Item>
+            <Form.Item label="阻力系数">
+              <InputNumber v-model:value="vehicleFormModel.drag" :min="0" :step="0.01" style="width: 100%" />
+            </Form.Item>
+          </Tabs.TabPane>
+        </Tabs>
       </Form>
     </Modal>
   </div>

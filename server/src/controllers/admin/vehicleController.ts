@@ -13,6 +13,12 @@ type VehiclePayload = {
   coverUrl?: string
   isActive?: boolean
   isDefault?: boolean
+  maxSpeed?: number
+  acceleration?: number
+  braking?: number
+  handling?: number
+  mass?: number
+  drag?: number
 }
 
 type UserVehiclePayload = {
@@ -42,6 +48,12 @@ function mapVehicle(row: any) {
     name: row.name,
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
+    maxSpeed: typeof row.maxSpeed === 'number' ? row.maxSpeed : undefined,
+    acceleration: typeof row.acceleration === 'number' ? row.acceleration : undefined,
+    braking: typeof row.braking === 'number' ? row.braking : undefined,
+    handling: typeof row.handling === 'number' ? row.handling : undefined,
+    mass: typeof row.mass === 'number' ? row.mass : undefined,
+    drag: typeof row.drag === 'number' ? row.drag : undefined,
     isActive: row.isActive !== false,
     isDefault: row.isDefault === true,
     productId: row.productId?.toString?.() ?? null,
@@ -189,6 +201,12 @@ export async function createVehicle(ctx: Context): Promise<void> {
       coverUrl,
       isActive: body.isActive !== false,
       isDefault: body.isDefault === true,
+      maxSpeed: typeof body.maxSpeed === 'number' ? body.maxSpeed : undefined,
+      acceleration: typeof body.acceleration === 'number' ? body.acceleration : undefined,
+      braking: typeof body.braking === 'number' ? body.braking : undefined,
+      handling: typeof body.handling === 'number' ? body.handling : undefined,
+      mass: typeof body.mass === 'number' ? body.mass : undefined,
+      drag: typeof body.drag === 'number' ? body.drag : undefined,
       productId: product._id,
     })
   } catch (error) {
@@ -240,6 +258,12 @@ export async function updateVehicle(ctx: Context): Promise<void> {
           : (toStringValue(body.coverUrl) ?? ''),
       isActive: body.isActive === undefined ? current.isActive : body.isActive === true,
       isDefault: body.isDefault === undefined ? current.isDefault : body.isDefault === true,
+      maxSpeed: body.maxSpeed === undefined ? (current as any).maxSpeed : Number(body.maxSpeed),
+      acceleration: body.acceleration === undefined ? (current as any).acceleration : Number(body.acceleration),
+      braking: body.braking === undefined ? (current as any).braking : Number(body.braking),
+      handling: body.handling === undefined ? (current as any).handling : Number(body.handling),
+      mass: body.mass === undefined ? (current as any).mass : Number(body.mass),
+      drag: body.drag === undefined ? (current as any).drag : Number(body.drag),
     },
     { new: true },
   )
@@ -332,7 +356,10 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
   const [rows, total] = await Promise.all([
     UserVehicleModel.find(filter)
       .populate('userId', 'username displayName')
-      .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
+      .populate(
+        'vehicleId',
+        'identifier name description coverUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
+      )
       .sort({ ownedAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -356,7 +383,10 @@ export async function getUserVehicle(ctx: Context): Promise<void> {
   }
   const row = await UserVehicleModel.findById(id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
+    .populate(
+      'vehicleId',
+      'identifier name description coverUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
+    )
     .lean()
     .exec()
   if (!row) {

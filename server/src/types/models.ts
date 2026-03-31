@@ -508,6 +508,18 @@ export interface VehicleDocument extends Document<Types.ObjectId> {
   isDefault: boolean
   /** 中文：关联商品 ID（可选） */
   productId?: Types.ObjectId | null
+  /** 中文：车辆最大速度（km/h） */
+  maxSpeed?: number
+  /** 中文：车辆加速度（m/s^2） */
+  acceleration?: number
+  /** 中文：刹车减速度（m/s^2） */
+  braking?: number
+  /** 中文：操控性系数（无单位） */
+  handling?: number
+  /** 中文：质量（kg） */
+  mass?: number
+  /** 中文：空气阻力系数（无单位） */
+  drag?: number
   /** 中文：创建时间 */
   createdAt: Date
   /** 中文：更新时间 */
