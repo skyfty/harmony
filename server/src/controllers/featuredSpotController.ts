@@ -3,7 +3,26 @@ import { Types } from 'mongoose'
 import { listFeaturedSpots, createFeaturedSpot, updateFeaturedSpotOrder, deleteFeaturedSpot } from '@/services/featuredSpotService'
 
 export async function listFeaturedSpotsHandler(ctx: Context): Promise<void> {
-  ctx.body = await listFeaturedSpots()
+  const { page = '1', pageSize = '10' } = ctx.query as Record<string, string>
+  const toPositiveNumber = (value: unknown, fallback: number): number => {
+    const parsed = Number(value)
+    if (Number.isNaN(parsed) || parsed <= 0) return fallback
+    return parsed
+  }
+  const pageNumber = Math.max(toPositiveNumber(page, 1), 1)
+  const limit = Math.min(Math.max(toPositiveNumber(pageSize, 10), 1), 100)
+
+  const rows = await listFeaturedSpots()
+  const total = Array.isArray(rows) ? rows.length : 0
+  const start = (pageNumber - 1) * limit
+  const data = Array.isArray(rows) ? rows.slice(start, start + limit) : []
+
+  ctx.body = {
+    data,
+    page: pageNumber,
+    pageSize: limit,
+    total,
+  }
 }
 
 export async function createFeaturedSpotHandler(ctx: Context): Promise<void> {

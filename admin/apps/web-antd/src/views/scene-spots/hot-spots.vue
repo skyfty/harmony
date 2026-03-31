@@ -139,6 +139,12 @@ function openCreateModal() {
   modalOpen.value = true;
 }
 
+function openEditModal(row: any) {
+  editingId.value = String(row.id || '')
+  formModel.value = { sceneSpotId: row.sceneSpotId || '', order: typeof row.order === 'number' ? row.order : 0 }
+  modalOpen.value = true
+}
+
 async function submitForm() {
   const form = formRef.value;
   if (!form) return;
@@ -156,7 +162,9 @@ async function submitForm() {
     modalOpen.value = false;
     gridApi.reload();
   } catch (err) {
-    message.error('提交失败');
+    // show server-provided message when available
+    const serverMsg = (err as any)?.response?.data?.message || (err as any)?.message
+    message.error(serverMsg || '提交失败');
   } finally {
     submitting.value = false;
   }
@@ -171,7 +179,8 @@ async function submitForm() {
       </template>
 
       <template #actions="{ row }">
-        <Button size="small" type="text" @click="() => handleUpdateOrder(row)">保存排序</Button>
+          <Button size="small" type="text" @click="() => openEditModal(row)">编辑</Button>
+          <Button size="small" type="text" @click="() => handleUpdateOrder(row)">保存排序</Button>
         <Button size="small" type="text" danger @click="() => handleDelete(row)">删除</Button>
       </template>
     </Grid>
@@ -188,7 +197,7 @@ async function submitForm() {
     >
       <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 16 }">
         <Form.Item label="景点" name="sceneSpotId" :rules="[{ required: true, message: '请选择景点' }]">
-          <Select v-model:value="formModel.sceneSpotId" :options="sceneOptions" :loading="sceneOptionsLoading" show-search :filter-option="false" @search="handleSceneSearch" />
+          <Select v-model:value="formModel.sceneSpotId" :options="sceneOptions" :loading="sceneOptionsLoading" show-search :filter-option="false" @search="handleSceneSearch" :disabled="!!editingId" />
         </Form.Item>
         <Form.Item label="排序" name="order">
           <InputNumber v-model:value="formModel.order" :min="0" style="width:100%" />

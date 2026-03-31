@@ -30,6 +30,10 @@ export async function listHotSpots(): Promise<HotSpotView[]> {
 export async function createHotSpot(payload: { sceneSpotId?: unknown; order?: unknown }): Promise<HotSpotView> {
   const rawId = typeof payload.sceneSpotId === 'string' ? payload.sceneSpotId.trim() : undefined
   if (!rawId || !Types.ObjectId.isValid(rawId)) throw new Error('Invalid sceneSpotId')
+  // prevent duplicate entries
+  const exists = await HotSpotModel.exists({ sceneSpotId: rawId })
+  if (exists) throw new Error('SceneSpot already exists in hot spots')
+
   const sceneSpot = await SceneSpotModel.findById(rawId).lean().exec()
   if (!sceneSpot) throw new Error('SceneSpot not found')
   const created = await HotSpotModel.create({ sceneSpotId: new Types.ObjectId(rawId), order: Number.isFinite(Number(payload.order)) ? Number(payload.order) : 0 })

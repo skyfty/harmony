@@ -30,6 +30,10 @@ export async function listFeaturedSpots(): Promise<FeaturedSpotView[]> {
 export async function createFeaturedSpot(payload: { sceneSpotId?: unknown; order?: unknown }): Promise<FeaturedSpotView> {
   const rawId = typeof payload.sceneSpotId === 'string' ? payload.sceneSpotId.trim() : undefined
   if (!rawId || !Types.ObjectId.isValid(rawId)) throw new Error('Invalid sceneSpotId')
+  // prevent duplicate entries
+  const exists = await FeaturedSpotModel.exists({ sceneSpotId: rawId })
+  if (exists) throw new Error('SceneSpot already exists in featured spots')
+
   const sceneSpot = await SceneSpotModel.findById(rawId).lean().exec()
   if (!sceneSpot) throw new Error('SceneSpot not found')
   const created = await FeaturedSpotModel.create({ sceneSpotId: new Types.ObjectId(rawId), order: Number.isFinite(Number(payload.order)) ? Number(payload.order) : 0 })

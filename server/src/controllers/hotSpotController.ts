@@ -3,7 +3,26 @@ import { Types } from 'mongoose'
 import { listHotSpots, createHotSpot, updateHotSpotOrder, deleteHotSpot } from '@/services/hotSpotService'
 
 export async function listHotSpotsHandler(ctx: Context): Promise<void> {
-  ctx.body = await listHotSpots()
+  const { page = '1', pageSize = '10' } = ctx.query as Record<string, string>
+  const toPositiveNumber = (value: unknown, fallback: number): number => {
+    const parsed = Number(value)
+    if (Number.isNaN(parsed) || parsed <= 0) return fallback
+    return parsed
+  }
+  const pageNumber = Math.max(toPositiveNumber(page, 1), 1)
+  const limit = Math.min(Math.max(toPositiveNumber(pageSize, 10), 1), 100)
+
+  const rows = await listHotSpots()
+  const total = Array.isArray(rows) ? rows.length : 0
+  const start = (pageNumber - 1) * limit
+  const data = Array.isArray(rows) ? rows.slice(start, start + limit) : []
+
+  ctx.body = {
+    data,
+    page: pageNumber,
+    pageSize: limit,
+    total,
+  }
 }
 
 export async function createHotSpotHandler(ctx: Context): Promise<void> {
