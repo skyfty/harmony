@@ -87,12 +87,9 @@ function composeFeaturedFirst(featuredScenics: ScenicSummary[], allScenics: Scen
 }
 
 async function reload() {
-  const [featuredScenicsRes, allScenicsRes] = await Promise.all([
-    listScenicsSafe({ featured: true }),
-    listScenicsSafe(),
-  ]);
-
-  scenics.value = composeFeaturedFirst(featuredScenicsRes, allScenicsRes);
+  // request homepage-ordered list: featured -> hot -> others, each ordered by their `order` field
+  const res = await listScenicsSafe({ homepage: true });
+  scenics.value = res;
 }
 
 onMounted(() => {

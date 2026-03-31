@@ -3,6 +3,7 @@ import { optionalMiniAuth, requireMiniAuth } from '@/middleware/authDomains'
 import { requireMiniProfileComplete } from '@/middleware/miniProfile'
 import {
   listSceneSpots,
+  listHomepageSceneSpots,
   getSceneSpot,
   getSceneSpotEntry,
   listSceneProducts,
@@ -103,6 +104,7 @@ miniRouter.get('/collections/:id', optionalMiniAuth, getCollection)
 miniRouter.get('/exhibitions/:id', optionalMiniAuth, getExhibition)
 
 // public readable (optional auth enhances with user state)
+miniRouter.get('/scene-spots/home', optionalMiniAuth, listHomepageSceneSpots)
 miniRouter.get('/scene-spots', optionalMiniAuth, listSceneSpots)
 miniRouter.get('/scene-spots/:id', optionalMiniAuth, getSceneSpot)
 miniRouter.get('/scene-spots/:id/entry', optionalMiniAuth, getSceneSpotEntry)

@@ -2,6 +2,8 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { SceneModel } from '@/models/Scene'
 import { SceneSpotModel } from '@/models/SceneSpot'
+import { FeaturedSpotModel } from '@/models/FeaturedSpot'
+import { HotSpotModel } from '@/models/HotSpot'
 import { SceneSpotInteractionModel } from '@/models/SceneSpotInteraction'
 import { SceneProductBindingModel } from '@/models/SceneProductBinding'
 import { ProductModel } from '@/models/Product'
@@ -245,6 +247,106 @@ function toOptionalBoolean(value: unknown): boolean | undefined {
 
   return undefined
 }
+
+export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
+  const userId = getOptionalUserId(ctx)
+  const { q } = ctx.query as { q?: string }
+
+  // fetch featured & hot spot entries with their sceneSpot populated
+  const [featuredRows, hotRows, otherSpots] = await Promise.all([
+    FeaturedSpotModel.find({}).sort({ order: 1, createdAt: -1 }).populate('sceneSpotId').lean().exec(),
+    HotSpotModel.find({}).sort({ order: 1, createdAt: -1 }).populate('sceneSpotId').lean().exec(),
+    SceneSpotModel.find({}).sort({ order: 1, createdAt: -1 }).lean().exec(),
+  ])
+
+  const featuredSpots: any[] = []
+  const hotSpots: any[] = []
+  const otherSpotsMap = new Map<string, any>()
+
+  for (const spot of otherSpots) {
+    otherSpotsMap.set(String(spot._id), spot)
+  }
+
+  for (const row of featuredRows) {
+    const sceneSpot = row.sceneSpotId
+    if (sceneSpot) featuredSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
+  }
+
+  for (const row of hotRows) {
+    const sceneSpot = row.sceneSpotId
+    if (sceneSpot) hotSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
+  }
+
+  // remove featured & hot from others map
+  for (const f of featuredSpots) otherSpotsMap.delete(String(f.sceneSpot._id))
+  for (const h of hotSpots) otherSpotsMap.delete(String(h.sceneSpot._id))
+
+  const others = Array.from(otherSpotsMap.values())
+
+  // optional q filter applied on title/description/address
+  const normalizedQ = typeof q === 'string' && q.trim() ? q.trim() : ''
+
+  const matchesQ = (spot: any) => {
+    if (!normalizedQ) return true
+    const regex = new RegExp(normalizedQ.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&'), 'i')
+    return regex.test(String(spot.title || '')) || regex.test(String(spot.description || '')) || regex.test(String(spot.address || ''))
+  }
+
+  const ordered: any[] = []
+
+  // add featured (ordered by featured.order)
+  featuredSpots.sort((a, b) => a.groupOrder - b.groupOrder)
+  for (const item of featuredSpots) {
+    if (matchesQ(item.sceneSpot)) ordered.push(item.sceneSpot)
+  }
+
+  // add hot (ordered by hot.order), excluding those already added
+  hotSpots.sort((a, b) => a.groupOrder - b.groupOrder)
+  const added = new Set(ordered.map((s) => String(s._id)))
+  for (const item of hotSpots) {
+    const id = String(item.sceneSpot._id)
+    if (!added.has(id) && matchesQ(item.sceneSpot)) {
+      ordered.push(item.sceneSpot)
+      added.add(id)
+    }
+  }
+
+  // add rest sorted by sceneSpot.order
+  others.sort((a, b) => (Number.isFinite(Number(a.order)) ? Number(a.order) : 0) - (Number.isFinite(Number(b.order)) ? Number(b.order) : 0))
+  for (const spot of others) {
+    if (!added.has(String(spot._id)) && matchesQ(spot)) ordered.push(spot)
+  }
+
+  // fetch scenes for ordered spots
+  const sceneIds = Array.from(new Set(ordered.map((spot) => String(spot.sceneId))))
+  const scenes = sceneIds.length ? await SceneModel.find({ _id: { $in: sceneIds } }).lean().exec() : []
+  const sceneById = new Map(scenes.map((scene) => [String(scene._id), scene]))
+
+  // gather interaction state
+  const spotIds = ordered.map((s) => s._id)
+  const interactionBySpotId = new Map<string, SceneSpotInteractionLean>()
+  if (userId && spotIds.length) {
+    const interactions = await SceneSpotInteractionModel.find({ userId, sceneSpotId: { $in: spotIds } }).lean().exec()
+    for (const interaction of interactions as SceneSpotInteractionLean[]) {
+      interactionBySpotId.set(String(interaction.sceneSpotId), interaction)
+    }
+  }
+
+  const rowsDto = ordered
+    .map((spot) => {
+      const scene = sceneById.get(String(spot.sceneId))
+      if (!scene) return null
+      const dto = buildSceneSpotSummaryDto(spot, scene)
+      return withInteractionState(dto, interactionBySpotId.get(String(spot._id)))
+    })
+    .filter(Boolean)
+
+  ctx.body = {
+    total: rowsDto.length,
+    sceneSpots: rowsDto,
+  }
+}
+
 
 type ProductWithStateDto = {
   id: string
