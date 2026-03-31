@@ -33,8 +33,8 @@
           :summary="scenic.description"
           :cover-url="(scenic.slides && scenic.slides[0]) || scenic.coverImage || ''"
           :rating="scenic.averageRating"
-          :is-home="scenic.isHome"
-          :is-hot="false"
+          :is-featured="scenic.isFeatured"
+          :is-hot="scenic.isHot"
           @tap="openDetail(scenic.id)"
         />
       </view>

@@ -115,6 +115,12 @@
         "isHome": "Home Featured",
         "isHomeYes": "Featured",
         "isHomeNo": "Not Featured",
+        "isFeatured": "Featured",
+        "isFeaturedYes": "Featured",
+        "isFeaturedNo": "Not Featured",
+        "isHot": "Hot",
+        "isHotYes": "Hot",
+        "isHotNo": "Not Hot",
         "averageRating": "Average Rating",
         "ratingCount": "Rating Count",
         "favoriteCount": "Favorites",
@@ -175,6 +181,13 @@
         "isHome": {
           "label": "Home Featured"
         }
+        ,
+        "isFeatured": {
+          "label": "Featured"
+        },
+        "isHot": {
+          "label": "Hot"
+        }
       }
     },
     "detail": {
@@ -195,6 +208,12 @@
         "isHome": "Home Featured",
         "isHomeYes": "Featured",
         "isHomeNo": "Not Featured",
+        "isFeatured": "Featured",
+        "isFeaturedYes": "Featured",
+        "isFeaturedNo": "Not Featured",
+        "isHot": "Hot",
+        "isHotYes": "Hot",
+        "isHotNo": "Not Hot",
         "coverImage": "Cover Image",
         "slides": "Slides",
         "createdAt": "Created At",

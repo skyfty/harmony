@@ -24,6 +24,8 @@ export interface SceneSpotItem {
   distance?: string | null;
   order: number;
   isHome: boolean;
+  isFeatured?: boolean;
+  isHot?: boolean;
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;

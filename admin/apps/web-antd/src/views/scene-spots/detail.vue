@@ -62,6 +62,16 @@ onMounted(load);
             {{ sceneSpot?.isHome ? t('page.sceneSpots.detail.fields.isHomeYes') : t('page.sceneSpots.detail.fields.isHomeNo') }}
           </Tag>
         </Descriptions.Item>
+        <Descriptions.Item :label="t('page.sceneSpots.detail.fields.isFeatured')">
+          <Tag :color="sceneSpot?.isFeatured ? 'green' : 'default'">
+            {{ sceneSpot?.isFeatured ? t('page.sceneSpots.detail.fields.isFeaturedYes') : t('page.sceneSpots.detail.fields.isFeaturedNo') }}
+          </Tag>
+        </Descriptions.Item>
+        <Descriptions.Item :label="t('page.sceneSpots.detail.fields.isHot')">
+          <Tag :color="sceneSpot?.isHot ? 'green' : 'default'">
+            {{ sceneSpot?.isHot ? t('page.sceneSpots.detail.fields.isHotYes') : t('page.sceneSpots.detail.fields.isHotNo') }}
+          </Tag>
+        </Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.coverImage')">
           <Image v-if="sceneSpot?.coverImage" :src="sceneSpot.coverImage" :width="160" />
           <span v-else>-</span>

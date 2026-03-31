@@ -190,6 +190,8 @@ function buildSceneSpotSummaryDto(spot: any, scene: any) {
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
     order: typeof spot.order === 'number' ? spot.order : 0,
     isHome: spot.isHome === true,
+    isFeatured: spot.isFeatured === true,
+    isHot: spot.isHot === true,
     averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
     ratingCount: typeof spot.ratingCount === 'number' ? spot.ratingCount : 0,
     favoriteCount: typeof spot.favoriteCount === 'number' ? spot.favoriteCount : 0,

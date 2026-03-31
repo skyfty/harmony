@@ -876,6 +876,8 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   location?: { type: 'Point'; coordinates: number[] } | null
   order: number
   isHome: boolean
+  isFeatured?: boolean
+  isHot?: boolean
   averageRating: number
   ratingCount: number
   favoriteCount: number

@@ -6,7 +6,7 @@
         <view class="hero-orb hero-orb-right" />
         <view class="hero-curve" />
       </view>
-
+              :is-featured="scenic.isHome"
       <view class="hero-content">
         <text class="hero-tag">热门目的地</text>
         <text class="hero-title">探索你想去的景点</text>
@@ -39,8 +39,8 @@
               :rating-count="scenic.ratingCount"
               :address="scenic.address"
               :favorite-count="scenic.favoriteCount"
-              :is-home="scenic.isHome"
-              :is-hot="scenic.homepageTag === 'hot'"
+              :is-featured="scenic.isFeatured"
+              :is-hot="scenic.isHot"
             variant="list"
             :progress-percent="resolveScenicProgress(scenic.id).percent"
             :progress-text="resolveScenicProgress(scenic.id).description"

@@ -18,7 +18,7 @@ import {
 import { $t } from '#/locales';
 
 import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload, Tooltip, Tabs } from 'ant-design-vue';
-import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined, StarOutlined, FireOutlined } from '@ant-design/icons-vue';
 
 interface SceneSpotFormModel {
   sceneId: string;
@@ -31,6 +31,8 @@ interface SceneSpotFormModel {
   locationLng?: number | null;
   order: number;
   isHome: boolean;
+  isFeatured: boolean;
+  isHot: boolean;
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;
@@ -75,6 +77,8 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   locationLng: null,
   order: 0,
   isHome: false,
+  isFeatured: false,
+  isHot: false,
   averageRating: 0,
   ratingCount: 0,
   favoriteCount: 0,
@@ -84,8 +88,8 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
 const categoryOptions = ref<Array<{ label: string; value: string }>>([]);
 const categoryOptionsLoading = ref(false);
 
-const featuredLoading = reactive<Record<string, boolean>>({});
-const featuredError = reactive<Record<string, boolean>>({});
+const homeLoading = reactive<Record<string, boolean>>({});
+const homeError = reactive<Record<string, boolean>>({});
 
 const modalTitle = computed(() =>
   editingId.value ? t('page.sceneSpots.index.modal.edit') : t('page.sceneSpots.index.modal.create'),
@@ -416,12 +420,12 @@ function handleDelete(row: SceneSpotItem) {
   });
 }
 
-async function toggleFeatured(row: SceneSpotItem, checked: unknown) {
+async function toggleHome(row: SceneSpotItem, checked: unknown) {
   const flag = Boolean(checked === true || checked === 'true' || checked === 1 || checked === '1');
   const prev = row.isHome;
   // prevent duplicate
-  if (featuredLoading[row.id]) return;
-  featuredLoading[row.id] = true;
+  if (homeLoading[row.id]) return;
+  homeLoading[row.id] = true;
   // optimistic update
   row.isHome = flag;
   try {
@@ -432,14 +436,14 @@ async function toggleFeatured(row: SceneSpotItem, checked: unknown) {
     sceneSpotGridApi.reload();
   } catch (err) {
     row.isHome = prev;
-    featuredError[row.id] = true;
+    homeError[row.id] = true;
     // clear error highlight after short delay
     setTimeout(() => {
-      featuredError[row.id] = false;
+      homeError[row.id] = false;
     }, 1400);
     message.error(t('page.sceneSpots.index.message.updateFailed'));
   } finally {
-    featuredLoading[row.id] = false;
+    homeLoading[row.id] = false;
   }
 }
 
@@ -547,13 +551,19 @@ onMounted(async () => {
         {{ sceneNameMap[row.sceneId] || row.sceneId }}
       </template>
 
+      <template #title="{ row }">
+        <span class="spot-title">{{ row.title }}</span>
+        <span v-if="row.isFeatured" class="inline-badge featured-badge" title="精选"><StarOutlined /></span>
+        <span v-if="row.isHot" class="inline-badge hot-badge" title="热门"><FireOutlined /></span>
+      </template>
+
       <template #category="{ row }">
         {{ row.category?.name || '-' }}
       </template>
 
       <template #isHome="{ row }">
-        <div :class="['featured-cell', { 'featured-error': featuredError[row.id] }]">
-          <Switch :checked="row.isHome" :loading="featuredLoading[row.id]" @change="(checked) => toggleFeatured(row, checked)" />
+        <div :class="['home-cell', { 'home-error': homeError[row.id] }]">
+          <Switch :checked="row.isHome" :loading="homeLoading[row.id]" @change="(checked) => toggleHome(row, checked)" />
         </div>
       </template>
 
@@ -722,5 +732,32 @@ onMounted(async () => {
   color: #6b7280;
   font-size: 12px;
   margin-top: 6px;
+}
+
+.spot-title {
+  margin-right: 8px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.inline-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.featured-badge {
+  background: linear-gradient(90deg, #ffd54f, #ffb340);
+  color: #1a1f2e;
+}
+
+.hot-badge {
+  background: linear-gradient(90deg, #ff6b6b, #ff3b3b);
+  color: #ffffff;
 }
 </style>

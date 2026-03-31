@@ -13,6 +13,9 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
     address: { type: String, default: '' },
     order: { type: Number, default: 0 },
     isHome: { type: Boolean, default: false },
+    // denormalized flags for quick lookup
+    isFeatured: { type: Boolean, default: false },
+    isHot: { type: Boolean, default: false },
     averageRating: { type: Number, default: 0, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0, min: 0 },
     favoriteCount: { type: Number, default: 0, min: 0 },
@@ -32,6 +35,8 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
 
 sceneSpotSchema.index({ sceneId: 1, order: 1 })
 sceneSpotSchema.index({ isHome: 1, order: 1, createdAt: -1 })
+sceneSpotSchema.index({ isFeatured: 1 })
+sceneSpotSchema.index({ isHot: 1 })
 sceneSpotSchema.index({ title: 'text', description: 'text', address: 'text' })
 // Use a sparse 2dsphere index so documents without a valid location are not indexed.
 sceneSpotSchema.index({ location: '2dsphere' }, { sparse: true })

@@ -37,6 +37,8 @@ export async function createFeaturedSpot(payload: { sceneSpotId?: unknown; order
   const sceneSpot = await SceneSpotModel.findById(rawId).lean().exec()
   if (!sceneSpot) throw new Error('SceneSpot not found')
   const created = await FeaturedSpotModel.create({ sceneSpotId: new Types.ObjectId(rawId), order: Number.isFinite(Number(payload.order)) ? Number(payload.order) : 0 })
+  // mark the scene spot as featured for quick lookup
+  await SceneSpotModel.findByIdAndUpdate(rawId, { isFeatured: true }).exec()
   return toView({ ...created.toObject(), sceneSpot })
 }
 
@@ -53,5 +55,11 @@ export async function deleteFeaturedSpot(featuredSpotId: string): Promise<boolea
   const current = await FeaturedSpotModel.findById(featuredSpotId).lean().exec()
   if (!current) return false
   await FeaturedSpotModel.findByIdAndDelete(featuredSpotId).exec()
+  // unset the featured flag on the scene spot
+  try {
+    await SceneSpotModel.findByIdAndUpdate(String(current.sceneSpotId), { isFeatured: false }).exec()
+  } catch (err) {
+    // ignore — best-effort denormalized flag update
+  }
   return true
 }

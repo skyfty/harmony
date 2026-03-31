@@ -40,6 +40,10 @@
         <view class="title-row">
           <view class="title-left">
             <text class="scenic-name">{{ scenic.title }}</text>
+            <view class="badge-wrap-detail">
+              <view v-if="scenic.isHot" class="badge badge-hot">热门</view>
+              <view v-if="scenic.isHome || scenic.isFeatured" class="badge badge-featured">精选</view>
+            </view>
             <view class="rating-row">
               <view class="stars-inline">
                 <text
@@ -724,3 +728,31 @@ function computeScenicCheckinRatio(): number {
   color: #1a1f2e;
 }
 </style>
+
+/* Badges for scenic detail */
+.badge-wrap-detail {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.badge {
+  height: 22px;
+  border-radius: 999px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.badge-hot {
+  background: linear-gradient(90deg, #ff6b6b, #ff3b3b);
+}
+
+.badge-featured {
+  background: linear-gradient(90deg, #ffd54f, #ffb340);
+  color: #1a1f2e;
+}

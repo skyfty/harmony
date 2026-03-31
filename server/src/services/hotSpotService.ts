@@ -37,6 +37,8 @@ export async function createHotSpot(payload: { sceneSpotId?: unknown; order?: un
   const sceneSpot = await SceneSpotModel.findById(rawId).lean().exec()
   if (!sceneSpot) throw new Error('SceneSpot not found')
   const created = await HotSpotModel.create({ sceneSpotId: new Types.ObjectId(rawId), order: Number.isFinite(Number(payload.order)) ? Number(payload.order) : 0 })
+  // mark the scene spot as hot for quick lookup
+  await SceneSpotModel.findByIdAndUpdate(rawId, { isHot: true }).exec()
   return toView({ ...created.toObject(), sceneSpot })
 }
 
@@ -53,5 +55,11 @@ export async function deleteHotSpot(hotSpotId: string): Promise<boolean> {
   const current = await HotSpotModel.findById(hotSpotId).lean().exec()
   if (!current) return false
   await HotSpotModel.findByIdAndDelete(hotSpotId).exec()
+  // unset the hot flag on the scene spot
+  try {
+    await SceneSpotModel.findByIdAndUpdate(String(current.sceneSpotId), { isHot: false }).exec()
+  } catch (err) {
+    // ignore — best-effort denormalized flag update
+  }
   return true
 }

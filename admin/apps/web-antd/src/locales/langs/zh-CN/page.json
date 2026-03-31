@@ -116,9 +116,15 @@
         "titleCol": "景点名称",
         "sceneId": "所属场景",
         "category": "分类",
-        "isHome": "首页推荐",
-        "isHomeYes": "已推荐",
-        "isHomeNo": "未推荐",
+          "isHome": "首页推荐",
+          "isHomeYes": "已推荐",
+          "isHomeNo": "未推荐",
+          "isFeatured": "精选景点",
+          "isFeaturedYes": "已精选",
+          "isFeaturedNo": "未精选",
+          "isHot": "热门景点",
+          "isHotYes": "热门",
+          "isHotNo": "非热门",
         "averageRating": "评分均值",
         "ratingCount": "评分人数",
         "favoriteCount": "收藏次数",
@@ -179,6 +185,13 @@
         "isHome": {
           "label": "首页推荐"
         }
+        ,
+        "isFeatured": {
+          "label": "精选景点"
+        },
+        "isHot": {
+          "label": "热门景点"
+        }
       }
       ,
       "error": {
@@ -208,6 +221,12 @@
         "isHome": "首页推荐",
         "isHomeYes": "已推荐",
         "isHomeNo": "未推荐",
+        "isFeatured": "精选景点",
+        "isFeaturedYes": "已精选",
+        "isFeaturedNo": "未精选",
+        "isHot": "热门景点",
+        "isHotYes": "热门",
+        "isHotNo": "非热门",
         "coverImage": "介绍图",
         "slides": "幻灯片",
         "createdAt": "创建时间",

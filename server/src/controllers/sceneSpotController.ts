@@ -15,6 +15,8 @@ type SceneSpotMutationPayload = {
   address?: string | null
   order?: number
   isHome?: boolean
+  isFeatured?: boolean
+  isHot?: boolean
   averageRating?: number
   ratingCount?: number
   favoriteCount?: number
@@ -307,6 +309,8 @@ function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
     distance: typeof spot.distance === 'string' ? spot.distance : '',
     order: typeof spot.order === 'number' ? spot.order : 0,
     isHome: spot.isHome === true,
+    isFeatured: spot.isFeatured === true,
+    isHot: spot.isHot === true,
     averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
     ratingCount: typeof spot.ratingCount === 'number' ? spot.ratingCount : 0,
     favoriteCount: typeof spot.favoriteCount === 'number' ? spot.favoriteCount : 0,
@@ -526,6 +530,8 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
       // location will be added below only if valid coords exist
       order: toNumberOrDefault(body.order, 0),
       isHome: toBoolean(body.isHome) ?? false,
+      isFeatured: toBoolean((body as any).isFeatured) ?? false,
+      isHot: toBoolean((body as any).isHot) ?? false,
       averageRating,
       ratingCount,
       favoriteCount,
@@ -618,6 +624,8 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
   }
 
   const nextIsHome = toBoolean(body.isHome)
+  const nextIsFeatured = toBoolean((body as any).isFeatured)
+  const nextIsHot = toBoolean((body as any).isHot)
   const title = body.title === undefined ? undefined : toNonEmptyString(body.title)
   if (body.title !== undefined && !title) {
     ctx.throw(400, 'Scene spot title is required')
@@ -780,6 +788,8 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
       address: body.address === undefined ? current.address : toNullableString(body.address) ?? '',
       order: body.order === undefined ? current.order : toNumberOrDefault(body.order, current.order ?? 0),
       isHome: nextIsHome === null ? current.isHome : nextIsHome,
+      isFeatured: nextIsFeatured === null ? current.isFeatured : nextIsFeatured,
+      isHot: nextIsHot === null ? current.isHot : nextIsHot,
       averageRating: nextAverageRating,
       ratingCount: nextRatingCount,
       favoriteCount: nextFavoriteCount,

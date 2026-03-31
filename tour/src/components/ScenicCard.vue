@@ -21,7 +21,7 @@
               <!-- show homepage badge: 热门 > 精选; remove previous review-count area -->
               <view class="badge-wrap">
                 <view v-if="isHot" class="badge badge-hot">热门</view>
-                <view v-if="isHome" class="badge badge-featured">精选</view>
+                <view v-if="isFeatured" class="badge badge-featured">精选</view>
               </view>
               <!-- <text v-if="distance" class="distance">{{ distance }}</text> -->
               <text v-if="address" class="address">{{ address }}</text>
@@ -93,7 +93,7 @@ defineProps<{
   name: string;
   summary: string | null;
   coverUrl: string;
-  isHome?: boolean;
+  isFeatured?: boolean;
   isHot?: boolean;
   rating?: number;
   ratingCount?: number;
