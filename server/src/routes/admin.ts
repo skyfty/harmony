@@ -28,6 +28,18 @@ import {
   removeCategory as removeSceneSpotCategory,
 } from '@/controllers/admin/sceneSpotCategoryController'
 import {
+  listHotSpotsHandler as listHotSpots,
+  createHotSpotHandler as createHotSpot,
+  updateHotSpotHandler as updateHotSpot,
+  deleteHotSpotHandler as deleteHotSpot,
+} from '@/controllers/hotSpotController'
+import {
+  listFeaturedSpotsHandler as listFeaturedSpots,
+  createFeaturedSpotHandler as createFeaturedSpot,
+  updateFeaturedSpotHandler as updateFeaturedSpot,
+  deleteFeaturedSpotHandler as deleteFeaturedSpot,
+} from '@/controllers/featuredSpotController'
+import {
   createProduct,
   deleteProduct,
   getProduct,
@@ -210,6 +222,18 @@ adminRouter.get('/scene-spot-categories', requireAnyPermission(['sceneSpotCatego
 adminRouter.post('/scene-spot-categories', requireAnyPermission(['sceneSpotCategory:write']), createSceneSpotCategory)
 adminRouter.put('/scene-spot-categories/:id', requireAnyPermission(['sceneSpotCategory:write']), updateSceneSpotCategory)
 adminRouter.delete('/scene-spot-categories/:id', requireAnyPermission(['sceneSpotCategory:write']), removeSceneSpotCategory)
+
+// Hot spots (popular)
+adminRouter.get('/hot-spots', requireAnyPermission(['sceneSpot:read']), listHotSpots)
+adminRouter.post('/hot-spots', requireAnyPermission(['sceneSpot:write']), createHotSpot)
+adminRouter.put('/hot-spots/:id', requireAnyPermission(['sceneSpot:write']), updateHotSpot)
+adminRouter.delete('/hot-spots/:id', requireAnyPermission(['sceneSpot:write']), deleteHotSpot)
+
+// Featured spots (精选)
+adminRouter.get('/featured-spots', requireAnyPermission(['sceneSpot:read']), listFeaturedSpots)
+adminRouter.post('/featured-spots', requireAnyPermission(['sceneSpot:write']), createFeaturedSpot)
+adminRouter.put('/featured-spots/:id', requireAnyPermission(['sceneSpot:write']), updateFeaturedSpot)
+adminRouter.delete('/featured-spots/:id', requireAnyPermission(['sceneSpot:write']), deleteFeaturedSpot)
 
 adminRouter.get('/scene-spot-comments', requireAnyPermission(['comment:read']), listSceneSpotComments)
 adminRouter.get('/scene-spot-comments/:id', requireAnyPermission(['comment:read']), getSceneSpotComment)

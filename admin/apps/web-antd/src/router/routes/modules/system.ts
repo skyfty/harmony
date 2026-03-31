@@ -30,6 +30,24 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        name: 'HotSpots',
+        path: 'hot-spots',
+        component: () => import('#/views/scene-spots/hot-spots.vue'),
+        meta: {
+          icon: 'lucide:star',
+          title: '热门景点',
+        },
+      },
+      {
+        name: 'FeaturedSpots',
+        path: 'featured-spots',
+        component: () => import('#/views/scene-spots/featured-spots.vue'),
+        meta: {
+          icon: 'lucide:award',
+          title: '精选景点',
+        },
+      },
+      {
         name: 'SceneSpotCategories',
         path: 'categories',
         component: () => import('#/views/scene-spot-categories/index.vue'),

@@ -12,6 +12,7 @@ import {
   createSceneSpotComment,
   deleteSceneSpotComment,
 } from '@/controllers/miniprogram/sceneSpotController'
+import { listHotSpotsPublic, listFeaturedSpotsPublic } from '@/controllers/miniprogram/hotFeaturedController'
 import { listHotEvents } from '@/controllers/miniprogram/eventController'
 import {
   listUserCoupons,
@@ -108,6 +109,9 @@ miniRouter.get('/scene-spots/:id/entry', optionalMiniAuth, getSceneSpotEntry)
 miniRouter.get('/scene-spots/:id/comments', optionalMiniAuth, listSceneSpotComments)
 miniRouter.get('/scene-spot-categories', optionalMiniAuth, listSceneSpotCategories)
 miniRouter.get('/scenes/:id/products', optionalMiniAuth, listSceneProducts)
+
+miniRouter.get('/hot-spots', optionalMiniAuth, listHotSpotsPublic)
+miniRouter.get('/featured-spots', optionalMiniAuth, listFeaturedSpotsPublic)
 
 miniRouter.get('/events/hot', optionalMiniAuth, listHotEvents)
 miniRouter.post('/analytics/events', optionalMiniAuth, trackAnalyticsEvent)

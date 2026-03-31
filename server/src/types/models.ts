@@ -885,6 +885,24 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface HotSpotDocument extends Document<Types.ObjectId> {
+  /** 中文：关联的 SceneSpot ID */
+  sceneSpotId: Types.ObjectId
+  /** 中文：排序字段（较小的值靠前） */
+  order: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface FeaturedSpotDocument extends Document<Types.ObjectId> {
+  /** 中文：关联的 SceneSpot ID */
+  sceneSpotId: Types.ObjectId
+  /** 中文：排序字段（较小的值靠前） */
+  order: number
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface SceneSpotCategoryDocument extends Document<Types.ObjectId> {
   /** 中文：分类名称 */
   name: string
