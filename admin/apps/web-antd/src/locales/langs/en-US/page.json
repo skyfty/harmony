@@ -105,7 +105,7 @@
         "tabs": {
           "basic": "Basic Fields",
           "other": "Other Fields"
-        },
+        }
       },
       "table": {
         "tableTitle": "Scene Spot Management",
@@ -180,8 +180,7 @@
         },
         "isHome": {
           "label": "Home Featured"
-        }
-        ,
+        },
         "isFeatured": {
           "label": "Featured"
         },
@@ -237,11 +236,19 @@
         "reviewUpdated": "Review status updated"
       },
       "confirm": {
-        "delete": { "title": "Confirm delete this comment?" }
+        "delete": {
+          "title": "Confirm delete this comment?"
+        }
       },
       "form": {
-        "keyword": { "label": "Keyword", "placeholder": "Comment keyword" },
-        "status": { "label": "Status", "placeholder": "Please select status" }
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Comment keyword"
+        },
+        "status": {
+          "label": "Status",
+          "placeholder": "Please select status"
+        }
       },
       "table": {
         "sceneSpot": "Scene",
@@ -251,20 +258,49 @@
         "createdAt": "Created At",
         "actions": "Actions"
       },
-      "toolbar": { "create": "New Comment" },
-      "actions": { "edit": "Edit", "approve": "Approve", "reject": "Reject", "delete": "Delete" },
-      "formFields": {
-        "scene": { "label": "Scene", "required": "Please select a scene", "placeholder": "Search scene by name" },
-        "user": { "label": "User", "required": "Please select a user", "placeholder": "Search by username/display name" },
-        "status": { "label": "Status", "required": "Please select status" },
-        "content": { "label": "Comment Content", "required": "Please enter comment content" }
+      "toolbar": {
+        "create": "New Comment"
       },
-      "title": { "index": "Comments", "sceneSpot": "Scene Spot Comments" }
+      "actions": {
+        "edit": "Edit",
+        "approve": "Approve",
+        "reject": "Reject",
+        "delete": "Delete"
+      },
+      "formFields": {
+        "scene": {
+          "label": "Scene",
+          "required": "Please select a scene",
+          "placeholder": "Search scene by name"
+        },
+        "user": {
+          "label": "User",
+          "required": "Please select a user",
+          "placeholder": "Search by username/display name"
+        },
+        "status": {
+          "label": "Status",
+          "required": "Please select status"
+        },
+        "content": {
+          "label": "Comment Content",
+          "required": "Please enter comment content"
+        }
+      },
+      "title": {
+        "index": "Comments",
+        "sceneSpot": "Scene Spot Comments"
+      }
     }
   },
   "sceneSpotCategories": {
     "title": "Scene Spot Categories",
-    "modal": { "edit": "Edit Category", "create": "New Category", "ok": "Save", "cancel": "Cancel" },
+    "modal": {
+      "edit": "Edit Category",
+      "create": "New Category",
+      "ok": "Save",
+      "cancel": "Cancel"
+    },
     "message": {
       "updateSuccess": "Category updated",
       "createSuccess": "Category created",
@@ -287,18 +323,40 @@
       "updatedAt": "Updated At",
       "actions": "Actions"
     },
-    "toolbar": { "create": "New Category" },
-    "actions": { "edit": "Edit", "delete": "Delete" },
-    "form": {
-      "name": { "label": "Name", "required": "Please enter category name" },
-      "description": { "label": "Description" },
-      "slug": { "label": "Slug", "placeholder": "Optional unique identifier (lowercase)" },
-      "sortOrder": { "label": "Sort Order" },
-      "enabled": { "label": "Enabled" }
+    "toolbar": {
+      "create": "New Category"
     },
-    "values": { "yes": "Yes", "no": "No" }
+    "actions": {
+      "edit": "Edit",
+      "delete": "Delete"
+    },
+    "form": {
+      "name": {
+        "label": "Name",
+        "required": "Please enter category name"
+      },
+      "description": {
+        "label": "Description"
+      },
+      "slug": {
+        "label": "Slug",
+        "placeholder": "Optional unique identifier (lowercase)"
+      },
+      "sortOrder": {
+        "label": "Sort Order"
+      },
+      "enabled": {
+        "label": "Enabled"
+      }
+    },
+    "values": {
+      "yes": "Yes",
+      "no": "No"
+    }
   },
-  "loginLogs": { "title": "Login Logs" },
+  "loginLogs": {
+    "title": "Login Logs"
+  },
   "travelRecords": {
     "title": "Travel Records",
     "index": {
@@ -440,15 +498,26 @@
   },
   "project": {
     "title": "Projects",
-    "index": { "title": "Project Management" },
-    "detail": { "title": "Project Details" },
-    "categories": { "title": "Project Categories" }
+    "index": {
+      "title": "Project Management"
+    },
+    "detail": {
+      "title": "Project Details"
+    },
+    "categories": {
+      "title": "Project Categories"
+    }
   },
   "products": {
     "title": "Products",
     "index": {
       "title": "Product Management",
-      "modal": { "edit": "Edit Product", "create": "New Product", "ok": "Save", "cancel": "Cancel" },
+      "modal": {
+        "edit": "Edit Product",
+        "create": "New Product",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
       "message": {
         "readFailed": "Failed to load product",
         "updateSuccess": "Product updated",
@@ -462,8 +531,14 @@
         }
       },
       "form": {
-        "keyword": { "label": "Keyword", "placeholder": "Name / Slug" },
-        "categoryId": { "label": "Category", "placeholder": "Select category" }
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Name / Slug"
+        },
+        "categoryId": {
+          "label": "Category",
+          "placeholder": "Select category"
+        }
       },
       "table": {
         "name": "Name",
@@ -476,27 +551,59 @@
         "updatedAt": "Updated At",
         "actions": "Actions"
       },
-      "toolbar": { "create": "New Product" },
-      "actions": { "edit": "Edit", "delete": "Delete" },
+      "toolbar": {
+        "create": "New Product"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
       "formFields": {
-        "name": { "label": "Name", "required": "Please enter name", "placeholder": "Product name" },
+        "name": {
+          "label": "Name",
+          "required": "Please enter name",
+          "placeholder": "Product name"
+        },
         "slug": {
           "label": "Slug",
           "required": "Please enter slug",
           "pattern": "Only lowercase letters/numbers/hyphens are allowed",
           "placeholder": "Unique identifier (lowercase)"
         },
-        "categoryId": { "label": "Category", "required": "Please select product category", "placeholder": "Select product category" },
-        "price": { "label": "Price", "min": "Price must be greater than or equal to 0" },
-        "validityDays": { "label": "Validity (days)", "min": "Validity must be greater than or equal to 1" },
-        "description": { "label": "Description", "placeholder": "Detailed description" },
-        "coverUpload": { "label": "Cover Upload", "upload": "Upload" },
-        "currentCover": { "label": "Current Cover" }
+        "categoryId": {
+          "label": "Category",
+          "required": "Please select product category",
+          "placeholder": "Select product category"
+        },
+        "price": {
+          "label": "Price",
+          "min": "Price must be greater than or equal to 0"
+        },
+        "validityDays": {
+          "label": "Validity (days)",
+          "min": "Validity must be greater than or equal to 1"
+        },
+        "description": {
+          "label": "Description",
+          "placeholder": "Detailed description"
+        },
+        "coverUpload": {
+          "label": "Cover Upload",
+          "upload": "Upload"
+        },
+        "currentCover": {
+          "label": "Current Cover"
+        }
       }
     },
     "categories": {
       "title": "Product Categories",
-      "modal": { "edit": "Edit Product Category", "create": "New Product Category", "ok": "Save", "cancel": "Cancel" },
+      "modal": {
+        "edit": "Edit Product Category",
+        "create": "New Product Category",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
       "message": {
         "updateSuccess": "Product category updated",
         "createSuccess": "Product category created",
@@ -518,14 +625,31 @@
         "updatedAt": "Updated At",
         "actions": "Actions"
       },
-      "values": { "yes": "Yes", "no": "No" },
-      "toolbar": { "create": "New Category" },
-      "actions": { "edit": "Edit", "delete": "Delete" },
+      "values": {
+        "yes": "Yes",
+        "no": "No"
+      },
+      "toolbar": {
+        "create": "New Category"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
       "form": {
-        "name": { "label": "Name", "required": "Please enter category name" },
-        "description": { "label": "Description" },
-        "sortOrder": { "label": "Sort Order" },
-        "enabled": { "label": "Enabled" }
+        "name": {
+          "label": "Name",
+          "required": "Please enter category name"
+        },
+        "description": {
+          "label": "Description"
+        },
+        "sortOrder": {
+          "label": "Sort Order"
+        },
+        "enabled": {
+          "label": "Enabled"
+        }
       }
     }
   },
@@ -533,7 +657,12 @@
     "title": "Coupons",
     "index": {
       "title": "Coupon Templates",
-      "modal": { "edit": "Edit Coupon", "create": "New Coupon", "ok": "Save", "cancel": "Cancel" },
+      "modal": {
+        "edit": "Edit Coupon",
+        "create": "New Coupon",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
       "message": {
         "loadTypesFailed": "Failed to load coupon types",
         "readFailed": "Failed to load coupon",
@@ -548,7 +677,10 @@
         }
       },
       "form": {
-        "keyword": { "label": "Keyword", "placeholder": "Name / Description" }
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Name / Description"
+        }
       },
       "table": {
         "typeName": "Type",
@@ -559,19 +691,48 @@
         "updatedAt": "Updated At",
         "actions": "Actions"
       },
-      "toolbar": { "create": "New Coupon" },
-      "actions": { "edit": "Edit", "delete": "Delete" },
+      "toolbar": {
+        "create": "New Coupon"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
       "formFields": {
-        "typeId": { "label": "Type", "required": "Please select type", "placeholder": "Please select coupon type" },
-        "title": { "label": "Name", "required": "Please enter name", "placeholder": "Coupon name" },
-        "description": { "label": "Description", "required": "Please enter description", "placeholder": "Coupon description" },
-        "validUntil": { "label": "Validity", "required": "Please select validity" }
+        "typeId": {
+          "label": "Type",
+          "required": "Please select type",
+          "placeholder": "Please select coupon type"
+        },
+        "title": {
+          "label": "Name",
+          "required": "Please enter name",
+          "placeholder": "Coupon name"
+        },
+        "description": {
+          "label": "Description",
+          "required": "Please enter description",
+          "placeholder": "Coupon description"
+        },
+        "validUntil": {
+          "label": "Validity",
+          "required": "Please select validity"
+        }
       }
     },
     "userCoupons": {
       "title": "User Coupons",
-      "stats": { "total": "Total", "unused": "Unused", "used": "Used", "expired": "Expired" },
-      "status": { "unused": "Unused", "used": "Used", "expired": "Expired" },
+      "stats": {
+        "total": "Total",
+        "unused": "Unused",
+        "used": "Used",
+        "expired": "Expired"
+      },
+      "status": {
+        "unused": "Unused",
+        "used": "Used",
+        "expired": "Expired"
+      },
       "message": {
         "singleUserRequired": "Please select a user or enter user ID manually",
         "batchUsersRequired": "Please select users or enter a user ID list",
@@ -580,9 +741,18 @@
         "usedSuccess": "Coupon redeemed"
       },
       "form": {
-        "keyword": { "label": "Keyword", "placeholder": "User/Coupon keyword" },
-        "status": { "label": "Status", "placeholder": "All statuses" },
-        "couponId": { "label": "Coupon Template", "placeholder": "All coupons" }
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "User/Coupon keyword"
+        },
+        "status": {
+          "label": "Status",
+          "placeholder": "All statuses"
+        },
+        "couponId": {
+          "label": "Coupon Template",
+          "placeholder": "All coupons"
+        }
       },
       "table": {
         "couponTitle": "Coupon Name",
@@ -594,8 +764,13 @@
         "usedAt": "Used At",
         "actions": "Actions"
       },
-      "toolbar": { "single": "Single Distribute", "batch": "Batch Distribute" },
-      "actions": { "use": "Redeem" },
+      "toolbar": {
+        "single": "Single Distribute",
+        "batch": "Batch Distribute"
+      },
+      "actions": {
+        "use": "Redeem"
+      },
       "modal": {
         "singleTitle": "Single Coupon Distribution",
         "batchTitle": "Batch Coupon Distribution",
@@ -603,23 +778,37 @@
         "cancel": "Cancel"
       },
       "formFields": {
-        "couponId": { "label": "Coupon", "required": "Please select coupon", "placeholder": "Please select coupon" },
+        "couponId": {
+          "label": "Coupon",
+          "required": "Please select coupon",
+          "placeholder": "Please select coupon"
+        },
         "searchUser": {
           "label": "Search User",
           "singlePlaceholder": "Search by display name/username",
           "batchPlaceholder": "Search and select multiple users"
         },
-        "manualUserId": { "label": "User ID (manual)", "placeholder": "Enter user ID manually when no user found" },
+        "manualUserId": {
+          "label": "User ID (manual)",
+          "placeholder": "Enter user ID manually when no user found"
+        },
         "manualUserIds": {
           "label": "User IDs (manual)",
           "placeholder": "Paste user IDs; one per line, or separated by comma/space"
         },
-        "expiresAt": { "label": "Expires At" }
+        "expiresAt": {
+          "label": "Expires At"
+        }
       }
     },
     "types": {
       "title": "Coupon Types",
-      "modal": { "edit": "Edit Coupon Type", "create": "New Coupon Type", "ok": "Save", "cancel": "Cancel" },
+      "modal": {
+        "edit": "Edit Coupon Type",
+        "create": "New Coupon Type",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
       "message": {
         "updateSuccess": "Coupon type updated",
         "createSuccess": "Coupon type created",
@@ -631,7 +820,12 @@
           "content": "This action cannot be undone, and referenced types cannot be deleted."
         }
       },
-      "form": { "keyword": { "label": "Keyword", "placeholder": "Name / Code" } },
+      "form": {
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Name / Code"
+        }
+      },
       "table": {
         "name": "Name",
         "code": "Code",
@@ -641,14 +835,33 @@
         "updatedAt": "Updated At",
         "actions": "Actions"
       },
-      "toolbar": { "create": "New Type" },
-      "actions": { "edit": "Edit", "delete": "Delete" },
+      "toolbar": {
+        "create": "New Type"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
       "formFields": {
-        "name": { "label": "Name", "required": "Please enter type name" },
-        "code": { "label": "Code", "required": "Please enter type code", "placeholder": "e.g.: ticket" },
-        "iconUrl": { "label": "Icon URL", "placeholder": "Optional" },
-        "sort": { "label": "Sort" },
-        "enabled": { "label": "Enabled" }
+        "name": {
+          "label": "Name",
+          "required": "Please enter type name"
+        },
+        "code": {
+          "label": "Code",
+          "required": "Please enter type code",
+          "placeholder": "e.g.: ticket"
+        },
+        "iconUrl": {
+          "label": "Icon URL",
+          "placeholder": "Optional"
+        },
+        "sort": {
+          "label": "Sort"
+        },
+        "enabled": {
+          "label": "Enabled"
+        }
       }
     }
   },
@@ -730,9 +943,18 @@
         }
       },
       "form": {
-        "keyword": { "label": "Keyword", "placeholder": "Project name" },
-        "userId": { "label": "User ID", "placeholder": "Optional (admins can filter by user)" },
-        "categoryId": { "label": "Category", "placeholder": "All categories" }
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Project name"
+        },
+        "userId": {
+          "label": "User ID",
+          "placeholder": "Optional (admins can filter by user)"
+        },
+        "categoryId": {
+          "label": "Category",
+          "placeholder": "All categories"
+        }
       },
       "table": {
         "name": "Project Name",
@@ -754,15 +976,29 @@
         "delete": "Delete"
       },
       "formFields": {
-        "userId": { "label": "User ID", "required": "Please enter user ID" },
-        "id": { "label": "Project ID", "required": "Please enter project ID" },
-        "name": { "label": "Project Name", "required": "Please enter project name" },
-        "categoryId": { "label": "Category", "placeholder": "Optional" }
+        "userId": {
+          "label": "User ID",
+          "required": "Please enter user ID"
+        },
+        "id": {
+          "label": "Project ID",
+          "required": "Please enter project ID"
+        },
+        "name": {
+          "label": "Project Name",
+          "required": "Please enter project name"
+        },
+        "categoryId": {
+          "label": "Category",
+          "placeholder": "Optional"
+        }
       }
     },
     "detail": {
       "title": "Project Details",
-      "button": { "back": "Back" },
+      "button": {
+        "back": "Back"
+      },
       "fields": {
         "id": "Project ID",
         "name": "Project Name",
@@ -772,14 +1008,26 @@
         "sceneCount": "Scene Count",
         "lastEditedSceneId": "Last Edited Scene ID"
       },
-      "scenes": { "title": "Related Resources (Scenes)", "columns": { "id": "Scene ID", "name": "Name", "url": "URL" } }
+      "scenes": {
+        "title": "Related Resources (Scenes)",
+        "columns": {
+          "id": "Scene ID",
+          "name": "Name",
+          "url": "URL"
+        }
+      }
     }
   },
   "orders": {
     "title": "Order Management",
     "index": {
-      "actions": { "edit": "Edit", "delete": "Delete" },
-      "modal": { "title": "Order" },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "modal": {
+        "title": "Order"
+      },
       "table": {
         "orderNumber": "Order Number",
         "status": "Status",
@@ -836,29 +1084,85 @@
         "addItem": "Please add at least one product item"
       }
     }
-  }
-  ,
+  },
   "resources": {
     "title": "Resources",
-    "index": { "title": "Resource Management" },
-    "tags": { "title": "Resource Tags" },
-    "series": { "title": "Resource Series" }
+    "index": {
+      "title": "Resource Management"
+    },
+    "tags": {
+      "title": "Resource Tags"
+    },
+    "series": {
+      "title": "Resource Series"
+    }
   },
   "systemUsers": {
     "index": {
-      "modal": { "edit": "Edit User", "create": "New User", "ok": "Save", "cancel": "Cancel" },
-      "message": { "updateSuccess": "User updated", "createSuccess": "User created", "deleteSuccess": "User deleted", "statusUpdate": "Status updated", "avatarUploadFailed": "Avatar upload failed" },
-      "confirm": { "delete": { "title": "Confirm delete user \"{username}\"?", "content": "This action cannot be undone." } },
+      "modal": {
+        "edit": "Edit User",
+        "create": "New User",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "User updated",
+        "createSuccess": "User created",
+        "deleteSuccess": "User deleted",
+        "statusUpdate": "Status updated",
+        "avatarUploadFailed": "Avatar upload failed"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete user \"{username}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
       "form": {
-        "avatar": { "label": "Avatar" },
-        "username": { "label": "Username", "required": "Please enter username", "placeholder": "Please enter username" },
-        "password": { "label": "Password", "required": "Please enter password", "placeholder": "Please enter password", "reset": "Reset Password", "keep": "Leave blank to keep current password" },
-        "displayName": { "label": "Display Name", "placeholder": "Please enter display name" },
-        "email": { "label": "Email", "placeholder": "Please enter email" },
-        "phone": { "label": "Phone", "placeholder": "Please enter phone" },
-        "bio": { "label": "Bio", "placeholder": "Please enter bio" },
-        "status": { "label": "Status", "options": { "active": "Active", "disabled": "Disabled" }, "checkedChildren": "On", "unCheckedChildren": "Off" },
-        "roles": { "label": "Roles", "placeholder": "Please select roles" }
+        "avatar": {
+          "label": "Avatar"
+        },
+        "username": {
+          "label": "Username",
+          "required": "Please enter username",
+          "placeholder": "Please enter username"
+        },
+        "password": {
+          "label": "Password",
+          "required": "Please enter password",
+          "placeholder": "Please enter password",
+          "reset": "Reset Password",
+          "keep": "Leave blank to keep current password"
+        },
+        "displayName": {
+          "label": "Display Name",
+          "placeholder": "Please enter display name"
+        },
+        "email": {
+          "label": "Email",
+          "placeholder": "Please enter email"
+        },
+        "phone": {
+          "label": "Phone",
+          "placeholder": "Please enter phone"
+        },
+        "bio": {
+          "label": "Bio",
+          "placeholder": "Please enter bio"
+        },
+        "status": {
+          "label": "Status",
+          "options": {
+            "active": "Active",
+            "disabled": "Disabled"
+          },
+          "checkedChildren": "On",
+          "unCheckedChildren": "Off"
+        },
+        "roles": {
+          "label": "Roles",
+          "placeholder": "Please select roles"
+        }
       },
       "table": {
         "keyword": "Keyword",
@@ -876,22 +1180,70 @@
         "actions": "Actions",
         "title": "User Management"
       },
-      "toolbar": { "create": "New User" },
-      "actions": { "edit": "Edit", "delete": "Delete" }
+      "toolbar": {
+        "create": "New User"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      }
     }
   },
   "systemAdmins": {
     "index": {
-      "modal": { "edit": "Edit Admin", "create": "New Admin", "ok": "Save", "cancel": "Cancel" },
-      "message": { "updateSuccess": "Admin updated", "createSuccess": "Admin created", "deleteSuccess": "Admin deleted", "statusUpdate": "Status updated" },
-      "confirm": { "delete": { "title": "Confirm delete admin \"{username}\"?", "content": "This action cannot be undone." } },
+      "modal": {
+        "edit": "Edit Admin",
+        "create": "New Admin",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Admin updated",
+        "createSuccess": "Admin created",
+        "deleteSuccess": "Admin deleted",
+        "statusUpdate": "Status updated"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete admin \"{username}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
       "form": {
-        "username": { "label": "Username", "required": "Please enter username", "placeholder": "Please enter username" },
-        "password": { "label": "Password", "required": "Please enter password", "placeholder": "Please enter password", "reset": "Reset Password", "keep": "Leave blank to keep current password" },
-        "displayName": { "label": "Display Name", "placeholder": "Please enter display name" },
-        "email": { "label": "Email", "placeholder": "Please enter email" },
-        "status": { "label": "Status", "options": { "active": "Active", "disabled": "Disabled" }, "checkedChildren": "On", "unCheckedChildren": "Off", "placeholder": "Please select status" },
-        "roles": { "label": "Roles", "placeholder": "Please select roles" }
+        "username": {
+          "label": "Username",
+          "required": "Please enter username",
+          "placeholder": "Please enter username"
+        },
+        "password": {
+          "label": "Password",
+          "required": "Please enter password",
+          "placeholder": "Please enter password",
+          "reset": "Reset Password",
+          "keep": "Leave blank to keep current password"
+        },
+        "displayName": {
+          "label": "Display Name",
+          "placeholder": "Please enter display name"
+        },
+        "email": {
+          "label": "Email",
+          "placeholder": "Please enter email"
+        },
+        "status": {
+          "label": "Status",
+          "options": {
+            "active": "Active",
+            "disabled": "Disabled"
+          },
+          "checkedChildren": "On",
+          "unCheckedChildren": "Off",
+          "placeholder": "Please select status"
+        },
+        "roles": {
+          "label": "Roles",
+          "placeholder": "Please select roles"
+        }
       },
       "table": {
         "title": "Admin Management",
@@ -905,30 +1257,136 @@
         "updatedAt": "Updated At",
         "actions": "Actions"
       },
-      "toolbar": { "create": "New Admin" },
-      "actions": { "edit": "Edit", "delete": "Delete" }
+      "toolbar": {
+        "create": "New Admin"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      }
     }
   },
   "rolesPermissions": {
     "index": {
-      "tabs": { "roles": "Role Management", "permissions": "Permission Management" },
+      "tabs": {
+        "roles": "Role Management",
+        "permissions": "Permission Management"
+      },
       "role": {
-        "modal": { "edit": "Edit Role", "create": "New Role", "ok": "Save", "cancel": "Cancel" },
-        "message": { "updateSuccess": "Role updated", "createSuccess": "Role created", "deleteSuccess": "Role deleted" },
-        "confirm": { "delete": { "title": "Confirm delete role \"{name}\"?", "content": "This action cannot be undone." } },
-        "form": { "name": { "label": "Role Name", "required": "Please enter role name", "placeholder": "Please enter role name" }, "code": { "label": "Role Code", "required": "Please enter role code", "placeholder": "Please enter role code" }, "description": { "label": "Description", "placeholder": "Please enter description" }, "permissions": { "label": "Permission Set", "placeholder": "Please select permissions" } },
-        "table": { "keyword": "Keyword", "keywordPlaceholder": "Role name / code", "name": "Role Name", "code": "Role Code", "description": "Description", "permissions": "Permission Set", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Role Management" },
-        "toolbar": { "create": "New Role" },
-        "actions": { "edit": "Edit", "delete": "Delete" }
+        "modal": {
+          "edit": "Edit Role",
+          "create": "New Role",
+          "ok": "Save",
+          "cancel": "Cancel"
+        },
+        "message": {
+          "updateSuccess": "Role updated",
+          "createSuccess": "Role created",
+          "deleteSuccess": "Role deleted"
+        },
+        "confirm": {
+          "delete": {
+            "title": "Confirm delete role \"{name}\"?",
+            "content": "This action cannot be undone."
+          }
+        },
+        "form": {
+          "name": {
+            "label": "Role Name",
+            "required": "Please enter role name",
+            "placeholder": "Please enter role name"
+          },
+          "code": {
+            "label": "Role Code",
+            "required": "Please enter role code",
+            "placeholder": "Please enter role code"
+          },
+          "description": {
+            "label": "Description",
+            "placeholder": "Please enter description"
+          },
+          "permissions": {
+            "label": "Permission Set",
+            "placeholder": "Please select permissions"
+          }
+        },
+        "table": {
+          "keyword": "Keyword",
+          "keywordPlaceholder": "Role name / code",
+          "name": "Role Name",
+          "code": "Role Code",
+          "description": "Description",
+          "permissions": "Permission Set",
+          "createdAt": "Created At",
+          "updatedAt": "Updated At",
+          "actions": "Actions",
+          "title": "Role Management"
+        },
+        "toolbar": {
+          "create": "New Role"
+        },
+        "actions": {
+          "edit": "Edit",
+          "delete": "Delete"
+        }
       },
       "permission": {
-        "modal": { "edit": "Edit Permission", "create": "New Permission", "ok": "Save", "cancel": "Cancel" },
-        "message": { "updateSuccess": "Permission updated", "createSuccess": "Permission created", "deleteSuccess": "Permission deleted" },
-        "confirm": { "delete": { "title": "Confirm delete permission \"{name}\"?", "content": "This action cannot be undone." } },
-        "form": { "name": { "label": "Permission Name", "required": "Please enter permission name", "placeholder": "Please enter permission name" }, "code": { "label": "Permission Code", "required": "Please enter permission code", "placeholder": "Please enter permission code" }, "group": { "label": "Group", "placeholder": "All groups" }, "description": { "label": "Description", "placeholder": "Please enter description" } },
-        "table": { "keyword": "Keyword", "keywordPlaceholder": "Permission name / code", "name": "Permission Name", "code": "Permission Code", "group": "Group", "description": "Description", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Permission Management" },
-        "toolbar": { "create": "New Permission" },
-        "actions": { "edit": "Edit", "delete": "Delete" }
+        "modal": {
+          "edit": "Edit Permission",
+          "create": "New Permission",
+          "ok": "Save",
+          "cancel": "Cancel"
+        },
+        "message": {
+          "updateSuccess": "Permission updated",
+          "createSuccess": "Permission created",
+          "deleteSuccess": "Permission deleted"
+        },
+        "confirm": {
+          "delete": {
+            "title": "Confirm delete permission \"{name}\"?",
+            "content": "This action cannot be undone."
+          }
+        },
+        "form": {
+          "name": {
+            "label": "Permission Name",
+            "required": "Please enter permission name",
+            "placeholder": "Please enter permission name"
+          },
+          "code": {
+            "label": "Permission Code",
+            "required": "Please enter permission code",
+            "placeholder": "Please enter permission code"
+          },
+          "group": {
+            "label": "Group",
+            "placeholder": "All groups"
+          },
+          "description": {
+            "label": "Description",
+            "placeholder": "Please enter description"
+          }
+        },
+        "table": {
+          "keyword": "Keyword",
+          "keywordPlaceholder": "Permission name / code",
+          "name": "Permission Name",
+          "code": "Permission Code",
+          "group": "Group",
+          "description": "Description",
+          "createdAt": "Created At",
+          "updatedAt": "Updated At",
+          "actions": "Actions",
+          "title": "Permission Management"
+        },
+        "toolbar": {
+          "create": "New Permission"
+        },
+        "actions": {
+          "edit": "Edit",
+          "delete": "Delete"
+        }
       }
     }
   }
