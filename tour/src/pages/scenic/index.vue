@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <PageHeader title="全部景区" />
+    <PageHeader :title="headerTitle" />
 
     <view class="content">
       <view class="search-box">
@@ -21,8 +21,14 @@
         </view>
       </view>
 
+      <view class="filter-tabs">
+        <view :class="['tab', { active: activeFilter === 'all' }]" @tap="setFilter('all')">全部景区</view>
+        <view :class="['tab', { active: activeFilter === 'hot' }]" @tap="setFilter('hot')">热门景区</view>
+        <view :class="['tab', { active: activeFilter === 'featured' }]" @tap="setFilter('featured')">精选景区</view>
+      </view>
+
       <view class="section-title">
-        <text class="section-text">全部景区</text>
+        <text class="section-text">{{ headerTitle }}</text>
       </view>
 
       <view class="grid">
@@ -69,6 +75,17 @@ import type { ScenicSummary } from '@/types/scenic'
 const keyword = ref('')
 const scenics = ref<ScenicSummary[]>([])
 const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicSummary[]>
+const activeFilter = ref<'all' | 'hot' | 'featured'>('all')
+
+const headerTitle = computed(() => {
+  if (activeFilter.value === 'hot') return '热门景区'
+  if (activeFilter.value === 'featured') return '精选景区'
+  return '全部景区'
+})
+
+function setFilter(f: 'all' | 'hot' | 'featured') {
+  activeFilter.value = f
+}
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 async function reload(searchKeyword?: string) {
@@ -85,8 +102,19 @@ onMounted(() => {
 
 const filtered = computed(() => {
   const k = keyword.value.trim()
-  if (!k) return scenics.value
-  return scenics.value.filter((s) => s.title.includes(k) || s.description.includes(k))
+  let list = Array.isArray(scenics.value) ? scenics.value.slice() : []
+
+  if (k) {
+    list = list.filter((s) => (s.title || '').includes(k) || (s.description || '').includes(k))
+  }
+
+  if (activeFilter.value === 'hot') {
+    list = list.filter((s) => !!s.isHot)
+  } else if (activeFilter.value === 'featured') {
+    list = list.filter((s) => !!s.isFeatured)
+  }
+
+  return list
 })
 
 function handleKeywordInput() {
@@ -141,21 +169,23 @@ function handleNavigate(key: NavKey) {
   padding: 11px 12px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.16);
-}
-
 .search-input {
   flex: 1;
   font-size: 13px;
   color: #55617a;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
 }
-
 .search-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
   height: 36px;
   padding: 0;
   border-radius: 50%;
@@ -171,6 +201,28 @@ function handleNavigate(key: NavKey) {
   height: 18px;
   color: #7b74e7;
   flex-shrink: 0;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+  background: transparent;
+}
+
+.tab {
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.95);
+  border-radius: 999px;
+  font-size: 13px;
+  color: #55617a;
+  box-shadow: 0 6px 14px rgba(23, 43, 77, 0.06);
+}
+
+.tab.active {
+  background: #7b74e7;
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(123,116,231,0.16);
 }
 
 .clear-icon {

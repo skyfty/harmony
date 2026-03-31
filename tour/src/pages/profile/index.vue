@@ -15,11 +15,6 @@
     </view>
 
     <view class="content">
-      <view v-if="isProfileIncomplete" class="tips-card">
-        <text class="tips-title">请先完善头像和昵称</text>
-        <text class="tips-desc">下单和支付前需要先完成资料设置。</text>
-        <button class="tips-action" @tap="openProfileEdit">立即完善</button>
-      </view>
 
       <view class="card">
         <view class="row" @tap="nav('/pages/orders/index')">
