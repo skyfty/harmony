@@ -165,11 +165,14 @@ function handleNavigate(key: NavKey) {
 
 .search-box {
   margin-top: 12px;
-  background: rgba(255, 255, 255, 0.98);
-  border-radius: 14px;
-  padding: 11px 12px;
   display: flex;
   align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #e6eaf2;
+}
 .search-input {
   flex: 1;
   font-size: 13px;
@@ -187,12 +190,6 @@ function handleNavigate(key: NavKey) {
   border-radius: 0;
   background: transparent;
 }
-  height: 36px;
-  padding: 0;
-  border-radius: 50%;
-  background: transparent;
-}
-
 .search-button-text {
   display: none;
 }
