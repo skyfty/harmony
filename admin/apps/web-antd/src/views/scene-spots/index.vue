@@ -142,12 +142,57 @@ function getFileUrl(file?: UploadFile): string {
   return ((file.response as any)?.url || file.url || '') as string;
 }
 
-function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) {
-  coverImageFileList.value = info.fileList.slice(-1);
+async function validateImage256(file: File): Promise<boolean> {
+  return await new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const ok = img.width === 256 && img.height === 256;
+        URL.revokeObjectURL(url);
+        resolve(ok);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(false);
+      };
+      img.src = url;
+    } catch (err) {
+      resolve(false);
+    }
+  });
 }
 
-function handleSlidesChange(info: UploadChangeParam<UploadFile<any>>) {
-  slidesFileList.value = info.fileList.slice(0, MAX_SLIDES_COUNT);
+async function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) {
+  const list = info.fileList.slice(-1);
+  if (list.length > 0) {
+    const fileObj = list[0].originFileObj as File | undefined;
+    if (fileObj) {
+      const ok = await validateImage256(fileObj);
+      if (!ok) {
+        message.error('图片尺寸必须为256x256');
+        return;
+      }
+    }
+  }
+  coverImageFileList.value = list;
+}
+
+async function handleSlidesChange(info: UploadChangeParam<UploadFile<any>>) {
+  const list = info.fileList.slice(0, MAX_SLIDES_COUNT);
+  const validated: UploadFile[] = [];
+  for (const f of list) {
+    const fileObj = f.originFileObj as File | undefined;
+    if (fileObj) {
+      const ok = await validateImage256(fileObj);
+      if (!ok) {
+        message.error('图片尺寸必须为256x256');
+        continue;
+      }
+    }
+    validated.push(f);
+  }
+  slidesFileList.value = validated;
 }
 
 async function handlePreview(file: UploadFile) {
@@ -592,6 +637,7 @@ onMounted(async () => {
               >
                 <div v-if="coverImageFileList.length < 1">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
               </Upload>
+              <div class="upload-note">图片必须为 256x256 大小，才能上传</div>
             </Form.Item>
 
             <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
@@ -605,6 +651,7 @@ onMounted(async () => {
               >
                 <div v-if="slidesFileList.length < MAX_SLIDES_COUNT">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
               </Upload>
+              <div class="upload-note">每张幻灯片图片必须为 256x256，最多可上传 {{ MAX_SLIDES_COUNT }} 张</div>
             </Form.Item>
 
             <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
@@ -669,5 +716,11 @@ onMounted(async () => {
   0% { box-shadow: 0 0 0 rgba(255,77,79,0.0); }
   40% { box-shadow: 0 0 10px rgba(255,77,79,0.28); }
   100% { box-shadow: none; }
+}
+
+.upload-note {
+  color: #6b7280;
+  font-size: 12px;
+  margin-top: 6px;
 }
 </style>

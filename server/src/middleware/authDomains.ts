@@ -75,9 +75,11 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
           wxOpenId?: string
         }
       | undefined
+    let verifyError: unknown
     try {
       payload = verifyMiniAuthToken(token)
     } catch (error) {
+      verifyError = error
       const message = error instanceof Error ? error.message : String(error)
       const name = error instanceof Error ? error.name : 'UnknownError'
       console.warn('[mini-auth] token verification failed', {
@@ -89,6 +91,18 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
         errorName: name,
         errorMessage: message,
       })
+
+      // If the token is explicitly expired, respond with a clear auth envelope
+      // so clients (miniRequest) treat it as an auth failure and can recover.
+      if (error instanceof Error && error.name === 'TokenExpiredError') {
+        ctx.status = 401
+        ctx.body = {
+          code: 401,
+          data: {},
+          message: 'token expired',
+        }
+        return
+      }
     }
 
     if (payload) {
@@ -131,9 +145,21 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
     }
   }
 
-  if (!hasBearerToken) {
-    ctx.throw(401, 'Unauthorized')
+  // If we had a bearer token but didn't produce a payload (invalid token),
+  // return a 401 business envelope so clients can detect an auth failure
+  // and trigger the mini auth recovery flow. If there was no bearer token,
+  // behave as before and throw Unauthorized.
+  if (hasBearerToken) {
+    ctx.status = 401
+    ctx.body = {
+      code: 401,
+      data: {},
+      message: 'Unauthorized',
+    }
+    return
   }
+
+  ctx.throw(401, 'Unauthorized')
 }
 
 export async function optionalMiniAuth(ctx: Context, next: Next): Promise<void> {
