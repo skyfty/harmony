@@ -152,7 +152,8 @@ function handleNavigate(key: NavKey) {
 <style scoped lang="scss">
 .page {
   min-height: 100vh;
-  background: #f8f8f8;
+  /* 更换为更柔和的渐变背景，提升视觉体验 */
+  background: linear-gradient(180deg, #f6f9ff 0%, #ffffff 100%);
   padding-bottom: 65px;
   padding-bottom: calc(65px + constant(safe-area-inset-bottom));
   padding-bottom: calc(65px + env(safe-area-inset-bottom));
