@@ -4,6 +4,30 @@ import { storeToRefs } from 'pinia'
 import LightDirectionSphere from '@/components/inspector/LightDirectionSphere.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { LightNodeProperties, LightNodeType, LightShadowProperties } from '@schema/index'
+import {
+  DEFAULT_LIGHT_DIRECTION as SCHEMA_DEFAULT_LIGHT_DIRECTION,
+  DEFAULT_LIGHT_TARGET_DISTANCE as SCHEMA_DEFAULT_LIGHT_TARGET_DISTANCE,
+  DEFAULT_COLOR,
+  DEFAULT_GROUND_COLOR,
+  DEFAULT_INTENSITY,
+  DEFAULT_DISTANCE,
+  DEFAULT_DECAY,
+  DEFAULT_WIDTH,
+  DEFAULT_HEIGHT,
+  DEFAULT_CAST_SHADOW,
+  DEFAULT_PENUMBRA,
+  DEFAULT_SPOT_ANGLE_RAD,
+  DEFAULT_SPOT_ANGLE_DEG,
+  getDefaultShadowMapSize,
+  DEFAULT_SHADOW_MAP_SIZE_SPOT,
+  DEFAULT_SHADOW_BIAS_DIRECTIONAL,
+  DEFAULT_SHADOW_BIAS,
+  DEFAULT_SHADOW_NORMAL_BIAS,
+  DEFAULT_SHADOW_RADIUS,
+  DEFAULT_SHADOW_CAMERA_NEAR,
+  DEFAULT_SHADOW_CAMERA_FAR,
+  DEFAULT_SHADOW_ORTHO_SIZE,
+} from '@schema/lightDefaults'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
@@ -12,33 +36,30 @@ const props = defineProps<{ disabled?: boolean }>()
 
 type NumericVector3 = { x: number; y: number; z: number }
 
-const DEFAULT_LIGHT_DIRECTION: NumericVector3 = { x: 0, y: -1, z: 0 }
-const DEFAULT_LIGHT_TARGET_DISTANCE: Record<'Directional' | 'Spot', number> = {
-  Directional: 30,
-  Spot: 20,
-}
+const DEFAULT_LIGHT_DIRECTION: NumericVector3 = { ...SCHEMA_DEFAULT_LIGHT_DIRECTION }
+const DEFAULT_LIGHT_TARGET_DISTANCE: Record<'Directional' | 'Spot', number> = { ...SCHEMA_DEFAULT_LIGHT_TARGET_DISTANCE }
 
 let lightDirectionInteractionActive = false
 
 const lightForm = reactive({
-  color: '#ffffff',
-  groundColor: '#444444',
-  intensity: 1,
-  distance: 50,
-  decay: 1,
-  angle: 30,
-  penumbra: 0.3,
-  width: 10,
-  height: 10,
-  castShadow: false,
+  color: DEFAULT_COLOR,
+  groundColor: DEFAULT_GROUND_COLOR,
+  intensity: DEFAULT_INTENSITY,
+  distance: DEFAULT_DISTANCE,
+  decay: DEFAULT_DECAY,
+  angle: DEFAULT_SPOT_ANGLE_DEG,
+  penumbra: DEFAULT_PENUMBRA,
+  width: DEFAULT_WIDTH,
+  height: DEFAULT_HEIGHT,
+  castShadow: DEFAULT_CAST_SHADOW,
 
-  shadowMapSize: 1024,
-  shadowBias: 0,
-  shadowNormalBias: 0,
-  shadowRadius: 1,
-  shadowCameraNear: 0.1,
-  shadowCameraFar: 200,
-  shadowOrthoSize: 20,
+  shadowMapSize: DEFAULT_SHADOW_MAP_SIZE_SPOT,
+  shadowBias: DEFAULT_SHADOW_BIAS,
+  shadowNormalBias: DEFAULT_SHADOW_NORMAL_BIAS,
+  shadowRadius: DEFAULT_SHADOW_RADIUS,
+  shadowCameraNear: DEFAULT_SHADOW_CAMERA_NEAR,
+  shadowCameraFar: DEFAULT_SHADOW_CAMERA_FAR,
+  shadowOrthoSize: DEFAULT_SHADOW_ORTHO_SIZE,
 })
 
 const shadowMapSizeOptions = [256, 512, 1024, 2048, 4096, 8192]
@@ -197,30 +218,30 @@ watch(
     }
     const light = node.light
     const shadow = light.shadow ?? {}
-    lightForm.color = light.color ?? '#ffffff'
-    lightForm.groundColor = (light as any).groundColor ?? '#444444'
-    lightForm.intensity = light.intensity ?? 1
-    lightForm.distance = light.distance ?? 50
-    lightForm.decay = light.decay ?? 1
-    lightForm.width = (light as any).width ?? 10
-    lightForm.height = (light as any).height ?? 10
-    lightForm.castShadow = light.castShadow ?? false
+    lightForm.color = light.color ?? DEFAULT_COLOR
+    lightForm.groundColor = (light as any).groundColor ?? DEFAULT_GROUND_COLOR
+    lightForm.intensity = light.intensity ?? DEFAULT_INTENSITY
+    lightForm.distance = light.distance ?? DEFAULT_DISTANCE
+    lightForm.decay = light.decay ?? DEFAULT_DECAY
+    lightForm.width = (light as any).width ?? DEFAULT_WIDTH
+    lightForm.height = (light as any).height ?? DEFAULT_HEIGHT
+    lightForm.castShadow = light.castShadow ?? DEFAULT_CAST_SHADOW
 
-    const defaultMapSize = light.type === 'Directional' ? 2048 : light.type === 'Spot' ? 1024 : 512
+    const defaultMapSize = getDefaultShadowMapSize(light.type)
     lightForm.shadowMapSize = (shadow.mapSize ?? defaultMapSize) as number
-    lightForm.shadowBias = (shadow.bias ?? (light.type === 'Directional' ? -0.0002 : 0)) as number
-    lightForm.shadowNormalBias = (shadow.normalBias ?? 0) as number
-    lightForm.shadowRadius = (shadow.radius ?? 1) as number
-    lightForm.shadowCameraNear = (shadow.cameraNear ?? 0.1) as number
-    lightForm.shadowCameraFar = (shadow.cameraFar ?? 200) as number
-    lightForm.shadowOrthoSize = (shadow.orthoSize ?? 20) as number
+    lightForm.shadowBias = (shadow.bias ?? (light.type === 'Directional' ? DEFAULT_SHADOW_BIAS_DIRECTIONAL : DEFAULT_SHADOW_BIAS)) as number
+    lightForm.shadowNormalBias = (shadow.normalBias ?? DEFAULT_SHADOW_NORMAL_BIAS) as number
+    lightForm.shadowRadius = (shadow.radius ?? DEFAULT_SHADOW_RADIUS) as number
+    lightForm.shadowCameraNear = (shadow.cameraNear ?? DEFAULT_SHADOW_CAMERA_NEAR) as number
+    lightForm.shadowCameraFar = (shadow.cameraFar ?? DEFAULT_SHADOW_CAMERA_FAR) as number
+    lightForm.shadowOrthoSize = (shadow.orthoSize ?? DEFAULT_SHADOW_ORTHO_SIZE) as number
 
     if (light.type === 'Spot') {
-      lightForm.angle = toDegrees(light.angle ?? Math.PI / 6)
-      lightForm.penumbra = light.penumbra ?? 0.3
+      lightForm.angle = toDegrees(light.angle ?? DEFAULT_SPOT_ANGLE_RAD)
+      lightForm.penumbra = light.penumbra ?? DEFAULT_PENUMBRA
     } else {
-      lightForm.angle = 30
-      lightForm.penumbra = light.penumbra ?? 0.3
+      lightForm.angle = DEFAULT_SPOT_ANGLE_DEG
+      lightForm.penumbra = light.penumbra ?? DEFAULT_PENUMBRA
     }
   },
   { immediate: true },

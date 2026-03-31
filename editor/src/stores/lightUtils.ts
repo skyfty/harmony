@@ -4,6 +4,7 @@
 import type { SceneNode, LightNodeType } from '@schema'
 import type { Vector3, Light } from 'three'
 import { normalizeLightNodeType } from '@/types/light'
+import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
 
 export type LightDeps = {
   createVector: (x: number, y: number, z: number) => Vector3
@@ -54,7 +55,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
     case 'Directional':
       return {
         name: 'Directional Light',
-        color: '#ffffff',
+        color: DEFAULT_COLOR,
         intensity: 1.2,
         position: deps.createVector(15, 20, 15),
         target: deps.createVector(0, 0, 0),
@@ -63,20 +64,21 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
     case 'Point':
       return {
         name: 'Point Light',
-        color: '#ffffff',
-        intensity: 1,
+        color: DEFAULT_COLOR,
+        intensity: DEFAULT_INTENSITY,
         position: deps.createVector(0, 8, 0),
         extras: { distance: 60, decay: 2, castShadow: false } as Record<string, unknown>,
       }
     case 'Spot':
       return {
         name: 'Spot Light',
-        color: '#ffffff',
-        intensity: 1,
+        color: DEFAULT_COLOR,
+        intensity: DEFAULT_INTENSITY,
         position: deps.createVector(10, 14, 10),
         target: deps.createVector(0, 0, 0),
         extras: { angle: Math.PI / 5, penumbra: 0.35, distance: 80, decay: 2, castShadow: true } as Record<string, unknown>,
       }
+    
     case 'Ambient':
     default:
       return {
@@ -109,7 +111,7 @@ export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {
 export const POINT_LIGHT_HELPER_SIZE = 0.5
 export const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
 // Default helper color used when a helper-specific color is needed
-export const LIGHT_HELPER_DEFAULT_COLOR = '#ffffff'
+export const LIGHT_HELPER_DEFAULT_COLOR = DEFAULT_COLOR
 // Global debug flag for light helpers (turn on additional helper debugging/metrics)
 export const LIGHT_HELPERS_DEBUG = false
 

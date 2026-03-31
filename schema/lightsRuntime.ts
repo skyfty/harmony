@@ -1,6 +1,21 @@
 import * as THREE from 'three'
 
-import type { LightNodeProperties } from './index'
+import type { LightNodeProperties,LightNodeType,LightShadowProperties } from './index'
+import {
+  DEFAULT_COLOR,
+  DEFAULT_INTENSITY,
+  DEFAULT_DECAY,
+  DEFAULT_SPOT_ANGLE_RAD,
+  DEFAULT_GROUND_COLOR,
+  DEFAULT_SHADOW_MAP_SIZE_DIRECTIONAL,
+  DEFAULT_SHADOW_MAP_SIZE_SPOT,
+  DEFAULT_SHADOW_RADIUS,
+  DEFAULT_SHADOW_BIAS,
+  DEFAULT_SHADOW_NORMAL_BIAS,
+  DEFAULT_SHADOW_CAMERA_NEAR,
+  DEFAULT_SHADOW_CAMERA_FAR,
+  DEFAULT_SHADOW_ORTHO_SIZE,
+} from './lightDefaults'
 
 // RectAreaLight support removed: no-op placeholder kept for compatibility.
 export function ensureRectAreaLightSupport(): void {
@@ -20,11 +35,7 @@ function coerceFiniteNumber(value: unknown): number | null {
   return value
 }
 
-function applyShadowSettings(light: THREE.Light, props: LightNodeProperties): void {
-  const shadowProps = props.shadow
-  if (!shadowProps) {
-    return
-  }
+function applyShadowSettings(light: THREE.Light,type:LightNodeType, shadowProps: LightShadowProperties): void {
 
   const anyLight = light as any
   const shadow = anyLight.shadow as THREE.LightShadow | undefined
@@ -65,7 +76,7 @@ function applyShadowSettings(light: THREE.Light, props: LightNodeProperties): vo
     shadowCamera.far = cameraFar
   }
 
-  if (props.type === 'Directional') {
+  if (type === 'Directional') {
     const orthoSize = coerceFiniteNumber(shadowProps.orthoSize)
     const camera = shadowCamera as THREE.OrthographicCamera | undefined
     if (orthoSize !== null && camera && (camera as any).isOrthographicCamera) {
@@ -81,21 +92,23 @@ function applyShadowSettings(light: THREE.Light, props: LightNodeProperties): vo
 }
 
 export function createThreeLightFromLightNode(props: LightNodeProperties): CreatedThreeLight {
-  const color = new THREE.Color(props.color ?? '#ffffff')
-  const intensity = Number.isFinite(props.intensity) ? Number(props.intensity) : 1
+  const colorValue = props.color ?? DEFAULT_COLOR
+  const color = new THREE.Color(colorValue)
+  const intensity = Number.isFinite(props.intensity) ? Number(props.intensity) : DEFAULT_INTENSITY
 
   switch (props.type) {
     case 'Directional': {
       const directional = new THREE.DirectionalLight(color, intensity)
       directional.castShadow = Boolean(props.castShadow)
-      directional.shadow.mapSize.set(2048, 2048)
-      directional.shadow.camera.near = 0.1
-      directional.shadow.camera.far = 200
-      directional.shadow.bias = 0
-      directional.shadow.normalBias = 0
-      directional.shadow.radius = 1
-      directional.shadow.orthoSize = 20
-      applyShadowSettings(directional, props)
+      let shadowProps = props.shadow ?? {}
+      shadowProps.mapSize ??= DEFAULT_SHADOW_MAP_SIZE_DIRECTIONAL
+      shadowProps.cameraNear ??= DEFAULT_SHADOW_CAMERA_NEAR
+      shadowProps.cameraFar ??= DEFAULT_SHADOW_CAMERA_FAR
+      shadowProps.orthoSize ??= DEFAULT_SHADOW_ORTHO_SIZE
+      shadowProps.bias ??= DEFAULT_SHADOW_BIAS
+      shadowProps.normalBias ??= DEFAULT_SHADOW_NORMAL_BIAS
+      shadowProps.radius ??= DEFAULT_SHADOW_RADIUS
+      applyShadowSettings(directional, props.type, shadowProps)
 
       if (props.target) {
         const target = new THREE.Object3D()
@@ -108,9 +121,16 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
     }
 
     case 'Point': {
-      const point = new THREE.PointLight(color, intensity, props.distance ?? 0, props.decay ?? 1)
+      const point = new THREE.PointLight(color, intensity, props.distance ?? 0, props.decay ?? DEFAULT_DECAY)
       point.castShadow = Boolean(props.castShadow)
-      applyShadowSettings(point, props)
+      let shadowProps = props.shadow ?? {}
+      shadowProps.mapSize ??= DEFAULT_SHADOW_MAP_SIZE_SPOT
+      shadowProps.cameraNear ??= DEFAULT_SHADOW_CAMERA_NEAR
+      shadowProps.cameraFar ??= DEFAULT_SHADOW_CAMERA_FAR
+      shadowProps.bias ??= DEFAULT_SHADOW_BIAS
+      shadowProps.normalBias ??= DEFAULT_SHADOW_NORMAL_BIAS
+      shadowProps.radius ??= DEFAULT_SHADOW_RADIUS
+      applyShadowSettings(point, props.type, shadowProps)
       return { light: point }
     }
 
@@ -119,13 +139,19 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
         color,
         intensity,
         props.distance ?? 0,
-        props.angle ?? Math.PI / 4,
+        props.angle ?? DEFAULT_SPOT_ANGLE_RAD,
         props.penumbra ?? 0,
-        props.decay ?? 1,
+        props.decay ?? DEFAULT_DECAY,
       )
       spot.castShadow = Boolean(props.castShadow)
-      spot.shadow.mapSize.set(1024, 1024)
-      applyShadowSettings(spot, props)
+      let shadowProps = props.shadow ?? {}
+      shadowProps.mapSize ??= DEFAULT_SHADOW_MAP_SIZE_SPOT
+      shadowProps.cameraNear ??= DEFAULT_SHADOW_CAMERA_NEAR
+      shadowProps.cameraFar ??= DEFAULT_SHADOW_CAMERA_FAR
+      shadowProps.bias ??= DEFAULT_SHADOW_BIAS
+      shadowProps.normalBias ??= DEFAULT_SHADOW_NORMAL_BIAS
+      shadowProps.radius ??= DEFAULT_SHADOW_RADIUS
+      applyShadowSettings(spot, props.type, shadowProps)
 
       if (props.target) {
         const target = new THREE.Object3D()
@@ -138,7 +164,7 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
     }
 
     case 'Hemisphere': {
-      const ground = new THREE.Color(props.groundColor ?? '#444444')
+      const ground = new THREE.Color(props.groundColor ?? DEFAULT_GROUND_COLOR)
       const hemi = new THREE.HemisphereLight(color, ground, intensity)
       return { light: hemi }
     }

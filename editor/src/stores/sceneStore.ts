@@ -34,6 +34,7 @@ import {
   extractWaterSurfaceMeshMetadataFromUserData,
   normalizeWaterSurfaceMeshInput,
 } from '@schema'
+import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import type {
   AssetSourceMetadata,
   BehaviorComponentProps,
@@ -2298,7 +2299,7 @@ type ExternalSceneImportContext = {
   modelAssetId: string | null
 }
 
-function toHexColor(color: Color | null | undefined, fallback = '#ffffff'): string {
+function toHexColor(color: Color | null | undefined, fallback = DEFAULT_COLOR): string {
   if (!color) {
     return fallback
   }
@@ -2662,8 +2663,8 @@ async function convertObjectToSceneNode(
     const lightType = resolveLightTypeFromObject(lightCandidate)
     const lightConfig: LightNodeProperties = {
       type: lightType,
-      color: toHexColor(lightCandidate.color as Color, '#ffffff'),
-      intensity: typeof lightCandidate.intensity === 'number' ? lightCandidate.intensity : 1,
+      color: toHexColor(lightCandidate.color as Color),
+      intensity: typeof lightCandidate.intensity === 'number' ? lightCandidate.intensity : DEFAULT_INTENSITY,
     }
 
     if (typeof (lightCandidate as Record<string, unknown>).distance === 'number') {
