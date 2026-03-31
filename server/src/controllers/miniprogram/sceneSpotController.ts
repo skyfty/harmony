@@ -256,7 +256,8 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
   const [featuredRows, hotRows, otherSpots] = await Promise.all([
     FeaturedSpotModel.find({}).sort({ order: 1, createdAt: -1 }).populate('sceneSpotId').lean().exec(),
     HotSpotModel.find({}).sort({ order: 1, createdAt: -1 }).populate('sceneSpotId').lean().exec(),
-    SceneSpotModel.find({}).sort({ order: 1, createdAt: -1 }).lean().exec(),
+    // only load scene spots that are marked as homepage recommended (isFeatured)
+    SceneSpotModel.find({ isFeatured: true }).sort({ order: 1, createdAt: -1 }).lean().exec(),
   ])
 
   const featuredSpots: any[] = []
@@ -269,12 +270,16 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
 
   for (const row of featuredRows) {
     const sceneSpot = row.sceneSpotId
-    if (sceneSpot) featuredSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
+    // include only if the referenced scene spot exists and is marked homepage recommended
+    if (sceneSpot && sceneSpot.isFeatured === true)
+      featuredSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
   }
 
   for (const row of hotRows) {
     const sceneSpot = row.sceneSpotId
-    if (sceneSpot) hotSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
+    // include only if the referenced scene spot exists and is marked homepage recommended
+    if (sceneSpot && sceneSpot.isFeatured === true)
+      hotSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
   }
 
   // remove featured & hot from others map
@@ -293,11 +298,16 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
   }
 
   const ordered: any[] = []
+  // map of spotId -> homepage tag: 'featured' | 'hot' | 'only'
+  const homepageTagById = new Map<string, string>()
 
   // add featured (ordered by featured.order)
   featuredSpots.sort((a, b) => a.groupOrder - b.groupOrder)
   for (const item of featuredSpots) {
-    if (matchesQ(item.sceneSpot)) ordered.push(item.sceneSpot)
+    if (matchesQ(item.sceneSpot)) {
+      ordered.push(item.sceneSpot)
+      homepageTagById.set(String(item.sceneSpot._id), 'featured')
+    }
   }
 
   // add hot (ordered by hot.order), excluding those already added
@@ -308,13 +318,18 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
     if (!added.has(id) && matchesQ(item.sceneSpot)) {
       ordered.push(item.sceneSpot)
       added.add(id)
+      homepageTagById.set(id, 'hot')
     }
   }
 
   // add rest sorted by sceneSpot.order
   others.sort((a, b) => (Number.isFinite(Number(a.order)) ? Number(a.order) : 0) - (Number.isFinite(Number(b.order)) ? Number(b.order) : 0))
   for (const spot of others) {
-    if (!added.has(String(spot._id)) && matchesQ(spot)) ordered.push(spot)
+    const sid = String(spot._id)
+    if (!added.has(sid) && matchesQ(spot)) {
+      ordered.push(spot)
+      homepageTagById.set(sid, 'only')
+    }
   }
 
   // fetch scenes for ordered spots
@@ -337,6 +352,9 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
       const scene = sceneById.get(String(spot.sceneId))
       if (!scene) return null
       const dto = buildSceneSpotSummaryDto(spot, scene)
+      // annotate which homepage bucket this spot came from
+      const tag = homepageTagById.get(String(spot._id))
+      if (tag) (dto as any).homepageTag = tag
       return withInteractionState(dto, interactionBySpotId.get(String(spot._id)))
     })
     .filter(Boolean)

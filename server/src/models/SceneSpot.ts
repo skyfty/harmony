@@ -18,9 +18,10 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
     favoriteCount: { type: Number, default: 0, min: 0 },
     ratingTotalScore: { type: Number, default: 0, min: 0 },
     phone: { type: String, default: null },
+    // GeoJSON Point - only set when coordinates are provided
     location: {
-      type: { type: String, enum: ['Point'], default: 'Point' },
-      coordinates: { type: [Number], default: undefined }, // [lng, lat]
+      type: { type: String, enum: ['Point'] },
+      coordinates: { type: [Number] }, // [lng, lat]
     },
   },
   {
@@ -32,6 +33,7 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
 sceneSpotSchema.index({ sceneId: 1, order: 1 })
 sceneSpotSchema.index({ isFeatured: 1, order: 1, createdAt: -1 })
 sceneSpotSchema.index({ title: 'text', description: 'text', address: 'text' })
-sceneSpotSchema.index({ location: '2dsphere' })
+// Use a sparse 2dsphere index so documents without a valid location are not indexed.
+sceneSpotSchema.index({ location: '2dsphere' }, { sparse: true })
 
 export const SceneSpotModel = model<SceneSpotDocument>('SceneSpot', sceneSpotSchema)

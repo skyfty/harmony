@@ -17,11 +17,15 @@
               <text class="value">{{ rating.toFixed(1) }}</text>
             </view>
           </view>
-        <view class="meta-row">
-          <text v-if="typeof ratingCount === 'number'" class="review-count">点评 {{ formatCount(ratingCount) }}</text>
-          <!-- <text v-if="distance" class="distance">{{ distance }}</text> -->
-          <text v-if="address" class="address">{{ address }}</text>
-        </view>
+            <view class="meta-row">
+              <!-- show homepage badge: 热门 > 精选; remove previous review-count area -->
+              <view class="badge-wrap">
+                <view v-if="isHot" class="badge badge-hot">热门</view>
+                <view v-if="isFeatured" class="badge badge-featured">精选</view>
+              </view>
+              <!-- <text v-if="distance" class="distance">{{ distance }}</text> -->
+              <text v-if="address" class="address">{{ address }}</text>
+            </view>
         <text v-if="summary" class="summary">{{ summary }}</text>
           <view v-if="typeof progressPercent === 'number'" class="progress-row list-progress-row">
             <image class="progress-icon" src="/static/images/checkin.jpg" mode="aspectFit" aria-hidden="true" />
@@ -89,6 +93,8 @@ defineProps<{
   name: string;
   summary: string | null;
   coverUrl: string;
+  isFeatured?: boolean;
+  isHot?: boolean;
   rating?: number;
   ratingCount?: number;
   favoriteCount?: number;
@@ -357,5 +363,31 @@ function formatCount(n?: number): string {
 
 .progress-perc {
   flex: 0 0 auto;
+}
+
+.badge-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  height: 22px;
+  border-radius: 999px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.badge-hot {
+  background: linear-gradient(90deg, #ff6b6b, #ff3b3b);
+}
+
+.badge-featured {
+  background: linear-gradient(90deg, #ffd54f, #ffb340);
+  color: #1a1f2e;
 }
 </style>

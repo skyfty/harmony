@@ -39,6 +39,8 @@
               :rating-count="scenic.ratingCount"
               :address="scenic.address"
               :favorite-count="scenic.favoriteCount"
+              :is-featured="scenic.isFeatured"
+              :is-hot="scenic.homepageTag === 'hot'"
             variant="list"
             :progress-percent="resolveScenicProgress(scenic.id).percent"
             :progress-text="resolveScenicProgress(scenic.id).description"
