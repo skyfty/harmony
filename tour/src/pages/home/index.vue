@@ -6,9 +6,7 @@
         <view class="hero-orb hero-orb-right" />
         <view class="hero-curve" />
       </view>
-              :is-featured="scenic.isHome"
       <view class="hero-content">
-        <text class="hero-tag">热门目的地</text>
         <text class="hero-title">探索你想去的景点</text>
         <text class="hero-subtitle">轻松查找景区路线与游玩进度</text>
 

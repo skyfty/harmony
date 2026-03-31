@@ -271,16 +271,16 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
   }
 
   for (const row of featuredRows) {
-    const sceneSpot = row.sceneSpotId
+    const sceneSpot = (row as any).sceneSpotId
     // include only if the referenced scene spot exists and is marked homepage recommended
-    if (sceneSpot && sceneSpot.isHome === true)
+    if (sceneSpot && (sceneSpot as any).isHome === true)
       featuredSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
   }
 
   for (const row of hotRows) {
-    const sceneSpot = row.sceneSpotId
+    const sceneSpot = (row as any).sceneSpotId
     // include only if the referenced scene spot exists and is marked homepage recommended
-    if (sceneSpot && sceneSpot.isHome === true)
+    if (sceneSpot && (sceneSpot as any).isHome === true)
       hotSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
   }
 
