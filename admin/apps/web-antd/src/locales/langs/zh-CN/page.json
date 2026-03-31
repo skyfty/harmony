@@ -116,9 +116,9 @@
         "titleCol": "景点名称",
         "sceneId": "所属场景",
         "category": "分类",
-        "isFeatured": "首页推荐",
-        "isFeaturedYes": "已推荐",
-        "isFeaturedNo": "未推荐",
+        "isHome": "首页推荐",
+        "isHomeYes": "已推荐",
+        "isHomeNo": "未推荐",
         "averageRating": "评分均值",
         "ratingCount": "评分人数",
         "favoriteCount": "收藏次数",
@@ -176,7 +176,7 @@
         "favoriteCount": {
           "label": "收藏次数"
         },
-        "isFeatured": {
+        "isHome": {
           "label": "首页推荐"
         }
       }
@@ -205,9 +205,9 @@
         "averageRating": "评分均值",
         "ratingCount": "评分人数",
         "favoriteCount": "收藏次数",
-        "isFeatured": "首页推荐",
-        "isFeaturedYes": "已推荐",
-        "isFeaturedNo": "未推荐",
+        "isHome": "首页推荐",
+        "isHomeYes": "已推荐",
+        "isHomeNo": "未推荐",
         "coverImage": "介绍图",
         "slides": "幻灯片",
         "createdAt": "创建时间",

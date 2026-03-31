@@ -30,7 +30,7 @@ interface SceneSpotFormModel {
   locationLat?: number | null;
   locationLng?: number | null;
   order: number;
-  isFeatured: boolean;
+  isHome: boolean;
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;
@@ -74,7 +74,7 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   locationLat: null,
   locationLng: null,
   order: 0,
-  isFeatured: false,
+  isHome: false,
   averageRating: 0,
   ratingCount: 0,
   favoriteCount: 0,
@@ -108,7 +108,7 @@ function resetForm() {
   sceneSpotFormModel.locationLat = null;
   sceneSpotFormModel.locationLng = null;
   sceneSpotFormModel.order = 0;
-  sceneSpotFormModel.isFeatured = false;
+  sceneSpotFormModel.isHome = false;
   sceneSpotFormModel.averageRating = 0;
   sceneSpotFormModel.ratingCount = 0;
   sceneSpotFormModel.favoriteCount = 0;
@@ -282,7 +282,7 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.distance = data.distance ?? '';
   sceneSpotFormModel.address = data.address ?? '';
   sceneSpotFormModel.order = data.order ?? 0;
-  sceneSpotFormModel.isFeatured = data.isFeatured === true;
+  sceneSpotFormModel.isHome = data.isHome === true;
   sceneSpotFormModel.averageRating = Number(data.averageRating ?? 0);
   sceneSpotFormModel.ratingCount = Number(data.ratingCount ?? 0);
   sceneSpotFormModel.favoriteCount = Number(data.favoriteCount ?? 0);
@@ -341,7 +341,7 @@ async function submitSceneSpot() {
   payload.append('description', sceneSpotFormModel.description.trim());
   payload.append('address', sceneSpotFormModel.address.trim());
   payload.append('order', String(Number(sceneSpotFormModel.order) || 0));
-  payload.append('isFeatured', String(sceneSpotFormModel.isFeatured));
+  payload.append('isHome', String(sceneSpotFormModel.isHome));
   payload.append('averageRating', String(Number(sceneSpotFormModel.averageRating) || 0));
   payload.append('ratingCount', String(Number(sceneSpotFormModel.ratingCount) || 0));
   payload.append('favoriteCount', String(Number(sceneSpotFormModel.favoriteCount) || 0));
@@ -418,20 +418,20 @@ function handleDelete(row: SceneSpotItem) {
 
 async function toggleFeatured(row: SceneSpotItem, checked: unknown) {
   const flag = Boolean(checked === true || checked === 'true' || checked === 1 || checked === '1');
-  const prev = row.isFeatured;
+  const prev = row.isHome;
   // prevent duplicate
   if (featuredLoading[row.id]) return;
   featuredLoading[row.id] = true;
   // optimistic update
-  row.isFeatured = flag;
+  row.isHome = flag;
   try {
     const payload = new FormData();
-    payload.append('isFeatured', String(flag));
+    payload.append('isHome', String(flag));
     await updateSceneSpotApi(row.id, payload);
     message.success(t('page.sceneSpots.index.message.updateSuccess'));
     sceneSpotGridApi.reload();
   } catch (err) {
-    row.isFeatured = prev;
+    row.isHome = prev;
     featuredError[row.id] = true;
     // clear error highlight after short delay
     setTimeout(() => {
@@ -478,7 +478,7 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
       { field: 'title', minWidth: 180, title: t('page.sceneSpots.index.table.titleCol') },
       { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId'), slots: { default: 'sceneName' } },
       { field: 'category', minWidth: 160, title: t('page.sceneSpots.index.table.category'), slots: { default: 'category' } },
-      { field: 'isFeatured', minWidth: 120, title: t('page.sceneSpots.index.table.isFeatured'), slots: { default: 'isFeatured' } },
+      { field: 'isHome', minWidth: 120, title: t('page.sceneSpots.index.table.isHome'), slots: { default: 'isHome' } },
       { field: 'averageRating', minWidth: 120, title: t('page.sceneSpots.index.table.averageRating') },
       { field: 'ratingCount', minWidth: 120, title: t('page.sceneSpots.index.table.ratingCount') },
       { field: 'favoriteCount', minWidth: 120, title: t('page.sceneSpots.index.table.favoriteCount') },
@@ -551,9 +551,9 @@ onMounted(async () => {
         {{ row.category?.name || '-' }}
       </template>
 
-      <template #isFeatured="{ row }">
+      <template #isHome="{ row }">
         <div :class="['featured-cell', { 'featured-error': featuredError[row.id] }]">
-          <Switch :checked="row.isFeatured" :loading="featuredLoading[row.id]" @change="(checked) => toggleFeatured(row, checked)" />
+          <Switch :checked="row.isHome" :loading="featuredLoading[row.id]" @change="(checked) => toggleFeatured(row, checked)" />
         </div>
       </template>
 
@@ -654,8 +654,8 @@ onMounted(async () => {
               <div class="upload-note">{{ t('page.sceneSpots.index.help.slideImageSize', { width: 430, height: 340, max: MAX_SLIDES_COUNT }) }}</div>
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
-              <Switch v-model:checked="sceneSpotFormModel.isFeatured" />
+            <Form.Item :label="t('page.sceneSpots.index.formFields.isHome.label')" name="isHome">
+              <Switch v-model:checked="sceneSpotFormModel.isHome" />
             </Form.Item>
             <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">
               <TextArea v-model:value="sceneSpotFormModel.description" :rows="3" />

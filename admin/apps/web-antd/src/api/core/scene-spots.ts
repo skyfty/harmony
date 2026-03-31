@@ -23,7 +23,7 @@ export interface SceneSpotItem {
   address: string;
   distance?: string | null;
   order: number;
-  isFeatured: boolean;
+  isHome: boolean;
   averageRating: number;
   ratingCount: number;
   favoriteCount: number;
@@ -36,7 +36,7 @@ export interface ListSceneSpotsParams {
   page?: number;
   pageSize?: number;
   sceneId?: string;
-  isFeatured?: boolean;
+  isHome?: boolean;
 }
 
 function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {

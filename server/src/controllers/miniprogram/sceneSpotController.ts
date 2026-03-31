@@ -189,7 +189,7 @@ function buildSceneSpotSummaryDto(spot: any, scene: any) {
     distance: toStringValue(spot.distance, ''),
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
     order: typeof spot.order === 'number' ? spot.order : 0,
-    isFeatured: spot.isFeatured === true,
+    isHome: spot.isHome === true,
     averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
     ratingCount: typeof spot.ratingCount === 'number' ? spot.ratingCount : 0,
     favoriteCount: typeof spot.favoriteCount === 'number' ? spot.favoriteCount : 0,
@@ -256,8 +256,8 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
   const [featuredRows, hotRows, otherSpots] = await Promise.all([
     FeaturedSpotModel.find({}).sort({ order: 1, createdAt: -1 }).populate('sceneSpotId').lean().exec(),
     HotSpotModel.find({}).sort({ order: 1, createdAt: -1 }).populate('sceneSpotId').lean().exec(),
-    // only load scene spots that are marked as homepage recommended (isFeatured)
-    SceneSpotModel.find({ isFeatured: true }).sort({ order: 1, createdAt: -1 }).lean().exec(),
+    // only load scene spots that are marked as homepage recommended (isHome)
+    SceneSpotModel.find({ isHome: true }).sort({ order: 1, createdAt: -1 }).lean().exec(),
   ])
 
   const featuredSpots: any[] = []
@@ -271,14 +271,14 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
   for (const row of featuredRows) {
     const sceneSpot = row.sceneSpotId
     // include only if the referenced scene spot exists and is marked homepage recommended
-    if (sceneSpot && sceneSpot.isFeatured === true)
+    if (sceneSpot && sceneSpot.isHome === true)
       featuredSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
   }
 
   for (const row of hotRows) {
     const sceneSpot = row.sceneSpotId
     // include only if the referenced scene spot exists and is marked homepage recommended
-    if (sceneSpot && sceneSpot.isFeatured === true)
+    if (sceneSpot && sceneSpot.isHome === true)
       hotSpots.push({ sceneSpot, groupOrder: Number.isFinite(Number(row.order)) ? Number(row.order) : 0 })
   }
 
@@ -408,7 +408,7 @@ export async function listSceneSpots(ctx: Context): Promise<void> {
   const filter: Record<string, unknown> = {}
   const featuredFlag = toOptionalBoolean(featured)
   if (featuredFlag !== undefined) {
-    filter.isFeatured = featuredFlag
+    filter.isHome = featuredFlag
   }
 
   if (typeof q === 'string' && q.trim()) {

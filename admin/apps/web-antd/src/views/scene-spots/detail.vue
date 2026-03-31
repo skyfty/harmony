@@ -57,9 +57,9 @@ onMounted(load);
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.averageRating')">{{ sceneSpot?.averageRating ?? '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.ratingCount')">{{ sceneSpot?.ratingCount ?? '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.favoriteCount')">{{ sceneSpot?.favoriteCount ?? '-' }}</Descriptions.Item>
-        <Descriptions.Item :label="t('page.sceneSpots.detail.fields.isFeatured')">
-          <Tag :color="sceneSpot?.isFeatured ? 'green' : 'default'">
-            {{ sceneSpot?.isFeatured ? t('page.sceneSpots.detail.fields.isFeaturedYes') : t('page.sceneSpots.detail.fields.isFeaturedNo') }}
+        <Descriptions.Item :label="t('page.sceneSpots.detail.fields.isHome')">
+          <Tag :color="sceneSpot?.isHome ? 'green' : 'default'">
+            {{ sceneSpot?.isHome ? t('page.sceneSpots.detail.fields.isHomeYes') : t('page.sceneSpots.detail.fields.isHomeNo') }}
           </Tag>
         </Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.coverImage')">

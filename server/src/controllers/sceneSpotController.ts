@@ -14,7 +14,7 @@ type SceneSpotMutationPayload = {
   description?: string | null
   address?: string | null
   order?: number
-  isFeatured?: boolean
+  isHome?: boolean
   averageRating?: number
   ratingCount?: number
   favoriteCount?: number
@@ -306,7 +306,7 @@ function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
     address: typeof spot.address === 'string' ? spot.address : '',
     distance: typeof spot.distance === 'string' ? spot.distance : '',
     order: typeof spot.order === 'number' ? spot.order : 0,
-    isFeatured: spot.isFeatured === true,
+    isHome: spot.isHome === true,
     averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
     ratingCount: typeof spot.ratingCount === 'number' ? spot.ratingCount : 0,
     favoriteCount: typeof spot.favoriteCount === 'number' ? spot.favoriteCount : 0,
@@ -525,7 +525,7 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
       phone: toNullableString(body.phone) ?? null,
       // location will be added below only if valid coords exist
       order: toNumberOrDefault(body.order, 0),
-      isFeatured: toBoolean(body.isFeatured) ?? false,
+      isHome: toBoolean(body.isHome) ?? false,
       averageRating,
       ratingCount,
       favoriteCount,
@@ -617,7 +617,7 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'retainSlides does not accept base64 payload')
   }
 
-  const nextIsFeatured = toBoolean(body.isFeatured)
+  const nextIsHome = toBoolean(body.isHome)
   const title = body.title === undefined ? undefined : toNonEmptyString(body.title)
   if (body.title !== undefined && !title) {
     ctx.throw(400, 'Scene spot title is required')
@@ -779,7 +779,7 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
       distance: body.distance === undefined ? current.distance : toNullableString(body.distance) ?? '',
       address: body.address === undefined ? current.address : toNullableString(body.address) ?? '',
       order: body.order === undefined ? current.order : toNumberOrDefault(body.order, current.order ?? 0),
-      isFeatured: nextIsFeatured === null ? current.isFeatured : nextIsFeatured,
+      isHome: nextIsHome === null ? current.isHome : nextIsHome,
       averageRating: nextAverageRating,
       ratingCount: nextRatingCount,
       favoriteCount: nextFavoriteCount,

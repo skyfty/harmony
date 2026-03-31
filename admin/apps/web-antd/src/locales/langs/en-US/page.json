@@ -112,9 +112,9 @@
         "titleCol": "Title",
         "sceneId": "Scene",
         "category": "Category",
-        "isFeatured": "Home Featured",
-        "isFeaturedYes": "Featured",
-        "isFeaturedNo": "Not Featured",
+        "isHome": "Home Featured",
+        "isHomeYes": "Featured",
+        "isHomeNo": "Not Featured",
         "averageRating": "Average Rating",
         "ratingCount": "Rating Count",
         "favoriteCount": "Favorites",
@@ -172,7 +172,7 @@
         "favoriteCount": {
           "label": "Favorites"
         },
-        "isFeatured": {
+        "isHome": {
           "label": "Home Featured"
         }
       }
@@ -192,9 +192,9 @@
         "averageRating": "Average Rating",
         "ratingCount": "Rating Count",
         "favoriteCount": "Favorites",
-        "isFeatured": "Home Featured",
-        "isFeaturedYes": "Featured",
-        "isFeaturedNo": "Not Featured",
+        "isHome": "Home Featured",
+        "isHomeYes": "Featured",
+        "isHomeNo": "Not Featured",
         "coverImage": "Cover Image",
         "slides": "Slides",
         "createdAt": "Created At",

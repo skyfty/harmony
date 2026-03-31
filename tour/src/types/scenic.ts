@@ -6,7 +6,7 @@ export interface ScenicSummary {
   description: string;
   address: string;
   slides: string[];
-  isFeatured: boolean;
+  isHome: boolean;
   distance?: string | null;
   phone?: string | null;
   location?: { lat: number; lng: number } | null;
