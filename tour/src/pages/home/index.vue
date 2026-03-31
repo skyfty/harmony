@@ -196,13 +196,18 @@ function handleNavigate(key: NavKey) {
 }
 
 .hero-tag {
-  width: fit-content;
-  padding: 2px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
   border-radius: 999px;
   font-size: 11px;
-  color: #f8fbff;
-  background: rgba(255, 255, 255, 0.24);
-  animation: hero-pulse 3.4s ease-in-out infinite;
+  font-weight: 700;
+  color: #0b1020;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 20px rgba(79, 70, 229, 0.12);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
 }
 
 .hero-title {

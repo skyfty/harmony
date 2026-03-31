@@ -736,23 +736,44 @@ function computeScenicCheckinRatio(): number {
   align-items: center;
 }
 
+
 .badge {
-  height: 22px;
-  border-radius: 999px;
-  padding: 0 8px;
-  display: flex;
+  height: 18px;
+  border-radius: 4px;
+  padding: 0 6px;
+  display: inline-flex;
   align-items: center;
-  font-size: 12px;
-  font-weight: 700;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
   color: #ffffff;
+  box-shadow: 0 6px 14px rgba(10, 14, 33, 0.10);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+
+
+.badge:hover {
+  transform: translateY(-1px);
 }
 
 .badge-hot {
-  background: linear-gradient(90deg, #ff6b6b, #ff3b3b);
+  background: linear-gradient(90deg, #ff7a6b, #ff3b3b);
+}
+
+.badge-hot::before {
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06) inset;
 }
 
 .badge-featured {
-  background: linear-gradient(90deg, #ffd54f, #ffb340);
+  background: linear-gradient(90deg, #fff2b8, #ffd07a);
   color: #1a1f2e;
+}
+
+.badge-featured::before {
+  background: rgba(255, 255, 255, 0.98);
 }
 </style>
