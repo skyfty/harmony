@@ -29,6 +29,9 @@ importers:
       three:
         specifier: ^0.172.0
         version: 0.172.0
+      three-csm:
+        specifier: ^4.2.1
+        version: 4.2.1
       three-mesh-bvh:
         specifier: ^0.9.1
         version: 0.9.8(three@0.172.0)
@@ -239,6 +242,9 @@ packages:
     engines: {node: '>=16'}
     hasBin: true
 
+  three-csm@4.2.1:
+    resolution: {integrity: sha512-yHxKNPB2XMUBgWQTIWR0pESXzGYOdID49f2LdTbz+pNJRzBIMMVEJp5JuRSeCU6c75lmL5L4+FXRHQ1tQIgWEg==}
+
   three-mesh-bvh@0.9.8:
     resolution: {integrity: sha512-YphYvdXEZSXdz6iNdWJo1RB6qvSCRyiXPEVSvNU6xVWbLDOdSrfEIsJOpgFOnefdmVEvZ6M+sY0cjh9gl7MvdA==}
     peerDependencies:
@@ -417,6 +423,8 @@ snapshots:
       csso: 5.0.5
       picocolors: 1.1.1
       sax: 1.4.4
+
+  three-csm@4.2.1: {}
 
   three-mesh-bvh@0.9.8(three@0.172.0):
     dependencies:

@@ -564,6 +564,7 @@ import {
   type Vector3Like,
 } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
+import { createSceneCsmShadowRuntime, type SceneCsmConfig, type SceneCsmShadowRuntime } from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
 import {
@@ -1589,8 +1590,43 @@ const bootstrapFinished = ref(false);
 const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight';
 const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget';
 const SKY_SUN_LIGHT_DISTANCE = 1000;
+const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
+  enabled: !isWeChatMiniProgram,
+  cascades: 4,
+  maxCascades: 4,
+  maxFar: 1000,
+  shadowMapSize: 2048,
+  lightMargin: 240,
+  fade: true,
+  noLastCascadeCutOff: true,
+};
+let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
+
+function shouldUseSceneCsmShadows(): boolean {
+  return Boolean(renderContext?.scene && renderContext?.camera && SCENERY_SCENE_CSM_CONFIG.enabled);
+}
+
+function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
+  const context = renderContext;
+  if (!context || !shouldUseSceneCsmShadows()) {
+    return null;
+  }
+  if (!sceneCsmShadowRuntime) {
+    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(context.scene, context.camera, SCENERY_SCENE_CSM_CONFIG);
+  }
+  return sceneCsmShadowRuntime;
+}
+
+function disposeSceneCsmShadowRuntime(): void {
+  sceneCsmShadowRuntime?.dispose();
+  sceneCsmShadowRuntime = null;
+}
 
 function ensureSkySunLightExists(): THREE.DirectionalLight | null {
+  if (shouldUseSceneCsmShadows()) {
+    ensureSceneCsmShadowRuntime()?.setActive(true);
+    return null;
+  }
   const scene = renderContext?.scene ?? null;
   if (!scene) {
     return null;
@@ -1633,6 +1669,20 @@ function disposeSkySunLight(): void {
 }
 
 function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
+  if (shouldUseSceneCsmShadows()) {
+    disposeSkySunLight();
+    const exposure = resolveSceneExposure(settings.exposure);
+    const runtime = ensureSceneCsmShadowRuntime();
+    runtime?.setActive(true);
+    runtime?.registerObject(sceneGraphRoot);
+    runtime?.registerObject(instancedMeshGroup);
+    runtime?.syncSun(
+      skySunPosition,
+      clampNumber(exposure, 0, 20, resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure)),
+      0xffffff,
+    );
+    return;
+  }
   const light = ensureSkySunLightExists();
   if (!light || !skySunLightTarget) {
     return;
@@ -4133,6 +4183,7 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
   mesh.frustumCulled = false;
   instancedMeshes.push(mesh);
   instancedMeshGroup.add(mesh);
+  sceneCsmShadowRuntime?.registerObject(mesh);
 }
 
 function clearInstancedMeshes(): void {
@@ -4305,6 +4356,7 @@ function indexSceneObjects(root: THREE.Object3D) {
       }
     }
   });
+  sceneCsmShadowRuntime?.registerObject(root);
 }
 
 function registerSceneSubtree(root: THREE.Object3D): void {
@@ -4359,6 +4411,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       });
     }
   });
+  sceneCsmShadowRuntime?.registerObject(root);
 }
 
 const physicsContactSettings: PhysicsContactSettings = {
@@ -8915,6 +8968,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
+    sceneCsmShadowRuntime?.setActive(false);
     disposeSkySunLight();
     return;
   }
@@ -8924,10 +8978,12 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
+    sceneCsmShadowRuntime?.setActive(false);
     disposeSkySunLight();
     return;
   }
   ensureSkySunLightExists();
+  ensureSceneCsmShadowRuntime()?.setActive(true);
   ensureSkyExists();
   if (!sky) {
     pendingSkyboxSettings = cloneSkyboxSettings(settings);
@@ -9862,6 +9918,7 @@ function teardownRenderer() {
   disposeEnvironmentResources();
   disposeSkyResources();
   disposeSkySunLight();
+  disposeSceneCsmShadowRuntime();
   cloudRenderer?.dispose();
   cloudRenderer = null;
   pmremGenerator?.dispose();
@@ -9996,6 +10053,8 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
+
+  ensureSceneCsmShadowRuntime();
 
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);
@@ -10214,6 +10273,7 @@ function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: TH
   const height = (canvasResult?.canvas?.height || canvasResult?.canvas?.clientHeight || 1) as number;
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  sceneCsmShadowRuntime?.updateFrustums();
 }
 
 /**
@@ -10336,6 +10396,7 @@ function startRenderLoop(
         if (gradientBackgroundDome) {
           gradientBackgroundDome.mesh.position.copy(camera.position);
         }
+        sceneCsmShadowRuntime?.update();
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {
@@ -10527,6 +10588,7 @@ const handleResize: WindowResizeCallback = (_result) => {
     renderContext!.renderer.setSize(width, height, false);
     renderContext!.camera.aspect = width / height;
     renderContext!.camera.updateProjectionMatrix();
+    sceneCsmShadowRuntime?.updateFrustums();
     markInstancedCullingDirty();
   });
 };

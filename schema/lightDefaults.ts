@@ -35,6 +35,18 @@ export const DEFAULT_SHADOW_CAMERA_NEAR = 0.1
 export const DEFAULT_SHADOW_CAMERA_FAR = 200
 export const DEFAULT_SHADOW_ORTHO_SIZE = 20
 
+export const DEFAULT_CSM_CASCADES = 4
+export const DEFAULT_CSM_MAX_CASCADES = 4
+export const DEFAULT_CSM_MAX_FAR = 1000
+export const DEFAULT_CSM_MODE = 'practical' as const
+export const DEFAULT_CSM_PRACTICAL_MODE_LAMBDA = 0.6
+export const DEFAULT_CSM_SHADOW_MAP_SIZE = 2048
+export const DEFAULT_CSM_SHADOW_BIAS = -0.0000025
+export const DEFAULT_CSM_SHADOW_NORMAL_BIAS = 0.0005
+export const DEFAULT_CSM_LIGHT_MARGIN = 200
+export const DEFAULT_CSM_FADE = true
+export const DEFAULT_CSM_NO_LAST_CASCADE_CUT_OFF = true
+
 export default {
   DEFAULT_COLOR,
   DEFAULT_GROUND_COLOR,

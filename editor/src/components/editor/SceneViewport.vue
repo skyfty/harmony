@@ -90,6 +90,7 @@ import {
   isVideoLikeExtension,
   loadSkyCubeTexture,
 } from '@schema/index'
+import { createSceneCsmShadowRuntime, type SceneCsmConfig, type SceneCsmShadowRuntime } from '@schema/sceneCsm'
 import {
   applyMaterialOverrides,
   applyMaterialConfigToMaterial,
@@ -1111,12 +1112,50 @@ const SKY_SUN_LIGHT_DISTANCE = 1000
 const SKY_SUN_SHADOW_FRUSTUM_SIZE = 2000
 const SKY_SUN_SHADOW_NEAR = 0.5
 const SKY_SUN_SHADOW_FAR = 5000
+const VIEWPORT_SCENE_CSM_CONFIG: SceneCsmConfig = {
+  enabled: true,
+  cascades: 4,
+  maxCascades: 4,
+  maxFar: 1200,
+  shadowMapSize: 2048,
+  lightMargin: 240,
+  fade: true,
+  noLastCascadeCutOff: true,
+}
+let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
+
+function shouldUseSceneCsmShadows(): boolean {
+  return Boolean(scene && camera && hasSkyNode.value && shadowsActiveInViewport.value && VIEWPORT_SCENE_CSM_CONFIG.enabled)
+}
+
+function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
+  if (!scene || !camera || !shouldUseSceneCsmShadows()) {
+    return null
+  }
+  if (!sceneCsmShadowRuntime) {
+    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, VIEWPORT_SCENE_CSM_CONFIG)
+  }
+  return sceneCsmShadowRuntime
+}
+
+function disposeSceneCsmShadowRuntime(): void {
+  sceneCsmShadowRuntime?.dispose()
+  sceneCsmShadowRuntime = null
+}
+
+function refreshSceneCsmFrustums(): void {
+  sceneCsmShadowRuntime?.updateFrustums()
+}
 
 function ensureSkySunLightExists(): THREE.DirectionalLight | null {
   if (!scene) {
     return null
   }
   if (!hasSkyNode.value) {
+    return null
+  }
+  if (shouldUseSceneCsmShadows()) {
+    ensureSceneCsmShadowRuntime()?.setActive(true)
     return null
   }
 
@@ -1177,6 +1216,16 @@ function disposeSkySunLight(): void {
 }
 
 function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
+  if (shouldUseSceneCsmShadows()) {
+    disposeSkySunLight()
+    const exposure = typeof settings.exposure === 'number' ? settings.exposure : 1
+    const runtime = ensureSceneCsmShadowRuntime()
+    runtime?.setActive(true)
+    runtime?.registerObject(rootGroup)
+    runtime?.registerObject(instancedMeshGroup)
+    runtime?.syncSun(skySunPosition, clampNumber(exposure, 0, 20), 0xffffff)
+    return
+  }
   const light = ensureSkySunLightExists()
   if (!light || !skySunLightTarget) {
     return
@@ -1395,6 +1444,7 @@ function applyRendererShadowSetting() {
   }
   const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
+  sceneCsmShadowRuntime?.setActive(castShadows && hasSkyNode.value)
 }
 
 function resetEffectRuntimeTickers(): void {
@@ -7615,7 +7665,7 @@ function handleViewportOverlayResize() {
 const {
   syncInstancedTransform,
   primeInstancedTransform,
-  attachInstancedMesh,
+  attachInstancedMesh: attachInstancedMeshBase,
   clearInstancedMeshes
 } = useInstancedMeshes(
   instancedMeshGroup,
@@ -7654,6 +7704,11 @@ const {
     },
   }
 )
+
+function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
+  attachInstancedMeshBase(mesh)
+  sceneCsmShadowRuntime?.registerObject(mesh)
+}
 
 const instancedCullingFrustum = new THREE.Frustum()
 const instancedCullingProjView = new THREE.Matrix4()
@@ -10791,6 +10846,7 @@ function resetCameraView() {
   camera.position.copy(position)
   camera.fov = DEFAULT_PERSPECTIVE_FOV
   camera.updateProjectionMatrix()
+  refreshSceneCsmFrustums()
 
   mapControls.target.copy(target)
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(target) / 10)
@@ -10867,6 +10923,7 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
     }
     perspectiveCamera.fov = state.fov
     perspectiveCamera.updateProjectionMatrix()
+    refreshSceneCsmFrustums()
   }
 
   if (!camera) return
@@ -10880,6 +10937,7 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   if (camera instanceof THREE.PerspectiveCamera) {
     camera.fov = state.fov
     camera.updateProjectionMatrix()
+    refreshSceneCsmFrustums()
   }
 
   const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
@@ -10933,6 +10991,7 @@ function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: numb
       camera.near = near
       camera.far = far
       camera.updateProjectionMatrix()
+      refreshSceneCsmFrustums()
     }
   }
 }
@@ -11552,6 +11611,8 @@ function initScene() {
   perspectiveCamera.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
   perspectiveCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
   camera = perspectiveCamera
+  ensureSceneCsmShadowRuntime()
+  applySkyboxSettingsToScene(skyboxSettings.value)
 
   applyCameraControlMode()
   updateCameraStatusDistance()
@@ -11600,6 +11661,7 @@ function initScene() {
     if (perspectiveCamera) {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()
+      refreshSceneCsmFrustums()
     }
     // TrackballControls relies on a cached DOMRect for correct pointer math.
     // Calling this is safe for other controls (it will no-op if not present).
@@ -11642,10 +11704,12 @@ function ensureSkyExists() {
 
 function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
   if (!settings) {
+    sceneCsmShadowRuntime?.setActive(false)
     return
   }
 
   if (!hasSkyNode.value) {
+    sceneCsmShadowRuntime?.setActive(false)
     disposeSkyResources()
     return
   }
@@ -12550,6 +12614,7 @@ function animate() {
   }
   const t0_render = performance.now()
   // debug bounds update removed
+  sceneCsmShadowRuntime?.update()
   renderViewportFrame()
   prof.render = performance.now() - t0_render
   const t0_gizmoRender = performance.now()
@@ -12606,6 +12671,7 @@ function disposeScene() {
   clearLightHelpers()
   disposeSkyResources()
   disposeSkySunLight()
+  disposeSceneCsmShadowRuntime()
   disposeBackgroundResources()
 
   if (gizmoControls) {
@@ -18634,6 +18700,8 @@ function syncSceneGraph() {
   terrainGridController.refresh()
   refreshEffectRuntimeTickers()
   updateSelectionHighlights()
+  sceneCsmShadowRuntime?.registerObject(rootGroup)
+  sceneCsmShadowRuntime?.registerObject(instancedMeshGroup)
 }
 
 function disposeSceneNodes() {
@@ -19373,6 +19441,8 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   }
 
   syncInstancedTransform(object)
+
+  sceneCsmShadowRuntime?.registerObject(object)
 
   return object
 }

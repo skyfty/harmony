@@ -80,6 +80,7 @@ import {
 	updateGroundChunks,
 } from '@schema/groundMesh'
 import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
+import { createSceneCsmShadowRuntime, type SceneCsmConfig, type SceneCsmShadowRuntime } from '@schema/sceneCsm'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
@@ -1131,6 +1132,7 @@ let rootGroup: THREE.Group | null = null
 let sky: Sky | null = null
 let skySunLight: THREE.DirectionalLight | null = null
 let skySunLightTarget: THREE.Object3D | null = null
+let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 let shouldRenderSkyBackground = true
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
@@ -1142,8 +1144,41 @@ const SKY_SUN_LIGHT_DISTANCE = 1000
 const SKY_SUN_SHADOW_FRUSTUM_SIZE = 2000
 const SKY_SUN_SHADOW_NEAR = 0.5
 const SKY_SUN_SHADOW_FAR = 5000
+const EDITOR_SCENE_CSM_CONFIG: SceneCsmConfig = {
+	enabled: true,
+	cascades: 4,
+	maxCascades: 4,
+	maxFar: 1200,
+	shadowMapSize: 2048,
+	lightMargin: 240,
+	fade: true,
+	noLastCascadeCutOff: true,
+}
+
+function shouldUseSceneCsmShadows(): boolean {
+	return Boolean(scene && camera && EDITOR_SCENE_CSM_CONFIG.enabled)
+}
+
+function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
+	if (!scene || !camera || !shouldUseSceneCsmShadows()) {
+		return null
+	}
+	if (!sceneCsmShadowRuntime) {
+		sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, EDITOR_SCENE_CSM_CONFIG)
+	}
+	return sceneCsmShadowRuntime
+}
+
+function disposeSceneCsmShadowRuntime(): void {
+	sceneCsmShadowRuntime?.dispose()
+	sceneCsmShadowRuntime = null
+}
 
 function ensureSkySunLightExists(): THREE.DirectionalLight | null {
+	if (shouldUseSceneCsmShadows()) {
+		ensureSceneCsmShadowRuntime()?.setActive(true)
+		return null
+	}
 	if (!scene) {
 		return null
 	}
@@ -1218,6 +1253,18 @@ function tryFitSkySunLightShadowsToGround(light: THREE.DirectionalLight): void {
 }
 
 function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
+	if (shouldUseSceneCsmShadows()) {
+		disposeSkySunLight()
+		const exposure = typeof settings.exposure === 'number' && Number.isFinite(settings.exposure)
+			? settings.exposure
+			: DEFAULT_SKYBOX_SETTINGS.exposure
+		const runtime = ensureSceneCsmShadowRuntime()
+		runtime?.setActive(true)
+		runtime?.registerObject(rootGroup)
+		runtime?.registerObject(instancedMeshGroup)
+		runtime?.syncSun(skySunPosition, Math.max(0, Math.min(20, exposure)), 0xffffff)
+		return
+	}
 	const light = ensureSkySunLightExists()
 	if (!light || !skySunLightTarget) {
 		return
@@ -3269,6 +3316,7 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh) {
 	mesh.frustumCulled = false
 	instancedMeshes.push(mesh)
 	instancedMeshGroup.add(mesh)
+	sceneCsmShadowRuntime?.registerObject(mesh)
 }
 
 function clearInstancedMeshes() {
@@ -6678,6 +6726,7 @@ function initRenderer() {
 	rootGroup.name = 'ScenePreviewRoot'
 	scene.add(rootGroup)
 	scene.add(instancedMeshGroup)
+	ensureSceneCsmShadowRuntime()
 	clearInstancedMeshes()
 	stopInstancedMeshSubscription?.()
 	stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
@@ -6749,6 +6798,7 @@ function handleResize() {
 	renderer.setSize(width, height, false)
 	camera.aspect = width / height
 	camera.updateProjectionMatrix()
+	sceneCsmShadowRuntime?.updateFrustums()
 	scenePreviewPerf.markInstancedCullingDirty()
 }
 
@@ -7130,6 +7180,7 @@ function startAnimationLoop() {
 		}
 
 		// 4) Render + stats
+		sceneCsmShadowRuntime?.update()
 		currentRenderer.render(currentScene, activeCamera)
 		syncRendererDebugForFrame(currentRenderer)
 		syncInstancedMatrixUploadEstimateForFrame()
@@ -7157,6 +7208,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	lastCameraDependentUpdateQuaternion.identity()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+	sceneCsmShadowRuntime?.setActive(false)
 	nodeObjectMap.forEach((_object, nodeId) => {
 		releaseModelInstance(nodeId)
 	})
@@ -7301,6 +7353,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
 		applySkyEnvironmentToScene()
 		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
 		cloudRenderer?.setSkyboxSettings(null)
+		sceneCsmShadowRuntime?.setActive(false)
 		disposeSkySunLight()
 		return
 	}
@@ -7309,10 +7362,12 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
 		scene.environment = null
 		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
 		cloudRenderer?.setSkyboxSettings(null)
+		sceneCsmShadowRuntime?.setActive(false)
 		disposeSkySunLight()
 		return
 	}
 	ensureSkySunLightExists()
+	ensureSceneCsmShadowRuntime()?.setActive(true)
 	ensureSkyExists()
 	if (!sky) {
 		return
@@ -8043,6 +8098,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				}
 		}
 	})
+	sceneCsmShadowRuntime?.registerObject(object)
 }
 
 function adoptNodeFromPending(nodeId: string, parent: THREE.Object3D, pending: Map<string, THREE.Object3D>): THREE.Object3D | null {
@@ -10714,6 +10770,7 @@ onBeforeUnmount(() => {
 	disposeEnvironmentResources()
 	disposeSkyResources()
 	disposeMaterialTextureCache()
+	disposeSceneCsmShadowRuntime()
 	pmremGenerator?.dispose()
 	pmremGenerator = null
 	lanternViewerInstance = null
