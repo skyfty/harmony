@@ -95,7 +95,6 @@ import {
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
   DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
   DEFAULT_LARGE_SCENE_CSM_CONFIG,
-  RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG,
   resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
@@ -1103,7 +1102,7 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
 }
 
 const VIEWPORT_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
-  ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  ...DEFAULT_SCENE_CSM_CONFIG,
 }
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 let sceneCsmRuntimeConfigKey = ''
@@ -1111,15 +1110,15 @@ let sceneCsmRuntimeConfigKey = ''
 function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
   const csm = settings.csm
   return {
-    enabled: csm?.enabled ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.enabled,
+    enabled: csm?.enabled ?? DEFAULT_SCENE_CSM_CONFIG.enabled,
     lightColor: csm?.lightColor ?? '#ffffff',
-    lightIntensity: csm?.lightIntensity ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.lightIntensity,
+    lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
     sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
     sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-    cascades: csm?.cascades ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.cascades,
-    maxFar: csm?.maxFar ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.maxFar,
-    shadowMapSize: csm?.shadowMapSize ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowMapSize,
-    shadowBias: csm?.shadowBias ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowBias,
+    cascades: csm?.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
+    maxFar: csm?.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
+    shadowMapSize: csm?.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
+    shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
   }
 }
 

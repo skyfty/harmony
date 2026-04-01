@@ -567,8 +567,6 @@ import {
   DEFAULT_SCENE_CSM_CONFIG,
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
   DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-  DEFAULT_LARGE_SCENE_CSM_CONFIG,
-  RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG,
   resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
@@ -1577,7 +1575,7 @@ let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
 
 const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
-  ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  ...DEFAULT_SCENE_CSM_CONFIG,
 };
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
 let sceneCsmRuntimeConfigKey = '';
@@ -1585,15 +1583,15 @@ let sceneCsmRuntimeConfigKey = '';
 function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
   const csm = settings.csm;
   return {
-    enabled: csm?.enabled ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.enabled,
+    enabled: csm?.enabled ?? SCENERY_SCENE_CSM_CONFIG.enabled,
     lightColor: csm?.lightColor ?? '#ffffff',
-    lightIntensity: csm?.lightIntensity ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.lightIntensity,
+    lightIntensity: csm?.lightIntensity ?? SCENERY_SCENE_CSM_CONFIG.lightIntensity,
     sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
     sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-    cascades: csm?.cascades ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.cascades,
-    maxFar: csm?.maxFar ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.maxFar,
-    shadowMapSize: csm?.shadowMapSize ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowMapSize,
-    shadowBias: csm?.shadowBias ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowBias,
+    cascades: csm?.cascades ?? SCENERY_SCENE_CSM_CONFIG.cascades,
+    maxFar: csm?.maxFar ?? SCENERY_SCENE_CSM_CONFIG.maxFar,
+    shadowMapSize: csm?.shadowMapSize ?? SCENERY_SCENE_CSM_CONFIG.shadowMapSize,
+    shadowBias: csm?.shadowBias ?? SCENERY_SCENE_CSM_CONFIG.shadowBias,
   };
 }
 
@@ -10034,10 +10032,23 @@ function startRenderLoop(
     renderScope = effectScope();
   }
 
+  // 限制FPS为30帧，累加delta，只有渲染帧时才统计
+  let lastFrameTime = 0;
+  const minFrameInterval = 1000 / 30; // 约33.33ms
+  let accumulatedDelta = 0;
   renderScope.run(() => {
     watchEffect((onCleanup) => {
-      const { cancel } = result.useFrame((delta) => {
-        const deltaSeconds = normalizeFrameDelta(delta);
+      const { cancel } = result.useFrame((delta, rawTimestamp) => {
+        const now = typeof rawTimestamp === 'number' ? rawTimestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+        const deltaSecondsRaw = normalizeFrameDelta(delta);
+        accumulatedDelta += deltaSecondsRaw;
+        if (now - lastFrameTime < minFrameInterval) {
+          return; // 跳过本帧，限制最大FPS
+        }
+        lastFrameTime = now;
+        // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
+        const deltaSeconds = accumulatedDelta;
+        accumulatedDelta = 0;
 
         if (debugEnabled.value) {
           updateDebugFps(deltaSeconds);

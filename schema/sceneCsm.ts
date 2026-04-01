@@ -36,6 +36,8 @@ export type SceneCsmConfig = {
   lightIntensity?: number
 }
 
+export type SceneCsmRuntimeProfile = 'desktop' | 'wechat-mini-program'
+
 export const DEFAULT_SCENE_CSM_CONFIG: Readonly<Required<SceneCsmConfig>> = Object.freeze({
   enabled: true,
   cascades: DEFAULT_CSM_CASCADES,
@@ -53,16 +55,6 @@ export const DEFAULT_SCENE_CSM_CONFIG: Readonly<Required<SceneCsmConfig>> = Obje
   lightIntensity: DEFAULT_INTENSITY,
 })
 
-export const DEFAULT_LARGE_SCENE_CSM_CONFIG: Readonly<SceneCsmConfig> = Object.freeze({
-  enabled: true,
-  cascades: 3,
-  maxCascades: 3,
-  maxFar: 1000,
-  shadowMapSize: 2048,
-  lightMargin: 240,
-  fade: true,
-  noLastCascadeCutOff: true,
-})
 
 export const DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG = 45
 export const DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG = 42
@@ -260,11 +252,6 @@ function resolveSceneCsmConfig(config?: SceneCsmConfig | null): Required<SceneCs
     lightIntensity: Math.max(0, Number(config?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity)),
   }
 }
-
-export const RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG: Readonly<Required<SceneCsmConfig>> = Object.freeze(
-  resolveSceneCsmConfig(DEFAULT_LARGE_SCENE_CSM_CONFIG),
-)
-
 export function shouldUseReceiverOnlyForDenseInstancedMesh(instanceCount: number, radius: number): boolean {
   return instanceCount >= LARGE_SCENE_INSTANCED_SHADOW_RECEIVER_ONLY_COUNT
     && Number.isFinite(radius)
