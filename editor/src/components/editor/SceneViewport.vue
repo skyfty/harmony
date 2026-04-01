@@ -255,6 +255,7 @@ import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
 import {
   buildClosedWallSegmentsFromWorldPoints,
+  buildOpenWallSegmentsFromWorldPoints,
   resolveAutoOverlayBuildPlan,
   type AutoOverlayBuildPlan,
 } from './autoOverlayBuild'
@@ -7717,7 +7718,7 @@ function resolveAutoOverlaySuggestedMargins(plan: AutoOverlayBuildPlan): { horiz
     const magnitude = roundAutoOverlayMargin(step * stepIndex)
     // Default auto-detection should prefer inward inset and avoid outward spread.
     const horiz = roundAutoOverlayMargin(-magnitude)
-    const candidate = offsetPolyline(plan.worldPoints, horiz, 0, { closed: true })
+    const candidate = offsetPolyline(plan.worldPoints, horiz, 0, { closed: plan.closedPath })
     if (!detectAutoOverlayOverlap(candidate, existingContours)) {
       return { horiz, vert: 0 }
     }
@@ -7727,7 +7728,7 @@ function resolveAutoOverlaySuggestedMargins(plan: AutoOverlayBuildPlan): { horiz
     const magnitude = roundAutoOverlayMargin(step * stepIndex)
     for (const sign of [1, -1]) {
       const vert = roundAutoOverlayMargin(sign * magnitude)
-      const candidate = offsetPolyline(plan.worldPoints, 0, vert, { closed: true })
+      const candidate = offsetPolyline(plan.worldPoints, 0, vert, { closed: plan.closedPath })
       if (!detectAutoOverlayOverlap(candidate, existingContours)) {
         return { horiz: 0, vert }
       }
@@ -7794,16 +7795,19 @@ async function handleConfirmAutoOverlay(): Promise<void> {
   try {
     const horiz = Number(autoOverlayHorizMargin.value || 0)
     const vert = Number(autoOverlayVertMargin.value || 0)
-    const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert, { closed: true })
+    const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert, { closed: plan.closedPath })
 
     if (plan.targetTool === 'wall') {
       const brush = resolveAutoOverlayWallBrush()
       const targetShape = plan.targetBuildShape as WallBuildShape
       buildToolsStore.setWallBuildShape(targetShape, { activate: true })
+      const wallSegments = plan.closedPath
+        ? buildClosedWallSegmentsFromWorldPoints(adjustedPoints)
+        : buildOpenWallSegmentsFromWorldPoints(adjustedPoints)
 
       const created = sceneStore.createWallNode({
-        segments: buildClosedWallSegmentsFromWorldPoints(adjustedPoints),
-        closed: true,
+        segments: wallSegments,
+        closed: plan.closedPath,
         dimensions: brush.dimensions,
         bodyAssetId: brush.bodyAssetId,
         wallComponentProps: brush.wallComponentProps,
