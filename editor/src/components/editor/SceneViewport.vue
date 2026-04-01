@@ -90,7 +90,14 @@ import {
   isVideoLikeExtension,
   loadSkyCubeTexture,
 } from '@schema/index'
-import { createSceneCsmShadowRuntime, type SceneCsmConfig, type SceneCsmShadowRuntime } from '@schema/sceneCsm'
+import {
+  createSceneCsmShadowRuntime,
+  DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  getSceneCsmSunPositionFromSkyboxSettings,
+  hasSceneSkyNode,
+  type SceneCsmConfig,
+  type SceneCsmShadowRuntime,
+} from '@schema/sceneCsm'
 import {
   applyMaterialOverrides,
   applyMaterialConfigToMaterial,
@@ -1095,16 +1102,10 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
 }
 
 const VIEWPORT_SCENE_CSM_CONFIG: SceneCsmConfig = {
-  enabled: true,
-  cascades: 4,
-  maxCascades: 4,
-  maxFar: 1200,
-  shadowMapSize: 2048,
-  lightMargin: 240,
-  fade: true,
-  noLastCascadeCutOff: true,
+  ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
 }
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
+const sceneCsmSunPosition = new THREE.Vector3()
 
 function shouldUseSceneCsmShadows(): boolean {
   return Boolean(scene && camera && hasSkyNode.value && shadowsActiveInViewport.value && VIEWPORT_SCENE_CSM_CONFIG.enabled)
@@ -1116,6 +1117,8 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
   }
   if (!sceneCsmShadowRuntime) {
     sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, VIEWPORT_SCENE_CSM_CONFIG)
+    sceneCsmShadowRuntime.registerObject(rootGroup)
+    sceneCsmShadowRuntime.registerObject(instancedMeshGroup)
   }
   return sceneCsmShadowRuntime
 }
@@ -1127,6 +1130,14 @@ function disposeSceneCsmShadowRuntime(): void {
 
 function refreshSceneCsmFrustums(): void {
   sceneCsmShadowRuntime?.updateFrustums()
+}
+
+function syncSceneCsmSunFromSkybox(settings: SceneSkyboxSettings | null | undefined): void {
+  const runtime = sceneCsmShadowRuntime ?? ensureSceneCsmShadowRuntime()
+  if (!runtime || !settings) {
+    return
+  }
+  runtime.syncSun(getSceneCsmSunPositionFromSkyboxSettings(settings, sceneCsmSunPosition), 1)
 }
 
 // Building label font/meshes (planning-conversion buildings)
@@ -1327,7 +1338,12 @@ function applyRendererShadowSetting() {
   }
   const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
-  sceneCsmShadowRuntime?.setActive(castShadows && hasSkyNode.value)
+  if (castShadows && hasSkyNode.value) {
+    ensureSceneCsmShadowRuntime()?.setActive(true)
+    syncSceneCsmSunFromSkybox(skyboxSettings.value)
+    return
+  }
+  sceneCsmShadowRuntime?.setActive(false)
 }
 
 function resetEffectRuntimeTickers(): void {
@@ -10571,7 +10587,7 @@ const skyboxSignature = computed(() => {
   })
 })
 
-const hasSkyNode = computed(() => false)
+const hasSkyNode = computed(() => hasSceneSkyNode(sceneStore.nodes))
 
 const environmentSignature = computed(() => {
   const settings = environmentSettings.value
@@ -11550,7 +11566,9 @@ function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
     pendingSkyboxSettings = null
     return
   }
-  sceneCsmShadowRuntime?.setActive(true)
+  const csmRuntime = ensureSceneCsmShadowRuntime()
+  csmRuntime?.setActive(true)
+  syncSceneCsmSunFromSkybox(settings)
   renderer.toneMappingExposure = settings.exposure
   disposeSkyResources()
   pendingSkyboxSettings = null

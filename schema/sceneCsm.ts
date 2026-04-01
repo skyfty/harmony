@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import CSM from 'three-csm'
+import type { SceneNode, SceneSkyboxSettings } from './index'
 
 import {
   DEFAULT_CSM_CASCADES,
@@ -53,10 +54,54 @@ export const DEFAULT_SCENE_CSM_CONFIG: Readonly<Required<SceneCsmConfig>> = Obje
   lightIntensity: DEFAULT_INTENSITY,
 })
 
+export const DEFAULT_LARGE_SCENE_CSM_CONFIG: Readonly<SceneCsmConfig> = Object.freeze({
+  enabled: true,
+  cascades: 4,
+  maxCascades: 4,
+  maxFar: 1200,
+  shadowMapSize: 2048,
+  lightMargin: 240,
+  fade: true,
+  noLastCascadeCutOff: true,
+})
+
 const tempSunDirection = new THREE.Vector3()
 const defaultSunDirection = new THREE.Vector3(0, -1, 0)
+const tempSunSpherical = new THREE.Spherical(1, 0, 0)
 const baseThreeLightsFragmentBegin = THREE.ShaderChunk.lights_fragment_begin
 const directionalLightsBlockPattern = /#if \( NUM_DIR_LIGHTS > 0 \) && defined\( RE_Direct \)[\s\S]*?#endif\n\n#if \( NUM_RECT_AREA_LIGHTS > 0 \) && defined\( RE_Direct_RectArea \)/
+
+export function hasSceneSkyNode(nodes: ReadonlyArray<SceneNode> | null | undefined): boolean {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return false
+  }
+  const stack = [...nodes]
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.nodeType === 'Sky') {
+      return true
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      stack.push(...node.children)
+    }
+  }
+  return false
+}
+
+export function getSceneCsmSunPositionFromSkyboxSettings(
+  settings: Pick<SceneSkyboxSettings, 'elevation' | 'azimuth'> | null | undefined,
+  target = new THREE.Vector3(),
+): THREE.Vector3 {
+  const elevation = Number.isFinite(settings?.elevation) ? Number(settings?.elevation) : 22
+  const azimuth = Number.isFinite(settings?.azimuth) ? Number(settings?.azimuth) : 145
+  tempSunSpherical.radius = 1
+  tempSunSpherical.phi = THREE.MathUtils.degToRad(90 - elevation)
+  tempSunSpherical.theta = THREE.MathUtils.degToRad(azimuth)
+  return target.setFromSpherical(tempSunSpherical)
+}
 
 function buildCompatibleCsmLightsFragmentBegin(cascades: number): string {
   const directionalBlock = `#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )

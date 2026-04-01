@@ -563,7 +563,14 @@ import {
   type Vector3Like,
 } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
-import { createSceneCsmShadowRuntime, type SceneCsmConfig, type SceneCsmShadowRuntime } from '@harmony/schema/sceneCsm';
+import {
+  createSceneCsmShadowRuntime,
+  DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  getSceneCsmSunPositionFromSkyboxSettings,
+  hasSceneSkyNode,
+  type SceneCsmConfig,
+  type SceneCsmShadowRuntime,
+} from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
 import {
@@ -1579,16 +1586,11 @@ let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
 
 const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
+  ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
   enabled: !isWeChatMiniProgram,
-  cascades: 4,
-  maxCascades: 4,
-  maxFar: 1000,
-  shadowMapSize: 2048,
-  lightMargin: 240,
-  fade: true,
-  noLastCascadeCutOff: true,
 };
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
+const sceneCsmSunPosition = new THREE.Vector3();
 
 function shouldUseSceneCsmShadows(): boolean {
   return Boolean(renderContext?.scene && renderContext?.camera && SCENERY_SCENE_CSM_CONFIG.enabled);
@@ -1601,6 +1603,7 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
   }
   if (!sceneCsmShadowRuntime) {
     sceneCsmShadowRuntime = createSceneCsmShadowRuntime(context.scene, context.camera, SCENERY_SCENE_CSM_CONFIG);
+    sceneCsmShadowRuntime.registerObject(context.scene);
   }
   return sceneCsmShadowRuntime;
 }
@@ -1608,6 +1611,14 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 function disposeSceneCsmShadowRuntime(): void {
   sceneCsmShadowRuntime?.dispose();
   sceneCsmShadowRuntime = null;
+}
+
+function syncSceneCsmSunFromSkybox(settings: SceneSkyboxSettings | null | undefined): void {
+  const runtime = sceneCsmShadowRuntime ?? ensureSceneCsmShadowRuntime();
+  if (!runtime || !settings) {
+    return;
+  }
+  runtime.syncSun(getSceneCsmSunPositionFromSkyboxSettings(settings, sceneCsmSunPosition), 1);
 }
 
 function supportsFloatTextureLinearFiltering(): boolean {
@@ -8792,7 +8803,9 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
     sceneCsmShadowRuntime?.setActive(false);
     return;
   }
-  ensureSceneCsmShadowRuntime()?.setActive(true);
+  const csmRuntime = ensureSceneCsmShadowRuntime();
+  csmRuntime?.setActive(true);
+  syncSceneCsmSunFromSkybox(settings);
   renderer.toneMappingExposure = resolveSceneExposure(settings.exposure);
   applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
   pendingSkyboxSettings = null;
@@ -8946,26 +8959,6 @@ function hydrateGroundSidecarFromPackage(
   }
 
   return document;
-}
-
-function hasSkyNode(nodes: SceneNode[] | undefined | null): boolean {
-  if (!Array.isArray(nodes)) {
-    return false;
-  }
-  const stack: SceneNode[] = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    if (node.nodeType === 'Sky') {
-      return true;
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return false;
 }
 
 let projectSceneSwitchToken = 0;

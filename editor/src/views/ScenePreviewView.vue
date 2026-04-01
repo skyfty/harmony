@@ -78,7 +78,14 @@ import {
 	isGroundChunkStreamingEnabled,
 	updateGroundChunks,
 } from '@schema/groundMesh'
-import { createSceneCsmShadowRuntime, type SceneCsmConfig, type SceneCsmShadowRuntime } from '@schema/sceneCsm'
+import {
+	createSceneCsmShadowRuntime,
+	DEFAULT_LARGE_SCENE_CSM_CONFIG,
+	getSceneCsmSunPositionFromSkyboxSettings,
+	hasSceneSkyNode,
+	type SceneCsmConfig,
+	type SceneCsmShadowRuntime,
+} from '@schema/sceneCsm'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
@@ -1128,15 +1135,9 @@ let rootGroup: THREE.Group | null = null
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 
 const EDITOR_SCENE_CSM_CONFIG: SceneCsmConfig = {
-	enabled: true,
-	cascades: 4,
-	maxCascades: 4,
-	maxFar: 1200,
-	shadowMapSize: 2048,
-	lightMargin: 240,
-	fade: true,
-	noLastCascadeCutOff: true,
+	...DEFAULT_LARGE_SCENE_CSM_CONFIG,
 }
+const sceneCsmSunPosition = new THREE.Vector3()
 
 function shouldUseSceneCsmShadows(): boolean {
 	return Boolean(scene && camera && EDITOR_SCENE_CSM_CONFIG.enabled)
@@ -1148,6 +1149,7 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 	}
 	if (!sceneCsmShadowRuntime) {
 		sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, EDITOR_SCENE_CSM_CONFIG)
+		sceneCsmShadowRuntime.registerObject(rootGroup)
 	}
 	return sceneCsmShadowRuntime
 }
@@ -1155,6 +1157,14 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 function disposeSceneCsmShadowRuntime(): void {
 	sceneCsmShadowRuntime?.dispose()
 	sceneCsmShadowRuntime = null
+}
+
+function syncSceneCsmSunFromSkybox(settings: SceneSkyboxSettings | null | undefined): void {
+	const runtime = sceneCsmShadowRuntime ?? ensureSceneCsmShadowRuntime()
+	if (!runtime || !settings) {
+		return
+	}
+	runtime.syncSun(getSceneCsmSunPositionFromSkyboxSettings(settings, sceneCsmSunPosition), 1)
 }
 let backgroundTexture: THREE.Texture | null = null
 let backgroundTextureCleanup: (() => void) | null = null
@@ -7145,7 +7155,9 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
 		sceneCsmShadowRuntime?.setActive(false)
 		return
 	}
-	ensureSceneCsmShadowRuntime()?.setActive(true)
+	const csmRuntime = ensureSceneCsmShadowRuntime()
+	csmRuntime?.setActive(true)
+	syncSceneCsmSunFromSkybox(settings)
 	renderer.toneMappingExposure = settings.exposure
 	disposeSkyResources()
 }
@@ -10233,7 +10245,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 
 	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
-	const skyNodeActive = false
+	const skyNodeActive = hasSceneSkyNode(document.nodes)
 	applySkyboxSettings(skyboxSettings, skyNodeActive)
 	const environmentSettings = resolveDocumentEnvironment(document)
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
