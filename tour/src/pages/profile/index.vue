@@ -65,6 +65,7 @@ import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
 import { bindWechatPhone, getProfile } from '@/api/mini';
+import { requestProfileAndSync } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
@@ -98,6 +99,20 @@ onShow(() => {
   applyLightNavigationBar();
   void reloadProfile();
 });
+
+async function retryProfileAuth() {
+  try {
+    const ok = await requestProfileAndSync()
+    if (ok) {
+      void uni.showToast({ title: '同步成功', icon: 'success' })
+      void reloadProfile()
+    } else {
+      void uni.showToast({ title: '未授权或操作取消', icon: 'none' })
+    }
+  } catch {
+    void uni.showToast({ title: '操作失败', icon: 'none' })
+  }
+}
 
 async function reloadProfile() {
   try {

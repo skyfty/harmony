@@ -68,6 +68,10 @@ const ADMIN_PERMISSION_SEEDS = [
   { code: 'project:write', name: '项目管理', group: 'project' },
   { code: 'projectCategory:read', name: '项目分类查看', group: 'project' },
   { code: 'projectCategory:write', name: '项目分类管理', group: 'project' },
+  { code: 'achievement:read', name: '成就查看', group: 'achievement' },
+  { code: 'achievement:write', name: '成就管理', group: 'achievement' },
+  { code: 'rule:read', name: '规则查看', group: 'achievement' },
+  { code: 'rule:write', name: '规则管理', group: 'achievement' },
 ] as const
 
 export interface AdminSessionUser {

@@ -16,9 +16,11 @@
           class="page-header__back"
           @tap="handleBack"
         >
-          <text class="page-header__back-icon">
-            ‹
-          </text>
+          <image
+            class="page-header__back-icon"
+            src="/static/images/back.png"
+            mode="aspectFit"
+          />
         </view>
         <view
           v-else
@@ -106,22 +108,22 @@ function handleBack() {
   padding: 0 12px;
 }
 
-.page-header__back {
+  .page-header__back {
   width: 32px;
   height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.04);
+  background: transparent;
+  border-radius: 0;
   flex-shrink: 0;
 }
 
 .page-header__back-icon {
-  font-size: 22px;
-  color: #1a1f2e;
-  line-height: 1;
-  margin-top: -2px;
+  width: 20px;
+  height: 20px;
+  display: block;
+  object-fit: contain;
 }
 
 .page-header__back-placeholder {

@@ -3,7 +3,6 @@ import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
 import { initializeMiniAuth, prewarmMiniAuth } from '@/api/mini/session';
 import { setMiniAuthRecoveryHandler } from '@harmony/utils'
 import { showRecoveryModal } from '@/stores/miniAuthRecovery'
-import { resolveRecovery } from '@/stores/miniAuthRecovery'
 import { setPendingRecoveryProfile } from '@/api/mini/session'
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue'
 
@@ -18,19 +17,20 @@ setMiniAuthRecoveryHandler(async () => {
       return true
     }
     return false
-  } catch {
+  } catch(e) {
+    console.error("Error during mini auth recovery:", e)
     return false
   }
 })
 
 onLaunch(() => {
   initializeMiniAuth();
-  console.log("App Launch");
 });
-onShow(() => {
-  void prewarmMiniAuth();
-  console.log("App Show");
-});
+// Do not automatically prewarm auth on every app show to avoid
+// unintended temporary account registrations when returning to home.
+// onShow(() => {
+//   void prewarmMiniAuth();
+// });
 onHide(() => {
   console.log("App Hide");
 });
