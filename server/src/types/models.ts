@@ -978,6 +978,38 @@ export interface MiniAchievementDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface AchievementDocument extends Document<Types.ObjectId> {
+  /** 中文：成就名称 */
+  name: string
+  /** 中文：成就描述（可选） */
+  description?: string | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface RuleDocument extends Document<Types.ObjectId> {
+  /** 中文：规则名称 */
+  name: string
+  /** 中文：适用景区的 Scene ID（为空表示任意景区） */
+  scenicId?: Types.ObjectId | null
+  /** 中文：进入景区条件，若为 true 则规则为“进入景区” */
+  enterScenic?: boolean
+  /** 中文：浏览百分比条件，0-100，默认 0 */
+  viewPercentage?: number
+  enabled: boolean
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface AchievementRuleDocument extends Document<Types.ObjectId> {
+  achievementId: Types.ObjectId
+  ruleId: Types.ObjectId
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface MiniAddressDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   receiverName: string

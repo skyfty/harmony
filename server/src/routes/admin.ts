@@ -170,6 +170,17 @@ import {
   updateSceneSpotCommentStatus,
 } from '@/controllers/admin/sceneSpotCommentController'
 import { koaBody } from '@/utils/bodyParser'
+import {
+  listAchievements,
+  getAchievement,
+  createAchievement,
+  updateAchievement,
+  deleteAchievement,
+  listAchievementRules,
+  addRulesToAchievement,
+  removeRuleFromAchievement,
+} from '@/controllers/admin/achievementController'
+import { listRules, getRule, createRule, updateRule, deleteRule } from '@/controllers/admin/ruleController'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
 
@@ -394,5 +405,23 @@ adminRouter.delete('/punch-records/:id', requireAnyPermission(['punch:delete']),
 adminRouter.get('/travel-records', requireAnyPermission(['travel:read']), listTravelRecords)
 adminRouter.get('/travel-records/:id', requireAnyPermission(['travel:read']), getTravelRecord)
 adminRouter.delete('/travel-records/:id', requireAnyPermission(['travel:delete']), deleteTravelRecord)
+
+// Achievements & Rules
+adminRouter.get('/achievements', requireAnyPermission(['achievement:read']), listAchievements)
+adminRouter.get('/achievements/:id', requireAnyPermission(['achievement:read']), getAchievement)
+adminRouter.post('/achievements', requireAnyPermission(['achievement:write']), koaBody(), createAchievement)
+adminRouter.put('/achievements/:id', requireAnyPermission(['achievement:write']), koaBody(), updateAchievement)
+adminRouter.delete('/achievements/:id', requireAnyPermission(['achievement:write']), deleteAchievement)
+
+adminRouter.get('/rules', requireAnyPermission(['rule:read']), listRules)
+adminRouter.get('/rules/:id', requireAnyPermission(['rule:read']), getRule)
+adminRouter.post('/rules', requireAnyPermission(['rule:write']), koaBody(), createRule)
+adminRouter.put('/rules/:id', requireAnyPermission(['rule:write']), koaBody(), updateRule)
+adminRouter.delete('/rules/:id', requireAnyPermission(['rule:write']), deleteRule)
+
+// Manage rules for an achievement (many-to-many)
+adminRouter.get('/achievements/:id/rules', requireAnyPermission(['achievement:read']), listAchievementRules)
+adminRouter.post('/achievements/:id/rules', requireAnyPermission(['achievement:write']), koaBody(), addRulesToAchievement)
+adminRouter.delete('/achievements/:id/rules/:ruleId', requireAnyPermission(['achievement:write']), removeRuleFromAchievement)
 
 export default adminRouter
