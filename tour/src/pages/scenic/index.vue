@@ -14,10 +14,7 @@
           @confirm="handleSearch"
         />
         <view class="search-button" @tap="handleSearch" role="button" aria-label="搜索">
-          <svg class="search-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          </svg>
+          <image class="search-icon" src="/static/images/fangdajing.png" mode="aspectFit" aria-hidden="true" />
         </view>
       </view>
 
@@ -42,12 +39,14 @@
               :distance="scenic.distance"
               :rating-count="scenic.ratingCount"
               :address="scenic.address"
-            :summary="scenic.description"
+            :summary="null"
             :cover-url="(scenic.slides && scenic.slides[0]) || scenic.coverImage || ''"
             :rating="scenic.averageRating"
             :is-featured="scenic.isFeatured"
             :is-hot="scenic.isHot"
             variant="list"
+            :progress-percent="resolveScenicProgress(scenic.id).percent"
+            :progress-text="resolveScenicProgress(scenic.id).description"
             @tap="openDetail(scenic.id)"
           />
         </view>
@@ -147,6 +146,13 @@ function openDetail(id: string) {
 function handleNavigate(key: NavKey) {
   redirectToNav(key)
 }
+
+function resolveScenicProgress(_scenicId: string): { percent: number; description: string } {
+  return {
+    percent: 0,
+    description: '打卡进度',
+  }
+}
 </script>
 
 <style scoped lang="scss">
@@ -195,8 +201,8 @@ function handleNavigate(key: NavKey) {
 }
 
 .search-icon {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   color: #7b74e7;
   flex-shrink: 0;
 }

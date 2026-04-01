@@ -38,6 +38,7 @@ type NavItem = {
 
 const props = defineProps<{ active: NavKey }>();
 const emit = defineEmits<{ (event: 'navigate', value: NavKey): void }>();
+import { ensureAuthThenNavigate } from '@/utils/miniAuthHelper'
 
 const navItems: ReadonlyArray<NavItem> = [
   {
@@ -86,6 +87,16 @@ function go(value: NavKey) {
   if (value === props.active) {
     return;
   }
+
+  // For sensitive tabs that require profile/login, trigger auth via user gesture.
+  const sensitive: NavKey[] = ['coupon', 'achievement', 'vehicle', 'profile'];
+  if (sensitive.includes(value)) {
+    void ensureAuthThenNavigate(value).catch(() => {
+      // ignore
+    })
+    return
+  }
+
   emit('navigate', value);
 }
 </script>

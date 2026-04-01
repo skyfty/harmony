@@ -6,7 +6,7 @@
       :style="{ top: (statusBarHeight + 8) + 'px' }"
       @tap="handleBack"
     >
-      <text class="floating-back__icon">‹</text>
+      <image class="floating-back__img" src="/static/images/back.png" mode="aspectFit" />
     </view>
 
     <view v-if="!scenic" class="state">
@@ -360,17 +360,21 @@ function computeScenicCheckinRatio(): number {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(255, 255, 255, 0.18);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 6px 18px rgba(12, 16, 30, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  overflow: hidden;
 }
 
-.floating-back__icon {
-  font-size: 24px;
-  color: #ffffff;
-  line-height: 1;
-  margin-top: -2px;
+.floating-back__img {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 /* ---- Hero swiper ---- */
