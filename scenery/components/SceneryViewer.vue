@@ -1573,6 +1573,8 @@ const bootstrapFinished = ref(false);
 const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
   ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
   enabled: !isWeChatMiniProgram,
+  maxFar: 1600,
+  lightMargin: 320,
 };
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
 
@@ -1595,6 +1597,19 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 function disposeSceneCsmShadowRuntime(): void {
   sceneCsmShadowRuntime?.dispose();
   sceneCsmShadowRuntime = null;
+}
+
+function applyRendererShadowSetting(): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const castShadows = Boolean(context.renderer.shadowMap.enabled);
+  if (castShadows) {
+    ensureSceneCsmShadowRuntime()?.setActive(true);
+    return;
+  }
+  sceneCsmShadowRuntime?.setActive(false);
 }
 
 function supportsFloatTextureLinearFiltering(): boolean {
@@ -9712,6 +9727,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   };
 
   ensureSceneCsmShadowRuntime();
+  applyRendererShadowSetting();
 
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);

@@ -1122,6 +1122,9 @@ let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 
 const EDITOR_SCENE_CSM_CONFIG: SceneCsmConfig = {
 	...DEFAULT_LARGE_SCENE_CSM_CONFIG,
+	maxFar: 1600,
+	lightMargin: 320,
+	shadowMapSize: 4096,
 }
 
 function shouldUseSceneCsmShadows(): boolean {
@@ -1142,6 +1145,18 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 function disposeSceneCsmShadowRuntime(): void {
 	sceneCsmShadowRuntime?.dispose()
 	sceneCsmShadowRuntime = null
+}
+
+function applyRendererShadowSetting(): void {
+	if (!renderer) {
+		return
+	}
+	const castShadows = Boolean(renderer.shadowMap.enabled)
+	if (castShadows) {
+		ensureSceneCsmShadowRuntime()?.setActive(true)
+		return
+	}
+	sceneCsmShadowRuntime?.setActive(false)
 }
 let backgroundTexture: THREE.Texture | null = null
 let backgroundTextureCleanup: (() => void) | null = null
@@ -6557,6 +6572,7 @@ function initRenderer() {
 	scene.add(rootGroup)
 	scene.add(instancedMeshGroup)
 	ensureSceneCsmShadowRuntime()
+	applyRendererShadowSetting()
 	clearInstancedMeshes()
 	stopInstancedMeshSubscription?.()
 	stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
@@ -10127,6 +10143,7 @@ async function applyInitialDocumentGraph(
 		syncRigidbodyDebugHelpers()
 	}
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	applyRendererShadowSetting()
 	environmentAssetRefreshTick.value += 1
 }
 
@@ -10163,6 +10180,7 @@ async function applyIncrementalDocumentGraph(
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	applyRendererShadowSetting()
 	environmentAssetRefreshTick.value += 1
 	// (instancing trace removed)
 }

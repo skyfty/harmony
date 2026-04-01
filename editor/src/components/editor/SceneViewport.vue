@@ -1099,6 +1099,9 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
 
 const VIEWPORT_SCENE_CSM_CONFIG: SceneCsmConfig = {
   ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  maxFar: 1600,
+  lightMargin: 320,
+  shadowMapSize: 4096,
 }
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 function shouldUseSceneCsmShadows(): boolean {
