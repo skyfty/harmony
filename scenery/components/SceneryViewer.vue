@@ -1577,7 +1577,6 @@ const bootstrapFinished = ref(false);
 
 const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
   ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
-  enabled: !isWeChatMiniProgram,
   maxFar: 1600,
   lightMargin: 320,
 };
@@ -1606,7 +1605,7 @@ function resolveScenerySceneCsmConfig(): SceneCsmConfig {
   const csm = resolveEnvironmentCsmSettings(settings);
   return {
     ...SCENERY_SCENE_CSM_CONFIG,
-    enabled: !isWeChatMiniProgram && csm.enabled,
+    enabled: csm.enabled,
     lightColor: csm.lightColor,
     lightIntensity: csm.lightIntensity,
     cascades: csm.cascades,

@@ -95,12 +95,11 @@
                   hide-details
                   @update:model-value="(value) => emit('update:csm-sun-elevation-deg', Number(value))"
                 />
-                <v-text-field
+                <v-select
                   :model-value="csmCascades"
-                  type="number"
-                  min="1"
-                  max="6"
-                  step="1"
+                  :items="csmCascadeOptions"
+                  item-title="label"
+                  item-value="value"
                   label="Cascades"
                   density="compact"
                   variant="underlined"
@@ -119,12 +118,11 @@
                   hide-details
                   @update:model-value="(value) => emit('update:csm-max-far', Number(value))"
                 />
-                <v-text-field
+                <v-select
                   :model-value="csmShadowMapSize"
-                  type="number"
-                  min="256"
-                  max="8192"
-                  step="256"
+                  :items="csmShadowMapSizeOptions"
+                  item-title="label"
+                  item-value="value"
                   label="Shadow Map"
                   density="compact"
                   variant="underlined"
@@ -2040,6 +2038,24 @@ const noiseModeOptions: Array<{ value: GroundGenerationMode; label: string; icon
   { value: 'ridge', label: 'Ridge Noise', icon: 'mdi-mountain' },
   { value: 'voronoi', label: 'Voronoi Noise', icon: 'mdi-shape-polygon-plus' },
   { value: 'flat', label: 'Flat', icon: 'mdi-border-horizontal' },
+]
+
+const csmCascadeOptions: Array<{ value: number; label: string }> = [
+  { value: 1, label: '1 (fast)' },
+  { value: 2, label: '2' },
+  { value: 3, label: '3 (recommended)' },
+  { value: 4, label: '4 (high quality)' },
+  { value: 5, label: '5' },
+  { value: 6, label: '6 (max)' },
+]
+
+const csmShadowMapSizeOptions: Array<{ value: number; label: string }> = [
+  { value: 256, label: '256' },
+  { value: 512, label: '512' },
+  { value: 1024, label: '1024 (recommended)' },
+  { value: 2048, label: '2048 (high quality)' },
+  { value: 4096, label: '4096 (very high)' },
+  { value: 8192, label: '8192 (extreme)' },
 ]
 
 type RotationAxis = 'x' | 'y'

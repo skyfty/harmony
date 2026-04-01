@@ -90,6 +90,9 @@ packages:
     resolution: {integrity: sha512-7OXrNWzy6CK+r7Ch9OLPBDTKfB6XlWHjX4P0RU5B3IgFuWPeYN0XtRtlexGRjgbQxpfaUve6jTAwBGWuGntz/w==}
     engines: {node: '>=18.20 || >=20'}
 
+  three-csm@4.2.1:
+    resolution: {integrity: sha512-yHxKNPB2XMUBgWQTIWR0pESXzGYOdID49f2LdTbz+pNJRzBIMMVEJp5JuRSeCU6c75lmL5L4+FXRHQ1tQIgWEg==}
+
   three-mesh-bvh@0.9.8:
     resolution: {integrity: sha512-YphYvdXEZSXdz6iNdWJo1RB6qvSCRyiXPEVSvNU6xVWbLDOdSrfEIsJOpgFOnefdmVEvZ6M+sY0cjh9gl7MvdA==}
     peerDependencies:
@@ -117,6 +120,7 @@ snapshots:
       robust-predicates: 1.1.0
       splaytree: 3.2.3
       three: 0.172.0
+      three-csm: 4.2.1
       three-mesh-bvh: 0.9.8(three@0.172.0)
 
   '@harmony/utils@file:../utils': {}
@@ -153,6 +157,8 @@ snapshots:
   robust-predicates@3.0.2: {}
 
   splaytree@3.2.3: {}
+
+  three-csm@4.2.1: {}
 
   three-mesh-bvh@0.9.8(three@0.172.0):
     dependencies:

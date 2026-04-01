@@ -877,6 +877,9 @@ packages:
     peerDependencies:
       vue: ^3.2.0
 
+  three-csm@4.2.1:
+    resolution: {integrity: sha512-yHxKNPB2XMUBgWQTIWR0pESXzGYOdID49f2LdTbz+pNJRzBIMMVEJp5JuRSeCU6c75lmL5L4+FXRHQ1tQIgWEg==}
+
   three-mesh-bvh@0.9.8:
     resolution: {integrity: sha512-YphYvdXEZSXdz6iNdWJo1RB6qvSCRyiXPEVSvNU6xVWbLDOdSrfEIsJOpgFOnefdmVEvZ6M+sY0cjh9gl7MvdA==}
     peerDependencies:
@@ -1157,6 +1160,7 @@ snapshots:
       robust-predicates: 1.1.0
       splaytree: 3.2.3
       three: 0.172.0
+      three-csm: 4.2.1
       three-mesh-bvh: 0.9.8(three@0.172.0)
 
   '@jridgewell/resolve-uri@3.1.2': {}
@@ -1684,6 +1688,8 @@ snapshots:
   splitpanes@4.0.4(vue@3.5.28(typescript@5.9.3)):
     dependencies:
       vue: 3.5.28(typescript@5.9.3)
+
+  three-csm@4.2.1: {}
 
   three-mesh-bvh@0.9.8(three@0.172.0):
     dependencies:
