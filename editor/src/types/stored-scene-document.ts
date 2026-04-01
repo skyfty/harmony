@@ -5,7 +5,6 @@ import type {
   EnvironmentSettings,
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
-  SceneSkyboxSettings,
   SceneResourceSummary,
 } from '@schema'
 import type { SceneCameraState } from './scene-camera-state'
@@ -28,7 +27,6 @@ export interface StoredSceneDocument {
   selectedNodeIds?: string[]
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings
-  skybox: SceneSkyboxSettings
   shadowsEnabled: boolean
   environment?: EnvironmentSettings
   groundSettings: GroundSettings

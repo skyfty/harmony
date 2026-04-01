@@ -1,5 +1,4 @@
 import type { SceneJsonExportDocument, SceneNode } from '@schema'
-import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
 import {
   buildAssetDependencySubset,
   sanitizeSceneAssetRegistry,
@@ -71,7 +70,6 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
   const id = generatePreviewId()
   const name = typeof payload.name === 'string' && payload.name.trim().length ? payload.name.trim() : 'Prefab Preview'
 
-  const skybox = normalizeSkyboxSettings()
   const clonedRoot = cloneDeep(rootCandidate)
   if (!isSceneNodeLike(clonedRoot)) {
     throw new Error('Prefab 根节点数据无效')
@@ -89,7 +87,6 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
     name,
     createdAt: now,
     updatedAt: now,
-    skybox,
     nodes,
     materials: [],
     assetRegistry: dependencySubset.assetRegistry,

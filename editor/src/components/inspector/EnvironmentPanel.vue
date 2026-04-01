@@ -9,9 +9,6 @@ import type {
   SkyCubeBackgroundFormat,
 } from '@/types/environment'
 import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@schema'
-import type { SceneSkyboxSettings } from '@schema'
-import type { SkyboxParameterKey } from '@/types/skybox'
-import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -21,54 +18,11 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { environmentSettings: storeEnvironmentSettings, shadowsEnabled, skybox } = storeToRefs(sceneStore)
+const { environmentSettings: storeEnvironmentSettings, shadowsEnabled } = storeToRefs(sceneStore)
 
 const environmentSettings = computed(() => storeEnvironmentSettings.value)
 
-// --- Skybox settings (shown when background mode is 'skybox') ---
-const skyboxSettings = computed(() => skybox.value)
-const localSkyboxSettings = ref<SceneSkyboxSettings>(cloneSkyboxSettings(skyboxSettings.value))
-
-watch(
-  skyboxSettings,
-  (next) => {
-    localSkyboxSettings.value = cloneSkyboxSettings(next)
-  },
-  { immediate: true },
-)
-
-const skyboxPresetOptions = computed(() => [
-  ...SKYBOX_PRESETS.map((preset) => ({ title: preset.name, value: preset.id })),
-  { title: 'Custom', value: CUSTOM_SKYBOX_PRESET_ID },
-])
-
-function handleSkyboxPresetSelect(presetId: string | null) {
-  if (!presetId || presetId === CUSTOM_SKYBOX_PRESET_ID) {
-    return
-  }
-  sceneStore.applySkyboxPreset(presetId)
-}
-
-function onSkyboxChange(key: SkyboxParameterKey, value: unknown) {
-  if (value === '' || value === null || value === undefined) {
-    return
-  }
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  if (Math.abs(numeric - localSkyboxSettings.value[key]) < 1e-6) {
-    return
-  }
-  localSkyboxSettings.value = {
-    ...localSkyboxSettings.value,
-    [key]: numeric,
-  }
-  sceneStore.setSkyboxSettings({ [key]: numeric } as Partial<SceneSkyboxSettings>, { markCustom: true })
-}
-
 const backgroundModeOptions: Array<{ title: string; value: EnvironmentBackgroundMode }> = [
-  { title: 'Skybox', value: 'skybox' },
   { title: 'Solid Color', value: 'solidColor' },
   { title: 'HDRI', value: 'hdri' },
   { title: 'SkyCube', value: 'skycube' },
@@ -1252,94 +1206,7 @@ function handleBackgroundDrop(event: DragEvent) {
             </div>
           </div>
           <div
-            v-if="environmentSettings.background.mode === 'skybox'"
-            class="skybox-settings"
-          >
-            <div class="sky-section">
-              <div class="section-label">Skybox Preset</div>
-              <v-select
-                :items="skyboxPresetOptions"
-                :model-value="localSkyboxSettings.presetId"
-                density="compact"
-                hide-details
-                variant="underlined"
-                class="sky-select"
-                @update:model-value="handleSkyboxPresetSelect"
-              />
-            </div>
-            <div class="sky-slider">
-              <div class="slider-label"><span>Exposure</span></div>
-              <v-text-field
-                :model-value="localSkyboxSettings.exposure"
-                :min="0.05" :max="2.00" :step="0.01"
-                type="number" inputmode="decimal"
-                density="compact" variant="underlined" hide-details color="primary"
-                @update:model-value="(value) => onSkyboxChange('exposure', value)"
-              />
-            </div>
-            <div class="sky-slider">
-              <div class="slider-label"><span>Turbidity</span></div>
-              <v-text-field
-                :model-value="localSkyboxSettings.turbidity"
-                :min="1.00" :max="20.00" :step="0.1"
-                type="number" inputmode="decimal"
-                density="compact" variant="underlined" hide-details color="primary"
-                @update:model-value="(value) => onSkyboxChange('turbidity', value)"
-              />
-            </div>
-            <div class="sky-slider">
-              <div class="slider-label"><span>Rayleigh Scattering</span></div>
-              <v-text-field
-                :model-value="localSkyboxSettings.rayleigh"
-                :min="0.00" :max="5.00" :step="0.05"
-                type="number" inputmode="decimal"
-                density="compact" variant="underlined" hide-details color="primary"
-                @update:model-value="(value) => onSkyboxChange('rayleigh', value)"
-              />
-            </div>
-            <div class="sky-slider">
-              <div class="slider-label"><span>Mie Coefficient</span></div>
-              <v-text-field
-                :model-value="localSkyboxSettings.mieCoefficient"
-                :min="0.00" :max="0.05" :step="0.0005"
-                type="number" inputmode="decimal"
-                density="compact" variant="underlined" hide-details color="primary"
-                @update:model-value="(value) => onSkyboxChange('mieCoefficient', value)"
-              />
-            </div>
-            <div class="sky-slider">
-              <div class="slider-label"><span>Mie Directionality</span></div>
-              <v-text-field
-                :model-value="localSkyboxSettings.mieDirectionalG"
-                :min="0" :max="1" :step="0.01"
-                type="number" inputmode="decimal"
-                density="compact" variant="underlined" hide-details color="primary"
-                @update:model-value="(value) => onSkyboxChange('mieDirectionalG', value)"
-              />
-            </div>
-            <div class="sky-slider">
-              <div class="slider-label"><span>Sun Elevation</span></div>
-              <v-text-field
-                :model-value="localSkyboxSettings.elevation"
-                :min="-10" :max="90" :step="1"
-                type="number" inputmode="numeric"
-                density="compact" variant="underlined" hide-details color="primary"
-                @update:model-value="(value) => onSkyboxChange('elevation', value)"
-              />
-            </div>
-            <div class="sky-slider">
-              <div class="slider-label"><span>Sun Azimuth</span></div>
-              <v-text-field
-                :model-value="localSkyboxSettings.azimuth"
-                :min="0" :max="360" :step="1"
-                type="number" inputmode="numeric"
-                density="compact" variant="underlined" hide-details color="primary"
-                @update:model-value="(value) => onSkyboxChange('azimuth', value)"
-              />
-            </div>
-          </div>
-          <div
-            v-else-if="environmentSettings.background.mode === 'solidColor'"
+            v-if="environmentSettings.background.mode === 'solidColor'"
             class="material-color drop-target"
           >
             <div class="color-input">
@@ -2097,42 +1964,4 @@ function handleBackgroundDrop(event: DragEvent) {
   color: rgba(233, 236, 241, 0.28) !important;
 }
 
-.skybox-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 8px 0;
-}
-
-.sky-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.section-label {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #9fb5c7;
-}
-
-.sky-select {
-  max-width: 240px;
-}
-
-.sky-slider {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.slider-label {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  color: #cfd8e3;
-}
 </style>

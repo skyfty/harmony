@@ -5,7 +5,6 @@ import type {
   SceneMaterial,
   SceneNode,
   EnvironmentSettings,
-  SceneSkyboxSettings,
 } from '@schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { SceneViewportSettings } from './scene-viewport-settings'
@@ -29,7 +28,6 @@ export interface PresetSceneDocument {
   selectedNodeIds?: string[]
   camera?: SceneCameraState
   viewportSettings?: Partial<SceneViewportSettings>
-  skybox?: Partial<SceneSkyboxSettings>
   shadowsEnabled?: boolean
   environment?: Partial<EnvironmentSettings>
   groundSettings?: Partial<GroundSettings>

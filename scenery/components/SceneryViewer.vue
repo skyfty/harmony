@@ -415,8 +415,6 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
-import { Sky } from 'three/examples/jsm/objects/Sky.js';
-import { SceneCloudRenderer, sanitizeCloudSettings } from '@harmony/schema/cloudRenderer';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
 import { useProjectStore } from '../common/stores/projectStore';
@@ -550,10 +548,10 @@ import {
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
   type EnvironmentSettings,
+  type EnvironmentCsmSettings,
   type GradientBackgroundDome,
   type SceneNode,
   type SceneNodeComponentState,
-  type SceneSkyboxSettings,
   type SceneJsonExportDocument,
   type SceneAssetRegistryEntry,
   type LanternSlideDefinition,
@@ -564,6 +562,16 @@ import {
   type Vector3Like,
 } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
+import {
+  createSceneCsmShadowRuntime,
+  DEFAULT_SCENE_CSM_CONFIG,
+  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+  DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  resolveSceneCsmSunPositionFromAngles,
+  type SceneCsmConfig,
+  type SceneCsmShadowRuntime,
+} from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
 import {
@@ -1523,45 +1531,26 @@ const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
-const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
-  presetId: 'clear-day',
-  exposure: 0.7,
-  turbidity: 4,
-  rayleigh: 1.25,
-  mieCoefficient: 0.0025,
-  mieDirectionalG: 0.75,
-  elevation: 22,
-  azimuth: 145,
-  clouds: null,
-};
+const DEFAULT_SCENE_EXPOSURE = 0.7;
 
 
 const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
 
 function resolveSceneExposure(exposure: unknown): number {
-  const base = clampNumber(exposure, 0, 5, DEFAULT_SKYBOX_SETTINGS.exposure);
+  const base = clampNumber(exposure, 0, 5, DEFAULT_SCENE_EXPOSURE);
   return clampNumber(
     base * SCENE_VIEWER_EXPOSURE_BOOST,
     0.05,
     5,
-    DEFAULT_SKYBOX_SETTINGS.exposure * SCENE_VIEWER_EXPOSURE_BOOST,
+    DEFAULT_SCENE_EXPOSURE * SCENE_VIEWER_EXPOSURE_BOOST,
   );
 }
 
-const skySunPosition = new THREE.Vector3();
 
 const purposeWatchIcon = '👁️';
 const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
 
-let sky: Sky | null = null;
-let skySunLight: THREE.DirectionalLight | null = null;
-let skySunLightTarget: THREE.Object3D | null = null;
-let pmremGenerator: THREE.PMREMGenerator | null = null;
-let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
-let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
-let cloudRenderer: SceneCloudRenderer | null = null;
-let shouldRenderSkyBackground = true;
 let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundAssetId: string | null = null;
@@ -1586,62 +1575,114 @@ let initializing = false;
 let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
 
-const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight';
-const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget';
-const SKY_SUN_LIGHT_DISTANCE = 1000;
+const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
+  ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  enabled: !isWeChatMiniProgram,
+  maxFar: 1600,
+  lightMargin: 320,
+};
+let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
+let sceneCsmRuntimeConfigKey = '';
 
-function ensureSkySunLightExists(): THREE.DirectionalLight | null {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
+function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
+  const csm = settings.csm;
+  return {
+    enabled: csm?.enabled ?? true,
+    lightColor: csm?.lightColor ?? '#ffffff',
+    lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+    sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+    sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+    cascades: csm?.cascades ?? 4,
+    maxFar: csm?.maxFar ?? 1600,
+    shadowMapSize: csm?.shadowMapSize ?? 4096,
+    shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+  };
+}
+
+function resolveScenerySceneCsmConfig(): SceneCsmConfig {
+  const settings = currentDocument
+    ? resolveDocumentEnvironment(currentDocument)
+    : cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
+  const csm = resolveEnvironmentCsmSettings(settings);
+  return {
+    ...SCENERY_SCENE_CSM_CONFIG,
+    enabled: !isWeChatMiniProgram && csm.enabled,
+    lightColor: csm.lightColor,
+    lightIntensity: csm.lightIntensity,
+    cascades: csm.cascades,
+    maxFar: csm.maxFar,
+    shadowMapSize: csm.shadowMapSize,
+    shadowBias: csm.shadowBias,
+  };
+}
+
+function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
+  return JSON.stringify({
+    enabled: config.enabled ?? true,
+    cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
+    maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
+    shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
+    shadowBias: config.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+    lightMargin: config.lightMargin ?? DEFAULT_SCENE_CSM_CONFIG.lightMargin,
+  });
+}
+
+function shouldUseSceneCsmShadows(): boolean {
+  const config = resolveScenerySceneCsmConfig();
+  return Boolean(renderContext?.scene && renderContext?.camera && config.enabled);
+}
+
+function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
+  const context = renderContext;
+  if (!context || !shouldUseSceneCsmShadows()) {
+    if (sceneCsmShadowRuntime) {
+      disposeSceneCsmShadowRuntime();
+    }
     return null;
   }
-
-  if (skySunLight && skySunLightTarget) {
-    if (skySunLight.parent !== scene) {
-      scene.add(skySunLight);
-    }
-    if (skySunLightTarget.parent !== scene) {
-      scene.add(skySunLightTarget);
-    }
-    return skySunLight;
+  const config = resolveScenerySceneCsmConfig();
+  const configKey = buildSceneCsmConfigKey(config);
+  if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
+    disposeSceneCsmShadowRuntime();
   }
-
-  skySunLightTarget = new THREE.Object3D();
-  skySunLightTarget.name = SKY_SUN_LIGHT_TARGET_NAME;
-  skySunLightTarget.userData = { ...(skySunLightTarget.userData ?? {}), editorOnly: true };
-  skySunLightTarget.position.set(0, 0, 0);
-
-  skySunLight = new THREE.DirectionalLight(0xffffff, 1);
-  skySunLight.name = SKY_SUN_LIGHT_NAME;
-  skySunLight.userData = { ...(skySunLight.userData ?? {}), editorOnly: true };
-  skySunLight.castShadow = true;
-  skySunLight.target = skySunLightTarget;
-
-  (skySunLight as any).raycast = () => {};
-  (skySunLightTarget as any).raycast = () => {};
-
-  scene.add(skySunLightTarget);
-  scene.add(skySunLight);
-  return skySunLight;
+  if (!sceneCsmShadowRuntime) {
+    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(context.scene, context.camera, config);
+    sceneCsmRuntimeConfigKey = configKey;
+    sceneCsmShadowRuntime.registerObject(context.scene);
+  }
+  syncSceneCsmSunFromEnvironment();
+  return sceneCsmShadowRuntime;
 }
 
-function disposeSkySunLight(): void {
-  skySunLight?.removeFromParent();
-  skySunLightTarget?.removeFromParent();
-  skySunLight = null;
-  skySunLightTarget = null;
+function disposeSceneCsmShadowRuntime(): void {
+  sceneCsmShadowRuntime?.dispose();
+  sceneCsmShadowRuntime = null;
+  sceneCsmRuntimeConfigKey = '';
 }
 
-function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
-  const light = ensureSkySunLightExists();
-  if (!light || !skySunLightTarget) {
+function syncSceneCsmSunFromEnvironment(): void {
+  if (!sceneCsmShadowRuntime || !currentDocument) {
     return;
   }
-  light.position.copy(skySunPosition).multiplyScalar(SKY_SUN_LIGHT_DISTANCE);
-  skySunLightTarget.position.set(0, 0, 0);
-  skySunLightTarget.updateMatrixWorld(true);
-  const exposure = resolveSceneExposure(settings.exposure);
-  light.intensity = clampNumber(exposure, 0, 20, resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure));
+  const settings = resolveDocumentEnvironment(currentDocument);
+  const csm = resolveEnvironmentCsmSettings(settings);
+  const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000);
+  sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor);
+}
+
+function applyRendererShadowSetting(): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const castShadows = Boolean(context.renderer.shadowMap.enabled);
+  if (castShadows) {
+    const runtime = ensureSceneCsmShadowRuntime();
+    runtime?.setActive(true);
+    syncSceneCsmSunFromEnvironment();
+    return;
+  }
+  sceneCsmShadowRuntime?.setActive(false);
 }
 
 function supportsFloatTextureLinearFiltering(): boolean {
@@ -3571,35 +3612,6 @@ function closeBehaviorAlert() {
   behaviorAlertCancelText.value = '取消';
 }
 
-function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
-  return { ...settings };
-}
-
-function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings {
-  const ensureNumber = (candidate: unknown, fallback: number) => {
-    return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback;
-  };
-  const sanitizedClouds = sanitizeCloudSettings(input.clouds);
-  return {
-    presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
-    exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
-    turbidity: ensureNumber(input.turbidity, DEFAULT_SKYBOX_SETTINGS.turbidity),
-    rayleigh: ensureNumber(input.rayleigh, DEFAULT_SKYBOX_SETTINGS.rayleigh),
-    mieCoefficient: ensureNumber(input.mieCoefficient, DEFAULT_SKYBOX_SETTINGS.mieCoefficient),
-    mieDirectionalG: ensureNumber(input.mieDirectionalG, DEFAULT_SKYBOX_SETTINGS.mieDirectionalG),
-    elevation: ensureNumber(input.elevation, DEFAULT_SKYBOX_SETTINGS.elevation),
-    azimuth: ensureNumber(input.azimuth, DEFAULT_SKYBOX_SETTINGS.azimuth),
-    clouds: sanitizedClouds ?? null,
-  };
-}
-
-function resolveSceneSkybox(document: SceneJsonExportDocument | null | undefined): SceneSkyboxSettings | null {
-  if (!document) {
-    return null;
-  }
-  return sanitizeSkyboxSettings(document.skybox);
-}
-
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   assetNodeIdMap.clear();
   rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
@@ -4133,6 +4145,7 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
   mesh.frustumCulled = false;
   instancedMeshes.push(mesh);
   instancedMeshGroup.add(mesh);
+  sceneCsmShadowRuntime?.registerObject(mesh);
 }
 
 function clearInstancedMeshes(): void {
@@ -4305,6 +4318,7 @@ function indexSceneObjects(root: THREE.Object3D) {
       }
     }
   });
+  sceneCsmShadowRuntime?.registerObject(root);
 }
 
 function registerSceneSubtree(root: THREE.Object3D): void {
@@ -4359,6 +4373,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       });
     }
   });
+  sceneCsmShadowRuntime?.registerObject(root);
 }
 
 const physicsContactSettings: PhysicsContactSettings = {
@@ -8377,95 +8392,6 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
   canvas.addEventListener('click', handleBehaviorClick);
 }
 
-function disposeSkyEnvironment() {
-  if (skyEnvironmentTarget) {
-    skyEnvironmentTarget.dispose();
-    skyEnvironmentTarget = null;
-  }
-}
-
-function disposeSkyResources() {
-  disposeSkyEnvironment();
-  if (!sky) {
-    return;
-  }
-  sky.parent?.remove(sky);
-  const material = sky.material;
-  if (Array.isArray(material)) {
-    material.forEach((entry) => entry?.dispose?.());
-  } else {
-    material?.dispose?.();
-  }
-  sky.geometry?.dispose?.();
-  sky = null;
-}
-
-function syncSkyVisibility() {
-  if (!sky) {
-    return;
-  }
-  sky.visible = shouldRenderSkyBackground;
-}
-
-function setSkyBackgroundEnabled(enabled: boolean) {
-  shouldRenderSkyBackground = enabled;
-  syncSkyVisibility();
-}
-
-function ensureSkyExists() {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return;
-  }
-  if (sky) {
-    if (sky.parent !== scene) {
-      scene.add(sky);
-    }
-    syncSkyVisibility();
-    return;
-  }
-  sky = new Sky();
-  sky.name = 'HarmonySky';
-  sky.scale.setScalar(SKY_SCALE);
-  sky.frustumCulled = false;
-  scene.add(sky);
-  syncSkyVisibility();
-}
-
-function updateSkyLighting(settings: SceneSkyboxSettings) {
-  if (!sky) {
-    return;
-  }
-  const skyMaterial = sky.material as THREE.ShaderMaterial;
-  const uniforms = skyMaterial.uniforms;
-  const phi = THREE.MathUtils.degToRad(90 - settings.elevation);
-  const theta = THREE.MathUtils.degToRad(settings.azimuth);
-  skySunPosition.setFromSphericalCoords(1, phi, theta);
-  const sunUniform = uniforms?.sunPosition;
-  if (sunUniform?.value instanceof THREE.Vector3) {
-    sunUniform.value.copy(skySunPosition);
-  } else if (sunUniform) {
-    sunUniform.value = skySunPosition.clone();
-  }
-
-  // Keep the internal Sky sun light in sync.
-  syncSkySunLightFromSkyboxSettings(settings);
-}
-
-function applySkyEnvironmentToScene() {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return;
-  }
-  if (skyEnvironmentTarget) {
-    scene.environment = skyEnvironmentTarget.texture;
-    scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
-  } else {
-    scene.environment = null;
-    scene.environmentIntensity = 1;
-  }
-}
-
 function disposeHdriBackgroundResources() {
   const scene = renderContext?.scene ?? null;
   const previousTexture = backgroundTexture;
@@ -8616,13 +8542,6 @@ async function applyBackgroundSettings(
   if (!scene) {
     return false;
   }
-  if (background.mode === 'skybox') {
-    disposeBackgroundResources();
-    setSkyBackgroundEnabled(true);
-    scene.background = null;
-    return true;
-  }
-  setSkyBackgroundEnabled(false);
   if (background.mode === 'solidColor') {
     const gradientTopColor = typeof background.gradientTopColor === 'string'
       ? background.gradientTopColor.trim()
@@ -8854,11 +8773,7 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
     return false;
   }
   lastAppliedBackground = { ...background };
-  if (background.mode === 'skybox') {
-    applySkyEnvironmentToScene();
-    return true;
-  }
-  // Reflections follow Background: only Skybox produces reflections.
+  void background;
   scene.environment = null;
   scene.environmentIntensity = 1;
   return true;
@@ -8885,6 +8800,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   );
   scene.backgroundRotation.copy(euler);
   scene.environmentRotation.copy(euler);
+  applyRendererShadowSetting();
+  syncSceneCsmSunFromEnvironment();
   if (backgroundApplied && environmentApplied) {
     pendingEnvironmentSettings = null;
   } else {
@@ -8898,79 +8815,12 @@ function disposeEnvironmentResources() {
   pendingEnvironmentSettings = null;
 }
 
-function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive: boolean) {
-  const context = renderContext;
-  if (!context) {
-    pendingSkyboxSettings = settings && skyNodeActive ? cloneSkyboxSettings(settings) : null;
-    return;
-  }
-  const { renderer, scene } = context;
-  if (!renderer || !scene) {
-    pendingSkyboxSettings = settings && skyNodeActive ? cloneSkyboxSettings(settings) : null;
-    return;
-  }
-  if (!skyNodeActive) {
-    disposeSkyResources();
-    applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
-    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
-    cloudRenderer?.setSkyboxSettings(null);
-    pendingSkyboxSettings = null;
-    disposeSkySunLight();
-    return;
-  }
-  if (!settings) {
-    disposeSkyEnvironment();
-    applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
-    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
-    cloudRenderer?.setSkyboxSettings(null);
-    pendingSkyboxSettings = null;
-    disposeSkySunLight();
-    return;
-  }
-  ensureSkySunLightExists();
-  ensureSkyExists();
-  if (!sky) {
-    pendingSkyboxSettings = cloneSkyboxSettings(settings);
-    return;
-  }
-  const skyMaterial = sky.material as THREE.ShaderMaterial;
-  const uniforms = skyMaterial.uniforms;
-  const assignUniform = (key: string, value: number) => {
-    const uniform = uniforms?.[key];
-    if (!uniform) {
-      return;
-    }
-    if (typeof uniform.value === 'number') {
-      uniform.value = value;
-      return;
-    }
-    if (uniform.value && typeof uniform.value === 'object' && 'setScalar' in uniform.value) {
-      uniform.value.setScalar?.(value);
-      return;
-    }
-    uniform.value = value;
-  };
-  assignUniform('turbidity', settings.turbidity);
-  assignUniform('rayleigh', settings.rayleigh);
-  assignUniform('mieCoefficient', settings.mieCoefficient);
-  assignUniform('mieDirectionalG', settings.mieDirectionalG);
-  updateSkyLighting(settings);
-  renderer.toneMappingExposure = resolveSceneExposure(settings.exposure);
-  if (!pmremGenerator && renderer) {
-    pmremGenerator = new THREE.PMREMGenerator(renderer);
-  }
-  disposeSkyEnvironment();
-  if (pmremGenerator && sky) {
-    const previousVisibility = sky.visible;
-    sky.visible = true;
-    skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene);
-    sky.visible = previousVisibility;
-    syncSkyVisibility();
-  }
+function resetRemovedSkyState() {
   applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
-  cloudRenderer?.setSunPosition(skySunPosition);
-  cloudRenderer?.setSkyboxSettings(settings);
-  pendingSkyboxSettings = null;
+  const renderer = renderContext?.renderer ?? null;
+  if (renderer) {
+    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SCENE_EXPOSURE);
+  }
 }
 
 function isValidSceneDocument(document: unknown): document is SceneJsonExportDocument {
@@ -9121,26 +8971,6 @@ function hydrateGroundSidecarFromPackage(
   }
 
   return document;
-}
-
-function hasSkyNode(nodes: SceneNode[] | undefined | null): boolean {
-  if (!Array.isArray(nodes)) {
-    return false;
-  }
-  const stack: SceneNode[] = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    if (node.nodeType === 'Sky') {
-      return true;
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return false;
 }
 
 let projectSceneSwitchToken = 0;
@@ -9609,7 +9439,7 @@ watch(
     }
     if (!payload) {
       teardownRenderer();
-      applySkyboxSettings(null, false);
+      resetRemovedSkyState();
       warnings.value = [];
       return;
     }
@@ -9622,7 +9452,7 @@ function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   if (!payload) {
     addRuntimeStageLog('[SceneryViewer] Preview payload cleared');
     teardownRenderer();
-    applySkyboxSettings(null, false);
+    resetRemovedSkyState();
     warnings.value = [];
     return;
   }
@@ -9633,9 +9463,7 @@ function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   });
   error.value = null;
   warnings.value = [];
-  const skyboxSettings = resolveSceneSkybox(payload.document);
-  const skyNodeActive = hasSkyNode(payload.document.nodes);
-  applySkyboxSettings(skyboxSettings, skyNodeActive);
+  resetRemovedSkyState();
   pendingEnvironmentSettings = cloneEnvironmentSettings(resolveDocumentEnvironment(payload.document));
   try {
     uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
@@ -9860,13 +9688,7 @@ function teardownRenderer() {
   frameDeltaMode = null;
   controls.dispose();
   disposeEnvironmentResources();
-  disposeSkyResources();
-  disposeSkySunLight();
-  cloudRenderer?.dispose();
-  cloudRenderer = null;
-  pmremGenerator?.dispose();
-  pmremGenerator = null;
-  pendingSkyboxSettings = null;
+  disposeSceneCsmShadowRuntime();
   lanternTextPromises.clear();
   Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
   resetAssetResolutionCaches();
@@ -9917,8 +9739,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  pmremGenerator?.dispose();
-  pmremGenerator = new THREE.PMREMGenerator(renderer);
 
   const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000);
   camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
@@ -9974,28 +9794,15 @@ async function ensureRendererContext(result: UseCanvasResult) {
     attachInstancedMesh(mesh);
   });
 
-  cloudRenderer?.dispose();
-  cloudRenderer = new SceneCloudRenderer({
-    scene,
-    assetResolver: async (source) => {
-      const resolved = await resolveAssetUrlReference(source);
-      if (!resolved) {
-        return null;
-      }
-      return resolved.dispose ? { url: resolved.url, dispose: resolved.dispose } : { url: resolved.url };
-    },
-    sunPosition: skySunPosition,
-  });
-  if (pendingSkyboxSettings) {
-    cloudRenderer.setSkyboxSettings(pendingSkyboxSettings);
-  }
-
   renderContext = {
     renderer,
     scene,
     camera,
     controls,
   };
+
+  ensureSceneCsmShadowRuntime();
+  applyRendererShadowSetting();
 
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);
@@ -10196,14 +10003,12 @@ function mountGraphAndSyncSubsystems(
   syncTerrainScatterInstances(payload.document, resourceCache);
 }
 
-/** Apply camera alignment, skybox and environment settings for the current document. */
+/** Apply camera alignment and environment settings for the current document. */
 function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: THREE.PerspectiveCamera): void {
   const shouldAlignToProtagonist = purposeActiveMode.value === 'level' && !vehicleDriveActive.value;
   syncProtagonistCameraPose({ force: true, applyToCamera: shouldAlignToProtagonist });
 
-  const skyboxSettings = resolveSceneSkybox(document);
-  const skyNodeActive = hasSkyNode(document.nodes);
-  applySkyboxSettings(skyboxSettings, skyNodeActive);
+  resetRemovedSkyState();
 
   // Environment settings are applied asynchronously (e.g. texture loads) and will self-defer
   // into `pendingEnvironmentSettings` when the render context is not ready.
@@ -10214,6 +10019,7 @@ function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: TH
   const height = (canvasResult?.canvas?.height || canvasResult?.canvas?.clientHeight || 1) as number;
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  sceneCsmShadowRuntime?.updateFrustums();
 }
 
 /**
@@ -10330,12 +10136,12 @@ function startRenderLoop(
         if (shouldRunInstancedCulling(camera, instancingNow)) {
           updateInstancedCullingAndLod();
         }
-        cloudRenderer?.update(deltaSeconds);
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
         tickInstancedBounds(deltaSeconds);
         if (gradientBackgroundDome) {
           gradientBackgroundDome.mesh.position.copy(camera.position);
         }
+        sceneCsmShadowRuntime?.update();
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {
@@ -10406,10 +10212,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   frameDeltaMode = null;
 
   disposeEnvironmentResources();
-  disposeSkyResources();
-  cloudRenderer?.dispose();
-  cloudRenderer = null;
-  pendingSkyboxSettings = null;
 
   lanternTextPromises.clear();
   Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
@@ -10501,7 +10303,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   addRuntimeStageLog('[SceneryViewer] Phase 4 mount scene graph');
   mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
 
-  // Phase 5: apply view settings (camera alignment, skybox, environment, projection).
+  // Phase 5: apply view settings (camera alignment, environment, projection).
   addRuntimeStageLog('[SceneryViewer] Phase 5 apply document view settings');
   applyDocumentViewSettings(payload.document, camera);
   markInstancedCullingDirty();
@@ -10527,6 +10329,7 @@ const handleResize: WindowResizeCallback = (_result) => {
     renderContext!.renderer.setSize(width, height, false);
     renderContext!.camera.aspect = width / height;
     renderContext!.camera.updateProjectionMatrix();
+    sceneCsmShadowRuntime?.updateFrustums();
     markInstancedCullingDirty();
   });
 };
@@ -10642,7 +10445,7 @@ function applyInput(params: {
     handlePreviewPayload(previewPayload.value);
   } else {
     teardownRenderer();
-    applySkyboxSettings(null, false);
+    resetRemovedSkyState();
   }
 }
 

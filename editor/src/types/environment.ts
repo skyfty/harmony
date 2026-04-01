@@ -1,4 +1,4 @@
-export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skycube'
+export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
@@ -14,7 +14,7 @@ export interface EnvironmentRotationDegrees {
 export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
-  /** Optional gradient skybox top color (hex). When present, background becomes a vertical gradient. */
+  /** Optional gradient background top color (hex). When present, background becomes a vertical gradient. */
   gradientTopColor?: string | null
   /** Gradient vertical offset. Default: 33. */
   gradientOffset?: number
@@ -46,9 +46,23 @@ export interface EnvironmentSettings {
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
+  csm?: EnvironmentCsmSettings
   viewportPerformanceMode?: boolean
+}
+
+export interface EnvironmentCsmSettings {
+  enabled: boolean
+  lightColor: string
+  lightIntensity: number
+  sunAzimuthDeg: number
+  sunElevationDeg: number
+  cascades: number
+  maxFar: number
+  shadowMapSize: number
+  shadowBias: number
 }
 
 export type EnvironmentSettingsPatch = Partial<Omit<EnvironmentSettings, 'background'>> & {
   background?: Partial<EnvironmentBackgroundSettings>
+  csm?: Partial<EnvironmentCsmSettings>
 }

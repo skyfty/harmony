@@ -264,26 +264,6 @@ const tools: SceneAgentTool[] = [
   },
   {
     definition: {
-      name: 'set_skybox_preset',
-      description: '将天空盒切换到指定的预设。',
-      parameters: {
-        type: 'object',
-        required: ['presetId'],
-        properties: {
-          presetId: { type: 'string', description: '天空盒预设标识符。' },
-        },
-      },
-    },
-    execute: (store, args) => {
-      const presetId = typeof args?.presetId === 'string' ? args.presetId.trim() : ''
-      if (!presetId.length) {
-        throw new Error('需要提供天空盒预设 ID。')
-      }
-      store.applySkyboxPreset(presetId)
-    },
-  },
-  {
-    definition: {
       name: 'select_nodes',
       description: '选择一个或多个节点。',
       parameters: {

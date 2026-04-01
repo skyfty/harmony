@@ -4,10 +4,8 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
-import { Sky } from 'three/addons/objects/Sky.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
-import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	DEFAULT_ENVIRONMENT_RESTITUTION,
@@ -27,6 +25,7 @@ import {
 	resolveSceneNodeById,
 	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
+	type EnvironmentCsmSettings,
 	type EnvironmentSettings,
 	createGradientBackgroundDome,
 	disposeSkyCubeTexture,
@@ -40,7 +39,6 @@ import {
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
-	type SceneSkyboxSettings,
 	type Vector3Like,
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
@@ -79,7 +77,16 @@ import {
 	isGroundChunkStreamingEnabled,
 	updateGroundChunks,
 } from '@schema/groundMesh'
-import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
+import {
+	createSceneCsmShadowRuntime,
+	DEFAULT_SCENE_CSM_CONFIG,
+	DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+	DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+	DEFAULT_LARGE_SCENE_CSM_CONFIG,
+	resolveSceneCsmSunPositionFromAngles,
+	type SceneCsmConfig,
+	type SceneCsmShadowRuntime,
+} from '@schema/sceneCsm'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
@@ -1092,21 +1099,9 @@ const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
-const skySunPosition = new THREE.Vector3()
 const SKY_ENVIRONMENT_INTENSITY = 0.35
-const SKY_SCALE = 2500
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
-const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
-	presetId: 'clear-day',
-	exposure: 0.6,
-	turbidity: 4,
-	rayleigh: 1.25,
-	mieCoefficient: 0.0025,
-	mieDirectionalG: 0.75,
-	elevation: 22,
-	azimuth: 145,
-	clouds: null,
-}
+const DEFAULT_TONE_MAPPING_EXPOSURE = 1
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'first-person' | 'orbit'
@@ -1128,108 +1123,113 @@ let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
 let rootGroup: THREE.Group | null = null
-let sky: Sky | null = null
-let skySunLight: THREE.DirectionalLight | null = null
-let skySunLightTarget: THREE.Object3D | null = null
-let shouldRenderSkyBackground = true
-let pmremGenerator: THREE.PMREMGenerator | null = null
-let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
-let cloudRenderer: SceneCloudRenderer | null = null
+let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
+let sceneCsmRuntimeConfigKey = ''
 
-const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight'
-const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget'
-const SKY_SUN_LIGHT_DISTANCE = 1000
-const SKY_SUN_SHADOW_FRUSTUM_SIZE = 2000
-const SKY_SUN_SHADOW_NEAR = 0.5
-const SKY_SUN_SHADOW_FAR = 5000
+const EDITOR_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
+	...DEFAULT_LARGE_SCENE_CSM_CONFIG,
+	maxFar: 1600,
+	lightMargin: 320,
+	shadowMapSize: 4096,
+}
 
-function ensureSkySunLightExists(): THREE.DirectionalLight | null {
-	if (!scene) {
+function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
+	const csm = settings.csm
+	return {
+		enabled: csm?.enabled ?? true,
+		lightColor: csm?.lightColor ?? '#ffffff',
+		lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+		sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+		sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+		cascades: csm?.cascades ?? 4,
+		maxFar: csm?.maxFar ?? 1600,
+		shadowMapSize: csm?.shadowMapSize ?? 4096,
+		shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+	}
+}
+
+function resolvePreviewSceneCsmConfig(): SceneCsmConfig {
+	const settings = currentDocument
+		? resolveDocumentEnvironment(currentDocument)
+		: cloneEnvironmentSettings()
+	const csm = resolveEnvironmentCsmSettings(settings)
+	return {
+		...EDITOR_SCENE_CSM_BASE_CONFIG,
+		enabled: csm.enabled,
+		lightColor: csm.lightColor,
+		lightIntensity: csm.lightIntensity,
+		cascades: csm.cascades,
+		maxFar: csm.maxFar,
+		shadowMapSize: csm.shadowMapSize,
+		shadowBias: csm.shadowBias,
+	}
+}
+
+function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
+	return JSON.stringify({
+		enabled: config.enabled ?? true,
+		cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
+		maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
+		shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
+		shadowBias: config.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+		lightMargin: config.lightMargin ?? DEFAULT_SCENE_CSM_CONFIG.lightMargin,
+	})
+}
+
+function shouldUseSceneCsmShadows(): boolean {
+	const config = resolvePreviewSceneCsmConfig()
+	return Boolean(scene && camera && config.enabled)
+}
+
+function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
+	if (!scene || !camera || !shouldUseSceneCsmShadows()) {
+		if (sceneCsmShadowRuntime) {
+			disposeSceneCsmShadowRuntime()
+		}
 		return null
 	}
-	if (skySunLight && skySunLightTarget) {
-		if (skySunLight.parent !== scene) {
-			scene.add(skySunLight)
-		}
-		if (skySunLightTarget.parent !== scene) {
-			scene.add(skySunLightTarget)
-		}
-		return skySunLight
+	const config = resolvePreviewSceneCsmConfig()
+	const configKey = buildSceneCsmConfigKey(config)
+	if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
+		disposeSceneCsmShadowRuntime()
 	}
-
-	skySunLightTarget = new THREE.Object3D()
-	skySunLightTarget.name = SKY_SUN_LIGHT_TARGET_NAME
-	skySunLightTarget.userData = { ...(skySunLightTarget.userData ?? {}), editorOnly: true }
-	skySunLightTarget.position.set(0, 0, 0)
-
-	skySunLight = new THREE.DirectionalLight(0xffffff, 1)
-	skySunLight.name = SKY_SUN_LIGHT_NAME
-	skySunLight.userData = { ...(skySunLight.userData ?? {}), editorOnly: true }
-	skySunLight.castShadow = true
-	skySunLight.target = skySunLightTarget
-
-	// Match the editor viewport defaults: without configuring the shadow camera,
-	// DirectionalLight shadows are often clipped away (appears as "no shadows").
-	const shadowCam = skySunLight.shadow.camera as THREE.OrthographicCamera
-	const half = SKY_SUN_SHADOW_FRUSTUM_SIZE * 0.5
-	shadowCam.left = -half
-	shadowCam.right = half
-	shadowCam.top = half
-	shadowCam.bottom = -half
-	shadowCam.near = SKY_SUN_SHADOW_NEAR
-	shadowCam.far = SKY_SUN_SHADOW_FAR
-	shadowCam.updateProjectionMatrix()
-
-	skySunLight.shadow.mapSize.set(2048, 2048)
-	skySunLight.shadow.bias = -0.0001
-	skySunLight.shadow.normalBias = 0.02
-
-	;(skySunLight as any).raycast = () => {}
-	;(skySunLightTarget as any).raycast = () => {}
-
-	scene.add(skySunLightTarget)
-	scene.add(skySunLight)
-	return skySunLight
+	if (!sceneCsmShadowRuntime) {
+		sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, config)
+		sceneCsmRuntimeConfigKey = configKey
+		sceneCsmShadowRuntime.registerObject(rootGroup)
+	}
+	syncSceneCsmSunFromEnvironment()
+	return sceneCsmShadowRuntime
 }
 
-function disposeSkySunLight(): void {
-	if (skySunLight) {
-		skySunLight.removeFromParent()
-	}
-	if (skySunLightTarget) {
-		skySunLightTarget.removeFromParent()
-	}
-	skySunLight = null
-	skySunLightTarget = null
+function disposeSceneCsmShadowRuntime(): void {
+	sceneCsmShadowRuntime?.dispose()
+	sceneCsmShadowRuntime = null
+	sceneCsmRuntimeConfigKey = ''
 }
 
-function tryFitSkySunLightShadowsToGround(light: THREE.DirectionalLight): void {
-	if (!cachedGroundNodeId || !cachedGroundDynamicMesh) {
+function syncSceneCsmSunFromEnvironment(): void {
+	if (!sceneCsmShadowRuntime || !currentDocument) {
 		return
 	}
-	const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
-	if (!groundObject) {
-		return
-	}
-	const width = cachedGroundDynamicMesh.width
-	const depth = cachedGroundDynamicMesh.depth
-	groundObject.updateMatrixWorld(true)
-	autoFitDirectionalLightShadowToGround(light, groundObject.matrixWorld, width, depth, { onlyCastShadow: true })
+	const settings = resolveDocumentEnvironment(currentDocument)
+	const csm = resolveEnvironmentCsmSettings(settings)
+	const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
+	sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor)
 }
 
-function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
-	const light = ensureSkySunLightExists()
-	if (!light || !skySunLightTarget) {
+function applyRendererShadowSetting(): void {
+	if (!renderer) {
 		return
 	}
-	light.position.copy(skySunPosition).multiplyScalar(SKY_SUN_LIGHT_DISTANCE)
-	skySunLightTarget.position.set(0, 0, 0)
-	skySunLightTarget.updateMatrixWorld(true)
-	const exposure = typeof settings.exposure === 'number' && Number.isFinite(settings.exposure)
-		? settings.exposure
-		: DEFAULT_SKYBOX_SETTINGS.exposure
-	light.intensity = Math.max(0, Math.min(20, exposure))
-	tryFitSkySunLightShadowsToGround(light)
+	const castShadows = Boolean(renderer.shadowMap.enabled)
+	if (castShadows) {
+		const runtime = ensureSceneCsmShadowRuntime()
+		runtime?.setActive(true)
+		syncSceneCsmSunFromEnvironment()
+		return
+	}
+	sceneCsmShadowRuntime?.setActive(false)
 }
 let backgroundTexture: THREE.Texture | null = null
 let backgroundTextureCleanup: (() => void) | null = null
@@ -2148,14 +2148,6 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
 		}
 	}
 	return null
-}
-
-function shouldUseSkybox(document: SceneJsonExportDocument | null | undefined): boolean {
-	const env = (document as any)?.environment
-	if (!env || !env.background) {
-		return false
-	}
-	return env.background.mode === 'skybox'
 }
 
 function resolveVehicleAncestorNodeId(nodeId: string | null): string | null {
@@ -3269,6 +3261,7 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh) {
 	mesh.frustumCulled = false
 	instancedMeshes.push(mesh)
 	instancedMeshGroup.add(mesh)
+	sceneCsmShadowRuntime?.registerObject(mesh)
 }
 
 function clearInstancedMeshes() {
@@ -3310,31 +3303,6 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D): void {
 		return
 	}
 	previewComponentManager.attachRuntime(nodeState, object)
-}
-
-function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings {
-	const ensureNumber = (candidate: unknown, fallback: number) => {
-		return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback
-	}
-	const sanitizedClouds = sanitizeCloudSettings(input.clouds)
-	return {
-		presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
-		exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
-		turbidity: ensureNumber(input.turbidity, DEFAULT_SKYBOX_SETTINGS.turbidity),
-		rayleigh: ensureNumber(input.rayleigh, DEFAULT_SKYBOX_SETTINGS.rayleigh),
-		mieCoefficient: ensureNumber(input.mieCoefficient, DEFAULT_SKYBOX_SETTINGS.mieCoefficient),
-		mieDirectionalG: ensureNumber(input.mieDirectionalG, DEFAULT_SKYBOX_SETTINGS.mieDirectionalG),
-		elevation: ensureNumber(input.elevation, DEFAULT_SKYBOX_SETTINGS.elevation),
-		azimuth: ensureNumber(input.azimuth, DEFAULT_SKYBOX_SETTINGS.azimuth),
-		clouds: sanitizedClouds ?? null,
-	}
-}
-
-function resolveDocumentSkybox(document: SceneJsonExportDocument | null | undefined): SceneSkyboxSettings | null {
-	if (!document) {
-		return null
-	}
-	return sanitizeSkyboxSettings(document.skybox)
 }
 
 function resetAssetResolutionCaches(): void {
@@ -6659,8 +6627,6 @@ function initRenderer() {
 	renderer.shadowMap.enabled = true
 	renderer.shadowMap.type = THREE.PCFSoftShadowMap
 	renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
-	pmremGenerator?.dispose()
-	pmremGenerator = new THREE.PMREMGenerator(renderer)
 	host.appendChild(renderer.domElement)
 
 	scene = new THREE.Scene()
@@ -6678,6 +6644,8 @@ function initRenderer() {
 	rootGroup.name = 'ScenePreviewRoot'
 	scene.add(rootGroup)
 	scene.add(instancedMeshGroup)
+	ensureSceneCsmShadowRuntime()
+	applyRendererShadowSetting()
 	clearInstancedMeshes()
 	stopInstancedMeshSubscription?.()
 	stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
@@ -6749,6 +6717,7 @@ function handleResize() {
 	renderer.setSize(width, height, false)
 	camera.aspect = width / height
 	camera.updateProjectionMatrix()
+	sceneCsmShadowRuntime?.updateFrustums()
 	scenePreviewPerf.markInstancedCullingDirty()
 }
 
@@ -7124,12 +7093,12 @@ function startAnimationLoop() {
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera)
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updatePerFrameDiagnostics(delta)
-		// cloudRenderer?.update(delta)
 		if (gradientBackgroundDome) {
 			gradientBackgroundDome.mesh.position.copy(activeCamera.position)
 		}
 
 		// 4) Render + stats
+		sceneCsmShadowRuntime?.update()
 		currentRenderer.render(currentScene, activeCamera)
 		syncRendererDebugForFrame(currentRenderer)
 		syncInstancedMatrixUploadEstimateForFrame()
@@ -7149,7 +7118,6 @@ function stopAnimationLoop() {
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
 	void syncGroundCache(null)
-	disposeSkySunLight()
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
 	cameraDependentUpdateElapsed = 0
@@ -7157,6 +7125,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	lastCameraDependentUpdateQuaternion.identity()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+	sceneCsmShadowRuntime?.setActive(false)
 	nodeObjectMap.forEach((_object, nodeId) => {
 		releaseModelInstance(nodeId)
 	})
@@ -7205,172 +7174,10 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearInstancedMeshes()
 }
 
-function disposeSkyEnvironment() {
-	if (skyEnvironmentTarget) {
-		skyEnvironmentTarget.dispose()
-		skyEnvironmentTarget = null
-	}
-}
-
 function disposeSkyResources() {
-	disposeSkyEnvironment()
-	if (!sky) {
-		return
-	}
-	sky.parent?.remove(sky)
-	const material = sky.material
-	if (Array.isArray(material)) {
-		material.forEach((entry) => entry?.dispose?.())
-	} else {
-		material?.dispose?.()
-	}
-	sky.geometry?.dispose?.()
-	sky = null
-}
-
-function syncSkyVisibility() {
-	if (!sky) {
-		return
-	}
-	sky.visible = shouldRenderSkyBackground
-}
-
-function setSkyBackgroundEnabled(enabled: boolean) {
-	shouldRenderSkyBackground = enabled
-	syncSkyVisibility()
-}
-
-function ensureSkyExists() {
-	if (!scene) {
-		return
-	}
-	if (sky) {
-		if (sky.parent !== scene) {
-			scene.add(sky)
-		}
-		syncSkyVisibility()
-		return
-	}
-	sky = new Sky()
-	sky.name = 'HarmonySky'
-	sky.scale.setScalar(SKY_SCALE)
-	sky.frustumCulled = false
-	scene.add(sky)
-	syncSkyVisibility()
-}
-
-function updateSkyLighting(settings: SceneSkyboxSettings) {
-	if (!sky) {
-		return
-	}
-	const skyMaterial = sky.material as THREE.ShaderMaterial
-	const uniforms = skyMaterial.uniforms
-	const phi = THREE.MathUtils.degToRad(90 - settings.elevation)
-	const theta = THREE.MathUtils.degToRad(settings.azimuth)
-	skySunPosition.setFromSphericalCoords(1, phi, theta)
-	const sunUniform = uniforms?.sunPosition
-	if (sunUniform?.value instanceof THREE.Vector3) {
-		sunUniform.value.copy(skySunPosition)
-	} else if (sunUniform) {
-		sunUniform.value = skySunPosition.clone()
-	}
-
-	// Keep the internal Sky sun light in sync.
-	syncSkySunLightFromSkyboxSettings(settings)
-}
-
-function applySkyEnvironmentToScene() {
-	if (!scene) {
-		return
-	}
-	if (skyEnvironmentTarget) {
-		scene.environment = skyEnvironmentTarget.texture
-		scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
-	} else {
-		scene.environment = null
-		scene.environmentIntensity = 1
-	}
-}
-
-function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive: boolean) {
-	if (!renderer || !scene) {
-		return
-	}
-	if (!skyNodeActive) {
-		disposeSkyResources()
-		applySkyEnvironmentToScene()
-		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
-		cloudRenderer?.setSkyboxSettings(null)
-		disposeSkySunLight()
-		return
-	}
-	if (!settings) {
-		disposeSkyEnvironment()
-		scene.environment = null
-		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
-		cloudRenderer?.setSkyboxSettings(null)
-		disposeSkySunLight()
-		return
-	}
-	ensureSkySunLightExists()
-	ensureSkyExists()
-	if (!sky) {
-		return
-	}
-	const skyMaterial = sky.material as THREE.ShaderMaterial
-	const uniforms = skyMaterial.uniforms
-	const assignUniform = (key: string, value: number) => {
-		const uniform = uniforms?.[key]
-		if (!uniform) {
-			return
-		}
-		if (typeof uniform.value === 'number') {
-			uniform.value = value
-			return
-		}
-		if (uniform.value && typeof uniform.value === 'object' && 'setScalar' in uniform.value) {
-			uniform.value.setScalar?.(value)
-			return
-		}
-		uniform.value = value
-	}
-	assignUniform('turbidity', settings.turbidity)
-	assignUniform('rayleigh', settings.rayleigh)
-	assignUniform('mieCoefficient', settings.mieCoefficient)
-	assignUniform('mieDirectionalG', settings.mieDirectionalG)
-	updateSkyLighting(settings)
-	renderer.toneMappingExposure = settings.exposure
-	if (!pmremGenerator) {
-		pmremGenerator = new THREE.PMREMGenerator(renderer)
-	}
-	disposeSkyEnvironment()
-	const previousVisibility = sky.visible
-	sky.visible = true
-	skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene)
-	sky.visible = previousVisibility
-	syncSkyVisibility()
-	applySkyEnvironmentToScene()
-
-	if (cloudRenderer) {
-		cloudRenderer.setSunPosition(skySunPosition)
-		cloudRenderer.setSkyboxSettings(settings)
-	} else {
-		cloudRenderer = new SceneCloudRenderer({
-			scene,
-			assetResolver: async (source) => {
-				const resolved = await resolveAssetUrlReference(source)
-				if (!resolved) {
-					return null
-				}
-				return {
-					url: resolved.url,
-					dispose: resolved.dispose,
-				}
-			},
-			sunPosition: skySunPosition,
-		})
-		cloudRenderer.setSkyboxSettings(settings)
-	}
+	if (!scene) return
+	scene.environment = null
+	scene.environmentIntensity = 1
 }
 
 function disposeHdriBackgroundResources() {
@@ -7498,13 +7305,6 @@ async function applyBackgroundSettings(
 	if (!scene) {
 		return false
 	}
-	if (background.mode === 'skybox') {
-		disposeBackgroundResources()
-		setSkyBackgroundEnabled(true)
-		scene.background = null
-		return true
-	}
-	setSkyBackgroundEnabled(false)
 	if (background.mode === 'solidColor') {
 		const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''
 		disposeHdriBackgroundResources()
@@ -7732,11 +7532,7 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
 	if (!scene) {
 		return false
 	}
-	if (background.mode === 'skybox') {
-		applySkyEnvironmentToScene()
-		return true
-	}
-	// Reflections follow Background: only Skybox produces reflections.
+	void background
 	scene.environment = null
 	scene.environmentIntensity = 1
 	return true
@@ -7768,6 +7564,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	} else {
 		pendingEnvironmentSettings = snapshot
 	}
+	applyRendererShadowSetting()
+	syncSceneCsmSunFromEnvironment()
 }
 
 const environmentAssetSignature = computed(() => {
@@ -8043,6 +7841,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				}
 		}
 	})
+	sceneCsmShadowRuntime?.registerObject(object)
 }
 
 function adoptNodeFromPending(nodeId: string, parent: THREE.Object3D, pending: Map<string, THREE.Object3D>): THREE.Object3D | null {
@@ -10408,9 +10207,6 @@ async function applyInitialDocumentGraph(
 	currentDocument = document
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
 	await syncGroundCache(document)
-	if (skySunLight) {
-		tryFitSkySunLightShadowsToGround(skySunLight)
-	}
 	// (instancing trace removed)
 	await syncTerrainScatterInstances(document, resourceCache)
 	refreshAnimations()
@@ -10422,6 +10218,7 @@ async function applyInitialDocumentGraph(
 		syncRigidbodyDebugHelpers()
 	}
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	applyRendererShadowSetting()
 	environmentAssetRefreshTick.value += 1
 }
 
@@ -10442,9 +10239,6 @@ async function applyIncrementalDocumentGraph(
 	}
 
 	await syncGroundCache(document)
-	if (skySunLight) {
-		tryFitSkySunLightShadowsToGround(skySunLight)
-	}
 
 	nodeObjectMap.forEach((object, nodeId) => {
 		attachRuntimeForNode(nodeId, object)
@@ -10461,6 +10255,7 @@ async function applyIncrementalDocumentGraph(
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	applyRendererShadowSetting()
 	environmentAssetRefreshTick.value += 1
 	// (instancing trace removed)
 }
@@ -10471,9 +10266,10 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetProtagonistPoseState()
 
 	refreshResourceAssetInfo(document)
-	const skyboxSettings = resolveDocumentSkybox(document)
-	const skyNodeActive = shouldUseSkybox(document)
-	applySkyboxSettings(skyboxSettings, skyNodeActive)
+	disposeSkyResources()
+	if (renderer) {
+		renderer.toneMappingExposure = DEFAULT_TONE_MAPPING_EXPOSURE
+	}
 	const environmentSettings = resolveDocumentEnvironment(document)
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
 	deferredInstancingNodeIds.clear()
@@ -10714,8 +10510,7 @@ onBeforeUnmount(() => {
 	disposeEnvironmentResources()
 	disposeSkyResources()
 	disposeMaterialTextureCache()
-	pmremGenerator?.dispose()
-	pmremGenerator = null
+	disposeSceneCsmShadowRuntime()
 	lanternViewerInstance = null
 	animationMixers.forEach((mixer) => mixer.stopAllAction())
 	animationMixers = []
