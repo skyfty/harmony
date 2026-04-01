@@ -31,6 +31,12 @@ import {
 } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
 import { isGeometryType } from '../../index'
+import {
+  WATER_SURFACE_POLYGON_OFFSET_FACTOR,
+  WATER_SURFACE_POLYGON_OFFSET_UNITS,
+  WATER_SURFACE_WORLD_OFFSET,
+  WATER_TERRAIN_SURFACE_RENDER_ORDER,
+} from '../../terrainSurfaceLayering'
 
 export const WATER_COMPONENT_TYPE = 'water'
 export const WATER_DEFAULT_TEXTURE_WIDTH = 512
@@ -91,6 +97,7 @@ const DEFAULT_FLOW_DIRECTION: FlowDirection = { x: 0.7071, y: 0.7071 }
 const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
+const WATER_SURFACE_RENDER_ORDER = WATER_TERRAIN_SURFACE_RENDER_ORDER
 
 const WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ = 0.15 * 0.15
 // Allow ~35° rotation change before forcing re-capture.
@@ -143,6 +150,39 @@ function resolveEffectiveImplementationMode(mode: WaterImplementationMode): Excl
   }
   const isMobile = isWeChatMiniProgramRuntime() || isMobileUserAgentRuntime()
   return isMobile ? 'static' : 'dynamic'
+}
+
+function resolveWaterSurfaceRenderOrder(baseRenderOrder: number): number {
+  return Math.max(baseRenderOrder, WATER_SURFACE_RENDER_ORDER)
+}
+
+function applyWaterSurfaceMaterialLayering(material: Material | null | undefined): void {
+  if (!material) {
+    return
+  }
+  material.polygonOffset = true
+  material.polygonOffsetFactor = WATER_SURFACE_POLYGON_OFFSET_FACTOR
+  material.polygonOffsetUnits = WATER_SURFACE_POLYGON_OFFSET_UNITS
+}
+
+function applyWaterSurfaceLayering(target: Object3D | null | undefined): void {
+  if (!target) {
+    return
+  }
+  target.renderOrder = resolveWaterSurfaceRenderOrder(target.renderOrder)
+  target.traverse((child) => {
+    const mesh = child as Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+    mesh.renderOrder = resolveWaterSurfaceRenderOrder(mesh.renderOrder)
+    const material = mesh.material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => applyWaterSurfaceMaterialLayering(entry))
+      return
+    }
+    applyWaterSurfaceMaterialLayering(material ?? null)
+  })
 }
 
 export function clampWaterComponentProps(
@@ -537,7 +577,8 @@ class WaterComponent extends Component<WaterComponentProps> {
     water.userData[COMPONENT_ARTIFACT_KEY] = true
     water.userData[COMPONENT_ARTIFACT_NODE_ID_KEY] = this.context.nodeId
     water.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = this.context.componentId
-    water.renderOrder = mesh.renderOrder
+    water.renderOrder = resolveWaterSurfaceRenderOrder(mesh.renderOrder)
+    applyWaterSurfaceLayering(water)
 
     const parent = mesh.parent
     if (parent) {
@@ -597,6 +638,9 @@ class WaterComponent extends Component<WaterComponentProps> {
       transparent,
       opacity,
       depthWrite: !transparent,
+      polygonOffset: true,
+      polygonOffsetFactor: WATER_SURFACE_POLYGON_OFFSET_FACTOR,
+      polygonOffsetUnits: WATER_SURFACE_POLYGON_OFFSET_UNITS,
       uniforms,
       lights: true,
       vertexShader: /* glsl */ `
@@ -739,7 +783,8 @@ class WaterComponent extends Component<WaterComponentProps> {
     typedWaterMesh.userData[COMPONENT_ARTIFACT_KEY] = true
     typedWaterMesh.userData[COMPONENT_ARTIFACT_NODE_ID_KEY] = this.context.nodeId
     typedWaterMesh.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = this.context.componentId
-    typedWaterMesh.renderOrder = mesh.renderOrder
+    typedWaterMesh.renderOrder = resolveWaterSurfaceRenderOrder(mesh.renderOrder)
+    applyWaterSurfaceLayering(typedWaterMesh)
 
     const mirrorTarget = new WebGLRenderTarget(
       Math.max(WATER_MIN_TEXTURE_SIZE, Math.floor(props.textureWidth)),
@@ -793,12 +838,19 @@ class WaterComponent extends Component<WaterComponentProps> {
     const hostWorldQuaternion = new Quaternion()
     const hostWorldScale = new Vector3()
     this.hostMesh.matrixWorld.decompose(hostWorldPosition, hostWorldQuaternion, hostWorldScale)
+    hostWorldPosition.add(
+      new Vector3(0, 0, 1)
+        .applyQuaternion(hostWorldQuaternion)
+        .normalize()
+        .multiplyScalar(WATER_SURFACE_WORLD_OFFSET),
+    )
 
     const targetParent = target.parent
     if (!targetParent) {
       target.position.copy(hostWorldPosition)
       target.quaternion.copy(hostWorldQuaternion)
       target.scale.copy(hostWorldScale)
+      applyWaterSurfaceLayering(target)
       target.updateMatrix()
       target.updateMatrixWorld(true)
       return
@@ -809,6 +861,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     const parentInverseWorld = targetParent.matrixWorld.clone().invert()
     const targetLocalMatrix = new Matrix4().multiplyMatrices(parentInverseWorld, hostWorldMatrix)
     targetLocalMatrix.decompose(target.position, target.quaternion, target.scale)
+    applyWaterSurfaceLayering(target)
     target.updateMatrix()
     target.updateMatrixWorld(true)
   }

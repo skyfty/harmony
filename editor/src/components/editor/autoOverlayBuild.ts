@@ -14,7 +14,7 @@ const POINT_EPSILON_SQ = 1e-8
 
 export type AutoOverlayTool = 'floor' | 'wall' | 'water'
 export type AutoOverlayReferenceType = 'floor' | 'landform' | 'wall' | 'water'
-export type AutoOverlayTargetBuildShape = FloorBuildShape | Exclude<WallBuildShape, 'line'> | WaterBuildShape
+export type AutoOverlayTargetBuildShape = FloorBuildShape | WallBuildShape | WaterBuildShape
 
 export type AutoOverlayBuildPlan = {
   supported: boolean
@@ -26,6 +26,7 @@ export type AutoOverlayBuildPlan = {
   targetTool: AutoOverlayTool
   targetBuildShape: AutoOverlayTargetBuildShape
   worldPoints: Vector3Like[]
+  closedPath: boolean
 }
 
 function toFiniteNumber(value: unknown, fallback = 0): number {
@@ -124,6 +125,7 @@ function buildWaterOverlayPlan(
       targetTool,
       targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
       worldPoints: contour,
+      closedPath: true,
     }
   }
 
@@ -137,6 +139,7 @@ function buildWaterOverlayPlan(
     targetTool,
     targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
     worldPoints: contour,
+    closedPath: true,
   }
 }
 
@@ -178,6 +181,7 @@ function buildFloorOverlayPlan(
       targetTool,
       targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
       worldPoints: contour,
+      closedPath: true,
     }
   }
 
@@ -191,6 +195,7 @@ function buildFloorOverlayPlan(
     targetTool,
     targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
     worldPoints: contour,
+    closedPath: true,
   }
 }
 
@@ -230,6 +235,7 @@ function buildLandformOverlayPlan(
       targetTool,
       targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
       worldPoints: contour,
+      closedPath: true,
     }
   }
 
@@ -243,7 +249,30 @@ function buildLandformOverlayPlan(
     targetTool,
     targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
     worldPoints: contour,
+    closedPath: true,
   }
+}
+
+function computeWallChainLengthSq(points: Array<Vector3Like | null | undefined>): number {
+  if (!Array.isArray(points) || points.length < 2) {
+    return 0
+  }
+  let total = 0
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index]
+    const next = points[index + 1]
+    if (!current || !next) {
+      continue
+    }
+    const dx = Number(next.x) - Number(current.x)
+    const dy = Number(next.y) - Number(current.y)
+    const dz = Number(next.z) - Number(current.z)
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) {
+      continue
+    }
+    total += (dx * dx) + (dy * dy) + (dz * dz)
+  }
+  return total
 }
 
 function buildWallOverlayPlan(
@@ -257,35 +286,61 @@ function buildWallOverlayPlan(
   const dimensions = dynamicMesh.dimensions ?? {}
   const height = Math.max(0, toFiniteNumber(dimensions.height))
 
-  if (buildShape === 'line') {
+  // Keep legacy restriction for non-wall targets that need closed contours.
+  if (targetTool !== 'wall') {
+    if (buildShape === 'line') {
+      return {
+        supported: false,
+        reason: '当前只支持闭合 wall 作为自动铺设参考。',
+        referenceNodeId: node.id,
+        referenceNodeName: node.name,
+        referenceType: 'wall',
+        referenceBuildShape: buildShape,
+        targetTool,
+        targetBuildShape: normalizeTargetBuildShape(buildShape, 0),
+        worldPoints: [],
+        closedPath: true,
+      }
+    }
+
+    if (chains.length !== 1 || !chains[0]?.closed) {
+      return {
+        supported: false,
+        reason: '当前只支持单个闭合 wall 轮廓自动铺设。',
+        referenceNodeId: node.id,
+        referenceNodeName: node.name,
+        referenceType: 'wall',
+        referenceBuildShape: buildShape,
+        targetTool,
+        targetBuildShape: normalizeTargetBuildShape(buildShape, 0),
+        worldPoints: [],
+        closedPath: true,
+      }
+    }
+  }
+
+  const candidateChains = chains
+    .filter((chain) => Array.isArray(chain?.points) && chain.points.length >= 2)
+    .sort((a, b) => computeWallChainLengthSq(b.points) - computeWallChainLengthSq(a.points))
+
+  const selectedChain = candidateChains[0] ?? null
+  if (!selectedChain) {
     return {
       supported: false,
-      reason: '当前只支持闭合 wall 作为自动铺设参考。',
+      reason: '参考 wall 轮廓无效，无法自动铺设。',
       referenceNodeId: node.id,
       referenceNodeName: node.name,
       referenceType: 'wall',
       referenceBuildShape: buildShape,
       targetTool,
-      targetBuildShape: normalizeTargetBuildShape(buildShape, 0),
+      targetBuildShape: targetTool === 'wall' ? 'line' : normalizeTargetBuildShape(buildShape, 0),
       worldPoints: [],
+      closedPath: false,
     }
   }
 
-  if (chains.length !== 1 || !chains[0]?.closed) {
-    return {
-      supported: false,
-      reason: '当前只支持单个闭合 wall 轮廓自动铺设。',
-      referenceNodeId: node.id,
-      referenceNodeName: node.name,
-      referenceType: 'wall',
-      referenceBuildShape: buildShape,
-      targetTool,
-      targetBuildShape: normalizeTargetBuildShape(buildShape, 0),
-      worldPoints: [],
-    }
-  }
-
-  const localPoints = Array.isArray(chains[0].points) ? chains[0].points : []
+  const isClosedPath = Boolean(selectedChain.closed)
+  const localPoints = Array.isArray(selectedChain.points) ? selectedChain.points : []
   const contour = sanitizeWorldPoints(
     localPoints
       .map((point) => {
@@ -300,7 +355,8 @@ function buildWallOverlayPlan(
       .filter((entry): entry is THREE.Vector3 => Boolean(entry)),
   )
 
-  if (contour.length < 3) {
+  const minPointCount = isClosedPath ? 3 : 2
+  if (contour.length < minPointCount) {
     return {
       supported: false,
       reason: '参考 wall 轮廓无效，无法自动铺设。',
@@ -309,8 +365,11 @@ function buildWallOverlayPlan(
       referenceType: 'wall',
       referenceBuildShape: buildShape,
       targetTool,
-      targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
+      targetBuildShape: targetTool === 'wall'
+        ? (isClosedPath ? normalizeTargetBuildShape(buildShape, contour.length) : 'line')
+        : normalizeTargetBuildShape(buildShape, contour.length),
       worldPoints: contour,
+      closedPath: isClosedPath,
     }
   }
 
@@ -322,8 +381,11 @@ function buildWallOverlayPlan(
     referenceType: 'wall',
     referenceBuildShape: buildShape,
     targetTool,
-    targetBuildShape: normalizeTargetBuildShape(buildShape, contour.length),
+    targetBuildShape: targetTool === 'wall'
+      ? (isClosedPath ? normalizeTargetBuildShape(buildShape, contour.length) : 'line')
+      : normalizeTargetBuildShape(buildShape, contour.length),
     worldPoints: contour,
+    closedPath: isClosedPath,
   }
 }
 
@@ -357,6 +419,23 @@ export function buildClosedWallSegmentsFromWorldPoints(points: Vector3Like[]): A
   for (let index = 0; index < points.length; index += 1) {
     const start = points[index]!
     const end = points[(index + 1) % points.length]!
+    segments.push({
+      start: { x: start.x, y: start.y, z: start.z },
+      end: { x: end.x, y: end.y, z: end.z },
+    })
+  }
+  return segments
+}
+
+export function buildOpenWallSegmentsFromWorldPoints(points: Vector3Like[]): Array<{ start: Vector3Like; end: Vector3Like }> {
+  if (points.length < 2) {
+    return []
+  }
+
+  const segments: Array<{ start: Vector3Like; end: Vector3Like }> = []
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index]!
+    const end = points[index + 1]!
     segments.push({
       start: { x: start.x, y: start.y, z: start.z },
       end: { x: end.x, y: end.y, z: end.z },

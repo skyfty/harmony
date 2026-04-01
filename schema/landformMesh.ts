@@ -1,13 +1,20 @@
 import * as THREE from 'three'
 import type { LandformDynamicMesh, Vector2Like, Vector3Like } from './index'
 import { MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from './material'
+import {
+  LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR,
+  LANDFORM_SURFACE_POLYGON_OFFSET_UNITS,
+  LANDFORM_SURFACE_WORLD_OFFSET,
+  LAND_TERRAIN_SURFACE_RENDER_ORDER,
+} from './terrainSurfaceLayering'
 
 const LANDFORM_DEFAULT_COLOR = 0xffffff
-const LANDFORM_SURFACE_Y_OFFSET = 0.1
-const LANDFORM_RENDER_ORDER = 8
+const LANDFORM_SURFACE_Y_OFFSET = LANDFORM_SURFACE_WORLD_OFFSET
+const LANDFORM_RENDER_ORDER = LAND_TERRAIN_SURFACE_RENDER_ORDER
 const LANDFORM_CONTENT_GROUP = '__LandformContent'
 const LANDFORM_MESH_NAME = '__LandformSurface'
 const LANDFORM_FEATHER_PATCHED_FLAG = '__landformFeatherPatched'
+const LANDFORM_EDGE_ALPHA_FLOOR = 0.12
 
 function normalizeMaterialConfigId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
@@ -51,8 +58,8 @@ function createLandformMaterial(): THREE.MeshStandardMaterial {
     depthWrite: false,
     side: THREE.DoubleSide,
     polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
+    polygonOffsetFactor: LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR,
+    polygonOffsetUnits: LANDFORM_SURFACE_POLYGON_OFFSET_UNITS,
   })
   material.name = 'LandformMaterial'
   material.shadowSide = THREE.FrontSide
@@ -239,8 +246,8 @@ export function applyLandformFeatherMaterial(material: THREE.Material | null | u
   clone.transparent = true
   clone.depthWrite = false
   clone.polygonOffset = true
-  clone.polygonOffsetFactor = -2
-  clone.polygonOffsetUnits = -2
+  clone.polygonOffsetFactor = LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR
+  clone.polygonOffsetUnits = LANDFORM_SURFACE_POLYGON_OFFSET_UNITS
   clone.alphaTest = Math.max(clone.alphaTest ?? 0, 0.001)
   const originalOnBeforeCompile = clone.onBeforeCompile
   clone.onBeforeCompile = (shader, renderer) => {
@@ -249,7 +256,10 @@ export function applyLandformFeatherMaterial(material: THREE.Material | null | u
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLandformFeather = landformFeather;')
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vLandformFeather;')
-      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse, opacity * clamp(vLandformFeather, 0.0, 1.0) );')
+      .replace(
+        'vec4 diffuseColor = vec4( diffuse, opacity );',
+        `float landformFeatherAlpha = mix(${LANDFORM_EDGE_ALPHA_FLOOR.toFixed(2)}, 1.0, clamp(vLandformFeather, 0.0, 1.0));\nvec4 diffuseColor = vec4( diffuse, opacity * landformFeatherAlpha );`,
+      )
     originalOnBeforeCompile?.(shader, renderer)
   }
   const originalKey = clone.customProgramCacheKey?.bind(clone)

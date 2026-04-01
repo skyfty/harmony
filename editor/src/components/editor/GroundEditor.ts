@@ -49,7 +49,7 @@ import {
 	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
 import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
-import { resolveAutoOverlayBuildPlan } from './autoOverlayBuild'
+import { resolveAutoOverlayBuildPlan, type AutoOverlayBuildPlan } from './autoOverlayBuild'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -120,6 +120,7 @@ export type GroundEditorOptions = {
 	scatterEraseRadius: Ref<number>
 	scatterDensityPercent: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
+	resolveAutoOverlayPlan?: (event: PointerEvent) => AutoOverlayBuildPlan | null
 	onScatterEraseStart?: () => void
 	scatterEraseModeActive: Ref<boolean>
 	resolveVertexSnapPoint?: (
@@ -1754,7 +1755,39 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function updateScatterHoverPreview(event: PointerEvent): void {
 		if (!scatterModeEnabled()) {
 			scatterPreviewGroup.visible = false
+			if (!scatterSession) {
+				clearScatterAreaPreview()
+			}
 			return
+		}
+		if ((event.ctrlKey || event.metaKey) && !scatterSession) {
+			const overlayPlan = options.resolveAutoOverlayPlan?.(event) ?? null
+			if (overlayPlan?.supported && Array.isArray(overlayPlan.worldPoints) && overlayPlan.worldPoints.length >= 3) {
+				const previewPoints = overlayPlan.worldPoints.map((point) => new THREE.Vector3(point.x, point.y, point.z))
+				const outlineGeometry = createScatterAreaOutlineGeometry(previewPoints, true)
+				if (outlineGeometry) {
+					setScatterAreaPreviewGeometry(scatterAreaPreviewOutline, outlineGeometry)
+					const fillGeometry = createScatterAreaFillGeometry(previewPoints)
+					if (fillGeometry) {
+						setScatterAreaPreviewGeometry(scatterAreaPreviewFill, fillGeometry)
+						scatterAreaPreviewFill.visible = true
+					} else {
+						scatterAreaPreviewFill.visible = false
+					}
+					scatterAreaPreviewOutline.visible = true
+					scatterAreaPreviewGroup.visible = true
+				} else {
+					clearScatterAreaPreview()
+				}
+				scatterPreviewGroup.visible = false
+				return
+			}
+			clearScatterAreaPreview()
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (!scatterSession) {
+			clearScatterAreaPreview()
 		}
 		const definition = getGroundDynamicMeshDefinition()
 		const groundMesh = getGroundObject()
@@ -5004,21 +5037,27 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			? spacingStats.minDistance
 			: resolveScatterSpacing()
 		const chunkCells = resolveChunkCellsForDefinition(definition)
+		const overlayPlan = options.resolveAutoOverlayPlan?.(event) ?? null
 
 		// Ctrl (or Meta) + Scatter: if user pressed Ctrl, try to reuse Auto Overlay's
 		// reference node polygon/rectangle as scatter domain and apply current
 		// scatter configuration within that domain immediately.
 		if ((event.ctrlKey || event.metaKey) && typeof options.pickNodeAtPointer === 'function') {
 			try {
-				const hit = options.pickNodeAtPointer(event, { includeSelectionLocked: false })
-				if (hit && hit.nodeId) {
-					const nodes = options.getSceneNodes()
-					const refNode = nodes.find((n) => n.id === hit.nodeId) ?? null
-					if (refNode) {
-						const runtimeObject = options.objectMap.get(refNode.id) ?? null
-						const targetTool = refNode.dynamicMesh?.type === 'Floor' || refNode.dynamicMesh?.type === 'Landform' ? 'floor' : (refNode.dynamicMesh?.type === 'Wall' ? 'wall' : 'water')
-						const plan = resolveAutoOverlayBuildPlan({ referenceNode: refNode, runtimeObject, targetTool })
-						if (plan && plan.supported && Array.isArray(plan.worldPoints) && plan.worldPoints.length >= 3) {
+				let plan = overlayPlan
+				if (!plan) {
+					const hit = options.pickNodeAtPointer(event, { includeSelectionLocked: false })
+					if (hit && hit.nodeId) {
+						const nodes = options.getSceneNodes()
+						const refNode = nodes.find((n) => n.id === hit.nodeId) ?? null
+						if (refNode) {
+							const runtimeObject = options.objectMap.get(refNode.id) ?? null
+							const targetTool = refNode.dynamicMesh?.type === 'Floor' || refNode.dynamicMesh?.type === 'Landform' ? 'floor' : (refNode.dynamicMesh?.type === 'Wall' ? 'wall' : 'water')
+							plan = resolveAutoOverlayBuildPlan({ referenceNode: refNode, runtimeObject, targetTool })
+						}
+					}
+				}
+				if (plan && plan.supported && Array.isArray(plan.worldPoints) && plan.worldPoints.length >= 3) {
 							// Ensure model group / layer are ready
 							if (!scatterModelGroup) {
 								console.warn('散布资源仍在加载，请稍后重试')
@@ -5067,12 +5106,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 								scatterSession = previousSession
 							}
 							// Provide immediate feedback and consume the click.
+							refreshScatterAreaPreview(scatterSession)
 							event.preventDefault()
 							event.stopPropagation()
 							event.stopImmediatePropagation()
 							return true
-						}
-					}
 				}
 			} catch (err) {
 				console.warn('Auto-overlay scatter failed', err)

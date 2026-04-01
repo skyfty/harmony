@@ -255,6 +255,7 @@ import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
 import {
   buildClosedWallSegmentsFromWorldPoints,
+  buildOpenWallSegmentsFromWorldPoints,
   resolveAutoOverlayBuildPlan,
   type AutoOverlayBuildPlan,
 } from './autoOverlayBuild'
@@ -1828,8 +1829,8 @@ const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
-const autoOverlayHorizOffset = ref(0)
-const autoOverlayVertOffset = ref(0)
+const autoOverlayHorizMargin = ref(0)
+const autoOverlayVertMargin = ref(0)
 const autoOverlayHoverNodeId = ref<string | null>(null)
 const autoOverlayHoverIndicator = reactive({
   visible: false,
@@ -3255,6 +3256,7 @@ const groundEditor = createGroundEditor({
   scatterEraseRadius,
   scatterDensityPercent,
   activeBuildTool,
+  resolveAutoOverlayPlan: resolveScatterAutoOverlayPlanForEvent,
   scatterEraseModeActive,
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
@@ -7380,6 +7382,15 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
     return null
   }
 
+  const node = resolveAutoOverlayReferenceNodeForEvent(event)
+  if (!node) {
+    return null
+  }
+
+  return resolveAutoOverlayBuildPlanForReferenceNode(node, targetTool)
+}
+
+function resolveAutoOverlayReferenceNodeForEvent(event: PointerEvent): SceneNode | null {
   const hit = pickNodeAtPointer(event)
   if (!hit) {
     return null
@@ -7393,6 +7404,13 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
     return null
   }
 
+  return node
+}
+
+function resolveAutoOverlayBuildPlanForReferenceNode(
+  node: SceneNode,
+  targetTool: 'floor' | 'wall' | 'water',
+): AutoOverlayBuildPlan | null {
   return resolveAutoOverlayBuildPlan({
     referenceNode: node,
     runtimeObject: objectMap.get(node.id) ?? null,
@@ -7400,13 +7418,31 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
   })
 }
 
-function setMeshGeometry(target: { geometry?: THREE.BufferGeometry | null }, nextGeometry: THREE.BufferGeometry) {
-  const previous = (target.geometry as THREE.BufferGeometry | undefined) ?? null
-  target.geometry = nextGeometry
-  if (previous && typeof (previous as any).dispose === 'function') {
-    try { (previous as any).dispose() } catch (e) { /* ignore */ }
-  }
+function scatterAutoOverlayEnabled(): boolean {
+  return activeBuildTool.value === 'scatter'
+    && !scatterEraseModeActive.value
+    && Boolean(terrainStore.scatterSelectedAsset)
 }
+
+function resolveScatterAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPlan | null {
+  if (!scatterAutoOverlayEnabled()) {
+    return null
+  }
+  if (isAltOverrideActive || nodePickerStore.isActive) {
+    return null
+  }
+
+  const node = resolveAutoOverlayReferenceNodeForEvent(event)
+  if (!node) {
+    return null
+  }
+
+  const targetTool = node.dynamicMesh?.type === 'Floor' || node.dynamicMesh?.type === 'Landform'
+    ? 'floor'
+    : (node.dynamicMesh?.type === 'Wall' ? 'wall' : 'water')
+  return resolveAutoOverlayBuildPlanForReferenceNode(node, targetTool)
+}
+
 function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
   const hasActiveDrag = Boolean(
     roadVertexDragState
@@ -7438,7 +7474,8 @@ function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
     return
   }
 
-  const plan = resolveAutoOverlayPlanForEvent(event)
+  const scatterPlan = resolveScatterAutoOverlayPlanForEvent(event)
+  const plan = scatterPlan ?? resolveAutoOverlayPlanForEvent(event)
   if (!plan?.supported || !surfaceRef.value) {
     clearAutoOverlayHoverIndicator()
     return
@@ -7449,51 +7486,253 @@ function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
   autoOverlayHoverIndicator.visible = true
   autoOverlayHoverIndicator.x = event.clientX - rect.left + 14
   autoOverlayHoverIndicator.y = event.clientY - rect.top + 18
-  autoOverlayHoverIndicator.label = `自动铺设 ${plan.targetTool}`
+  autoOverlayHoverIndicator.label = scatterPlan
+    ? `智能散布 ${plan.referenceType}`
+    : `自动铺设 ${plan.targetTool}`
+}
 
-  // Also show the scatter area preview using GroundEditor's preview group.
-  try {
-    const points = (plan.worldPoints ?? []).map((p) => p ? new THREE.Vector3(p.x, p.y, p.z) : undefined).filter((p): p is THREE.Vector3 => Boolean(p))
-    if (points.length >= 3 && scatterAreaPreviewGroup) {
-      // Outline geometry (line loop)
-      const outlinePoints = [...points, points[0]!]
-      const outlineGeom = new THREE.BufferGeometry().setFromPoints(outlinePoints)
-      const fillShape = new THREE.Shape(points.map((pt) => new THREE.Vector2(pt.x, pt.z)))
-      const fillGeom2D = new THREE.ShapeGeometry(fillShape)
-      // Convert 2D shape geometry (XY) into XZ plane at average Y
-      let avgY = 0
-      for (const pt of points) avgY += pt.y
-      avgY = avgY / points.length
-      const fillGeom = new THREE.BufferGeometry()
-      // Copy positions and remap: x->x, y->z, z->ignored; then set z=y
-      const posAttr = fillGeom2D.getAttribute('position')
-      const posArray: number[] = []
-      for (let i = 0; i < posAttr.count; i++) {
-        const x = posAttr.getX(i)
-        const y = posAttr.getY(i)
-        posArray.push(x, avgY, y)
-      }
-      fillGeom.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3))
+type AutoOverlayContourMetrics = {
+  points: Array<{ x: number; z: number }>
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+  centroidX: number
+  centroidZ: number
+  avgEdgeLength: number
+}
 
-      const fillMesh = scatterAreaPreviewGroup.children.find((c) => (c as any).isMesh) as THREE.Mesh | undefined
-      const outlineLine = scatterAreaPreviewGroup.children.find((c) => (c as any).type === 'Line') as THREE.Line | undefined
-      if (fillMesh) {
-        setMeshGeometry(fillMesh, fillGeom)
-        fillMesh.visible = true
-      }
-      if (outlineLine) {
-        setMeshGeometry(outlineLine as any, outlineGeom)
-        outlineLine.visible = true
-      }
-      scatterAreaPreviewGroup.visible = true
-    } else if (scatterAreaPreviewGroup) {
-      // hide if invalid
-      scatterAreaPreviewGroup.visible = false
-    }
-  } catch (err) {
-    // ignore preview errors
-    console.warn('Auto overlay preview build failed', err)
+function collectSceneNodesRecursive(nodes: SceneNode[] | undefined, out: SceneNode[]): void {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return
   }
+  for (const node of nodes) {
+    out.push(node)
+    const children = (node as SceneNode & { children?: SceneNode[] }).children
+    if (Array.isArray(children) && children.length) {
+      collectSceneNodesRecursive(children, out)
+    }
+  }
+}
+
+function buildAutoOverlayContourMetrics(worldPoints: Array<{ x: number; z: number }>): AutoOverlayContourMetrics | null {
+  if (!Array.isArray(worldPoints) || worldPoints.length < 3) {
+    return null
+  }
+  const points = worldPoints
+    .map((point) => ({ x: Number(point?.x), z: Number(point?.z) }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
+  if (points.length < 3) {
+    return null
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  let perimeter = 0
+  let signedArea = 0
+  let centroidNumeratorX = 0
+  let centroidNumeratorZ = 0
+
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    minX = Math.min(minX, current.x)
+    maxX = Math.max(maxX, current.x)
+    minZ = Math.min(minZ, current.z)
+    maxZ = Math.max(maxZ, current.z)
+
+    const dx = next.x - current.x
+    const dz = next.z - current.z
+    perimeter += Math.sqrt((dx * dx) + (dz * dz))
+
+    const cross = current.x * next.z - next.x * current.z
+    signedArea += cross
+    centroidNumeratorX += (current.x + next.x) * cross
+    centroidNumeratorZ += (current.z + next.z) * cross
+  }
+
+  const area = signedArea * 0.5
+  const absArea = Math.abs(area)
+  let centroidX = (minX + maxX) * 0.5
+  let centroidZ = (minZ + maxZ) * 0.5
+  if (absArea > 1e-8) {
+    centroidX = centroidNumeratorX / (6 * area)
+    centroidZ = centroidNumeratorZ / (6 * area)
+  }
+
+  return {
+    points,
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    centroidX,
+    centroidZ,
+    avgEdgeLength: perimeter / points.length,
+  }
+}
+
+function autoOverlayBoundsIntersect(a: AutoOverlayContourMetrics, b: AutoOverlayContourMetrics): boolean {
+  return !(a.maxX < b.minX || b.maxX < a.minX || a.maxZ < b.minZ || b.maxZ < a.minZ)
+}
+
+function distancePointToSegmentSq2D(
+  point: { x: number; z: number },
+  start: { x: number; z: number },
+  end: { x: number; z: number },
+): number {
+  const sx = start.x
+  const sz = start.z
+  const ex = end.x
+  const ez = end.z
+  const vx = ex - sx
+  const vz = ez - sz
+  const wx = point.x - sx
+  const wz = point.z - sz
+  const lenSq = (vx * vx) + (vz * vz)
+  if (lenSq <= 1e-8) {
+    const dx = point.x - sx
+    const dz = point.z - sz
+    return (dx * dx) + (dz * dz)
+  }
+  const t = Math.max(0, Math.min(1, ((wx * vx) + (wz * vz)) / lenSq))
+  const cx = sx + (vx * t)
+  const cz = sz + (vz * t)
+  const dx = point.x - cx
+  const dz = point.z - cz
+  return (dx * dx) + (dz * dz)
+}
+
+function meanPointToContourDistance(points: Array<{ x: number; z: number }>, contour: Array<{ x: number; z: number }>): number {
+  if (!points.length || contour.length < 2) {
+    return Number.POSITIVE_INFINITY
+  }
+  let sum = 0
+  for (const point of points) {
+    let bestSq = Number.POSITIVE_INFINITY
+    for (let index = 0; index < contour.length; index += 1) {
+      const start = contour[index]!
+      const end = contour[(index + 1) % contour.length]!
+      const distSq = distancePointToSegmentSq2D(point, start, end)
+      if (distSq < bestSq) {
+        bestSq = distSq
+      }
+    }
+    sum += Math.sqrt(bestSq)
+  }
+  return sum / points.length
+}
+
+function contoursLikelyOverlap(a: AutoOverlayContourMetrics, b: AutoOverlayContourMetrics): boolean {
+  if (!autoOverlayBoundsIntersect(a, b)) {
+    return false
+  }
+
+  const centroidDx = a.centroidX - b.centroidX
+  const centroidDz = a.centroidZ - b.centroidZ
+  const centroidDistance = Math.sqrt((centroidDx * centroidDx) + (centroidDz * centroidDz))
+  const aDiag = Math.sqrt(((a.maxX - a.minX) ** 2) + ((a.maxZ - a.minZ) ** 2))
+  const bDiag = Math.sqrt(((b.maxX - b.minX) ** 2) + ((b.maxZ - b.minZ) ** 2))
+  const maxComparableCentroidDistance = Math.max(0.35, Math.min(aDiag, bDiag) * 0.5)
+  if (centroidDistance > maxComparableCentroidDistance) {
+    return false
+  }
+
+  const forward = meanPointToContourDistance(a.points, b.points)
+  const backward = meanPointToContourDistance(b.points, a.points)
+  const distanceThreshold = Math.max(0.12, Math.min(a.avgEdgeLength, b.avgEdgeLength) * 0.35)
+  return forward <= distanceThreshold && backward <= distanceThreshold
+}
+
+function isNodeMatchingAutoOverlayTarget(node: SceneNode, targetTool: 'floor' | 'wall' | 'water'): boolean {
+  if (targetTool === 'floor') {
+    return node.dynamicMesh?.type === 'Floor'
+  }
+  if (targetTool === 'wall') {
+    return node.dynamicMesh?.type === 'Wall'
+  }
+  return isWaterSurfaceNode(node)
+}
+
+function detectAutoOverlayOverlap(
+  worldPoints: Array<{ x: number; y: number; z: number }>,
+  existingContours: AutoOverlayContourMetrics[],
+): boolean {
+  const metrics = buildAutoOverlayContourMetrics(worldPoints)
+  if (!metrics) {
+    return false
+  }
+  return existingContours.some((existing) => contoursLikelyOverlap(metrics, existing))
+}
+
+function roundAutoOverlayMargin(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function resolveAutoOverlaySuggestedMargins(plan: AutoOverlayBuildPlan): { horiz: number; vert: number } {
+  if (!plan.supported || !Array.isArray(plan.worldPoints) || plan.worldPoints.length < 3) {
+    return { horiz: 0, vert: 0 }
+  }
+
+  const allNodes: SceneNode[] = []
+  collectSceneNodesRecursive(sceneStore.nodes, allNodes)
+
+  const existingContours: AutoOverlayContourMetrics[] = []
+  for (const node of allNodes) {
+    if (node.id === plan.referenceNodeId || !isNodeMatchingAutoOverlayTarget(node, plan.targetTool)) {
+      continue
+    }
+    if (node.locked || sceneStore.isNodeSelectionLocked(node.id)) {
+      continue
+    }
+    const existingPlan = resolveAutoOverlayBuildPlan({
+      referenceNode: node,
+      runtimeObject: objectMap.get(node.id) ?? null,
+      targetTool: plan.targetTool,
+    })
+    if (!existingPlan?.supported || existingPlan.worldPoints.length < 3) {
+      continue
+    }
+    const metrics = buildAutoOverlayContourMetrics(existingPlan.worldPoints)
+    if (metrics) {
+      existingContours.push(metrics)
+    }
+  }
+
+  if (!existingContours.length) {
+    return { horiz: 0, vert: 0 }
+  }
+  if (!detectAutoOverlayOverlap(plan.worldPoints, existingContours)) {
+    return { horiz: 0, vert: 0 }
+  }
+
+  const step = 0.25
+  const maxSteps = 24
+
+  for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex += 1) {
+    const magnitude = roundAutoOverlayMargin(step * stepIndex)
+    // Default auto-detection should prefer inward inset and avoid outward spread.
+    const horiz = roundAutoOverlayMargin(-magnitude)
+    const candidate = offsetPolyline(plan.worldPoints, horiz, 0, { closed: plan.closedPath })
+    if (!detectAutoOverlayOverlap(candidate, existingContours)) {
+      return { horiz, vert: 0 }
+    }
+  }
+
+  for (let stepIndex = 1; stepIndex <= Math.min(12, maxSteps); stepIndex += 1) {
+    const magnitude = roundAutoOverlayMargin(step * stepIndex)
+    for (const sign of [1, -1]) {
+      const vert = roundAutoOverlayMargin(sign * magnitude)
+      const candidate = offsetPolyline(plan.worldPoints, 0, vert, { closed: plan.closedPath })
+      if (!detectAutoOverlayOverlap(candidate, existingContours)) {
+        return { horiz: 0, vert }
+      }
+    }
+  }
+
+  return { horiz: 0, vert: 0 }
 }
 
 function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
@@ -7506,6 +7745,9 @@ function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
   }
 
   clearAutoOverlayHoverIndicator()
+  const suggestedMargins = resolveAutoOverlaySuggestedMargins(plan)
+  autoOverlayHorizMargin.value = suggestedMargins.horiz
+  autoOverlayVertMargin.value = suggestedMargins.vert
   autoOverlayPlan.value = plan
   autoOverlayDialogOpen.value = true
   event.preventDefault()
@@ -7544,22 +7786,25 @@ async function handleConfirmAutoOverlay(): Promise<void> {
   if (!plan || !plan.supported || autoOverlaySubmitting.value) {
     return
   }
-  // compute world points with user-specified horizontal/vertical offsets
+  // Compute world points with user-specified horizontal/vertical margins.
 
   autoOverlaySubmitting.value = true
   try {
-    const horiz = Number(autoOverlayHorizOffset.value || 0)
-    const vert = Number(autoOverlayVertOffset.value || 0)
-    const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert)
+    const horiz = Number(autoOverlayHorizMargin.value || 0)
+    const vert = Number(autoOverlayVertMargin.value || 0)
+    const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert, { closed: plan.closedPath })
 
     if (plan.targetTool === 'wall') {
       const brush = resolveAutoOverlayWallBrush()
       const targetShape = plan.targetBuildShape as WallBuildShape
       buildToolsStore.setWallBuildShape(targetShape, { activate: true })
+      const wallSegments = plan.closedPath
+        ? buildClosedWallSegmentsFromWorldPoints(adjustedPoints)
+        : buildOpenWallSegmentsFromWorldPoints(adjustedPoints)
 
       const created = sceneStore.createWallNode({
-        segments: buildClosedWallSegmentsFromWorldPoints(adjustedPoints),
-        closed: true,
+        segments: wallSegments,
+        closed: plan.closedPath,
         dimensions: brush.dimensions,
         bodyAssetId: brush.bodyAssetId,
         wallComponentProps: brush.wallComponentProps,
@@ -20174,21 +20419,24 @@ defineExpose<SceneViewportHandle>({
               <v-row>
                 <v-col cols="6">
                   <v-text-field
-                    label="水平偏移 (m)"
+                    label="水平 margin (m)"
                     type="number"
-                    v-model.number="autoOverlayHorizOffset"
+                    v-model.number="autoOverlayHorizMargin"
                     :step="0.01"
                   />
                 </v-col>
                 <v-col cols="6">
                   <v-text-field
-                    label="垂直偏移 (m)"
+                    label="垂直 margin (m)"
                     type="number"
-                    v-model.number="autoOverlayVertOffset"
+                    v-model.number="autoOverlayVertMargin"
                     :step="0.01"
                   />
                 </v-col>
               </v-row>
+              <div class="text-caption text-medium-emphasis" style="margin-top:4px;">
+                水平 margin 正数外扩、负数缩进；垂直 margin 正数沿轮廓方向前移、负数后移。可用于同一参考轮廓重复自动铺设时错开位置，避免覆盖。
+              </div>
             </div>
             <div v-else class="text-error">{{ autoOverlayPlan.reason }}</div>
           </div>

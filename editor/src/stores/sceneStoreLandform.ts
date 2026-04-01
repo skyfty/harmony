@@ -22,6 +22,8 @@ export type SceneStoreLandformHelpersDeps = {
 
 const LANDFORM_TARGET_TRI_EDGE_LENGTH = 0.5
 const LANDFORM_MAX_CELL_SUBDIVISIONS = 4
+const LANDFORM_MAX_REFINEMENT_STEPS = 8
+const LANDFORM_HEIGHT_ERROR_TOLERANCE = 0.01
 
 type GroundTransform = {
   position: { x: number; y: number; z: number }
@@ -268,11 +270,100 @@ function resolveLandformSubdivisionSteps(cellSize: number): number {
   return Math.max(0, Math.ceil(Math.log2(targetSubdivisions)))
 }
 
+type SampledLandformVertex = {
+  x: number
+  z: number
+  height: number
+}
+
+function sampleLandformTriangleVertexHeight(groundDefinition: GroundDynamicMesh, vertex: Vector2): SampledLandformVertex {
+  return {
+    x: vertex.x,
+    z: vertex.y,
+    height: sampleGroundHeight(groundDefinition, vertex.x, vertex.y),
+  }
+}
+
+function interpolateTriangleHeightAtPoint(
+  pointX: number,
+  pointZ: number,
+  a: SampledLandformVertex,
+  b: SampledLandformVertex,
+  c: SampledLandformVertex,
+): number | null {
+  const denominator = ((b.z - c.z) * (a.x - c.x)) + ((c.x - b.x) * (a.z - c.z))
+  if (Math.abs(denominator) <= 1e-10) {
+    return null
+  }
+
+  const weightA = (((b.z - c.z) * (pointX - c.x)) + ((c.x - b.x) * (pointZ - c.z))) / denominator
+  const weightB = (((c.z - a.z) * (pointX - c.x)) + ((a.x - c.x) * (pointZ - c.z))) / denominator
+  const weightC = 1 - weightA - weightB
+  return (a.height * weightA) + (b.height * weightB) + (c.height * weightC)
+}
+
+function requiresGroundConformanceRefinement(
+  groundDefinition: GroundDynamicMesh,
+  a: Vector2,
+  b: Vector2,
+  c: Vector2,
+  tolerance: number,
+): boolean {
+  if (!Number.isFinite(tolerance) || tolerance <= 1e-6) {
+    return false
+  }
+
+  const sampledA = sampleLandformTriangleVertexHeight(groundDefinition, a)
+  const sampledB = sampleLandformTriangleVertexHeight(groundDefinition, b)
+  const sampledC = sampleLandformTriangleVertexHeight(groundDefinition, c)
+
+  const testPoints = [
+    { x: (a.x + b.x + c.x) / 3, z: (a.y + b.y + c.y) / 3 },
+    { x: (a.x + b.x) * 0.5, z: (a.y + b.y) * 0.5 },
+    { x: (b.x + c.x) * 0.5, z: (b.y + c.y) * 0.5 },
+    { x: (c.x + a.x) * 0.5, z: (c.y + a.y) * 0.5 },
+  ]
+
+  return testPoints.some((point) => {
+    const approximatedHeight = interpolateTriangleHeightAtPoint(point.x, point.z, sampledA, sampledB, sampledC)
+    if (!Number.isFinite(approximatedHeight)) {
+      return false
+    }
+    const actualHeight = sampleGroundHeight(groundDefinition, point.x, point.z)
+    return Math.abs(actualHeight - approximatedHeight) > tolerance
+  })
+}
+
+function refineLandformTriangulationForGround(
+  triangulation: { vertices: Vector2[]; indices: number[] },
+  groundDefinition: GroundDynamicMesh,
+): { vertices: Vector2[]; indices: number[] } {
+  const cellSize = Math.max(1e-6, groundDefinition.cellSize)
+  const subdivisionSteps = resolveLandformSubdivisionSteps(cellSize)
+  const targetEdgeLength = cellSize / Math.max(1, resolveLandformCellSubdivisions(cellSize))
+  const maxSteps = Math.min(LANDFORM_MAX_REFINEMENT_STEPS, Math.max(1, subdivisionSteps + 4))
+
+  return refineTriangulation(
+    triangulation.vertices,
+    triangulation.indices,
+    targetEdgeLength,
+    maxSteps,
+    (a, b, c) => requiresGroundConformanceRefinement(
+      groundDefinition,
+      a,
+      b,
+      c,
+      LANDFORM_HEIGHT_ERROR_TOLERANCE,
+    ),
+  )
+}
+
 function refineTriangulation(
   verticesInput: Vector2[],
   indicesInput: number[],
   targetEdgeLength: number,
   maxSteps: number,
+  shouldSplitByShape?: (a: Vector2, b: Vector2, c: Vector2) => boolean,
 ): { vertices: Vector2[]; indices: number[] } {
   if (!Number.isFinite(targetEdgeLength) || targetEdgeLength <= 1e-6 || maxSteps <= 0 || indicesInput.length < 3) {
     return {
@@ -313,7 +404,10 @@ function refineTriangulation(
       const d01 = v0.distanceTo(v1)
       const d12 = v1.distanceTo(v2)
       const d20 = v2.distanceTo(v0)
-      return d01 > targetEdgeLength || d12 > targetEdgeLength || d20 > targetEdgeLength
+      if (d01 > targetEdgeLength || d12 > targetEdgeLength || d20 > targetEdgeLength) {
+        return true
+      }
+      return shouldSplitByShape?.(v0, v1, v2) ?? false
     }
 
     for (let index = 0; index + 2 < indices.length; index += 3) {
@@ -462,15 +556,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         return null
       }
 
-      const cellSize = Math.max(1e-6, groundDefinition.cellSize)
-      const subdivisionSteps = resolveLandformSubdivisionSteps(cellSize)
-      const targetEdgeLength = cellSize / Math.max(1, resolveLandformCellSubdivisions(cellSize))
-      const refinedTriangulation = refineTriangulation(
-        polygonTriangulation.vertices,
-        polygonTriangulation.indices,
-        targetEdgeLength,
-        Math.max(1, subdivisionSteps + 3),
-      )
+      const refinedTriangulation = refineLandformTriangulationForGround(polygonTriangulation, groundDefinition)
 
       const surfaceIndices = [...refinedTriangulation.indices]
       const surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
@@ -561,15 +647,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           return null
         }
 
-        const cellSize = Math.max(1e-6, groundDefinition.cellSize)
-        const subdivisionSteps = resolveLandformSubdivisionSteps(cellSize)
-        const targetEdgeLength = cellSize / Math.max(1, resolveLandformCellSubdivisions(cellSize))
-        const refinedTriangulation = refineTriangulation(
-          polygonTriangulation.vertices,
-          polygonTriangulation.indices,
-          targetEdgeLength,
-          Math.max(1, subdivisionSteps + 3),
-        )
+        const refinedTriangulation = refineLandformTriangulationForGround(polygonTriangulation, groundDefinition)
 
         surfaceIndices = [...refinedTriangulation.indices]
         surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
