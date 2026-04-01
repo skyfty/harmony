@@ -1,4 +1,14 @@
-import type { EnvironmentSettings, SceneJsonExportDocument, SceneNode } from './index'
+import {
+  DEFAULT_SCENE_CSM_CONFIG,
+  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+} from './sceneCsm'
+import type {
+  EnvironmentCsmSettings,
+  EnvironmentSettings,
+  SceneJsonExportDocument,
+  SceneNode,
+} from './index'
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
 
@@ -18,6 +28,19 @@ export const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
 export const DEFAULT_ENVIRONMENT_GRADIENT_OFFSET = 33
 export const DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT = 0.6
 export const DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE = false
+export const DEFAULT_ENVIRONMENT_CSM_LIGHT_COLOR = '#ffffff'
+
+export const DEFAULT_ENVIRONMENT_CSM_SETTINGS: EnvironmentCsmSettings = {
+  enabled: true,
+  lightColor: DEFAULT_ENVIRONMENT_CSM_LIGHT_COLOR,
+  lightIntensity: DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+  sunAzimuthDeg: DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+  sunElevationDeg: DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+  cascades: DEFAULT_SCENE_CSM_CONFIG.cascades,
+  maxFar: DEFAULT_SCENE_CSM_CONFIG.maxFar,
+  shadowMapSize: DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
+  shadowBias: DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+}
 
 export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
@@ -49,6 +72,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
   collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
   collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
+  csm: { ...DEFAULT_ENVIRONMENT_CSM_SETTINGS },
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {
@@ -95,6 +119,26 @@ function normalizeAssetId(value: unknown): string | null {
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : null
+}
+
+function normalizeEnvironmentCsmSettings(value: unknown): EnvironmentCsmSettings {
+  const source = isPlainRecord(value) ? value : {}
+  return {
+    enabled:
+      typeof source.enabled === 'boolean'
+        ? source.enabled
+        : DEFAULT_ENVIRONMENT_CSM_SETTINGS.enabled,
+    lightColor: normalizeHexColor(source.lightColor, DEFAULT_ENVIRONMENT_CSM_SETTINGS.lightColor),
+    lightIntensity: clampNumber(source.lightIntensity, 0, 16, DEFAULT_ENVIRONMENT_CSM_SETTINGS.lightIntensity),
+    sunAzimuthDeg: clampNumber(source.sunAzimuthDeg, -180, 180, DEFAULT_ENVIRONMENT_CSM_SETTINGS.sunAzimuthDeg),
+    sunElevationDeg: clampNumber(source.sunElevationDeg, -10, 89, DEFAULT_ENVIRONMENT_CSM_SETTINGS.sunElevationDeg),
+    cascades: Math.round(clampNumber(source.cascades, 1, 6, DEFAULT_ENVIRONMENT_CSM_SETTINGS.cascades)),
+    maxFar: clampNumber(source.maxFar, 1, 10000, DEFAULT_ENVIRONMENT_CSM_SETTINGS.maxFar),
+    shadowMapSize: Math.round(
+      clampNumber(source.shadowMapSize, 256, 8192, DEFAULT_ENVIRONMENT_CSM_SETTINGS.shadowMapSize),
+    ),
+    shadowBias: clampNumber(source.shadowBias, -0.01, 0.01, DEFAULT_ENVIRONMENT_CSM_SETTINGS.shadowBias),
+  }
 }
 
 function hasAnySkycubeFaceAssetId(background: {
@@ -270,6 +314,7 @@ export function cloneEnvironmentSettings(
       1,
       DEFAULT_ENVIRONMENT_FRICTION,
     ),
+    csm: normalizeEnvironmentCsmSettings((normalizedSource as any)?.csm),
   }
 }
 

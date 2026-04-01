@@ -91,7 +91,11 @@ import {
 } from '@schema/index'
 import {
   createSceneCsmShadowRuntime,
+  DEFAULT_SCENE_CSM_CONFIG,
+  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
   DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
@@ -333,7 +337,7 @@ import type {
   LodComponentProps,
 
 } from '@schema/components'
-import type { EnvironmentSettings } from '@/types/environment'
+import type { EnvironmentCsmSettings, EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
@@ -1097,32 +1101,95 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
   return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}|${downloadUrl ?? ''}`
 }
 
-const VIEWPORT_SCENE_CSM_CONFIG: SceneCsmConfig = {
+const VIEWPORT_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
   ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
   maxFar: 1600,
   lightMargin: 320,
   shadowMapSize: 4096,
 }
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
+let sceneCsmRuntimeConfigKey = ''
+
+function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
+  const csm = settings.csm
+  return {
+    enabled: csm?.enabled ?? true,
+    lightColor: csm?.lightColor ?? '#ffffff',
+    lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+    sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+    sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+    cascades: csm?.cascades ?? 4,
+    maxFar: csm?.maxFar ?? 1600,
+    shadowMapSize: csm?.shadowMapSize ?? 4096,
+    shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+  }
+}
+
+function resolveViewportSceneCsmConfig(settings: EnvironmentSettings): SceneCsmConfig {
+  const csm = resolveEnvironmentCsmSettings(settings)
+  return {
+    ...VIEWPORT_SCENE_CSM_BASE_CONFIG,
+    enabled: csm.enabled,
+    lightColor: csm.lightColor,
+    lightIntensity: csm.lightIntensity,
+    cascades: csm.cascades,
+    maxFar: csm.maxFar,
+    shadowMapSize: csm.shadowMapSize,
+    shadowBias: csm.shadowBias,
+  }
+}
+
+function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
+  return JSON.stringify({
+    enabled: config.enabled ?? true,
+    cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
+    maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
+    shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
+    shadowBias: config.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+    lightMargin: config.lightMargin ?? DEFAULT_SCENE_CSM_CONFIG.lightMargin,
+  })
+}
+
 function shouldUseSceneCsmShadows(): boolean {
-  return Boolean(scene && camera && shadowsActiveInViewport.value && VIEWPORT_SCENE_CSM_CONFIG.enabled)
+  const config = resolveViewportSceneCsmConfig(environmentSettings.value)
+  return Boolean(scene && camera && shadowsActiveInViewport.value && config.enabled)
 }
 
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
   if (!scene || !camera || !shouldUseSceneCsmShadows()) {
+    if (sceneCsmShadowRuntime) {
+      disposeSceneCsmShadowRuntime()
+    }
     return null
   }
+  const config = resolveViewportSceneCsmConfig(environmentSettings.value)
+  const configKey = buildSceneCsmConfigKey(config)
+  if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
+    disposeSceneCsmShadowRuntime()
+  }
   if (!sceneCsmShadowRuntime) {
-    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, VIEWPORT_SCENE_CSM_CONFIG)
+    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, config)
+    sceneCsmRuntimeConfigKey = configKey
     sceneCsmShadowRuntime.registerObject(rootGroup)
     sceneCsmShadowRuntime.registerObject(instancedMeshGroup)
   }
+  syncSceneCsmSunFromEnvironment(environmentSettings.value)
   return sceneCsmShadowRuntime
 }
 
 function disposeSceneCsmShadowRuntime(): void {
   sceneCsmShadowRuntime?.dispose()
   sceneCsmShadowRuntime = null
+  sceneCsmRuntimeConfigKey = ''
+}
+
+function syncSceneCsmSunFromEnvironment(settings: EnvironmentSettings): void {
+  if (!sceneCsmShadowRuntime) {
+    return
+  }
+  const csm = resolveEnvironmentCsmSettings(settings)
+  const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
+  sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor)
 }
 
 function refreshSceneCsmFrustums(): void {
@@ -1328,7 +1395,9 @@ function applyRendererShadowSetting() {
   const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
   if (castShadows) {
-    ensureSceneCsmShadowRuntime()?.setActive(true)
+    const runtime = ensureSceneCsmShadowRuntime()
+    runtime?.setActive(true)
+    syncSceneCsmSunFromEnvironment(environmentSettings.value)
     return
   }
   sceneCsmShadowRuntime?.setActive(false)
@@ -1774,6 +1843,7 @@ const autoOverlayHoverIndicator = reactive({
 const groundTerrainMenuOpen = ref(false)
 const groundPaintMenuOpen = ref(false)
 const groundScatterMenuOpen = ref(false)
+const csmMenuOpen = ref(false)
 const viewportPlacementMenuOpen = ref(false)
 const pendingViewportPlacement = ref<ViewportPlacementItem | null>(null)
 const viewportPlacementActive = computed(() => Boolean(pendingViewportPlacement.value))
@@ -6781,6 +6851,56 @@ function handleGroundScatterMenuOpen(value: boolean) {
   groundScatterMenuOpen.value = Boolean(value)
 }
 
+function patchEnvironmentCsmSettings(patch: Partial<EnvironmentCsmSettings>): void {
+  const current = resolveEnvironmentCsmSettings(environmentSettings.value)
+  sceneStore.patchEnvironmentSettings({
+    csm: {
+      ...current,
+      ...patch,
+    },
+  })
+}
+
+function handleCsmMenuOpen(value: boolean): void {
+  csmMenuOpen.value = Boolean(value)
+}
+
+function handleCsmEnabledUpdate(value: boolean): void {
+  patchEnvironmentCsmSettings({ enabled: Boolean(value) })
+}
+
+function handleCsmLightColorUpdate(value: string): void {
+  patchEnvironmentCsmSettings({ lightColor: value })
+}
+
+function handleCsmLightIntensityUpdate(value: number): void {
+  patchEnvironmentCsmSettings({ lightIntensity: value })
+}
+
+function handleCsmSunAzimuthDegUpdate(value: number): void {
+  patchEnvironmentCsmSettings({ sunAzimuthDeg: value })
+}
+
+function handleCsmSunElevationDegUpdate(value: number): void {
+  patchEnvironmentCsmSettings({ sunElevationDeg: value })
+}
+
+function handleCsmCascadesUpdate(value: number): void {
+  patchEnvironmentCsmSettings({ cascades: value })
+}
+
+function handleCsmMaxFarUpdate(value: number): void {
+  patchEnvironmentCsmSettings({ maxFar: value })
+}
+
+function handleCsmShadowMapSizeUpdate(value: number): void {
+  patchEnvironmentCsmSettings({ shadowMapSize: value })
+}
+
+function handleCsmShadowBiasUpdate(value: number): void {
+  patchEnvironmentCsmSettings({ shadowBias: value })
+}
+
 function handleViewportPlacementMenuOpen(value: boolean) {
   viewportPlacementMenuOpen.value = Boolean(value)
 }
@@ -10634,6 +10754,7 @@ const environmentSignature = computed(() => {
     fogNear: settings.fogNear,
     fogFar: settings.fogFar,
     fogDensity: settings.fogDensity,
+    csm: resolveEnvironmentCsmSettings(settings),
   })
 })
 
@@ -12015,6 +12136,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   } else {
     pendingEnvironmentSettings = snapshot
   }
+  applyRendererShadowSetting()
+  syncSceneCsmSunFromEnvironment(snapshot)
   updateFogForSelection()
 }
 
@@ -19802,6 +19925,7 @@ defineExpose<SceneViewportHandle>({
           :viewport-placement-menu-open="viewportPlacementMenuOpen"
           :viewport-placement-active="viewportPlacementActive"
         :camera-reset-menu-open="cameraResetMenuOpen"
+          :csm-menu-open="csmMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :landform-shape-menu-open="landformShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
@@ -19838,6 +19962,15 @@ defineExpose<SceneViewportHandle>({
         :ground-scatter-spacing="scatterSpacing"
         :ground-scatter-density-percent="scatterDensityPercent"
         :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
+        :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
+        :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
+        :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
+        :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
+        :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
+        :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
+        :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
+        :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
+        :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
@@ -19860,6 +19993,16 @@ defineExpose<SceneViewportHandle>({
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
           @update:camera-reset-menu-open="handleCameraResetMenuOpen"
+          @update:csm-menu-open="handleCsmMenuOpen"
+          @update:csm-enabled="handleCsmEnabledUpdate"
+          @update:csm-light-color="handleCsmLightColorUpdate"
+          @update:csm-light-intensity="handleCsmLightIntensityUpdate"
+          @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
+          @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
+          @update:csm-cascades="handleCsmCascadesUpdate"
+          @update:csm-max-far="handleCsmMaxFarUpdate"
+          @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
+          @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:ground-terrain-menu-open="handleGroundTerrainMenuOpen"
           @update:ground-paint-menu-open="handleGroundPaintMenuOpen"

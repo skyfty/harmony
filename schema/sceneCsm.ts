@@ -64,6 +64,42 @@ export const DEFAULT_LARGE_SCENE_CSM_CONFIG: Readonly<SceneCsmConfig> = Object.f
   noLastCascadeCutOff: true,
 })
 
+export const DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG = 45
+export const DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG = 42
+
+function clampSunAngle(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+  if (value < min) {
+    return min
+  }
+  if (value > max) {
+    return max
+  }
+  return value
+}
+
+export function resolveSceneCsmSunPositionFromAngles(
+  azimuthDeg: number,
+  elevationDeg: number,
+  radius = 1,
+): THREE.Vector3 {
+  const azimuth = THREE.MathUtils.degToRad(
+    clampSunAngle(azimuthDeg, -180, 180, DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG),
+  )
+  const elevation = THREE.MathUtils.degToRad(
+    clampSunAngle(elevationDeg, -10, 89, DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG),
+  )
+  const resolvedRadius = Number.isFinite(radius) && radius > 0 ? radius : 1
+
+  const cosElevation = Math.cos(elevation)
+  const x = Math.sin(azimuth) * cosElevation
+  const y = Math.sin(elevation)
+  const z = Math.cos(azimuth) * cosElevation
+  return new THREE.Vector3(x, y, z).multiplyScalar(resolvedRadius)
+}
+
 const tempSunDirection = new THREE.Vector3()
 const defaultSunDirection = new THREE.Vector3(0, -1, 0)
 const baseThreeLightsFragmentBegin = THREE.ShaderChunk.lights_fragment_begin

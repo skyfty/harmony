@@ -125,6 +125,15 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&
     Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
     Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon &&
+    Boolean(a.csm?.enabled ?? true) === Boolean(b.csm?.enabled ?? true) &&
+    (a.csm?.lightColor ?? '#ffffff') === (b.csm?.lightColor ?? '#ffffff') &&
+    Math.abs((a.csm?.lightIntensity ?? 1) - (b.csm?.lightIntensity ?? 1)) <= epsilon &&
+    Math.abs((a.csm?.sunAzimuthDeg ?? 45) - (b.csm?.sunAzimuthDeg ?? 45)) <= epsilon &&
+    Math.abs((a.csm?.sunElevationDeg ?? 42) - (b.csm?.sunElevationDeg ?? 42)) <= epsilon &&
+    Math.abs((a.csm?.cascades ?? 4) - (b.csm?.cascades ?? 4)) <= epsilon &&
+    Math.abs((a.csm?.maxFar ?? 1200) - (b.csm?.maxFar ?? 1200)) <= epsilon &&
+    Math.abs((a.csm?.shadowMapSize ?? 2048) - (b.csm?.shadowMapSize ?? 2048)) <= epsilon &&
+    Math.abs((a.csm?.shadowBias ?? -0.00015) - (b.csm?.shadowBias ?? -0.00015)) <= epsilon &&
     Boolean(a.viewportPerformanceMode) === Boolean(b.viewportPerformanceMode)
   )
 }

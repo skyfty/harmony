@@ -548,6 +548,7 @@ import {
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
   type EnvironmentSettings,
+  type EnvironmentCsmSettings,
   type GradientBackgroundDome,
   type SceneNode,
   type SceneNodeComponentState,
@@ -563,7 +564,11 @@ import {
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
   createSceneCsmShadowRuntime,
+  DEFAULT_SCENE_CSM_CONFIG,
+  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
   DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
 } from '@harmony/schema/sceneCsm';
@@ -1577,26 +1582,92 @@ const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
   lightMargin: 320,
 };
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
+let sceneCsmRuntimeConfigKey = '';
+
+function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
+  const csm = settings.csm;
+  return {
+    enabled: csm?.enabled ?? true,
+    lightColor: csm?.lightColor ?? '#ffffff',
+    lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+    sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+    sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+    cascades: csm?.cascades ?? 4,
+    maxFar: csm?.maxFar ?? 1600,
+    shadowMapSize: csm?.shadowMapSize ?? 4096,
+    shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+  };
+}
+
+function resolveScenerySceneCsmConfig(): SceneCsmConfig {
+  const settings = currentDocument
+    ? resolveDocumentEnvironment(currentDocument)
+    : cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
+  const csm = resolveEnvironmentCsmSettings(settings);
+  return {
+    ...SCENERY_SCENE_CSM_CONFIG,
+    enabled: !isWeChatMiniProgram && csm.enabled,
+    lightColor: csm.lightColor,
+    lightIntensity: csm.lightIntensity,
+    cascades: csm.cascades,
+    maxFar: csm.maxFar,
+    shadowMapSize: csm.shadowMapSize,
+    shadowBias: csm.shadowBias,
+  };
+}
+
+function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
+  return JSON.stringify({
+    enabled: config.enabled ?? true,
+    cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
+    maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
+    shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
+    shadowBias: config.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+    lightMargin: config.lightMargin ?? DEFAULT_SCENE_CSM_CONFIG.lightMargin,
+  });
+}
 
 function shouldUseSceneCsmShadows(): boolean {
-  return Boolean(renderContext?.scene && renderContext?.camera && SCENERY_SCENE_CSM_CONFIG.enabled);
+  const config = resolveScenerySceneCsmConfig();
+  return Boolean(renderContext?.scene && renderContext?.camera && config.enabled);
 }
 
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
   const context = renderContext;
   if (!context || !shouldUseSceneCsmShadows()) {
+    if (sceneCsmShadowRuntime) {
+      disposeSceneCsmShadowRuntime();
+    }
     return null;
   }
+  const config = resolveScenerySceneCsmConfig();
+  const configKey = buildSceneCsmConfigKey(config);
+  if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
+    disposeSceneCsmShadowRuntime();
+  }
   if (!sceneCsmShadowRuntime) {
-    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(context.scene, context.camera, SCENERY_SCENE_CSM_CONFIG);
+    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(context.scene, context.camera, config);
+    sceneCsmRuntimeConfigKey = configKey;
     sceneCsmShadowRuntime.registerObject(context.scene);
   }
+  syncSceneCsmSunFromEnvironment();
   return sceneCsmShadowRuntime;
 }
 
 function disposeSceneCsmShadowRuntime(): void {
   sceneCsmShadowRuntime?.dispose();
   sceneCsmShadowRuntime = null;
+  sceneCsmRuntimeConfigKey = '';
+}
+
+function syncSceneCsmSunFromEnvironment(): void {
+  if (!sceneCsmShadowRuntime || !currentDocument) {
+    return;
+  }
+  const settings = resolveDocumentEnvironment(currentDocument);
+  const csm = resolveEnvironmentCsmSettings(settings);
+  const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000);
+  sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor);
 }
 
 function applyRendererShadowSetting(): void {
@@ -1606,7 +1677,9 @@ function applyRendererShadowSetting(): void {
   }
   const castShadows = Boolean(context.renderer.shadowMap.enabled);
   if (castShadows) {
-    ensureSceneCsmShadowRuntime()?.setActive(true);
+    const runtime = ensureSceneCsmShadowRuntime();
+    runtime?.setActive(true);
+    syncSceneCsmSunFromEnvironment();
     return;
   }
   sceneCsmShadowRuntime?.setActive(false);
@@ -8727,6 +8800,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   );
   scene.backgroundRotation.copy(euler);
   scene.environmentRotation.copy(euler);
+  applyRendererShadowSetting();
+  syncSceneCsmSunFromEnvironment();
   if (backgroundApplied && environmentApplied) {
     pendingEnvironmentSettings = null;
   } else {

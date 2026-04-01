@@ -46,9 +46,23 @@ export interface EnvironmentSettings {
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
+  csm?: EnvironmentCsmSettings
   viewportPerformanceMode?: boolean
+}
+
+export interface EnvironmentCsmSettings {
+  enabled: boolean
+  lightColor: string
+  lightIntensity: number
+  sunAzimuthDeg: number
+  sunElevationDeg: number
+  cascades: number
+  maxFar: number
+  shadowMapSize: number
+  shadowBias: number
 }
 
 export type EnvironmentSettingsPatch = Partial<Omit<EnvironmentSettings, 'background'>> & {
   background?: Partial<EnvironmentBackgroundSettings>
+  csm?: Partial<EnvironmentCsmSettings>
 }

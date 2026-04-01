@@ -1078,12 +1078,26 @@ export interface EnvironmentSettings {
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
+  csm?: EnvironmentCsmSettings
   /** Prefer viewport FPS over visual quality in editor postprocessing. */
   viewportPerformanceMode?: boolean
 }
 
+export interface EnvironmentCsmSettings {
+  enabled: boolean
+  lightColor: string
+  lightIntensity: number
+  sunAzimuthDeg: number
+  sunElevationDeg: number
+  cascades: number
+  maxFar: number
+  shadowMapSize: number
+  shadowBias: number
+}
+
 export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
+  csm?: Partial<EnvironmentCsmSettings>
 }
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute'
 

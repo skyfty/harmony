@@ -25,6 +25,7 @@ import {
 	resolveSceneNodeById,
 	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
+	type EnvironmentCsmSettings,
 	type EnvironmentSettings,
 	createGradientBackgroundDome,
 	disposeSkyCubeTexture,
@@ -78,7 +79,11 @@ import {
 } from '@schema/groundMesh'
 import {
 	createSceneCsmShadowRuntime,
+	DEFAULT_SCENE_CSM_CONFIG,
+	DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+	DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
 	DEFAULT_LARGE_SCENE_CSM_CONFIG,
+	resolveSceneCsmSunPositionFromAngles,
 	type SceneCsmConfig,
 	type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
@@ -1119,32 +1124,98 @@ let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
 let rootGroup: THREE.Group | null = null
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
+let sceneCsmRuntimeConfigKey = ''
 
-const EDITOR_SCENE_CSM_CONFIG: SceneCsmConfig = {
+const EDITOR_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
 	...DEFAULT_LARGE_SCENE_CSM_CONFIG,
 	maxFar: 1600,
 	lightMargin: 320,
 	shadowMapSize: 4096,
 }
 
+function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
+	const csm = settings.csm
+	return {
+		enabled: csm?.enabled ?? true,
+		lightColor: csm?.lightColor ?? '#ffffff',
+		lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+		sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
+		sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+		cascades: csm?.cascades ?? 4,
+		maxFar: csm?.maxFar ?? 1600,
+		shadowMapSize: csm?.shadowMapSize ?? 4096,
+		shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+	}
+}
+
+function resolvePreviewSceneCsmConfig(): SceneCsmConfig {
+	const settings = currentDocument
+		? resolveDocumentEnvironment(currentDocument)
+		: cloneEnvironmentSettings()
+	const csm = resolveEnvironmentCsmSettings(settings)
+	return {
+		...EDITOR_SCENE_CSM_BASE_CONFIG,
+		enabled: csm.enabled,
+		lightColor: csm.lightColor,
+		lightIntensity: csm.lightIntensity,
+		cascades: csm.cascades,
+		maxFar: csm.maxFar,
+		shadowMapSize: csm.shadowMapSize,
+		shadowBias: csm.shadowBias,
+	}
+}
+
+function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
+	return JSON.stringify({
+		enabled: config.enabled ?? true,
+		cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
+		maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
+		shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
+		shadowBias: config.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+		lightMargin: config.lightMargin ?? DEFAULT_SCENE_CSM_CONFIG.lightMargin,
+	})
+}
+
 function shouldUseSceneCsmShadows(): boolean {
-	return Boolean(scene && camera && EDITOR_SCENE_CSM_CONFIG.enabled)
+	const config = resolvePreviewSceneCsmConfig()
+	return Boolean(scene && camera && config.enabled)
 }
 
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 	if (!scene || !camera || !shouldUseSceneCsmShadows()) {
+		if (sceneCsmShadowRuntime) {
+			disposeSceneCsmShadowRuntime()
+		}
 		return null
 	}
+	const config = resolvePreviewSceneCsmConfig()
+	const configKey = buildSceneCsmConfigKey(config)
+	if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
+		disposeSceneCsmShadowRuntime()
+	}
 	if (!sceneCsmShadowRuntime) {
-		sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, EDITOR_SCENE_CSM_CONFIG)
+		sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, config)
+		sceneCsmRuntimeConfigKey = configKey
 		sceneCsmShadowRuntime.registerObject(rootGroup)
 	}
+	syncSceneCsmSunFromEnvironment()
 	return sceneCsmShadowRuntime
 }
 
 function disposeSceneCsmShadowRuntime(): void {
 	sceneCsmShadowRuntime?.dispose()
 	sceneCsmShadowRuntime = null
+	sceneCsmRuntimeConfigKey = ''
+}
+
+function syncSceneCsmSunFromEnvironment(): void {
+	if (!sceneCsmShadowRuntime || !currentDocument) {
+		return
+	}
+	const settings = resolveDocumentEnvironment(currentDocument)
+	const csm = resolveEnvironmentCsmSettings(settings)
+	const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
+	sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor)
 }
 
 function applyRendererShadowSetting(): void {
@@ -1153,7 +1224,9 @@ function applyRendererShadowSetting(): void {
 	}
 	const castShadows = Boolean(renderer.shadowMap.enabled)
 	if (castShadows) {
-		ensureSceneCsmShadowRuntime()?.setActive(true)
+		const runtime = ensureSceneCsmShadowRuntime()
+		runtime?.setActive(true)
+		syncSceneCsmSunFromEnvironment()
 		return
 	}
 	sceneCsmShadowRuntime?.setActive(false)
@@ -7491,6 +7564,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	} else {
 		pendingEnvironmentSettings = snapshot
 	}
+	applyRendererShadowSetting()
+	syncSceneCsmSunFromEnvironment()
 }
 
 const environmentAssetSignature = computed(() => {

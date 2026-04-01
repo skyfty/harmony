@@ -2,6 +2,152 @@
 <template>
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
+      <v-menu
+        :activator="menuActivators.sun"
+        :model-value="csmMenuOpen"
+        location="bottom"
+        :offset="6"
+        :open-on-click="false"
+        :close-on-content-click="false"
+        @update:modelValue="handleCsmMenuModelUpdate"
+      >
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            :ref="(el: unknown) => setMenuActivator('sun', el)"
+            icon="mdi-white-balance-sunny"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            :color="csmMenuOpen ? 'primary' : undefined"
+            :variant="csmMenuOpen ? 'flat' : 'text'"
+            title="CSM Sun & Shadow"
+            @click="emit('update:csm-menu-open', true)"
+          />
+        </template>
+        <v-list density="compact" class="csm-sun-menu">
+          <div
+            class="popup-menu-card csm-sun-menu__card"
+            @pointerdown.stop
+            @pointerup.stop
+            @mousedown.stop
+            @mouseup.stop
+          >
+            <v-toolbar density="compact" class="menu-toolbar" height="36px">
+              <div class="toolbar-text">
+                <div class="menu-title">CSM Sun</div>
+              </div>
+              <v-spacer />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:csm-menu-open', false)" />
+            </v-toolbar>
+            <div class="popup-menu-card__content csm-sun-menu__content">
+              <v-switch
+                :model-value="csmEnabled"
+                density="compact"
+                hide-details
+                inset
+                color="primary"
+                label="Enable CSM"
+                @update:model-value="(value) => emit('update:csm-enabled', Boolean(value))"
+              />
+              <div class="csm-sun-grid">
+                <v-text-field
+                  :model-value="csmLightColor"
+                  label="Light Color"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-light-color', String(value ?? ''))"
+                />
+                <v-text-field
+                  :model-value="csmLightIntensity"
+                  type="number"
+                  min="0"
+                  max="16"
+                  step="0.05"
+                  label="Intensity"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-light-intensity', Number(value))"
+                />
+                <v-text-field
+                  :model-value="csmSunAzimuthDeg"
+                  type="number"
+                  min="-180"
+                  max="180"
+                  step="1"
+                  label="Azimuth (deg)"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-sun-azimuth-deg', Number(value))"
+                />
+                <v-text-field
+                  :model-value="csmSunElevationDeg"
+                  type="number"
+                  min="-10"
+                  max="89"
+                  step="1"
+                  label="Elevation (deg)"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-sun-elevation-deg', Number(value))"
+                />
+                <v-text-field
+                  :model-value="csmCascades"
+                  type="number"
+                  min="1"
+                  max="6"
+                  step="1"
+                  label="Cascades"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-cascades', Number(value))"
+                />
+                <v-text-field
+                  :model-value="csmMaxFar"
+                  type="number"
+                  min="1"
+                  max="10000"
+                  step="10"
+                  label="Max Far"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-max-far', Number(value))"
+                />
+                <v-text-field
+                  :model-value="csmShadowMapSize"
+                  type="number"
+                  min="256"
+                  max="8192"
+                  step="256"
+                  label="Shadow Map"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-shadow-map-size', Number(value))"
+                />
+                <v-text-field
+                  :model-value="csmShadowBias"
+                  type="number"
+                  min="-0.01"
+                  max="0.01"
+                  step="0.00005"
+                  label="Shadow Bias"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  @update:model-value="(value) => emit('update:csm-shadow-bias', Number(value))"
+                />
+              </div>
+            </div>
+          </div>
+        </v-list>
+      </v-menu>
 
       <template v-for="tool in buildToolButtons" :key="tool.id">
         <v-menu
@@ -1341,6 +1487,7 @@ const props = withDefaults(
   viewportPlacementMenuOpen: boolean
   viewportPlacementActive: boolean
   cameraResetMenuOpen: boolean
+  csmMenuOpen: boolean
   floorShapeMenuOpen: boolean
   landformShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
@@ -1377,6 +1524,15 @@ const props = withDefaults(
   groundScatterSpacing: number
   groundScatterDensityPercent: number
   groundScatterProviderAssetId?: string | null
+  csmEnabled: boolean
+  csmLightColor: string
+  csmLightIntensity: number
+  csmSunAzimuthDeg: number
+  csmSunElevationDeg: number
+  csmCascades: number
+  csmMaxFar: number
+  csmShadowMapSize: number
+  csmShadowBias: number
   }>(),
   {
     buildToolsDisabled: false,
@@ -1404,6 +1560,16 @@ const emit = defineEmits<{
   (event: 'clear-all-scatter-instances'): void
   (event: 'reset-camera-direction', direction: CameraResetDirection): void
   (event: 'update:camera-reset-menu-open', value: boolean): void
+  (event: 'update:csm-menu-open', value: boolean): void
+  (event: 'update:csm-enabled', value: boolean): void
+  (event: 'update:csm-light-color', value: string): void
+  (event: 'update:csm-light-intensity', value: number): void
+  (event: 'update:csm-sun-azimuth-deg', value: number): void
+  (event: 'update:csm-sun-elevation-deg', value: number): void
+  (event: 'update:csm-cascades', value: number): void
+  (event: 'update:csm-max-far', value: number): void
+  (event: 'update:csm-shadow-map-size', value: number): void
+  (event: 'update:csm-shadow-bias', value: number): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:viewport-placement-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
@@ -1462,6 +1628,7 @@ const {
   viewportPlacementMenuOpen,
   viewportPlacementActive,
   cameraResetMenuOpen,
+  csmMenuOpen,
   floorShapeMenuOpen,
   landformShapeMenuOpen,
   wallShapeMenuOpen,
@@ -1497,6 +1664,15 @@ const {
   groundScatterSpacing,
   groundScatterDensityPercent,
   groundScatterProviderAssetId,
+  csmEnabled,
+  csmLightColor,
+  csmLightIntensity,
+  csmSunAzimuthDeg,
+  csmSunElevationDeg,
+  csmCascades,
+  csmMaxFar,
+  csmShadowMapSize,
+  csmShadowBias,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 const wallPresetPickerAssets = computed<ProjectAsset[]>(() => {
@@ -1521,6 +1697,7 @@ const fixedPrimaryAsAnchor = ref(true)
 const displayBoardToolMenuOpen = ref(false)
 
 type MenuActivatorKey =
+  | 'sun'
   | 'terrain'
   | 'paint'
   | 'scatter'
@@ -1535,6 +1712,7 @@ type MenuActivatorKey =
   | 'cameraReset'
 
 const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined>>({
+  sun: undefined,
   terrain: undefined,
   paint: undefined,
   scatter: undefined,
@@ -1940,6 +2118,9 @@ watch(canEraseScatterEffective, (enabled) => {
 })
 
 watch(buildToolsDisabled, (disabled) => {
+  if (disabled && csmMenuOpen.value) {
+    emit('update:csm-menu-open', false)
+  }
   if (disabled && displayBoardToolMenuOpen.value) {
     displayBoardToolMenuOpen.value = false
   }
@@ -1981,6 +2162,7 @@ watch(hasGroundNode, (available) => {
 // Mutual exclusivity helpers
 function closeExternalMenus() {
   displayBoardToolMenuOpen.value = false
+  emit('update:csm-menu-open', false)
   emit('update:ground-terrain-menu-open', false)
   emit('update:ground-paint-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
@@ -2605,6 +2787,14 @@ function handleCameraResetMenuModelUpdate(value: boolean) {
   emit('update:camera-reset-menu-open', Boolean(value))
 }
 
+function handleCsmMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+  }
+  emit('update:csm-menu-open', open)
+}
+
 function handleCameraResetDirectionSelect(direction: CameraResetDirection) {
   emit('reset-camera-direction', direction)
   emit('update:camera-reset-menu-open', false)
@@ -2658,6 +2848,22 @@ function handleClearScatterMenuAction() {
 .scatter-erase-menu {
   min-width: 220px;
   padding: 0;
+}
+
+.csm-sun-menu {
+  width: 320px;
+  max-width: min(320px, 92vw);
+  padding: 6px;
+}
+
+.csm-sun-menu__content {
+  padding: 8px 10px 10px;
+}
+
+.csm-sun-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .viewport-placement-menu {
