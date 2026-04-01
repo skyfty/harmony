@@ -568,6 +568,7 @@ import {
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
   DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
   DEFAULT_LARGE_SCENE_CSM_CONFIG,
+  RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG,
   resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
@@ -1577,8 +1578,6 @@ const bootstrapFinished = ref(false);
 
 const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
   ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
-  maxFar: 1600,
-  lightMargin: 320,
 };
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
 let sceneCsmRuntimeConfigKey = '';
@@ -1586,15 +1585,15 @@ let sceneCsmRuntimeConfigKey = '';
 function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
   const csm = settings.csm;
   return {
-    enabled: csm?.enabled ?? true,
+    enabled: csm?.enabled ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.enabled,
     lightColor: csm?.lightColor ?? '#ffffff',
-    lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+    lightIntensity: csm?.lightIntensity ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.lightIntensity,
     sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
     sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-    cascades: csm?.cascades ?? 4,
-    maxFar: csm?.maxFar ?? 1600,
-    shadowMapSize: csm?.shadowMapSize ?? 4096,
-    shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+    cascades: csm?.cascades ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.cascades,
+    maxFar: csm?.maxFar ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.maxFar,
+    shadowMapSize: csm?.shadowMapSize ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowMapSize,
+    shadowBias: csm?.shadowBias ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowBias,
   };
 }
 
@@ -4140,8 +4139,8 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
   if (instancedMeshes.includes(mesh)) {
     return;
   }
-  // 禁用 InstancedMesh 的视锥裁剪，避免共享包围体过小导致实例在特定角度被裁掉
-  mesh.frustumCulled = false;
+  mesh.frustumCulled = true;
+  addInstancedBoundsMesh(mesh);
   instancedMeshes.push(mesh);
   instancedMeshGroup.add(mesh);
   sceneCsmShadowRuntime?.registerObject(mesh);

@@ -7,6 +7,7 @@ import {
   updateModelInstanceMatrix,
   type ModelInstanceBinding,
 } from '@schema/modelObjectCache'
+import { addMesh as addInstancedBoundsMesh } from '@schema/instancedBoundsTracker'
 import type { SceneNode } from '@schema'
 import { getContinuousInstancedModelUserData, syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 
@@ -422,9 +423,9 @@ export function useInstancedMeshes(
     if (instancedMeshes.includes(mesh)) {
       return
     }
-    // InstancedMesh 使用共享几何体的包围体，默认视锥裁剪会把远离原始包围体的实例裁掉
-    // 禁用 frustumCulled 以避免实例在某些相机角度下闪烁消失
-    mesh.frustumCulled = false
+    // InstancedMesh 依赖运行时重算后的整体 bounding sphere 参与裁剪。
+    mesh.frustumCulled = true
+    addInstancedBoundsMesh(mesh)
     instancedMeshes.push(mesh)
     instancedMeshGroup.add(mesh)
   }

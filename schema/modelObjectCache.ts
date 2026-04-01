@@ -13,6 +13,7 @@ import {
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
+import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsm'
 
 const DEFAULT_INSTANCE_CAPACITY = 2048
 
@@ -92,6 +93,7 @@ interface ParsedSubmesh {
 interface InstancedMeshHandle {
   id: string
   mesh: InstancedMesh
+  radius: number
   capacity: number
   nextIndex: number
   freeSlots: number[]
@@ -113,6 +115,13 @@ const derivedAssetIdsBySource = new Map<string, Set<string>>()
 
 const tempMatrix = new Matrix4()
 const tempInstanceMatrix = new Matrix4()
+
+function syncInstancedMeshShadowPolicy(handle: InstancedMeshHandle): void {
+  const receiverOnly = shouldUseReceiverOnlyForDenseInstancedMesh(handle.mesh.count, handle.radius)
+  handle.mesh.castShadow = !receiverOnly
+  handle.mesh.receiveShadow = true
+  handle.mesh.userData.shadowPolicy = receiverOnly ? 'receiver-only-dense-instanced' : 'default'
+}
 
 function cloneObjectForRepeatVariant(root: Object3D, repeatScaleU: number): Object3D {
   const clonedRoot = root.clone(true)
@@ -234,6 +243,7 @@ export function allocateModelInstanceBinding(assetId: string, bindingId: string,
               if (allocatedHandle.mesh.count !== nextCount) {
                 allocatedHandle.mesh.count = nextCount
                 markInstancedBoundsDirty(allocatedHandle.mesh)
+                syncInstancedMeshShadowPolicy(allocatedHandle)
               }
             }
           })
@@ -248,6 +258,7 @@ export function allocateModelInstanceBinding(assetId: string, bindingId: string,
     handle.mesh.count = Math.max(handle.mesh.count, index + 1)
     if (handle.mesh.count !== previousCount) {
       markInstancedBoundsDirty(handle.mesh)
+      syncInstancedMeshShadowPolicy(handle)
     }
     slots.push({ mesh: handle.mesh, handleId: handle.id, index })
   }
@@ -518,6 +529,7 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     mesh.count = 0
     mesh.castShadow = true
     mesh.receiveShadow = true
+    mesh.frustumCulled = true
     const handleId = `${assetId}:${index}:${mesh.uuid}`
     mesh.userData.assetId = assetId
     mesh.userData.instancingHandleId = handleId
@@ -525,12 +537,14 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     const handle: InstancedMeshHandle = {
       id: handleId,
       mesh,
+      radius,
       capacity: initialCapacity,
       nextIndex: 0,
       freeSlots: [],
       bindingByIndex: new Map(),
     }
     meshHandleLookup.set(handle.id, handle)
+    syncInstancedMeshShadowPolicy(handle)
 
     if (Array.isArray(submesh.material)) {
       submesh.material.forEach((entry) => {
@@ -690,5 +704,6 @@ function shrinkInstancedMeshCount(handle: InstancedMeshHandle): void {
   if (nextCount !== handle.mesh.count) {
     handle.mesh.count = nextCount
     markInstancedBoundsDirty(handle.mesh)
+    syncInstancedMeshShadowPolicy(handle)
   }
 }

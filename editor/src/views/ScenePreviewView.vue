@@ -83,6 +83,7 @@ import {
 	DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
 	DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
 	DEFAULT_LARGE_SCENE_CSM_CONFIG,
+	RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG,
 	resolveSceneCsmSunPositionFromAngles,
 	type SceneCsmConfig,
 	type SceneCsmShadowRuntime,
@@ -1128,23 +1129,20 @@ let sceneCsmRuntimeConfigKey = ''
 
 const EDITOR_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
 	...DEFAULT_LARGE_SCENE_CSM_CONFIG,
-	maxFar: 1600,
-	lightMargin: 320,
-	shadowMapSize: 4096,
 }
 
 function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
 	const csm = settings.csm
 	return {
-		enabled: csm?.enabled ?? true,
+		enabled: csm?.enabled ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.enabled,
 		lightColor: csm?.lightColor ?? '#ffffff',
-		lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+		lightIntensity: csm?.lightIntensity ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.lightIntensity,
 		sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
 		sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-		cascades: csm?.cascades ?? 4,
-		maxFar: csm?.maxFar ?? 1600,
-		shadowMapSize: csm?.shadowMapSize ?? 4096,
-		shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
+		cascades: csm?.cascades ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.cascades,
+		maxFar: csm?.maxFar ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.maxFar,
+		shadowMapSize: csm?.shadowMapSize ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowMapSize,
+		shadowBias: csm?.shadowBias ?? RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG.shadowBias,
 	}
 }
 
@@ -3256,9 +3254,8 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh) {
 		return
 	}
 	mesh.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
-	// InstancedMesh with shared geometry may have an undersized default bounding volume;
-	// frustum culling can incorrectly hide instances far from the origin.
-	mesh.frustumCulled = false
+	mesh.frustumCulled = true
+	addInstancedBoundsMesh(mesh)
 	instancedMeshes.push(mesh)
 	instancedMeshGroup.add(mesh)
 	sceneCsmShadowRuntime?.registerObject(mesh)
@@ -7783,11 +7780,10 @@ function removeNodeSubtree(nodeId: string) {
 
 function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Object3D>) {
 	object.traverse((child) => {
-		// Keep InstancedMesh visible: default bounding volumes can be too small,
-		// causing frustum culling to hide instances far from origin.
 		if (child instanceof THREE.InstancedMesh) {
 			child.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
-			;(child as THREE.Object3D & { frustumCulled?: boolean }).frustumCulled = false
+			;(child as THREE.Object3D & { frustumCulled?: boolean }).frustumCulled = true
+			addInstancedBoundsMesh(child)
 		}
 
 		const nodeId = child.userData?.nodeId as string | undefined

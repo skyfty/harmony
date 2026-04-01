@@ -55,9 +55,9 @@ export const DEFAULT_SCENE_CSM_CONFIG: Readonly<Required<SceneCsmConfig>> = Obje
 
 export const DEFAULT_LARGE_SCENE_CSM_CONFIG: Readonly<SceneCsmConfig> = Object.freeze({
   enabled: true,
-  cascades: 4,
-  maxCascades: 4,
-  maxFar: 1200,
+  cascades: 3,
+  maxCascades: 3,
+  maxFar: 1000,
   shadowMapSize: 2048,
   lightMargin: 240,
   fade: true,
@@ -66,6 +66,9 @@ export const DEFAULT_LARGE_SCENE_CSM_CONFIG: Readonly<SceneCsmConfig> = Object.f
 
 export const DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG = 45
 export const DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG = 42
+
+export const LARGE_SCENE_INSTANCED_SHADOW_RECEIVER_ONLY_COUNT = 128
+export const LARGE_SCENE_INSTANCED_SHADOW_RECEIVER_ONLY_RADIUS = 20
 
 function clampSunAngle(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value)) {
@@ -256,6 +259,17 @@ function resolveSceneCsmConfig(config?: SceneCsmConfig | null): Required<SceneCs
     lightColor: config?.lightColor ?? DEFAULT_SCENE_CSM_CONFIG.lightColor,
     lightIntensity: Math.max(0, Number(config?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity)),
   }
+}
+
+export const RESOLVED_DEFAULT_LARGE_SCENE_CSM_CONFIG: Readonly<Required<SceneCsmConfig>> = Object.freeze(
+  resolveSceneCsmConfig(DEFAULT_LARGE_SCENE_CSM_CONFIG),
+)
+
+export function shouldUseReceiverOnlyForDenseInstancedMesh(instanceCount: number, radius: number): boolean {
+  return instanceCount >= LARGE_SCENE_INSTANCED_SHADOW_RECEIVER_ONLY_COUNT
+    && Number.isFinite(radius)
+    && radius > 0
+    && radius <= LARGE_SCENE_INSTANCED_SHADOW_RECEIVER_ONLY_RADIUS
 }
 
 export function isSceneCsmCompatibleMaterial(material: THREE.Material | null | undefined): material is CsmCompatibleMaterial {
