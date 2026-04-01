@@ -1018,7 +1018,6 @@ const postprocessing = useViewportPostprocessing({
   getCamera: () => camera,
   getPerformanceMode: () => Boolean(environmentSettings.value.viewportPerformanceMode),
 })
-const skySunPosition = new THREE.Vector3()
 let backgroundTexture: THREE.Texture | null = null
 let backgroundAssetId: string | null = null
 let backgroundAssetKey: string | null = null
@@ -11539,8 +11538,6 @@ function initScene() {
   applyCameraState(props.cameraState)
 }
 
-function setSkyBackgroundEnabled(_enabled: boolean) {}
-
 function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
   if (!scene || !renderer) {
     pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null
@@ -11549,23 +11546,14 @@ function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
   if (!settings || !hasSkyNode.value) {
     sceneCsmShadowRuntime?.setActive(false)
     renderer.toneMappingExposure = settings?.exposure ?? 1
-    scene.environment = null
-    scene.environmentIntensity = 1
+    disposeSkyResources()
     pendingSkyboxSettings = null
     return
   }
   sceneCsmShadowRuntime?.setActive(true)
-  updateSkyLighting(settings)
   renderer.toneMappingExposure = settings.exposure
-  scene.environment = null
-  scene.environmentIntensity = 1
+  disposeSkyResources()
   pendingSkyboxSettings = null
-}
-
-function updateSkyLighting(settings: SceneSkyboxSettings) {
-  const phi = THREE.MathUtils.degToRad(90 - settings.elevation)
-  const theta = THREE.MathUtils.degToRad(settings.azimuth)
-  skySunPosition.setFromSphericalCoords(1, phi, theta)
 }
 
 function cloneEnvironmentSettingsLocal(settings: EnvironmentSettings): EnvironmentSettings {
@@ -11781,8 +11769,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   if (!scene) {
     return false
   }
-
-  setSkyBackgroundEnabled(false)
 
   if (background.mode === 'solidColor') {
     const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''

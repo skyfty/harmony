@@ -1548,14 +1548,11 @@ function resolveSceneExposure(exposure: unknown): number {
   );
 }
 
-const skySunPosition = new THREE.Vector3();
 
 const purposeWatchIcon = '👁️';
 const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
 
-let pmremGenerator: THREE.PMREMGenerator | null = null;
-let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
 let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
@@ -8349,39 +8346,6 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
   canvas.addEventListener('click', handleBehaviorClick);
 }
 
-function disposeSkyEnvironment() {
-  if (skyEnvironmentTarget) {
-    skyEnvironmentTarget.dispose();
-    skyEnvironmentTarget = null;
-  }
-}
-
-function disposeSkyResources() {
-  disposeSkyEnvironment();
-}
-
-function setSkyBackgroundEnabled(_enabled: boolean) {}
-
-function updateSkyLighting(settings: SceneSkyboxSettings) {
-  const phi = THREE.MathUtils.degToRad(90 - settings.elevation);
-  const theta = THREE.MathUtils.degToRad(settings.azimuth);
-  skySunPosition.setFromSphericalCoords(1, phi, theta);
-}
-
-function applySkyEnvironmentToScene() {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return;
-  }
-  if (skyEnvironmentTarget) {
-    scene.environment = skyEnvironmentTarget.texture;
-    scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
-  } else {
-    scene.environment = null;
-    scene.environmentIntensity = 1;
-  }
-}
-
 function disposeHdriBackgroundResources() {
   const scene = renderContext?.scene ?? null;
   const previousTexture = backgroundTexture;
@@ -8532,7 +8496,6 @@ async function applyBackgroundSettings(
   if (!scene) {
     return false;
   }
-  setSkyBackgroundEnabled(false);
   if (background.mode === 'solidColor') {
     const gradientTopColor = typeof background.gradientTopColor === 'string'
       ? background.gradientTopColor.trim()
@@ -8816,7 +8779,6 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
     return;
   }
   if (!skyNodeActive) {
-    disposeSkyResources();
     applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     pendingSkyboxSettings = null;
@@ -8824,7 +8786,6 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
     return;
   }
   if (!settings) {
-    disposeSkyEnvironment();
     applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     pendingSkyboxSettings = null;
@@ -8832,12 +8793,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
     return;
   }
   ensureSceneCsmShadowRuntime()?.setActive(true);
-  updateSkyLighting(settings);
   renderer.toneMappingExposure = resolveSceneExposure(settings.exposure);
-  if (!pmremGenerator && renderer) {
-    pmremGenerator = new THREE.PMREMGenerator(renderer);
-  }
-  disposeSkyEnvironment();
   applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
   pendingSkyboxSettings = null;
 }
@@ -9729,10 +9685,7 @@ function teardownRenderer() {
   frameDeltaMode = null;
   controls.dispose();
   disposeEnvironmentResources();
-  disposeSkyResources();
   disposeSceneCsmShadowRuntime();
-  pmremGenerator?.dispose();
-  pmremGenerator = null;
   pendingSkyboxSettings = null;
   lanternTextPromises.clear();
   Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
@@ -9784,8 +9737,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  pmremGenerator?.dispose();
-  pmremGenerator = new THREE.PMREMGenerator(renderer);
 
   const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000);
   camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
@@ -10260,7 +10211,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   frameDeltaMode = null;
 
   disposeEnvironmentResources();
-  disposeSkyResources();
   pendingSkyboxSettings = null;
 
   lanternTextPromises.clear();

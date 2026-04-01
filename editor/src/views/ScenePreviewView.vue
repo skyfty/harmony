@@ -1091,7 +1091,6 @@ const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
-const skySunPosition = new THREE.Vector3()
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
@@ -1127,7 +1126,6 @@ let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
 let rootGroup: THREE.Group | null = null
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
-let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 
 const EDITOR_SCENE_CSM_CONFIG: SceneCsmConfig = {
 	enabled: true,
@@ -7125,26 +7123,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearInstancedMeshes()
 }
 
-function disposeSkyEnvironment() {
-	if (skyEnvironmentTarget) {
-		skyEnvironmentTarget.dispose()
-		skyEnvironmentTarget = null
-	}
-}
-
 function disposeSkyResources() {
-	disposeSkyEnvironment()
-}
-
-function setSkyBackgroundEnabled(_enabled: boolean) {}
-
-function updateSkyLighting(settings: SceneSkyboxSettings) {
-	const phi = THREE.MathUtils.degToRad(90 - settings.elevation)
-	const theta = THREE.MathUtils.degToRad(settings.azimuth)
-	skySunPosition.setFromSphericalCoords(1, phi, theta)
-}
-
-function applySkyEnvironmentToScene() {
 	if (!scene) return
 	scene.environment = null
 	scene.environmentIntensity = 1
@@ -7156,24 +7135,19 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
 	}
 	if (!skyNodeActive) {
 		disposeSkyResources()
-		applySkyEnvironmentToScene()
 		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
 		sceneCsmShadowRuntime?.setActive(false)
 		return
 	}
 	if (!settings) {
-		disposeSkyEnvironment()
-		scene.environment = null
+		disposeSkyResources()
 		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
 		sceneCsmShadowRuntime?.setActive(false)
 		return
 	}
 	ensureSceneCsmShadowRuntime()?.setActive(true)
-	updateSkyLighting(settings)
 	renderer.toneMappingExposure = settings.exposure
-	scene.environment = null
-	scene.environmentIntensity = 1
-	applySkyEnvironmentToScene()
+	disposeSkyResources()
 }
 
 function disposeHdriBackgroundResources() {
@@ -7301,7 +7275,6 @@ async function applyBackgroundSettings(
 	if (!scene) {
 		return false
 	}
-	setSkyBackgroundEnabled(false)
 	if (background.mode === 'solidColor') {
 		const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''
 		disposeHdriBackgroundResources()
