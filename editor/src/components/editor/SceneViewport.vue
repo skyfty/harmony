@@ -1831,8 +1831,8 @@ const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
-const autoOverlayHorizOffset = ref(0)
-const autoOverlayVertOffset = ref(0)
+const autoOverlayHorizMargin = ref(0)
+const autoOverlayVertMargin = ref(0)
 const autoOverlayHoverNodeId = ref<string | null>(null)
 const autoOverlayHoverIndicator = reactive({
   visible: false,
@@ -7403,13 +7403,6 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
   })
 }
 
-function setMeshGeometry(target: { geometry?: THREE.BufferGeometry | null }, nextGeometry: THREE.BufferGeometry) {
-  const previous = (target.geometry as THREE.BufferGeometry | undefined) ?? null
-  target.geometry = nextGeometry
-  if (previous && typeof (previous as any).dispose === 'function') {
-    try { (previous as any).dispose() } catch (e) { /* ignore */ }
-  }
-}
 function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
   const hasActiveDrag = Boolean(
     roadVertexDragState
@@ -7453,50 +7446,6 @@ function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
   autoOverlayHoverIndicator.x = event.clientX - rect.left + 14
   autoOverlayHoverIndicator.y = event.clientY - rect.top + 18
   autoOverlayHoverIndicator.label = `自动铺设 ${plan.targetTool}`
-
-  // Also show the scatter area preview using GroundEditor's preview group.
-  try {
-    const points = (plan.worldPoints ?? []).map((p) => p ? new THREE.Vector3(p.x, p.y, p.z) : undefined).filter((p): p is THREE.Vector3 => Boolean(p))
-    if (points.length >= 3 && scatterAreaPreviewGroup) {
-      // Outline geometry (line loop)
-      const outlinePoints = [...points, points[0]!]
-      const outlineGeom = new THREE.BufferGeometry().setFromPoints(outlinePoints)
-      const fillShape = new THREE.Shape(points.map((pt) => new THREE.Vector2(pt.x, pt.z)))
-      const fillGeom2D = new THREE.ShapeGeometry(fillShape)
-      // Convert 2D shape geometry (XY) into XZ plane at average Y
-      let avgY = 0
-      for (const pt of points) avgY += pt.y
-      avgY = avgY / points.length
-      const fillGeom = new THREE.BufferGeometry()
-      // Copy positions and remap: x->x, y->z, z->ignored; then set z=y
-      const posAttr = fillGeom2D.getAttribute('position')
-      const posArray: number[] = []
-      for (let i = 0; i < posAttr.count; i++) {
-        const x = posAttr.getX(i)
-        const y = posAttr.getY(i)
-        posArray.push(x, avgY, y)
-      }
-      fillGeom.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3))
-
-      const fillMesh = scatterAreaPreviewGroup.children.find((c) => (c as any).isMesh) as THREE.Mesh | undefined
-      const outlineLine = scatterAreaPreviewGroup.children.find((c) => (c as any).type === 'Line') as THREE.Line | undefined
-      if (fillMesh) {
-        setMeshGeometry(fillMesh, fillGeom)
-        fillMesh.visible = true
-      }
-      if (outlineLine) {
-        setMeshGeometry(outlineLine as any, outlineGeom)
-        outlineLine.visible = true
-      }
-      scatterAreaPreviewGroup.visible = true
-    } else if (scatterAreaPreviewGroup) {
-      // hide if invalid
-      scatterAreaPreviewGroup.visible = false
-    }
-  } catch (err) {
-    // ignore preview errors
-    console.warn('Auto overlay preview build failed', err)
-  }
 }
 
 function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
@@ -7547,13 +7496,13 @@ async function handleConfirmAutoOverlay(): Promise<void> {
   if (!plan || !plan.supported || autoOverlaySubmitting.value) {
     return
   }
-  // compute world points with user-specified horizontal/vertical offsets
+  // Compute world points with user-specified horizontal/vertical margins.
 
   autoOverlaySubmitting.value = true
   try {
-    const horiz = Number(autoOverlayHorizOffset.value || 0)
-    const vert = Number(autoOverlayVertOffset.value || 0)
-    const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert)
+    const horiz = Number(autoOverlayHorizMargin.value || 0)
+    const vert = Number(autoOverlayVertMargin.value || 0)
+    const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert, { closed: true })
 
     if (plan.targetTool === 'wall') {
       const brush = resolveAutoOverlayWallBrush()
@@ -20177,21 +20126,24 @@ defineExpose<SceneViewportHandle>({
               <v-row>
                 <v-col cols="6">
                   <v-text-field
-                    label="水平偏移 (m)"
+                    label="水平 margin (m)"
                     type="number"
-                    v-model.number="autoOverlayHorizOffset"
+                    v-model.number="autoOverlayHorizMargin"
                     :step="0.01"
                   />
                 </v-col>
                 <v-col cols="6">
                   <v-text-field
-                    label="垂直偏移 (m)"
+                    label="垂直 margin (m)"
                     type="number"
-                    v-model.number="autoOverlayVertOffset"
+                    v-model.number="autoOverlayVertMargin"
                     :step="0.01"
                   />
                 </v-col>
               </v-row>
+              <div class="text-caption text-medium-emphasis" style="margin-top:4px;">
+                水平 margin 正数外扩、负数缩进；垂直 margin 正数沿轮廓方向前移、负数后移。可用于同一参考轮廓重复自动铺设时错开位置，避免覆盖。
+              </div>
             </div>
             <div v-else class="text-error">{{ autoOverlayPlan.reason }}</div>
           </div>

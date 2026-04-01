@@ -1,34 +1,71 @@
 import * as THREE from 'three'
 
 export type Vec3 = { x: number; y: number; z: number }
+export type OffsetPolylineOptions = {
+  closed?: boolean
+}
+
+const CLOSED_EPS = 1e-4
+
+function isDuplicatedClosingPoint(points: Vec3[]): boolean {
+  if (points.length < 2) {
+    return false
+  }
+  const first = new THREE.Vector3(points[0]!.x, points[0]!.y, points[0]!.z)
+  const last = new THREE.Vector3(points[points.length - 1]!.x, points[points.length - 1]!.y, points[points.length - 1]!.z)
+  return first.distanceTo(last) <= CLOSED_EPS
+}
+
+function computeSignedAreaXZ(points: Vec3[]): number {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    area += current.x * next.z - next.x * current.z
+  }
+  return area * 0.5
+}
+
+function normalizeClosedMarginWinding(points: Vec3[]): { points: Vec3[]; reversed: boolean } {
+  if (points.length < 3) {
+    return { points, reversed: false }
+  }
+  const area = computeSignedAreaXZ(points)
+  if (Number.isFinite(area) && area > 0) {
+    return { points: [...points].reverse(), reversed: true }
+  }
+  return { points, reversed: false }
+}
 
 /**
- * Offset a polyline by a horizontal (perpendicular) and vertical (along-tangent) amount.
- * horiz: lateral offset in meters (positive to the right of tangent)
- * vert: longitudinal offset in meters (positive forward along tangent)
+ * Offset a polyline by a horizontal (perpendicular) and vertical (along-tangent) margin.
+ * horiz: lateral margin in meters. For closed contours, positive expands outward and negative insets.
+ * vert: longitudinal margin in meters (positive forward along tangent)
  */
-export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec3[] {
+export function offsetPolyline(points: Vec3[], horiz: number, vert: number, options?: OffsetPolylineOptions): Vec3[] {
   // Edge-based offset: shift each segment, then intersect adjacent offset lines
   const out: Vec3[] = []
   if (!points || points.length === 0) return out
-  const n = points.length
+  const inferredClosed = isDuplicatedClosingPoint(points)
+  const closed = options?.closed ?? inferredClosed
+  const basePoints = inferredClosed ? points.slice(0, -1) : points
+  const normalizedClosed = closed ? normalizeClosedMarginWinding(basePoints) : { points: basePoints, reversed: false }
+  const workingPoints = normalizedClosed.points
+  const n = workingPoints.length
   if (n === 1) {
     // Single point: shift by perp of X axis
-    const p = points[0]!
+    const p = workingPoints[0]!
     return [{ x: p.x - horiz, y: p.y, z: p.z }]
   }
-  const CLOSED_EPS = 1e-4
-  const first = new THREE.Vector3(points[0]!.x, points[0]!.y, points[0]!.z)
-  const last = new THREE.Vector3(points[n - 1]!.x, points[n - 1]!.y, points[n - 1]!.z)
-  const isClosed = first.distanceTo(last) <= CLOSED_EPS
+  const isClosed = closed && n >= 3
 
   type Line2D = { p: THREE.Vector2; d: THREE.Vector2; end: THREE.Vector2 }
   const segLines: Line2D[] = []
   // build offset lines for each segment
   const segCount = isClosed ? n : n - 1
   for (let i = 0; i < segCount; i++) {
-    const a = new THREE.Vector3(points[i]!.x, points[i]!.y, points[i]!.z)
-    const b = new THREE.Vector3(points[(i + 1) % n]!.x, points[(i + 1) % n]!.y, points[(i + 1) % n]!.z)
+    const a = new THREE.Vector3(workingPoints[i]!.x, workingPoints[i]!.y, workingPoints[i]!.z)
+    const b = new THREE.Vector3(workingPoints[(i + 1) % n]!.x, workingPoints[(i + 1) % n]!.y, workingPoints[(i + 1) % n]!.z)
     const dir3 = new THREE.Vector3().subVectors(b, a)
     dir3.y = 0
     if (dir3.lengthSq() < 1e-8) {
@@ -73,12 +110,12 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
       const l2 = segLines[i]!
       const ip = intersectLines(l1, l2)
       if (ip) {
-        out.push({ x: ip.x, y: points[i]!.y, z: ip.y })
+        out.push({ x: ip.x, y: workingPoints[i]!.y, z: ip.y })
       } else {
         // fallback: 取当前点的偏移
-        const a = new THREE.Vector3(points[i]!.x, points[i]!.y, points[i]!.z)
+        const a = new THREE.Vector3(workingPoints[i]!.x, workingPoints[i]!.y, workingPoints[i]!.z)
         const dir3 = new THREE.Vector3().subVectors(
-          new THREE.Vector3(points[(i + 1) % n]!.x, points[(i + 1) % n]!.y, points[(i + 1) % n]!.z),
+          new THREE.Vector3(workingPoints[(i + 1) % n]!.x, workingPoints[(i + 1) % n]!.y, workingPoints[(i + 1) % n]!.z),
           a
         )
         dir3.y = 0
@@ -90,21 +127,21 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
       }
     }
     // 闭合：首尾不重复
-    return out
+    return normalizedClosed.reversed ? out.reverse() : out
   } else {
     // 开放链：首点、尾点直接用偏移，中间点用交点
     const firstLine = segLines[0]!
-    out.push({ x: firstLine.p.x, y: points[0]!.y, z: firstLine.p.y })
+    out.push({ x: firstLine.p.x, y: workingPoints[0]!.y, z: firstLine.p.y })
     for (let i = 1; i < n - 1; i++) {
       const l1 = segLines[i - 1]!
       const l2 = segLines[i]!
       const ip = intersectLines(l1, l2)
       if (ip) {
-        out.push({ x: ip.x, y: points[i]!.y, z: ip.y })
+        out.push({ x: ip.x, y: workingPoints[i]!.y, z: ip.y })
       } else {
         // fallback: 取当前点的偏移
-        const a = new THREE.Vector3(points[i]!.x, points[i]!.y, points[i]!.z)
-        const prevDir = new THREE.Vector3().subVectors(a, new THREE.Vector3(points[i - 1]!.x, points[i - 1]!.y, points[i - 1]!.z))
+        const a = new THREE.Vector3(workingPoints[i]!.x, workingPoints[i]!.y, workingPoints[i]!.z)
+        const prevDir = new THREE.Vector3().subVectors(a, new THREE.Vector3(workingPoints[i - 1]!.x, workingPoints[i - 1]!.y, workingPoints[i - 1]!.z))
         prevDir.y = 0
         prevDir.normalize()
         const perp = new THREE.Vector3(-prevDir.z, 0, prevDir.x)
@@ -113,7 +150,7 @@ export function offsetPolyline(points: Vec3[], horiz: number, vert: number): Vec
       }
     }
     const lastLine = segLines[segLines.length - 1]!
-    out.push({ x: lastLine.end.x, y: points[n - 1]!.y, z: lastLine.end.y })
+    out.push({ x: lastLine.end.x, y: workingPoints[n - 1]!.y, z: lastLine.end.y })
     return out
   }
 }
