@@ -40,109 +40,26 @@
               <v-spacer />
               <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:csm-menu-open', false)" />
             </v-toolbar>
-            <div class="popup-menu-card__content csm-sun-menu__content">
-              <v-switch
-                :model-value="csmEnabled"
-                density="compact"
-                hide-details
-                inset
-                color="primary"
-                label="Enable CSM"
-                @update:model-value="(value) => emit('update:csm-enabled', Boolean(value))"
-              />
-              <div class="csm-sun-grid">
-                <v-text-field
-                  :model-value="csmLightColor"
-                  label="Light Color"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-light-color', String(value ?? ''))"
-                />
-                <v-text-field
-                  :model-value="csmLightIntensity"
-                  type="number"
-                  min="0"
-                  max="16"
-                  step="0.05"
-                  label="Intensity"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-light-intensity', Number(value))"
-                />
-                <v-text-field
-                  :model-value="csmSunAzimuthDeg"
-                  type="number"
-                  min="-180"
-                  max="180"
-                  step="1"
-                  label="Azimuth (deg)"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-sun-azimuth-deg', Number(value))"
-                />
-                <v-text-field
-                  :model-value="csmSunElevationDeg"
-                  type="number"
-                  min="-10"
-                  max="89"
-                  step="1"
-                  label="Elevation (deg)"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-sun-elevation-deg', Number(value))"
-                />
-                <v-select
-                  :model-value="csmCascades"
-                  :items="csmCascadeOptions"
-                  item-title="label"
-                  item-value="value"
-                  label="Cascades"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-cascades', Number(value))"
-                />
-                <v-text-field
-                  :model-value="csmMaxFar"
-                  type="number"
-                  min="1"
-                  max="10000"
-                  step="10"
-                  label="Max Far"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-max-far', Number(value))"
-                />
-                <v-select
-                  :model-value="csmShadowMapSize"
-                  :items="csmShadowMapSizeOptions"
-                  item-title="label"
-                  item-value="value"
-                  label="Shadow Map"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-shadow-map-size', Number(value))"
-                />
-                <v-text-field
-                  :model-value="csmShadowBias"
-                  type="number"
-                  min="-0.01"
-                  max="0.01"
-                  step="0.00005"
-                  label="Shadow Bias"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => emit('update:csm-shadow-bias', Number(value))"
-                />
-              </div>
-            </div>
+            <CsmSunMenuContent
+              :csm-enabled="csmEnabled"
+              :csm-light-color="csmLightColor"
+              :csm-light-intensity="csmLightIntensity"
+              :csm-sun-azimuth-deg="csmSunAzimuthDeg"
+              :csm-sun-elevation-deg="csmSunElevationDeg"
+              :csm-cascades="csmCascades"
+              :csm-max-far="csmMaxFar"
+              :csm-shadow-map-size="csmShadowMapSize"
+              :csm-shadow-bias="csmShadowBias"
+              @update:csm-enabled="emit('update:csm-enabled', $event)"
+              @update:csm-light-color="emit('update:csm-light-color', $event)"
+              @update:csm-light-intensity="emit('update:csm-light-intensity', $event)"
+              @update:csm-sun-azimuth-deg="emit('update:csm-sun-azimuth-deg', $event)"
+              @update:csm-sun-elevation-deg="emit('update:csm-sun-elevation-deg', $event)"
+              @update:csm-cascades="emit('update:csm-cascades', $event)"
+              @update:csm-max-far="emit('update:csm-max-far', $event)"
+              @update:csm-shadow-map-size="emit('update:csm-shadow-map-size', $event)"
+              @update:csm-shadow-bias="emit('update:csm-shadow-bias', $event)"
+            />
           </div>
         </v-list>
       </v-menu>
@@ -1427,6 +1344,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
+import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
@@ -2038,24 +1956,6 @@ const noiseModeOptions: Array<{ value: GroundGenerationMode; label: string; icon
   { value: 'ridge', label: 'Ridge Noise', icon: 'mdi-mountain' },
   { value: 'voronoi', label: 'Voronoi Noise', icon: 'mdi-shape-polygon-plus' },
   { value: 'flat', label: 'Flat', icon: 'mdi-border-horizontal' },
-]
-
-const csmCascadeOptions: Array<{ value: number; label: string }> = [
-  { value: 1, label: '1 (fast)' },
-  { value: 2, label: '2' },
-  { value: 3, label: '3 (recommended)' },
-  { value: 4, label: '4 (high quality)' },
-  { value: 5, label: '5' },
-  { value: 6, label: '6 (max)' },
-]
-
-const csmShadowMapSizeOptions: Array<{ value: number; label: string }> = [
-  { value: 256, label: '256' },
-  { value: 512, label: '512' },
-  { value: 1024, label: '1024 (recommended)' },
-  { value: 2048, label: '2048 (high quality)' },
-  { value: 4096, label: '4096 (very high)' },
-  { value: 8192, label: '8192 (extreme)' },
 ]
 
 type RotationAxis = 'x' | 'y'
@@ -2870,16 +2770,6 @@ function handleClearScatterMenuAction() {
   width: 320px;
   max-width: min(320px, 92vw);
   padding: 6px;
-}
-
-.csm-sun-menu__content {
-  padding: 8px 10px 10px;
-}
-
-.csm-sun-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
 }
 
 .viewport-placement-menu {
