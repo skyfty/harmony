@@ -21,7 +21,7 @@ export const DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE = false
 
 export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
-    mode: 'skybox',
+    mode: 'solidColor',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     gradientTopColor: null,
     gradientOffset: DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
@@ -153,7 +153,7 @@ export function cloneEnvironmentSettings(
     return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES }
   }
 
-  let backgroundMode: EnvironmentSettings['background']['mode'] = 'skybox'
+  let backgroundMode: EnvironmentSettings['background']['mode'] = 'solidColor'
   if (backgroundSource?.mode === 'hdri') {
     backgroundMode = 'hdri'
   } else if (backgroundSource?.mode === 'skycube') {

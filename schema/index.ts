@@ -951,7 +951,6 @@ export interface SceneJsonExportDocument {
   name: string;
   createdAt: string;
   updatedAt: string;
-  skybox: SceneSkyboxSettings;
   environment?: EnvironmentSettings;
   nodes: SceneNode[];
   materials: SceneMaterial[];
@@ -1014,84 +1013,7 @@ export interface SceneResourceSummary {
   meshTextureUsage?: SceneResourceMeshTextureUsage[];
 }
 
-export type SceneCloudImplementation = 'cubeTexture' | 'spherical' | 'volumetric';
-
-export interface SceneCubeTextureCloudSettings {
-  mode: 'cubeTexture';
-  /** Cube map face on the +X axis. */
-  positiveX: string;
-  /** Cube map face on the -X axis. */
-  negativeX: string;
-  /** Cube map face on the +Y axis. */
-  positiveY: string;
-  /** Cube map face on the -Y axis. */
-  negativeY: string;
-  /** Cube map face on the +Z axis. */
-  positiveZ: string;
-  /** Cube map face on the -Z axis. */
-  negativeZ: string;
-  /** Blends the cubemap clouds with the analytic sky. */
-  intensity: number;
-}
-
-export interface SceneSphericalCloudSettings {
-  mode: 'spherical';
-  /** Optional texture asset applied to the spherical cloud layer. */
-  textureAssetId: string | null;
-  /** Radius of the spherical cloud dome. */
-  radius: number;
-  /** Cloud layer opacity between 0 and 1. */
-  opacity: number;
-  /** Angular rotation speed in radians per second. */
-  rotationSpeed: number;
-  /** Tint color for the cloud material. */
-  color: string;
-  /** Height offset for positioning the cloud dome. */
-  height: number;
-}
-
-export interface SceneVolumetricCloudSettings {
-  mode: 'volumetric';
-  /** Tint color for the cloud material. */
-  color: string;
-  /** Cloud density multiplier. */
-  density: number;
-  /** Cloud movement speed. */
-  speed: number;
-  /** Cloud detail level (0-10). */
-  detail: number;
-  /** Cloud coverage (0-1). */
-  coverage: number;
-  /** Height offset. */
-  height: number;
-  /** Cloud scale/size. */
-  size: number;
-  /** Shadow opacity (0-1). Higher is darker shadows. */
-  shadowOpacity?: number;
-  /** Sun light intensity (0-1). */
-  sunIntensity?: number;
-  /** Ambient light intensity (0-1). */
-  ambientIntensity?: number;
-}
-
-export type SceneCloudSettings =
-  | SceneCubeTextureCloudSettings
-  | SceneSphericalCloudSettings
-  | SceneVolumetricCloudSettings;
-
-export interface SceneSkyboxSettings {
-  presetId: string
-  exposure: number
-  turbidity: number
-  rayleigh: number
-  mieCoefficient: number
-  mieDirectionalG: number
-  elevation: number
-  azimuth: number
-  clouds?: SceneCloudSettings | null
-}
-
-export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skycube'
+export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
@@ -1111,7 +1033,7 @@ export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
   /**
-   * Optional gradient skybox top color.
+  * Optional gradient background top color.
    * When provided (valid hex), background renders as a vertical gradient from solidColor (bottom) to gradientTopColor (top).
    * When omitted/invalid, background falls back to a pure solid color.
    */

@@ -68,7 +68,6 @@ import type {
   SceneMaterialTextureSlot,
   SceneMaterialTextureRef,
   SceneNodeMaterial,
-  SceneSkyboxSettings,
   GradientBackgroundDome,
   GroundDynamicMesh,
   GroundGenerationMode,
@@ -93,8 +92,6 @@ import {
 import {
   createSceneCsmShadowRuntime,
   DEFAULT_LARGE_SCENE_CSM_CONFIG,
-  getSceneCsmSunPositionFromSkyboxSettings,
-  hasSceneSkyNode,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
@@ -168,7 +165,6 @@ import { createPrimitiveMesh, PROTAGONIST_NODE_ID } from '@schema/index'
 
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
 import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
 import { buildLandformNodeMaterialsFromPreset } from '@/utils/landformPresetNodeMaterials'
@@ -1105,10 +1101,8 @@ const VIEWPORT_SCENE_CSM_CONFIG: SceneCsmConfig = {
   ...DEFAULT_LARGE_SCENE_CSM_CONFIG,
 }
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
-const sceneCsmSunPosition = new THREE.Vector3()
-
 function shouldUseSceneCsmShadows(): boolean {
-  return Boolean(scene && camera && hasSkyNode.value && shadowsActiveInViewport.value && VIEWPORT_SCENE_CSM_CONFIG.enabled)
+  return Boolean(scene && camera && shadowsActiveInViewport.value && VIEWPORT_SCENE_CSM_CONFIG.enabled)
 }
 
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
@@ -1130,14 +1124,6 @@ function disposeSceneCsmShadowRuntime(): void {
 
 function refreshSceneCsmFrustums(): void {
   sceneCsmShadowRuntime?.updateFrustums()
-}
-
-function syncSceneCsmSunFromSkybox(settings: SceneSkyboxSettings | null | undefined): void {
-  const runtime = sceneCsmShadowRuntime ?? ensureSceneCsmShadowRuntime()
-  if (!runtime || !settings) {
-    return
-  }
-  runtime.syncSun(getSceneCsmSunPositionFromSkyboxSettings(settings, sceneCsmSunPosition), 1)
 }
 
 // Building label font/meshes (planning-conversion buildings)
@@ -1338,9 +1324,8 @@ function applyRendererShadowSetting() {
   }
   const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
-  if (castShadows && hasSkyNode.value) {
+  if (castShadows) {
     ensureSceneCsmShadowRuntime()?.setActive(true)
-    syncSceneCsmSunFromSkybox(skyboxSettings.value)
     return
   }
   sceneCsmShadowRuntime?.setActive(false)
@@ -1724,7 +1709,6 @@ const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const vertexSnapThresholdPx = computed(() => sceneStore.viewportSettings.snapThresholdPx)
 const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
-const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
 const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
 const shadowsActiveInViewport = computed(() => shadowsEnabled.value)
@@ -7548,7 +7532,6 @@ let cameraTransitionState: CameraTransitionState | null = null
 const SHIFT_ORBIT_FOCUS_TRANSITION_MS = 260
 
 let transformGroupState: TransformGroupState | null = null
-let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let pendingSceneGraphSync = false
 
 
@@ -10571,24 +10554,6 @@ watch(axesVisible, (visible) => {
   applyAxesVisibility(visible)
 }, { immediate: true })
 
-const skyboxSignature = computed(() => {
-  const settings = skyboxSettings.value
-  if (!settings) {
-    return 'null'
-  }
-  return JSON.stringify({
-    turbidity: settings.turbidity,
-    rayleigh: settings.rayleigh,
-    mieCoefficient: settings.mieCoefficient,
-    mieDirectionalG: settings.mieDirectionalG,
-    elevation: settings.elevation,
-    azimuth: settings.azimuth,
-    exposure: settings.exposure,
-  })
-})
-
-const hasSkyNode = computed(() => hasSceneSkyNode(sceneStore.nodes))
-
 const environmentSignature = computed(() => {
   const settings = environmentSettings.value
   const background = settings.background
@@ -10687,14 +10652,6 @@ function applyEnvironmentTextureRotation(settings: EnvironmentSettings) {
   scene.backgroundRotation.copy(euler)
   scene.environmentRotation.copy(euler)
 }
-
-watch([skyboxSignature, hasSkyNode], () => {
-  if (!hasSkyNode.value) {
-    disposeSkyResources()
-    return
-  }
-  applySkyboxSettingsToScene(skyboxSettings.value)
-}, { immediate: true })
 
 watch(environmentSignature, () => {
   void applyEnvironmentSettingsToScene(environmentSettings.value)
@@ -11478,11 +11435,6 @@ function initScene() {
     instancedMeshRevision.value += 1
   })
 
-  applySkyboxSettingsToScene(skyboxSettings.value)
-  if (pendingSkyboxSettings) {
-    applySkyboxSettingsToScene(pendingSkyboxSettings)
-  }
-
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings)
   } else {
@@ -11494,7 +11446,6 @@ function initScene() {
   perspectiveCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
   camera = perspectiveCamera
   ensureSceneCsmShadowRuntime()
-  applySkyboxSettingsToScene(skyboxSettings.value)
 
   applyCameraControlMode()
   updateCameraStatusDistance()
@@ -11552,26 +11503,6 @@ function initScene() {
   renderClock.start()
   animate()
   applyCameraState(props.cameraState)
-}
-
-function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
-  if (!scene || !renderer) {
-    pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null
-    return
-  }
-  if (!settings || !hasSkyNode.value) {
-    sceneCsmShadowRuntime?.setActive(false)
-    renderer.toneMappingExposure = settings?.exposure ?? 1
-    disposeSkyResources()
-    pendingSkyboxSettings = null
-    return
-  }
-  const csmRuntime = ensureSceneCsmShadowRuntime()
-  csmRuntime?.setActive(true)
-  syncSceneCsmSunFromSkybox(settings)
-  renderer.toneMappingExposure = settings.exposure
-  disposeSkyResources()
-  pendingSkyboxSettings = null
 }
 
 function cloneEnvironmentSettingsLocal(settings: EnvironmentSettings): EnvironmentSettings {
@@ -11774,7 +11705,7 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
     return false
   }
   void background
-  // Skybox background mode is not supported.
+  // Background modes do not contribute a separate reflection environment here.
   scene.environment = null
   scene.environmentIntensity = 1
   return true

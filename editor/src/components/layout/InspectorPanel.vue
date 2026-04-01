@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import MaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import LightPanel from '@/components/inspector/LightPanel.vue'
@@ -224,10 +224,6 @@ watch(
   },
   { immediate: true },
 )
-
-onBeforeUnmount(() => {
-  sceneStore.setCloudPreviewEnabled(false)
-})
 
 function handleNameUpdate(value: string) {
   if (!selectedNodeId.value) return

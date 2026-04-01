@@ -6,7 +6,6 @@ import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonCont
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
-import { sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	DEFAULT_ENVIRONMENT_RESTITUTION,
@@ -39,7 +38,6 @@ import {
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
-	type SceneSkyboxSettings,
 	type Vector3Like,
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
@@ -81,8 +79,6 @@ import {
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_LARGE_SCENE_CSM_CONFIG,
-	getSceneCsmSunPositionFromSkyboxSettings,
-	hasSceneSkyNode,
 	type SceneCsmConfig,
 	type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
@@ -1100,17 +1096,7 @@ const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
-const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
-	presetId: 'clear-day',
-	exposure: 0.6,
-	turbidity: 4,
-	rayleigh: 1.25,
-	mieCoefficient: 0.0025,
-	mieDirectionalG: 0.75,
-	elevation: 22,
-	azimuth: 145,
-	clouds: null,
-}
+const DEFAULT_TONE_MAPPING_EXPOSURE = 1
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'first-person' | 'orbit'
@@ -1137,7 +1123,6 @@ let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 const EDITOR_SCENE_CSM_CONFIG: SceneCsmConfig = {
 	...DEFAULT_LARGE_SCENE_CSM_CONFIG,
 }
-const sceneCsmSunPosition = new THREE.Vector3()
 
 function shouldUseSceneCsmShadows(): boolean {
 	return Boolean(scene && camera && EDITOR_SCENE_CSM_CONFIG.enabled)
@@ -1157,14 +1142,6 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 function disposeSceneCsmShadowRuntime(): void {
 	sceneCsmShadowRuntime?.dispose()
 	sceneCsmShadowRuntime = null
-}
-
-function syncSceneCsmSunFromSkybox(settings: SceneSkyboxSettings | null | undefined): void {
-	const runtime = sceneCsmShadowRuntime ?? ensureSceneCsmShadowRuntime()
-	if (!runtime || !settings) {
-		return
-	}
-	runtime.syncSun(getSceneCsmSunPositionFromSkyboxSettings(settings, sceneCsmSunPosition), 1)
 }
 let backgroundTexture: THREE.Texture | null = null
 let backgroundTextureCleanup: (() => void) | null = null
@@ -3238,31 +3215,6 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D): void {
 		return
 	}
 	previewComponentManager.attachRuntime(nodeState, object)
-}
-
-function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings {
-	const ensureNumber = (candidate: unknown, fallback: number) => {
-		return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback
-	}
-	const sanitizedClouds = sanitizeCloudSettings(input.clouds)
-	return {
-		presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
-		exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
-		turbidity: ensureNumber(input.turbidity, DEFAULT_SKYBOX_SETTINGS.turbidity),
-		rayleigh: ensureNumber(input.rayleigh, DEFAULT_SKYBOX_SETTINGS.rayleigh),
-		mieCoefficient: ensureNumber(input.mieCoefficient, DEFAULT_SKYBOX_SETTINGS.mieCoefficient),
-		mieDirectionalG: ensureNumber(input.mieDirectionalG, DEFAULT_SKYBOX_SETTINGS.mieDirectionalG),
-		elevation: ensureNumber(input.elevation, DEFAULT_SKYBOX_SETTINGS.elevation),
-		azimuth: ensureNumber(input.azimuth, DEFAULT_SKYBOX_SETTINGS.azimuth),
-		clouds: sanitizedClouds ?? null,
-	}
-}
-
-function resolveDocumentSkybox(document: SceneJsonExportDocument | null | undefined): SceneSkyboxSettings | null {
-	if (!document) {
-		return null
-	}
-	return sanitizeSkyboxSettings(document.skybox)
 }
 
 function resetAssetResolutionCaches(): void {
@@ -7139,29 +7091,6 @@ function disposeSkyResources() {
 	scene.environmentIntensity = 1
 }
 
-function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive: boolean) {
-	if (!renderer || !scene) {
-		return
-	}
-	if (!skyNodeActive) {
-		disposeSkyResources()
-		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
-		sceneCsmShadowRuntime?.setActive(false)
-		return
-	}
-	if (!settings) {
-		disposeSkyResources()
-		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
-		sceneCsmShadowRuntime?.setActive(false)
-		return
-	}
-	const csmRuntime = ensureSceneCsmShadowRuntime()
-	csmRuntime?.setActive(true)
-	syncSceneCsmSunFromSkybox(settings)
-	renderer.toneMappingExposure = settings.exposure
-	disposeSkyResources()
-}
-
 function disposeHdriBackgroundResources() {
 	const previousTexture = backgroundTexture
 	if (previousTexture) {
@@ -10244,9 +10173,10 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetProtagonistPoseState()
 
 	refreshResourceAssetInfo(document)
-	const skyboxSettings = resolveDocumentSkybox(document)
-	const skyNodeActive = hasSceneSkyNode(document.nodes)
-	applySkyboxSettings(skyboxSettings, skyNodeActive)
+	disposeSkyResources()
+	if (renderer) {
+		renderer.toneMappingExposure = DEFAULT_TONE_MAPPING_EXPOSURE
+	}
 	const environmentSettings = resolveDocumentEnvironment(document)
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
 	deferredInstancingNodeIds.clear()

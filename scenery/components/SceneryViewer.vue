@@ -415,7 +415,6 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
-import { sanitizeCloudSettings } from '@harmony/schema/cloudRenderer';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
 import { useProjectStore } from '../common/stores/projectStore';
@@ -552,7 +551,6 @@ import {
   type GradientBackgroundDome,
   type SceneNode,
   type SceneNodeComponentState,
-  type SceneSkyboxSettings,
   type SceneJsonExportDocument,
   type SceneAssetRegistryEntry,
   type LanternSlideDefinition,
@@ -566,8 +564,6 @@ import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/
 import {
   createSceneCsmShadowRuntime,
   DEFAULT_LARGE_SCENE_CSM_CONFIG,
-  getSceneCsmSunPositionFromSkyboxSettings,
-  hasSceneSkyNode,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
 } from '@harmony/schema/sceneCsm';
@@ -1530,28 +1526,18 @@ const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
-const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
-  presetId: 'clear-day',
-  exposure: 0.7,
-  turbidity: 4,
-  rayleigh: 1.25,
-  mieCoefficient: 0.0025,
-  mieDirectionalG: 0.75,
-  elevation: 22,
-  azimuth: 145,
-  clouds: null,
-};
+const DEFAULT_SCENE_EXPOSURE = 0.7;
 
 
 const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
 
 function resolveSceneExposure(exposure: unknown): number {
-  const base = clampNumber(exposure, 0, 5, DEFAULT_SKYBOX_SETTINGS.exposure);
+  const base = clampNumber(exposure, 0, 5, DEFAULT_SCENE_EXPOSURE);
   return clampNumber(
     base * SCENE_VIEWER_EXPOSURE_BOOST,
     0.05,
     5,
-    DEFAULT_SKYBOX_SETTINGS.exposure * SCENE_VIEWER_EXPOSURE_BOOST,
+    DEFAULT_SCENE_EXPOSURE * SCENE_VIEWER_EXPOSURE_BOOST,
   );
 }
 
@@ -1560,7 +1546,6 @@ const purposeWatchIcon = '👁️';
 const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
 
-let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
 let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundAssetId: string | null = null;
@@ -1590,7 +1575,6 @@ const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
   enabled: !isWeChatMiniProgram,
 };
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
-const sceneCsmSunPosition = new THREE.Vector3();
 
 function shouldUseSceneCsmShadows(): boolean {
   return Boolean(renderContext?.scene && renderContext?.camera && SCENERY_SCENE_CSM_CONFIG.enabled);
@@ -1611,14 +1595,6 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
 function disposeSceneCsmShadowRuntime(): void {
   sceneCsmShadowRuntime?.dispose();
   sceneCsmShadowRuntime = null;
-}
-
-function syncSceneCsmSunFromSkybox(settings: SceneSkyboxSettings | null | undefined): void {
-  const runtime = sceneCsmShadowRuntime ?? ensureSceneCsmShadowRuntime();
-  if (!runtime || !settings) {
-    return;
-  }
-  runtime.syncSun(getSceneCsmSunPositionFromSkyboxSettings(settings, sceneCsmSunPosition), 1);
 }
 
 function supportsFloatTextureLinearFiltering(): boolean {
@@ -3546,35 +3522,6 @@ function closeBehaviorAlert() {
   behaviorAlertShowCancel.value = false;
   behaviorAlertConfirmText.value = '确定';
   behaviorAlertCancelText.value = '取消';
-}
-
-function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
-  return { ...settings };
-}
-
-function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings {
-  const ensureNumber = (candidate: unknown, fallback: number) => {
-    return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback;
-  };
-  const sanitizedClouds = sanitizeCloudSettings(input.clouds);
-  return {
-    presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
-    exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
-    turbidity: ensureNumber(input.turbidity, DEFAULT_SKYBOX_SETTINGS.turbidity),
-    rayleigh: ensureNumber(input.rayleigh, DEFAULT_SKYBOX_SETTINGS.rayleigh),
-    mieCoefficient: ensureNumber(input.mieCoefficient, DEFAULT_SKYBOX_SETTINGS.mieCoefficient),
-    mieDirectionalG: ensureNumber(input.mieDirectionalG, DEFAULT_SKYBOX_SETTINGS.mieDirectionalG),
-    elevation: ensureNumber(input.elevation, DEFAULT_SKYBOX_SETTINGS.elevation),
-    azimuth: ensureNumber(input.azimuth, DEFAULT_SKYBOX_SETTINGS.azimuth),
-    clouds: sanitizedClouds ?? null,
-  };
-}
-
-function resolveSceneSkybox(document: SceneJsonExportDocument | null | undefined): SceneSkyboxSettings | null {
-  if (!document) {
-    return null;
-  }
-  return sanitizeSkyboxSettings(document.skybox);
 }
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
@@ -8778,37 +8725,12 @@ function disposeEnvironmentResources() {
   pendingEnvironmentSettings = null;
 }
 
-function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive: boolean) {
-  const context = renderContext;
-  if (!context) {
-    pendingSkyboxSettings = settings && skyNodeActive ? cloneSkyboxSettings(settings) : null;
-    return;
-  }
-  const { renderer, scene } = context;
-  if (!renderer || !scene) {
-    pendingSkyboxSettings = settings && skyNodeActive ? cloneSkyboxSettings(settings) : null;
-    return;
-  }
-  if (!skyNodeActive) {
-    applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
-    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
-    pendingSkyboxSettings = null;
-    sceneCsmShadowRuntime?.setActive(false);
-    return;
-  }
-  if (!settings) {
-    applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
-    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
-    pendingSkyboxSettings = null;
-    sceneCsmShadowRuntime?.setActive(false);
-    return;
-  }
-  const csmRuntime = ensureSceneCsmShadowRuntime();
-  csmRuntime?.setActive(true);
-  syncSceneCsmSunFromSkybox(settings);
-  renderer.toneMappingExposure = resolveSceneExposure(settings.exposure);
+function resetRemovedSkyState() {
   applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
-  pendingSkyboxSettings = null;
+  const renderer = renderContext?.renderer ?? null;
+  if (renderer) {
+    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SCENE_EXPOSURE);
+  }
 }
 
 function isValidSceneDocument(document: unknown): document is SceneJsonExportDocument {
@@ -9427,7 +9349,7 @@ watch(
     }
     if (!payload) {
       teardownRenderer();
-      applySkyboxSettings(null, false);
+      resetRemovedSkyState();
       warnings.value = [];
       return;
     }
@@ -9440,7 +9362,7 @@ function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   if (!payload) {
     addRuntimeStageLog('[SceneryViewer] Preview payload cleared');
     teardownRenderer();
-    applySkyboxSettings(null, false);
+    resetRemovedSkyState();
     warnings.value = [];
     return;
   }
@@ -9451,9 +9373,7 @@ function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   });
   error.value = null;
   warnings.value = [];
-  const skyboxSettings = resolveSceneSkybox(payload.document);
-  const skyNodeActive = hasSkyNode(payload.document.nodes);
-  applySkyboxSettings(skyboxSettings, skyNodeActive);
+  resetRemovedSkyState();
   pendingEnvironmentSettings = cloneEnvironmentSettings(resolveDocumentEnvironment(payload.document));
   try {
     uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
@@ -9679,7 +9599,6 @@ function teardownRenderer() {
   controls.dispose();
   disposeEnvironmentResources();
   disposeSceneCsmShadowRuntime();
-  pendingSkyboxSettings = null;
   lanternTextPromises.clear();
   Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
   resetAssetResolutionCaches();
@@ -9993,14 +9912,12 @@ function mountGraphAndSyncSubsystems(
   syncTerrainScatterInstances(payload.document, resourceCache);
 }
 
-/** Apply camera alignment, skybox and environment settings for the current document. */
+/** Apply camera alignment and environment settings for the current document. */
 function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: THREE.PerspectiveCamera): void {
   const shouldAlignToProtagonist = purposeActiveMode.value === 'level' && !vehicleDriveActive.value;
   syncProtagonistCameraPose({ force: true, applyToCamera: shouldAlignToProtagonist });
 
-  const skyboxSettings = resolveSceneSkybox(document);
-  const skyNodeActive = hasSkyNode(document.nodes);
-  applySkyboxSettings(skyboxSettings, skyNodeActive);
+  resetRemovedSkyState();
 
   // Environment settings are applied asynchronously (e.g. texture loads) and will self-defer
   // into `pendingEnvironmentSettings` when the render context is not ready.
@@ -10204,7 +10121,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   frameDeltaMode = null;
 
   disposeEnvironmentResources();
-  pendingSkyboxSettings = null;
 
   lanternTextPromises.clear();
   Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
@@ -10296,7 +10212,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   addRuntimeStageLog('[SceneryViewer] Phase 4 mount scene graph');
   mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
 
-  // Phase 5: apply view settings (camera alignment, skybox, environment, projection).
+  // Phase 5: apply view settings (camera alignment, environment, projection).
   addRuntimeStageLog('[SceneryViewer] Phase 5 apply document view settings');
   applyDocumentViewSettings(payload.document, camera);
   markInstancedCullingDirty();
@@ -10438,7 +10354,7 @@ function applyInput(params: {
     handlePreviewPayload(previewPayload.value);
   } else {
     teardownRenderer();
-    applySkyboxSettings(null, false);
+    resetRemovedSkyState();
   }
 }
 

@@ -362,7 +362,6 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
     }
   })
 
-  collectAssetIdsFromUnknown(scene.skybox, bucket)
   collectAssetIdsFromUnknown(sanitizeEnvironmentAssetReferences(scene.environment), bucket)
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)
   collectPlanningAssetDependencies(scene.planningData, bucket)

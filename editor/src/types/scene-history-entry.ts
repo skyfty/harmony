@@ -34,7 +34,7 @@ export type SceneHistoryNodeStructureOp =
     }
 
 // New history model: content-only undo/redo entries.
-// Explicitly excludes: selection, camera, viewport, panels, assets, planning, environment/skybox/shadows.
+// Explicitly excludes: selection, camera, viewport, panels, assets, planning, environment/shadows.
 export type SceneHistoryEntry =
   | {
       kind: 'content-snapshot'

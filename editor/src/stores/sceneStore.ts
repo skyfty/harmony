@@ -99,7 +99,6 @@ import type {
   AssetManifestDirectory,
   ClipboardEntry,
   SceneMaterialTextureSlot,
-  SceneSkyboxSettings,
   CameraControlMode,
   CameraProjection,
   SceneResourceSummary,
@@ -148,14 +147,6 @@ import {
 import { createBehaviorSequenceId } from '@schema/behaviors/definitions'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 
-import {
-  CUSTOM_SKYBOX_PRESET_ID,
-  DEFAULT_SKYBOX_SETTINGS,
-  cloneSkyboxSettings,
-  normalizeSkyboxSettings,
-  resolveSkyboxPreset,
-} from '@/stores/skyboxPresets'
-import { cloudSettingsEqual } from '@schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
@@ -2932,7 +2923,6 @@ function normalizeProjectPanelTreeSize(value: unknown): number {
   return clamped
 }
 
-const defaultSkyboxSettings = cloneSkyboxSettings(DEFAULT_SKYBOX_SETTINGS)
 const defaultShadowsEnabled = true
 
 const defaultViewportSettings: SceneViewportSettings = {
@@ -2988,37 +2978,12 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
   }
 }
 
-function cloneSceneSkybox(settings?: Partial<SceneSkyboxSettings> | SceneSkyboxSettings | null): SceneSkyboxSettings {
-  if (!settings) {
-    return cloneSkyboxSettings(defaultSkyboxSettings)
-  }
-  return normalizeSkyboxSettings(settings)
-}
-
 function normalizeShadowsEnabledInput(value: unknown): boolean {
   return typeof value === 'boolean' ? value : defaultShadowsEnabled
 }
 
-function resolveDocumentSkybox(document: { skybox?: Partial<SceneSkyboxSettings> | SceneSkyboxSettings | null }): SceneSkyboxSettings {
-  return cloneSceneSkybox(document.skybox ?? null)
-}
-
 function resolveDocumentShadowsEnabled(document: { shadowsEnabled?: boolean | null }): boolean {
   return normalizeShadowsEnabledInput(document.shadowsEnabled)
-}
-
-function skyboxSettingsEqual(a: SceneSkyboxSettings, b: SceneSkyboxSettings): boolean {
-  return (
-    a.presetId === b.presetId &&
-    a.exposure === b.exposure &&
-    a.turbidity === b.turbidity &&
-    a.rayleigh === b.rayleigh &&
-    a.mieCoefficient === b.mieCoefficient &&
-    a.mieDirectionalG === b.mieDirectionalG &&
-    a.elevation === b.elevation &&
-    a.azimuth === b.azimuth &&
-    cloudSettingsEqual(a.clouds ?? null, b.clouds ?? null)
-  )
 }
 
 function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSettings): boolean {
@@ -5175,7 +5140,6 @@ export async function cloneSceneDocumentForExport(
     planningData: scene.planningData,
     materials: scene.materials,
     viewportSettings: scene.viewportSettings,
-    skybox: scene.skybox,
     shadowsEnabled: scene.shadowsEnabled,
     panelVisibility: scene.panelVisibility,
     panelPlacement: scene.panelPlacement,
@@ -6537,7 +6501,6 @@ function createSceneDocument(
     resourceSummary?: SceneResourceSummary
     planningData?: PlanningSceneData | null
     viewportSettings?: Partial<SceneViewportSettings>
-    skybox?: Partial<SceneSkyboxSettings>
     shadowsEnabled?: boolean
     panelVisibility?: Partial<PanelVisibilityState>
     panelPlacement?: Partial<PanelPlacementState>
@@ -6581,7 +6544,6 @@ function createSceneDocument(
   if (options.resourceSummary) {
     resourceSummary = options.resourceSummary
   }
-  const skybox = cloneSceneSkybox(options.skybox ?? null)
   const shadowsEnabled = normalizeShadowsEnabledInput(options.shadowsEnabled)
   const viewportSettings = cloneViewportSettings(options.viewportSettings)
   const panelVisibility = normalizePanelVisibilityState(options.panelVisibility)
@@ -6595,8 +6557,7 @@ function createSceneDocument(
     materials,
     camera,
     viewportSettings,
-  skybox,
-  shadowsEnabled,
+    shadowsEnabled,
     environment: environmentSettings,
     groundSettings,
     panelVisibility,
@@ -6665,7 +6626,6 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     materials: cloneSceneMaterials(store.materials),
     camera: cloneCameraState(store.camera),
     viewportSettings: cloneViewportSettings(store.viewportSettings),
-    skybox: cloneSkyboxSettings(store.skybox),
     shadowsEnabled: normalizeShadowsEnabledInput(store.shadowsEnabled),
     environment,
     groundSettings: effectiveGroundSettings,
@@ -6784,7 +6744,6 @@ function createInitialSceneState(): SceneState {
     selectedAssetId: null,
     camera: cloneCameraState(defaultCameraState),
     viewportSettings,
-    skybox: cloneSkyboxSettings(defaultSkyboxSettings),
     shadowsEnabled: normalizeShadowsEnabledInput(defaultShadowsEnabled),
     environment: initialEnvironment,
     groundSettings: cloneGroundSettings(undefined),
@@ -6793,7 +6752,6 @@ function createInitialSceneState(): SceneState {
     panelPlacement: { ...defaultPanelPlacement },
     projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
     resourceProviderId: 'builtin',
-    cloudPreviewEnabled: false,
     prefabAssetDownloadProgress: {},
     cameraFocusNodeId: null,
     cameraFocusRequestId: 0,
@@ -6841,7 +6799,6 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.selectedAssetId = null
   store.camera = cloneCameraState(initialState.camera)
   store.viewportSettings = cloneViewportSettings(initialState.viewportSettings)
-  store.skybox = cloneSkyboxSettings(initialState.skybox)
   store.shadowsEnabled = normalizeShadowsEnabledInput(initialState.shadowsEnabled)
   store.groundSettings = cloneGroundSettings(initialState.groundSettings)
   store.planningData = null
@@ -6849,7 +6806,6 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.panelPlacement = { ...initialState.panelPlacement }
   store.projectPanelTreeSize = initialState.projectPanelTreeSize
   store.resourceProviderId = initialState.resourceProviderId
-  store.cloudPreviewEnabled = false
   store.prefabAssetDownloadProgress = {}
   store.cameraFocusNodeId = null
   store.cameraFocusRequestId = 0
@@ -7750,7 +7706,6 @@ export const useSceneStore = defineStore('scene', {
       this.setSelection([])
       this.camera = cloneCameraState(scene.camera)
       this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
-      this.skybox = resolveDocumentSkybox(scene)
       this.shadowsEnabled = resolveDocumentShadowsEnabled(scene)
       this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
@@ -7912,7 +7867,7 @@ export const useSceneStore = defineStore('scene', {
         this.nodes.forEach((node) => releaseRuntimeTree(node))
 
         applyHistoryEntry(this, entry)
-        // Keep excluded state (environment/skybox/shadows/etc.) out of undo.
+        // Keep excluded state (environment/shadows/etc.) out of undo.
         this.nodes = ensureEnvironmentNode(
           ensureGroundNode(this.nodes, this.groundSettings),
           this.environment,
@@ -11216,39 +11171,6 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.setViewportSettings({ cameraControlMode: mode })
-    },
-    setSkyboxSettings(partial: Partial<SceneSkyboxSettings>, options: { markCustom?: boolean } = {}) {
-      const current = cloneSkyboxSettings(this.skybox)
-      const next = normalizeSkyboxSettings({ ...current, ...partial })
-      if (options.markCustom && !partial.presetId) {
-        next.presetId = CUSTOM_SKYBOX_PRESET_ID
-      }
-      if (skyboxSettingsEqual(this.skybox, next)) {
-        return
-      }
-      this.skybox = next
-      commitSceneSnapshot(this, { updateNodes: false })
-    },
-    applySkyboxPreset(presetId: string) {
-      const preset = resolveSkyboxPreset(presetId)
-      if (!preset) {
-        return
-      }
-      const next = normalizeSkyboxSettings({
-        presetId,
-        ...preset.settings,
-      })
-      if (skyboxSettingsEqual(this.skybox, next)) {
-        return
-      }
-      this.skybox = next
-      commitSceneSnapshot(this, { updateNodes: false })
-    },
-    setCloudPreviewEnabled(enabled: boolean) {
-      if (this.cloudPreviewEnabled === enabled) {
-        return
-      }
-      this.cloudPreviewEnabled = enabled
     },
     setPanelVisibility(panel: EditorPanel, visible: boolean) {
       if (this.panelVisibility[panel] === visible) {
@@ -15972,7 +15894,6 @@ export const useSceneStore = defineStore('scene', {
         projectId,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
-        skybox: this.skybox,
         shadowsEnabled: this.shadowsEnabled,
         nodes: baseNodes,
         materials: this.materials,
@@ -16342,7 +16263,6 @@ export const useSceneStore = defineStore('scene', {
       'resourceProviderId',
       'assetCatalog',
       'groundSettings',
-      'skybox',
       'shadowsEnabled',
       'environment',
       'workspaceId',
