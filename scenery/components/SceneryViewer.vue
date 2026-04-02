@@ -138,7 +138,28 @@
           class="viewer-overlay__flash"
           :class="{ 'is-active': sceneSwitchFlashActive }"
         ></view>
+        <view v-if="overlayCardActive" class="viewer-overlay__backdrop" aria-hidden="true">
+          <view class="viewer-overlay__aurora viewer-overlay__aurora--cyan"></view>
+          <view class="viewer-overlay__aurora viewer-overlay__aurora--amber"></view>
+          <view class="viewer-overlay__grid"></view>
+          <view class="viewer-overlay__scanline"></view>
+        </view>
         <view v-if="overlayCardActive" class="viewer-overlay__content viewer-overlay__card">
+          <view class="viewer-loader" aria-hidden="true">
+            <view class="viewer-loader__halo viewer-loader__halo--outer"></view>
+            <view class="viewer-loader__halo viewer-loader__halo--mid"></view>
+            <view class="viewer-loader__ring viewer-loader__ring--a"></view>
+            <view class="viewer-loader__ring viewer-loader__ring--b"></view>
+            <view class="viewer-loader__ring viewer-loader__ring--c"></view>
+            <view class="viewer-loader__core">
+              <view class="viewer-loader__core-pulse"></view>
+              <view class="viewer-loader__core-dot"></view>
+            </view>
+            <view class="viewer-loader__particle viewer-loader__particle--1"></view>
+            <view class="viewer-loader__particle viewer-loader__particle--2"></view>
+            <view class="viewer-loader__particle viewer-loader__particle--3"></view>
+            <view class="viewer-loader__particle viewer-loader__particle--4"></view>
+          </view>
           <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
           <view class="viewer-progress">
             <view
@@ -1353,6 +1374,12 @@ let hasRenderedSceneOnce = false;
 
 let initializeToken = 0;
 let pendingRestartAfterCurrentInit = false;
+const renderedFrameCountByToken = new Map<number, number>();
+const pendingRenderedFrameWaiters = new Map<number, Array<{
+  minFrames: number;
+  resolve: () => void;
+  timeout: ReturnType<typeof setTimeout>;
+}>>();
 
 let sceneSwitchShowTimer: ReturnType<typeof setTimeout> | null = null;
 let sceneSwitchHideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1450,6 +1477,91 @@ function endSceneSwitchTransition(token: number): void {
       sceneSwitchFlashActive.value = false;
     }, SCENE_SWITCH_OVERLAY_FADE_OUT_MS);
   }, delay);
+}
+
+function countSceneNodes(nodes: SceneNode[] | undefined | null): number {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return 0;
+  }
+  let count = 0;
+  const stack = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    count += 1;
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return count;
+}
+
+function resolveOverlayDismissFrameCount(document: SceneJsonExportDocument): number {
+  const nodeCount = countSceneNodes(document.nodes);
+  if (nodeCount >= 2000) {
+    return 6;
+  }
+  if (nodeCount >= 1000) {
+    return 5;
+  }
+  if (nodeCount >= 300) {
+    return 4;
+  }
+  if (nodeCount >= 80) {
+    return 3;
+  }
+  return 2;
+}
+
+function notifyRenderedFrame(token: number): void {
+  const nextCount = (renderedFrameCountByToken.get(token) ?? 0) + 1;
+  renderedFrameCountByToken.set(token, nextCount);
+
+  const waiters = pendingRenderedFrameWaiters.get(token);
+  if (!waiters?.length) {
+    return;
+  }
+
+  const remaining: typeof waiters = [];
+  waiters.forEach((waiter) => {
+    if (nextCount >= waiter.minFrames) {
+      clearTimeout(waiter.timeout);
+      waiter.resolve();
+      return;
+    }
+    remaining.push(waiter);
+  });
+
+  if (remaining.length) {
+    pendingRenderedFrameWaiters.set(token, remaining);
+  } else {
+    pendingRenderedFrameWaiters.delete(token);
+  }
+}
+
+function waitForRenderedFrames(token: number, minFrames: number, timeoutMs = 4000): Promise<void> {
+  if ((renderedFrameCountByToken.get(token) ?? 0) >= minFrames) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      const waiters = pendingRenderedFrameWaiters.get(token) ?? [];
+      const nextWaiters = waiters.filter((waiter) => waiter.timeout !== timeout);
+      if (nextWaiters.length) {
+        pendingRenderedFrameWaiters.set(token, nextWaiters);
+      } else {
+        pendingRenderedFrameWaiters.delete(token);
+      }
+      resolve();
+    }, timeoutMs);
+
+    const waiters = pendingRenderedFrameWaiters.get(token) ?? [];
+    waiters.push({ minFrames, resolve, timeout });
+    pendingRenderedFrameWaiters.set(token, waiters);
+  });
 }
 
 const overlayTitle = computed(() => {
@@ -9976,12 +10088,11 @@ function applyWeChatShadowPolicy(root: THREE.Object3D): void {
 }
 
 /**
- * Mount the graph into the scene and sync all subsystems that depend on the object tree.
+ * Mount the graph and perform only the work required for the first visible frame.
  */
-function mountGraphAndSyncSubsystems(
+function mountGraphForFirstFrame(
   payload: ScenePreviewPayload,
   root: THREE.Object3D,
-  resourceCache: ResourceCache | null,
   canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
 ): void {
@@ -9997,8 +10108,55 @@ function mountGraphAndSyncSubsystems(
   refreshAnimationControllers(root);
   ensureBehaviorTapHandler(canvas, camera);
   initializeLazyPlaceholders(payload.document);
+}
+
+function syncSceneSubsystemsAfterFirstFrame(
+  payload: ScenePreviewPayload,
+  resourceCache: ResourceCache | null,
+): void {
   syncPhysicsBodiesForDocument(payload.document);
-  syncTerrainScatterInstances(payload.document, resourceCache);
+  void syncTerrainScatterInstances(payload.document, resourceCache);
+}
+
+function waitForNextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    const schedule = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (callback: () => void) => setTimeout(callback, 16);
+    schedule(() => resolve());
+  });
+}
+
+async function continueSceneInitializationAfterFirstFrame(
+  payload: ScenePreviewPayload,
+  root: THREE.Object3D,
+  resourceCache: ResourceCache | null,
+  token: number,
+): Promise<void> {
+  await waitForNextAnimationFrame();
+  if (token !== initializeToken || sceneGraphRoot !== root) {
+    return;
+  }
+
+  addRuntimeStageLog('[SceneryViewer] Deferred Phase 4 sync subsystems');
+  syncSceneSubsystemsAfterFirstFrame(payload, resourceCache);
+
+  await waitForNextAnimationFrame();
+  if (token !== initializeToken || sceneGraphRoot !== root) {
+    return;
+  }
+
+  addRuntimeStageLog('[SceneryViewer] Deferred Phase 3 prepare instancing');
+  const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(root);
+  await prepareInstancedNodesIfPossible(root, payload, resourceCache, instancingSkipNodeIds);
+
+  if (token !== initializeToken || sceneGraphRoot !== root) {
+    return;
+  }
+
+  registerSceneSubtree(root);
+  refreshAnimationControllers(root);
+  markInstancedCullingDirty();
 }
 
 /** Apply camera alignment and environment settings for the current document. */
@@ -10020,6 +10178,20 @@ function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: TH
   sceneCsmShadowRuntime?.updateFrustums();
 }
 
+function renderSingleSceneFrame(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  token: number,
+): void {
+  sceneCsmShadowRuntime?.update();
+  renderer.render(scene, camera);
+  notifyRenderedFrame(token);
+  if (debugEnabled.value) {
+    syncRendererDebug(renderer);
+  }
+}
+
 /**
  * Start the render loop (per-frame updates + rendering). Uses Vue effect scope so it can be stopped.
  */
@@ -10029,6 +10201,7 @@ function startRenderLoop(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
+  token: number,
 ): void {
   if (!renderScope) {
     renderScope = effectScope();
@@ -10154,6 +10327,7 @@ function startRenderLoop(
         }
         sceneCsmShadowRuntime?.update();
         renderer.render(scene, camera);
+        notifyRenderedFrame(token);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {
           syncRendererDebug(renderer);
@@ -10300,19 +10474,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     warnings.value = graph.warnings;
   }
 
-  // Phase 3: instancing preparation (skip lazy placeholders).
-  addRuntimeStageLog('[SceneryViewer] Phase 3 prepare instancing');
-  const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
-  await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
-
-  if (token !== initializeToken) {
-    disposeObject(graph.root);
-    return;
-  }
-
-  // Phase 4: mount graph and sync subsystems that depend on it.
+  // Phase 4: mount the graph and only do the work required for a first visible frame.
   addRuntimeStageLog('[SceneryViewer] Phase 4 mount scene graph');
-  mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
+  mountGraphForFirstFrame(payload, graph.root, canvas, camera);
 
   // Phase 5: apply view settings (camera alignment, environment, projection).
   addRuntimeStageLog('[SceneryViewer] Phase 5 apply document view settings');
@@ -10321,7 +10485,16 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 6: start the render loop.
   addRuntimeStageLog('[SceneryViewer] Phase 6 start render loop');
-  startRenderLoop(result, renderer, scene, camera, controls);
+  renderSingleSceneFrame(renderer, scene, camera, token);
+  startRenderLoop(result, renderer, scene, camera, controls, token);
+  await waitForRenderedFrames(token, resolveOverlayDismissFrameCount(payload.document));
+
+  await waitForNextAnimationFrame();
+  if (token !== initializeToken || sceneGraphRoot !== graph.root) {
+    return;
+  }
+
+  void continueSceneInitializationAfterFirstFrame(payload, graph.root, resourceCache, token);
 }
 
 const handleResize: WindowResizeCallback = (_result) => {
@@ -10645,6 +10818,7 @@ onUnmounted(() => {
   position: relative;
   flex: 1;
   background-color: #e9eef5;
+  isolation: isolate;
 }
 
 .viewer-debug-overlay {
@@ -10793,6 +10967,8 @@ onUnmounted(() => {
 }
 
 .viewer-canvas {
+  position: relative;
+  z-index: 0;
   width: 100%;
   height: 100%;
 }
@@ -10812,6 +10988,66 @@ onUnmounted(() => {
   font-size: 14px;
   text-align: center;
   padding: 12px;
+  z-index: 1600;
+}
+
+.viewer-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.viewer-overlay__aurora {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(16px);
+  opacity: 0.72;
+  mix-blend-mode: screen;
+  animation: viewer-overlay-aurora 9s ease-in-out infinite;
+}
+
+.viewer-overlay__aurora--cyan {
+  top: 8%;
+  left: -12%;
+  width: 56%;
+  height: 34%;
+  background: radial-gradient(circle at 30% 50%, rgba(96, 245, 255, 0.82) 0%, rgba(96, 245, 255, 0.18) 38%, rgba(96, 245, 255, 0) 78%);
+}
+
+.viewer-overlay__aurora--amber {
+  right: -10%;
+  bottom: 4%;
+  width: 52%;
+  height: 30%;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 181, 77, 0.78) 0%, rgba(255, 113, 77, 0.18) 40%, rgba(255, 181, 77, 0) 76%);
+  animation-duration: 11s;
+  animation-direction: reverse;
+}
+
+.viewer-overlay__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(circle at 50% 42%, rgba(0, 0, 0, 0.86) 0%, rgba(0, 0, 0, 0.66) 34%, transparent 82%);
+  opacity: 0.34;
+  transform: perspective(700px) rotateX(70deg) translateY(24%);
+  transform-origin: center top;
+}
+
+.viewer-overlay__scanline {
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  top: -16%;
+  height: 28%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(112, 225, 255, 0.06) 42%, rgba(112, 225, 255, 0.24) 50%, rgba(112, 225, 255, 0.06) 58%, rgba(255, 255, 255, 0) 100%);
+  filter: blur(2px);
+  opacity: 0.82;
+  animation: viewer-overlay-scanline 3.8s linear infinite;
 }
 
 .viewer-overlay__flash {
@@ -10837,16 +11073,152 @@ onUnmounted(() => {
   gap: 12px;
   width: 80%;
   max-width: 320px;
+  z-index: 1;
 }
 
 .viewer-overlay__card {
+  position: relative;
+  overflow: hidden;
   width: 100%;
-  background: rgba(20, 22, 34, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(15, 20, 36, 0.9) 0%, rgba(7, 11, 22, 0.9) 100%);
+  border: 1px solid rgba(151, 216, 255, 0.18);
+  border-radius: 24px;
   padding: 24px 22px;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(14px);
+}
+
+.viewer-overlay__card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at top, rgba(98, 223, 255, 0.16), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 34%, transparent 66%, rgba(255, 196, 124, 0.08));
+  pointer-events: none;
+}
+
+.viewer-loader {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  margin-bottom: 8px;
+}
+
+.viewer-loader__halo,
+.viewer-loader__ring,
+.viewer-loader__core,
+.viewer-loader__particle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.viewer-loader__halo {
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(111, 233, 255, 0.22) 0%, rgba(111, 233, 255, 0.08) 36%, rgba(111, 233, 255, 0) 72%);
+  animation: viewer-loader-breathe 2.8s ease-in-out infinite;
+}
+
+.viewer-loader__halo--outer {
+  width: 160px;
+  height: 160px;
+}
+
+.viewer-loader__halo--mid {
+  width: 118px;
+  height: 118px;
+  animation-duration: 2.2s;
+  animation-direction: reverse;
+}
+
+.viewer-loader__ring {
+  border-radius: 999px;
+  border: 1px solid rgba(143, 224, 255, 0.28);
+}
+
+.viewer-loader__ring--a {
+  width: 132px;
+  height: 132px;
+  border-top-color: rgba(255, 198, 109, 0.92);
+  border-right-color: rgba(94, 214, 255, 0.12);
+  border-bottom-color: rgba(94, 214, 255, 0.92);
+  border-left-color: rgba(94, 214, 255, 0.12);
+  animation: viewer-loader-spin 2.8s linear infinite;
+}
+
+.viewer-loader__ring--b {
+  width: 102px;
+  height: 102px;
+  border-top-color: rgba(94, 214, 255, 0.14);
+  border-right-color: rgba(255, 255, 255, 0.82);
+  border-bottom-color: rgba(94, 214, 255, 0.14);
+  border-left-color: rgba(255, 176, 96, 0.82);
+  animation: viewer-loader-spin-reverse 2.1s linear infinite;
+}
+
+.viewer-loader__ring--c {
+  width: 74px;
+  height: 74px;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 18px rgba(82, 215, 255, 0.16);
+  animation: viewer-loader-tilt 2.6s ease-in-out infinite;
+}
+
+.viewer-loader__core {
+  width: 44px;
+  height: 44px;
+}
+
+.viewer-loader__core-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.96) 0%, rgba(103, 231, 255, 0.96) 26%, rgba(23, 151, 255, 0.92) 58%, rgba(9, 34, 92, 0.66) 100%);
+  box-shadow: 0 0 24px rgba(82, 215, 255, 0.42), 0 0 50px rgba(43, 140, 255, 0.2);
+  animation: viewer-loader-core 1.6s ease-in-out infinite;
+}
+
+.viewer-loader__core-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.75);
+}
+
+.viewer-loader__particle {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(90, 221, 255, 0.7));
+  box-shadow: 0 0 12px rgba(93, 220, 255, 0.55);
+}
+
+.viewer-loader__particle--1 {
+  animation: viewer-loader-orbit-a 2.4s linear infinite;
+}
+
+.viewer-loader__particle--2 {
+  animation: viewer-loader-orbit-a 2.4s linear infinite;
+  animation-delay: -0.6s;
+}
+
+.viewer-loader__particle--3 {
+  animation: viewer-loader-orbit-b 3.1s linear infinite;
+}
+
+.viewer-loader__particle--4 {
+  animation: viewer-loader-orbit-b 3.1s linear infinite;
+  animation-delay: -1.2s;
 }
 
 .viewer-overlay__title {
@@ -10941,6 +11313,111 @@ onUnmounted(() => {
   }
 }
 
+@keyframes viewer-overlay-aurora {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(4%, -3%, 0) scale(1.08);
+  }
+}
+
+@keyframes viewer-overlay-scanline {
+  0% {
+    transform: translateY(-18%);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.82;
+  }
+  85% {
+    opacity: 0.82;
+  }
+  100% {
+    transform: translateY(420%);
+    opacity: 0;
+  }
+}
+
+@keyframes viewer-loader-breathe {
+  0%,
+  100% {
+    opacity: 0.52;
+    transform: translate(-50%, -50%) scale(0.94);
+  }
+  50% {
+    opacity: 0.92;
+    transform: translate(-50%, -50%) scale(1.04);
+  }
+}
+
+@keyframes viewer-loader-spin {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@keyframes viewer-loader-spin-reverse {
+  from {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+}
+
+@keyframes viewer-loader-tilt {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) rotate(0deg) scale(1);
+    opacity: 0.62;
+  }
+  50% {
+    transform: translate(-50%, -50%) rotate(18deg) scale(1.06);
+    opacity: 1;
+  }
+}
+
+@keyframes viewer-loader-core {
+  0%,
+  100% {
+    transform: scale(0.9);
+    filter: saturate(0.92);
+  }
+  50% {
+    transform: scale(1.08);
+    filter: saturate(1.16);
+  }
+}
+
+@keyframes viewer-loader-orbit-a {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg) translateX(64px) scale(0.8);
+  }
+  50% {
+    transform: translate(-50%, -50%) rotate(180deg) translateX(64px) scale(1.18);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg) translateX(64px) scale(0.8);
+  }
+}
+
+@keyframes viewer-loader-orbit-b {
+  from {
+    transform: translate(-50%, -50%) rotate(360deg) translateX(48px) scale(0.72);
+  }
+  50% {
+    transform: translate(-50%, -50%) rotate(180deg) translateX(48px) scale(1.08);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(0deg) translateX(48px) scale(0.72);
+  }
+}
+
 .viewer-progress__stats {
   display: flex;
   justify-content: space-between;
@@ -10968,6 +11445,47 @@ onUnmounted(() => {
 
 .viewer-overlay.error {
   background-color: rgba(208, 0, 0, 0.6);
+}
+
+@media (max-width: 480px) {
+  .viewer-overlay {
+    padding: 16px;
+  }
+
+  .viewer-overlay__card {
+    padding: 22px 18px;
+    border-radius: 22px;
+  }
+
+  .viewer-loader {
+    width: 132px;
+    height: 132px;
+  }
+
+  .viewer-loader__halo--outer {
+    width: 132px;
+    height: 132px;
+  }
+
+  .viewer-loader__halo--mid {
+    width: 96px;
+    height: 96px;
+  }
+
+  .viewer-loader__ring--a {
+    width: 110px;
+    height: 110px;
+  }
+
+  .viewer-loader__ring--b {
+    width: 84px;
+    height: 84px;
+  }
+
+  .viewer-loader__ring--c {
+    width: 60px;
+    height: 60px;
+  }
 }
 
 .viewer-footer {
