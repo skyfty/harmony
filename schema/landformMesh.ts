@@ -15,12 +15,89 @@ const LANDFORM_CONTENT_GROUP = '__LandformContent'
 const LANDFORM_MESH_NAME = '__LandformSurface'
 const LANDFORM_FEATHER_PATCHED_FLAG = '__landformFeatherPatched'
 const LANDFORM_EDGE_ALPHA_FLOOR = 0.12
+const LANDFORM_FEATHER_SHADER_HOOK_INSTALLED = '__landformFeatherShaderHookInstalled'
+const LANDFORM_FEATHER_ORIGINAL_ON_BEFORE_COMPILE = '__landformFeatherOriginalOnBeforeCompile'
+const LANDFORM_FEATHER_ORIGINAL_PROGRAM_CACHE_KEY = '__landformFeatherOriginalProgramCacheKey'
 
 type LandformGeometryData = {
   positions: Float32Array
   indices: Uint16Array | Uint32Array
   uvs: Float32Array
   feather: Float32Array
+}
+
+function enforceLandformFeatherState(material: THREE.MeshStandardMaterial): boolean {
+  let changed = false
+
+  if (!material.transparent) {
+    material.transparent = true
+    changed = true
+  }
+  if (material.depthWrite) {
+    material.depthWrite = false
+    changed = true
+  }
+  if (!material.polygonOffset) {
+    material.polygonOffset = true
+    changed = true
+  }
+  if (material.polygonOffsetFactor !== LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR) {
+    material.polygonOffsetFactor = LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR
+    changed = true
+  }
+  if (material.polygonOffsetUnits !== LANDFORM_SURFACE_POLYGON_OFFSET_UNITS) {
+    material.polygonOffsetUnits = LANDFORM_SURFACE_POLYGON_OFFSET_UNITS
+    changed = true
+  }
+
+  const minAlphaTest = 0.001
+  const normalizedAlphaTest = Math.max(material.alphaTest ?? 0, minAlphaTest)
+  if (material.alphaTest !== normalizedAlphaTest) {
+    material.alphaTest = normalizedAlphaTest
+    changed = true
+  }
+
+  if (changed) {
+    material.needsUpdate = true
+  }
+
+  return changed
+}
+
+function ensureLandformFeatherShaderHooks(material: THREE.MeshStandardMaterial): boolean {
+  const typed = material as THREE.MeshStandardMaterial & Record<string, unknown>
+  if (typed[LANDFORM_FEATHER_SHADER_HOOK_INSTALLED] === true) {
+    return false
+  }
+
+  const originalOnBeforeCompile = material.onBeforeCompile
+  const originalCustomProgramCacheKey = material.customProgramCacheKey
+  typed[LANDFORM_FEATHER_ORIGINAL_ON_BEFORE_COMPILE] = originalOnBeforeCompile
+  typed[LANDFORM_FEATHER_ORIGINAL_PROGRAM_CACHE_KEY] = originalCustomProgramCacheKey
+
+  material.onBeforeCompile = (shader, renderer) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float landformFeather;\nvarying float vLandformFeather;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLandformFeather = landformFeather;')
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vLandformFeather;')
+      .replace(
+        'vec4 diffuseColor = vec4( diffuse, opacity );',
+        `float landformFeatherAlpha = mix(${LANDFORM_EDGE_ALPHA_FLOOR.toFixed(2)}, 1.0, clamp(vLandformFeather, 0.0, 1.0));\nvec4 diffuseColor = vec4( diffuse, opacity * landformFeatherAlpha );`,
+      )
+    originalOnBeforeCompile?.(shader, renderer)
+  }
+
+  material.customProgramCacheKey = () => {
+    const originalKey = typeof originalCustomProgramCacheKey === 'function'
+      ? originalCustomProgramCacheKey.call(material)
+      : 'landform'
+    return `${originalKey}|landform-feather-v1`
+  }
+
+  typed[LANDFORM_FEATHER_SHADER_HOOK_INSTALLED] = true
+  material.needsUpdate = true
+  return true
 }
 
 function normalizeMaterialConfigId(value: unknown): string | null {
@@ -332,6 +409,9 @@ export function applyLandformFeatherMaterial(material: THREE.Material | null | u
     return material ?? null
   }
   if ((material as THREE.Material).userData?.[LANDFORM_FEATHER_PATCHED_FLAG] === true) {
+    const patched = material as THREE.MeshStandardMaterial
+    enforceLandformFeatherState(patched)
+    ensureLandformFeatherShaderHooks(patched)
     return material
   }
   const clone = (material as THREE.MeshStandardMaterial).clone()
@@ -339,27 +419,7 @@ export function applyLandformFeatherMaterial(material: THREE.Material | null | u
     ...(clone.userData ?? {}),
     [LANDFORM_FEATHER_PATCHED_FLAG]: true,
   }
-  clone.transparent = true
-  clone.depthWrite = false
-  clone.polygonOffset = true
-  clone.polygonOffsetFactor = LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR
-  clone.polygonOffsetUnits = LANDFORM_SURFACE_POLYGON_OFFSET_UNITS
-  clone.alphaTest = Math.max(clone.alphaTest ?? 0, 0.001)
-  const originalOnBeforeCompile = clone.onBeforeCompile
-  clone.onBeforeCompile = (shader, renderer) => {
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float landformFeather;\nvarying float vLandformFeather;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLandformFeather = landformFeather;')
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vLandformFeather;')
-      .replace(
-        'vec4 diffuseColor = vec4( diffuse, opacity );',
-        `float landformFeatherAlpha = mix(${LANDFORM_EDGE_ALPHA_FLOOR.toFixed(2)}, 1.0, clamp(vLandformFeather, 0.0, 1.0));\nvec4 diffuseColor = vec4( diffuse, opacity * landformFeatherAlpha );`,
-      )
-    originalOnBeforeCompile?.(shader, renderer)
-  }
-  const originalKey = clone.customProgramCacheKey?.bind(clone)
-  clone.customProgramCacheKey = () => `${originalKey ? originalKey() : 'landform'}|landform-feather-v1`
-  clone.needsUpdate = true
+  enforceLandformFeatherState(clone)
+  ensureLandformFeatherShaderHooks(clone)
   return clone
 }

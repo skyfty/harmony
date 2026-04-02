@@ -1282,6 +1282,14 @@ export function applyMaterialConfigToMaterial(
       typed.depthWrite = false;
       needsUpdate = true;
     }
+    if (!typed.polygonOffset) {
+      typed.polygonOffset = true;
+      needsUpdate = true;
+    }
+    if (typed.alphaTest < 0.001) {
+      typed.alphaTest = 0.001;
+      needsUpdate = true;
+    }
   }
 
   if (needsUpdate) {
