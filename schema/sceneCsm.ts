@@ -21,6 +21,7 @@ export type SceneCsmMode = 'uniform' | 'logarithmic' | 'practical' | 'custom'
 
 export type SceneCsmConfig = {
   enabled?: boolean
+  shadowEnabled?: boolean
   cascades?: number
   maxCascades?: number
   maxFar?: number
@@ -40,6 +41,7 @@ export type SceneCsmRuntimeProfile = 'desktop' | 'wechat-mini-program'
 
 export const DEFAULT_SCENE_CSM_CONFIG: Readonly<Required<SceneCsmConfig>> = Object.freeze({
   enabled: true,
+  shadowEnabled: true,
   cascades: DEFAULT_CSM_CASCADES,
   maxCascades: DEFAULT_CSM_MAX_CASCADES,
   maxFar: DEFAULT_CSM_MAX_FAR,
@@ -230,6 +232,7 @@ type CsmCompatibleMaterial = THREE.Material & {
 function resolveSceneCsmConfig(config?: SceneCsmConfig | null): Required<SceneCsmConfig> {
   return {
     enabled: config?.enabled ?? DEFAULT_SCENE_CSM_CONFIG.enabled,
+    shadowEnabled: config?.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
     cascades: Math.max(1, Math.round(config?.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades)),
     maxCascades: Math.max(
       1,
@@ -316,6 +319,8 @@ export class SceneCsmShadowRuntime {
 
   private active = true
 
+  private shadowEnabled = true
+
   private shadowsDirty = true
 
   private frustumsDirty = true
@@ -341,6 +346,7 @@ export class SceneCsmShadowRuntime {
     this.camera = camera
     this.config = resolveSceneCsmConfig(config)
     this.lightColor.set(this.config.lightColor)
+    this.shadowEnabled = this.config.shadowEnabled
     if (!this.config.enabled) {
       this.csm = null
       this.active = false
@@ -435,7 +441,7 @@ export class SceneCsmShadowRuntime {
       return
     }
     this.csm.lights.forEach((light) => {
-      light.castShadow = active
+      light.castShadow = active && this.shadowEnabled
       light.visible = active
       light.intensity = active ? this.csm!.lightIntensity : 0
     })
@@ -469,7 +475,7 @@ export class SceneCsmShadowRuntime {
     this.csm.lights.forEach((light) => {
       light.color.copy(this.csm!.lightColor)
       light.intensity = this.csm!.lightIntensity
-      light.castShadow = this.active
+      light.castShadow = this.active && this.shadowEnabled
       light.visible = this.active
     })
     if (directionChanged || intensityChanged || colorChanged) {
@@ -481,6 +487,11 @@ export class SceneCsmShadowRuntime {
 
   public update(): boolean {
     if (!this.csm || !this.active) {
+      return false
+    }
+    // If shadow is disabled, skip shadow map update but keep light active
+    if (!this.shadowEnabled) {
+      this.syncCameraStateSnapshot()
       return false
     }
     const projectionChanged = this.frustumsDirty || this.hasCameraProjectionChanged()

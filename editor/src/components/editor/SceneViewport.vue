@@ -1111,6 +1111,7 @@ function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): Environme
   const csm = settings.csm
   return {
     enabled: csm?.enabled ?? DEFAULT_SCENE_CSM_CONFIG.enabled,
+    shadowEnabled: csm?.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
     lightColor: csm?.lightColor ?? '#ffffff',
     lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
     sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
@@ -1127,6 +1128,7 @@ function resolveViewportSceneCsmConfig(settings: EnvironmentSettings): SceneCsmC
   return {
     ...VIEWPORT_SCENE_CSM_BASE_CONFIG,
     enabled: csm.enabled,
+    shadowEnabled: csm.shadowEnabled,
     lightColor: csm.lightColor,
     lightIntensity: csm.lightIntensity,
     cascades: csm.cascades,
@@ -1139,6 +1141,7 @@ function resolveViewportSceneCsmConfig(settings: EnvironmentSettings): SceneCsmC
 function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
   return JSON.stringify({
     enabled: config.enabled ?? true,
+    shadowEnabled: config.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
     cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
     maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
     shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
@@ -6918,6 +6921,10 @@ function handleCsmMenuOpen(value: boolean): void {
 
 function handleCsmEnabledUpdate(value: boolean): void {
   patchEnvironmentCsmSettings({ enabled: Boolean(value) })
+}
+
+function handleCsmShadowEnabledUpdate(value: boolean): void {
+  patchEnvironmentCsmSettings({ shadowEnabled: Boolean(value) })
 }
 
 function handleCsmLightColorUpdate(value: string): void {
@@ -20269,6 +20276,7 @@ defineExpose<SceneViewportHandle>({
         :ground-scatter-density-percent="scatterDensityPercent"
         :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
         :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
+        :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
         :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
         :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
         :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
@@ -20301,6 +20309,7 @@ defineExpose<SceneViewportHandle>({
           @update:camera-reset-menu-open="handleCameraResetMenuOpen"
           @update:csm-menu-open="handleCsmMenuOpen"
           @update:csm-enabled="handleCsmEnabledUpdate"
+          @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
           @update:csm-light-color="handleCsmLightColorUpdate"
           @update:csm-light-intensity="handleCsmLightIntensityUpdate"
           @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"

@@ -42,6 +42,7 @@
             </v-toolbar>
             <CsmSunMenuContent
               :csm-enabled="csmEnabled"
+              :csm-shadow-enabled="csmShadowEnabled"
               :csm-light-color="csmLightColor"
               :csm-light-intensity="csmLightIntensity"
               :csm-sun-azimuth-deg="csmSunAzimuthDeg"
@@ -51,6 +52,7 @@
               :csm-shadow-map-size="csmShadowMapSize"
               :csm-shadow-bias="csmShadowBias"
               @update:csm-enabled="emit('update:csm-enabled', $event)"
+              @update:csm-shadow-enabled="emit('update:csm-shadow-enabled', $event)"
               @update:csm-light-color="emit('update:csm-light-color', $event)"
               @update:csm-light-intensity="emit('update:csm-light-intensity', $event)"
               @update:csm-sun-azimuth-deg="emit('update:csm-sun-azimuth-deg', $event)"
@@ -1441,6 +1443,7 @@ const props = withDefaults(
   groundScatterDensityPercent: number
   groundScatterProviderAssetId?: string | null
   csmEnabled: boolean
+  csmShadowEnabled: boolean
   csmLightColor: string
   csmLightIntensity: number
   csmSunAzimuthDeg: number
@@ -1478,6 +1481,7 @@ const emit = defineEmits<{
   (event: 'update:camera-reset-menu-open', value: boolean): void
   (event: 'update:csm-menu-open', value: boolean): void
   (event: 'update:csm-enabled', value: boolean): void
+  (event: 'update:csm-shadow-enabled', value: boolean): void
   (event: 'update:csm-light-color', value: string): void
   (event: 'update:csm-light-intensity', value: number): void
   (event: 'update:csm-sun-azimuth-deg', value: number): void
@@ -1581,6 +1585,7 @@ const {
   groundScatterDensityPercent,
   groundScatterProviderAssetId,
   csmEnabled,
+  csmShadowEnabled,
   csmLightColor,
   csmLightIntensity,
   csmSunAzimuthDeg,

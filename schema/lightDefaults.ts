@@ -1,6 +1,6 @@
 export const DEFAULT_COLOR = '#ffffff'
 export const DEFAULT_GROUND_COLOR = '#444444'
-export const DEFAULT_INTENSITY = 1
+export const DEFAULT_INTENSITY = 3
 export const DEFAULT_DISTANCE = 50
 export const DEFAULT_DECAY = 1
 export const DEFAULT_WIDTH = 10
@@ -40,7 +40,7 @@ export const DEFAULT_CSM_MAX_CASCADES = 4
 export const DEFAULT_CSM_MAX_FAR = 100
 export const DEFAULT_CSM_MODE = 'practical' as const
 export const DEFAULT_CSM_PRACTICAL_MODE_LAMBDA = 0.6
-export const DEFAULT_CSM_SHADOW_MAP_SIZE = 512
+export const DEFAULT_CSM_SHADOW_MAP_SIZE = 128
 export const DEFAULT_CSM_SHADOW_BIAS = -0.0000025
 export const DEFAULT_CSM_SHADOW_NORMAL_BIAS = 0.0005
 export const DEFAULT_CSM_LIGHT_MARGIN = 200

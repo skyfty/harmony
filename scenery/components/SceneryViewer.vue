@@ -1584,6 +1584,7 @@ function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): Environme
   const csm = settings.csm;
   return {
     enabled: csm?.enabled ?? SCENERY_SCENE_CSM_CONFIG.enabled,
+    shadowEnabled: csm?.shadowEnabled ?? SCENERY_SCENE_CSM_CONFIG.shadowEnabled,
     lightColor: csm?.lightColor ?? '#ffffff',
     lightIntensity: csm?.lightIntensity ?? SCENERY_SCENE_CSM_CONFIG.lightIntensity,
     sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
@@ -1603,6 +1604,7 @@ function resolveScenerySceneCsmConfig(): SceneCsmConfig {
   return {
     ...SCENERY_SCENE_CSM_CONFIG,
     enabled: csm.enabled,
+    shadowEnabled: csm.shadowEnabled,
     lightColor: csm.lightColor,
     lightIntensity: csm.lightIntensity,
     cascades: csm.cascades,
@@ -1615,6 +1617,7 @@ function resolveScenerySceneCsmConfig(): SceneCsmConfig {
 function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
   return JSON.stringify({
     enabled: config.enabled ?? true,
+    shadowEnabled: config.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
     cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
     maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
     shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
