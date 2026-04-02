@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EditorTool } from '@/types/editor-tool'
 import { TRANSFORM_TOOLS, type TransformToolDefinition } from '../../types/scene-transform-tools'
+import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import { computed } from 'vue'
 
@@ -8,15 +9,30 @@ const props = defineProps<{
   activeTool: EditorTool
 }>()
 
+const sceneStore = useSceneStore()
 const uiStore = useUiStore()
 const transformDisabled = computed(() => Boolean(uiStore.activeSelectionContext))
+const landformTransformLocked = computed(() => {
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  return selectedIds.some((id) => sceneStore.getNodeById(id)?.dynamicMesh?.type === 'Landform')
+})
 
 const emit = defineEmits<{
   (event: 'change-tool', tool: EditorTool): void
 }>()
 
+function isToolDisabled(tool: TransformToolDefinition) {
+  if (transformDisabled.value) {
+    return true
+  }
+  if (landformTransformLocked.value && (tool.value === 'rotate' || tool.value === 'scale')) {
+    return true
+  }
+  return false
+}
+
 function handleToolSelect(tool: TransformToolDefinition) {
-  if (transformDisabled.value) return
+  if (isToolDisabled(tool)) return
   emit('change-tool', tool.value)
 }
 
@@ -24,6 +40,9 @@ function toolTitle(tool: TransformToolDefinition): string {
   const base = `${tool.label} (${tool.key.replace('Key', '')})`
   if (tool.value === 'translate') {
     return `${base} — hold Shift to snap, hold V to temporarily select for placement snap`
+  }
+  if (landformTransformLocked.value && (tool.value === 'rotate' || tool.value === 'scale')) {
+    return `${base} — disabled for Landform selection`
   }
   return base
 }
@@ -37,12 +56,12 @@ function toolTitle(tool: TransformToolDefinition): string {
         :key="tool.value"
         :icon="tool.icon"
         :title="toolTitle(tool)"
-        :color="(!transformDisabled && props.activeTool === tool.value) ? 'primary' : undefined"
-        :variant="(!transformDisabled && props.activeTool === tool.value) ? 'flat' : 'text'"
+        :color="(!isToolDisabled(tool) && props.activeTool === tool.value) ? 'primary' : undefined"
+        :variant="(!isToolDisabled(tool) && props.activeTool === tool.value) ? 'flat' : 'text'"
         density="comfortable"
         class="tool-button"
         @click="handleToolSelect(tool)"
-        :disabled="transformDisabled"
+        :disabled="isToolDisabled(tool)"
       />
     </v-card>
   </div>

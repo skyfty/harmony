@@ -1902,11 +1902,35 @@ const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
 const selectedNodeIsLandform = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Landform')
 const selectedNodeIsWater = computed(() => isWaterSurfaceNode(sceneStore.selectedNode))
+const selectionContainsLandform = computed(() => {
+  const selectedIds = new Set<string>()
+  const primaryId = getPrimarySelectedNodeId()
+  if (primaryId) {
+    selectedIds.add(primaryId)
+  }
+  ;(Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []).forEach((id) => {
+    if (typeof id === 'string' && id.length > 0) {
+      selectedIds.add(id)
+    }
+  })
+  return Array.from(selectedIds).some((id) => resolveSceneNodeById(id)?.dynamicMesh?.type === 'Landform')
+})
 // Shift modifier in scatter-erase mode means "repair/restore".
 // - Walls: repair a segment (hammer)
 // - InstanceLayout: restore erased instances
 const scatterRepairModifierActive = computed(() => scatterEraseModeActive.value && scatterEraseRestoreModifierActive.value)
 const wallRepairModeActive = computed(() => scatterRepairModifierActive.value && selectedNodeIsWall.value)
+
+function isTransformToolBlockedByLandform(tool: EditorTool): boolean {
+  return selectionContainsLandform.value && (tool === 'rotate' || tool === 'scale')
+}
+
+function getSafeTransformTool(tool: EditorTool): EditorTool {
+  if (isTransformToolBlockedByLandform(tool)) {
+    return 'translate'
+  }
+  return tool
+}
 
 function getPrimarySelectedNodeId(): string | null {
   return sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -5739,6 +5763,35 @@ function buildLandformPreviewFromLocalPoints(
   return sceneStore.previewLandformSurfaceMeshNode({
     nodeId,
     localPoints: points.map(([x, z]) => [x, z] as [number, number]),
+  })
+}
+
+function previewLandformNodeDuringTranslate(nodeId: string): void {
+  const node = sceneStore.getNodeById(nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Landform') {
+    return
+  }
+  const points = cloneLandformFootprintPoints(node)
+  if (points.length < 3) {
+    return
+  }
+  buildLandformPreviewFromLocalPoints(nodeId, points)
+}
+
+function previewLandformNodesDuringTransform(updates: TransformUpdatePayload[], mode: string): void {
+  if (mode !== 'translate' || !updates.length) {
+    return
+  }
+
+  const previewIds = new Set<string>()
+  updates.forEach((update) => {
+    if (typeof update.id === 'string' && update.id.length > 0) {
+      previewIds.add(update.id)
+    }
+  })
+
+  previewIds.forEach((id) => {
+    previewLandformNodeDuringTranslate(id)
   })
 }
 
@@ -17955,6 +18008,8 @@ function handleTransformChange() {
     shouldSnapTranslate,
   })
 
+  previewLandformNodesDuringTransform(updates, mode)
+
   finalizeTransformChange({
     updates,
     isGroupTransform,
@@ -19468,6 +19523,7 @@ function updateSelectionPivotObject(primaryId: string | null, tool: EditorTool):
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
+  const effectiveTool = getSafeTransformTool(tool)
   const primaryId = nodeId ?? sceneStore.selectedNodeId ?? null
   const locked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const target = !locked && primaryId ? (objectMap.get(primaryId) ?? null) : null
@@ -19490,16 +19546,16 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
     transformControls.detach()
     return
   }
-  if (tool === 'select') {
+  if (effectiveTool === 'select') {
     transformControls.detach()
     return
   }
   // 根据当前工具选择合适的变换坐标系
-  applyTransformSpaceForSelection(tool, primaryId)
-  transformControls.setMode(tool)
+  applyTransformSpaceForSelection(effectiveTool, primaryId)
+  transformControls.setMode(effectiveTool)
 
   // Multi-select: attach to centroid pivot so the gizmo axis is centered.
-  const centroidWorld = updateSelectionPivotObject(primaryId, tool)
+  const centroidWorld = updateSelectionPivotObject(primaryId, effectiveTool)
   if (centroidWorld) {
     // Multi-select always uses world-space axis.
     transformControls.setSpace('world')
@@ -19511,9 +19567,9 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
 
   // DirectionalLight: edit using an editor-only pivot at the light target so the gizmo stays near the scene.
   const node = sceneStore.getNodeById(primaryId)
-  if (node?.light?.type === 'Directional' && (tool === 'translate' || tool === 'rotate')) {
-    syncDirectionalLightTargetPivotFromNode(primaryId, { orientForRotate: tool === 'rotate' })
-    transformControls.setSpace(tool === 'rotate' ? 'local' : 'world')
+  if (node?.light?.type === 'Directional' && (effectiveTool === 'translate' || effectiveTool === 'rotate')) {
+    syncDirectionalLightTargetPivotFromNode(primaryId, { orientForRotate: effectiveTool === 'rotate' })
+    transformControls.setSpace(effectiveTool === 'rotate' ? 'local' : 'world')
     transformControls.attach(directionalLightTargetPivotObject)
     // Keep highlight anchored to the actual node object.
     updateGridHighlightFromObject(target)
@@ -19529,17 +19585,19 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
 function updateToolMode(tool: EditorTool) {
   if (!transformControls) return
 
-  transformControls.enabled = tool !== 'select'
+  const effectiveTool = getSafeTransformTool(tool)
 
-  if (tool === 'select') {
+  transformControls.enabled = effectiveTool !== 'select'
+
+  if (effectiveTool === 'select') {
     transformControls.detach()
   } else {
-    applyTransformSpaceForSelection(tool, sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
-    transformControls.setMode(tool)
+    applyTransformSpaceForSelection(effectiveTool, sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
+    transformControls.setMode(effectiveTool)
   }
 
   if (props.selectedNodeId) {
-    attachSelection(props.selectedNodeId, tool)
+    attachSelection(props.selectedNodeId, effectiveTool)
   } else {
     updateGridHighlight(null)
   }
@@ -19648,6 +19706,10 @@ function handleViewportShortcut(event: KeyboardEvent) {
       default: {
         const tool = transformToolKeyMap.get(event.code)
         if (tool) {
+          if (isTransformToolBlockedByLandform(tool)) {
+            handled = true
+            break
+          }
           emit('changeTool', tool)
           handled = true
         }

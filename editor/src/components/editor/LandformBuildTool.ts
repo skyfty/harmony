@@ -51,6 +51,13 @@ type VertexSnapResolverOptions = {
 
 const PREVIEW_SIGNATURE_PRECISION = 1000
 const LANDFORM_LINE_PREVIEW_Y_OFFSET = 0.03
+const LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS = 1000 / 30
+
+function getNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+}
 
 function createLinePreviewGroup(points: THREE.Vector3[]): THREE.Group {
   const group = new THREE.Group()
@@ -204,6 +211,7 @@ export function createLandformBuildTool(options: {
   let previewSignature: string | null = null
   let lastPresetSignature = buildPreviewSignature()
   let lastRegularPolygonSides = getRegularPolygonSides()
+  let lastMeshPreviewFlushAt = Number.NEGATIVE_INFINITY
 
   const clearPreview = (targetSession: LandformPreviewSession | null): void => {
     if (targetSession?.previewGroup) {
@@ -249,6 +257,8 @@ export function createLandformBuildTool(options: {
       return
     }
 
+    lastMeshPreviewFlushAt = getNowMs()
+
     const build = options.sceneStore.buildLandformPreviewMesh({
       points: previewPoints.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
       reason: 'landform-preview',
@@ -281,12 +291,23 @@ export function createLandformBuildTool(options: {
       previewNeedsSync = true
     },
     flushIfNeeded: (scene: THREE.Scene | null, targetSession: LandformPreviewSession | null) => {
+      const now = getNowMs()
       const currentPresetSignature = buildPreviewSignature()
       const currentRegularPolygonSides = getRegularPolygonSides()
       if (currentPresetSignature !== lastPresetSignature || currentRegularPolygonSides !== lastRegularPolygonSides) {
         previewNeedsSync = true
       }
       if (!previewNeedsSync) {
+        return
+      }
+      const previewPointCount = targetSession ? buildPreviewVertices(targetSession).length : 0
+      const previewIsMesh = previewPointCount >= 3
+      const previewGroupMissing = !targetSession?.previewGroup || targetSession.previewGroup.userData?.isLandformLinePreview === true
+      if (
+        previewIsMesh
+        && !previewGroupMissing
+        && now - lastMeshPreviewFlushAt < LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS
+      ) {
         return
       }
       flushPreview(scene, targetSession)
@@ -298,6 +319,7 @@ export function createLandformBuildTool(options: {
       previewSignature = null
       lastPresetSignature = buildPreviewSignature()
       lastRegularPolygonSides = getRegularPolygonSides()
+      lastMeshPreviewFlushAt = Number.NEGATIVE_INFINITY
     },
     dispose: (targetSession: LandformPreviewSession | null) => {
       clearPreview(targetSession)
@@ -305,6 +327,7 @@ export function createLandformBuildTool(options: {
       previewSignature = null
       lastPresetSignature = buildPreviewSignature()
       lastRegularPolygonSides = getRegularPolygonSides()
+      lastMeshPreviewFlushAt = Number.NEGATIVE_INFINITY
     },
   }
 
