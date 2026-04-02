@@ -1,31 +1,63 @@
 <template>
   <div class="popup-menu-card__content csm-sun-menu__content">
-    <v-switch
-      :model-value="csmEnabled"
-      density="compact"
-      hide-details
-      color="primary"
-      label="Enable CSM"
-      @update:model-value="(value) => emit('update:csm-enabled', Boolean(value))"
-    />
-    <v-switch
-      :model-value="csmShadowEnabled"
-      density="compact"
-      hide-details
-      color="primary"
-      label="启用阴影"
-      @update:model-value="(value) => emit('update:csm-shadow-enabled', Boolean(value))"
-    />
-    <div class="csm-sun-grid">
-      <v-text-field
-        v-model="csmLightColorInput"
-        label="Light Color"
+    <div class="csm-switch-row">
+      <v-switch
+        :model-value="csmEnabled"
         density="compact"
-        variant="underlined"
         hide-details
-        @blur="commitCsmLightColorInput"
-        @keydown.enter.prevent="commitCsmLightColorInput"
+        color="primary"
+        label="Enable CSM"
+        @update:model-value="(value) => emit('update:csm-enabled', Boolean(value))"
       />
+      <v-switch
+        :model-value="csmShadowEnabled"
+        density="compact"
+        hide-details
+        color="primary"
+        label="启用阴影"
+        @update:model-value="(value) => emit('update:csm-shadow-enabled', Boolean(value))"
+      />
+    </div>
+    <div class="csm-sun-grid">
+      <div class="material-color">
+        <div class="color-input">
+          <v-text-field
+            v-model="csmLightColorInput"
+            label="Light Color"
+            density="compact"
+            variant="underlined"
+            hide-details
+            @blur="commitCsmLightColorInput"
+            @keydown.enter.prevent="commitCsmLightColorInput"
+          />
+          <v-menu
+            v-model="csmLightColorMenuOpen"
+            :close-on-content-click="false"
+            transition="scale-transition"
+            location="bottom start"
+          >
+            <template #activator="{ props: menuProps }">
+              <button
+                class="color-swatch"
+                type="button"
+                v-bind="menuProps"
+                :style="{ backgroundColor: csmLightColorInput }"
+              >
+                <span class="sr-only">Choose color</span>
+              </button>
+            </template>
+            <div class="color-picker">
+              <v-color-picker
+                :model-value="csmLightColorInput"
+                mode="hex"
+                :modes="['hex']"
+                hide-inputs
+                @update:model-value="handleCsmColorPickerInput"
+              />
+            </div>
+          </v-menu>
+        </div>
+      </div>
       <v-text-field
         v-model="csmLightIntensityInput"
         type="number"
@@ -165,6 +197,7 @@ const csmShadowMapSizeOptions: Array<{ value: number; label: string }> = [
 ]
 
 const csmLightColorInput = ref(props.csmLightColor)
+const csmLightColorMenuOpen = ref(false)
 const csmLightIntensityInput = ref(props.csmLightIntensity)
 const csmSunAzimuthDegInput = ref(props.csmSunAzimuthDeg)
 const csmSunElevationDegInput = ref(props.csmSunElevationDeg)
@@ -210,6 +243,14 @@ function commitCsmLightColorInput() {
   nextTick(() => {
     csmLightColorInput.value = props.csmLightColor
   })
+}
+
+function handleCsmColorPickerInput(value: string | null) {
+  if (typeof value !== 'string') {
+    return
+  }
+  csmLightColorInput.value = value
+  commitCsmLightColorInput()
 }
 
 function commitCsmLightIntensityInput() {
@@ -274,5 +315,57 @@ function commitCsmShadowBiasInput() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.csm-switch-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.csm-switch-row > * {
+  flex: 1;
+}
+
+.material-color {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.color-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  padding: 0;
+  display: inline-block;
+  background: transparent;
+}
+
+.color-swatch:focus-visible {
+  outline: 2px solid rgba(107, 152, 255, 0.8);
+  outline-offset: 2px;
+}
+
+.color-picker {
+  padding: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 </style>
