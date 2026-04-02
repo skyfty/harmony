@@ -14,6 +14,7 @@ import { errorHandler } from '@/middleware/errorHandler'
 import { responseEnvelope } from '@/middleware/responseEnvelope'
 import routes from '@/routes'
 import { createInitialAdminV2 } from '@/services/adminAuthService'
+import { ensureAppUserWechatIndexes } from '@/services/appUserIndexService'
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
@@ -32,6 +33,7 @@ function registerRoutes(app: HarmonyKoa): void {
 
 async function bootstrap(): Promise<void> {
   await connectDatabase()
+  await ensureAppUserWechatIndexes()
   await createInitialAdminV2()
   await ensureMiniProgramTestUserV2()
   await ensureEditorAuthBootstrap()

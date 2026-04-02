@@ -265,17 +265,17 @@ export async function miniLoginWithOpenId(input: {
   let user = await pickCanonicalWechatUser({ miniAppId, openId, unionId })
 
   if (!user) {
+    const createdAt = new Date()
     user = await AppUserModel.create({
       miniAppId,
       authProvider: 'wechat-mini-program',
       wxOpenId: openId,
-      wxUnionId: unionId,
+      ...(unionId ? { wxUnionId: unionId, wechatIdentitySyncedAt: createdAt } : {}),
       displayName: displayName ?? appConfig.miniAuth.defaultDisplayName,
       avatarUrl,
-      lastLoginAt: new Date(),
+      lastLoginAt: createdAt,
       lastLoginSource: 'mini-wechat-login',
-      wechatIdentitySyncedAt: new Date(),
-      wechatProfileSyncedAt: displayName || avatarUrl ? new Date() : undefined,
+      wechatProfileSyncedAt: displayName || avatarUrl ? createdAt : undefined,
       status: 'active',
     })
   } else {

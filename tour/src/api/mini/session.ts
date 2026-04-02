@@ -194,7 +194,8 @@ async function performMiniAuth(force = false): Promise<string> {
         const needsAvatar = !user.avatarUrl || !user.avatarUrl.trim()
         if (needsDisplay || needsAvatar) {
           try {
-            const result = await (await import('@/stores/miniAuthRecovery')).showRecoveryModal()
+            const { showRecoveryModal } = await import('@/stores/miniAuthRecovery')
+            const result = await showRecoveryModal()
             if (result && result.success) {
               const payload: Record<string, unknown> = {}
               if (result.displayName && result.displayName.trim()) payload.displayName = result.displayName.trim()
