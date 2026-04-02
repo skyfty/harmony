@@ -1,6 +1,6 @@
 export const DEFAULT_COLOR = '#ffffff'
 export const DEFAULT_GROUND_COLOR = '#444444'
-export const DEFAULT_INTENSITY = 1
+export const DEFAULT_INTENSITY = 3
 export const DEFAULT_DISTANCE = 50
 export const DEFAULT_DECAY = 1
 export const DEFAULT_WIDTH = 10
