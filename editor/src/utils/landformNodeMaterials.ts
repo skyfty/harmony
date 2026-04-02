@@ -13,7 +13,7 @@ function buildMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneMater
     color: '#ffffff',
     transparent: true,
     opacity: 1,
-    side: 'back',
+    side: 'double',
     wireframe: false,
     metalness: 0.00,
     roughness: 1.0,
@@ -50,7 +50,7 @@ export function createLandformNodeMaterials(options: { color?: string; surfaceNa
     roughness: 1.0,
     transparent: true,
     opacity: 1,
-    side: 'back',
+    side: 'double',
   })
   return [surface]
 }
