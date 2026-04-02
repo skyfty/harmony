@@ -326,7 +326,7 @@ function requiresGroundConformanceRefinement(
 
   return testPoints.some((point) => {
     const approximatedHeight = interpolateTriangleHeightAtPoint(point.x, point.z, sampledA, sampledB, sampledC)
-    if (!Number.isFinite(approximatedHeight)) {
+    if (approximatedHeight === null || !Number.isFinite(approximatedHeight)) {
       return false
     }
     const actualHeight = sampleGroundHeight(groundDefinition, point.x, point.z)

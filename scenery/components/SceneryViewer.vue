@@ -1675,7 +1675,6 @@ function applyRendererShadowSetting(): void {
   if (castShadows) {
     const runtime = ensureSceneCsmShadowRuntime();
     runtime?.setActive(true);
-    syncSceneCsmSunFromEnvironment();
     return;
   }
   sceneCsmShadowRuntime?.setActive(false);

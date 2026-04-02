@@ -97,6 +97,7 @@ export function resolveSceneCsmSunPositionFromAngles(
 
 const tempSunDirection = new THREE.Vector3()
 const defaultSunDirection = new THREE.Vector3(0, -1, 0)
+const cameraStateEpsilon = 1e-8
 const baseThreeLightsFragmentBegin = THREE.ShaderChunk.lights_fragment_begin
 const directionalLightsBlockPattern = /#if \( NUM_DIR_LIGHTS > 0 \) && defined\( RE_Direct \)[\s\S]*?#endif\n\n#if \( NUM_RECT_AREA_LIGHTS > 0 \) && defined\( RE_Direct_RectArea \)/
 
@@ -307,7 +308,29 @@ export class SceneCsmShadowRuntime {
 
   private readonly lightColor = new THREE.Color()
 
+  private readonly lastLightDirection = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN)
+
+  private readonly lastCameraPosition = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN)
+
+  private readonly lastCameraQuaternion = new THREE.Quaternion(Number.NaN, Number.NaN, Number.NaN, Number.NaN)
+
   private active = true
+
+  private shadowsDirty = true
+
+  private frustumsDirty = true
+
+  private lastLightIntensity = Number.NaN
+
+  private lastCameraProjectionState = {
+    aspect: Number.NaN,
+    far: Number.NaN,
+    filmOffset: Number.NaN,
+    focus: Number.NaN,
+    fov: Number.NaN,
+    near: Number.NaN,
+    zoom: Number.NaN,
+  }
 
   public constructor(
     scene: THREE.Scene,
@@ -344,6 +367,43 @@ export class SceneCsmShadowRuntime {
     ensureThreeCsmShaderChunkCompatibility(this.config.cascades)
   }
 
+  private markShadowsDirty(): void {
+    this.shadowsDirty = true
+  }
+
+  private markFrustumsDirty(): void {
+    this.frustumsDirty = true
+    this.shadowsDirty = true
+  }
+
+  private hasCameraTransformChanged(): boolean {
+    return this.lastCameraPosition.distanceToSquared(this.camera.position) > cameraStateEpsilon
+      || 1 - Math.abs(this.lastCameraQuaternion.dot(this.camera.quaternion)) > cameraStateEpsilon
+  }
+
+  private hasCameraProjectionChanged(): boolean {
+    const last = this.lastCameraProjectionState
+    return Math.abs(last.aspect - this.camera.aspect) > cameraStateEpsilon
+      || Math.abs(last.far - this.camera.far) > cameraStateEpsilon
+      || Math.abs(last.filmOffset - this.camera.filmOffset) > cameraStateEpsilon
+      || Math.abs(last.focus - this.camera.focus) > cameraStateEpsilon
+      || Math.abs(last.fov - this.camera.fov) > cameraStateEpsilon
+      || Math.abs(last.near - this.camera.near) > cameraStateEpsilon
+      || Math.abs(last.zoom - this.camera.zoom) > cameraStateEpsilon
+  }
+
+  private syncCameraStateSnapshot(): void {
+    this.lastCameraPosition.copy(this.camera.position)
+    this.lastCameraQuaternion.copy(this.camera.quaternion)
+    this.lastCameraProjectionState.aspect = this.camera.aspect
+    this.lastCameraProjectionState.far = this.camera.far
+    this.lastCameraProjectionState.filmOffset = this.camera.filmOffset
+    this.lastCameraProjectionState.focus = this.camera.focus
+    this.lastCameraProjectionState.fov = this.camera.fov
+    this.lastCameraProjectionState.near = this.camera.near
+    this.lastCameraProjectionState.zoom = this.camera.zoom
+  }
+
   public get enabled(): boolean {
     return Boolean(this.csm)
   }
@@ -355,6 +415,7 @@ export class SceneCsmShadowRuntime {
     ensureThreeCsmShaderChunkCompatibility(this.config.cascades)
     this.csm.setupMaterial(material)
     this.registeredMaterials.add(material)
+    this.markShadowsDirty()
   }
 
   public registerObject(root: THREE.Object3D | null | undefined): void {
@@ -364,9 +425,11 @@ export class SceneCsmShadowRuntime {
     forEachSceneCsmCompatibleMaterial(root, (material) => {
       this.registerMaterial(material)
     })
+    this.markShadowsDirty()
   }
 
   public setActive(active: boolean): void {
+    const activeChanged = this.active !== active
     this.active = active
     if (!this.csm) {
       return
@@ -376,6 +439,9 @@ export class SceneCsmShadowRuntime {
       light.visible = active
       light.intensity = active ? this.csm!.lightIntensity : 0
     })
+    if (activeChanged && active) {
+      this.markShadowsDirty()
+    }
   }
 
   public syncSun(position: THREE.Vector3, intensity: number, color?: THREE.ColorRepresentation): void {
@@ -388,11 +454,17 @@ export class SceneCsmShadowRuntime {
     } else {
       tempSunDirection.normalize().multiplyScalar(-1)
     }
+    const resolvedIntensity = this.active ? Math.max(0, intensity) : 0
+    const directionChanged = this.lastLightDirection.distanceToSquared(tempSunDirection) > cameraStateEpsilon
+    const intensityChanged = Math.abs(this.lastLightIntensity - resolvedIntensity) > cameraStateEpsilon
+    let colorChanged = false
     this.csm.lightDirection.copy(tempSunDirection)
-    this.csm.lightIntensity = this.active ? Math.max(0, intensity) : 0
+    this.csm.lightIntensity = resolvedIntensity
     if (color !== undefined) {
+      const previousColorHex = this.lightColor.getHex()
       this.lightColor.set(color)
       this.csm.lightColor.copy(this.lightColor)
+      colorChanged = previousColorHex !== this.lightColor.getHex()
     }
     this.csm.lights.forEach((light) => {
       light.color.copy(this.csm!.lightColor)
@@ -400,21 +472,44 @@ export class SceneCsmShadowRuntime {
       light.castShadow = this.active
       light.visible = this.active
     })
-    this.csm.updateFrustums()
+    if (directionChanged || intensityChanged || colorChanged) {
+      this.lastLightDirection.copy(tempSunDirection)
+      this.lastLightIntensity = resolvedIntensity
+      this.markShadowsDirty()
+    }
   }
 
-  public update(): void {
+  public update(): boolean {
     if (!this.csm || !this.active) {
-      return
+      return false
     }
+    const projectionChanged = this.frustumsDirty || this.hasCameraProjectionChanged()
+    const transformChanged = projectionChanged || this.hasCameraTransformChanged()
+
+    if (projectionChanged) {
+      this.csm.updateFrustums()
+      this.frustumsDirty = false
+      this.shadowsDirty = true
+    }
+
+    if (!this.shadowsDirty && !transformChanged) {
+      return false
+    }
+
     this.csm.update()
+    this.shadowsDirty = false
+    this.syncCameraStateSnapshot()
+    return true
   }
 
   public updateFrustums(): void {
     if (!this.csm) {
       return
     }
+    this.markFrustumsDirty()
     this.csm.updateFrustums()
+    this.frustumsDirty = false
+    this.syncCameraStateSnapshot()
   }
 
   public dispose(): void {
