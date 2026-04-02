@@ -94,7 +94,6 @@ import {
   DEFAULT_SCENE_CSM_CONFIG,
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
   DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-  DEFAULT_LARGE_SCENE_CSM_CONFIG,
   resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
