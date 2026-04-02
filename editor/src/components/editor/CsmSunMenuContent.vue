@@ -188,6 +188,7 @@ const csmCascadeOptions: Array<{ value: number; label: string }> = [
 ]
 
 const csmShadowMapSizeOptions: Array<{ value: number; label: string }> = [
+  { value: 128, label: '128' },
   { value: 256, label: '256' },
   { value: 512, label: '512' },
   { value: 1024, label: '1024 (recommended)' },
