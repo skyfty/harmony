@@ -257,6 +257,7 @@ function resolveSceneCsmConfig(config?: SceneCsmConfig | null): Required<SceneCs
   }
 }
 export function shouldUseReceiverOnlyForDenseInstancedMesh(instanceCount: number, radius: number): boolean {
+  return false;
   return instanceCount >= LARGE_SCENE_INSTANCED_SHADOW_RECEIVER_ONLY_COUNT
     && Number.isFinite(radius)
     && radius > 0

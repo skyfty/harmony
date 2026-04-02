@@ -204,7 +204,7 @@ const csmSunAzimuthDegInput = ref(props.csmSunAzimuthDeg)
 const csmSunElevationDegInput = ref(props.csmSunElevationDeg)
 const csmCascadesInput = ref(props.csmCascades)
 const csmMaxFarInput = ref(props.csmMaxFar)
-const csmShadowMapSizeInput = ref(props.csmShadowMapSize)
+const csmShadowMapSizeInput = ref(Number(props.csmShadowMapSize))
 const csmShadowBiasInput = ref(props.csmShadowBias)
 
 watch(() => props.csmLightColor, (value) => {
@@ -232,7 +232,7 @@ watch(() => props.csmMaxFar, (value) => {
 })
 
 watch(() => props.csmShadowMapSize, (value) => {
-  csmShadowMapSizeInput.value = value
+  csmShadowMapSizeInput.value = Number(value)
 })
 
 watch(() => props.csmShadowBias, (value) => {
@@ -292,7 +292,7 @@ function commitCsmMaxFarInput() {
 function commitCsmShadowMapSizeInput() {
   emit('update:csm-shadow-map-size', Number(csmShadowMapSizeInput.value))
   nextTick(() => {
-    csmShadowMapSizeInput.value = props.csmShadowMapSize
+    csmShadowMapSizeInput.value = Number(props.csmShadowMapSize)
   })
 }
 
