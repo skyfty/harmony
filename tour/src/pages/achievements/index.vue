@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="打卡成就"  :showBack="false" />
 
     <view class="content">
@@ -58,6 +59,7 @@ import { getStatusBarHeight } from '@/utils/systemInfo';
 const statusBarHeight = ref(getStatusBarHeight());
 
 import BottomNav from '@/components/BottomNav.vue';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import { listAchievements } from '@/api/mini/achievements';
 import { redirectToNav, type NavKey } from '@/utils/navKey';

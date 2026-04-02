@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="提交建议" />
     <view class="content">
       <view class="card">
@@ -24,6 +25,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { createFeedback } from '@/api/mini';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import type { FeedbackCategory } from '@/types/feedback';
 

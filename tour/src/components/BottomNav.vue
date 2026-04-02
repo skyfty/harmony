@@ -40,6 +40,16 @@ const props = defineProps<{ active: NavKey }>();
 const emit = defineEmits<{ (event: 'navigate', value: NavKey): void }>();
 import { ensureAuthThenNavigate } from '@/utils/miniAuthHelper'
 
+const MINI_AUTH_NAV_LOG_PREFIX = '[mini-auth-nav]'
+
+function logMiniAuthNav(message: string, details?: unknown): void {
+  if (details === undefined) {
+    console.info(`${MINI_AUTH_NAV_LOG_PREFIX} ${message}`)
+    return
+  }
+  console.info(`${MINI_AUTH_NAV_LOG_PREFIX} ${message}`, details)
+}
+
 const navItems: ReadonlyArray<NavItem> = [
   {
     key: 'scenic',
@@ -84,19 +94,24 @@ const navItems: ReadonlyArray<NavItem> = [
 ];
 
 function go(value: NavKey) {
+  logMiniAuthNav('nav tapped', { from: props.active, to: value })
   if (value === props.active) {
+    logMiniAuthNav('ignore tap on active tab', { tab: value })
     return;
   }
 
   // For sensitive tabs that require profile/login, trigger auth via user gesture.
   const sensitive: NavKey[] = ['coupon', 'achievement', 'vehicle', 'profile'];
   if (sensitive.includes(value)) {
+    logMiniAuthNav('sensitive tab requires auth', { tab: value })
     void ensureAuthThenNavigate(value).catch(() => {
+      logMiniAuthNav('ensureAuthThenNavigate rejected', { tab: value })
       // ignore
     })
     return
   }
 
+  logMiniAuthNav('navigate without auth gate', { tab: value })
   emit('navigate', value);
 }
 </script>

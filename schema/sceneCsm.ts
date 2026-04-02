@@ -312,7 +312,6 @@ export class SceneCsmShadowRuntime {
 
   private readonly lightColor = new THREE.Color()
 
-  private readonly lastLightDirection = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN)
 
   private readonly lastCameraPosition = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN)
 
@@ -326,7 +325,6 @@ export class SceneCsmShadowRuntime {
 
   private frustumsDirty = true
 
-  private lastLightIntensity = Number.NaN
 
   private lastCameraProjectionState = {
     aspect: Number.NaN,
@@ -462,16 +460,11 @@ export class SceneCsmShadowRuntime {
       tempSunDirection.normalize().multiplyScalar(-1)
     }
     const resolvedIntensity = this.active ? Math.max(0, intensity) : 0
-    const directionChanged = this.lastLightDirection.distanceToSquared(tempSunDirection) > cameraStateEpsilon
-    const intensityChanged = Math.abs(this.lastLightIntensity - resolvedIntensity) > cameraStateEpsilon
-    let colorChanged = false
     this.csm.lightDirection.copy(tempSunDirection)
     this.csm.lightIntensity = resolvedIntensity
     if (color !== undefined) {
-      const previousColorHex = this.lightColor.getHex()
       this.lightColor.set(color)
       this.csm.lightColor.copy(this.lightColor)
-      colorChanged = previousColorHex !== this.lightColor.getHex()
     }
     this.csm.lights.forEach((light) => {
       light.color.copy(this.csm!.lightColor)
@@ -479,11 +472,8 @@ export class SceneCsmShadowRuntime {
       light.castShadow = this.active && this.shadowEnabled
       light.visible = this.active
     })
-    if (directionChanged || intensityChanged || colorChanged) {
-      this.lastLightDirection.copy(tempSunDirection)
-      this.lastLightIntensity = resolvedIntensity
-      this.markShadowsDirty()
-    }
+    this.markShadowsDirty()
+
   }
 
   public update(): boolean {

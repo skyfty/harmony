@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="{ paddingTop: topInset + 'px' }">
+    <MiniAuthRecovery />
     <view class="header">
       <view class="profile">
         <view class="avatar">
@@ -69,6 +70,7 @@ import { computed, ref, reactive } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import { bindWechatPhone, getProfile } from '@/api/mini';
 import { requestProfileAndSync } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';
@@ -103,12 +105,15 @@ const settings = reactive(readStorageJson(KEY, { notify: true, autoDownload: fal
 onShow(() => {
   topInset.value = getTopSafeAreaMetrics().contentTopInset;
   applyLightNavigationBar();
+  console.info('[mini-auth-profile-page] onShow reloadProfile start')
   void reloadProfile();
 });
 
 async function retryProfileAuth() {
   try {
+    console.info('[mini-auth-profile-page] retryProfileAuth tapped')
     const ok = await requestProfileAndSync()
+    console.info('[mini-auth-profile-page] retryProfileAuth resolved', { ok })
     if (ok) {
       void uni.showToast({ title: '同步成功', icon: 'success' })
       void reloadProfile()
@@ -122,8 +127,15 @@ async function retryProfileAuth() {
 
 async function reloadProfile() {
   try {
+    console.info('[mini-auth-profile-page] reloadProfile request start')
     profile.value = await getProfile();
+    console.info('[mini-auth-profile-page] reloadProfile success', {
+      displayName: profile.value.displayName,
+      isAnonymousDisplay: Boolean(profile.value.isAnonymousDisplay),
+      hasAvatarUrl: Boolean(profile.value.avatarUrl),
+    })
   } catch {
+    console.info('[mini-auth-profile-page] reloadProfile failed')
     uni.showToast({ title: '加载失败', icon: 'none' });
   }
 }

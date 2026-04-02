@@ -1,17 +1,25 @@
-import { getProfile, saveProfile, uploadProfileAvatar } from '@/api/mini'
 import { getAccessToken } from '@/api/mini/token'
-import { setPendingRecoveryProfile, ensureMiniAuth } from '@/api/mini/session'
+import { ensureMiniAuth } from '@/api/mini/session'
 import { redirectToNav } from '@/utils/navKey'
 import {
   normalizeMiniProfileText,
-  setAnonymousDisplayEnabled,
-  type MiniProfileDraft,
 } from '@/utils/miniProfile'
 import {
-  showRecoveryModal,
   type MiniAuthRecoveryOptions,
-  type MiniAuthRecoveryResult,
-} from '@/stores/miniAuthRecovery'
+} from '@/services/miniAuth/types'
+import { requestMiniAuthRecovery } from '@/services/miniAuth/recoveryPresenter'
+import { applyRecoveryResultForNextLogin } from '@/services/miniAuth/runtime'
+import { syncMiniProfileDraft } from '@/services/miniAuth/profileSync'
+
+const MINI_AUTH_HELPER_LOG_PREFIX = '[mini-auth-helper]'
+
+function logMiniAuthHelper(message: string, details?: unknown): void {
+  if (details === undefined) {
+    console.info(`${MINI_AUTH_HELPER_LOG_PREFIX} ${message}`)
+    return
+  }
+  console.info(`${MINI_AUTH_HELPER_LOG_PREFIX} ${message}`, details)
+}
 
 const DEFAULT_AUTH_RECOVERY_OPTIONS: MiniAuthRecoveryOptions = {
   title: '完善微信资料',
@@ -34,58 +42,39 @@ function resolveRecoveryOptions(options?: MiniAuthRecoveryOptions): MiniAuthReco
   }
 }
 
-async function promptMiniProfileRecovery(options?: MiniAuthRecoveryOptions): Promise<MiniAuthRecoveryResult> {
-  return await showRecoveryModal(resolveRecoveryOptions(options))
-}
-
-export async function syncMiniProfileDraft(draft: MiniProfileDraft): Promise<boolean> {
-  const currentProfile = await getProfile()
-  const nextDisplayName = normalizeMiniProfileText(draft.displayName) ?? currentProfile.displayName
-
-  let nextAvatarUrl = String(currentProfile.avatarUrl || '').trim()
-  if (draft.avatarFilePath) {
-    nextAvatarUrl = await uploadProfileAvatar(draft.avatarFilePath)
-  }
-
-  const hasDisplayNameChanged = nextDisplayName !== currentProfile.displayName
-  const hasAvatarChanged = nextAvatarUrl !== String(currentProfile.avatarUrl || '').trim()
-
-  if (hasDisplayNameChanged || hasAvatarChanged) {
-    await saveProfile({
-      ...currentProfile,
-      displayName: nextDisplayName,
-      avatarUrl: nextAvatarUrl || undefined,
-    })
-  }
-
-  setAnonymousDisplayEnabled(false)
-  return true
+async function promptMiniProfileRecovery(options?: MiniAuthRecoveryOptions) {
+  logMiniAuthHelper('promptMiniProfileRecovery invoked', {
+    title: resolveRecoveryOptions(options).title || '(empty)',
+  })
+  return await requestMiniAuthRecovery(resolveRecoveryOptions(options))
 }
 
 export async function ensureAuthThenNavigate(key: string): Promise<boolean> {
   try {
+    logMiniAuthHelper('ensureAuthThenNavigate invoked', {
+      key,
+      hasToken: Boolean(getAccessToken()),
+    })
     if (getAccessToken()) {
       // already logged in
+      logMiniAuthHelper('token already exists, navigate directly', { key })
       redirectToNav(key as any)
       return true
     }
 
     const result = await promptMiniProfileRecovery()
-    if (result.action === 'submit') {
-      setAnonymousDisplayEnabled(false)
-      setPendingRecoveryProfile({
-        displayName: normalizeMiniProfileText(result.displayName),
-        avatarFilePath: result.avatarFilePath,
-      })
-    } else {
-      setPendingRecoveryProfile(null)
-      setAnonymousDisplayEnabled(true)
-    }
+    logMiniAuthHelper('promptMiniProfileRecovery resolved for navigation', {
+      key,
+      action: result.action,
+    })
+    applyRecoveryResultForNextLogin(result)
 
     await ensureMiniAuth()
+    logMiniAuthHelper('ensureMiniAuth resolved for navigation', { key })
     redirectToNav(key as any)
     return true
   } catch {
+    logMiniAuthHelper('ensureAuthThenNavigate failed, fallback navigation attempt', { key })
     try {
       redirectToNav(key as any)
     } catch {}
@@ -95,16 +84,27 @@ export async function ensureAuthThenNavigate(key: string): Promise<boolean> {
 
 export async function requestProfileAndSync(options: MiniAuthRecoveryOptions = DEFAULT_MANUAL_RECOVERY_OPTIONS): Promise<boolean> {
   try {
+    logMiniAuthHelper('requestProfileAndSync invoked', {
+      title: options.title || '(empty)',
+      hasToken: Boolean(getAccessToken()),
+    })
     const result = await promptMiniProfileRecovery(options)
+    logMiniAuthHelper('promptMiniProfileRecovery resolved for profile sync', {
+      action: result.action,
+    })
     if (result.action !== 'submit') {
       return false
     }
+
+    await ensureMiniAuth()
+    logMiniAuthHelper('ensureMiniAuth resolved for profile sync')
 
     return await syncMiniProfileDraft({
       displayName: normalizeMiniProfileText(result.displayName),
       avatarFilePath: result.avatarFilePath,
     })
   } catch {
+    logMiniAuthHelper('requestProfileAndSync failed')
     return false
   }
 }

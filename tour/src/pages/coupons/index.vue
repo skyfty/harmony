@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader
       title="卡券中心"
       :show-back="false"
@@ -48,6 +49,7 @@ import { getStatusBarHeight } from '@/utils/systemInfo';
 const statusBarHeight = ref(getStatusBarHeight());
 import { onMounted } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import CouponCard from '@/components/CouponCard.vue';
 import { listMyCoupons } from '@/api/mini/coupons';

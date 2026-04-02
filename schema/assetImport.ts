@@ -35,24 +35,6 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
 
         material.side = THREE.DoubleSide
 
-        // const anyMaterial = material as any
-        // const opacity = typeof anyMaterial.opacity === 'number' ? anyMaterial.opacity : 1
-        // const alphaTest = typeof anyMaterial.alphaTest === 'number' ? anyMaterial.alphaTest : 0
-        // const hasAlphaMap = Boolean(anyMaterial.alphaMap)
-        // const hasMap = Boolean(anyMaterial.map)
-        // const transmission = typeof anyMaterial.transmission === 'number' ? anyMaterial.transmission : 0
-        // const thickness = typeof anyMaterial.thickness === 'number' ? anyMaterial.thickness : 0
-
-        // const isActuallyTranslucent = opacity < 0.999 || transmission > 0 || thickness > 0
-        // const mightNeedAlpha = hasAlphaMap || alphaTest > 0
-
-        // if (anyMaterial.transparent === true && !isActuallyTranslucent && !mightNeedAlpha && !hasMap) {
-        //   anyMaterial.transparent = false
-        //   if (typeof anyMaterial.depthWrite === 'boolean') {
-        //     anyMaterial.depthWrite = true
-        //   }
-        // }
-
         material.needsUpdate = true
         return material
       })
@@ -70,24 +52,6 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
     }
 
     material.side = THREE.DoubleSide
-
-    // const anyMaterial = material as any
-    // const opacity = typeof anyMaterial.opacity === 'number' ? anyMaterial.opacity : 1
-    // const alphaTest = typeof anyMaterial.alphaTest === 'number' ? anyMaterial.alphaTest : 0
-    // const hasAlphaMap = Boolean(anyMaterial.alphaMap)
-    // const hasMap = Boolean(anyMaterial.map)
-    // const transmission = typeof anyMaterial.transmission === 'number' ? anyMaterial.transmission : 0
-    // const thickness = typeof anyMaterial.thickness === 'number' ? anyMaterial.thickness : 0
-
-    // const isActuallyTranslucent = opacity < 0.999 || transmission > 0 || thickness > 0
-    // const mightNeedAlpha = hasAlphaMap || alphaTest > 0
-
-    // if (anyMaterial.transparent === true && !isActuallyTranslucent && !mightNeedAlpha && !hasMap) {
-    //   anyMaterial.transparent = false
-    //   if (typeof anyMaterial.depthWrite === 'boolean') {
-    //     anyMaterial.depthWrite = true
-    //   }
-    // }
 
     material.needsUpdate = true
   })

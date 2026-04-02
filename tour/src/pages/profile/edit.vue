@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="个人信息编辑" />
     <view class="content">
       <view class="card">
@@ -42,6 +43,7 @@
 import { reactive } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { getProfile, saveProfile, uploadProfileAvatar } from '@/api/mini';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import type { Gender, UserProfile } from '@/types/profile';
 

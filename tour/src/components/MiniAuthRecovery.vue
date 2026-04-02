@@ -1,5 +1,5 @@
 <template>
-  <view v-if="visible" class="recovery-overlay">
+  <view v-if="visible && isActiveHost" class="recovery-overlay">
     <view class="recovery-card">
       <text class="title">{{ resolvedTitle }}</text>
       <text class="desc">{{ resolvedDescription }}</text>
@@ -39,17 +39,35 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  getRecoveryOptions,
-  isRecoveryVisible,
-  resolveRecovery,
-} from '@/stores/miniAuthRecovery'
+  miniAuthRecoveryDialogController,
+} from '@/services/miniAuth/recoveryDialogController'
 import { normalizeMiniProfileText } from '@/utils/miniProfile'
 
+const MINI_AUTH_COMPONENT_LOG_PREFIX = '[mini-auth-component]'
+
+function logMiniAuthComponent(message: string, details?: unknown): void {
+  if (details === undefined) {
+    console.info(`${MINI_AUTH_COMPONENT_LOG_PREFIX} ${message}`)
+    return
+  }
+  console.info(`${MINI_AUTH_COMPONENT_LOG_PREFIX} ${message}`, details)
+}
+
 const isWechatMiniProgram = typeof wx !== 'undefined'
-const visible = computed(() => isRecoveryVisible().value)
-const options = computed(() => getRecoveryOptions().value)
+const hostId = miniAuthRecoveryDialogController.registerHost()
+const dialogState = ref(miniAuthRecoveryDialogController.getSnapshot())
+const stopSync = miniAuthRecoveryDialogController.subscribe((nextState) => {
+  logMiniAuthComponent('controller pushed state', {
+    visible: nextState.visible,
+    title: nextState.options.title || '(empty)',
+  })
+  dialogState.value = nextState
+})
+const visible = computed(() => dialogState.value.visible)
+const isActiveHost = computed(() => dialogState.value.activeHostId === hostId)
+const options = computed(() => dialogState.value.options)
 const displayName = ref('')
 const avatarPreview = ref('')
 const avatarFilePath = ref('')
@@ -66,6 +84,13 @@ const displayInitial = computed(() => {
 watch(
   visible,
   (nextVisible) => {
+    logMiniAuthComponent('visible changed', {
+      visible: nextVisible,
+      isActiveHost: isActiveHost.value,
+      hostId,
+      title: options.value.title || '(empty)',
+      initialDisplayName: options.value.initialDisplayName || '(empty)',
+    })
     if (!nextVisible) {
       displayName.value = ''
       avatarPreview.value = ''
@@ -79,6 +104,12 @@ watch(
   },
   { immediate: true },
 )
+
+onBeforeUnmount(() => {
+  logMiniAuthComponent('component before unmount')
+  miniAuthRecoveryDialogController.unregisterHost(hostId)
+  stopSync()
+})
 
 function handleChooseAvatar(event: { detail?: { avatarUrl?: string } }) {
   const selected = String(event?.detail?.avatarUrl || '').trim()
@@ -114,7 +145,11 @@ function handleNicknameBlur(event: { detail?: { value?: string } }) {
 }
 
 function handleSubmit() {
-  resolveRecovery({
+  logMiniAuthComponent('submit tapped', {
+    displayName: displayName.value || '(empty)',
+    hasAvatarFilePath: Boolean(avatarFilePath.value),
+  })
+  miniAuthRecoveryDialogController.resolve({
     action: 'submit',
     displayName: normalizeMiniProfileText(displayName.value),
     avatarFilePath: avatarFilePath.value || undefined,
@@ -122,7 +157,8 @@ function handleSubmit() {
 }
 
 function handleSkip() {
-  resolveRecovery({ action: 'skip' })
+  logMiniAuthComponent('skip tapped')
+  miniAuthRecoveryDialogController.resolve({ action: 'skip' })
 }
 </script>
 

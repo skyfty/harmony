@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader
       title="代步工具"
       :show-back="false"
@@ -53,6 +54,7 @@ defineOptions({ name: 'VehiclesPage' });
 
 const statusBarHeight = ref(getStatusBarHeight());
 import BottomNav from '@/components/BottomNav.vue';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import VehicleCard from '@/components/VehicleCard.vue';
