@@ -74,7 +74,6 @@
         <div class="csm-sun-dial-card__header">
           <div>
             <div class="csm-sun-dial-card__title">Sun Direction</div>
-            <div class="csm-sun-dial-card__caption">Drag the outer ring to adjust azimuth; drag toward the center to raise the sun</div>
           </div>
           <div class="csm-sun-dial-card__values">
             <span class="csm-sun-dial-card__state">{{ currentSunStateLabel }}</span>

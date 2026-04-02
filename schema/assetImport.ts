@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
 import { createUvDebugMaterial } from './debugTextures'
 import { MeshBVH } from 'three-mesh-bvh'
+import { normalizeScatterMaterials } from './scatterMaterials'
 
 export interface LoadObjectOptions {
   onProgress?: (payload: LoaderProgressPayload) => void
@@ -136,6 +137,7 @@ export async function loadObjectFromFile(
       const object = payload as THREE.Object3D
       prepareImportedObject(object)
       normalizeImportedMeshMaterials(object)
+      normalizeScatterMaterials(object)
       buildObjectBvh(object)
       resolve(object)
     }
