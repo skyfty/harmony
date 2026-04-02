@@ -32,6 +32,7 @@ export function useSelectionDrag(
     getVertexSnapDelta?: (options: { drag: SelectionDragState; event: PointerEvent }) => THREE.Vector3 | null
     computeTransformPivotWorld?: (object: THREE.Object3D, out: THREE.Vector3) => void
     beforeEmitTransformUpdates?: (nodeIds: string[]) => void
+    onSelectionDragUpdates?: (updates: TransformUpdatePayload[]) => void
     resolveDropSurfaceHeight?: (options: {
       nodeId: string
       object: THREE.Object3D
@@ -177,6 +178,8 @@ export function useSelectionDrag(
         position: companion.object.position,
       })
     })
+
+    callbacks.onSelectionDragUpdates?.(updates)
 
     callbacks.updateGridHighlightFromObject(drag.object)
     callbacks.updateSelectionHighlights()

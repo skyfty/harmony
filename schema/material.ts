@@ -1290,6 +1290,10 @@ export function applyMaterialConfigToMaterial(
       typed.alphaTest = 0.001;
       needsUpdate = true;
     }
+    if (typed.side !== THREE.DoubleSide) {
+      typed.side = THREE.DoubleSide;
+      needsUpdate = true;
+    }
   }
 
   if (needsUpdate) {

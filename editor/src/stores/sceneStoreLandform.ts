@@ -584,6 +584,20 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       let nextMaterials = currentMaterials
       if (!currentMaterials.length) {
         nextMaterials = deps.createLandformNodeMaterials({ surfaceName: 'Surface' })
+      } else {
+        const normalizedMaterials = currentMaterials.map((entry) => {
+          if (entry?.side === 'double') {
+            return entry
+          }
+          return {
+            ...entry,
+            side: 'double',
+          }
+        })
+        const sideChanged = normalizedMaterials.some((entry, index) => entry !== currentMaterials[index])
+        if (sideChanged) {
+          nextMaterials = normalizedMaterials as SceneNodeMaterial[]
+        }
       }
 
       const materialsChanged = nextMaterials !== currentMaterials

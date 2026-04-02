@@ -41,6 +41,10 @@ function enforceLandformFeatherState(material: THREE.MeshStandardMaterial): bool
     material.polygonOffset = true
     changed = true
   }
+  if (material.side !== THREE.DoubleSide) {
+    material.side = THREE.DoubleSide
+    changed = true
+  }
   if (material.polygonOffsetFactor !== LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR) {
     material.polygonOffsetFactor = LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR
     changed = true

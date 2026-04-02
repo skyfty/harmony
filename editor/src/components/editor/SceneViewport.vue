@@ -8372,6 +8372,9 @@ const {
         queueMicrotask(() => applyCapturedLightTargetUpdates(captured))
       }
     },
+    onSelectionDragUpdates: (updates) => {
+      previewLandformNodesDuringTransform(updates, 'translate')
+    },
     resolveDropSurfaceHeight: ({ bounds, excludedNodeIds }) => {
       const excludedObjects = new Set<THREE.Object3D>()
       excludedNodeIds.forEach((id) => {
