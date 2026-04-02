@@ -1,5 +1,11 @@
 import * as harmonyUtils from '@harmony/utils'
 import { getAccessToken, setAccessToken } from './token'
+import {
+  isMiniProfileIncomplete,
+  normalizeMiniProfileText,
+  setAnonymousDisplayEnabled,
+  type MiniProfileDraft,
+} from '@/utils/miniProfile'
 
 const { MiniApiError, miniRequest } = harmonyUtils
 
@@ -8,13 +14,16 @@ export { getAccessToken, setAccessToken }
 type LoginResponse = {
   token?: string
   accessToken?: string
+  user?: {
+    displayName?: string
+    avatarUrl?: string
+    username?: string
+  }
 }
 
 let pendingAuthPromise: Promise<string> | null = null
 let miniAuthInitialized = false
-// Temporary profile provided by a user-gesture recovery flow. When set,
-// `performMiniAuth` will include these fields in the next login attempt.
-let pendingRecoveryProfile: { displayName?: string; avatarUrl?: string } | null = null
+let pendingRecoveryProfile: MiniProfileDraft | null = null
 const MINI_AUTH_LOG_PREFIX = '[mini-auth]'
 const MINI_AUTH_SESSION_STORAGE_KEYS = [
   'tour:selectedVehicleId',
@@ -62,6 +71,10 @@ function clearMiniAuthSessionStorage(): void {
 function clearMiniAuthLocalState(reason: string): void {
   setAccessToken('')
   clearMiniAuthSessionStorage()
+  pendingRecoveryProfile = null
+  if (reason === 'manual-reset' || reason === 'perform-auth-failed') {
+    setAnonymousDisplayEnabled(false)
+  }
   logMiniAuth('mini auth local state cleared', { reason })
 }
 
@@ -91,7 +104,7 @@ async function getWechatLoginCode(): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     uni.login({
       provider: 'weixin',
-      success: (res) => {
+      success: (res: { code?: string }) => {
         if (!res.code) {
           errorMiniAuth('wx.login success callback without code')
           reject(new Error('Wechat login code not found'))
@@ -100,7 +113,7 @@ async function getWechatLoginCode(): Promise<string> {
         logMiniAuth('wx.login success, got code')
         resolve(res.code)
       },
-      fail: (error) => {
+      fail: (error: unknown) => {
         errorMiniAuth('wx.login failed', error)
         reject(new Error('Wechat login failed'))
       },
@@ -124,7 +137,7 @@ export async function loginWithCredentials(username: string, password: string): 
   return token
 }
 
-export async function loginWithWechatCode(code: string, displayName?: string, avatarUrl?: string): Promise<string> {
+export async function loginWithWechatCode(code: string, displayName?: string): Promise<LoginResponse> {
   const miniAppId = getMiniAppId()
   console.log(`${MINI_AUTH_LOG_PREFIX} 
     
@@ -140,9 +153,7 @@ export async function loginWithWechatCode(code: string, displayName?: string, av
     body: {
       code,
       miniAppId: miniAppId || undefined,
-      // optionally include profile fields when available so server can auto-register
       ...(typeof displayName === 'string' && displayName ? { displayName } : {}),
-      ...(typeof avatarUrl === 'string' && avatarUrl ? { avatarUrl } : {}),
     },
   })
 
@@ -156,7 +167,7 @@ export async function loginWithWechatCode(code: string, displayName?: string, av
 
   setAccessToken(token)
   logMiniAuth('wechat-login success, token stored', { tokenLength: token.length })
-  return token
+  return data
 }
 
 async function performMiniAuth(force = false): Promise<string> {
@@ -165,7 +176,29 @@ async function performMiniAuth(force = false): Promise<string> {
     const token = getAccessToken()
     if (token) {
       logMiniAuth('existing token found, skip auto login request')
-      return token
+      // 尝试用 token 拉 profile 检查有效性
+      try {
+        await miniRequest<{ user: { displayName?: string; avatarUrl?: string } }>('/mini-auth/profile', {
+          method: 'GET',
+        })
+        return token
+      } catch (err: any) {
+        // 检查服务端返回的错误信息
+        const msg = (err && err.message) ? String(err.message) : ''
+        if (
+          msg.includes('User not found') ||
+          msg.includes('401') ||
+          msg.includes('token') ||
+          msg.includes('未登录')
+        ) {
+          warnMiniAuth('token invalid, clear and re-auth', msg)
+          clearMiniAuthLocalState('token-invalid')
+          // 递归强制重新走微信登录
+          return await performMiniAuth(true)
+        }
+        // 其它错误直接抛出
+        throw err
+      }
     }
   } else {
     logMiniAuth('force=true, clear token before re-auth')
@@ -177,40 +210,48 @@ async function performMiniAuth(force = false): Promise<string> {
     pendingAuthPromise = (async () => {
       logMiniAuth('using wechat login flow')
       const code = await getWechatLoginCode()
-      // If a recovery profile was provided by a user-gesture flow, include it
-      // in the login request so the server can auto-register/sync the profile.
       const profile = pendingRecoveryProfile
       pendingRecoveryProfile = null
-      const token = await loginWithWechatCode(code, profile?.displayName, profile?.avatarUrl)
+      const response = await loginWithWechatCode(code, normalizeMiniProfileText(profile?.displayName))
+      const token = readTokenFromResponse(response)
+      if (!token) {
+        throw new Error('Wechat login succeeded but no token returned')
+      }
 
-      // After successful login, check whether the server-side profile has displayName/avatarUrl.
-      // If missing, prompt the user (user TAP gesture) to authorize profile access and PATCH the profile.
-      try {
-        const resp = await miniRequest<{ user: { displayName?: string; avatarUrl?: string } }>('/mini-auth/profile', {
-          method: 'GET',
-        })
-        const user = resp.user || {}
-        const needsDisplay = !user.displayName || !user.displayName.trim()
-        const needsAvatar = !user.avatarUrl || !user.avatarUrl.trim()
-        if (needsDisplay || needsAvatar) {
-          try {
-            const { showRecoveryModal } = await import('@/stores/miniAuthRecovery')
-            const result = await showRecoveryModal()
-            if (result && result.success) {
-              const payload: Record<string, unknown> = {}
-              if (result.displayName && result.displayName.trim()) payload.displayName = result.displayName.trim()
-              if (result.avatarUrl && result.avatarUrl.trim()) payload.avatarUrl = result.avatarUrl.trim()
-              if (Object.keys(payload).length) {
-                await miniRequest('/mini-auth/profile', { method: 'PATCH', body: payload })
-              }
-            }
-          } catch (err) {
-            warnMiniAuth('profile recovery failed or cancelled', err)
-          }
+      if (profile) {
+        try {
+          const { syncMiniProfileDraft } = await import('@/utils/miniAuthHelper')
+          await syncMiniProfileDraft(profile)
+        } catch (err) {
+          warnMiniAuth('failed to sync submitted recovery profile after login', err)
         }
-      } catch (err) {
-        // ignore profile fetch errors
-        warnMiniAuth('failed to fetch profile after login', err)
+      }
+
+      const currentUser = response.user || {}
+      if (!profile && isMiniProfileIncomplete(currentUser)) {
+        try {
+          const { showRecoveryModal } = await import('@/stores/miniAuthRecovery')
+          const { syncMiniProfileDraft } = await import('@/utils/miniAuthHelper')
+          const result = await showRecoveryModal({
+            title: '完善微信资料',
+            description: '检测到当前账号缺少微信头像或昵称。你可以现在同步，也可以先匿名使用。',
+            confirmText: '同步资料',
+            skipText: '暂时匿名使用',
+            initialDisplayName: currentUser.username,
+          })
+          if (result.action === 'submit') {
+            await syncMiniProfileDraft({
+              displayName: normalizeMiniProfileText(result.displayName),
+              avatarFilePath: result.avatarFilePath,
+            })
+          } else {
+            setAnonymousDisplayEnabled(true)
+          }
+        } catch (err) {
+          warnMiniAuth('profile recovery failed or skipped', err)
+        }
+      } else if (!isMiniProfileIncomplete(currentUser)) {
+        setAnonymousDisplayEnabled(false)
       }
 
       return token
@@ -232,7 +273,7 @@ async function performMiniAuth(force = false): Promise<string> {
 }
 
 // Called by recovery handler to provide a profile obtained via user gesture.
-export function setPendingRecoveryProfile(profile: { displayName?: string; avatarUrl?: string } | null): void {
+export function setPendingRecoveryProfile(profile: MiniProfileDraft | null): void {
   pendingRecoveryProfile = profile
 }
 
@@ -302,6 +343,7 @@ export async function ensureDevLogin(): Promise<string> {
   return await ensureMiniAuth()
 }
 
-export function isMiniAuthError(error: unknown): error is MiniApiError {
-  return error instanceof MiniApiError && error.kind === 'auth'
+export function isMiniAuthError(error: unknown): boolean {
+  const candidate = error as { kind?: unknown }
+  return error instanceof MiniApiError && candidate.kind === 'auth'
 }

@@ -1,48 +1,128 @@
 <template>
   <view v-if="visible" class="recovery-overlay">
     <view class="recovery-card">
-      <text class="title">授权以完成登录</text>
-      <text class="desc">需要获取你的微信昵称与头像以完成账号注册与同步。</text>
-      <button @click="handleAuthorize" class="auth-button">授权并登录</button>
-      <button @click="handleCancel" class="cancel-button">稍后再说</button>
+      <text class="title">{{ resolvedTitle }}</text>
+      <text class="desc">{{ resolvedDescription }}</text>
+
+      <view class="avatar-panel">
+        <view class="avatar-preview">
+          <image v-if="avatarPreview" class="avatar-image" :src="avatarPreview" mode="aspectFill" />
+          <text v-else class="avatar-text">{{ displayInitial }}</text>
+        </view>
+        <button
+          v-if="isWechatMiniProgram"
+          class="avatar-button"
+          open-type="chooseAvatar"
+          @chooseavatar="handleChooseAvatar"
+        >选择微信头像</button>
+        <button v-else class="avatar-button" @tap="handleFallbackAvatar">选择头像</button>
+      </view>
+
+      <view class="field">
+        <text class="field-label">微信昵称</text>
+        <input
+          v-model="displayName"
+          class="field-input"
+          type="nickname"
+          maxlength="30"
+          placeholder="请输入昵称"
+          @blur="handleNicknameBlur"
+        />
+      </view>
+
+      <view class="actions">
+        <button class="primary-button" @tap="handleSubmit">{{ resolvedConfirmText }}</button>
+        <button class="secondary-button" @tap="handleSkip">{{ resolvedSkipText }}</button>
+      </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { isRecoveryVisible, resolveRecovery } from '@/stores/miniAuthRecovery'
+import { computed, ref, watch } from 'vue'
+import {
+  getRecoveryOptions,
+  isRecoveryVisible,
+  resolveRecovery,
+} from '@/stores/miniAuthRecovery'
+import { normalizeMiniProfileText } from '@/utils/miniProfile'
 
+const isWechatMiniProgram = typeof wx !== 'undefined'
 const visible = computed(() => isRecoveryVisible().value)
-const showRetry = ref(false)
+const options = computed(() => getRecoveryOptions().value)
+const displayName = ref('')
+const avatarPreview = ref('')
+const avatarFilePath = ref('')
 
-async function handleAuthorize() {
-  try {
-    // This must be triggered by a user TAP gesture to succeed in WeChat
-    // and will prompt the user to allow profile access.
-    // @ts-ignore -- uni types in this environment
-    const res = await new Promise<any>((resolve, reject) => {
-      ;(uni as any).getUserProfile({
-        desc: '用于完成账号注册与头像同步',
-        success: (r: any) => resolve(r),
-        fail: (e: any) => reject(e),
-      })
-    })
-    const displayName = res?.userInfo?.nickName
-    const avatarUrl = res?.userInfo?.avatarUrl
-    // If authorization succeeds, resolve and hide any retry state
-    showRetry.value = false
-    resolveRecovery({ success: true, displayName, avatarUrl })
-  } catch (err) {
-    // user denied or error — show a secondary retry prompt
-    showRetry.value = true
+const resolvedTitle = computed(() => options.value.title || '完善微信资料')
+const resolvedDescription = computed(() => options.value.description || '请提供微信头像和昵称，用于完成登录注册与账号资料同步。')
+const resolvedConfirmText = computed(() => options.value.confirmText || '同步资料')
+const resolvedSkipText = computed(() => options.value.skipText || '暂时匿名使用')
+const displayInitial = computed(() => {
+  const normalized = normalizeMiniProfileText(displayName.value)
+  return normalized ? normalized.slice(0, 1) : '匿'
+})
+
+watch(
+  visible,
+  (nextVisible) => {
+    if (!nextVisible) {
+      displayName.value = ''
+      avatarPreview.value = ''
+      avatarFilePath.value = ''
+      return
+    }
+
+    displayName.value = options.value.initialDisplayName || ''
+    avatarPreview.value = ''
+    avatarFilePath.value = ''
+  },
+  { immediate: true },
+)
+
+function handleChooseAvatar(event: { detail?: { avatarUrl?: string } }) {
+  const selected = String(event?.detail?.avatarUrl || '').trim()
+  if (!selected) {
+    return
   }
+
+  avatarPreview.value = selected
+  avatarFilePath.value = selected
 }
 
-function handleCancel() {
-  // user explicitly cancelled — clear retry state and resolve as denied
-  showRetry.value = false
-  resolveRecovery({ success: false })
+function handleFallbackAvatar() {
+  if (typeof uni.chooseImage !== 'function') {
+    return
+  }
+
+  uni.chooseImage({
+    count: 1,
+    success: (res) => {
+      const selected = Array.isArray(res.tempFilePaths) ? String(res.tempFilePaths[0] || '').trim() : ''
+      if (!selected) {
+        return
+      }
+      avatarPreview.value = selected
+      avatarFilePath.value = selected
+    },
+  })
+}
+
+function handleNicknameBlur(event: { detail?: { value?: string } }) {
+  const nextValue = normalizeMiniProfileText(event?.detail?.value)
+  displayName.value = nextValue || ''
+}
+
+function handleSubmit() {
+  resolveRecovery({
+    action: 'submit',
+    displayName: normalizeMiniProfileText(displayName.value),
+    avatarFilePath: avatarFilePath.value || undefined,
+  })
+}
+
+function handleSkip() {
+  resolveRecovery({ action: 'skip' })
 }
 </script>
 
@@ -53,20 +133,126 @@ function handleCancel() {
   top: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0,0,0,0.4);
+  z-index: 999;
+  background: rgba(6, 24, 44, 0.46);
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
 }
+
 .recovery-card {
-  background: #fff;
-  padding: 20px;
-  border-radius: 8px;
-  width: 85%;
+  width: 100%;
+  max-width: 640rpx;
+  background: linear-gradient(180deg, #ffffff 0%, #f5fbff 100%);
+  border-radius: 24px;
+  padding: 28px 24px;
+  box-sizing: border-box;
 }
-.title { font-weight: 700; margin-bottom: 8px; }
-.desc { color: #666; margin-bottom: 16px }
-.auth-button { background: #06b48a; color: #fff; padding: 10px 12px; border-radius: 6px; }
-.cancel-button { margin-top: 8px; color: #666; }
+
+.title {
+  display: block;
+  color: #11263c;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.desc {
+  display: block;
+  margin-top: 10px;
+  color: #607086;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.avatar-panel {
+  margin-top: 18px;
+  padding: 18px 16px;
+  border-radius: 18px;
+  background: rgba(31, 122, 236, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.avatar-preview {
+  width: 72px;
+  height: 72px;
+  border-radius: 36px;
+  overflow: hidden;
+  background: linear-gradient(145deg, rgba(63, 151, 255, 0.4), rgba(126, 198, 255, 0.2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.avatar-image {
+  width: 72px;
+  height: 72px;
+}
+
+.avatar-text {
+  color: #ffffff;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.avatar-button {
+  margin: 0;
+  flex: 1;
+  height: 40px;
+  line-height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(31, 122, 236, 0.24);
+  background: #ffffff;
+  color: #1f7aec;
+  font-size: 13px;
+}
+
+.field {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.field-label {
+  display: block;
+  color: #607086;
+  font-size: 12px;
+}
+
+.field-input {
+  margin-top: 8px;
+  color: #11263c;
+  font-size: 15px;
+}
+
+.actions {
+  margin-top: 18px;
+}
+
+.primary-button {
+  background: #1f7aec;
+  color: #ffffff;
+  border-radius: 999px;
+  height: 44px;
+  line-height: 44px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.secondary-button {
+  margin-top: 10px;
+  background: rgba(31, 122, 236, 0.08);
+  color: #607086;
+  border-radius: 999px;
+  height: 40px;
+  line-height: 40px;
+  font-size: 13px;
+}
 </style>
 

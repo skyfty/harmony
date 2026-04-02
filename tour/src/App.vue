@@ -1,22 +1,32 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
-import { initializeMiniAuth, prewarmMiniAuth } from '@/api/mini/session';
+import { initializeMiniAuth, recoverMiniAuthSession } from '@/api/mini/session';
 import { setMiniAuthRecoveryHandler } from '@harmony/utils'
-import { showRecoveryModal } from '@/stores/miniAuthRecovery'
 import { setPendingRecoveryProfile } from '@/api/mini/session'
+import { showRecoveryModal } from '@/stores/miniAuthRecovery'
+import { normalizeMiniProfileText, setAnonymousDisplayEnabled } from '@/utils/miniProfile'
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue'
 
-// Register a recovery handler that will show a modal prompting the user
-// to tap a button to authorize profile access. The modal's button will
-// call `uni.getUserProfile` (user gesture) and resolve with the profile.
 setMiniAuthRecoveryHandler(async () => {
   try {
-    const result = await showRecoveryModal()
-    if (result && result.success) {
-      setPendingRecoveryProfile({ displayName: result.displayName, avatarUrl: result.avatarUrl })
-      return true
+    const result = await showRecoveryModal({
+      title: '登录已失效',
+      description: '请补充微信头像和昵称后重新完成登录；如果暂时不想授权，也可以先匿名使用。',
+      confirmText: '继续登录',
+      skipText: '匿名继续',
+    })
+    if (result.action === 'submit') {
+      setAnonymousDisplayEnabled(false)
+      setPendingRecoveryProfile({
+        displayName: normalizeMiniProfileText(result.displayName),
+        avatarFilePath: result.avatarFilePath,
+      })
+    } else {
+      setPendingRecoveryProfile(null)
+      setAnonymousDisplayEnabled(true)
     }
-    return false
+
+    return await recoverMiniAuthSession()
   } catch(e) {
     console.error("Error during mini auth recovery:", e)
     return false

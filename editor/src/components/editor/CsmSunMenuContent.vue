@@ -68,8 +68,7 @@
         density="compact"
         variant="underlined"
         hide-details
-        @blur="commitCsmLightIntensityInput"
-        @keydown.enter.prevent="commitCsmLightIntensityInput"
+        @update:modelValue="commitCsmLightIntensityInput"
       />
       <v-text-field
         v-model="csmSunAzimuthDegInput"
@@ -81,8 +80,7 @@
         density="compact"
         variant="underlined"
         hide-details
-        @blur="commitCsmSunAzimuthDegInput"
-        @keydown.enter.prevent="commitCsmSunAzimuthDegInput"
+        @update:modelValue="commitCsmSunAzimuthDegInput"
       />
       <v-text-field
         v-model="csmSunElevationDegInput"
@@ -94,8 +92,7 @@
         density="compact"
         variant="underlined"
         hide-details
-        @blur="commitCsmSunElevationDegInput"
-        @keydown.enter.prevent="commitCsmSunElevationDegInput"
+        @update:modelValue="commitCsmSunElevationDegInput"
       />
       <v-select
         v-model="csmCascadesInput"
@@ -106,7 +103,7 @@
         density="compact"
         variant="underlined"
         hide-details
-        @update:model-value="commitCsmCascadesInput"
+        @update:modelValue="commitCsmCascadesInput"
       />
       <v-text-field
         v-model="csmMaxFarInput"
@@ -118,8 +115,7 @@
         density="compact"
         variant="underlined"
         hide-details
-        @blur="commitCsmMaxFarInput"
-        @keydown.enter.prevent="commitCsmMaxFarInput"
+        @update:modelValue="commitCsmMaxFarInput"
       />
       <v-select
         v-model="csmShadowMapSizeInput"
@@ -130,7 +126,7 @@
         density="compact"
         variant="underlined"
         hide-details
-        @update:model-value="commitCsmShadowMapSizeInput"
+        @update:modelValue="commitCsmShadowMapSizeInput"
       />
       <v-text-field
         v-model="csmShadowBiasInput"
@@ -142,8 +138,7 @@
         density="compact"
         variant="underlined"
         hide-details
-        @blur="commitCsmShadowBiasInput"
-        @keydown.enter.prevent="commitCsmShadowBiasInput"
+        @update:modelValue="commitCsmShadowBiasInput"
       />
     </div>
   </div>

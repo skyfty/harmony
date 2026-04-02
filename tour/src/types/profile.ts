@@ -6,6 +6,7 @@ export interface UserProfile {
   id: string;
   avatarUrl?: string;
   displayName: string;
+  isAnonymousDisplay?: boolean;
   email?: string;
   phone?: string;
   phoneCountryCode?: string;

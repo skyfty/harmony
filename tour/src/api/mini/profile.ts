@@ -2,6 +2,7 @@ import type { Gender, UserProfile } from '@/types/profile'
 import { getApiOrigin, miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 import { getAccessToken, setAccessToken } from './token'
+import { applyAnonymousProfileView, setAnonymousDisplayEnabled } from '@/utils/miniProfile'
 
 type MiniProfileUser = {
   id: string
@@ -36,7 +37,7 @@ type UploadAvatarResponse = {
 }
 
 function toUserProfile(user: MiniProfileUser): UserProfile {
-  return {
+  return applyAnonymousProfileView({
     id: user.id,
     displayName: user.displayName || user.username || '游客',
     email: user.email,
@@ -49,7 +50,7 @@ function toUserProfile(user: MiniProfileUser): UserProfile {
     gender: user.gender ?? 'other',
     birthDate: user.birthDate ? user.birthDate.slice(0, 10) : '',
     lastLoginAt: user.lastLoginAt,
-  }
+  })
 }
 
 export async function getProfile(): Promise<UserProfile> {
@@ -72,6 +73,7 @@ export async function saveProfile(profile: UserProfile): Promise<UserProfile> {
     method: 'PATCH',
     body: payload,
   })
+  setAnonymousDisplayEnabled(false)
   return toUserProfile(response.user)
 }
 

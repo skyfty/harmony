@@ -15,6 +15,11 @@
     </view>
 
     <view class="content">
+      <view v-if="isProfileIncomplete" class="tips-card">
+        <text class="tips-title">{{ isAnonymousDisplay ? '当前为匿名使用' : '当前资料未完善' }}</text>
+        <text class="tips-desc">{{ isAnonymousDisplay ? '你已跳过微信头像昵称授权，可稍后手动获取并自动同步到账号。' : '补充微信头像和昵称后，个人资料会自动更新到服务端。' }}</text>
+        <button class="tips-action" @tap="retryProfileAuth">{{ isAnonymousDisplay ? '获取微信头像昵称' : '完善微信资料' }}</button>
+      </view>
 
       <view class="card">
         <view class="row" @tap="nav('/pages/orders/index')">
@@ -71,6 +76,7 @@ import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { readStorageJson, writeStorageJson } from '@/utils/storage';
+import { isMiniProfileIncomplete } from '@/utils/miniProfile';
 
 const KEY = 'tour:settings:v1';
 
@@ -148,11 +154,10 @@ const maskedPhone = computed(() => {
 });
 
 const isProfileIncomplete = computed(() => {
-  const displayName = String(profile.value.displayName || '').trim();
-  const avatarUrl = String(profile.value.avatarUrl || '').trim();
-  const isPlaceholderName = !displayName || displayName === '微信用户' || displayName === '游客';
-  return isPlaceholderName || !avatarUrl;
+  return isMiniProfileIncomplete(profile.value);
 });
+
+const isAnonymousDisplay = computed(() => Boolean(profile.value.isAnonymousDisplay));
 
 function openProfileEdit() {
   uni.navigateTo({ url: '/pages/profile/edit' });
