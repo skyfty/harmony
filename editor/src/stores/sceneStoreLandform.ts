@@ -239,6 +239,106 @@ function distanceToFootprintBoundary(pointX: number, pointZ: number, footprint: 
   return Number.isFinite(minDistance) ? minDistance : 0
 }
 
+type FootprintSegment = {
+  index: number
+  startX: number
+  startZ: number
+  endX: number
+  endZ: number
+}
+
+type FootprintSegmentIndex = {
+  bucketSize: number
+  buckets: Map<string, FootprintSegment[]>
+}
+
+function bucketKey(x: number, z: number): string {
+  return `${x}:${z}`
+}
+
+function buildFootprintSegmentIndex(footprint: Array<[number, number]>, maxDistance: number): FootprintSegmentIndex | null {
+  if (footprint.length < 2 || !Number.isFinite(maxDistance) || maxDistance <= 1e-6) {
+    return null
+  }
+
+  const bucketSize = Math.max(maxDistance, 1e-3)
+  const buckets = new Map<string, FootprintSegment[]>()
+
+  for (let index = 0; index < footprint.length; index += 1) {
+    const a = footprint[index]!
+    const b = footprint[(index + 1) % footprint.length]!
+    const segment: FootprintSegment = {
+      index,
+      startX: a[0],
+      startZ: a[1],
+      endX: b[0],
+      endZ: b[1],
+    }
+    const minBucketX = Math.floor((Math.min(segment.startX, segment.endX) - maxDistance) / bucketSize)
+    const maxBucketX = Math.floor((Math.max(segment.startX, segment.endX) + maxDistance) / bucketSize)
+    const minBucketZ = Math.floor((Math.min(segment.startZ, segment.endZ) - maxDistance) / bucketSize)
+    const maxBucketZ = Math.floor((Math.max(segment.startZ, segment.endZ) + maxDistance) / bucketSize)
+
+    for (let bucketX = minBucketX; bucketX <= maxBucketX; bucketX += 1) {
+      for (let bucketZ = minBucketZ; bucketZ <= maxBucketZ; bucketZ += 1) {
+        const key = bucketKey(bucketX, bucketZ)
+        const bucket = buckets.get(key)
+        if (bucket) {
+          bucket.push(segment)
+        } else {
+          buckets.set(key, [segment])
+        }
+      }
+    }
+  }
+
+  return { bucketSize, buckets }
+}
+
+function distanceToFootprintBoundaryWithin(
+  pointX: number,
+  pointZ: number,
+  footprint: Array<[number, number]>,
+  maxDistance: number,
+  segmentIndex?: FootprintSegmentIndex | null,
+): number {
+  if (!Number.isFinite(maxDistance) || maxDistance <= 1e-6) {
+    return distanceToFootprintBoundary(pointX, pointZ, footprint)
+  }
+
+  if (!segmentIndex) {
+    return Math.min(distanceToFootprintBoundary(pointX, pointZ, footprint), maxDistance)
+  }
+
+  const bucketX = Math.floor(pointX / segmentIndex.bucketSize)
+  const bucketZ = Math.floor(pointZ / segmentIndex.bucketSize)
+  const candidates = segmentIndex.buckets.get(bucketKey(bucketX, bucketZ)) ?? []
+  if (!candidates.length) {
+    return maxDistance
+  }
+
+  let minDistance = maxDistance
+  const seen = new Set<number>()
+  candidates.forEach((segment) => {
+    if (seen.has(segment.index)) {
+      return
+    }
+    seen.add(segment.index)
+    const distance = pointToSegmentDistance2D(
+      pointX,
+      pointZ,
+      segment.startX,
+      segment.startZ,
+      segment.endX,
+      segment.endZ,
+    )
+    if (distance < minDistance) {
+      minDistance = distance
+    }
+  })
+  return minDistance
+}
+
 function buildLandformSurfaceFeather(
   footprint: Array<[number, number]>,
   surfaceVertices: Array<{ x: number; z: number }>,
@@ -249,8 +349,10 @@ function buildLandformSurfaceFeather(
     return surfaceVertices.map(() => 1)
   }
 
+  const segmentIndex = buildFootprintSegmentIndex(footprint, normalizedWidth)
+
   return surfaceVertices.map((vertex) => {
-    const distance = distanceToFootprintBoundary(vertex.x, vertex.z, footprint)
+    const distance = distanceToFootprintBoundaryWithin(vertex.x, vertex.z, footprint, normalizedWidth, segmentIndex)
     const t = clamp01(distance / normalizedWidth)
     // smoothstep for a softer, more natural transition.
     return t * t * (3 - 2 * t)
@@ -276,11 +378,27 @@ type SampledLandformVertex = {
   height: number
 }
 
-function sampleLandformTriangleVertexHeight(groundDefinition: GroundDynamicMesh, vertex: Vector2): SampledLandformVertex {
+type LandformHeightSampler = (x: number, z: number) => number
+
+function createLandformHeightSampler(groundDefinition: GroundDynamicMesh): LandformHeightSampler {
+  const cache = new Map<string, number>()
+  return (x: number, z: number) => {
+    const key = `${x.toFixed(6)},${z.toFixed(6)}`
+    const cached = cache.get(key)
+    if (cached !== undefined) {
+      return cached
+    }
+    const sampled = sampleGroundHeight(groundDefinition, x, z)
+    cache.set(key, sampled)
+    return sampled
+  }
+}
+
+function sampleLandformTriangleVertexHeight(sampleHeight: LandformHeightSampler, vertex: Vector2): SampledLandformVertex {
   return {
     x: vertex.x,
     z: vertex.y,
-    height: sampleGroundHeight(groundDefinition, vertex.x, vertex.y),
+    height: sampleHeight(vertex.x, vertex.y),
   }
 }
 
@@ -303,33 +421,44 @@ function interpolateTriangleHeightAtPoint(
 }
 
 function requiresGroundConformanceRefinement(
-  groundDefinition: GroundDynamicMesh,
+  sampleHeight: LandformHeightSampler,
   a: Vector2,
   b: Vector2,
   c: Vector2,
   tolerance: number,
+  targetEdgeLength: number,
 ): boolean {
   if (!Number.isFinite(tolerance) || tolerance <= 1e-6) {
     return false
   }
 
-  const sampledA = sampleLandformTriangleVertexHeight(groundDefinition, a)
-  const sampledB = sampleLandformTriangleVertexHeight(groundDefinition, b)
-  const sampledC = sampleLandformTriangleVertexHeight(groundDefinition, c)
+  const sampledA = sampleLandformTriangleVertexHeight(sampleHeight, a)
+  const sampledB = sampleLandformTriangleVertexHeight(sampleHeight, b)
+  const sampledC = sampleLandformTriangleVertexHeight(sampleHeight, c)
+
+  const d01 = a.distanceTo(b)
+  const d12 = b.distanceTo(c)
+  const d20 = c.distanceTo(a)
+  const largestEdge = Math.max(d01, d12, d20)
 
   const testPoints = [
     { x: (a.x + b.x + c.x) / 3, z: (a.y + b.y + c.y) / 3 },
-    { x: (a.x + b.x) * 0.5, z: (a.y + b.y) * 0.5 },
-    { x: (b.x + c.x) * 0.5, z: (b.y + c.y) * 0.5 },
-    { x: (c.x + a.x) * 0.5, z: (c.y + a.y) * 0.5 },
   ]
+
+  if (!Number.isFinite(targetEdgeLength) || largestEdge > targetEdgeLength * 1.25) {
+    testPoints.push(
+      { x: (a.x + b.x) * 0.5, z: (a.y + b.y) * 0.5 },
+      { x: (b.x + c.x) * 0.5, z: (b.y + c.y) * 0.5 },
+      { x: (c.x + a.x) * 0.5, z: (c.y + a.y) * 0.5 },
+    )
+  }
 
   return testPoints.some((point) => {
     const approximatedHeight = interpolateTriangleHeightAtPoint(point.x, point.z, sampledA, sampledB, sampledC)
     if (approximatedHeight === null || !Number.isFinite(approximatedHeight)) {
       return false
     }
-    const actualHeight = sampleGroundHeight(groundDefinition, point.x, point.z)
+    const actualHeight = sampleHeight(point.x, point.z)
     return Math.abs(actualHeight - approximatedHeight) > tolerance
   })
 }
@@ -337,6 +466,7 @@ function requiresGroundConformanceRefinement(
 function refineLandformTriangulationForGround(
   triangulation: { vertices: Vector2[]; indices: number[] },
   groundDefinition: GroundDynamicMesh,
+  sampleHeight: LandformHeightSampler,
 ): { vertices: Vector2[]; indices: number[] } {
   const cellSize = Math.max(1e-6, groundDefinition.cellSize)
   const subdivisionSteps = resolveLandformSubdivisionSteps(cellSize)
@@ -349,11 +479,12 @@ function refineLandformTriangulationForGround(
     targetEdgeLength,
     maxSteps,
     (a, b, c) => requiresGroundConformanceRefinement(
-      groundDefinition,
+      sampleHeight,
       a,
       b,
       c,
       LANDFORM_HEIGHT_ERROR_TOLERANCE,
+      targetEdgeLength,
     ),
   )
 }
@@ -556,11 +687,13 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         return null
       }
 
-      const refinedTriangulation = refineLandformTriangulationForGround(polygonTriangulation, groundDefinition)
+      const sampleHeight = createLandformHeightSampler(groundDefinition)
+
+      const refinedTriangulation = refineLandformTriangulationForGround(polygonTriangulation, groundDefinition, sampleHeight)
 
       const surfaceIndices = [...refinedTriangulation.indices]
       const surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
-        const localHeight = sampleGroundHeight(groundDefinition, vertex.x, vertex.y)
+        const localHeight = sampleHeight(vertex.x, vertex.y)
         return groundLocalToWorld(new Vector3(vertex.x, localHeight, vertex.y), transform)
       })
 
@@ -647,11 +780,13 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           return null
         }
 
-        const refinedTriangulation = refineLandformTriangulationForGround(polygonTriangulation, groundDefinition)
+        const sampleHeight = createLandformHeightSampler(groundDefinition)
+
+        const refinedTriangulation = refineLandformTriangulationForGround(polygonTriangulation, groundDefinition, sampleHeight)
 
         surfaceIndices = [...refinedTriangulation.indices]
         surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
-          const localHeight = sampleGroundHeight(groundDefinition, vertex.x, vertex.y)
+          const localHeight = sampleHeight(vertex.x, vertex.y)
           return groundLocalToWorld(new Vector3(vertex.x, localHeight, vertex.y), transform)
         })
       }

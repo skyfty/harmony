@@ -1628,12 +1628,14 @@ function commitGroundHeightMapRuntimeEdit(
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
+  const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  const dirtyBounds = computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.manualHeightMap, manualHeightMap)
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
   target.dynamicMesh.surfaceRevision = nextRevision
   definition.surfaceRevision = nextRevision
   useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
-  refreshLandformNodesForGroundChange(store, nodeId)
+  refreshLandformNodesForGroundChange(store, nodeId, dirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
@@ -2142,6 +2144,106 @@ function buildLandformFootprintWorldPoints(node: SceneNode, mesh: LandformDynami
     .filter((entry): entry is Vector3Like => Boolean(entry))
 }
 
+type WorldBoundsXZ = {
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+}
+
+function computeWorldBoundsXZ(points: Vector3Like[]): WorldBoundsXZ | null {
+  if (!points.length) {
+    return null
+  }
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  points.forEach((point) => {
+    minX = Math.min(minX, Number(point.x))
+    maxX = Math.max(maxX, Number(point.x))
+    minZ = Math.min(minZ, Number(point.z))
+    maxZ = Math.max(maxZ, Number(point.z))
+  })
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return null
+  }
+  return { minX, maxX, minZ, maxZ }
+}
+
+function boundsIntersectXZ(a: WorldBoundsXZ | null, b: WorldBoundsXZ | null): boolean {
+  if (!a || !b) {
+    return true
+  }
+  return a.minX <= b.maxX
+    && a.maxX >= b.minX
+    && a.minZ <= b.maxZ
+    && a.maxZ >= b.minZ
+}
+
+function computeGroundDirtyBoundsXZ(
+  groundNode: SceneNode,
+  definition: GroundRuntimeDynamicMesh,
+  previousHeightMap: Float64Array,
+  nextHeightMap: Float64Array,
+): WorldBoundsXZ | null {
+  const total = Math.min(previousHeightMap.length, nextHeightMap.length)
+  if (total <= 0) {
+    return null
+  }
+
+  let minRow = Number.POSITIVE_INFINITY
+  let maxRow = Number.NEGATIVE_INFINITY
+  let minColumn = Number.POSITIVE_INFINITY
+  let maxColumn = Number.NEGATIVE_INFINITY
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const rows = Math.max(1, Math.trunc(definition.rows))
+
+  for (let index = 0; index < total; index += 1) {
+    const previous = previousHeightMap[index] ?? 0
+    const next = nextHeightMap[index] ?? 0
+    if (Math.abs(previous - next) <= 1e-9) {
+      continue
+    }
+    const row = Math.floor(index / (columns + 1))
+    const column = index % (columns + 1)
+    minRow = Math.min(minRow, row)
+    maxRow = Math.max(maxRow, row)
+    minColumn = Math.min(minColumn, column)
+    maxColumn = Math.max(maxColumn, column)
+  }
+
+  if (!Number.isFinite(minRow) || !Number.isFinite(maxRow) || !Number.isFinite(minColumn) || !Number.isFinite(maxColumn)) {
+    return null
+  }
+
+  const expandedMinRow = Math.max(0, Math.floor(minRow) - 1)
+  const expandedMaxRow = Math.min(rows, Math.ceil(maxRow) + 1)
+  const expandedMinColumn = Math.max(0, Math.floor(minColumn) - 1)
+  const expandedMaxColumn = Math.min(columns, Math.ceil(maxColumn) + 1)
+
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const localMinX = -halfWidth + expandedMinColumn * cellSize
+  const localMaxX = -halfWidth + expandedMaxColumn * cellSize
+  const localMinZ = -halfDepth + expandedMinRow * cellSize
+  const localMaxZ = -halfDepth + expandedMaxRow * cellSize
+
+  const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
+  const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
+  const worldX0 = position.x + localMinX * scale.x
+  const worldX1 = position.x + localMaxX * scale.x
+  const worldZ0 = position.z + localMinZ * scale.z
+  const worldZ1 = position.z + localMaxZ * scale.z
+  return {
+    minX: Math.min(worldX0, worldX1),
+    maxX: Math.max(worldX0, worldX1),
+    minZ: Math.min(worldZ0, worldZ1),
+    maxZ: Math.max(worldZ0, worldZ1),
+  }
+}
+
 function rebuildLandformNodeForTerrain(store: {
   nodes: SceneNode[]
   currentSceneId?: string | null
@@ -2193,7 +2295,7 @@ function refreshLandformNodesForGroundChange(store: {
   currentSceneId?: string | null
   queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
   bumpSceneNodePropertyVersion: () => void
-}, groundNodeId: string): number {
+}, groundNodeId: string, dirtyBounds?: WorldBoundsXZ | null): number {
   const groundNode = findNodeById(store.nodes, groundNodeId)
   const groundDefinition = resolveGroundRuntimeDefinition(store, groundNodeId)
   if (!groundNode || !groundDefinition) {
@@ -2204,6 +2306,13 @@ function refreshLandformNodesForGroundChange(store: {
   const walk = (nodes: SceneNode[]) => {
     nodes.forEach((node) => {
       if (node.dynamicMesh?.type === 'Landform') {
+        if (dirtyBounds) {
+          const worldPoints = buildLandformFootprintWorldPoints(node, node.dynamicMesh as LandformDynamicMesh)
+          const landformBounds = computeWorldBoundsXZ(worldPoints)
+          if (!boundsIntersectXZ(landformBounds, dirtyBounds)) {
+            return
+          }
+        }
         const rebuilt = rebuildLandformNodeForTerrain(store, node.id)
         if (rebuilt) {
           changedNodeIds.push(node.id)
@@ -8353,7 +8462,6 @@ export const useSceneStore = defineStore('scene', {
       this.captureNodeBasicsHistorySnapshot([{ id: nodeId, userData: true }])
 
       const sanitized = userData && isPlainRecord(userData) ? (clonePlainRecord(userData) ?? null) : null
-
       visitNode(this.nodes, nodeId, (node) => {
         if (sanitized) {
           node.userData = sanitized

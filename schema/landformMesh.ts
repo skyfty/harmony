@@ -16,6 +16,13 @@ const LANDFORM_MESH_NAME = '__LandformSurface'
 const LANDFORM_FEATHER_PATCHED_FLAG = '__landformFeatherPatched'
 const LANDFORM_EDGE_ALPHA_FLOOR = 0.12
 
+type LandformGeometryData = {
+  positions: Float32Array
+  indices: Uint16Array | Uint32Array
+  uvs: Float32Array
+  feather: Float32Array
+}
+
 function normalizeMaterialConfigId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   return raw.length ? raw : null
@@ -115,7 +122,7 @@ function buildFallbackUvs(vertices: THREE.Vector3[], uvScale: { x: number; y: nu
   return uvs
 }
 
-function buildLandformGeometry(definition: LandformDynamicMesh): THREE.BufferGeometry | null {
+function buildLandformGeometryData(definition: LandformDynamicMesh): LandformGeometryData | null {
   const vertices = Array.isArray(definition.surfaceVertices)
     ? definition.surfaceVertices.map((entry) => toFiniteVector3(entry)).filter((entry): entry is THREE.Vector3 => Boolean(entry))
     : []
@@ -127,7 +134,6 @@ function buildLandformGeometry(definition: LandformDynamicMesh): THREE.BufferGeo
     return null
   }
 
-  const geometry = new THREE.BufferGeometry()
   const positions = new Float32Array(vertices.length * 3)
   for (let index = 0; index < vertices.length; index += 1) {
     const vertex = vertices[index]!
@@ -136,25 +142,23 @@ function buildLandformGeometry(definition: LandformDynamicMesh): THREE.BufferGeo
     positions[offset + 1] = vertex.y
     positions[offset + 2] = vertex.z
   }
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
 
   const typedIndices = vertices.length > 65535 ? new Uint32Array(indices) : new Uint16Array(indices)
-  geometry.setIndex(new THREE.BufferAttribute(typedIndices, 1))
 
   const uvScale = resolveUvScale(definition.uvScale)
   const providedUvs = Array.isArray(definition.surfaceUvs)
     ? definition.surfaceUvs.map((entry) => toFiniteVector2(entry)).filter((entry): entry is THREE.Vector2 => Boolean(entry))
     : []
+  let uvs: Float32Array
   if (providedUvs.length === vertices.length) {
-    const uvs = new Float32Array(vertices.length * 2)
+    uvs = new Float32Array(vertices.length * 2)
     for (let index = 0; index < providedUvs.length; index += 1) {
       const uv = providedUvs[index]!
       uvs[index * 2] = uv.x
       uvs[index * 2 + 1] = uv.y
     }
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   } else {
-    geometry.setAttribute('uv', new THREE.BufferAttribute(buildFallbackUvs(vertices, uvScale), 2))
+    uvs = buildFallbackUvs(vertices, uvScale)
   }
 
   const providedFeather = Array.isArray(definition.surfaceFeather) ? definition.surfaceFeather : []
@@ -163,7 +167,21 @@ function buildLandformGeometry(definition: LandformDynamicMesh): THREE.BufferGeo
     const value = Number(providedFeather[index])
     feather[index] = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1
   }
-  geometry.setAttribute('landformFeather', new THREE.BufferAttribute(feather, 1))
+
+  return { positions, indices: typedIndices, uvs, feather }
+}
+
+function buildLandformGeometry(definition: LandformDynamicMesh): THREE.BufferGeometry | null {
+  const geometryData = buildLandformGeometryData(definition)
+  if (!geometryData) {
+    return null
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(geometryData.positions, 3))
+  geometry.setIndex(new THREE.BufferAttribute(geometryData.indices, 1))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(geometryData.uvs, 2))
+  geometry.setAttribute('landformFeather', new THREE.BufferAttribute(geometryData.feather, 1))
 
   geometry.computeVertexNormals()
   geometry.computeBoundingBox()
@@ -171,8 +189,106 @@ function buildLandformGeometry(definition: LandformDynamicMesh): THREE.BufferGeo
   return geometry
 }
 
+function updateArrayAttribute(attribute: THREE.BufferAttribute, data: Float32Array | Uint16Array | Uint32Array): boolean {
+  if (attribute.array.length !== data.length) {
+    return false
+  }
+  attribute.array.set(data)
+  attribute.needsUpdate = true
+  return true
+}
+
+function canReuseLandformGeometry(geometry: THREE.BufferGeometry, geometryData: LandformGeometryData): boolean {
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  const uv = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
+  const feather = geometry.getAttribute('landformFeather') as THREE.BufferAttribute | undefined
+  const index = geometry.getIndex()
+  if (!position || !uv || !feather || !index) {
+    return false
+  }
+  if (!(position.array instanceof Float32Array) || !(uv.array instanceof Float32Array) || !(feather.array instanceof Float32Array)) {
+    return false
+  }
+  return position.array.length === geometryData.positions.length
+    && uv.array.length === geometryData.uvs.length
+    && feather.array.length === geometryData.feather.length
+    && index.array.length === geometryData.indices.length
+    && index.array.constructor === geometryData.indices.constructor
+}
+
+function updateLandformGeometry(geometry: THREE.BufferGeometry, definition: LandformDynamicMesh): boolean {
+  const geometryData = buildLandformGeometryData(definition)
+  if (!geometryData || !canReuseLandformGeometry(geometry, geometryData)) {
+    return false
+  }
+
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute
+  const uv = geometry.getAttribute('uv') as THREE.BufferAttribute
+  const feather = geometry.getAttribute('landformFeather') as THREE.BufferAttribute
+  const index = geometry.getIndex()!
+
+  updateArrayAttribute(position, geometryData.positions)
+  updateArrayAttribute(uv, geometryData.uvs)
+  updateArrayAttribute(feather, geometryData.feather)
+  updateArrayAttribute(index, geometryData.indices)
+
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return true
+}
+
+function findLandformSurfaceMesh(root: THREE.Group): THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]> | null {
+  const candidate = root.getObjectByName(LANDFORM_MESH_NAME)
+  const mesh = candidate as THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]> | null
+  if (mesh?.isMesh && mesh.geometry) {
+    return mesh
+  }
+  return null
+}
+
+function applyLandformMeshState(
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>,
+  definition: LandformDynamicMesh,
+): void {
+  mesh.userData = {
+    ...(mesh.userData ?? {}),
+    [MATERIAL_CONFIG_ID_KEY]: normalizeMaterialConfigId(definition.materialConfigId),
+    [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: {
+      uvMetersPerUnit: { x: 1, y: 1 },
+      repeatScale: { x: 1, y: 1 },
+    },
+    landformSurface: true,
+  }
+}
+
+function configureLandformMesh(
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>,
+  definition: LandformDynamicMesh,
+): void {
+  mesh.name = LANDFORM_MESH_NAME
+  mesh.castShadow = false
+  mesh.receiveShadow = true
+  mesh.renderOrder = LANDFORM_RENDER_ORDER
+  applyLandformMeshState(mesh, definition)
+  mesh.onBeforeRender = () => {
+    const currentMaterial = mesh.material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(currentMaterial)) {
+      mesh.material = currentMaterial.map((entry) => applyLandformFeatherMaterial(entry) ?? entry)
+      return
+    }
+    mesh.material = applyLandformFeatherMaterial(currentMaterial ?? null) ?? (currentMaterial as THREE.Material)
+  }
+}
+
 function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMesh, materialTemplate: THREE.MeshStandardMaterial): boolean {
   const content = ensureLandformContentGroup(group)
+  const existingMesh = findLandformSurfaceMesh(content)
+  if (existingMesh && updateLandformGeometry(existingMesh.geometry, definition)) {
+    applyLandformMeshState(existingMesh, definition)
+    return true
+  }
+
   const previousChildren = [...content.children]
   previousChildren.forEach((child) => child.removeFromParent())
   previousChildren.forEach((child) => disposeObject3D(child))
@@ -187,27 +303,7 @@ function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMes
     geometry,
     (applyLandformFeatherMaterial(baseMaterial) ?? baseMaterial) as THREE.Material,
   )
-  mesh.name = LANDFORM_MESH_NAME
-  mesh.castShadow = false
-  mesh.receiveShadow = true
-  mesh.renderOrder = LANDFORM_RENDER_ORDER
-  mesh.userData = {
-    ...(mesh.userData ?? {}),
-    [MATERIAL_CONFIG_ID_KEY]: normalizeMaterialConfigId(definition.materialConfigId),
-    [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: {
-      uvMetersPerUnit: { x: 1, y: 1 },
-      repeatScale: { x: 1, y: 1 },
-    },
-    landformSurface: true,
-  }
-  mesh.onBeforeRender = () => {
-    const currentMaterial = mesh.material as THREE.Material | THREE.Material[] | undefined
-    if (Array.isArray(currentMaterial)) {
-      mesh.material = currentMaterial.map((entry) => applyLandformFeatherMaterial(entry) ?? entry)
-      return
-    }
-    mesh.material = applyLandformFeatherMaterial(currentMaterial ?? null) ?? (currentMaterial as THREE.Material)
-  }
+  configureLandformMesh(mesh, definition)
   content.add(mesh)
   return true
 }
