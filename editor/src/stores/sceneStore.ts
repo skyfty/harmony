@@ -7268,6 +7268,44 @@ function insertNodeMutable(
   return false
 }
 
+function selectionContainsLandformNode(
+  nodes: SceneNode[],
+  selectedIds: string[] | null | undefined,
+): boolean {
+  if (!Array.isArray(selectedIds) || selectedIds.length === 0) {
+    return false
+  }
+
+  return selectedIds.some((id) => {
+    if (typeof id !== 'string' || id.length === 0) {
+      return false
+    }
+    return findNodeById(nodes, id)?.dynamicMesh?.type === 'Landform'
+  })
+}
+
+function isTransformToolAllowedForSelection(
+  nodes: SceneNode[],
+  selectedIds: string[] | null | undefined,
+  tool: EditorTool,
+): boolean {
+  if ((tool === 'rotate' || tool === 'scale') && selectionContainsLandformNode(nodes, selectedIds)) {
+    return false
+  }
+  return true
+}
+
+function normalizeInvalidTransformToolForSelection(
+  nodes: SceneNode[],
+  selectedIds: string[] | null | undefined,
+  tool: EditorTool,
+): EditorTool {
+  if (!isTransformToolAllowedForSelection(nodes, selectedIds, tool) && (tool === 'rotate' || tool === 'scale')) {
+    return 'translate'
+  }
+  return tool
+}
+
 
 export const useSceneStore = defineStore('scene', {
   state: (): SceneState => createInitialSceneState(),
@@ -8030,6 +8068,9 @@ export const useSceneStore = defineStore('scene', {
       this.transformSnapshotCaptured = false
     },
     setActiveTool(tool: EditorTool) {
+      if (!isTransformToolAllowedForSelection(this.nodes, this.selectedNodeIds, tool)) {
+        return
+      }
       this.activeTool = tool
     },
     modifyGroundRegion(bounds: GroundRegionBounds, transformer: (current: number, row: number, column: number) => number) {
@@ -8206,6 +8247,7 @@ export const useSceneStore = defineStore('scene', {
       }
       this.selectedNodeIds = normalized
       this.selectedNodeId = nextPrimary
+      this.activeTool = normalizeInvalidTransformToolForSelection(this.nodes, normalized, this.activeTool)
 
       if (this.selectedRoadSegment && (normalized.length !== 1 || normalized[0] !== this.selectedRoadSegment.nodeId)) {
         this.selectedRoadSegment = null

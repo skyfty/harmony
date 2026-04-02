@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import type { Direction } from '@/components/common/VectorControls.vue'
@@ -18,6 +18,21 @@ type NumericVector = { x: number; y: number; z: number }
 
 const MIN_SCALE = 0.01
 
+const selectionContainsLandform = computed(() => {
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  return selectedIds.some((id) => sceneStore.getNodeById(id)?.dynamicMesh?.type === 'Landform')
+})
+
+function isFieldDisabled(field: TransformField): boolean {
+  if (props.disabled) {
+    return true
+  }
+  if (selectionContainsLandform.value && (field === 'rotation' || field === 'scale')) {
+    return true
+  }
+  return false
+}
+
 const transformForm = reactive({
   position: createZeroVector(),
   rotation: createZeroVector(),
@@ -25,19 +40,19 @@ const transformForm = reactive({
 })
 
 function resetPosition() {
-  applyTransformReset({ position: createNumericVector(0, 0, 0) })
+  applyTransformReset('position', { position: createNumericVector(0, 0, 0) })
 }
 
 function resetRotation() {
-  applyTransformReset({ rotation: createNumericVector(0, 0, 0) })
+  applyTransformReset('rotation', { rotation: createNumericVector(0, 0, 0) })
 }
 
 function resetScale() {
-  applyTransformReset({ scale: createNumericVector(1, 1, 1) })
+  applyTransformReset('scale', { scale: createNumericVector(1, 1, 1) })
 }
 
 function ratioScale(direction: Direction) {
-  if (props.disabled) {
+  if (isFieldDisabled('scale')) {
     return
   }
   const node = selectedNode.value
@@ -56,8 +71,11 @@ function ratioScale(direction: Direction) {
   })
 }
 
-function applyTransformReset(patch: Partial<Pick<TransformUpdatePayload, 'position' | 'rotation' | 'scale'>>) {
-  if (props.disabled) {
+function applyTransformReset(
+  field: TransformField,
+  patch: Partial<Pick<TransformUpdatePayload, 'position' | 'rotation' | 'scale'>>,
+) {
+  if (isFieldDisabled(field)) {
     return
   }
   const node = selectedNode.value
@@ -162,7 +180,7 @@ function handleVectorChange(field: TransformField, axis: VectorAxis, rawValue: s
     [axis]: rawValue,
   }
 
-  if (props.disabled) {
+  if (isFieldDisabled(field)) {
     return
   }
 
@@ -246,7 +264,7 @@ function cloneVector(field: TransformField, source?: NumericVector): NumericVect
         <InspectorVectorControls
           label="Position"
           :model-value="transformForm.position"
-          :disabled="props.disabled"
+          :disabled="isFieldDisabled('position')"
           @dblclick:label="resetPosition"
           @update:axis="(axis, value) => handleVectorChange('position', axis, value)"
         />
@@ -255,7 +273,7 @@ function cloneVector(field: TransformField, source?: NumericVector): NumericVect
         <InspectorVectorControls
           label="Rotation"
           :model-value="transformForm.rotation"
-          :disabled="props.disabled"
+          :disabled="isFieldDisabled('rotation')"
           @dblclick:label="resetRotation"
           @update:axis="(axis, value) => handleVectorChange('rotation', axis, value)"
         />
@@ -265,7 +283,7 @@ function cloneVector(field: TransformField, source?: NumericVector): NumericVect
           label="Scale"
           :model-value="transformForm.scale"
           min="0.01"
-          :disabled="props.disabled"
+          :disabled="isFieldDisabled('scale')"
           @dblclick:label="resetScale"
           @wheel:label="ratioScale"
           @update:axis="(axis, value) => handleVectorChange('scale', axis, value)"

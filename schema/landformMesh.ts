@@ -358,7 +358,7 @@ function configureLandformMesh(
   }
 }
 
-function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMesh, materialTemplate: THREE.MeshStandardMaterial): boolean {
+function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMesh): boolean {
   const content = ensureLandformContentGroup(group)
   const existingMesh = findLandformSurfaceMesh(content)
   if (existingMesh && updateLandformGeometry(existingMesh.geometry, definition)) {
@@ -375,7 +375,7 @@ function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMes
     return false
   }
 
-  const baseMaterial = materialTemplate.clone()
+  const baseMaterial = createLandformMaterial()
   const mesh = new THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>(
     geometry,
     (applyLandformFeatherMaterial(baseMaterial) ?? baseMaterial) as THREE.Material,
@@ -388,7 +388,7 @@ function rebuildLandformGroup(group: THREE.Group, definition: LandformDynamicMes
 export function createLandformRenderGroup(definition: LandformDynamicMesh): THREE.Group {
   const root = new THREE.Group()
   root.name = 'Landform'
-  rebuildLandformGroup(root, definition, createLandformMaterial())
+  rebuildLandformGroup(root, definition)
   return root
 }
 
@@ -401,7 +401,7 @@ export function updateLandformGroup(object: THREE.Object3D, definition: Landform
     return false
   }
   const group = object as THREE.Group
-  return rebuildLandformGroup(group, definition, createLandformMaterial())
+  return rebuildLandformGroup(group, definition)
 }
 
 export function applyLandformFeatherMaterial(material: THREE.Material | null | undefined): THREE.Material | null {
