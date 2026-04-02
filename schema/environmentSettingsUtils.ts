@@ -32,6 +32,7 @@ export const DEFAULT_ENVIRONMENT_CSM_LIGHT_COLOR = '#ffffff'
 
 export const DEFAULT_ENVIRONMENT_CSM_SETTINGS: EnvironmentCsmSettings = {
   enabled: true,
+  shadowEnabled: true,
   lightColor: DEFAULT_ENVIRONMENT_CSM_LIGHT_COLOR,
   lightIntensity: DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
   sunAzimuthDeg: DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
@@ -128,6 +129,10 @@ function normalizeEnvironmentCsmSettings(value: unknown): EnvironmentCsmSettings
       typeof source.enabled === 'boolean'
         ? source.enabled
         : DEFAULT_ENVIRONMENT_CSM_SETTINGS.enabled,
+    shadowEnabled:
+      typeof source.shadowEnabled === 'boolean'
+        ? source.shadowEnabled
+        : DEFAULT_ENVIRONMENT_CSM_SETTINGS.shadowEnabled,
     lightColor: normalizeHexColor(source.lightColor, DEFAULT_ENVIRONMENT_CSM_SETTINGS.lightColor),
     lightIntensity: clampNumber(source.lightIntensity, 0, 16, DEFAULT_ENVIRONMENT_CSM_SETTINGS.lightIntensity),
     sunAzimuthDeg: clampNumber(source.sunAzimuthDeg, -180, 180, DEFAULT_ENVIRONMENT_CSM_SETTINGS.sunAzimuthDeg),

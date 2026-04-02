@@ -8,6 +8,14 @@
       label="Enable CSM"
       @update:model-value="(value) => emit('update:csm-enabled', Boolean(value))"
     />
+    <v-switch
+      :model-value="csmShadowEnabled"
+      density="compact"
+      hide-details
+      color="primary"
+      label="启用阴影"
+      @update:model-value="(value) => emit('update:csm-shadow-enabled', Boolean(value))"
+    />
     <div class="csm-sun-grid">
       <v-text-field
         v-model="csmLightColorInput"
@@ -114,6 +122,7 @@ import { nextTick, ref, watch } from 'vue'
 
 const props = defineProps<{
   csmEnabled: boolean
+  csmShadowEnabled: boolean
   csmLightColor: string
   csmLightIntensity: number
   csmSunAzimuthDeg: number
@@ -126,6 +135,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update:csm-enabled', value: boolean): void
+  (event: 'update:csm-shadow-enabled', value: boolean): void
   (event: 'update:csm-light-color', value: string): void
   (event: 'update:csm-light-intensity', value: number): void
   (event: 'update:csm-sun-azimuth-deg', value: number): void

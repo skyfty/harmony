@@ -1085,6 +1085,7 @@ export interface EnvironmentSettings {
 
 export interface EnvironmentCsmSettings {
   enabled: boolean
+  shadowEnabled: boolean
   lightColor: string
   lightIntensity: number
   sunAzimuthDeg: number

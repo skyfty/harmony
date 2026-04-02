@@ -126,6 +126,7 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
     Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon &&
     Boolean(a.csm?.enabled ?? true) === Boolean(b.csm?.enabled ?? true) &&
+    Boolean(a.csm?.shadowEnabled ?? true) === Boolean(b.csm?.shadowEnabled ?? true) &&
     (a.csm?.lightColor ?? '#ffffff') === (b.csm?.lightColor ?? '#ffffff') &&
     Math.abs((a.csm?.lightIntensity ?? 1) - (b.csm?.lightIntensity ?? 1)) <= epsilon &&
     Math.abs((a.csm?.sunAzimuthDeg ?? 45) - (b.csm?.sunAzimuthDeg ?? 45)) <= epsilon &&
