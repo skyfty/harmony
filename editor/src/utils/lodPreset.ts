@@ -6,7 +6,7 @@ export const LOD_PRESET_FORMAT_VERSION = 1
 
 export interface LodPresetAssetReference {
   assetId: string
-  type: 'model' | 'mesh'
+  type: 'model' | 'mesh' | 'image' | 'texture'
   name?: string
   downloadUrl?: string | null
   description?: string | null
@@ -54,7 +54,16 @@ function normalizeAssetRefs(value: unknown): LodPresetAssetReference[] {
       return
     }
     const typeRaw = normalizeAssetId(record.type)
-    const type = typeRaw === 'mesh' ? 'mesh' : typeRaw === 'model' ? 'model' : null
+    const type =
+      typeRaw === 'mesh'
+        ? 'mesh'
+        : typeRaw === 'model'
+          ? 'model'
+          : typeRaw === 'image'
+            ? 'image'
+            : typeRaw === 'texture'
+              ? 'texture'
+              : null
     if (!type) {
       return
     }

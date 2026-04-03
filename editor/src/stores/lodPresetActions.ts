@@ -1,5 +1,10 @@
 import type { SceneNode, SceneNodeComponentState } from '@schema'
-import { LOD_COMPONENT_TYPE, clampLodComponentProps, type LodComponentProps } from '@schema/components'
+import {
+  LOD_COMPONENT_TYPE,
+  clampLodComponentProps,
+  getLodLevelAssetId,
+  type LodComponentProps,
+} from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore, type AssetCacheEntry } from './assetCacheStore'
 import { determineAssetCategoryId } from './assetCatalog'
@@ -43,18 +48,18 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const name = typeof payload.name === 'string' ? payload.name : ''
       const props = clampLodComponentProps(payload.props)
       const assetCache = useAssetCacheStore()
-      const referencedModelIds = Array.from(
+      const referencedAssetIds = Array.from(
         new Set(
           props.levels
-            .map((level) => (typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''))
+            .map((level) => getLodLevelAssetId(level) ?? '')
             .filter((id) => Boolean(id)),
         ),
       )
 
-      const assetRefs = referencedModelIds
+      const assetRefs = referencedAssetIds
         .map<LodPresetAssetReference | null>((assetId) => {
           const asset = store.getAsset(assetId)
-          if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+          if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'image' && asset.type !== 'texture')) {
             return null
           }
           const entry = assetCache.getEntry(assetId)
@@ -140,12 +145,12 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
 
       const refs = Array.isArray(preset.assetRefs) ? preset.assetRefs : []
       if (refs.length) {
-        // Best-effort: ensure referenced model assets exist in this project, and trigger download if possible.
+        // Best-effort: ensure referenced LOD assets exist in this project, and trigger download if possible.
         refs.forEach((ref) => {
           if (!ref?.assetId || store.getAsset(ref.assetId)) {
             return
           }
-          if (ref.type !== 'model' && ref.type !== 'mesh') {
+          if (ref.type !== 'model' && ref.type !== 'mesh' && ref.type !== 'image' && ref.type !== 'texture') {
             return
           }
 
@@ -192,8 +197,8 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
           if (!refAsset) {
             return
           }
-          void assetCache.downloaProjectAsset(refAsset).catch((error) => {
-            console.warn('[LodPresetActions] Failed to download referenced LOD model asset', ref.assetId, error)
+          void assetCache.downloaProjectAsset(refAsset).catch((error: unknown) => {
+            console.warn('[LodPresetActions] Failed to download referenced LOD asset', ref.assetId, error)
           })
         })
       }

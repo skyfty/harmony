@@ -182,7 +182,7 @@ watch(
 
 <template>
   <div class="asset-painter" :style="thumbnailCssVars">
-      <div v-if="props.showSearch !== false" class="asset-toolbar">
+    <div v-if="props.showSearch !== false" class="asset-toolbar">
       <v-text-field
         :model-value="searchQuery"
         density="compact"
@@ -195,6 +195,11 @@ watch(
         :disabled="loadingMap[props.category]"
         @update:model-value="handleSearchInput"
       />
+    </div>
+
+    <!-- LOD UI HINT: show when selected asset is .lod -->
+    <div v-if="scatterSelectedAsset.value && scatterSelectedAsset.value.type === 'prefab' && scatterSelectedAsset.value.id.endsWith('.lod')" class="hint-text">
+      已选择 LOD 预设（.lod）：撒件时将自动使用其首个模型 LOD 进行地形散布。
     </div>
 
     <div v-if="loadingMap[props.category]" class="state-card">

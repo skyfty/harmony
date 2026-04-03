@@ -530,6 +530,10 @@ import {
   findNodeIdForInstance,
   type ModelInstanceGroup,
 } from '@harmony/schema/modelObjectCache';
+import {
+  subscribeBillboardInstancedMeshes,
+  updateBillboardInstanceCameraWorldPosition,
+} from '@harmony/schema/instancedBillboardCache';
 import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker';
 import { syncContinuousInstancedModelCommitted } from '@harmony/schema/continuousInstancedModel';
 import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@harmony/schema/wallInstancing';
@@ -1963,6 +1967,7 @@ const instancedMeshGroup = new THREE.Group();
 instancedMeshGroup.name = 'InstancedMeshes';
 const instancedMeshes: THREE.InstancedMesh[] = [];
 let stopInstancedMeshSubscription: (() => void) | null = null;
+let stopBillboardMeshSubscription: (() => void) | null = null;
 const instancedMatrixHelper = new THREE.Matrix4();
 const instancedPositionHelper = new THREE.Vector3();
 const instancedQuaternionHelper = new THREE.Quaternion();
@@ -3979,16 +3984,22 @@ async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | 
   await task;
 }
 
-function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D, camera: THREE.Camera): string | null {
+
+// Enhanced: support both model and billboard LOD targets
+function resolveDesiredLodTarget(
+  node: SceneNode,
+  object: THREE.Object3D,
+  camera: THREE.Camera
+): { kind: 'model', assetId: string } | { kind: 'billboard', imageAssetId: string, width: number, height: number } | null {
   const baseAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null;
   const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined;
   if (!component || !component.enabled) {
-    return baseAssetId;
+    return baseAssetId ? { kind: 'model', assetId: baseAssetId } : null;
   }
   const props = clampLodComponentProps(component.props);
   const levels = props.levels;
   if (!levels.length) {
-    return baseAssetId;
+    return baseAssetId ? { kind: 'model', assetId: baseAssetId } : null;
   }
   object.getWorldPosition(instancedCullingWorldPosition);
   const distance = instancedCullingWorldPosition.distanceTo(camera.position);
@@ -4000,46 +4011,86 @@ function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D, camer
       break;
     }
   }
+  if (!chosen) {
+    return baseAssetId ? { kind: 'model', assetId: baseAssetId } : null;
+  }
+  if (chosen.kind === 'billboard' && chosen.imageAssetId) {
+    // Billboard: use node's bounding box for size if available, fallback to 1x1
+    let width = 1, height = 1;
+    const bounds = object.userData?.instancedBounds;
+    if (bounds && bounds.min && bounds.max) {
+      width = Math.abs(bounds.max[0] - bounds.min[0]);
+      height = Math.abs(bounds.max[1] - bounds.min[1]);
+    }
+    return { kind: 'billboard', imageAssetId: chosen.imageAssetId, width, height };
+  }
   const id = chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId.trim() : '';
-  return id || baseAssetId;
+  return id ? { kind: 'model', assetId: id } : (baseAssetId ? { kind: 'model', assetId: baseAssetId } : null);
 }
 
-function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
-  const cached = getCachedModelObject(assetId);
-  if (!cached) {
-    const node = resolveNodeById(nodeId);
-    void ensureModelObjectCached(assetId, node);
-    return;
-  }
-  const node = resolveNodeById(nodeId);
-  const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout;
-  const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null };
-  const desiredCount = getInstanceLayoutCount(layout);
 
-  releaseModelInstance(nodeId);
-  clearInstancedTransformCacheForNode(nodeId);
-  const baseBinding = allocateModelInstance(assetId, nodeId);
-  if (!baseBinding) {
-    return;
-  }
-  for (let i = 1; i < desiredCount; i += 1) {
-    const bindingId = getInstanceLayoutBindingId(nodeId, i);
-    const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId);
-    if (!binding) {
-      releaseModelInstance(nodeId);
+// Enhanced: support both model and billboard LOD targets
+function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target: ReturnType<typeof resolveDesiredLodTarget>): void {
+  if (!target) return;
+  if (target.kind === 'model') {
+    const assetId = target.assetId;
+    const cached = getCachedModelObject(assetId);
+    if (!cached) {
+      const node = resolveNodeById(nodeId);
+      void ensureModelObjectCached(assetId, node);
       return;
     }
+    const node = resolveNodeById(nodeId);
+    const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout;
+    const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null };
+    const desiredCount = getInstanceLayoutCount(layout);
+
+    releaseModelInstance(nodeId);
+    clearInstancedTransformCacheForNode(nodeId);
+    const baseBinding = allocateModelInstance(assetId, nodeId);
+    if (!baseBinding) {
+      return;
+    }
+    for (let i = 1; i < desiredCount; i += 1) {
+      const bindingId = getInstanceLayoutBindingId(nodeId, i);
+      const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId);
+      if (!binding) {
+        releaseModelInstance(nodeId);
+        return;
+      }
+    }
+    const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout, cached.boundingBox) ?? cached.boundingBox;
+    const sphere = new THREE.Sphere();
+    layoutBounds.getBoundingSphere(sphere);
+    object.userData = {
+      ...(object.userData ?? {}),
+      instancedAssetId: assetId,
+      instancedBounds: serializeBoundingBox(layoutBounds),
+      __harmonyInstancedRadius: sphere.radius,
+    };
+    syncInstancedTransform(object, true);
+    return;
+  } else if (target.kind === 'billboard') {
+    // Billboard: use billboard instancing system
+    releaseModelInstance(nodeId);
+    clearInstancedTransformCacheForNode(nodeId);
+    // Register billboard instance
+    allocateBillboardInstance({
+      nodeId,
+      imageAssetId: target.imageAssetId,
+      width: target.width,
+      height: target.height,
+    });
+    object.userData = {
+      ...(object.userData ?? {}),
+      instancedAssetId: undefined,
+      billboardImageAssetId: target.imageAssetId,
+      billboardWidth: target.width,
+      billboardHeight: target.height,
+    };
+    syncInstancedTransform(object, true);
+    return;
   }
-  const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout, cached.boundingBox) ?? cached.boundingBox;
-  const sphere = new THREE.Sphere();
-  layoutBounds.getBoundingSphere(sphere);
-  object.userData = {
-    ...(object.userData ?? {}),
-    instancedAssetId: assetId,
-    instancedBounds: serializeBoundingBox(layoutBounds),
-    __harmonyInstancedRadius: sphere.radius,
-  };
-  syncInstancedTransform(object, true);
 }
 
 function resolveInstancedProxyRadius(object: THREE.Object3D): number {
@@ -4064,6 +4115,8 @@ function resolveInstancedProxyRadius(object: THREE.Object3D): number {
   return 0.5;
 }
 
+
+// Enhanced: support both model and billboard LOD targets
 function updateInstancedCullingAndLod(): void {
   const context = renderContext;
   if (!context) {
@@ -4078,7 +4131,8 @@ function updateInstancedCullingAndLod(): void {
   const candidateIds: string[] = [];
   const candidateObjects = new Map<string, THREE.Object3D>();
   nodeObjectMap.forEach((object, nodeId) => {
-    if (!object?.userData?.instancedAssetId) {
+    // Accept both instancedAssetId (model) and billboardImageAssetId (billboard)
+    if (!object?.userData?.instancedAssetId && !object?.userData?.billboardImageAssetId) {
       return;
     }
     const node = resolveNodeById(nodeId);
@@ -4131,28 +4185,42 @@ function updateInstancedCullingAndLod(): void {
         return;
       }
       releaseModelInstance(nodeId);
+      // Also release billboard instance if present
+      if (object.userData?.billboardImageAssetId) {
+        releaseBillboardInstance(nodeId);
+      }
       return;
     }
 
     instancedCullingLastVisibleAt.set(nodeId, now);
-    const desiredAssetId = resolveDesiredLodAssetId(node, object, camera);
-    if (!desiredAssetId) {
+    const desiredTarget = resolveDesiredLodTarget(node, object, camera);
+    if (!desiredTarget) {
       return;
     }
-    const currentAssetId = object.userData?.instancedAssetId as string | undefined;
-    if (currentAssetId !== desiredAssetId) {
-      applyInstancedLodSwitch(nodeId, object, desiredAssetId);
-      return;
+    // Switch logic: if current is model, check instancedAssetId; if billboard, check billboardImageAssetId
+    if (desiredTarget.kind === 'model') {
+      const currentAssetId = object.userData?.instancedAssetId as string | undefined;
+      if (currentAssetId !== desiredTarget.assetId) {
+        applyInstancedLodSwitch(nodeId, object, desiredTarget);
+        return;
+      }
+      const existingBinding = getModelInstanceBinding(nodeId);
+      const shouldForceUpload = !existingBinding || existingBinding.assetId !== desiredTarget.assetId;
+      const binding = allocateModelInstance(desiredTarget.assetId, nodeId);
+      if (!binding) {
+        void ensureModelObjectCached(desiredTarget.assetId, node);
+        return;
+      }
+      syncInstancedTransform(object, shouldForceUpload);
+    } else if (desiredTarget.kind === 'billboard') {
+      const currentImageAssetId = object.userData?.billboardImageAssetId as string | undefined;
+      if (currentImageAssetId !== desiredTarget.imageAssetId) {
+        applyInstancedLodSwitch(nodeId, object, desiredTarget);
+        return;
+      }
+      // Billboard instance already allocated; update transform if needed
+      syncInstancedTransform(object, true);
     }
-
-    const existingBinding = getModelInstanceBinding(nodeId);
-    const shouldForceUpload = !existingBinding || existingBinding.assetId !== desiredAssetId;
-    const binding = allocateModelInstance(desiredAssetId, nodeId);
-    if (!binding) {
-      void ensureModelObjectCached(desiredAssetId, node);
-      return;
-    }
-    syncInstancedTransform(object, shouldForceUpload);
   });
 }
 
@@ -9804,6 +9872,8 @@ function teardownRenderer() {
   resetAssetResolutionCaches();
   stopInstancedMeshSubscription?.();
   stopInstancedMeshSubscription = null;
+  stopBillboardMeshSubscription?.();
+  stopBillboardMeshSubscription = null;
   clearInstancedMeshes();
   disposeObject(scene);
   disposeMaterialTextureCache();
@@ -9900,7 +9970,11 @@ async function ensureRendererContext(result: UseCanvasResult) {
 
   scene.add(instancedMeshGroup);
   stopInstancedMeshSubscription?.();
+  stopBillboardMeshSubscription?.();
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
+    attachInstancedMesh(mesh);
+  });
+  stopBillboardMeshSubscription = subscribeBillboardInstancedMeshes((mesh) => {
     attachInstancedMesh(mesh);
   });
 
@@ -10288,6 +10362,8 @@ function startRenderLoop(
           updateAutoTourFollowCamera(deltaSeconds);
         }
 
+        updateBillboardInstanceCameraWorldPosition(camera.position);
+
         if (vehicleDriveActive.value) {
           updateVehicleDriveCamera(deltaSeconds);
         }
@@ -10403,6 +10479,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
 
   stopInstancedMeshSubscription?.();
   stopInstancedMeshSubscription = null;
+  stopBillboardMeshSubscription?.();
+  stopBillboardMeshSubscription = null;
   clearInstancedMeshes();
 
   if (sceneGraphRoot) {

@@ -40,13 +40,21 @@ import {
 	type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
 import {
+	getBillboardAspectRatio,
+	getOrLoadBillboardInstanceGroup,
+	updateBillboardInstanceCameraWorldPosition,
+} from '@schema/instancedBillboardCache'
+import {
 	bindScatterInstance,
+	composeScatterBillboardMatrix,
 	composeScatterMatrix,
+	getScatterRuntimeTargetKey,
 	getScatterInstanceWorldPosition,
 	releaseScatterInstance,
 	resetScatterInstanceBinding,
 	updateScatterInstanceMatrix,
 	buildScatterNodeId,
+	type ScatterRuntimeTarget,
 } from '@/utils/terrainScatterRuntime'
 import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 import { resolveAutoOverlayBuildPlan, type AutoOverlayBuildPlan } from './autoOverlayBuild'
@@ -1926,7 +1934,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					return
 				}
 				const asset = options.sceneStore.getAsset(id)
-				if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+				if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'image' && asset.type !== 'texture')) {
 					return
 				}
 				await assetCacheStore.downloaProjectAsset(asset)
@@ -1980,7 +1988,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return null
 		}
 		for (const level of levels) {
-			const id = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+			const kind = level?.kind === 'billboard' ? 'billboard' : 'model'
+			const id = kind === 'billboard'
+				? (typeof level?.billboardAssetId === 'string' ? level.billboardAssetId.trim() : '')
+				: (typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : '')
+			if (kind !== 'model') {
+				continue
+			}
 			if (id) {
 				return id
 			}
@@ -1988,11 +2002,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return null
 	}
 
-	function chooseLodModelAssetId(preset: Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>>, distance: number): string | null {
+	function resolveFirstLodModelAssetId(preset: Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>> | null): string | null {
+		return resolveLodBindingAssetId(preset)
+	}
+
+	function chooseLodTarget(
+		preset: Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>>,
+		distance: number,
+		fallbackModelAssetId: string | null,
+	): ScatterRuntimeTarget | null {
 		const levels = Array.isArray(preset?.props?.levels) ? preset.props.levels : []
-		if (!levels.length) {
-			return null
-		}
 		let chosen: (typeof levels)[number] | undefined
 		for (let i = levels.length - 1; i >= 0; i -= 1) {
 			const candidate = levels[i]
@@ -2001,8 +2020,121 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				break
 			}
 		}
-		const id = typeof chosen?.modelAssetId === 'string' ? chosen.modelAssetId.trim() : ''
-		return id || null
+		const kind = chosen?.kind === 'billboard' ? 'billboard' : 'model'
+		const assetId = kind === 'billboard'
+			? (typeof chosen?.billboardAssetId === 'string' ? chosen.billboardAssetId.trim() : '')
+			: (typeof chosen?.modelAssetId === 'string' ? chosen.modelAssetId.trim() : '')
+		const resolvedModelAssetId = resolveFirstLodModelAssetId(preset) ?? fallbackModelAssetId
+		if (assetId) {
+			return {
+				kind,
+				assetId,
+				sourceModelHeight: null,
+			}
+		}
+		if (!resolvedModelAssetId) {
+			return null
+		}
+		return {
+			kind: 'model',
+			assetId: resolvedModelAssetId,
+			sourceModelHeight: null,
+		}
+	}
+
+	function resolveCachedAssetUrl(assetId: string): string | null {
+		const entry = assetCacheStore.getEntry(assetId)
+		if (entry?.blobUrl) {
+			return entry.blobUrl
+		}
+		if (entry?.downloadUrl) {
+			return entry.downloadUrl
+		}
+		const asset = options.sceneStore.getAsset(assetId)
+		if (!asset) {
+			return null
+		}
+		return typeof asset.downloadUrl === 'string' && asset.downloadUrl.trim().length ? asset.downloadUrl.trim() : null
+	}
+
+	function ensureScatterBillboardCached(assetId: string): boolean {
+		const normalized = assetId.trim()
+		if (!normalized) {
+			return false
+		}
+		const url = resolveCachedAssetUrl(normalized)
+		if (url && getBillboardAspectRatio(normalized)) {
+			return true
+		}
+		if (pendingScatterModelLoads.has(`billboard:${normalized}`)) {
+			return false
+		}
+		const task = (async () => {
+			const asset = options.sceneStore.getAsset(normalized)
+			if (!asset || (asset.type !== 'image' && asset.type !== 'texture')) {
+				return
+			}
+			try {
+				if (!assetCacheStore.hasCache(normalized)) {
+					await assetCacheStore.loadFromIndexedDb(normalized)
+				}
+				if (!assetCacheStore.hasCache(normalized)) {
+					await assetCacheStore.downloaProjectAsset(asset)
+				}
+			} catch (error) {
+				console.warn('缓存散布 Billboard 资源失败', normalized, error)
+			}
+			await getOrLoadBillboardInstanceGroup(normalized, async () => resolveCachedAssetUrl(normalized))
+		})()
+			.finally(() => {
+				pendingScatterModelLoads.delete(`billboard:${normalized}`)
+			})
+		pendingScatterModelLoads.set(`billboard:${normalized}`, task)
+		return false
+	}
+
+	function resolveSourceModelHeight(assetId: string | null): number {
+		const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+		if (!normalized) {
+			return 1
+		}
+		const group = getCachedModelObject(normalized)
+		if (!group) {
+			return 1
+		}
+		const size = group.boundingBox.getSize(new THREE.Vector3())
+		return Number.isFinite(size.y) && size.y > 0 ? size.y : Math.max(group.radius * 2, 1)
+	}
+
+	function computeScatterTargetMatrix(
+		instance: TerrainScatterInstance,
+		groundMesh: THREE.Object3D,
+		target: ScatterRuntimeTarget,
+		sourceModelHeight: number,
+	): THREE.Matrix4 {
+		if (target.kind === 'billboard') {
+			const aspectRatio = getBillboardAspectRatio(target.assetId) ?? 1
+			return composeScatterBillboardMatrix(instance, groundMesh, sourceModelHeight, aspectRatio, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
+		}
+		return composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
+	}
+
+	function computeScatterTargetRadius(targetKey: string | null, instance: TerrainScatterInstance, sourceModelHeight: number): number {
+		if (targetKey && targetKey.startsWith('billboard:')) {
+			const assetId = targetKey.slice('billboard:'.length)
+			const aspectRatio = getBillboardAspectRatio(assetId) ?? 1
+			const scale = instance.localScale
+			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+			const safeScale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1
+			const height = Math.max(sourceModelHeight, 1) * safeScale
+			const width = height * aspectRatio
+			return Math.sqrt(width * width + height * height) * 0.5
+		}
+		const assetId = targetKey?.startsWith('model:') ? targetKey.slice('model:'.length) : targetKey
+		const baseRadius = assetId ? (getCachedModelObject(assetId)?.radius ?? 0.5) : 0.5
+		const scale = instance.localScale
+		const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+		return baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
 	}
 
 	function ensureScatterModelCached(assetId: string): boolean {
@@ -2375,12 +2507,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (!bindingAssetId) {
 					continue
 				}
+				const sourceModelHeight = resolveSourceModelHeight(resolveFirstLodModelAssetId(scatterLodPresetCache.get(resolved.lodPresetAssetId ?? '') ?? null) ?? selectionAssetId)
 				const group = await ensureModelGroup(bindingAssetId)
 				if (!group) {
 					continue
 				}
-				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
-				if (!bindScatterInstance(instance, matrix, group.assetId)) {
+				const target: ScatterRuntimeTarget = { kind: 'model', assetId: group.assetId, sourceModelHeight }
+				const matrix = computeScatterTargetMatrix(instance, groundMesh, target, sourceModelHeight)
+				if (!bindScatterInstance(instance, matrix, target)) {
 					console.warn('绑定地面散布实例失败', {
 						layerId: layer.id,
 						instanceId: instance.id,
@@ -2388,7 +2522,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					})
 					continue
 				}
-				scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(layer.id, instance.id), group.assetId)
+				instance.metadata = {
+					...(instance.metadata ?? {}),
+					billboardSourceModelHeight: sourceModelHeight,
+					billboardSourceAssetId: resolveFirstLodModelAssetId(scatterLodPresetCache.get(resolved.lodPresetAssetId ?? '') ?? null) ?? selectionAssetId,
+				}
+				scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(layer.id, instance.id), getScatterRuntimeTargetKey(target))
 			}
 		}
 		} finally {
@@ -2582,11 +2721,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
 			centerTarget.copy(worldPos)
-			const boundAssetId = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null
-			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
-			const scale = entry.instance.localScale
-			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
-			const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * scatterChunkStreamingCullRadiusMultiplier
+			const boundAssetKey = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null
+			const sourceModelHeight = Number(entry.instance.metadata?.billboardSourceModelHeight ?? 1)
+			const radius = computeScatterTargetRadius(boundAssetKey, entry.instance, sourceModelHeight) * scatterChunkStreamingCullRadiusMultiplier
 			return { radius }
 		})
 
@@ -2631,6 +2768,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!bindingAssetId) {
 			return
 		}
+		const sourceModelAssetId = resolveFirstLodModelAssetId(scatterLodPresetCache.get(resolved.lodPresetAssetId ?? '') ?? null) ?? selectionAssetId
+		const sourceModelHeight = resolveSourceModelHeight(sourceModelAssetId)
 		const group = await ensureScatterChunkStreamingModelGroup(bindingAssetId)
 		if (!group) {
 			return
@@ -2646,11 +2785,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		groundMesh.updateMatrixWorld(true)
 		scatterGroundWorldMatrixHelper.copy(groundMesh.matrixWorld)
-		const matrix = composeScatterMatrix(entry.instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
-		if (!bindScatterInstance(entry.instance, matrix, group.assetId)) {
+		const target: ScatterRuntimeTarget = { kind: 'model', assetId: group.assetId, sourceModelHeight }
+		const matrix = computeScatterTargetMatrix(entry.instance, groundMesh, target, sourceModelHeight)
+		if (!bindScatterInstance(entry.instance, matrix, target)) {
 			return
 		}
-		scatterRuntimeAssetIdByNodeId.set(nodeId, group.assetId)
+		entry.instance.metadata = {
+			...(entry.instance.metadata ?? {}),
+			billboardSourceModelHeight: sourceModelHeight,
+			billboardSourceAssetId: sourceModelAssetId,
+		}
+		scatterRuntimeAssetIdByNodeId.set(nodeId, getScatterRuntimeTargetKey(target))
 		scatterChunkStreamingAllocatedNodeIds.add(nodeId)
 	}
 
@@ -5241,6 +5386,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterLodImmediateSyncNeeded = false
 		lastScatterLodUpdateAt = now
 		scatterLodCameraPosition.copy(camera.position)
+		updateBillboardInstanceCameraWorldPosition(camera.position)
 		groundMesh.updateMatrixWorld(true)
 		scatterGroundWorldMatrixHelper.copy(groundMesh.matrixWorld)
 
@@ -5276,25 +5422,40 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 				const distance = worldPos.distanceTo(scatterLodCameraPosition)
+				const sourceModelAssetId = resolveFirstLodModelAssetId(preset) ?? resolveScatterSelectionAssetId(instance, layer)
+				const sourceModelHeight = resolveSourceModelHeight(sourceModelAssetId)
 				const desired = lockScatterLodToBaseAsset
-					? resolveLodBindingAssetId(preset)
-					: chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
-				if (!desired) {
+					? ({ kind: 'model', assetId: resolveLodBindingAssetId(preset) ?? '', sourceModelHeight } satisfies ScatterRuntimeTarget)
+					: chooseLodTarget(preset, distance, sourceModelAssetId)
+				if (!desired?.assetId) {
 					continue
 				}
+				const desiredKey = getScatterRuntimeTargetKey(desired)
 				const current = scatterRuntimeAssetIdByNodeId.get(nodeId)
-				if (current === desired) {
+				if (current === desiredKey) {
 					continue
 				}
-				if (!ensureScatterModelCached(desired)) {
+				const isReady = desired.kind === 'billboard'
+					? ensureScatterBillboardCached(desired.assetId)
+					: ensureScatterModelCached(desired.assetId)
+				if (!isReady && desired.kind !== 'billboard') {
+					continue
+				}
+				if (desired.kind === 'billboard' && !getBillboardAspectRatio(desired.assetId)) {
 					continue
 				}
 				releaseScatterInstance(instance)
-				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
+				const matrix = computeScatterTargetMatrix(instance, groundMesh, desired, sourceModelHeight)
 				if (!bindScatterInstance(instance, matrix, desired)) {
 					continue
 				}
-				scatterRuntimeAssetIdByNodeId.set(nodeId, desired)
+				instance.metadata = {
+					...(instance.metadata ?? {}),
+					billboardSourceModelHeight: sourceModelHeight,
+					billboardSourceAssetId: sourceModelAssetId,
+					billboardAssetId: desired.kind === 'billboard' ? desired.assetId : null,
+				}
+				scatterRuntimeAssetIdByNodeId.set(nodeId, desiredKey)
 			}
 			return
 		}
@@ -5327,13 +5488,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
 			centerTarget.copy(worldPos)
 			const baseBindingAssetId = resolveLodBindingAssetId(entry.preset)
-			const boundAssetId = lockScatterLodToBaseAsset
-				? (baseBindingAssetId ?? scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null)
-				: (scatterRuntimeAssetIdByNodeId.get(nodeId) ?? baseBindingAssetId)
-			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
-			const scale = entry.instance.localScale
-			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
-			const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
+			const boundAssetKey = lockScatterLodToBaseAsset
+				? (baseBindingAssetId ? `model:${baseBindingAssetId}` : scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null)
+				: (scatterRuntimeAssetIdByNodeId.get(nodeId) ?? (baseBindingAssetId ? `model:${baseBindingAssetId}` : null))
+			const sourceModelHeight = Number(entry.instance.metadata?.billboardSourceModelHeight ?? 1)
+			const radius = computeScatterTargetRadius(boundAssetKey, entry.instance, sourceModelHeight)
 			return { radius }
 		})
 
@@ -5345,28 +5504,43 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 			const distance = worldPos.distanceTo(scatterLodCameraPosition)
+			const sourceModelAssetId = resolveFirstLodModelAssetId(entry.preset) ?? resolveScatterSelectionAssetId(instance, entry.layer)
+			const sourceModelHeight = resolveSourceModelHeight(sourceModelAssetId)
 			const desired = lockScatterLodToBaseAsset
-				? resolveLodBindingAssetId(entry.preset)
-				: chooseLodModelAssetId(entry.preset, distance) ?? resolveLodBindingAssetId(entry.preset)
-			if (!desired) {
+				? ({ kind: 'model', assetId: resolveLodBindingAssetId(entry.preset) ?? '', sourceModelHeight } satisfies ScatterRuntimeTarget)
+				: chooseLodTarget(entry.preset, distance, sourceModelAssetId)
+			if (!desired?.assetId) {
 				continue
 			}
+			const desiredKey = getScatterRuntimeTargetKey(desired)
 			const current = scatterRuntimeAssetIdByNodeId.get(nodeId)
 			const hasBinding = Boolean(instance.binding?.nodeId)
-			if (current === desired && hasBinding) {
+			if (current === desiredKey && hasBinding) {
 				continue
 			}
-			if (!ensureScatterModelCached(desired)) {
+			const isReady = desired.kind === 'billboard'
+				? ensureScatterBillboardCached(desired.assetId)
+				: ensureScatterModelCached(desired.assetId)
+			if (!isReady && desired.kind !== 'billboard') {
 				continue
 			}
-			if (current !== desired) {
+			if (desired.kind === 'billboard' && !getBillboardAspectRatio(desired.assetId)) {
+				continue
+			}
+			if (current !== desiredKey) {
 				releaseScatterInstance(instance)
 			}
-			const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper, scatterGroundWorldMatrixHelper)
+			const matrix = computeScatterTargetMatrix(instance, groundMesh, desired, sourceModelHeight)
 			if (!bindScatterInstance(instance, matrix, desired)) {
 				continue
 			}
-			scatterRuntimeAssetIdByNodeId.set(nodeId, desired)
+			instance.metadata = {
+				...(instance.metadata ?? {}),
+				billboardSourceModelHeight: sourceModelHeight,
+				billboardSourceAssetId: sourceModelAssetId,
+				billboardAssetId: desired.kind === 'billboard' ? desired.assetId : null,
+			}
+			scatterRuntimeAssetIdByNodeId.set(nodeId, desiredKey)
 		}
 	}
 
