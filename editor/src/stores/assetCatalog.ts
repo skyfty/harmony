@@ -12,6 +12,7 @@ export interface AssetCategoryDefinition {
     | 'materials'
     | 'behaviors'
     | 'prefabs'
+    | 'lods'
     | 'wallPresets'
     | 'floorPresets'
     | 'videos'
@@ -75,7 +76,14 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     assetType: 'prefab',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-prefabs`,
     label: 'Prefabs',
-    extensions: ['.prefab', '.lod'],
+    extensions: ['.prefab'],
+  },
+  {
+    key: 'lods',
+    assetType: 'lod',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-lods`,
+    label: 'LOD Presets',
+    extensions: ['.lod'],
   },
   {
     key: 'wallPresets',

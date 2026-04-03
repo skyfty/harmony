@@ -198,7 +198,7 @@ watch(
     </div>
 
     <!-- LOD UI HINT: show when selected asset is .lod -->
-    <div v-if="scatterSelectedAsset?.value && scatterSelectedAsset.value.type === 'prefab' && scatterSelectedAsset.value.id.endsWith('.lod')" class="hint-text">
+    <div v-if="scatterSelectedAsset && scatterSelectedAsset.type === 'lod'" class="hint-text">
       已选择 LOD 预设（.lod）：撒件时将自动使用其首个模型 LOD 进行地形散布。
     </div>
 

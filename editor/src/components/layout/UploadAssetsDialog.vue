@@ -43,6 +43,7 @@ const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
   hdri: '#009688',
   material: '#ffb74d',
   prefab: '#7986cb',
+  lod: '#7986cb',
   video: '#ff7043',
   file: '#546e7a',
   behavior: '#607d8b',
@@ -364,7 +365,7 @@ function buildExtraHints(entry: UploadAssetEntry): string[] {
   const hints: string[] = []
   const color = normalizeHexColor(entry.color) ?? normalizeHexColor(entry.asset.color ?? null)
   if (color) hints.push(`Primary color ${color}`)
-  if (['model', 'prefab'].includes(entry.asset.type)) {
+  if (['model', 'prefab', 'lod'].includes(entry.asset.type)) {
     const parts: string[] = []
     if (typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) && entry.dimensionLength > 0) parts.push(`Length ${entry.dimensionLength.toFixed(2)} m`)
     if (typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) && entry.dimensionWidth > 0) parts.push(`Width ${entry.dimensionWidth.toFixed(2)} m`)
@@ -851,7 +852,7 @@ async function buildPreparedEntryMetadata(
       height: ASSET_THUMBNAIL_HEIGHT,
     })
     thumbnailSource = 'generated'
-    thumbnailGenerationHint = ['model', 'mesh', 'prefab'].includes(thumbnailAsset.type) ? 'model-default-placeholder' : 'auto-generated'
+    thumbnailGenerationHint = ['model', 'mesh', 'prefab', 'lod'].includes(thumbnailAsset.type) ? 'model-default-placeholder' : 'auto-generated'
   }
 
   const thumbnailUrl = thumbnailFile ? await readBlobAsDataUrl(thumbnailFile) : persistedThumbnailUrl
@@ -1261,14 +1262,7 @@ function isModelAsset(asset: ProjectAsset): boolean {
   if (detectAssetPreviewPresetKind(asset)) {
     return true
   }
-  // 支持 .lod prefab 作为模型资产
-  if (asset.type === 'prefab') {
-    const ext = getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id)
-    if (ext === '.lod') {
-      return true
-    }
-  }
-  if (['model', 'mesh', 'prefab', 'hdri'].includes(asset.type)) {
+  if (['model', 'mesh', 'prefab', 'lod', 'hdri'].includes(asset.type)) {
     return true
   }
   return isSkycubeFileAsset(asset)

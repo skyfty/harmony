@@ -170,3 +170,8 @@ export function buildLodPresetFilename(name: string): string {
   // LOD presets are stored as JSON assets with a .lod extension.
   return `${base}.lod`
 }
+
+export function isLodPresetFilename(value: string | null | undefined): boolean {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return raw.endsWith('.lod')
+}

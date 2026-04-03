@@ -93,7 +93,7 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const projectAsset: ProjectAsset = {
         id: assetId,
         name: name?.trim().length ? name.trim() : 'LOD Preset',
-        type: 'prefab',
+        type: 'lod',
         downloadUrl: assetId,
         previewColor: deps.LOD_PRESET_PREVIEW_COLOR,
         thumbnail: null,
@@ -122,7 +122,7 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       if (!asset) {
         throw new Error('LOD 预设资源不存在')
       }
-      if (asset.type !== 'prefab') {
+      if (asset.type !== 'lod') {
         throw new Error('指定资源并非 LOD 预设')
       }
 

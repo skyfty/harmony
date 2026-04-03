@@ -60,6 +60,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useSceneStore } from '@/stores/sceneStore'
 import ModelPreview from '@/components/common/ModelPreview.vue'
 import PrefabPreview from '@/components/common/PrefabPreview.vue'
 import HDRPreview from '@/components/common/HDRPreview.vue'
@@ -78,6 +79,7 @@ const emit = defineEmits<{
 }>()
 
 const assetCacheStore = useAssetCacheStore()
+const sceneStore = useSceneStore()
 
 const previewState = reactive({
   loading: false,
@@ -96,13 +98,8 @@ let loadToken = 0
 const metaProbes = new Set<HTMLImageElement>()
 
 const presetPreviewKind = computed(() => detectAssetPreviewPresetKind(props.asset))
-// LOD: 检查是否为 .lod prefab
-const isLodAsset = computed(() => {
-  if (props.asset.type !== 'prefab') return false
-  const ext = getLastExtensionFromFilenameOrUrl(props.asset.name || props.asset.downloadUrl || props.asset.id)
-  return ext === 'lod'
-})
-const showLodModelPreview = computed(() => Boolean(previewState.file) && isLodAsset.value)
+// LOD: 识别 lod 资产类型
+const isLodAsset = computed(() => props.asset.type === 'lod')
 const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'mesh'].includes(props.asset.type))
 const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value && !isLodAsset.value)
 const showPresetPreview = computed(() => Boolean(previewState.file) && Boolean(presetPreviewKind.value))
@@ -226,7 +223,7 @@ async function preparePreview(): Promise<void> {
       const modelAssetId = resolveFirstLodModelAssetId(lodPreset)
       if (!modelAssetId) throw new Error('LOD 预设未配置可用模型')
       // 3. 加载模型文件
-      const modelAsset = assetCacheStore.getAsset(modelAssetId)
+      const modelAsset = sceneStore.getAsset(modelAssetId)
       if (!modelAsset) throw new Error('LOD 引用模型未导入')
       let modelFile = assetCacheStore.createFileFromCache(modelAssetId)
       if (!modelFile) {

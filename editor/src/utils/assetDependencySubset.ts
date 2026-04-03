@@ -205,9 +205,38 @@ function collectAssetReferencesFromConfigValue(value: unknown, bucket: Set<strin
   })
 }
 
+
 export function collectConfigAssetDependencyIds(value: unknown): string[] {
   const bucket = new Set<string>()
   collectAssetReferencesFromConfigValue(value, bucket)
+
+  // Special handling for .lod files: extract from props.levels[*] and assetRefs[*]
+  if (value && typeof value === 'object') {
+    // Try to detect LodPresetData shape
+    const obj = value as Record<string, any>
+    // props.levels[*].modelAssetId / billboardAssetId
+    if (obj.props && Array.isArray(obj.props.levels)) {
+      for (const level of obj.props.levels) {
+        if (level && typeof level === 'object') {
+          if (typeof level.modelAssetId === 'string' && level.modelAssetId.trim()) {
+            bucket.add(level.modelAssetId.trim())
+          }
+          if (typeof level.billboardAssetId === 'string' && level.billboardAssetId.trim()) {
+            bucket.add(level.billboardAssetId.trim())
+          }
+        }
+      }
+    }
+    // assetRefs[*].assetId
+    if (Array.isArray(obj.assetRefs)) {
+      for (const ref of obj.assetRefs) {
+        if (ref && typeof ref === 'object' && typeof ref.assetId === 'string' && ref.assetId.trim()) {
+          bucket.add(ref.assetId.trim())
+        }
+      }
+    }
+  }
+
   return Array.from(bucket)
 }
 

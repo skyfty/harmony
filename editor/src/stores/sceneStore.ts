@@ -179,6 +179,7 @@ import { createGuideRouteGroup } from '@schema/guideRouteMesh'
 import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
+  resolveFirstLodModelAssetId,
   type LodPresetData,
 } from '@/utils/lodPreset'
 import { createLodPresetActions } from './lodPresetActions'
@@ -362,6 +363,13 @@ type NodeComponentPropsOf<T extends NodeComponentType> = T extends keyof NodeCom
 type AddNodeComponentResult<T extends NodeComponentType> = {
   component: SceneNodeComponentState<NodeComponentPropsOf<T>>
   created: boolean
+}
+
+type ResolvedPlaceableAsset = {
+  requestedAsset: ProjectAsset
+  modelAsset: ProjectAsset
+  lodPresetAssetId: string | null
+  lodPresetData: LodPresetData | null
 }
 
 installPlanningImagesResolver()
@@ -9854,6 +9862,83 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
+    async resolvePlaceableAsset(assetOrId: ProjectAsset | string): Promise<ResolvedPlaceableAsset> {
+      const requestedAsset = typeof assetOrId === 'string'
+        ? this.getAsset(assetOrId)
+        : assetOrId
+      if (!requestedAsset) {
+        throw new Error('Unable to find the requested asset')
+      }
+
+      if (requestedAsset.type === 'model' || requestedAsset.type === 'mesh') {
+        return {
+          requestedAsset,
+          modelAsset: requestedAsset,
+          lodPresetAssetId: null,
+          lodPresetData: null,
+        }
+      }
+
+      if (requestedAsset.type !== 'lod') {
+        throw new Error('Asset is not a placeable model asset')
+      }
+
+      const preset = await this.loadLodPreset(requestedAsset.id)
+      const modelAssetId = resolveFirstLodModelAssetId(preset)
+      if (!modelAssetId) {
+        throw new Error('LOD preset does not contain a usable model level')
+      }
+
+      const modelAsset = this.getAsset(modelAssetId)
+      if (!modelAsset) {
+        throw new Error('Referenced LOD model asset is not available in this project')
+      }
+      if (modelAsset.type !== 'model' && modelAsset.type !== 'mesh') {
+        throw new Error('Referenced LOD asset is not a model or mesh asset')
+      }
+
+      return {
+        requestedAsset,
+        modelAsset,
+        lodPresetAssetId: requestedAsset.id,
+        lodPresetData: preset,
+      }
+    },
+
+    async addPlaceableAssetNode(payload: {
+      asset: ProjectAsset
+      position?: THREE.Vector3
+      baseY?: number
+      name?: string
+      rotation?: THREE.Vector3
+      scale?: THREE.Vector3
+      parentId?: string | null
+      snapToGrid?: boolean
+      editorFlags?: SceneNodeEditorFlags
+      appendToParentEnd?: boolean
+    }): Promise<SceneNode | null> {
+      const resolved = await this.resolvePlaceableAsset(payload.asset)
+
+      if (resolved.lodPresetAssetId) {
+        const assetCache = useAssetCacheStore()
+        if (!assetCache.hasCache(resolved.modelAsset.id)) {
+          const entry = await assetCache.downloaProjectAsset(resolved.modelAsset)
+          if (!assetCache.hasCache(resolved.modelAsset.id)) {
+            throw new Error(entry.error ?? 'Referenced LOD model asset is not ready yet')
+          }
+        }
+      }
+
+      const node = await this.addModelNode({
+        ...payload,
+        asset: resolved.modelAsset,
+      })
+      if (node && resolved.lodPresetAssetId) {
+        await this.applyLodPresetToNode(node.id, resolved.lodPresetAssetId)
+      }
+      return node
+    },
+
     async spawnAssetIntoEmptyGroupAtPosition(
       assetId: string,
       groupId: string,
@@ -9959,12 +10044,15 @@ export const useSceneStore = defineStore('scene', {
         return { asset, node }
       }
 
-      const node = await this.addModelNode({
-        asset,
-        position,
-        rotation: options.rotation,
-        parentId: targetParentId ?? undefined,
-      })
+      const supportsDirectPlacement = asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod'
+      const node = supportsDirectPlacement
+        ? await this.addPlaceableAssetNode({
+            asset,
+            position,
+            rotation: options.rotation,
+            parentId: targetParentId ?? undefined,
+          })
+        : null
       if (node) {
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldPosition(node.id, position))

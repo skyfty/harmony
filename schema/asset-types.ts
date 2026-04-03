@@ -6,6 +6,7 @@ const AssetTypesList = [
   'material',
   'file',
   'prefab',
+  'lod',
   'video',
   'mesh',
   'behavior',

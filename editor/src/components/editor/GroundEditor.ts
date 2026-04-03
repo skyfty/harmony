@@ -1902,7 +1902,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return null
 		}
 		const asset = options.sceneStore.getAsset(assetId)
-		if (asset?.type === 'prefab') {
+		if (asset?.type === 'prefab' || asset?.type === 'lod') {
 			return assetId
 		}
 		return null
@@ -2427,7 +2427,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const resolveBindingAssetId = async (selectionAssetId: string): Promise<{ bindingAssetId: string | null; lodPresetAssetId: string | null }> => {
 			const asset = options.sceneStore.getAsset(selectionAssetId)
-			if (asset?.type === 'prefab') {
+			if (asset?.type === 'prefab' || asset?.type === 'lod') {
 				await ensureScatterLodPresetCached(selectionAssetId)
 				const preset = scatterLodPresetCache.get(selectionAssetId) ?? null
 				const base = resolveLodBindingAssetId(preset)
@@ -2639,7 +2639,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return cached
 		}
 		const asset = options.sceneStore.getAsset(normalized)
-		if (asset?.type === 'prefab') {
+		if (asset?.type === 'prefab' || asset?.type === 'lod') {
 			await ensureScatterLodPresetCached(normalized)
 			const preset = scatterLodPresetCache.get(normalized) ?? null
 			const base = resolveLodBindingAssetId(preset)
@@ -3077,7 +3077,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		let bindingAssetId: string | null = asset.id
 		let lodPresetAssetId: string | null = null
-		if (asset.type === 'prefab') {
+		if (asset.type === 'prefab' || asset.type === 'lod') {
 			await ensureScatterLodPresetCached(asset.id)
 			const preset = scatterLodPresetCache.get(asset.id) ?? null
 			const base = resolveLodBindingAssetId(preset)

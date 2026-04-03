@@ -548,7 +548,7 @@ async function ensureAssetCached(asset: ProjectAsset) {
   }
 }
 
-const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh'])
+const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'lod'])
 const MATERIAL_ASSET_TYPES = new Set<ProjectAsset['type']>(['material'])
 const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture', 'image'])
 
@@ -705,7 +705,7 @@ async function handleAddAsset(asset: ProjectAsset) {
     }
     await ensureAssetCached(preparedAsset)
     if (MODEL_ASSET_TYPES.has(preparedAsset.type)) {
-      const node = await sceneStore.addModelNode({ asset: preparedAsset, parentId: parentNode?.id ?? undefined })
+      const node = await sceneStore.addPlaceableAssetNode({ asset: preparedAsset, parentId: parentNode?.id ?? undefined })
       if (!node) {
         throw new Error('Asset is not ready yet')
       }
@@ -920,13 +920,22 @@ function detachDragSuppressionListeners() {
 function initializeDragSuppression(preparedAsset: ProjectAsset, sourceAssetId: string) {
   detachDragSuppressionListeners()
   const supportsSuppression = preparedAsset.type === 'prefab' || MODEL_ASSET_TYPES.has(preparedAsset.type)
-  const preparedAssetId = supportsSuppression ? preparedAsset.id : null
   dragSuppressionSourceAssetId = sourceAssetId
-  dragSuppressionPreparedAssetId = preparedAssetId
+  dragSuppressionPreparedAssetId = supportsSuppression ? preparedAsset.id : null
   dragSuppressionPreparedAssetType = supportsSuppression ? preparedAsset.type : null
   dragSuppressionActive = false
   if (dragSuppressionPreparedAssetId) {
     attachDragSuppressionListeners()
+  }
+  if (preparedAsset.type === 'lod') {
+    void sceneStore.resolvePlaceableAsset(preparedAsset).then((resolved) => {
+      if (dragSuppressionSourceAssetId !== sourceAssetId || dragSuppressionPreparedAssetType !== 'lod') {
+        return
+      }
+      dragSuppressionPreparedAssetId = resolved.modelAsset.id
+    }).catch(() => {
+      // Leave the LOD asset id in place; viewport drag preview still resolves the first model asynchronously.
+    })
   }
 }
 
@@ -2277,6 +2286,7 @@ const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   video: '#1E88E5',
   mesh: '#8D6E63',
   hdri: '#0097A7',
+  lod: '#CCCCCC',
 }
 
 function resolvePreviewColor(type: ProjectAsset['type']): string {
