@@ -1,3 +1,18 @@
+/**
+ * 解析 LodComponentProps，返回首个可用的模型 assetId（跳过空/非 model level）。
+ * @param props LodComponentProps 或 LodPresetData
+ * @returns string | null
+ */
+export function resolveFirstLodModelAssetId(props: LodComponentProps | { props: LodComponentProps } | null | undefined): string | null {
+  const levels = (props && 'props' in props ? props.props.levels : props?.levels) ?? []
+  for (const level of levels) {
+    if (level && (level.kind === undefined || level.kind === 'model')) {
+      const id = typeof level.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+      if (id) return id
+    }
+  }
+  return null
+}
 import { generateUuid } from '@/utils/uuid'
 import type { LodComponentProps } from '@schema/components'
 import { clampLodComponentProps } from '@schema/components/definitions/lodComponent'
