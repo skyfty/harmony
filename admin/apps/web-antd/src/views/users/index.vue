@@ -8,6 +8,7 @@ import type {
 } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
@@ -32,7 +33,7 @@ import {
   Upload,
 } from 'ant-design-vue';
 import { Tooltip } from 'ant-design-vue';
-import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { DeleteOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons-vue';
 import { createResourceAssetApi } from '#/api/core/resources';
 
 interface UserFormModel {
@@ -73,6 +74,7 @@ const avatarUploadProps: UploadProps = {
 };
 
 const { t } = useI18n();
+const router = useRouter();
 const modalTitle = computed(() => (editingUserId.value ? t('page.systemUsers.index.modal.edit') : t('page.systemUsers.index.modal.create')));
 
 const userRules = computed(() => ({
@@ -132,6 +134,10 @@ function openEditModal(record: UserItem) {
 
 function closeModal() {
   modalOpen.value = false;
+}
+
+function openDetail(record: UserItem) {
+  router.push({ name: 'UserDetail', params: { id: record.id } });
 }
 
 async function submitUser() {
@@ -363,6 +369,11 @@ function handleAvatarBeforeUpload(file: UploadFile) {
 
       <template #actions="{ row }">
         <Space>
+          <Tooltip :title="t('page.systemUsers.index.actions.detail')">
+            <Button size="small" type="text" @click="openDetail(row)">
+              <EyeOutlined />
+            </Button>
+          </Tooltip>
           <Tooltip :title="t('page.systemUsers.index.actions.edit')">
             <Button
               v-access:code="'user:write'"

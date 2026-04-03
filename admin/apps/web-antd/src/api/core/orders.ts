@@ -47,6 +47,7 @@ export interface ListOrdersParams {
   status?: string;
   paymentStatus?: string;
   refundStatus?: string;
+  userId?: string;
   page?: number;
   pageSize?: number;
 }

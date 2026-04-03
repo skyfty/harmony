@@ -156,6 +156,15 @@ function mapMedal(row: any) {
   }
 }
 
+function mapUserMedalStatus(row: any, userMedal: any) {
+  return {
+    ...mapMedal(row),
+    awarded: Boolean(userMedal),
+    awardedAt: userMedal?.awardedAt?.toISOString?.() ?? (userMedal?.awardedAt ? new Date(userMedal.awardedAt).toISOString() : null),
+    userMedalId: userMedal?._id?.toString?.() ?? null,
+  }
+}
+
 export async function listMedals(ctx: Context): Promise<void> {
   const { page = '1', pageSize = '20', q } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
@@ -186,6 +195,45 @@ export async function getMedal(ctx: Context): Promise<void> {
   const row = await MedalModel.findById(id).lean().exec()
   if (!row) ctx.throw(404, 'Medal not found')
   ctx.body = mapMedal(row)
+}
+
+export async function listUserMedals(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) ctx.throw(400, 'Invalid user id')
+
+  const { page = '1', pageSize = '20', q } = ctx.query as Record<string, string>
+  const pageNumber = Math.max(Number(page) || 1, 1)
+  const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 200)
+  const skip = (pageNumber - 1) * limit
+
+  const filter: Record<string, unknown> = {}
+  if (q && q.trim()) {
+    filter.$or = [{ name: new RegExp(q.trim(), 'i') }, { description: new RegExp(q.trim(), 'i') }]
+  }
+
+  const [rows, total] = await Promise.all([
+    MedalModel.find(filter).sort({ sort: 1, createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
+    MedalModel.countDocuments(filter),
+  ])
+
+  const medalIds = rows.map((row: any) => row._id)
+  const userMedalRows = medalIds.length
+    ? await UserMedalModel.find({
+        userId: new Types.ObjectId(id),
+        medalId: { $in: medalIds },
+      })
+        .lean()
+        .exec()
+    : []
+
+  const userMedalMap = new Map(userMedalRows.map((row: any) => [row.medalId?.toString?.() ?? '', row]))
+
+  ctx.body = {
+    data: rows.map((row: any) => mapUserMedalStatus(row, userMedalMap.get(row._id.toString()))),
+    page: pageNumber,
+    pageSize: limit,
+    total,
+  }
 }
 
 export async function createMedal(ctx: Context): Promise<void> {

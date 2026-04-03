@@ -1184,6 +1184,7 @@
         "create": "New User"
       },
       "actions": {
+        "detail": "Detail",
         "edit": "Edit",
         "delete": "Delete"
       }

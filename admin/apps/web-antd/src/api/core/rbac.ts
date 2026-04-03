@@ -19,18 +19,32 @@ export interface UserRoleItem {
 }
 
 export interface UserItem {
+  authProvider?: null | string;
+  avatarUrl?: string | null;
   bio?: null | string;
+  birthDate?: null | string;
   createdAt: string;
+  currentVehicleId?: null | string;
   displayName: null | string;
   email: null | string;
-  avatarUrl?: string | null;
+  exhibitionShareCount?: number;
+  gender?: null | string;
   id: string;
+  lastLoginAt?: null | string;
+  lastLoginSource?: null | string;
+  miniAppId?: null | string;
   phone?: null | string;
+  phoneBoundAt?: null | string;
+  phoneCountryCode?: null | string;
   roles?: UserRoleItem[];
   status: 'active' | 'disabled';
   updatedAt: string;
   username: string;
+  wechatIdentitySyncedAt?: null | string;
+  wechatProfileSyncedAt?: null | string;
+  workShareCount?: number;
   wxOpenId?: null | string;
+  wxUnionId?: null | string;
 }
 
 export interface UserListParams {

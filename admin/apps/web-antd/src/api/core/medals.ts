@@ -40,6 +40,12 @@ export interface MedalItem {
   updatedAt?: null | string;
 }
 
+export interface UserMedalStatusItem extends MedalItem {
+  awarded: boolean;
+  awardedAt?: null | string;
+  userMedalId?: null | string;
+}
+
 function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
   return {
     items: result.data || [],
@@ -49,6 +55,17 @@ function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
 
 export async function listMedalsApi(params?: { keyword?: string; page?: number; pageSize?: number }) {
   const response = await requestClient.get<ServerPageResult<MedalItem>>('/admin/medals', { params });
+  return normalizeGridPage(response);
+}
+
+export async function listUserMedalsApi(
+  userId: string,
+  params?: { q?: string; page?: number; pageSize?: number },
+) {
+  const response = await requestClient.get<ServerPageResult<UserMedalStatusItem>>(
+    `/admin/users/${userId}/medals`,
+    { params },
+  );
   return normalizeGridPage(response);
 }
 

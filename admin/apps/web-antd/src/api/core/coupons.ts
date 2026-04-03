@@ -60,6 +60,7 @@ export interface UserCouponItem {
   claimedAt?: string | null;
   usedAt?: string | null;
   expiresAt?: string | null;
+  acquisitionSource?: string | null;
   metadata?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
@@ -156,6 +157,11 @@ export async function deleteCouponApi(id: string) {
 }
 
 export async function listUserCouponsApi(params: ListUserCouponsParams) {
+  const response = await requestClient.get<ServerPageResult<UserCouponItem>>('/admin/coupons/user-coupons', { params });
+  return normalizeGridPage(response);
+}
+
+export async function listUserCouponClaimsApi(params: ListUserCouponsParams) {
   const response = await requestClient.get<ServerPageResult<UserCouponItem>>('/admin/coupons/user-coupons', { params });
   return normalizeGridPage(response);
 }

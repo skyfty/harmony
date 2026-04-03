@@ -181,7 +181,7 @@ import {
   removeRuleFromAchievement,
 } from '@/controllers/admin/achievementController'
 import { listRules, getRule, createRule, updateRule, deleteRule } from '@/controllers/admin/ruleController'
-import { listMedals, getMedal, createMedal, updateMedal, deleteMedal } from '@/controllers/admin/medalController'
+import { listMedals, getMedal, listUserMedals, createMedal, updateMedal, deleteMedal } from '@/controllers/admin/medalController'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
 
@@ -309,6 +309,7 @@ adminRouter.delete('/orders/:id', requireAnyPermission(['order:write']), deleteO
 
 adminRouter.get('/users', requireAnyPermission(['user:read']), listAppUsers)
 adminRouter.get('/users/:id', requireAnyPermission(['user:read']), getAppUser)
+adminRouter.get('/users/:id/medals', requireAnyPermission(['user:read', 'medal:read']), listUserMedals)
 adminRouter.post('/users', requireAnyPermission(['user:write']), createAppUser)
 adminRouter.put('/users/:id', requireAnyPermission(['user:write']), updateAppUser)
 adminRouter.patch('/users/:id/status', requireAnyPermission(['user:write']), updateAppUserStatus)

@@ -254,6 +254,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'UserDetail',
+    path: '/users/:id',
+    component: () => import('#/views/users/detail.vue'),
+    meta: {
+      title: '用户详情',
+      hideInMenu: true,
+    },
+  },
+  {
     name: 'PunchRecords',
     path: '/punch-records',
     component: () => import('#/views/punch-records/index.vue'),

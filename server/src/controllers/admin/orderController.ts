@@ -130,13 +130,16 @@ function mapOrder(order: any, relationMap: { users: Map<string, any>; products: 
 }
 
 export async function listOrders(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '10', keyword, status, paymentStatus, refundStatus } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '10', keyword, status, paymentStatus, refundStatus, userId } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
   const filter: Record<string, unknown> = {}
   if (keyword && keyword.trim()) {
     filter.orderNumber = new RegExp(keyword.trim(), 'i')
+  }
+  if (userId && Types.ObjectId.isValid(userId)) {
+    filter.userId = new Types.ObjectId(userId)
   }
   if (status && ORDER_STATUS.has(status)) {
     filter.orderStatus = status

@@ -890,7 +890,7 @@
         "title": "用户管理"
       },
       "toolbar": { "create": "新增用户" },
-      "actions": { "edit": "编辑", "delete": "删除" }
+      "actions": { "detail": "详情", "edit": "编辑", "delete": "删除" }
     }
   },
   "systemAdmins": {

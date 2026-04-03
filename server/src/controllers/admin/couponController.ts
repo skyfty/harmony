@@ -104,6 +104,13 @@ function normalizeStatus(value: unknown): UserCouponStatus | null {
 function mapUserCoupon(row: any) {
   const coupon = row.couponId
   const user = row.userId
+  const rawMetadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : null
+  const acquisitionSource =
+    typeof rawMetadata?.acquisitionSource === 'string'
+      ? rawMetadata.acquisitionSource
+      : typeof rawMetadata?.claimSource === 'string'
+        ? rawMetadata.claimSource
+        : null
   const expiresAt = row.expiresAt ?? coupon?.validUntil ?? null
   const status = computeUserCouponStatus({
     status: row.status,
@@ -133,7 +140,8 @@ function mapUserCoupon(row: any) {
     claimedAt: row.claimedAt?.toISOString?.() ?? null,
     usedAt: row.usedAt?.toISOString?.() ?? null,
     expiresAt: expiresAt?.toISOString?.() ?? null,
-    metadata: row.metadata ?? null,
+    acquisitionSource,
+    metadata: rawMetadata ?? null,
     createdAt: row.createdAt?.toISOString?.() ?? null,
     updatedAt: row.updatedAt?.toISOString?.() ?? null,
   }
@@ -381,7 +389,10 @@ export async function distributeCouponToUser(ctx: Context): Promise<void> {
     claimedAt: now,
     expiresAt,
     status: 'unused',
-    metadata: body.metadata ?? null,
+    metadata: {
+      ...((body.metadata && typeof body.metadata === 'object') ? body.metadata : {}),
+      acquisitionSource: 'admin-distribute',
+    },
   })
 
   ctx.status = 201
@@ -451,7 +462,10 @@ export async function distributeCouponBatch(ctx: Context): Promise<void> {
           claimedAt: now,
           expiresAt,
           status: 'unused',
-          metadata: body.metadata ?? null,
+          metadata: {
+            ...((body.metadata && typeof body.metadata === 'object') ? body.metadata : {}),
+            acquisitionSource: 'admin-batch-distribute',
+          },
         })),
         { ordered: false },
       )

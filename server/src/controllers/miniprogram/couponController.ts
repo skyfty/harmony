@@ -195,6 +195,9 @@ export async function claimCoupon(ctx: Context): Promise<void> {
     status: 'unused',
     claimedAt: now,
     expiresAt: coupon.validUntil,
+    metadata: {
+      acquisitionSource: 'miniapp-claim',
+    },
   })
 
   ctx.status = 201
