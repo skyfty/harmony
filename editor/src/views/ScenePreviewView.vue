@@ -369,6 +369,7 @@ const isOtherRigidbodyWireframeVisible = ref(false)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
+let lastInstancedCullingMismatchSignature: string | null = null
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
 const isGroundChunkStatsVisible = ref(false)
@@ -2435,7 +2436,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 		}
 	}
 
-	object.getWorldPosition(instancedCullingWorldPosition)
+	resolveInstancedProxyWorldCenter(object, instancedCullingWorldPosition)
 	const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
 
 	let chosen: (typeof levels)[number] | null = null
@@ -2467,10 +2468,12 @@ async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | 
 	}
 	if (getCachedModelObject(assetId)) {
 		ensureInstancedMeshesRegistered(assetId)
+		scenePreviewPerf.markInstancedCullingDirty()
 		return
 	}
 	if (pendingLodModelLoads.has(assetId)) {
 		await pendingLodModelLoads.get(assetId)
+		scenePreviewPerf.markInstancedCullingDirty()
 		return
 	}
 
@@ -2480,6 +2483,7 @@ async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | 
 		}
 		await ensureModelInstanceGroup(assetId, sampleNode, editorResourceCache)
 		ensureInstancedMeshesRegistered(assetId)
+		scenePreviewPerf.markInstancedCullingDirty()
 	})()
 		.catch((error) => {
 			console.warn('[ScenePreview] Failed to preload LOD model asset', assetId, error)
@@ -2498,6 +2502,7 @@ async function ensureBillboardObjectCached(assetId: string): Promise<void> {
 	}
 	if (pendingLodBillboardLoads.has(assetId)) {
 		await pendingLodBillboardLoads.get(assetId)
+		scenePreviewPerf.markInstancedCullingDirty()
 		return
 	}
 
@@ -2507,6 +2512,7 @@ async function ensureBillboardObjectCached(assetId: string): Promise<void> {
 		}
 		await ensureBillboardInstanceGroup(assetId, editorResourceCache)
 		ensureBillboardInstancedMeshesRegistered(assetId)
+		scenePreviewPerf.markInstancedCullingDirty()
 	})()
 		.catch((error) => {
 			console.warn('[ScenePreview] Failed to preload LOD billboard asset', assetId, error)
@@ -2686,6 +2692,18 @@ function resolveInstancedProxyRadius(object: THREE.Object3D): number {
 	return radius
 }
 
+function resolveInstancedProxyWorldCenter(object: THREE.Object3D, target: THREE.Vector3): THREE.Vector3 {
+	const bounds = object.userData?.instancedBounds as { min?: [number, number, number]; max?: [number, number, number] } | undefined
+	if (bounds?.min && bounds?.max) {
+		instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0)
+		instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0)
+		instancedCullingBox.getCenter(target)
+		return target.applyMatrix4(object.matrixWorld)
+	}
+	object.getWorldPosition(target)
+	return target
+}
+
 function ensureInstancedCullingVisualizationResources(required: number): void {
 	if (!scene) {
 		return
@@ -2858,18 +2876,7 @@ function updateInstancedCullingAndLod(): void {
 			}
 			object.updateMatrixWorld(true)
 
-			const bounds = object.userData?.instancedBounds as
-				| { min?: [number, number, number]; max?: [number, number, number] }
-				| undefined
-
-			if (bounds?.min && bounds?.max) {
-				instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0)
-				instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0)
-				instancedCullingBox.getCenter(instancedCullingWorldPosition)
-				instancedCullingWorldPosition.applyMatrix4(object.matrixWorld)
-			} else {
-				object.getWorldPosition(instancedCullingWorldPosition)
-			}
+			resolveInstancedProxyWorldCenter(object, instancedCullingWorldPosition)
 
 			object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 			const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z)
@@ -2886,8 +2893,10 @@ function updateInstancedCullingAndLod(): void {
 		updateInstancedCullingVisualization(visualizationIds, visualizationObjects, visualizationVisibleIds)
 	}
 
-	const candidateIds: string[] = []
-	const candidateObjects = new Map<string, THREE.Object3D>()
+	const lodNodeIds: string[] = []
+	const lodObjects = new Map<string, THREE.Object3D>()
+	const cullingCandidateIds: string[] = []
+	const cullingCandidateObjects = new Map<string, THREE.Object3D>()
 	nodeObjectMap.forEach((object, nodeId) => {
 		if (!object?.userData?.instancedAssetId) {
 			return
@@ -2900,23 +2909,25 @@ function updateInstancedCullingAndLod(): void {
 		if (!lodComponent) {
 			return
 		}
+		lodNodeIds.push(nodeId)
+		lodObjects.set(nodeId, object)
 		const props = clampLodComponentProps(lodComponent.props)
 		if (props.enableCulling === false) {
 			return
 		}
-		candidateIds.push(nodeId)
-		candidateObjects.set(nodeId, object)
+		cullingCandidateIds.push(nodeId)
+		cullingCandidateObjects.set(nodeId, object)
 	})
 
-	candidateIds.sort()
-	instancedLodFrustumCuller.setIds(candidateIds)
+	cullingCandidateIds.sort()
+	instancedLodFrustumCuller.setIds(cullingCandidateIds)
 	const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
-		const object = candidateObjects.get(id)
+		const object = cullingCandidateObjects.get(id)
 		if (!object) {
 			return null
 		}
 		object.updateMatrixWorld(true)
-		object.getWorldPosition(centerTarget)
+		resolveInstancedProxyWorldCenter(object, centerTarget)
 		object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 		const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z)
 		const baseRadius = resolveInstancedProxyRadius(object)
@@ -2924,8 +2935,8 @@ function updateInstancedCullingAndLod(): void {
 		return { radius }
 	})
 
-	instancedLodTotalCount.value = candidateIds.length
-	instancedLodVisibleCount.value = visibleIds.size
+
+	instancedLodTotalCount.value = lodNodeIds.length
 	const scatterStats = terrainScatterRuntime.getInstanceStats()
 	terrainScatterTotalCount.value = scatterStats.total
 	terrainScatterVisibleCount.value = scatterStats.visible
@@ -2953,8 +2964,9 @@ function updateInstancedCullingAndLod(): void {
 		instancingDebug.scatterVisible = terrainScatterVisibleCount.value
 	}
 
-	candidateIds.forEach((nodeId) => {
-		const object = candidateObjects.get(nodeId)
+	let lodVisibleCount = 0
+	lodNodeIds.forEach((nodeId) => {
+		const object = lodObjects.get(nodeId)
 		if (!object) {
 			return
 		}
@@ -2962,8 +2974,14 @@ function updateInstancedCullingAndLod(): void {
 		if (!node) {
 			return
 		}
-		const isVisible = visibleIds.has(nodeId)
-		if (!isVisible) {
+		const lodComponent = resolveLodComponent(node)
+		if (!lodComponent) {
+			return
+		}
+		const props = clampLodComponentProps(lodComponent.props)
+		const cullingEnabled = props.enableCulling !== false
+		const isVisible = !cullingEnabled || visibleIds.has(nodeId)
+		if (cullingEnabled && !isVisible) {
 			if (object.userData.__harmonyCulled !== true) {
 				object.userData.__harmonyCulled = true
 			}
@@ -2973,6 +2991,7 @@ function updateInstancedCullingAndLod(): void {
 			return
 		}
 
+		lodVisibleCount += 1
 		object.userData.__harmonyCulled = false
 		const desiredTarget = resolveDesiredLodTarget(node, object)
 		if (!desiredTarget.assetId || !desiredTarget.key) {
@@ -3019,6 +3038,7 @@ function updateInstancedCullingAndLod(): void {
 		}
 		syncInstancedTransform(object)
 	})
+	instancedLodVisibleCount.value = lodVisibleCount
 }
 
 function extractRigidbodyShape(

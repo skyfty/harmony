@@ -197,10 +197,6 @@ watch(
       />
     </div>
 
-    <!-- LOD UI HINT: show when selected asset is .lod -->
-    <div v-if="scatterSelectedAsset && scatterSelectedAsset.type === 'lod'" class="hint-text">
-      已选择 LOD 预设（.lod）：撒件时将自动使用其首个模型 LOD 进行地形散布。
-    </div>
 
     <div v-if="loadingMap[props.category]" class="state-card">
       <v-progress-circular indeterminate size="28" color="primary" />

@@ -15,6 +15,7 @@ export type InstancedBvhFrustumCuller = {
 const v0 = new THREE.Vector3()
 const v1 = new THREE.Vector3()
 const v2 = new THREE.Vector3()
+const sphere = new THREE.Sphere()
 
 export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
   let ids: string[] = []
@@ -67,6 +68,7 @@ export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
     getBounds: (id: string, centerTarget: THREE.Vector3) => { radius: number } | null,
   ): Set<string> {
     const visible = new Set<string>()
+    const sphereVisible = new Set<string>()
     if (!bvh || !ids.length) {
       return visible
     }
@@ -88,9 +90,18 @@ export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
       const cy = centerScratch.y
       const cz = centerScratch.z
 
-      // Triangle that approximates a sphere bounds around (cx, cy, cz)
-      v0.set(cx - radius, cy - radius, cz)
-      v1.set(cx + radius, cy - radius, cz)
+      if (bounds && Number.isFinite(radius) && radius >= 0) {
+        sphere.center.set(cx, cy, cz)
+        sphere.radius = radius
+        if (frustum.intersectsSphere(sphere)) {
+          sphereVisible.add(id)
+        }
+      }
+
+      // The triangle itself is irrelevant; its AABB is what the BVH queries against.
+      // Keep the bounds conservative across all axes so visible instances are not culled early.
+      v0.set(cx - radius, cy - radius, cz - radius)
+      v1.set(cx + radius, cy - radius, cz - radius)
       v2.set(cx, cy + radius, cz + radius)
 
       const base = i * 9
@@ -124,6 +135,12 @@ export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
         return false
       },
     })
+
+    if (sphereVisible.size > visible.size) {
+      sphereVisible.forEach((id) => {
+        visible.add(id)
+      })
+    }
 
     return visible
   }

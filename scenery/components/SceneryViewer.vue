@@ -4159,12 +4159,24 @@ function updateInstancedCullingAndLod(): void {
       return null;
     }
     object.updateMatrixWorld(true);
-    object.getWorldPosition(centerTarget);
+    resolveInstancedProxyWorldCenter(object, centerTarget);
     object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
     const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z);
     const baseRadius = resolveInstancedProxyRadius(object);
-    const radius = (Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius) * INSTANCED_CULL_RADIUS_MULTIPLIER;
+    const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius;
     return { radius };
+  // 保守中心点推导，与 editor 端一致
+  function resolveInstancedProxyWorldCenter(object, target) {
+    const bounds = object.userData?.instancedBounds;
+    if (bounds?.min && bounds?.max) {
+      instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0);
+      instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0);
+      instancedCullingBox.getCenter(target);
+      return target.applyMatrix4(object.matrixWorld);
+    }
+    object.getWorldPosition(target);
+    return target;
+  }
   });
 
   syncInstancingDebugCounters(candidateIds.length, visibleIds.size);
