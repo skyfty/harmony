@@ -4,6 +4,7 @@ import {
   createTravelEnterRecord,
   queryTravelRecords,
 } from '@/services/travelRecordService'
+import { evaluatePendingMedalsForUser } from '@/services/medalService'
 
 type EnterTravelBody = {
   sceneId?: string
@@ -56,6 +57,12 @@ export async function createMiniTravelEnterRecord(ctx: Context): Promise<void> {
     userAgent: ctx.get('User-Agent') || undefined,
     metadata: body.metadata,
   })
+
+  try {
+    await evaluatePendingMedalsForUser(userId, 'travel_enter')
+  } catch (error) {
+    console.error('Failed to evaluate medals after travel enter', error)
+  }
 
   ctx.body = {
     success: true,

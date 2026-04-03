@@ -7,6 +7,18 @@ export interface Achievement {
   achievedAt?: string;
 }
 
+export interface MedalItem {
+  id: string;
+  name: string;
+  description?: null | string;
+  lockedIconUrl?: null | string;
+  unlockedIconUrl?: null | string;
+  displayIconUrl?: null | string;
+  earned: boolean;
+  awardedAt?: null | string;
+  sort: number;
+}
+
 export interface CheckinProgressItem {
   sceneId: string;
   sceneName?: string;

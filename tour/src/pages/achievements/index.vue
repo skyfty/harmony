@@ -3,6 +3,29 @@
     <PageHeader title="打卡成就"  :showBack="false" />
 
     <view class="content">
+      <view class="medal-section">
+        <view class="section-head">
+          <text class="section-title">勋章墙</text>
+          <text class="section-meta">已获得 {{ earnedMedalCount }}/{{ medals.length }}</text>
+        </view>
+
+        <view v-if="medals.length" class="medal-grid">
+          <view
+            v-for="medal in medals"
+            :key="medal.id"
+            :class="['medal-card', medal.earned ? 'medal-card--earned' : '']"
+          >
+            <image class="medal-icon" :src="resolveMedalIcon(medal)" mode="aspectFill" />
+            <text :class="['medal-name', medal.earned ? 'medal-name--earned' : '']">{{ medal.name }}</text>
+            <text class="medal-status">{{ medal.earned ? '已获得' : '未获得' }}</text>
+          </view>
+        </view>
+
+        <view v-else class="medal-empty">
+          暂无勋章配置
+        </view>
+      </view>
+
       <view
         v-for="item in filteredScenicCheckins"
         :key="item.scenicId"
@@ -54,6 +77,7 @@
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { getStatusBarHeight } from '@/utils/systemInfo';
+import type { MedalItem } from '@/types/achievement';
 
 const statusBarHeight = ref(getStatusBarHeight());
 
@@ -79,6 +103,7 @@ interface ScenicCardItem {
 }
 
 const keyword = ref('');
+const medals = ref<MedalItem[]>([]);
 const scenicCheckinProgresses = ref<ScenicCardItem[]>([]);
 
 onShow(() => {
@@ -87,56 +112,15 @@ onShow(() => {
 
 async function reload() {
   try {
-    const fetchAchievements = listAchievements as unknown as () => Promise<unknown>;
-    const achievementPayload = await fetchAchievements();
-    const achievementData = normalizeAchievementData(achievementPayload);
-
+    const achievementData = await listAchievements();
+    medals.value = achievementData.medals;
     scenicCheckinProgresses.value = achievementData.scenicCheckinProgresses;
   } catch {
     void uni.showToast({ title: '加载失败', icon: 'none' });
   }
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function normalizeAchievementData(value: unknown): {
-  scenicCheckinProgresses: ScenicCardItem[];
-} {
-  if (!isObject(value)) {
-    return {
-      scenicCheckinProgresses: [],
-    };
-  }
-
-  const scenicCheckinProgresses: ScenicCardItem[] = [];
-  const rawList = value.scenicCheckinProgresses;
-  if (Array.isArray(rawList)) {
-    for (const item of rawList) {
-      if (isScenicCardItem(item)) {
-        scenicCheckinProgresses.push(item);
-      }
-    }
-  }
-
-  return {
-    scenicCheckinProgresses,
-  };
-}
-
-function isScenicCardItem(value: unknown): value is ScenicCardItem {
-  if (!isObject(value)) {
-    return false;
-  }
-  return (
-    typeof value.scenicId === 'string'
-    && typeof value.sceneId === 'string'
-    && typeof value.scenicTitle === 'string'
-    && typeof value.checkedCount === 'number'
-    && typeof value.totalCount === 'number'
-  );
-}
+const earnedMedalCount = computed(() => medals.value.filter((item) => item.earned).length);
 
 const filteredScenicCheckins = computed(() => {
   const k = keyword.value.trim();
@@ -199,6 +183,10 @@ function buildCardStyle(item: ScenicCardItem): Record<string, string> {
   };
 }
 
+function resolveMedalIcon(item: MedalItem): string {
+  return item.displayIconUrl || item.unlockedIconUrl || item.lockedIconUrl || '';
+}
+
 function openScenic(scenicId: string) {
   void uni.navigateTo({ url: `/pages/scenic/detail?id=${encodeURIComponent(scenicId)}` });
 }
@@ -259,6 +247,85 @@ function handleNavigate(key: NavKey) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.medal-section {
+  padding: 18px 16px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #fff9ef 0%, #f6efe1 100%);
+  box-shadow: 0 12px 28px rgba(98, 74, 18, 0.08);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.section-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #4a3614;
+}
+
+.section-meta {
+  font-size: 24rpx;
+  color: #8f7444;
+}
+
+.medal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.medal-card {
+  padding: 16px 10px 14px;
+  border-radius: 16px;
+  background: rgba(125, 111, 78, 0.08);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.72;
+}
+
+.medal-card--earned {
+  background: linear-gradient(180deg, rgba(255, 231, 170, 0.9) 0%, rgba(255, 214, 102, 0.75) 100%);
+  box-shadow: 0 10px 20px rgba(179, 127, 16, 0.18);
+  opacity: 1;
+}
+
+.medal-icon {
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 22rpx;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.medal-name {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #7f7262;
+  text-align: center;
+}
+
+.medal-name--earned {
+  color: #5d3f07;
+}
+
+.medal-status {
+  font-size: 22rpx;
+  color: #917b56;
+}
+
+.medal-empty {
+  font-size: 24rpx;
+  color: #8f7444;
+  text-align: center;
+  padding: 20rpx 0;
 }
 
 .scenic-card {

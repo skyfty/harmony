@@ -181,6 +181,7 @@ import {
   removeRuleFromAchievement,
 } from '@/controllers/admin/achievementController'
 import { listRules, getRule, createRule, updateRule, deleteRule } from '@/controllers/admin/ruleController'
+import { listMedals, getMedal, createMedal, updateMedal, deleteMedal } from '@/controllers/admin/medalController'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
 
@@ -412,6 +413,12 @@ adminRouter.get('/achievements/:id', requireAnyPermission(['achievement:read']),
 adminRouter.post('/achievements', requireAnyPermission(['achievement:write']), koaBody(), createAchievement)
 adminRouter.put('/achievements/:id', requireAnyPermission(['achievement:write']), koaBody(), updateAchievement)
 adminRouter.delete('/achievements/:id', requireAnyPermission(['achievement:write']), deleteAchievement)
+
+adminRouter.get('/medals', requireAnyPermission(['medal:read']), listMedals)
+adminRouter.get('/medals/:id', requireAnyPermission(['medal:read']), getMedal)
+adminRouter.post('/medals', requireAnyPermission(['medal:write']), koaBody(), createMedal)
+adminRouter.put('/medals/:id', requireAnyPermission(['medal:write']), koaBody(), updateMedal)
+adminRouter.delete('/medals/:id', requireAnyPermission(['medal:write']), deleteMedal)
 
 adminRouter.get('/rules', requireAnyPermission(['rule:read']), listRules)
 adminRouter.get('/rules/:id', requireAnyPermission(['rule:read']), getRule)

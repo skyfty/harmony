@@ -988,6 +988,46 @@ export interface AchievementDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export type MedalRuleType =
+  | 'enter_scenic'
+  | 'punch_ratio_gte'
+  | 'enter_count_gte'
+  | 'punch_count_gte'
+  | 'specific_scenic_set_complete'
+
+export type MedalRuleScope = 'any_scenic' | 'specific_scenic'
+
+export type MedalRuleCompleteType = 'enter_scenic' | 'punch_ratio_gte'
+
+export interface MedalRule {
+  type: MedalRuleType
+  params?: Record<string, unknown> | null
+  order?: number
+}
+
+export interface MedalDocument extends Document<Types.ObjectId> {
+  name: string
+  description?: string | null
+  lockedIconUrl?: string | null
+  unlockedIconUrl?: string | null
+  enabled: boolean
+  sort: number
+  rules: MedalRule[]
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface UserMedalDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  medalId: Types.ObjectId
+  awardedAt: Date
+  triggerSource?: string | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface RuleDocument extends Document<Types.ObjectId> {
   /** 中文：规则名称 */
   name: string

@@ -72,6 +72,8 @@ const ADMIN_PERMISSION_SEEDS = [
   { code: 'achievement:write', name: '成就管理', group: 'achievement' },
   { code: 'rule:read', name: '规则查看', group: 'achievement' },
   { code: 'rule:write', name: '规则管理', group: 'achievement' },
+  { code: 'medal:read', name: '勋章查看', group: 'achievement' },
+  { code: 'medal:write', name: '勋章管理', group: 'achievement' },
 ] as const
 
 export interface AdminSessionUser {

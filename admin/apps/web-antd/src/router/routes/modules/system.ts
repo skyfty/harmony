@@ -272,6 +272,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'Medals',
+    path: '/medals',
+    component: () => import('#/views/medals/index.vue'),
+    meta: {
+      icon: 'lucide:medal',
+      title: '勋章管理',
+    },
+  },
+  {
     name: 'PunchRecordDetail',
     path: '/punch-records/:id',
     component: () => import('#/views/punch-records/detail.vue'),

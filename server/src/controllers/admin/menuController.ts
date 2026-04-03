@@ -246,6 +246,13 @@ const BACKEND_MENU_TREE: MenuNode[] = [
     meta: { icon: 'lucide:route', title: '游历记录' },
   },
   {
+    name: 'Medals',
+    path: '/medals',
+    component: '/views/medals/index.vue',
+    requiredPermissions: ['medal:read'],
+    meta: { icon: 'lucide:medal', title: '勋章管理' },
+  },
+  {
     name: 'System',
     path: '/system',
     component: 'BasicLayout',

@@ -1,5 +1,6 @@
 import type { Context } from 'koa'
 import { createPunchRecord } from '@/services/punchRecordService'
+import { evaluatePendingMedalsForUser } from '@/services/medalService'
 
 type CreatePunchRecordBody = {
   sceneId?: string
@@ -56,6 +57,12 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
     userAgent: ctx.get('User-Agent') || undefined,
     metadata: body.metadata,
   })
+
+  try {
+    await evaluatePendingMedalsForUser(userId, 'punch_record')
+  } catch (error) {
+    console.error('Failed to evaluate medals after punch record', error)
+  }
 
   ctx.body = {
     success: true,

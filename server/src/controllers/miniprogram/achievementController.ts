@@ -7,6 +7,7 @@ import {
   getCheckinProgressBySceneForUser,
   getTravelSummaryBySceneForUser,
 } from '@/services/travelRecordService'
+import { listMedalsForUser } from '@/services/medalService'
 import { ensureUserId } from './utils'
 
 interface AchievementLean {
@@ -48,10 +49,11 @@ export async function listAchievements(ctx: Context): Promise<void> {
     .exec()) as AchievementLean[]
 
   const achievements = list.map(toAchievementResponse)
-  const [scenicCheckinProgresses, checkinProgresses, travelSummary] = await Promise.all([
+  const [scenicCheckinProgresses, checkinProgresses, travelSummary, medals] = await Promise.all([
     getCheckinProgressByScenicForUser(userId),
     getCheckinProgressBySceneForUser(userId),
     getTravelSummaryBySceneForUser(userId),
+    listMedalsForUser(userId),
   ])
 
   const sceneIdSet = new Set<string>()
@@ -85,6 +87,7 @@ export async function listAchievements(ctx: Context): Promise<void> {
   ctx.body = {
     total: achievements.length,
     achievements,
+    medals,
     scenicCheckinProgresses: scenicCheckinProgresses.map((item) => ({
       scenicId: item.scenicId,
       sceneId: item.sceneId,
