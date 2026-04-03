@@ -8049,17 +8049,18 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
   if (!assetId) {
     return
   }
-  if (getCachedModelObject(assetId)) {
-    return
-  }
   if (pendingModelPreloads.has(assetId)) {
     await pendingModelPreloads.get(assetId)
     return
   }
 
   const task = (async () => {
-    const asset = sceneStore.getAsset(assetId)
-    if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+    const resolved = await sceneStore.resolvePlaceableAsset(assetId).catch(() => null)
+    const asset = resolved?.modelAsset ?? null
+    if (!asset) {
+      return
+    }
+    if (getCachedModelObject(asset.id)) {
       return
     }
     let file = assetCacheStore.createFileFromCache(asset.id)
@@ -10208,7 +10209,7 @@ watch(
         return
       }
 
-      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
+      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod') {
         selectionPreviewActive = true
         selectionPreviewAssetId = asset.id
         placementPreviewYaw = 0
@@ -14166,7 +14167,7 @@ async function handlePointerDown(event: PointerEvent) {
   const canPlaceSelectedAsset =
     Boolean(selectedAssetId) &&
     Boolean(selectedAsset) &&
-    (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab') &&
+    (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab' || selectedAsset?.type === 'lod') &&
     !isWallPresetAsset(selectedAsset) &&
     !sceneStore.draggingAssetId
 
@@ -15563,8 +15564,8 @@ async function handlePointerUp(event: PointerEvent) {
       // 仅在点击未发生拖动时继续（防止误触放置）
       if (!session.moved) {
         const asset = sceneStore.getAsset(session.assetId)
-        // 仅对 model/mesh/prefab 类型资产执行放置逻辑
-        if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
+        // 仅对可放置的 3D 资产执行放置逻辑
+        if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod')) {
           // 如果当前临时顶点吸附生效并且工具处于选择模式，则尝试消费一次放置侧吸附结果
           // `consumePlacementSideSnapResult()` 会返回当前预览时计算好的吸附信息并将其内部状态标记为已消费
           const placementSideSnap = (isVertexSnapActiveEffective.value && props.activeTool === 'select')

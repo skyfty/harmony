@@ -258,7 +258,6 @@ export function useDragPreview(options: Options): DragPreviewController {
       return false
     }
 
-    pendingPreviewAssetId = asset.id
     clearObject(true)
     const token = ++dragPreviewLoadToken
 
