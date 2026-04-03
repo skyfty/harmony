@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="订单详情" />
 
     <view
@@ -245,6 +246,7 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 import { applyOrderRefund, getOrderDetail, payOrder } from '@/api/mini';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import type { OrderDetail, OrderItem, OrderStatus, PaymentStatus, RefundStatus } from '@/types/order';

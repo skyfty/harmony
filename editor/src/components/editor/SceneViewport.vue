@@ -141,6 +141,15 @@ import {
   findNodeIdForInstance,
 } from '@schema/modelObjectCache'
 import {
+  allocateBillboardInstance,
+  allocateBillboardInstanceBinding,
+  getBillboardAspectRatio,
+  releaseBillboardInstance,
+  subscribeBillboardInstancedMeshes,
+} from '@schema/instancedBillboardCache'
+import { resolveLodRenderTarget } from '@schema/components'
+// duplicate import removed
+import {
   clampSceneNodeInstanceLayout,
   computeInstanceLayoutLocalBoundingBox,
   forEachInstanceWorldMatrix,
@@ -1000,6 +1009,7 @@ let stats: Stats | null = null
 let statsPointerHandler: (() => void) | null = null
 let statsPanelIndex = 0
 let stopInstancedMeshSubscription: (() => void) | null = null
+let stopBillboardMeshSubscription: (() => void) | null = null
 let gridHighlight: THREE.Group | null = null
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let latestFogSettings: EnvironmentSettings | null = null
@@ -8075,28 +8085,87 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
   await task
 }
 
-function resolveBaseInstancedAssetId(node: SceneNode, object: THREE.Object3D): string | null {
+type InstancedLodTarget = {
+  kind: 'model' | 'billboard',
+  assetId: string
+}
+
+function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): InstancedLodTarget | null {
+  // 兼容 instanceLayout 模板 assetId
   const templateAssetIdRaw = object.userData?.__harmonyInstanceLayoutTemplateAssetId
   const templateAssetId = typeof templateAssetIdRaw === 'string' ? templateAssetIdRaw.trim() : ''
   if (templateAssetId) {
-    return templateAssetId
+    return { kind: 'model', assetId: templateAssetId }
   }
+  // LOD 组件
+  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+  if (component && component.enabled) {
+    const props = clampLodComponentProps(component.props)
+    // FIX: resolveLodRenderTarget expects a single LodLevelDefinition, not an array
+    const target = props.levels && props.levels.length > 0 ? resolveLodRenderTarget(props.levels[0]) : undefined
+    if (target && target.kind && target.assetId) {
+      return { kind: target.kind, assetId: target.assetId }
+    }
+  }
+  // 兜底：sourceAssetId
   const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
   if (sourceAssetId) {
-    return sourceAssetId
+    return { kind: 'model', assetId: sourceAssetId }
   }
+  // 兜底：当前 assetId
   const currentAssetIdRaw = object.userData?.instancedAssetId
   const currentAssetId = typeof currentAssetIdRaw === 'string' ? currentAssetIdRaw.trim() : ''
-  return currentAssetId || null
+  if (currentAssetId) {
+    return { kind: 'model', assetId: currentAssetId }
+  }
+  return null
 }
 
-function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
-  const cached = getCachedModelObject(assetId)
-  if (!cached) {
-    void ensureModelObjectCached(assetId)
+function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target: InstancedLodTarget): void {
+  if (target.kind === 'model') {
+    const cached = getCachedModelObject(target.assetId)
+    if (!cached) {
+      void ensureModelObjectCached(target.assetId)
+      return
+    }
+    const node = resolveSceneNodeById(nodeId)
+    const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout
+    const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : ({ mode: 'single', templateAssetId: null } as const)
+    const desiredCount = getInstanceLayoutCount(layout)
+    const erased = layout.mode === 'grid' && Array.isArray((layout as any).erasedIndices) && (layout as any).erasedIndices.length
+      ? new Set<number>((layout as any).erasedIndices as number[])
+      : null
+    releaseModelInstance(nodeId)
+    const binding = allocateModelInstance(target.assetId, nodeId)
+    if (!binding) {
+      return
+    }
+    for (let index = 1; index < desiredCount; index += 1) {
+      if (erased?.has(index)) {
+        continue
+      }
+      const bindingId = getInstanceLayoutBindingId(nodeId, index)
+      const extra = allocateModelInstanceBinding(target.assetId, bindingId, nodeId)
+      if (!extra) {
+        releaseModelInstance(nodeId)
+        return
+      }
+    }
+    const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout as any, cached.boundingBox) ?? cached.boundingBox
+    layoutBounds.getBoundingSphere(instancedCullingSphere)
+    object.userData = {
+      ...(object.userData ?? {}),
+      instancedAssetId: target.assetId,
+      instancedBounds: serializeBoundingBox(layoutBounds),
+      instancedRenderKind: 'model',
+    }
+    object.userData.__harmonyInstancedRadius = instancedCullingSphere.radius
+    object.userData.__harmonyCulled = false
+    syncInstancedTransform(object)
     return
   }
-
+  // billboard
+  // 需要 source model 高度
   const node = resolveSceneNodeById(nodeId)
   const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout
   const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : ({ mode: 'single', templateAssetId: null } as const)
@@ -8104,31 +8173,38 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
   const erased = layout.mode === 'grid' && Array.isArray((layout as any).erasedIndices) && (layout as any).erasedIndices.length
     ? new Set<number>((layout as any).erasedIndices as number[])
     : null
-
-  releaseModelInstance(nodeId)
-  const binding = allocateModelInstance(assetId, nodeId)
+  // 取当前 userData 里的 sourceModelHeight
+  const sourceModelHeight = object.userData?.billboardSourceModelHeight as number | undefined
+  releaseBillboardInstance(nodeId)
+  const binding = allocateBillboardInstance(target.assetId, nodeId)
   if (!binding) {
     return
   }
-
   for (let index = 1; index < desiredCount; index += 1) {
     if (erased?.has(index)) {
       continue
     }
     const bindingId = getInstanceLayoutBindingId(nodeId, index)
-    const extra = allocateModelInstanceBinding(assetId, bindingId, nodeId)
+    const extra = allocateBillboardInstanceBinding(target.assetId, bindingId, nodeId)
     if (!extra) {
-      releaseModelInstance(nodeId)
+      releaseBillboardInstance(nodeId)
       return
     }
   }
-
-  const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout as any, cached.boundingBox) ?? cached.boundingBox
+  // billboard bounding box
+  const aspect = getBillboardAspectRatio(target.assetId) || 1
+  const height = sourceModelHeight || 1
+  const width = height * aspect
+  const layoutBounds = new THREE.Box3(
+    new THREE.Vector3(-width / 2, 0, -0.01),
+    new THREE.Vector3(width / 2, height, 0.01)
+  )
   layoutBounds.getBoundingSphere(instancedCullingSphere)
-
   object.userData = {
     ...(object.userData ?? {}),
-    instancedAssetId: assetId,
+    instancedAssetId: target.assetId,
+    instancedRenderKind: 'billboard',
+    billboardSourceModelHeight: height,
     instancedBounds: serializeBoundingBox(layoutBounds),
   }
   object.userData.__harmonyInstancedRadius = instancedCullingSphere.radius
@@ -8223,8 +8299,8 @@ function updateInstancedCullingAndBinding(): void {
       return
     }
 
-    const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
-    const isGridInstanceLayout = Boolean(layout && layout.mode === 'grid')
+    // const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+    // const isGridInstanceLayout = Boolean(layout && layout.mode === 'grid')
     const isVisible = visibleIds.has(nodeId)
     if (!isVisible) {
       object.userData.__harmonyCulled = true
@@ -8233,42 +8309,14 @@ function updateInstancedCullingAndBinding(): void {
     }
 
     object.userData.__harmonyCulled = false
-    const desiredAssetId = resolveBaseInstancedAssetId(node, object)
-    if (!desiredAssetId) {
+    const desiredTarget = resolveDesiredLodTarget(node, object)
+    if (!desiredTarget) {
       return
     }
+    const currentKind = object.userData.instancedRenderKind as 'model' | 'billboard' | undefined
     const currentAssetId = object.userData.instancedAssetId as string | undefined
-    if (currentAssetId !== desiredAssetId) {
-      if (isGridInstanceLayout) {
-        const bindings = getModelInstanceBindingsForNode(nodeId)
-        bindings.forEach((binding) => {
-          releaseModelInstanceBinding(binding.bindingId)
-          instanceLayoutMatrixCache.delete(binding.bindingId)
-        })
-        clearInstanceLayoutMatrixCacheForNode(nodeId)
-        if (object.userData) {
-          delete object.userData.__harmonyInstanceLayoutCache
-        }
-        object.userData = {
-          ...(object.userData ?? {}),
-          instancedAssetId: desiredAssetId,
-        }
-        void ensureModelObjectCached(desiredAssetId)
-        syncInstancedTransform(object)
-        return
-      }
-
-      applyInstancedLodSwitch(nodeId, object, desiredAssetId)
-      return
-    }
-    if (isGridInstanceLayout) {
-      syncInstancedTransform(object)
-      return
-    }
-
-    const binding = allocateModelInstance(desiredAssetId, nodeId)
-    if (!binding) {
-      void ensureModelObjectCached(desiredAssetId)
+    if (currentKind !== desiredTarget.kind || currentAssetId !== desiredTarget.assetId) {
+      applyInstancedLodSwitch(nodeId, object, desiredTarget)
       return
     }
     syncInstancedTransform(object)
@@ -11858,7 +11906,12 @@ function initScene() {
   applyAxesVisibility(axesVisible.value)
   clearInstancedMeshes()
   instancedMeshRevision.value += 1
+  stopBillboardMeshSubscription?.()
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
+    attachInstancedMesh(mesh)
+    instancedMeshRevision.value += 1
+  })
+  stopBillboardMeshSubscription = subscribeBillboardInstancedMeshes((mesh) => {
     attachInstancedMesh(mesh)
     instancedMeshRevision.value += 1
   })
@@ -12465,6 +12518,8 @@ function animate() {
   const effectiveDelta = delta > 0 ? Math.min(delta, 0.1) : 0
   const prof: Record<string, number> = {}
 
+  // updateBillboardInstanceCameraWorldPosition(camera.position) // Removed: function not defined/imported
+
   let controlsUpdated = false
 
   if (cameraTransitionState && mapControls) {
@@ -12648,6 +12703,10 @@ function disposeScene() {
   if (stopInstancedMeshSubscription) {
     stopInstancedMeshSubscription()
     stopInstancedMeshSubscription = null
+  }
+  if (stopBillboardMeshSubscription) {
+    stopBillboardMeshSubscription()
+    stopBillboardMeshSubscription = null
   }
   instanceLayoutMatrixCache.clear()
   clearInstancedMeshes()

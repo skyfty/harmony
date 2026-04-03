@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader :title="editing ? '编辑地址' : '新增地址'" />
 
     <view class="content">
@@ -37,6 +38,7 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { reactive, ref } from 'vue';
 import { getAddressById, upsertAddress } from '@/api/mini';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 
 const editing = ref(false);

@@ -7,7 +7,18 @@ import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNodeComponentState } from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
-import { LOD_COMPONENT_TYPE, type LodComponentProps, clampLodComponentProps } from '@schema/components'
+import {
+  LOD_COMPONENT_TYPE,
+  LOD_LEVEL_KIND_BILLBOARD,
+  LOD_LEVEL_KIND_MODEL,
+  clampLodComponentProps,
+  getLodLevelAssetId,
+  getLodLevelBillboardAssetId,
+  getLodLevelKind,
+  getLodLevelModelAssetId,
+  type LodComponentProps,
+  type LodLevelKind,
+} from '@schema/components'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
@@ -50,10 +61,17 @@ const modelAssetDialogSelectedId = ref('')
 const modelAssetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const modelAssetDialogLevelIndex = ref<number | null>(null)
 const isPreparingModelSelection = ref(false)
+const assetDialogKind = ref<LodLevelKind>(LOD_LEVEL_KIND_MODEL)
+
+const levelKindOptions: Array<{ title: string; value: LodLevelKind }> = [
+  { title: 'Model', value: LOD_LEVEL_KIND_MODEL },
+  { title: 'Billboard', value: LOD_LEVEL_KIND_BILLBOARD },
+]
+const modelOnlyLevelKindOptions = levelKindOptions.filter((item) => item.value === LOD_LEVEL_KIND_MODEL)
 
 watch(
   lodComponent,
-  (component) => {
+  (component: SceneNodeComponentState<LodComponentProps> | null) => {
     isSyncingFromScene.value = true
     try {
       if (!component) {
@@ -73,7 +91,7 @@ watch(
   { immediate: true, deep: true },
 )
 
-watch(modelAssetDialogVisible, (open) => {
+watch(modelAssetDialogVisible, (open: boolean) => {
   if (open) {
     return
   }
@@ -155,10 +173,14 @@ function updateEnableCulling(value: boolean): void {
   pushPropsToStore()
 }
 
+function handleEnableCullingUpdate(value: unknown): void {
+  updateEnableCulling(Boolean(value))
+}
+
 function updateLevelDistance(levelIndex: number, value: unknown): void {
   const nextValue = Number(value)
   const distance = Number.isFinite(nextValue) ? Math.max(0, nextValue) : 0
-  const nextLevels = localLevels.value.map((level) => ({ ...level }))
+  const nextLevels = localLevels.value.map((level: LodComponentProps['levels'][number]) => ({ ...level }))
   if (!nextLevels[levelIndex]) {
     return
   }
@@ -167,25 +189,57 @@ function updateLevelDistance(levelIndex: number, value: unknown): void {
   pushPropsToStore()
 }
 
+function handleLevelDistanceUpdate(levelIndex: number, value: unknown): void {
+  updateLevelDistance(levelIndex, value)
+}
+
+function updateLevelKind(levelIndex: number, value: unknown): void {
+  const kind = value === LOD_LEVEL_KIND_BILLBOARD ? LOD_LEVEL_KIND_BILLBOARD : LOD_LEVEL_KIND_MODEL
+  const nextLevels = localLevels.value.map((level: LodComponentProps['levels'][number]) => ({ ...level }))
+  const target = nextLevels[levelIndex]
+  if (!target) {
+    return
+  }
+  target.kind = kind
+  if (kind === LOD_LEVEL_KIND_BILLBOARD) {
+    target.modelAssetId = null
+  } else {
+    target.billboardAssetId = null
+  }
+  localLevels.value = nextLevels
+  pushPropsToStore()
+}
+
+function handleLevelKindUpdate(levelIndex: number, value: unknown): void {
+  updateLevelKind(levelIndex, value)
+}
+
 function handleDistanceKeydown(event: KeyboardEvent): void {
   if (event.key === '-') {
     event.preventDefault()
   }
 }
 
-function assignModelAsset(levelIndex: number, assetId: string | null | undefined): void {
-  const nextLevels = localLevels.value.map((level) => ({ ...level }))
+function assignLevelAsset(levelIndex: number, assetId: string | null | undefined): void {
+  const nextLevels = localLevels.value.map((level: LodComponentProps['levels'][number]) => ({ ...level }))
   if (!nextLevels[levelIndex]) {
     return
   }
-  nextLevels[levelIndex].modelAssetId = assetId ?? null
+  const target = nextLevels[levelIndex]
+  if (getLodLevelKind(target) === LOD_LEVEL_KIND_BILLBOARD) {
+    target.billboardAssetId = assetId ?? null
+  } else {
+    target.modelAssetId = assetId ?? null
+  }
   localLevels.value = nextLevels
   pushPropsToStore()
 }
 
-function openModelAssetDialog(levelIndex: number, event?: MouseEvent): void {
+function openAssetDialog(levelIndex: number, event?: MouseEvent): void {
+  const target = localLevels.value[levelIndex]
+  assetDialogKind.value = getLodLevelKind(target)
   modelAssetDialogLevelIndex.value = levelIndex
-  modelAssetDialogSelectedId.value = localLevels.value[levelIndex]?.modelAssetId ?? ''
+  modelAssetDialogSelectedId.value = getLodLevelAssetId(target) ?? ''
   modelAssetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   modelAssetDialogVisible.value = true
 }
@@ -216,6 +270,32 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<boolean> {
   return assetCacheStore.hasCache(asset.id)
 }
 
+async function ensureBillboardAssetCached(asset: ProjectAsset): Promise<boolean> {
+  if (!asset?.id) {
+    return false
+  }
+  if (assetCacheStore.hasCache(asset.id)) {
+    return true
+  }
+
+  try {
+    await assetCacheStore.loadFromIndexedDb(asset.id)
+  } catch (error) {
+    console.warn('Failed to load billboard asset from IndexedDB', asset.id, error)
+  }
+
+  if (assetCacheStore.hasCache(asset.id)) {
+    return true
+  }
+
+  if (!asset.downloadUrl && !asset.description) {
+    return false
+  }
+
+  await assetCacheStore.downloaProjectAsset(asset)
+  return assetCacheStore.hasCache(asset.id)
+}
+
 async function handleModelAssetDialogUpdate(asset: ProjectAsset | null): Promise<void> {
   const index = modelAssetDialogLevelIndex.value
   if (index == null) {
@@ -223,14 +303,11 @@ async function handleModelAssetDialogUpdate(asset: ProjectAsset | null): Promise
     return
   }
   if (!asset) {
-    assignModelAsset(index, null)
+    assignLevelAsset(index, null)
     modelAssetDialogVisible.value = false
     return
   }
-  if (asset.type !== 'model' && asset.type !== 'mesh') {
-    console.warn('Selected asset is not a model/mesh')
-    return
-  }
+  const kind = assetDialogKind.value
 
   if (isPreparingModelSelection.value) {
     return
@@ -238,15 +315,35 @@ async function handleModelAssetDialogUpdate(asset: ProjectAsset | null): Promise
 
   isPreparingModelSelection.value = true
   try {
+    if (kind === LOD_LEVEL_KIND_BILLBOARD) {
+      if (asset.type !== 'image' && asset.type !== 'texture') {
+        console.warn('Selected asset is not an image/texture')
+        return
+      }
+      const cached = await ensureBillboardAssetCached(asset)
+      if (!cached) {
+        console.warn('Selected billboard asset is not cached and cannot be downloaded', asset.id)
+        return
+      }
+      assignLevelAsset(index, asset.id)
+      modelAssetDialogVisible.value = false
+      return
+    }
+
+    if (asset.type !== 'model' && asset.type !== 'mesh') {
+      console.warn('Selected asset is not a model/mesh')
+      return
+    }
+
     const cached = await ensureModelAssetCached(asset)
     if (!cached) {
       console.warn('Selected model asset is not cached and cannot be downloaded', asset.id)
       return
     }
-    assignModelAsset(index, asset.id)
+    assignLevelAsset(index, asset.id)
     modelAssetDialogVisible.value = false
   } catch (error) {
-    console.warn('Failed to download selected model asset', asset.id, error)
+    console.warn('Failed to download selected LOD asset', asset.id, error)
   } finally {
     isPreparingModelSelection.value = false
   }
@@ -288,14 +385,21 @@ async function handleDropPreset(event: DragEvent): Promise<void> {
 }
 
 const levelSummaries = computed(() => {
-  return localLevels.value.map((level, index) => {
-    const model = resolveAsset(level.modelAssetId)
+  return localLevels.value.map((level: LodComponentProps['levels'][number], index: number, levels: LodComponentProps['levels']) => {
+    const kind = getLodLevelKind(level)
+    const assetId = getLodLevelAssetId(level)
+    const asset = resolveAsset(assetId)
+    const isBillboard = kind === LOD_LEVEL_KIND_BILLBOARD
+    const isLastLevel = index === levels.length - 1
     return {
       index,
       distance: level.distance,
-      modelLabel: model ? model.name : 'Default model',
-      modelStyle: resolveAssetPreviewStyle(model),
-      isDefaultModel: !level.modelAssetId,
+      kind,
+      canUseBillboard: isLastLevel,
+      typeLabel: isBillboard ? 'Billboard' : 'Model',
+      assetLabel: asset ? asset.name : isBillboard ? 'Billboard image' : 'Default model',
+      assetStyle: resolveAssetPreviewStyle(asset),
+      isAssetUnset: isBillboard ? !getLodLevelBillboardAssetId(level) : !getLodLevelModelAssetId(level),
     }
   })
 })
@@ -359,7 +463,7 @@ const levelSummaries = computed(() => {
             hide-details
             :model-value="localEnableCulling"
             :disabled="!componentEnabled"
-            @update:modelValue="(v) => updateEnableCulling(Boolean(v))"
+            @update:modelValue="handleEnableCullingUpdate"
           />
           <span class="lod-label">Frustum Culling</span>
         </div>
@@ -370,38 +474,53 @@ const levelSummaries = computed(() => {
             <div class="lod-level-meta">≥ {{ Math.round(summary.distance) }}m</div>
           </div>
 
+          <div class="lod-kind-row">
+            <v-select
+              class="lod-kind-select"
+              label="Type"
+              density="compact"
+              variant="underlined"
+              :items="summary.canUseBillboard ? levelKindOptions : modelOnlyLevelKindOptions"
+              item-title="title"
+              item-value="value"
+              :model-value="summary.kind"
+              :disabled="!componentEnabled || !summary.canUseBillboard"
+              @update:modelValue="handleLevelKindUpdate(summary.index, $event)"
+            />
+          </div>
+
           <div class="lod-level-row">
             <div class="lod-model-wrap">
               <button
                 type="button"
                 class="lod-model-button"
-                :title="summary.modelLabel"
+                :title="summary.assetLabel"
                 :disabled="!componentEnabled"
-                @click="openModelAssetDialog(summary.index, $event)"
-                @keydown.enter.prevent="openModelAssetDialog(summary.index)"
-                @keydown.space.prevent="openModelAssetDialog(summary.index)"
+                @click="openAssetDialog(summary.index, $event)"
+                @keydown.enter.prevent="openAssetDialog(summary.index)"
+                @keydown.space.prevent="openAssetDialog(summary.index)"
               >
                 <div
                   class="lod-model-thumb"
-                  :class="{ 'lod-model-thumb--empty': summary.isDefaultModel }"
-                  :style="summary.modelStyle"
+                  :class="{ 'lod-model-thumb--empty': summary.isAssetUnset }"
+                  :style="summary.assetStyle"
                 />
               </button>
 
               <v-btn
-                v-if="!summary.isDefaultModel"
+                v-if="!summary.isAssetUnset"
                 class="lod-clear-button"
                 icon="mdi-close"
                 size="x-small"
                 variant="text"
-                title="Clear model override"
+                :title="summary.kind === 'billboard' ? 'Clear billboard asset' : 'Clear model override'"
                 :disabled="!componentEnabled"
-                @click.stop="assignModelAsset(summary.index, null)"
+                @click.stop="assignLevelAsset(summary.index, null)"
               />
             </div>
 
             <div class="lod-distance-col">
-              <div class="lod-model-name" :title="summary.modelLabel">{{ summary.modelLabel }}</div>
+              <div class="lod-model-name" :title="summary.assetLabel">{{ summary.assetLabel }}</div>
               <v-text-field
                 class="lod-distance"
                 label="Distance"
@@ -413,7 +532,7 @@ const levelSummaries = computed(() => {
                 :model-value="summary.distance"
                 :disabled="!componentEnabled"
                 @keydown="handleDistanceKeydown"
-                @update:modelValue="(v) => updateLevelDistance(summary.index, v)"
+                @update:modelValue="handleLevelDistanceUpdate(summary.index, $event)"
               />
             </div>
           </div>
@@ -423,8 +542,8 @@ const levelSummaries = computed(() => {
       <AssetPickerDialog
         v-model="modelAssetDialogVisible"
         :asset-id="modelAssetDialogSelectedId"
-        assetType="model,mesh"
-        title="Select Model Asset"
+        :assetType="assetDialogKind === 'billboard' ? 'image,texture' : 'model,mesh'"
+        :title="assetDialogKind === 'billboard' ? 'Select Billboard Asset' : 'Select Model Asset'"
         :anchor="modelAssetDialogAnchor"
         :disabled="!componentEnabled"
         @update:asset="handleModelAssetDialogUpdate"
@@ -500,6 +619,14 @@ const levelSummaries = computed(() => {
   display: flex;
   align-items: flex-start;
   gap: 0.9rem;
+}
+
+.lod-kind-row {
+  display: flex;
+}
+
+.lod-kind-select {
+  width: 160px;
 }
 
 .lod-model-wrap {

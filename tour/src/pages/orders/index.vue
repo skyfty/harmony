@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="订单中心" />
 
     <view class="content">
@@ -37,6 +38,7 @@
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { listOrders, payOrder } from '@/api/mini';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import type { OrderListItem, OrderStatus } from '@/types/order';

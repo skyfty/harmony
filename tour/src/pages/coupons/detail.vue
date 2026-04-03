@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="卡券详情" />
 
     <view
@@ -79,6 +80,7 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { getMyCouponDetail, useMyCoupon } from '@/api/mini/coupons';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import type { Coupon, CouponStatus } from '@/types/coupon';
 

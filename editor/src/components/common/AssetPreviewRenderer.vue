@@ -65,6 +65,7 @@ import PrefabPreview from '@/components/common/PrefabPreview.vue'
 import HDRPreview from '@/components/common/HDRPreview.vue'
 import WallFloorPresetPreview from '@/components/common/WallFloorPresetPreview.vue'
 import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
+import { deserializeLodPreset, resolveFirstLodModelAssetId } from '@/utils/lodPreset'
 
 const props = defineProps<{
   asset: ProjectAsset
@@ -95,8 +96,15 @@ let loadToken = 0
 const metaProbes = new Set<HTMLImageElement>()
 
 const presetPreviewKind = computed(() => detectAssetPreviewPresetKind(props.asset))
+// LOD: 检查是否为 .lod prefab
+const isLodAsset = computed(() => {
+  if (props.asset.type !== 'prefab') return false
+  const ext = getLastExtensionFromFilenameOrUrl(props.asset.name || props.asset.downloadUrl || props.asset.id)
+  return ext === 'lod'
+})
+const showLodModelPreview = computed(() => Boolean(previewState.file) && isLodAsset.value)
 const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'mesh'].includes(props.asset.type))
-const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value)
+const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value && !isLodAsset.value)
 const showPresetPreview = computed(() => Boolean(previewState.file) && Boolean(presetPreviewKind.value))
 const isSkycubeAsset = computed(() => {
   if (props.asset.type !== 'file') {
@@ -195,12 +203,44 @@ function probeImageMeta(url: string): void {
   image.src = url
 }
 
+
 async function preparePreview(): Promise<void> {
   const token = ++loadToken
   resetPreviewState()
   const type = props.asset.type
   if (!type) {
     previewState.error = '未知资源类型'
+    return
+  }
+
+  // LOD 预设特殊处理
+  if (isLodAsset.value) {
+    previewState.loading = true
+    try {
+      // 1. 读取 LOD 文件内容
+      const lodFile = await ensureAssetFile()
+      if (!lodFile) throw new Error('LOD 文件未找到')
+      const text = await lodFile.text()
+      const lodPreset = deserializeLodPreset(text)
+      // 2. 解析首个可用模型 assetId
+      const modelAssetId = resolveFirstLodModelAssetId(lodPreset)
+      if (!modelAssetId) throw new Error('LOD 预设未配置可用模型')
+      // 3. 加载模型文件
+      const modelAsset = assetCacheStore.getAsset(modelAssetId)
+      if (!modelAsset) throw new Error('LOD 引用模型未导入')
+      let modelFile = assetCacheStore.createFileFromCache(modelAssetId)
+      if (!modelFile) {
+        await assetCacheStore.loadFromIndexedDb(modelAssetId)
+        modelFile = assetCacheStore.createFileFromCache(modelAssetId)
+      }
+      if (!modelFile) throw new Error('LOD 引用模型文件未缓存')
+      if (token !== loadToken) return
+      previewState.file = modelFile
+    } catch (error) {
+      previewState.error = (error as Error).message ?? 'LOD 预览失败'
+    } finally {
+      if (token === loadToken) previewState.loading = false
+    }
     return
   }
 

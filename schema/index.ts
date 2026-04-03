@@ -185,6 +185,8 @@ export type {
 export { createScenePreviewPerfController } from './scenePreviewPerf'
 export type { ScenePreviewPerfController, ScenePreviewPerfOptions } from './scenePreviewPerf'
 
+export * from './instancedBillboardCache'
+
 export { resolveEnabledComponentState } from './componentRuntimeUtils'
 
 export { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from './nodeIndexUtils'

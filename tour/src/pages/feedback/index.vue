@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="用户建议">
       <template #right>
         <button class="add" @tap="create">提交建议</button>
@@ -24,6 +25,7 @@
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { listFeedback } from '@/api/mini';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import type { FeedbackCategory, FeedbackStatus, FeedbackTicket } from '@/types/feedback';
 

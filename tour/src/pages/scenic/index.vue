@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader :title="headerTitle" />
 
     <view class="content">
@@ -65,6 +66,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import BottomNav from '@/components/BottomNav.vue'
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import ScenicCard from '@/components/ScenicCard.vue'
 import { listScenics } from '@/api/mini'

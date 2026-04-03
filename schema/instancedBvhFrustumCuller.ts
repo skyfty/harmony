@@ -34,7 +34,7 @@ export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     geometry.setDrawRange(0, triangleCount * 3)
     // Create (or recreate) BVH.
-    bvh = triangleCount ? new MeshBVH(geometry, { maxLeafTris: 10 }) : null
+    bvh = triangleCount ? new MeshBVH(geometry, { maxLeafSize: 10 }) : null
   }
 
   function setIds(nextIds: string[]): void {

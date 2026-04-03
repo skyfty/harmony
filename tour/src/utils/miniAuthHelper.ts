@@ -1,60 +1,110 @@
 import { getAccessToken } from '@/api/mini/token'
-import { setPendingRecoveryProfile, ensureMiniAuth } from '@/api/mini/session'
+import { ensureMiniAuth } from '@/api/mini/session'
 import { redirectToNav } from '@/utils/navKey'
+import {
+  normalizeMiniProfileText,
+} from '@/utils/miniProfile'
+import {
+  type MiniAuthRecoveryOptions,
+} from '@/services/miniAuth/types'
+import { requestMiniAuthRecovery } from '@/services/miniAuth/recoveryPresenter'
+import { applyRecoveryResultForNextLogin } from '@/services/miniAuth/runtime'
+import { syncMiniProfileDraft } from '@/services/miniAuth/profileSync'
+
+const MINI_AUTH_HELPER_LOG_PREFIX = '[mini-auth-helper]'
+
+function logMiniAuthHelper(message: string, details?: unknown): void {
+  if (details === undefined) {
+    console.info(`${MINI_AUTH_HELPER_LOG_PREFIX} ${message}`)
+    return
+  }
+  console.info(`${MINI_AUTH_HELPER_LOG_PREFIX} ${message}`, details)
+}
+
+const DEFAULT_AUTH_RECOVERY_OPTIONS: MiniAuthRecoveryOptions = {
+  title: '完善微信资料',
+  description: '请填写微信昵称并选择头像，授权后会自动同步到账号资料。',
+  confirmText: '同步并继续',
+  skipText: '暂时匿名使用',
+}
+
+const DEFAULT_MANUAL_RECOVERY_OPTIONS: MiniAuthRecoveryOptions = {
+  title: '获取微信头像昵称',
+  description: '补充微信头像和昵称后，会自动更新到当前账号。',
+  confirmText: '同步到账号',
+  skipText: '暂不处理',
+}
+
+function resolveRecoveryOptions(options?: MiniAuthRecoveryOptions): MiniAuthRecoveryOptions {
+  return {
+    ...DEFAULT_AUTH_RECOVERY_OPTIONS,
+    ...(options ?? {}),
+  }
+}
+
+async function promptMiniProfileRecovery(options?: MiniAuthRecoveryOptions) {
+  logMiniAuthHelper('promptMiniProfileRecovery invoked', {
+    title: resolveRecoveryOptions(options).title || '(empty)',
+  })
+  return await requestMiniAuthRecovery(resolveRecoveryOptions(options))
+}
 
 export async function ensureAuthThenNavigate(key: string): Promise<boolean> {
   try {
+    logMiniAuthHelper('ensureAuthThenNavigate invoked', {
+      key,
+      hasToken: Boolean(getAccessToken()),
+    })
     if (getAccessToken()) {
       // already logged in
+      logMiniAuthHelper('token already exists, navigate directly', { key })
       redirectToNav(key as any)
       return true
     }
 
-    // prompt user for profile (must be a user gesture)
-    const res: any = await new Promise((resolve, reject) => {
-      // @ts-ignore
-      ;(uni as any).getUserProfile({
-        desc: '用于完成账号注册与头像同步',
-        success: (r: any) => resolve(r),
-        fail: (e: any) => reject(e),
-      })
+    const result = await promptMiniProfileRecovery()
+    logMiniAuthHelper('promptMiniProfileRecovery resolved for navigation', {
+      key,
+      action: result.action,
     })
+    applyRecoveryResultForNextLogin(result)
 
-    const displayName = res?.userInfo?.nickName
-    const avatarUrl = res?.userInfo?.avatarUrl
-    setPendingRecoveryProfile({ displayName, avatarUrl })
-
-    // perform auth (will include pending profile in login request)
     await ensureMiniAuth()
+    logMiniAuthHelper('ensureMiniAuth resolved for navigation', { key })
     redirectToNav(key as any)
     return true
-  } catch (err) {
-    // user cancelled or login failed
+  } catch {
+    logMiniAuthHelper('ensureAuthThenNavigate failed, fallback navigation attempt', { key })
     try {
-      // fallback: still navigate to target page without auth
       redirectToNav(key as any)
     } catch {}
     return false
   }
 }
 
-export async function requestProfileAndSync(): Promise<boolean> {
+export async function requestProfileAndSync(options: MiniAuthRecoveryOptions = DEFAULT_MANUAL_RECOVERY_OPTIONS): Promise<boolean> {
   try {
-    const res: any = await new Promise((resolve, reject) => {
-      // @ts-ignore
-      ;(uni as any).getUserProfile({
-        desc: '用于同步昵称与头像',
-        success: (r: any) => resolve(r),
-        fail: (e: any) => reject(e),
-      })
+    logMiniAuthHelper('requestProfileAndSync invoked', {
+      title: options.title || '(empty)',
+      hasToken: Boolean(getAccessToken()),
     })
+    const result = await promptMiniProfileRecovery(options)
+    logMiniAuthHelper('promptMiniProfileRecovery resolved for profile sync', {
+      action: result.action,
+    })
+    if (result.action !== 'submit') {
+      return false
+    }
 
-    const displayName = res?.userInfo?.nickName
-    const avatarUrl = res?.userInfo?.avatarUrl
-    setPendingRecoveryProfile({ displayName, avatarUrl })
-    await ensureMiniAuth(true)
-    return true
-  } catch (err) {
+    await ensureMiniAuth()
+    logMiniAuthHelper('ensureMiniAuth resolved for profile sync')
+
+    return await syncMiniProfileDraft({
+      displayName: normalizeMiniProfileText(result.displayName),
+      avatarFilePath: result.avatarFilePath,
+    })
+  } catch {
+    logMiniAuthHelper('requestProfileAndSync failed')
     return false
   }
 }

@@ -34,6 +34,7 @@ const ASSET_TYPE_BY_EXTENSION: Readonly<Record<string, AssetType>> = {
 
   // prefabs
   prefab: 'prefab',
+  lod: 'prefab',
 
   // materials
   mtl: 'material',

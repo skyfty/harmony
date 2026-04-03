@@ -3,9 +3,23 @@ import type { AssetCacheEntry } from './assetCache'
 import ResourceCache from './ResourceCache'
 import type { SceneJsonExportDocument, SceneNode, GroundDynamicMesh } from './index'
 import type { TerrainScatterInstance, TerrainScatterLayer, TerrainScatterStoreSnapshot } from './terrain-scatter'
-import { clampLodComponentProps, type LodComponentProps } from './components'
+import {
+  clampLodComponentProps,
+  resolveLodRenderTarget,
+  type LodComponentProps,
+  type LodRenderTarget,
+} from './components'
 import { loadNodeObject } from './modelAssetLoader'
 import { normalizeScatterMaterials } from './scatterMaterials'
+import {
+  allocateBillboardInstance,
+  ensureBillboardInstanceGroup,
+  ensureBillboardInstancedMeshesRegistered,
+  getBillboardAspectRatio,
+  releaseBillboardInstance,
+  updateBillboardInstanceCameraWorldPosition,
+  updateBillboardInstanceMatrix,
+} from './instancedBillboardCache'
 import {
   allocateModelInstance,
   getCachedModelObject,
@@ -69,7 +83,13 @@ type ScatterRuntimeInstance = {
   layerId: string | null
   instance: TerrainScatterInstance
   presetAssetId: string | null
-  boundAssetId: string
+  sourceModelAssetId: string | null
+  sourceModelHeight: number
+  boundTarget: ScatterRenderTarget
+}
+
+type ScatterRenderTarget = LodRenderTarget & {
+  assetId: string
 }
 
 const scatterLocalPositionHelper = new THREE.Vector3()
@@ -82,6 +102,7 @@ const scatterWorldPositionHelper = new THREE.Vector3()
 const scatterCullingProjView = new THREE.Matrix4()
 const scatterCullingFrustum = new THREE.Frustum()
 const scatterCullingSphere = new THREE.Sphere()
+const scatterBillboardScaleHelper = new THREE.Vector3()
 
 function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {
   const normalizedLayer = typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : 'layer'
@@ -107,6 +128,31 @@ function composeScatterMatrix(
   scatterQuaternionHelper.setFromEuler(scatterLocalRotationHelper)
   scatterLocalScaleHelper.set(instance.localScale?.x ?? 1, instance.localScale?.y ?? 1, instance.localScale?.z ?? 1)
   scatterInstanceMatrixHelper.compose(scatterLocalPositionHelper, scatterQuaternionHelper, scatterLocalScaleHelper)
+  const output = target ?? new THREE.Matrix4()
+  return output.copy(groundMesh.matrixWorld).multiply(scatterInstanceMatrixHelper)
+}
+
+function composeScatterBillboardMatrix(
+  instance: TerrainScatterInstance,
+  groundMesh: THREE.Mesh,
+  sourceModelHeight: number,
+  aspectRatio: number,
+  target?: THREE.Matrix4,
+): THREE.Matrix4 {
+  scatterLocalPositionHelper.set(
+    instance.localPosition?.x ?? 0,
+    instance.localPosition?.y ?? 0,
+    instance.localPosition?.z ?? 0,
+  )
+  const scale = instance.localScale
+  const uniformScale = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+  const safeUniformScale = Number.isFinite(uniformScale) && uniformScale > 0 ? uniformScale : 1
+  const safeHeight = Number.isFinite(sourceModelHeight) && sourceModelHeight > 0 ? sourceModelHeight : 1
+  const safeAspect = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1
+  const height = safeHeight * safeUniformScale
+  const width = height * safeAspect
+  scatterBillboardScaleHelper.set(width, height, 1)
+  scatterInstanceMatrixHelper.compose(scatterLocalPositionHelper, scatterQuaternionHelper.identity(), scatterBillboardScaleHelper)
   const output = target ?? new THREE.Matrix4()
   return output.copy(groundMesh.matrixWorld).multiply(scatterInstanceMatrixHelper)
 }
@@ -282,13 +328,17 @@ async function loadLodPreset(resourceCache: ResourceCache, presetAssetId: string
   return safeParseLodPreset(text)
 }
 
-function resolveLodBindingAssetId(preset: LodPresetData | null): string | null {
+function resolveFirstLodModelAssetId(preset: LodPresetData | null): string | null {
   const levels = preset?.props?.levels
   if (!Array.isArray(levels) || levels.length === 0) {
     return null
   }
   for (const level of levels) {
-    const id = normalizeText(level?.modelAssetId)
+    const target = resolveLodRenderTarget(level)
+    const id = normalizeText(target.assetId)
+    if (target.kind !== 'model') {
+      continue
+    }
     if (id) {
       return id
     }
@@ -296,10 +346,25 @@ function resolveLodBindingAssetId(preset: LodPresetData | null): string | null {
   return null
 }
 
-function chooseLodModelAssetId(preset: LodPresetData, distance: number): string | null {
+function resolveBaseScatterRenderTarget(preset: LodPresetData | null, fallbackModelAssetId: string | null): ScatterRenderTarget | null {
+  const modelAssetId = resolveFirstLodModelAssetId(preset) ?? normalizeText(fallbackModelAssetId)
+  if (!modelAssetId) {
+    return null
+  }
+  return {
+    kind: 'model',
+    assetId: modelAssetId,
+  }
+}
+
+function chooseLodRenderTarget(
+  preset: LodPresetData,
+  distance: number,
+  fallbackModelAssetId: string | null,
+): ScatterRenderTarget | null {
   const levels = Array.isArray(preset?.props?.levels) ? preset.props.levels : []
   if (!levels.length) {
-    return null
+    return resolveBaseScatterRenderTarget(preset, fallbackModelAssetId)
   }
   let chosen: (typeof levels)[number] | undefined
   for (let i = levels.length - 1; i >= 0; i -= 1) {
@@ -309,8 +374,15 @@ function chooseLodModelAssetId(preset: LodPresetData, distance: number): string 
       break
     }
   }
-  const id = normalizeText(chosen?.modelAssetId)
-  return id || null
+  const resolved = resolveLodRenderTarget(chosen)
+  const assetId = normalizeText(resolved.assetId)
+  if (assetId) {
+    return {
+      kind: resolved.kind,
+      assetId,
+    }
+  }
+  return resolveBaseScatterRenderTarget(preset, fallbackModelAssetId)
 }
 
 async function ensureModelInstanceGroup(assetId: string, resourceCache: ResourceCache): Promise<ModelInstanceGroup | null> {
@@ -335,6 +407,94 @@ async function ensureModelInstanceGroup(assetId: string, resourceCache: Resource
     console.warn('[TerrainScatterLOD] Failed to prepare instanced model', assetId, error)
     return null
   }
+}
+
+function getSourceModelHeight(assetId: string | null): number {
+  const normalized = normalizeText(assetId)
+  if (!normalized) {
+    return 1
+  }
+  const group = getCachedModelObject(normalized)
+  if (!group) {
+    return 1
+  }
+  const size = group.boundingBox.getSize(new THREE.Vector3())
+  return Number.isFinite(size.y) && size.y > 0 ? size.y : Math.max(group.radius * 2, 1)
+}
+
+async function ensureScatterRenderTargetReady(
+  target: ScatterRenderTarget,
+  resourceCache: ResourceCache,
+): Promise<boolean> {
+  if (target.kind === 'billboard') {
+    const group = await ensureBillboardInstanceGroup(target.assetId, resourceCache)
+    if (!group) {
+      return false
+    }
+    ensureBillboardInstancedMeshesRegistered(target.assetId)
+    return true
+  }
+
+  const group = await ensureModelInstanceGroup(target.assetId, resourceCache)
+  if (!group || !group.meshes.length) {
+    return false
+  }
+  ensureInstancedMeshesRegistered(target.assetId)
+  return true
+}
+
+function releaseScatterRenderTargetBinding(target: ScatterRenderTarget, nodeId: string): void {
+  if (target.kind === 'billboard') {
+    releaseBillboardInstance(nodeId)
+    return
+  }
+  releaseModelInstance(nodeId)
+}
+
+function allocateScatterRenderTargetBinding(target: ScatterRenderTarget, nodeId: string): boolean {
+  if (target.kind === 'billboard') {
+    return Boolean(allocateBillboardInstance(target.assetId, nodeId))
+  }
+  return Boolean(allocateModelInstance(target.assetId, nodeId))
+}
+
+function updateScatterRenderTargetMatrix(target: ScatterRenderTarget, nodeId: string, matrix: THREE.Matrix4): void {
+  if (target.kind === 'billboard') {
+    updateBillboardInstanceMatrix(nodeId, matrix)
+    return
+  }
+  updateModelInstanceMatrix(nodeId, matrix)
+}
+
+function computeScatterRuntimeMatrix(
+  runtime: ScatterRuntimeInstance,
+  groundMesh: THREE.Mesh,
+  target?: ScatterRenderTarget,
+): THREE.Matrix4 {
+  const renderTarget = target ?? runtime.boundTarget
+  if (renderTarget.kind === 'billboard') {
+    const aspectRatio = getBillboardAspectRatio(renderTarget.assetId) ?? 1
+    return composeScatterBillboardMatrix(runtime.instance, groundMesh, runtime.sourceModelHeight, aspectRatio, scatterMatrixHelper)
+  }
+  return composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+}
+
+function computeScatterCullRadius(runtime: ScatterRuntimeInstance): number {
+  if (runtime.boundTarget.kind === 'billboard') {
+    const safeHeight = Number.isFinite(runtime.sourceModelHeight) && runtime.sourceModelHeight > 0 ? runtime.sourceModelHeight : 1
+    const aspectRatio = getBillboardAspectRatio(runtime.boundTarget.assetId) ?? 1
+    const scale = runtime.instance.localScale
+    const uniformScale = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+    const safeScale = Number.isFinite(uniformScale) && uniformScale > 0 ? uniformScale : 1
+    const height = safeHeight * safeScale
+    const width = height * aspectRatio
+    return Math.sqrt(width * width + height * height) * 0.5
+  }
+
+  const baseRadius = getCachedModelObject(runtime.boundTarget.assetId)?.radius ?? 0.5
+  const scale = runtime.instance.localScale
+  const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+  return baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
 }
 
 export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntimeOptions = {}): TerrainScatterLodRuntime {
@@ -396,7 +556,9 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
   let pendingLodUpdate: Promise<void> | null = null
 
   function dispose(): void {
-    allocatedNodeIds.forEach((nodeId) => releaseModelInstance(nodeId))
+    runtimeInstances.forEach((runtime) => {
+      releaseScatterRenderTargetBinding(runtime.boundTarget, runtime.nodeId)
+    })
     allocatedNodeIds.clear()
     visibleNodeIds.clear()
     runtimeInstances.clear()
@@ -485,31 +647,46 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         }
 
         const preset = presetAssetId ? (lodPresetCache.get(presetAssetId) ?? null) : null
-        const presetBinding = resolveLodBindingAssetId(preset)
-        const bindingAssetId = presetBinding || selectionId
-        if (!bindingAssetId) {
+        const sourceModelAssetId = resolveFirstLodModelAssetId(preset) || selectionId
+        const bindingTarget = resolveBaseScatterRenderTarget(preset, selectionId)
+        if (!bindingTarget) {
           continue
         }
 
-        const group = await ensureModelInstanceGroup(bindingAssetId, nextResourceCache)
-        if (!group || !group.meshes.length) {
+        const ready = await ensureScatterRenderTargetReady(bindingTarget, nextResourceCache)
+        if (!ready) {
           continue
         }
-        ensureInstancedMeshesRegistered(bindingAssetId)
+        if (sourceModelAssetId) {
+          await ensureModelInstanceGroup(sourceModelAssetId, nextResourceCache)
+        }
+        const sourceModelHeight = getSourceModelHeight(sourceModelAssetId)
 
         const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
         for (const instance of instances) {
           const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
 
           if (!chunkStreamingEnabled) {
-            const binding = allocateModelInstance(bindingAssetId, nodeId)
+            const binding = allocateScatterRenderTargetBinding(bindingTarget, nodeId)
             if (!binding) {
               continue
             }
-            const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper)
-            updateModelInstanceMatrix(nodeId, matrix)
+            const runtimeTarget = { ...bindingTarget }
+            const runtimeState: ScatterRuntimeInstance = {
+              nodeId,
+              groundNodeId: entry.nodeId,
+              layerId: layer?.id ?? null,
+              instance,
+              presetAssetId: preset ? presetAssetId : null,
+              sourceModelAssetId,
+              sourceModelHeight,
+              boundTarget: runtimeTarget,
+            }
+            const matrix = computeScatterRuntimeMatrix(runtimeState, groundMesh)
+            updateScatterRenderTargetMatrix(runtimeTarget, nodeId, matrix)
             allocatedNodeIds.add(nodeId)
             visibleNodeIds.add(nodeId)
+            runtimeInstances.set(nodeId, runtimeState)
           } else {
             const local = instance.localPosition
             const chunkKey = computeGroundChunkKeyFromLocal(entry.definition, chunkCells, local?.x ?? 0, local?.z ?? 0)
@@ -520,16 +697,18 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
             } else {
               runtimeInstancesByChunkKey.set(compositeKey, [nodeId])
             }
-          }
 
-          runtimeInstances.set(nodeId, {
-            nodeId,
-            groundNodeId: entry.nodeId,
-            layerId: layer?.id ?? null,
-            instance,
-            presetAssetId: preset ? presetAssetId : null,
-            boundAssetId: bindingAssetId,
-          })
+            runtimeInstances.set(nodeId, {
+              nodeId,
+              groundNodeId: entry.nodeId,
+              layerId: layer?.id ?? null,
+              instance,
+              presetAssetId: preset ? presetAssetId : null,
+              sourceModelAssetId,
+              sourceModelHeight,
+              boundTarget: { ...bindingTarget },
+            })
+          }
         }
       }
     }
@@ -607,7 +786,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       const nodeIds = runtimeInstancesByChunkKey.get(compositeKey) ?? []
       for (const nodeId of nodeIds) {
         if (allocatedNodeIds.has(nodeId)) {
-          releaseModelInstance(nodeId)
+          const runtime = runtimeInstances.get(nodeId)
+          if (runtime) {
+            releaseScatterRenderTargetBinding(runtime.boundTarget, nodeId)
+          }
           allocatedNodeIds.delete(nodeId)
           visibleNodeIds.delete(nodeId)
         }
@@ -686,14 +868,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         scatterWorldPositionHelper.setFromMatrixPosition(matrix)
 
         // 计算用于裁剪的包围球半径：基于模型基础半径、实例缩放以及全局 cull 半径乘数
-        const boundAssetId = runtime.boundAssetId
-        // 尝试从缓存模型对象读取基础半径；若不存在则使用默认 0.5
-        const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
-        const scale = runtime.instance.localScale
-        // 以最大的轴向缩放为尺度因子（保守估计）
-        const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
-        const radius =
-          baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * cullRadiusMultiplier
+        const radius = computeScatterCullRadius(runtime) * cullRadiusMultiplier
 
         // 设置裁剪用球体（中心 + 半径）
         scatterCullingSphere.center.copy(scatterWorldPositionHelper)
@@ -723,12 +898,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       scatterWorldPositionHelper.setFromMatrixPosition(matrix)
 
       // 3) 计算包围球半径（基于缓存模型半径、实例缩放与全局乘数）
-      const boundAssetId = runtime.boundAssetId
-      const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
-      const scale = runtime.instance.localScale
-      const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
-      const radius =
-        baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * cullRadiusMultiplier
+      const radius = computeScatterCullRadius(runtime) * cullRadiusMultiplier
 
       // 4) 填充用于裁剪的球体，并测试是否与视锥体相交
       scatterCullingSphere.center.copy(scatterWorldPositionHelper)
@@ -776,7 +946,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         continue
       }
 
-      releaseModelInstance(nodeId)
+      const runtime = runtimeInstances.get(nodeId)
+      if (runtime) {
+        releaseScatterRenderTargetBinding(runtime.boundTarget, nodeId)
+      }
       bindingChanges += 1
       allocatedNodeIds.delete(nodeId)
       visibleNodeIds.delete(nodeId)
@@ -794,7 +967,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         if (bindingChanges >= maxBindingChangesPerUpdate) {
           return
         }
-        const binding = allocateModelInstance(runtime.boundAssetId, runtime.nodeId)
+        const binding = allocateScatterRenderTargetBinding(runtime.boundTarget, runtime.nodeId)
         if (!binding) {
           return
         }
@@ -812,8 +985,8 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         preparedGroundNodeIds.add(runtime.groundNodeId)
       }
 
-      const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
-      updateModelInstanceMatrix(runtime.nodeId, matrix)
+      const matrix = computeScatterRuntimeMatrix(runtime, groundMesh)
+      updateScatterRenderTargetMatrix(runtime.boundTarget, runtime.nodeId, matrix)
     })
   }
 
@@ -855,7 +1028,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         preparedGroundNodeIds.add(runtime.groundNodeId)
       }
 
-      const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+      const matrix = computeScatterRuntimeMatrix(runtime, groundMesh)
 
       const presetAssetId = runtime.presetAssetId
       if (presetAssetId) {
@@ -865,18 +1038,15 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
           scatterWorldPositionHelper.setFromMatrixPosition(matrix)
           const distance = scatterWorldPositionHelper.distanceTo(cameraPosition)
           if (Number.isFinite(distance)) {
-            const desiredAssetId = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
-            if (desiredAssetId && desiredAssetId !== runtime.boundAssetId) {
-              const group = await ensureModelInstanceGroup(desiredAssetId, cache)
-              if (group && group.meshes.length) {
-                ensureInstancedMeshesRegistered(desiredAssetId)
-                if (allocatedNodeIds.has(runtime.nodeId)) {
-                  releaseModelInstance(runtime.nodeId)
-                  const binding = allocateModelInstance(desiredAssetId, runtime.nodeId)
-                  if (binding) {
-                    runtime.boundAssetId = desiredAssetId
-                    allocatedNodeIds.add(runtime.nodeId)
-                  }
+            const desiredTarget = chooseLodRenderTarget(preset, distance, runtime.sourceModelAssetId)
+            if (desiredTarget && (desiredTarget.kind !== runtime.boundTarget.kind || desiredTarget.assetId !== runtime.boundTarget.assetId)) {
+              const ready = await ensureScatterRenderTargetReady(desiredTarget, cache)
+              if (ready && allocatedNodeIds.has(runtime.nodeId)) {
+                releaseScatterRenderTargetBinding(runtime.boundTarget, runtime.nodeId)
+                const binding = allocateScatterRenderTargetBinding(desiredTarget, runtime.nodeId)
+                if (binding) {
+                  runtime.boundTarget = desiredTarget
+                  allocatedNodeIds.add(runtime.nodeId)
                 }
               }
             }
@@ -884,19 +1054,22 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         }
       }
 
-      const binding = allocateModelInstance(runtime.boundAssetId, runtime.nodeId)
+      const binding = allocateScatterRenderTargetBinding(runtime.boundTarget, runtime.nodeId)
       if (!binding) {
         // Ensure cached for re-entry after culling.
-        await ensureModelInstanceGroup(runtime.boundAssetId, cache)
+        await ensureScatterRenderTargetReady(runtime.boundTarget, cache)
         continue
       }
       allocatedNodeIds.add(runtime.nodeId)
-      updateModelInstanceMatrix(runtime.nodeId, matrix)
+      updateScatterRenderTargetMatrix(runtime.boundTarget, runtime.nodeId, computeScatterRuntimeMatrix(runtime, groundMesh))
     }
   }
 
   function update(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): void {
     const now = nowMs()
+    if ((camera as THREE.Camera & { position?: THREE.Vector3 }).position) {
+      updateBillboardInstanceCameraWorldPosition((camera as THREE.Camera & { position: THREE.Vector3 }).position)
+    }
 
     // Fast path: update frustum culling + visible matrices (sync) at its own cadence.
     if (now - lastVisibilityUpdateAt >= visibilityUpdateIntervalMs) {

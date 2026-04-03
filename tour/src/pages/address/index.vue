@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="地址管理">
       <template #right>
         <button class="add" @tap="create">新增地址</button>
@@ -30,6 +31,7 @@
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { listAddresses, removeAddress } from '@/api/mini';
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import type { Address } from '@/types/address';
 

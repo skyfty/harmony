@@ -56,6 +56,7 @@ export interface TerrainScatterInstanceBindingSlot {
 
 export interface TerrainScatterInstanceBinding {
   nodeId: string
+  kind?: 'model' | 'billboard'
   slots: TerrainScatterInstanceBindingSlot[]
 }
 

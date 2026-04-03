@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <MiniAuthRecovery />
     <PageHeader title="系统设置" />
       <view class="content">
         <view class="card">
@@ -12,6 +13,7 @@
 </template>
 
 <script setup lang="ts">
+import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 
 function goProfile() {

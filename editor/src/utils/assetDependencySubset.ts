@@ -146,7 +146,7 @@ export function cloneSceneAssetRegistrySubset(
 
 export function isConfigAssetExtension(extension: string | null | undefined): boolean {
   const normalized = typeof extension === 'string' ? extension.trim().toLowerCase() : ''
-  return ['json', 'prefab', 'wall', 'floor', 'material'].includes(normalized)
+  return ['json', 'prefab', 'lod', 'wall', 'floor', 'material'].includes(normalized)
 }
 
 export function normalizeAssetReferenceCandidate(value: string): string | null {

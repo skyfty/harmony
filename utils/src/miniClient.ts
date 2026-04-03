@@ -163,8 +163,7 @@ function buildQueryString(query?: Record<string, string | number | boolean | nul
 }
 
 async function requestWithUni<R>(target: string, options: HttpRequestOptions): Promise<R> {
-  const method = options.method === 'PATCH' ? 'POST' : (options.method ?? 'GET');
-  const extraHeaders = options.method === 'PATCH' ? { 'X-HTTP-Method-Override': 'PATCH' } : {};
+  const method = options.method ?? 'GET';
   const authHeader = options.auth === false || !getAuthToken() ? {} : { Authorization: `Bearer ${getAuthToken()}` };
   return await new Promise<R>((resolve, reject) => {
     uni.request({
@@ -175,7 +174,6 @@ async function requestWithUni<R>(target: string, options: HttpRequestOptions): P
       header: {
         'Content-Type': 'application/json',
         ...(options.headers ?? {}),
-        ...extraHeaders,
         ...authHeader,
       },
       success: (response: { statusCode?: number; data?: unknown }) => {

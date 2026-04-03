@@ -1261,6 +1261,13 @@ function isModelAsset(asset: ProjectAsset): boolean {
   if (detectAssetPreviewPresetKind(asset)) {
     return true
   }
+  // 支持 .lod prefab 作为模型资产
+  if (asset.type === 'prefab') {
+    const ext = getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id)
+    if (ext === '.lod') {
+      return true
+    }
+  }
   if (['model', 'mesh', 'prefab', 'hdri'].includes(asset.type)) {
     return true
   }
