@@ -141,6 +141,7 @@ export type GroundEditorOptions = {
 	) => THREE.Vector3 | null
 	clearVertexSnap?: () => void
 	lockScatterLodToBaseAsset?: boolean
+	disableScatterLodRuntime?: boolean
 	scatterChunkStreaming?: {
 		enabled?: boolean
 		getDynamicRadiusMeters?: () => number
@@ -1530,6 +1531,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	const scatterChunkStreamingEnabled = Boolean(options.scatterChunkStreaming?.enabled)
 	const lockScatterLodToBaseAsset = Boolean(options.lockScatterLodToBaseAsset)
+	const scatterLodRuntimeDisabled = Boolean(options.disableScatterLodRuntime)
 	const scatterChunkStreamingRadiusOverride = clampFinite(options.scatterChunkStreaming?.radiusMeters, Number.NaN)
 	const scatterChunkStreamingPaddingOverride = clampFinite(options.scatterChunkStreaming?.unloadPaddingMeters, Number.NaN)
 	const scatterChunkStreamingMaxChunkChangesPerUpdate =
@@ -5379,6 +5381,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		// Keep chunk streaming + per-instance visibility responsive even when LOD switching is throttled.
 		updateScatterChunkStreamingVisibilityAndGrace()
+		if (scatterLodRuntimeDisabled) {
+			return
+		}
 		const now = Date.now()
 		if (!force && !scatterLodImmediateSyncNeeded && now - lastScatterLodUpdateAt < 200) {
 			return

@@ -3264,6 +3264,9 @@ function resolveGroundScatterChunkStreamingEnabled(): boolean {
   return isGroundChunkStreamingEnabled(node.dynamicMesh)
 }
 
+const DISABLE_EDITOR_VIEWPORT_SCATTER_LOD_RUNTIME = true
+const DISABLE_EDITOR_VIEWPORT_INSTANCED_CULLING = true
+
 const groundEditor = createGroundEditor({
   sceneStore,
   getSceneNodes: () => props.sceneNodes,
@@ -3297,6 +3300,7 @@ const groundEditor = createGroundEditor({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   lockScatterLodToBaseAsset: true,
+  disableScatterLodRuntime: DISABLE_EDITOR_VIEWPORT_SCATTER_LOD_RUNTIME,
   scatterChunkStreaming: {
     enabled: resolveGroundScatterChunkStreamingEnabled(),
     getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
@@ -8238,14 +8242,26 @@ function resolveInstancedProxyRadius(object: THREE.Object3D): number {
   return radius
 }
 
+function syncInstancedBindingWithoutCulling(nodeId: string, object: THREE.Object3D, node: SceneNode): void {
+  object.userData.__harmonyCulled = false
+  const desiredTarget = resolveDesiredLodTarget(node, object)
+  if (!desiredTarget) {
+    return
+  }
+  const currentKind = object.userData.instancedRenderKind as 'model' | 'billboard' | undefined
+  const currentAssetId = object.userData.instancedAssetId as string | undefined
+  const needsModelRebind = desiredTarget.kind === 'model' && getModelInstanceBindingsForNode(nodeId).length === 0
+  if (currentKind !== desiredTarget.kind || currentAssetId !== desiredTarget.assetId || needsModelRebind) {
+    applyInstancedLodSwitch(nodeId, object, desiredTarget)
+    return
+  }
+  syncInstancedTransform(object)
+}
+
 function updateInstancedCullingAndBinding(): void {
   if (!camera) {
     return
   }
-
-  camera.updateMatrixWorld(true)
-  instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
-  instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
 
 
   const candidateIds: string[] = []
@@ -8273,6 +8289,22 @@ function updateInstancedCullingAndBinding(): void {
     candidateObjects.set(nodeId, object)
     candidateNodes.set(nodeId, node)
   })
+
+  if (DISABLE_EDITOR_VIEWPORT_INSTANCED_CULLING) {
+    candidateIds.forEach((nodeId) => {
+      const object = candidateObjects.get(nodeId)
+      const node = candidateNodes.get(nodeId)
+      if (!object || !node) {
+        return
+      }
+      syncInstancedBindingWithoutCulling(nodeId, object, node)
+    })
+    return
+  }
+
+  camera.updateMatrixWorld(true)
+  instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+  instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
 
   candidateIds.sort()
   instancedCullingFrustumCuller.setIds(candidateIds)
@@ -8309,18 +8341,7 @@ function updateInstancedCullingAndBinding(): void {
       return
     }
 
-    object.userData.__harmonyCulled = false
-    const desiredTarget = resolveDesiredLodTarget(node, object)
-    if (!desiredTarget) {
-      return
-    }
-    const currentKind = object.userData.instancedRenderKind as 'model' | 'billboard' | undefined
-    const currentAssetId = object.userData.instancedAssetId as string | undefined
-    if (currentKind !== desiredTarget.kind || currentAssetId !== desiredTarget.assetId) {
-      applyInstancedLodSwitch(nodeId, object, desiredTarget)
-      return
-    }
-    syncInstancedTransform(object)
+    syncInstancedBindingWithoutCulling(nodeId, object, node)
   })
 }
 
