@@ -650,7 +650,7 @@ watch(
 
 
                   <div class="w-full flex flex-wrap items-end gap-3">
-                    <div class="min-w-[180px] flex-1">
+                    <div class="flex-1 min-w-0">
                       <div class="mb-1 text-text-secondary">规则类型</div>
                       <Select
                         v-model:value="rule.type"
@@ -660,7 +660,7 @@ watch(
                     </div>
 
                     <template v-if="rule.type === 'enter_scenic' || rule.type === 'punch_ratio_gte'">
-                      <div class="min-w-[160px] flex-1">
+                      <div class="flex-1 min-w-0">
                         <div class="mb-1 text-text-secondary">景点范围</div>
                         <Select
                           v-model:value="rule.scope"
@@ -668,29 +668,29 @@ watch(
                           @change="() => applyRuleTypeDefaults(rule)"
                         />
                       </div>
-                      <div v-if="rule.scope === 'specific_scenic'" class="min-w-[220px] flex-[1.3]">
+                      <div v-if="rule.scope === 'specific_scenic'" class="flex-[1.3] min-w-0">
                         <div class="mb-1 text-text-secondary">指定景点</div>
                         <Select v-model:value="rule.scenicId" :options="scenicOptions" show-search option-filter-prop="label" />
                       </div>
-                      <div v-else class="w-[140px]">
+                      <div v-else class="flex-none w-[140px]">
                         <div class="mb-1 text-text-secondary">景点数量</div>
                         <InputNumber v-model:value="rule.scenicCount" :min="1" :precision="0" style="width: 100%" />
                       </div>
-                      <div v-if="rule.type === 'punch_ratio_gte'" class="w-[160px]">
+                      <div v-if="rule.type === 'punch_ratio_gte'" class="flex-none w-[160px]">
                         <div class="mb-1 text-text-secondary">打卡比例(%)</div>
                         <InputNumber v-model:value="rule.conditionValue" :min="0" :max="100" :precision="0" style="width: 100%" />
                       </div>
                     </template>
 
                     <template v-if="rule.type === 'enter_count_gte' || rule.type === 'punch_count_gte'">
-                      <div class="w-[160px]">
+                      <div class="flex-none w-[160px]">
                         <div class="mb-1 text-text-secondary">阈值</div>
                         <InputNumber v-model:value="rule.threshold" :min="1" :precision="0" style="width: 100%" />
                       </div>
                     </template>
 
                     <template v-if="rule.type === 'specific_scenic_set_complete'">
-                      <div class="min-w-[320px] flex-[2]">
+                      <div class="flex-[2] min-w-0">
                         <div class="mb-1 text-text-secondary">景点集合</div>
                         <Select
                           v-model:value="rule.scenicIds"
@@ -700,7 +700,7 @@ watch(
                           option-filter-prop="label"
                         />
                       </div>
-                      <div class="min-w-[180px] flex-1">
+                      <div class="flex-1 min-w-0">
                         <div class="mb-1 text-text-secondary">完成条件</div>
                         <Select
                           v-model:value="rule.completeType"
@@ -708,7 +708,7 @@ watch(
                           @change="() => applyRuleTypeDefaults(rule)"
                         />
                       </div>
-                      <div v-if="rule.completeType === 'punch_ratio_gte'" class="w-[160px]">
+                      <div v-if="rule.completeType === 'punch_ratio_gte'" class="flex-none w-[160px]">
                         <div class="mb-1 text-text-secondary">打卡比例(%)</div>
                         <InputNumber v-model:value="rule.completeValue" :min="0" :max="100" :precision="0" style="width: 100%" />
                       </div>
@@ -716,7 +716,7 @@ watch(
                   </div>
                 </div>
 
-                <Button type="dashed" @click="addRule()">
+                <Button type="dashed" class="w-full" @click="addRule()">
                   <PlusOutlined />
                   添加规则
                 </Button>

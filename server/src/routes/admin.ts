@@ -416,8 +416,8 @@ adminRouter.delete('/achievements/:id', requireAnyPermission(['achievement:write
 
 adminRouter.get('/medals', requireAnyPermission(['medal:read']), listMedals)
 adminRouter.get('/medals/:id', requireAnyPermission(['medal:read']), getMedal)
-adminRouter.post('/medals', requireAnyPermission(['medal:write']), koaBody(), createMedal)
-adminRouter.put('/medals/:id', requireAnyPermission(['medal:write']), koaBody(), updateMedal)
+adminRouter.post('/medals', requireAnyPermission(['medal:write']), createMedal)
+adminRouter.put('/medals/:id', requireAnyPermission(['medal:write']), updateMedal)
 adminRouter.delete('/medals/:id', requireAnyPermission(['medal:write']), deleteMedal)
 
 adminRouter.get('/rules', requireAnyPermission(['rule:read']), listRules)

@@ -189,6 +189,19 @@ export async function getMedal(ctx: Context): Promise<void> {
 }
 
 export async function createMedal(ctx: Context): Promise<void> {
+  // TEMP DEBUG: log request metadata to diagnose "stream is not readable" errors
+  try {
+    console.debug('[medal:create] headers:', ctx.request.header || ctx.headers)
+    console.debug('[medal:create] is multipart:', ctx.is('multipart'))
+    console.debug('[medal:create] request type:', ctx.request.type)
+    // ctx.req is a Node IncomingMessage
+    // readable may be false if the stream has been consumed or closed
+    // @ts-ignore
+    console.debug('[medal:create] req.readable:', typeof ctx.req?.readable === 'boolean' ? ctx.req.readable : 'unknown')
+  } catch (e) {
+    console.warn('[medal:create] failed to log request debug info', e)
+  }
+
   const body = isRecord(ctx.request.body) ? ctx.request.body : {}
   const name = toTrimmedString(body.name)
   if (!name) ctx.throw(400, 'name is required')
