@@ -23,7 +23,7 @@ export interface LodLevelDefinition {
 export interface LodComponentProps {
   /** When true, instances can be culled via frustum checks (implementation is renderer-specific). */
   enableCulling: boolean
-  /** LOD levels sorted by ascending distance. */
+  /** Authoring order for LOD levels. Use clampLodComponentProps for sorted runtime reads. */
   levels: LodLevelDefinition[]
 }
 
@@ -88,20 +88,36 @@ export function resolveLodRenderTarget(level: Partial<LodLevelDefinition> | null
   }
 }
 
-export function clampLodComponentProps(props: Partial<LodComponentProps> | null | undefined): LodComponentProps {
-  const enableCulling = props?.enableCulling !== false
-  const sourceLevels = Array.isArray(props?.levels) ? props!.levels : DEFAULT_LEVELS
+function sanitizeLodLevelDefinition(
+  level: Partial<LodLevelDefinition> | null | undefined,
+  index: number,
+): LodLevelDefinition {
+  return {
+    distance: clampDistance(level?.distance, index === 0 ? 0 : DEFAULT_LEVELS[Math.min(index, DEFAULT_LEVELS.length - 1)]!.distance),
+    kind: normalizeKind(level?.kind),
+    modelAssetId: normalizeAssetId(level?.modelAssetId),
+    billboardAssetId: normalizeAssetId(level?.billboardAssetId),
+  }
+}
 
-  const sanitizedLevels = sourceLevels
-    .map((level, index) => {
-      const record = level as Partial<LodLevelDefinition> | null | undefined
-      return {
-        distance: clampDistance(record?.distance, index === 0 ? 0 : DEFAULT_LEVELS[Math.min(index, DEFAULT_LEVELS.length - 1)]!.distance),
-        kind: normalizeKind(record?.kind),
-        modelAssetId: normalizeAssetId(record?.modelAssetId),
-        billboardAssetId: normalizeAssetId(record?.billboardAssetId),
-      } satisfies LodLevelDefinition
-    })
+export function normalizeLodComponentPropsForEditing(
+  props: Partial<LodComponentProps> | null | undefined,
+): LodComponentProps {
+  const enableCulling = props?.enableCulling !== false
+  const sourceLevels = Array.isArray(props?.levels) ? props.levels : DEFAULT_LEVELS
+  const levels = sourceLevels
+    .map((level, index) => sanitizeLodLevelDefinition(level as Partial<LodLevelDefinition> | null | undefined, index))
+    .filter((level) => Number.isFinite(level.distance))
+
+  return {
+    enableCulling,
+    levels: (levels.length ? levels : [sanitizeLodLevelDefinition(DEFAULT_LEVELS[0], 0)]).map((level) => ({ ...level })),
+  }
+}
+
+export function clampLodComponentProps(props: Partial<LodComponentProps> | null | undefined): LodComponentProps {
+  const normalized = normalizeLodComponentPropsForEditing(props)
+  const sanitizedLevels = normalized.levels
     .filter((level) => Number.isFinite(level.distance))
     .sort((a, b) => a.distance - b.distance)
 
@@ -125,7 +141,7 @@ export function clampLodComponentProps(props: Partial<LodComponentProps> | null 
   })
 
   return {
-    enableCulling,
+    enableCulling: normalized.enableCulling,
     levels: ensuredLevels,
   }
 }

@@ -16,6 +16,7 @@ import {
   getLodLevelBillboardAssetId,
   getLodLevelKind,
   getLodLevelModelAssetId,
+  normalizeLodComponentPropsForEditing,
   type LodComponentProps,
   type LodLevelKind,
 } from '@schema/components'
@@ -79,7 +80,7 @@ watch(
         localLevels.value = []
         return
       }
-      const props = clampLodComponentProps(component.props)
+      const props = normalizeLodComponentPropsForEditing(component.props)
       localEnableCulling.value = props.enableCulling
       localLevels.value = props.levels.map((level) => ({ ...level }))
     } finally {
@@ -159,7 +160,7 @@ function pushPropsToStore(): void {
   if (!nodeId || !component) {
     return
   }
-  const nextProps = clampLodComponentProps({
+  const nextProps = normalizeLodComponentPropsForEditing({
     enableCulling: localEnableCulling.value,
     levels: localLevels.value,
   })

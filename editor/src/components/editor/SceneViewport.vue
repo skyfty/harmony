@@ -10142,7 +10142,7 @@ watch(
         return
       }
 
-      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
+      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod') {
         selectionPreviewActive = true
         selectionPreviewAssetId = asset.id
         placementPreviewYaw = 0
