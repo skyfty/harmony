@@ -1,6 +1,6 @@
 import type { SceneNode, GroundDynamicMesh } from './index'
 import type { RigidbodyPhysicsShape } from './components'
-import { resolveGroundEffectiveHeightAtVertex } from './groundMesh'
+import { resolveGroundEffectiveHeightAtVertex, sampleGroundEffectiveHeightRegion } from './groundMesh'
 
 export type GroundHeightfieldData = {
   matrix: number[][]
@@ -90,6 +90,7 @@ type GroundRegionSample = {
   rowSpan: number
   columnSpan: number
   rowStride: number
+  valueOffset: number
   values: Float32Array
 }
 
@@ -178,7 +179,7 @@ function getRegionSampleHeight(sample: GroundRegionSample, row: number, column: 
   if (localRow < 0 || localColumn < 0 || localRow > sample.rowSpan || localColumn > sample.columnSpan) {
     return 0
   }
-  return sample.values[localRow * sample.rowStride + localColumn] ?? 0
+  return sample.values[sample.valueOffset + localRow * sample.rowStride + localColumn] ?? 0
 }
 
 function sampleRegionPlaneHeight(
@@ -196,20 +197,77 @@ function sampleRegionPlaneHeight(
   return h00 + slopeX * (column - sample.startColumn) + slopeZ * (row - sample.startRow)
 }
 
+type GroundRegionPlane = {
+  h00: number
+  slopeX: number
+  slopeZ: number
+}
+
+function resolveGroundRegionPlane(sample: GroundRegionSample): GroundRegionPlane {
+  const rowSpan = Math.max(1, sample.rowSpan)
+  const columnSpan = Math.max(1, sample.columnSpan)
+  const h00 = getRegionSampleHeight(sample, sample.startRow, sample.startColumn)
+  const h10 = getRegionSampleHeight(sample, sample.startRow, sample.endColumn)
+  const h01 = getRegionSampleHeight(sample, sample.endRow, sample.startColumn)
+  return {
+    h00,
+    slopeX: (h10 - h00) / columnSpan,
+    slopeZ: (h01 - h00) / rowSpan,
+  }
+}
+
+function sampleResolvedRegionPlaneHeight(
+  sample: GroundRegionSample,
+  plane: GroundRegionPlane,
+  row: number,
+  column: number,
+): number {
+  return plane.h00 + plane.slopeX * (column - sample.startColumn) + plane.slopeZ * (row - sample.startRow)
+}
+
 function regionMatchesPlane(sample: GroundRegionSample, tolerance: number): boolean {
-  const cornerPlane = sampleRegionPlaneHeight(sample, sample.endRow, sample.endColumn)
+  const plane = resolveGroundRegionPlane(sample)
+  const cornerPlane = sampleResolvedRegionPlaneHeight(sample, plane, sample.endRow, sample.endColumn)
   const cornerHeight = getRegionSampleHeight(sample, sample.endRow, sample.endColumn)
   if (Math.abs(cornerHeight - cornerPlane) > tolerance) {
     return false
   }
 
-  for (let row = sample.startRow; row <= sample.endRow; row += 1) {
-    for (let column = sample.startColumn; column <= sample.endColumn; column += 1) {
+  const probeRows = [
+    sample.startRow + Math.floor(sample.rowSpan * 0.5),
+    sample.startRow + Math.floor(sample.rowSpan * 0.25),
+    sample.startRow + Math.floor(sample.rowSpan * 0.75),
+  ]
+  const probeColumns = [
+    sample.startColumn + Math.floor(sample.columnSpan * 0.5),
+    sample.startColumn + Math.floor(sample.columnSpan * 0.25),
+    sample.startColumn + Math.floor(sample.columnSpan * 0.75),
+  ]
+
+  for (const row of probeRows) {
+    if (row <= sample.startRow || row >= sample.endRow) {
+      continue
+    }
+    for (const column of probeColumns) {
+      if (column <= sample.startColumn || column >= sample.endColumn) {
+        continue
+      }
       const actual = getRegionSampleHeight(sample, row, column)
-      const expected = sampleRegionPlaneHeight(sample, row, column)
+      const expected = sampleResolvedRegionPlaneHeight(sample, plane, row, column)
       if (Math.abs(actual - expected) > tolerance) {
         return false
       }
+    }
+  }
+
+  for (let row = sample.startRow; row <= sample.endRow; row += 1) {
+    let expected = sampleResolvedRegionPlaneHeight(sample, plane, row, sample.startColumn)
+    for (let column = sample.startColumn; column <= sample.endColumn; column += 1) {
+      const actual = getRegionSampleHeight(sample, row, column)
+      if (Math.abs(actual - expected) > tolerance) {
+        return false
+      }
+      expected += plane.slopeX
     }
   }
   return true
@@ -225,30 +283,51 @@ function findLargestCommonStride(rowSpan: number, columnSpan: number, maxStride:
   return 1
 }
 
-function sampleGroundRegion(node: SceneNode, mesh: GroundDynamicMesh, region: GroundAdaptiveRegion): GroundRegionSample {
-  const rowSpan = Math.max(1, region.endRow - region.startRow)
-  const columnSpan = Math.max(1, region.endColumn - region.startColumn)
-  const rowStride = columnSpan + 1
-  const values = new Float32Array((rowSpan + 1) * (columnSpan + 1))
+function buildGroundRegionSampleGrid(node: SceneNode, mesh: GroundDynamicMesh): GroundRegionSample {
+  const rows = Math.max(1, Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0)
+  const columns = Math.max(1, Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0)
   const { scaleY } = resolveNodeScaleVector(node.scale)
+  const sample = sampleGroundEffectiveHeightRegion(
+    mesh as GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array },
+    0,
+    rows,
+    0,
+    columns,
+  )
+  const values = sample.values
 
-  for (let row = region.startRow; row <= region.endRow; row += 1) {
-    const rowOffset = (row - region.startRow) * rowStride
-    for (let column = region.startColumn; column <= region.endColumn; column += 1) {
-      const height = resolveGroundEffectiveHeightAtVertex(mesh, row, column) * scaleY
-      values[rowOffset + (column - region.startColumn)] = height
+  if (scaleY !== 1) {
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = (values[index] ?? 0) * scaleY
     }
   }
 
+  return {
+    startRow: sample.minRow,
+    endRow: sample.maxRow,
+    startColumn: sample.minColumn,
+    endColumn: sample.maxColumn,
+    rowSpan: Math.max(1, sample.maxRow - sample.minRow),
+    columnSpan: Math.max(1, sample.maxColumn - sample.minColumn),
+    rowStride: sample.stride,
+    valueOffset: 0,
+    values,
+  }
+}
+
+function createGroundRegionSample(parent: GroundRegionSample, region: GroundAdaptiveRegion): GroundRegionSample {
   return {
     startRow: region.startRow,
     endRow: region.endRow,
     startColumn: region.startColumn,
     endColumn: region.endColumn,
-    rowSpan,
-    columnSpan,
-    rowStride,
-    values,
+    rowSpan: Math.max(1, region.endRow - region.startRow),
+    columnSpan: Math.max(1, region.endColumn - region.startColumn),
+    rowStride: parent.rowStride,
+    valueOffset: parent.valueOffset
+      + (region.startRow - parent.startRow) * parent.rowStride
+      + (region.startColumn - parent.startColumn),
+    values: parent.values,
   }
 }
 
@@ -316,17 +395,15 @@ function buildGroundCollisionSegment(
 }
 
 function pushAdaptiveGroundCollisionSegments(
-  node: SceneNode,
-  mesh: GroundDynamicMesh,
-  region: GroundAdaptiveRegion,
+  sample: GroundRegionSample,
+  depth: number,
   metrics: GroundHorizontalMetrics,
   segments: GroundCollisionSegment[],
 ): void {
-  const sample = sampleGroundRegion(node, mesh, region)
   const isPlanar = regionMatchesPlane(sample, DEFAULT_ADAPTIVE_PLANAR_TOLERANCE)
   const bestPlanarStride = findLargestCommonStride(sample.rowSpan, sample.columnSpan, DEFAULT_ADAPTIVE_MAX_PLANAR_STRIDE)
   const isSmallRegion = sample.rowSpan <= DEFAULT_ADAPTIVE_SMALL_REGION_CELLS && sample.columnSpan <= DEFAULT_ADAPTIVE_SMALL_REGION_CELLS
-  const shouldStop = region.depth >= DEFAULT_ADAPTIVE_MAX_SUBDIVISION_DEPTH
+  const shouldStop = depth >= DEFAULT_ADAPTIVE_MAX_SUBDIVISION_DEPTH
     || segments.length >= DEFAULT_ADAPTIVE_MAX_SEGMENTS - 1
     || (sample.rowSpan <= DEFAULT_ADAPTIVE_MIN_COMPLEX_REGION_CELLS && sample.columnSpan <= DEFAULT_ADAPTIVE_MIN_COMPLEX_REGION_CELLS)
 
@@ -341,40 +418,40 @@ function pushAdaptiveGroundCollisionSegments(
   }
 
   if (sample.rowSpan >= sample.columnSpan && sample.rowSpan > 1) {
-    const middleRow = region.startRow + Math.floor(sample.rowSpan * 0.5)
-    pushAdaptiveGroundCollisionSegments(node, mesh, {
-      startRow: region.startRow,
+    const middleRow = sample.startRow + Math.floor(sample.rowSpan * 0.5)
+    pushAdaptiveGroundCollisionSegments(createGroundRegionSample(sample, {
+      startRow: sample.startRow,
       endRow: middleRow,
-      startColumn: region.startColumn,
-      endColumn: region.endColumn,
-      depth: region.depth + 1,
-    }, metrics, segments)
-    pushAdaptiveGroundCollisionSegments(node, mesh, {
+      startColumn: sample.startColumn,
+      endColumn: sample.endColumn,
+      depth: depth + 1,
+    }), depth + 1, metrics, segments)
+    pushAdaptiveGroundCollisionSegments(createGroundRegionSample(sample, {
       startRow: middleRow,
-      endRow: region.endRow,
-      startColumn: region.startColumn,
-      endColumn: region.endColumn,
-      depth: region.depth + 1,
-    }, metrics, segments)
+      endRow: sample.endRow,
+      startColumn: sample.startColumn,
+      endColumn: sample.endColumn,
+      depth: depth + 1,
+    }), depth + 1, metrics, segments)
     return
   }
 
   if (sample.columnSpan > 1) {
-    const middleColumn = region.startColumn + Math.floor(sample.columnSpan * 0.5)
-    pushAdaptiveGroundCollisionSegments(node, mesh, {
-      startRow: region.startRow,
-      endRow: region.endRow,
-      startColumn: region.startColumn,
+    const middleColumn = sample.startColumn + Math.floor(sample.columnSpan * 0.5)
+    pushAdaptiveGroundCollisionSegments(createGroundRegionSample(sample, {
+      startRow: sample.startRow,
+      endRow: sample.endRow,
+      startColumn: sample.startColumn,
       endColumn: middleColumn,
-      depth: region.depth + 1,
-    }, metrics, segments)
-    pushAdaptiveGroundCollisionSegments(node, mesh, {
-      startRow: region.startRow,
-      endRow: region.endRow,
+      depth: depth + 1,
+    }), depth + 1, metrics, segments)
+    pushAdaptiveGroundCollisionSegments(createGroundRegionSample(sample, {
+      startRow: sample.startRow,
+      endRow: sample.endRow,
       startColumn: middleColumn,
-      endColumn: region.endColumn,
-      depth: region.depth + 1,
-    }, metrics, segments)
+      endColumn: sample.endColumn,
+      depth: depth + 1,
+    }), depth + 1, metrics, segments)
     return
   }
 
@@ -395,13 +472,8 @@ export function buildAdaptiveGroundCollisionData(
 
   const metrics = resolveGroundHorizontalMetrics(node, mesh)
   const segments: GroundCollisionSegment[] = []
-  pushAdaptiveGroundCollisionSegments(node, mesh, {
-    startRow: 0,
-    endRow: rows,
-    startColumn: 0,
-    endColumn: columns,
-    depth: 0,
-  }, metrics, segments)
+  const rootSample = buildGroundRegionSampleGrid(node, mesh)
+  pushAdaptiveGroundCollisionSegments(rootSample, 0, metrics, segments)
 
   if (!segments.length) {
     return null
