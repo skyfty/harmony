@@ -215,8 +215,6 @@ import {
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
-  syncGroundChunkLoadingMode,
-  updateGroundChunks,
   updateGroundMesh,
   releaseGroundMeshCache,
   sampleGroundHeight,
@@ -3119,16 +3117,6 @@ const GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR = 0.58
 const GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES = 60
 const GROUND_STREAMING_HEIGHT_START_METERS = 80
 const GROUND_STREAMING_HEIGHT_END_METERS = 1200
-const GROUND_STREAMING_BUDGET_CREATE_MIN = 8
-const GROUND_STREAMING_BUDGET_CREATE_MAX = 56
-const GROUND_STREAMING_BUDGET_DESTROY_MIN = 12
-const GROUND_STREAMING_BUDGET_DESTROY_MAX = 96
-const GROUND_STREAMING_BUDGET_MAX_MS_MIN = 3.5
-const GROUND_STREAMING_BUDGET_MAX_MS_MAX = 9
-const GROUND_STREAMING_INTERVAL_MS_NEAR = 120
-const GROUND_STREAMING_INTERVAL_MS_FAR = 45
-const GROUND_STREAMING_MOVE_THRESHOLD_NEAR = 22
-const GROUND_STREAMING_MOVE_THRESHOLD_FAR = 8
 const dynamicGroundStreamingCameraWorldHelper = new THREE.Vector3()
 const dynamicGroundStreamingGroundWorldHelper = new THREE.Vector3()
 
@@ -3202,49 +3190,6 @@ function resolveDynamicGroundStreamingMetrics(groundObject?: THREE.Object3D | nu
 
 function resolveDynamicGroundStreamingRadiusMeters(groundObject?: THREE.Object3D | null): number {
   return resolveDynamicGroundStreamingMetrics(groundObject).radiusMeters
-}
-
-function resolveDynamicGroundStreamingBudget(groundObject?: THREE.Object3D | null): {
-  maxCreatePerUpdate: number
-  maxDestroyPerUpdate: number
-  maxMs: number
-  minIntervalMs: number
-  minCameraMoveMeters: number
-} {
-  const { normalizedHeight } = resolveDynamicGroundStreamingMetrics(groundObject)
-  return {
-    maxCreatePerUpdate: Math.round(
-      THREE.MathUtils.lerp(
-        GROUND_STREAMING_BUDGET_CREATE_MIN,
-        GROUND_STREAMING_BUDGET_CREATE_MAX,
-        normalizedHeight,
-      ),
-    ),
-    maxDestroyPerUpdate: Math.round(
-      THREE.MathUtils.lerp(
-        GROUND_STREAMING_BUDGET_DESTROY_MIN,
-        GROUND_STREAMING_BUDGET_DESTROY_MAX,
-        normalizedHeight,
-      ),
-    ),
-    maxMs: THREE.MathUtils.lerp(
-      GROUND_STREAMING_BUDGET_MAX_MS_MIN,
-      GROUND_STREAMING_BUDGET_MAX_MS_MAX,
-      normalizedHeight,
-    ),
-    minIntervalMs: Math.round(
-      THREE.MathUtils.lerp(
-        GROUND_STREAMING_INTERVAL_MS_NEAR,
-        GROUND_STREAMING_INTERVAL_MS_FAR,
-        normalizedHeight,
-      ),
-    ),
-    minCameraMoveMeters: THREE.MathUtils.lerp(
-      GROUND_STREAMING_MOVE_THRESHOLD_NEAR,
-      GROUND_STREAMING_MOVE_THRESHOLD_FAR,
-      normalizedHeight,
-    ),
-  }
 }
 
 function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
@@ -18294,12 +18239,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         if (shouldSkipSculptRefresh) {
           delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
         }
-        syncGroundChunkLoadingMode(groundObject, groundDefinition, camera)
+        syncViewportGroundChunks(groundObject, groundDefinition)
 
       } else if (groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
-      syncGroundChunkLoadingMode(groundObject, groundDefinition, camera)
+      syncViewportGroundChunks(groundObject, groundDefinition)
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
@@ -18510,6 +18455,12 @@ function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D
   return `${count}:${hash}`
 }
 
+function syncViewportGroundChunks(groundObject: THREE.Object3D, groundDefinition: GroundRuntimeDynamicMesh): void {
+  if (!areAllGroundChunksLoaded(groundObject, groundDefinition)) {
+    ensureAllGroundChunks(groundObject, groundDefinition)
+  }
+}
+
 function updateGroundChunkStreaming() {
   if (!camera) {
     return
@@ -18525,27 +18476,12 @@ function updateGroundChunkStreaming() {
     return
   }
 
-  const radius = resolveDynamicGroundStreamingRadiusMeters(groundObject)
-  const budget = resolveDynamicGroundStreamingBudget(groundObject)
   const groundDefinition = resolveGroundDynamicMeshDefinition()
   if (!groundDefinition) {
     return
   }
 
-  if (isGroundChunkStreamingEnabled(groundDefinition)) {
-    updateGroundChunks(groundObject, groundDefinition, camera, {
-      radius,
-      budget: {
-        maxCreatePerUpdate: budget.maxCreatePerUpdate,
-        maxDestroyPerUpdate: budget.maxDestroyPerUpdate,
-        maxMs: budget.maxMs,
-      },
-      minIntervalMs: budget.minIntervalMs,
-      minCameraMoveMeters: budget.minCameraMoveMeters,
-    })
-  } else if (!areAllGroundChunksLoaded(groundObject, groundDefinition)) {
-    ensureAllGroundChunks(groundObject, groundDefinition)
-  }
+  syncViewportGroundChunks(groundObject, groundDefinition)
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
   // Refresh placement raycast targets when the chunk set changes; otherwise asset placement
@@ -19332,7 +19268,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
       groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
-      syncGroundChunkLoadingMode(groundMesh, groundDefinition, camera)
+      syncViewportGroundChunks(groundMesh, groundDefinition)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'
