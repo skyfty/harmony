@@ -56,6 +56,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
+import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
 import { useScenesStore } from '@/stores/scenesStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from '@/stores/groundPaintStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
@@ -77,6 +78,7 @@ import {
 	isGroundChunkStreamingEnabled,
 	updateGroundChunks,
 } from '@schema/groundMesh'
+import { hasGroundOptimizedMeshData } from '@schema/groundOptimizedMesh'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -369,7 +371,6 @@ const isOtherRigidbodyWireframeVisible = ref(false)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
-let lastInstancedCullingMismatchSignature: string | null = null
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
 const isGroundChunkStatsVisible = ref(false)
@@ -5110,6 +5111,7 @@ async function buildPreviewRuntimeDocument(
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
 	}
+	attachOptimizedGroundMeshToDocument(document)
 	return document
 }
 
@@ -6991,13 +6993,19 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
+			if (hasGroundOptimizedMeshData(cachedGroundDynamicMesh)) {
+				groundChunkDebug.loaded = 1
+				groundChunkDebug.target = 1
+				groundChunkDebug.total = 1
+				groundChunkDebug.pending = 0
+				groundChunkDebug.unloaded = 0
+			} else if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
 				updateGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
 				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
 			}
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
-			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
+			if (!hasGroundOptimizedMeshData(cachedGroundDynamicMesh) && (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value)) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
 					renderHelpers: isGroundChunkStreamingDebugVisible.value,
 				})

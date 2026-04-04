@@ -494,6 +494,7 @@ import {
   isGroundChunkStreamingEnabled,
   updateGroundChunks,
 } from '@harmony/schema/groundMesh';
+import { hasGroundOptimizedMeshData } from '@harmony/schema/groundOptimizedMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -3846,6 +3847,9 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
 }
 
 function isGroundChunkStreamingActive(definition: GroundDynamicMesh | null | undefined): boolean {
+  if (hasGroundOptimizedMeshData(definition ?? null)) {
+    return false;
+  }
   return harmonyGroundChunkStreamingGlobal.__HARMONY_GROUND_CHUNK_STREAMING_ENABLED__ !== false
     && isGroundChunkStreamingEnabled(definition);
 }
@@ -10387,12 +10391,18 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            if (isGroundChunkStreamingActive(cachedGround.dynamicMesh)) {
+            if (hasGroundOptimizedMeshData(cachedGround.dynamicMesh)) {
+              groundChunkDebug.loaded = 1;
+              groundChunkDebug.target = 1;
+              groundChunkDebug.total = 1;
+              groundChunkDebug.pending = 0;
+              groundChunkDebug.unloaded = 0;
+            } else if (isGroundChunkStreamingActive(cachedGround.dynamicMesh)) {
               updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
             } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
               ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
             }
-            if (debugEnabled.value) {
+            if (debugEnabled.value && !hasGroundOptimizedMeshData(cachedGround.dynamicMesh)) {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }
           }

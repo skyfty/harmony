@@ -34,8 +34,10 @@ import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import {
   GROUND_HEIGHTMAP_SIDECAR_FILENAME,
+  createGroundRuntimeMeshFromSidecar,
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
+import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   BUILTIN_WATER_NORMAL_FILENAME,
@@ -576,6 +578,12 @@ export async function exportScenePackageZip(payload: {
     // New scenes can contain Ground nodes before sidecar persistence runs; generate a fallback sidecar for upload consistency.
     if (groundNode && !groundHeightSidecar) {
       groundHeightSidecar = groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
+    }
+    if (groundNode?.dynamicMesh?.type === 'Ground') {
+      if (groundHeightSidecar) {
+        groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, groundHeightSidecar)
+      }
+      attachOptimizedGroundMeshToDocument(sidecarSource as SceneJsonExportDocument)
     }
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields

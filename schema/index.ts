@@ -1315,6 +1315,7 @@ export interface GroundDynamicMesh {
   rows: number
   columns: number
   cellSize: number
+  optimizedMesh?: GroundOptimizedMeshData | null
   /** When false, load all terrain chunks eagerly instead of streaming them around the camera. */
   chunkStreamingEnabled?: boolean
   /** Monotonic revision for changes that affect rendered ground surface heights. */
@@ -1340,6 +1341,15 @@ export interface GroundDynamicMesh {
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
+}
+
+export type GroundOptimizedMeshData = {
+  version: 1
+  positions: number[]
+  uvs: number[]
+  indices: number[]
+  vertexCount: number
+  triangleCount: number
 }
 
 /**

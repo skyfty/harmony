@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { GroundDynamicMesh } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
-import { createGroundMesh, setGroundMaterial, updateGroundMesh } from '../../groundMesh';
+import { applyGroundTextureToGroundObject, createGroundMesh, setGroundMaterial, updateGroundMesh } from '../../groundMesh';
+import { buildGroundOptimizedGeometry, hasGroundOptimizedMeshData } from '../../groundOptimizedMesh';
 
 export async function buildGroundMesh(
   deps: {
@@ -16,14 +17,26 @@ export async function buildGroundMesh(
   meshInfo: GroundDynamicMesh,
   node: SceneNodeWithExtras,
 ): Promise<THREE.Object3D | null> {
-  const groundObject = createGroundMesh(meshInfo);
+  const groundObject = hasGroundOptimizedMeshData(meshInfo)
+    ? new THREE.Mesh(
+        buildGroundOptimizedGeometry(meshInfo.optimizedMesh!),
+        new THREE.MeshStandardMaterial({ color: '#707070', roughness: 0.85, metalness: 0.05 }),
+      )
+    : createGroundMesh(meshInfo);
   groundObject.name = node.name ?? (groundObject.name || 'Ground');
 
   const userData = { ...(groundObject.userData ?? {}) } as Record<string, unknown>;
   userData.dynamicMeshType = 'Ground';
+  userData.groundChunked = !hasGroundOptimizedMeshData(meshInfo);
   groundObject.userData = userData;
 
-  updateGroundMesh(groundObject, meshInfo);
+  if (!hasGroundOptimizedMeshData(meshInfo)) {
+    updateGroundMesh(groundObject, meshInfo);
+  } else {
+    const mesh = groundObject as THREE.Mesh;
+    mesh.receiveShadow = true;
+    mesh.castShadow = meshInfo.castShadow === true;
+  }
 
   // Apply node materials across all ground chunks.
   let groundTexture: THREE.Texture | null = null;
@@ -44,6 +57,7 @@ export async function buildGroundMesh(
       deps.assignTextureToMaterial(groundMaterial, groundTexture);
     }
   }
+  applyGroundTextureToGroundObject(groundObject, meshInfo);
 
   deps.applyTransform(groundObject, node);
   deps.applyVisibility(groundObject, node);

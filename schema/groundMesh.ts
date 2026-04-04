@@ -1090,6 +1090,10 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
   })
 }
 
+export function applyGroundTextureToGroundObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
+  applyGroundTextureToObject(object, definition)
+}
+
 export type GroundGeometryUpdateRegion = {
   minRow: number
   maxRow: number
