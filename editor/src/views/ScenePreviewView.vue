@@ -9026,7 +9026,7 @@ function ensureGroundHeightfieldDebugHelper(
 		lines.renderOrder = 9999
 		const [ox = 0, oy = 0, oz = 0] = shape.offset ?? [0, 0, 0]
 		const centerX = ox + shape.width * 0.5
-		const centerZ = oy + shape.depth * 0.5
+		const centerZ = -oy - shape.depth * 0.5
 		lines.position.set(centerX, oz, centerZ)
 		helperGroup.add(lines)
 	})

@@ -291,7 +291,7 @@ function buildGroundCollisionSegment(
   const depth = Math.max(MIN_ELEMENT_SIZE, sample.rowSpan * metrics.baseElementSize)
   const offset: [number, number, number] = [
     -metrics.halfWidth + sample.startColumn * metrics.baseElementSize,
-    -metrics.halfDepth + sample.startRow * metrics.baseElementSize,
+    metrics.halfDepth - sample.endRow * metrics.baseElementSize,
     0,
   ]
   const key = groundRegionKey(sample.startRow, sample.endRow, sample.startColumn, sample.endColumn)
