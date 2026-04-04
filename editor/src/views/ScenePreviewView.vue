@@ -1660,8 +1660,8 @@ function syncGroundOptimizationDebug(definition: GroundDynamicMesh | null | unde
 	}
 	groundChunkDebug.sourceVertices = optimizedMesh.sourceVertexCount
 	groundChunkDebug.sourceTriangles = optimizedMesh.sourceTriangleCount
-	groundChunkDebug.optimizedVertices = optimizedMesh.vertexCount
-	groundChunkDebug.optimizedTriangles = optimizedMesh.triangleCount
+	groundChunkDebug.optimizedVertices = optimizedMesh.optimizedVertexCount
+	groundChunkDebug.optimizedTriangles = optimizedMesh.optimizedTriangleCount
 	groundChunkDebug.optimizedRows = optimizedMesh.optimizedRowCount
 	groundChunkDebug.optimizedColumns = optimizedMesh.optimizedColumnCount
 }
@@ -7025,19 +7025,13 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
 			syncGroundOptimizationDebug(cachedGroundDynamicMesh)
-			if (hasGroundOptimizedMeshData(cachedGroundDynamicMesh)) {
-				groundChunkDebug.loaded = 1
-				groundChunkDebug.target = 1
-				groundChunkDebug.total = 1
-				groundChunkDebug.pending = 0
-				groundChunkDebug.unloaded = 0
-			} else if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
+			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
 				updateGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
 				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
 			}
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
-			if (!hasGroundOptimizedMeshData(cachedGroundDynamicMesh) && (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value)) {
+			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
 					renderHelpers: isGroundChunkStreamingDebugVisible.value,
 				})

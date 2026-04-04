@@ -1344,7 +1344,25 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
 }
 
 export type GroundOptimizedMeshData = {
-  version: 1
+  version: 2
+  chunkCells: number
+  chunkCount: number
+  chunks: GroundOptimizedMeshChunkData[]
+  sourceVertexCount: number
+  sourceTriangleCount: number
+  optimizedVertexCount: number
+  optimizedTriangleCount: number
+  optimizedRowCount: number
+  optimizedColumnCount: number
+}
+
+export type GroundOptimizedMeshChunkData = {
+  chunkRow: number
+  chunkColumn: number
+  startRow: number
+  startColumn: number
+  rows: number
+  columns: number
   positions: number[]
   uvs: number[]
   indices: number[]

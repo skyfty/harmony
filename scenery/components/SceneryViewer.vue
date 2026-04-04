@@ -1131,8 +1131,8 @@ function syncGroundOptimizationDebug(definition: GroundDynamicMesh | null | unde
   }
   groundChunkDebug.sourceVertices = optimizedMesh.sourceVertexCount;
   groundChunkDebug.sourceTriangles = optimizedMesh.sourceTriangleCount;
-  groundChunkDebug.optimizedVertices = optimizedMesh.vertexCount;
-  groundChunkDebug.optimizedTriangles = optimizedMesh.triangleCount;
+  groundChunkDebug.optimizedVertices = optimizedMesh.optimizedVertexCount;
+  groundChunkDebug.optimizedTriangles = optimizedMesh.optimizedTriangleCount;
   groundChunkDebug.optimizedRows = optimizedMesh.optimizedRowCount;
   groundChunkDebug.optimizedColumns = optimizedMesh.optimizedColumnCount;
 }
@@ -3875,9 +3875,6 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
 }
 
 function isGroundChunkStreamingActive(definition: GroundDynamicMesh | null | undefined): boolean {
-  if (hasGroundOptimizedMeshData(definition ?? null)) {
-    return false;
-  }
   return harmonyGroundChunkStreamingGlobal.__HARMONY_GROUND_CHUNK_STREAMING_ENABLED__ !== false
     && isGroundChunkStreamingEnabled(definition);
 }
@@ -10420,18 +10417,12 @@ function startRenderLoop(
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
             syncGroundOptimizationDebug(cachedGround.dynamicMesh);
-            if (hasGroundOptimizedMeshData(cachedGround.dynamicMesh)) {
-              groundChunkDebug.loaded = 1;
-              groundChunkDebug.target = 1;
-              groundChunkDebug.total = 1;
-              groundChunkDebug.pending = 0;
-              groundChunkDebug.unloaded = 0;
-            } else if (isGroundChunkStreamingActive(cachedGround.dynamicMesh)) {
+            if (isGroundChunkStreamingActive(cachedGround.dynamicMesh)) {
               updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
             } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
               ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
             }
-            if (debugEnabled.value && !hasGroundOptimizedMeshData(cachedGround.dynamicMesh)) {
+            if (debugEnabled.value) {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }
           }

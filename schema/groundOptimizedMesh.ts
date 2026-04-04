@@ -1,21 +1,8 @@
 import * as THREE from 'three'
-import type { GroundContourBounds, GroundDynamicMesh } from './index'
-import { sampleGroundEffectiveHeightRegion } from './groundMesh'
+import type { GroundContourBounds, GroundDynamicMesh, GroundOptimizedMeshChunkData, GroundOptimizedMeshData } from './index'
+import { resolveGroundChunkCells, sampleGroundEffectiveHeightRegion } from './groundMesh'
 
-export const GROUND_OPTIMIZED_MESH_VERSION = 1 as const
-
-export type GroundOptimizedMeshData = {
-  version: typeof GROUND_OPTIMIZED_MESH_VERSION
-  positions: number[]
-  uvs: number[]
-  indices: number[]
-  vertexCount: number
-  triangleCount: number
-  sourceVertexCount: number
-  sourceTriangleCount: number
-  optimizedRowCount: number
-  optimizedColumnCount: number
-}
+export const GROUND_OPTIMIZED_MESH_VERSION = 2 as const
 
 type GroundOptimizedMeshBuildOptions = {
   tolerance?: number
@@ -24,14 +11,30 @@ type GroundOptimizedMeshBuildOptions = {
 }
 
 type GroundOptimizedHeightGrid = {
-  rows: number
-  columns: number
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+  stride: number
   values: Float32Array
 }
 
 type GroundOptimizedRegionGrid = {
   rows: number[]
   columns: number[]
+}
+
+type GroundOptimizedChunkDomain = {
+  chunkRow: number
+  chunkColumn: number
+  startRow: number
+  startColumn: number
+  rows: number
+  columns: number
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
 }
 
 function clampFinite(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -49,25 +52,34 @@ function computeVertexZ(definition: GroundDynamicMesh, row: number): number {
   return -definition.depth * 0.5 + row * definition.cellSize
 }
 
-function buildHeightGrid(definition: GroundDynamicMesh): GroundOptimizedHeightGrid {
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+function buildHeightGrid(
+  definition: GroundDynamicMesh,
+  domain: Pick<GroundOptimizedChunkDomain, 'minRow' | 'maxRow' | 'minColumn' | 'maxColumn'>,
+): GroundOptimizedHeightGrid {
   const region = sampleGroundEffectiveHeightRegion(
     definition as GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array },
-    0,
-    rows,
-    0,
-    columns,
+    domain.minRow,
+    domain.maxRow,
+    domain.minColumn,
+    domain.maxColumn,
   )
   return {
-    rows,
-    columns,
+    minRow: region.minRow,
+    maxRow: region.maxRow,
+    minColumn: region.minColumn,
+    maxColumn: region.maxColumn,
+    stride: region.stride,
     values: region.values,
   }
 }
 
 function getGridHeight(grid: GroundOptimizedHeightGrid, row: number, column: number): number {
-  return grid.values[row * (grid.columns + 1) + column] ?? 0
+  const localRow = row - grid.minRow
+  const localColumn = column - grid.minColumn
+  if (localRow < 0 || localColumn < 0) {
+    return 0
+  }
+  return grid.values[localRow * grid.stride + localColumn] ?? 0
 }
 
 function samplePlaneHeight(
@@ -273,8 +285,8 @@ function pruneAdaptiveGridLines(
   return { rows: prunedRows, columns: prunedColumns }
 }
 
-function createSequentialGridLines(count: number): number[] {
-  return Array.from({ length: count + 1 }, (_value, index) => index)
+function createSequentialGridLinesForDomain(start: number, end: number): number[] {
+  return Array.from({ length: Math.max(0, end - start) + 1 }, (_value, index) => start + index)
 }
 
 function deriveNonPlanarAxisBounds(
@@ -292,16 +304,18 @@ function deriveNonPlanarAxisBounds(
     if (isRedundantRow(grid, rows, columns, row, tolerance)) {
       continue
     }
-    minRow = Math.min(minRow, row)
-    maxRow = Math.max(maxRow, row)
+    const rowValue = rows[row]!
+    minRow = Math.min(minRow, rowValue)
+    maxRow = Math.max(maxRow, rowValue)
   }
 
   for (let column = 1; column < columns.length - 1; column += 1) {
     if (isRedundantColumn(grid, rows, columns, column, tolerance)) {
       continue
     }
-    minColumn = Math.min(minColumn, column)
-    maxColumn = Math.max(maxColumn, column)
+    const columnValue = columns[column]!
+    minColumn = Math.min(minColumn, columnValue)
+    maxColumn = Math.max(maxColumn, columnValue)
   }
 
   const hasRowBounds = Number.isFinite(minRow) && Number.isFinite(maxRow)
@@ -311,42 +325,40 @@ function deriveNonPlanarAxisBounds(
   }
 
   return {
-    minRow: hasRowBounds ? minRow : 0,
-    maxRow: hasRowBounds ? maxRow : grid.rows,
-    minColumn: hasColumnBounds ? minColumn : 0,
-    maxColumn: hasColumnBounds ? maxColumn : grid.columns,
-  }
-}
-
-function padBounds(bounds: GroundContourBounds, grid: GroundOptimizedHeightGrid, padding: number): GroundContourBounds {
-  const clampedPadding = Math.max(0, Math.trunc(padding))
-  return {
-    minRow: Math.max(0, bounds.minRow - clampedPadding),
-    maxRow: Math.min(grid.rows, bounds.maxRow + clampedPadding),
-    minColumn: Math.max(0, bounds.minColumn - clampedPadding),
-    maxColumn: Math.min(grid.columns, bounds.maxColumn + clampedPadding),
+    minRow: hasRowBounds ? minRow : grid.minRow,
+    maxRow: hasRowBounds ? maxRow : grid.maxRow,
+    minColumn: hasColumnBounds ? minColumn : grid.minColumn,
+    maxColumn: hasColumnBounds ? maxColumn : grid.maxColumn,
   }
 }
 
 function deriveActiveBounds(
-  definition: GroundDynamicMesh,
+  domain: Pick<GroundOptimizedChunkDomain, 'minRow' | 'maxRow' | 'minColumn' | 'maxColumn'>,
   grid: GroundOptimizedHeightGrid,
   tolerance: number,
 ): GroundContourBounds | null {
-  const rows = createSequentialGridLines(Math.max(1, Math.trunc(definition.rows)))
-  const columns = createSequentialGridLines(Math.max(1, Math.trunc(definition.columns)))
+  const rows = createSequentialGridLinesForDomain(domain.minRow, domain.maxRow)
+  const columns = createSequentialGridLinesForDomain(domain.minColumn, domain.maxColumn)
   const derived = deriveNonPlanarAxisBounds(grid, rows, columns, tolerance)
   if (!derived) {
     return null
   }
-  return padBounds(derived, grid, 1)
+  return {
+    minRow: Math.max(domain.minRow, derived.minRow - 1),
+    maxRow: Math.min(domain.maxRow, derived.maxRow + 1),
+    minColumn: Math.max(domain.minColumn, derived.minColumn - 1),
+    maxColumn: Math.min(domain.maxColumn, derived.maxColumn + 1),
+  }
 }
 
-function boundsCoverFullTerrain(bounds: GroundContourBounds, rows: number, columns: number): boolean {
-  return bounds.minRow <= 0
-    && bounds.maxRow >= rows
-    && bounds.minColumn <= 0
-    && bounds.maxColumn >= columns
+function boundsCoverDomain(
+  bounds: GroundContourBounds,
+  domain: Pick<GroundOptimizedChunkDomain, 'minRow' | 'maxRow' | 'minColumn' | 'maxColumn'>,
+): boolean {
+  return bounds.minRow <= domain.minRow
+    && bounds.maxRow >= domain.maxRow
+    && bounds.minColumn <= domain.minColumn
+    && bounds.maxColumn >= domain.maxColumn
 }
 
 function buildAdaptiveRegionGrid(
@@ -393,14 +405,15 @@ function createStripLines(start: number, end: number): number[] {
   return values
 }
 
-function buildCartesianOptimizedMeshData(
+function buildCartesianOptimizedMeshChunkData(
   definition: GroundDynamicMesh,
+  domain: Pick<GroundOptimizedChunkDomain, 'chunkRow' | 'chunkColumn' | 'startRow' | 'startColumn' | 'rows' | 'columns'>,
   grid: GroundOptimizedHeightGrid,
   rows: number[],
   columns: number[],
   sourceVertexCount: number,
   sourceTriangleCount: number,
-): GroundOptimizedMeshData {
+): GroundOptimizedMeshChunkData {
   const rowsCount = Math.max(1, Math.trunc(definition.rows))
   const columnsCount = Math.max(1, Math.trunc(definition.columns))
   const vertexCount = rows.length * columns.length
@@ -443,7 +456,12 @@ function buildCartesianOptimizedMeshData(
   }
 
   return {
-    version: GROUND_OPTIMIZED_MESH_VERSION,
+    chunkRow: domain.chunkRow,
+    chunkColumn: domain.chunkColumn,
+    startRow: domain.startRow,
+    startColumn: domain.startColumn,
+    rows: domain.rows,
+    columns: domain.columns,
     positions,
     uvs,
     indices,
@@ -456,14 +474,15 @@ function buildCartesianOptimizedMeshData(
   }
 }
 
-function buildBoundedOptimizedMeshData(
+function buildBoundedOptimizedMeshChunkData(
   definition: GroundDynamicMesh,
+  domain: Pick<GroundOptimizedChunkDomain, 'chunkRow' | 'chunkColumn' | 'startRow' | 'startColumn' | 'rows' | 'columns' | 'minRow' | 'maxRow' | 'minColumn' | 'maxColumn'>,
   grid: GroundOptimizedHeightGrid,
   bounds: GroundContourBounds,
   adaptiveRegion: GroundOptimizedRegionGrid,
   sourceVertexCount: number,
   sourceTriangleCount: number,
-): GroundOptimizedMeshData {
+): GroundOptimizedMeshChunkData {
   const rowsCount = Math.max(1, Math.trunc(definition.rows))
   const columnsCount = Math.max(1, Math.trunc(definition.columns))
   const positions: number[] = []
@@ -520,10 +539,10 @@ function buildBoundedOptimizedMeshData(
     }
   }
 
-  const topRows = createStripLines(0, bounds.minRow)
-  const bottomRows = createStripLines(bounds.maxRow, rowsCount)
-  const leftColumns = createStripLines(0, bounds.minColumn)
-  const rightColumns = createStripLines(bounds.maxColumn, columnsCount)
+  const topRows = createStripLines(domain.minRow, bounds.minRow)
+  const bottomRows = createStripLines(bounds.maxRow, domain.maxRow)
+  const leftColumns = createStripLines(domain.minColumn, bounds.minColumn)
+  const rightColumns = createStripLines(bounds.maxColumn, domain.maxColumn)
 
   appendRegion(topRows, leftColumns)
   appendRegion(topRows, adaptiveRegion.columns)
@@ -536,7 +555,12 @@ function buildBoundedOptimizedMeshData(
   appendRegion(bottomRows, rightColumns)
 
   return {
-    version: GROUND_OPTIMIZED_MESH_VERSION,
+    chunkRow: domain.chunkRow,
+    chunkColumn: domain.chunkColumn,
+    startRow: domain.startRow,
+    startColumn: domain.startColumn,
+    rows: domain.rows,
+    columns: domain.columns,
     positions,
     uvs,
     indices,
@@ -549,40 +573,46 @@ function buildBoundedOptimizedMeshData(
   }
 }
 
-export function hasGroundOptimizedMeshData(definition: GroundDynamicMesh | null | undefined): boolean {
-  const mesh = definition?.optimizedMesh
-  return Boolean(
-    mesh
-    && mesh.version === GROUND_OPTIMIZED_MESH_VERSION
-    && Array.isArray(mesh.positions)
-    && Array.isArray(mesh.uvs)
-    && Array.isArray(mesh.indices)
-    && mesh.positions.length >= 12
-    && mesh.uvs.length >= 8
-    && mesh.indices.length >= 6,
-  )
+function computeChunkDomain(
+  definition: GroundDynamicMesh,
+  chunkRow: number,
+  chunkColumn: number,
+  chunkCells: number,
+): GroundOptimizedChunkDomain {
+  const totalRows = Math.max(1, Math.trunc(definition.rows))
+  const totalColumns = Math.max(1, Math.trunc(definition.columns))
+  const startRow = chunkRow * chunkCells
+  const startColumn = chunkColumn * chunkCells
+  const rows = Math.max(1, Math.min(chunkCells, totalRows - startRow))
+  const columns = Math.max(1, Math.min(chunkCells, totalColumns - startColumn))
+  return {
+    chunkRow,
+    chunkColumn,
+    startRow,
+    startColumn,
+    rows,
+    columns,
+    minRow: startRow,
+    maxRow: startRow + rows,
+    minColumn: startColumn,
+    maxColumn: startColumn + columns,
+  }
 }
 
-export function buildGroundOptimizedMeshData(
+function buildGroundOptimizedMeshChunkData(
   definition: GroundDynamicMesh,
-  options: GroundOptimizedMeshBuildOptions = {},
-): GroundOptimizedMeshData {
-  const grid = buildHeightGrid(definition)
-  const rowsCount = Math.max(1, Math.trunc(definition.rows))
-  const columnsCount = Math.max(1, Math.trunc(definition.columns))
-  const sourceVertexCount = (rowsCount + 1) * (columnsCount + 1)
-  const sourceTriangleCount = rowsCount * columnsCount * 2
-  const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
-    tolerance: clampFinite(options.tolerance, 0.02, 0.0001, 10),
-    maxSamplesPerAxis: Math.trunc(clampFinite(options.maxSamplesPerAxis, 6, 2, 16)),
-    maxSubdivisionDepth: Math.trunc(clampFinite(options.maxSubdivisionDepth, 10, 1, 24)),
-  }
-
-  const activeBounds = deriveActiveBounds(definition, grid, normalizedOptions.tolerance)
-  if (activeBounds && !boundsCoverFullTerrain(activeBounds, rowsCount, columnsCount)) {
-    const adaptiveRegion = buildAdaptiveRegionGrid(definition, grid, activeBounds, normalizedOptions)
-    return buildBoundedOptimizedMeshData(
+  domain: GroundOptimizedChunkDomain,
+  options: Required<GroundOptimizedMeshBuildOptions>,
+): GroundOptimizedMeshChunkData {
+  const grid = buildHeightGrid(definition, domain)
+  const sourceVertexCount = (domain.rows + 1) * (domain.columns + 1)
+  const sourceTriangleCount = domain.rows * domain.columns * 2
+  const activeBounds = deriveActiveBounds(domain, grid, options.tolerance)
+  if (activeBounds && !boundsCoverDomain(activeBounds, domain)) {
+    const adaptiveRegion = buildAdaptiveRegionGrid(definition, grid, activeBounds, options)
+    return buildBoundedOptimizedMeshChunkData(
       definition,
+      domain,
       grid,
       activeBounds,
       adaptiveRegion,
@@ -591,17 +621,17 @@ export function buildGroundOptimizedMeshData(
     )
   }
 
-  const selectedRows = new Set<number>([0, rowsCount])
-  const selectedColumns = new Set<number>([0, columnsCount])
+  const selectedRows = new Set<number>([domain.minRow, domain.maxRow])
+  const selectedColumns = new Set<number>([domain.minColumn, domain.maxColumn])
   collectAdaptiveGridLines(
     definition,
     grid,
+    domain.minRow,
+    domain.maxRow,
+    domain.minColumn,
+    domain.maxColumn,
     0,
-    rowsCount,
-    0,
-    columnsCount,
-    0,
-    normalizedOptions,
+    options,
     selectedRows,
     selectedColumns,
   )
@@ -612,10 +642,11 @@ export function buildGroundOptimizedMeshData(
     grid,
     initialRows,
     initialColumns,
-    normalizedOptions.tolerance,
+    options.tolerance,
   )
-  return buildCartesianOptimizedMeshData(
+  return buildCartesianOptimizedMeshChunkData(
     definition,
+    domain,
     grid,
     rows,
     columns,
@@ -624,7 +655,83 @@ export function buildGroundOptimizedMeshData(
   )
 }
 
-export function buildGroundOptimizedGeometry(mesh: GroundOptimizedMeshData): THREE.BufferGeometry {
+export function hasGroundOptimizedMeshData(definition: GroundDynamicMesh | null | undefined): boolean {
+  const mesh = definition?.optimizedMesh
+  return Boolean(
+    mesh
+    && mesh.version === GROUND_OPTIMIZED_MESH_VERSION
+    && Number.isFinite(mesh.chunkCells)
+    && mesh.chunkCells > 0
+    && Array.isArray(mesh.chunks)
+    && mesh.chunks.length > 0
+    && mesh.chunks.every((chunk) => (
+      Number.isFinite(chunk.chunkRow)
+      && Number.isFinite(chunk.chunkColumn)
+      && Number.isFinite(chunk.startRow)
+      && Number.isFinite(chunk.startColumn)
+      && Number.isFinite(chunk.rows)
+      && Number.isFinite(chunk.columns)
+      && Array.isArray(chunk.positions)
+      && Array.isArray(chunk.uvs)
+      && Array.isArray(chunk.indices)
+      && chunk.positions.length >= 12
+      && chunk.uvs.length >= 8
+      && chunk.indices.length >= 6
+    )),
+  )
+}
+
+export function buildGroundOptimizedMeshData(
+  definition: GroundDynamicMesh,
+  options: GroundOptimizedMeshBuildOptions = {},
+): GroundOptimizedMeshData {
+  const rowsCount = Math.max(1, Math.trunc(definition.rows))
+  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const chunkCells = resolveGroundChunkCells(definition)
+  const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
+    tolerance: clampFinite(options.tolerance, 0.02, 0.0001, 10),
+    maxSamplesPerAxis: Math.trunc(clampFinite(options.maxSamplesPerAxis, 6, 2, 16)),
+    maxSubdivisionDepth: Math.trunc(clampFinite(options.maxSubdivisionDepth, 10, 1, 24)),
+  }
+  const rowChunkCount = Math.max(1, Math.ceil(rowsCount / chunkCells))
+  const columnChunkCount = Math.max(1, Math.ceil(columnsCount / chunkCells))
+  const chunks: GroundOptimizedMeshChunkData[] = []
+  let sourceVertexCount = 0
+  let sourceTriangleCount = 0
+  let optimizedVertexCount = 0
+  let optimizedTriangleCount = 0
+  let optimizedRowCount = 0
+  let optimizedColumnCount = 0
+
+  for (let chunkRow = 0; chunkRow < rowChunkCount; chunkRow += 1) {
+    for (let chunkColumn = 0; chunkColumn < columnChunkCount; chunkColumn += 1) {
+      const domain = computeChunkDomain(definition, chunkRow, chunkColumn, chunkCells)
+      const chunk = buildGroundOptimizedMeshChunkData(definition, domain, normalizedOptions)
+      chunks.push(chunk)
+      sourceVertexCount += chunk.sourceVertexCount
+      sourceTriangleCount += chunk.sourceTriangleCount
+      optimizedVertexCount += chunk.vertexCount
+      optimizedTriangleCount += chunk.triangleCount
+      optimizedRowCount += chunk.optimizedRowCount
+      optimizedColumnCount += chunk.optimizedColumnCount
+    }
+  }
+
+  return {
+    version: GROUND_OPTIMIZED_MESH_VERSION,
+    chunkCells,
+    chunkCount: chunks.length,
+    chunks,
+    sourceVertexCount,
+    sourceTriangleCount,
+    optimizedVertexCount,
+    optimizedTriangleCount,
+    optimizedRowCount,
+    optimizedColumnCount,
+  }
+}
+
+export function buildGroundOptimizedGeometry(mesh: GroundOptimizedMeshChunkData): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(mesh.positions), 3))
   geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(mesh.uvs), 2))

@@ -7,6 +7,7 @@ import {
   type GroundDynamicMesh,
   type GroundGenerationSettings,
   type GroundHeightMap,
+  type GroundOptimizedMeshChunkData,
   type GroundRuntimeDynamicMesh,
   type GroundSculptOperation,
 } from './index'
@@ -146,7 +147,12 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : columns * cellSize
   const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : rows * cellSize
-  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}`
+  const optimizedMesh = definition.optimizedMesh
+  const optimizedSignature = optimizedMesh
+    ? `${optimizedMesh.version}:${optimizedMesh.chunkCells}:${optimizedMesh.chunkCount}:${optimizedMesh.optimizedVertexCount}:${optimizedMesh.optimizedTriangleCount}`
+    : 'none'
+  const surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.trunc(definition.surfaceRevision as number) : 0
+  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}`
 }
 
 function clampInclusive(value: number, min: number, max: number): number {
@@ -535,7 +541,58 @@ function buildGroundGeometry(definition: GroundRuntimeDynamicMesh): THREE.Buffer
   return geometry
 }
 
+function resolveOptimizedChunkForSpec(
+  definition: GroundDynamicMesh,
+  spec: GroundChunkSpec,
+): GroundOptimizedMeshChunkData | null {
+  const optimizedMesh = definition.optimizedMesh
+  if (!optimizedMesh || optimizedMesh.version !== 2 || !Array.isArray(optimizedMesh.chunks)) {
+    return null
+  }
+  return optimizedMesh.chunks.find((chunk) => (
+    chunk.startRow === spec.startRow
+    && chunk.startColumn === spec.startColumn
+    && chunk.rows === spec.rows
+    && chunk.columns === spec.columns
+  )) ?? null
+}
+
+function createGroundOptimizedChunkGeometry(chunk: GroundOptimizedMeshChunkData): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(chunk.positions), 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(chunk.uvs), 2))
+  const indexArray = chunk.positions.length / 3 > 65535
+    ? new Uint32Array(chunk.indices)
+    : new Uint16Array(chunk.indices)
+  geometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function applyGroundOptimizedChunkGeometry(
+  geometry: THREE.BufferGeometry,
+  chunk: GroundOptimizedMeshChunkData,
+): boolean {
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(chunk.positions), 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(chunk.uvs), 2))
+  const indexArray = chunk.positions.length / 3 > 65535
+    ? new Uint32Array(chunk.indices)
+    : new Uint16Array(chunk.indices)
+  geometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return true
+}
+
 function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): THREE.BufferGeometry {
+  const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
+  if (optimizedChunk) {
+    return createGroundOptimizedChunkGeometry(optimizedChunk)
+  }
+
   const columns = Math.max(1, definition.columns)
   const rows = Math.max(1, definition.rows)
   const chunkColumns = Math.max(1, spec.columns)
@@ -1102,6 +1159,11 @@ export type GroundGeometryUpdateRegion = {
 }
 
 function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): boolean {
+  const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
+  if (optimizedChunk) {
+    return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
+  }
+
   const columns = Math.max(1, Math.trunc(definition.columns))
   const rows = Math.max(1, Math.trunc(definition.rows))
   const chunkColumns = Math.max(1, Math.trunc(spec.columns))
@@ -1154,6 +1216,11 @@ function updateChunkGeometryRegion(
   region: GroundGeometryUpdateRegion,
   options: { computeNormals?: boolean } = {},
 ): boolean {
+  const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
+  if (optimizedChunk) {
+    return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
+  }
+
   const chunkColumns = Math.max(1, Math.trunc(spec.columns))
   const chunkRows = Math.max(1, Math.trunc(spec.rows))
   const vertexColumns = chunkColumns + 1
