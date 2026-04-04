@@ -10906,7 +10906,6 @@ onBeforeUnmount(() => {
 								@update:model-value="toggleOtherRigidbodyWireframeDebug"
 							/>
 						</v-list-item>
-						
 					</v-list>
 				</v-card>
 			</v-menu>

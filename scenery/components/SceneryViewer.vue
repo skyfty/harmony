@@ -867,7 +867,7 @@ const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : TH
 // Enable temporarily via query param `?debug=1`.
 const debugEnabled = ref(true);
 // debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show all debug info
-const debugMode = ref<'off' | 'fps' | 'full'>('fps');
+const debugMode = ref<'off' | 'fps' | 'full'>('full');
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
 
@@ -5444,7 +5444,6 @@ function stepPhysicsWorld(delta: number): void {
       console.warn('[SceneViewer] Physics step failed', error);
     }
   }
-
   // Ensure vehicles are truly static after exiting drive/auto-tour.
   // If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
   const nowMs = Date.now();
