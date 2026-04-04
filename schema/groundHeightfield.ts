@@ -182,21 +182,6 @@ function getRegionSampleHeight(sample: GroundRegionSample, row: number, column: 
   return sample.values[sample.valueOffset + localRow * sample.rowStride + localColumn] ?? 0
 }
 
-function sampleRegionPlaneHeight(
-  sample: GroundRegionSample,
-  row: number,
-  column: number,
-): number {
-  const rowSpan = Math.max(1, sample.rowSpan)
-  const columnSpan = Math.max(1, sample.columnSpan)
-  const h00 = getRegionSampleHeight(sample, sample.startRow, sample.startColumn)
-  const h10 = getRegionSampleHeight(sample, sample.startRow, sample.endColumn)
-  const h01 = getRegionSampleHeight(sample, sample.endRow, sample.startColumn)
-  const slopeX = (h10 - h00) / columnSpan
-  const slopeZ = (h01 - h00) / rowSpan
-  return h00 + slopeX * (column - sample.startColumn) + slopeZ * (row - sample.startRow)
-}
-
 type GroundRegionPlane = {
   h00: number
   slopeX: number
