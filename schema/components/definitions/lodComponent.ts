@@ -14,6 +14,8 @@ export interface LodLevelDefinition {
   distance: number
   /** Render target kind for this LOD level. Billboard is only supported on the final level. */
   kind?: LodLevelKind
+  /** When true on the final level, orient the rendered target toward the camera. */
+  faceCamera?: boolean
   /** Optional model/mesh asset override for this level. */
   modelAssetId: string | null
   /** Optional image/texture asset used when kind === 'billboard'. */
@@ -30,6 +32,7 @@ export interface LodComponentProps {
 export interface LodRenderTarget {
   kind: LodLevelKind
   assetId: string | null
+  faceCamera: boolean
 }
 
 export const LOD_DEFAULT_ENABLE_CULLING = true
@@ -60,6 +63,10 @@ function normalizeKind(value: unknown): LodLevelKind {
   return value === LOD_LEVEL_KIND_BILLBOARD ? LOD_LEVEL_KIND_BILLBOARD : LOD_LEVEL_KIND_MODEL
 }
 
+function normalizeFaceCamera(value: unknown): boolean {
+  return value === true
+}
+
 export function getLodLevelKind(level: Partial<LodLevelDefinition> | null | undefined): LodLevelKind {
   return normalizeKind(level?.kind)
 }
@@ -85,6 +92,7 @@ export function resolveLodRenderTarget(level: Partial<LodLevelDefinition> | null
   return {
     kind,
     assetId: kind === LOD_LEVEL_KIND_BILLBOARD ? getLodLevelBillboardAssetId(level) : getLodLevelModelAssetId(level),
+    faceCamera: normalizeFaceCamera(level?.faceCamera),
   }
 }
 
@@ -95,6 +103,7 @@ function sanitizeLodLevelDefinition(
   return {
     distance: clampDistance(level?.distance, index === 0 ? 0 : DEFAULT_LEVELS[Math.min(index, DEFAULT_LEVELS.length - 1)]!.distance),
     kind: normalizeKind(level?.kind),
+    faceCamera: normalizeFaceCamera(level?.faceCamera),
     modelAssetId: normalizeAssetId(level?.modelAssetId),
     billboardAssetId: normalizeAssetId(level?.billboardAssetId),
   }
@@ -128,6 +137,7 @@ export function clampLodComponentProps(props: Partial<LodComponentProps> | null 
       return {
         distance: level.distance,
         kind: LOD_LEVEL_KIND_BILLBOARD,
+        faceCamera: level.faceCamera === true,
         modelAssetId: null,
         billboardAssetId: level.billboardAssetId ?? null,
       } satisfies LodLevelDefinition
@@ -135,6 +145,7 @@ export function clampLodComponentProps(props: Partial<LodComponentProps> | null 
     return {
       distance: level.distance,
       kind: LOD_LEVEL_KIND_MODEL,
+      faceCamera: isLastLevel ? level.faceCamera === true : false,
       modelAssetId: level.modelAssetId ?? null,
       billboardAssetId: null,
     } satisfies LodLevelDefinition
@@ -152,6 +163,7 @@ export function cloneLodComponentProps(props: LodComponentProps): LodComponentPr
     levels: props.levels.map((level) => ({
       distance: level.distance,
       kind: getLodLevelKind(level),
+      faceCamera: level.faceCamera === true,
       modelAssetId: level.modelAssetId,
       billboardAssetId: getLodLevelBillboardAssetId(level),
     })),

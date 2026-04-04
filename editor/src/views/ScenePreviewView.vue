@@ -1407,6 +1407,7 @@ type InstancedLodTarget = {
 	kind: 'model' | 'billboard'
 	assetId: string | null
 	sourceModelAssetId: string | null
+	faceCamera: boolean
 	key: string | null
 }
 
@@ -1426,6 +1427,9 @@ const instancedMatrixHelper = new THREE.Matrix4()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
+const instancedFacingDirectionHelper = new THREE.Vector3()
+const instancedFacingQuaternionHelper = new THREE.Quaternion()
+const instancedFacingAxisHelper = new THREE.Vector3(1, 0, 0)
 
 type InstancedMatrixCacheEntry = {
 	bindingKey: string
@@ -2480,6 +2484,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 			kind: 'model',
 			assetId: normalizedBase,
 			sourceModelAssetId: normalizedBase,
+			faceCamera: false,
 			key: normalizedBase ? `model:${normalizedBase}` : null,
 		}
 	}
@@ -2491,6 +2496,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 			kind: 'model',
 			assetId: normalizedBase,
 			sourceModelAssetId: normalizedBase,
+			faceCamera: false,
 			key: normalizedBase ? `model:${normalizedBase}` : null,
 		}
 	}
@@ -2514,8 +2520,24 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 		kind,
 		assetId: resolvedAssetId,
 		sourceModelAssetId: normalizedBase,
+		faceCamera: chosen?.faceCamera === true,
 		key: resolvedAssetId ? `${kind}:${resolvedAssetId}` : null,
 	}
+}
+
+function applyModelFaceCameraMatrix(matrix: THREE.Matrix4): void {
+	if (!camera) {
+		return
+	}
+	matrix.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+	instancedFacingDirectionHelper.copy(camera.position).sub(instancedPositionHelper)
+	instancedFacingDirectionHelper.y = 0
+	if (instancedFacingDirectionHelper.lengthSq() <= 1e-6) {
+		return
+	}
+	instancedFacingDirectionHelper.normalize()
+	instancedFacingQuaternionHelper.setFromUnitVectors(instancedFacingAxisHelper, instancedFacingDirectionHelper)
+	matrix.compose(instancedPositionHelper, instancedFacingQuaternionHelper, instancedScaleHelper)
 }
 
 const pendingLodModelLoads = new Map<string, Promise<void>>()
@@ -2654,6 +2676,7 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target:
 			...(object.userData ?? {}),
 			instancedAssetId: target.assetId,
 			instancedRenderKind: 'model',
+			__harmonyLodFaceCamera: target.faceCamera === true,
 			instancedBounds: serializeBoundingBox(layoutBounds),
 		}
 		object.userData.__harmonyInstancedRadius = sphere.radius
@@ -2718,6 +2741,7 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target:
 		...(object.userData ?? {}),
 		instancedAssetId: target.assetId,
 		instancedRenderKind: 'billboard',
+		__harmonyLodFaceCamera: target.faceCamera === true,
 		__harmonyBillboardSourceAssetId: target.sourceModelAssetId,
 		instancedBounds: serializeBoundingBox(layoutBounds),
 	}
@@ -3063,6 +3087,7 @@ function updateInstancedCullingAndLod(): void {
 			applyInstancedLodSwitch(nodeId, object, desiredTarget)
 			return
 		}
+		object.userData.__harmonyLodFaceCamera = desiredTarget.faceCamera === true
 		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
 		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
 		const desiredCount = getInstanceLayoutCount(layout)
@@ -8035,6 +8060,9 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		const isVisible = target.visible !== false && !isCulled
 		if (isVisible) {
 			instancedMatrixHelper.copy(target.matrixWorld)
+			if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
+				applyModelFaceCameraMatrix(instancedMatrixHelper)
+			}
 		} else {
 			target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 			instancedScaleHelper.setScalar(0)
@@ -8045,6 +8073,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 			kind: 'billboard',
 			assetId,
 			sourceModelAssetId: typeof target.userData?.__harmonyBillboardSourceAssetId === 'string' ? target.userData.__harmonyBillboardSourceAssetId : null,
+			faceCamera: target.userData?.__harmonyLodFaceCamera === true,
 			key: null,
 		})
 		const layoutBounds = renderKind === 'billboard'

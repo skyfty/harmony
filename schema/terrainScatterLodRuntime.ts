@@ -354,6 +354,7 @@ function resolveBaseScatterRenderTarget(preset: LodPresetData | null, fallbackMo
   return {
     kind: 'model',
     assetId: modelAssetId,
+    faceCamera: false,
   }
 }
 
@@ -380,6 +381,7 @@ function chooseLodRenderTarget(
     return {
       kind: resolved.kind,
       assetId,
+      faceCamera: resolved.faceCamera ?? false,
     }
   }
   return resolveBaseScatterRenderTarget(preset, fallbackModelAssetId)

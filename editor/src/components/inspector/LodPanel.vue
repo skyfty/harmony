@@ -215,6 +215,21 @@ function handleLevelKindUpdate(levelIndex: number, value: unknown): void {
   updateLevelKind(levelIndex, value)
 }
 
+function updateLevelFaceCamera(levelIndex: number, value: unknown): void {
+  const nextLevels = localLevels.value.map((level: LodComponentProps['levels'][number]) => ({ ...level }))
+  const target = nextLevels[levelIndex]
+  if (!target) {
+    return
+  }
+  target.faceCamera = value === true
+  localLevels.value = nextLevels
+  pushPropsToStore()
+}
+
+function handleLevelFaceCameraUpdate(levelIndex: number, value: unknown): void {
+  updateLevelFaceCamera(levelIndex, value)
+}
+
 function handleDistanceKeydown(event: KeyboardEvent): void {
   if (event.key === '-') {
     event.preventDefault()
@@ -397,6 +412,8 @@ const levelSummaries = computed(() => {
       distance: level.distance,
       kind,
       canUseBillboard: isLastLevel,
+      faceCamera: level.faceCamera === true,
+      showFaceCameraToggle: isLastLevel,
       typeLabel: isBillboard ? 'Billboard' : 'Model',
       assetLabel: asset ? asset.name : isBillboard ? 'Billboard image' : 'Default model',
       assetStyle: resolveAssetPreviewStyle(asset),
@@ -487,6 +504,18 @@ const levelSummaries = computed(() => {
               :model-value="summary.kind"
               :disabled="!componentEnabled || !summary.canUseBillboard"
               @update:modelValue="handleLevelKindUpdate(summary.index, $event)"
+            />
+
+            <v-switch
+              v-if="summary.showFaceCameraToggle"
+              class="lod-face-camera-switch"
+              density="compact"
+              hide-details
+              inset
+              label="朝向相机"
+              :model-value="summary.faceCamera"
+              :disabled="!componentEnabled"
+              @update:modelValue="handleLevelFaceCameraUpdate(summary.index, $event)"
             />
           </div>
 
@@ -624,10 +653,17 @@ const levelSummaries = computed(() => {
 
 .lod-kind-row {
   display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 .lod-kind-select {
-  width: 160px;
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+
+.lod-face-camera-switch {
+  flex: 0 0 auto;
 }
 
 .lod-model-wrap {
