@@ -5389,13 +5389,22 @@ function stepPhysicsWorld(delta: number): void {
       });
     }
   } else {
+    const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
+    physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
     try {
-      if (vehicleDriveActive.value) {
-        applyVehicleDriveForces(delta);
+      while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+        if (vehicleDriveActive.value) {
+          applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
+        }
+        physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
+        physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
+        subSteps += 1;
       }
-      physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
     } catch (error) {
       console.warn('[SceneViewer] Physics step failed', error);
+    }
+    if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
+      physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
     }
   }
   // Ensure vehicles are truly static after exiting drive/auto-tour.

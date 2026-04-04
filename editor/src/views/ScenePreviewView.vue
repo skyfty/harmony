@@ -1949,6 +1949,7 @@ let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION
 const vehicleIdleFreezeLastLogMs = new Map<string, number>()
 const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
+const PHYSICS_MAX_ACCUMULATOR = PHYSICS_FIXED_TIMESTEP * PHYSICS_MAX_SUB_STEPS
 const PHYSICS_SOLVER_ITERATIONS = 18
 const PHYSICS_SOLVER_TOLERANCE = 5e-4
 const PHYSICS_CONTACT_STIFFNESS = 1e9
@@ -1974,6 +1975,7 @@ const lastOrbitState = {
 }
 let animationMixers: THREE.AnimationMixer[] = []
 let effectRuntimeTickers: Array<(delta: number) => void> = []
+let physicsAccumulator = 0
 
 type WarpGateRuntimeRegistryEntry = {
 	tick?: (delta: number) => void
@@ -6910,7 +6912,6 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 	} else {
 		autoTourRuntime.update(delta)
 	}
-	applyVehicleDriveForces(delta)
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
 	updateVehicleWheelVisuals(delta)
@@ -9533,6 +9534,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 
 function stepPhysicsWorld(delta: number): void {
 	if (!physicsWorld || !rigidbodyInstances.size) {
+		physicsAccumulator = 0
 		return
 	}
 
@@ -9579,10 +9581,23 @@ function stepPhysicsWorld(delta: number): void {
 			}
 		}
 	})
+	const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR)
+	physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta)
+	let subSteps = 0
 	try {
-		physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS)
+		while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+			if (vehicleDriveState.active) {
+				applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP)
+			}
+			physicsWorld.step(PHYSICS_FIXED_TIMESTEP)
+			physicsAccumulator -= PHYSICS_FIXED_TIMESTEP
+			subSteps += 1
+		}
 	} catch (error) {
 		console.warn('[ScenePreview] Physics step failed', error)
+	}
+	if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
+		physicsAccumulator = PHYSICS_FIXED_TIMESTEP
 	}
 
 	// Ensure vehicles are truly static after exiting drive/auto-tour.

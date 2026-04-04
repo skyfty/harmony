@@ -175,6 +175,11 @@ const VEHICLE_BRAKE_FORCE = 42
 // Default soft/hard speed caps used when no component-level max is present.
 const DEFAULT_VEHICLE_SPEED_SOFT_CAP = 8.5
 const DEFAULT_VEHICLE_SPEED_HARD_CAP = 12.5
+const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
+const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
+const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
+const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
+const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.18
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
@@ -422,6 +427,13 @@ export class VehicleDriveController {
     this.smoothStopState.initialSpeedSq = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ
   }
 
+  private resetSpeedGovernor(): void {
+    this.speedGovernorScale = 1
+    this.speedGovernorBrakeAssist = 0
+    this.speedGovernorSmoothedForwardSpeedAbs = 0
+    this.speedGovernorOverHardCap = false
+  }
+
   resetInputs(): void {
     const flags = this.inputFlags
     flags.forward = false
@@ -585,6 +597,7 @@ export class VehicleDriveController {
     this.followCameraSteerLookAngle = 0
     this.resetFollowCameraOffset()
     this.resetInputs()
+    this.resetSpeedGovernor()
     if (this.deps.setCameraViewState) {
       this.deps.setCameraViewState('watching', targetNodeId)
     }
@@ -612,6 +625,7 @@ export class VehicleDriveController {
     // RaycastVehicle keeps last engine/brake/steer values if we stop calling it.
     // Clear all control state and forcibly stop the chassis body to guarantee that exiting drive leaves the vehicle static.
     this.resetInputs()
+    this.resetSpeedGovernor()
     if (instance?.vehicle) {
       try {
         const vehicle = instance.vehicle
@@ -738,7 +752,7 @@ export class VehicleDriveController {
       // Smooth speed reading to avoid tiny physics noise causing visible push-pull near caps.
       const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
       this.speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - this.speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
-      const speedForGovernor = this.speedGovernorSmoothedForwardSpeedAbs
+      const speedForGovernor = Math.max(forwardSpeedAbs, this.speedGovernorSmoothedForwardSpeedAbs)
 
       // forwardSpeedAbs can be used for conditional logic if needed
 
@@ -785,14 +799,14 @@ export class VehicleDriveController {
         // Smoothstep (0..1), then invert to get scale (1..0)
         const smooth = t * t * (3 - 2 * t)
         const scaleTarget = Math.max(0, 1 - smooth)
-        const scaleAlpha = 1 - Math.exp(-10 * dt)
+        const scaleAlpha = 1 - Math.exp(-14 * dt)
         this.speedGovernorScale += (scaleTarget - this.speedGovernorScale) * scaleAlpha
         engineForce *= this.speedGovernorScale
 
-        // Brake assist kicks in only after crossing hard cap, and ramps smoothly.
-        // Add hysteresis around the hard cap to avoid toggling when speed hovers near the threshold.
-        const hardCapEnter = hardCap + 0.15
-        const hardCapExit = hardCap - 0.25
+        // Brake assist is only for sustained overspeed after engine force has already been scaled down.
+        // Keep a dead-band above the hard cap so the vehicle settles instead of point-braking.
+        const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
+        const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
         if (!this.speedGovernorOverHardCap) {
           if (speedForGovernor > hardCapEnter) {
             this.speedGovernorOverHardCap = true
@@ -800,11 +814,12 @@ export class VehicleDriveController {
         } else if (speedForGovernor < hardCapExit) {
           this.speedGovernorOverHardCap = false
         }
-        const over = this.speedGovernorOverHardCap ? Math.max(0, speedForGovernor - hardCap) : 0
-        const brakeBand = 0.9 // m/s (~3.2km/h)
-        const brakeRatio = Math.min(1, over / brakeBand)
-        const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * 0.35
-        const brakeAlpha = 1 - Math.exp(-8 * dt)
+        const over = this.speedGovernorOverHardCap
+          ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
+          : 0
+        const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
+        const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
+        const brakeAlpha = 1 - Math.exp(-4 * dt)
         this.speedGovernorBrakeAssist += (brakeTarget - this.speedGovernorBrakeAssist) * brakeAlpha
       } else {
         // Relax governor when not accelerating forward.
@@ -927,6 +942,7 @@ export class VehicleDriveController {
     rigidbody.object.position.copy(chassisPosition)
     rigidbody.object.quaternion.copy(temp.resetQuaternion)
     rigidbody.object.updateMatrixWorld(true)
+    this.resetSpeedGovernor()
     this.bindings.cameraFollowState.initialized = false
     return true
   }
