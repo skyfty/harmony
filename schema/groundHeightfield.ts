@@ -13,6 +13,28 @@ export type GroundHeightfieldData = {
   signature: string
 }
 
+export type GroundCollisionSegment = {
+  key: string
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  stride: number
+  rows: number
+  columns: number
+  matrix: number[][]
+  elementSize: number
+  width: number
+  depth: number
+  offset: [number, number, number]
+  signature: string
+}
+
+export type GroundCollisionData = {
+  signature: string
+  segments: GroundCollisionSegment[]
+}
+
 export type GroundHeightfieldChunkPlan = {
   signature: string
   elementSize: number
@@ -53,6 +75,37 @@ const DEFAULT_MAX_SAMPLE_POINTS = 75_000
 const DEFAULT_CHUNK_CELLS = 128
 const DEFAULT_MIN_STRIDE = 1
 const DEFAULT_MAX_STRIDE = 16
+const DEFAULT_ADAPTIVE_PLANAR_TOLERANCE = 0.03
+const DEFAULT_ADAPTIVE_MAX_SUBDIVISION_DEPTH = 6
+const DEFAULT_ADAPTIVE_MAX_PLANAR_STRIDE = 64
+const DEFAULT_ADAPTIVE_MIN_COMPLEX_REGION_CELLS = 16
+const DEFAULT_ADAPTIVE_MAX_SEGMENTS = 48
+const DEFAULT_ADAPTIVE_SMALL_REGION_CELLS = 32
+
+type GroundRegionSample = {
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  rowSpan: number
+  columnSpan: number
+  rowStride: number
+  values: Float32Array
+}
+
+type GroundAdaptiveRegion = {
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  depth: number
+}
+
+type GroundHorizontalMetrics = {
+  baseElementSize: number
+  halfWidth: number
+  halfDepth: number
+}
 
 export function isGroundDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is GroundDynamicMesh {
   return Boolean(value && value.type === 'Ground')
@@ -115,6 +168,249 @@ function groundChunkKey(chunkRow: number, chunkColumn: number): string {
   return `${chunkRow}:${chunkColumn}`
 }
 
+function groundRegionKey(startRow: number, endRow: number, startColumn: number, endColumn: number): string {
+  return `${startRow}:${endRow}:${startColumn}:${endColumn}`
+}
+
+function getRegionSampleHeight(sample: GroundRegionSample, row: number, column: number): number {
+  const localRow = row - sample.startRow
+  const localColumn = column - sample.startColumn
+  if (localRow < 0 || localColumn < 0 || localRow > sample.rowSpan || localColumn > sample.columnSpan) {
+    return 0
+  }
+  return sample.values[localRow * sample.rowStride + localColumn] ?? 0
+}
+
+function sampleRegionPlaneHeight(
+  sample: GroundRegionSample,
+  row: number,
+  column: number,
+): number {
+  const rowSpan = Math.max(1, sample.rowSpan)
+  const columnSpan = Math.max(1, sample.columnSpan)
+  const h00 = getRegionSampleHeight(sample, sample.startRow, sample.startColumn)
+  const h10 = getRegionSampleHeight(sample, sample.startRow, sample.endColumn)
+  const h01 = getRegionSampleHeight(sample, sample.endRow, sample.startColumn)
+  const slopeX = (h10 - h00) / columnSpan
+  const slopeZ = (h01 - h00) / rowSpan
+  return h00 + slopeX * (column - sample.startColumn) + slopeZ * (row - sample.startRow)
+}
+
+function regionMatchesPlane(sample: GroundRegionSample, tolerance: number): boolean {
+  const cornerPlane = sampleRegionPlaneHeight(sample, sample.endRow, sample.endColumn)
+  const cornerHeight = getRegionSampleHeight(sample, sample.endRow, sample.endColumn)
+  if (Math.abs(cornerHeight - cornerPlane) > tolerance) {
+    return false
+  }
+
+  for (let row = sample.startRow; row <= sample.endRow; row += 1) {
+    for (let column = sample.startColumn; column <= sample.endColumn; column += 1) {
+      const actual = getRegionSampleHeight(sample, row, column)
+      const expected = sampleRegionPlaneHeight(sample, row, column)
+      if (Math.abs(actual - expected) > tolerance) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+function findLargestCommonStride(rowSpan: number, columnSpan: number, maxStride: number): number {
+  const boundedMaxStride = Math.max(1, Math.min(maxStride, rowSpan, columnSpan))
+  for (let stride = boundedMaxStride; stride >= 2; stride -= 1) {
+    if (rowSpan % stride === 0 && columnSpan % stride === 0) {
+      return stride
+    }
+  }
+  return 1
+}
+
+function sampleGroundRegion(node: SceneNode, mesh: GroundDynamicMesh, region: GroundAdaptiveRegion): GroundRegionSample {
+  const rowSpan = Math.max(1, region.endRow - region.startRow)
+  const columnSpan = Math.max(1, region.endColumn - region.startColumn)
+  const rowStride = columnSpan + 1
+  const values = new Float32Array((rowSpan + 1) * (columnSpan + 1))
+  const { scaleY } = resolveNodeScaleVector(node.scale)
+
+  for (let row = region.startRow; row <= region.endRow; row += 1) {
+    const rowOffset = (row - region.startRow) * rowStride
+    for (let column = region.startColumn; column <= region.endColumn; column += 1) {
+      const height = resolveGroundEffectiveHeightAtVertex(mesh, row, column) * scaleY
+      values[rowOffset + (column - region.startColumn)] = height
+    }
+  }
+
+  return {
+    startRow: region.startRow,
+    endRow: region.endRow,
+    startColumn: region.startColumn,
+    endColumn: region.endColumn,
+    rowSpan,
+    columnSpan,
+    rowStride,
+    values,
+  }
+}
+
+function resolveGroundHorizontalMetrics(node: SceneNode, mesh: GroundDynamicMesh): GroundHorizontalMetrics {
+  const rawCellSize = getPositiveNumber(mesh.cellSize, 1)
+  const { scaleX, scaleZ } = resolveNodeScaleVector(node.scale)
+  const uniformHorizontalScale = Math.max(MIN_ELEMENT_SIZE, (Math.abs(scaleX) + Math.abs(scaleZ)) * 0.5)
+  const baseElementSize = Math.max(MIN_ELEMENT_SIZE, rawCellSize * uniformHorizontalScale)
+  const halfWidth = Math.max(MIN_ELEMENT_SIZE, Math.max(1, Math.floor(mesh.columns)) * baseElementSize) * 0.5
+  const halfDepth = Math.max(MIN_ELEMENT_SIZE, Math.max(1, Math.floor(mesh.rows)) * baseElementSize) * 0.5
+  return { baseElementSize, halfWidth, halfDepth }
+}
+
+function buildGroundCollisionSegment(
+  sample: GroundRegionSample,
+  stride: number,
+  metrics: GroundHorizontalMetrics,
+): GroundCollisionSegment {
+  const safeStride = Math.max(1, stride)
+  const rows = Math.max(1, Math.floor(sample.rowSpan / safeStride))
+  const columns = Math.max(1, Math.floor(sample.columnSpan / safeStride))
+  const elementSize = Math.max(MIN_ELEMENT_SIZE, metrics.baseElementSize * safeStride)
+  const matrix: number[][] = []
+  let hash = 0
+
+  for (let localColumn = 0; localColumn <= columns; localColumn += 1) {
+    const sourceColumn = sample.startColumn + localColumn * safeStride
+    const columnValues: number[] = []
+    for (let localRow = rows; localRow >= 0; localRow -= 1) {
+      const sourceRow = sample.startRow + localRow * safeStride
+      const height = getRegionSampleHeight(sample, sourceRow, sourceColumn)
+      columnValues.push(height)
+      const normalized = Math.round(height * 1000)
+      hash = (hash * 31 + normalized) >>> 0
+    }
+    matrix.push(columnValues)
+  }
+
+  const width = Math.max(MIN_ELEMENT_SIZE, sample.columnSpan * metrics.baseElementSize)
+  const depth = Math.max(MIN_ELEMENT_SIZE, sample.rowSpan * metrics.baseElementSize)
+  const offset: [number, number, number] = [
+    -metrics.halfWidth + sample.startColumn * metrics.baseElementSize,
+    -metrics.halfDepth + sample.startRow * metrics.baseElementSize,
+    0,
+  ]
+  const key = groundRegionKey(sample.startRow, sample.endRow, sample.startColumn, sample.endColumn)
+  const signature = `${key}|${safeStride}|${rows}|${columns}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${hash.toString(16)}`
+
+  return {
+    key,
+    startRow: sample.startRow,
+    endRow: sample.endRow,
+    startColumn: sample.startColumn,
+    endColumn: sample.endColumn,
+    stride: safeStride,
+    rows,
+    columns,
+    matrix,
+    elementSize,
+    width,
+    depth,
+    offset,
+    signature,
+  }
+}
+
+function pushAdaptiveGroundCollisionSegments(
+  node: SceneNode,
+  mesh: GroundDynamicMesh,
+  region: GroundAdaptiveRegion,
+  metrics: GroundHorizontalMetrics,
+  segments: GroundCollisionSegment[],
+): void {
+  const sample = sampleGroundRegion(node, mesh, region)
+  const isPlanar = regionMatchesPlane(sample, DEFAULT_ADAPTIVE_PLANAR_TOLERANCE)
+  const bestPlanarStride = findLargestCommonStride(sample.rowSpan, sample.columnSpan, DEFAULT_ADAPTIVE_MAX_PLANAR_STRIDE)
+  const isSmallRegion = sample.rowSpan <= DEFAULT_ADAPTIVE_SMALL_REGION_CELLS && sample.columnSpan <= DEFAULT_ADAPTIVE_SMALL_REGION_CELLS
+  const shouldStop = region.depth >= DEFAULT_ADAPTIVE_MAX_SUBDIVISION_DEPTH
+    || segments.length >= DEFAULT_ADAPTIVE_MAX_SEGMENTS - 1
+    || (sample.rowSpan <= DEFAULT_ADAPTIVE_MIN_COMPLEX_REGION_CELLS && sample.columnSpan <= DEFAULT_ADAPTIVE_MIN_COMPLEX_REGION_CELLS)
+
+  if (isPlanar && (bestPlanarStride > 1 || isSmallRegion || shouldStop)) {
+    segments.push(buildGroundCollisionSegment(sample, bestPlanarStride, metrics))
+    return
+  }
+
+  if (shouldStop || (sample.rowSpan <= 1 && sample.columnSpan <= 1)) {
+    segments.push(buildGroundCollisionSegment(sample, 1, metrics))
+    return
+  }
+
+  if (sample.rowSpan >= sample.columnSpan && sample.rowSpan > 1) {
+    const middleRow = region.startRow + Math.floor(sample.rowSpan * 0.5)
+    pushAdaptiveGroundCollisionSegments(node, mesh, {
+      startRow: region.startRow,
+      endRow: middleRow,
+      startColumn: region.startColumn,
+      endColumn: region.endColumn,
+      depth: region.depth + 1,
+    }, metrics, segments)
+    pushAdaptiveGroundCollisionSegments(node, mesh, {
+      startRow: middleRow,
+      endRow: region.endRow,
+      startColumn: region.startColumn,
+      endColumn: region.endColumn,
+      depth: region.depth + 1,
+    }, metrics, segments)
+    return
+  }
+
+  if (sample.columnSpan > 1) {
+    const middleColumn = region.startColumn + Math.floor(sample.columnSpan * 0.5)
+    pushAdaptiveGroundCollisionSegments(node, mesh, {
+      startRow: region.startRow,
+      endRow: region.endRow,
+      startColumn: region.startColumn,
+      endColumn: middleColumn,
+      depth: region.depth + 1,
+    }, metrics, segments)
+    pushAdaptiveGroundCollisionSegments(node, mesh, {
+      startRow: region.startRow,
+      endRow: region.endRow,
+      startColumn: middleColumn,
+      endColumn: region.endColumn,
+      depth: region.depth + 1,
+    }, metrics, segments)
+    return
+  }
+
+  segments.push(buildGroundCollisionSegment(sample, 1, metrics))
+}
+
+export function buildAdaptiveGroundCollisionData(
+  node: SceneNode,
+  mesh: GroundDynamicMesh,
+): GroundCollisionData | null {
+  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
+  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
+  const rows = Math.max(1, rawRows)
+  const columns = Math.max(1, rawColumns)
+  if (rows <= 0 || columns <= 0) {
+    return null
+  }
+
+  const metrics = resolveGroundHorizontalMetrics(node, mesh)
+  const segments: GroundCollisionSegment[] = []
+  pushAdaptiveGroundCollisionSegments(node, mesh, {
+    startRow: 0,
+    endRow: rows,
+    startColumn: 0,
+    endColumn: columns,
+    depth: 0,
+  }, metrics, segments)
+
+  if (!segments.length) {
+    return null
+  }
+
+  const signature = segments.map((segment) => segment.signature).join('||')
+  return { signature, segments }
+}
+
 function computeChunkSpec(rows: number, columns: number, chunkRow: number, chunkColumn: number, chunkCells: number): {
   startRow: number
   startColumn: number
@@ -128,6 +424,27 @@ function computeChunkSpec(rows: number, columns: number, chunkRow: number, chunk
   const chunkRows = Math.max(1, Math.min(chunkCells, rowsRemaining))
   const chunkColumns = Math.max(1, Math.min(chunkCells, columnsRemaining))
   return { startRow, startColumn, rows: chunkRows, columns: chunkColumns }
+}
+
+export function buildGroundCollisionDebugShapesFromNode(
+  node: SceneNode,
+): Array<Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>> {
+  if (!isGroundDynamicMesh(node.dynamicMesh)) {
+    return []
+  }
+  const data = buildAdaptiveGroundCollisionData(node, node.dynamicMesh)
+  if (!data) {
+    return []
+  }
+  return data.segments.map((segment) => ({
+    kind: 'heightfield',
+    matrix: segment.matrix,
+    elementSize: segment.elementSize,
+    width: segment.width,
+    depth: segment.depth,
+    offset: segment.offset,
+    applyScale: false,
+  }))
 }
 
 export function computeGroundHeightfieldChunkHash(

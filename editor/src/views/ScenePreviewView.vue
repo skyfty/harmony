@@ -69,7 +69,7 @@ import { inferMimeTypeFromAssetId } from '@schema/assetTypeConversion'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
 import {
-	buildHeightfieldShapeFromGroundNode,
+	buildGroundCollisionDebugShapesFromNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
@@ -8994,6 +8994,51 @@ function ensureRoadHeightfieldDebugHelper(
 	})
 }
 
+function ensureGroundHeightfieldDebugHelper(
+	nodeId: string,
+	shapes: Array<Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>>,
+	category: RigidbodyDebugHelperCategory,
+): void {
+	if (!shapes.length) {
+		removeRigidbodyDebugHelper(nodeId)
+		return
+	}
+	const signature = `ground-heightfield-segments:${shapes.map((shape) => computeRigidbodyShapeSignature(shape)).join('|')}`
+	const existing = rigidbodyDebugHelpers.get(nodeId)
+	if (existing?.signature === signature) {
+		return
+	}
+	removeRigidbodyDebugHelper(nodeId)
+	const container = ensureRigidbodyDebugGroup()
+	if (!container) {
+		return
+	}
+	const helperGroup = new THREE.Group()
+	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
+	helperGroup.visible = false
+	helperGroup.scale.set(1, 1, 1)
+	shapes.forEach((shape, index) => {
+		const lines = buildRigidbodyDebugLineSegments(shape)
+		if (!lines) {
+			return
+		}
+		lines.name = `GroundHeightfieldDebugLines:${nodeId}:${index}`
+		lines.renderOrder = 9999
+		const [ox = 0, oy = 0, oz = 0] = shape.offset ?? [0, 0, 0]
+		const centerX = ox + shape.width * 0.5
+		const centerZ = oy + shape.depth * 0.5
+		lines.position.set(centerX, oz, centerZ)
+		helperGroup.add(lines)
+	})
+	container.add(helperGroup)
+	rigidbodyDebugHelpers.set(nodeId, {
+		group: helperGroup,
+		signature,
+		category,
+		scale: new THREE.Vector3(1, 1, 1),
+	})
+}
+
 function refreshRigidbodyDebugHelper(nodeId: string): void {
 	if (!isRigidbodyDebugVisible.value) {
 		return
@@ -9032,10 +9077,22 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		updateRigidbodyDebugHelperTransform(nodeId)
 		return
 	}
-	let shapeDefinition = extractRigidbodyShape(component)
-	if (!shapeDefinition && isGroundNode && node) {
-		shapeDefinition = buildHeightfieldShapeFromGroundNode(node)
+	if (isGroundNode && node) {
+		const category: RigidbodyDebugHelperCategory = 'ground'
+		if (!isRigidbodyDebugCategoryVisible(category)) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
+		const shapes = buildGroundCollisionDebugShapesFromNode(node)
+		if (!shapes.length) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
+		ensureGroundHeightfieldDebugHelper(nodeId, shapes, category)
+		updateRigidbodyDebugHelperTransform(nodeId)
+		return
 	}
+	let shapeDefinition = extractRigidbodyShape(component)
 	if (!shapeDefinition) {
 		removeRigidbodyDebugHelper(nodeId)
 		return

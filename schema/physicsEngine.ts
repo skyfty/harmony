@@ -22,9 +22,9 @@ import {
 	DEFAULT_RIGIDBODY_RESTITUTION,
 } from './components'
 import {
-	buildGroundHeightfieldData,
+	buildAdaptiveGroundCollisionData,
 } from './groundHeightfield'
-import type { GroundHeightfieldData } from './groundHeightfield'
+import type { GroundCollisionData } from './groundHeightfield'
 import { isGroundDynamicMesh } from './groundHeightfield'
 
 import {
@@ -252,8 +252,10 @@ const WALL_FORBIDDEN_COLLIDER_HEIGHT = 100
 
 export type GroundHeightfieldCacheEntry = {
 	signature: string
-	shape: CANNON.Heightfield
-	offset: [number, number, number]
+	segments: Array<{
+		shape: CANNON.Heightfield
+		offset: [number, number, number]
+	}>
 }
 
 export type WallTrimeshCacheEntry = {
@@ -1143,7 +1145,7 @@ export function resolveGroundHeightfieldShape(
 	cache: Map<string, GroundHeightfieldCacheEntry>,
 ): GroundHeightfieldCacheEntry | null {
 	const nodeId = node.id
-	const data: GroundHeightfieldData | null = buildGroundHeightfieldData(node, definition)
+	const data: GroundCollisionData | null = buildAdaptiveGroundCollisionData(node, definition)
 	if (!data) {
 		cache.delete(nodeId)
 		return null
@@ -1152,11 +1154,13 @@ export function resolveGroundHeightfieldShape(
 	if (cached && cached.signature === data.signature) {
 		return cached
 	}
-	const shape = new CANNON.Heightfield(data.matrix, { elementSize: data.elementSize })
+	const segments = data.segments.map((segment) => ({
+		shape: new CANNON.Heightfield(segment.matrix, { elementSize: segment.elementSize }),
+		offset: segment.offset,
+	}))
 	const entry: GroundHeightfieldCacheEntry = {
 		signature: data.signature,
-		shape,
-		offset: data.offset,
+		segments,
 	}
 	cache.set(nodeId, entry)
 	return entry
@@ -1200,15 +1204,17 @@ export function createRigidbodyBody(
 	const shapeScale = normalizeScaleVector(physicsScaleHelper)
 	let offsetTuple: RigidbodyVector3Tuple | null = null
 	let resolvedShape: CANNON.Shape | null = null
+	let groundSegments: GroundHeightfieldCacheEntry['segments'] | null = null
 	let wallSegments: WallTrimeshCacheEntry['segments'] | null = null
 	let floorSegments: FloorShapeCacheEntry['segments'] | null = null
 	let needsHeightfieldOrientation = false
 	if (isGroundDynamicMesh(node.dynamicMesh)) {
 		const groundEntry = resolveGroundHeightfieldShape(node, node.dynamicMesh, groundHeightfieldCache)
 		if (groundEntry) {
-			resolvedShape = groundEntry.shape
-			offsetTuple = groundEntry.offset
-			needsHeightfieldOrientation = true
+			groundSegments = groundEntry.segments
+			resolvedShape = null
+			offsetTuple = null
+			needsHeightfieldOrientation = groundEntry.segments.length > 0
 		}
 	}
 	if (isWallDynamicMesh(node.dynamicMesh) && wallTrimeshCache) {
@@ -1233,7 +1239,7 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
-	if (!resolvedShape && !wallSegments && !floorSegments) {
+	if (!resolvedShape && !groundSegments && !wallSegments && !floorSegments) {
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
@@ -1260,7 +1266,20 @@ export function createRigidbodyBody(
 	}
 	const orientationAdjustment = needsHeightfieldOrientation ? groundHeightfieldOrientationAdjustment : null
 	let addedShapeCount = 0
-	if (wallSegments && wallSegments.length) {
+	if (groundSegments && groundSegments.length) {
+		for (const segment of groundSegments) {
+			const [ox, oy, oz] = segment.offset
+			body.addShape(
+				segment.shape,
+				heightfieldShapeOffsetHelper.set(
+					(ox ?? 0) * shapeScale.x,
+					(oy ?? 0) * shapeScale.y,
+					(oz ?? 0) * shapeScale.z,
+				).clone(),
+			)
+			addedShapeCount += 1
+		}
+	} else if (wallSegments && wallSegments.length) {
 		for (const segment of wallSegments) {
 			const [ox, oy, oz] = segment.offset
 			wallOffsetVec3Helper.set(ox, oy, oz)
