@@ -11,6 +11,10 @@ export type GroundOptimizedMeshData = {
   indices: number[]
   vertexCount: number
   triangleCount: number
+  sourceVertexCount: number
+  sourceTriangleCount: number
+  optimizedRowCount: number
+  optimizedColumnCount: number
 }
 
 type GroundOptimizedMeshBuildOptions = {
@@ -280,6 +284,8 @@ export function buildGroundOptimizedMeshData(
 ): GroundOptimizedMeshData {
   const rowsCount = Math.max(1, Math.trunc(definition.rows))
   const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const sourceVertexCount = (rowsCount + 1) * (columnsCount + 1)
+  const sourceTriangleCount = rowsCount * columnsCount * 2
   const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
     tolerance: clampFinite(options.tolerance, 0.02, 0.0001, 10),
     maxSamplesPerAxis: Math.trunc(clampFinite(options.maxSamplesPerAxis, 6, 2, 16)),
@@ -354,6 +360,10 @@ export function buildGroundOptimizedMeshData(
     indices,
     vertexCount,
     triangleCount: indices.length / 3,
+    sourceVertexCount,
+    sourceTriangleCount,
+    optimizedRowCount: rows.length,
+    optimizedColumnCount: columns.length,
   }
 }
 

@@ -379,6 +379,9 @@
           <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
           <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
           <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
+          <text v-if="groundChunkDebug.optimizedVertices > 0" class="viewer-debug-line">Ground mesh verts: {{ groundChunkDebug.sourceVertices }} -> {{ groundChunkDebug.optimizedVertices }}</text>
+          <text v-if="groundChunkDebug.optimizedTriangles > 0" class="viewer-debug-line">Ground mesh tris: {{ groundChunkDebug.sourceTriangles }} -> {{ groundChunkDebug.optimizedTriangles }}</text>
+          <text v-if="groundChunkDebug.optimizedRows > 0" class="viewer-debug-line">Ground optimized grid: {{ groundChunkDebug.optimizedRows }} x {{ groundChunkDebug.optimizedColumns }}</text>
 
           
         </template>
@@ -1107,7 +1110,32 @@ const groundChunkDebug = reactive({
   total: 0,
   pending: 0,
   unloaded: 0,
+  sourceVertices: 0,
+  sourceTriangles: 0,
+  optimizedVertices: 0,
+  optimizedTriangles: 0,
+  optimizedRows: 0,
+  optimizedColumns: 0,
 });
+
+function syncGroundOptimizationDebug(definition: GroundDynamicMesh | null | undefined): void {
+  const optimizedMesh = definition?.optimizedMesh ?? null;
+  if (!optimizedMesh || !hasGroundOptimizedMeshData(definition)) {
+    groundChunkDebug.sourceVertices = 0;
+    groundChunkDebug.sourceTriangles = 0;
+    groundChunkDebug.optimizedVertices = 0;
+    groundChunkDebug.optimizedTriangles = 0;
+    groundChunkDebug.optimizedRows = 0;
+    groundChunkDebug.optimizedColumns = 0;
+    return;
+  }
+  groundChunkDebug.sourceVertices = optimizedMesh.sourceVertexCount;
+  groundChunkDebug.sourceTriangles = optimizedMesh.sourceTriangleCount;
+  groundChunkDebug.optimizedVertices = optimizedMesh.vertexCount;
+  groundChunkDebug.optimizedTriangles = optimizedMesh.triangleCount;
+  groundChunkDebug.optimizedRows = optimizedMesh.optimizedRowCount;
+  groundChunkDebug.optimizedColumns = optimizedMesh.optimizedColumnCount;
+}
 
 let debugFpsFrames = 0;
 let debugFpsAccumSeconds = 0;
@@ -10391,6 +10419,7 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
+            syncGroundOptimizationDebug(cachedGround.dynamicMesh);
             if (hasGroundOptimizedMeshData(cachedGround.dynamicMesh)) {
               groundChunkDebug.loaded = 1;
               groundChunkDebug.target = 1;
@@ -10406,6 +10435,8 @@ function startRenderLoop(
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }
           }
+        } else {
+          syncGroundOptimizationDebug(null);
         }
 
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'

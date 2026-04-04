@@ -1350,6 +1350,10 @@ export type GroundOptimizedMeshData = {
   indices: number[]
   vertexCount: number
   triangleCount: number
+  sourceVertexCount: number
+  sourceTriangleCount: number
+  optimizedRowCount: number
+  optimizedColumnCount: number
 }
 
 /**

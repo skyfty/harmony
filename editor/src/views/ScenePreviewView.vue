@@ -411,6 +411,12 @@ const groundChunkDebug = reactive({
 	total: 0,
 	pending: 0,
 	unloaded: 0,
+	sourceVertices: 0,
+	sourceTriangles: 0,
+	optimizedVertices: 0,
+	optimizedTriangles: 0,
+	optimizedRows: 0,
+	optimizedColumns: 0,
 })
 
 const rendererSizeHelper = new THREE.Vector2()
@@ -1625,6 +1631,12 @@ function disposeGroundChunkDebugHelpers(): void {
 	groundChunkDebug.total = 0
 	groundChunkDebug.pending = 0
 	groundChunkDebug.unloaded = 0
+	groundChunkDebug.sourceVertices = 0
+	groundChunkDebug.sourceTriangles = 0
+	groundChunkDebug.optimizedVertices = 0
+	groundChunkDebug.optimizedTriangles = 0
+	groundChunkDebug.optimizedRows = 0
+	groundChunkDebug.optimizedColumns = 0
 	if (groundChunkDebugEdgesGeometry) {
 		groundChunkDebugEdgesGeometry.dispose()
 		groundChunkDebugEdgesGeometry = null
@@ -1633,6 +1645,25 @@ function disposeGroundChunkDebugHelpers(): void {
 		groundChunkDebugBoxGeometry.dispose()
 		groundChunkDebugBoxGeometry = null
 	}
+}
+
+function syncGroundOptimizationDebug(definition: GroundDynamicMesh | null | undefined): void {
+	const optimizedMesh = definition?.optimizedMesh ?? null
+	if (!optimizedMesh || !hasGroundOptimizedMeshData(definition)) {
+		groundChunkDebug.sourceVertices = 0
+		groundChunkDebug.sourceTriangles = 0
+		groundChunkDebug.optimizedVertices = 0
+		groundChunkDebug.optimizedTriangles = 0
+		groundChunkDebug.optimizedRows = 0
+		groundChunkDebug.optimizedColumns = 0
+		return
+	}
+	groundChunkDebug.sourceVertices = optimizedMesh.sourceVertexCount
+	groundChunkDebug.sourceTriangles = optimizedMesh.sourceTriangleCount
+	groundChunkDebug.optimizedVertices = optimizedMesh.vertexCount
+	groundChunkDebug.optimizedTriangles = optimizedMesh.triangleCount
+	groundChunkDebug.optimizedRows = optimizedMesh.optimizedRowCount
+	groundChunkDebug.optimizedColumns = optimizedMesh.optimizedColumnCount
 }
 
 function ensureGroundChunkDebugGroup(groundObject: THREE.Object3D): THREE.Group {
@@ -6993,6 +7024,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
+			syncGroundOptimizationDebug(cachedGroundDynamicMesh)
 			if (hasGroundOptimizedMeshData(cachedGroundDynamicMesh)) {
 				groundChunkDebug.loaded = 1
 				groundChunkDebug.target = 1
@@ -7011,6 +7043,8 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				})
 			}
 		}
+	} else {
+		syncGroundOptimizationDebug(null)
 	}
 }
 
@@ -10635,6 +10669,15 @@ onBeforeUnmount(() => {
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}
+					</div>
+					<div v-if="groundChunkDebug.optimizedVertices > 0" class="scene-preview__stats-fallback">
+						Ground mesh verts: {{ groundChunkDebug.sourceVertices }} -> {{ groundChunkDebug.optimizedVertices }}
+					</div>
+					<div v-if="groundChunkDebug.optimizedTriangles > 0" class="scene-preview__stats-fallback">
+						Ground mesh tris: {{ groundChunkDebug.sourceTriangles }} -> {{ groundChunkDebug.optimizedTriangles }}
+					</div>
+					<div v-if="groundChunkDebug.optimizedRows > 0" class="scene-preview__stats-fallback">
+						Ground optimized grid: {{ groundChunkDebug.optimizedRows }} x {{ groundChunkDebug.optimizedColumns }}
 					</div>
 				</template>
 			</div>
