@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh } from './index'
-import { resolveGroundEffectiveHeightAtVertex } from './groundMesh'
+import { sampleGroundEffectiveHeightRegion } from './groundMesh'
 
 export const GROUND_OPTIMIZED_MESH_VERSION = 1 as const
 
@@ -23,6 +23,12 @@ type GroundOptimizedMeshBuildOptions = {
   maxSubdivisionDepth?: number
 }
 
+type GroundOptimizedHeightGrid = {
+  rows: number
+  columns: number
+  values: Float32Array
+}
+
 function clampFinite(value: number | undefined, fallback: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
     return fallback
@@ -38,8 +44,30 @@ function computeVertexZ(definition: GroundDynamicMesh, row: number): number {
   return -definition.depth * 0.5 + row * definition.cellSize
 }
 
+function buildHeightGrid(definition: GroundDynamicMesh): GroundOptimizedHeightGrid {
+  const rows = Math.max(1, Math.trunc(definition.rows))
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const region = sampleGroundEffectiveHeightRegion(
+    definition as GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array },
+    0,
+    rows,
+    0,
+    columns,
+  )
+  return {
+    rows,
+    columns,
+    values: region.values,
+  }
+}
+
+function getGridHeight(grid: GroundOptimizedHeightGrid, row: number, column: number): number {
+  return grid.values[row * (grid.columns + 1) + column] ?? 0
+}
+
 function samplePlaneHeight(
   definition: GroundDynamicMesh,
+  grid: GroundOptimizedHeightGrid,
   rowStart: number,
   rowEnd: number,
   columnStart: number,
@@ -54,9 +82,9 @@ function samplePlaneHeight(
   const width = Math.max(1e-6, x1 - x0)
   const depth = Math.max(1e-6, z1 - z0)
 
-  const h00 = resolveGroundEffectiveHeightAtVertex(definition, rowStart, columnStart)
-  const h10 = resolveGroundEffectiveHeightAtVertex(definition, rowStart, columnEnd)
-  const h01 = resolveGroundEffectiveHeightAtVertex(definition, rowEnd, columnStart)
+  const h00 = getGridHeight(grid, rowStart, columnStart)
+  const h10 = getGridHeight(grid, rowStart, columnEnd)
+  const h01 = getGridHeight(grid, rowEnd, columnStart)
   const slopeX = (h10 - h00) / width
   const slopeZ = (h01 - h00) / depth
 
@@ -65,48 +93,23 @@ function samplePlaneHeight(
 
 function patchMatchesPlane(
   definition: GroundDynamicMesh,
+  grid: GroundOptimizedHeightGrid,
   rowStart: number,
   rowEnd: number,
   columnStart: number,
   columnEnd: number,
   tolerance: number,
-  maxSamplesPerAxis: number,
 ): boolean {
-  const cornerPlane = samplePlaneHeight(definition, rowStart, rowEnd, columnStart, columnEnd, rowEnd, columnEnd)
-  const cornerHeight = resolveGroundEffectiveHeightAtVertex(definition, rowEnd, columnEnd)
+  const cornerPlane = samplePlaneHeight(definition, grid, rowStart, rowEnd, columnStart, columnEnd, rowEnd, columnEnd)
+  const cornerHeight = getGridHeight(grid, rowEnd, columnEnd)
   if (Math.abs(cornerHeight - cornerPlane) > tolerance) {
     return false
   }
 
-  const rowSpan = rowEnd - rowStart
-  const columnSpan = columnEnd - columnStart
-  const rowStep = Math.max(1, Math.ceil(rowSpan / Math.max(1, maxSamplesPerAxis - 1)))
-  const columnStep = Math.max(1, Math.ceil(columnSpan / Math.max(1, maxSamplesPerAxis - 1)))
-
-  for (let row = rowStart; row <= rowEnd; row += rowStep) {
-    for (let column = columnStart; column <= columnEnd; column += columnStep) {
-      const actual = resolveGroundEffectiveHeightAtVertex(definition, row, column)
-      const expected = samplePlaneHeight(definition, rowStart, rowEnd, columnStart, columnEnd, row, column)
-      if (Math.abs(actual - expected) > tolerance) {
-        return false
-      }
-    }
-  }
-
-  if ((rowEnd - rowStart) % rowStep !== 0) {
-    for (let column = columnStart; column <= columnEnd; column += columnStep) {
-      const actual = resolveGroundEffectiveHeightAtVertex(definition, rowEnd, column)
-      const expected = samplePlaneHeight(definition, rowStart, rowEnd, columnStart, columnEnd, rowEnd, column)
-      if (Math.abs(actual - expected) > tolerance) {
-        return false
-      }
-    }
-  }
-
-  if ((columnEnd - columnStart) % columnStep !== 0) {
-    for (let row = rowStart; row <= rowEnd; row += rowStep) {
-      const actual = resolveGroundEffectiveHeightAtVertex(definition, row, columnEnd)
-      const expected = samplePlaneHeight(definition, rowStart, rowEnd, columnStart, columnEnd, row, columnEnd)
+  for (let row = rowStart; row <= rowEnd; row += 1) {
+    for (let column = columnStart; column <= columnEnd; column += 1) {
+      const actual = getGridHeight(grid, row, column)
+      const expected = samplePlaneHeight(definition, grid, rowStart, rowEnd, columnStart, columnEnd, row, column)
       if (Math.abs(actual - expected) > tolerance) {
         return false
       }
@@ -118,6 +121,7 @@ function patchMatchesPlane(
 
 function collectAdaptiveGridLines(
   definition: GroundDynamicMesh,
+  grid: GroundOptimizedHeightGrid,
   rowStart: number,
   rowEnd: number,
   columnStart: number,
@@ -133,7 +137,7 @@ function collectAdaptiveGridLines(
     return
   }
 
-  if (patchMatchesPlane(definition, rowStart, rowEnd, columnStart, columnEnd, options.tolerance, options.maxSamplesPerAxis)) {
+  if (patchMatchesPlane(definition, grid, rowStart, rowEnd, columnStart, columnEnd, options.tolerance)) {
     return
   }
 
@@ -150,16 +154,16 @@ function collectAdaptiveGridLines(
   if (rowSpan >= columnSpan && rowSpan > 1) {
     const middleRow = rowStart + Math.floor(rowSpan * 0.5)
     rows.add(middleRow)
-    collectAdaptiveGridLines(definition, rowStart, middleRow, columnStart, columnEnd, depth + 1, options, rows, columns)
-    collectAdaptiveGridLines(definition, middleRow, rowEnd, columnStart, columnEnd, depth + 1, options, rows, columns)
+    collectAdaptiveGridLines(definition, grid, rowStart, middleRow, columnStart, columnEnd, depth + 1, options, rows, columns)
+    collectAdaptiveGridLines(definition, grid, middleRow, rowEnd, columnStart, columnEnd, depth + 1, options, rows, columns)
     return
   }
 
   if (columnSpan > 1) {
     const middleColumn = columnStart + Math.floor(columnSpan * 0.5)
     columns.add(middleColumn)
-    collectAdaptiveGridLines(definition, rowStart, rowEnd, columnStart, middleColumn, depth + 1, options, rows, columns)
-    collectAdaptiveGridLines(definition, rowStart, rowEnd, middleColumn, columnEnd, depth + 1, options, rows, columns)
+    collectAdaptiveGridLines(definition, grid, rowStart, rowEnd, columnStart, middleColumn, depth + 1, options, rows, columns)
+    collectAdaptiveGridLines(definition, grid, rowStart, rowEnd, middleColumn, columnEnd, depth + 1, options, rows, columns)
     return
   }
 
@@ -170,7 +174,7 @@ function collectAdaptiveGridLines(
 }
 
 function isRedundantRow(
-  definition: GroundDynamicMesh,
+  grid: GroundOptimizedHeightGrid,
   rows: number[],
   columns: number[],
   rowIndex: number,
@@ -189,9 +193,9 @@ function isRedundantRow(
   const factor = (currentRow - previousRow) / span
   for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
     const column = columns[columnIndex]!
-    const start = resolveGroundEffectiveHeightAtVertex(definition, previousRow, column)
-    const end = resolveGroundEffectiveHeightAtVertex(definition, nextRow, column)
-    const actual = resolveGroundEffectiveHeightAtVertex(definition, currentRow, column)
+    const start = getGridHeight(grid, previousRow, column)
+    const end = getGridHeight(grid, nextRow, column)
+    const actual = getGridHeight(grid, currentRow, column)
     const expected = start + (end - start) * factor
     if (Math.abs(actual - expected) > tolerance) {
       return false
@@ -201,7 +205,7 @@ function isRedundantRow(
 }
 
 function isRedundantColumn(
-  definition: GroundDynamicMesh,
+  grid: GroundOptimizedHeightGrid,
   rows: number[],
   columns: number[],
   columnIndex: number,
@@ -220,9 +224,9 @@ function isRedundantColumn(
   const factor = (currentColumn - previousColumn) / span
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex]!
-    const start = resolveGroundEffectiveHeightAtVertex(definition, row, previousColumn)
-    const end = resolveGroundEffectiveHeightAtVertex(definition, row, nextColumn)
-    const actual = resolveGroundEffectiveHeightAtVertex(definition, row, currentColumn)
+    const start = getGridHeight(grid, row, previousColumn)
+    const end = getGridHeight(grid, row, nextColumn)
+    const actual = getGridHeight(grid, row, currentColumn)
     const expected = start + (end - start) * factor
     if (Math.abs(actual - expected) > tolerance) {
       return false
@@ -232,7 +236,7 @@ function isRedundantColumn(
 }
 
 function pruneAdaptiveGridLines(
-  definition: GroundDynamicMesh,
+  grid: GroundOptimizedHeightGrid,
   rows: number[],
   columns: number[],
   tolerance: number,
@@ -245,7 +249,7 @@ function pruneAdaptiveGridLines(
     changed = false
 
     for (let rowIndex = prunedRows.length - 2; rowIndex >= 1; rowIndex -= 1) {
-      if (!isRedundantRow(definition, prunedRows, prunedColumns, rowIndex, tolerance)) {
+      if (!isRedundantRow(grid, prunedRows, prunedColumns, rowIndex, tolerance)) {
         continue
       }
       prunedRows.splice(rowIndex, 1)
@@ -253,7 +257,7 @@ function pruneAdaptiveGridLines(
     }
 
     for (let columnIndex = prunedColumns.length - 2; columnIndex >= 1; columnIndex -= 1) {
-      if (!isRedundantColumn(definition, prunedRows, prunedColumns, columnIndex, tolerance)) {
+      if (!isRedundantColumn(grid, prunedRows, prunedColumns, columnIndex, tolerance)) {
         continue
       }
       prunedColumns.splice(columnIndex, 1)
@@ -282,6 +286,7 @@ export function buildGroundOptimizedMeshData(
   definition: GroundDynamicMesh,
   options: GroundOptimizedMeshBuildOptions = {},
 ): GroundOptimizedMeshData {
+  const grid = buildHeightGrid(definition)
   const rowsCount = Math.max(1, Math.trunc(definition.rows))
   const columnsCount = Math.max(1, Math.trunc(definition.columns))
   const sourceVertexCount = (rowsCount + 1) * (columnsCount + 1)
@@ -296,6 +301,7 @@ export function buildGroundOptimizedMeshData(
   const selectedColumns = new Set<number>([0, columnsCount])
   collectAdaptiveGridLines(
     definition,
+    grid,
     0,
     rowsCount,
     0,
@@ -309,7 +315,7 @@ export function buildGroundOptimizedMeshData(
   const initialRows = Array.from(selectedRows.values()).sort((left, right) => left - right)
   const initialColumns = Array.from(selectedColumns.values()).sort((left, right) => left - right)
   const { rows, columns } = pruneAdaptiveGridLines(
-    definition,
+    grid,
     initialRows,
     initialColumns,
     normalizedOptions.tolerance,
@@ -327,7 +333,7 @@ export function buildGroundOptimizedMeshData(
     for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
       const column = columns[columnIndex]!
       positions[vertexOffset + 0] = computeVertexX(definition, column)
-      positions[vertexOffset + 1] = resolveGroundEffectiveHeightAtVertex(definition, row, column)
+      positions[vertexOffset + 1] = getGridHeight(grid, row, column)
       positions[vertexOffset + 2] = z
       uvs[uvOffset + 0] = columnsCount === 0 ? 0 : column / columnsCount
       uvs[uvOffset + 1] = rowsCount === 0 ? 0 : 1 - row / rowsCount
