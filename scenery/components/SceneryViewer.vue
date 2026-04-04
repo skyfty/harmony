@@ -369,16 +369,22 @@
       <view v-if="debugOverlayVisible && debugMode !== 'off'" class="viewer-debug-overlay">
         <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
         <template v-if="debugMode === 'full'">
+          <text class="viewer-debug-line">[Renderer]</text>
           <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
           <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
+          <text class="viewer-debug-line">GPU render tris(raw): {{ rendererDebug.renderTriangles }}</text>
           <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
+          <text class="viewer-debug-line">[Instancing]</text>
           <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
           <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
           <text class="viewer-debug-line">Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}</text>
           <text class="viewer-debug-line">Instanced matrix upload est: {{ instancingDebug.instanceMatrixUploadKb }} KB/frame</text>
           <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
           <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
+          <text class="viewer-debug-line">[Ground]</text>
           <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
+          <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
+          <text v-if="rendererDebug.groundTriangles > 0" class="viewer-debug-line">Ground tris in summary: {{ rendererDebug.groundTriangles }}</text>
           <text v-if="groundChunkDebug.optimizedVertices > 0" class="viewer-debug-line">Ground mesh verts: {{ groundChunkDebug.sourceVertices }} -> {{ groundChunkDebug.optimizedVertices }}</text>
           <text v-if="groundChunkDebug.optimizedTriangles > 0" class="viewer-debug-line">Ground mesh tris: {{ groundChunkDebug.sourceTriangles }} -> {{ groundChunkDebug.optimizedTriangles }}</text>
           <text v-if="groundChunkDebug.optimizedRows > 0" class="viewer-debug-line">Ground optimized grid: {{ groundChunkDebug.optimizedRows }} x {{ groundChunkDebug.optimizedColumns }}</text>
@@ -1068,12 +1074,70 @@ const instancingDebug = reactive({
 const rendererDebug = reactive({
   calls: 0,
   triangles: 0,
+  renderTriangles: 0,
+  groundTriangles: 0,
   geometries: 0,
   textures: 0,
   width: 0,
   height: 0,
   pixelRatio: 1,
 });
+
+function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    const currentName = typeof current.name === 'string' ? current.name : '';
+    if (
+      currentName === 'GroundChunkDebugHelpers'
+      || currentName === 'RigidbodyDebugHelpers'
+      || currentName === 'AirWallDebug'
+      || currentName.startsWith('GroundChunkDebug')
+      || currentName.startsWith('AirWallDebug')
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry): number {
+  const positionAttribute = geometry.getAttribute('position');
+  const positionCount = positionAttribute?.count ?? 0;
+  if (positionCount <= 0) {
+    return 0;
+  }
+
+  const availableElementCount = geometry.index?.count ?? positionCount;
+  const drawRangeStart = Number.isFinite(geometry.drawRange.start)
+    ? Math.max(0, Math.trunc(geometry.drawRange.start))
+    : 0;
+  const remainingElementCount = Math.max(0, availableElementCount - drawRangeStart);
+  const drawRangeCount = Number.isFinite(geometry.drawRange.count)
+    ? Math.max(0, Math.trunc(geometry.drawRange.count))
+    : remainingElementCount;
+
+  return Math.floor(Math.min(remainingElementCount, drawRangeCount) / 3);
+}
+
+function estimateSceneTriangleCount(root: THREE.Object3D): number {
+  let total = 0;
+  root.traverseVisible((object: THREE.Object3D) => {
+    if (!(object instanceof THREE.Mesh) || shouldIgnoreDebugTriangleObject(object)) {
+      return;
+    }
+    const triangleCount = resolveGeometryTriangleCount(object.geometry);
+    if (triangleCount <= 0) {
+      return;
+    }
+    if (object instanceof THREE.InstancedMesh) {
+      total += triangleCount * Math.max(0, Math.trunc(object.count));
+      return;
+    }
+    total += triangleCount;
+  });
+  return total;
+}
 
 type InstancedTransformCacheEntry = {
   assetId: string | null;
@@ -1273,13 +1337,18 @@ function syncInstancingDebugCounters(lodTotal: number, lodVisible: number): void
   instancingDebug.scatterVisible = scatterStats.visible;
 }
 
-function syncRendererDebug(renderer: THREE.WebGLRenderer): void {
+function syncRendererDebug(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
   if (!debugEnabled.value) {
     return;
   }
   const info = renderer.info;
   rendererDebug.calls = info?.render?.calls ?? 0;
-  rendererDebug.triangles = info?.render?.triangles ?? 0;
+  rendererDebug.renderTriangles = info?.render?.triangles ?? 0;
+  rendererDebug.groundTriangles = groundChunkDebug.optimizedTriangles > 0
+    ? groundChunkDebug.optimizedTriangles
+    : groundChunkDebug.sourceTriangles;
+  const sceneTriangles = estimateSceneTriangleCount(scene);
+  rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.groundTriangles;
   rendererDebug.geometries = info?.memory?.geometries ?? 0;
   rendererDebug.textures = info?.memory?.textures ?? 0;
   rendererDebug.pixelRatio = typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : 1;
@@ -10303,7 +10372,7 @@ function renderSingleSceneFrame(
   renderer.render(scene, camera);
   notifyRenderedFrame(token);
   if (debugEnabled.value) {
-    syncRendererDebug(renderer);
+    syncRendererDebug(renderer, scene);
   }
 }
 
@@ -10450,7 +10519,7 @@ function startRenderLoop(
         notifyRenderedFrame(token);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {
-          syncRendererDebug(renderer);
+          syncRendererDebug(renderer, scene);
         }
       });
       onCleanup(() => {

@@ -390,9 +390,67 @@ const rendererDebug = reactive({
 	pixelRatio: 1,
 	calls: 0,
 	triangles: 0,
+	renderTriangles: 0,
+	groundTriangles: 0,
 	geometries: 0,
 	textures: 0,
 	})
+
+function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
+	let current: THREE.Object3D | null = object
+	while (current) {
+		const currentName = typeof current.name === 'string' ? current.name : ''
+		if (
+			currentName === 'GroundChunkDebugHelpers'
+			|| currentName === 'RigidbodyDebugHelpers'
+			|| currentName === 'AirWallDebug'
+			|| currentName.startsWith('GroundChunkDebug')
+			|| currentName.startsWith('AirWallDebug')
+		) {
+			return true
+		}
+		current = current.parent
+	}
+	return false
+}
+
+function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry): number {
+	const positionAttribute = geometry.getAttribute('position')
+	const positionCount = positionAttribute?.count ?? 0
+	if (positionCount <= 0) {
+		return 0
+	}
+
+	const availableElementCount = geometry.index?.count ?? positionCount
+	const drawRangeStart = Number.isFinite(geometry.drawRange.start)
+		? Math.max(0, Math.trunc(geometry.drawRange.start))
+		: 0
+	const remainingElementCount = Math.max(0, availableElementCount - drawRangeStart)
+	const drawRangeCount = Number.isFinite(geometry.drawRange.count)
+		? Math.max(0, Math.trunc(geometry.drawRange.count))
+		: remainingElementCount
+
+	return Math.floor(Math.min(remainingElementCount, drawRangeCount) / 3)
+}
+
+function estimateSceneTriangleCount(root: THREE.Object3D): number {
+	let total = 0
+	root.traverseVisible((object) => {
+		if (!(object instanceof THREE.Mesh) || shouldIgnoreDebugTriangleObject(object)) {
+			return
+		}
+		const triangleCount = resolveGeometryTriangleCount(object.geometry)
+		if (triangleCount <= 0) {
+			return
+		}
+		if (object instanceof THREE.InstancedMesh) {
+			total += triangleCount * Math.max(0, Math.trunc(object.count))
+			return
+		}
+		total += triangleCount
+	})
+	return total
+}
 
 	const instancingDebug = reactive({
 		instancedMesh: 0,
@@ -3764,6 +3822,8 @@ watch(isRendererDebugVisible, (visible) => {
 	rendererDebug.pixelRatio = 1
 	rendererDebug.calls = 0
 	rendererDebug.triangles = 0
+	rendererDebug.renderTriangles = 0
+	rendererDebug.groundTriangles = 0
 	rendererDebug.geometries = 0
 	rendererDebug.textures = 0
 })
@@ -7052,7 +7112,7 @@ function updatePerFrameDiagnostics(delta: number): void {
 	}
 }
 
-function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer): void {
+function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, currentScene: THREE.Scene): void {
 	if (!isRendererDebugVisible.value) {
 		return
 	}
@@ -7062,7 +7122,12 @@ function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer): void {
 	rendererDebug.width = Math.max(0, Math.round(rendererSizeHelper.x * rendererDebug.pixelRatio))
 	rendererDebug.height = Math.max(0, Math.round(rendererSizeHelper.y * rendererDebug.pixelRatio))
 	rendererDebug.calls = currentRenderer.info?.render?.calls ?? 0
-	rendererDebug.triangles = currentRenderer.info?.render?.triangles ?? 0
+	rendererDebug.renderTriangles = currentRenderer.info?.render?.triangles ?? 0
+	rendererDebug.groundTriangles = groundChunkDebug.optimizedTriangles > 0
+		? groundChunkDebug.optimizedTriangles
+		: groundChunkDebug.sourceTriangles
+	const sceneTriangles = estimateSceneTriangleCount(currentScene)
+	rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.groundTriangles
 	rendererDebug.geometries = currentRenderer.info?.memory?.geometries ?? 0
 	rendererDebug.textures = currentRenderer.info?.memory?.textures ?? 0
 }
@@ -7134,7 +7199,7 @@ function startAnimationLoop() {
 		// 4) Render + stats
 		sceneCsmShadowRuntime?.update()
 		currentRenderer.render(currentScene, activeCamera)
-		syncRendererDebugForFrame(currentRenderer)
+		syncRendererDebugForFrame(currentRenderer, currentScene)
 		syncInstancedMatrixUploadEstimateForFrame()
 		fpsStats?.end()
 		updateMemoryStats()
@@ -10632,6 +10697,9 @@ onBeforeUnmount(() => {
 						Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}
 					</div>
 					<div class="scene-preview__stats-fallback">
+						GPU render tris(raw): {{ rendererDebug.renderTriangles }}
+					</div>
+					<div class="scene-preview__stats-fallback">
 						GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}
 					</div>
 				</template>
@@ -10663,6 +10731,9 @@ onBeforeUnmount(() => {
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}
+					</div>
+					<div v-if="rendererDebug.groundTriangles > 0" class="scene-preview__stats-fallback">
+						Ground tris in summary: {{ rendererDebug.groundTriangles }}
 					</div>
 					<div v-if="groundChunkDebug.optimizedVertices > 0" class="scene-preview__stats-fallback">
 						Ground mesh verts: {{ groundChunkDebug.sourceVertices }} -> {{ groundChunkDebug.optimizedVertices }}
