@@ -384,12 +384,7 @@
           <text class="viewer-debug-line">[Ground]</text>
           <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
           <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
-          <text v-if="rendererDebug.groundTriangles > 0" class="viewer-debug-line">Ground tris in summary: {{ rendererDebug.groundTriangles }}</text>
-          <text v-if="groundChunkDebug.optimizedVertices > 0" class="viewer-debug-line">Ground mesh verts: {{ groundChunkDebug.sourceVertices }} -> {{ groundChunkDebug.optimizedVertices }}</text>
-          <text v-if="groundChunkDebug.optimizedTriangles > 0" class="viewer-debug-line">Ground mesh tris: {{ groundChunkDebug.sourceTriangles }} -> {{ groundChunkDebug.optimizedTriangles }}</text>
-          <text v-if="groundChunkDebug.optimizedRows > 0" class="viewer-debug-line">Ground optimized grid: {{ groundChunkDebug.optimizedRows }} x {{ groundChunkDebug.optimizedColumns }}</text>
 
-          
         </template>
       </view>
       <view v-if="debugConsoleEnabled" class="viewer-log-floating">
@@ -503,7 +498,6 @@ import {
   isGroundChunkStreamingEnabled,
   updateGroundChunks,
 } from '@harmony/schema/groundMesh';
-import { hasGroundOptimizedMeshData } from '@harmony/schema/groundOptimizedMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -1075,7 +1069,6 @@ const rendererDebug = reactive({
   calls: 0,
   triangles: 0,
   renderTriangles: 0,
-  groundTriangles: 0,
   geometries: 0,
   textures: 0,
   width: 0,
@@ -1174,32 +1167,7 @@ const groundChunkDebug = reactive({
   total: 0,
   pending: 0,
   unloaded: 0,
-  sourceVertices: 0,
-  sourceTriangles: 0,
-  optimizedVertices: 0,
-  optimizedTriangles: 0,
-  optimizedRows: 0,
-  optimizedColumns: 0,
 });
-
-function syncGroundOptimizationDebug(definition: GroundDynamicMesh | null | undefined): void {
-  const optimizedMesh = definition?.optimizedMesh ?? null;
-  if (!optimizedMesh || !hasGroundOptimizedMeshData(definition)) {
-    groundChunkDebug.sourceVertices = 0;
-    groundChunkDebug.sourceTriangles = 0;
-    groundChunkDebug.optimizedVertices = 0;
-    groundChunkDebug.optimizedTriangles = 0;
-    groundChunkDebug.optimizedRows = 0;
-    groundChunkDebug.optimizedColumns = 0;
-    return;
-  }
-  groundChunkDebug.sourceVertices = optimizedMesh.sourceVertexCount;
-  groundChunkDebug.sourceTriangles = optimizedMesh.sourceTriangleCount;
-  groundChunkDebug.optimizedVertices = optimizedMesh.optimizedVertexCount;
-  groundChunkDebug.optimizedTriangles = optimizedMesh.optimizedTriangleCount;
-  groundChunkDebug.optimizedRows = optimizedMesh.optimizedRowCount;
-  groundChunkDebug.optimizedColumns = optimizedMesh.optimizedColumnCount;
-}
 
 let debugFpsFrames = 0;
 let debugFpsAccumSeconds = 0;
@@ -1344,11 +1312,8 @@ function syncRendererDebug(renderer: THREE.WebGLRenderer, scene: THREE.Scene): v
   const info = renderer.info;
   rendererDebug.calls = info?.render?.calls ?? 0;
   rendererDebug.renderTriangles = info?.render?.triangles ?? 0;
-  rendererDebug.groundTriangles = groundChunkDebug.optimizedTriangles > 0
-    ? groundChunkDebug.optimizedTriangles
-    : groundChunkDebug.sourceTriangles;
   const sceneTriangles = estimateSceneTriangleCount(scene);
-  rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.groundTriangles;
+  rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.renderTriangles;
   rendererDebug.geometries = info?.memory?.geometries ?? 0;
   rendererDebug.textures = info?.memory?.textures ?? 0;
   rendererDebug.pixelRatio = typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : 1;
@@ -10389,9 +10354,9 @@ function startRenderLoop(
         const now = typeof rawTimestamp === 'number' ? rawTimestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
         const deltaSecondsRaw = normalizeFrameDelta(delta);
         accumulatedDelta += deltaSecondsRaw;
-        if (now - lastFrameTime < minFrameInterval) {
-          return; // 跳过本帧，限制最大FPS
-        }
+        // if (now - lastFrameTime < minFrameInterval) {
+        //   return; // 跳过本帧，限制最大FPS
+        // }
         lastFrameTime = now;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
@@ -10473,7 +10438,6 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            syncGroundOptimizationDebug(cachedGround.dynamicMesh);
             if (isGroundChunkStreamingEnabled(cachedGround.dynamicMesh)) {
               updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
             } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
@@ -10483,8 +10447,6 @@ function startRenderLoop(
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }
           }
-        } else {
-          syncGroundOptimizationDebug(null);
         }
 
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'

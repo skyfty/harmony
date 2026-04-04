@@ -78,7 +78,6 @@ import {
 	isGroundChunkStreamingEnabled,
 	updateGroundChunks,
 } from '@schema/groundMesh'
-import { hasGroundOptimizedMeshData } from '@schema/groundOptimizedMesh'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -391,7 +390,6 @@ const rendererDebug = reactive({
 	calls: 0,
 	triangles: 0,
 	renderTriangles: 0,
-	groundTriangles: 0,
 	geometries: 0,
 	textures: 0,
 	})
@@ -469,12 +467,6 @@ const groundChunkDebug = reactive({
 	total: 0,
 	pending: 0,
 	unloaded: 0,
-	sourceVertices: 0,
-	sourceTriangles: 0,
-	optimizedVertices: 0,
-	optimizedTriangles: 0,
-	optimizedRows: 0,
-	optimizedColumns: 0,
 })
 
 const rendererSizeHelper = new THREE.Vector2()
@@ -1689,12 +1681,6 @@ function disposeGroundChunkDebugHelpers(): void {
 	groundChunkDebug.total = 0
 	groundChunkDebug.pending = 0
 	groundChunkDebug.unloaded = 0
-	groundChunkDebug.sourceVertices = 0
-	groundChunkDebug.sourceTriangles = 0
-	groundChunkDebug.optimizedVertices = 0
-	groundChunkDebug.optimizedTriangles = 0
-	groundChunkDebug.optimizedRows = 0
-	groundChunkDebug.optimizedColumns = 0
 	if (groundChunkDebugEdgesGeometry) {
 		groundChunkDebugEdgesGeometry.dispose()
 		groundChunkDebugEdgesGeometry = null
@@ -1703,25 +1689,6 @@ function disposeGroundChunkDebugHelpers(): void {
 		groundChunkDebugBoxGeometry.dispose()
 		groundChunkDebugBoxGeometry = null
 	}
-}
-
-function syncGroundOptimizationDebug(definition: GroundDynamicMesh | null | undefined): void {
-	const optimizedMesh = definition?.optimizedMesh ?? null
-	if (!optimizedMesh || !hasGroundOptimizedMeshData(definition)) {
-		groundChunkDebug.sourceVertices = 0
-		groundChunkDebug.sourceTriangles = 0
-		groundChunkDebug.optimizedVertices = 0
-		groundChunkDebug.optimizedTriangles = 0
-		groundChunkDebug.optimizedRows = 0
-		groundChunkDebug.optimizedColumns = 0
-		return
-	}
-	groundChunkDebug.sourceVertices = optimizedMesh.sourceVertexCount
-	groundChunkDebug.sourceTriangles = optimizedMesh.sourceTriangleCount
-	groundChunkDebug.optimizedVertices = optimizedMesh.optimizedVertexCount
-	groundChunkDebug.optimizedTriangles = optimizedMesh.optimizedTriangleCount
-	groundChunkDebug.optimizedRows = optimizedMesh.optimizedRowCount
-	groundChunkDebug.optimizedColumns = optimizedMesh.optimizedColumnCount
 }
 
 function ensureGroundChunkDebugGroup(groundObject: THREE.Object3D): THREE.Group {
@@ -3823,7 +3790,6 @@ watch(isRendererDebugVisible, (visible) => {
 	rendererDebug.calls = 0
 	rendererDebug.triangles = 0
 	rendererDebug.renderTriangles = 0
-	rendererDebug.groundTriangles = 0
 	rendererDebug.geometries = 0
 	rendererDebug.textures = 0
 })
@@ -7084,7 +7050,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			syncGroundOptimizationDebug(cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
 				updateGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
@@ -7097,8 +7062,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				})
 			}
 		}
-	} else {
-		syncGroundOptimizationDebug(null)
 	}
 }
 
@@ -7123,11 +7086,8 @@ function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, current
 	rendererDebug.height = Math.max(0, Math.round(rendererSizeHelper.y * rendererDebug.pixelRatio))
 	rendererDebug.calls = currentRenderer.info?.render?.calls ?? 0
 	rendererDebug.renderTriangles = currentRenderer.info?.render?.triangles ?? 0
-	rendererDebug.groundTriangles = groundChunkDebug.optimizedTriangles > 0
-		? groundChunkDebug.optimizedTriangles
-		: groundChunkDebug.sourceTriangles
 	const sceneTriangles = estimateSceneTriangleCount(currentScene)
-	rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.groundTriangles
+	rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.renderTriangles
 	rendererDebug.geometries = currentRenderer.info?.memory?.geometries ?? 0
 	rendererDebug.textures = currentRenderer.info?.memory?.textures ?? 0
 }
@@ -10788,18 +10748,6 @@ onBeforeUnmount(() => {
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}
-					</div>
-					<div v-if="rendererDebug.groundTriangles > 0" class="scene-preview__stats-fallback">
-						Ground tris in summary: {{ rendererDebug.groundTriangles }}
-					</div>
-					<div v-if="groundChunkDebug.optimizedVertices > 0" class="scene-preview__stats-fallback">
-						Ground mesh verts: {{ groundChunkDebug.sourceVertices }} -> {{ groundChunkDebug.optimizedVertices }}
-					</div>
-					<div v-if="groundChunkDebug.optimizedTriangles > 0" class="scene-preview__stats-fallback">
-						Ground mesh tris: {{ groundChunkDebug.sourceTriangles }} -> {{ groundChunkDebug.optimizedTriangles }}
-					</div>
-					<div v-if="groundChunkDebug.optimizedRows > 0" class="scene-preview__stats-fallback">
-						Ground optimized grid: {{ groundChunkDebug.optimizedRows }} x {{ groundChunkDebug.optimizedColumns }}
 					</div>
 				</template>
 			</div>
