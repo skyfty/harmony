@@ -241,6 +241,36 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
   return runtimeDefinition
 }
 
+function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): boolean {
+  if (definition.runtimeDisableOptimizedChunks === true) {
+    return true
+  }
+
+  if (Number.isFinite(definition.surfaceRevision) && Math.trunc(definition.surfaceRevision as number) > 0) {
+    definition.runtimeDisableOptimizedChunks = true
+    return true
+  }
+
+  const manualHeightMap = definition.manualHeightMap
+  const planningHeightMap = definition.planningHeightMap
+  const limit = Math.max(manualHeightMap?.length ?? 0, planningHeightMap?.length ?? 0)
+  for (let index = 0; index < limit; index += 1) {
+    const manual = manualHeightMap[index]
+    if (typeof manual === 'number' && Number.isFinite(manual)) {
+      definition.runtimeDisableOptimizedChunks = true
+      return true
+    }
+    const planning = planningHeightMap[index]
+    if (typeof planning === 'number' && Number.isFinite(planning)) {
+      definition.runtimeDisableOptimizedChunks = true
+      return true
+    }
+  }
+
+  definition.runtimeDisableOptimizedChunks = false
+  return false
+}
+
 function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: number, column: number): number {
   // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
   // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
@@ -545,6 +575,10 @@ function resolveOptimizedChunkForSpec(
   definition: GroundDynamicMesh,
   spec: GroundChunkSpec,
 ): GroundOptimizedMeshChunkData | null {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  if (hasRuntimeGroundHeightOverrides(runtimeDefinition)) {
+    return null
+  }
   const optimizedMesh = definition.optimizedMesh
   if (!optimizedMesh || optimizedMesh.version !== 2 || !Array.isArray(optimizedMesh.chunks)) {
     return null

@@ -117,6 +117,7 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
     delete groundDynamicMesh.planningHeightMap
     delete groundDynamicMesh.planningMetadata
     delete groundDynamicMesh.surfaceRevision
+    delete groundDynamicMesh.runtimeDisableOptimizedChunks
     delete groundDynamicMesh.terrainScatter
   })
   return document
@@ -145,5 +146,6 @@ export function createGroundRuntimeMeshFromSidecar(
     planningHeightMap,
     planningMetadata: header.planningMetadata,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
+    runtimeDisableOptimizedChunks: true,
   }
 }

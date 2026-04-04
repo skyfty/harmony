@@ -1341,6 +1341,8 @@ export interface GroundDynamicMesh {
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
+  /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
+  runtimeDisableOptimizedChunks?: boolean
 }
 
 export type GroundOptimizedMeshData = {
