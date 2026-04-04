@@ -524,6 +524,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     Number.isFinite(typedOptions.maxBindingChangesPerUpdate) && (typedOptions.maxBindingChangesPerUpdate as number) > 0
       ? (typedOptions.maxBindingChangesPerUpdate as number)
       : Number.POSITIVE_INFINITY
+  const syncSliceMs = visibilityUpdateIntervalMs >= 100 ? 8 : 12
 
   const chunkStreamingOptions = typedOptions.chunkStreaming
   const chunkStreamingEnabled = Boolean(chunkStreamingOptions?.enabled)
@@ -622,6 +623,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       return
     }
 
+    let lastYieldAt = nowMs()
     for (const entry of entries) {
       groundDefinitionByNodeId.set(entry.nodeId, entry.definition)
       const chunkCells = resolveGroundChunkCells(entry.definition)
@@ -644,6 +646,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         const presetAssetId = getScatterLayerLodPresetId(layer)
         if (presetAssetId) {
           await ensureLodPresetCached(presetAssetId)
+          lastYieldAt = await maybeYieldSync(lastYieldAt)
         }
 
         const preset = presetAssetId ? (lodPresetCache.get(presetAssetId) ?? null) : null
@@ -657,13 +660,16 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         if (!ready) {
           continue
         }
+        lastYieldAt = await maybeYieldSync(lastYieldAt)
         if (sourceModelAssetId) {
           await ensureModelInstanceGroup(sourceModelAssetId, nextResourceCache)
+          lastYieldAt = await maybeYieldSync(lastYieldAt)
         }
         const sourceModelHeight = getSourceModelHeight(sourceModelAssetId)
 
         const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
-        for (const instance of instances) {
+        for (let instanceIndex = 0; instanceIndex < instances.length; instanceIndex += 1) {
+          const instance = instances[instanceIndex]!
           const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
 
           if (!chunkStreamingEnabled) {
@@ -709,8 +715,16 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
               boundTarget: { ...bindingTarget },
             })
           }
+
+          if ((instanceIndex + 1) % 64 === 0) {
+            lastYieldAt = await maybeYieldSync(lastYieldAt)
+          }
         }
+
+        lastYieldAt = await maybeYieldSync(lastYieldAt)
       }
+
+      lastYieldAt = await maybeYieldSync(lastYieldAt)
     }
   }
 
@@ -914,6 +928,19 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
 
   function nowMs(): number {
     return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+  }
+
+  async function maybeYieldSync(lastYieldAt: number): Promise<number> {
+    if (nowMs() - lastYieldAt < syncSliceMs) {
+      return lastYieldAt
+    }
+    await new Promise<void>((resolve) => {
+      const schedule = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (callback: () => void) => setTimeout(callback, 16)
+      schedule(() => resolve())
+    })
+    return nowMs()
   }
 
   function applyCullingAndUpdateVisibleMatrices(
