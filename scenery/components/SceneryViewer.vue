@@ -439,7 +439,7 @@ import '@minisheep/three-platform-adapter/wechat';
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
 import { useProjectStore } from '../common/stores/projectStore';
@@ -610,13 +610,8 @@ import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
 import {
   type WarpGateComponentProps,
-  // The following types are not exported from warpGateComponent, so comment out and use 'any' as fallback
-  // type RigidbodyComponentProps,
-  // type RigidbodyComponentMetadata,
-  // type RigidbodyPhysicsShape,
 } from '@harmony/schema/components/definitions/warpGateComponent';
 
-// Fallback types for missing exports
 type RigidbodyComponentProps = any;
 type RigidbodyComponentMetadata = any;
 type RigidbodyPhysicsShape = any;
@@ -770,7 +765,6 @@ interface ScenePreviewPayload {
 type RequestedMode = 'project' | null;
 
 
-// Fallback UniApp types for type checking
 declare namespace UniApp {
   interface OnProgressUpdateResult {
     totalBytesWritten?: number;
@@ -929,6 +923,18 @@ let sceneDownloadTask: SceneRequestTask | null = null;
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
+type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
+let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
+
+async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
+  if (!rgbeLoaderClassPromise) {
+    rgbeLoaderClassPromise = import('three/examples/jsm/loaders/RGBELoader.js').then(
+      (module) => module.RGBELoader as RGBELoaderClass,
+    );
+  }
+  const LoaderClass = await rgbeLoaderClassPromise;
+  return new LoaderClass(manager).setDataType(DEFAULT_RGBE_DATA_TYPE);
+}
 
 function getGroundVertexCount(rows: number, columns: number): number {
   return (Math.max(1, Math.trunc(rows)) + 1) * (Math.max(1, Math.trunc(columns)) + 1);
@@ -1443,53 +1449,10 @@ function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: 
   groundChunkDebug.unloaded = debugGroundUnloadedTotal;
 }
 
-const rgbeLoader = new RGBELoader().setDataType(DEFAULT_RGBE_DATA_TYPE);
 const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
-const bakedGroundTextureCache = new Map<string, THREE.Texture | null>();
-const bakedGroundTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
 
-// debug hooks removed
-
-async function loadBakedGroundTexture(assetId: string): Promise<THREE.Texture | null> {
-  const normalizedId = assetId.trim();
-  if (!normalizedId) {
-    return null;
-  }
-  const cached = bakedGroundTextureCache.get(normalizedId);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const pending = bakedGroundTextureRequests.get(normalizedId);
-  if (pending) {
-    return pending;
-  }
-  const request = (async () => {
-    const resolved = await resolveAssetUrlFromCache(normalizedId);
-    if (!resolved?.url) {
-      return null;
-    }
-    try {
-      const texture = await textureLoader.loadAsync(resolved.url);
-      (texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace;
-      texture.needsUpdate = true;
-      return texture;
-    } catch (error) {
-      console.warn('[SceneryViewer] Failed to load baked ground texture', normalizedId, error);
-      return null;
-    }
-  })();
-  bakedGroundTextureRequests.set(normalizedId, request);
-  request.then((texture) => {
-    bakedGroundTextureRequests.delete(normalizedId);
-    bakedGroundTextureCache.set(normalizedId, texture);
-  }).catch(() => {
-    bakedGroundTextureRequests.delete(normalizedId);
-    bakedGroundTextureCache.set(normalizedId, null);
-  });
-  return await request;
-}
 
 function ensureResourceCache(
   document: SceneJsonExportDocument,
@@ -2030,7 +1993,8 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
       try {
       let texture: THREE.Texture;
       if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
-        texture = await rgbeLoader.loadAsync(source);
+        const hdrLoader = await createRgbELoader();
+        texture = await hdrLoader.loadAsync(source);
       } else {
         // EXR is not available in all module environments; fall back to image loader.
         texture = await textureLoader.loadAsync(source);
@@ -2432,7 +2396,9 @@ const lanternViewportSize = reactive({
 const lanternImageNaturalSize = reactive({ width: 0, height: 0 });
 const lanternViewerRoot = ref<HTMLElement | ComponentPublicInstance | null>(null);
 let lanternViewerInstance: any = null;
-const lanternViewerOptions: Record<string, any> = {
+const lanternViewerOptions: Record<string, any> = {};
+// #ifdef H5
+Object.assign(lanternViewerOptions, {
   inline: false,
   toolbar: true,
   navbar: false,
@@ -2445,7 +2411,8 @@ const lanternViewerOptions: Record<string, any> = {
   transition: false,
   fullscreen: true,
   zIndex: 3000,
-};
+});
+// #endif
 const lanternImageBoxStyle = computed(() => {
   const viewportWidth = lanternViewportSize.width || 375;
   const viewportHeight = lanternViewportSize.height || 667;
@@ -3087,6 +3054,9 @@ function resetLanternImageMetrics(): void {
 }
 
 function getLanternViewerElement(): HTMLElement | null {
+  // #ifndef H5
+  return null;
+  // #endif
   const target = lanternViewerRoot.value;
   if (!target) {
     return null;
@@ -3104,6 +3074,9 @@ function getLanternViewerElement(): HTMLElement | null {
 }
 
 function resolveLanternViewer(): Viewer | null {
+  // #ifndef H5
+  return null;
+  // #endif
   if (lanternViewerInstance) {
     return lanternViewerInstance;
   }
@@ -3120,9 +3093,9 @@ function resolveLanternViewer(): Viewer | null {
 }
 
 function isLanternViewerOpen(): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
+  // #ifndef H5
+  return false;
+  // #endif
   const viewer = resolveLanternViewer();
   if (!viewer) {
     return false;
@@ -3132,17 +3105,17 @@ function isLanternViewerOpen(): boolean {
 }
 
 function syncLanternViewer(): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
+  // #ifndef H5
+  return;
+  // #endif
   const viewer = resolveLanternViewer();
   viewer?.update?.();
 }
 
 function syncLanternViewerLater(): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
+  // #ifndef H5
+  return;
+  // #endif
   nextTick(() => {
     syncLanternViewer();
   });
@@ -3183,6 +3156,10 @@ function openLanternImageFullscreen(): void {
       uni.previewImage({ urls: [imageUrl] });
     }
   };
+  // #ifndef H5
+  fallbackPreview();
+  return;
+  // #endif
   if (typeof window === 'undefined') {
     fallbackPreview();
     return;
@@ -3200,9 +3177,9 @@ function openLanternImageFullscreen(): void {
 }
 
 function closeLanternImageFullscreen(): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
+  // #ifndef H5
+  return;
+  // #endif
   const viewer = resolveLanternViewer();
   viewer?.hide?.();
 }
@@ -8857,7 +8834,8 @@ async function loadEnvironmentTextureFromAsset(
       return { texture };
     }
     if (extension === 'hdr' || extension === 'hdri' || resolve.mimeType === 'image/vnd.radiance') {
-      const texture = await rgbeLoader.loadAsync(resolve.url);
+      const hdrLoader = await createRgbELoader();
+      const texture = await hdrLoader.loadAsync(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = false;
       texture.magFilter = THREE.NearestFilter;
@@ -10242,9 +10220,6 @@ async function buildSceneGraphWithProgress(
   try {
     lazyLoadMeshesEnabled = payload.document.lazyLoadMeshes !== false;
     const buildOptions: SceneGraphBuildOptions = {
-      materialFactoryOptions: {
-        hdrLoader: rgbeLoader,
-      },
       onProgress: (info) => {
         resourcePreload.total = info.total;
         resourcePreload.loaded = info.loaded;

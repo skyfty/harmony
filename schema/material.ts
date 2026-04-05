@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type {
   SceneMaterial,
   SceneMaterialProps,
@@ -16,6 +16,19 @@ import type ResourceCache from './ResourceCache';
 import { inferAssetTypeOrNull } from './assetTypeConversion';
 import { hashString, stableSerialize } from './stableSerialize';
 import { getDefaultUvDebugTexture } from './debugTextures';
+
+type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
+let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
+
+async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
+  if (!rgbeLoaderClassPromise) {
+    rgbeLoaderClassPromise = import('three/examples/jsm/loaders/RGBELoader.js').then(
+      (module) => module.RGBELoader as RGBELoaderClass,
+    );
+  }
+  const LoaderClass = await rgbeLoaderClassPromise;
+  return new LoaderClass(manager).setDataType(THREE.FloatType);
+}
 
 export interface SceneMaterialFactoryOptions {
   provider: ResourceCache;
@@ -521,6 +534,7 @@ export class SceneMaterialFactory {
   private readonly loadingManager: THREE.LoadingManager;
   private readonly textureLoader: THREE.TextureLoader;
   private readonly hdrLoader: RGBELoader | null;
+  private hdrLoaderPromise: Promise<RGBELoader> | null = null;
   private readonly resourceEntrys: SceneResourceSummaryEntry[];
   constructor(options: SceneMaterialFactoryOptions) {
     if (!options?.provider) {
@@ -540,8 +554,18 @@ export class SceneMaterialFactory {
       options.hdrLoader.manager = this.loadingManager;
       this.hdrLoader = options.hdrLoader;
     } else {
-      this.hdrLoader = new RGBELoader(this.loadingManager).setDataType(THREE.FloatType);
+      this.hdrLoader = null;
     }
+  }
+
+  private getHdrLoader(): Promise<RGBELoader> {
+    if (this.hdrLoader) {
+      return Promise.resolve(this.hdrLoader);
+    }
+    if (!this.hdrLoaderPromise) {
+      this.hdrLoaderPromise = createRgbELoader(this.loadingManager);
+    }
+    return this.hdrLoaderPromise;
   }
 
   async prepareTemplates(materials: readonly SceneMaterial[] | null | undefined): Promise<void> {
@@ -918,8 +942,8 @@ export class SceneMaterialFactory {
         return null;
       }
 
-      if (options?.hdr && this.hdrLoader) {
-        const hdrLoader = this.hdrLoader;
+      if (options?.hdr) {
+        const hdrLoader = await this.getHdrLoader();
         const texture = await new Promise<THREE.Texture>((resolve, reject) => {
           hdrLoader.load(
             downloadUrl,

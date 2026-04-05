@@ -113,7 +113,6 @@ export async function loadObjectFromFile(
   extensionOrOptions?: string | LoadObjectOptions,
   optionsParam: LoadObjectOptions = {},
 ): Promise<THREE.Object3D> {
-  const extension = typeof extensionOrOptions === 'string' ? extensionOrOptions : undefined
   const options: LoadObjectOptions = typeof extensionOrOptions === 'object' && extensionOrOptions !== null
     ? (extensionOrOptions as LoadObjectOptions)
     : optionsParam
@@ -149,7 +148,7 @@ export async function loadObjectFromFile(
     }
 
     try {
-      loader.loadFile(file, extension)
+      loader.loadFile(file)
     } catch (error) {
       cleanup()
       reject(error)

@@ -53,7 +53,6 @@ export default {
     },
     resolve: {
       alias: {
-        'three/examples/jsm/loaders/KTX2Loader.js': fileURLToPath(new URL('./shims/noopKtx2Loader.ts', import.meta.url)),
         '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
         '@harmony/schema': fileURLToPath(new URL('../schema', import.meta.url)),
         'vue': vueRuntimeAlias,

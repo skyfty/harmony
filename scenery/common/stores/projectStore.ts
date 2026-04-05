@@ -1,5 +1,4 @@
 import { ref, type Ref } from 'vue';
-import { defineStore } from 'pinia';
 import { removeScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
 
 export interface ProjectConfig {
@@ -87,103 +86,105 @@ type ProjectStoreSetup = {
 	getProject: () => StoredProjectEntry | undefined;
 };
 
-export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup => {
-	const currentProject = ref<StoredProjectEntry | null>(null);
-	const initialized = ref(false);
+const currentProject = ref<StoredProjectEntry | null>(null);
+const initialized = ref(false);
 
-	function bootstrap() {
-		if (initialized.value) {
-			return;
-		}
-		currentProject.value = loadProjectFromStorage();
-		initialized.value = true;
-	}
-
-	function loadProjectFromStorage(): StoredProjectEntry | null {
-		try {
-			const raw = uni.getStorageSync(STORAGE_KEY);
-			if (!raw) {
-				return null;
-			}
-			const entry = JSON.parse(raw);
-			if (!entry || typeof entry !== 'object') {
-				return null;
-			}
-			const { id, savedAt, origin, scenePackage, project, sceneCount } = entry as StoredProjectEntry;
-			if (typeof id !== 'string' || typeof savedAt !== 'string') {
-				return null;
-			}
-			if (!scenePackage || typeof scenePackage !== 'object') {
-				return null;
-			}
-			if (!('kind' in (scenePackage as any)) || !('ref' in (scenePackage as any))) {
-				return null;
-			}
-			const kind = (scenePackage as any).kind;
-			const ref = (scenePackage as any).ref;
-			if ((kind !== 'wxfs' && kind !== 'idb') || typeof ref !== 'string' || !ref.trim()) {
-				return null;
-			}
-			const rawProject = project as unknown;
-			if (!isProjectConfig(rawProject)) {
-				return null;
-			}
-			const normalizedOrigin = typeof origin === 'string' && origin.trim().length ? origin.trim() : '';
-			return {
-				id,
-				savedAt,
-				...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
-				scenePackage: { kind, ref } as ScenePackagePointer,
-				project: {
-					id: typeof (rawProject as any).id === 'string' ? (rawProject as any).id : id,
-					name: typeof (rawProject as any).name === 'string' ? (rawProject as any).name : '',
-					defaultSceneId: (rawProject as any).defaultSceneId ?? null,
-					lastEditedSceneId: (rawProject as any).lastEditedSceneId ?? null,
-					sceneOrder: Array.isArray((rawProject as any).sceneOrder) ? (rawProject as any).sceneOrder : [],
-				},
-				sceneCount: Number.isFinite(sceneCount) ? Math.max(0, Math.floor(sceneCount)) : 0,
-			};
-		} catch (_error) {
+function loadProjectFromStorage(): StoredProjectEntry | null {
+	try {
+		const raw = uni.getStorageSync(STORAGE_KEY);
+		if (!raw) {
 			return null;
 		}
-	}
-
-	function persistProject(entry: StoredProjectEntry | null): void {
-		if (entry) {
-			const payload = JSON.stringify(entry);
-			uni.setStorageSync(STORAGE_KEY, payload);
-		} else {
-			uni.removeStorageSync(STORAGE_KEY);
+		const entry = JSON.parse(raw);
+		if (!entry || typeof entry !== 'object') {
+			return null;
 		}
+		const { id, savedAt, origin, scenePackage, project, sceneCount } = entry as StoredProjectEntry;
+		if (typeof id !== 'string' || typeof savedAt !== 'string') {
+			return null;
+		}
+		if (!scenePackage || typeof scenePackage !== 'object') {
+			return null;
+		}
+		if (!('kind' in (scenePackage as any)) || !('ref' in (scenePackage as any))) {
+			return null;
+		}
+		const kind = (scenePackage as any).kind;
+		const ref = (scenePackage as any).ref;
+		if ((kind !== 'wxfs' && kind !== 'idb') || typeof ref !== 'string' || !ref.trim()) {
+			return null;
+		}
+		const rawProject = project as unknown;
+		if (!isProjectConfig(rawProject)) {
+			return null;
+		}
+		const normalizedOrigin = typeof origin === 'string' && origin.trim().length ? origin.trim() : '';
+		return {
+			id,
+			savedAt,
+			...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
+			scenePackage: { kind, ref } as ScenePackagePointer,
+			project: {
+				id: typeof (rawProject as any).id === 'string' ? (rawProject as any).id : id,
+				name: typeof (rawProject as any).name === 'string' ? (rawProject as any).name : '',
+				defaultSceneId: (rawProject as any).defaultSceneId ?? null,
+				lastEditedSceneId: (rawProject as any).lastEditedSceneId ?? null,
+				sceneOrder: Array.isArray((rawProject as any).sceneOrder) ? (rawProject as any).sceneOrder : [],
+			},
+			sceneCount: Number.isFinite(sceneCount) ? Math.max(0, Math.floor(sceneCount)) : 0,
+		};
+	} catch (_error) {
+		return null;
 	}
+}
 
-	function setProject(
-		payload: { scenePackage: ScenePackagePointer; project: ProjectConfig; sceneCount: number },
-		origin?: string,
-	): StoredProjectEntry {
-		const entry = createProjectEntryFromScenePackage(payload, origin);
-		currentProject.value = entry;
-		persistProject(entry);
-		return entry;
+function persistProject(entry: StoredProjectEntry | null): void {
+	if (entry) {
+		const payload = JSON.stringify(entry);
+		uni.setStorageSync(STORAGE_KEY, payload);
+	} else {
+		uni.removeStorageSync(STORAGE_KEY);
 	}
+}
 
-	function clearProject(): void {
-		const entry = currentProject.value;
-		currentProject.value = null;
-		persistProject(null);
-		void removeScenePackageZip(entry?.scenePackage);
+function bootstrap(): void {
+	if (initialized.value) {
+		return;
 	}
+	currentProject.value = loadProjectFromStorage();
+	initialized.value = true;
+}
 
-	function getProject(): StoredProjectEntry | undefined {
-		return currentProject.value || undefined;
-	}
+function setProject(
+	payload: { scenePackage: ScenePackagePointer; project: ProjectConfig; sceneCount: number },
+	origin?: string,
+): StoredProjectEntry {
+	const entry = createProjectEntryFromScenePackage(payload, origin);
+	currentProject.value = entry;
+	persistProject(entry);
+	return entry;
+}
 
-	return {
-		currentProject,
-		initialized,
-		bootstrap,
-		setProject,
-		clearProject,
-		getProject,
-	};
-});
+function clearProject(): void {
+	const entry = currentProject.value;
+	currentProject.value = null;
+	persistProject(null);
+	void removeScenePackageZip(entry?.scenePackage);
+}
+
+function getProject(): StoredProjectEntry | undefined {
+	return currentProject.value || undefined;
+}
+
+const projectStore: ProjectStoreSetup = {
+	currentProject,
+	initialized,
+	bootstrap,
+	setProject,
+	clearProject,
+	getProject,
+};
+
+export function useProjectStore(): ProjectStoreSetup {
+	return projectStore;
+}

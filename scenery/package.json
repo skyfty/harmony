@@ -19,7 +19,7 @@
     "lint": "eslint --ext .ts,.vue common components",
     "lint:fix": "eslint --ext .ts,.vue common components --fix",
     "check": "pnpm run type-check && pnpm run lint",
-    "clean": "rimraf node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "clean": "node -e \"require('node:fs').rmSync('node_modules/.tmp/tsconfig.app.tsbuildinfo', { force: true })\"",
     "prepare": "pnpm run build"
   },
   "engines": {
@@ -50,8 +50,6 @@
     "eslint": "^8.50.0",
     "eslint-plugin-vue": "^9.10.0",
     "miniprogram-api-typings": "^4.0.5",
-    "pinia": "^3.0.4",
-    "rimraf": "^3.0.2",
     "three": "^0.172.0",
     "typescript": "~5.6.3",
     "vue": "^3.5.13",

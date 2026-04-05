@@ -1519,5 +1519,3 @@ export interface SceneClipboard {
   runtimeSnapshots: Map<string, THREE.Object3D>
   cut: boolean
 }
-
-export * from './shadowFit'

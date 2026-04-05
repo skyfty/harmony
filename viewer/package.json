@@ -39,7 +39,6 @@
     "web-streams-polyfill": "^3.2.1",
     "cannon-es": "^0.20.0",
     "fflate": "^0.8.2",
-    "pinia": "^2.2.6",
     "polygon-clipping": "^0.15.7",
     "three": "^0.172.0",
     "three-mesh-bvh": "^0.9.1",

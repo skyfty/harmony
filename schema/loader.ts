@@ -1,6 +1,4 @@
 import * as THREE from 'three';
-import { STATIC_LOADER_MODULES } from './loaderStaticImports';
-// import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -37,16 +35,8 @@ type DataTransferItemWithEntry = DataTransferItem & {
 
 type FilesMap = Record<string, File>;
 
-const MINI_PROGRAM_ENV = typeof globalThis !== 'undefined' && typeof (globalThis as any).wx !== 'undefined';
-const ENABLE_GLTF_KTX2 = (import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2 ?? 'true') === 'true';
 
-async function safeImport<T>(moduleId: string, importer: () => Promise<T>): Promise<T> {
-  if (MINI_PROGRAM_ENV && moduleId in STATIC_LOADER_MODULES) {
-    const staticModule = STATIC_LOADER_MODULES[moduleId as keyof typeof STATIC_LOADER_MODULES];
-    if (staticModule) {
-      return staticModule as T;
-    }
-  }
+async function safeImport<T>(importer: () => Promise<T>): Promise<T> {
 
   return importer();
 }
@@ -69,18 +59,17 @@ export default class Loader {
     return map;
   }
 
-  public getFilesFromItemList(items: DataTransferItemList, onDone: (files: File[], filesMap: FilesMap) => void) {
+  public getFilesFromItemList(items: DataTransferItemList, onDone: (files: File[]) => void) {
     let itemsCount = 0;
     let itemsTotal = 0;
 
     const files: File[] = [];
-    const filesMap: FilesMap = {};
 
     function onEntryHandled(): void {
       itemsCount += 1;
 
       if (itemsCount === itemsTotal) {
-        onDone(files, filesMap);
+        onDone(files);
       }
     }
 
@@ -97,8 +86,6 @@ export default class Loader {
       } else if (entry.isFile) {
         entry.file((file: File) => {
           files.push(file);
-
-          filesMap[entry.fullPath.slice(1)] = file;
           onEntryHandled();
         });
       }
@@ -119,44 +106,25 @@ export default class Loader {
   }
 
   public loadItemList(items: DataTransferItemList) {
-    this.getFilesFromItemList(items, (files, filesMap) => {
-      this.loadFiles(files, filesMap);
+    this.getFilesFromItemList(items, (files) => {
+      this.loadFiles(files);
     });
   }
 
-  public loadFiles(files: File[], filesMap?: FilesMap){
+  public loadFiles(files: File[]){
     if (files.length === 0) {
       return;
     }
 
-    const effectiveFilesMap = filesMap ?? this.createFilesMap(files);
-
-    const manager = new THREE.LoadingManager();
-  manager.setURLModifier((url: string) => {
-      const sanitized = url.replace(/^(\.?\/)/, '');
-      const file = effectiveFilesMap[sanitized];
-
-      if (file) {
-        console.log('Loading', sanitized);
-        return URL.createObjectURL(file);
-      }
-
-      return url;
-    });
-
-    // manager.addHandler(/\.tga$/i, new TGALoader());
-
     for (const file of files) {
-      this.loadFile(file, undefined, manager);
+      this.loadFile(file);
     }
   }
 
-  public loadFile(file: File, extension?: string, manager?: THREE.LoadingManager) {
+  public loadFile(file: File) {
     const filename = file.name;
     const inferred = filename.split('.').pop()?.toLowerCase();
-    const ext = (extension && typeof extension === 'string' && extension.trim().length)
-      ? extension.toLowerCase()
-      : inferred;
+    const ext = inferred;
 
     if (!ext) {
       console.error('Unable to determine file extension.');
@@ -236,29 +204,18 @@ export interface ParsedGltfResult {
 }
 
 const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
-const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
 
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
-  const enableKtx2 = options.enableKtx2 ?? ENABLE_GLTF_KTX2;
   const { GLTFLoader } = await safeImport(
-    'three/examples/jsm/loaders/GLTFLoader.js',
     () => import('three/examples/jsm/loaders/GLTFLoader.js'),
   );
   const { DRACOLoader } = await safeImport(
-    'three/examples/jsm/loaders/DRACOLoader.js',
     () => import('three/examples/jsm/loaders/DRACOLoader.js'),
   );
   const loader = new GLTFLoader(options.manager);
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
   loader.setDRACOLoader(dracoLoader);
-
-  if (enableKtx2) {
-    const { KTX2Loader } = await import('three/examples/jsm/loaders/KTX2Loader.js');
-    const ktx2Loader = new KTX2Loader(options.manager);
-    ktx2Loader.setTranscoderPath(options.ktx2TranscoderPath ?? DEFAULT_KTX2_TRANSCODER_PATH);
-    loader.setKTX2Loader(ktx2Loader);
-  }
 
   // loader.setMeshoptDecoder(MeshoptDecoder);
   return loader;

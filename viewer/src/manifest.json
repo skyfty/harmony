@@ -44,7 +44,7 @@
         "appid" : "",
         "setting" : {
             "urlCheck" : false,
-            "es6": true
+            "es6": false
         },
         "usingComponents" : true
     },
