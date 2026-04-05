@@ -1,3 +1,4 @@
+export type { EnvironmentSettings, EnvironmentCsmSettings } from './index';
 import {
   DEFAULT_SCENE_CSM_CONFIG,
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,

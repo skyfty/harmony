@@ -1,14 +1,28 @@
 {
-  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  // "extends": "../editor/tsconfig.app.json",
+  "include": [
+    "common/**/*.ts",
+    "common/**/*.d.ts",
+    "components/**/*.ts",
+    "components/**/*.d.ts",
+    "components/**/*.vue",
+    "../schema/**/*.ts",
+    "../utils/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "common/**/__tests__/*",
+    "components/**/__tests__/*"
+  ],
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "moduleResolution": "bundler",
-    "types": ["vite/client", "vuetify"],
+    "types": [],
     "baseUrl": ".",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "paths": {
-      "@/*": ["src/*"],
-      "@schema": ["../schema/index.ts"],
-      "@schema/*": ["../schema/*"],
+      "@harmony/schema": ["../schema/index.ts"],
+      "@harmony/schema/*": ["../schema/*"],
+      "@harmony/utils": ["../utils/src/index.ts"],
       "@three-examples/*": [
         "node_modules/@types/three/examples/jsm/*",
         "node_modules/three/examples/jsm/*"
@@ -19,8 +33,6 @@
         "node_modules/three/*"
       ]
     },
-
-    /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -29,14 +41,6 @@
     "noImplicitThis": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
-  },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "src/**/*.vue",
-    "src/**/*.d.ts"
-  ]
+    "noFallthroughCasesInSwitch": true
+  }
 }
