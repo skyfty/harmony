@@ -36,6 +36,9 @@ const pollingInterval =
     : 300;
 
 export default {
+    define: {
+      'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('false'),
+    },
     optimizeDeps: {
       exclude: ['@minisheep/three-platform-adapter'],
       esbuildOptions: {
@@ -50,6 +53,7 @@ export default {
     },
     resolve: {
       alias: {
+        'three/examples/jsm/loaders/KTX2Loader.js': fileURLToPath(new URL('./shims/noopKtx2Loader.ts', import.meta.url)),
         '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
         '@harmony/schema': fileURLToPath(new URL('../schema', import.meta.url)),
         'vue': vueRuntimeAlias,

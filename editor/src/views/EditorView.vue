@@ -1854,7 +1854,7 @@ async function handleExternalSceneFileChange(event: Event) {
   }
 
   const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
-  if (!['glb', 'gltf', 'fbx'].includes(extension)) {
+  if (!['glb', 'gltf'].includes(extension)) {
     console.warn('Unsupported import format:', extension)
     input.value = ''
     return
@@ -2333,7 +2333,7 @@ onBeforeUnmount(() => {
     <input
       ref="externalSceneInputRef"
       type="file"
-      accept=".glb,.gltf,.fbx"
+      accept=".glb,.gltf"
       style="display: none"
       @change="handleExternalSceneFileChange"
     />

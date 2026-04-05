@@ -115,9 +115,6 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   // models
   gltf: 'model/gltf+json',
   glb: 'model/gltf-binary',
-  fbx: 'model/fbx',
-  obj: 'model/obj',
-  stl: 'model/stl',
 
   // misc
   json: 'application/json',

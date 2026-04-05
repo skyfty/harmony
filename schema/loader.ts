@@ -38,6 +38,7 @@ type DataTransferItemWithEntry = DataTransferItem & {
 type FilesMap = Record<string, File>;
 
 const MINI_PROGRAM_ENV = typeof globalThis !== 'undefined' && typeof (globalThis as any).wx !== 'undefined';
+const ENABLE_GLTF_KTX2 = (import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2 ?? 'true') === 'true';
 
 async function safeImport<T>(moduleId: string, importer: () => Promise<T>): Promise<T> {
   if (MINI_PROGRAM_ENV && moduleId in STATIC_LOADER_MODULES) {
@@ -172,25 +173,6 @@ export default class Loader {
     });
 
     switch (ext) {
-      case 'fbx': {
-        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const contents = event.target?.result as ArrayBuffer;
-          if (!contents) return;
-
-          const { FBXLoader } = await safeImport(
-            'three/examples/jsm/loaders/FBXLoader.js',
-            () => import('three/examples/jsm/loaders/FBXLoader.js'),
-          );
-
-          const loader = new FBXLoader(manager);
-          const object = loader.parse(contents, '');
-          object.name = filename;
-          this.emit('loaded', object);
-        });
-        reader.readAsArrayBuffer(file);
-        break;
-      }
-
       case 'glb': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
           const contents = event.target?.result as ArrayBuffer;
@@ -213,32 +195,6 @@ export default class Loader {
         reader.readAsArrayBuffer(file);
         break;
       }
-
-      case 'gltf': {
-        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const contents = event.target?.result as string;
-          if (!contents) return;
-
-          const loader = await this.createGLTFLoader(manager);
-
-          loader.parse(contents, '', (result: any) => {
-            const scene = result.scene;
-            scene.name = filename;
-
-            scene.animations.push(...result.animations);
-
-            if (loader.dracoLoader) loader.dracoLoader.dispose();
-            if (loader.ktx2Loader) loader.ktx2Loader.dispose();
-
-            this.emit('loaded', scene);
-          });
-        });
-        reader.readAsText(file);
-        break;
-      }
-
-      // Note: PCD and PLY loaders removed — support for .pcd/.ply deprecated.
-
 
       default:
         console.error(`Unsupported file format (${ext}).`);
@@ -271,6 +227,7 @@ export interface GltfParseOptions {
   manager?: THREE.LoadingManager;
   dracoDecoderPath?: string;
   ktx2TranscoderPath?: string;
+  enableKtx2?: boolean;
 }
 
 export interface ParsedGltfResult {
@@ -282,6 +239,7 @@ const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
 const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
 
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
+  const enableKtx2 = options.enableKtx2 ?? ENABLE_GLTF_KTX2;
   const { GLTFLoader } = await safeImport(
     'three/examples/jsm/loaders/GLTFLoader.js',
     () => import('three/examples/jsm/loaders/GLTFLoader.js'),
@@ -290,19 +248,17 @@ export async function createGltfLoader(options: GltfParseOptions = {}): Promise<
     'three/examples/jsm/loaders/DRACOLoader.js',
     () => import('three/examples/jsm/loaders/DRACOLoader.js'),
   );
-  const { KTX2Loader } = await safeImport(
-    'three/examples/jsm/loaders/KTX2Loader.js',
-    () => import('three/examples/jsm/loaders/KTX2Loader.js'),
-  );
-
   const loader = new GLTFLoader(options.manager);
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
   loader.setDRACOLoader(dracoLoader);
 
-  const ktx2Loader = new KTX2Loader(options.manager);
-  ktx2Loader.setTranscoderPath(options.ktx2TranscoderPath ?? DEFAULT_KTX2_TRANSCODER_PATH);
-  loader.setKTX2Loader(ktx2Loader);
+  if (enableKtx2) {
+    const { KTX2Loader } = await import('three/examples/jsm/loaders/KTX2Loader.js');
+    const ktx2Loader = new KTX2Loader(options.manager);
+    ktx2Loader.setTranscoderPath(options.ktx2TranscoderPath ?? DEFAULT_KTX2_TRANSCODER_PATH);
+    loader.setKTX2Loader(ktx2Loader);
+  }
 
   // loader.setMeshoptDecoder(MeshoptDecoder);
   return loader;

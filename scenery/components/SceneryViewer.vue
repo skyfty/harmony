@@ -552,49 +552,48 @@ import {
   DEFAULT_ENVIRONMENT_GRAVITY,
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
-  deserializeGroundPaintSidecar,
-  deserializeGroundScatterSidecar,
   cloneEnvironmentSettings,
   resolveDocumentEnvironment,
+  type EnvironmentSettings,
+  type EnvironmentCsmSettings,
+} from '@harmony/schema/environmentSettingsUtils';
+import { deserializeGroundPaintSidecar } from '@harmony/schema/groundPaintSidecar';
+import { deserializeGroundScatterSidecar } from '@harmony/schema/groundScatterSidecar';
+import {
   clampSceneNodeInstanceLayout,
   computeInstanceLayoutLocalBoundingBox,
-  createAutoTourRuntime,
-  createWaterRuntime,
-  createScenePreviewPerfController,
-
   forEachInstanceWorldMatrix,
   getInstanceLayoutBindingId,
   getInstanceLayoutCount,
-  rebuildSceneNodeIndex,
   resolveInstanceLayoutTemplateAssetId,
-  resolveSceneNodeById,
-  resolveSceneParentNodeId,
-  resolveEnabledComponentState,
-  getGroundVertexCount,
-  createGradientBackgroundDome,
-  disposeSkyCubeTexture,
-  disposeGradientBackgroundDome,
-  loadSkyCubeTexture,
-		extractSkycubeZipFaces,
+} from '@harmony/schema/instanceLayout';
+import { createAutoTourRuntime } from '@harmony/schema/autoTourRuntime';
+import { createWaterRuntime } from '@harmony/schema/waterRuntime';
+import { createScenePreviewPerfController } from '@harmony/schema/scenePreviewPerf';
+import { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from '@harmony/schema/nodeIndexUtils';
+import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUtils';
+import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
+import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFaces, type LanternSlideDefinition } from '@harmony/schema/skyCubeTexture';
+import {
   decodeScenePackageSceneDocument,
+} from '@harmony/schema/scenePackageSceneCodec';
+import {
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
   readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
-  type EnvironmentSettings,
-  type EnvironmentCsmSettings,
-  type GradientBackgroundDome,
-  type SceneNode,
-  type SceneNodeComponentState,
-  type SceneJsonExportDocument,
-  type SceneAssetRegistryEntry,
-  type LanternSlideDefinition,
-  type SceneMaterialTextureRef,
-  type GroundDynamicMesh,
-  type SceneResourceSummary,
-  type SceneResourceSummaryEntry,
-  type Vector3Like,
+} from '@harmony/schema/scenePackageZip';
+import type {
+  SceneNode,
+  SceneNodeComponentState,
+  SceneJsonExportDocument,
+  SceneAssetRegistryEntry,
+  SceneMaterialTextureRef,
+  GroundDynamicMesh,
+  SceneResourceSummary,
+  SceneResourceSummaryEntry,
+  Vector3Like,
 } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
@@ -609,48 +608,101 @@ import {
 import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
 import {
+  type WarpGateComponentProps,
+  type RigidbodyComponentProps,
+  type RigidbodyComponentMetadata,
+  type RigidbodyPhysicsShape,
+} from '@harmony/schema/components/definitions/warpGateComponent';
+import {
   behaviorComponentDefinition,
+} from '@harmony/schema/components/definitions/behaviorComponent';
+import {
   billboardComponentDefinition,
+} from '@harmony/schema/components/definitions/billboardComponent';
+import {
   guideboardComponentDefinition,
-  displayBoardComponentDefinition,
-  floorComponentDefinition,
-  wallComponentDefinition,
-  roadComponentDefinition,
-  landformComponentDefinition,
-  viewPointComponentDefinition,
-  warpGateComponentDefinition,
-  effectComponentDefinition,
-  rigidbodyComponentDefinition,
-  vehicleComponentDefinition,
-  waterComponentDefinition,
-  protagonistComponentDefinition,
-  lodComponentDefinition,
-  onlineComponentDefinition,
-  guideRouteComponentDefinition,
-  autoTourComponentDefinition,
-  purePursuitComponentDefinition,
-  sceneStateAnchorComponentDefinition,
-  preloadableComponentDefinition,
-  WARP_GATE_RUNTIME_REGISTRY_KEY,
-  WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   GUIDEBOARD_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_COMPONENT_TYPE,
-  RIGIDBODY_COMPONENT_TYPE,
-  RIGIDBODY_METADATA_KEY,
-  VEHICLE_COMPONENT_TYPE,
-  ONLINE_COMPONENT_TYPE,
-  WALL_COMPONENT_TYPE,
-  AUTO_TOUR_COMPONENT_TYPE,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
+  type GuideboardComponentProps,
+} from '@harmony/schema/components/definitions/guideboardComponent';
+import {
+  displayBoardComponentDefinition,
+} from '@harmony/schema/components/definitions/displayBoardComponent';
+import {
+  floorComponentDefinition,
+} from '@harmony/schema/components/definitions/floorComponent';
+import {
+  wallComponentDefinition,
+  WALL_COMPONENT_TYPE,
+} from '@harmony/schema/components/definitions/wallComponent';
+import {
+  roadComponentDefinition,
+} from '@harmony/schema/components/definitions/roadComponent';
+import {
+  landformComponentDefinition,
+} from '@harmony/schema/components/definitions/landformComponent';
+import {
+  viewPointComponentDefinition,
+} from '@harmony/schema/components/definitions/viewPointComponent';
+import {
+  warpGateComponentDefinition,
+  WARP_GATE_RUNTIME_REGISTRY_KEY,
+  WARP_GATE_EFFECT_ACTIVE_FLAG,
+} from '@harmony/schema/components/definitions/warpGateComponent';
+import {
+  effectComponentDefinition,
+} from '@harmony/schema/components/definitions/effectComponent';
+import {
+  rigidbodyComponentDefinition,
+  RIGIDBODY_COMPONENT_TYPE,
+  RIGIDBODY_METADATA_KEY,
+} from '@harmony/schema/components/definitions/rigidbodyComponent';
+import {
+  vehicleComponentDefinition,
+  VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
-  clampLodComponentProps,
   DEFAULT_DIRECTION,
   DEFAULT_AXLE,
+  type VehicleComponentProps,
+  type VehicleWheelProps,
+} from '@harmony/schema/components/definitions/vehicleComponent';
+import {
+  waterComponentDefinition,
+} from '@harmony/schema/components/definitions/waterComponent';
+import {
+  protagonistComponentDefinition,
+} from '@harmony/schema/components/definitions/protagonistComponent';
+import {
+  lodComponentDefinition,
   LOD_COMPONENT_TYPE,
+  clampLodComponentProps,
+  type LodComponentProps,
+} from '@harmony/schema/components/definitions/lodComponent';
+import {
+  onlineComponentDefinition,
+  ONLINE_COMPONENT_TYPE,
+} from '@harmony/schema/components/definitions/onlineComponent';
+import {
+  guideRouteComponentDefinition,
+} from '@harmony/schema/components/definitions/guideRouteComponent';
+import {
+  autoTourComponentDefinition,
+  AUTO_TOUR_COMPONENT_TYPE,
+  type AutoTourComponentProps,
+} from '@harmony/schema/components/definitions/autoTourComponent';
+import {
+  purePursuitComponentDefinition,
+} from '@harmony/schema/components/definitions/purePursuitComponent';
+import {
+  sceneStateAnchorComponentDefinition,
   SCENE_STATE_ANCHOR_COMPONENT_TYPE,
-} from '@harmony/schema/components';
+} from '@harmony/schema/components/definitions/sceneStateAnchorComponent';
+import {
+  preloadableComponentDefinition,
+} from '@harmony/schema/components/definitions/preloadableComponent';
 import {
   VehicleDriveController,
   type VehicleDriveCameraFollowState,
@@ -673,17 +725,6 @@ import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTou
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
 import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@harmony/schema/cameraGuard';
-import type {
-  GuideboardComponentProps,
-  LodComponentProps,
-  WarpGateComponentProps,
-  RigidbodyComponentProps,
-  RigidbodyComponentMetadata,
-  RigidbodyPhysicsShape,
-  AutoTourComponentProps,
-  VehicleComponentProps,
-  VehicleWheelProps,
-} from '@harmony/schema/components';
 import {
   addBehaviorRuntimeListener,
   getBehaviorNodeVisible,
@@ -862,6 +903,10 @@ let sceneDownloadTask: SceneRequestTask | null = null;
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
+
+function getGroundVertexCount(rows: number, columns: number): number {
+  return (Math.max(1, Math.trunc(rows)) + 1) * (Math.max(1, Math.trunc(columns)) + 1);
+}
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
@@ -10060,7 +10105,9 @@ async function ensureRendererContext(result: UseCanvasResult) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
-    antialias: true, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance'
+    antialias: true,
+    preserveDrawingBuffer: false,
+    powerPreference: 'high-performance',
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(pixelRatio);

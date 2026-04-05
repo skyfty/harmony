@@ -18,7 +18,7 @@ export interface ProjectAsset {
   id: string
   name: string
   /**
-   * Optional file extension (without dot), e.g. 'glb', 'gltf', 'fbx', 'png'.
+   * Optional file extension (without dot), e.g. 'glb', 'gltf', 'png'.
    * Stored when importing local files or inferred from URLs/mime types so
    * loaders can correctly identify the resource type when the file name
    * is otherwise lost (for example when blobs are stored by hash).
