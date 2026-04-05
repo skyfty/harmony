@@ -209,6 +209,7 @@ import {
   type PrefabStoreLike,
 } from './prefabActions'
 import {
+  collectDirectSceneAssetReferenceIds,
   collectSceneAssetReferences,
   collectRetainedAssetIdsForSceneCleanup,
   pruneAssetCatalogByRetainedIds,
@@ -10798,6 +10799,73 @@ export const useSceneStore = defineStore('scene', {
 
       this.applyCatalogUpdate(nextCatalog)
       if (shouldResetSelection) {
+        this.selectedAssetId = null
+      }
+      this.ensureActiveDirectoryAndSelectionValid()
+
+      commitSceneSnapshot(this, { updateNodes: false })
+
+      return { removedAssetIds }
+    },
+    async cleanUnusedAssetsByIds(candidateAssetIds: Iterable<string>): Promise<{ removedAssetIds: string[] }> {
+      if (!this.currentSceneId) {
+        return { removedAssetIds: [] }
+      }
+
+      const normalizedCandidateIds = Array.from(new Set(
+        Array.from(candidateAssetIds ?? [])
+          .map((assetId) => typeof assetId === 'string' ? assetId.trim() : '')
+          .filter((assetId) => assetId.length > 0),
+      ))
+      if (!normalizedCandidateIds.length) {
+        return { removedAssetIds: [] }
+      }
+
+      normalizeCurrentSceneMeta(this)
+      const document = buildSceneDocumentFromState(this)
+      const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
+      const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(document)
+      const prefabAssetIds = collectPrefabAssetIdsFromSceneReferences(document, this.assetCatalog)
+      if (prefabAssetIds.size) {
+        const prefabDependencyAssetIds = await collectPrefabTransitiveDependencyAssetIds(
+          prefabAssetIds,
+          this.assetCatalog,
+          (assetId) => this.loadNodePrefab(assetId),
+        )
+        prefabDependencyAssetIds.forEach((assetId) => retainedAssetIds.add(assetId))
+      }
+
+      const removableCandidateIds = new Set(
+        normalizedCandidateIds.filter((assetId) => !retainedAssetIds.has(assetId) && !directReferenceAssetIds.has(assetId)),
+      )
+      if (!removableCandidateIds.size) {
+        return { removedAssetIds: [] }
+      }
+
+      const nextCatalog: Record<string, ProjectAsset[]> = {}
+      const removedAssetIds: string[] = []
+      let catalogChanged = false
+
+      Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
+        const filtered = list.filter((asset) => {
+          const remove = removableCandidateIds.has(asset.id)
+          if (remove) {
+            removedAssetIds.push(asset.id)
+          }
+          return !remove
+        })
+        if (filtered.length !== list.length) {
+          catalogChanged = true
+        }
+        nextCatalog[categoryId] = filtered
+      })
+
+      if (!catalogChanged) {
+        return { removedAssetIds: [] }
+      }
+
+      this.applyCatalogUpdate(nextCatalog)
+      if (this.selectedAssetId && removableCandidateIds.has(this.selectedAssetId)) {
         this.selectedAssetId = null
       }
       this.ensureActiveDirectoryAndSelectionValid()

@@ -311,7 +311,7 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
   }
 }
 
-export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<string> {
+export function collectDirectSceneAssetReferenceIds(scene: StoredSceneDocument): Set<string> {
   const bucket = new Set<string>()
   const materialIds = new Set<string>()
 
@@ -365,6 +365,12 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
   collectAssetIdsFromUnknown(sanitizeEnvironmentAssetReferences(scene.environment), bucket)
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)
   collectPlanningAssetDependencies(scene.planningData, bucket)
+
+  return bucket
+}
+
+export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<string> {
+  const bucket = collectDirectSceneAssetReferenceIds(scene)
 
   const catalog = scene.assetCatalog ?? {}
   const removable: string[] = []

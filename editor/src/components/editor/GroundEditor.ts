@@ -12,6 +12,7 @@ import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
 	upsertTerrainScatterLayer,
+	removeTerrainScatterLayer,
 	replaceTerrainScatterInstances,
 	loadTerrainScatterSnapshot,
 	serializeTerrainScatterStore,
@@ -1064,6 +1065,9 @@ let scatterEraseState: ScatterEraseState | null = null
 let scatterSidecarPersistPending = false
 let pendingScatterSidecarSave: Promise<void> | null = null
 let scatterSidecarSaveQueued = false
+let pendingScatterAssetCleanup: Promise<void> | null = null
+let scatterAssetCleanupQueued = false
+const pendingScatterAssetCleanupIds = new Set<string>()
 
 type ScatterPerfMetrics = {
 	eraseCommits: number
@@ -3131,6 +3135,116 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		}
 		return result
+	}
+
+	function collectScatterAssetCleanupId(bucket: Set<string>, value: string | null | undefined): void {
+		const normalized = typeof value === 'string' ? value.trim() : ''
+		if (normalized) {
+			bucket.add(normalized)
+		}
+	}
+
+	function collectScatterAssetCleanupIdsFromInstance(instance: TerrainScatterInstance, bucket: Set<string>): void {
+		collectScatterAssetCleanupId(bucket, instance.assetId)
+		collectScatterAssetCleanupId(bucket, instance.profileId)
+	}
+
+	function collectScatterAssetCleanupIdsFromLayer(layer: TerrainScatterLayer, bucket: Set<string>): void {
+		collectScatterAssetCleanupId(bucket, layer.assetId)
+		collectScatterAssetCleanupId(bucket, layer.profileId)
+		for (const instance of layer.instances) {
+			collectScatterAssetCleanupIdsFromInstance(instance, bucket)
+		}
+	}
+
+	function cleanupScatterRuntimeForInstance(layerId: string, instance: TerrainScatterInstance): void {
+		releaseScatterInstance(instance)
+		const nodeId = buildScatterNodeId(layerId, instance.id)
+		const chunkEntry = scatterChunkEntryByNodeId.get(nodeId)
+		if (chunkEntry) {
+			const bucket = scatterChunkIndex.get(chunkEntry.chunkKey)
+			if (bucket) {
+				for (let index = bucket.length - 1; index >= 0; index -= 1) {
+					const entry = bucket[index]
+					if (entry && entry.layer.id === layerId && entry.instance.id === instance.id) {
+						bucket.splice(index, 1)
+					}
+				}
+				if (bucket.length === 0) {
+					scatterChunkIndex.delete(chunkEntry.chunkKey)
+				}
+			}
+			scatterChunkEntryByNodeId.delete(nodeId)
+		}
+		scatterRuntimeAssetIdByNodeId.delete(nodeId)
+		scatterChunkStreamingAllocatedNodeIds.delete(nodeId)
+		scatterChunkStreamingPendingBindIds.delete(nodeId)
+		scatterChunkStreamingLastVisibleAt.delete(nodeId)
+		scatterChunkStreamingLastFrustumVisibleIds.delete(nodeId)
+	}
+
+	function removeScatterLayerFromStore(
+		store: TerrainScatterStore,
+		layer: TerrainScatterLayer,
+		cleanupAssetIds: Set<string>,
+		optionsOverride: { releaseInstances?: boolean } = {},
+	): boolean {
+		collectScatterAssetCleanupIdsFromLayer(layer, cleanupAssetIds)
+		if (optionsOverride.releaseInstances !== false) {
+			for (const instance of layer.instances) {
+				cleanupScatterRuntimeForInstance(layer.id, instance)
+			}
+		}
+		const removed = removeTerrainScatterLayer(store, layer.id)
+		if (removed) {
+			if (scatterLayer?.id === layer.id) {
+				scatterLayer = null
+			}
+			scatterChunkIndexDirty = true
+		}
+		return removed
+	}
+
+	function queueScatterAssetCleanup(assetIds: Iterable<string>): void {
+		for (const assetId of assetIds) {
+			const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+			if (normalized) {
+				pendingScatterAssetCleanupIds.add(normalized)
+			}
+		}
+		if (pendingScatterAssetCleanupIds.size === 0) {
+			return
+		}
+		scatterAssetCleanupQueued = true
+		if (pendingScatterAssetCleanup) {
+			return
+		}
+
+		const cleanupPromise = (async () => {
+			while (scatterAssetCleanupQueued) {
+				scatterAssetCleanupQueued = false
+				const candidateIds = Array.from(pendingScatterAssetCleanupIds)
+				pendingScatterAssetCleanupIds.clear()
+				if (!candidateIds.length) {
+					continue
+				}
+				try {
+					await options.sceneStore.cleanUnusedAssetsByIds(candidateIds)
+				} catch (error) {
+					console.warn('清理未引用的地面散布资产失败', error)
+				}
+			}
+		})()
+
+		pendingScatterAssetCleanup = cleanupPromise
+		void cleanupPromise.finally(() => {
+			if (pendingScatterAssetCleanup === cleanupPromise) {
+				pendingScatterAssetCleanup = null
+			}
+			if (scatterAssetCleanupQueued && pendingScatterAssetCleanupIds.size > 0) {
+				queueScatterAssetCleanup([])
+			}
+		})
 	}
 
 	function queueScatterSidecarSave(): void {
@@ -5722,6 +5836,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		let removedLayerCount = 0
 		let removedInstanceCount = 0
 		let mutatedLayers = 0
+		const cleanupAssetIds = new Set<string>()
 		// Compute distance on ground-local XZ plane so the brush radius works regardless of terrain height.
 		scatterEraseLocalPointHelper.copy(worldPoint)
 		groundMesh.updateMatrixWorld(true)
@@ -5791,45 +5906,32 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			removedLayerCount += 1
 			removedInstanceCount += removedInstances.length
 			for (const instance of removedInstances) {
-				releaseScatterInstance(instance)
-				const nodeId = buildScatterNodeId(layer.id, instance.id)
-				const chunkEntry = scatterChunkEntryByNodeId.get(nodeId)
-				if (chunkEntry) {
-					const bucket = scatterChunkIndex.get(chunkEntry.chunkKey)
-					if (bucket) {
-						for (let index = bucket.length - 1; index >= 0; index -= 1) {
-							const entry = bucket[index]
-							if (entry && entry.layer.id === layer.id && entry.instance.id === instance.id) {
-								bucket.splice(index, 1)
-							}
-						}
-						if (bucket.length === 0) {
-							scatterChunkIndex.delete(chunkEntry.chunkKey)
-						}
-					}
-					scatterChunkEntryByNodeId.delete(nodeId)
-				}
-				scatterRuntimeAssetIdByNodeId.delete(nodeId)
-				scatterChunkStreamingAllocatedNodeIds.delete(nodeId)
-				scatterChunkStreamingPendingBindIds.delete(nodeId)
-				scatterChunkStreamingLastVisibleAt.delete(nodeId)
-				scatterChunkStreamingLastFrustumVisibleIds.delete(nodeId)
+				collectScatterAssetCleanupIdsFromInstance(instance, cleanupAssetIds)
+				cleanupScatterRuntimeForInstance(layer.id, instance)
 			}
-					const nextLayer = replaceTerrainScatterInstances(store, layer.id, survivors)
-					if (nextLayer && scatterLayer && scatterLayer.id === layer.id) {
-						scatterLayer = nextLayer
-					}
-					if (nextLayer) {
-						mutatedLayers += 1
-					}
-		}
-				if (mutatedLayers > 0) {
-					syncTerrainScatterSnapshotToScene(store, {
-						bumpRuntimeVersion: false,
-						runtimeSyncReason: 'editor-local-erase',
-					})
-					scatterSidecarPersistPending = true
+			if (survivors.length === 0) {
+				if (removeScatterLayerFromStore(store, layer, cleanupAssetIds, { releaseInstances: false })) {
+					mutatedLayers += 1
 				}
+				continue
+			}
+			const nextLayer = replaceTerrainScatterInstances(store, layer.id, survivors)
+			if (nextLayer && scatterLayer && scatterLayer.id === layer.id) {
+				scatterLayer = nextLayer
+			}
+			if (nextLayer) {
+				mutatedLayers += 1
+				scatterChunkIndexDirty = true
+			}
+		}
+		if (mutatedLayers > 0) {
+			syncTerrainScatterSnapshotToScene(store, {
+				bumpRuntimeVersion: false,
+				runtimeSyncReason: 'editor-local-erase',
+			})
+			scatterSidecarPersistPending = true
+			queueScatterAssetCleanup(cleanupAssetIds)
+		}
 		recordScatterErasePerf(nowMs() - perfStart, removedLayerCount, removedInstanceCount)
 		return removed
 	}
@@ -5898,17 +6000,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function clearScatterInstances(): boolean {
 		const store = ensureScatterStoreRef()
+		const cleanupAssetIds = new Set<string>()
 		let removed = false
 		for (const layer of Array.from(store.layers.values())) {
-			if (!layer.instances.length) {
-				continue
-			}
-			layer.instances.forEach((instance) => releaseScatterInstance(instance))
-			persistScatterInstances(layer, [])
-			removed = true
+			removed = removeScatterLayerFromStore(store, layer, cleanupAssetIds) || removed
 		}
 		if (removed) {
+			syncTerrainScatterSnapshotToScene(store, {
+				bumpRuntimeVersion: false,
+				runtimeSyncReason: 'editor-local-clear',
+			})
+			scatterSidecarPersistPending = true
 			queueScatterSidecarSave()
+			queueScatterAssetCleanup(cleanupAssetIds)
 		}
 		return removed
 	}

@@ -61,6 +61,7 @@ import type {
   BehaviorComponentProps,
   BehaviorEventType,
   SceneBehavior,
+  SceneNode,
   SceneNodeComponentState,
 } from '@schema'
 import type { Project } from '@schema'
@@ -1265,6 +1266,24 @@ let lastPreviewBroadcastRevision = 0
 
 let latestScenePreviewBroadcastTaskId = 0
 
+function pruneEmptyGroundScatterLayers(groundNode: SceneNode | null | undefined): void {
+  const dynamicMesh = groundNode?.dynamicMesh
+  if (!groundNode || dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  const terrainScatter = dynamicMesh.terrainScatter
+  if (!terrainScatter) {
+    return
+  }
+  groundNode.dynamicMesh = {
+    ...dynamicMesh,
+    terrainScatter: {
+      ...terrainScatter,
+      layers: terrainScatter.layers.filter((layer) => Array.isArray(layer.instances) && layer.instances.length > 0),
+    },
+  }
+}
+
 async function broadcastScenePreview(document: StoredSceneDocument, isStale?: () => boolean) {
   try {
     if (isStale?.()) {
@@ -1280,6 +1299,7 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     const groundNode = findGroundNode(exportDocument.nodes)
     if (groundNode) {
       attachGroundScatterRuntimeToNode(exportDocument.id, groundNode)
+      pruneEmptyGroundScatterLayers(groundNode)
       attachGroundPaintRuntimeToNode(exportDocument.id, groundNode)
     }
 

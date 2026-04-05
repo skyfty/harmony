@@ -195,6 +195,13 @@ function normalizeScatterPayload(payload: GroundScatterSidecarPayload): GroundSc
   }
 }
 
+function filterEmptyScatterLayers(snapshot: TerrainScatterStoreSnapshot): TerrainScatterStoreSnapshot {
+  return {
+    ...snapshot,
+    layers: snapshot.layers.filter((layer) => Array.isArray(layer.instances) && layer.instances.length > 0),
+  }
+}
+
 function buildScatterMetaSection(snapshot: TerrainScatterStoreSnapshot): SectionBuffer {
   const bytes = new Uint8Array(24)
   const view = new DataView(bytes.buffer)
@@ -306,13 +313,15 @@ export function serializeGroundScatterSidecar(rawPayload: GroundScatterSidecarPa
     throw new Error('terrainScatter is required for ground scatter sidecar')
   }
 
+  const terrainScatter = filterEmptyScatterLayers(payload.terrainScatter)
+
   const strings = new StringTableBuilder()
   const blobs = new BlobPoolBuilder()
   const groundNodeIdIndex = strings.add(payload.groundNodeId)
   const sections: SectionBuffer[] = [
-    buildScatterMetaSection(payload.terrainScatter),
-    buildScatterLayersSection(payload.terrainScatter, strings, blobs),
-    buildScatterInstancesSection(payload.terrainScatter, strings, blobs),
+    buildScatterMetaSection(terrainScatter),
+    buildScatterLayersSection(terrainScatter, strings, blobs),
+    buildScatterInstancesSection(terrainScatter, strings, blobs),
   ]
 
   const stringBytes = strings.toBytes()
