@@ -57,7 +57,7 @@ function buildHeightGrid(
   domain: Pick<GroundOptimizedChunkDomain, 'minRow' | 'maxRow' | 'minColumn' | 'maxColumn'>,
 ): GroundOptimizedHeightGrid {
   const region = sampleGroundEffectiveHeightRegion(
-    definition as GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array },
+    definition,
     domain.minRow,
     domain.maxRow,
     domain.minColumn,

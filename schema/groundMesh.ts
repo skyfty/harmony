@@ -320,18 +320,19 @@ export type GroundEffectiveHeightRegion = GroundBaseHeightRegion & {
 }
 
 export function sampleGroundEffectiveHeightRegion(
-  definition: GroundRuntimeDynamicMesh,
+  definition: GroundDynamicMesh,
   minRowInput: number,
   maxRowInput: number,
   minColumnInput: number,
   maxColumnInput: number,
 ): GroundEffectiveHeightRegion {
-  const baseRegion = computeGroundBaseHeightRegion(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const baseRegion = computeGroundBaseHeightRegion(runtimeDefinition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
   const { minRow, maxRow, minColumn, maxColumn, stride, values: baseValues } = baseRegion
   const total = baseValues.length
   const values = new Float32Array(total)
-  const manualHeightMap = definition.manualHeightMap
-  const planningHeightMap = definition.planningHeightMap
+  const manualHeightMap = runtimeDefinition.manualHeightMap
+  const planningHeightMap = runtimeDefinition.planningHeightMap
   let heightMin = 0
   let heightMax = 0
 
@@ -344,7 +345,7 @@ export function sampleGroundEffectiveHeightRegion(
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const offset = baseOffset + (column - minColumn)
       const base = baseValues[offset] ?? 0
-      const heightIndex = getGroundVertexIndex(definition.columns, row, column)
+      const heightIndex = getGroundVertexIndex(runtimeDefinition.columns, row, column)
       const manualRaw = manualHeightMap[heightIndex]
       const planningRaw = planningHeightMap[heightIndex]
       const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base

@@ -57,6 +57,7 @@ import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
+import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from '@/stores/groundPaintStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
@@ -1506,6 +1507,29 @@ function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null
 	return runtime.manualHeightMap instanceof Float64Array && runtime.planningHeightMap instanceof Float64Array
 }
 
+async function resolvePreviewGroundHeightSidecar(
+	documentId: string,
+	groundNode: SceneNode | null,
+	preferredSidecar?: ArrayBuffer | null,
+): Promise<ArrayBuffer | null> {
+	if (preferredSidecar) {
+		return preferredSidecar
+	}
+	const storedSidecar = await useScenesStore().loadGroundHeightSidecar(documentId)
+	if (storedSidecar) {
+		return storedSidecar
+	}
+	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		return null
+	}
+	try {
+		return useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to synthesize ground height sidecar', error)
+		return null
+	}
+}
+
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
@@ -1522,11 +1546,13 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	}
 	if (hasEmbeddedGroundRuntimeHeightmaps(groundNode.dynamicMesh)) {
 	} else {
-		const sidecar = await useScenesStore().loadGroundHeightSidecar(document.id)
+		const sidecar = await resolvePreviewGroundHeightSidecar(document.id, groundNode)
 		if (groundSurfacePreviewLoadToken !== loadToken) {
 			return
 		}
-		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
+		if (sidecar) {
+			groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
+		}
 	}
 	if (groundSurfacePreviewLoadToken !== loadToken) {
 		return
@@ -5137,10 +5163,10 @@ async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null; groundPaintSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
-	const sidecar = options.groundHeightSidecar ?? await useScenesStore().loadGroundHeightSidecar(document.id)
+	const groundNode = findGroundNode(document.nodes)
+	const sidecar = await resolvePreviewGroundHeightSidecar(document.id, groundNode, options.groundHeightSidecar)
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
 	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
-	const groundNode = findGroundNode(document.nodes)
 	const scatterStore = useGroundScatterStore()
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
