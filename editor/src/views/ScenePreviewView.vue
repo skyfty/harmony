@@ -53,7 +53,8 @@ import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
-import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
+import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
+import { logSceneAssetDiagnostics, type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
@@ -5148,7 +5149,34 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
-	return await prepareStoredSceneJsonExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+	const bundle = await prepareStoredSceneJsonExportBundle(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+	if (bundle.diagnostics.issues.length) {
+		logSceneAssetDiagnostics(bundle.diagnostics, '[ScenePreviewExport]', document.name)
+	}
+	return bundle.document
+}
+
+function logPreviewDiagnosticsSummary(summary: SceneAssetDiagnosticsSummary | undefined): void {
+	if (!summary || summary.totalIssueCount <= 0) {
+		return
+	}
+	console.groupCollapsed(
+		`[ScenePreview] asset diagnostics summary: ${summary.blockingIssueCount} blocking, ${summary.warningIssueCount} warning`,
+	)
+	summary.items.forEach((item) => {
+		const payload = {
+			severity: item.severity,
+			code: item.code,
+			assetId: item.assetId ?? null,
+			locations: item.locations,
+		}
+		if (item.severity === 'error') {
+			console.error(item.message, payload)
+		} else {
+			console.warn(item.message, payload)
+		}
+	})
+	console.groupEnd()
 }
 
 function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument {
@@ -10579,6 +10607,7 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		return
 	}
 	lastSnapshotRevision = snapshot.revision
+	logPreviewDiagnosticsSummary(snapshot.diagnosticsSummary)
 	if (isApplyingSnapshot) {
 		queuedSnapshot = snapshot
 		return

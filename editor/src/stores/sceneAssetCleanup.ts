@@ -7,6 +7,10 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial } from '@/types/material'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { isPlanningImageConversionNode } from '@/utils/planningToScene'
+import {
+  type ExplicitSceneAssetReference,
+  visitExplicitComponentAssetReferences,
+} from '../utils/sceneExplicitAssetReferences'
 import { useGroundScatterStore } from './groundScatterStore'
 import { useGroundPaintStore } from './groundPaintStore'
 import { collectPrefabAssetReferences } from './prefabActions'
@@ -283,10 +287,14 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
     })
   }
   if (node.components) {
-    Object.values(node.components).forEach((component) => {
-      if (component?.props) {
-        collectAssetIdsFromUnknown(component.props, bucket)
+    Object.entries(node.components).forEach(([componentType, component]) => {
+      if (!component?.props) {
+        return
       }
+      collectAssetIdsFromUnknown(component.props, bucket)
+      visitExplicitComponentAssetReferences(componentType, component.props as Record<string, unknown>, ({ assetId }: ExplicitSceneAssetReference) => {
+        collectAssetIdCandidate(bucket, assetId)
+      })
     })
   }
   if (node.userData) {

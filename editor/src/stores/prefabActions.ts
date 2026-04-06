@@ -34,6 +34,10 @@ import {
 } from '@/utils/behaviorPrefab'
 import { buildAssetDependencySubset, sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { createServerAssetSource, isServerBackedProviderId } from '@/utils/serverAssetSource'
+import {
+  type ExplicitSceneAssetReference,
+  visitExplicitComponentAssetReferences,
+} from '../utils/sceneExplicitAssetReferences'
 
 export type PrefabStoreLike = {
   nodes: SceneNode[]
@@ -284,9 +288,15 @@ function collectNodeAssetDependenciesLocal(node: SceneNode | null | undefined, b
     ;((node as any).materials as any[]).forEach((material) => collectAssetIdsFromUnknown(material, bucket))
   }
   if ((node as any).components) {
-    Object.values((node as any).components).forEach((component: any) => {
-      if (component?.props) collectAssetIdsFromUnknown(component.props, bucket)
-    })
+    Object.entries((node as any).components as Record<string, { props?: Record<string, unknown> | null | undefined }>).forEach(
+      ([componentType, component]) => {
+        if (!component?.props) return
+        collectAssetIdsFromUnknown(component.props, bucket)
+        visitExplicitComponentAssetReferences(componentType, component.props, ({ assetId }: ExplicitSceneAssetReference) => {
+          collectAssetIdCandidate(bucket, assetId)
+        })
+      },
+    )
   }
   if ((node as any).userData) {
     if ((node as any).nodeType === 'Environment' && isPlainObject((node as any).userData)) {

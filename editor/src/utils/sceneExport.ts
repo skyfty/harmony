@@ -4,12 +4,14 @@ import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
 import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type GroundRuntimeDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportOptions } from '@/types/scene-export'
+import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
 import { buildAssetRegistryForExport } from '@/stores/sceneStore'
 import { calculateSceneResourceSummary, cloneSceneDocumentForExport } from '@/stores/sceneStore'
+import { validateSceneAssetReferences } from '@/utils/sceneAssetDiagnostics'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
@@ -91,7 +93,20 @@ export function collectPunchPointsFromNodes(nodes: SceneNode[]): ScenePunchPoint
   return points
 }
 
+export interface PreparedSceneExportBundle {
+  document: SceneJsonExportDocument
+  diagnostics: SceneAssetValidationReport
+}
+
 export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneJsonExportDocument> {
+  const bundle = await prepareJsonSceneExportBundle(snapshot, options)
+  return bundle.document
+}
+
+export async function prepareJsonSceneExportBundle(
+  snapshot: StoredSceneDocument,
+  options: SceneExportOptions,
+): Promise<PreparedSceneExportBundle> {
   const assetRegistry = await buildAssetRegistryForExport(snapshot)
 
   const environment: EnvironmentSettings | undefined = snapshot.environment ? { ...snapshot.environment } : undefined
@@ -115,16 +130,41 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
   if (punchPoints.length) {
     exportDocument.punchPoints = punchPoints
   }
-  return await sanitizeSceneDocumentForJsonExport(exportDocument, options)
+  const sanitizedDocument = await sanitizeSceneDocumentForJsonExport(exportDocument, options)
+  const diagnostics = validateSceneAssetReferences(
+    {
+      ...snapshot,
+      nodes: sanitizedDocument.nodes,
+      materials: sanitizedDocument.materials,
+      environment: sanitizedDocument.environment,
+      groundSettings: sanitizedDocument.groundSettings ?? snapshot.groundSettings,
+      assetRegistry,
+      projectOverrideAssets: sanitizedDocument.projectOverrideAssets,
+      sceneOverrideAssets: sanitizedDocument.sceneOverrideAssets,
+    },
+    assetRegistry,
+  )
+  return {
+    document: sanitizedDocument,
+    diagnostics,
+  }
 }
 
 export async function prepareStoredSceneJsonExport(
   snapshot: StoredSceneDocument,
   options: SceneExportOptions,
 ): Promise<SceneJsonExportDocument> {
+  const bundle = await prepareStoredSceneJsonExportBundle(snapshot, options)
+  return bundle.document
+}
+
+export async function prepareStoredSceneJsonExportBundle(
+  snapshot: StoredSceneDocument,
+  options: SceneExportOptions,
+): Promise<PreparedSceneExportBundle> {
   const exportableScene = await cloneSceneDocumentForExport(snapshot)
   exportableScene.resourceSummary = await calculateSceneResourceSummary(exportableScene, { embedResources: true })
-  return await prepareJsonSceneExport(exportableScene, options)
+  return await prepareJsonSceneExportBundle(exportableScene, options)
 }
 
 type OutlineCandidate = {

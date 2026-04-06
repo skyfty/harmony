@@ -1,10 +1,12 @@
 import type { SceneJsonExportDocument } from '@schema'
+import type { SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { deflate, inflate } from 'pako'
 
 export interface ScenePreviewSnapshot {
   revision: number
   document: SceneJsonExportDocument
   timestamp: string
+  diagnosticsSummary?: SceneAssetDiagnosticsSummary
 }
 
 type PreviewListener = (snapshot: ScenePreviewSnapshot) => void

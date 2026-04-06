@@ -24,7 +24,12 @@ import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 
-import { prepareStoredSceneJsonExport } from '@/utils/sceneExport'
+import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
+import {
+  formatSceneAssetDiagnosticsReport,
+  logSceneAssetDiagnostics,
+  type SceneAssetValidationReport,
+} from '@/utils/sceneAssetDiagnostics'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
@@ -120,6 +125,11 @@ const isExporting = ref(false)
 const exportProgress = ref(0)
 const exportProgressMessage = ref('')
 const exportErrorMessage = ref<string | null>(null)
+const isExportDiagnosticsDialogOpen = ref(false)
+const exportDiagnosticsReport = ref<SceneAssetValidationReport | null>(null)
+const exportDiagnosticsSceneName = ref('')
+const exportDiagnosticsSeverityFilter = ref<'all' | 'error' | 'warning'>('all')
+const exportDiagnosticsSearch = ref('')
 const exportDialogFileName = ref('scene')
 const exportPreferences = ref<SceneExportOptions>({
   fileName: 'scene',
@@ -144,6 +154,46 @@ const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
 const externalSceneInputRef = ref<HTMLInputElement | null>(null)
 const isImportingExternalScene = ref(false)
+
+const exportDiagnosticsSeverityOptions = [
+  { title: '全部', value: 'all' },
+  { title: '阻断错误', value: 'error' },
+  { title: '警告', value: 'warning' },
+] as const
+
+const filteredExportDiagnosticIssues = computed(() => {
+  const report = exportDiagnosticsReport.value
+  if (!report) {
+    return []
+  }
+  const query = exportDiagnosticsSearch.value.trim().toLowerCase()
+  return report.issues.filter((issue) => {
+    if (exportDiagnosticsSeverityFilter.value !== 'all' && issue.severity !== exportDiagnosticsSeverityFilter.value) {
+      return false
+    }
+    if (!query) {
+      return true
+    }
+    const haystack = [
+      issue.message,
+      issue.assetId ?? '',
+      issue.path ?? '',
+      issue.code,
+      ...issue.references.map((reference) => `${reference.path} ${reference.nodeName ?? ''} ${reference.nodeId ?? ''}`),
+    ]
+      .join(' ')
+      .toLowerCase()
+    return haystack.includes(query)
+  })
+})
+
+const exportDiagnosticsSummaryText = computed(() => {
+  const report = exportDiagnosticsReport.value
+  if (!report) {
+    return ''
+  }
+  return formatSceneAssetDiagnosticsReport(report)
+})
 
 function closeProjectManagerOverlay() {
   isProjectManagerOverlayOpen.value = false
@@ -989,6 +1039,30 @@ function sanitizeExportFileName(input: string): string {
   return withoutExtension || 'scene'
 }
 
+function openExportDiagnosticsDialog(report: SceneAssetValidationReport, sceneName: string) {
+  exportDiagnosticsReport.value = report
+  exportDiagnosticsSceneName.value = sceneName
+  exportDiagnosticsSeverityFilter.value = report.blockingIssueCount > 0 ? 'error' : 'all'
+  exportDiagnosticsSearch.value = ''
+  isExportDiagnosticsDialogOpen.value = true
+}
+
+function closeExportDiagnosticsDialog() {
+  isExportDiagnosticsDialogOpen.value = false
+}
+
+async function copyExportDiagnosticsSummary() {
+  const text = exportDiagnosticsSummaryText.value
+  if (!text || typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (error) {
+    console.warn('[SceneExport] Failed to copy diagnostics summary', error)
+  }
+}
+
 type SceneExportWorkflowConfig = {
   action: 'export'
   startMessage: string
@@ -1098,7 +1172,18 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
         throw new Error(`无法读取场景：${id}`)
       }
 
-      const exportDocument = await prepareStoredSceneJsonExport(document, { ...options, format: 'json' })
+      const exportBundle = await prepareStoredSceneJsonExportBundle(document, { ...options, format: 'json' })
+      if (exportBundle.diagnostics.hasBlockingIssues) {
+        logSceneAssetDiagnostics(exportBundle.diagnostics, '[SceneExport]', document.name)
+        openExportDiagnosticsDialog(exportBundle.diagnostics, document.name || document.id)
+        throw new Error(
+          `场景“${document.name || document.id}”存在 ${exportBundle.diagnostics.blockingIssueCount} 个资产有效性错误，已阻止正式导出。请查看资产诊断弹窗。`,
+        )
+      }
+      if (exportBundle.diagnostics.issues.length) {
+        logSceneAssetDiagnostics(exportBundle.diagnostics, '[SceneExport]', document.name)
+      }
+      const exportDocument = exportBundle.document
       embeddedScenes.push({ id, document: exportDocument, planningData: document.planningData ?? null })
       continue
     }
@@ -1225,6 +1310,14 @@ watch(isPublishDialogOpen, (open) => {
   }
 })
 
+watch(isExportDiagnosticsDialogOpen, (open) => {
+  if (open) {
+    return
+  }
+  exportDiagnosticsSeverityFilter.value = 'all'
+  exportDiagnosticsSearch.value = ''
+})
+
 function toggleStatsPanelVisibility() {
   showStatsPanel.value = !showStatsPanel.value
 }
@@ -1292,10 +1385,14 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     if (isStale?.()) {
       return
     }
-    const exportDocument = await prepareStoredSceneJsonExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+    const exportBundle = await prepareStoredSceneJsonExportBundle(document, SCENE_PREVIEW_EXPORT_OPTIONS)
     if (isStale?.()) {
       return
     }
+    if (exportBundle.diagnostics.issues.length) {
+      logSceneAssetDiagnostics(exportBundle.diagnostics, '[ScenePreviewExport]', document.name)
+    }
+    const exportDocument = exportBundle.document
     const groundNode = findGroundNode(exportDocument.nodes)
     if (groundNode) {
       attachGroundScatterRuntimeToNode(exportDocument.id, groundNode)
@@ -1312,6 +1409,7 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
       revision,
       document: exportDocument,
       timestamp: new Date().toISOString(),
+      diagnosticsSummary: exportBundle.diagnostics.summary,
     })
   } catch (error) {
     console.warn('[SceneStore] Failed to broadcast preview update', error)
@@ -2380,6 +2478,122 @@ onBeforeUnmount(() => {
       @cancel="handlePublishDialogCancel"
     />
 
+    <v-dialog
+      v-model="isExportDiagnosticsDialogOpen"
+      max-width="980"
+      scrollable
+    >
+      <v-card>
+        <v-card-title class="export-diagnostics-dialog__title">
+          <div>
+            <div class="text-h6">资产诊断</div>
+            <div class="text-body-2 text-medium-emphasis">
+              {{ exportDiagnosticsSceneName || '当前场景' }}
+            </div>
+          </div>
+          <div class="export-diagnostics-dialog__chips" v-if="exportDiagnosticsReport">
+            <v-chip color="error" variant="tonal">
+              阻断错误 {{ exportDiagnosticsReport.blockingIssueCount }}
+            </v-chip>
+            <v-chip color="warning" variant="tonal">
+              警告 {{ exportDiagnosticsReport.warningIssueCount }}
+            </v-chip>
+          </div>
+        </v-card-title>
+
+        <v-card-text class="export-diagnostics-dialog__content">
+          <div class="export-diagnostics-dialog__toolbar">
+            <v-select
+              v-model="exportDiagnosticsSeverityFilter"
+              :items="exportDiagnosticsSeverityOptions"
+              item-title="title"
+              item-value="value"
+              label="严重级别"
+              density="comfortable"
+              hide-details
+              class="export-diagnostics-dialog__filter"
+            />
+            <v-text-field
+              v-model="exportDiagnosticsSearch"
+              label="搜索资产 ID、路径、节点名"
+              density="comfortable"
+              hide-details
+              clearable
+              class="export-diagnostics-dialog__search"
+            />
+          </div>
+
+          <div class="export-diagnostics-dialog__summary" v-if="exportDiagnosticsReport">
+            检测到 {{ exportDiagnosticsReport.issues.length }} 条资产问题。
+            正式导出已因阻断错误被取消，请先修复再重试。
+          </div>
+
+          <div
+            v-if="filteredExportDiagnosticIssues.length"
+            class="export-diagnostics-dialog__issues"
+          >
+            <div
+              v-for="(issue, index) in filteredExportDiagnosticIssues"
+              :key="`${issue.code}-${issue.assetId ?? 'no-asset'}-${issue.path ?? index}`"
+              class="export-diagnostics-dialog__issue"
+            >
+              <div class="export-diagnostics-dialog__issue-header">
+                <div class="export-diagnostics-dialog__issue-title-row">
+                  <v-chip
+                    :color="issue.severity === 'error' ? 'error' : 'warning'"
+                    size="small"
+                    variant="flat"
+                  >
+                    {{ issue.severity === 'error' ? '阻断错误' : '警告' }}
+                  </v-chip>
+                  <span class="export-diagnostics-dialog__issue-code">{{ issue.code }}</span>
+                  <span v-if="issue.assetId" class="export-diagnostics-dialog__asset-id">{{ issue.assetId }}</span>
+                </div>
+                <div class="export-diagnostics-dialog__issue-message">{{ issue.message }}</div>
+              </div>
+              <div v-if="issue.detail" class="export-diagnostics-dialog__issue-detail">
+                {{ issue.detail }}
+              </div>
+              <div v-if="issue.references.length" class="export-diagnostics-dialog__references">
+                <div
+                  v-for="reference in issue.references.slice(0, 6)"
+                  :key="`${reference.assetId}-${reference.path}`"
+                  class="export-diagnostics-dialog__reference"
+                >
+                  <div class="export-diagnostics-dialog__reference-path">{{ reference.path }}</div>
+                  <div class="export-diagnostics-dialog__reference-meta">
+                    <span v-if="reference.nodeName || reference.nodeId">
+                      节点 {{ reference.nodeName || reference.nodeId }}
+                    </span>
+                    <span v-if="reference.componentType">
+                      组件 {{ reference.componentType }}
+                    </span>
+                    <span>分类 {{ reference.category }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="export-diagnostics-dialog__empty">
+            当前筛选条件下没有匹配的问题。
+          </div>
+        </v-card-text>
+
+        <v-divider />
+
+        <v-card-actions>
+          <v-btn variant="text" @click="copyExportDiagnosticsSummary">
+            复制摘要
+          </v-btn>
+          <v-spacer />
+          <v-btn color="primary" @click="closeExportDiagnosticsDialog">
+            关闭
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <div
       v-if="isProjectManagerOverlayOpen"
       ref="projectManagerOverlayRef"
@@ -2407,6 +2621,130 @@ onBeforeUnmount(() => {
    */
   z-index: 1900;
   overflow: auto;
+}
+
+.export-diagnostics-dialog__title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.export-diagnostics-dialog__chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.export-diagnostics-dialog__content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.export-diagnostics-dialog__toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.export-diagnostics-dialog__filter {
+  flex: 0 0 180px;
+}
+
+.export-diagnostics-dialog__search {
+  flex: 1 1 auto;
+}
+
+.export-diagnostics-dialog__summary {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.export-diagnostics-dialog__issues {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.export-diagnostics-dialog__issue {
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.export-diagnostics-dialog__issue-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.export-diagnostics-dialog__issue-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.export-diagnostics-dialog__issue-code {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.export-diagnostics-dialog__asset-id {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  color: #9ad0ff;
+}
+
+.export-diagnostics-dialog__issue-message {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.export-diagnostics-dialog__issue-detail {
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+}
+
+.export-diagnostics-dialog__references {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.export-diagnostics-dialog__reference {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.export-diagnostics-dialog__reference-path {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  color: #f3f7ff;
+  word-break: break-all;
+}
+
+.export-diagnostics-dialog__reference-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.export-diagnostics-dialog__empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.62);
 }
 
 .preview-overlay-container {
