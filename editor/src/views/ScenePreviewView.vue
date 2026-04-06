@@ -465,6 +465,43 @@ type GroundChunkRenderSnapshot = {
 	visibleChunkCount: number
 	estimatedTriangles: number
 	chunkKeys: string[]
+	geometrySourceCounts: Record<string, number>
+	fallbackReasonCounts: Record<string, number>
+	chunkSamples: GroundChunkRenderSample[]
+}
+
+function countFiniteGroundHeightValues(value: unknown): number {
+	if (!(value instanceof Float64Array)) {
+		return 0
+	}
+	let total = 0
+	for (let index = 0; index < value.length; index += 1) {
+		const entry = value[index]
+		if (typeof entry === 'number' && Number.isFinite(entry)) {
+			total += 1
+		}
+	}
+	return total
+}
+
+function collectGroundHeightRuntimeStats(definition: GroundDynamicMesh): GroundHeightRuntimeStats {
+	const runtime = definition as GroundRuntimeDynamicMesh & {
+		runtimeHydratedHeightState?: string
+		runtimeDisableOptimizedChunks?: boolean
+		surfaceRevision?: unknown
+	}
+	return {
+		hasEmbeddedRuntimeHeightmaps: hasEmbeddedGroundRuntimeHeightmaps(definition),
+		manualFiniteCount: countFiniteGroundHeightValues(runtime.manualHeightMap),
+		planningFiniteCount: countFiniteGroundHeightValues(runtime.planningHeightMap),
+		surfaceRevision: Number.isFinite(runtime.surfaceRevision)
+			? Math.max(0, Math.trunc(runtime.surfaceRevision as number))
+			: 0,
+		runtimeHydratedHeightState: typeof runtime.runtimeHydratedHeightState === 'string'
+			? runtime.runtimeHydratedHeightState
+			: null,
+		runtimeDisableOptimizedChunks: runtime.runtimeDisableOptimizedChunks === true,
+	}
 }
 
 function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | undefined): GroundChunkRenderSnapshot {
@@ -473,14 +510,20 @@ function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | 
 			visibleChunkCount: 0,
 			estimatedTriangles: 0,
 			chunkKeys: [],
+			geometrySourceCounts: {},
+			fallbackReasonCounts: {},
+			chunkSamples: [],
 		}
 	}
 
 	let visibleChunkCount = 0
 	let estimatedTriangles = 0
 	const chunkKeys: string[] = []
+	const geometrySourceCounts: Record<string, number> = {}
+	const fallbackReasonCounts: Record<string, number> = {}
+	const chunkSamples: GroundChunkRenderSample[] = []
 
-	groundObject.traverseVisible((object) => {
+	groundObject.traverseVisible((object: THREE.Object3D) => {
 		const mesh = object as THREE.Mesh
 		if (!mesh.isMesh) {
 			return
@@ -490,8 +533,27 @@ function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | 
 			return
 		}
 		visibleChunkCount += 1
-		chunkKeys.push(`${chunk.chunkRow}:${chunk.chunkColumn}`)
+		const key = `${chunk.chunkRow}:${chunk.chunkColumn}`
+		chunkKeys.push(key)
+		const geometrySource = chunk.geometrySource === 'optimized' || chunk.geometrySource === 'dense'
+			? chunk.geometrySource
+			: 'unknown'
+		geometrySourceCounts[geometrySource] = (geometrySourceCounts[geometrySource] ?? 0) + 1
+		if (geometrySource !== 'optimized') {
+			const reason = typeof chunk.geometryReason === 'string' && chunk.geometryReason.length
+				? chunk.geometryReason
+				: 'unknown'
+			fallbackReasonCounts[reason] = (fallbackReasonCounts[reason] ?? 0) + 1
+		}
 		const triangleCount = resolveGeometryTriangleCount(mesh.geometry)
+		chunkSamples.push({
+			key,
+			triangleCount,
+			geometrySource,
+			geometryReason: typeof chunk.geometryReason === 'string' ? chunk.geometryReason : null,
+			denseTriangleCount: typeof chunk.denseTriangleCount === 'number' ? chunk.denseTriangleCount : null,
+			optimizedTriangleCount: typeof chunk.optimizedTriangleCount === 'number' ? chunk.optimizedTriangleCount : null,
+		})
 		if (triangleCount <= 0) {
 			return
 		}
@@ -508,6 +570,9 @@ function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | 
 		visibleChunkCount,
 		estimatedTriangles,
 		chunkKeys,
+		geometrySourceCounts,
+		fallbackReasonCounts,
+		chunkSamples,
 	}
 }
 
@@ -1710,6 +1775,28 @@ type GroundChunkUserData = {
 	columns: number
 	chunkRow: number
 	chunkColumn: number
+	geometrySource?: 'optimized' | 'dense'
+	geometryReason?: string
+	denseTriangleCount?: number
+	optimizedTriangleCount?: number | null
+}
+
+type GroundChunkRenderSample = {
+	key: string
+	triangleCount: number
+	geometrySource: 'optimized' | 'dense' | 'unknown'
+	geometryReason: string | null
+	denseTriangleCount: number | null
+	optimizedTriangleCount: number | null
+}
+
+type GroundHeightRuntimeStats = {
+	hasEmbeddedRuntimeHeightmaps: boolean
+	manualFiniteCount: number
+	planningFiniteCount: number
+	surfaceRevision: number
+	runtimeHydratedHeightState: string | null
+	runtimeDisableOptimizedChunks: boolean
 }
 
 const groundChunkDebugMeshes = new Map<string, THREE.Group>()
@@ -1910,7 +1997,7 @@ function syncGroundChunkStreamingDebug(
 	groundObject.updateWorldMatrix(true, false)
 	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
 
-	groundObject.traverse((object) => {
+	groundObject.traverse((object: THREE.Object3D) => {
 		const mesh = object as THREE.Mesh
 		if (!mesh.isMesh) {
 			return
@@ -2002,6 +2089,8 @@ function syncGroundChunkStreamingDebug(
 		groundChunkDebug.pending,
 		renderSnapshot.visibleChunkCount,
 		renderSnapshot.estimatedTriangles,
+		JSON.stringify(renderSnapshot.geometrySourceCounts),
+		JSON.stringify(renderSnapshot.fallbackReasonCounts),
 		renderSnapshot.chunkKeys.join(','),
 	].join('|')
 	if (signature !== lastGroundChunkDebugSignature && now - lastGroundChunkDebugLogAt >= 250) {
@@ -2016,9 +2105,12 @@ function syncGroundChunkStreamingDebug(
 			unloadedChunks: groundChunkDebug.unloaded,
 			visibleChunkMeshes: renderSnapshot.visibleChunkCount,
 			visibleChunkTriangleEstimate: renderSnapshot.estimatedTriangles,
+			visibleChunkGeometrySources: renderSnapshot.geometrySourceCounts,
+			visibleChunkFallbackReasons: renderSnapshot.fallbackReasonCounts,
 			addedChunkKeys: addedKeys,
 			removedChunkKeys: removedKeys,
 			activeChunkKeysSample: renderSnapshot.chunkKeys.slice(0, 24),
+			activeChunkGeometrySample: renderSnapshot.chunkSamples.slice(0, 16),
 		})
 	}
 }
@@ -5370,12 +5462,15 @@ async function buildPreviewRuntimeDocument(
 	attachOptimizedGroundMeshToDocument(document)
 	if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		const analysis = analyzeGroundOptimizedMeshUsage(groundNode.dynamicMesh)
+		const runtimeStats = collectGroundHeightRuntimeStats(groundNode.dynamicMesh)
 		const analysisKey = [
 			document.id,
 			groundNode.id,
 			analysis.surfaceRevision,
 			analysis.runtimeHydratedHeightState,
 			analysis.runtimeDisableOptimizedChunks ? 'disabled' : 'enabled',
+			runtimeStats.manualFiniteCount,
+			runtimeStats.planningFiniteCount,
 			analysis.reason,
 			analysis.optimizedTriangleCount,
 			analysis.runtimeChunkCells,
@@ -5393,6 +5488,9 @@ async function buildPreviewRuntimeDocument(
 				surfaceRevision: analysis.surfaceRevision,
 				runtimeHydratedHeightState: analysis.runtimeHydratedHeightState,
 				runtimeDisableOptimizedChunks: analysis.runtimeDisableOptimizedChunks,
+				hasEmbeddedRuntimeHeightmaps: runtimeStats.hasEmbeddedRuntimeHeightmaps,
+				manualFiniteCount: runtimeStats.manualFiniteCount,
+				planningFiniteCount: runtimeStats.planningFiniteCount,
 				sourceChunkCells: analysis.sourceChunkCells,
 				optimizedChunkCells: analysis.optimizedChunkCells,
 				runtimeChunkCells: analysis.runtimeChunkCells,
