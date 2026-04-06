@@ -19,6 +19,8 @@ export type GroundHeightRuntimeState = {
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: Float64Array
   planningHeightMap: Float64Array
+  runtimeHydratedHeightState?: 'pristine' | 'dirty'
+  runtimeDisableOptimizedChunks?: boolean
 }
 
 function asGroundDynamicMesh(node: SceneNode | null | undefined): GroundDynamicMesh | null {
@@ -81,10 +83,19 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
 ): void {
   runtimeGroundHeightmaps.clear()
   const definition = asGroundDynamicMesh(groundNode)
-  if (!groundNode || !definition || !sidecar) {
+  if (!groundNode || !definition) {
+    return
+  }
+  const runtimeGroundDefinition = definition as GroundRuntimeDynamicMesh
+  if (!sidecar) {
+    delete runtimeGroundDefinition.runtimeHydratedHeightState
+    delete runtimeGroundDefinition.runtimeDisableOptimizedChunks
     return
   }
   const runtimeDefinition = createGroundRuntimeMeshFromSidecar(definition, sidecar)
+  runtimeGroundDefinition.runtimeHydratedHeightState = runtimeDefinition.runtimeHydratedHeightState
+  runtimeGroundDefinition.runtimeDisableOptimizedChunks = runtimeDefinition.runtimeDisableOptimizedChunks
+  runtimeGroundDefinition.surfaceRevision = runtimeDefinition.surfaceRevision
   runtimeGroundHeightmaps.set(groundNode.id, {
     nodeId: groundNode.id,
     rows: runtimeDefinition.rows,

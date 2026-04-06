@@ -147,12 +147,15 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : columns * cellSize
   const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : rows * cellSize
+  const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   const optimizedMesh = definition.optimizedMesh
   const optimizedSignature = optimizedMesh
     ? `${optimizedMesh.version}:${optimizedMesh.chunkCells}:${optimizedMesh.chunkCount}:${optimizedMesh.optimizedVertexCount}:${optimizedMesh.optimizedTriangleCount}`
     : 'none'
   const surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.trunc(definition.surfaceRevision as number) : 0
-  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}`
+  const optimizedChunkState = runtimeDefinition.runtimeDisableOptimizedChunks === true ? 'disabled' : 'enabled'
+  const hydratedHeightState = runtimeDefinition.runtimeHydratedHeightState ?? 'none'
+  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}`
 }
 
 function clampInclusive(value: number, min: number, max: number): number {
@@ -242,13 +245,19 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
 }
 
 function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): boolean {
-  if (definition.runtimeDisableOptimizedChunks === true) {
+  if (definition.runtimeDisableOptimizedChunks === true || definition.runtimeHydratedHeightState === 'dirty') {
     return true
   }
 
   if (Number.isFinite(definition.surfaceRevision) && Math.trunc(definition.surfaceRevision as number) > 0) {
+    definition.runtimeHydratedHeightState = 'dirty'
     definition.runtimeDisableOptimizedChunks = true
     return true
+  }
+
+  if (definition.runtimeHydratedHeightState === 'pristine') {
+    definition.runtimeDisableOptimizedChunks = false
+    return false
   }
 
   const manualHeightMap = definition.manualHeightMap
@@ -257,11 +266,13 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
   for (let index = 0; index < limit; index += 1) {
     const manual = manualHeightMap[index]
     if (typeof manual === 'number' && Number.isFinite(manual)) {
+      definition.runtimeHydratedHeightState = 'dirty'
       definition.runtimeDisableOptimizedChunks = true
       return true
     }
     const planning = planningHeightMap[index]
     if (typeof planning === 'number' && Number.isFinite(planning)) {
+      definition.runtimeHydratedHeightState = 'dirty'
       definition.runtimeDisableOptimizedChunks = true
       return true
     }

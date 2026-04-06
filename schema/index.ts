@@ -1341,6 +1341,8 @@ export interface GroundDynamicMesh {
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
+  /** Runtime-only hydration state used to distinguish untouched sidecar restore from in-session edits. */
+  runtimeHydratedHeightState?: 'pristine' | 'dirty'
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
   runtimeDisableOptimizedChunks?: boolean
 }

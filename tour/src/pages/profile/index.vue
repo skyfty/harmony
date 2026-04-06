@@ -9,7 +9,6 @@
         </view>
         <view class="info">
           <text class="name">{{ profile.displayName }}</text>
-          <text class="badge">会员</text>
         </view>
         <button class="edit" @tap="openProfileEdit">编辑个人资料</button>
       </view>

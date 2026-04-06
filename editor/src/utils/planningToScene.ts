@@ -683,6 +683,16 @@ function syncPlanningHeightState(
   if (!sceneId) {
     throw new Error('Planning height runtime state cannot be synchronized before the scene is persisted')
   }
+  const groundRuntimeDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+  const nextRevision = Number.isFinite(groundRuntimeDefinition.surfaceRevision)
+    ? Math.max(0, Math.trunc(groundRuntimeDefinition.surfaceRevision as number)) + 1
+    : 1
+  groundRuntimeDefinition.surfaceRevision = nextRevision
+  groundRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
+  groundRuntimeDefinition.runtimeDisableOptimizedChunks = true
+  definition.surfaceRevision = nextRevision
+  definition.runtimeHydratedHeightState = 'dirty'
+  definition.runtimeDisableOptimizedChunks = true
   useGroundHeightmapStore().replacePlanningHeightMap(
     groundNode.id,
     groundNode.dynamicMesh as GroundDynamicMesh,

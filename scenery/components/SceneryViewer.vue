@@ -9302,7 +9302,11 @@ function hydrateGroundSidecarFromPackage(
   definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
     ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
     : 0;
-  definition.runtimeDisableOptimizedChunks = true;
+  (definition as GroundDynamicMesh & {
+    runtimeHydratedHeightState?: 'pristine' | 'dirty';
+    runtimeDisableOptimizedChunks?: boolean;
+  }).runtimeHydratedHeightState = 'pristine';
+  definition.runtimeDisableOptimizedChunks = false;
 
   const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
   if (!scatterSidecarPath) {

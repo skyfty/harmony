@@ -1497,10 +1497,15 @@ function shouldBumpGroundSurfaceRevision(incoming: Record<string, any>): boolean
 function prepareGroundDynamicMeshRevision(existing: Record<string, any> | null, incoming: Record<string, any>): number {
   const currentRevision = normalizeGroundSurfaceRevision(existing?.surfaceRevision)
   const incomingRevision = normalizeGroundSurfaceRevision(incoming.surfaceRevision)
-  const nextRevision = shouldBumpGroundSurfaceRevision(incoming)
+  const shouldBump = shouldBumpGroundSurfaceRevision(incoming)
+  const nextRevision = shouldBump
     ? Math.max(currentRevision, incomingRevision) + 1
     : Math.max(currentRevision, incomingRevision)
   incoming.surfaceRevision = nextRevision
+  if (shouldBump) {
+    incoming.runtimeHydratedHeightState = 'dirty'
+    incoming.runtimeDisableOptimizedChunks = true
+  }
   return nextRevision
 }
 
@@ -1643,8 +1648,13 @@ function commitGroundHeightMapRuntimeEdit(
   const dirtyBounds = computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.manualHeightMap, manualHeightMap)
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
-  target.dynamicMesh.surfaceRevision = nextRevision
+  const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
+  targetRuntimeDefinition.surfaceRevision = nextRevision
+  targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
+  targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
   definition.surfaceRevision = nextRevision
+  runtimeDefinition.runtimeHydratedHeightState = 'dirty'
+  runtimeDefinition.runtimeDisableOptimizedChunks = true
   useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
   refreshLandformNodesForGroundChange(store, nodeId, dirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
