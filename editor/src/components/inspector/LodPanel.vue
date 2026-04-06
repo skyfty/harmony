@@ -8,6 +8,9 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNodeComponentState } from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
+  LOD_FACE_CAMERA_FORWARD_AXIS_X,
+  LOD_FACE_CAMERA_FORWARD_AXIS_Y,
+  LOD_FACE_CAMERA_FORWARD_AXIS_Z,
   LOD_COMPONENT_TYPE,
   LOD_LEVEL_KIND_BILLBOARD,
   LOD_LEVEL_KIND_MODEL,
@@ -18,8 +21,11 @@ import {
   getLodLevelModelAssetId,
   normalizeLodComponentPropsForEditing,
   type LodComponentProps,
+  type LodFaceCameraForwardAxis,
   type LodLevelKind,
 } from '@schema/components'
+
+type LodForwardAxisSelectValue = LodFaceCameraForwardAxis | 'off'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
@@ -69,6 +75,12 @@ const levelKindOptions: Array<{ title: string; value: LodLevelKind }> = [
   { title: 'Billboard', value: LOD_LEVEL_KIND_BILLBOARD },
 ]
 const modelOnlyLevelKindOptions = levelKindOptions.filter((item) => item.value === LOD_LEVEL_KIND_MODEL)
+const levelForwardAxisOptions: Array<{ title: string; value: LodForwardAxisSelectValue }> = [
+  { title: 'Off', value: 'off' },
+  { title: 'X', value: LOD_FACE_CAMERA_FORWARD_AXIS_X },
+  { title: 'Z', value: LOD_FACE_CAMERA_FORWARD_AXIS_Z },
+  { title: 'Y', value: LOD_FACE_CAMERA_FORWARD_AXIS_Y },
+]
 
 watch(
   lodComponent,
@@ -215,19 +227,29 @@ function handleLevelKindUpdate(levelIndex: number, value: unknown): void {
   updateLevelKind(levelIndex, value)
 }
 
-function updateLevelFaceCamera(levelIndex: number, value: unknown): void {
+function updateLevelForwardAxis(levelIndex: number, value: unknown): void {
   const nextLevels = localLevels.value.map((level: LodComponentProps['levels'][number]) => ({ ...level }))
   const target = nextLevels[levelIndex]
   if (!target) {
     return
   }
-  target.faceCamera = value === true
+  if (value === 'off') {
+    target.faceCamera = false
+    target.forwardAxis = LOD_FACE_CAMERA_FORWARD_AXIS_Z
+  } else {
+    target.faceCamera = true
+    target.forwardAxis = value === LOD_FACE_CAMERA_FORWARD_AXIS_X
+      || value === LOD_FACE_CAMERA_FORWARD_AXIS_Y
+      || value === LOD_FACE_CAMERA_FORWARD_AXIS_Z
+      ? value
+      : LOD_FACE_CAMERA_FORWARD_AXIS_Z
+  }
   localLevels.value = nextLevels
   pushPropsToStore()
 }
 
-function handleLevelFaceCameraUpdate(levelIndex: number, value: unknown): void {
-  updateLevelFaceCamera(levelIndex, value)
+function handleLevelForwardAxisUpdate(levelIndex: number, value: unknown): void {
+  updateLevelForwardAxis(levelIndex, value)
 }
 
 function handleDistanceKeydown(event: KeyboardEvent): void {
@@ -407,13 +429,18 @@ const levelSummaries = computed(() => {
     const asset = resolveAsset(assetId)
     const isBillboard = kind === LOD_LEVEL_KIND_BILLBOARD
     const isLastLevel = index === levels.length - 1
+    const isModelLevel = kind === LOD_LEVEL_KIND_MODEL
     return {
       index,
       distance: level.distance,
       kind,
       canUseBillboard: isLastLevel,
+      isModelLevel,
       faceCamera: level.faceCamera === true,
-      showFaceCameraToggle: isLastLevel,
+      forwardAxisSelectValue: level.faceCamera === true
+        ? (level.forwardAxis ?? LOD_FACE_CAMERA_FORWARD_AXIS_Z)
+        : 'off',
+      showForwardAxisSelect: isLastLevel && isModelLevel,
       typeLabel: isBillboard ? 'Billboard' : 'Model',
       assetLabel: asset ? asset.name : isBillboard ? 'Billboard image' : 'Default model',
       assetStyle: resolveAssetPreviewStyle(asset),
@@ -506,16 +533,18 @@ const levelSummaries = computed(() => {
               @update:modelValue="handleLevelKindUpdate(summary.index, $event)"
             />
 
-            <v-switch
-              v-if="summary.showFaceCameraToggle"
-              class="lod-face-camera-switch"
+            <v-select
+              v-if="summary.showForwardAxisSelect"
+              class="lod-forward-axis-select"
+              label="Face Camera"
               density="compact"
-              hide-details
-              inset
-              label="朝向相机"
-              :model-value="summary.faceCamera"
+              variant="underlined"
+              :items="levelForwardAxisOptions"
+              item-title="title"
+              item-value="value"
+              :model-value="summary.forwardAxisSelectValue"
               :disabled="!componentEnabled"
-              @update:modelValue="handleLevelFaceCameraUpdate(summary.index, $event)"
+              @update:modelValue="handleLevelForwardAxisUpdate(summary.index, $event)"
             />
           </div>
 
@@ -659,11 +688,11 @@ const levelSummaries = computed(() => {
 
 .lod-kind-select {
   flex: 1 1 auto;
-  min-width: 160px;
 }
 
-.lod-face-camera-switch {
-  flex: 0 0 auto;
+.lod-forward-axis-select {
+  flex: 0 0 108px;
+  min-width: 0;
 }
 
 .lod-model-wrap {
@@ -714,7 +743,7 @@ const levelSummaries = computed(() => {
   flex: 1;
   min-width: 0;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.5rem;
 }
 
 .lod-model-name {

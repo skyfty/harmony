@@ -6,8 +6,15 @@ import type { SceneNode, SceneNodeComponentState } from '../../index'
 export const LOD_COMPONENT_TYPE = 'lod'
 export const LOD_LEVEL_KIND_MODEL = 'model'
 export const LOD_LEVEL_KIND_BILLBOARD = 'billboard'
+export const LOD_FACE_CAMERA_FORWARD_AXIS_X = 'x'
+export const LOD_FACE_CAMERA_FORWARD_AXIS_Y = 'y'
+export const LOD_FACE_CAMERA_FORWARD_AXIS_Z = 'z'
 
 export type LodLevelKind = typeof LOD_LEVEL_KIND_MODEL | typeof LOD_LEVEL_KIND_BILLBOARD
+export type LodFaceCameraForwardAxis =
+  | typeof LOD_FACE_CAMERA_FORWARD_AXIS_X
+  | typeof LOD_FACE_CAMERA_FORWARD_AXIS_Y
+  | typeof LOD_FACE_CAMERA_FORWARD_AXIS_Z
 
 export interface LodLevelDefinition {
   /** Switch to this level when camera distance >= distance (meters). */
@@ -16,6 +23,8 @@ export interface LodLevelDefinition {
   kind?: LodLevelKind
   /** When true on the final level, orient the rendered target toward the camera. */
   faceCamera?: boolean
+  /** Local positive axis that should face the camera when faceCamera is enabled on the final model level. */
+  forwardAxis?: LodFaceCameraForwardAxis
   /** Optional model/mesh asset override for this level. */
   modelAssetId: string | null
   /** Optional image/texture asset used when kind === 'billboard'. */
@@ -33,14 +42,15 @@ export interface LodRenderTarget {
   kind: LodLevelKind
   assetId: string | null
   faceCamera: boolean
+  forwardAxis: LodFaceCameraForwardAxis
 }
 
 export const LOD_DEFAULT_ENABLE_CULLING = true
 
 const DEFAULT_LEVELS: LodLevelDefinition[] = [
-  { distance: 0, kind: LOD_LEVEL_KIND_MODEL, modelAssetId: null, billboardAssetId: null },
-  { distance: 50, kind: LOD_LEVEL_KIND_MODEL, modelAssetId: null, billboardAssetId: null },
-  { distance: 200, kind: LOD_LEVEL_KIND_MODEL, modelAssetId: null, billboardAssetId: null },
+  { distance: 0, kind: LOD_LEVEL_KIND_MODEL, forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z, modelAssetId: null, billboardAssetId: null },
+  { distance: 50, kind: LOD_LEVEL_KIND_MODEL, forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z, modelAssetId: null, billboardAssetId: null },
+  { distance: 200, kind: LOD_LEVEL_KIND_MODEL, forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z, modelAssetId: null, billboardAssetId: null },
 ]
 
 function normalizeAssetId(value: unknown): string | null {
@@ -65,6 +75,17 @@ function normalizeKind(value: unknown): LodLevelKind {
 
 function normalizeFaceCamera(value: unknown): boolean {
   return value === true
+}
+
+function normalizeForwardAxis(value: unknown): LodFaceCameraForwardAxis {
+  if (
+    value === LOD_FACE_CAMERA_FORWARD_AXIS_X
+    || value === LOD_FACE_CAMERA_FORWARD_AXIS_Y
+    || value === LOD_FACE_CAMERA_FORWARD_AXIS_Z
+  ) {
+    return value
+  }
+  return LOD_FACE_CAMERA_FORWARD_AXIS_Z
 }
 
 export function getLodLevelKind(level: Partial<LodLevelDefinition> | null | undefined): LodLevelKind {
@@ -93,6 +114,7 @@ export function resolveLodRenderTarget(level: Partial<LodLevelDefinition> | null
     kind,
     assetId: kind === LOD_LEVEL_KIND_BILLBOARD ? getLodLevelBillboardAssetId(level) : getLodLevelModelAssetId(level),
     faceCamera: normalizeFaceCamera(level?.faceCamera),
+    forwardAxis: normalizeForwardAxis(level?.forwardAxis),
   }
 }
 
@@ -104,6 +126,7 @@ function sanitizeLodLevelDefinition(
     distance: clampDistance(level?.distance, index === 0 ? 0 : DEFAULT_LEVELS[Math.min(index, DEFAULT_LEVELS.length - 1)]!.distance),
     kind: normalizeKind(level?.kind),
     faceCamera: normalizeFaceCamera(level?.faceCamera),
+    forwardAxis: normalizeForwardAxis(level?.forwardAxis),
     modelAssetId: normalizeAssetId(level?.modelAssetId),
     billboardAssetId: normalizeAssetId(level?.billboardAssetId),
   }
@@ -138,6 +161,7 @@ export function clampLodComponentProps(props: Partial<LodComponentProps> | null 
         distance: level.distance,
         kind: LOD_LEVEL_KIND_BILLBOARD,
         faceCamera: level.faceCamera === true,
+        forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z,
         modelAssetId: null,
         billboardAssetId: level.billboardAssetId ?? null,
       } satisfies LodLevelDefinition
@@ -146,6 +170,7 @@ export function clampLodComponentProps(props: Partial<LodComponentProps> | null 
       distance: level.distance,
       kind: LOD_LEVEL_KIND_MODEL,
       faceCamera: isLastLevel ? level.faceCamera === true : false,
+      forwardAxis: isLastLevel ? normalizeForwardAxis(level.forwardAxis) : LOD_FACE_CAMERA_FORWARD_AXIS_Z,
       modelAssetId: level.modelAssetId ?? null,
       billboardAssetId: null,
     } satisfies LodLevelDefinition
@@ -164,6 +189,7 @@ export function cloneLodComponentProps(props: LodComponentProps): LodComponentPr
       distance: level.distance,
       kind: getLodLevelKind(level),
       faceCamera: level.faceCamera === true,
+      forwardAxis: normalizeForwardAxis(level.forwardAxis),
       modelAssetId: level.modelAssetId,
       billboardAssetId: getLodLevelBillboardAssetId(level),
     })),

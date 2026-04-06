@@ -5,8 +5,12 @@ import type { SceneJsonExportDocument, SceneNode, GroundDynamicMesh } from './in
 import type { TerrainScatterInstance, TerrainScatterLayer, TerrainScatterStoreSnapshot } from './terrain-scatter'
 import {
   clampLodComponentProps,
+  LOD_FACE_CAMERA_FORWARD_AXIS_X,
+  LOD_FACE_CAMERA_FORWARD_AXIS_Y,
+  LOD_FACE_CAMERA_FORWARD_AXIS_Z,
   resolveLodRenderTarget,
   type LodComponentProps,
+  type LodFaceCameraForwardAxis,
   type LodRenderTarget,
 } from './components'
 import { loadNodeObject } from './modelAssetLoader'
@@ -103,6 +107,23 @@ const scatterCullingProjView = new THREE.Matrix4()
 const scatterCullingFrustum = new THREE.Frustum()
 const scatterCullingSphere = new THREE.Sphere()
 const scatterBillboardScaleHelper = new THREE.Vector3()
+const scatterFaceCameraPositionHelper = new THREE.Vector3()
+const scatterFaceCameraQuaternionHelper = new THREE.Quaternion()
+const scatterFaceCameraScaleHelper = new THREE.Vector3()
+const scatterFaceCameraDirectionHelper = new THREE.Vector3()
+const scatterFaceCameraAxisXHelper = new THREE.Vector3(1, 0, 0)
+const scatterFaceCameraAxisYHelper = new THREE.Vector3(0, 1, 0)
+const scatterFaceCameraAxisZHelper = new THREE.Vector3(0, 0, 1)
+
+function resolveScatterFaceCameraAxis(axis: LodFaceCameraForwardAxis): THREE.Vector3 {
+  if (axis === LOD_FACE_CAMERA_FORWARD_AXIS_X) {
+    return scatterFaceCameraAxisXHelper
+  }
+  if (axis === LOD_FACE_CAMERA_FORWARD_AXIS_Y) {
+    return scatterFaceCameraAxisYHelper
+  }
+  return scatterFaceCameraAxisZHelper
+}
 
 function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {
   const normalizedLayer = typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : 'layer'
@@ -155,6 +176,38 @@ function composeScatterBillboardMatrix(
   scatterInstanceMatrixHelper.compose(scatterLocalPositionHelper, scatterQuaternionHelper.identity(), scatterBillboardScaleHelper)
   const output = target ?? new THREE.Matrix4()
   return output.copy(groundMesh.matrixWorld).multiply(scatterInstanceMatrixHelper)
+}
+
+function applyScatterModelFaceCameraMatrix(
+  matrix: THREE.Matrix4,
+  cameraPosition: THREE.Vector3 | null | undefined,
+  forwardAxis: LodFaceCameraForwardAxis,
+): THREE.Matrix4 {
+  if (!cameraPosition) {
+    return matrix
+  }
+  matrix.decompose(
+    scatterFaceCameraPositionHelper,
+    scatterFaceCameraQuaternionHelper,
+    scatterFaceCameraScaleHelper,
+  )
+  scatterFaceCameraDirectionHelper.copy(cameraPosition).sub(scatterFaceCameraPositionHelper)
+  if (forwardAxis !== LOD_FACE_CAMERA_FORWARD_AXIS_Y) {
+    scatterFaceCameraDirectionHelper.y = 0
+  }
+  if (scatterFaceCameraDirectionHelper.lengthSq() <= 1e-6) {
+    return matrix
+  }
+  scatterFaceCameraDirectionHelper.normalize()
+  scatterFaceCameraQuaternionHelper.setFromUnitVectors(
+    resolveScatterFaceCameraAxis(forwardAxis),
+    scatterFaceCameraDirectionHelper,
+  )
+  return matrix.compose(
+    scatterFaceCameraPositionHelper,
+    scatterFaceCameraQuaternionHelper,
+    scatterFaceCameraScaleHelper,
+  )
 }
 
 function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): GroundScatterEntry[] {
@@ -368,6 +421,7 @@ function collectPresetScatterRenderTargets(preset: LodPresetData | null): Scatte
       kind: resolved.kind,
       assetId,
       faceCamera: resolved.faceCamera ?? false,
+      forwardAxis: resolved.forwardAxis,
     })
   })
   return targets
@@ -382,6 +436,7 @@ function resolveBaseScatterRenderTarget(preset: LodPresetData | null, fallbackMo
     kind: 'model',
     assetId: modelAssetId,
     faceCamera: false,
+    forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z,
   }
 }
 
@@ -409,6 +464,7 @@ function chooseLodRenderTarget(
       kind: resolved.kind,
       assetId,
       faceCamera: resolved.faceCamera ?? false,
+      forwardAxis: resolved.forwardAxis,
     }
   }
   return resolveBaseScatterRenderTarget(preset, fallbackModelAssetId)
@@ -499,13 +555,18 @@ function computeScatterRuntimeMatrix(
   runtime: ScatterRuntimeInstance,
   groundMesh: THREE.Mesh,
   target?: ScatterRenderTarget,
+  cameraPosition?: THREE.Vector3 | null,
 ): THREE.Matrix4 {
   const renderTarget = target ?? runtime.boundTarget
   if (renderTarget.kind === 'billboard') {
     const aspectRatio = getBillboardAspectRatio(renderTarget.assetId) ?? 1
     return composeScatterBillboardMatrix(runtime.instance, groundMesh, runtime.sourceModelHeight, aspectRatio, scatterMatrixHelper)
   }
-  return composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+  const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+  if (renderTarget.faceCamera === true) {
+    return applyScatterModelFaceCameraMatrix(matrix, cameraPosition, renderTarget.forwardAxis)
+  }
+  return matrix
 }
 
 function computeScatterCullRadius(runtime: ScatterRuntimeInstance): number {
@@ -983,6 +1044,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
   function applyCullingAndUpdateVisibleMatrices(
     visibleIds: Set<string>,
     resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
+    cameraPosition?: THREE.Vector3 | null,
   ): void {
     const now = nowMs()
     const preparedGroundNodeIds = new Set<string>()
@@ -1049,7 +1111,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         preparedGroundNodeIds.add(runtime.groundNodeId)
       }
 
-      const matrix = computeScatterRuntimeMatrix(runtime, groundMesh)
+      const matrix = computeScatterRuntimeMatrix(runtime, groundMesh, undefined, cameraPosition)
       updateScatterRenderTargetMatrix(runtime.boundTarget, runtime.nodeId, matrix)
     })
   }
@@ -1092,7 +1154,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         preparedGroundNodeIds.add(runtime.groundNodeId)
       }
 
-      const matrix = computeScatterRuntimeMatrix(runtime, groundMesh)
+      const matrix = computeScatterRuntimeMatrix(runtime, groundMesh, undefined, cameraPosition)
 
       const presetAssetId = runtime.presetAssetId
       if (presetAssetId) {
@@ -1125,14 +1187,19 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         continue
       }
       allocatedNodeIds.add(runtime.nodeId)
-      updateScatterRenderTargetMatrix(runtime.boundTarget, runtime.nodeId, computeScatterRuntimeMatrix(runtime, groundMesh))
+      updateScatterRenderTargetMatrix(
+        runtime.boundTarget,
+        runtime.nodeId,
+        computeScatterRuntimeMatrix(runtime, groundMesh, undefined, cameraPosition),
+      )
     }
   }
 
   function update(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): void {
     const now = nowMs()
-    if ((camera as THREE.Camera & { position?: THREE.Vector3 }).position) {
-      updateBillboardInstanceCameraWorldPosition((camera as THREE.Camera & { position: THREE.Vector3 }).position)
+    const cameraPosition = (camera as THREE.Camera & { position?: THREE.Vector3 }).position ?? null
+    if (cameraPosition) {
+      updateBillboardInstanceCameraWorldPosition(cameraPosition)
     }
 
     // Fast path: update frustum culling + visible matrices (sync) at its own cadence.
@@ -1140,7 +1207,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       lastVisibilityUpdateAt = now
       updateChunkStreamingActiveWindow(camera, resolveGroundMeshObject)
       const visibleIds = computeVisibleScatterIds(camera, resolveGroundMeshObject)
-      applyCullingAndUpdateVisibleMatrices(visibleIds, resolveGroundMeshObject)
+      applyCullingAndUpdateVisibleMatrices(visibleIds, resolveGroundMeshObject, cameraPosition)
     }
 
     // Slow path: LOD switching (async) at its own cadence.

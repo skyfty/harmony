@@ -177,6 +177,9 @@ import {
 	AUTO_TOUR_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
 	LOD_COMPONENT_TYPE,
+	LOD_FACE_CAMERA_FORWARD_AXIS_X,
+	LOD_FACE_CAMERA_FORWARD_AXIS_Y,
+	LOD_FACE_CAMERA_FORWARD_AXIS_Z,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
@@ -201,6 +204,7 @@ import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from 
 import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
 import type {
 	GuideboardComponentProps,
+	LodFaceCameraForwardAxis,
 	LodComponentProps,
 	RigidbodyComponentMetadata,
 	RigidbodyComponentProps,
@@ -1410,6 +1414,7 @@ type InstancedLodTarget = {
 	assetId: string | null
 	sourceModelAssetId: string | null
 	faceCamera: boolean
+	forwardAxis: LodFaceCameraForwardAxis
 	key: string | null
 }
 
@@ -1431,7 +1436,9 @@ const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
 const instancedFacingDirectionHelper = new THREE.Vector3()
 const instancedFacingQuaternionHelper = new THREE.Quaternion()
-const instancedFacingAxisHelper = new THREE.Vector3(1, 0, 0)
+const instancedFacingAxisXHelper = new THREE.Vector3(1, 0, 0)
+const instancedFacingAxisYHelper = new THREE.Vector3(0, 1, 0)
+const instancedFacingAxisZHelper = new THREE.Vector3(0, 0, 1)
 
 type InstancedMatrixCacheEntry = {
 	bindingKey: string
@@ -2512,6 +2519,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 			assetId: normalizedBase,
 			sourceModelAssetId: normalizedBase,
 			faceCamera: false,
+			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z,
 			key: normalizedBase ? `model:${normalizedBase}` : null,
 		}
 	}
@@ -2524,6 +2532,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 			assetId: normalizedBase,
 			sourceModelAssetId: normalizedBase,
 			faceCamera: false,
+			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z,
 			key: normalizedBase ? `model:${normalizedBase}` : null,
 		}
 	}
@@ -2543,27 +2552,46 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 	const assetId = typeof renderTarget.assetId === 'string' ? renderTarget.assetId.trim() : ''
 	const resolvedAssetId = assetId || normalizedBase || null
 	const kind = renderTarget.kind === 'billboard' && assetId ? 'billboard' : 'model'
+	const forwardAxis = kind === 'model'
+		? chosen?.forwardAxis ?? LOD_FACE_CAMERA_FORWARD_AXIS_Z
+		: LOD_FACE_CAMERA_FORWARD_AXIS_Z
 	return {
 		kind,
 		assetId: resolvedAssetId,
 		sourceModelAssetId: normalizedBase,
 		faceCamera: chosen?.faceCamera === true,
+		forwardAxis,
 		key: resolvedAssetId ? `${kind}:${resolvedAssetId}` : null,
 	}
 }
 
-function applyModelFaceCameraMatrix(matrix: THREE.Matrix4): void {
+function resolveModelFaceCameraAxis(axis: LodFaceCameraForwardAxis): THREE.Vector3 {
+	if (axis === LOD_FACE_CAMERA_FORWARD_AXIS_X) {
+		return instancedFacingAxisXHelper
+	}
+	if (axis === LOD_FACE_CAMERA_FORWARD_AXIS_Y) {
+		return instancedFacingAxisYHelper
+	}
+	return instancedFacingAxisZHelper
+}
+
+function applyModelFaceCameraMatrix(matrix: THREE.Matrix4, forwardAxis: LodFaceCameraForwardAxis): void {
 	if (!camera) {
 		return
 	}
 	matrix.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 	instancedFacingDirectionHelper.copy(camera.position).sub(instancedPositionHelper)
-	instancedFacingDirectionHelper.y = 0
+	if (forwardAxis !== LOD_FACE_CAMERA_FORWARD_AXIS_Y) {
+		instancedFacingDirectionHelper.y = 0
+	}
 	if (instancedFacingDirectionHelper.lengthSq() <= 1e-6) {
 		return
 	}
 	instancedFacingDirectionHelper.normalize()
-	instancedFacingQuaternionHelper.setFromUnitVectors(instancedFacingAxisHelper, instancedFacingDirectionHelper)
+	instancedFacingQuaternionHelper.setFromUnitVectors(
+		resolveModelFaceCameraAxis(forwardAxis),
+		instancedFacingDirectionHelper,
+	)
 	matrix.compose(instancedPositionHelper, instancedFacingQuaternionHelper, instancedScaleHelper)
 }
 
@@ -2704,6 +2732,7 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target:
 			instancedAssetId: target.assetId,
 			instancedRenderKind: 'model',
 			__harmonyLodFaceCamera: target.faceCamera === true,
+			__harmonyLodForwardAxis: target.forwardAxis,
 			instancedBounds: serializeBoundingBox(layoutBounds),
 		}
 		object.userData.__harmonyInstancedRadius = sphere.radius
@@ -2769,6 +2798,7 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target:
 		instancedAssetId: target.assetId,
 		instancedRenderKind: 'billboard',
 		__harmonyLodFaceCamera: target.faceCamera === true,
+		__harmonyLodForwardAxis: target.forwardAxis,
 		__harmonyBillboardSourceAssetId: target.sourceModelAssetId,
 		instancedBounds: serializeBoundingBox(layoutBounds),
 	}
@@ -3115,6 +3145,7 @@ function updateInstancedCullingAndLod(): void {
 			return
 		}
 		object.userData.__harmonyLodFaceCamera = desiredTarget.faceCamera === true
+		object.userData.__harmonyLodForwardAxis = desiredTarget.forwardAxis
 		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
 		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
 		const desiredCount = getInstanceLayoutCount(layout)
@@ -8115,7 +8146,11 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		if (isVisible) {
 			instancedMatrixHelper.copy(target.matrixWorld)
 			if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
-				applyModelFaceCameraMatrix(instancedMatrixHelper)
+				applyModelFaceCameraMatrix(
+					instancedMatrixHelper,
+					(target.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
+						?? LOD_FACE_CAMERA_FORWARD_AXIS_Z,
+				)
 			}
 		} else {
 			target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
@@ -8128,6 +8163,8 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 			assetId,
 			sourceModelAssetId: typeof target.userData?.__harmonyBillboardSourceAssetId === 'string' ? target.userData.__harmonyBillboardSourceAssetId : null,
 			faceCamera: target.userData?.__harmonyLodFaceCamera === true,
+			forwardAxis: (target.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
+				?? LOD_FACE_CAMERA_FORWARD_AXIS_Z,
 			key: null,
 		})
 		const layoutBounds = renderKind === 'billboard'
