@@ -436,7 +436,7 @@ function resolveBaseScatterRenderTarget(preset: LodPresetData | null, fallbackMo
     kind: 'model',
     assetId: modelAssetId,
     faceCamera: false,
-    forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z,
+    forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_X,
   }
 }
 

@@ -2519,7 +2519,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 			assetId: normalizedBase,
 			sourceModelAssetId: normalizedBase,
 			faceCamera: false,
-			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z,
+			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_X,
 			key: normalizedBase ? `model:${normalizedBase}` : null,
 		}
 	}
@@ -2532,7 +2532,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 			assetId: normalizedBase,
 			sourceModelAssetId: normalizedBase,
 			faceCamera: false,
-			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_Z,
+			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_X,
 			key: normalizedBase ? `model:${normalizedBase}` : null,
 		}
 	}
@@ -2553,7 +2553,7 @@ function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): Insta
 	const resolvedAssetId = assetId || normalizedBase || null
 	const kind = renderTarget.kind === 'billboard' && assetId ? 'billboard' : 'model'
 	const forwardAxis = kind === 'model'
-		? chosen?.forwardAxis ?? LOD_FACE_CAMERA_FORWARD_AXIS_Z
+		? chosen?.forwardAxis ?? LOD_FACE_CAMERA_FORWARD_AXIS_X
 		: LOD_FACE_CAMERA_FORWARD_AXIS_Z
 	return {
 		kind,
@@ -8149,7 +8149,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 				applyModelFaceCameraMatrix(
 					instancedMatrixHelper,
 					(target.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
-						?? LOD_FACE_CAMERA_FORWARD_AXIS_Z,
+						?? LOD_FACE_CAMERA_FORWARD_AXIS_X,
 				)
 			}
 		} else {
