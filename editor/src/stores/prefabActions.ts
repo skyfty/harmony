@@ -37,6 +37,7 @@ import { createServerAssetSource, isServerBackedProviderId } from '@/utils/serve
 import {
   type ExplicitSceneAssetReference,
   visitExplicitComponentAssetReferences,
+  visitExplicitTerrainScatterAssetReferences,
 } from '../utils/sceneExplicitAssetReferences'
 
 export type PrefabStoreLike = {
@@ -258,6 +259,9 @@ function collectTerrainScatterAssetDependencies(snapshot: any, bucket: Set<strin
         collectAssetIdCandidate(bucket, instance.profileId)
       })
     }
+  })
+  visitExplicitTerrainScatterAssetReferences(snapshot, ({ assetId }: ExplicitSceneAssetReference) => {
+    collectAssetIdCandidate(bucket, assetId)
   })
 }
 

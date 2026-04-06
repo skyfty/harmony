@@ -23,6 +23,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import {
   type ExplicitSceneAssetReference,
   visitExplicitComponentAssetReferences,
+  visitExplicitTerrainScatterAssetReferences,
 } from './sceneExplicitAssetReferences'
 import {
   MATERIAL_TEXTURE_SLOTS,
@@ -30,6 +31,7 @@ import {
   type SceneMaterialTextureRef,
   type SceneNodeMaterial,
 } from '@/types/material'
+import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 
 export type SceneAssetDiagnosticSeverity = 'error' | 'warning'
@@ -293,6 +295,16 @@ function scanNode(node: SceneNode, bucket: SceneAssetReferenceRecord[], parentPa
     category: node.dynamicMesh?.type === 'Ground' ? 'ground' : 'node',
     nodeId: node.id,
     nodeName: node.name,
+  })
+  const scatterSnapshot = (node.dynamicMesh as { terrainScatter?: TerrainScatterStoreSnapshot | null } | null | undefined)?.terrainScatter
+  visitExplicitTerrainScatterAssetReferences(scatterSnapshot, ({ assetId, path }: ExplicitSceneAssetReference) => {
+    addReference(bucket, normalizeAssetIdCandidate(assetId), {
+      path: `${nodePath}.dynamicMesh.terrainScatter.${path}`,
+      category: 'terrain-scatter',
+      nodeId: node.id,
+      nodeName: node.name,
+      note: 'terrain-scatter-lod-preset',
+    })
   })
   if (Array.isArray(node.children)) {
     node.children.forEach((child) => scanNode(child, bucket, `${nodePath}.children`))

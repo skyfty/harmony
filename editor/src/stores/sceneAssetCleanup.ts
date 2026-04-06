@@ -10,6 +10,7 @@ import { isPlanningImageConversionNode } from '@/utils/planningToScene'
 import {
   type ExplicitSceneAssetReference,
   visitExplicitComponentAssetReferences,
+  visitExplicitTerrainScatterAssetReferences,
 } from '../utils/sceneExplicitAssetReferences'
 import { useGroundScatterStore } from './groundScatterStore'
 import { useGroundPaintStore } from './groundPaintStore'
@@ -212,6 +213,9 @@ function collectTerrainScatterAssetDependencies(
         collectAssetIdCandidate(bucket, instance.profileId)
       })
     }
+  })
+  visitExplicitTerrainScatterAssetReferences(snapshot, ({ assetId }: ExplicitSceneAssetReference) => {
+    collectAssetIdCandidate(bucket, assetId)
   })
 }
 

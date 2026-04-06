@@ -29,6 +29,7 @@ import { useScenesStore } from '@/stores/scenesStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
+import type { SceneExportEventReporter } from '@/types/scene-export'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
@@ -160,6 +161,24 @@ type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
   assetUrlOverrides?: Record<string, string>
   resourceSummary?: SceneResourceSummary
   planningData?: unknown
+}
+
+function emitSceneExportEvent(reportEvent: SceneExportEventReporter | undefined, event: Parameters<SceneExportEventReporter>[0]): void {
+  reportEvent?.(event)
+}
+
+function describeAssetName(assetId: string, filename?: string | null): string {
+  const normalizedFilename = typeof filename === 'string' ? filename.trim() : ''
+  if (normalizedFilename) {
+    return normalizedFilename
+  }
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  return normalizedAssetId || 'unknown-asset'
+}
+
+function describeSceneName(scene: ScenePackageExportScene): string {
+  const rawName = typeof scene.document?.name === 'string' ? scene.document.name.trim() : ''
+  return rawName || scene.id
 }
 
 function cloneSceneExportDocument<T>(document: T): T {
@@ -461,6 +480,7 @@ export async function exportScenePackageZip(payload: {
   embedAssets?: boolean
   includePlanningData?: boolean
   updateProgress?: (value: number, message?: string) => void
+  reportEvent?: SceneExportEventReporter
 }): Promise<Blob> {
   const createdAt = new Date().toISOString()
 
@@ -477,6 +497,14 @@ export async function exportScenePackageZip(payload: {
     checkpointTotal,
   }
   files[projectPath] = jsonBytes(projectWithCheckpointTotal)
+  emitSceneExportEvent(payload.reportEvent, {
+    phase: 'project',
+    level: 'info',
+    status: 'running',
+    message: `已写入工程配置 (${payload.scenes.length} 个场景)`,
+    current: payload.scenes.length,
+    total: payload.scenes.length,
+  })
 
   // scenes + per-scene resources (referenced local assets)
   const manifestScenes: ScenePackageManifestV1['scenes'] = []
@@ -493,7 +521,28 @@ export async function exportScenePackageZip(payload: {
     const total = embedAssets.size
     let done = 0
 
+    emitSceneExportEvent(payload.reportEvent, {
+      phase: 'asset',
+      level: 'info',
+      status: total > 0 ? 'running' : 'completed',
+      message: total > 0 ? `开始处理共享嵌入资产 (${total})` : '没有需要嵌入的共享资产',
+      current: 0,
+      total,
+    })
+
     for (const item of embedAssets.values()) {
+      const assetName = describeAssetName(item.assetId, item.filenameHint)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'asset',
+        level: 'info',
+        status: 'running',
+        assetId: item.assetId,
+        assetName,
+        current: done + 1,
+        total,
+        message: `正在嵌入共享资产 ${assetName}`,
+      })
+
       done += 1
       const ratio = total > 0 ? done / total : 1
       payload.updateProgress?.(85 + Math.round(6 * ratio), `Embedding assets… (${done}/${total})`)
@@ -549,11 +598,33 @@ export async function exportScenePackageZip(payload: {
         size: blob.size,
         hash,
       })
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'asset',
+        level: 'success',
+        status: 'completed',
+        assetId: item.assetId,
+        assetName,
+        current: done,
+        total,
+        detail: resourcePath,
+        message: `共享资产已写入 ${assetName}`,
+      })
     }
   }
 
   for (let sIndex = 0; sIndex < payload.scenes.length; sIndex += 1) {
     const scene = payload.scenes[sIndex]!
+    const sceneName = describeSceneName(scene)
+    emitSceneExportEvent(payload.reportEvent, {
+      phase: 'scene',
+      level: 'info',
+      status: 'running',
+      sceneId: scene.id,
+      sceneName,
+      current: sIndex + 1,
+      total: payload.scenes.length,
+      message: `开始打包场景 ${sceneName}`,
+    })
     const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document)
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
@@ -600,6 +671,20 @@ export async function exportScenePackageZip(payload: {
 
     for (let aIndex = 0; aIndex < localAssetIds.length; aIndex += 1) {
       const assetId = localAssetIds[aIndex]!
+      const cachedEntry = assetCache.getEntry(assetId)
+      const assetName = describeAssetName(assetId, cachedEntry.filename)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'asset',
+        level: 'info',
+        status: 'running',
+        sceneId: scene.id,
+        sceneName,
+        assetId,
+        assetName,
+        current: aIndex + 1,
+        total: localAssetIds.length,
+        message: `正在打包本地资产 ${assetName}`,
+      })
       const ratio = localAssetIds.length ? (aIndex + 1) / localAssetIds.length : 1
       payload.updateProgress?.(85 + Math.round(10 * ratio), `Packaging local assets… (${aIndex + 1}/${localAssetIds.length})`)
 
@@ -634,26 +719,86 @@ export async function exportScenePackageZip(payload: {
         size: blob.size,
         hash,
       })
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'asset',
+        level: 'success',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        assetId,
+        assetName,
+        current: aIndex + 1,
+        total: localAssetIds.length,
+        detail: resourcePath,
+        message: `本地资产已写入 ${assetName}`,
+      })
     }
 
     // Add the prepared binary scene document to files and manifest.
     files[scenePath] = encodeScenePackageSceneDocument(docClone)
+    emitSceneExportEvent(payload.reportEvent, {
+      phase: 'scene',
+      level: 'success',
+      status: 'completed',
+      sceneId: scene.id,
+      sceneName,
+      current: sIndex + 1,
+      total: payload.scenes.length,
+      detail: scenePath,
+      message: `场景二进制已写入 ${sceneName}`,
+    })
     if (groundHeightSidecar) {
       groundHeightsPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
       files[groundHeightsPath] = new Uint8Array(groundHeightSidecar)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        detail: groundHeightsPath,
+        message: `已写入地形高度 sidecar`,
+      })
     }
     if (groundScatterSidecar) {
       groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SCATTER_SIDECAR_FILENAME}`
       files[groundScatterPath] = new Uint8Array(groundScatterSidecar)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        detail: groundScatterPath,
+        message: `已写入地表散布 sidecar`,
+      })
     }
     if (groundPaintSidecar) {
       groundPaintPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_PAINT_SIDECAR_FILENAME}`
       files[groundPaintPath] = new Uint8Array(groundPaintSidecar)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        detail: groundPaintPath,
+        message: `已写入地表绘制 sidecar`,
+      })
     }
     if (payload.includePlanningData && scene.planningData) {
       const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
       planningPath = planningSidecar.planningPath
       files[planningPath] = jsonBytes(planningSidecar.sidecar)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        detail: planningPath,
+        message: `已写入规划数据 sidecar`,
+      })
     }
     manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath, groundHeightsPath, groundScatterPath, groundPaintPath })
   }
@@ -668,11 +813,34 @@ export async function exportScenePackageZip(payload: {
   }
 
   files['manifest.json'] = jsonBytes(manifest)
+  emitSceneExportEvent(payload.reportEvent, {
+    phase: 'manifest',
+    level: 'info',
+    status: 'completed',
+    detail: 'manifest.json',
+    message: `清单文件已生成 (${manifest.scenes.length} 个场景, ${manifest.resources.length} 个资源)`,
+  })
 
   payload.updateProgress?.(96, 'Compressing ZIP…')
+  emitSceneExportEvent(payload.reportEvent, {
+    phase: 'archive',
+    level: 'info',
+    status: 'running',
+    progress: 96,
+    detail: 'manifest.json',
+    message: '开始压缩 ZIP 包',
+  })
   const zipBytes = zipSync(files, { level: 6 })
   // fflate returns Uint8Array<ArrayBufferLike> which fails BlobPart typing; copy into ArrayBuffer.
   const zipArrayBuffer = new ArrayBuffer(zipBytes.byteLength)
   new Uint8Array(zipArrayBuffer).set(zipBytes)
+  emitSceneExportEvent(payload.reportEvent, {
+    phase: 'archive',
+    level: 'success',
+    status: 'completed',
+    progress: 100,
+    detail: `${Object.keys(files).length} files`,
+    message: 'ZIP 压缩完成',
+  })
   return new Blob([zipArrayBuffer], { type: 'application/zip' })
 }

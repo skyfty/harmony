@@ -20,7 +20,15 @@ import { type ProjectCreateParams } from '@/types/project-summary'
 import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
-import type { SceneExportOptions } from '@/types/scene-export'
+import type {
+  SceneExportEntityProgress,
+  SceneExportEventReporter,
+  SceneExportLogEntry,
+  SceneExportPhase,
+  SceneExportProgressEvent,
+  SceneExportProgressSummary,
+  SceneExportOptions,
+} from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 
@@ -125,6 +133,11 @@ const isExporting = ref(false)
 const exportProgress = ref(0)
 const exportProgressMessage = ref('')
 const exportErrorMessage = ref<string | null>(null)
+const exportLogs = ref<SceneExportLogEntry[]>([])
+const exportCurrentPhase = ref<SceneExportPhase>('project')
+const exportSceneProgress = ref<SceneExportEntityProgress | null>(null)
+const exportNodeProgress = ref<SceneExportEntityProgress | null>(null)
+const exportAssetProgress = ref<SceneExportEntityProgress | null>(null)
 const isExportDiagnosticsDialogOpen = ref(false)
 const exportDiagnosticsReport = ref<SceneAssetValidationReport | null>(null)
 const exportDiagnosticsSceneName = ref('')
@@ -161,6 +174,19 @@ const exportDiagnosticsSeverityOptions = [
   { title: '警告', value: 'warning' },
 ] as const
 
+const MAX_EXPORT_LOG_ENTRIES = 600
+
+const EXPORT_PHASE_LABELS: Record<SceneExportPhase, string> = {
+  project: '工程',
+  scene: '场景',
+  node: '节点',
+  asset: '资产',
+  sidecar: '附属数据',
+  manifest: '清单',
+  archive: '压缩包',
+  diagnostics: '诊断',
+}
+
 const filteredExportDiagnosticIssues = computed(() => {
   const report = exportDiagnosticsReport.value
   if (!report) {
@@ -194,6 +220,93 @@ const exportDiagnosticsSummaryText = computed(() => {
   }
   return formatSceneAssetDiagnosticsReport(report)
 })
+
+const exportProgressSummary = computed<SceneExportProgressSummary>(() => ({
+  phase: exportCurrentPhase.value,
+  phaseLabel: EXPORT_PHASE_LABELS[exportCurrentPhase.value as SceneExportPhase] ?? '工程',
+  scenes: exportSceneProgress.value,
+  nodes: exportNodeProgress.value,
+  assets: exportAssetProgress.value,
+  logs: exportLogs.value.length,
+}))
+
+function resetExportWorkflowFeedback(): void {
+  exportProgress.value = 0
+  exportProgressMessage.value = ''
+  exportErrorMessage.value = null
+  exportLogs.value = []
+  exportCurrentPhase.value = 'project'
+  exportSceneProgress.value = null
+  exportNodeProgress.value = null
+  exportAssetProgress.value = null
+}
+
+function normalizeExportLogLevel(event: SceneExportProgressEvent): SceneExportLogEntry['level'] {
+  if (event.level) {
+    return event.level
+  }
+  if (event.status === 'failed') {
+    return 'error'
+  }
+  if (event.status === 'completed') {
+    return 'success'
+  }
+  if (event.status === 'skipped') {
+    return 'warning'
+  }
+  return 'info'
+}
+
+function normalizeExportLogStatus(event: SceneExportProgressEvent): SceneExportLogEntry['status'] {
+  return event.status ?? 'running'
+}
+
+function updateExportEntityProgress(
+  target: typeof exportSceneProgress | typeof exportNodeProgress | typeof exportAssetProgress,
+  event: SceneExportProgressEvent,
+): void {
+  if (!Number.isFinite(event.current) || !Number.isFinite(event.total)) {
+    return
+  }
+  const current = Math.max(0, Math.round(event.current ?? 0))
+  const total = Math.max(current, Math.round(event.total ?? 0))
+  target.value = { current, total }
+}
+
+function appendExportLog(event: SceneExportProgressEvent): void {
+  if (!event.message) {
+    return
+  }
+  const entry: SceneExportLogEntry = {
+    ...event,
+    id: generateUuid(),
+    timestamp: Date.now(),
+    level: normalizeExportLogLevel(event),
+    status: normalizeExportLogStatus(event),
+  }
+  const nextLogs = [...exportLogs.value, entry]
+  exportLogs.value = nextLogs.length > MAX_EXPORT_LOG_ENTRIES
+    ? nextLogs.slice(nextLogs.length - MAX_EXPORT_LOG_ENTRIES)
+    : nextLogs
+}
+
+function reportExportEvent(event: SceneExportProgressEvent): void {
+  if (Number.isFinite(event.progress)) {
+    exportProgress.value = Math.min(Math.max(event.progress ?? 0, 0), 100)
+  }
+  if (event.message) {
+    exportProgressMessage.value = event.message
+  }
+  exportCurrentPhase.value = event.phase
+  if (event.phase === 'scene') {
+    updateExportEntityProgress(exportSceneProgress, event)
+  } else if (event.phase === 'node') {
+    updateExportEntityProgress(exportNodeProgress, event)
+  } else if (event.phase === 'asset') {
+    updateExportEntityProgress(exportAssetProgress, event)
+  }
+  appendExportLog(event)
+}
 
 function closeProjectManagerOverlay() {
   isProjectManagerOverlayOpen.value = false
@@ -1072,6 +1185,7 @@ type SceneExportWorkflowConfig = {
     blob: Blob
     fileName: string
     updateProgress: (value: number, message?: string) => void
+    reportEvent: SceneExportEventReporter
   }) => Promise<void>
 }
 
@@ -1126,7 +1240,11 @@ function isSceneJsonExportDocument(raw: unknown): raw is any {
 	return !!raw && typeof raw === 'object' && typeof (raw as any).id === 'string' && Array.isArray((raw as any).nodes)
 }
 
-async function exportProjectPackageZip(options: SceneExportOptions, updateProgress?: (value: number, message?: string) => void): Promise<Blob> {
+async function exportProjectPackageZip(
+  options: SceneExportOptions,
+  updateProgress?: (value: number, message?: string) => void,
+  reportEvent?: SceneExportEventReporter,
+): Promise<Blob> {
   const project = await loadActiveProjectDocument()
   if (!project) {
     throw new Error('必须先打开工程才能导出')
@@ -1145,7 +1263,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
     throw new Error('必须先打开工程才能导出')
   }
 
-  const localSummaries = sortSceneSummariesBySceneManagerOrder(sceneSummaries.value)
+  const localSummaries = sortSceneSummariesBySceneManagerOrder<(typeof sceneSummaries.value)[number]>(sceneSummaries.value)
   const localSceneIds = localSummaries.map((entry) => entry.id)
   const localSceneIdSet = new Set(localSceneIds)
 
@@ -1153,6 +1271,14 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
 
   const orderedSceneIds = [...localSceneIds, ...externalOnly.map((meta) => meta.id)]
   const defaultSceneId = project.lastEditedSceneId ?? (orderedSceneIds[0] ?? null)
+  reportEvent?.({
+    phase: 'project',
+    level: 'info',
+    status: 'running',
+    message: `开始整理工程导出内容 (${orderedSceneIds.length} 个场景)`,
+    current: 0,
+    total: orderedSceneIds.length,
+  })
 
   const embeddedScenes: Array<{ id: string; document: any; planningData?: any }> = []
   const totalToEmbed = orderedSceneIds.length
@@ -1160,11 +1286,24 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
     const id = orderedSceneIds[index]!
     const localSummary = localSummaries.find((s) => s.id === id) ?? null
     const meta = projectScenes.find((s) => s.id === id) ?? null
+    const sceneName = localSummary?.name ?? meta?.name ?? id
 
     const progressBase = 10
     const progressSpan = 70
     const ratio = totalToEmbed > 0 ? (index + 1) / totalToEmbed : 1
-    updateProgress?.(progressBase + Math.round(progressSpan * ratio), `导出场景 ${localSummary?.name ?? meta?.name ?? id}…`)
+    const sceneProgress = progressBase + Math.round(progressSpan * ratio)
+    updateProgress?.(sceneProgress, `导出场景 ${sceneName}…`)
+    reportEvent?.({
+      phase: 'scene',
+      level: 'info',
+      status: 'running',
+      sceneId: id,
+      sceneName,
+      progress: sceneProgress,
+      current: index + 1,
+      total: totalToEmbed,
+      message: `准备导出场景 ${sceneName}`,
+    })
 
     if (localSummary) {
       const document = await ensureExportableSceneDocument(id)
@@ -1172,23 +1311,61 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
         throw new Error(`无法读取场景：${id}`)
       }
 
-      const exportBundle = await prepareStoredSceneJsonExportBundle(document, { ...options, format: 'json' })
+      const exportBundle = await prepareStoredSceneJsonExportBundle(document, { ...options, format: 'json' }, reportEvent)
       if (exportBundle.diagnostics.hasBlockingIssues) {
         logSceneAssetDiagnostics(exportBundle.diagnostics, '[SceneExport]', document.name)
         openExportDiagnosticsDialog(exportBundle.diagnostics, document.name || document.id)
+        reportEvent?.({
+          phase: 'diagnostics',
+          level: 'error',
+          status: 'failed',
+          sceneId: document.id,
+          sceneName: document.name || document.id,
+          message: `场景 ${document.name || document.id} 存在 ${exportBundle.diagnostics.blockingIssueCount} 个阻断资产错误`,
+          detail: '请查看资产诊断弹窗',
+        })
         throw new Error(
           `场景“${document.name || document.id}”存在 ${exportBundle.diagnostics.blockingIssueCount} 个资产有效性错误，已阻止正式导出。请查看资产诊断弹窗。`,
         )
       }
       if (exportBundle.diagnostics.issues.length) {
         logSceneAssetDiagnostics(exportBundle.diagnostics, '[SceneExport]', document.name)
+        reportEvent?.({
+          phase: 'diagnostics',
+          level: 'warning',
+          status: 'completed',
+          sceneId: document.id,
+          sceneName: document.name || document.id,
+          message: `场景 ${document.name || document.id} 存在 ${exportBundle.diagnostics.warningIssueCount} 个警告`,
+        })
       }
       const exportDocument = exportBundle.document
       embeddedScenes.push({ id, document: exportDocument, planningData: document.planningData ?? null })
+      reportEvent?.({
+        phase: 'scene',
+        level: 'success',
+        status: 'completed',
+        sceneId: id,
+        sceneName: document.name || document.id,
+        current: index + 1,
+        total: totalToEmbed,
+        message: `场景导出数据已准备完成 ${document.name || document.id}`,
+      })
       continue
     }
 
     if (meta?.sceneJsonUrl) {
+      reportEvent?.({
+        phase: 'scene',
+        level: 'info',
+        status: 'running',
+        sceneId: id,
+        sceneName,
+        current: index + 1,
+        total: totalToEmbed,
+        detail: meta.sceneJsonUrl,
+        message: `下载外部场景 ${sceneName}`,
+      })
       const response = await fetch(meta.sceneJsonUrl, { method: 'GET', credentials: 'omit', cache: 'no-cache' })
       if (!response.ok) {
         throw new Error(`无法下载外部场景：${meta.sceneJsonUrl} (${response.status})`)
@@ -1199,11 +1376,30 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
         throw new Error(`外部场景格式不正确：${meta.sceneJsonUrl}`)
       }
       embeddedScenes.push({ id, document: parsed })
+      reportEvent?.({
+        phase: 'scene',
+        level: 'success',
+        status: 'completed',
+        sceneId: id,
+        sceneName,
+        current: index + 1,
+        total: totalToEmbed,
+        message: `外部场景已载入 ${sceneName}`,
+      })
       continue
     }
   }
 
   updateProgress?.(85, '生成场景包…')
+  reportEvent?.({
+    phase: 'project',
+    level: 'info',
+    status: 'running',
+    progress: 85,
+    message: `开始生成工程场景包 (${embeddedScenes.length} 个场景)`,
+    current: embeddedScenes.length,
+    total: embeddedScenes.length,
+  })
   return await exportScenePackageZip({
     project: {
       id: project.id,
@@ -1216,6 +1412,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
     embedAssets: options.embedAssets ?? false,
     includePlanningData: false,
     updateProgress,
+    reportEvent,
   })
 }
 
@@ -1233,21 +1430,20 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
 
   const proceed = typeof window !== 'undefined' ? window.confirm('仍要继续导出该工程吗？') : true
   if (!proceed) {
-    exportProgress.value = 0
-    exportProgressMessage.value = ''
-    exportErrorMessage.value = null
+    resetExportWorkflowFeedback()
     return false
   }
 
   isExporting.value = true
-  exportErrorMessage.value = null
-  exportProgress.value = 5
-  exportProgressMessage.value = config.startMessage
+  resetExportWorkflowFeedback()
 
   const { fileName, ...preferenceSnapshot } = options
   exportPreferences.value = { fileName, ...preferenceSnapshot }
 
   let workflowSucceeded = false
+  const reportEvent: SceneExportEventReporter = (event) => {
+    reportExportEvent(event)
+  }
   const updateProgress = (value: number, message?: string) => {
     if (Number.isFinite(value)) {
       exportProgress.value = Math.min(Math.max(value, 0), 100)
@@ -1258,26 +1454,55 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
   }
 
   try {
+    reportEvent({
+      phase: 'project',
+      level: 'info',
+      status: 'running',
+      progress: 5,
+      message: config.startMessage,
+    })
     updateProgress(10, 'Exporting project')
-    const blob = await exportProjectPackageZip(options, updateProgress)
-    await config.afterExport({ blob, fileName, updateProgress })
-    updateProgress(100, config.successMessage)
+    reportEvent({
+      phase: 'project',
+      level: 'info',
+      status: 'running',
+      progress: 10,
+      message: '开始导出工程',
+    })
+    const blob = await exportProjectPackageZip(options, updateProgress, reportEvent)
+    await config.afterExport({ blob, fileName, updateProgress, reportEvent })
+    reportEvent({
+      phase: 'archive',
+      level: 'success',
+      status: 'completed',
+      progress: 100,
+      detail: fileName,
+      message: config.successMessage,
+    })
     workflowSucceeded = true
     return true
   } catch (error) {
     const message = (error as Error)?.message ?? config.failureMessage
     exportErrorMessage.value = message
     exportProgressMessage.value = message
+    reportEvent({
+      phase: 'project',
+      level: 'error',
+      status: 'failed',
+      progress: exportProgress.value,
+      message,
+    })
     console.error(`Scene ${config.action} failed`, error)
     return false
   } finally {
     isExporting.value = false
-    if (workflowSucceeded) {
-      setTimeout(() => {
-        isPublishDialogOpen.value = false
-        exportProgress.value = 0
-        exportProgressMessage.value = ''
-      }, 600)
+    if (!workflowSucceeded && exportLogs.value.length === 0 && exportErrorMessage.value) {
+      reportExportEvent({
+        phase: 'project',
+        level: 'error',
+        status: 'failed',
+        message: exportErrorMessage.value,
+      })
     }
   }
 }
@@ -1285,28 +1510,31 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
 async function handlePublishDialogConfirm(options: SceneExportOptions) {
   await runSceneExportWorkflow(options, {
     action: 'export',
-    startMessage: 'Preparing export...',
-    successMessage: 'Export complete',
-    failureMessage: 'Export failed',
-    afterExport: async ({ blob, fileName }) => {
+    startMessage: '准备导出工程…',
+    successMessage: '工程导出完成',
+    failureMessage: '工程导出失败',
+    afterExport: async ({ blob, fileName, reportEvent }) => {
       const normalized = typeof fileName === 'string' && fileName.trim().length ? fileName.trim() : 'scene-package.zip'
       const zipName = normalized.toLowerCase().endsWith('.zip') ? normalized : `${normalized.replace(/\.[^./\\]+$/g, '')}.zip`
       triggerDownload(blob, zipName)
+      reportEvent({
+        phase: 'archive',
+        level: 'success',
+        status: 'completed',
+        detail: zipName,
+        message: `导出文件已生成 ${zipName}`,
+      })
     },
   })
 }
 
 function handlePublishDialogCancel() {
-  exportProgress.value = 0
-  exportProgressMessage.value = ''
-  exportErrorMessage.value = null
+  resetExportWorkflowFeedback()
 }
 
 watch(isPublishDialogOpen, (open) => {
   if (!open && !isExporting.value) {
-    exportProgress.value = 0
-    exportProgressMessage.value = ''
-    exportErrorMessage.value = null
+    resetExportWorkflowFeedback()
   }
 })
 
@@ -2474,6 +2702,8 @@ onBeforeUnmount(() => {
       :progress="exportProgress"
       :progress-message="exportProgressMessage"
       :error-message="exportErrorMessage"
+      :logs="exportLogs"
+      :export-summary="exportProgressSummary"
       @confirm="handlePublishDialogConfirm"
       @cancel="handlePublishDialogCancel"
     />

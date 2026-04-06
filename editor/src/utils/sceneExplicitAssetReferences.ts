@@ -1,4 +1,5 @@
 import type { BehaviorComponentProps, SceneBehavior } from '@schema'
+import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import {
   BEHAVIOR_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
@@ -12,6 +13,10 @@ import {
 export interface ExplicitSceneAssetReference {
   assetId: string | null | undefined
   path: string
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function visitLodAssetReferences(
@@ -99,4 +104,20 @@ export function visitExplicitComponentAssetReferences(
     default:
       return
   }
+}
+
+export function visitExplicitTerrainScatterAssetReferences(
+  snapshot: TerrainScatterStoreSnapshot | null | undefined,
+  visit: (reference: ExplicitSceneAssetReference) => void,
+): void {
+  if (!snapshot || !Array.isArray(snapshot.layers)) {
+    return
+  }
+  snapshot.layers.forEach((layer, layerIndex) => {
+    const payload = isPlainObject(layer?.params?.payload) ? layer.params.payload : null
+    visit({
+      assetId: payload?.lodPresetAssetId as string | null | undefined,
+      path: `layers[${layerIndex}].params.payload.lodPresetAssetId`,
+    })
+  })
 }

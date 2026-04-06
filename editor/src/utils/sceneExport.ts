@@ -3,7 +3,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
 import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type GroundRuntimeDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
-import type { SceneExportOptions } from '@/types/scene-export'
+import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
 import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
@@ -98,14 +98,130 @@ export interface PreparedSceneExportBundle {
   diagnostics: SceneAssetValidationReport
 }
 
-export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneJsonExportDocument> {
-  const bundle = await prepareJsonSceneExportBundle(snapshot, options)
+type NodeExportProgressTracker = {
+  reportEvent: SceneExportEventReporter
+  sceneId: string
+  sceneName: string
+  processed: number
+  total: number
+}
+
+function countSceneNodes(nodes: SceneNode[]): number {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return 0
+  }
+  let count = 0
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    count += 1
+    if (Array.isArray(current.children) && current.children.length > 0) {
+      stack.push(...current.children)
+    }
+  }
+  return count
+}
+
+function describeSceneNode(node: SceneNode): string {
+  const nodeName = typeof node.name === 'string' ? node.name.trim() : ''
+  return nodeName || node.id || 'unnamed-node'
+}
+
+function createNodeExportProgressTracker(
+  document: SceneJsonExportDocument,
+  reportEvent?: SceneExportEventReporter,
+): NodeExportProgressTracker | null {
+  if (!reportEvent) {
+    return null
+  }
+  const total = countSceneNodes(document.nodes)
+  if (total <= 0) {
+    return null
+  }
+  return {
+    reportEvent,
+    sceneId: document.id,
+    sceneName: document.name || document.id,
+    processed: 0,
+    total,
+  }
+}
+
+function reportNodeExportStart(progress: NodeExportProgressTracker | null): void {
+  if (!progress) {
+    return
+  }
+  progress.reportEvent({
+    phase: 'node',
+    level: 'info',
+    status: 'running',
+    sceneId: progress.sceneId,
+    sceneName: progress.sceneName,
+    current: 0,
+    total: progress.total,
+    message: `开始处理场景节点 (${progress.total})`,
+  })
+}
+
+function reportNodeExportProgress(
+  progress: NodeExportProgressTracker | null,
+  node: SceneNode,
+  status: 'completed' | 'skipped',
+  detail?: string,
+): void {
+  if (!progress) {
+    return
+  }
+  progress.processed += 1
+  progress.reportEvent({
+    phase: 'node',
+    level: status === 'skipped' ? 'warning' : 'info',
+    status,
+    sceneId: progress.sceneId,
+    sceneName: progress.sceneName,
+    nodeId: node.id,
+    nodeName: node.name || node.id,
+    current: progress.processed,
+    total: progress.total,
+    detail,
+    message: status === 'skipped'
+      ? `跳过节点 ${describeSceneNode(node)}`
+      : `已处理节点 ${describeSceneNode(node)}`,
+  })
+}
+
+function reportNodeExportDone(progress: NodeExportProgressTracker | null): void {
+  if (!progress) {
+    return
+  }
+  progress.reportEvent({
+    phase: 'node',
+    level: 'success',
+    status: 'completed',
+    sceneId: progress.sceneId,
+    sceneName: progress.sceneName,
+    current: progress.processed,
+    total: progress.total,
+    message: `场景节点处理完成 (${progress.processed}/${progress.total})`,
+  })
+}
+
+export async function prepareJsonSceneExport(
+  snapshot: StoredSceneDocument,
+  options: SceneExportOptions,
+  reportEvent?: SceneExportEventReporter,
+): Promise<SceneJsonExportDocument> {
+  const bundle = await prepareJsonSceneExportBundle(snapshot, options, reportEvent)
   return bundle.document
 }
 
 export async function prepareJsonSceneExportBundle(
   snapshot: StoredSceneDocument,
   options: SceneExportOptions,
+  reportEvent?: SceneExportEventReporter,
 ): Promise<PreparedSceneExportBundle> {
   const assetRegistry = await buildAssetRegistryForExport(snapshot)
 
@@ -130,7 +246,7 @@ export async function prepareJsonSceneExportBundle(
   if (punchPoints.length) {
     exportDocument.punchPoints = punchPoints
   }
-  const sanitizedDocument = await sanitizeSceneDocumentForJsonExport(exportDocument, options)
+  const sanitizedDocument = await sanitizeSceneDocumentForJsonExport(exportDocument, options, reportEvent)
   const diagnostics = validateSceneAssetReferences(
     {
       ...snapshot,
@@ -153,18 +269,20 @@ export async function prepareJsonSceneExportBundle(
 export async function prepareStoredSceneJsonExport(
   snapshot: StoredSceneDocument,
   options: SceneExportOptions,
+  reportEvent?: SceneExportEventReporter,
 ): Promise<SceneJsonExportDocument> {
-  const bundle = await prepareStoredSceneJsonExportBundle(snapshot, options)
+  const bundle = await prepareStoredSceneJsonExportBundle(snapshot, options, reportEvent)
   return bundle.document
 }
 
 export async function prepareStoredSceneJsonExportBundle(
   snapshot: StoredSceneDocument,
   options: SceneExportOptions,
+  reportEvent?: SceneExportEventReporter,
 ): Promise<PreparedSceneExportBundle> {
   const exportableScene = await cloneSceneDocumentForExport(snapshot)
   exportableScene.resourceSummary = await calculateSceneResourceSummary(exportableScene, { embedResources: true })
-  return await prepareJsonSceneExportBundle(exportableScene, options)
+  return await prepareJsonSceneExportBundle(exportableScene, options, reportEvent)
 }
 
 type OutlineCandidate = {
@@ -180,17 +298,21 @@ type RigidbodyExportCandidate = {
 async function sanitizeSceneDocumentForJsonExport(
   document: SceneJsonExportDocument,
   options: SceneExportOptions,
+  reportEvent?: SceneExportEventReporter,
 ): Promise<SceneJsonExportDocument> {
   const removedNodeIds = new Set<string>()
   const outlineCandidates: OutlineCandidate[] = []
   const rigidbodyCandidates: RigidbodyExportCandidate[] = []
+  const nodeProgress = createNodeExportProgressTracker(document, reportEvent)
   const sanitizedMaterials = document.materials.map((material) => sanitizeSceneMaterial(material))
+  reportNodeExportStart(nodeProgress)
   const sanitizedNodes = sanitizeNodesForJsonExport(
     document.nodes,
     options,
     removedNodeIds,
     outlineCandidates,
     rigidbodyCandidates,
+    nodeProgress,
   )
 
   let outlineMeshMap: SceneOutlineMeshMap | undefined
@@ -219,6 +341,8 @@ async function sanitizeSceneDocumentForJsonExport(
     delete sanitizedDocument.outlineMeshMap
   }
 
+  reportNodeExportDone(nodeProgress)
+
   return sanitizedDocument
 }
 
@@ -228,11 +352,14 @@ function sanitizeNodesForJsonExport(
   removedNodeIds: Set<string>,
   outlineCandidates: OutlineCandidate[],
   rigidbodyCandidates: RigidbodyExportCandidate[],
+  nodeProgress?: NodeExportProgressTracker | null,
 ): SceneNode[] {
   const result: SceneNode[] = []
   for (const node of nodes) {
-    if (shouldExcludeNodeForJsonExport(node, options)) {
+    const excludeReason = getNodeJsonExportExclusionReason(node, options)
+    if (excludeReason) {
       collectNodeTreeIds(node, removedNodeIds)
+      reportNodeExportProgress(nodeProgress ?? null, node, 'skipped', excludeReason)
       continue
     }
     const sanitized = sanitizeNodeForJsonExport(
@@ -241,6 +368,7 @@ function sanitizeNodesForJsonExport(
       removedNodeIds,
       outlineCandidates,
       rigidbodyCandidates,
+      nodeProgress,
     )
     result.push(sanitized)
   }
@@ -249,20 +377,20 @@ function sanitizeNodesForJsonExport(
 
 import { isPlanningImageConversionNode } from '@/utils/planningToScene'
 
-function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOptions): boolean {
+function getNodeJsonExportExclusionReason(node: SceneNode, options: SceneExportOptions): string | null {
   if (!options.includeHiddenNodes && node.visible === false) {
-    return true
+    return 'hidden node excluded'
   }
   if (!options.includeLights && (node.nodeType === 'Light' || Boolean(node.light))) {
-    return true
+    return 'light node excluded'
   }
   if (node.nodeType === 'Environment') {
-    return true
+    return 'environment node excluded'
   }
   if (isPlanningImageConversionNode(node)) {
-    return true
+    return 'planning conversion helper excluded'
   }
-  return false
+  return null
 }
 
 function shouldGenerateOutlineMeshForNode(node: SceneNode, options: SceneExportOptions): boolean {
@@ -287,6 +415,7 @@ function sanitizeNodeForJsonExport(
   removedNodeIds: Set<string>,
   outlineCandidates: OutlineCandidate[],
   rigidbodyCandidates: RigidbodyExportCandidate[],
+  nodeProgress?: NodeExportProgressTracker | null,
 ): SceneNode {
   const sanitized: SceneNode = { ...node }
 
@@ -301,6 +430,7 @@ function sanitizeNodeForJsonExport(
       removedNodeIds,
       outlineCandidates,
       rigidbodyCandidates,
+      nodeProgress,
     )
     if (children.length) {
       sanitized.children = children
@@ -348,6 +478,13 @@ function sanitizeNodeForJsonExport(
   if (shouldGenerateOutlineMeshForNode(node, options)) {
     outlineCandidates.push({ sourceNode: node, sanitizedNode: sanitized })
   }
+
+  reportNodeExportProgress(
+    nodeProgress ?? null,
+    node,
+    'completed',
+    `类型：${node.nodeType || 'Unknown'}`,
+  )
 
   return sanitized
 }
