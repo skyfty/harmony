@@ -7,7 +7,6 @@ import {
   clampLodComponentProps,
   LOD_FACE_CAMERA_FORWARD_AXIS_X,
   LOD_FACE_CAMERA_FORWARD_AXIS_Y,
-  LOD_FACE_CAMERA_FORWARD_AXIS_Z,
   resolveLodRenderTarget,
   type LodComponentProps,
   type LodFaceCameraForwardAxis,

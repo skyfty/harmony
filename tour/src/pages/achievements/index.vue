@@ -4,21 +4,46 @@
     <PageHeader title="打卡成就"  :showBack="false" />
 
     <view class="content">
-      <view class="medal-section">
+      <view class="filter-tabs">
+        <view
+          :class="['tab', { active: activeTab === 'medals' }]"
+          @tap="setActiveTab('medals')"
+        >
+          勋章墙
+        </view>
+        <view
+          :class="['tab', { active: activeTab === 'records' }]"
+          @tap="setActiveTab('records')"
+        >
+          打卡记录
+        </view>
+      </view>
+
+      <view v-if="activeTab === 'medals'" class="medal-section">
         <view class="section-head">
           <text class="section-title">勋章墙</text>
           <text class="section-meta">已获得 {{ earnedMedalCount }}/{{ medals.length }}</text>
         </view>
 
-        <view v-if="medals.length" class="medal-grid">
+        <view v-if="medals.length" class="medal-list">
           <view
             v-for="medal in medals"
             :key="medal.id"
-            :class="['medal-card', medal.earned ? 'medal-card--earned' : '']"
+            :class="['medal-card', medal.earned ? 'medal-card--earned' : 'medal-card--locked']"
           >
-            <image class="medal-icon" :src="resolveMedalIcon(medal)" mode="aspectFill" />
-            <text :class="['medal-name', medal.earned ? 'medal-name--earned' : '']">{{ medal.name }}</text>
-            <text class="medal-status">{{ medal.earned ? '已获得' : '未获得' }}</text>
+            <view class="medal-visual">
+              <image class="medal-icon" :src="resolveMedalIcon(medal)" mode="aspectFit" />
+              <text :class="['medal-status', medal.earned ? 'medal-status--earned' : 'medal-status--locked']">
+                {{ medal.earned ? '已获得' : '未获得' }}
+              </text>
+            </view>
+
+            <view class="medal-body">
+              <text :class="['medal-name', medal.earned ? 'medal-name--earned' : 'medal-name--locked']">
+                {{ medal.name }}
+              </text>
+              <text class="medal-description">{{ getMedalDescription(medal) }}</text>
+            </view>
           </view>
         </view>
 
@@ -27,44 +52,46 @@
         </view>
       </view>
 
-      <view
-        v-for="item in filteredScenicCheckins"
-        :key="item.scenicId"
-        class="scenic-card"
-        :style="buildCardStyle(item)"
-      >
-        <view class="scenic-card-mask">
-          <view class="scenic-header">
-            <text class="scenic-title">
-              {{ item.scenicTitle || item.sceneName || '未命名景区' }}
-            </text>
-            <view class="progress-badge">
-              <text class="progress-icon">
-                ★
+      <template v-else>
+        <view
+          v-for="item in scenicCheckins"
+          :key="item.scenicId"
+          class="scenic-card"
+          :style="buildCardStyle(item)"
+        >
+          <view class="scenic-card-mask">
+            <view class="scenic-header">
+              <text class="scenic-title">
+                {{ item.scenicTitle || item.sceneName || '未命名景区' }}
               </text>
-              <text class="progress-value">
-                {{ formatPercent(item) }}
-              </text>
+              <view class="progress-badge">
+                <text class="progress-icon">
+                  ★
+                </text>
+                <text class="progress-value">
+                  {{ formatPercent(item) }}
+                </text>
+              </view>
+            </view>
+
+            <view class="card-spacer" />
+
+            <view
+              class="enter-btn"
+              @tap="openScenic(item.scenicId)"
+            >
+              进入景区
             </view>
           </view>
-
-          <view class="card-spacer" />
-
-          <view
-            class="enter-btn"
-            @tap="openScenic(item.scenicId)"
-          >
-            进入景区
-          </view>
         </view>
-      </view>
 
-      <view
-        v-if="!filteredScenicCheckins.length"
-        class="empty"
-      >
-        暂无打卡成就数据
-      </view>
+        <view
+          v-if="!scenicCheckins.length"
+          class="empty"
+        >
+          暂无打卡成就数据
+        </view>
+      </template>
     </view>
 
     <BottomNav
@@ -77,10 +104,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { getStatusBarHeight } from '@/utils/systemInfo';
 import type { MedalItem } from '@/types/achievement';
-
-const statusBarHeight = ref(getStatusBarHeight());
 
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
@@ -104,7 +128,9 @@ interface ScenicCardItem {
   ratio?: number;
 }
 
-const keyword = ref('');
+type AchievementTab = 'medals' | 'records';
+
+const activeTab = ref<AchievementTab>('medals');
 const medals = ref<MedalItem[]>([]);
 const scenicCheckinProgresses = ref<ScenicCardItem[]>([]);
 
@@ -122,25 +148,13 @@ async function reload() {
   }
 }
 
-const earnedMedalCount = computed(() => medals.value.filter((item) => item.earned).length);
+const earnedMedalCount = computed(() => medals.value.filter((item: MedalItem) => item.earned).length);
 
-const filteredScenicCheckins = computed(() => {
-  const k = keyword.value.trim();
-  const source = scenicCheckinProgresses.value;
+const scenicCheckins = computed(() => scenicCheckinProgresses.value);
 
-  if (!k) {
-    return source;
-  }
-
-  const filtered: ScenicCardItem[] = [];
-  for (const item of source) {
-    const sceneText = item.scenicTitle || item.sceneName || item.scenicId;
-    if (sceneText.includes(k)) {
-      filtered.push(item);
-    }
-  }
-  return filtered;
-});
+function setActiveTab(tab: AchievementTab) {
+  activeTab.value = tab;
+}
 
 function clampCount(value: number): number {
   if (!Number.isFinite(value)) {
@@ -187,6 +201,11 @@ function buildCardStyle(item: ScenicCardItem): Record<string, string> {
 
 function resolveMedalIcon(item: MedalItem): string {
   return item.displayIconUrl || item.unlockedIconUrl || item.lockedIconUrl || '';
+}
+
+function getMedalDescription(item: MedalItem): string {
+  const description = typeof item.description === 'string' ? item.description.trim() : '';
+  return description || '完成对应打卡目标后即可解锁这枚勋章。';
 }
 
 function openScenic(scenicId: string) {
@@ -251,6 +270,32 @@ function handleNavigate(key: NavKey) {
   gap: 14px;
 }
 
+.filter-tabs {
+  display: flex;
+  gap: 10px;
+}
+
+.tab {
+  min-width: 168rpx;
+  height: 72rpx;
+  padding: 0 24rpx;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 18px rgba(24, 38, 68, 0.08);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #5b6780;
+}
+
+.tab.active {
+  background: linear-gradient(135deg, #f2c14d 0%, #d69425 100%);
+  box-shadow: 0 12px 24px rgba(180, 119, 16, 0.2);
+  color: #ffffff;
+}
+
 .medal-section {
   padding: 18px 16px;
   border-radius: 20px;
@@ -277,50 +322,95 @@ function handleNavigate(key: NavKey) {
   color: #8f7444;
 }
 
-.medal-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+.medal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .medal-card {
-  padding: 16px 10px 14px;
-  border-radius: 16px;
-  background: rgba(125, 111, 78, 0.08);
+  padding: 20px 18px;
+  border-radius: 22px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  opacity: 0.72;
+  gap: 18px;
+  border: 1px solid transparent;
 }
 
 .medal-card--earned {
-  background: linear-gradient(180deg, rgba(255, 231, 170, 0.9) 0%, rgba(255, 214, 102, 0.75) 100%);
-  box-shadow: 0 10px 20px rgba(179, 127, 16, 0.18);
-  opacity: 1;
+  background: linear-gradient(135deg, rgba(255, 243, 204, 0.98) 0%, rgba(255, 225, 149, 0.88) 100%);
+  border-color: rgba(211, 153, 38, 0.18);
+  box-shadow: 0 14px 28px rgba(179, 127, 16, 0.16);
+}
+
+.medal-card--locked {
+  background: linear-gradient(135deg, rgba(234, 240, 249, 0.96) 0%, rgba(222, 229, 241, 0.92) 100%);
+  border-color: rgba(109, 123, 150, 0.14);
+}
+
+.medal-visual {
+  width: 168rpx;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
 .medal-icon {
-  width: 88rpx;
-  height: 88rpx;
-  border-radius: 22rpx;
-  background: rgba(255, 255, 255, 0.7);
+  width: 128rpx;
+  height: 128rpx;
+  background: transparent;
+}
+
+.medal-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .medal-name {
-  font-size: 24rpx;
-  font-weight: 600;
-  color: #7f7262;
-  text-align: center;
+  font-size: 32rpx;
+  font-weight: 800;
+  line-height: 1.35;
 }
 
 .medal-name--earned {
   color: #5d3f07;
 }
 
+.medal-name--locked {
+  color: #45546f;
+}
+
+.medal-description {
+  font-size: 25rpx;
+  line-height: 1.6;
+  color: #6b7280;
+}
+
 .medal-status {
+  min-width: 112rpx;
+  height: 48rpx;
+  padding: 0 18rpx;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 22rpx;
-  color: #917b56;
+  font-weight: 700;
+}
+
+.medal-status--earned {
+  color: #8a5400;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.medal-status--locked {
+  color: #60708c;
+  background: rgba(255, 255, 255, 0.62);
 }
 
 .medal-empty {
