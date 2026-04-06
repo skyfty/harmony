@@ -75,9 +75,12 @@ import {
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
+	analyzeGroundOptimizedMeshUsage,
 	areAllGroundChunksLoaded,
 	ensureAllGroundChunks,
 	isGroundChunkStreamingEnabled,
+	resolveGroundChunkRadiusMeters,
+	resolveGroundRuntimeChunkCells,
 	updateGroundChunks,
 } from '@schema/groundMesh'
 import {
@@ -396,6 +399,8 @@ const rendererDebug = reactive({
 	calls: 0,
 	triangles: 0,
 	renderTriangles: 0,
+	groundChunkTriangles: 0,
+	groundVisibleChunks: 0,
 	geometries: 0,
 	textures: 0,
 	})
@@ -456,6 +461,56 @@ function estimateSceneTriangleCount(root: THREE.Object3D): number {
 	return total
 }
 
+type GroundChunkRenderSnapshot = {
+	visibleChunkCount: number
+	estimatedTriangles: number
+	chunkKeys: string[]
+}
+
+function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | undefined): GroundChunkRenderSnapshot {
+	if (!groundObject) {
+		return {
+			visibleChunkCount: 0,
+			estimatedTriangles: 0,
+			chunkKeys: [],
+		}
+	}
+
+	let visibleChunkCount = 0
+	let estimatedTriangles = 0
+	const chunkKeys: string[] = []
+
+	groundObject.traverseVisible((object) => {
+		const mesh = object as THREE.Mesh
+		if (!mesh.isMesh) {
+			return
+		}
+		const chunk = (mesh.userData?.groundChunk ?? null) as GroundChunkUserData | null
+		if (!chunk) {
+			return
+		}
+		visibleChunkCount += 1
+		chunkKeys.push(`${chunk.chunkRow}:${chunk.chunkColumn}`)
+		const triangleCount = resolveGeometryTriangleCount(mesh.geometry)
+		if (triangleCount <= 0) {
+			return
+		}
+		if (mesh instanceof THREE.InstancedMesh) {
+			estimatedTriangles += triangleCount * Math.max(0, Math.trunc(mesh.count))
+			return
+		}
+		estimatedTriangles += triangleCount
+	})
+
+	chunkKeys.sort()
+
+	return {
+		visibleChunkCount,
+		estimatedTriangles,
+		chunkKeys,
+	}
+}
+
 	const instancingDebug = reactive({
 		instancedMesh: 0,
 		instancedActive: 0,
@@ -473,7 +528,15 @@ const groundChunkDebug = reactive({
 	total: 0,
 	pending: 0,
 	unloaded: 0,
+	visible: 0,
+	triangleEstimate: 0,
 })
+
+let lastGroundChunkDebugLogAt = 0
+let lastGroundChunkDebugSignature = ''
+let lastGroundChunkDebugKeys = new Set<string>()
+let lastRendererDebugLogAt = 0
+let lastRendererDebugSignature = ''
 
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
@@ -1328,6 +1391,7 @@ let followCameraControlActive = false
 let followCameraControlDirty = false
 let rendererInitialized = false
 let suppressControlModeApply = false
+let lastPreviewGroundOptimizationAnalysisKey = ''
 const MAP_CONTROL_DEFAULTS = {
 	minDistance: 1,
 	maxDistance: 200,
@@ -1782,17 +1846,6 @@ function createGroundChunkDebugEntry(key: string): THREE.Group {
 	return group
 }
 
-function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
-	const columns = Math.max(1, Math.trunc(definition.columns))
-	const rows = Math.max(1, Math.trunc(definition.rows))
-	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-	const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : columns * cellSize
-	const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : rows * cellSize
-	const halfDiagonal = Math.sqrt(Math.max(0, width) ** 2 + Math.max(0, depth) ** 2) * 0.5
-	const defaultRadius = 200
-	return Math.max(80, Math.min(2000, Math.min(defaultRadius, halfDiagonal)))
-}
-
 function computeTargetGroundChunkCount(
 	definition: GroundDynamicMesh,
 	chunkCells: number,
@@ -1809,7 +1862,7 @@ function computeTargetGroundChunkCount(
 	const columnChunks = Math.max(1, Math.ceil(columns / safeCells))
 
 	const chunkSizeMeters = Math.max(1e-6, safeCells * cellSize)
-	const radiusMeters = resolveGroundChunkRadius(definition)
+	const radiusMeters = resolveGroundChunkRadiusMeters(definition)
 	const radiusChunks = Math.max(0, Math.ceil(radiusMeters / chunkSizeMeters))
 
 	groundObject.updateWorldMatrix(true, false)
@@ -1927,15 +1980,47 @@ function syncGroundChunkStreamingDebug(
 	if (maxChunkCells > 0) {
 		groundChunkCellsEstimate = Math.max(groundChunkCellsEstimate ?? 0, maxChunkCells)
 	}
-	const total = groundChunkCellsEstimate ? computeTotalGroundChunkCount(definition, groundChunkCellsEstimate) : loadedChunks
-	const target = groundChunkCellsEstimate
-		? computeTargetGroundChunkCount(definition, groundChunkCellsEstimate, groundObject, activeCamera)
-		: loadedChunks
+	const effectiveChunkCells = groundChunkCellsEstimate ?? resolveGroundRuntimeChunkCells(definition)
+	const total = computeTotalGroundChunkCount(definition, effectiveChunkCells)
+	const target = computeTargetGroundChunkCount(definition, effectiveChunkCells, groundObject, activeCamera)
+	const renderSnapshot = collectGroundChunkRenderSnapshot(groundObject)
 	groundChunkDebug.loaded = loadedChunks
 	groundChunkDebug.total = total
 	groundChunkDebug.target = target
 	groundChunkDebug.pending = Math.max(0, target - loadedChunks)
 	groundChunkDebug.unloaded = Math.max(0, total - loadedChunks)
+	groundChunkDebug.visible = renderSnapshot.visibleChunkCount
+	groundChunkDebug.triangleEstimate = renderSnapshot.estimatedTriangles
+
+	const currentKeys = new Set(renderSnapshot.chunkKeys)
+	const addedKeys = renderSnapshot.chunkKeys.filter((key) => !lastGroundChunkDebugKeys.has(key))
+	const removedKeys = Array.from(lastGroundChunkDebugKeys).filter((key) => !currentKeys.has(key))
+	const signature = [
+		loadedChunks,
+		target,
+		total,
+		groundChunkDebug.pending,
+		renderSnapshot.visibleChunkCount,
+		renderSnapshot.estimatedTriangles,
+		renderSnapshot.chunkKeys.join(','),
+	].join('|')
+	if (signature !== lastGroundChunkDebugSignature && now - lastGroundChunkDebugLogAt >= 250) {
+		lastGroundChunkDebugLogAt = now
+		lastGroundChunkDebugSignature = signature
+		lastGroundChunkDebugKeys = currentKeys
+		console.info('[ScenePreview][Ground] chunk visibility stats', {
+			loadedChunks,
+			targetChunks: target,
+			totalChunks: total,
+			pendingChunks: groundChunkDebug.pending,
+			unloadedChunks: groundChunkDebug.unloaded,
+			visibleChunkMeshes: renderSnapshot.visibleChunkCount,
+			visibleChunkTriangleEstimate: renderSnapshot.estimatedTriangles,
+			addedChunkKeys: addedKeys,
+			removedChunkKeys: removedKeys,
+			activeChunkKeysSample: renderSnapshot.chunkKeys.slice(0, 24),
+		})
+	}
 }
 
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
@@ -3875,6 +3960,8 @@ watch(isRendererDebugVisible, (visible) => {
 	rendererDebug.calls = 0
 	rendererDebug.triangles = 0
 	rendererDebug.renderTriangles = 0
+	rendererDebug.groundChunkTriangles = 0
+	rendererDebug.groundVisibleChunks = 0
 	rendererDebug.geometries = 0
 	rendererDebug.textures = 0
 })
@@ -5281,6 +5368,39 @@ async function buildPreviewRuntimeDocument(
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
 	}
 	attachOptimizedGroundMeshToDocument(document)
+	if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		const analysis = analyzeGroundOptimizedMeshUsage(groundNode.dynamicMesh)
+		const analysisKey = [
+			document.id,
+			groundNode.id,
+			analysis.surfaceRevision,
+			analysis.runtimeHydratedHeightState,
+			analysis.runtimeDisableOptimizedChunks ? 'disabled' : 'enabled',
+			analysis.reason,
+			analysis.optimizedTriangleCount,
+			analysis.runtimeChunkCells,
+		].join('|')
+		if (analysisKey !== lastPreviewGroundOptimizationAnalysisKey) {
+			lastPreviewGroundOptimizationAnalysisKey = analysisKey
+			const logMethod = analysis.canUseOptimizedMesh ? console.info : console.warn
+			logMethod('[ScenePreview][Ground] optimized mesh analysis', {
+				documentId: document.id,
+				groundNodeId: groundNode.id,
+				hadSidecar: Boolean(sidecar),
+				hasOptimizedMesh: analysis.hasOptimizedMesh,
+				reason: analysis.reason,
+				canUseOptimizedMesh: analysis.canUseOptimizedMesh,
+				surfaceRevision: analysis.surfaceRevision,
+				runtimeHydratedHeightState: analysis.runtimeHydratedHeightState,
+				runtimeDisableOptimizedChunks: analysis.runtimeDisableOptimizedChunks,
+				sourceChunkCells: analysis.sourceChunkCells,
+				optimizedChunkCells: analysis.optimizedChunkCells,
+				runtimeChunkCells: analysis.runtimeChunkCells,
+				sourceTriangleCount: analysis.sourceTriangleCount,
+				optimizedTriangleCount: analysis.optimizedTriangleCount,
+			})
+		}
+	}
 	return document
 }
 
@@ -7199,8 +7319,33 @@ function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, current
 	rendererDebug.renderTriangles = currentRenderer.info?.render?.triangles ?? 0
 	const sceneTriangles = estimateSceneTriangleCount(currentScene)
 	rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.renderTriangles
+	const groundObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
+	const groundRenderSnapshot = collectGroundChunkRenderSnapshot(groundObject)
+	rendererDebug.groundChunkTriangles = groundRenderSnapshot.estimatedTriangles
+	rendererDebug.groundVisibleChunks = groundRenderSnapshot.visibleChunkCount
 	rendererDebug.geometries = currentRenderer.info?.memory?.geometries ?? 0
 	rendererDebug.textures = currentRenderer.info?.memory?.textures ?? 0
+
+	const now = performance.now()
+	const signature = [
+		rendererDebug.calls,
+		rendererDebug.triangles,
+		rendererDebug.renderTriangles,
+		rendererDebug.groundChunkTriangles,
+		rendererDebug.groundVisibleChunks,
+	].join('|')
+	if (signature !== lastRendererDebugSignature && now - lastRendererDebugLogAt >= 250) {
+		lastRendererDebugLogAt = now
+		lastRendererDebugSignature = signature
+		console.info('[ScenePreview][Renderer] frame stats', {
+			drawCalls: rendererDebug.calls,
+			sceneTriangleEstimate: rendererDebug.triangles,
+			gpuRenderTrianglesRaw: rendererDebug.renderTriangles,
+			groundVisibleChunkCount: rendererDebug.groundVisibleChunks,
+			groundVisibleChunkTriangleEstimate: rendererDebug.groundChunkTriangles,
+			triangleLabelMeaning: 'sceneTriangleEstimate traverses visible meshes; gpuRenderTrianglesRaw comes from renderer.info.render.triangles',
+		})
+	}
 }
 
 function syncInstancedMatrixUploadEstimateForFrame(): void {
@@ -10847,10 +10992,13 @@ onBeforeUnmount(() => {
 						Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}
 					</div>
 					<div class="scene-preview__stats-fallback">
-						Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}
+						Draw calls: {{ rendererDebug.calls }}, Scene tris(est): {{ rendererDebug.triangles }}
 					</div>
 					<div class="scene-preview__stats-fallback">
 						GPU render tris(raw): {{ rendererDebug.renderTriangles }}
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Ground visible chunks/tris(est): {{ rendererDebug.groundVisibleChunks }} / {{ rendererDebug.groundChunkTriangles }}
 					</div>
 					<div class="scene-preview__stats-fallback">
 						GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}
@@ -10884,6 +11032,9 @@ onBeforeUnmount(() => {
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Ground visible chunk meshes/tris(est): {{ groundChunkDebug.visible }} / {{ groundChunkDebug.triangleEstimate }}
 					</div>
 				</template>
 			</div>

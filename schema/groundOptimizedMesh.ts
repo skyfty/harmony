@@ -1,13 +1,17 @@
 import * as THREE from 'three'
-import type { GroundContourBounds, GroundDynamicMesh, GroundOptimizedMeshChunkData, GroundOptimizedMeshData } from './index'
+import type {
+  GroundContourBounds,
+  GroundDynamicMesh,
+  GroundOptimizedMeshChunkData,
+  GroundOptimizedMeshData,
+} from './index'
 import { resolveGroundChunkCells, sampleGroundEffectiveHeightRegion } from './groundMesh'
 
-export const GROUND_OPTIMIZED_MESH_VERSION = 2 as const
-
-type GroundOptimizedMeshBuildOptions = {
+export type GroundOptimizedMeshBuildOptions = {
   tolerance?: number
   maxSamplesPerAxis?: number
   maxSubdivisionDepth?: number
+  renderChunkCells?: number
 }
 
 type GroundOptimizedHeightGrid = {
@@ -42,6 +46,10 @@ function clampFinite(value: number | undefined, fallback: number, min: number, m
     return fallback
   }
   return Math.min(max, Math.max(min, value as number))
+}
+
+function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+  return Math.trunc(clampFinite(value, fallback, min, max))
 }
 
 function computeVertexX(definition: GroundDynamicMesh, column: number): number {
@@ -657,13 +665,16 @@ function buildGroundOptimizedMeshChunkData(
 
 export function hasGroundOptimizedMeshData(definition: GroundDynamicMesh | null | undefined): boolean {
   const mesh = definition?.optimizedMesh
+  const sourceChunkCells = mesh?.sourceChunkCells
   return Boolean(
     mesh
-    && mesh.version === GROUND_OPTIMIZED_MESH_VERSION
     && Number.isFinite(mesh.chunkCells)
     && mesh.chunkCells > 0
     && Array.isArray(mesh.chunks)
     && mesh.chunks.length > 0
+    && typeof sourceChunkCells === 'number'
+    && Number.isFinite(sourceChunkCells)
+    && sourceChunkCells > 0
     && mesh.chunks.every((chunk) => (
       Number.isFinite(chunk.chunkRow)
       && Number.isFinite(chunk.chunkColumn)
@@ -681,17 +692,37 @@ export function hasGroundOptimizedMeshData(definition: GroundDynamicMesh | null 
   )
 }
 
+function deriveOptimizedRenderChunkCells(
+  definition: GroundDynamicMesh,
+  sourceChunkCells: number,
+  requestedChunkCells?: number,
+): number {
+  const rowsCount = Math.max(1, Math.trunc(definition.rows))
+  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const maxChunkCells = Math.max(sourceChunkCells, Math.max(rowsCount, columnsCount))
+  if (Number.isFinite(requestedChunkCells) && (requestedChunkCells as number) > 0) {
+    return clampInteger(requestedChunkCells, sourceChunkCells, sourceChunkCells, maxChunkCells)
+  }
+
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const targetMeters = Math.max(256, sourceChunkCells * cellSize * 4)
+  const derived = Math.max(sourceChunkCells, Math.round(targetMeters / Math.max(1e-6, cellSize)))
+  return clampInteger(derived, sourceChunkCells, sourceChunkCells, maxChunkCells)
+}
+
 export function buildGroundOptimizedMeshData(
   definition: GroundDynamicMesh,
   options: GroundOptimizedMeshBuildOptions = {},
 ): GroundOptimizedMeshData {
   const rowsCount = Math.max(1, Math.trunc(definition.rows))
   const columnsCount = Math.max(1, Math.trunc(definition.columns))
-  const chunkCells = resolveGroundChunkCells(definition)
+  const sourceChunkCells = resolveGroundChunkCells(definition)
+  const chunkCells = deriveOptimizedRenderChunkCells(definition, sourceChunkCells, options.renderChunkCells)
   const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
     tolerance: clampFinite(options.tolerance, 0.02, 0.0001, 10),
-    maxSamplesPerAxis: Math.trunc(clampFinite(options.maxSamplesPerAxis, 6, 2, 16)),
-    maxSubdivisionDepth: Math.trunc(clampFinite(options.maxSubdivisionDepth, 10, 1, 24)),
+    maxSamplesPerAxis: clampInteger(options.maxSamplesPerAxis, 6, 2, 16),
+    maxSubdivisionDepth: clampInteger(options.maxSubdivisionDepth, 10, 1, 24),
+    renderChunkCells: chunkCells,
   }
   const rowChunkCount = Math.max(1, Math.ceil(rowsCount / chunkCells))
   const columnChunkCount = Math.max(1, Math.ceil(columnsCount / chunkCells))
@@ -717,8 +748,7 @@ export function buildGroundOptimizedMeshData(
     }
   }
 
-  return {
-    version: GROUND_OPTIMIZED_MESH_VERSION,
+  const common = {
     chunkCells,
     chunkCount: chunks.length,
     chunks,
@@ -728,6 +758,11 @@ export function buildGroundOptimizedMeshData(
     optimizedTriangleCount,
     optimizedRowCount,
     optimizedColumnCount,
+  }
+
+  return {
+    sourceChunkCells,
+    ...common,
   }
 }
 

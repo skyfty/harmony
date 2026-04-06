@@ -1,5 +1,5 @@
 import type { SceneJsonExportDocument, SceneNode } from '@schema'
-import { buildGroundOptimizedMeshData } from '@schema/groundOptimizedMesh'
+import { buildGroundOptimizedMeshData, type GroundOptimizedMeshBuildOptions } from '@schema/groundOptimizedMesh'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
@@ -19,11 +19,14 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   return null
 }
 
-export function attachOptimizedGroundMeshToDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
+export function attachOptimizedGroundMeshToDocument(
+  document: SceneJsonExportDocument,
+  options: GroundOptimizedMeshBuildOptions = {},
+): SceneJsonExportDocument {
   const groundNode = findGroundNode(document.nodes)
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return document
   }
-  groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh)
+  groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh, options)
   return document
 }

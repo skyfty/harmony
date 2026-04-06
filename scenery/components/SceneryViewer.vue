@@ -496,6 +496,8 @@ import {
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
+  resolveGroundChunkRadiusMeters,
+  resolveGroundRuntimeChunkCells,
   updateGroundChunks,
 } from '@harmony/schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
@@ -1274,20 +1276,6 @@ function clampInclusive(value: number, min: number, max: number): number {
   return value;
 }
 
-function resolveGroundChunkCells(definition: GroundDynamicMesh): number {
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
-  const targetMeters = 100;
-  const candidate = Math.max(4, Math.round(targetMeters / Math.max(1e-6, cellSize)));
-  return Math.max(4, Math.min(512, Math.trunc(candidate)));
-}
-
-function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
-  const width = Number.isFinite(definition.width) ? definition.width : 0;
-  const depth = Number.isFinite(definition.depth) ? definition.depth : 0;
-  const halfDiagonal = Math.sqrt(Math.max(0, width) ** 2 + Math.max(0, depth) ** 2) * 0.5;
-  return Math.max(80, Math.min(2000, Math.min(200, halfDiagonal)));
-}
-
 function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
   const rows = Math.max(1, Math.trunc(definition.rows));
   const columns = Math.max(1, Math.trunc(definition.columns));
@@ -1298,7 +1286,7 @@ function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells:
 }
 
 function computeTargetLoadChunkCount(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): number {
-  const chunkCells = resolveGroundChunkCells(definition);
+  const chunkCells = resolveGroundRuntimeChunkCells(definition);
   const rows = Math.max(1, Math.trunc(definition.rows));
   const columns = Math.max(1, Math.trunc(definition.columns));
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells));
@@ -1315,7 +1303,7 @@ function computeTargetLoadChunkCount(groundObject: THREE.Object3D, definition: G
     localZ = cameraLocal.z;
   }
 
-  const loadRadius = resolveGroundChunkRadius(definition);
+  const loadRadius = resolveGroundChunkRadiusMeters(definition);
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
   const halfWidth = definition.width * 0.5;
   const halfDepth = definition.depth * 0.5;
@@ -1441,7 +1429,7 @@ function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: 
   }
   debugLastGroundChunkKeys = loadedKeys;
 
-  const chunkCells = resolveGroundChunkCells(definition);
+  const chunkCells = resolveGroundRuntimeChunkCells(definition);
   groundChunkDebug.loaded = loadedKeys.size;
   groundChunkDebug.total = computeTotalGroundChunkCount(definition, chunkCells);
   groundChunkDebug.target = computeTargetLoadChunkCount(groundObject, definition, camera);

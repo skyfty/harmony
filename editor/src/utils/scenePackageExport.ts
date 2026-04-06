@@ -267,6 +267,54 @@ function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExpor
   return null
 }
 
+function emitGroundOptimizationDiagnostics(
+  reportEvent: SceneExportEventReporter | undefined,
+  sceneId: string,
+  sceneName: string,
+  groundNode: SceneJsonExportDocument['nodes'][number] | null,
+): void {
+  const optimizedMesh = groundNode?.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh.optimizedMesh : null
+  if (!optimizedMesh) {
+    return
+  }
+
+  const sourceTriangles = Math.max(0, Math.trunc(optimizedMesh.sourceTriangleCount ?? 0))
+  const optimizedTriangles = Math.max(0, Math.trunc(optimizedMesh.optimizedTriangleCount ?? 0))
+  const reduction = sourceTriangles > 0
+    ? Math.max(0, Math.min(1, 1 - optimizedTriangles / sourceTriangles))
+    : 0
+  const percentText = `${Math.round(reduction * 100)}%`
+  const detail = [
+    `sourceTriangles=${sourceTriangles}`,
+    `optimizedTriangles=${optimizedTriangles}`,
+    `chunkCells=${optimizedMesh.chunkCells}`,
+    `sourceChunkCells=${optimizedMesh.sourceChunkCells}`,
+    `chunkCount=${optimizedMesh.chunkCount}`,
+  ].join(', ')
+
+  emitSceneExportEvent(reportEvent, {
+    phase: 'diagnostics',
+    level: 'info',
+    status: 'completed',
+    sceneId,
+    sceneName,
+    detail,
+    message: `Ground optimized mesh reduced triangles by ${percentText} (${sourceTriangles} -> ${optimizedTriangles})`,
+  })
+
+  if (sourceTriangles > 0 && reduction < 0.15) {
+    emitSceneExportEvent(reportEvent, {
+      phase: 'diagnostics',
+      level: 'warning',
+      status: 'completed',
+      sceneId,
+      sceneName,
+      detail,
+      message: 'Ground optimized mesh produced limited simplification; inspect terrain flatness and render chunk sizing.',
+    })
+  }
+}
+
 function stripEditorOnlySceneFields(
   document: SceneExportDocumentWithEditorFields,
 ): void {
@@ -655,6 +703,7 @@ export async function exportScenePackageZip(payload: {
         groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, groundHeightSidecar)
       }
       attachOptimizedGroundMeshToDocument(sidecarSource as SceneJsonExportDocument)
+      emitGroundOptimizationDiagnostics(payload.reportEvent, scene.id, sceneName, groundNode)
     }
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields

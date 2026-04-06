@@ -8,6 +8,7 @@ import {
   type GroundGenerationSettings,
   type GroundHeightMap,
   type GroundOptimizedMeshChunkData,
+  type GroundOptimizedMeshData,
   type GroundRuntimeDynamicMesh,
   type GroundSculptOperation,
 } from './index'
@@ -141,6 +142,21 @@ function groundChunkKey(chunkRow: number, chunkColumn: number): GroundChunkKey {
   return `${chunkRow}:${chunkColumn}`
 }
 
+function resolveOptimizedMesh(definition: GroundDynamicMesh | null | undefined): GroundOptimizedMeshData | null {
+  const optimizedMesh = definition?.optimizedMesh
+  if (!optimizedMesh || !Array.isArray(optimizedMesh.chunks) || optimizedMesh.chunks.length === 0) {
+    return null
+  }
+  if (!Number.isFinite(optimizedMesh.chunkCells) || optimizedMesh.chunkCells <= 0) {
+    return null
+  }
+  const sourceChunkCells = optimizedMesh.sourceChunkCells
+  if (typeof sourceChunkCells !== 'number' || !Number.isFinite(sourceChunkCells) || sourceChunkCells <= 0) {
+    return null
+  }
+  return optimizedMesh
+}
+
 function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const columns = Math.max(1, Math.trunc(definition.columns))
   const rows = Math.max(1, Math.trunc(definition.rows))
@@ -150,7 +166,7 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   const optimizedMesh = definition.optimizedMesh
   const optimizedSignature = optimizedMesh
-    ? `${optimizedMesh.version}:${optimizedMesh.chunkCells}:${optimizedMesh.chunkCount}:${optimizedMesh.optimizedVertexCount}:${optimizedMesh.optimizedTriangleCount}`
+    ? `${optimizedMesh.chunkCells}:${optimizedMesh.chunkCount}:${optimizedMesh.optimizedVertexCount}:${optimizedMesh.optimizedTriangleCount}`
     : 'none'
   const surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.trunc(definition.surfaceRevision as number) : 0
   const optimizedChunkState = runtimeDefinition.runtimeDisableOptimizedChunks === true ? 'disabled' : 'enabled'
@@ -171,7 +187,7 @@ function clampInclusive(value: number, min: number, max: number): number {
   return value
 }
 
-function resolveChunkCells(definition: GroundDynamicMesh): number {
+function resolveEditingChunkCells(definition: GroundDynamicMesh): number {
   // Keep chunk size reasonable even when cellSize is not 1.
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const targetMeters = DEFAULT_GROUND_CHUNK_CELLS
@@ -179,8 +195,148 @@ function resolveChunkCells(definition: GroundDynamicMesh): number {
   return Math.max(4, Math.min(512, Math.trunc(candidate)))
 }
 
+function resolveRuntimeChunkCells(definition: GroundDynamicMesh): number {
+  const optimizedMesh = resolveOptimizedMesh(definition)
+  if (optimizedMesh) {
+    const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+    if (!hasRuntimeGroundHeightOverrides(runtimeDefinition)) {
+      return Math.max(4, Math.trunc(optimizedMesh.chunkCells))
+    }
+  }
+  return resolveEditingChunkCells(definition)
+}
+
 export function resolveGroundChunkCells(definition: GroundDynamicMesh): number {
-  return resolveChunkCells(definition)
+  return resolveEditingChunkCells(definition)
+}
+
+export function resolveGroundRuntimeChunkCells(definition: GroundDynamicMesh): number {
+  return resolveRuntimeChunkCells(definition)
+}
+
+export type GroundOptimizedMeshUsageAnalysis = {
+  hasOptimizedMesh: boolean
+  optimizedChunkCells: number | null
+  sourceChunkCells: number | null
+  runtimeChunkCells: number
+  sourceTriangleCount: number
+  optimizedTriangleCount: number
+  surfaceRevision: number
+  runtimeHydratedHeightState: 'pristine' | 'dirty' | 'none'
+  runtimeDisableOptimizedChunks: boolean
+  canUseOptimizedMesh: boolean
+  reason:
+    | 'no-optimized-mesh'
+    | 'runtime-disable-flag'
+    | 'hydrated-state-dirty'
+    | 'surface-revision-dirty'
+    | 'manual-height-overrides-present'
+    | 'planning-height-overrides-present'
+    | 'optimized-ready'
+}
+
+export function analyzeGroundOptimizedMeshUsage(definition: GroundDynamicMesh): GroundOptimizedMeshUsageAnalysis {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const optimizedMesh = resolveOptimizedMesh(definition)
+  const hydratedHeightState = runtimeDefinition.runtimeHydratedHeightState ?? 'none'
+  const surfaceRevision = Number.isFinite(runtimeDefinition.surfaceRevision)
+    ? Math.max(0, Math.trunc(runtimeDefinition.surfaceRevision as number))
+    : 0
+  const sourceChunkCells = resolveEditingChunkCells(definition)
+
+  if (!optimizedMesh) {
+    return {
+      hasOptimizedMesh: false,
+      optimizedChunkCells: null,
+      sourceChunkCells: null,
+      runtimeChunkCells: sourceChunkCells,
+      sourceTriangleCount: 0,
+      optimizedTriangleCount: 0,
+      surfaceRevision,
+      runtimeHydratedHeightState: hydratedHeightState,
+      runtimeDisableOptimizedChunks: runtimeDefinition.runtimeDisableOptimizedChunks === true,
+      canUseOptimizedMesh: false,
+      reason: 'no-optimized-mesh',
+    }
+  }
+
+  const base = {
+    hasOptimizedMesh: true,
+    optimizedChunkCells: Math.max(1, Math.trunc(optimizedMesh.chunkCells)),
+    sourceChunkCells: Math.max(1, Math.trunc(optimizedMesh.sourceChunkCells)),
+    sourceTriangleCount: Math.max(0, Math.trunc(optimizedMesh.sourceTriangleCount)),
+    optimizedTriangleCount: Math.max(0, Math.trunc(optimizedMesh.optimizedTriangleCount)),
+    surfaceRevision,
+    runtimeHydratedHeightState: hydratedHeightState,
+    runtimeDisableOptimizedChunks: runtimeDefinition.runtimeDisableOptimizedChunks === true,
+  } as const
+
+  if (runtimeDefinition.runtimeDisableOptimizedChunks === true) {
+    return {
+      ...base,
+      runtimeChunkCells: sourceChunkCells,
+      canUseOptimizedMesh: false,
+      reason: 'runtime-disable-flag',
+    }
+  }
+
+  if (runtimeDefinition.runtimeHydratedHeightState === 'dirty') {
+    return {
+      ...base,
+      runtimeChunkCells: sourceChunkCells,
+      canUseOptimizedMesh: false,
+      reason: 'hydrated-state-dirty',
+    }
+  }
+
+  if (surfaceRevision > 0) {
+    return {
+      ...base,
+      runtimeChunkCells: sourceChunkCells,
+      canUseOptimizedMesh: false,
+      reason: 'surface-revision-dirty',
+    }
+  }
+
+  if (runtimeDefinition.runtimeHydratedHeightState === 'pristine') {
+    return {
+      ...base,
+      runtimeChunkCells: Math.max(1, Math.trunc(optimizedMesh.chunkCells)),
+      canUseOptimizedMesh: true,
+      reason: 'optimized-ready',
+    }
+  }
+
+  const manualHeightMap = runtimeDefinition.manualHeightMap
+  const planningHeightMap = runtimeDefinition.planningHeightMap
+  const limit = Math.max(manualHeightMap?.length ?? 0, planningHeightMap?.length ?? 0)
+  for (let index = 0; index < limit; index += 1) {
+    const manual = manualHeightMap[index]
+    if (typeof manual === 'number' && Number.isFinite(manual)) {
+      return {
+        ...base,
+        runtimeChunkCells: sourceChunkCells,
+        canUseOptimizedMesh: false,
+        reason: 'manual-height-overrides-present',
+      }
+    }
+    const planning = planningHeightMap[index]
+    if (typeof planning === 'number' && Number.isFinite(planning)) {
+      return {
+        ...base,
+        runtimeChunkCells: sourceChunkCells,
+        canUseOptimizedMesh: false,
+        reason: 'planning-height-overrides-present',
+      }
+    }
+  }
+
+  return {
+    ...base,
+    runtimeChunkCells: Math.max(1, Math.trunc(optimizedMesh.chunkCells)),
+    canUseOptimizedMesh: true,
+    reason: 'optimized-ready',
+  }
 }
 
 export function resolveGroundChunkRadiusMeters(definition: GroundDynamicMesh): number {
@@ -591,8 +747,8 @@ function resolveOptimizedChunkForSpec(
   if (hasRuntimeGroundHeightOverrides(runtimeDefinition)) {
     return null
   }
-  const optimizedMesh = definition.optimizedMesh
-  if (!optimizedMesh || optimizedMesh.version !== 2 || !Array.isArray(optimizedMesh.chunks)) {
+  const optimizedMesh = resolveOptimizedMesh(definition)
+  if (!optimizedMesh) {
     return null
   }
   return optimizedMesh.chunks.find((chunk) => (
@@ -738,7 +894,7 @@ function computeChunkSpec(definition: GroundDynamicMesh, chunkRow: number, chunk
 function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynamicMesh): GroundRuntimeState {
   const signature = definitionStructureSignature(definition)
   const existing = groundRuntimeStateMap.get(root)
-  const chunkCells = resolveChunkCells(definition)
+  const chunkCells = resolveRuntimeChunkCells(definition)
   const desiredCastShadow = definition.castShadow === true
   if (existing && existing.definitionSignature === signature && existing.chunkCells === chunkCells) {
     if (existing.castShadow !== desiredCastShadow) {
@@ -1334,7 +1490,7 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D 
   // Seed a small neighborhood around origin so it shows up immediately.
   // Avoid using the default chunk radius here; that can load too many chunks on creation.
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 0 ? runtimeDefinition.cellSize : 1
-  const seedRadius = Math.max(50, resolveChunkCells(runtimeDefinition) * cellSize * 1.5)
+  const seedRadius = Math.max(50, resolveRuntimeChunkCells(runtimeDefinition) * cellSize * 1.5)
   updateGroundChunks(group, runtimeDefinition, null, { radius: seedRadius })
   applyGroundTextureToObject(group, runtimeDefinition)
   return group
