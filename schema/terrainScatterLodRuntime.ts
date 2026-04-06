@@ -346,6 +346,33 @@ function resolveFirstLodModelAssetId(preset: LodPresetData | null): string | nul
   return null
 }
 
+function collectPresetScatterRenderTargets(preset: LodPresetData | null): ScatterRenderTarget[] {
+  const levels = preset?.props?.levels
+  if (!Array.isArray(levels) || levels.length === 0) {
+    return []
+  }
+  const targets: ScatterRenderTarget[] = []
+  const seen = new Set<string>()
+  levels.forEach((level) => {
+    const resolved = resolveLodRenderTarget(level)
+    const assetId = normalizeText(resolved.assetId)
+    if (!assetId) {
+      return
+    }
+    const key = `${resolved.kind}:${assetId}`
+    if (seen.has(key)) {
+      return
+    }
+    seen.add(key)
+    targets.push({
+      kind: resolved.kind,
+      assetId,
+      faceCamera: resolved.faceCamera ?? false,
+    })
+  })
+  return targets
+}
+
 function resolveBaseScatterRenderTarget(preset: LodPresetData | null, fallbackModelAssetId: string | null): ScatterRenderTarget | null {
   const modelAssetId = resolveFirstLodModelAssetId(preset) ?? normalizeText(fallbackModelAssetId)
   if (!modelAssetId) {
@@ -663,6 +690,14 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
           continue
         }
         lastYieldAt = await maybeYieldSync(lastYieldAt)
+        const presetRenderTargets = collectPresetScatterRenderTargets(preset)
+        for (const target of presetRenderTargets) {
+          if (target.kind === bindingTarget.kind && target.assetId === bindingTarget.assetId) {
+            continue
+          }
+          await ensureScatterRenderTargetReady(target, nextResourceCache)
+          lastYieldAt = await maybeYieldSync(lastYieldAt)
+        }
         if (sourceModelAssetId) {
           await ensureModelInstanceGroup(sourceModelAssetId, nextResourceCache)
           lastYieldAt = await maybeYieldSync(lastYieldAt)

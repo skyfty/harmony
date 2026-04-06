@@ -180,8 +180,10 @@ import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
   resolveFirstLodModelAssetId,
+  deserializeLodPreset,
   type LodPresetData,
 } from '@/utils/lodPreset'
+import { visitExplicitTerrainScatterAssetReferences } from '@/utils/sceneExplicitAssetReferences'
 import { createLodPresetActions } from './lodPresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
@@ -4705,6 +4707,99 @@ function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: s
   return null
 }
 
+function collectTerrainScatterLodPresetIds(nodes: SceneNode[] | null | undefined): Set<string> {
+  const presetIds = new Set<string>()
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return presetIds
+  }
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.dynamicMesh?.type === 'Ground') {
+      const definition = node.dynamicMesh as GroundDynamicMesh & {
+        terrainScatter?: TerrainScatterStoreSnapshot | null
+      }
+      visitExplicitTerrainScatterAssetReferences(definition.terrainScatter, ({ assetId }) => {
+        const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+        if (normalized) {
+          presetIds.add(normalized)
+        }
+      })
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return presetIds
+}
+
+async function loadLodPresetDependencyIds(
+  assetId: string,
+  assetCatalog: Record<string, ProjectAsset[]>,
+): Promise<Set<string>> {
+  const dependencyIds = new Set<string>()
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedAssetId) {
+    return dependencyIds
+  }
+  dependencyIds.add(normalizedAssetId)
+
+  const assetCache = useAssetCacheStore()
+  const asset = getAssetFromCatalog(assetCatalog, normalizedAssetId)
+  let cacheEntry = assetCache.getEntry(normalizedAssetId)
+  if (cacheEntry.status !== 'cached' || !cacheEntry.blob) {
+    cacheEntry = (await assetCache.loadFromIndexedDb(normalizedAssetId)) ?? cacheEntry
+  }
+  if ((!cacheEntry.blob || cacheEntry.status !== 'cached') && asset?.downloadUrl) {
+    try {
+      cacheEntry = await assetCache.downloaProjectAsset(asset)
+    } catch {
+      return dependencyIds
+    }
+  }
+  if (!cacheEntry.blob) {
+    return dependencyIds
+  }
+
+  try {
+    const preset = deserializeLodPreset(await cacheEntry.blob.text())
+    ;(preset.assetRefs ?? []).forEach((ref) => {
+      const refAssetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+      if (refAssetId) {
+        dependencyIds.add(refAssetId)
+      }
+    })
+    preset.props.levels.forEach((level) => {
+      const modelAssetId = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+      if (modelAssetId) {
+        dependencyIds.add(modelAssetId)
+      }
+      const billboardAssetId = typeof level?.billboardAssetId === 'string' ? level.billboardAssetId.trim() : ''
+      if (billboardAssetId) {
+        dependencyIds.add(billboardAssetId)
+      }
+    })
+  } catch {
+    return dependencyIds
+  }
+
+  return dependencyIds
+}
+
+async function collectTerrainScatterLodPresetDependencyAssetIds(scene: StoredSceneDocument): Promise<Set<string>> {
+  const dependencyIds = new Set<string>()
+  const assetCatalog = scene.assetCatalog ?? {}
+  const presetIds = collectTerrainScatterLodPresetIds(scene.nodes ?? [])
+  for (const presetId of presetIds) {
+    const presetDependencyIds = await loadLodPresetDependencyIds(presetId, assetCatalog)
+    presetDependencyIds.forEach((assetId) => dependencyIds.add(assetId))
+  }
+  return dependencyIds
+}
+
 function replaceMaterialTextureReferences(
   textures: Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>> | undefined,
   previousId: string,
@@ -4848,6 +4943,8 @@ export async function buildAssetRegistryForExport(
 ): Promise<Record<string, SceneAssetRegistryEntry>> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
+  const terrainScatterLodDependencyIds = await collectTerrainScatterLodPresetDependencyAssetIds(runtimeAwareScene)
+  terrainScatterLodDependencyIds.forEach((assetId) => usedAssetIds.add(assetId))
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
   const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
   const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
@@ -4914,6 +5011,7 @@ export async function calculateSceneResourceSummary(
   options: SceneBundleExportOptions,
 ): Promise<SceneResourceSummary> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
+  const terrainScatterLodDependencyIds = await collectTerrainScatterLodPresetDependencyAssetIds(runtimeAwareScene)
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
   const assetRegistry = await buildAssetRegistryForExport(runtimeAwareScene)
 
@@ -4953,6 +5051,7 @@ export async function calculateSceneResourceSummary(
   let textureBytes = 0
 
   const assetIds = new Set<string>()
+  terrainScatterLodDependencyIds.forEach((assetId) => assetIds.add(assetId))
 
   const registerTextureUsage = (node: SceneNode, assetId: string | null | undefined): void => {
     const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
