@@ -34,20 +34,6 @@ type GroundChunkSpec = {
   columns: number
 }
 
-type GroundChunkGeometrySource = 'optimized' | 'dense'
-
-type GroundChunkGeometryReason =
-  | 'optimized-chunk'
-  | 'runtime-overrides'
-  | 'missing-optimized-mesh'
-  | 'missing-optimized-chunk'
-
-type GroundChunkGeometryResolution = {
-  source: GroundChunkGeometrySource
-  reason: GroundChunkGeometryReason
-  optimizedChunk: GroundOptimizedMeshChunkData | null
-}
-
 type GroundChunkRuntime = {
   key: GroundChunkKey
   chunkRow: number
@@ -757,74 +743,20 @@ function resolveOptimizedChunkForSpec(
   definition: GroundDynamicMesh,
   spec: GroundChunkSpec,
 ): GroundOptimizedMeshChunkData | null {
-  const resolution = resolveGroundChunkGeometryResolution(definition, spec)
-  return resolution.optimizedChunk
-}
-
-function resolveGroundChunkGeometryResolution(
-  definition: GroundDynamicMesh,
-  spec: GroundChunkSpec,
-): GroundChunkGeometryResolution {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   if (hasRuntimeGroundHeightOverrides(runtimeDefinition)) {
-    return {
-      source: 'dense',
-      reason: 'runtime-overrides',
-      optimizedChunk: null,
-    }
+    return null
   }
   const optimizedMesh = resolveOptimizedMesh(definition)
   if (!optimizedMesh) {
-    return {
-      source: 'dense',
-      reason: 'missing-optimized-mesh',
-      optimizedChunk: null,
-    }
+    return null
   }
-  const optimizedChunk = optimizedMesh.chunks.find((chunk) => (
+  return optimizedMesh.chunks.find((chunk) => (
     chunk.startRow === spec.startRow
     && chunk.startColumn === spec.startColumn
     && chunk.rows === spec.rows
     && chunk.columns === spec.columns
   )) ?? null
-  if (optimizedChunk) {
-    return {
-      source: 'optimized',
-      reason: 'optimized-chunk',
-      optimizedChunk,
-    }
-  }
-  return {
-    source: 'dense',
-    reason: 'missing-optimized-chunk',
-    optimizedChunk: null,
-  }
-}
-
-function estimateDenseChunkTriangleCount(spec: GroundChunkSpec): number {
-  const rows = Math.max(1, Math.trunc(spec.rows))
-  const columns = Math.max(1, Math.trunc(spec.columns))
-  return rows * columns * 2
-}
-
-function estimateOptimizedChunkTriangleCount(chunk: GroundOptimizedMeshChunkData | null): number | null {
-  if (!chunk || !Array.isArray(chunk.indices)) {
-    return null
-  }
-  return Math.max(0, Math.trunc(chunk.indices.length / 3))
-}
-
-function applyGroundChunkGeometryMetadata(
-  mesh: THREE.Mesh,
-  definition: GroundDynamicMesh,
-  spec: GroundChunkSpec,
-): GroundChunkGeometryResolution {
-  const resolution = resolveGroundChunkGeometryResolution(definition, spec)
-  mesh.userData.groundChunkGeometrySource = resolution.source
-  mesh.userData.groundChunkGeometryReason = resolution.reason
-  mesh.userData.groundChunkDenseTriangleCount = estimateDenseChunkTriangleCount(spec)
-  mesh.userData.groundChunkOptimizedTriangleCount = estimateOptimizedChunkTriangleCount(resolution.optimizedChunk)
-  return resolution
 }
 
 function createGroundOptimizedChunkGeometry(chunk: GroundOptimizedMeshChunkData): THREE.BufferGeometry {
@@ -1114,7 +1046,6 @@ function ensureChunkMesh(
   mesh.castShadow = state.castShadow
   mesh.userData.dynamicMeshType = 'Ground'
   mesh.userData.groundChunk = { ...spec, chunkRow, chunkColumn }
-  applyGroundChunkGeometryMetadata(mesh, definition, spec)
   mesh.visible = true
   root.add(mesh)
   const runtime: GroundChunkRuntime = { key, chunkRow, chunkColumn, spec, mesh }
@@ -1430,8 +1361,7 @@ export type GroundGeometryUpdateRegion = {
 }
 
 function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): boolean {
-  const resolution = resolveGroundChunkGeometryResolution(definition, spec)
-  const optimizedChunk = resolution.optimizedChunk
+  const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
   if (optimizedChunk) {
     return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
   }
@@ -1444,18 +1374,6 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
   const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
   if (!positionAttr || !uvAttr || positionAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
-    console.warn('[groundMesh] chunk geometry requires dense rebuild', {
-      reason: resolution.reason,
-      startRow: spec.startRow,
-      startColumn: spec.startColumn,
-      rows: spec.rows,
-      columns: spec.columns,
-      expectedDenseVertexCount: expectedVertexCount,
-      actualPositionVertexCount: positionAttr?.count ?? null,
-      actualUvVertexCount: uvAttr?.count ?? null,
-      denseTriangleCount: estimateDenseChunkTriangleCount(spec),
-      optimizedTriangleCount: estimateOptimizedChunkTriangleCount(optimizedChunk),
-    })
     return false
   }
   const halfWidth = definition.width * 0.5
@@ -1500,8 +1418,7 @@ function updateChunkGeometryRegion(
   region: GroundGeometryUpdateRegion,
   options: { computeNormals?: boolean } = {},
 ): boolean {
-  const resolution = resolveGroundChunkGeometryResolution(definition, spec)
-  const optimizedChunk = resolution.optimizedChunk
+  const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
   if (optimizedChunk) {
     return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
   }
@@ -1512,18 +1429,6 @@ function updateChunkGeometryRegion(
   const expectedVertexCount = (chunkColumns + 1) * (chunkRows + 1)
   const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
   if (!positionAttr || positionAttr.count !== expectedVertexCount) {
-    console.warn('[groundMesh] chunk region update skipped because geometry topology no longer matches dense grid', {
-      reason: resolution.reason,
-      startRow: spec.startRow,
-      startColumn: spec.startColumn,
-      rows: spec.rows,
-      columns: spec.columns,
-      region,
-      expectedDenseVertexCount: expectedVertexCount,
-      actualPositionVertexCount: positionAttr?.count ?? null,
-      denseTriangleCount: estimateDenseChunkTriangleCount(spec),
-      optimizedTriangleCount: estimateOptimizedChunkTriangleCount(optimizedChunk),
-    })
     return false
   }
 
@@ -1959,7 +1864,6 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynam
           entry.mesh.geometry = buildGroundChunkGeometry(runtimeDefinition, entry.spec)
         }
       }
-      applyGroundChunkGeometryMetadata(entry.mesh, runtimeDefinition, entry.spec)
     })
   }
   applyGroundTextureToObject(group, runtimeDefinition)
@@ -2048,7 +1952,6 @@ export function updateGroundMeshRegion(
       return
     }
     const ok = updateChunkGeometryRegion(geometry, definition, entry.spec, region, options)
-    applyGroundChunkGeometryMetadata(entry.mesh, definition, entry.spec)
     updated = updated || ok
   })
   return updated
