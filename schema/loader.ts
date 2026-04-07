@@ -128,6 +128,7 @@ export default class Loader {
 
     if (!ext) {
       console.error('Unable to determine file extension.');
+      this.emit('loaded', null);
       return;
     }
 
@@ -166,6 +167,7 @@ export default class Loader {
 
       default:
         console.error(`Unsupported file format (${ext}).`);
+        this.emit('loaded', null);
         break;
     }
   }

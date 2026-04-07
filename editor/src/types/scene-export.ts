@@ -31,6 +31,10 @@ export interface SceneExportProgressEvent {
   nodeName?: string | null
   assetId?: string | null
   assetName?: string | null
+  assetType?: string | null
+  assetSourceType?: string | null
+  assetSourceLabel?: string | null
+  assetReferenceCount?: number | null
   current?: number
   total?: number
   detail?: string | null

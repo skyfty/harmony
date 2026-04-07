@@ -1,11 +1,14 @@
 import {
+  type AssetType,
   LOD_COMPONENT_TYPE,
   cloneEnvironmentSettings,
   resolveServerAssetDownloadUrl,
+  type SceneAssetSourceType,
   type BehaviorComponentProps,
   type EnvironmentSettings,
   type SceneAssetOverrideEntry,
   type SceneAssetRegistryEntry,
+  type SceneResourceSummaryEntry,
   type SceneNode,
   type SceneNodeComponentState,
 } from '@schema'
@@ -100,6 +103,18 @@ export interface SceneAssetValidationReport {
   summary: SceneAssetDiagnosticsSummary
 }
 
+export interface SceneAssetReferenceSummary {
+  assetId: string
+  assetName?: string | null
+  assetType?: AssetType | string | null
+  sourceType?: SceneAssetSourceType | string | null
+  sourceLabel?: string | null
+  resolvedUrl?: string | null
+  referenceCount: number
+  referencePaths: string[]
+  references: SceneAssetReferenceRecord[]
+}
+
 type AssetLookupScene = Pick<
   StoredSceneDocument,
   | 'id'
@@ -113,6 +128,7 @@ type AssetLookupScene = Pick<
   | 'assetRegistry'
   | 'projectOverrideAssets'
   | 'sceneOverrideAssets'
+  | 'resourceSummary'
 >
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
@@ -547,6 +563,140 @@ function collectReferenceMap(references: SceneAssetReferenceRecord[]): Map<strin
     }
   })
   return map
+}
+
+function getResourceSummaryEntry(
+  scene: AssetLookupScene,
+  assetId: string,
+): SceneResourceSummaryEntry | null {
+  const entries = Array.isArray(scene.resourceSummary?.assets) ? scene.resourceSummary.assets : []
+  const normalized = assetId.trim()
+  if (!normalized) {
+    return null
+  }
+  return entries.find((entry) => entry?.assetId === normalized) ?? null
+}
+
+function resolveReferenceSummaryAssetType(
+  assetId: string,
+  catalogAsset: ProjectAsset | null,
+  summaryEntry: SceneResourceSummaryEntry | null,
+  registryEntry: SceneAssetRegistryEntry | null,
+): AssetType | string | null {
+  if (catalogAsset?.type) {
+    return catalogAsset.type
+  }
+  if (summaryEntry?.type) {
+    return summaryEntry.type
+  }
+  if (registryEntry?.assetType) {
+    return registryEntry.assetType
+  }
+  const normalized = assetId.trim().toLowerCase()
+  const dot = normalized.lastIndexOf('.')
+  if (dot > 0 && dot < normalized.length - 1) {
+    return normalized.slice(dot + 1)
+  }
+  return null
+}
+
+function resolveReferenceSummarySourceLabel(
+  catalogAsset: ProjectAsset | null,
+  registryEntry: SceneAssetRegistryEntry | null,
+): { sourceType: SceneAssetSourceType | string | null; sourceLabel: string | null; resolvedUrl: string | null } {
+  if (registryEntry?.sourceType === 'package') {
+    return {
+      sourceType: registryEntry.sourceType,
+      sourceLabel: registryEntry.zipPath ?? registryEntry.inline ?? null,
+      resolvedUrl: null,
+    }
+  }
+  if (registryEntry?.sourceType === 'url') {
+    return {
+      sourceType: registryEntry.sourceType,
+      sourceLabel: registryEntry.url ?? null,
+      resolvedUrl: registryEntry.url ?? null,
+    }
+  }
+  if (registryEntry?.sourceType === 'server') {
+    const resolvedUrl = registryEntry.resolvedUrl?.trim?.() || null
+    return {
+      sourceType: registryEntry.sourceType,
+      sourceLabel: resolvedUrl ?? registryEntry.fileKey ?? registryEntry.serverAssetId ?? null,
+      resolvedUrl,
+    }
+  }
+  const sourceType = catalogAsset?.source?.type ?? null
+  if (sourceType === 'package') {
+    const providerId = catalogAsset.source?.providerId ?? ''
+    const originalAssetId = catalogAsset.source?.originalAssetId ?? catalogAsset.id
+    return {
+      sourceType,
+      sourceLabel: providerId ? `${providerId}::${originalAssetId}` : originalAssetId,
+      resolvedUrl: null,
+    }
+  }
+  if (sourceType === 'url') {
+    const downloadUrl = catalogAsset?.downloadUrl?.trim?.() || null
+    return {
+      sourceType,
+      sourceLabel: downloadUrl,
+      resolvedUrl: downloadUrl,
+    }
+  }
+  if (sourceType === 'local') {
+    return {
+      sourceType,
+      sourceLabel: `local::${catalogAsset?.id ?? ''}`,
+      resolvedUrl: null,
+    }
+  }
+  if (sourceType === 'server') {
+    const resolvedUrl = resolveServerAssetDownloadUrl({
+      assetBaseUrl: readServerDownloadBaseUrl(),
+      fileKey: catalogAsset?.fileKey ?? null,
+      downloadUrl: catalogAsset?.downloadUrl ?? null,
+    }) ?? null
+    return {
+      sourceType,
+      sourceLabel: resolvedUrl ?? catalogAsset?.fileKey ?? catalogAsset?.downloadUrl ?? null,
+      resolvedUrl,
+    }
+  }
+  return {
+    sourceType,
+    sourceLabel: null,
+    resolvedUrl: null,
+  }
+}
+
+export function buildSceneAssetReferenceSummaryMap(
+  scene: AssetLookupScene,
+  assetRegistry: Record<string, SceneAssetRegistryEntry> = scene.assetRegistry ?? {},
+): Map<string, SceneAssetReferenceSummary> {
+  const references = collectSceneAssetReferenceRecords(scene)
+  const referenceMap = collectReferenceMap(references)
+  const summaryMap = new Map<string, SceneAssetReferenceSummary>()
+
+  referenceMap.forEach((assetReferences, assetId) => {
+    const catalogAsset = getAssetFromCatalog(scene.assetCatalog ?? {}, assetId)
+    const registryEntry = resolveEffectiveRegistryEntry(scene, assetRegistry, assetId)
+    const summaryEntry = getResourceSummaryEntry(scene, assetId)
+    const { sourceType, sourceLabel, resolvedUrl } = resolveReferenceSummarySourceLabel(catalogAsset, registryEntry)
+    summaryMap.set(assetId, {
+      assetId,
+      assetName: catalogAsset?.name ?? summaryEntry?.name ?? registryEntry?.name ?? null,
+      assetType: resolveReferenceSummaryAssetType(assetId, catalogAsset, summaryEntry, registryEntry),
+      sourceType,
+      sourceLabel,
+      resolvedUrl,
+      referenceCount: assetReferences.length,
+      referencePaths: assetReferences.map((reference) => reference.path),
+      references: assetReferences,
+    })
+  })
+
+  return summaryMap
 }
 
 function buildEnvironmentIssues(scene: AssetLookupScene): SceneAssetDiagnosticIssue[] {

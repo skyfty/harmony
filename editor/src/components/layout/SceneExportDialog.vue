@@ -182,6 +182,15 @@ function buildLogMeta(entry: SceneExportLogEntry): string[] {
   if (entry.assetName) {
     parts.push(`资产 ${entry.assetName}`)
   }
+  if (entry.assetType) {
+    parts.push(`类型 ${entry.assetType}`)
+  }
+  if (entry.assetSourceType) {
+    parts.push(`来源 ${entry.assetSourceType}`)
+  }
+  if (Number.isFinite(entry.assetReferenceCount)) {
+    parts.push(`引用 ${Math.max(0, Math.round(entry.assetReferenceCount ?? 0))}`)
+  }
   if (Number.isFinite(entry.current) && Number.isFinite(entry.total)) {
     parts.push(`${entry.current}/${entry.total}`)
   }
@@ -846,6 +855,7 @@ function handleConfirm() {
   margin-top: 6px;
   font-size: 0.78rem;
   color: rgba(196, 215, 244, 0.84);
+  white-space: pre-wrap;
   word-break: break-word;
 }
 

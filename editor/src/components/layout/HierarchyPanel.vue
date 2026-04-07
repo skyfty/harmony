@@ -19,6 +19,10 @@ import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import { Group, Vector3 } from 'three'
+import {
+  buildSceneAssetReferenceSummaryMap,
+  type SceneAssetReferenceSummary,
+} from '@/utils/sceneAssetDiagnostics'
 
 const props = defineProps<{ floating?: boolean }>()
 
@@ -268,6 +272,7 @@ const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float 
 const searchQuery = ref('')
 const isSearchVisible = ref(false)
 const searchFieldRef = ref<unknown>(null)
+const searchMode = ref<'nodes' | 'assets'>('nodes')
 
 const openedIds = computed({
   get: () => sceneStore.getExpandedGroupIds(),
@@ -281,6 +286,10 @@ const normalizedSearchQuery = computed(() => {
   return raw.trim().toLowerCase()
 })
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
+const isAssetSearchMode = computed(() => searchMode.value === 'assets')
+const searchPlaceholder = computed(() => (isAssetSearchMode.value ? 'Search asset references by name or id' : 'Search nodes'))
+const searchModeIcon = computed(() => (isAssetSearchMode.value ? 'mdi-graph-outline' : 'mdi-file-tree-outline'))
+const searchModeTitle = computed(() => (isAssetSearchMode.value ? 'Switch to node search' : 'Switch to asset reference search'))
 
 function focusSearchField() {
   nextTick(() => {
@@ -310,6 +319,11 @@ function clearAndHideSearch() {
   searchQuery.value = ''
   isSearchVisible.value = false
   focusTreeContainer()
+}
+
+function toggleSearchMode() {
+  searchMode.value = isAssetSearchMode.value ? 'nodes' : 'assets'
+  showSearchAndFocus()
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -368,7 +382,7 @@ function areSameSelection(a: string[], b: string[]): boolean {
   return true
 }
 
-watch(draggingAssetId, (value) => {
+watch(draggingAssetId, (value: string | null | undefined) => {
   if (!value) {
     materialDropTargetId.value = null
     assetDropTargetId.value = null
@@ -377,10 +391,10 @@ watch(draggingAssetId, (value) => {
 })
 
 const flattenedHierarchyItems = computed(() => flattenHierarchyItems(hierarchyItems.value))
-const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item) => item.id))
+const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item: HierarchyTreeItem) => item.id))
 const rangeOrderNodeIds = computed(() => {
   if (isSearchActive.value) {
-    return visibleHierarchyRows.value.map((row) => row.id)
+    return visibleHierarchyRows.value.map((row: VisibleHierarchyRow) => row.id)
   }
   return allNodeIds.value
 })
@@ -429,10 +443,115 @@ function filterHierarchyItemsForSearch(items: HierarchyTreeItem[], query: string
 
 const hierarchyItemsForView = computed(() => {
   const query = normalizedSearchQuery.value
-  if (!query) {
+  if (!query || isAssetSearchMode.value) {
     return hierarchyItems.value
   }
   return filterHierarchyItemsForSearch(hierarchyItems.value, query)
+})
+
+type AssetReferenceSearchResult = {
+  key: string
+  assetId: string
+  assetName: string
+  assetType: string | null
+  sourceType: string | null
+  sourceLabel: string | null
+  category: string
+  path: string
+  nodeId: string | null
+  nodeName: string | null
+  componentType: string | null
+  note: string | null
+  totalReferences: number
+}
+
+const assetReferenceSummaries = computed(() => {
+  if (!isAssetSearchMode.value) {
+    return []
+  }
+  const summaryMap = buildSceneAssetReferenceSummaryMap({
+    id: sceneStore.currentSceneId ?? 'scene',
+    name: sceneStore.currentSceneMeta?.name ?? 'scene',
+    nodes: sceneStore.nodes,
+    materials: sceneStore.materials,
+    environment: sceneStore.environment,
+    groundSettings: sceneStore.groundSettings,
+    planningData: sceneStore.planningData,
+    assetCatalog: sceneStore.assetCatalog,
+    assetRegistry: sceneStore.assetRegistry,
+    projectOverrideAssets: sceneStore.projectOverrideAssets,
+    sceneOverrideAssets: sceneStore.sceneOverrideAssets,
+    resourceSummary: sceneStore.resourceSummary,
+  } as any)
+  return Array.from(summaryMap.values())
+})
+
+const assetReferenceSearchResults = computed<AssetReferenceSearchResult[]>(() => {
+  if (!isAssetSearchMode.value || !normalizedSearchQuery.value) {
+    return []
+  }
+  const query = normalizedSearchQuery.value
+  const results: AssetReferenceSearchResult[] = []
+
+  assetReferenceSummaries.value.forEach((summary: SceneAssetReferenceSummary) => {
+    const haystack = [
+      summary.assetId,
+      summary.assetName ?? '',
+      summary.assetType ? String(summary.assetType) : '',
+      summary.sourceType ? String(summary.sourceType) : '',
+      summary.sourceLabel ?? '',
+      ...summary.references.flatMap((reference: SceneAssetReferenceSummary['references'][number]) => [
+        reference.path,
+        reference.nodeId ?? '',
+        reference.nodeName ?? '',
+        reference.componentType ?? '',
+        reference.category,
+        reference.note ?? '',
+      ]),
+    ].join(' ').toLowerCase()
+
+    if (!haystack.includes(query)) {
+      return
+    }
+
+    summary.references.forEach((reference: SceneAssetReferenceSummary['references'][number], index: number) => {
+      const fallbackNodeId = reference.category === 'environment'
+        ? ENVIRONMENT_NODE_ID
+        : (reference.category === 'ground' || reference.category === 'terrain-scatter' || reference.category === 'terrain-paint'
+            ? GROUND_NODE_ID
+            : null)
+      results.push({
+        key: `${summary.assetId}::${reference.path}::${index}`,
+        assetId: summary.assetId,
+        assetName: summary.assetName ?? summary.assetId,
+        assetType: summary.assetType ? String(summary.assetType) : null,
+        sourceType: summary.sourceType ? String(summary.sourceType) : null,
+        sourceLabel: summary.sourceLabel ?? null,
+        category: reference.category,
+        path: reference.path,
+        nodeId: reference.nodeId ?? fallbackNodeId,
+        nodeName: reference.nodeName ?? null,
+        componentType: reference.componentType ?? null,
+        note: reference.note ?? null,
+        totalReferences: summary.referenceCount,
+      })
+    })
+  })
+
+  return results.slice(0, 120)
+})
+
+const assetReferenceSearchSummary = computed(() => {
+  if (!isAssetSearchMode.value) {
+    return ''
+  }
+  if (!normalizedSearchQuery.value) {
+    return ''
+  }
+  if (!assetReferenceSearchResults.value.length) {
+    return 'No matching asset references found in the current scene.'
+  }
+  return `Found ${assetReferenceSearchResults.value.length} matching references.`
 })
 
 const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
@@ -468,15 +587,15 @@ watch(
 // Global visibility toggle: exclude system nodes and skip selection-locked nodes.
 const visibilityCandidates = computed(() =>
   flattenedHierarchyItems.value.filter(
-    (item) => item.id !== GROUND_NODE_ID && item.id !== ENVIRONMENT_NODE_ID,
+    (item: HierarchyTreeItem) => item.id !== GROUND_NODE_ID && item.id !== ENVIRONMENT_NODE_ID,
   ),
 )
 const visibilityToggleItems = computed(() => visibilityCandidates.value)
 const hasVisibilityToggleNodes = computed(() => visibilityCandidates.value.length > 0)
 const areAllNodesVisible = computed(
-  () => hasVisibilityToggleNodes.value && visibilityToggleItems.value.every((item) => item.visible),
+  () => hasVisibilityToggleNodes.value && visibilityToggleItems.value.every((item: HierarchyTreeItem) => item.visible),
 )
-const anyNodeHidden = computed(() => visibilityToggleItems.value.some((item) => !item.visible))
+const anyNodeHidden = computed(() => visibilityToggleItems.value.some((item: HierarchyTreeItem) => !item.visible))
 const visibilityToggleIcon = computed(() => {
   if (!hasVisibilityToggleNodes.value) {
     return 'mdi-eye-outline'
@@ -489,9 +608,9 @@ const visibilityToggleTitle = computed(() => {
   }
   return areAllNodesVisible.value ? 'Hide all nodes (skips system nodes)' : 'Show all nodes (skips system nodes)'
 })
-const anyNodeLocked = computed(() => flattenedHierarchyItems.value.some((item) => item.locked))
+const anyNodeLocked = computed(() => flattenedHierarchyItems.value.some((item: HierarchyTreeItem) => item.locked))
 const areAllNodesLocked = computed(
-  () => hasHierarchyNodes.value && flattenedHierarchyItems.value.every((item) => item.locked),
+  () => hasHierarchyNodes.value && flattenedHierarchyItems.value.every((item: HierarchyTreeItem) => item.locked),
 )
 const lockToggleIcon = computed(() => (areAllNodesLocked.value ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'))
 const lockToggleTitle = computed(() => (areAllNodesLocked.value ? 'Unlock all' : 'Lock all nodes'))
@@ -577,7 +696,7 @@ const canUpdatePrefab = computed(() => {
 })
 
 
-watch(allNodeIds, (ids) => {
+watch(allNodeIds, (ids: string[]) => {
   if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {
     selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
   }
@@ -585,7 +704,7 @@ watch(allNodeIds, (ids) => {
 
 watch(
   selectedNodeIds,
-  (ids) => {
+  (ids: string[]) => {
     if (suppressSelectionSync.value) {
       suppressSelectionSync.value = false
     }
@@ -625,7 +744,7 @@ function sortNodeIdsByHierarchyOrder(ids: string[]): string[] {
   if (!ids.length) {
     return []
   }
-  const orderIndex = new Map(allNodeIds.value.map((id, index) => [id, index]))
+  const orderIndex = new Map<string, number>(allNodeIds.value.map((id: string, index: number) => [id, index]))
   const uniqueIds = Array.from(new Set(ids)).filter((id) => orderIndex.has(id))
   uniqueIds.sort((a, b) => (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0))
   return uniqueIds
@@ -770,7 +889,7 @@ function supportsMaterialDrop(targetId: string): boolean {
   if (!targetId) {
     return false
   }
-  const item = flattenedHierarchyItems.value.find((entry) => entry.id === targetId) ?? null
+  const item = flattenedHierarchyItems.value.find((entry: HierarchyTreeItem) => entry.id === targetId) ?? null
   if (item?.nodeType) {
     return item.nodeType !== 'Light' && item.nodeType !== 'Group'
   }
@@ -1291,7 +1410,7 @@ function handleDragOver(event: DragEvent, targetId: string) {
   const session = dragSession.value
   const { sourceIds } = dragState.value
   const sourceIdSet = session?.sourceIdSet ?? new Set(sourceIds)
-  const draggingMultiuserNode = session?.draggingMultiuserNode ?? sourceIds.some((id) => isMultiuserNodeId(id))
+  const draggingMultiuserNode = session?.draggingMultiuserNode ?? sourceIds.some((id: string) => isMultiuserNodeId(id))
 
   if (!sourceIds.length || sourceIdSet.has(targetId)) {
     return
@@ -1402,7 +1521,7 @@ async function handleDrop(event: DragEvent, targetId: string) {
     resetDragState()
     return
   }
-  const draggingMultiuserNode = dragSession.value?.draggingMultiuserNode ?? sourceIds.some((id) => isMultiuserNodeId(id))
+  const draggingMultiuserNode = dragSession.value?.draggingMultiuserNode ?? sourceIds.some((id: string) => isMultiuserNodeId(id))
   if (draggingMultiuserNode) {
     event.preventDefault()
     event.stopPropagation()
@@ -1615,6 +1734,35 @@ function handleSearchIconClick() {
   }
 }
 
+function expandHierarchyAncestors(nodeId: string) {
+  let currentParentId = sceneStore.getParentNodeId(nodeId)
+  while (currentParentId) {
+    sceneStore.setGroupExpanded(currentParentId, true, { captureHistory: false })
+    currentParentId = sceneStore.getParentNodeId(currentParentId)
+  }
+}
+
+function escapeAttributeSelectorValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+async function revealNodeInHierarchy(nodeId: string) {
+  expandHierarchyAncestors(nodeId)
+  await nextTick()
+  const selector = `[data-node-id="${escapeAttributeSelectorValue(nodeId)}"]`
+  const target = treeContainerRef.value?.querySelector<HTMLElement>(selector) ?? null
+  target?.scrollIntoView({ block: 'nearest' })
+}
+
+function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
+  if (!result.nodeId) {
+    return
+  }
+  sceneStore.setSelection([result.nodeId], { primaryId: result.nodeId })
+  sceneStore.requestCameraFocus(result.nodeId)
+  void revealNodeInHierarchy(result.nodeId)
+}
+
 </script>
 
 <template>
@@ -1626,6 +1774,13 @@ function handleSearchIconClick() {
     <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
 
       <v-spacer />
+      <v-btn
+        :icon="searchModeIcon"
+        size="small"
+        variant="text"
+        :title="searchModeTitle"
+        @click="toggleSearchMode"
+      />
       <v-btn
         icon='mdi-magnify'
         size="small"
@@ -1732,10 +1887,39 @@ function handleSearchIconClick() {
           hide-details
           clearable
           single-line
-          placeholder="Search nodes"
+          :placeholder="searchPlaceholder"
           prepend-inner-icon="mdi-magnify"
           @keydown="handleSearchFieldKeydown"
         />
+      </div>
+      <div v-if="isSearchVisible && isAssetSearchMode" class="asset-reference-search-panel">
+        <div class="asset-reference-search-summary">{{ assetReferenceSearchSummary }}</div>
+        <div v-if="assetReferenceSearchResults.length" class="asset-reference-search-results">
+          <button
+            v-for="result in assetReferenceSearchResults"
+            :key="result.key"
+            type="button"
+            class="asset-reference-result"
+            @click="handleAssetReferenceResultClick(result)"
+          >
+            <div class="asset-reference-result__title">
+              <span>{{ result.assetName }}</span>
+              <span class="asset-reference-result__id">{{ result.assetId }}</span>
+            </div>
+            <div class="asset-reference-result__meta">
+              <span v-if="result.assetType">类型 {{ result.assetType }}</span>
+              <span v-if="result.sourceType">来源 {{ result.sourceType }}</span>
+              <span>{{ result.category }}</span>
+              <span v-if="result.componentType">组件 {{ result.componentType }}</span>
+              <span>引用 {{ result.totalReferences }}</span>
+            </div>
+            <div class="asset-reference-result__path">{{ result.path }}</div>
+            <div v-if="result.nodeName || result.nodeId || result.sourceLabel" class="asset-reference-result__location">
+              <span v-if="result.nodeName || result.nodeId">定位 {{ result.nodeName || result.nodeId }}</span>
+              <span v-if="result.sourceLabel">资源 {{ result.sourceLabel }}</span>
+            </div>
+          </button>
+        </div>
       </div>
       <div
         class="tree-container"
@@ -1761,6 +1945,7 @@ function handleSearchIconClick() {
             <div class="hierarchy-row" :key="row.id">
               <div
                 class="node-label"
+                :data-node-id="row.id"
                 :class="getNodeInteractionClasses(row.id)"
                 :style="{ paddingLeft: `${row.depth * 16 + 30}px` }"
                 draggable="true"
@@ -1890,6 +2075,77 @@ function handleSearchIconClick() {
 
 .tree-search :deep(.v-field) {
   background: rgba(255, 255, 255, 0.04);
+}
+
+.asset-reference-search-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-right: calc(1px + var(--hierarchy-scrollbar-gutter, 0px));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.asset-reference-search-summary {
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.68);
+}
+
+.asset-reference-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.asset-reference-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  color: rgba(233, 236, 241, 0.88);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.asset-reference-result:hover {
+  background: rgba(77, 208, 225, 0.1);
+  border-color: rgba(77, 208, 225, 0.24);
+}
+
+.asset-reference-result__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.asset-reference-result__id,
+.asset-reference-result__path,
+.asset-reference-result__location,
+.asset-reference-result__meta {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.68);
+}
+
+.asset-reference-result__id,
+.asset-reference-result__path,
+.asset-reference-result__location {
+  word-break: break-word;
+}
+
+.asset-reference-result__meta,
+.asset-reference-result__location {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
 }
 
 .global-toggle-btn {

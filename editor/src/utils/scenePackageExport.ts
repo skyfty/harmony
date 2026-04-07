@@ -41,6 +41,10 @@ import {
 import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
+  buildSceneAssetReferenceSummaryMap,
+  type SceneAssetReferenceSummary,
+} from './sceneAssetDiagnostics'
+import {
   BUILTIN_WATER_NORMAL_FILENAME,
   isBuiltinWaterNormalAsset,
 } from '@/constants/builtinAssets'
@@ -163,6 +167,14 @@ type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
   planningData?: unknown
 }
 
+type AssetEventContext = {
+  assetType?: string | null
+  assetSourceType?: string | null
+  assetSourceLabel?: string | null
+  assetReferenceCount?: number | null
+  detail?: string | null
+}
+
 function emitSceneExportEvent(reportEvent: SceneExportEventReporter | undefined, event: Parameters<SceneExportEventReporter>[0]): void {
   reportEvent?.(event)
 }
@@ -186,6 +198,83 @@ function cloneSceneExportDocument<T>(document: T): T {
     return structuredClone(document)
   }
   return JSON.parse(JSON.stringify(document)) as T
+}
+
+function formatAssetReferenceLabel(
+  reference: SceneAssetReferenceSummary['references'][number],
+  sceneName?: string | null,
+): string {
+  const segments: string[] = []
+  if (sceneName) {
+    segments.push(sceneName)
+  }
+  if (reference.nodeName || reference.nodeId) {
+    segments.push(reference.nodeName ? `${reference.nodeName}(${reference.nodeId ?? 'unknown'})` : (reference.nodeId ?? 'unknown-node'))
+  } else {
+    segments.push(reference.category)
+  }
+  segments.push(reference.path)
+  return segments.join(' -> ')
+}
+
+function buildAssetEventContext(
+  summary: SceneAssetReferenceSummary | null | undefined,
+  packagedPath: string,
+  sceneName?: string | null,
+): AssetEventContext {
+  const referenceLabels = summary?.references.slice(0, 3).map((reference) => formatAssetReferenceLabel(reference, sceneName)) ?? []
+  const detailParts = [
+    `packaged=${packagedPath}`,
+    summary?.assetType ? `type=${summary.assetType}` : null,
+    summary?.sourceType ? `sourceType=${summary.sourceType}` : null,
+    summary?.sourceLabel ? `source=${summary.sourceLabel}` : null,
+    typeof summary?.referenceCount === 'number' ? `references=${summary.referenceCount}` : null,
+    referenceLabels.length ? `paths=${referenceLabels.join(' | ')}` : null,
+  ].filter((value): value is string => Boolean(value))
+
+  return {
+    assetType: summary?.assetType ? String(summary.assetType) : null,
+    assetSourceType: summary?.sourceType ? String(summary.sourceType) : null,
+    assetSourceLabel: summary?.sourceLabel ?? null,
+    assetReferenceCount: summary?.referenceCount ?? null,
+    detail: detailParts.join('\n') || null,
+  }
+}
+
+function buildCombinedAssetEventContext(
+  assetId: string,
+  scenes: ScenePackageExportScene[],
+  summaryMaps: Map<string, Map<string, SceneAssetReferenceSummary>>,
+  packagedPath: string,
+): AssetEventContext {
+  const matchedSummaries = scenes
+    .map((scene) => ({
+      sceneName: describeSceneName(scene),
+      summary: summaryMaps.get(scene.id)?.get(assetId) ?? null,
+    }))
+    .filter((entry) => entry.summary)
+
+  const first = matchedSummaries[0]?.summary ?? null
+  const referenceLabels = matchedSummaries.flatMap((entry) =>
+    entry.summary?.references.slice(0, 2).map((reference) => formatAssetReferenceLabel(reference, entry.sceneName)) ?? [],
+  )
+  const totalReferenceCount = matchedSummaries.reduce((sum, entry) => sum + (entry.summary?.referenceCount ?? 0), 0)
+  const detailParts = [
+    `packaged=${packagedPath}`,
+    first?.assetType ? `type=${first.assetType}` : null,
+    first?.sourceType ? `sourceType=${first.sourceType}` : null,
+    first?.sourceLabel ? `source=${first.sourceLabel}` : null,
+    totalReferenceCount > 0 ? `references=${totalReferenceCount}` : null,
+    referenceLabels.length ? `paths=${referenceLabels.slice(0, 4).join(' | ')}` : null,
+  ].filter((value): value is string => Boolean(value))
+
+  return {
+    assetType: first?.assetType ? String(first.assetType) : null,
+    assetSourceType: first?.sourceType ? String(first.sourceType) : null,
+    assetSourceLabel: first?.sourceLabel ?? null,
+    assetReferenceCount: totalReferenceCount || null,
+    detail: detailParts.join('\n') || null,
+  }
 }
 
 function stripGroundBakedTextureAssetIds(nodes: SceneJsonExportDocument['nodes']): void {
@@ -561,6 +650,16 @@ export async function exportScenePackageZip(payload: {
   const scenesStore = useScenesStore()
   const sceneStore = useSceneStore()
   const resources: ScenePackageResourceEntry[] = []
+  const sceneReferenceSummaryMaps = new Map<string, Map<string, SceneAssetReferenceSummary>>()
+
+  payload.scenes.forEach((scene) => {
+    const document = scene.document as SceneExportDocumentWithEditorFields
+    const effectiveRegistry = buildEffectiveAssetRegistry(document)
+    sceneReferenceSummaryMaps.set(
+      scene.id,
+      buildSceneAssetReferenceSummaryMap(document as any, effectiveRegistry),
+    )
+  })
 
   // Shared (project-wide) embedded assets
   const sharedAssetPathById = new Map<string, string>()
@@ -633,6 +732,7 @@ export async function exportScenePackageZip(payload: {
       const hash = await sha256Hex(item.assetId)
       const safeName = hash.length > 16 ? hash.slice(0, 16) : hash
       const resourcePath = `resources/${safeName}.${ext}`
+      const assetContext = buildCombinedAssetEventContext(item.assetId, payload.scenes, sceneReferenceSummaryMaps, resourcePath)
 
       // De-dup: if two ids map to same path (shouldn't), last one wins.
       files[resourcePath] = bytes
@@ -652,9 +752,13 @@ export async function exportScenePackageZip(payload: {
         status: 'completed',
         assetId: item.assetId,
         assetName,
+        assetType: assetContext.assetType,
+        assetSourceType: assetContext.assetSourceType,
+        assetSourceLabel: assetContext.assetSourceLabel,
+        assetReferenceCount: assetContext.assetReferenceCount,
         current: done,
         total,
-        detail: resourcePath,
+        detail: assetContext.detail,
         message: `共享资产已写入 ${assetName}`,
       })
     }
@@ -710,6 +814,7 @@ export async function exportScenePackageZip(payload: {
     stripEditorOnlySceneFields(docClone)
 
     const localAssetIds = collectLocalAssetIdsForExport(docClone)
+    const sceneAssetReferenceSummaries = sceneReferenceSummaryMaps.get(scene.id) ?? new Map<string, SceneAssetReferenceSummary>()
 
     if (!Array.isArray(docClone.punchPoints) || docClone.punchPoints.length === 0) {
       const computedPunchPoints = collectPunchPointsFromNodes(docClone.nodes)
@@ -757,6 +862,7 @@ export async function exportScenePackageZip(payload: {
       const resourcePath = isBuiltinWaterNormalAsset(assetId)
         ? `scenes/${encodeURIComponent(scene.id)}/resources/${BUILTIN_WATER_NORMAL_FILENAME}`
         : `scenes/${encodeURIComponent(scene.id)}/resources/${safeName}.${ext}`
+      const assetContext = buildAssetEventContext(sceneAssetReferenceSummaries.get(assetId), resourcePath, sceneName)
 
       files[resourcePath] = bytes
       resources.push({
@@ -776,9 +882,13 @@ export async function exportScenePackageZip(payload: {
         sceneName,
         assetId,
         assetName,
+        assetType: assetContext.assetType,
+        assetSourceType: assetContext.assetSourceType,
+        assetSourceLabel: assetContext.assetSourceLabel,
+        assetReferenceCount: assetContext.assetReferenceCount,
         current: aIndex + 1,
         total: localAssetIds.length,
-        detail: resourcePath,
+        detail: assetContext.detail,
         message: `本地资产已写入 ${assetName}`,
       })
     }

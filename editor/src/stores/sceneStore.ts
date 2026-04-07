@@ -5778,19 +5778,57 @@ function buildAssetCatalogFromManifest(
   return catalog
 }
 
+function mergeAssetCatalogsById(
+  primaryCatalog: Record<string, ProjectAsset[]>,
+  secondaryCatalog: Record<string, ProjectAsset[]>,
+): Record<string, ProjectAsset[]> {
+  const mergedCatalog = cloneAssetCatalog(primaryCatalog)
+  const seenAssetIds = new Set<string>(buildCatalogAssetMap(primaryCatalog).keys())
+
+  Object.entries(secondaryCatalog).forEach(([categoryId, assets]) => {
+    assets.forEach((asset) => {
+      if (!asset?.id || seenAssetIds.has(asset.id)) {
+        return
+      }
+      const resolvedCategoryId = typeof asset.categoryId === 'string' && asset.categoryId.length
+        ? asset.categoryId
+        : categoryId
+      if (!mergedCatalog[resolvedCategoryId]) {
+        mergedCatalog[resolvedCategoryId] = []
+      }
+      mergedCatalog[resolvedCategoryId]!.push({ ...asset })
+      seenAssetIds.add(asset.id)
+    })
+  })
+
+  return mergedCatalog
+}
+
 function buildLocalAssetTreeFromManifest(
   manifest: AssetManifest,
   catalog: Record<string, ProjectAsset[]>,
   directoryId: string,
+  activeDirectoryIds: Set<string> = new Set(),
+  warnedDirectoryIds: Set<string> = new Set(),
 ): ProjectDirectory | null {
+  if (activeDirectoryIds.has(directoryId)) {
+    if (!warnedDirectoryIds.has(directoryId)) {
+      warnedDirectoryIds.add(directoryId)
+      console.warn('[SceneStore] Skipped cyclic asset directory while building project tree', directoryId)
+    }
+    return null
+  }
+
   const directory = manifest.directoriesById[directoryId]
   if (!directory) {
     return null
   }
 
+  activeDirectoryIds.add(directoryId)
   const childDirectories = directory.directoryIds
-    .map((childId) => buildLocalAssetTreeFromManifest(manifest, catalog, childId))
+    .map((childId) => buildLocalAssetTreeFromManifest(manifest, catalog, childId, activeDirectoryIds, warnedDirectoryIds))
     .filter((entry): entry is ProjectDirectory => !!entry)
+  activeDirectoryIds.delete(directoryId)
 
   const projectDirectoryId = directory.id === manifest.rootDirectoryId ? ASSETS_ROOT_DIRECTORY_ID : directory.id
 
@@ -5837,6 +5875,194 @@ function cleanupManifestDirectoryReferences(manifest: AssetManifest): AssetManif
     ...manifest,
     directoriesById,
   }
+}
+
+function sanitizeManifestDirectoryGraph(manifest: AssetManifest): {
+  manifest: AssetManifest
+  changed: boolean
+  warnings: string[]
+} {
+  const rootDirectory = manifest.directoriesById[manifest.rootDirectoryId]
+  if (!rootDirectory) {
+    return {
+      manifest,
+      changed: true,
+      warnings: [`Missing root directory \"${manifest.rootDirectoryId}\".`],
+    }
+  }
+
+  const sourceDirectoriesById: Record<string, AssetManifestDirectory> = Object.fromEntries(
+    Object.entries(manifest.directoriesById).map(([directoryId, directory]) => [
+      directoryId,
+      {
+        ...directory,
+        id: directoryId,
+        parentId: directoryId === manifest.rootDirectoryId
+          ? null
+          : (typeof directory.parentId === 'string' && directory.parentId in manifest.directoriesById ? directory.parentId : null),
+        directoryIds: [...directory.directoryIds],
+        assetIds: [...directory.assetIds],
+      },
+    ]),
+  )
+  const sanitizedDirectoriesById: Record<string, AssetManifestDirectory> = {}
+  const assignedParentByDirectoryId = new Map<string, string | null>()
+  const visitedDirectoryIds = new Set<string>()
+  const activeDirectoryIds = new Set<string>()
+  const warnings: string[] = []
+  let changed = false
+
+  const pushWarning = (message: string) => {
+    if (!warnings.includes(message)) {
+      warnings.push(message)
+    }
+    changed = true
+  }
+
+  const ensureSanitizedDirectory = (directoryId: string, parentId: string | null): AssetManifestDirectory => {
+    const existing = sanitizedDirectoriesById[directoryId]
+    if (existing) {
+      if (existing.parentId !== parentId) {
+        existing.parentId = parentId
+        changed = true
+      }
+      return existing
+    }
+
+    const source = sourceDirectoriesById[directoryId]!
+    const createdAt = typeof source.createdAt === 'string' && source.createdAt.length ? source.createdAt : manifest.generatedAt
+    const updatedAt = typeof source.updatedAt === 'string' && source.updatedAt.length ? source.updatedAt : createdAt
+    const nextDirectory: AssetManifestDirectory = {
+      ...source,
+      id: directoryId,
+      parentId,
+      directoryIds: [],
+      assetIds: [...source.assetIds],
+      createdAt,
+      updatedAt,
+    }
+    sanitizedDirectoriesById[directoryId] = nextDirectory
+    return nextDirectory
+  }
+
+  const attachDirectory = (directoryId: string, parentId: string | null): boolean => {
+    if (!(directoryId in sourceDirectoriesById)) {
+      pushWarning(`Dropped missing asset directory \"${directoryId}\".`)
+      return false
+    }
+    if (directoryId === manifest.rootDirectoryId && parentId !== null) {
+      pushWarning('Moved asset manifest root back to the top level.')
+      parentId = null
+    }
+    if (activeDirectoryIds.has(directoryId)) {
+      pushWarning(`Removed cyclic asset directory reference at \"${directoryId}\".`)
+      return false
+    }
+
+    const existingParentId = assignedParentByDirectoryId.get(directoryId)
+    if (assignedParentByDirectoryId.has(directoryId) && existingParentId !== parentId) {
+      pushWarning(`Dropped duplicate asset directory parent for \"${directoryId}\".`)
+      return false
+    }
+    assignedParentByDirectoryId.set(directoryId, parentId)
+
+    const target = ensureSanitizedDirectory(directoryId, parentId)
+    if (visitedDirectoryIds.has(directoryId)) {
+      return true
+    }
+
+    const source = sourceDirectoriesById[directoryId]!
+    if (source.parentId !== parentId) {
+      changed = true
+    }
+
+    visitedDirectoryIds.add(directoryId)
+    activeDirectoryIds.add(directoryId)
+
+    source.directoryIds.forEach((childId) => {
+      if (childId === directoryId) {
+        pushWarning(`Removed self-referencing asset directory \"${directoryId}\".`)
+        return
+      }
+      if (!(childId in sourceDirectoriesById)) {
+        pushWarning(`Dropped missing child asset directory \"${childId}\" from \"${directoryId}\".`)
+        return
+      }
+      if (activeDirectoryIds.has(childId)) {
+        pushWarning(`Removed cyclic asset directory edge \"${directoryId}\" -> \"${childId}\".`)
+        return
+      }
+      if (attachDirectory(childId, directoryId)) {
+        target.directoryIds.push(childId)
+      }
+    })
+
+    activeDirectoryIds.delete(directoryId)
+    return true
+  }
+
+  attachDirectory(manifest.rootDirectoryId, null)
+
+  Object.keys(sourceDirectoriesById).forEach((directoryId) => {
+    if (visitedDirectoryIds.has(directoryId)) {
+      return
+    }
+    const source = sourceDirectoriesById[directoryId]!
+    const preferredParentId = source.parentId && source.parentId in sanitizedDirectoriesById && source.parentId !== directoryId
+      ? source.parentId
+      : manifest.rootDirectoryId
+    if (attachDirectory(directoryId, preferredParentId)) {
+      const parent = sanitizedDirectoriesById[preferredParentId]
+      if (parent && !parent.directoryIds.includes(directoryId)) {
+        parent.directoryIds.push(directoryId)
+      }
+      pushWarning(`Reattached orphan asset directory \"${directoryId}\" under the manifest root.`)
+    }
+  })
+
+  return {
+    manifest: {
+      ...manifest,
+      directoriesById: sanitizedDirectoriesById,
+    },
+    changed,
+    warnings,
+  }
+}
+
+function normalizeSceneAssetManifest(
+  manifest: AssetManifest | null | undefined,
+  assetCatalog: Record<string, ProjectAsset[]>,
+  context: string,
+): AssetManifest {
+  const fallbackManifest = buildSceneAssetManifest(assetCatalog)
+  const clonedManifest = cloneAssetManifest(manifest)
+  if (!clonedManifest) {
+    return fallbackManifest
+  }
+  if (!(clonedManifest.rootDirectoryId in clonedManifest.directoriesById)) {
+    console.warn(`[SceneStore] Rebuilt asset manifest while ${context}: missing root directory`, clonedManifest.rootDirectoryId)
+    return fallbackManifest
+  }
+
+  const cleanedManifest = cleanupManifestDirectoryReferences(clonedManifest)
+  const { manifest: sanitizedManifest, changed, warnings } = sanitizeManifestDirectoryGraph(cleanedManifest)
+  const manifestBackedCatalog = buildAssetCatalogFromManifest(sanitizedManifest, assetCatalog)
+  const synchronizedManifest = synchronizeManifestWithCatalog(
+    sanitizedManifest,
+    mergeAssetCatalogsById(manifestBackedCatalog, assetCatalog),
+  )
+
+  if (!(synchronizedManifest.rootDirectoryId in synchronizedManifest.directoriesById)) {
+    console.warn(`[SceneStore] Rebuilt asset manifest while ${context}: sanitized manifest lost its root directory`)
+    return fallbackManifest
+  }
+
+  if (changed || warnings.length) {
+    console.warn(`[SceneStore] Sanitized invalid asset manifest while ${context}`, warnings)
+  }
+
+  return synchronizedManifest
 }
 
 function synchronizeManifestWithCatalog(
@@ -6159,8 +6385,9 @@ function migrateScenePersistedState(
 }
 
 function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
-  store.assetManifest = cloneAssetManifest(scene.assetManifest) ?? buildSceneAssetManifest(scene.assetCatalog)
-  const baseCatalog = buildAssetCatalogFromManifest(store.assetManifest, cloneAssetCatalog(scene.assetCatalog))
+  const sceneAssetCatalog = cloneAssetCatalog(scene.assetCatalog)
+  store.assetManifest = normalizeSceneAssetManifest(scene.assetManifest, sceneAssetCatalog, `loading scene \"${scene.name || scene.id}\"`)
+  const baseCatalog = buildAssetCatalogFromManifest(store.assetManifest, sceneAssetCatalog)
   store.assetRegistry = cloneSceneAssetRegistry(scene.assetRegistry ?? {})
   store.assetCatalog = mergeCatalogAssetMetadataFromIndex(baseCatalog)
   ensureBuiltinWallPresetAssets(store.assetCatalog)
@@ -6755,7 +6982,10 @@ function createSceneDocument(
     ? cloneSceneAssetOverrides(options.sceneOverrideAssets)
     : undefined
   const normalizedAssetCatalog = mergeCatalogAssetMetadataFromIndex(assetCatalog)
-  const normalizedAssetManifest = cloneAssetManifest(options.assetManifest) ?? buildSceneAssetManifest(normalizedAssetCatalog)
+  const normalizedAssetManifest = normalizeSceneAssetManifest(options.assetManifest, normalizedAssetCatalog, `creating scene \"${name}\"`)
+  const normalizedStoredAssetCatalog = mergeCatalogAssetMetadataFromIndex(
+    mergeAssetCatalogsById(buildAssetCatalogFromManifest(normalizedAssetManifest, normalizedAssetCatalog), normalizedAssetCatalog),
+  )
   let resourceSummary: SceneResourceSummary | undefined
   if (options.resourceSummary) {
     resourceSummary = options.resourceSummary
@@ -6781,7 +7011,7 @@ function createSceneDocument(
     resourceProviderId: options.resourceProviderId ?? 'builtin',
     createdAt,
     updatedAt,
-    assetCatalog: normalizedAssetCatalog,
+    assetCatalog: normalizedStoredAssetCatalog,
     assetManifest: normalizedAssetManifest,
     assetRegistry,
     projectOverrideAssets,
