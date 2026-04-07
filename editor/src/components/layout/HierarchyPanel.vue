@@ -18,6 +18,7 @@ import type { SceneNode } from '@schema'
 import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
+import AssetReferenceSearchDialog from './AssetReferenceSearchDialog.vue'
 import { Group, Vector3 } from 'three'
 import {
   buildSceneAssetReferenceSummaryMap,
@@ -272,7 +273,8 @@ const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float 
 const searchQuery = ref('')
 const isSearchVisible = ref(false)
 const searchFieldRef = ref<unknown>(null)
-const searchMode = ref<'nodes' | 'assets'>('nodes')
+const isAssetReferenceDialogOpen = ref(false)
+const assetReferenceSearchQuery = ref('')
 
 const openedIds = computed({
   get: () => sceneStore.getExpandedGroupIds(),
@@ -286,10 +288,10 @@ const normalizedSearchQuery = computed(() => {
   return raw.trim().toLowerCase()
 })
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
-const isAssetSearchMode = computed(() => searchMode.value === 'assets')
-const searchPlaceholder = computed(() => (isAssetSearchMode.value ? 'Search asset references by name or id' : 'Search nodes'))
-const searchModeIcon = computed(() => (isAssetSearchMode.value ? 'mdi-graph-outline' : 'mdi-file-tree-outline'))
-const searchModeTitle = computed(() => (isAssetSearchMode.value ? 'Switch to node search' : 'Switch to asset reference search'))
+const normalizedAssetReferenceSearchQuery = computed(() => {
+  const raw = assetReferenceSearchQuery.value ?? ''
+  return raw.trim().toLowerCase()
+})
 
 function focusSearchField() {
   nextTick(() => {
@@ -321,9 +323,8 @@ function clearAndHideSearch() {
   focusTreeContainer()
 }
 
-function toggleSearchMode() {
-  searchMode.value = isAssetSearchMode.value ? 'nodes' : 'assets'
-  showSearchAndFocus()
+function openAssetReferenceSearchDialog() {
+  isAssetReferenceDialogOpen.value = true
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -443,7 +444,7 @@ function filterHierarchyItemsForSearch(items: HierarchyTreeItem[], query: string
 
 const hierarchyItemsForView = computed(() => {
   const query = normalizedSearchQuery.value
-  if (!query || isAssetSearchMode.value) {
+  if (!query) {
     return hierarchyItems.value
   }
   return filterHierarchyItemsForSearch(hierarchyItems.value, query)
@@ -466,9 +467,6 @@ type AssetReferenceSearchResult = {
 }
 
 const assetReferenceSummaries = computed(() => {
-  if (!isAssetSearchMode.value) {
-    return []
-  }
   const summaryMap = buildSceneAssetReferenceSummaryMap({
     id: sceneStore.currentSceneId ?? 'scene',
     name: sceneStore.currentSceneMeta?.name ?? 'scene',
@@ -487,10 +485,10 @@ const assetReferenceSummaries = computed(() => {
 })
 
 const assetReferenceSearchResults = computed<AssetReferenceSearchResult[]>(() => {
-  if (!isAssetSearchMode.value || !normalizedSearchQuery.value) {
+  if (!normalizedAssetReferenceSearchQuery.value) {
     return []
   }
-  const query = normalizedSearchQuery.value
+  const query = normalizedAssetReferenceSearchQuery.value
   const results: AssetReferenceSearchResult[] = []
 
   assetReferenceSummaries.value.forEach((summary: SceneAssetReferenceSummary) => {
@@ -542,11 +540,8 @@ const assetReferenceSearchResults = computed<AssetReferenceSearchResult[]>(() =>
 })
 
 const assetReferenceSearchSummary = computed(() => {
-  if (!isAssetSearchMode.value) {
-    return ''
-  }
-  if (!normalizedSearchQuery.value) {
-    return ''
+  if (!normalizedAssetReferenceSearchQuery.value) {
+    return '输入资产名称或资产 ID，定位当前场景中的引用来源。'
   }
   if (!assetReferenceSearchResults.value.length) {
     return 'No matching asset references found in the current scene.'
@@ -1775,11 +1770,11 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
 
       <v-spacer />
       <v-btn
-        :icon="searchModeIcon"
+        icon="mdi-graph-outline"
         size="small"
         variant="text"
-        :title="searchModeTitle"
-        @click="toggleSearchMode"
+        title="Asset reference search"
+        @click="openAssetReferenceSearchDialog"
       />
       <v-btn
         icon='mdi-magnify'
@@ -1887,39 +1882,10 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
           hide-details
           clearable
           single-line
-          :placeholder="searchPlaceholder"
+          placeholder="Search nodes"
           prepend-inner-icon="mdi-magnify"
           @keydown="handleSearchFieldKeydown"
         />
-      </div>
-      <div v-if="isSearchVisible && isAssetSearchMode" class="asset-reference-search-panel">
-        <div class="asset-reference-search-summary">{{ assetReferenceSearchSummary }}</div>
-        <div v-if="assetReferenceSearchResults.length" class="asset-reference-search-results">
-          <button
-            v-for="result in assetReferenceSearchResults"
-            :key="result.key"
-            type="button"
-            class="asset-reference-result"
-            @click="handleAssetReferenceResultClick(result)"
-          >
-            <div class="asset-reference-result__title">
-              <span>{{ result.assetName }}</span>
-              <span class="asset-reference-result__id">{{ result.assetId }}</span>
-            </div>
-            <div class="asset-reference-result__meta">
-              <span v-if="result.assetType">类型 {{ result.assetType }}</span>
-              <span v-if="result.sourceType">来源 {{ result.sourceType }}</span>
-              <span>{{ result.category }}</span>
-              <span v-if="result.componentType">组件 {{ result.componentType }}</span>
-              <span>引用 {{ result.totalReferences }}</span>
-            </div>
-            <div class="asset-reference-result__path">{{ result.path }}</div>
-            <div v-if="result.nodeName || result.nodeId || result.sourceLabel" class="asset-reference-result__location">
-              <span v-if="result.nodeName || result.nodeId">定位 {{ result.nodeName || result.nodeId }}</span>
-              <span v-if="result.sourceLabel">资源 {{ result.sourceLabel }}</span>
-            </div>
-          </button>
-        </div>
       </div>
       <div
         class="tree-container"
@@ -1999,6 +1965,13 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
         </v-virtual-scroll>
       </div>
     </div>
+    <AssetReferenceSearchDialog
+      v-model="isAssetReferenceDialogOpen"
+      v-model:query="assetReferenceSearchQuery"
+      :summary="assetReferenceSearchSummary"
+      :results="assetReferenceSearchResults"
+      @select="handleAssetReferenceResultClick"
+    />
   </v-card>
 </template>
 
@@ -2075,77 +2048,6 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
 
 .tree-search :deep(.v-field) {
   background: rgba(255, 255, 255, 0.04);
-}
-
-.asset-reference-search-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px 10px;
-  margin-right: calc(1px + var(--hierarchy-scrollbar-gutter, 0px));
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.asset-reference-search-summary {
-  font-size: 0.75rem;
-  color: rgba(233, 236, 241, 0.68);
-}
-
-.asset-reference-search-results {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 220px;
-  overflow: auto;
-}
-
-.asset-reference-result {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  padding: 8px 10px;
-  text-align: left;
-  color: rgba(233, 236, 241, 0.88);
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.asset-reference-result:hover {
-  background: rgba(77, 208, 225, 0.1);
-  border-color: rgba(77, 208, 225, 0.24);
-}
-
-.asset-reference-result__title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-.asset-reference-result__id,
-.asset-reference-result__path,
-.asset-reference-result__location,
-.asset-reference-result__meta {
-  font-size: 0.72rem;
-  color: rgba(233, 236, 241, 0.68);
-}
-
-.asset-reference-result__id,
-.asset-reference-result__path,
-.asset-reference-result__location {
-  word-break: break-word;
-}
-
-.asset-reference-result__meta,
-.asset-reference-result__location {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
 }
 
 .global-toggle-btn {
