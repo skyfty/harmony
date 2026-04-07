@@ -534,7 +534,6 @@ const groundChunkDebug = reactive({
 
 let lastGroundChunkDebugLogAt = 0
 let lastGroundChunkDebugSignature = ''
-let lastGroundChunkDebugKeys = new Set<string>()
 let lastRendererDebugLogAt = 0
 let lastRendererDebugSignature = ''
 
@@ -1988,7 +1987,6 @@ function syncGroundChunkStreamingDebug(
 	groundChunkDebug.visible = renderSnapshot.visibleChunkCount
 	groundChunkDebug.triangleEstimate = renderSnapshot.estimatedTriangles
 
-	const currentKeys = new Set(renderSnapshot.chunkKeys)
 	const signature = [
 		loadedChunks,
 		target,
@@ -2001,7 +1999,6 @@ function syncGroundChunkStreamingDebug(
 	if (signature !== lastGroundChunkDebugSignature && now - lastGroundChunkDebugLogAt >= 250) {
 		lastGroundChunkDebugLogAt = now
 		lastGroundChunkDebugSignature = signature
-		lastGroundChunkDebugKeys = currentKeys
 	}
 }
 
