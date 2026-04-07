@@ -10472,9 +10472,9 @@ function startRenderLoop(
         const now = typeof rawTimestamp === 'number' ? rawTimestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
         const deltaSecondsRaw = normalizeFrameDelta(delta);
         accumulatedDelta += deltaSecondsRaw;
-        if (now - lastFrameTime < minFrameInterval) {
-          return; // 跳过本帧，限制最大FPS
-        }
+        // if (now - lastFrameTime < minFrameInterval) {
+        //   return; // 跳过本帧，限制最大FPS
+        // }
         lastFrameTime = now;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
