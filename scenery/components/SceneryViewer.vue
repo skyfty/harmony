@@ -1469,12 +1469,6 @@ let hasRenderedSceneOnce = false;
 
 let initializeToken = 0;
 let pendingRestartAfterCurrentInit = false;
-const renderedFrameCountByToken = new Map<number, number>();
-const pendingRenderedFrameWaiters = new Map<number, Array<{
-  minFrames: number;
-  resolve: () => void;
-  timeout: ReturnType<typeof setTimeout>;
-}>>();
 
 let sceneSwitchShowTimer: ReturnType<typeof setTimeout> | null = null;
 let sceneSwitchHideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1572,91 +1566,6 @@ function endSceneSwitchTransition(token: number): void {
       sceneSwitchFlashActive.value = false;
     }, SCENE_SWITCH_OVERLAY_FADE_OUT_MS);
   }, delay);
-}
-
-function countSceneNodes(nodes: SceneNode[] | undefined | null): number {
-  if (!Array.isArray(nodes) || !nodes.length) {
-    return 0;
-  }
-  let count = 0;
-  const stack = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    count += 1;
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return count;
-}
-
-function resolveOverlayDismissFrameCount(document: SceneJsonExportDocument): number {
-  const nodeCount = countSceneNodes(document.nodes);
-  if (nodeCount >= 2000) {
-    return 6;
-  }
-  if (nodeCount >= 1000) {
-    return 5;
-  }
-  if (nodeCount >= 300) {
-    return 4;
-  }
-  if (nodeCount >= 80) {
-    return 3;
-  }
-  return 2;
-}
-
-function notifyRenderedFrame(token: number): void {
-  const nextCount = (renderedFrameCountByToken.get(token) ?? 0) + 1;
-  renderedFrameCountByToken.set(token, nextCount);
-
-  const waiters = pendingRenderedFrameWaiters.get(token);
-  if (!waiters?.length) {
-    return;
-  }
-
-  const remaining: typeof waiters = [];
-  waiters.forEach((waiter) => {
-    if (nextCount >= waiter.minFrames) {
-      clearTimeout(waiter.timeout);
-      waiter.resolve();
-      return;
-    }
-    remaining.push(waiter);
-  });
-
-  if (remaining.length) {
-    pendingRenderedFrameWaiters.set(token, remaining);
-  } else {
-    pendingRenderedFrameWaiters.delete(token);
-  }
-}
-
-function waitForRenderedFrames(token: number, minFrames: number, timeoutMs = 4000): Promise<void> {
-  if ((renderedFrameCountByToken.get(token) ?? 0) >= minFrames) {
-    return Promise.resolve();
-  }
-
-  return new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      const waiters = pendingRenderedFrameWaiters.get(token) ?? [];
-      const nextWaiters = waiters.filter((waiter) => waiter.timeout !== timeout);
-      if (nextWaiters.length) {
-        pendingRenderedFrameWaiters.set(token, nextWaiters);
-      } else {
-        pendingRenderedFrameWaiters.delete(token);
-      }
-      resolve();
-    }, timeoutMs);
-
-    const waiters = pendingRenderedFrameWaiters.get(token) ?? [];
-    waiters.push({ minFrames, resolve, timeout });
-    pendingRenderedFrameWaiters.set(token, waiters);
-  });
 }
 
 const overlayTitle = computed(() => {
@@ -10343,14 +10252,15 @@ function applyWeChatShadowPolicy(root: THREE.Object3D): void {
 }
 
 /**
- * Mount the graph and perform only the work required for the first visible frame.
+ * Mount the graph into the scene and synchronously initialize scene-dependent subsystems.
  */
-function mountGraphForFirstFrame(
+async function mountGraphAndSyncSubsystems(
   payload: ScenePreviewPayload,
   root: THREE.Object3D,
+  resourceCache: ResourceCache | null,
   canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
-): void {
+): Promise<void> {
   sceneGraphRoot = root;
   renderContext?.scene?.add(root);
 
@@ -10363,52 +10273,8 @@ function mountGraphForFirstFrame(
   refreshAnimationControllers(root);
   ensureBehaviorTapHandler(canvas, camera);
   initializeLazyPlaceholders(payload.document);
-}
-
-function syncSceneSubsystemsAfterFirstFrame(
-  payload: ScenePreviewPayload,
-  resourceCache: ResourceCache | null,
-): void {
   syncPhysicsBodiesForDocument(payload.document);
-  void syncTerrainScatterInstances(payload.document, resourceCache);
-}
-
-function waitForNextAnimationFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    const schedule = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame
-      : (callback: () => void) => setTimeout(callback, 16);
-    schedule(() => resolve());
-  });
-}
-
-async function continueSceneInitializationAfterFirstFrame(
-  payload: ScenePreviewPayload,
-  root: THREE.Object3D,
-  resourceCache: ResourceCache | null,
-  token: number,
-): Promise<void> {
-  await waitForNextAnimationFrame();
-  if (token !== initializeToken || sceneGraphRoot !== root) {
-    return;
-  }
-
-  addRuntimeStageLog('[SceneryViewer] Deferred Phase 4 sync subsystems');
-  syncSceneSubsystemsAfterFirstFrame(payload, resourceCache);
-
-  await waitForNextAnimationFrame();
-  if (token !== initializeToken || sceneGraphRoot !== root) {
-    return;
-  }
-
-  addRuntimeStageLog('[SceneryViewer] Deferred Phase 3 prepare instancing');
-  const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(root);
-  await prepareInstancedNodesIfPossible(root, payload, resourceCache, instancingSkipNodeIds);
-
-  if (token !== initializeToken || sceneGraphRoot !== root) {
-    return;
-  }
-
+  await syncTerrainScatterInstances(payload.document, resourceCache);
   registerSceneSubtree(root);
   refreshAnimationControllers(root);
   markInstancedCullingDirty();
@@ -10433,20 +10299,6 @@ function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: TH
   sceneCsmShadowRuntime?.updateFrustums();
 }
 
-function renderSingleSceneFrame(
-  renderer: THREE.WebGLRenderer,
-  scene: THREE.Scene,
-  camera: THREE.PerspectiveCamera,
-  token: number,
-): void {
-  sceneCsmShadowRuntime?.update();
-  renderer.render(scene, camera);
-  notifyRenderedFrame(token);
-  if (debugEnabled.value) {
-    syncRendererDebug(renderer, scene);
-  }
-}
-
 /**
  * Start the render loop (per-frame updates + rendering). Uses Vue effect scope so it can be stopped.
  */
@@ -10456,7 +10308,6 @@ function startRenderLoop(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
-  token: number,
 ): void {
   if (!renderScope) {
     renderScope = effectScope();
@@ -10472,9 +10323,9 @@ function startRenderLoop(
         const now = typeof rawTimestamp === 'number' ? rawTimestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
         const deltaSecondsRaw = normalizeFrameDelta(delta);
         accumulatedDelta += deltaSecondsRaw;
-        // if (now - lastFrameTime < minFrameInterval) {
-        //   return; // 跳过本帧，限制最大FPS
-        // }
+        if (now - lastFrameTime < minFrameInterval) {
+          return; // 跳过本帧，限制最大FPS
+        }
         lastFrameTime = now;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
@@ -10584,7 +10435,6 @@ function startRenderLoop(
         }
         sceneCsmShadowRuntime?.update();
         renderer.render(scene, camera);
-        notifyRenderedFrame(token);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {
           syncRendererDebug(renderer, scene);
@@ -10733,9 +10583,13 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     warnings.value = graph.warnings;
   }
 
-  // Phase 4: mount the graph and only do the work required for a first visible frame.
+  // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
   addRuntimeStageLog('[SceneryViewer] Phase 4 mount scene graph');
-  mountGraphForFirstFrame(payload, graph.root, canvas, camera);
+  await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
+
+  if (token !== initializeToken || sceneGraphRoot !== graph.root) {
+    return;
+  }
 
   // Phase 5: apply view settings (camera alignment, environment, projection).
   addRuntimeStageLog('[SceneryViewer] Phase 5 apply document view settings');
@@ -10744,16 +10598,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 6: start the render loop.
   addRuntimeStageLog('[SceneryViewer] Phase 6 start render loop');
-  renderSingleSceneFrame(renderer, scene, camera, token);
-  startRenderLoop(result, renderer, scene, camera, controls, token);
-  await waitForRenderedFrames(token, resolveOverlayDismissFrameCount(payload.document));
-
-  await waitForNextAnimationFrame();
-  if (token !== initializeToken || sceneGraphRoot !== graph.root) {
-    return;
-  }
-
-  void continueSceneInitializationAfterFirstFrame(payload, graph.root, resourceCache, token);
+  startRenderLoop(result, renderer, scene, camera, controls);
 }
 
 const handleResize: WindowResizeCallback = (_result) => {

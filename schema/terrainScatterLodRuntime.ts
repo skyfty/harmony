@@ -95,6 +95,8 @@ type ScatterRenderTarget = LodRenderTarget & {
   assetId: string
 }
 
+type ScatterRenderTargetKey = string
+
 const scatterLocalPositionHelper = new THREE.Vector3()
 const scatterLocalRotationHelper = new THREE.Euler()
 const scatterLocalScaleHelper = new THREE.Vector3()
@@ -297,6 +299,26 @@ function computeChunkKeysInRadius(
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function createModelScatterRenderTarget(assetId: string): ScatterRenderTarget {
+  return {
+    kind: 'model',
+    assetId,
+    faceCamera: false,
+    forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_X,
+  }
+}
+
+function buildScatterRenderTargetKey(target: ScatterRenderTarget | null | undefined): ScatterRenderTargetKey | null {
+  if (!target) {
+    return null
+  }
+  const assetId = normalizeText(target.assetId)
+  if (!assetId) {
+    return null
+  }
+  return `${target.kind}:${assetId}`
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -506,27 +528,6 @@ function getSourceModelHeight(assetId: string | null): number {
   return Number.isFinite(size.y) && size.y > 0 ? size.y : Math.max(group.radius * 2, 1)
 }
 
-async function ensureScatterRenderTargetReady(
-  target: ScatterRenderTarget,
-  resourceCache: ResourceCache,
-): Promise<boolean> {
-  if (target.kind === 'billboard') {
-    const group = await ensureBillboardInstanceGroup(target.assetId, resourceCache)
-    if (!group) {
-      return false
-    }
-    ensureBillboardInstancedMeshesRegistered(target.assetId)
-    return true
-  }
-
-  const group = await ensureModelInstanceGroup(target.assetId, resourceCache)
-  if (!group || !group.meshes.length) {
-    return false
-  }
-  ensureInstancedMeshesRegistered(target.assetId)
-  return true
-}
-
 function releaseScatterRenderTargetBinding(target: ScatterRenderTarget, nodeId: string): void {
   if (target.kind === 'billboard') {
     releaseBillboardInstance(nodeId)
@@ -640,10 +641,64 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
 
   const lodPresetCache = new Map<string, LodPresetData | null>()
   const pendingLodPresetLoads = new Map<string, Promise<void>>()
+  const invalidLodPresetAssetIds = new Set<string>()
+  const invalidScatterRenderTargets = new Set<ScatterRenderTargetKey>()
 
   let lastVisibilityUpdateAt = 0
   let lastLodUpdateAt = 0
   let pendingLodUpdate: Promise<void> | null = null
+
+  function markLodPresetInvalid(presetAssetId: string | null | undefined): void {
+    const normalized = normalizeText(presetAssetId)
+    if (!normalized) {
+      return
+    }
+    invalidLodPresetAssetIds.add(normalized)
+  }
+
+  function isLodPresetInvalid(presetAssetId: string | null | undefined): boolean {
+    const normalized = normalizeText(presetAssetId)
+    return normalized ? invalidLodPresetAssetIds.has(normalized) : false
+  }
+
+  function markScatterRenderTargetInvalid(target: ScatterRenderTarget | null | undefined): void {
+    const key = buildScatterRenderTargetKey(target)
+    if (!key) {
+      return
+    }
+    invalidScatterRenderTargets.add(key)
+  }
+
+  function isScatterRenderTargetInvalid(target: ScatterRenderTarget | null | undefined): boolean {
+    const key = buildScatterRenderTargetKey(target)
+    return key ? invalidScatterRenderTargets.has(key) : false
+  }
+
+  async function ensureScatterRenderTargetReady(
+    target: ScatterRenderTarget,
+    cache: ResourceCache,
+  ): Promise<boolean> {
+    if (isScatterRenderTargetInvalid(target)) {
+      return false
+    }
+    if (target.kind === 'billboard') {
+      const group = await ensureBillboardInstanceGroup(target.assetId, cache)
+      if (!group) {
+        markScatterRenderTargetInvalid(target)
+        return false
+      }
+      ensureBillboardInstancedMeshesRegistered(target.assetId)
+      return true
+    }
+
+    const group = await ensureModelInstanceGroup(target.assetId, cache)
+    if (!group || !group.meshes.length) {
+      markScatterRenderTargetInvalid(target)
+      return false
+    }
+    ensureInstancedMeshesRegistered(target.assetId)
+    return true
+  }
 
   function dispose(): void {
     runtimeInstances.forEach((runtime) => {
@@ -660,6 +715,8 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     resourceCache = null
     lodPresetCache.clear()
     pendingLodPresetLoads.clear()
+    invalidLodPresetAssetIds.clear()
+    invalidScatterRenderTargets.clear()
     pendingLodUpdate = null
     lastLodUpdateAt = 0
     lastVisibilityUpdateAt = 0
@@ -670,6 +727,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
   async function ensureLodPresetCached(presetAssetId: string): Promise<void> {
     const normalized = presetAssetId.trim()
     if (!normalized) {
+      return
+    }
+    if (isLodPresetInvalid(normalized)) {
+      lodPresetCache.set(normalized, null)
       return
     }
     if (lodPresetCache.has(normalized)) {
@@ -687,8 +748,14 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
           return
         }
         const preset = await loadLodPreset(resourceCache, normalized)
+        if (!preset) {
+          markLodPresetInvalid(normalized)
+          lodPresetCache.set(normalized, null)
+          return
+        }
         lodPresetCache.set(normalized, preset)
       } catch {
+        markLodPresetInvalid(normalized)
         lodPresetCache.set(normalized, null)
       }
     })().finally(() => {
@@ -734,14 +801,20 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
 
         const presetAssetId = getScatterLayerLodPresetId(layer)
         if (presetAssetId) {
+          if (isLodPresetInvalid(presetAssetId)) {
+            continue
+          }
           await ensureLodPresetCached(presetAssetId)
+          if (isLodPresetInvalid(presetAssetId)) {
+            continue
+          }
           lastYieldAt = await maybeYieldSync(lastYieldAt)
         }
 
         const preset = presetAssetId ? (lodPresetCache.get(presetAssetId) ?? null) : null
         const sourceModelAssetId = resolveFirstLodModelAssetId(preset) || selectionId
         const bindingTarget = resolveBaseScatterRenderTarget(preset, selectionId)
-        if (!bindingTarget) {
+        if (!bindingTarget || isScatterRenderTargetInvalid(bindingTarget)) {
           continue
         }
 
@@ -755,11 +828,17 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
           if (target.kind === bindingTarget.kind && target.assetId === bindingTarget.assetId) {
             continue
           }
+          if (isScatterRenderTargetInvalid(target)) {
+            continue
+          }
           await ensureScatterRenderTargetReady(target, nextResourceCache)
           lastYieldAt = await maybeYieldSync(lastYieldAt)
         }
         if (sourceModelAssetId) {
-          await ensureModelInstanceGroup(sourceModelAssetId, nextResourceCache)
+          const sourceModelTarget = createModelScatterRenderTarget(sourceModelAssetId)
+          if (!isScatterRenderTargetInvalid(sourceModelTarget)) {
+            await ensureScatterRenderTargetReady(sourceModelTarget, nextResourceCache)
+          }
           lastYieldAt = await maybeYieldSync(lastYieldAt)
         }
         const sourceModelHeight = getSourceModelHeight(sourceModelAssetId)
@@ -963,6 +1042,9 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         if (!runtime) {
           continue
         }
+        if (isScatterRenderTargetInvalid(runtime.boundTarget)) {
+          continue
+        }
         // 解析该实例对应的地面网格对象；若无法找到则跳过
         const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
         if (!groundMesh) {
@@ -994,6 +1076,9 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     }
 
     runtimeInstances.forEach((runtime, nodeId) => {
+      if (isScatterRenderTargetInvalid(runtime.boundTarget)) {
+        return
+      }
       const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
       if (!groundMesh) {
         return
@@ -1156,15 +1241,22 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       const matrix = computeScatterRuntimeMatrix(runtime, groundMesh, undefined, cameraPosition)
 
       const presetAssetId = runtime.presetAssetId
-      if (presetAssetId) {
+      if (presetAssetId && !isLodPresetInvalid(presetAssetId)) {
         await ensureLodPresetCached(presetAssetId)
+        if (isLodPresetInvalid(presetAssetId)) {
+          continue
+        }
         const preset = lodPresetCache.get(presetAssetId) ?? null
         if (preset) {
           scatterWorldPositionHelper.setFromMatrixPosition(matrix)
           const distance = scatterWorldPositionHelper.distanceTo(cameraPosition)
           if (Number.isFinite(distance)) {
             const desiredTarget = chooseLodRenderTarget(preset, distance, runtime.sourceModelAssetId)
-            if (desiredTarget && (desiredTarget.kind !== runtime.boundTarget.kind || desiredTarget.assetId !== runtime.boundTarget.assetId)) {
+            if (
+              desiredTarget
+              && !isScatterRenderTargetInvalid(desiredTarget)
+              && (desiredTarget.kind !== runtime.boundTarget.kind || desiredTarget.assetId !== runtime.boundTarget.assetId)
+            ) {
               const ready = await ensureScatterRenderTargetReady(desiredTarget, cache)
               if (ready && allocatedNodeIds.has(runtime.nodeId)) {
                 releaseScatterRenderTargetBinding(runtime.boundTarget, runtime.nodeId)
@@ -1179,10 +1271,20 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         }
       }
 
+      if (isScatterRenderTargetInvalid(runtime.boundTarget)) {
+        releaseScatterRenderTargetBinding(runtime.boundTarget, runtime.nodeId)
+        allocatedNodeIds.delete(runtime.nodeId)
+        visibleNodeIds.delete(runtime.nodeId)
+        lastVisibleAt.delete(runtime.nodeId)
+        continue
+      }
+
       const binding = allocateScatterRenderTargetBinding(runtime.boundTarget, runtime.nodeId)
       if (!binding) {
         // Ensure cached for re-entry after culling.
-        await ensureScatterRenderTargetReady(runtime.boundTarget, cache)
+        if (!isScatterRenderTargetInvalid(runtime.boundTarget)) {
+          await ensureScatterRenderTargetReady(runtime.boundTarget, cache)
+        }
         continue
       }
       allocatedNodeIds.add(runtime.nodeId)
