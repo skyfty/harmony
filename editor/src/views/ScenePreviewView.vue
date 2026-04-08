@@ -170,7 +170,6 @@ import {
 	sceneStateAnchorComponentDefinition,
 	nominateComponentDefinition,
 	steerComponentDefinition,
-	buildSteerResolvedEntryMap,
 	findDefaultSteerResolvedEntry,
 	applyNominateStateMapToRuntime,
 	type NominateExternalStateMap,
@@ -299,18 +298,6 @@ function switchToLivePreviewMode(): void {
 		window.location.href = url.toString()
 	} catch {
 		// ignore
-	}
-}
-
-function readPreviewDefaultSteerIdentifierFromUrl(): string {
-	if (typeof window === 'undefined') {
-		return ''
-	}
-	try {
-		const url = new URL(window.location.href)
-		return normalizeSteerIdentifier(url.searchParams.get('defaultSteerIdentifier'))
-	} catch {
-		return ''
 	}
 }
 
@@ -1435,10 +1422,6 @@ function syncPreviewNominateStateMap(): void {
 	previewNominateStateMap.value = readPreviewNominateStateMap()
 }
 
-function normalizeSteerIdentifier(value: unknown): string {
-	return typeof value === 'string' ? value.trim() : ''
-}
-
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
@@ -1449,7 +1432,6 @@ let isApplyingSnapshot = false
 let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
-const previewDefaultSteerIdentifier = ref(readPreviewDefaultSteerIdentifierFromUrl())
 let appliedDefaultSteerDriveKey: string | null = null
 
 function resetAppliedDefaultSteerDriveKey(): void {
@@ -5921,21 +5903,13 @@ function startVehicleDriveMode(
 
 function applyDefaultSteerDriveForCurrentScene(): void {
 	const document = currentDocument
-	const identifier = normalizeSteerIdentifier(previewDefaultSteerIdentifier.value)
-	const defaultEntry = !identifier && document
-		? findDefaultSteerResolvedEntry(document.nodes)
-		: null
-	if (!document || (!identifier && !defaultEntry)) {
-		if (!identifier) {
-			resetAppliedDefaultSteerDriveKey()
-		}
+	const defaultEntry = document ? findDefaultSteerResolvedEntry(document.nodes) : null
+	if (!document || !defaultEntry) {
+		resetAppliedDefaultSteerDriveKey()
 		return
 	}
-	const entry = identifier
-		? (buildSteerResolvedEntryMap(document.nodes).get(identifier)?.[0] ?? null)
-		: defaultEntry
-	const sourceKey = identifier || (defaultEntry ? `entry:${defaultEntry.id}` : '')
-	const attemptKey = `${document.id ?? ''}:${sourceKey}:${entry?.targetNode.id ?? '__missing__'}`
+	const entry = defaultEntry
+	const attemptKey = `${document.id ?? ''}:entry:${entry.id}:${entry.targetNode.id}`
 	if (appliedDefaultSteerDriveKey === attemptKey) {
 		return
 	}
@@ -10861,9 +10835,6 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		return
 	}
 	lastSnapshotRevision = snapshot.revision
-	if (typeof snapshot.defaultSteerIdentifier === 'string') {
-		previewDefaultSteerIdentifier.value = normalizeSteerIdentifier(snapshot.defaultSteerIdentifier)
-	}
 	logPreviewDiagnosticsSummary(snapshot.diagnosticsSummary)
 	if (isApplyingSnapshot) {
 		queuedSnapshot = snapshot
