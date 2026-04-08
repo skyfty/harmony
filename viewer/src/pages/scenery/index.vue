@@ -4,6 +4,7 @@
       :project-id="projectId"
       :package-url="packageUrl"
       :nominate-state-map="nominateStateMap"
+      :default-steer-identifier="selectedVehicleId"
       :server-asset-base-url="serverAssetBaseUrl"
       @punch="handlePunch"
     />

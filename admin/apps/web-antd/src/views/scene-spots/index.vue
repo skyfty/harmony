@@ -650,17 +650,19 @@ onMounted(async () => {
               <Input v-model:value="sceneSpotFormModel.title" allow-clear />
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="category" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.category.required') }]">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="categoryId" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.category.required') }]">
               <Select
                 v-model:value="sceneSpotFormModel.categoryId"
                 :options="categoryOptions"
                 :loading="categoryOptionsLoading"
                 allow-clear
+                show-search
+                option-filter-prop="label"
                 :placeholder="t('page.sceneSpots.index.formFields.category.placeholder')"
               />
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage" :rules="coverImageRules">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage" >
               <Upload
                 v-bind="uploadProps"
                 :file-list="coverImageFileList"
@@ -673,7 +675,7 @@ onMounted(async () => {
               <div class="upload-note">{{ t('page.sceneSpots.index.help.coverImageSize', { width: 110, height: 110 }) }}</div>
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides" :rules="slidesRules">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
               <Upload
                 v-bind="uploadProps"
                 :file-list="slidesFileList"

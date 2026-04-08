@@ -6,23 +6,24 @@ import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
-  NOMINATE_COMPONENT_TYPE,
-  clampNominateComponentProps,
-  type NominateComponentEntry,
-  type NominateComponentProps,
+  STEER_COMPONENT_TYPE,
+  clampSteerComponentProps,
+  type SteerComponentEntry,
+  type SteerComponentProps,
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, nodes } = storeToRefs(sceneStore)
 
-const nominateComponent = computed(
-  () => selectedNode.value?.components?.[NOMINATE_COMPONENT_TYPE] as
-    | SceneNodeComponentState<NominateComponentProps>
+const steerComponent = computed(
+  () => selectedNode.value?.components?.[STEER_COMPONENT_TYPE] as
+    | SceneNodeComponentState<SteerComponentProps>
     | undefined,
 )
 
-const nominateProps = computed(() => clampNominateComponentProps(nominateComponent.value?.props))
-const entries = computed(() => nominateProps.value.entries ?? [])
+const steerProps = computed(() => clampSteerComponentProps(steerComponent.value?.props))
+const entries = computed(() => steerProps.value.entries ?? [])
+const defaultEntryId = computed(() => steerProps.value.defaultEntryId)
 
 function findNodeName(tree: SceneNode[] | undefined, targetId: string | null | undefined): string {
   if (!tree?.length || !targetId) {
@@ -40,36 +41,46 @@ function findNodeName(tree: SceneNode[] | undefined, targetId: string | null | u
   return ''
 }
 
-function updateEntries(nextEntries: NominateComponentEntry[]): void {
-  const component = nominateComponent.value
+function updateSteerProps(patch: Partial<SteerComponentProps>): void {
+  const component = steerComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, {
+  sceneStore.updateNodeComponentProps(nodeId, component.id, patch as Partial<Record<string, unknown>>)
+}
+
+function updateEntries(nextEntries: SteerComponentEntry[]): void {
+  const nextDefaultEntryId = defaultEntryId.value && nextEntries.some((entry) => entry.id === defaultEntryId.value)
+    ? defaultEntryId.value
+    : null
+  updateSteerProps({
     entries: nextEntries,
+    defaultEntryId: nextDefaultEntryId,
   })
 }
 
 function handleAddEntry(): void {
-  const nextEntries = [
+  updateEntries([
     ...entries.value,
     {
       id: generateUuid(),
       key: '',
       nodeId: null,
-      defaultVisible: true,
     },
-  ]
-  updateEntries(nextEntries)
+  ])
 }
 
 function handleRemoveEntry(entryId: string): void {
-  updateEntries(entries.value.filter((entry) => entry.id !== entryId))
+  const nextEntries = entries.value.filter((entry) => entry.id !== entryId)
+  updateSteerProps({
+    entries: nextEntries,
+    defaultEntryId: defaultEntryId.value === entryId ? null : defaultEntryId.value,
+  })
 }
 
 function handleToggleComponent(): void {
-  const component = nominateComponent.value
+  const component = steerComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
     return
@@ -78,7 +89,7 @@ function handleToggleComponent(): void {
 }
 
 function handleRemoveComponent(): void {
-  const component = nominateComponent.value
+  const component = steerComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
     return
@@ -103,7 +114,7 @@ function handleEntryNodeChange(entryId: string, nextNodeId: string | null): void
 }
 
 function handleEntryKeyChange(entryId: string, value: string): void {
-  const nextEntries = entries.value.map((entry) => {
+  updateEntries(entries.value.map((entry) => {
     if (entry.id !== entryId) {
       return entry
     }
@@ -111,41 +122,36 @@ function handleEntryKeyChange(entryId: string, value: string): void {
       ...entry,
       key: value,
     }
-  })
-  updateEntries(nextEntries)
+  }))
 }
 
-function handleEntryVisibilityChange(entryId: string, value: boolean | null): void {
-  const nextEntries = entries.value.map((entry) => {
-    if (entry.id !== entryId) {
-      return entry
-    }
-    return {
-      ...entry,
-      defaultVisible: value !== false,
-    }
+function handleDefaultEntryChange(entryId: string, value: boolean | null): void {
+  if (!value && defaultEntryId.value !== entryId) {
+    return
+  }
+  updateSteerProps({
+    defaultEntryId: value ? entryId : null,
   })
-  updateEntries(nextEntries)
 }
 </script>
 
 <template>
-  <v-expansion-panel :value="NOMINATE_COMPONENT_TYPE">
+  <v-expansion-panel :value="STEER_COMPONENT_TYPE">
     <v-expansion-panel-title>
-      <div class="nominate-panel__header">
-        <span class="nominate-panel__title">Nominate</span>
+      <div class="steer-panel__header">
+        <span class="steer-panel__title">Steer</span>
         <v-spacer />
         <v-btn
-          v-if="nominateComponent"
+          v-if="steerComponent"
           size="small"
           variant="text"
           icon="mdi-plus"
-          :disabled="!nominateComponent.enabled"
+          :disabled="!steerComponent.enabled"
           aria-label="Add Item"
           @click.stop="handleAddEntry"
         />
         <v-menu
-          v-if="nominateComponent"
+          v-if="steerComponent"
           location="bottom end"
           origin="auto"
           transition="fade-transition"
@@ -164,7 +170,7 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
           </template>
           <v-list density="compact">
             <v-list-item @click.stop="handleToggleComponent()">
-              <v-list-item-title>{{ nominateComponent.enabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+              <v-list-item-title>{{ steerComponent.enabled ? 'Disable' : 'Enable' }}</v-list-item-title>
             </v-list-item>
             <v-divider class="component-menu-divider" inset />
             <v-list-item @click.stop="handleRemoveComponent()">
@@ -175,16 +181,26 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="nominate-panel__body">
-        <div v-if="entries.length" class="nominate-panel__list">
-          <div v-for="entry in entries" :key="entry.id" class="nominate-entry">
-            <div class="nominate-entry__fields">
+      <div class="steer-panel__body">
+        <div v-if="entries.length" class="steer-panel__list">
+          <div
+            v-for="entry in entries"
+            :key="entry.id"
+            class="steer-entry"
+            :class="{ 'steer-entry--default': defaultEntryId === entry.id }"
+          >
+            <div class="steer-entry__fields">
+              <div class="steer-entry__meta">
+                <span v-if="defaultEntryId === entry.id" class="steer-entry__badge">Auto Drive Default</span>
+                <span v-else class="steer-entry__badge steer-entry__badge--muted">Optional Default</span>
+              </div>
               <NodePicker
+                owner="steer-target"
                 :model-value="entry.nodeId"
-                pick-hint="Click a node in the scene to control"
-                selection-hint="Select the scene node controlled by this nominate item"
-                placeholder="Target Node"
-                :disabled="!nominateComponent?.enabled"
+                pick-hint="Click a vehicle node in the scene to drive"
+                selection-hint="Select the vehicle node mapped by this steer item"
+                placeholder="Vehicle"
+                :disabled="!steerComponent?.enabled"
                 @update:modelValue="(value) => handleEntryNodeChange(entry.id, value as string | null)"
               />
               <v-text-field
@@ -193,25 +209,25 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
                 variant="underlined"
                 persistent-hint
                 :model-value="entry.key"
-                :disabled="!nominateComponent?.enabled"
+                :disabled="!steerComponent?.enabled"
                 @update:modelValue="(value) => handleEntryKeyChange(entry.id, String(value ?? ''))"
               />
               <v-switch
-                label="Visible By Default"
+                label="Default Vehicle"
                 color="primary"
                 density="compact"
                 hide-details
-                :model-value="entry.defaultVisible"
-                :disabled="!nominateComponent?.enabled"
-                @update:modelValue="(value) => handleEntryVisibilityChange(entry.id, value as boolean | null)"
+                :model-value="defaultEntryId === entry.id"
+                :disabled="!steerComponent?.enabled || !entry.nodeId"
+                @update:modelValue="(value) => handleDefaultEntryChange(entry.id, value as boolean | null)"
               />
             </div>
-            <div class="nominate-entry__actions">
+            <div class="steer-entry__actions">
               <v-btn
                 icon
                 variant="text"
                 density="compact"
-                :disabled="!nominateComponent?.enabled"
+                :disabled="!steerComponent?.enabled"
                 @click="handleRemoveEntry(entry.id)"
               >
                 <v-icon size="18">mdi-delete</v-icon>
@@ -219,8 +235,8 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
             </div>
           </div>
         </div>
-        <div v-else class="nominate-panel__empty">
-          Add nominate items to map external identifiers to scene nodes.
+        <div v-else class="steer-panel__empty">
+          Add steer items to map external identifiers to vehicle nodes.
         </div>
       </div>
     </v-expansion-panel-text>
@@ -228,32 +244,32 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
 </template>
 
 <style scoped>
-.nominate-panel__header {
+.steer-panel__header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   width: 100%;
 }
 
-.nominate-panel__title {
+.steer-panel__title {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
-.nominate-panel__body {
+.steer-panel__body {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
   padding-inline: 0.4rem;
 }
 
-.nominate-panel__list {
+.steer-panel__list {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
 }
 
-.nominate-entry {
+.steer-entry {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.75rem;
@@ -262,21 +278,59 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.nominate-entry__fields {
+.steer-entry--default {
+  border-color: rgba(76, 175, 80, 0.45);
+  background: rgba(76, 175, 80, 0.08);
+  box-shadow: 0 0 0 1px rgba(76, 175, 80, 0.12) inset;
+}
+
+.steer-entry__fields {
   display: flex;
   flex-direction: column;
-  gap: 1.0rem;
+  gap: 1rem;
   min-width: 0;
 }
 
-.nominate-entry__actions {
+.steer-entry__meta {
   display: flex;
   align-items: center;
 }
 
-.nominate-panel__empty {
+.steer-entry__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(76, 175, 80, 0.16);
+  color: rgba(198, 255, 204, 0.96);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.steer-entry__badge--muted {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(233, 236, 241, 0.7);
+}
+
+.steer-entry__actions {
+  display: flex;
+  align-items: center;
+}
+
+.steer-entry__hint {
+  margin-top: -0.4rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: rgba(233, 236, 241, 0.62);
+}
+
+.steer-panel__empty {
   font-size: 0.84rem;
   color: rgba(233, 236, 241, 0.58);
 }

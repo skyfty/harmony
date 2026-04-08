@@ -304,6 +304,7 @@ import {
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
+  VEHICLE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
@@ -427,6 +428,15 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+
+function canCompleteNodePick(nodeId: string): boolean {
+  if (nodePickerStore.owner !== 'steer-target') {
+    return true
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  return Boolean(node?.components?.[VEHICLE_COMPONENT_TYPE]?.enabled)
+}
+
 const protagonistPreviewNodeId = computed(() => {
   const selectedId = sceneStore.selectedNodeId
   if (!selectedId) {
@@ -14357,7 +14367,11 @@ async function handlePointerDown(event: PointerEvent) {
     floorCircleEditModeActive: isSelectedFloorCircleEditMode(),
     isAltOverrideActive,
     nodePickerActive: nodePickerStore.isActive,
-    nodePickerCompletePick: (nodeId) => nodePickerStore.completePick(nodeId),
+    nodePickerCompletePick: (nodeId) => {
+      if (canCompleteNodePick(nodeId)) {
+        nodePickerStore.completePick(nodeId)
+      }
+    },
     hideNodePickerHighlight,
     pickNodeAtPointer: (e) => pickNodeAtPointer(e),
     wallBuildToolHandlePointerDown: (e) => wallBuildTool.handlePointerDown(e),

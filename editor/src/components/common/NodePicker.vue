@@ -6,6 +6,7 @@ import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { NodePickerOwner } from '@/stores/nodePickerStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
+import { VEHICLE_COMPONENT_TYPE } from '@schema/components'
 
 type ExposedMethods = {
   cancelPicking: () => void
@@ -54,6 +55,22 @@ function findNodeName(tree: SceneNode[] | undefined, id: string | null | undefin
       return name && name.length ? name : node.id
     }
     const match = findNodeName(node.children, id)
+    if (match) {
+      return match
+    }
+  }
+  return null
+}
+
+function findNodeById(tree: SceneNode[] | undefined, id: string | null | undefined): SceneNode | null {
+  if (!tree || !id) {
+    return null
+  }
+  for (const node of tree) {
+    if (node.id === id) {
+      return node
+    }
+    const match = findNodeById(node.children, id)
     if (match) {
       return match
     }
@@ -172,6 +189,17 @@ function updateValue(next: string | null) {
   emit('update:modelValue', next)
 }
 
+function canAcceptNodeId(nodeId: string | null | undefined): boolean {
+  if (!nodeId) {
+    return true
+  }
+  if (props.owner !== 'steer-target') {
+    return true
+  }
+  const node = findNodeById(nodes.value, nodeId)
+  return Boolean(node?.components?.[VEHICLE_COMPONENT_TYPE]?.enabled)
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -211,6 +239,9 @@ function startPicking() {
       onPick(nodeId: string) {
         activeRequestId.value = null
         stopPicking()
+        if (!canAcceptNodeId(nodeId)) {
+          return
+        }
         updateValue(nodeId)
       },
       onCancel() {
@@ -300,6 +331,9 @@ function handleDrop(event: DragEvent) {
   }
   const nodeExists = hierarchyNameMap.value.has(nodeId) || Boolean(findNodeName(nodes.value, nodeId))
   if (!nodeExists) {
+    return
+  }
+  if (!canAcceptNodeId(nodeId)) {
     return
   }
   if (isPicking.value) {

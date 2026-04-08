@@ -1,6 +1,6 @@
 // Development runtime config for admin (mount this in dev only)
 window._VBEN_ADMIN_PRO_APP_CONF_ = {
-  VITE_GLOB_API_URL: 'http://127.0.0.1:4000/api',
+  VITE_GLOB_API_URL: 'https://v.touchmagic.cn/api',
   VITE_GLOB_AUTH_DINGDING_CORP_ID: '',
   VITE_GLOB_AUTH_DINGDING_CLIENT_ID: ''
 };

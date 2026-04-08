@@ -15,7 +15,7 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@schema'
-import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
+import { PROTAGONIST_COMPONENT_TYPE, VEHICLE_COMPONENT_TYPE } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import AssetReferenceSearchDialog from './AssetReferenceSearchDialog.vue'
@@ -39,6 +39,7 @@ const uiStore = useUiStore()
 const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
 
 const NODE_DRAG_LIST_MIME = 'application/x-harmony-node-list'
+const HIERARCHY_ROW_HEIGHT = 30
 
 const selectionAnchorId = ref<string | null>(null)
 const suppressSelectionSync = ref(false)
@@ -312,6 +313,12 @@ function focusTreeContainer() {
   })
 }
 
+function waitForAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve())
+  })
+}
+
 function showSearchAndFocus() {
   isSearchVisible.value = true
   focusSearchField()
@@ -400,6 +407,7 @@ const rangeOrderNodeIds = computed(() => {
   return allNodeIds.value
 })
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
+const canRevealSelectedNode = computed(() => Boolean(selectedNodeId.value))
 const hasHierarchyNodes = computed(() => flattenedHierarchyItems.value.length > 0)
 
 type VisibleHierarchyRow = {
@@ -644,6 +652,9 @@ const groupToggleTitle = computed(() => {
   }
   return selectedGroupExpanded.value ? 'Collapse group' : 'Expand group'
 })
+const revealSelectedNodeTitle = computed(() =>
+  canRevealSelectedNode.value ? 'Reveal selected node' : 'No selected node to reveal',
+)
 
 function handleToggleSelectedGroupExpansion() {
   const id = selectedGroupId.value
@@ -712,6 +723,19 @@ watch(
     }
   },
   { immediate: true, deep: true },
+)
+
+watch(
+  () => isSearchActive.value,
+  async (isActive: boolean, wasActive: boolean) => {
+    if (isActive || !wasActive || !selectedNodeId.value) {
+      return
+    }
+    await nextTick()
+    await waitForAnimationFrame()
+    await revealSelectedNodeInHierarchy()
+  },
+  { flush: 'post' },
 )
 
 const rootDropClasses = computed(() => {
@@ -1181,13 +1205,39 @@ function resolveRowIcon(row: VisibleHierarchyRow): string {
   return resolveNodeIcon(row.item)
 }
 
+function findNodeById(tree: SceneNode[] | undefined, targetId: string): SceneNode | null {
+  if (!tree?.length) {
+    return null
+  }
+  for (const node of tree) {
+    if (node.id === targetId) {
+      return node
+    }
+    const nested = findNodeById(node.children, targetId)
+    if (nested) {
+      return nested
+    }
+  }
+  return null
+}
+
+function canCompleteNodePick(nodeId: string): boolean {
+  if (nodePickerStore.owner !== 'steer-target') {
+    return true
+  }
+  const node = findNodeById(sceneStore.nodes, nodeId)
+  return Boolean(node?.components?.[VEHICLE_COMPONENT_TYPE]?.enabled)
+}
+
 function handleNodeClick(event: MouseEvent, nodeId: string) {
   event.stopPropagation()
   event.preventDefault()
   if (event.button !== 0) return
 
   if (nodePickerStore.isActive) {
-    nodePickerStore.completePick(nodeId)
+    if (canCompleteNodePick(nodeId)) {
+      nodePickerStore.completePick(nodeId)
+    }
     return
   }
 
@@ -1565,7 +1615,9 @@ async function handleDrop(event: DragEvent, targetId: string) {
 
 function handleNodeDoubleClick(nodeId: string) {
   if (nodePickerStore.isActive) {
-    nodePickerStore.completePick(nodeId)
+    if (canCompleteNodePick(nodeId)) {
+      nodePickerStore.completePick(nodeId)
+    }
     return
   }
   const nextSelection = sceneStore.handleNodeDoubleClick(nodeId)
@@ -1754,12 +1806,55 @@ function escapeAttributeSelectorValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
-async function revealNodeInHierarchy(nodeId: string) {
-  expandHierarchyAncestors(nodeId)
+async function ensureHierarchyRowRendered(nodeId: string) {
+  const rowIndex = visibleHierarchyRows.value.findIndex((row: VisibleHierarchyRow) => row.id === nodeId)
+  if (rowIndex === -1) {
+    return
+  }
+  const container = getHierarchyScrollContainer()
+  if (!container) {
+    return
+  }
+
+  const rowTop = rowIndex * HIERARCHY_ROW_HEIGHT
+  const rowBottom = rowTop + HIERARCHY_ROW_HEIGHT
+  const viewportTop = container.scrollTop
+  const viewportBottom = viewportTop + container.clientHeight
+
+  if (rowTop < viewportTop) {
+    container.scrollTop = rowTop
+  } else if (rowBottom > viewportBottom) {
+    container.scrollTop = Math.max(0, rowBottom - container.clientHeight)
+  }
+
   await nextTick()
+}
+
+async function revealNodeInHierarchy(nodeId: string) {
+  if (!nodeId) {
+    return
+  }
+  expandHierarchyAncestors(nodeId)
   const selector = `[data-node-id="${escapeAttributeSelectorValue(nodeId)}"]`
-  const target = treeContainerRef.value?.querySelector<HTMLElement>(selector) ?? null
-  target?.scrollIntoView({ block: 'nearest' })
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await nextTick()
+    await ensureHierarchyRowRendered(nodeId)
+    await nextTick()
+    const target = treeContainerRef.value?.querySelector<HTMLElement>(selector) ?? null
+    if (target) {
+      target.scrollIntoView({ block: 'nearest' })
+      return
+    }
+    await waitForAnimationFrame()
+  }
+}
+
+async function revealSelectedNodeInHierarchy() {
+  const nodeId = selectedNodeId.value
+  if (!nodeId) {
+    return
+  }
+  await revealNodeInHierarchy(nodeId)
 }
 
 function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
@@ -1859,6 +1954,15 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
           :disabled="!selectedGroupId"
           @click="handleToggleSelectedGroupExpansion"
         />
+        <v-btn
+          icon="mdi-crosshairs-gps"
+          variant="text"
+          density="compact"
+          color="primary"
+          :title="revealSelectedNodeTitle"
+          :disabled="!canRevealSelectedNode"
+          @click="revealSelectedNodeInHierarchy"
+        />
         <v-spacer />
         <div class="tree-toolbar-right">
         <v-btn
@@ -1914,7 +2018,7 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
         <v-virtual-scroll
           :items="visibleHierarchyRows"
           item-key="id"
-          :item-height="30"
+          :item-height="HIERARCHY_ROW_HEIGHT"
           class="hierarchy-virtual-list"
           @dragover.capture="handleVirtualListDragOverCapture"
           @drop.capture="handleVirtualListDropCapture"

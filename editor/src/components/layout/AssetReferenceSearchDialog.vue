@@ -106,14 +106,7 @@ function handleSelect(result: AssetReferenceDialogResult) {
         <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
       </v-toolbar>
       <v-card-text class="asset-reference-dialog-content">
-        <section class="asset-reference-dialog-overview">
-          <div class="overview-copy">
-            <div class="overview-eyebrow">Hierarchy Tools</div>
-            <div class="overview-title">资产引用查找</div>
-            <div class="overview-subtitle">按资产名称或资产 ID 查找当前场景中的引用来源。</div>
-          </div>
-        </section>
-
+ 
         <section class="asset-reference-search-section">
           <v-text-field
             ref="searchFieldRef"

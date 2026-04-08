@@ -449,6 +449,7 @@ type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
   nominateStateMap?: NominateExternalStateMap;
+  defaultSteerIdentifier?: string;
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
   debugConsoleEnabled?: boolean;
@@ -710,6 +711,11 @@ import {
   applyNominateStateMapToRuntime,
   type NominateExternalStateMap,
 } from '@harmony/schema/components/definitions/nominateComponent';
+import {
+  steerComponentDefinition,
+  buildSteerResolvedEntryMap,
+  findDefaultSteerResolvedEntry,
+} from '@harmony/schema/components/definitions/steerComponent';
 import {
   preloadableComponentDefinition,
 } from '@harmony/schema/components/definitions/preloadableComponent';
@@ -1702,6 +1708,26 @@ const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
 let sceneCsmRuntimeConfigKey = '';
 
+function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
+  let current = object;
+  while (current) {
+    if (current.visible === false) {
+      return false;
+    }
+    current = current.parent;
+  }
+  return true;
+}
+
+function syncInstancedProxyVisibilityAfterNominate(): void {
+  nodeObjectMap.forEach((object) => {
+    if (!object?.userData?.instancedAssetId) {
+      return;
+    }
+    syncInstancedTransform(object, true);
+  });
+}
+
 function applyNominateOverridesForCurrentScene(): void {
   if (!currentDocument?.nodes?.length) {
     return;
@@ -1715,6 +1741,7 @@ function applyNominateOverridesForCurrentScene(): void {
     (nodeId) => nodeObjectMap.get(nodeId) ?? null,
     externalStateMap,
   );
+  syncInstancedProxyVisibilityAfterNominate();
 }
 
 function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
@@ -1979,10 +2006,12 @@ previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(nominateComponentDefinition);
+previewComponentManager.registerDefinition(steerComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
+let appliedDefaultSteerDriveKey: string | null = null;
 const assetNodeIdMap = new Map<string, Set<string>>();
 const multiuserNodeIds = new Set<string>();
 const multiuserNodeObjects = new Map<string, THREE.Object3D>();
@@ -3840,6 +3869,56 @@ function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null
 
 function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
+}
+
+function normalizeSteerIdentifier(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resetAppliedDefaultSteerDriveKey(): void {
+  appliedDefaultSteerDriveKey = null;
+}
+
+function applyDefaultSteerDriveForCurrentScene(): void {
+  const document = currentDocument;
+  const identifier = normalizeSteerIdentifier(props.defaultSteerIdentifier);
+  const defaultEntry = !identifier && document
+    ? findDefaultSteerResolvedEntry(document.nodes)
+    : null;
+  if (!document || (!identifier && !defaultEntry) || !renderContext) {
+    if (!identifier) {
+      resetAppliedDefaultSteerDriveKey();
+    }
+    return;
+  }
+  const entry = identifier
+    ? (buildSteerResolvedEntryMap(document.nodes).get(identifier)?.[0] ?? null)
+    : defaultEntry;
+  const sourceKey = identifier || (defaultEntry ? `entry:${defaultEntry.id}` : '');
+  const attemptKey = `${document.id ?? ''}:${sourceKey}:${entry?.targetNode.id ?? '__missing__'}`;
+  if (appliedDefaultSteerDriveKey === attemptKey) {
+    return;
+  }
+  appliedDefaultSteerDriveKey = attemptKey;
+  if (!entry) {
+    return;
+  }
+  const result = vehicleDriveController.startDrive(
+    {
+      nodeId: entry.targetNode.id,
+      targetNodeId: entry.targetNode.id,
+    },
+    {
+      camera: renderContext.camera,
+      mapControls: renderContext.controls,
+    },
+  );
+  if (!result.success) {
+    return;
+  }
+  vehicleDriveCameraFollowState.initialized = false;
+  purposeActiveMode.value = 'watch';
+  updateVehicleDriveCamera(0, { immediate: true });
 }
 
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
@@ -6140,7 +6219,7 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
     const layout = clampSceneNodeInstanceLayout(node.instanceLayout);
 
     const assetId = typeof target.userData?.instancedAssetId === 'string' ? (target.userData.instancedAssetId as string) : null;
-    const visible = target.visible !== false;
+    const visible = isRuntimeObjectEffectivelyVisible(target);
     const renderKind = target.userData?.instancedRenderKind === 'billboard' ? 'billboard' : 'model';
 
     const group = renderKind === 'model' && assetId ? getCachedModelObject(assetId) : null;
@@ -10574,6 +10653,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 1: bind state for the new payload.
   addRuntimeStageLog('[SceneryViewer] Phase 1 bind scene state');
   currentDocument = payload.document;
+  resetAppliedDefaultSteerDriveKey();
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();
@@ -10609,6 +10689,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   addRuntimeStageLog('[SceneryViewer] Phase 4 mount scene graph');
   await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
   applyNominateOverridesForCurrentScene();
+  applyDefaultSteerDriveForCurrentScene();
 
   if (token !== initializeToken || sceneGraphRoot !== graph.root) {
     return;
@@ -10806,8 +10887,17 @@ watch(
   { deep: true },
 );
 
+watch(
+  () => props.defaultSteerIdentifier,
+  () => {
+    resetAppliedDefaultSteerDriveKey();
+    applyDefaultSteerDriveForCurrentScene();
+  },
+);
+
 function cleanupRuntime(): void {
   addRuntimeStageLog('[SceneryViewer] Cleanup runtime');
+  resetAppliedDefaultSteerDriveKey();
   restoreConsoleCapture();
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();

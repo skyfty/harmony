@@ -95,6 +95,17 @@ function committedBindingId(nodeId: string, index: number): string {
   return `inst:${nodeId}:${index}`
 }
 
+function isObjectEffectivelyVisible(object: Object3D | null | undefined): boolean {
+  let current = object
+  while (current) {
+    if (current.visible === false) {
+      return false
+    }
+    current = current.parent
+  }
+  return true
+}
+
 const tempBase = new Matrix4()
 const tempInstance = new Matrix4()
 const tempTranslation = new Matrix4()
@@ -116,7 +127,7 @@ export function syncContinuousInstancedModelCommitted(params: {
 
   const definition = getContinuousInstancedModelUserData(node)
   object.updateMatrixWorld(true)
-  const isVisible = object.visible !== false
+  const isVisible = isObjectEffectivelyVisible(object)
   // Preserve shear when visible; only decompose/compose when hiding (scale=0).
   if (isVisible) {
     tempBase.copy(object.matrixWorld)
@@ -231,7 +242,7 @@ export function syncInstancedModelCommittedLocalMatrices(params: {
   ensureInstancedMeshesRegistered(assetId)
   object.updateMatrixWorld(true)
 
-  const isVisible = object.visible !== false
+  const isVisible = isObjectEffectivelyVisible(object)
   if (isVisible) {
     tempBase.copy(object.matrixWorld)
   } else {

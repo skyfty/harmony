@@ -3,6 +3,7 @@
     <SceneryViewer
       :project-id="projectId"
       :package-url="packageUrl"
+      :default-steer-identifier="selectedVehicleId"
       :server-asset-base-url="serverAssetBaseUrl"
       @punch="handlePunch"
     />
@@ -20,6 +21,7 @@ const packageUrl = ref<string>('');
 // sceneUrl removed: use packageUrl instead
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
+const selectedVehicleId = ref<string>('');
 const enterAt = ref<number>(0);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 
@@ -77,6 +79,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   // sceneUrl parameter removed; ignore record.sceneUrl
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
+  selectedVehicleId.value = decodeQueryValue(record.vehicleId);
   enterAt.value = Date.now();
 
   void trackAnalyticsEvent({
@@ -87,6 +90,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
     path: '/pages/scenery/index',
     metadata: {
       projectId: projectId.value,
+      vehicleId: selectedVehicleId.value || undefined,
     },
   });
 });
@@ -102,6 +106,7 @@ onUnload(() => {
     dwellMs: stayMs,
     metadata: {
       projectId: projectId.value,
+      vehicleId: selectedVehicleId.value || undefined,
     },
   });
 });

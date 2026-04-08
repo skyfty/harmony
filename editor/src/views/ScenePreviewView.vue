@@ -169,6 +169,9 @@ import {
 	purePursuitComponentDefinition,
 	sceneStateAnchorComponentDefinition,
 	nominateComponentDefinition,
+	steerComponentDefinition,
+	buildSteerResolvedEntryMap,
+	findDefaultSteerResolvedEntry,
 	applyNominateStateMapToRuntime,
 	type NominateExternalStateMap,
 	GUIDEBOARD_COMPONENT_TYPE,
@@ -296,6 +299,18 @@ function switchToLivePreviewMode(): void {
 		window.location.href = url.toString()
 	} catch {
 		// ignore
+	}
+}
+
+function readPreviewDefaultSteerIdentifierFromUrl(): string {
+	if (typeof window === 'undefined') {
+		return ''
+	}
+	try {
+		const url = new URL(window.location.href)
+		return normalizeSteerIdentifier(url.searchParams.get('defaultSteerIdentifier'))
+	} catch {
+		return ''
 	}
 }
 
@@ -918,6 +933,7 @@ previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 previewComponentManager.registerDefinition(nominateComponentDefinition)
+previewComponentManager.registerDefinition(steerComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -1418,6 +1434,11 @@ const previewNominateStateMap = ref<NominateExternalStateMap | null>(readPreview
 function syncPreviewNominateStateMap(): void {
 	previewNominateStateMap.value = readPreviewNominateStateMap()
 }
+
+function normalizeSteerIdentifier(value: unknown): string {
+	return typeof value === 'string' ? value.trim() : ''
+}
+
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
@@ -1428,6 +1449,12 @@ let isApplyingSnapshot = false
 let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
+const previewDefaultSteerIdentifier = ref(readPreviewDefaultSteerIdentifierFromUrl())
+let appliedDefaultSteerDriveKey: string | null = null
+
+function resetAppliedDefaultSteerDriveKey(): void {
+	appliedDefaultSteerDriveKey = null
+}
 
 const environmentAssetRefreshTick = ref(0)
 
@@ -1584,6 +1611,26 @@ const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 
+function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
+	let current: THREE.Object3D | null | undefined = object
+	while (current) {
+		if (current.visible === false) {
+			return false
+		}
+		current = current.parent
+	}
+	return true
+}
+
+function syncInstancedProxyVisibilityAfterNominate(): void {
+	nodeObjectMap.forEach((object) => {
+		if (!object?.userData?.instancedAssetId) {
+			return
+		}
+		syncInstancedTransform(object)
+	})
+}
+
 function applyPreviewNominateOverrides(): void {
 	if (!currentDocument?.nodes?.length) {
 		return
@@ -1597,6 +1644,7 @@ function applyPreviewNominateOverrides(): void {
 		(nodeId) => nodeObjectMap.get(nodeId) ?? null,
 		externalStateMap,
 	)
+	syncInstancedProxyVisibilityAfterNominate()
 }
 
 const scenePreviewPerf = createScenePreviewPerfController({
@@ -5871,6 +5919,43 @@ function startVehicleDriveMode(
 	return { success: true }
 }
 
+function applyDefaultSteerDriveForCurrentScene(): void {
+	const document = currentDocument
+	const identifier = normalizeSteerIdentifier(previewDefaultSteerIdentifier.value)
+	const defaultEntry = !identifier && document
+		? findDefaultSteerResolvedEntry(document.nodes)
+		: null
+	if (!document || (!identifier && !defaultEntry)) {
+		if (!identifier) {
+			resetAppliedDefaultSteerDriveKey()
+		}
+		return
+	}
+	const entry = identifier
+		? (buildSteerResolvedEntryMap(document.nodes).get(identifier)?.[0] ?? null)
+		: defaultEntry
+	const sourceKey = identifier || (defaultEntry ? `entry:${defaultEntry.id}` : '')
+	const attemptKey = `${document.id ?? ''}:${sourceKey}:${entry?.targetNode.id ?? '__missing__'}`
+	if (appliedDefaultSteerDriveKey === attemptKey) {
+		return
+	}
+	appliedDefaultSteerDriveKey = attemptKey
+	if (!entry) {
+		return
+	}
+	startVehicleDriveMode({
+		type: 'vehicle-drive',
+		nodeId: entry.targetNode.id,
+		action: 'click',
+		sequenceId: '__steer-default__',
+		behaviorSequenceId: '__steer-default__',
+		behaviorId: '__steer-default__',
+		targetNodeId: entry.targetNode.id,
+		seatNodeId: null,
+		token: `steer:${attemptKey}`,
+	})
+}
+
 function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; preserveCamera?: boolean } = {}): void {
 	if (!vehicleDriveState.active) {
 		return
@@ -8272,7 +8357,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 
 		removeVehicleInstance(nodeId)
 		const isCulled = target.userData?.__harmonyCulled === true
-		const isVisible = target.visible !== false && !isCulled
+		const isVisible = isRuntimeObjectEffectivelyVisible(target) && !isCulled
 		if (isVisible) {
 			instancedMatrixHelper.copy(target.matrixWorld)
 			if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
@@ -10768,6 +10853,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		)
 	}
 	applyPreviewNominateOverrides()
+	applyDefaultSteerDriveForCurrentScene()
 }
 
 function applySnapshot(snapshot: ScenePreviewSnapshot) {
@@ -10775,6 +10861,9 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		return
 	}
 	lastSnapshotRevision = snapshot.revision
+	if (typeof snapshot.defaultSteerIdentifier === 'string') {
+		previewDefaultSteerIdentifier.value = normalizeSteerIdentifier(snapshot.defaultSteerIdentifier)
+	}
 	logPreviewDiagnosticsSummary(snapshot.diagnosticsSummary)
 	if (isApplyingSnapshot) {
 		queuedSnapshot = snapshot
@@ -10893,6 +10982,7 @@ onBeforeUnmount(() => {
 		releaseSteeringWheelPointer()
 	}
 	removeBehaviorRuntimeListener(behaviorRuntimeListener)
+	resetAppliedDefaultSteerDriveKey()
 	activeBehaviorDelayTimers.forEach((handle) => window.clearTimeout(handle))
 	activeBehaviorDelayTimers.clear()
 	activeBehaviorAnimations.forEach((cancel) => {
