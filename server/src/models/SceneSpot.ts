@@ -4,11 +4,11 @@ import type { SceneSpotDocument } from '@/types/models'
 const sceneSpotSchema = new Schema<SceneSpotDocument>(
   {
     sceneId: { type: Schema.Types.ObjectId, ref: 'Scene', required: true },
-    category: { type: Schema.Types.ObjectId, ref: 'SceneSpotCategory', default: null },
+    category: { type: Schema.Types.ObjectId, ref: 'SceneSpotCategory', required: true, default: null },
     title: { type: String, required: true, trim: true },
-    coverImage: { type: String, default: null },
-    slides: { type: [String], default: [] },
-    description: { type: String, default: '' },
+    coverImage: { type: String, required: true, default: null },
+    slides: { type: [String], required: true, default: [] },
+    description: { type: String, required: true, default: '' },
     distance: { type: String, default: null },
     address: { type: String, default: '' },
     order: { type: Number, default: 0 },
