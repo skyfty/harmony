@@ -100,6 +100,29 @@ const uploadProps: UploadProps = {
   beforeUpload: () => false,
 };
 
+// Validation rules for upload fields that rely on file lists
+const coverImageRules = [
+  {
+    validator: () => {
+      if (coverImageFileList.value.length > 0 || originalCoverImageUrl.value) {
+        return Promise.resolve();
+      }
+      return Promise.reject(new Error(t('page.sceneSpots.index.formFields.coverImage.required')));
+    },
+  },
+];
+
+const slidesRules = [
+  {
+    validator: () => {
+      if (slidesFileList.value.length > 0 || (originalSlides.value && originalSlides.value.length > 0)) {
+        return Promise.resolve();
+      }
+      return Promise.reject(new Error(t('page.sceneSpots.index.formFields.slides.required')));
+    },
+  },
+];
+
 const MAX_SLIDES_COUNT = 10;
 
 function resetForm() {
@@ -627,7 +650,7 @@ onMounted(async () => {
               <Input v-model:value="sceneSpotFormModel.title" allow-clear />
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="category">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="category" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.category.required') }]">
               <Select
                 v-model:value="sceneSpotFormModel.categoryId"
                 :options="categoryOptions"
@@ -637,7 +660,7 @@ onMounted(async () => {
               />
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage" :rules="coverImageRules">
               <Upload
                 v-bind="uploadProps"
                 :file-list="coverImageFileList"
@@ -650,7 +673,7 @@ onMounted(async () => {
               <div class="upload-note">{{ t('page.sceneSpots.index.help.coverImageSize', { width: 110, height: 110 }) }}</div>
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides" :rules="slidesRules">
               <Upload
                 v-bind="uploadProps"
                 :file-list="slidesFileList"
@@ -667,7 +690,7 @@ onMounted(async () => {
             <Form.Item :label="t('page.sceneSpots.index.formFields.isHome.label')" name="isHome">
               <Switch v-model:checked="sceneSpotFormModel.isHome" />
             </Form.Item>
-            <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.description.required') }]">
               <TextArea v-model:value="sceneSpotFormModel.description" :rows="3" />
             </Form.Item>
           </Tabs.TabPane>
