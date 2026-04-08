@@ -7,6 +7,7 @@
     <SceneryViewer
       :project-id="projectId"
       :package-url="packageUrl"
+      :nominate-state-map="nominateStateMap"
       :server-asset-base-url="serverAssetBaseUrl"
       :debug-console-enabled="false"
       :debug-console-default-expanded="true"
@@ -18,7 +19,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 import {
@@ -38,6 +39,17 @@ const enterAt = ref<number>(0);
 const selectedVehicleId = ref<string>('');
 const backButtonTop = ref<number>(8);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
+const nominateStateMap = computed(() => {
+  const vehicleId = selectedVehicleId.value.trim();
+  if (!vehicleId) {
+    return null;
+  }
+  return {
+    [vehicleId]: {
+      visible: true,
+    },
+  };
+});
 
 function syncBackButtonTop(): void {
   const metrics = getTopSafeAreaMetrics();

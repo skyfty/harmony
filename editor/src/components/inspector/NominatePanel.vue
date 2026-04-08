@@ -138,13 +138,12 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
         <v-btn
           v-if="nominateComponent"
           size="small"
-          variant="tonal"
-          prepend-icon="mdi-plus"
+          variant="text"
+          icon="mdi-plus"
           :disabled="!nominateComponent.enabled"
+          aria-label="Add Item"
           @click.stop="handleAddEntry"
-        >
-          Add Item
-        </v-btn>
+        />
         <v-menu
           v-if="nominateComponent"
           location="bottom end"

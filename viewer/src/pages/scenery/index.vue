@@ -3,6 +3,7 @@
     <SceneryViewer
       :project-id="projectId"
       :package-url="packageUrl"
+      :nominate-state-map="nominateStateMap"
       :server-asset-base-url="serverAssetBaseUrl"
       @punch="handlePunch"
     />
@@ -10,7 +11,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 import { createPunchRecord, getDownloadCdnBaseUrl } from '@harmony/utils';
@@ -20,8 +21,20 @@ const packageUrl = ref<string>('');
 // sceneUrl removed: use packageUrl instead
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
+const selectedVehicleId = ref<string>('');
 const enterAt = ref<number>(0);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
+const nominateStateMap = computed(() => {
+  const vehicleId = selectedVehicleId.value.trim();
+  if (!vehicleId) {
+    return null;
+  }
+  return {
+    [vehicleId]: {
+      visible: true,
+    },
+  };
+});
 
 type PunchEventPayload = {
   eventName: 'punch';
@@ -77,6 +90,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   // sceneUrl parameter removed; ignore record.sceneUrl
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
+  selectedVehicleId.value = decodeQueryValue(record.vehicleId);
   enterAt.value = Date.now();
 });
 
