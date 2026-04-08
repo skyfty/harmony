@@ -8,6 +8,7 @@ export type MiniAuthLoginResponse = {
   token?: string
   accessToken?: string
   user?: MiniAuthUser
+  shouldPromptProfileCompletion?: boolean
 }
 
 export type MiniAuthRecoveryResult =

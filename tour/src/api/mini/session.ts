@@ -3,7 +3,6 @@ export {
   setAccessToken,
   loginWithCredentials,
   loginWithWechatCode,
-  setPendingRecoveryProfile,
   ensureMiniAuth,
   recoverMiniAuthSession,
   prewarmMiniAuth,
