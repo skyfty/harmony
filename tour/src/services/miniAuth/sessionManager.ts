@@ -4,7 +4,6 @@ import {
   isMiniProfileIncomplete,
   normalizeMiniProfileText,
   setAnonymousDisplayEnabled,
-  type MiniProfileDraft,
 } from '@/utils/miniProfile'
 import { syncMiniProfileDraft } from './profileSync'
 import { requestMiniAuthRecovery } from './recoveryPresenter'
@@ -16,7 +15,6 @@ export { getAccessToken, setAccessToken }
 
 let pendingAuthPromise: Promise<string> | null = null
 let miniAuthInitialized = false
-let pendingRecoveryProfile: MiniProfileDraft | null = null
 
 const MINI_AUTH_LOG_PREFIX = '[mini-auth]'
 const MINI_AUTH_SESSION_STORAGE_KEYS = [
@@ -65,7 +63,6 @@ function clearMiniAuthSessionStorage(): void {
 function clearMiniAuthLocalState(reason: string): void {
   setAccessToken('')
   clearMiniAuthSessionStorage()
-  pendingRecoveryProfile = null
   if (reason === 'manual-reset' || reason === 'perform-auth-failed') {
     setAnonymousDisplayEnabled(false)
   }
@@ -150,13 +147,23 @@ async function promptForIncompleteProfile(currentUsername?: string): Promise<voi
   }
 }
 
-async function ensureProfileCompleteness(profile: MiniAuthUser | null | undefined): Promise<void> {
-  if (pendingRecoveryProfile) {
-    return
-  }
+type MiniAuthFlowOptions = {
+  allowProfilePrompt?: boolean
+}
 
+async function ensureProfileCompleteness(
+  profile: MiniAuthUser | null | undefined,
+  options: MiniAuthFlowOptions = {},
+): Promise<void> {
   if (isMiniProfileIncomplete(profile)) {
-    await promptForIncompleteProfile(profile?.username)
+    if (options.allowProfilePrompt) {
+      await promptForIncompleteProfile(profile?.username)
+      return
+    }
+
+    logMiniAuth('profile incomplete, skip recovery dialog in silent auth flow', {
+      currentUsername: profile?.username || '(empty)',
+    })
     return
   }
 
@@ -164,8 +171,11 @@ async function ensureProfileCompleteness(profile: MiniAuthUser | null | undefine
   setAnonymousDisplayEnabled(false)
 }
 
-async function performMiniAuth(force = false): Promise<string> {
-  logMiniAuth('performMiniAuth invoked', { force })
+async function performMiniAuth(force = false, options: MiniAuthFlowOptions = {}): Promise<string> {
+  logMiniAuth('performMiniAuth invoked', {
+    force,
+    allowProfilePrompt: Boolean(options.allowProfilePrompt),
+  })
   if (!force) {
     const token = getAccessToken()
     if (token) {
@@ -184,7 +194,7 @@ async function performMiniAuth(force = false): Promise<string> {
         ) {
           warnMiniAuth('token invalid, clear and re-auth', msg)
           clearMiniAuthLocalState('token-invalid')
-          return await performMiniAuth(true)
+          return await performMiniAuth(true, options)
         }
         throw err
       }
@@ -199,27 +209,19 @@ async function performMiniAuth(force = false): Promise<string> {
     pendingAuthPromise = (async () => {
       logMiniAuth('using wechat login flow')
       const code = await getWechatLoginCode()
-      const profile = pendingRecoveryProfile
-      pendingRecoveryProfile = null
-      const response = await loginWithWechatCode(code, normalizeMiniProfileText(profile?.displayName))
+      const response = await loginWithWechatCode(code)
       const token = readTokenFromResponse(response)
       if (!token) {
         throw new Error('Wechat login succeeded but no token returned')
-      }
-
-      if (profile) {
-        try {
-          await syncMiniProfileDraft(profile)
-        } catch (error) {
-          warnMiniAuth('failed to sync submitted recovery profile after login', error)
-        }
       }
 
       const currentUser = await fetchMiniAuthProfile().catch((error) => {
         warnMiniAuth('failed to fetch canonical profile after login, fallback to login response user', error)
         return response.user || {}
       })
-      await ensureProfileCompleteness(currentUser)
+      await ensureProfileCompleteness(currentUser, {
+        allowProfilePrompt: Boolean(options.allowProfilePrompt) && Boolean(response.shouldPromptProfileCompletion),
+      })
 
       return token
     })()
@@ -286,18 +288,14 @@ export async function loginWithWechatCode(code: string, displayName?: string): P
   return data
 }
 
-export function setPendingRecoveryProfile(profile: MiniProfileDraft | null): void {
-  pendingRecoveryProfile = profile
-}
-
-export async function ensureMiniAuth(force = false): Promise<string> {
-  return await performMiniAuth(force)
+export async function ensureMiniAuth(force = false, options: MiniAuthFlowOptions = {}): Promise<string> {
+  return await performMiniAuth(force, options)
 }
 
 export async function recoverMiniAuthSession(): Promise<boolean> {
   logMiniAuth('recoverMiniAuthSession invoked')
   try {
-    const token = await performMiniAuth(true)
+    const token = await performMiniAuth(true, { allowProfilePrompt: false })
     logMiniAuth('recoverMiniAuthSession success', { hasToken: Boolean(token) })
     return Boolean(token)
   } catch (error) {

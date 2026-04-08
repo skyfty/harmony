@@ -66,6 +66,7 @@ export interface MiniSessionUser {
 export interface MiniSessionResponse {
   token?: string
   user: MiniSessionUser
+  shouldPromptProfileCompletion?: boolean
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -74,6 +75,14 @@ function normalizeOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim()
   return trimmed || undefined
+}
+
+function isMiniProfileComplete(profile: { displayName?: string; avatarUrl?: string }): boolean {
+  const displayName = normalizeOptionalString(profile.displayName)
+  const avatarUrl = normalizeOptionalString(profile.avatarUrl)
+  const defaultDisplayName = normalizeOptionalString(appConfig.miniAuth.defaultDisplayName)
+  const hasRealDisplayName = Boolean(displayName) && (!defaultDisplayName || displayName !== defaultDisplayName)
+  return hasRealDisplayName && Boolean(avatarUrl)
 }
 
 function buildMiniUser(user: AppUserLean): MiniSessionUser {
@@ -263,6 +272,7 @@ export async function miniLoginWithOpenId(input: {
   const displayName = normalizeOptionalString(input.displayName)
   const avatarUrl = normalizeOptionalString(input.avatarUrl)
   let user = await pickCanonicalWechatUser({ miniAppId, openId, unionId })
+  let shouldPromptProfileCompletion = false
 
   if (!user) {
     const createdAt = new Date()
@@ -277,6 +287,10 @@ export async function miniLoginWithOpenId(input: {
       lastLoginSource: 'mini-wechat-login',
       wechatProfileSyncedAt: displayName || avatarUrl ? createdAt : undefined,
       status: 'active',
+    })
+    shouldPromptProfileCompletion = !isMiniProfileComplete({
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
     })
   } else {
     user.miniAppId = miniAppId
@@ -304,6 +318,7 @@ export async function miniLoginWithOpenId(input: {
   return {
     token: issueMiniToken(sessionUser),
     user: sessionUser,
+    shouldPromptProfileCompletion,
   }
 }
 

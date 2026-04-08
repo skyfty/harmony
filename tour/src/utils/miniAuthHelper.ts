@@ -8,7 +8,6 @@ import {
   type MiniAuthRecoveryOptions,
 } from '@/services/miniAuth/types'
 import { requestMiniAuthRecovery } from '@/services/miniAuth/recoveryPresenter'
-import { applyRecoveryResultForNextLogin } from '@/services/miniAuth/runtime'
 import { syncMiniProfileDraft } from '@/services/miniAuth/profileSync'
 
 const MINI_AUTH_HELPER_LOG_PREFIX = '[mini-auth-helper]'
@@ -21,13 +20,6 @@ function logMiniAuthHelper(message: string, details?: unknown): void {
   console.info(`${MINI_AUTH_HELPER_LOG_PREFIX} ${message}`, details)
 }
 
-const DEFAULT_AUTH_RECOVERY_OPTIONS: MiniAuthRecoveryOptions = {
-  title: '完善微信资料',
-  description: '请填写微信昵称并选择头像，授权后会自动同步到账号资料。',
-  confirmText: '同步并继续',
-  skipText: '暂时匿名使用',
-}
-
 const DEFAULT_MANUAL_RECOVERY_OPTIONS: MiniAuthRecoveryOptions = {
   title: '获取微信头像昵称',
   description: '补充微信头像和昵称后，会自动更新到当前账号。',
@@ -35,18 +27,11 @@ const DEFAULT_MANUAL_RECOVERY_OPTIONS: MiniAuthRecoveryOptions = {
   skipText: '暂不处理',
 }
 
-function resolveRecoveryOptions(options?: MiniAuthRecoveryOptions): MiniAuthRecoveryOptions {
-  return {
-    ...DEFAULT_AUTH_RECOVERY_OPTIONS,
-    ...(options ?? {}),
-  }
-}
-
 async function promptMiniProfileRecovery(options?: MiniAuthRecoveryOptions) {
   logMiniAuthHelper('promptMiniProfileRecovery invoked', {
-    title: resolveRecoveryOptions(options).title || '(empty)',
+    title: options?.title || '(empty)',
   })
-  return await requestMiniAuthRecovery(resolveRecoveryOptions(options))
+  return await requestMiniAuthRecovery(options ?? DEFAULT_MANUAL_RECOVERY_OPTIONS)
 }
 
 export async function ensureAuthThenNavigate(key: string): Promise<boolean> {
@@ -61,13 +46,6 @@ export async function ensureAuthThenNavigate(key: string): Promise<boolean> {
       redirectToNav(key as any)
       return true
     }
-
-    const result = await promptMiniProfileRecovery()
-    logMiniAuthHelper('promptMiniProfileRecovery resolved for navigation', {
-      key,
-      action: result.action,
-    })
-    applyRecoveryResultForNextLogin(result)
 
     await ensureMiniAuth()
     logMiniAuthHelper('ensureMiniAuth resolved for navigation', { key })
@@ -96,7 +74,7 @@ export async function requestProfileAndSync(options: MiniAuthRecoveryOptions = D
       return false
     }
 
-    await ensureMiniAuth()
+    await ensureMiniAuth(false, { allowProfilePrompt: false })
     logMiniAuthHelper('ensureMiniAuth resolved for profile sync')
 
     return await syncMiniProfileDraft({
