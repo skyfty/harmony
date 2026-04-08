@@ -6326,6 +6326,12 @@ function cloneSceneAssetOverrides(
   return clone
 }
 
+function cloneSceneResourceSummary(
+  summary: SceneResourceSummary,
+): SceneResourceSummary {
+  return JSON.parse(JSON.stringify(summary)) as SceneResourceSummary
+}
+
 function migrateScenePersistedState(
   state: Partial<SceneState> | undefined,
   _fromVersion: number,
@@ -6394,6 +6400,15 @@ function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetManifest = normalizeSceneAssetManifest(scene.assetManifest, sceneAssetCatalog, `loading scene \"${scene.name || scene.id}\"`)
   const baseCatalog = buildAssetCatalogFromManifest(store.assetManifest, sceneAssetCatalog)
   store.assetRegistry = cloneSceneAssetRegistry(scene.assetRegistry ?? {})
+  store.projectOverrideAssets = scene.projectOverrideAssets
+    ? cloneSceneAssetOverrides(scene.projectOverrideAssets)
+    : undefined
+  store.sceneOverrideAssets = scene.sceneOverrideAssets
+    ? cloneSceneAssetOverrides(scene.sceneOverrideAssets)
+    : undefined
+  store.resourceSummary = scene.resourceSummary
+    ? cloneSceneResourceSummary(scene.resourceSummary)
+    : undefined
   store.assetCatalog = mergeCatalogAssetMetadataFromIndex(baseCatalog)
   ensureBuiltinWallPresetAssets(store.assetCatalog)
   store.assetCatalog = mergeCatalogAssetMetadataFromIndex(store.assetCatalog)
@@ -7088,6 +7103,9 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
     assetManifest: cloneAssetManifest(store.assetManifest) ?? buildSceneAssetManifest(store.assetCatalog),
     assetRegistry: cloneSceneAssetRegistry(store.assetRegistry),
+    projectOverrideAssets: store.projectOverrideAssets ? cloneSceneAssetOverrides(store.projectOverrideAssets) : undefined,
+    sceneOverrideAssets: store.sceneOverrideAssets ? cloneSceneAssetOverrides(store.sceneOverrideAssets) : undefined,
+    resourceSummary: store.resourceSummary ? cloneSceneResourceSummary(store.resourceSummary) : undefined,
     planningData: normalizedPlanningData ?? undefined,
   }
 }
@@ -7188,6 +7206,9 @@ function createInitialSceneState(): SceneState {
     assetCatalog,
     assetManifest,
     assetRegistry: {},
+    projectOverrideAssets: undefined,
+    sceneOverrideAssets: undefined,
+    resourceSummary: undefined,
     packageDirectoryCache,
     packageDirectoryLoaded: {},
     projectTree: buildSceneProjectTree(assetManifest, assetCatalog, packageDirectoryCache),

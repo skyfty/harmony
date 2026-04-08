@@ -626,10 +626,11 @@ function resolveReferenceSummarySourceLabel(
       resolvedUrl,
     }
   }
-  const sourceType = catalogAsset?.source?.type ?? null
-  if (sourceType === 'package') {
-    const providerId = catalogAsset.source?.providerId ?? ''
-    const originalAssetId = catalogAsset.source?.originalAssetId ?? catalogAsset.id
+  const source = catalogAsset?.source ?? null
+  const sourceType = source?.type ?? null
+  if (source?.type === 'package') {
+    const providerId = source.providerId ?? ''
+    const originalAssetId = source.originalAssetId ?? catalogAsset?.id ?? ''
     return {
       sourceType,
       sourceLabel: providerId ? `${providerId}::${originalAssetId}` : originalAssetId,

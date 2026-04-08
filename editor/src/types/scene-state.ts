@@ -6,6 +6,8 @@ import type {
   SceneClipboard,
   AssetManifest,
   SceneAssetRegistryEntry,
+  SceneAssetOverrideEntry,
+  SceneResourceSummary,
 } from '@schema'
 import type { EditorTool } from './editor-tool'
 import type { ProjectAsset } from './project-asset'
@@ -41,6 +43,9 @@ export interface SceneState {
   assetCatalog: Record<string, ProjectAsset[]>
   assetManifest: AssetManifest | null
   assetRegistry: Record<string, SceneAssetRegistryEntry>
+  projectOverrideAssets?: Record<string, SceneAssetOverrideEntry>
+  sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
+  resourceSummary?: SceneResourceSummary
   packageDirectoryCache: Record<string, ProjectDirectory[]>
   packageDirectoryLoaded: Record<string, boolean>
   activeDirectoryId: string | null
