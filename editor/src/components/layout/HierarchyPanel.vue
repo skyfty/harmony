@@ -588,9 +588,9 @@ const visibilityCandidates = computed(() =>
 const visibilityToggleItems = computed(() => visibilityCandidates.value)
 const hasVisibilityToggleNodes = computed(() => visibilityCandidates.value.length > 0)
 const areAllNodesVisible = computed(
-  () => hasVisibilityToggleNodes.value && visibilityToggleItems.value.every((item: HierarchyTreeItem) => item.visible),
+  () => hasVisibilityToggleNodes.value && visibilityToggleItems.value.every((item: HierarchyTreeItem) => sceneStore.isNodeVisible(item.id)),
 )
-const anyNodeHidden = computed(() => visibilityToggleItems.value.some((item: HierarchyTreeItem) => !item.visible))
+const anyNodeHidden = computed(() => visibilityToggleItems.value.some((item: HierarchyTreeItem) => !sceneStore.isNodeVisible(item.id)))
 const visibilityToggleIcon = computed(() => {
   if (!hasVisibilityToggleNodes.value) {
     return 'mdi-eye-outline'
@@ -1065,6 +1065,19 @@ function isItemActive(id: string) {
 
 function toggleNodeVisibility(id: string) {
   sceneStore.toggleNodeVisibility(id)
+}
+
+function isNodeEffectivelyVisible(id: string) {
+  return sceneStore.isNodeVisible(id)
+}
+
+function resolveNodeVisibilityTitle(id: string) {
+  const localVisible = sceneStore.isNodeLocallyVisible(id)
+  const effectiveVisible = sceneStore.isNodeVisible(id)
+  if (!effectiveVisible && localVisible) {
+    return 'Hidden by parent'
+  }
+  return localVisible ? 'Hide' : 'Show'
 }
 
 function toggleNodeSelectionLock(id: string) {
@@ -1939,13 +1952,13 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
 
                 <div class="tree-node-trailing" @mousedown.stop @click.stop>
                   <v-btn
-                    :icon="(row.item.visible ?? true) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
+                    :icon="isNodeEffectivelyVisible(row.id) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
                     variant="text"
                     density="compact"
                     size="26"
                     class="visibility-btn"
-                    :class="{ 'is-visible': (row.item.visible ?? true) }"
-                    :title="(row.item.visible ?? true) ? 'Hide' : 'Show'"
+                    :class="{ 'is-visible': isNodeEffectivelyVisible(row.id) }"
+                    :title="resolveNodeVisibilityTitle(row.id)"
                     @click.stop="toggleNodeVisibility(row.id)"
                   />
                   <v-btn

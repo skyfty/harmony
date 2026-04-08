@@ -146,7 +146,8 @@
         },
         "category": {
           "label": "Category",
-          "placeholder": "Select category"
+          "placeholder": "Select category",
+          "required": "Please select a category"
         },
         "title": {
           "label": "Title",
@@ -154,14 +155,17 @@
         },
         "coverImage": {
           "label": "Cover Image",
-          "upload": "Upload"
+          "upload": "Upload",
+          "required": "Please upload a cover image"
         },
         "slides": {
           "label": "Slides",
-          "placeholder": "One image URL per line"
+          "placeholder": "One image URL per line",
+          "required": "Please upload at least one slide image"
         },
         "description": {
-          "label": "Description"
+          "label": "Description",
+          "required": "Please enter a description"
         },
         "address": {
           "label": "Address"

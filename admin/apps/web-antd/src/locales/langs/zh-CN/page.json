@@ -151,7 +151,8 @@
         },
         "category": {
           "label": "分类",
-          "placeholder": "请选择分类"
+          "placeholder": "请选择分类",
+          "required": "请选择分类"
         },
         "title": {
           "label": "景点名称",
@@ -159,14 +160,17 @@
         },
         "coverImage": {
           "label": "介绍图",
-          "upload": "上传"
+          "upload": "上传",
+          "required": "请上传介绍图"
         },
         "slides": {
           "label": "幻灯片",
-          "placeholder": "每行一个图片 URL"
+          "placeholder": "每行一个图片 URL",
+          "required": "请上传至少一张幻灯片图片"
         },
         "description": {
-          "label": "描述"
+          "label": "描述",
+          "required": "请输入描述"
         },
         "address": {
           "label": "地址"

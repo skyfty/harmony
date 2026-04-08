@@ -18165,7 +18165,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   // mirrored-material side flip (Front<->Back) to avoid inside-out/backface artifacts.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 
-  object.visible = node.visible ?? true
+  object.visible = sceneStore.isNodeVisible(node.id)
 
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)

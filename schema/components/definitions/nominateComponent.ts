@@ -30,6 +30,8 @@ export interface NominateResolvedEntry extends NominateComponentEntry {
   targetNode: SceneNode
 }
 
+const NOMINATE_RUNTIME_BASE_VISIBLE_KEY = '__harmonyNominateBaseVisible'
+
 function sanitizeString(value: unknown): string {
   if (typeof value !== 'string') {
     return ''
@@ -211,6 +213,39 @@ function applyObjectVector(target: Object3D['position'] | Object3D['rotation'] |
   target.set(value.x, value.y, value.z)
 }
 
+function getRuntimeBaseVisible(runtimeObject: Object3D): boolean {
+  const userData = runtimeObject.userData ?? (runtimeObject.userData = {})
+  const cached = userData[NOMINATE_RUNTIME_BASE_VISIBLE_KEY]
+  if (typeof cached === 'boolean') {
+    return cached
+  }
+  userData[NOMINATE_RUNTIME_BASE_VISIBLE_KEY] = runtimeObject.visible
+  return runtimeObject.visible
+}
+
+function applyEffectiveVisibilityToRuntimeTree(
+  nodes: SceneNode[] | undefined,
+  resolveRuntimeObject: (nodeId: string) => Object3D | null | undefined,
+  visibilityOverrides: Map<string, boolean>,
+  inheritedVisible = true,
+): void {
+  if (!nodes?.length) {
+    return
+  }
+
+  nodes.forEach((node) => {
+    const runtimeObject = resolveRuntimeObject(node.id)
+    const localVisible = visibilityOverrides.get(node.id) ?? (runtimeObject ? getRuntimeBaseVisible(runtimeObject) : (node.visible ?? true))
+    const effectiveVisible = inheritedVisible && localVisible
+    if (runtimeObject) {
+      runtimeObject.visible = effectiveVisible
+    }
+    if (node.children?.length) {
+      applyEffectiveVisibilityToRuntimeTree(node.children, resolveRuntimeObject, visibilityOverrides, effectiveVisible)
+    }
+  })
+}
+
 export function applyNominateStateMapToRuntime(
   nodes: SceneNode[] | undefined,
   resolveRuntimeObject: (nodeId: string) => Object3D | null | undefined,
@@ -226,6 +261,7 @@ export function applyNominateStateMapToRuntime(
   }
 
   const defaultApplied = new Set<string>()
+  const visibilityOverrides = new Map<string, boolean>()
   resolvedEntries.forEach((entry) => {
     const runtimeObject = resolveRuntimeObject(entry.targetNode.id)
     if (!runtimeObject) {
@@ -235,13 +271,14 @@ export function applyNominateStateMapToRuntime(
       return
     }
     defaultApplied.add(entry.targetNode.id)
-    runtimeObject.visible = entry.defaultVisible
+    visibilityOverrides.set(entry.targetNode.id, entry.defaultVisible)
     applyObjectVector(runtimeObject.position, cloneVectorLike(entry.targetNode.position))
     applyObjectVector(runtimeObject.rotation, cloneVectorLike(entry.targetNode.rotation))
     applyObjectVector(runtimeObject.scale, cloneVectorLike(entry.targetNode.scale))
   })
 
   if (!stateMap || typeof stateMap !== 'object') {
+    applyEffectiveVisibilityToRuntimeTree(nodes, resolveRuntimeObject, visibilityOverrides)
     return
   }
 
@@ -265,7 +302,7 @@ export function applyNominateStateMapToRuntime(
         return
       }
       if (override.visible !== undefined) {
-        runtimeObject.visible = override.visible
+        visibilityOverrides.set(entry.targetNode.id, override.visible)
       }
       if (override.position) {
         applyObjectVector(runtimeObject.position, override.position)
@@ -278,6 +315,8 @@ export function applyNominateStateMapToRuntime(
       }
     })
   })
+
+  applyEffectiveVisibilityToRuntimeTree(nodes, resolveRuntimeObject, visibilityOverrides)
 }
 
 class NominateComponent extends Component<NominateComponentProps> {

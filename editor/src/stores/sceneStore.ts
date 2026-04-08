@@ -7419,6 +7419,14 @@ function findNodeById(nodes: SceneNode[], id: string): SceneNode | null {
   return null
 }
 
+function collectNodeSubtreeIds(node: SceneNode, target: string[] = []): string[] {
+  target.push(node.id)
+  if (node.children?.length) {
+    node.children.forEach((child) => collectNodeSubtreeIds(child, target))
+  }
+  return target
+}
+
 type SceneNodeIndex = {
   structureVersion: number
   nodeById: Map<string, SceneNode>
@@ -9803,30 +9811,59 @@ export const useSceneStore = defineStore('scene', {
       this.queueSceneNodePatch(id, ['light'])
       commitSceneSnapshot(this)
     },
-    isNodeVisible(id: string) {
+    isNodeLocallyVisible(id: string) {
       const node = findNodeById(this.nodes, id)
       return node?.visible ?? true
     },
-    setNodeVisibility(id: string, visible: boolean) {
+    isNodeVisible(id: string) {
+      if (!id) {
+        return true
+      }
+      ensureSceneNodeIndex(this)
+      let currentId: string | null = id
+      while (currentId) {
+        const node = sceneNodeIndex.nodeById.get(currentId) ?? null
+        if (node && (node.visible ?? true) === false) {
+          return false
+        }
+        currentId = sceneNodeIndex.parentById.get(currentId) ?? null
+      }
+      return true
+    },
+    setNodeVisibility(
+      id: string,
+      visible: boolean,
+      options: {
+        fullSyncThreshold?: number
+      } = {},
+    ) {
       const node = findNodeById(this.nodes, id)
       if (!node) {
         return
       }
-      const currentEffective = (node as any).visible ?? true
-      if (currentEffective === visible) {
+      const currentLocal = (node as any).visible ?? true
+      if (currentLocal === visible) {
         return
       }
+
+      const thresholdRaw = options.fullSyncThreshold
+      const fullSyncThreshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.floor(thresholdRaw as number)) : 200
+      const affectedIds = collectNodeSubtreeIds(node)
 
       this.captureNodeBasicsHistorySnapshot([{ id, visible: true }])
       visitNode(this.nodes, id, (target) => {
         ;(target as any).visible = visible
       })
       this.nodes = [...this.nodes]
-      this.queueSceneNodePatch(id, ['visibility'])
+      if (affectedIds.length > fullSyncThreshold) {
+        this.queueSceneStructurePatch('subtreeVisibility')
+      } else {
+        affectedIds.forEach((affectedId) => this.queueSceneNodePatch(affectedId, ['visibility']))
+      }
       commitSceneSnapshot(this)
     },
     toggleNodeVisibility(id: string) {
-      const current = this.isNodeVisible(id)
+      const current = this.isNodeLocallyVisible(id)
       this.setNodeVisibility(id, !current)
     },
     setAllNodesVisibility(visible: boolean) {
