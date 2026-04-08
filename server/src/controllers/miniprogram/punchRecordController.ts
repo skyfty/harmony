@@ -5,6 +5,7 @@ import { evaluatePendingMedalsForUser } from '@/services/medalService'
 type CreatePunchRecordBody = {
   sceneId?: string
   scenicId?: string
+  vehicleIdentifier?: string
   sceneName?: string
   clientPunchTime?: string
   behaviorPunchTime?: string
@@ -46,6 +47,7 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
     username: ctx.state.miniAuthUser?.username,
     sceneId,
     scenicId,
+    vehicleIdentifier: typeof body.vehicleIdentifier === 'string' ? body.vehicleIdentifier : undefined,
     sceneName: typeof body.sceneName === 'string' ? body.sceneName : undefined,
     nodeId,
     nodeName: typeof body.location?.nodeName === 'string' ? body.location.nodeName : undefined,

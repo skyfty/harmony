@@ -13,6 +13,7 @@ export interface TrackAnalyticsEventInput {
   userId?: string
   sceneId?: string
   sceneSpotId?: string
+  vehicleIdentifier?: string
   sessionId?: string
   source?: string
   device?: string
@@ -119,6 +120,7 @@ export async function recordAnalyticsEvent(input: TrackAnalyticsEventInput): Pro
     userId: toObjectId(input.userId),
     sceneId: toObjectId(input.sceneId),
     sceneSpotId: toObjectId(input.sceneSpotId),
+    vehicleIdentifier: sanitizeLabel(input.vehicleIdentifier, ''),
     sessionId: sanitizeLabel(input.sessionId, ''),
     source: sanitizeLabel(input.source, 'direct'),
     device: sanitizeLabel(input.device, 'unknown'),

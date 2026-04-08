@@ -132,6 +132,7 @@ import {
 } from '@/api/mini';
 import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicDetail } from '@/types/scenic';
+import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 import { getStatusBarHeight } from '@/utils/systemInfo';
 
 const scenic = ref<ScenicDetail | null>(null);
@@ -221,23 +222,15 @@ async function loadScenicCheckinProgress(scenicId: string): Promise<void> {
 
 function enterScenery() {
   if (!scenic.value) return;
-  let vehicleId = '';
-  try {
-    const selectedVehicleId = uni.getStorageSync('tour:selectedVehicleId');
-    if (typeof selectedVehicleId === 'string' && selectedVehicleId) {
-      vehicleId = selectedVehicleId;
-    }
-  } catch {
-    // ignore
-  }
+  const vehicleIdentifier = getSelectedVehicleIdentifier();
 
   const queryParts = [
     `packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
     `sceneSpotId=${encodeURIComponent(scenic.value.id)}`,
     `sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
   ];
-  if (vehicleId) {
-    queryParts.push(`vehicleId=${encodeURIComponent(vehicleId)}`);
+  if (vehicleIdentifier) {
+    queryParts.push(`vehicleIdentifier=${encodeURIComponent(vehicleIdentifier)}`);
   }
   uni.navigateTo({
     url: `/pages/scenery/index?${queryParts.join('&')}`,

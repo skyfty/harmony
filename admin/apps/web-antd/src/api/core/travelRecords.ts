@@ -19,6 +19,8 @@ type ServerTravelRecordItem = {
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
+  vehicleName?: string
   scenicTitle?: string
   sceneName?: string
   sceneCheckpointTotal?: number
@@ -40,6 +42,8 @@ export interface TravelRecordItem {
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
+  vehicleName?: string
   scenicTitle?: string
   sceneName?: string
   sceneCheckpointTotal?: number

@@ -1,12 +1,14 @@
 import { Types } from 'mongoose'
 import { PunchRecordModel } from '@/models/PunchRecord'
 import { SceneSpotModel } from '@/models/SceneSpot'
+import { loadVehicleNameMapByIdentifier } from '@/services/vehicleLookupService'
 
 export interface CreatePunchRecordInput {
   userId: string
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
   sceneName?: string
   nodeId: string
   nodeName?: string
@@ -24,6 +26,7 @@ export interface QueryPunchRecordsOptions {
   pageSize?: number
   sceneId?: string
   scenicId?: string
+  vehicleIdentifier?: string
   sceneName?: string
   nodeId?: string
   nodeName?: string
@@ -58,6 +61,7 @@ export async function createPunchRecord(input: CreatePunchRecordInput): Promise<
   const userObjectId = new Types.ObjectId(input.userId)
   const sceneId = normalizeText(input.sceneId)
   const scenicId = normalizeText(input.scenicId)
+  const vehicleIdentifier = normalizeText(input.vehicleIdentifier)
   const nodeId = normalizeText(input.nodeId)
   if (!sceneId) {
     throw new Error('sceneId is required')
@@ -81,6 +85,7 @@ export async function createPunchRecord(input: CreatePunchRecordInput): Promise<
         username: normalizeText(input.username) || undefined,
         sceneId,
         scenicId,
+        vehicleIdentifier: vehicleIdentifier || undefined,
         sceneName: normalizeText(input.sceneName) || undefined,
         nodeId,
         nodeName: normalizeText(input.nodeName) || undefined,
@@ -122,6 +127,11 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
   const scenicId = normalizeText(options.scenicId)
   if (scenicId) {
     filter.scenicId = scenicId
+  }
+
+  const vehicleIdentifier = normalizeText(options.vehicleIdentifier)
+  if (vehicleIdentifier) {
+    filter.vehicleIdentifier = vehicleIdentifier
   }
 
   const sceneName = normalizeText(options.sceneName)
@@ -192,11 +202,17 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
     }
   }
 
+  const vehicleNameMap = await loadVehicleNameMapByIdentifier(
+    items.map((item) => normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)),
+  )
+
   const enrichedItems = items.map((item) => {
     const scenicId = normalizeText((item as { scenicId?: string }).scenicId)
+    const vehicleIdentifier = normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)
     return {
       ...item,
       scenicTitle: scenicTitleMap.get(scenicId) || undefined,
+      vehicleName: vehicleNameMap.get(vehicleIdentifier) || undefined,
     }
   })
 
@@ -212,7 +228,18 @@ export async function getPunchRecordById(id: string) {
   if (!Types.ObjectId.isValid(id)) {
     return null
   }
-  return await PunchRecordModel.findById(id).lean()
+  const item = await PunchRecordModel.findById(id).lean()
+  if (!item) {
+    return null
+  }
+
+  const vehicleIdentifier = normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)
+  const vehicleNameMap = await loadVehicleNameMapByIdentifier(vehicleIdentifier ? [vehicleIdentifier] : [])
+
+  return {
+    ...item,
+    vehicleName: vehicleNameMap.get(vehicleIdentifier) || undefined,
+  }
 }
 
 export async function deletePunchRecordById(id: string) {

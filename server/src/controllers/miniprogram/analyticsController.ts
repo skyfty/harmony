@@ -5,6 +5,7 @@ interface TrackEventBody {
   eventType?: string
   sceneId?: string
   sceneSpotId?: string
+  vehicleIdentifier?: string
   sessionId?: string
   source?: string
   device?: string
@@ -31,6 +32,7 @@ export async function trackAnalyticsEvent(ctx: Context): Promise<void> {
     userId,
     sceneId: typeof body.sceneId === 'string' ? body.sceneId : undefined,
     sceneSpotId: typeof body.sceneSpotId === 'string' ? body.sceneSpotId : undefined,
+    vehicleIdentifier: typeof body.vehicleIdentifier === 'string' ? body.vehicleIdentifier : undefined,
     sessionId,
     source,
     device: body.device ? body.device : inferDeviceFromUserAgent(userAgent),

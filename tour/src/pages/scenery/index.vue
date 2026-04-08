@@ -8,7 +8,7 @@
       :project-id="projectId"
       :package-url="packageUrl"
       :nominate-state-map="nominateStateMap"
-      :default-steer-identifier="selectedVehicleId"
+      :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
       :debug-console-enabled="false"
       :debug-console-default-expanded="true"
@@ -31,22 +31,23 @@ import {
   trackAnalyticsEvent,
 } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
+import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
-const selectedVehicleId = ref<string>('');
+const selectedVehicleIdentifier = ref<string>('');
 const backButtonTop = ref<number>(8);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const nominateStateMap = computed(() => {
-  const vehicleId = selectedVehicleId.value.trim();
-  if (!vehicleId) {
+  const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
+  if (!vehicleIdentifier) {
     return null;
   }
   return {
-    [vehicleId]: {
+    [vehicleIdentifier]: {
       visible: true,
     },
   };
@@ -76,6 +77,7 @@ function handlePunch(payload: PunchEventPayload): void {
   void createPunchRecord({
     sceneId: payload.sceneId,
     scenicId: sceneSpotId.value,
+    vehicleIdentifier: selectedVehicleIdentifier.value || undefined,
     clientPunchTime: payload.clientPunchTime,
     behaviorPunchTime: payload.behaviorPunchTime,
     location: {
@@ -103,7 +105,9 @@ onLoad((query: Record<string, unknown> | undefined) => {
   packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
-  selectedVehicleId.value = typeof record.vehicleId === 'string' ? decodeURIComponent(record.vehicleId) : '';
+  selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string'
+    ? decodeURIComponent(record.vehicleIdentifier)
+    : getSelectedVehicleIdentifier();
 
   enterAt.value = Date.now();
 
@@ -111,13 +115,14 @@ onLoad((query: Record<string, unknown> | undefined) => {
     void createTravelEnterRecord({
       sceneId: sceneId.value,
       scenicId: sceneSpotId.value,
+      vehicleIdentifier: selectedVehicleIdentifier.value || undefined,
       enterTime: new Date(enterAt.value).toISOString(),
       source: 'tour-miniapp',
       path: '/pages/scenery/index',
-        metadata: {
+      metadata: {
         projectId: projectId.value,
         packageUrl: packageUrl.value,
-        vehicleId: selectedVehicleId.value || undefined,
+        vehicleIdentifier: selectedVehicleIdentifier.value || '',
       },
     });
   }
@@ -126,11 +131,12 @@ onLoad((query: Record<string, unknown> | undefined) => {
     eventType: 'enter_scene',
     sceneId: sceneId.value || undefined,
     sceneSpotId: sceneSpotId.value || undefined,
+    vehicleIdentifier: selectedVehicleIdentifier.value || undefined,
     source: 'tour-miniapp',
     path: '/pages/scenery/index',
     metadata: {
       projectId: projectId.value,
-      vehicleId: selectedVehicleId.value || undefined,
+      vehicleIdentifier: selectedVehicleIdentifier.value || '',
     },
   });
 });
@@ -146,13 +152,14 @@ onUnload(() => {
     void completeTravelLeaveRecord({
       sceneId: sceneId.value,
       scenicId: sceneSpotId.value,
+      vehicleIdentifier: selectedVehicleIdentifier.value || undefined,
       leaveTime: new Date().toISOString(),
       source: 'tour-miniapp',
       path: '/pages/scenery/index',
       metadata: {
         projectId: projectId.value,
         dwellMs,
-        vehicleId: selectedVehicleId.value || undefined,
+        vehicleIdentifier: selectedVehicleIdentifier.value || '',
       },
     });
   }
@@ -161,12 +168,13 @@ onUnload(() => {
     eventType: 'leave_scene',
     sceneId: sceneId.value || undefined,
     sceneSpotId: sceneSpotId.value || undefined,
+    vehicleIdentifier: selectedVehicleIdentifier.value || undefined,
     source: 'tour-miniapp',
     path: '/pages/scenery/index',
     dwellMs,
     metadata: {
       projectId: projectId.value,
-      vehicleId: selectedVehicleId.value || undefined,
+      vehicleIdentifier: selectedVehicleIdentifier.value || '',
     },
   });
 });

@@ -7,6 +7,7 @@ const punchRecordSchema = new Schema<PunchRecordDocument>(
     username: { type: String, required: false },
     sceneId: { type: String, required: true, trim: true, index: true },
     scenicId: { type: String, required: true, trim: true, index: true },
+    vehicleIdentifier: { type: String, required: false, trim: true, index: true },
     sceneName: { type: String, required: false, trim: true },
     nodeId: { type: String, required: true, trim: true, index: true },
     nodeName: { type: String, required: false, trim: true },

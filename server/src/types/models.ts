@@ -180,6 +180,7 @@ export interface PunchRecordDocument extends Document<Types.ObjectId> {
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
   sceneName?: string
   nodeId: string
   nodeName?: string
@@ -199,6 +200,7 @@ export interface TravelRecordDocument extends Document<Types.ObjectId> {
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
   sceneName?: string
   enterTime: Date
   leaveTime?: Date | null
@@ -218,6 +220,7 @@ export interface AnalyticsEventDocument extends Document<Types.ObjectId> {
   userId?: Types.ObjectId | null
   sceneId?: Types.ObjectId | null
   sceneSpotId?: Types.ObjectId | null
+  vehicleIdentifier?: string
   sessionId?: string
   source?: string
   device?: string

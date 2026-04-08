@@ -65,6 +65,7 @@ onMounted(load)
         <Descriptions.Item :label="t('page.punchRecords.detail.fields.clientPunchTime')">{{ record?.clientPunchTime || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.punchRecords.detail.fields.behaviorPunchTime')">{{ record?.behaviorPunchTime || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.punchRecords.detail.fields.sceneName')">{{ record?.sceneName || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.punchRecords.detail.fields.vehicleName')">{{ record?.vehicleName || record?.vehicleIdentifier || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.punchRecords.detail.fields.sceneId')">{{ record?.sceneId || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.punchRecords.detail.fields.scenicId')">{{ record?.scenicId || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.punchRecords.detail.fields.nodeName')">{{ record?.nodeName || '-' }}</Descriptions.Item>

@@ -9,6 +9,7 @@ import { evaluatePendingMedalsForUser } from '@/services/medalService'
 type EnterTravelBody = {
   sceneId?: string
   scenicId?: string
+  vehicleIdentifier?: string
   sceneName?: string
   enterTime?: string
   source?: string
@@ -19,6 +20,7 @@ type EnterTravelBody = {
 type LeaveTravelBody = {
   sceneId?: string
   scenicId?: string
+  vehicleIdentifier?: string
   leaveTime?: string
   source?: string
   path?: string
@@ -49,6 +51,7 @@ export async function createMiniTravelEnterRecord(ctx: Context): Promise<void> {
     username: ctx.state.miniAuthUser?.username,
     sceneId,
     scenicId,
+    vehicleIdentifier: typeof body.vehicleIdentifier === 'string' ? body.vehicleIdentifier : undefined,
     sceneName: typeof body.sceneName === 'string' ? body.sceneName : undefined,
     enterTime: typeof body.enterTime === 'string' ? body.enterTime : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,
@@ -88,6 +91,7 @@ export async function completeMiniTravelLeaveRecord(ctx: Context): Promise<void>
     userId,
     sceneId: typeof body.sceneId === 'string' ? body.sceneId : undefined,
     scenicId,
+    vehicleIdentifier: typeof body.vehicleIdentifier === 'string' ? body.vehicleIdentifier : undefined,
     leaveTime: typeof body.leaveTime === 'string' ? body.leaveTime : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,
     path: typeof body.path === 'string' ? body.path : undefined,

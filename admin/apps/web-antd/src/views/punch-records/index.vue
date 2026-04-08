@@ -27,6 +27,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
       { field: 'createdAt', minWidth: 180, title: t('page.punchRecords.index.table.createdAt'), sortable: true, formatter: 'formatDateTime' },
       { field: 'scenicTitle', minWidth: 220, title: t('page.punchRecords.index.table.scenicTitle'), slots: { default: 'scenicTitle' } },
       { field: 'sceneName', minWidth: 160, title: t('page.punchRecords.index.table.sceneName') },
+      { field: 'vehicleName', minWidth: 180, title: t('page.punchRecords.index.table.vehicleName'), slots: { default: 'vehicleName' } },
       { field: 'nodeName', minWidth: 160, title: t('page.punchRecords.index.table.nodeName') },
       { field: 'username', minWidth: 140, title: t('page.punchRecords.index.table.username') },
       { field: 'source', minWidth: 120, title: t('page.punchRecords.index.table.source') },
@@ -96,6 +97,9 @@ function handleDelete(row: any) {
         <Button type="link" size="small" @click="() => openScenicDetail(row)">
           {{ row.scenicTitle || row.scenicId || '-' }}
         </Button>
+      </template>
+      <template #vehicleName="{ row }">
+        {{ row.vehicleName || row.vehicleIdentifier || '-' }}
       </template>
       <template #actions="{ row }">
         <Space>

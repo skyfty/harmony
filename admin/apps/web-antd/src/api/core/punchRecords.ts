@@ -19,6 +19,8 @@ type ServerPunchRecordItem = {
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
+  vehicleName?: string
   scenicTitle?: string
   sceneName?: string
   nodeId: string
@@ -38,6 +40,8 @@ export interface PunchRecordItem {
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
+  vehicleName?: string
   scenicTitle?: string
   sceneName?: string
   nodeId: string

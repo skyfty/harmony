@@ -7,6 +7,7 @@ const travelRecordSchema = new Schema<TravelRecordDocument>(
     username: { type: String, required: false },
     sceneId: { type: String, required: true, trim: true, index: true },
     scenicId: { type: String, required: true, trim: true, index: true },
+    vehicleIdentifier: { type: String, required: false, trim: true, index: true },
     sceneName: { type: String, required: false, trim: true },
     enterTime: { type: Date, required: true, index: true },
     leaveTime: { type: Date, required: false, default: null },

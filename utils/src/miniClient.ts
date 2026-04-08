@@ -13,6 +13,7 @@ export interface TrackAnalyticsEventPayload {
   eventType: string;
   sceneId?: string;
   sceneSpotId?: string;
+  vehicleIdentifier?: string;
   sessionId?: string;
   source?: string;
   device?: string;
@@ -24,6 +25,7 @@ export interface TrackAnalyticsEventPayload {
 export interface CreatePunchRecordPayload {
   sceneId: string;
   scenicId: string;
+  vehicleIdentifier?: string;
   sceneName: string;
   clientPunchTime: string;
   behaviorPunchTime?: string;
@@ -38,6 +40,7 @@ export interface CreatePunchRecordPayload {
 export interface CreateTravelEnterPayload {
   sceneId: string;
   scenicId: string;
+  vehicleIdentifier?: string;
   sceneName?: string;
   enterTime?: string;
   source?: string;
@@ -48,6 +51,7 @@ export interface CreateTravelEnterPayload {
 export interface CreateTravelLeavePayload {
   sceneId: string;
   scenicId: string;
+  vehicleIdentifier?: string;
   leaveTime?: string;
   source?: string;
   path?: string;

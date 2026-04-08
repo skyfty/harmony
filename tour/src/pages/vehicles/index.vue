@@ -69,42 +69,7 @@ import {
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
-
-const VEHICLE_SELECTION_STORAGE_KEY = 'tour:selectedVehicleId';
-const VEHICLE_SELECTION_OBJECT_STORAGE_KEY = 'tour:selectedVehicle';
-
-function getSelectedVehicleId(): string | null {
-  try {
-    const value: unknown = uni.getStorageSync(VEHICLE_SELECTION_STORAGE_KEY);
-    return typeof value === 'string' && value ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function setSelectedVehicleId(id: string | null): void {
-  try {
-    if (id) {
-      uni.setStorageSync(VEHICLE_SELECTION_STORAGE_KEY, id);
-    } else {
-      uni.removeStorageSync(VEHICLE_SELECTION_STORAGE_KEY);
-    }
-  } catch {
-    // ignore
-  }
-}
-
-function setSelectedVehicle(vehicle: Vehicle | null): void {
-  try {
-    if (vehicle) {
-      uni.setStorageSync(VEHICLE_SELECTION_OBJECT_STORAGE_KEY, JSON.stringify(vehicle));
-    } else {
-      uni.removeStorageSync(VEHICLE_SELECTION_OBJECT_STORAGE_KEY);
-    }
-  } catch {
-    // ignore
-  }
-}
+import { getSelectedVehicleId, setSelectedVehicle, setSelectedVehicleId } from '@/utils/vehicleSelection';
 
 const vehicles = ref<Vehicle[]>([]);
 const selectedId = ref(getSelectedVehicleId());

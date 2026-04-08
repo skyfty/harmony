@@ -72,6 +72,7 @@ const punchColumns = [
   { title: '时间', dataIndex: 'createdAt', key: 'createdAt' },
   { title: '景点', dataIndex: 'scenicTitle', key: 'scenicTitle' },
   { title: '场景', dataIndex: 'sceneName', key: 'sceneName' },
+  { title: '车辆', dataIndex: 'vehicleName', key: 'vehicleName' },
   { title: '打卡点', dataIndex: 'nodeName', key: 'nodeName' },
   { title: '来源', dataIndex: 'source', key: 'source' },
 ];
@@ -82,6 +83,7 @@ const travelColumns = [
   { title: '停留时长(秒)', dataIndex: 'durationSeconds', key: 'durationSeconds' },
   { title: '景点', dataIndex: 'scenicTitle', key: 'scenicTitle' },
   { title: '场景', dataIndex: 'sceneName', key: 'sceneName' },
+  { title: '车辆', dataIndex: 'vehicleName', key: 'vehicleName' },
   { title: '状态', dataIndex: 'status', key: 'status' },
 ];
 
@@ -417,6 +419,9 @@ onMounted(async () => {
                     {{ record.scenicTitle || record.scenicId || '-' }}
                   </Button>
                 </template>
+                <template v-else-if="column.key === 'vehicleName'">
+                  {{ record.vehicleName || record.vehicleIdentifier || '-' }}
+                </template>
                 <template v-else>
                   {{ getCellValue(record, column.dataIndex) || '-' }}
                 </template>
@@ -451,6 +456,9 @@ onMounted(async () => {
                   <Tag :color="record.status === 'completed' ? 'success' : 'processing'">
                     {{ record.status === 'completed' ? '已完成' : '进行中' }}
                   </Tag>
+                </template>
+                <template v-else-if="column.key === 'vehicleName'">
+                  {{ record.vehicleName || record.vehicleIdentifier || '-' }}
                 </template>
                 <template v-else>
                   {{ getCellValue(record, column.dataIndex) ?? '-' }}

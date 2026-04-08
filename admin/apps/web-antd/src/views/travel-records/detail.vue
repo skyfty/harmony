@@ -138,6 +138,7 @@ onMounted(load)
         <Descriptions.Item :label="t('page.travelRecords.detail.fields.durationSeconds')">{{ record?.durationSeconds ?? '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.travelRecords.detail.fields.achievementCount')">{{ displayAchievementCount }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.travelRecords.detail.fields.sceneName')">{{ record?.sceneName || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.vehicleName')">{{ record?.vehicleName || record?.vehicleIdentifier || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.travelRecords.detail.fields.sceneCheckpointTotal')">{{ record?.sceneCheckpointTotal ?? 0 }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.travelRecords.detail.fields.sceneId')">{{ record?.sceneId || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.travelRecords.detail.fields.scenicId')">{{ record?.scenicId || '-' }}</Descriptions.Item>

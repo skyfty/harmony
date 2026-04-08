@@ -3,12 +3,14 @@ import { SceneSpotModel } from '@/models/SceneSpot'
 import { SceneModel } from '@/models/Scene'
 import { TravelRecordModel } from '@/models/TravelRecord'
 import { PunchRecordModel } from '@/models/PunchRecord'
+import { loadVehicleNameMapByIdentifier } from '@/services/vehicleLookupService'
 
 export interface CreateTravelEnterInput {
   userId: string
   username?: string
   sceneId: string
   scenicId: string
+  vehicleIdentifier?: string
   sceneName?: string
   enterTime?: string
   source?: string
@@ -25,6 +27,7 @@ export interface CompleteTravelLeaveInput {
   leaveTime?: string
   source?: string
   path?: string
+  vehicleIdentifier?: string
   metadata?: Record<string, unknown>
 }
 
@@ -33,6 +36,7 @@ export interface QueryTravelRecordsOptions {
   pageSize?: number
   sceneId?: string
   scenicId?: string
+  vehicleIdentifier?: string
   sceneName?: string
   userId?: string
   username?: string
@@ -103,7 +107,7 @@ function buildAchievementCountKey(userId: string, scenicId: string): string {
 }
 
 async function loadAchievementCountMap(
-  pairs: Array<{ userId: string; scenicId: string }>,
+  pairs: Array<{ userId: string; scenicId: string; vehicleIdentifier?: string }>,
 ): Promise<Map<string, number>> {
   const validPairs = pairs.filter((pair) => Types.ObjectId.isValid(pair.userId) && Types.ObjectId.isValid(pair.scenicId))
   if (!validPairs.length) {
@@ -157,6 +161,7 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
   const userObjectId = ensureObjectId(input.userId)
   const sceneId = normalizeText(input.sceneId)
   const scenicId = normalizeText(input.scenicId)
+  const vehicleIdentifier = normalizeText(input.vehicleIdentifier)
   if (!sceneId) {
     throw new Error('sceneId is required')
   }
@@ -168,6 +173,8 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
 
   const updateSet: Record<string, unknown> = {
     sceneId,
+    scenicId,
+    vehicleIdentifier,
     enterTime,
     leaveTime: null,
     durationSeconds: null,
@@ -234,6 +241,7 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
     $setOnInsert: {
       userId: userObjectId,
       scenicId,
+      vehicleIdentifier,
     },
   }
 
@@ -262,6 +270,7 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
 export async function completeTravelLeaveRecord(input: CompleteTravelLeaveInput): Promise<string | null> {
   const userObjectId = ensureObjectId(input.userId)
   const scenicId = normalizeText(input.scenicId)
+  const vehicleIdentifier = normalizeText(input.vehicleIdentifier)
   if (!scenicId) {
     throw new Error('scenicId is required')
   }
@@ -284,6 +293,9 @@ export async function completeTravelLeaveRecord(input: CompleteTravelLeaveInput)
   activeRecord.leaveTime = leaveTime
   activeRecord.durationSeconds = toPositiveDurationSeconds(activeRecord.enterTime, leaveTime)
   activeRecord.status = 'completed'
+  if (vehicleIdentifier) {
+    activeRecord.vehicleIdentifier = vehicleIdentifier
+  }
   if (input.source !== undefined) {
     activeRecord.source = normalizeText(input.source) || activeRecord.source
   }
@@ -313,6 +325,11 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
   const scenicId = normalizeText(options.scenicId)
   if (scenicId) {
     filter.scenicId = scenicId
+  }
+
+  const vehicleIdentifier = normalizeText(options.vehicleIdentifier)
+  if (vehicleIdentifier) {
+    filter.vehicleIdentifier = vehicleIdentifier
   }
 
   const sceneName = normalizeText(options.sceneName)
@@ -376,8 +393,8 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
   const sceneIds = Array.from(
     new Set(
       items
-        .map((item) => normalizeText((item as { sceneId?: string }).sceneId))
-        .filter((id) => Boolean(id) && Types.ObjectId.isValid(id)),
+        .map((item: Record<string, unknown>) => normalizeText((item as { sceneId?: string }).sceneId))
+        .filter((id: string) => Boolean(id) && Types.ObjectId.isValid(id)),
     ),
   )
 
@@ -405,8 +422,8 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
   const scenicIds = Array.from(
     new Set(
       items
-        .map((item) => normalizeText((item as { scenicId?: string }).scenicId))
-        .filter((id) => Boolean(id) && Types.ObjectId.isValid(id)),
+        .map((item: Record<string, unknown>) => normalizeText((item as { scenicId?: string }).scenicId))
+        .filter((id: string) => Boolean(id) && Types.ObjectId.isValid(id)),
     ),
   )
 
@@ -428,17 +445,22 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
     }
   }
 
+  const vehicleNameMap = await loadVehicleNameMapByIdentifier(
+    items.map((item: Record<string, unknown>) => normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)),
+  )
+
   const achievementCountMap = await loadAchievementCountMap(
-    items.map((item) => ({
+    items.map((item: Record<string, unknown>) => ({
       userId: normalizeUserId((item as { userId?: unknown }).userId),
       scenicId: normalizeText((item as { scenicId?: string }).scenicId),
     })),
   )
 
-  const enrichedItems = items.map((item) => {
+  const enrichedItems = items.map((item: Record<string, unknown>) => {
     const sceneId = normalizeText((item as { sceneId?: string }).sceneId)
     const sceneName = normalizeText((item as { sceneName?: string }).sceneName)
     const scenicId = normalizeText((item as { scenicId?: string }).scenicId)
+    const vehicleIdentifier = normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)
     const userId = normalizeUserId((item as { userId?: unknown }).userId)
     const achievementCount = userId && scenicId ? achievementCountMap.get(buildAchievementCountKey(userId, scenicId)) ?? 0 : 0
     return {
@@ -446,6 +468,7 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
       sceneName: sceneName || sceneNameMap.get(sceneId) || undefined,
       sceneCheckpointTotal: sceneCheckpointTotalMap.get(sceneId) ?? 0,
       scenicTitle: scenicTitleMap.get(scenicId) || undefined,
+      vehicleName: vehicleNameMap.get(vehicleIdentifier) || undefined,
       achievementCount,
     }
   })
@@ -479,6 +502,7 @@ export async function getTravelRecordById(id: string) {
   }
 
   const sceneId = normalizeText((item as { sceneId?: string }).sceneId)
+  const vehicleIdentifier = normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)
   let sceneCheckpointTotal = 0
   if (Types.ObjectId.isValid(sceneId)) {
     const scene = await SceneModel.findById(sceneId, { checkpointTotal: 1 }).lean().exec()
@@ -486,9 +510,12 @@ export async function getTravelRecordById(id: string) {
     sceneCheckpointTotal = Number.isFinite(rawCheckpointTotal) && rawCheckpointTotal > 0 ? Math.floor(rawCheckpointTotal) : 0
   }
 
+  const vehicleNameMap = await loadVehicleNameMapByIdentifier(vehicleIdentifier ? [vehicleIdentifier] : [])
+
   return {
     ...item,
     sceneCheckpointTotal,
+    vehicleName: vehicleNameMap.get(vehicleIdentifier) || undefined,
     achievementCount,
   }
 }
@@ -539,7 +566,7 @@ export async function getTravelSummaryBySceneForUser(userId: string): Promise<Ar
     { $sort: { visitedCount: -1, totalDurationSeconds: -1, _id: 1 } },
   ]).exec()
 
-  return rows.map((row) => ({
+  return rows.map((row: { _id: string; sceneName?: string; visitedCount: number; totalDurationSeconds: number }) => ({
     sceneId: row._id,
     sceneName: row.sceneName,
     visitedCount: row.visitedCount,

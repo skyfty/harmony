@@ -7,6 +7,7 @@ const analyticsEventSchema = new Schema<AnalyticsEventDocument>(
     userId: { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     sceneId: { type: Schema.Types.ObjectId, ref: 'Scene', default: null, index: true },
     sceneSpotId: { type: Schema.Types.ObjectId, ref: 'SceneSpot', default: null, index: true },
+    vehicleIdentifier: { type: String, default: '', index: true },
     sessionId: { type: String, default: '', index: true },
     source: { type: String, default: '', index: true },
     device: { type: String, default: '', index: true },

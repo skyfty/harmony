@@ -39,6 +39,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
       { field: 'durationSeconds', minWidth: 120, title: t('page.travelRecords.index.table.durationSeconds') },
       { field: 'scenicTitle', minWidth: 220, title: t('page.travelRecords.index.table.scenicTitle'), slots: { default: 'scenicTitle' } },
       { field: 'sceneName', minWidth: 160, title: t('page.travelRecords.index.table.sceneName') },
+      { field: 'vehicleName', minWidth: 180, title: t('page.travelRecords.index.table.vehicleName'), slots: { default: 'vehicleName' } },
       { field: 'sceneCheckpointTotal', minWidth: 140, title: t('page.travelRecords.index.table.sceneCheckpointTotal') },
       { field: 'username', minWidth: 140, title: t('page.travelRecords.index.table.username') },
       {
@@ -112,6 +113,9 @@ function handleDelete(row: any) {
         <Button type="link" size="small" @click="() => openScenicDetail(row)">
           {{ row.scenicTitle || row.scenicId || '-' }}
         </Button>
+      </template>
+      <template #vehicleName="{ row }">
+        {{ row.vehicleName || row.vehicleIdentifier || '-' }}
       </template>
       <template #actions="{ row }">
         <Space>
