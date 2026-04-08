@@ -202,7 +202,6 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
                 color="primary"
                 density="compact"
                 hide-details
-                inset
                 :model-value="entry.defaultVisible"
                 :disabled="!nominateComponent?.enabled"
                 @update:modelValue="(value) => handleEntryVisibilityChange(entry.id, value as boolean | null)"
@@ -269,7 +268,7 @@ function handleEntryVisibilityChange(entryId: string, value: boolean | null): vo
 .nominate-entry__fields {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 1.0rem;
   min-width: 0;
 }
 

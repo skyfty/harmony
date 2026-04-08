@@ -382,7 +382,6 @@ import {
   GRID_HIGHLIGHT_MIN_SIZE,
   DEFAULT_GRID_HIGHLIGHT_SIZE,
   DEFAULT_GRID_HIGHLIGHT_DIMENSIONS,
-  POINT_LIGHT_HELPER_SIZE,
   DIRECTIONAL_LIGHT_HELPER_SIZE,
   DEFAULT_CAMERA_POSITION,
   DEFAULT_CAMERA_TARGET,
@@ -18724,14 +18723,6 @@ function disposeSceneNodes() {
   resetEffectRuntimeTickers()
 }
 
-function registerLightHelper(nodeId: string, helper: LightHelperObject, requiresContinuousUpdate = false) {
-  helper.userData.nodeId = nodeId
-  helper.frustumCulled = false
-  lightHelpers.push(helper)
-  if (requiresContinuousUpdate) {
-    lightHelpersNeedingUpdate.add(helper)
-  }
-}
 
 type CapturedLightTargetUpdate = { nodeId: string; target: { x: number; y: number; z: number } }
 
@@ -18917,8 +18908,6 @@ function createLightObject(node: SceneNode): THREE.Object3D {
   }
 
   let light: THREE.Light
-  let helper: LightHelperObject | null = null
-  let requiresHelperUpdate = false
 
   switch (config.type) {
     case 'Directional': {
@@ -18938,8 +18927,6 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       // Visible, selectable target handle (Unity-like “sun” icon near the scene).
       // Marked editorOnly so it doesn't interfere with placement/snap surfaces, but still pickable.
       ensureDirectionalLightTargetHandle(target, config.color)
-      helper = new THREE.DirectionalLightHelper(directional, DIRECTIONAL_LIGHT_HELPER_SIZE, config.color)
-      requiresHelperUpdate = true
       break
     }
     case 'Point': {
@@ -18947,7 +18934,6 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       point.castShadow = config.castShadow ?? false
       applyLightShadowConfig(point, config)
       light = point
-      helper = new THREE.PointLightHelper(point, POINT_LIGHT_HELPER_SIZE, config.color)
       break
     }
     case 'Spot': {
@@ -18970,16 +18956,12 @@ function createLightObject(node: SceneNode): THREE.Object3D {
         container.add(spot.target)
       }
       light = spot
-      helper = new THREE.SpotLightHelper(spot, config.color)
-      requiresHelperUpdate = true
       break
     }
     case 'Hemisphere': {
       const ground = (config as any).groundColor ?? '#444444'
       const hemi = new THREE.HemisphereLight(config.color, ground, config.intensity)
       light = hemi
-      helper = new THREE.HemisphereLightHelper(hemi, DIRECTIONAL_LIGHT_HELPER_SIZE, config.color)
-      requiresHelperUpdate = true
       break
     }
     case 'Ambient':
@@ -18991,13 +18973,6 @@ function createLightObject(node: SceneNode): THREE.Object3D {
 
   light.userData.nodeId = node.id
   container.add(light)
-
-  if (helper) {
-    helper.name = `${node.name}-LightHelper`
-    registerLightHelper(node.id, helper, requiresHelperUpdate)
-    container.add(helper)
-    helper.update?.()
-  }
 
   return container
 }
