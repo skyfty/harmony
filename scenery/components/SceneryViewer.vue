@@ -1706,10 +1706,14 @@ function applyNominateOverridesForCurrentScene(): void {
   if (!currentDocument?.nodes?.length) {
     return;
   }
+  const externalStateMap =
+    props.nominateStateMap && typeof props.nominateStateMap === 'object'
+      ? props.nominateStateMap
+      : null;
   applyNominateStateMapToRuntime(
     currentDocument.nodes,
     (nodeId) => nodeObjectMap.get(nodeId) ?? null,
-    props.nominateStateMap ?? null,
+    externalStateMap,
   );
 }
 

@@ -1588,10 +1588,14 @@ function applyPreviewNominateOverrides(): void {
 	if (!currentDocument?.nodes?.length) {
 		return
 	}
+	const externalStateMap =
+		previewNominateStateMap.value && typeof previewNominateStateMap.value === 'object'
+			? previewNominateStateMap.value
+			: null
 	applyNominateStateMapToRuntime(
 		currentDocument.nodes,
 		(nodeId) => nodeObjectMap.get(nodeId) ?? null,
-		previewNominateStateMap.value,
+		externalStateMap,
 	)
 }
 
