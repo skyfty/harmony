@@ -248,6 +248,7 @@ import type {
   EffectComponentProps,
   GuideRouteComponentProps,
   GuideboardComponentProps,
+  NominateComponentProps,
   OnlineComponentProps,
   ProtagonistComponentProps,
   RigidbodyComponentProps,
@@ -324,6 +325,9 @@ import {
   PLANNING_IMAGES_COMPONENT_TYPE,
   clampPlanningImagesComponentProps,
   clonePlanningImagesComponentProps,
+  NOMINATE_COMPONENT_TYPE,
+  clampNominateComponentProps,
+  cloneNominateComponentProps,
 } from '@schema/components'
 import {
   LOD_COMPONENT_TYPE,
@@ -357,6 +361,7 @@ type NodeComponentPropsByType = {
   [VEHICLE_COMPONENT_TYPE]: VehicleComponentProps
   [AUTO_TOUR_COMPONENT_TYPE]: AutoTourComponentProps
   [LOD_COMPONENT_TYPE]: LodComponentProps
+  [NOMINATE_COMPONENT_TYPE]: NominateComponentProps
 }
 
 type NodeComponentPropsOf<T extends NodeComponentType> = T extends keyof NodeComponentPropsByType
@@ -14878,6 +14883,7 @@ export const useSceneStore = defineStore('scene', {
         | RigidbodyComponentProps
         | VehicleComponentProps
         | WaterComponentProps
+        | NominateComponentProps
       let wallCenterOffsetDelta: { x: number; y: number; z: number } | null = null
       let isOffsetOnlyWallPatch = false
       if (type === WALL_COMPONENT_TYPE) {
@@ -15442,6 +15448,18 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneWaterComponentProps(merged)
+      } else if (type === NOMINATE_COMPONENT_TYPE) {
+        const currentProps = clampNominateComponentProps(component.props as NominateComponentProps)
+        const typedPatch = patch as Partial<NominateComponentProps>
+        const merged = clampNominateComponentProps({
+          ...currentProps,
+          ...typedPatch,
+        })
+        const unchanged = JSON.stringify(currentProps) === JSON.stringify(merged)
+        if (unchanged) {
+          return false
+        }
+        nextProps = cloneNominateComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }

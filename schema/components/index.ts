@@ -21,6 +21,7 @@ import './definitions/purePursuitComponent'
 import './definitions/sceneStateAnchorComponent'
 import './definitions/preloadableComponent'
 import './definitions/planningImagesComponent'
+import './definitions/nominateComponent'
 
 export {
 	componentManager,
@@ -53,3 +54,4 @@ export * from './definitions/purePursuitComponent'
 export * from './definitions/sceneStateAnchorComponent'
 export * from './definitions/preloadableComponent'
 export * from './definitions/planningImagesComponent'
+export * from './definitions/nominateComponent'

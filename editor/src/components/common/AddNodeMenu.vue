@@ -36,6 +36,7 @@ import {
   DEFAULT_RIGIDBODY_FRICTION,
   DEFAULT_RIGIDBODY_RESTITUTION,
   GUIDEBOARD_COMPONENT_TYPE,
+  NOMINATE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
@@ -670,6 +671,20 @@ function getNextGuideboardName(): string {
   return `${base} ${index}`
 }
 
+function getNextNominateName(): string {
+  const names = new Set<string>()
+  collectNodeNames(sceneStore.nodes, names)
+  const base = 'Nominate'
+  if (!names.has(base)) {
+    return base
+  }
+  let index = 1
+  while (names.has(`${base} ${index}`)) {
+    index += 1
+  }
+  return `${base} ${index}`
+}
+
 function resolveSelectedSceneNode(): SceneNode | null {
   const candidate = sceneStore.selectedNode
   if (!candidate || candidate.isPlaceholder) {
@@ -1148,6 +1163,24 @@ function handleCreateEmptyNode() {
     name,
     parentId: parentId ?? undefined,
   })
+}
+
+function handleCreateNominateNode() {
+  const nominateObject = new THREE.Object3D()
+  const name = getNextNominateName()
+  nominateObject.name = name
+  const parentId = resolveEffectiveParentId(sceneStore.selectedNode ?? null)
+  sceneStore.captureHistorySnapshot()
+  const created = sceneStore.addSceneNode({
+    nodeType: 'Empty',
+    object: nominateObject,
+    name,
+    parentId: parentId ?? undefined,
+  })
+  if (!created) {
+    return
+  }
+  sceneStore.addNodeComponent<typeof NOMINATE_COMPONENT_TYPE>(created.id, NOMINATE_COMPONENT_TYPE)
 }
 
 async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
@@ -1755,6 +1788,7 @@ function handleAddLight(type: LightNodeType) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Empty" @click="handleCreateEmptyNode()" />
+      <v-list-item title="Nominate" @click="handleCreateNominateNode()" />
       <v-list-item title="Protagonist" @click="handleCreateProtagonistNode()" :disabled="!canAddProtagonist" />
       <v-list-item title="Multiuser" @click="handleCreateMultiuserNode()" :disabled="!canAddMultiuser" />
       <v-list-item

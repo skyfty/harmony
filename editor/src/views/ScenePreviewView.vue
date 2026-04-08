@@ -168,6 +168,9 @@ import {
 	autoTourComponentDefinition,
 	purePursuitComponentDefinition,
 	sceneStateAnchorComponentDefinition,
+	nominateComponentDefinition,
+	applyNominateStateMapToRuntime,
+	type NominateExternalStateMap,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -914,6 +917,7 @@ previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
+previewComponentManager.registerDefinition(nominateComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -1394,6 +1398,26 @@ const MAP_CONTROL_DEFAULTS = {
 }
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
+type PreviewWindowWithNominateState = Window & {
+	__HARMONY_PREVIEW_NOMINATE_STATE__?: NominateExternalStateMap | null
+}
+
+function readPreviewNominateStateMap(): NominateExternalStateMap | null {
+	if (typeof window === 'undefined') {
+		return null
+	}
+	const raw = (window as PreviewWindowWithNominateState).__HARMONY_PREVIEW_NOMINATE_STATE__
+	if (!raw || typeof raw !== 'object') {
+		return null
+	}
+	return raw
+}
+
+const previewNominateStateMap = ref<NominateExternalStateMap | null>(readPreviewNominateStateMap())
+
+function syncPreviewNominateStateMap(): void {
+	previewNominateStateMap.value = readPreviewNominateStateMap()
+}
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
@@ -1559,6 +1583,17 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+
+function applyPreviewNominateOverrides(): void {
+	if (!currentDocument?.nodes?.length) {
+		return
+	}
+	applyNominateStateMapToRuntime(
+		currentDocument.nodes,
+		(nodeId) => nodeObjectMap.get(nodeId) ?? null,
+		previewNominateStateMap.value,
+	)
+}
 
 const scenePreviewPerf = createScenePreviewPerfController({
 	isWeChatMiniProgram: false,
@@ -10728,6 +10763,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			environmentSettings,
 		)
 	}
+	applyPreviewNominateOverrides()
 }
 
 function applySnapshot(snapshot: ScenePreviewSnapshot) {
@@ -10821,6 +10857,9 @@ function captureScreenshot() {
 
 
 onMounted(() => {
+	if (typeof window !== 'undefined') {
+		window.addEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
+	}
 	(globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
 		DISPLAY_BOARD_RESOLVER_KEY
 	] = resolveDisplayBoardMediaSource
@@ -10842,6 +10881,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	if (typeof window !== 'undefined') {
+		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
+	}
 	rendererInitialized = false
 	if (steeringWheelState.dragging) {
 		releaseSteeringWheelPointer()
@@ -10901,6 +10943,14 @@ onBeforeUnmount(() => {
 		DISPLAY_BOARD_RESOLVER_KEY
 	] = undefined
 })
+
+watch(
+	previewNominateStateMap,
+	() => {
+		applyPreviewNominateOverrides()
+	},
+	{ deep: true },
+)
 </script>
 
 <template>

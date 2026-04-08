@@ -448,6 +448,7 @@ import { loadScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
 type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
+  nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
   debugConsoleEnabled?: boolean;
@@ -704,6 +705,11 @@ import {
   sceneStateAnchorComponentDefinition,
   SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/sceneStateAnchorComponent';
+import {
+  nominateComponentDefinition,
+  applyNominateStateMapToRuntime,
+  type NominateExternalStateMap,
+} from '@harmony/schema/components/definitions/nominateComponent';
 import {
   preloadableComponentDefinition,
 } from '@harmony/schema/components/definitions/preloadableComponent';
@@ -1696,6 +1702,17 @@ const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
 let sceneCsmRuntimeConfigKey = '';
 
+function applyNominateOverridesForCurrentScene(): void {
+  if (!currentDocument?.nodes?.length) {
+    return;
+  }
+  applyNominateStateMapToRuntime(
+    currentDocument.nodes,
+    (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+    props.nominateStateMap ?? null,
+  );
+}
+
 function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
   const csm = settings.csm;
   return {
@@ -1957,6 +1974,7 @@ previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
+previewComponentManager.registerDefinition(nominateComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
@@ -10586,6 +10604,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
   addRuntimeStageLog('[SceneryViewer] Phase 4 mount scene graph');
   await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
+  applyNominateOverridesForCurrentScene();
 
   if (token !== initializeToken || sceneGraphRoot !== graph.root) {
     return;
@@ -10773,6 +10792,14 @@ watch(
       physinterp: '',
     });
   },
+);
+
+watch(
+  () => props.nominateStateMap,
+  () => {
+    applyNominateOverridesForCurrentScene();
+  },
+  { deep: true },
 );
 
 function cleanupRuntime(): void {

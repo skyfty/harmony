@@ -30,6 +30,7 @@ import PurePursuitPanel from '@/components/inspector/PurePursuitPanel.vue'
 import PreloadablePanel from '@/components/inspector/PreloadablePanel.vue'
 import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
 import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
+import NominatePanel from '@/components/inspector/NominatePanel.vue'
 import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema'
@@ -54,6 +55,7 @@ import {
   WALL_COMPONENT_TYPE,
   WATER_COMPONENT_TYPE,
   EFFECT_COMPONENT_TYPE,
+  NOMINATE_COMPONENT_TYPE,
   componentManager,
   type RigidbodyColliderType,
   FLOOR_COMPONENT_TYPE,
@@ -574,6 +576,7 @@ watch(
               <GuideRoutePanel v-else-if="component.type === GUIDE_ROUTE_COMPONENT_TYPE" />
               <AutoTourPanel v-else-if="component.type === AUTO_TOUR_COMPONENT_TYPE" />
               <PurePursuitPanel v-else-if="component.type === PURE_PURSUIT_COMPONENT_TYPE" />
+              <NominatePanel v-else-if="component.type === NOMINATE_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />
               <BehaviorPanel
