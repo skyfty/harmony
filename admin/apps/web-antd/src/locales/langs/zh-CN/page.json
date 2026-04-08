@@ -42,6 +42,7 @@
         "title": "场景管理",
         "name": "名称",
         "fileUrl": "场景文件地址",
+        "checkpointTotal": "检查点总数",
         "fileSize": "文件大小(B)",
         "updatedAt": "更新时间",
         "actions": "操作"
