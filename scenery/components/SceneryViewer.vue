@@ -733,6 +733,11 @@ import {
   protagonistComponentDefinition,
 } from '@harmony/schema/components/definitions/protagonistComponent';
 import {
+  signboardComponentDefinition,
+  SIGNBOARD_COMPONENT_TYPE,
+  type SignboardComponentProps,
+} from '@harmony/schema/components/definitions/signboardComponent';
+import {
   lodComponentDefinition,
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
@@ -791,6 +796,11 @@ import {
 import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
+import {
+  computeSignboardPlacement,
+  resolveSignboardAnchorWorldPosition,
+  resolveSignboardDisplayLabel,
+} from '@harmony/schema/signboardOverlay';
 import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@harmony/schema/cameraGuard';
 import {
   addBehaviorRuntimeListener,
@@ -2043,6 +2053,7 @@ previewComponentManager.registerDefinition(landformComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);
 previewComponentManager.registerDefinition(displayBoardComponentDefinition);
 previewComponentManager.registerDefinition(billboardComponentDefinition);
+previewComponentManager.registerDefinition(signboardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
@@ -4062,7 +4073,13 @@ function closeBehaviorAlert() {
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   assetNodeIdMap.clear();
   rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
-  for (const node of previewNodeMap.values()) {
+  signboardNodeIds.clear();
+  for (const [nodeId, node] of previewNodeMap.entries()) {
+    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
+    if (signboardState?.enabled) {
+      signboardNodeIds.add(nodeId);
+    }
+
     if (isWeChatMiniProgram && node.nodeType === 'Light' && node.light) {
       if (node.light.type === 'Point') {
         node.light.castShadow = false;
@@ -4086,6 +4103,108 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
 
 function resolveParentNodeId(nodeId: string): string | null {
   return resolveSceneParentNodeId(previewParentMap, nodeId);
+}
+
+function resolveSignboardReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle' } | null {
+  const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
+  if (manualDriveNode) {
+    const manualVehicle = vehicleInstances.get(manualDriveNode)?.vehicle ?? null;
+    const bodyPosition = manualVehicle?.chassisBody?.position;
+    if (bodyPosition) {
+      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
+      return { position: signboardReferenceScratch, kind: 'vehicle' };
+    }
+    const manualObject = nodeObjectMap.get(manualDriveNode) ?? null;
+    if (manualObject) {
+      manualObject.getWorldPosition(signboardReferenceScratch);
+      return { position: signboardReferenceScratch, kind: 'vehicle' };
+    }
+  }
+
+  const followNodeId = autoTourFollowNodeId.value;
+  if (followNodeId) {
+    const autoTourVehicle = vehicleInstances.get(followNodeId)?.vehicle ?? null;
+    const bodyPosition = autoTourVehicle?.chassisBody?.position;
+    if (bodyPosition) {
+      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
+      return { position: signboardReferenceScratch, kind: 'vehicle' };
+    }
+    const followObject = nodeObjectMap.get(followNodeId) ?? null;
+    if (followObject) {
+      followObject.getWorldPosition(signboardReferenceScratch);
+      return { position: signboardReferenceScratch, kind: 'vehicle' };
+    }
+  }
+
+  activeCamera.getWorldPosition(signboardReferenceScratch);
+  return { position: signboardReferenceScratch, kind: 'camera' };
+}
+
+function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
+  if (!signboardNodeIds.size) {
+    if (signboardOverlayEntries.value.length) {
+      signboardOverlayEntries.value = [];
+    }
+    return;
+  }
+
+  const reference = resolveSignboardReference(activeCamera);
+  if (!reference) {
+    signboardOverlayEntries.value = [];
+    return;
+  }
+
+  const nextEntries: Array<{
+    id: string;
+    label: string;
+    distanceLabel: string;
+    xPercent: number;
+    yPercent: number;
+    scale: number;
+    opacity: number;
+    referenceKind: 'camera' | 'vehicle';
+  }> = [];
+
+  for (const nodeId of signboardNodeIds) {
+    const node = resolveNodeById(nodeId);
+    const object = nodeObjectMap.get(nodeId) ?? null;
+    if (!node || !object || !isRuntimeObjectEffectivelyVisible(object)) {
+      continue;
+    }
+
+    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
+    if (!signboardState?.enabled) {
+      continue;
+    }
+
+    const label = resolveSignboardDisplayLabel(signboardState.props?.label, node.name, nodeId);
+    if (!label) {
+      continue;
+    }
+
+    resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
+    const placement = computeSignboardPlacement({
+      anchorWorld: signboardAnchorScratch,
+      referenceWorld: reference.position,
+      camera: activeCamera,
+    });
+    if (!placement) {
+      continue;
+    }
+
+    nextEntries.push({
+      id: nodeId,
+      label,
+      distanceLabel: placement.distanceLabel,
+      xPercent: placement.xPercent,
+      yPercent: placement.yPercent,
+      scale: placement.scale,
+      opacity: placement.opacity,
+      referenceKind: reference.kind,
+    });
+  }
+
+  signboardOverlayEntries.value = nextEntries;
 }
 
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
@@ -10867,6 +10986,7 @@ function startRenderLoop(
         }
 
         updateBehaviorProximity();
+        updateSignboardOverlayEntries(camera);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
