@@ -63,6 +63,7 @@ import type {
   FloorDynamicMesh,
   LandformDynamicMesh,
   GuideRouteDynamicMesh,
+  RegionDynamicMesh,
 } from '@schema'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
 import { stableSerialize } from '@schema/stableSerialize'
@@ -176,6 +177,7 @@ import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
+import { buildRegionDynamicMeshFromLocalVertices, buildRegionDynamicMeshFromWorldPoints } from '@schema/regionUtils'
 import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
@@ -1604,7 +1606,7 @@ function finalizeDynamicMeshRuntimePatch(store: {
 }, nodeId: string, updatedMeshType: string | null): void {
   // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
   // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
-  if ( updatedMeshType === 'Road' ||  updatedMeshType === 'Wall' || updatedMeshType === 'Floor' || updatedMeshType === 'Landform' || updatedMeshType === 'Ground' ) {
+  if ( updatedMeshType === 'Road' ||  updatedMeshType === 'Wall' || updatedMeshType === 'Floor' || updatedMeshType === 'Landform' || updatedMeshType === 'Ground' || updatedMeshType === 'Region' ) {
     const queued = store.queueSceneNodePatch(nodeId, ['dynamicMesh'])
 
     // `SceneViewport` applies pending patches only when `sceneNodePropertyVersion` bumps.
@@ -1987,6 +1989,17 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
 
       return {
         type: 'GuideRoute',
+        vertices,
+      }
+    }
+    case 'Region': {
+      const region = mesh as RegionDynamicMesh
+      const vertices = (Array.isArray(region.vertices) ? region.vertices : [])
+        .map(normalizeVertex2D)
+        .filter((value): value is [number, number] => !!value)
+
+      return {
+        type: 'Region',
         vertices,
       }
     }
@@ -3350,7 +3363,7 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
   }
 
   const meshType = normalizeDynamicMeshType(meshDefinition.type)
-  if (meshType !== 'Wall' && meshType !== 'Road' && meshType !== 'Floor' && meshType !== 'Landform' && meshType !== 'GuideRoute') {
+  if (meshType !== 'Wall' && meshType !== 'Road' && meshType !== 'Floor' && meshType !== 'Landform' && meshType !== 'GuideRoute' && meshType !== 'Region') {
     return false
   }
 
@@ -3374,6 +3387,13 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
       runtime = createLandformGroup(meshDefinition as LandformDynamicMesh)
     } else if (meshType === 'GuideRoute') {
       runtime = createGuideRouteGroup(meshDefinition as GuideRouteDynamicMesh)
+    } else if (meshType === 'Region') {
+      runtime = new THREE.Group()
+      runtime.name = 'Region'
+      runtime.userData = {
+        ...(runtime.userData ?? {}),
+        dynamicMeshType: 'Region',
+      }
     } else {
       const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
       const wallProps = wallComponent
@@ -13411,6 +13431,38 @@ export const useSceneStore = defineStore('scene', {
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
 
+    generateRegionNodeName() {
+      const prefix = 'Region '
+      const pattern = /^Region\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
+
     generateWaterNodeName() {
       const prefix = 'Water '
       const pattern = /^Water\s(\d{2})$/
@@ -14497,6 +14549,89 @@ export const useSceneStore = defineStore('scene', {
         this.endHistoryCaptureSuppression()
       }
     },
+
+    createRegionNode(payload: {
+      nodeId?: string
+      points: Vector3Like[]
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+    }): SceneNode | null {
+      const build = buildRegionDynamicMeshFromWorldPoints(payload.points)
+      if (!build) {
+        return null
+      }
+
+      const group = new THREE.Group()
+      group.name = payload.name ?? 'Region'
+      group.userData = {
+        ...(group.userData ?? {}),
+        dynamicMeshType: 'Region',
+      }
+      const nodeName = payload.name ?? this.generateRegionNodeName()
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
+
+        if (existing && desiredId) {
+          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+            this.renameNode(desiredId, payload.name.trim())
+          }
+          this.updateNodeTransform({
+            id: desiredId,
+            position: createVector(build.center.x, build.center.y, build.center.z),
+            rotation: createVector(0, 0, 0),
+            scale: createVector(1, 1, 1),
+          })
+          this.updateNodeDynamicMesh(desiredId, build.definition)
+          return findNodeById(this.nodes, desiredId)
+        }
+
+        return this.addSceneNode({
+          nodeId: desiredId ?? undefined,
+          nodeType: 'Mesh',
+          object: group,
+          name: nodeName,
+          position: createVector(build.center.x, build.center.y, build.center.z),
+          rotation: createVector(0, 0, 0),
+          scale: createVector(1, 1, 1),
+          dynamicMesh: build.definition,
+          editorFlags: payload.editorFlags,
+        })
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    updateRegionNode(payload: {
+      nodeId: string
+      localPoints: Array<[number, number]>
+    }): SceneNode | null {
+      const target = findNodeById(this.nodes, payload.nodeId)
+      if (!target || target.dynamicMesh?.type !== 'Region') {
+        return null
+      }
+
+      const nextMesh = buildRegionDynamicMeshFromLocalVertices(payload.localPoints)
+      if (!nextMesh) {
+        return null
+      }
+
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, payload.nodeId, (node) => {
+        if (node.dynamicMesh?.type !== 'Region') {
+          return
+        }
+        node.dynamicMesh = nextMesh
+      })
+      this.queueSceneNodePatch(payload.nodeId, ['dynamicMesh'])
+      replaceSceneNodes(this, [...this.nodes])
+      commitSceneSnapshot(this)
+      return findNodeById(this.nodes, payload.nodeId)
+    },
+
     updateWallNodeGeometry(nodeId: string, payload: {
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
