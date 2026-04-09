@@ -385,7 +385,7 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-visual {
-  width: 168rpx;
+  width: 188rpx;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -394,8 +394,8 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-progress-shell {
-  width: 144rpx;
-  height: 144rpx;
+  width: 164rpx;
+  height: 164rpx;
   position: relative;
   display: flex;
   align-items: center;
@@ -410,8 +410,8 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-progress-core {
-  width: 118rpx;
-  height: 118rpx;
+  width: 136rpx;
+  height: 136rpx;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.88);
   box-shadow: 0 10px 22px rgba(23, 31, 55, 0.1);
@@ -422,8 +422,8 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-icon {
-  width: 96rpx;
-  height: 96rpx;
+  width: 114rpx;
+  height: 114rpx;
   background: transparent;
 }
 
