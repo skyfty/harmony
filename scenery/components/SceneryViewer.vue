@@ -2197,9 +2197,13 @@ const signboardOverlayEntries = ref<Array<{
 }>>([]);
 const signboardReferenceScratch = new THREE.Vector3();
 const signboardAnchorScratch = new THREE.Vector3();
+const overlayDistanceReferenceScratch = new THREE.Vector3();
+const overlayDistanceTargetAnchorScratch = new THREE.Vector3();
+const overlayDistanceReferenceAnchorScratch = new THREE.Vector3();
 const behaviorBubbleAnchorScratch = new THREE.Vector3();
 const behaviorBubbleCameraScratch = new THREE.Vector3();
 const behaviorBubbleSeenKeys = new Set<string>();
+const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5;
 
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
@@ -3890,8 +3894,13 @@ function buildBehaviorBubbleSeenKey(event: Extract<BehaviorRuntimeEvent, { type:
   return [event.nodeId, event.action, event.behaviorSequenceId, event.behaviorId].join(':');
 }
 
-function resolveBehaviorBubbleAnchorObject(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): THREE.Object3D | null {
+function resolveBehaviorBubbleAnchorNodeId(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): string | null {
   const targetNodeId = event.params.targetNodeId?.trim();
+  return targetNodeId || event.nodeId || null;
+}
+
+function resolveBehaviorBubbleAnchorObject(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): THREE.Object3D | null {
+  const targetNodeId = resolveBehaviorBubbleAnchorNodeId(event);
   if (targetNodeId) {
     return nodeObjectMap.get(targetNodeId) ?? null;
   }
@@ -3915,8 +3924,16 @@ function canPresentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: '
     event.params.worldOffsetY,
   );
   activeCamera.getWorldPosition(behaviorBubbleCameraScratch);
+  const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(
+    resolveBehaviorBubbleAnchorNodeId(event),
+    anchor,
+    {
+      position: behaviorBubbleCameraScratch,
+      nodeId: resolveOverlayDistanceReferenceNodeId(),
+    },
+  );
   const maxDistance = Math.max(0, event.params.maxDistanceMeters ?? 0);
-  if (maxDistance > 0 && behaviorBubbleCameraScratch.distanceTo(anchor) > maxDistance) {
+  if (maxDistance > 0 && distanceReferenceWorld.distanceTo(anchor) > maxDistance) {
     return false;
   }
   if (event.params.requireVisibleInView === false) {
@@ -3927,7 +3944,7 @@ function canPresentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: '
   }
   const placement = computeSignboardPlacement({
     anchorWorld: anchor,
-    referenceWorld: behaviorBubbleCameraScratch,
+    referenceWorld: distanceReferenceWorld,
     camera: activeCamera,
     maxDistance: maxDistance > 0 ? maxDistance : undefined,
   });
@@ -4105,19 +4122,59 @@ function resolveParentNodeId(nodeId: string): string | null {
   return resolveSceneParentNodeId(previewParentMap, nodeId);
 }
 
-function resolveSignboardReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle' } | null {
+function resolveCameraDistanceReferenceNodeId(): string | null {
+  return protagonistNodeId ?? resolveNodeIdFromObject(findProtagonistObject());
+}
+
+function resolveNodePlaneAnchorPoint(nodeId: string | null): THREE.Vector3 | null {
+  return resolveNodeAnchorPoint(nodeId) ?? resolveNodeFocusPoint(nodeId);
+}
+
+function resolveOverlayDistanceReferenceNodeId(): string | null {
+  if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
+    return vehicleDriveNodeId.value;
+  }
+  if (autoTourFollowNodeId.value) {
+    return autoTourFollowNodeId.value;
+  }
+  return resolveCameraDistanceReferenceNodeId();
+}
+
+function resolveOverlayDistanceReferenceWorld(
+  targetNodeId: string | null,
+  anchorWorld: THREE.Vector3,
+  reference: { position: THREE.Vector3; nodeId: string | null },
+): THREE.Vector3 {
+  const targetPlaneAnchor = resolveNodePlaneAnchorPoint(targetNodeId);
+  if (!targetPlaneAnchor) {
+    return reference.position;
+  }
+  overlayDistanceTargetAnchorScratch.copy(targetPlaneAnchor);
+  const referencePlaneAnchor = reference.nodeId ? resolveNodePlaneAnchorPoint(reference.nodeId) : null;
+  const comparableReference = referencePlaneAnchor
+    ? overlayDistanceReferenceAnchorScratch.copy(referencePlaneAnchor)
+    : overlayDistanceReferenceAnchorScratch.copy(reference.position);
+  if (Math.abs(overlayDistanceTargetAnchorScratch.y - comparableReference.y) > OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON) {
+    return reference.position;
+  }
+  overlayDistanceReferenceScratch.copy(reference.position);
+  overlayDistanceReferenceScratch.y = anchorWorld.y;
+  return overlayDistanceReferenceScratch;
+}
+
+function resolveSignboardReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } | null {
   const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (manualDriveNode) {
     const manualVehicle = vehicleInstances.get(manualDriveNode)?.vehicle ?? null;
     const bodyPosition = manualVehicle?.chassisBody?.position;
     if (bodyPosition) {
       signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-      return { position: signboardReferenceScratch, kind: 'vehicle' };
+      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: manualDriveNode };
     }
     const manualObject = nodeObjectMap.get(manualDriveNode) ?? null;
     if (manualObject) {
       manualObject.getWorldPosition(signboardReferenceScratch);
-      return { position: signboardReferenceScratch, kind: 'vehicle' };
+      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: manualDriveNode };
     }
   }
 
@@ -4127,17 +4184,17 @@ function resolveSignboardReference(activeCamera: THREE.Camera): { position: THRE
     const bodyPosition = autoTourVehicle?.chassisBody?.position;
     if (bodyPosition) {
       signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-      return { position: signboardReferenceScratch, kind: 'vehicle' };
+      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: followNodeId };
     }
     const followObject = nodeObjectMap.get(followNodeId) ?? null;
     if (followObject) {
       followObject.getWorldPosition(signboardReferenceScratch);
-      return { position: signboardReferenceScratch, kind: 'vehicle' };
+      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: followNodeId };
     }
   }
 
   activeCamera.getWorldPosition(signboardReferenceScratch);
-  return { position: signboardReferenceScratch, kind: 'camera' };
+  return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() };
 }
 
 function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
@@ -4183,9 +4240,10 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
     }
 
     resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
+    const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, reference);
     const placement = computeSignboardPlacement({
       anchorWorld: signboardAnchorScratch,
-      referenceWorld: reference.position,
+      referenceWorld: distanceReferenceWorld,
       camera: activeCamera,
     });
     if (!placement) {

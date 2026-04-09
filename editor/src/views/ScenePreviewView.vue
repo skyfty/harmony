@@ -1635,9 +1635,13 @@ const signboardOverlayEntries = ref<Array<{
 }>>([])
 const signboardReferenceScratch = new THREE.Vector3()
 const signboardAnchorScratch = new THREE.Vector3()
+const overlayDistanceReferenceScratch = new THREE.Vector3()
+const overlayDistanceTargetAnchorScratch = new THREE.Vector3()
+const overlayDistanceReferenceAnchorScratch = new THREE.Vector3()
 const behaviorBubbleAnchorScratch = new THREE.Vector3()
 const behaviorBubbleCameraScratch = new THREE.Vector3()
 const behaviorBubbleSeenKeys = new Set<string>()
+const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5
 
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
 	let current: THREE.Object3D | null | undefined = object
@@ -2250,30 +2254,69 @@ function resolveNodeById(nodeId: string): SceneNode | null {
 	return resolveSceneNodeById(previewNodeMap, nodeId)
 }
 
-function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' | 'vehicle' } | null {
+function resolveCameraDistanceReferenceNodeId(): string | null {
+	return resolveNodeIdFromObject(findProtagonistObject())
+}
+
+function resolveNodePlaneAnchorPoint(nodeId: string | null, target: THREE.Vector3): THREE.Vector3 | null {
+	return resolveNodeAnchorPoint(nodeId, target) ?? resolveNodeFocusPoint(nodeId, target)
+}
+
+function resolveOverlayDistanceReferenceNodeId(): string | null {
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		return vehicleDriveState.nodeId
+	}
+	if (autoTourFollowNodeId.value) {
+		return autoTourFollowNodeId.value
+	}
+	return resolveCameraDistanceReferenceNodeId()
+}
+
+function resolveOverlayDistanceReferenceWorld(
+	targetNodeId: string | null,
+	anchorWorld: THREE.Vector3,
+	reference: { position: THREE.Vector3; nodeId: string | null },
+): THREE.Vector3 {
+	const targetPlaneAnchor = resolveNodePlaneAnchorPoint(targetNodeId, overlayDistanceTargetAnchorScratch)
+	if (!targetPlaneAnchor) {
+		return reference.position
+	}
+	const referencePlaneAnchor = reference.nodeId
+		? resolveNodePlaneAnchorPoint(reference.nodeId, overlayDistanceReferenceAnchorScratch)
+		: null
+	const comparableReference = referencePlaneAnchor ?? overlayDistanceReferenceAnchorScratch.copy(reference.position)
+	if (Math.abs(targetPlaneAnchor.y - comparableReference.y) > OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON) {
+		return reference.position
+	}
+	overlayDistanceReferenceScratch.copy(reference.position)
+	overlayDistanceReferenceScratch.y = anchorWorld.y
+	return overlayDistanceReferenceScratch
+}
+
+function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } | null {
 	if (vehicleDriveState.active && vehicleDriveState.vehicle?.chassisBody?.position) {
 		const bodyPosition = vehicleDriveState.vehicle.chassisBody.position
 		signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
-		return { position: signboardReferenceScratch, kind: 'vehicle' }
+		return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: vehicleDriveState.nodeId }
 	}
 	if (autoTourFollowNodeId.value) {
 		const autoTourVehicle = vehicleInstances.get(autoTourFollowNodeId.value)?.vehicle ?? null
 		const bodyPosition = autoTourVehicle?.chassisBody?.position
 		if (bodyPosition) {
 			signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
-			return { position: signboardReferenceScratch, kind: 'vehicle' }
+			return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: autoTourFollowNodeId.value }
 		}
 		const followObject = nodeObjectMap.get(autoTourFollowNodeId.value) ?? null
 		if (followObject) {
 			followObject.getWorldPosition(signboardReferenceScratch)
-			return { position: signboardReferenceScratch, kind: 'vehicle' }
+			return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: autoTourFollowNodeId.value }
 		}
 	}
 	if (!camera) {
 		return null
 	}
 	camera.getWorldPosition(signboardReferenceScratch)
-	return { position: signboardReferenceScratch, kind: 'camera' }
+	return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() }
 }
 
 function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
@@ -2315,9 +2358,10 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
 			continue
 		}
 		resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch)
+		const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, reference)
 		const placement = computeSignboardPlacement({
 			anchorWorld: signboardAnchorScratch,
-			referenceWorld: reference.position,
+			referenceWorld: distanceReferenceWorld,
 			camera: activeCamera,
 		})
 		if (!placement) {
@@ -4415,8 +4459,13 @@ function buildBehaviorBubbleSeenKey(event: Extract<BehaviorRuntimeEvent, { type:
 	return [event.nodeId, event.action, event.behaviorSequenceId, event.behaviorId].join(':')
 }
 
-function resolveBehaviorBubbleAnchorObject(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): THREE.Object3D | null {
+function resolveBehaviorBubbleAnchorNodeId(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): string | null {
 	const targetNodeId = event.params.targetNodeId?.trim()
+	return targetNodeId || event.nodeId || null
+}
+
+function resolveBehaviorBubbleAnchorObject(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): THREE.Object3D | null {
+	const targetNodeId = resolveBehaviorBubbleAnchorNodeId(event)
 	if (targetNodeId) {
 		return nodeObjectMap.get(targetNodeId) ?? null
 	}
@@ -4440,8 +4489,16 @@ function canPresentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: '
 		event.params.worldOffsetY,
 	)
 	activeCamera.getWorldPosition(behaviorBubbleCameraScratch)
+	const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(
+		resolveBehaviorBubbleAnchorNodeId(event),
+		anchor,
+		{
+			position: behaviorBubbleCameraScratch,
+			nodeId: resolveOverlayDistanceReferenceNodeId(),
+		},
+	)
 	const maxDistance = Math.max(0, event.params.maxDistanceMeters ?? 0)
-	if (maxDistance > 0 && behaviorBubbleCameraScratch.distanceTo(anchor) > maxDistance) {
+	if (maxDistance > 0 && distanceReferenceWorld.distanceTo(anchor) > maxDistance) {
 		return false
 	}
 	if (event.params.requireVisibleInView === false) {
@@ -4452,7 +4509,7 @@ function canPresentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: '
 	}
 	const placement = computeSignboardPlacement({
 		anchorWorld: anchor,
-		referenceWorld: behaviorBubbleCameraScratch,
+		referenceWorld: distanceReferenceWorld,
 		camera: activeCamera,
 		maxDistance: maxDistance > 0 ? maxDistance : undefined,
 	})
