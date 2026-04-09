@@ -327,19 +327,6 @@
               <text class="viewer-drive-icon-text">🔄</text>
             </view>
           </button>
-          <button
-            class="viewer-drive-icon-button viewer-drive-icon-button--danger"
-            :class="{ 'is-busy': vehicleDriveExitBusy }"
-            :disabled="vehicleDriveExitBusy"
-            type="button"
-            hover-class="none"
-            aria-label="下车"
-            @tap="handleVehicleDriveExitTap"
-          >
-            <view class="viewer-drive-icon" aria-hidden="true">
-              <text class="viewer-drive-icon-text">🚪</text>
-            </view>
-          </button>
         </view>
         <view
           v-show="drivePadState.visible"
@@ -12277,7 +12264,7 @@ onUnmounted(() => {
 .viewer-drive-speed-left-floating {
   position: absolute;
   left: 24px;
-  bottom: 190px;
+  bottom: 206px;
   z-index: 1580;
   display: flex;
   align-items: center;
