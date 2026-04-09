@@ -366,33 +366,30 @@
           </view>
         </view>
       </view>
-      <view
-        v-if="vehicleDriveUi.visible"
-        class="viewer-drive-speed-floating"
-        aria-hidden="true"
-      >
-        <view class="viewer-drive-hud">
-          <view class="viewer-drive-speed-readout">
-            <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
-            <text class="viewer-drive-speed-readout__unit">km/h</text>
+      <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating" aria-hidden="true">
+        <view class="viewer-drive-speed-readout">
+          <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
+          <text class="viewer-drive-speed-readout__unit">km/h</text>
+        </view>
+      </view>
+
+      <view v-if="vehicleDriveUi.visible" class="viewer-drive-compass-right-floating" aria-hidden="true">
+        <view class="viewer-drive-compass" :style="vehicleCompassStyle">
+          <view class="viewer-drive-compass__ticks">
+            <view
+              v-for="tick in vehicleCompassTicks"
+              :key="tick.key"
+              class="viewer-drive-compass__tick"
+              :class="{ 'is-major': tick.major }"
+              :style="tick.style"
+            ></view>
           </view>
-          <view class="viewer-drive-compass" :style="vehicleCompassStyle">
-            <view class="viewer-drive-compass__ticks">
-              <view
-                v-for="tick in vehicleCompassTicks"
-                :key="tick.key"
-                class="viewer-drive-compass__tick"
-                :class="{ 'is-major': tick.major }"
-                :style="tick.style"
-              ></view>
-            </view>
-            <text class="viewer-drive-compass__label viewer-drive-compass__label--north">北</text>
-            <text class="viewer-drive-compass__label viewer-drive-compass__label--south">南</text>
-            <text class="viewer-drive-compass__label viewer-drive-compass__label--west">西</text>
-            <text class="viewer-drive-compass__label viewer-drive-compass__label--east">东</text>
-            <view class="viewer-drive-compass__pointer"></view>
-            <view class="viewer-drive-compass__hub"></view>
-          </view>
+          <text class="viewer-drive-compass__label viewer-drive-compass__label--north">北</text>
+          <text class="viewer-drive-compass__label viewer-drive-compass__label--south">南</text>
+          <text class="viewer-drive-compass__label viewer-drive-compass__label--west">西</text>
+          <text class="viewer-drive-compass__label viewer-drive-compass__label--east">东</text>
+          <view class="viewer-drive-compass__pointer"></view>
+          <view class="viewer-drive-compass__hub"></view>
         </view>
       </view>
 
@@ -12269,6 +12266,26 @@ onUnmounted(() => {
 
 .viewer-drive-speed-floating {
   position: absolute;
+  left: 24px;
+  bottom: 190px;
+  z-index: 1580;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.viewer-drive-speed-left-floating {
+  position: absolute;
+  left: 24px;
+  bottom: 190px;
+  z-index: 1580;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.viewer-drive-compass-right-floating {
+  position: absolute;
   right: 24px;
   bottom: 190px;
   z-index: 1580;
@@ -12295,7 +12312,7 @@ onUnmounted(() => {
   backdrop-filter: blur(12px);
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 2px;
   color: #f7fbff;
   font-weight: 700;
@@ -12305,6 +12322,8 @@ onUnmounted(() => {
 .viewer-drive-speed-readout__value {
   font-size: 1.5rem;
   line-height: 1;
+  width: 100%;
+  text-align: left;
 }
 
 .viewer-drive-speed-readout__unit {
@@ -12312,6 +12331,9 @@ onUnmounted(() => {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   opacity: 0.78;
+  width: 100%;
+  text-align: center;
+  align-self: center;
 }
 
 .viewer-drive-compass {
@@ -12353,6 +12375,7 @@ onUnmounted(() => {
   border-radius: 999px;
   background: rgba(227, 242, 255, 0.34);
   transform-origin: center 38px;
+  z-index: 1;
 }
 
 .viewer-drive-compass__tick.is-major {
@@ -12367,30 +12390,30 @@ onUnmounted(() => {
   letter-spacing: 0.08em;
   color: rgba(240, 248, 255, 0.9);
   text-shadow: 0 0 8px rgba(0, 0, 0, 0.45);
-  z-index: 2;
+  z-index: 3;
 }
 
 .viewer-drive-compass__label--north {
-  top: 8px;
+  top: 20px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .viewer-drive-compass__label--south {
-  bottom: 8px;
+  bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .viewer-drive-compass__label--west {
   top: 50%;
-  left: 10px;
+  left: 20px;
   transform: translateY(-50%);
 }
 
 .viewer-drive-compass__label--east {
   top: 50%;
-  right: 10px;
+  right: 20px;
   transform: translateY(-50%);
 }
 
