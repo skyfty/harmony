@@ -3284,7 +3284,14 @@ function resolveGroundScatterChunkStreamingEnabled(): boolean {
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return false
   }
+  if (sceneStore.groundSettings.editorScatterDynamicStreamingEnabled === false) {
+    return false
+  }
   return isGroundChunkStreamingEnabled(node.dynamicMesh)
+}
+
+function isEditorGroundScatterVisible(): boolean {
+  return sceneStore.groundSettings.editorScatterVisible !== false
 }
 
 const DISABLE_EDITOR_VIEWPORT_SCATTER_LOD_RUNTIME = true
@@ -3324,8 +3331,9 @@ const groundEditor = createGroundEditor({
   clearVertexSnap: clearBuildToolVertexSnap,
   lockScatterLodToBaseAsset: true,
   disableScatterLodRuntime: DISABLE_EDITOR_VIEWPORT_SCATTER_LOD_RUNTIME,
+  isScatterVisible: isEditorGroundScatterVisible,
   scatterChunkStreaming: {
-    enabled: resolveGroundScatterChunkStreamingEnabled(),
+    enabled: resolveGroundScatterChunkStreamingEnabled,
     getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
   },
   onTerrainPaintSurfacePreviewChanged: syncGroundSurfacePreviewFromLiveTerrainPaint,

@@ -6466,6 +6466,8 @@ function resolveGroundSettingsFromNodes(nodes: SceneNode[], fallback: GroundSett
     width: Number.isFinite(definition.width) ? Number(definition.width) : base.width,
     depth: Number.isFinite(definition.depth) ? Number(definition.depth) : base.depth,
     enableAirWall: base.enableAirWall,
+    editorScatterDynamicStreamingEnabled: base.editorScatterDynamicStreamingEnabled,
+    editorScatterVisible: base.editorScatterVisible,
   })
 }
 
@@ -8525,6 +8527,38 @@ export const useSceneStore = defineStore('scene', {
       this.groundSettings = {
         ...this.groundSettings,
         enableAirWall: next,
+      }
+
+      commitSceneSnapshot(this)
+      return true
+    },
+    setGroundEditorScatterDynamicStreamingEnabled(enabled: boolean) {
+      const next = enabled === true
+      if (this.groundSettings.editorScatterDynamicStreamingEnabled === next) {
+        return false
+      }
+
+      this.appendUndoEntry({ kind: 'ground-settings', groundSettings: cloneGroundSettings(this.groundSettings) })
+
+      this.groundSettings = {
+        ...this.groundSettings,
+        editorScatterDynamicStreamingEnabled: next,
+      }
+
+      commitSceneSnapshot(this)
+      return true
+    },
+    setGroundEditorScatterVisible(visible: boolean) {
+      const next = visible === true
+      if (this.groundSettings.editorScatterVisible === next) {
+        return false
+      }
+
+      this.appendUndoEntry({ kind: 'ground-settings', groundSettings: cloneGroundSettings(this.groundSettings) })
+
+      this.groundSettings = {
+        ...this.groundSettings,
+        editorScatterVisible: next,
       }
 
       commitSceneSnapshot(this)

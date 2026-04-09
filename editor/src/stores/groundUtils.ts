@@ -145,6 +145,8 @@ export function normalizeGroundSettings(settings: Partial<GroundSettings> | null
     width: normalizeGroundDimension(settings?.width as unknown, DEFAULT_GROUND_EXTENT),
     depth: normalizeGroundDimension(settings?.depth as unknown, DEFAULT_GROUND_EXTENT),
     enableAirWall: settings?.enableAirWall !== false,
+    editorScatterDynamicStreamingEnabled: settings?.editorScatterDynamicStreamingEnabled !== false,
+    editorScatterVisible: settings?.editorScatterVisible !== false,
   }
 }
 

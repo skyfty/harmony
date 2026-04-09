@@ -46,6 +46,20 @@ const groundChunkStreamingEnabled = computed({
     sceneStore.updateGroundNodeDynamicMesh(node.id, { chunkStreamingEnabled: value })
   },
 })
+
+const editorScatterDynamicStreamingEnabled = computed({
+  get: () => sceneStore.groundSettings.editorScatterDynamicStreamingEnabled !== false,
+  set: (value: boolean) => {
+    sceneStore.setGroundEditorScatterDynamicStreamingEnabled(value)
+  },
+})
+
+const editorScatterVisible = computed({
+  get: () => sceneStore.groundSettings.editorScatterVisible !== false,
+  set: (value: boolean) => {
+    sceneStore.setGroundEditorScatterVisible(value)
+  },
+})
 </script>
 
 <template>
@@ -97,6 +111,22 @@ const groundChunkStreamingEnabled = computed({
         hide-details
         color="primary"
         label="Enable Terrain Chunk Streaming"
+      />
+
+      <v-switch
+        v-model="editorScatterDynamicStreamingEnabled"
+        density="compact"
+        hide-details
+        color="primary"
+        label="Scatter Dynamic Load/Unload"
+      />
+
+      <v-switch
+        v-model="editorScatterVisible"
+        density="compact"
+        hide-details
+        color="primary"
+        label="Show All Ground Scatter"
       />
     </v-expansion-panel-text>
   </v-expansion-panel>

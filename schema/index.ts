@@ -991,6 +991,10 @@ export interface GroundSettings {
   depth: number;
   /** When true, build static air-wall colliders around the ground perimeter. */
   enableAirWall?: boolean;
+  /** When true, editor viewports may dynamically load and unload ground scatter instances. */
+  editorScatterDynamicStreamingEnabled?: boolean;
+  /** When true, editor viewports render all ground scatter instances. */
+  editorScatterVisible?: boolean;
 }
 
 export interface SceneViewportSettings {
