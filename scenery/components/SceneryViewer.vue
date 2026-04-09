@@ -114,13 +114,27 @@
                   <view class="viewer-drive-joystick__base"></view>
                   <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
                 </view>
-                <view class="viewer-drive-speed-gauge" aria-hidden="true">
-                  <view class="viewer-drive-speed-gauge__dial" :style="vehicleSpeedGaugeStyle">
-                    <view class="viewer-drive-speed-gauge__needle"></view>
+                <view class="viewer-drive-hud" aria-hidden="true">
+                  <view class="viewer-drive-speed-readout">
+                    <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
+                    <text class="viewer-drive-speed-readout__unit">km/h</text>
                   </view>
-                  <view class="viewer-drive-speed-gauge__values">
-                    <text class="viewer-drive-speed-gauge__value">{{ vehicleSpeedKmh }}</text>
-                    <text class="viewer-drive-speed-gauge__unit">km/h</text>
+                  <view class="viewer-drive-compass" :style="vehicleCompassStyle">
+                    <view class="viewer-drive-compass__ticks">
+                      <view
+                        v-for="tick in vehicleCompassTicks"
+                        :key="tick.key"
+                        class="viewer-drive-compass__tick"
+                        :class="{ 'is-major': tick.major }"
+                        :style="tick.style"
+                      ></view>
+                    </view>
+                    <text class="viewer-drive-compass__label viewer-drive-compass__label--north">北</text>
+                    <text class="viewer-drive-compass__label viewer-drive-compass__label--south">南</text>
+                    <text class="viewer-drive-compass__label viewer-drive-compass__label--west">西</text>
+                    <text class="viewer-drive-compass__label viewer-drive-compass__label--east">东</text>
+                    <view class="viewer-drive-compass__pointer"></view>
+                    <view class="viewer-drive-compass__hub"></view>
                   </view>
                 </view>
               </view>
@@ -357,12 +371,28 @@
         class="viewer-drive-speed-floating"
         aria-hidden="true"
       >
-        <view class="viewer-drive-speed-gauge" :style="vehicleSpeedGaugeStyle">
-          <view class="viewer-drive-speed-gauge__needle"></view>
-        </view>
-        <view class="viewer-drive-speed-gauge__values">
-          <text class="viewer-drive-speed-gauge__value">{{ vehicleSpeedKmh }}</text>
-          <text class="viewer-drive-speed-gauge__unit">km/h</text>
+        <view class="viewer-drive-hud">
+          <view class="viewer-drive-speed-readout">
+            <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
+            <text class="viewer-drive-speed-readout__unit">km/h</text>
+          </view>
+          <view class="viewer-drive-compass" :style="vehicleCompassStyle">
+            <view class="viewer-drive-compass__ticks">
+              <view
+                v-for="tick in vehicleCompassTicks"
+                :key="tick.key"
+                class="viewer-drive-compass__tick"
+                :class="{ 'is-major': tick.major }"
+                :style="tick.style"
+              ></view>
+            </view>
+            <text class="viewer-drive-compass__label viewer-drive-compass__label--north">北</text>
+            <text class="viewer-drive-compass__label viewer-drive-compass__label--south">南</text>
+            <text class="viewer-drive-compass__label viewer-drive-compass__label--west">西</text>
+            <text class="viewer-drive-compass__label viewer-drive-compass__label--east">东</text>
+            <view class="viewer-drive-compass__pointer"></view>
+            <view class="viewer-drive-compass__hub"></view>
+          </view>
         </view>
       </view>
 
@@ -2263,6 +2293,8 @@ const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseDirection = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const protagonistPoseTarget = new THREE.Vector3();
+const vehicleCompassForward = new THREE.Vector3();
+const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
 const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
@@ -2270,7 +2302,6 @@ let suppressSelfYawRecenter = false;
 let protagonistPoseSynced = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
-const VEHICLE_SPEED_GAUGE_MAX_MPS = 32;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
 const VEHICLE_SMOOTH_STOP_TRIGGER_SPEED = 0.6;
@@ -2492,10 +2523,17 @@ const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
 };
 
 const vehicleSpeed = ref(0);
-const vehicleSpeedPercent = computed(() => Math.min(1, vehicleSpeed.value / VEHICLE_SPEED_GAUGE_MAX_MPS));
 const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeed.value * 3.6));
-const vehicleSpeedGaugeStyle = computed(() => ({
-  '--speed-angle': `${vehicleSpeedPercent.value * 360}deg`,
+const vehicleHeadingDegrees = ref(0);
+const vehicleCompassStyle = computed(() => ({
+  '--vehicle-heading': `${vehicleHeadingDegrees.value}deg`,
+}));
+const vehicleCompassTicks = Array.from({ length: 24 }, (_, index) => ({
+  key: `vehicle-compass-tick-${index}`,
+  major: index % 3 === 0,
+  style: {
+    transform: `translateX(-50%) rotate(${index * 15}deg)`,
+  },
 }));
 
 // Bridge object so the shared VehicleDriveController can mutate existing refs while keeping reactivity intact.
@@ -7882,11 +7920,33 @@ function applyVehicleDriveForces(deltaSeconds: number): void {
 
 function updateVehicleSpeedFromVehicle(): void {
   const vehicle = vehicleDriveVehicle;
-  const velocity = vehicle?.chassisBody?.velocity ?? null;
-  if (!velocity) {
+  const chassisBody = vehicle?.chassisBody ?? null;
+  const velocity = chassisBody?.velocity ?? null;
+  if (!chassisBody || !velocity) {
     vehicleSpeed.value = 0;
+    vehicleHeadingDegrees.value = 0;
     return;
   }
+
+  vehicleCompassQuaternion.set(
+    chassisBody.quaternion.x,
+    chassisBody.quaternion.y,
+    chassisBody.quaternion.z,
+    chassisBody.quaternion.w,
+  );
+  vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
+  vehicleCompassForward.y = 0;
+  const horizontalLengthSq =
+    vehicleCompassForward.x * vehicleCompassForward.x
+    + vehicleCompassForward.z * vehicleCompassForward.z;
+  if (horizontalLengthSq > 1e-8) {
+    vehicleCompassForward.multiplyScalar(1 / Math.sqrt(horizontalLengthSq));
+    const headingDegrees = THREE.MathUtils.radToDeg(
+      Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
+    );
+    vehicleHeadingDegrees.value = (headingDegrees + 360) % 360;
+  }
+
   const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
   vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
 }
@@ -12209,76 +12269,177 @@ onUnmounted(() => {
 
 .viewer-drive-speed-floating {
   position: absolute;
-  left: 24px;
+  right: 24px;
   bottom: 190px;
   z-index: 1580;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
   pointer-events: none;
 }
 
-.viewer-drive-speed-gauge {
-  width: 76px;
-  height: 76px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background:
-    conic-gradient(from -90deg, rgba(102, 210, 255, 0.65) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.04) var(--speed-angle, 0deg));
-  background-color: rgba(6, 10, 24, 0.28);
-  position: relative;
+.viewer-drive-hud {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.viewer-drive-speed-readout {
+  min-width: 72px;
+  padding: 10px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(145deg, rgba(10, 16, 34, 0.5), rgba(7, 12, 28, 0.24));
   box-shadow:
-    inset 0 0 14px rgba(0, 0, 0, 0.32),
-    0 14px 28px rgba(3, 6, 18, 0.35);
-  backdrop-filter: blur(8px);
-}
-
-.viewer-drive-speed-gauge::after {
-  content: '';
-  position: absolute;
-  inset: 14%;
-  border-radius: 50%;
-  background: rgba(4, 6, 18, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.viewer-drive-speed-gauge__needle {
-  position: absolute;
-  bottom: 50%;
-  left: 50%;
-  width: 2px;
-  height: 36px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(67, 221, 255, 0.8));
-  border-radius: 1px;
-  transform-origin: center bottom;
-  transform: translateX(-50%) rotate(calc(var(--speed-angle, 0deg) - 90deg));
-  box-shadow: 0 0 10px rgba(78, 227, 255, 0.5);
-  z-index: 2;
-}
-
-.viewer-drive-speed-gauge__values {
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 14px 28px rgba(3, 6, 18, 0.28);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
   color: #f7fbff;
   font-weight: 700;
   text-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  font-size: 0.8rem;
 }
 
-.viewer-drive-speed-gauge__value {
-  font-size: 1.3rem;
+.viewer-drive-speed-readout__value {
+  font-size: 1.5rem;
+  line-height: 1;
 }
 
-.viewer-drive-speed-gauge__unit {
+.viewer-drive-speed-readout__unit {
   font-size: 0.65rem;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  opacity: 0.8;
+  opacity: 0.78;
+}
+
+.viewer-drive-compass {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background:
+    radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.2), transparent 34%),
+    linear-gradient(145deg, rgba(13, 20, 42, 0.52), rgba(6, 10, 24, 0.22));
+  box-shadow:
+    inset 0 0 18px rgba(0, 0, 0, 0.26),
+    0 16px 30px rgba(3, 6, 18, 0.3);
+  backdrop-filter: blur(14px);
+}
+
+.viewer-drive-compass::before {
+  content: '';
+  position: absolute;
+  inset: 10%;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: radial-gradient(circle at center, rgba(14, 22, 48, 0.24), rgba(4, 7, 18, 0.08));
+}
+
+.viewer-drive-compass__ticks {
+  position: absolute;
+  inset: 0;
+}
+
+.viewer-drive-compass__tick {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  width: 2px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(227, 242, 255, 0.34);
+  transform-origin: center 38px;
+}
+
+.viewer-drive-compass__tick.is-major {
+  height: 12px;
+  background: rgba(133, 221, 255, 0.68);
+}
+
+.viewer-drive-compass__label {
+  position: absolute;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(240, 248, 255, 0.9);
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.45);
+  z-index: 2;
+}
+
+.viewer-drive-compass__label--north {
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.viewer-drive-compass__label--south {
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.viewer-drive-compass__label--west {
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+}
+
+.viewer-drive-compass__label--east {
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+}
+
+.viewer-drive-compass__pointer {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--vehicle-heading, 0deg));
+  z-index: 2;
+}
+
+.viewer-drive-compass__pointer::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 17px;
+  width: 2px;
+  height: 30px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(95, 226, 255, 0.9));
+  box-shadow: 0 0 12px rgba(84, 221, 255, 0.48);
+  transform: translateX(-50%);
+}
+
+.viewer-drive-compass__pointer::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 9px;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 12px solid rgba(150, 237, 255, 0.92);
+  filter: drop-shadow(0 0 8px rgba(88, 225, 255, 0.38));
+  transform: translateX(-50%);
+}
+
+.viewer-drive-compass__hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.96), rgba(118, 224, 255, 0.75));
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 14px rgba(93, 224, 255, 0.32);
+  transform: translate(-50%, -50%);
+  z-index: 3;
 }
 
 .viewer-drive-brake {
