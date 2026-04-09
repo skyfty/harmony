@@ -12503,7 +12503,7 @@ onUnmounted(() => {
   left: 50%;
   top: 36px;
   width: 8px;
-  height: 49px;
+  height: 44px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(130, 231, 255, 0.94), rgba(56, 181, 255, 0.88));
   box-shadow: 0 0 16px rgba(84, 221, 255, 0.4);
