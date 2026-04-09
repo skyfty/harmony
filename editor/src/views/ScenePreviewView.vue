@@ -164,6 +164,7 @@ import {
 	vehicleComponentDefinition,
 	waterComponentDefinition,
 	protagonistComponentDefinition,
+	signboardComponentDefinition,
 	lodComponentDefinition,
 	guideRouteComponentDefinition,
 	autoTourComponentDefinition,
@@ -171,6 +172,7 @@ import {
 	sceneStateAnchorComponentDefinition,
 	nominateComponentDefinition,
 	steerComponentDefinition,
+	SIGNBOARD_COMPONENT_TYPE,
 	findDefaultSteerResolvedEntry,
 	applyNominateStateMapToRuntime,
 	type NominateExternalStateMap,
@@ -210,6 +212,11 @@ import {
 import { startTourAndFollow, stopTourAndUnfollow } from '@schema/autoTourHelpers'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
 import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
+import {
+	computeSignboardPlacement,
+	resolveSignboardAnchorWorldPosition,
+	resolveSignboardDisplayLabel,
+} from '@schema/signboardOverlay'
 import type {
 	GuideboardComponentProps,
 	LodFaceCameraForwardAxis,
@@ -218,6 +225,7 @@ import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
 	AutoTourComponentProps,
+	SignboardComponentProps,
     
 	VehicleComponentProps,
 	VehicleWheelProps,
@@ -907,6 +915,7 @@ previewComponentManager.registerDefinition(landformComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
 previewComponentManager.registerDefinition(displayBoardComponentDefinition)
 previewComponentManager.registerDefinition(billboardComponentDefinition)
+previewComponentManager.registerDefinition(signboardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
@@ -1594,6 +1603,19 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+const signboardNodeIds = new Set<string>()
+const signboardOverlayEntries = ref<Array<{
+	id: string
+	label: string
+	distanceLabel: string
+	xPercent: number
+	yPercent: number
+	scale: number
+	opacity: number
+	referenceKind: 'camera' | 'vehicle'
+}>>([])
+const signboardReferenceScratch = new THREE.Vector3()
+const signboardAnchorScratch = new THREE.Vector3()
 
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
 	let current: THREE.Object3D | null | undefined = object
@@ -2187,6 +2209,15 @@ function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | nul
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
 	rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap)
+	signboardNodeIds.clear()
+	for (const [nodeId, node] of previewNodeMap.entries()) {
+		const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
+			| SceneNodeComponentState<SignboardComponentProps>
+			| undefined
+		if (signboardState?.enabled) {
+			signboardNodeIds.add(nodeId)
+		}
+	}
 }
 
 function resolveParentNodeId(nodeId: string): string | null {
@@ -2195,6 +2226,93 @@ function resolveParentNodeId(nodeId: string): string | null {
 
 function resolveNodeById(nodeId: string): SceneNode | null {
 	return resolveSceneNodeById(previewNodeMap, nodeId)
+}
+
+function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' | 'vehicle' } | null {
+	if (vehicleDriveState.active && vehicleDriveState.vehicle?.chassisBody?.position) {
+		const bodyPosition = vehicleDriveState.vehicle.chassisBody.position
+		signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
+		return { position: signboardReferenceScratch, kind: 'vehicle' }
+	}
+	if (autoTourFollowNodeId.value) {
+		const autoTourVehicle = vehicleInstances.get(autoTourFollowNodeId.value)?.vehicle ?? null
+		const bodyPosition = autoTourVehicle?.chassisBody?.position
+		if (bodyPosition) {
+			signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
+			return { position: signboardReferenceScratch, kind: 'vehicle' }
+		}
+		const followObject = nodeObjectMap.get(autoTourFollowNodeId.value) ?? null
+		if (followObject) {
+			followObject.getWorldPosition(signboardReferenceScratch)
+			return { position: signboardReferenceScratch, kind: 'vehicle' }
+		}
+	}
+	if (!camera) {
+		return null
+	}
+	camera.getWorldPosition(signboardReferenceScratch)
+	return { position: signboardReferenceScratch, kind: 'camera' }
+}
+
+function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
+	if (!signboardNodeIds.size) {
+		if (signboardOverlayEntries.value.length) {
+			signboardOverlayEntries.value = []
+		}
+		return
+	}
+	const reference = resolveSignboardReference()
+	if (!reference) {
+		signboardOverlayEntries.value = []
+		return
+	}
+	const nextEntries: Array<{
+		id: string
+		label: string
+		distanceLabel: string
+		xPercent: number
+		yPercent: number
+		scale: number
+		opacity: number
+		referenceKind: 'camera' | 'vehicle'
+	}> = []
+	for (const nodeId of signboardNodeIds) {
+		const node = resolveNodeById(nodeId)
+		const object = nodeObjectMap.get(nodeId) ?? null
+		if (!node || !object || !isRuntimeObjectEffectivelyVisible(object)) {
+			continue
+		}
+		const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
+			| SceneNodeComponentState<SignboardComponentProps>
+			| undefined
+		if (!signboardState?.enabled) {
+			continue
+		}
+		const label = resolveSignboardDisplayLabel(signboardState.props?.label, node.name, nodeId)
+		if (!label) {
+			continue
+		}
+		resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch)
+		const placement = computeSignboardPlacement({
+			anchorWorld: signboardAnchorScratch,
+			referenceWorld: reference.position,
+			camera: activeCamera,
+		})
+		if (!placement) {
+			continue
+		}
+		nextEntries.push({
+			id: nodeId,
+			label,
+			distanceLabel: placement.distanceLabel,
+			xPercent: placement.xPercent,
+			yPercent: placement.yPercent,
+			scale: placement.scale,
+			opacity: placement.opacity,
+			referenceKind: reference.kind,
+		})
+	}
+	signboardOverlayEntries.value = nextEntries
 }
 
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
@@ -7505,6 +7623,7 @@ function startAnimationLoop() {
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera)
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
+		updateSignboardOverlayEntries(activeCamera)
 		updatePerFrameDiagnostics(delta)
 		if (gradientBackgroundDome) {
 			gradientBackgroundDome.mesh.position.copy(activeCamera.position)
@@ -11096,6 +11215,25 @@ watch(
 			</div>
 		</v-alert>
 		<div ref="containerRef" class="scene-preview__canvas"></div>
+		<div v-if="signboardOverlayEntries.length" class="scene-preview__signboard-layer" aria-hidden="true">
+			<div
+				v-for="entry in signboardOverlayEntries"
+				:key="entry.id"
+				class="scene-preview__signboard"
+				:class="{ 'scene-preview__signboard--vehicle': entry.referenceKind === 'vehicle' }"
+				:style="{
+					left: `${entry.xPercent}%`,
+					top: `${entry.yPercent}%`,
+					'--signboard-scale': String(entry.scale),
+					'--signboard-opacity': String(entry.opacity),
+				}"
+			>
+				<div class="scene-preview__signboard-pill">
+					<span class="scene-preview__signboard-name">{{ entry.label }}</span>
+					<span class="scene-preview__signboard-distance">{{ entry.distanceLabel }}</span>
+				</div>
+			</div>
+		</div>
 		<div class="scene-preview__stats">
 			<div
 				v-if="isDebugOverlayVisible"
@@ -11849,6 +11987,59 @@ watch(
 	width: 100%;
 	height: 100%;
 	display: block;
+}
+
+.scene-preview__signboard-layer {
+	position: absolute;
+	inset: 0;
+	z-index: 2150;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.scene-preview__signboard {
+	position: absolute;
+	transform: translate(-50%, -100%) scale(var(--signboard-scale, 1));
+	transform-origin: center bottom;
+	opacity: var(--signboard-opacity, 1);
+	transition: opacity 120ms linear, transform 120ms ease-out;
+	will-change: transform, opacity;
+}
+
+.scene-preview__signboard-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 14px;
+	border-radius: 999px;
+	border: 1px solid rgba(149, 223, 255, 0.32);
+	background: linear-gradient(135deg, rgba(8, 20, 34, 0.88), rgba(18, 44, 62, 0.82));
+	box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+	backdrop-filter: blur(10px);
+	color: #eff8ff;
+	white-space: nowrap;
+}
+
+.scene-preview__signboard--vehicle .scene-preview__signboard-pill {
+	border-color: rgba(255, 210, 127, 0.36);
+	background: linear-gradient(135deg, rgba(36, 22, 8, 0.88), rgba(62, 44, 18, 0.82));
+}
+
+.scene-preview__signboard-name {
+	font-size: 0.84rem;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.scene-preview__signboard-distance {
+	padding-left: 10px;
+	border-left: 1px solid rgba(255, 255, 255, 0.14);
+	font-size: 0.76rem;
+	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+	color: rgba(226, 242, 255, 0.82);
 }
 
 .scene-preview__stats {

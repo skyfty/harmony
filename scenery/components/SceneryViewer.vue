@@ -15,6 +15,25 @@
         class="viewer-canvas"
         @useCanvas="handleUseCanvas"
       />
+      <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
+        <view
+          v-for="entry in signboardOverlayEntries"
+          :key="entry.id"
+          class="viewer-signboard"
+          :class="{ 'viewer-signboard--vehicle': entry.referenceKind === 'vehicle' }"
+          :style="{
+            left: `${entry.xPercent}%`,
+            top: `${entry.yPercent}%`,
+            transform: `translate(-50%, -100%) scale(${entry.scale})`,
+            opacity: String(entry.opacity),
+          }"
+        >
+          <view class="viewer-signboard__pill">
+            <text class="viewer-signboard__name">{{ entry.label }}</text>
+            <text class="viewer-signboard__distance">{{ entry.distanceLabel }}</text>
+          </view>
+        </view>
+      </view>
       <view
         v-if="behaviorAlertVisible"
         class="viewer-behavior-overlay"
@@ -699,6 +718,11 @@ import {
   protagonistComponentDefinition,
 } from '@harmony/schema/components/definitions/protagonistComponent';
 import {
+  signboardComponentDefinition,
+  SIGNBOARD_COMPONENT_TYPE,
+  type SignboardComponentProps,
+} from '@harmony/schema/components/definitions/signboardComponent';
+import {
   lodComponentDefinition,
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
@@ -757,6 +781,11 @@ import {
 import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
+import {
+  computeSignboardPlacement,
+  resolveSignboardAnchorWorldPosition,
+  resolveSignboardDisplayLabel,
+} from '@harmony/schema/signboardOverlay';
 import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@harmony/schema/cameraGuard';
 import {
   addBehaviorRuntimeListener,
@@ -2009,6 +2038,7 @@ previewComponentManager.registerDefinition(landformComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);
 previewComponentManager.registerDefinition(displayBoardComponentDefinition);
 previewComponentManager.registerDefinition(billboardComponentDefinition);
+previewComponentManager.registerDefinition(signboardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
@@ -2139,6 +2169,19 @@ function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean
 }
 
 const nodeObjectMap = new Map<string, THREE.Object3D>();
+const signboardNodeIds = new Set<string>();
+const signboardOverlayEntries = ref<Array<{
+  id: string;
+  label: string;
+  distanceLabel: string;
+  xPercent: number;
+  yPercent: number;
+  scale: number;
+  opacity: number;
+  referenceKind: 'camera' | 'vehicle';
+}>>([]);
+const signboardReferenceScratch = new THREE.Vector3();
+const signboardAnchorScratch = new THREE.Vector3();
 
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
@@ -3817,8 +3860,16 @@ function closeBehaviorAlert() {
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   assetNodeIdMap.clear();
+  signboardNodeIds.clear();
   rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
   for (const node of previewNodeMap.values()) {
+    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<SignboardComponentProps>
+      | undefined;
+    if (signboardState?.enabled) {
+      signboardNodeIds.add(node.id);
+    }
+
     if (isWeChatMiniProgram && node.nodeType === 'Light' && node.light) {
       if (node.light.type === 'Point') {
         node.light.castShadow = false;
@@ -3896,6 +3947,95 @@ function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null
 
 function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
+}
+
+function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' | 'vehicle' } | null {
+  if (vehicleDriveActive.value && vehicleDriveVehicle?.chassisBody?.position) {
+    const bodyPosition = vehicleDriveVehicle.chassisBody.position;
+    signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
+    return { position: signboardReferenceScratch, kind: 'vehicle' };
+  }
+  if (autoTourFollowNodeId.value) {
+    const autoTourVehicle = vehicleInstances.get(autoTourFollowNodeId.value)?.vehicle ?? null;
+    const bodyPosition = autoTourVehicle?.chassisBody?.position;
+    if (bodyPosition) {
+      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
+      return { position: signboardReferenceScratch, kind: 'vehicle' };
+    }
+    const followObject = nodeObjectMap.get(autoTourFollowNodeId.value) ?? null;
+    if (followObject) {
+      followObject.getWorldPosition(signboardReferenceScratch);
+      return { position: signboardReferenceScratch, kind: 'vehicle' };
+    }
+  }
+  const activeCamera = renderContext?.camera ?? null;
+  if (!activeCamera) {
+    return null;
+  }
+  activeCamera.getWorldPosition(signboardReferenceScratch);
+  return { position: signboardReferenceScratch, kind: 'camera' };
+}
+
+function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
+  if (!signboardNodeIds.size) {
+    if (signboardOverlayEntries.value.length) {
+      signboardOverlayEntries.value = [];
+    }
+    return;
+  }
+  const reference = resolveSignboardReference();
+  if (!reference) {
+    signboardOverlayEntries.value = [];
+    return;
+  }
+
+  const nextEntries: Array<{
+    id: string;
+    label: string;
+    distanceLabel: string;
+    xPercent: number;
+    yPercent: number;
+    scale: number;
+    opacity: number;
+    referenceKind: 'camera' | 'vehicle';
+  }> = [];
+  for (const nodeId of signboardNodeIds) {
+    const node = resolveNodeById(nodeId);
+    const object = nodeObjectMap.get(nodeId) ?? null;
+    if (!node || !object || !isRuntimeObjectEffectivelyVisible(object)) {
+      continue;
+    }
+    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<SignboardComponentProps>
+      | undefined;
+    if (!signboardState?.enabled) {
+      continue;
+    }
+    const label = resolveSignboardDisplayLabel(signboardState.props?.label, node.name, nodeId);
+    if (!label) {
+      continue;
+    }
+    resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
+    const placement = computeSignboardPlacement({
+      anchorWorld: signboardAnchorScratch,
+      referenceWorld: reference.position,
+      camera: activeCamera,
+    });
+    if (!placement) {
+      continue;
+    }
+    nextEntries.push({
+      id: nodeId,
+      label,
+      distanceLabel: placement.distanceLabel,
+      xPercent: placement.xPercent,
+      yPercent: placement.yPercent,
+      scale: placement.scale,
+      opacity: placement.opacity,
+      referenceKind: reference.kind,
+    });
+  }
+  signboardOverlayEntries.value = nextEntries;
 }
 
 function normalizeSteerIdentifier(value: unknown): string {
@@ -10614,6 +10754,7 @@ function startRenderLoop(
         }
 
         updateBillboardInstanceCameraWorldPosition(camera.position);
+        updateSignboardOverlayEntries(camera);
 
         if (vehicleDriveActive.value) {
           updateVehicleDriveCamera(deltaSeconds);
@@ -11162,6 +11303,56 @@ onUnmounted(() => {
   flex: 1;
   background-color: #e9eef5;
   isolation: isolate;
+}
+
+.viewer-signboard-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1450;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.viewer-signboard {
+  position: absolute;
+  transform-origin: center bottom;
+  transition: opacity 0.12s linear, transform 0.12s ease-out;
+  will-change: transform, opacity;
+}
+
+.viewer-signboard__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 14rpx;
+  padding: 16rpx 22rpx;
+  border-radius: 999rpx;
+  border: 1px solid rgba(149, 223, 255, 0.3);
+  background: linear-gradient(135deg, rgba(8, 20, 34, 0.86), rgba(18, 44, 62, 0.8));
+  box-shadow: 0 16rpx 36rpx rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+  color: #eff8ff;
+  white-space: nowrap;
+}
+
+.viewer-signboard--vehicle .viewer-signboard__pill {
+  border-color: rgba(255, 210, 127, 0.34);
+  background: linear-gradient(135deg, rgba(36, 22, 8, 0.86), rgba(62, 44, 18, 0.8));
+}
+
+.viewer-signboard__name {
+  max-width: 360rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 24rpx;
+  font-weight: 700;
+  letter-spacing: 0.4rpx;
+}
+
+.viewer-signboard__distance {
+  padding-left: 14rpx;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 21rpx;
+  color: rgba(226, 242, 255, 0.82);
 }
 
 .viewer-debug-overlay {
