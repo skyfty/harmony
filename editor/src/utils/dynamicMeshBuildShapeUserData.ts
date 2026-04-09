@@ -82,6 +82,7 @@ export function isNodeExcludedFromSelectionBoundingBoxFallback(node: SceneNode |
     || dynamicMeshType === 'Wall'
     || dynamicMeshType === 'Floor'
     || dynamicMeshType === 'Landform'
+    || dynamicMeshType === 'Region'
   ) {
     return true
   }

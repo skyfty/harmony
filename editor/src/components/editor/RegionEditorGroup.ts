@@ -2,12 +2,12 @@ import * as THREE from 'three'
 import type { RegionDynamicMesh } from '@schema'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 
-const FILL_Y_OFFSET = 0.01
-const LINE_Y_OFFSET = 0.04
-const REGION_FILL_COLOR = 0x90a4ae
+const FILL_Y_OFFSET = 0.2
+const LINE_Y_OFFSET = 0.2
+const REGION_FILL_COLOR = 0x607d8b
 const REGION_FILL_OPACITY = 0.18
-const REGION_OUTLINE_COLOR = 0x78909c
-const REGION_OUTLINE_OPACITY = 0.68
+const REGION_OUTLINE_COLOR = 0x455a64
+const REGION_OUTLINE_OPACITY = 0.82
 
 function toXZPoints(definition: RegionDynamicMesh): Array<[number, number]> {
   return (Array.isArray(definition.vertices) ? definition.vertices : [])

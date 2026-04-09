@@ -9,6 +9,10 @@ import type {
   SceneBehaviorMap,
   SceneBehaviorScriptBinding,
   ShowAlertBehaviorParams,
+  BubbleBehaviorAnimationPreset,
+  BubbleBehaviorAnchorMode,
+  BubbleBehaviorParams,
+  BubbleBehaviorVariant,
   ShowBehaviorParams,
   LanternBehaviorParams,
   LanternSlideDefinition,
@@ -67,6 +71,67 @@ const actionDefinitions: BehaviorActionDefinition[] = [
 
 const DEFAULT_CONFIRM_TEXT = 'Confirm'
 const DEFAULT_CANCEL_TEXT = 'Cancel'
+const DEFAULT_BUBBLE_DURATION_SECONDS = 2.5
+const DEFAULT_BUBBLE_DELAY_SECONDS = 0
+const DEFAULT_BUBBLE_MAX_DISTANCE_METERS = 30
+const DEFAULT_BUBBLE_SCREEN_OFFSET_X = 0
+const DEFAULT_BUBBLE_SCREEN_OFFSET_Y = -12
+const DEFAULT_BUBBLE_WORLD_OFFSET_Y = 1.6
+
+function normalizeAssetId(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function normalizeNonNegativeNumber(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  return Math.max(0, numeric)
+}
+
+function normalizeFiniteNumber(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  return numeric
+}
+
+function normalizeBubbleVariant(value: string | null | undefined): BubbleBehaviorVariant {
+  switch (value) {
+    case 'success':
+    case 'warning':
+    case 'danger':
+      return value
+    default:
+      return 'info'
+  }
+}
+
+function normalizeBubbleAnimationPreset(value: string | null | undefined): BubbleBehaviorAnimationPreset {
+  switch (value) {
+    case 'fade':
+    case 'scale':
+    case 'shake':
+      return value
+    default:
+      return 'float'
+  }
+}
+
+function normalizeBubbleAnchorMode(value: string | null | undefined): BubbleBehaviorAnchorMode {
+  switch (value) {
+    case 'nodeAnchored':
+      return 'nodeAnchored'
+    default:
+      return 'screenFixed'
+  }
+}
 
 let lanternSlideCounter = 0
 
@@ -173,6 +238,30 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
         confirmText: DEFAULT_CONFIRM_TEXT,
         showCancel: false,
         cancelText: DEFAULT_CANCEL_TEXT,
+      }
+    },
+  },
+  {
+    id: 'bubble',
+    label: 'Bubble Prompt',
+    description: 'Display a short floating HUD bubble and continue after it fades out.',
+    icon: 'mdi-message-text-outline',
+    createDefaultParams(): BubbleBehaviorParams {
+      return {
+        content: 'Prompt message',
+        contentAssetId: null,
+        durationSeconds: DEFAULT_BUBBLE_DURATION_SECONDS,
+        delaySeconds: DEFAULT_BUBBLE_DELAY_SECONDS,
+        anchorMode: 'screenFixed',
+        targetNodeId: null,
+        repeat: true,
+        maxDistanceMeters: DEFAULT_BUBBLE_MAX_DISTANCE_METERS,
+        styleVariant: 'info',
+        animationPreset: 'float',
+        screenOffsetX: DEFAULT_BUBBLE_SCREEN_OFFSET_X,
+        screenOffsetY: DEFAULT_BUBBLE_SCREEN_OFFSET_Y,
+        worldOffsetY: DEFAULT_BUBBLE_WORLD_OFFSET_Y,
+        requireVisibleInView: true,
       }
     },
   },
@@ -615,6 +704,28 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
           cancelText: binding.params?.cancelText ?? DEFAULT_CANCEL_TEXT,
         },
       }
+    case 'bubble': {
+      const params = binding.params as BubbleBehaviorParams | undefined
+      return {
+        type: 'bubble',
+        params: {
+          content: typeof params?.content === 'string' ? params.content : 'Prompt message',
+          contentAssetId: normalizeAssetId(params?.contentAssetId),
+          durationSeconds: normalizeNonNegativeNumber(params?.durationSeconds, DEFAULT_BUBBLE_DURATION_SECONDS),
+          delaySeconds: normalizeNonNegativeNumber(params?.delaySeconds, DEFAULT_BUBBLE_DELAY_SECONDS),
+          anchorMode: normalizeBubbleAnchorMode(params?.anchorMode),
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          repeat: params?.repeat !== false,
+          maxDistanceMeters: normalizeNonNegativeNumber(params?.maxDistanceMeters, DEFAULT_BUBBLE_MAX_DISTANCE_METERS),
+          styleVariant: normalizeBubbleVariant(params?.styleVariant),
+          animationPreset: normalizeBubbleAnimationPreset(params?.animationPreset),
+          screenOffsetX: normalizeFiniteNumber(params?.screenOffsetX, DEFAULT_BUBBLE_SCREEN_OFFSET_X),
+          screenOffsetY: normalizeFiniteNumber(params?.screenOffsetY, DEFAULT_BUBBLE_SCREEN_OFFSET_Y),
+          worldOffsetY: normalizeFiniteNumber(params?.worldOffsetY, DEFAULT_BUBBLE_WORLD_OFFSET_Y),
+          requireVisibleInView: params?.requireVisibleInView !== false,
+        },
+      }
+    }
     case 'watch': {
       const params = binding.params as WatchBehaviorParams | undefined
       return {
@@ -881,6 +992,28 @@ export function ensureBehaviorParams(
             confirmText: params?.confirmText ?? DEFAULT_CONFIRM_TEXT,
             showCancel: params?.showCancel ?? false,
             cancelText: params?.cancelText ?? DEFAULT_CANCEL_TEXT,
+          },
+        }
+      }
+      case 'bubble': {
+        const params = script.params as Partial<BubbleBehaviorParams> | undefined
+        return {
+          type: 'bubble',
+          params: {
+            content: typeof params?.content === 'string' ? params.content : 'Prompt message',
+            contentAssetId: normalizeAssetId(params?.contentAssetId),
+            durationSeconds: normalizeNonNegativeNumber(params?.durationSeconds, DEFAULT_BUBBLE_DURATION_SECONDS),
+            delaySeconds: normalizeNonNegativeNumber(params?.delaySeconds, DEFAULT_BUBBLE_DELAY_SECONDS),
+            anchorMode: normalizeBubbleAnchorMode(params?.anchorMode),
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            repeat: params?.repeat !== false,
+            maxDistanceMeters: normalizeNonNegativeNumber(params?.maxDistanceMeters, DEFAULT_BUBBLE_MAX_DISTANCE_METERS),
+            styleVariant: normalizeBubbleVariant(params?.styleVariant),
+            animationPreset: normalizeBubbleAnimationPreset(params?.animationPreset),
+            screenOffsetX: normalizeFiniteNumber(params?.screenOffsetX, DEFAULT_BUBBLE_SCREEN_OFFSET_X),
+            screenOffsetY: normalizeFiniteNumber(params?.screenOffsetY, DEFAULT_BUBBLE_SCREEN_OFFSET_Y),
+            worldOffsetY: normalizeFiniteNumber(params?.worldOffsetY, DEFAULT_BUBBLE_WORLD_OFFSET_Y),
+            requireVisibleInView: params?.requireVisibleInView !== false,
           },
         }
       }

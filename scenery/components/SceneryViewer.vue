@@ -34,6 +34,19 @@
           </view>
         </view>
       </view>
+      <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
+        <view
+          class="viewer-bubble"
+          :class="[
+            { 'viewer-bubble--node-anchored': behaviorBubbleAnchorMode === 'nodeAnchored' },
+            `viewer-bubble--variant-${behaviorBubbleVariant}`,
+            `viewer-bubble--anim-${behaviorBubbleAnimation}`,
+          ]"
+          :style="behaviorBubbleStyle"
+        >
+          <text class="viewer-bubble__message">{{ behaviorBubbleMessage }}</text>
+        </view>
+      </view>
       <view
         v-if="behaviorAlertVisible"
         class="viewer-behavior-overlay"
@@ -2188,6 +2201,9 @@ const signboardOverlayEntries = ref<Array<{
 }>>([]);
 const signboardReferenceScratch = new THREE.Vector3();
 const signboardAnchorScratch = new THREE.Vector3();
+const behaviorBubbleAnchorScratch = new THREE.Vector3();
+const behaviorBubbleCameraScratch = new THREE.Vector3();
+const behaviorBubbleSeenKeys = new Set<string>();
 
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
@@ -2392,6 +2408,25 @@ const behaviorAlertShowConfirm = ref(true);
 const behaviorAlertShowCancel = ref(false);
 const behaviorAlertConfirmText = ref('确定');
 const behaviorAlertCancelText = ref('取消');
+const behaviorBubbleVisible = ref(false);
+const behaviorBubbleMessage = ref('');
+const behaviorBubbleToken = ref<string | null>(null);
+const behaviorBubbleVariant = ref<'info' | 'success' | 'warning' | 'danger'>('info');
+const behaviorBubbleAnimation = ref<'fade' | 'float' | 'scale' | 'shake'>('float');
+const behaviorBubbleAnchorMode = ref<'screenFixed' | 'nodeAnchored'>('screenFixed');
+const behaviorBubbleAnchorXPercent = ref(50);
+const behaviorBubbleAnchorYPercent = ref(12);
+const behaviorBubbleOffsetX = ref(0);
+const behaviorBubbleOffsetY = ref(-12);
+let behaviorBubbleDelayTimer: ReturnType<typeof setTimeout> | null = null;
+let behaviorBubbleDismissTimer: ReturnType<typeof setTimeout> | null = null;
+
+const behaviorBubbleStyle = computed<Record<string, string>>(() => ({
+  left: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorXPercent.value}%` : '',
+  top: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorYPercent.value}%` : '',
+  '--behavior-bubble-offset-x': `${behaviorBubbleOffsetX.value}px`,
+  '--behavior-bubble-offset-y': `${behaviorBubbleOffsetY.value}px`,
+}));
 
 const lanternOverlayVisible = ref(false);
 const lanternSlides = ref<LanternSlideDefinition[]>([]);
@@ -3819,6 +3854,163 @@ async function loadBehaviorAlertContent(assetId: string, token: string, fallback
       behaviorAlertMessage.value = fallback;
     }
   }
+}
+
+function clearBehaviorBubbleTimers(): void {
+  if (behaviorBubbleDelayTimer != null) {
+    clearTimeout(behaviorBubbleDelayTimer);
+    behaviorBubbleDelayTimer = null;
+  }
+  if (behaviorBubbleDismissTimer != null) {
+    clearTimeout(behaviorBubbleDismissTimer);
+    behaviorBubbleDismissTimer = null;
+  }
+}
+
+function clearBehaviorBubbleState(): string | null {
+  clearBehaviorBubbleTimers();
+  const token = behaviorBubbleToken.value;
+  behaviorBubbleVisible.value = false;
+  behaviorBubbleMessage.value = '';
+  behaviorBubbleToken.value = null;
+  behaviorBubbleVariant.value = 'info';
+  behaviorBubbleAnimation.value = 'float';
+  behaviorBubbleAnchorMode.value = 'screenFixed';
+  behaviorBubbleAnchorXPercent.value = 50;
+  behaviorBubbleAnchorYPercent.value = 12;
+  behaviorBubbleOffsetX.value = 0;
+  behaviorBubbleOffsetY.value = -12;
+  return token;
+}
+
+function dismissBehaviorBubble(resolution?: BehaviorEventResolution): void {
+  const token = clearBehaviorBubbleState();
+  if (resolution && token) {
+    resolveBehaviorToken(token, resolution);
+  }
+}
+
+function buildBehaviorBubbleSeenKey(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): string {
+  return [event.nodeId, event.action, event.behaviorSequenceId, event.behaviorId].join(':');
+}
+
+function resolveBehaviorBubbleAnchorObject(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): THREE.Object3D | null {
+  const targetNodeId = event.params.targetNodeId?.trim();
+  if (targetNodeId) {
+    return nodeObjectMap.get(targetNodeId) ?? null;
+  }
+  return nodeObjectMap.get(event.nodeId) ?? null;
+}
+
+function canPresentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): boolean {
+  const activeCamera = renderContext?.camera;
+  if (!activeCamera) {
+    return false;
+  }
+  const object = resolveBehaviorBubbleAnchorObject(event);
+  if (!object) {
+    return event.params.anchorMode !== 'nodeAnchored'
+      && event.params.requireVisibleInView === false
+      && (event.params.maxDistanceMeters ?? 0) <= 0;
+  }
+  const anchor = resolveSignboardAnchorWorldPosition(
+    object,
+    behaviorBubbleAnchorScratch,
+    event.params.worldOffsetY,
+  );
+  activeCamera.getWorldPosition(behaviorBubbleCameraScratch);
+  const maxDistance = Math.max(0, event.params.maxDistanceMeters ?? 0);
+  if (maxDistance > 0 && behaviorBubbleCameraScratch.distanceTo(anchor) > maxDistance) {
+    return false;
+  }
+  if (event.params.requireVisibleInView === false) {
+    return true;
+  }
+  if (!isRuntimeObjectEffectivelyVisible(object)) {
+    return false;
+  }
+  const placement = computeSignboardPlacement({
+    anchorWorld: anchor,
+    referenceWorld: behaviorBubbleCameraScratch,
+    camera: activeCamera,
+    maxDistance: maxDistance > 0 ? maxDistance : undefined,
+  });
+  if (!placement) {
+    return false;
+  }
+  if (event.params.anchorMode === 'nodeAnchored') {
+    behaviorBubbleAnchorXPercent.value = placement.xPercent;
+    behaviorBubbleAnchorYPercent.value = placement.yPercent;
+  }
+  return true;
+}
+
+async function loadBehaviorBubbleContent(assetId: string, token: string, fallback: string): Promise<void> {
+  try {
+    const content = await loadTextAssetContent(assetId);
+    if (behaviorBubbleToken.value !== token) {
+      return;
+    }
+    behaviorBubbleMessage.value = content ?? fallback;
+  } catch (error) {
+    console.warn('加载行为气泡文本失败', error);
+    if (behaviorBubbleToken.value === token) {
+      behaviorBubbleMessage.value = fallback;
+    }
+  }
+}
+
+function presentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): void {
+  const repeatKey = buildBehaviorBubbleSeenKey(event);
+  if (!event.params.repeat && behaviorBubbleSeenKeys.has(repeatKey)) {
+    resolveBehaviorToken(event.token, { type: 'continue' });
+    return;
+  }
+  if (!canPresentBehaviorBubble(event)) {
+    resolveBehaviorToken(event.token, { type: 'continue' });
+    return;
+  }
+  dismissBehaviorBubble({ type: 'continue' });
+  const fallbackMessage = typeof event.params.content === 'string' ? event.params.content : '';
+  behaviorBubbleToken.value = event.token;
+  behaviorBubbleMessage.value = fallbackMessage;
+  behaviorBubbleVariant.value = event.params.styleVariant;
+  behaviorBubbleAnimation.value = event.params.animationPreset;
+  behaviorBubbleAnchorMode.value = event.params.anchorMode;
+  behaviorBubbleOffsetX.value = event.params.screenOffsetX;
+  behaviorBubbleOffsetY.value = event.params.screenOffsetY;
+  const contentAssetId = typeof event.params.contentAssetId === 'string' ? event.params.contentAssetId.trim() : '';
+  if (contentAssetId) {
+    void loadBehaviorBubbleContent(contentAssetId, event.token, fallbackMessage);
+  }
+  const showBubble = () => {
+    if (behaviorBubbleToken.value !== event.token) {
+      return;
+    }
+    behaviorBubbleVisible.value = true;
+    if (!event.params.repeat) {
+      behaviorBubbleSeenKeys.add(repeatKey);
+    }
+    const durationMs = Math.max(0, event.params.durationSeconds ?? 0) * 1000;
+    if (durationMs <= 0) {
+      dismissBehaviorBubble({ type: 'continue' });
+      return;
+    }
+    behaviorBubbleDismissTimer = setTimeout(() => {
+      if (behaviorBubbleToken.value === event.token) {
+        dismissBehaviorBubble({ type: 'continue' });
+      }
+    }, durationMs);
+  };
+  const delayMs = Math.max(0, event.params.delaySeconds ?? 0) * 1000;
+  if (delayMs <= 0) {
+    showBubble();
+    return;
+  }
+  behaviorBubbleDelayTimer = setTimeout(() => {
+    behaviorBubbleDelayTimer = null;
+    showBubble();
+  }, delayMs);
 }
 
 function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
@@ -8887,6 +9079,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'move-camera':
       handleMoveCameraEvent(event);
       break;
+    case 'show-bubble':
+      presentBehaviorBubble(event);
+      break;
     case 'show-alert':
       presentBehaviorAlert(event);
       break;
@@ -11180,6 +11375,7 @@ watch(
 
 function cleanupRuntime(): void {
   addRuntimeStageLog('[SceneryViewer] Cleanup runtime');
+  dismissBehaviorBubble({ type: 'continue' });
   resetAppliedDefaultSteerDriveKey();
   restoreConsoleCapture();
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
@@ -11382,6 +11578,185 @@ onUnmounted(() => {
   font-size: 21rpx;
   color: rgba(226, 242, 255, 0.82);
   white-space: nowrap;
+}
+
+.viewer-bubble-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1500;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.viewer-bubble {
+  position: absolute;
+  left: 50%;
+  top: calc(132rpx + var(--viewer-safe-area-top, 0px));
+  max-width: min(620rpx, calc(100% - 40rpx));
+  padding: 20rpx 24rpx;
+  border-radius: 28rpx;
+  border: 1px solid rgba(159, 214, 255, 0.24);
+  background: linear-gradient(180deg, rgba(10, 16, 28, 0.94), rgba(18, 28, 42, 0.88));
+  box-shadow: 0 22rpx 48rpx rgba(0, 0, 0, 0.28);
+  transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px));
+  color: #f7fbff;
+  text-align: center;
+}
+
+.viewer-bubble--node-anchored {
+  transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+}
+
+.viewer-bubble__message {
+  display: block;
+  font-size: 28rpx;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0.4rpx;
+  word-break: break-word;
+}
+
+.viewer-bubble--variant-info {
+  border-color: rgba(122, 198, 255, 0.26);
+  background: linear-gradient(180deg, rgba(8, 20, 36, 0.94), rgba(18, 42, 66, 0.88));
+}
+
+.viewer-bubble--variant-success {
+  border-color: rgba(115, 231, 170, 0.32);
+  background: linear-gradient(180deg, rgba(8, 32, 24, 0.94), rgba(18, 62, 42, 0.88));
+}
+
+.viewer-bubble--variant-warning {
+  border-color: rgba(255, 198, 104, 0.34);
+  background: linear-gradient(180deg, rgba(40, 24, 8, 0.94), rgba(74, 44, 16, 0.88));
+}
+
+.viewer-bubble--variant-danger {
+  border-color: rgba(255, 132, 132, 0.34);
+  background: linear-gradient(180deg, rgba(42, 10, 14, 0.94), rgba(78, 18, 26, 0.88));
+}
+
+.viewer-bubble--anim-fade {
+  animation: viewer-bubble-fade 220ms ease-out;
+}
+
+.viewer-bubble--anim-float {
+  animation: viewer-bubble-float 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.viewer-bubble--anim-scale {
+  animation: viewer-bubble-scale 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.viewer-bubble--anim-shake {
+  animation: viewer-bubble-shake 360ms ease-out;
+}
+
+@keyframes viewer-bubble-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes viewer-bubble-float {
+  from {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(var(--behavior-bubble-offset-y, 0px) + 18rpx));
+  }
+  to {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px));
+  }
+}
+
+@keyframes viewer-bubble-scale {
+  from {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px)) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px)) scale(1);
+  }
+}
+
+@keyframes viewer-bubble-shake {
+  0% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(var(--behavior-bubble-offset-y, 0px) + 10rpx));
+  }
+  35% {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 8rpx), var(--behavior-bubble-offset-y, 0px));
+  }
+  55% {
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) + 8rpx), var(--behavior-bubble-offset-y, 0px));
+  }
+  75% {
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 4rpx), var(--behavior-bubble-offset-y, 0px));
+  }
+  100% {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px));
+  }
+}
+
+.viewer-bubble--node-anchored.viewer-bubble--anim-float {
+  animation: viewer-bubble-float-anchored 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.viewer-bubble--node-anchored.viewer-bubble--anim-scale {
+  animation: viewer-bubble-scale-anchored 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.viewer-bubble--node-anchored.viewer-bubble--anim-shake {
+  animation: viewer-bubble-shake-anchored 360ms ease-out;
+}
+
+@keyframes viewer-bubble-float-anchored {
+  from {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px) + 18rpx));
+  }
+  to {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+  }
+}
+
+@keyframes viewer-bubble-scale-anchored {
+  from {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px))) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px))) scale(1);
+  }
+}
+
+@keyframes viewer-bubble-shake-anchored {
+  0% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px) + 10rpx));
+  }
+  35% {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 8rpx), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+  }
+  55% {
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) + 8rpx), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+  }
+  75% {
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 4rpx), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+  }
+  100% {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+  }
 }
 
 .viewer-debug-overlay {

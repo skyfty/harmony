@@ -552,6 +552,7 @@ export type BehaviorScriptType =
   | 'delay'
   | 'moveTo'
   | 'showAlert'
+  | 'bubble'
   | 'watch'
   | 'showPurpose'
   | 'hidePurpose'
@@ -594,6 +595,43 @@ export interface ShowAlertBehaviorParams {
   showCancel: boolean
   /** Custom label for the cancel button. */
   cancelText: string
+}
+
+export type BubbleBehaviorVariant = 'info' | 'success' | 'warning' | 'danger'
+
+export type BubbleBehaviorAnimationPreset = 'fade' | 'float' | 'scale' | 'shake'
+
+export type BubbleBehaviorAnchorMode = 'screenFixed' | 'nodeAnchored'
+
+export interface BubbleBehaviorParams {
+  /** Primary content text displayed inside the bubble. */
+  content: string
+  /** Optional asset identifier that overrides the inline content. */
+  contentAssetId: string | null
+  /** Bubble display duration in seconds after it becomes visible. */
+  durationSeconds: number
+  /** Delay before the bubble is shown, in seconds. */
+  delaySeconds: number
+  /** Whether the bubble stays fixed on screen or follows a node projection. */
+  anchorMode: BubbleBehaviorAnchorMode
+  /** Optional node used as the projection anchor when anchorMode is nodeAnchored. */
+  targetNodeId: string | null
+  /** Whether the same bubble can be shown repeatedly in a single session. */
+  repeat: boolean
+  /** Maximum distance from the camera to show the bubble. Values <= 0 disable the check. */
+  maxDistanceMeters: number
+  /** Visual style preset used by the runtime overlay. */
+  styleVariant: BubbleBehaviorVariant
+  /** Animation preset used when the bubble enters the screen. */
+  animationPreset: BubbleBehaviorAnimationPreset
+  /** Horizontal screen-space offset, measured in pixels. */
+  screenOffsetX: number
+  /** Vertical screen-space offset, measured in pixels. */
+  screenOffsetY: number
+  /** Additional world-space Y offset used when validating visibility. */
+  worldOffsetY: number
+  /** Require the source node anchor to be inside the current camera view before showing. */
+  requireVisibleInView: boolean
 }
 
 export interface WatchBehaviorParams {
@@ -709,6 +747,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'showAlert'
       params: ShowAlertBehaviorParams
+    }
+  | {
+      type: 'bubble'
+      params: BubbleBehaviorParams
     }
   | {
       type: 'watch'

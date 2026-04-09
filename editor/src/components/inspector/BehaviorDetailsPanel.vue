@@ -19,6 +19,7 @@ import { instantiateBehaviorPrefab } from '@/utils/behaviorPrefab'
 import DelayParams from '@/components/inspector/behavior/DelayParams.vue'
 import MoveToParams from '@/components/inspector/behavior/MoveToParams.vue'
 import ShowAlertParams from '@/components/inspector/behavior/ShowAlertParams.vue'
+import BubbleParams from '@/components/inspector/behavior/BubbleParams.vue'
 import WatchParams from '@/components/inspector/behavior/WatchParams.vue'
 import ShowParams from '@/components/inspector/behavior/ShowParams.vue'
 import HideParams from '@/components/inspector/behavior/HideParams.vue'
@@ -87,6 +88,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   delay: DelayParams,
   moveTo: MoveToParams,
   showAlert: ShowAlertParams,
+  bubble: BubbleParams,
   watch: WatchParams,
   showPurpose: WatchParams,
   show: ShowParams,
@@ -808,6 +810,10 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
   position: relative;
   width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .behavior-details--prefab-drop-active {
@@ -818,12 +824,15 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
 .behavior-details__body {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 16px;
   padding: 16px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.04);
   background-color: rgb(var(--v-theme-surface));
   margin: 4px;
+  overflow-y: auto;
 }
 
 .behavior-details__field {

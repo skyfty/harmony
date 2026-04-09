@@ -1006,6 +1006,25 @@ const behaviorAlertShowConfirm = ref(true)
 const behaviorAlertShowCancel = ref(false)
 const behaviorAlertConfirmText = ref('Confirm')
 const behaviorAlertCancelText = ref('Cancel')
+const behaviorBubbleVisible = ref(false)
+const behaviorBubbleMessage = ref('')
+const behaviorBubbleToken = ref<string | null>(null)
+const behaviorBubbleVariant = ref<'info' | 'success' | 'warning' | 'danger'>('info')
+const behaviorBubbleAnimation = ref<'fade' | 'float' | 'scale' | 'shake'>('float')
+const behaviorBubbleAnchorMode = ref<'screenFixed' | 'nodeAnchored'>('screenFixed')
+const behaviorBubbleAnchorXPercent = ref(50)
+const behaviorBubbleAnchorYPercent = ref(12)
+const behaviorBubbleOffsetX = ref(0)
+const behaviorBubbleOffsetY = ref(-12)
+let behaviorBubbleDelayTimer: number | null = null
+let behaviorBubbleDismissTimer: number | null = null
+
+const behaviorBubbleStyle = computed(() => ({
+	left: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorXPercent.value}%` : undefined,
+	top: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorYPercent.value}%` : undefined,
+	'--behavior-bubble-offset-x': `${behaviorBubbleOffsetX.value}px`,
+	'--behavior-bubble-offset-y': `${behaviorBubbleOffsetY.value}px`,
+}))
 
 const lanternOverlayVisible = ref(false)
 const lanternSlides = ref<LanternSlideDefinition[]>([])
@@ -1616,6 +1635,9 @@ const signboardOverlayEntries = ref<Array<{
 }>>([])
 const signboardReferenceScratch = new THREE.Vector3()
 const signboardAnchorScratch = new THREE.Vector3()
+const behaviorBubbleAnchorScratch = new THREE.Vector3()
+const behaviorBubbleCameraScratch = new THREE.Vector3()
+const behaviorBubbleSeenKeys = new Set<string>()
 
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
 	let current: THREE.Object3D | null | undefined = object
@@ -4355,6 +4377,110 @@ function clearBehaviorAlert() {
 	behaviorAlertCancelText.value = 'Cancel'
 }
 
+function clearBehaviorBubbleTimers() {
+	if (behaviorBubbleDelayTimer != null) {
+		window.clearTimeout(behaviorBubbleDelayTimer)
+		behaviorBubbleDelayTimer = null
+	}
+	if (behaviorBubbleDismissTimer != null) {
+		window.clearTimeout(behaviorBubbleDismissTimer)
+		behaviorBubbleDismissTimer = null
+	}
+}
+
+function clearBehaviorBubbleState(): string | null {
+	clearBehaviorBubbleTimers()
+	const token = behaviorBubbleToken.value
+	behaviorBubbleVisible.value = false
+	behaviorBubbleMessage.value = ''
+	behaviorBubbleToken.value = null
+	behaviorBubbleVariant.value = 'info'
+	behaviorBubbleAnimation.value = 'float'
+	behaviorBubbleAnchorMode.value = 'screenFixed'
+	behaviorBubbleAnchorXPercent.value = 50
+	behaviorBubbleAnchorYPercent.value = 12
+	behaviorBubbleOffsetX.value = 0
+	behaviorBubbleOffsetY.value = -12
+	return token
+}
+
+function dismissBehaviorBubble(resolution?: BehaviorEventResolution) {
+	const token = clearBehaviorBubbleState()
+	if (resolution && token) {
+		resolveBehaviorToken(token, resolution)
+	}
+}
+
+function buildBehaviorBubbleSeenKey(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): string {
+	return [event.nodeId, event.action, event.behaviorSequenceId, event.behaviorId].join(':')
+}
+
+function resolveBehaviorBubbleAnchorObject(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): THREE.Object3D | null {
+	const targetNodeId = event.params.targetNodeId?.trim()
+	if (targetNodeId) {
+		return nodeObjectMap.get(targetNodeId) ?? null
+	}
+	return nodeObjectMap.get(event.nodeId) ?? null
+}
+
+function canPresentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): boolean {
+	const activeCamera = camera
+	if (!activeCamera) {
+		return false
+	}
+	const object = resolveBehaviorBubbleAnchorObject(event)
+	if (!object) {
+		return event.params.anchorMode !== 'nodeAnchored'
+			&& event.params.requireVisibleInView === false
+			&& (event.params.maxDistanceMeters ?? 0) <= 0
+	}
+	const anchor = resolveSignboardAnchorWorldPosition(
+		object,
+		behaviorBubbleAnchorScratch,
+		event.params.worldOffsetY,
+	)
+	activeCamera.getWorldPosition(behaviorBubbleCameraScratch)
+	const maxDistance = Math.max(0, event.params.maxDistanceMeters ?? 0)
+	if (maxDistance > 0 && behaviorBubbleCameraScratch.distanceTo(anchor) > maxDistance) {
+		return false
+	}
+	if (event.params.requireVisibleInView === false) {
+		return true
+	}
+	if (!isRuntimeObjectEffectivelyVisible(object)) {
+		return false
+	}
+	const placement = computeSignboardPlacement({
+		anchorWorld: anchor,
+		referenceWorld: behaviorBubbleCameraScratch,
+		camera: activeCamera,
+		maxDistance: maxDistance > 0 ? maxDistance : undefined,
+	})
+	if (!placement) {
+		return false
+	}
+	if (event.params.anchorMode === 'nodeAnchored') {
+		behaviorBubbleAnchorXPercent.value = placement.xPercent
+		behaviorBubbleAnchorYPercent.value = placement.yPercent
+	}
+	return true
+}
+
+async function loadBehaviorBubbleContent(assetId: string, token: string, fallback: string): Promise<void> {
+	try {
+		const text = await loadTextAssetContent(assetId)
+		if (behaviorBubbleToken.value !== token) {
+			return
+		}
+		behaviorBubbleMessage.value = text ?? fallback
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to load bubble text asset', error)
+		if (behaviorBubbleToken.value === token) {
+			behaviorBubbleMessage.value = fallback
+		}
+	}
+}
+
 function normalizeLanternLayout(layout: string | null | undefined): 'imageTop' | 'imageLeft' | 'imageRight' {
 	switch (layout) {
 		case 'imageLeft':
@@ -4588,6 +4714,59 @@ function cancelLanternOverlay(): void {
 		return
 	}
 	closeLanternOverlay({ type: 'abort', message: 'User dismissed lantern slides' })
+}
+
+function presentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>) {
+	const repeatKey = buildBehaviorBubbleSeenKey(event)
+	if (!event.params.repeat && behaviorBubbleSeenKeys.has(repeatKey)) {
+		resolveBehaviorToken(event.token, { type: 'continue' })
+		return
+	}
+	if (!canPresentBehaviorBubble(event)) {
+		resolveBehaviorToken(event.token, { type: 'continue' })
+		return
+	}
+	dismissBehaviorBubble({ type: 'continue' })
+	const fallbackMessage = typeof event.params.content === 'string' ? event.params.content : ''
+	behaviorBubbleToken.value = event.token
+	behaviorBubbleMessage.value = fallbackMessage
+	behaviorBubbleVariant.value = event.params.styleVariant
+	behaviorBubbleAnimation.value = event.params.animationPreset
+	behaviorBubbleAnchorMode.value = event.params.anchorMode
+	behaviorBubbleOffsetX.value = event.params.screenOffsetX
+	behaviorBubbleOffsetY.value = event.params.screenOffsetY
+	const contentAssetId = typeof event.params.contentAssetId === 'string' ? event.params.contentAssetId.trim() : ''
+	if (contentAssetId) {
+		void loadBehaviorBubbleContent(contentAssetId, event.token, fallbackMessage)
+	}
+	const showBubble = () => {
+		if (behaviorBubbleToken.value !== event.token) {
+			return
+		}
+		behaviorBubbleVisible.value = true
+		if (!event.params.repeat) {
+			behaviorBubbleSeenKeys.add(repeatKey)
+		}
+		const durationMs = Math.max(0, event.params.durationSeconds ?? 0) * 1000
+		if (durationMs <= 0) {
+			dismissBehaviorBubble({ type: 'continue' })
+			return
+		}
+		behaviorBubbleDismissTimer = window.setTimeout(() => {
+			if (behaviorBubbleToken.value === event.token) {
+				dismissBehaviorBubble({ type: 'continue' })
+			}
+		}, durationMs)
+	}
+	const delayMs = Math.max(0, event.params.delaySeconds ?? 0) * 1000
+	if (delayMs <= 0) {
+		showBubble()
+		return
+	}
+	behaviorBubbleDelayTimer = window.setTimeout(() => {
+		behaviorBubbleDelayTimer = null
+		showBubble()
+	}, delayMs)
 }
 
 function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
@@ -6665,6 +6844,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'move-camera':
 			handleMoveCameraEvent(event)
+			break
+		case 'show-bubble':
+			presentBehaviorBubble(event)
 			break
 		case 'show-alert':
 			presentBehaviorAlert(event)
@@ -11121,6 +11303,7 @@ onBeforeUnmount(() => {
 	if (typeof window !== 'undefined') {
 		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
 	}
+	dismissBehaviorBubble({ type: 'continue' })
 	rendererInitialized = false
 	if (steeringWheelState.dragging) {
 		releaseSteeringWheelPointer()
@@ -11232,6 +11415,19 @@ watch(
 					<span class="scene-preview__signboard-name">{{ entry.label }}</span>
 					<span class="scene-preview__signboard-distance">{{ entry.distanceLabel }}</span>
 				</div>
+			</div>
+		</div>
+		<div v-if="behaviorBubbleVisible" class="scene-preview__bubble-layer" aria-live="polite">
+			<div
+				class="scene-preview__bubble"
+				:class="[
+					{ 'scene-preview__bubble--node-anchored': behaviorBubbleAnchorMode === 'nodeAnchored' },
+					`scene-preview__bubble--variant-${behaviorBubbleVariant}`,
+					`scene-preview__bubble--anim-${behaviorBubbleAnimation}`,
+				]"
+				:style="behaviorBubbleStyle"
+			>
+				<p class="scene-preview__bubble-message">{{ behaviorBubbleMessage }}</p>
 			</div>
 		</div>
 		<div class="scene-preview__stats">
@@ -12045,6 +12241,192 @@ watch(
 	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 	color: rgba(226, 242, 255, 0.82);
 	white-space: nowrap;
+}
+
+.scene-preview__bubble-layer {
+	position: absolute;
+	inset: 0;
+	z-index: 2160;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.scene-preview__bubble {
+	position: absolute;
+	left: 50%;
+	top: clamp(28px, 12vh, 108px);
+	max-width: min(440px, calc(100% - 32px));
+	padding: 12px 16px;
+	border-radius: 18px;
+	border: 1px solid rgba(159, 214, 255, 0.22);
+	background: linear-gradient(180deg, rgba(10, 16, 28, 0.92), rgba(18, 28, 42, 0.88));
+	box-shadow: 0 22px 48px rgba(0, 0, 0, 0.28);
+	backdrop-filter: blur(12px);
+	transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px));
+	will-change: transform, opacity;
+	color: #f7fbff;
+	text-align: center;
+}
+
+.scene-preview__bubble--node-anchored {
+	transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+}
+
+.scene-preview__bubble-message {
+	margin: 0;
+	font-size: 0.95rem;
+	font-weight: 600;
+	line-height: 1.45;
+	letter-spacing: 0.01em;
+	word-break: break-word;
+	text-wrap: pretty;
+}
+
+.scene-preview__bubble--variant-info {
+	border-color: rgba(122, 198, 255, 0.26);
+	background: linear-gradient(180deg, rgba(8, 20, 36, 0.94), rgba(18, 42, 66, 0.88));
+	box-shadow: 0 22px 48px rgba(4, 31, 56, 0.28);
+}
+
+.scene-preview__bubble--variant-success {
+	border-color: rgba(115, 231, 170, 0.32);
+	background: linear-gradient(180deg, rgba(8, 32, 24, 0.94), rgba(18, 62, 42, 0.88));
+	box-shadow: 0 22px 48px rgba(9, 54, 34, 0.3);
+}
+
+.scene-preview__bubble--variant-warning {
+	border-color: rgba(255, 198, 104, 0.34);
+	background: linear-gradient(180deg, rgba(40, 24, 8, 0.94), rgba(74, 44, 16, 0.88));
+	box-shadow: 0 22px 48px rgba(72, 41, 10, 0.28);
+}
+
+.scene-preview__bubble--variant-danger {
+	border-color: rgba(255, 132, 132, 0.34);
+	background: linear-gradient(180deg, rgba(42, 10, 14, 0.94), rgba(78, 18, 26, 0.88));
+	box-shadow: 0 22px 48px rgba(62, 10, 20, 0.32);
+}
+
+.scene-preview__bubble--anim-fade {
+	animation: scene-preview-bubble-fade 220ms ease-out;
+}
+
+.scene-preview__bubble--anim-float {
+	animation: scene-preview-bubble-float 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.scene-preview__bubble--anim-scale {
+	animation: scene-preview-bubble-scale 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.scene-preview__bubble--anim-shake {
+	animation: scene-preview-bubble-shake 360ms ease-out;
+}
+
+@keyframes scene-preview-bubble-fade {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes scene-preview-bubble-float {
+	from {
+		opacity: 0;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(var(--behavior-bubble-offset-y, 0px) + 12px));
+	}
+	to {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px));
+	}
+}
+
+@keyframes scene-preview-bubble-scale {
+	from {
+		opacity: 0;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px)) scale(0.92);
+	}
+	to {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px)) scale(1);
+	}
+}
+
+@keyframes scene-preview-bubble-shake {
+	0% {
+		opacity: 0;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(var(--behavior-bubble-offset-y, 0px) + 6px));
+	}
+	35% {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 6px), var(--behavior-bubble-offset-y, 0px));
+	}
+	55% {
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) + 5px), var(--behavior-bubble-offset-y, 0px));
+	}
+	75% {
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 3px), var(--behavior-bubble-offset-y, 0px));
+	}
+	100% {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), var(--behavior-bubble-offset-y, 0px));
+	}
+}
+
+.scene-preview__bubble--node-anchored.scene-preview__bubble--anim-float {
+	animation: scene-preview-bubble-float-anchored 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.scene-preview__bubble--node-anchored.scene-preview__bubble--anim-scale {
+	animation: scene-preview-bubble-scale-anchored 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.scene-preview__bubble--node-anchored.scene-preview__bubble--anim-shake {
+	animation: scene-preview-bubble-shake-anchored 360ms ease-out;
+}
+
+@keyframes scene-preview-bubble-float-anchored {
+	from {
+		opacity: 0;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px) + 12px));
+	}
+	to {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+	}
+}
+
+@keyframes scene-preview-bubble-scale-anchored {
+	from {
+		opacity: 0;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px))) scale(0.92);
+	}
+	to {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px))) scale(1);
+	}
+}
+
+@keyframes scene-preview-bubble-shake-anchored {
+	0% {
+		opacity: 0;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px) + 6px));
+	}
+	35% {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 6px), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+	}
+	55% {
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) + 5px), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+	}
+	75% {
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px) - 3px), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+	}
+	100% {
+		opacity: 1;
+		transform: translate(calc(-50% + var(--behavior-bubble-offset-x, 0px)), calc(-100% + var(--behavior-bubble-offset-y, 0px)));
+	}
 }
 
 .scene-preview__stats {

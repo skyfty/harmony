@@ -1,6 +1,7 @@
 import type { Object3D } from 'three'
 import type {
   BehaviorEventType,
+  BubbleBehaviorParams,
   DelayBehaviorParams,
   HideBehaviorParams,
   LanternBehaviorParams,
@@ -65,6 +66,16 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       params: ShowAlertBehaviorParams
+      token: string
+    }
+  | {
+      type: 'show-bubble'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      params: BubbleBehaviorParams
       token: string
     }
   | {
@@ -486,6 +497,27 @@ function createShowAlertEvent(state: BehaviorSequenceState, behavior: SceneBehav
   }
 }
 
+function createShowBubbleEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, {
+    token,
+    sequenceId: state.id,
+    stepIndex: state.index,
+  })
+  state.status = 'waiting'
+  const params = behavior.script.params as BubbleBehaviorParams
+  return {
+    type: 'show-bubble',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    params,
+    token,
+  }
+}
+
 function createLanternEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
   const token = createToken(state.id, state.index)
   pendingTokens.set(token, {
@@ -784,6 +816,9 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         return events
       case 'showAlert':
         events.push(createShowAlertEvent(state, behavior))
+        return events
+      case 'bubble':
+        events.push(createShowBubbleEvent(state, behavior))
         return events
       case 'lantern':
         events.push(createLanternEvent(state, behavior))
