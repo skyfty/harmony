@@ -86,6 +86,17 @@ function shouldAutoLogin(): boolean {
   return !(raw === '0' || raw === 'false' || raw === 'no')
 }
 
+function getTestLoginCredentials(): { username: string; password: string } {
+  const username = String(import.meta.env.VITE_MINI_TEST_USERNAME ?? '').trim()
+  const password = String(import.meta.env.VITE_MINI_TEST_PASSWORD ?? '')
+
+  if (!username || !password) {
+    throw new Error('Test login is enabled but VITE_MINI_TEST_USERNAME or VITE_MINI_TEST_PASSWORD is missing')
+  }
+
+  return { username, password }
+}
+
 function readTokenFromResponse(data: MiniAuthLoginResponse): string {
   return typeof data.accessToken === 'string' ? data.accessToken : typeof data.token === 'string' ? data.token : ''
 }
@@ -207,6 +218,17 @@ async function performMiniAuth(force = false, options: MiniAuthFlowOptions = {})
   if (!pendingAuthPromise) {
     logMiniAuth('creating new pending auth promise')
     pendingAuthPromise = (async () => {
+      if (shouldUseTestLogin()) {
+        const { username, password } = getTestLoginCredentials()
+        logMiniAuth('using test credentials login flow', { username })
+        const token = await loginWithCredentials(username, password)
+        const currentUser = await fetchMiniAuthProfile()
+        await ensureProfileCompleteness(currentUser, {
+          allowProfilePrompt: false,
+        })
+        return token
+      }
+
       logMiniAuth('using wechat login flow')
       const code = await getWechatLoginCode()
       const response = await loginWithWechatCode(code)

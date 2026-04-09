@@ -365,7 +365,7 @@ export async function miniGetProfile(userId: string): Promise<MiniSessionRespons
 export async function ensureMiniProgramTestUserV2(): Promise<void> {
   const miniApp = await resolveMiniAppConfig().catch(() => null)
   const miniAppId = miniApp?.miniAppId
-  const username = appConfig.miniProgramTestUser.username
+  const username = appConfig.miniProgramTestUser.username.trim()
   const password = appConfig.miniProgramTestUser.password
   const displayName = appConfig.miniProgramTestUser.displayName
 
@@ -373,7 +373,7 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
     return
   }
 
-  const existing = await AppUserModel.findOne({ username, miniAppId }).exec()
+  const existing = await AppUserModel.findOne({ username }).exec()
   if (!existing) {
     await AppUserModel.create({
       miniAppId,
@@ -388,6 +388,11 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
   }
 
   let shouldSave = false
+  if ((existing.miniAppId ?? undefined) !== miniAppId) {
+    existing.miniAppId = miniAppId
+    shouldSave = true
+  }
+
   if (!existing.password) {
     existing.password = await hashPassword(password)
     shouldSave = true
@@ -428,6 +433,7 @@ export async function getMiniProgramTestSessionUser(): Promise<MiniSessionUser |
   }
 
   const user = await AppUserModel.findOne({ username, miniAppId }).lean<AppUserLean>().exec()
+    ?? await AppUserModel.findOne({ username }).lean<AppUserLean>().exec()
   if (!user || user.status !== 'active') {
     return null
   }
