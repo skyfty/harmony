@@ -17,10 +17,10 @@ function buildShape(points: Array<[number, number]>): THREE.Shape | null {
   }
   const shape = new THREE.Shape()
   const [firstX, firstZ] = points[0]!
-  shape.moveTo(firstX, firstZ)
+  shape.moveTo(firstX, -firstZ)
   for (let index = 1; index < points.length; index += 1) {
     const [x, z] = points[index]!
-    shape.lineTo(x, z)
+    shape.lineTo(x, -z)
   }
   shape.closePath()
   return shape
