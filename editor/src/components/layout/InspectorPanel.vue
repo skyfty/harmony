@@ -20,6 +20,7 @@ import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
 import BillboardPanel from '@/components/inspector/BillboardPanel.vue'
+import SignboardPanel from '@/components/inspector/SignboardPanel.vue'
 import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
@@ -41,6 +42,7 @@ import {
   BEHAVIOR_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
+  SIGNBOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
   AUTO_TOUR_COMPONENT_TYPE,
@@ -119,12 +121,14 @@ const isProtagonistNode = computed(() =>
 const isNominateNode = computed(() =>
   Boolean(selectedNode.value?.components?.[NOMINATE_COMPONENT_TYPE]),
 )
+const isRegionNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Region')
 const showMaterialPanel = computed(
   () =>
     !isLightNode.value &&
     !isProtagonistNode.value &&
     !isMultiuserNode.value &&
     !isNominateNode.value &&
+    !isRegionNode.value &&
     (selectedNode.value?.materials?.length ?? 0) > 0,
 )
 const showTransformPanel = computed(() => {
@@ -190,7 +194,8 @@ function computeDefaultExpandedPanels() {
   const shouldShowMaterial =
     (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
     !Boolean(node?.components?.[PROTAGONIST_COMPONENT_TYPE]) &&
-    !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE])
+    !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE]) &&
+    node?.dynamicMesh?.type !== 'Region'
   if (shouldShowMaterial && node?.id !== GROUND_NODE_ID) {
     panels.push('material')
   }
@@ -407,7 +412,10 @@ watch(
       defaults.add('light')
     }
     const materialVisible =
-      !isLightNode.value && !isProtagonistNode.value && (selectedNode.value?.materials?.length ?? 0) > 0
+      !isLightNode.value &&
+      !isProtagonistNode.value &&
+      !isRegionNode.value &&
+      (selectedNode.value?.materials?.length ?? 0) > 0
     if (materialVisible) {
       defaults.add('material')
     }
@@ -563,6 +571,7 @@ watch(
             <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
               <DisplayBoardPanel v-if="component.type === DISPLAY_BOARD_COMPONENT_TYPE" />
               <BillboardPanel v-else-if="component.type === BILLBOARD_COMPONENT_TYPE" />
+              <SignboardPanel v-else-if="component.type === SIGNBOARD_COMPONENT_TYPE" />
               <GuideboardPanel v-else-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />

@@ -23,6 +23,7 @@ import './definitions/preloadableComponent'
 import './definitions/planningImagesComponent'
 import './definitions/nominateComponent'
 import './definitions/steerComponent'
+import './definitions/signboardComponent'
 
 export {
 	componentManager,
@@ -57,3 +58,4 @@ export * from './definitions/preloadableComponent'
 export * from './definitions/planningImagesComponent'
 export * from './definitions/nominateComponent'
 export * from './definitions/steerComponent'
+export * from './definitions/signboardComponent'

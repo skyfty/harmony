@@ -1428,12 +1428,6 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
     return false
   }
 
-  const proceed = typeof window !== 'undefined' ? window.confirm('仍要继续导出该工程吗？') : true
-  if (!proceed) {
-    resetExportWorkflowFeedback()
-    return false
-  }
-
   isExporting.value = true
   resetExportWorkflowFeedback()
 
