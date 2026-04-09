@@ -18,6 +18,11 @@ async function main(): Promise<void> {
     console.warn('[seed] 跳过创建编辑器/上传器账号：', error)
   })
 
+  await ensureMiniProgramTestUserV2().catch((error) => {
+    console.warn('[seed] 跳过创建小程序测试账号：', error)
+  })
+  console.log('[seed] 小程序测试账号已初始化')
+
   await ensureAdminPermissionsV2().catch((error) => {
     console.warn('[seed] 初始化管理权限失败：', error)
   })

@@ -33,6 +33,12 @@ type MedalUserStats = {
   scenicRatioById: Map<string, number>
 }
 
+type MedalStatusSummary = {
+  earned: boolean
+  awardedAt: Date | null
+  completionRatio: number
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 }
@@ -180,10 +186,59 @@ function evaluateRule(rule: MedalRule, stats: MedalUserStats): boolean {
   }
 }
 
-function mapMedalForUser(medal: MedalLean, earnedRow?: UserMedalLean) {
+function summarizeMedalCompletion(medal: Pick<MedalLean, 'rules'>, stats: MedalUserStats): number {
+  const rules = Array.isArray(medal.rules) ? medal.rules : []
+  if (!rules.length) {
+    return 0
+  }
+
+  let completedRuleCount = 0
+  for (const rule of rules) {
+    if (evaluateRule(rule, stats)) {
+      completedRuleCount += 1
+    }
+  }
+
+  return Math.max(0, Math.min(1, completedRuleCount / rules.length))
+}
+
+export async function buildMedalStatusMapForUser(
+  userId: string,
+  medals: MedalLean[],
+  earnedRows: UserMedalLean[],
+): Promise<Map<string, MedalStatusSummary>> {
+  const statusMap = new Map<string, MedalStatusSummary>()
+  if (!medals.length) {
+    return statusMap
+  }
+
+  const earnedMap = new Map<string, UserMedalLean>()
+  for (const row of earnedRows) {
+    earnedMap.set(row.medalId.toString(), row)
+  }
+
+  const stats = await buildUserStats(userId)
+
+  for (const medal of medals) {
+    const medalId = medal._id.toString()
+    const earnedRow = earnedMap.get(medalId)
+    const earned = Boolean(earnedRow)
+    const completionRatio = earned ? 1 : summarizeMedalCompletion(medal, stats)
+
+    statusMap.set(medalId, {
+      earned,
+      awardedAt: earnedRow?.awardedAt ?? null,
+      completionRatio,
+    })
+  }
+
+  return statusMap
+}
+
+function mapMedalForUser(medal: MedalLean, status?: MedalStatusSummary) {
   const lockedIconUrl = toStringValue(medal.lockedIconUrl)
   const unlockedIconUrl = toStringValue(medal.unlockedIconUrl)
-  const earned = Boolean(earnedRow)
+  const earned = status?.earned === true
 
   return {
     id: medal._id.toString(),
@@ -193,7 +248,8 @@ function mapMedalForUser(medal: MedalLean, earnedRow?: UserMedalLean) {
     unlockedIconUrl: unlockedIconUrl || null,
     displayIconUrl: earned ? unlockedIconUrl || lockedIconUrl || null : lockedIconUrl || unlockedIconUrl || null,
     earned,
-    awardedAt: earnedRow?.awardedAt ? earnedRow.awardedAt.toISOString() : null,
+    awardedAt: status?.awardedAt ? status.awardedAt.toISOString() : null,
+    completionRatio: status?.completionRatio ?? 0,
     sort: medal.sort,
   }
 }
@@ -209,12 +265,9 @@ export async function listMedalsForUser(userId: string) {
     UserMedalModel.find({ userId: userObjectId }, { medalId: 1, awardedAt: 1 }).lean().exec() as Promise<UserMedalLean[]>,
   ])
 
-  const earnedMap = new Map<string, UserMedalLean>()
-  for (const row of earnedRows) {
-    earnedMap.set(row.medalId.toString(), row)
-  }
+  const statusMap = await buildMedalStatusMapForUser(userId, medals, earnedRows)
 
-  return medals.map((medal) => mapMedalForUser(medal, earnedMap.get(medal._id.toString())))
+  return medals.map((medal) => mapMedalForUser(medal, statusMap.get(medal._id.toString())))
 }
 
 export async function evaluatePendingMedalsForUser(userId: string, triggerSource: string): Promise<string[]> {

@@ -29,6 +29,7 @@ import {
   Card,
   Descriptions,
   Popconfirm,
+  Progress,
   Space,
   Spin,
   Table,
@@ -101,6 +102,7 @@ const medalColumns = [
   { title: '勋章名称', dataIndex: 'name', key: 'name' },
   { title: '启用状态', dataIndex: 'enabled', key: 'enabled' },
   { title: '获得状态', dataIndex: 'awarded', key: 'awarded' },
+  { title: '完成度', dataIndex: 'completionRatio', key: 'completionRatio', width: 180 },
   { title: '获得时间', dataIndex: 'awardedAt', key: 'awardedAt' },
   { title: '规则数', dataIndex: 'ruleCount', key: 'ruleCount' },
   { title: '描述', dataIndex: 'description', key: 'description' },
@@ -135,6 +137,14 @@ const couponColumns = [
 
 function formatTabTitle(title: string, total: number, loaded: boolean) {
   return loaded ? `${title} (${total})` : title;
+}
+
+function toMedalPercent(ratio?: number) {
+  const parsed = Number(ratio ?? 0);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(parsed * 100)));
 }
 
 function getCellValue(
@@ -524,6 +534,22 @@ onMounted(async () => {
                   <Tag :color="record.awarded ? 'gold' : 'default'">
                     {{ record.awarded ? '已获得' : '未获得' }}
                   </Tag>
+                </template>
+                <template v-else-if="column.key === 'completionRatio'">
+                  <div style="min-width: 140px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px;">
+                      <span>{{ toMedalPercent(record.completionRatio) }}%</span>
+                      <Tag :color="record.awarded ? 'gold' : 'blue'">
+                        {{ record.awarded ? '已达成' : '进行中' }}
+                      </Tag>
+                    </div>
+                    <Progress
+                      :percent="toMedalPercent(record.completionRatio)"
+                      :show-info="false"
+                      size="small"
+                      :stroke-color="record.awarded ? '#d48806' : '#1677ff'"
+                    />
+                  </div>
                 </template>
                 <template v-else>
                   {{ getCellValue(record, column.dataIndex) ?? '-' }}

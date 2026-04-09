@@ -43,6 +43,7 @@ export interface MedalItem {
 export interface UserMedalStatusItem extends MedalItem {
   awarded: boolean;
   awardedAt?: null | string;
+  completionRatio?: number;
   userMedalId?: null | string;
 }
 

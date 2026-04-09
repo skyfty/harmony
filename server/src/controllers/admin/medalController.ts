@@ -2,6 +2,7 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { MedalModel } from '@/models/Medal'
 import { UserMedalModel } from '@/models/UserMedal'
+import { buildMedalStatusMapForUser } from '@/services/medalService'
 import type { MedalRule, MedalRuleCompleteType, MedalRuleScope, MedalRuleType } from '@/types/models'
 
 const MEDAL_RULE_TYPES: MedalRuleType[] = [
@@ -156,12 +157,13 @@ function mapMedal(row: any) {
   }
 }
 
-function mapUserMedalStatus(row: any, userMedal: any) {
+function mapUserMedalStatus(row: any, userMedal: any, completionRatio = 0) {
   return {
     ...mapMedal(row),
     awarded: Boolean(userMedal),
     awardedAt: userMedal?.awardedAt?.toISOString?.() ?? (userMedal?.awardedAt ? new Date(userMedal.awardedAt).toISOString() : null),
     userMedalId: userMedal?._id?.toString?.() ?? null,
+    completionRatio,
   }
 }
 
@@ -227,9 +229,13 @@ export async function listUserMedals(ctx: Context): Promise<void> {
     : []
 
   const userMedalMap = new Map(userMedalRows.map((row: any) => [row.medalId?.toString?.() ?? '', row]))
+  const statusMap = await buildMedalStatusMapForUser(id, rows as any, userMedalRows as any)
 
   ctx.body = {
-    data: rows.map((row: any) => mapUserMedalStatus(row, userMedalMap.get(row._id.toString()))),
+    data: rows.map((row: any) => {
+      const status = statusMap.get(row._id.toString())
+      return mapUserMedalStatus(row, userMedalMap.get(row._id.toString()), status?.completionRatio ?? 0)
+    }),
     page: pageNumber,
     pageSize: limit,
     total,

@@ -32,7 +32,15 @@
             :class="['medal-card', medal.earned ? 'medal-card--earned' : 'medal-card--locked']"
           >
             <view class="medal-visual">
-              <image class="medal-icon" :src="resolveMedalIcon(medal)" mode="aspectFit" />
+              <view class="medal-progress-shell">
+                <view class="medal-progress-ring" :style="buildMedalRingStyle(medal)" />
+                <view class="medal-progress-core">
+                  <image class="medal-icon" :src="resolveMedalIcon(medal)" mode="aspectFit" />
+                </view>
+                <text class="medal-progress-value">
+                  {{ formatMedalCompletionPercent(medal) }}
+                </text>
+              </view>
               <text :class="['medal-status', medal.earned ? 'medal-status--earned' : 'medal-status--locked']">
                 {{ medal.earned ? '已获得' : '未获得' }}
               </text>
@@ -203,6 +211,34 @@ function resolveMedalIcon(item: MedalItem): string {
   return item.displayIconUrl || item.unlockedIconUrl || item.lockedIconUrl || '';
 }
 
+function getMedalCompletionRatio(item: MedalItem): number {
+  if (item.earned) {
+    return 1;
+  }
+  const parsed = Number(item.completionRatio ?? 0);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function getMedalCompletionPercent(item: MedalItem): number {
+  return Math.round(getMedalCompletionRatio(item) * 100);
+}
+
+function formatMedalCompletionPercent(item: MedalItem): string {
+  return `${getMedalCompletionPercent(item)}%`;
+}
+
+function buildMedalRingStyle(item: MedalItem): Record<string, string> {
+  const ratio = getMedalCompletionRatio(item);
+  const degrees = Math.round(ratio * 360);
+  const progressColor = item.earned ? '#f0b23a' : '#4d81ff';
+  return {
+    background: `conic-gradient(${progressColor} 0deg ${degrees}deg, rgba(255, 255, 255, 0.26) ${degrees}deg 360deg)`,
+  };
+}
+
 function getMedalDescription(item: MedalItem): string {
   const description = typeof item.description === 'string' ? item.description.trim() : '';
   return description || '完成对应打卡目标后即可解锁这枚勋章。';
@@ -325,15 +361,15 @@ function handleNavigate(key: NavKey) {
 .medal-list {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 
 .medal-card {
-  padding: 20px 18px;
+  padding: 10px 10px;
   border-radius: 22px;
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 10px;
   border: 1px solid transparent;
 }
 
@@ -357,10 +393,56 @@ function handleNavigate(key: NavKey) {
   gap: 10px;
 }
 
+.medal-progress-shell {
+  width: 144rpx;
+  height: 144rpx;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.medal-progress-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34);
+}
+
+.medal-progress-core {
+  width: 118rpx;
+  height: 118rpx;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 10px 22px rgba(23, 31, 55, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
 .medal-icon {
-  width: 128rpx;
-  height: 128rpx;
+  width: 96rpx;
+  height: 96rpx;
   background: transparent;
+}
+
+.medal-progress-value {
+  position: absolute;
+  right: -8rpx;
+  bottom: -2rpx;
+  min-width: 68rpx;
+  height: 36rpx;
+  padding: 0 12rpx;
+  border-radius: 999px;
+  background: rgba(23, 31, 55, 0.8);
+  color: #ffffff;
+  font-size: 20rpx;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 16px rgba(18, 24, 43, 0.18);
 }
 
 .medal-body {

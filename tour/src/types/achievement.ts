@@ -16,6 +16,7 @@ export interface MedalItem {
   displayIconUrl?: null | string;
   earned: boolean;
   awardedAt?: null | string;
+  completionRatio?: number;
   sort: number;
 }
 
