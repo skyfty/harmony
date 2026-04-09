@@ -316,21 +316,6 @@
         v-if="vehicleDriveUi.visible"
         class="viewer-drive-console viewer-drive-console--mobile"
       >
-        <view class="viewer-drive-cluster viewer-drive-cluster--actions">
-          <button
-            class="viewer-drive-icon-button"
-            :class="{ 'is-busy': vehicleDriveResetBusy }"
-            type="button"
-            hover-class="none"
-            :disabled="vehicleDriveResetBusy"
-            aria-label="重置车辆"
-            @tap="handleVehicleDriveResetTap"
-          >
-            <view class="viewer-drive-icon" aria-hidden="true">
-              <text class="viewer-drive-icon-text">🔄</text>
-            </view>
-          </button>
-        </view>
         <view
           v-show="drivePadState.visible"
           class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
@@ -356,11 +341,24 @@
           </view>
         </view>
       </view>
-      <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating" aria-hidden="true">
-        <view class="viewer-drive-speed-readout">
+      <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
+        <view class="viewer-drive-speed-readout" aria-hidden="true">
           <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
           <text class="viewer-drive-speed-readout__unit">km/h</text>
         </view>
+        <button
+          class="viewer-drive-icon-button"
+          :class="{ 'is-busy': vehicleDriveResetBusy }"
+          type="button"
+          hover-class="none"
+          :disabled="vehicleDriveResetBusy"
+          aria-label="重置车辆"
+          @tap="handleVehicleDriveResetTap"
+        >
+          <view class="viewer-drive-icon" aria-hidden="true">
+            <text class="viewer-drive-icon-text">🔄</text>
+          </view>
+        </button>
       </view>
 
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-compass-right-floating" aria-hidden="true">
@@ -486,8 +484,6 @@ const emit = defineEmits<{
   loaded: [];
   error: [message: string];
   progress: [payload: {
-    title: string;
-    percent: number;
     bytesLabel: string;
     loaded: number;
     total: number;
@@ -12365,14 +12361,16 @@ onUnmounted(() => {
   bottom: 206px;
   z-index: 1580;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  pointer-events: none;
+  gap: 12px;
+  pointer-events: auto;
 }
 
 .viewer-drive-compass-right-floating {
   position: absolute;
   right: 24px;
-  bottom: 190px;
+  bottom: 220px;
   z-index: 1580;
   display: flex;
   align-items: center;
@@ -12397,7 +12395,7 @@ onUnmounted(() => {
   backdrop-filter: blur(12px);
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 2px;
   color: #f7fbff;
   font-weight: 700;
@@ -12408,7 +12406,7 @@ onUnmounted(() => {
   font-size: 1.5rem;
   line-height: 1;
   width: 100%;
-  text-align: left;
+  text-align: center;
 }
 
 .viewer-drive-speed-readout__unit {
