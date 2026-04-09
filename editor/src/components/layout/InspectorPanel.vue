@@ -119,12 +119,14 @@ const isProtagonistNode = computed(() =>
 const isNominateNode = computed(() =>
   Boolean(selectedNode.value?.components?.[NOMINATE_COMPONENT_TYPE]),
 )
+const isRegionNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Region')
 const showMaterialPanel = computed(
   () =>
     !isLightNode.value &&
     !isProtagonistNode.value &&
     !isMultiuserNode.value &&
     !isNominateNode.value &&
+    !isRegionNode.value &&
     (selectedNode.value?.materials?.length ?? 0) > 0,
 )
 const showTransformPanel = computed(() => {
@@ -190,7 +192,8 @@ function computeDefaultExpandedPanels() {
   const shouldShowMaterial =
     (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
     !Boolean(node?.components?.[PROTAGONIST_COMPONENT_TYPE]) &&
-    !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE])
+    !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE]) &&
+    node?.dynamicMesh?.type !== 'Region'
   if (shouldShowMaterial && node?.id !== GROUND_NODE_ID) {
     panels.push('material')
   }
@@ -407,7 +410,10 @@ watch(
       defaults.add('light')
     }
     const materialVisible =
-      !isLightNode.value && !isProtagonistNode.value && (selectedNode.value?.materials?.length ?? 0) > 0
+      !isLightNode.value &&
+      !isProtagonistNode.value &&
+      !isRegionNode.value &&
+      (selectedNode.value?.materials?.length ?? 0) > 0
     if (materialVisible) {
       defaults.add('material')
     }

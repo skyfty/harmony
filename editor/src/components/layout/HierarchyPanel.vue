@@ -900,6 +900,9 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
     return false
   }
+  if (node.dynamicMesh?.type === 'Region') {
+    return false
+  }
   const type = node.nodeType ?? 'Mesh'
   return isNormalNodeType(node) && type !== 'Light' && type !== 'Group'
 }

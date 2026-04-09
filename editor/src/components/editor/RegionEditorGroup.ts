@@ -4,6 +4,10 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 
 const FILL_Y_OFFSET = 0.01
 const LINE_Y_OFFSET = 0.04
+const REGION_FILL_COLOR = 0x90a4ae
+const REGION_FILL_OPACITY = 0.18
+const REGION_OUTLINE_COLOR = 0x78909c
+const REGION_OUTLINE_OPACITY = 0.68
 
 function toXZPoints(definition: RegionDynamicMesh): Array<[number, number]> {
   return (Array.isArray(definition.vertices) ? definition.vertices : [])
@@ -54,9 +58,9 @@ export function updateRegionEditorGroup(group: THREE.Group, definition: RegionDy
   const line = new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints(linePoints.length >= 2 ? linePoints : [new THREE.Vector3(), new THREE.Vector3()]),
     new THREE.LineBasicMaterial({
-      color: 0x26a69a,
+      color: REGION_OUTLINE_COLOR,
       transparent: true,
-      opacity: 0.95,
+      opacity: REGION_OUTLINE_OPACITY,
       depthWrite: false,
     }),
   )
@@ -73,9 +77,9 @@ export function updateRegionEditorGroup(group: THREE.Group, definition: RegionDy
   const fill = new THREE.Mesh(
     new THREE.ShapeGeometry(shape),
     new THREE.MeshBasicMaterial({
-      color: 0x26a69a,
+      color: REGION_FILL_COLOR,
       transparent: true,
-      opacity: 0.08,
+      opacity: REGION_FILL_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
     }),

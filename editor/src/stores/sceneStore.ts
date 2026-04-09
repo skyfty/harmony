@@ -1139,6 +1139,9 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (isProtagonistNode(node)) {
     return false
   }
+  if (node.dynamicMesh?.type === 'Region') {
+    return false
+  }
   const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   return sceneNodeTypeSupportsMaterials(type)
 }
@@ -13126,9 +13129,10 @@ export const useSceneStore = defineStore('scene', {
     }) {
       const id = payload.nodeId ?? generateUuid()
       const nodeType = normalizeSceneNodeType(payload.nodeType)
+      const suppressInitialMaterials = payload.dynamicMesh?.type === 'Region'
       let nodeMaterials: SceneNodeMaterial[] | undefined
 
-      if (sceneNodeTypeSupportsMaterials(nodeType)) {
+      if (!suppressInitialMaterials && sceneNodeTypeSupportsMaterials(nodeType)) {
         const baseMaterial = findDefaultSceneMaterial(this.materials)
         const initialProps: SceneMaterialProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
         const initialMaterial = createNodeMaterial(null, initialProps, {
