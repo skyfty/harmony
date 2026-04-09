@@ -365,7 +365,7 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-card {
-  padding: 5px 5px;
+  padding: 7px 7px;
   border-radius: 22px;
   display: flex;
   align-items: center;
@@ -407,7 +407,6 @@ function handleNavigate(key: NavKey) {
   position: absolute;
   inset: 10rpx;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.14) 28%, rgba(255, 214, 92, 0.12) 58%, rgba(77, 129, 255, 0.06) 100%);
   filter: blur(8rpx);
   opacity: 0.95;
   pointer-events: none;
@@ -417,7 +416,7 @@ function handleNavigate(key: NavKey) {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34), 0 14rpx 28rpx rgba(77, 129, 255, 0.16), 0 8rpx 18rpx rgba(240, 178, 58, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34);
 }
 
 .medal-progress-ring::after {
@@ -434,8 +433,7 @@ function handleNavigate(key: NavKey) {
   width: 136rpx;
   height: 136rpx;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 248, 228, 0.94) 34%, rgba(255, 220, 146, 0.9) 68%, rgba(255, 196, 82, 0.82) 100%);
-  box-shadow: inset 0 4rpx 10rpx rgba(255, 255, 255, 0.52), inset 0 -10rpx 18rpx rgba(191, 130, 18, 0.18), 0 12rpx 24rpx rgba(23, 31, 55, 0.14);
+  box-shadow: 0 12rpx 24rpx rgba(23, 31, 55, 0.14);
   border: 2rpx solid rgba(255, 255, 255, 0.68);
   display: flex;
   align-items: center;
@@ -461,7 +459,56 @@ function handleNavigate(key: NavKey) {
   width: 114rpx;
   height: 114rpx;
   background: transparent;
+}
+
+.medal-card--earned .medal-progress-shell::before {
+  background: radial-gradient(circle at 28% 28%, rgba(255, 255, 255, 0.52) 0%, rgba(255, 247, 209, 0.26) 24%, rgba(255, 201, 70, 0.24) 58%, rgba(255, 142, 32, 0.12) 100%);
+}
+
+.medal-card--earned .medal-progress-ring {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34), 0 16rpx 30rpx rgba(240, 178, 58, 0.28), 0 6rpx 14rpx rgba(255, 132, 0, 0.18);
+}
+
+.medal-card--earned .medal-progress-ring::after {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.52) 0%, rgba(255, 244, 202, 0.18) 38%, rgba(255, 196, 76, 0.04) 72%);
+}
+
+.medal-card--earned .medal-progress-core {
+  background: radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.99) 0%, rgba(255, 248, 228, 0.96) 34%, rgba(255, 219, 136, 0.92) 66%, rgba(255, 190, 66, 0.84) 100%);
+  box-shadow: inset 0 4rpx 10rpx rgba(255, 255, 255, 0.56), inset 0 -10rpx 18rpx rgba(191, 130, 18, 0.2), 0 12rpx 24rpx rgba(23, 31, 55, 0.14);
+}
+
+.medal-card--earned .medal-progress-core::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76) 0%, rgba(255, 244, 196, 0.14) 100%);
+}
+
+.medal-card--earned .medal-icon {
   filter: drop-shadow(0 8rpx 10rpx rgba(111, 63, 0, 0.16));
+}
+
+.medal-card--locked .medal-progress-shell::before {
+  background: radial-gradient(circle at 34% 26%, rgba(255, 255, 255, 0.42) 0%, rgba(212, 229, 255, 0.24) 24%, rgba(110, 169, 255, 0.22) 54%, rgba(76, 110, 196, 0.14) 100%);
+}
+
+.medal-card--locked .medal-progress-ring {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34), 0 16rpx 30rpx rgba(90, 148, 255, 0.22), 0 6rpx 18rpx rgba(117, 241, 255, 0.16);
+}
+
+.medal-card--locked .medal-progress-ring::after {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.48) 0%, rgba(211, 233, 255, 0.22) 42%, rgba(111, 162, 255, 0.04) 78%);
+}
+
+.medal-card--locked .medal-progress-core {
+  background: radial-gradient(circle at 34% 26%, rgba(249, 252, 255, 0.98) 0%, rgba(224, 236, 255, 0.94) 36%, rgba(176, 203, 255, 0.88) 68%, rgba(130, 162, 225, 0.82) 100%);
+  box-shadow: inset 0 4rpx 10rpx rgba(255, 255, 255, 0.48), inset 0 -10rpx 18rpx rgba(65, 98, 170, 0.18), 0 12rpx 24rpx rgba(23, 31, 55, 0.12);
+}
+
+.medal-card--locked .medal-progress-core::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(200, 229, 255, 0.12) 100%);
+}
+
+.medal-card--locked .medal-icon {
+  filter: drop-shadow(0 8rpx 10rpx rgba(45, 74, 132, 0.16));
 }
 
 .medal-progress-value {
