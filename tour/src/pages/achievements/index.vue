@@ -402,29 +402,66 @@ function handleNavigate(key: NavKey) {
   justify-content: center;
 }
 
+.medal-progress-shell::before {
+  content: '';
+  position: absolute;
+  inset: 10rpx;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.14) 28%, rgba(255, 214, 92, 0.12) 58%, rgba(77, 129, 255, 0.06) 100%);
+  filter: blur(8rpx);
+  opacity: 0.95;
+  pointer-events: none;
+}
+
 .medal-progress-ring {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34), 0 14rpx 28rpx rgba(77, 129, 255, 0.16), 0 8rpx 18rpx rgba(240, 178, 58, 0.18);
+}
+
+.medal-progress-ring::after {
+  content: '';
+  position: absolute;
+  inset: 8rpx;
+  border-radius: 50%;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.46) 0%, rgba(255, 255, 255, 0.08) 42%, rgba(255, 255, 255, 0) 72%);
+  mix-blend-mode: screen;
+  pointer-events: none;
 }
 
 .medal-progress-core {
   width: 136rpx;
   height: 136rpx;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 10px 22px rgba(23, 31, 55, 0.1);
+  background: radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 248, 228, 0.94) 34%, rgba(255, 220, 146, 0.9) 68%, rgba(255, 196, 82, 0.82) 100%);
+  box-shadow: inset 0 4rpx 10rpx rgba(255, 255, 255, 0.52), inset 0 -10rpx 18rpx rgba(191, 130, 18, 0.18), 0 12rpx 24rpx rgba(23, 31, 55, 0.14);
+  border: 2rpx solid rgba(255, 255, 255, 0.68);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  position: relative;
+}
+
+.medal-progress-core::before {
+  content: '';
+  position: absolute;
+  top: 10rpx;
+  left: 18rpx;
+  width: 64rpx;
+  height: 34rpx;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.08) 100%);
+  transform: rotate(-18deg);
+  pointer-events: none;
 }
 
 .medal-icon {
   width: 114rpx;
   height: 114rpx;
   background: transparent;
+  filter: drop-shadow(0 8rpx 10rpx rgba(111, 63, 0, 0.16));
 }
 
 .medal-progress-value {
