@@ -4,7 +4,7 @@
       :project-id="projectId"
       :package-url="packageUrl"
       :nominate-state-map="nominateStateMap"
-      :default-steer-identifier="selectedVehicleId"
+      :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
       @punch="handlePunch"
     />
@@ -22,16 +22,16 @@ const packageUrl = ref<string>('');
 // sceneUrl removed: use packageUrl instead
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
-const selectedVehicleId = ref<string>('');
+const selectedVehicleIdentifier = ref<string>('');
 const enterAt = ref<number>(0);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const nominateStateMap = computed(() => {
-  const vehicleId = selectedVehicleId.value.trim();
-  if (!vehicleId) {
+  const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
+  if (!vehicleIdentifier) {
     return null;
   }
   return {
-    [vehicleId]: {
+    [vehicleIdentifier]: {
       visible: true,
     },
   };
@@ -73,6 +73,7 @@ function handlePunch(payload: PunchEventPayload): void {
     sceneId: payload.sceneId,
     scenicId: sceneSpotId.value,
     sceneName: payload.sceneName,
+    vehicleIdentifier: selectedVehicleIdentifier.value || undefined,
     clientPunchTime: payload.clientPunchTime,
     behaviorPunchTime: payload.behaviorPunchTime,
     location: {
@@ -88,10 +89,9 @@ onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = decodeQueryValue(record.packageUrl);
-  // sceneUrl parameter removed; ignore record.sceneUrl
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
-  selectedVehicleId.value = decodeQueryValue(record.vehicleId);
+  selectedVehicleIdentifier.value =  typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
   enterAt.value = Date.now();
 });
 

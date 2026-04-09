@@ -132,7 +132,8 @@ import {
 } from '@/api/mini';
 import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicDetail } from '@/types/scenic';
-import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
+import { getSelectedVehicleIdentifier, setSelectedVehicle } from '@/utils/vehicleSelection';
+import { listVehicles } from '@/api/mini/vehicles';
 import { getStatusBarHeight } from '@/utils/systemInfo';
 
 const scenic = ref<ScenicDetail | null>(null);
@@ -220,18 +221,30 @@ async function loadScenicCheckinProgress(scenicId: string): Promise<void> {
   }
 }
 
-function enterScenery() {
+async function enterScenery() {
   if (!scenic.value) return;
-  const vehicleIdentifier = getSelectedVehicleIdentifier();
+
+  let vehicleIdentifier = getSelectedVehicleIdentifier();
+  // 若本地未同步车辆信息，则主动同步
+  if (!vehicleIdentifier) {
+    try {
+      const vehicles = await listVehicles();
+      const current = vehicles.find((v) => v.isCurrent) || vehicles.find((v) => v.owned);
+      if (current) {
+        setSelectedVehicle(current);
+        vehicleIdentifier = typeof current.identifier === 'string' ? current.identifier.trim() : '';
+      }
+    } catch (e) {
+      // ignore, fallback to empty
+    }
+  }
 
   const queryParts = [
     `packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
     `sceneSpotId=${encodeURIComponent(scenic.value.id)}`,
     `sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
+    `vehicleIdentifier=${encodeURIComponent(vehicleIdentifier)}`,
   ];
-  if (vehicleIdentifier) {
-    queryParts.push(`vehicleIdentifier=${encodeURIComponent(vehicleIdentifier)}`);
-  }
   uni.navigateTo({
     url: `/pages/scenery/index?${queryParts.join('&')}`,
   });
