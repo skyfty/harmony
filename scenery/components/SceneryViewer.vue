@@ -129,12 +129,15 @@
                         :style="tick.style"
                       ></view>
                     </view>
-                    <text class="viewer-drive-compass__label viewer-drive-compass__label--north">北</text>
-                    <text class="viewer-drive-compass__label viewer-drive-compass__label--south">南</text>
-                    <text class="viewer-drive-compass__label viewer-drive-compass__label--west">西</text>
-                    <text class="viewer-drive-compass__label viewer-drive-compass__label--east">东</text>
+                    <view
+                      v-for="label in vehicleCompassLabels"
+                      :key="label.key"
+                      class="viewer-drive-compass__label-slot"
+                      :style="label.slotStyle"
+                    >
+                      <text class="viewer-drive-compass__label" :style="label.textStyle">{{ label.text }}</text>
+                    </view>
                     <view class="viewer-drive-compass__pointer"></view>
-                    <view class="viewer-drive-compass__hub"></view>
                   </view>
                 </view>
               </view>
@@ -371,12 +374,15 @@
               :style="tick.style"
             ></view>
           </view>
-          <text class="viewer-drive-compass__label viewer-drive-compass__label--north">北</text>
-          <text class="viewer-drive-compass__label viewer-drive-compass__label--south">南</text>
-          <text class="viewer-drive-compass__label viewer-drive-compass__label--west">西</text>
-          <text class="viewer-drive-compass__label viewer-drive-compass__label--east">东</text>
+          <view
+            v-for="label in vehicleCompassLabels"
+            :key="label.key"
+            class="viewer-drive-compass__label-slot"
+            :style="label.slotStyle"
+          >
+            <text class="viewer-drive-compass__label" :style="label.textStyle">{{ label.text }}</text>
+          </view>
           <view class="viewer-drive-compass__pointer"></view>
-          <view class="viewer-drive-compass__hub"></view>
         </view>
       </view>
 
@@ -2516,11 +2522,29 @@ const vehicleHeadingDegrees = ref(0);
 const vehicleCompassStyle = computed(() => ({
   '--vehicle-heading': `${vehicleHeadingDegrees.value}deg`,
 }));
-const vehicleCompassTicks = Array.from({ length: 24 }, (_, index) => ({
-  key: `vehicle-compass-tick-${index}`,
-  major: index % 3 === 0,
-  style: {
-    transform: `translateX(-50%) rotate(${index * 15}deg)`,
+const vehicleCompassCardinalTickIndices = new Set([0, 6, 12, 18]);
+const vehicleCompassTicks = Array.from({ length: 24 }, (_, index) => index)
+  .filter((index) => !vehicleCompassCardinalTickIndices.has(index))
+  .map((index) => ({
+    key: `vehicle-compass-tick-${index}`,
+    major: index % 3 === 0,
+    style: {
+      transform: `translateX(-50%) rotate(${index * 15}deg)`,
+    },
+  }));
+const vehicleCompassLabels = [
+  { key: 'north', text: '北', angle: 0 },
+  { key: 'east', text: '东', angle: 90 },
+  { key: 'south', text: '南', angle: 180 },
+  { key: 'west', text: '西', angle: 270 },
+].map((label) => ({
+  key: label.key,
+  text: label.text,
+  slotStyle: {
+    transform: `rotate(${label.angle}deg)`,
+  },
+  textStyle: {
+    transform: `translateX(-50%) rotate(${-label.angle}deg)`,
   },
 }));
 
@@ -12398,8 +12422,8 @@ onUnmounted(() => {
 }
 
 .viewer-drive-compass {
-  width: 92px;
-  height: 92px;
+  width: 108px;
+  height: 108px;
   border-radius: 50%;
   position: relative;
   overflow: hidden;
@@ -12416,7 +12440,7 @@ onUnmounted(() => {
 .viewer-drive-compass::before {
   content: '';
   position: absolute;
-  inset: 10%;
+  inset: 8%;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: radial-gradient(circle at center, rgba(14, 22, 48, 0.24), rgba(4, 7, 18, 0.08));
@@ -12429,101 +12453,76 @@ onUnmounted(() => {
 
 .viewer-drive-compass__tick {
   position: absolute;
-  top: 8px;
+  top: 10px;
   left: 50%;
   width: 2px;
   height: 8px;
   border-radius: 999px;
   background: rgba(227, 242, 255, 0.34);
-  transform-origin: center 38px;
+  transform-origin: center 44px;
   z-index: 1;
 }
 
 .viewer-drive-compass__tick.is-major {
-  height: 12px;
+  height: 14px;
   background: rgba(133, 221, 255, 0.68);
+}
+
+.viewer-drive-compass__label-slot {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
 }
 
 .viewer-drive-compass__label {
   position: absolute;
-  font-size: 0.72rem;
+  top: 10px;
+  left: 50%;
+  font-size: 0.74rem;
   font-weight: 700;
+  line-height: 1;
   letter-spacing: 0.08em;
-  color: rgba(240, 248, 255, 0.9);
+  color: rgba(240, 248, 255, 0.92);
   text-shadow: 0 0 8px rgba(0, 0, 0, 0.45);
+  transform-origin: center center;
   z-index: 3;
-}
-
-.viewer-drive-compass__label--north {
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.viewer-drive-compass__label--south {
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.viewer-drive-compass__label--west {
-  top: 50%;
-  left: 20px;
-  transform: translateY(-50%);
-}
-
-.viewer-drive-compass__label--east {
-  top: 50%;
-  right: 20px;
-  transform: translateY(-50%);
 }
 
 .viewer-drive-compass__pointer {
   position: absolute;
   inset: 0;
   transform: rotate(var(--vehicle-heading, 0deg));
+  transform-origin: center center;
   z-index: 2;
 }
+
 
 .viewer-drive-compass__pointer::before {
   content: '';
   position: absolute;
   left: 50%;
-  top: 17px;
-  width: 2px;
-  height: 30px;
+  top: 36px;
+  width: 8px;
+  height: 49px;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(95, 226, 255, 0.9));
-  box-shadow: 0 0 12px rgba(84, 221, 255, 0.48);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(130, 231, 255, 0.94), rgba(56, 181, 255, 0.88));
+  box-shadow: 0 0 16px rgba(84, 221, 255, 0.4);
   transform: translateX(-50%);
 }
+
 
 .viewer-drive-compass__pointer::after {
   content: '';
   position: absolute;
   left: 50%;
-  top: 9px;
+  top: 27px;
   width: 0;
   height: 0;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-bottom: 12px solid rgba(150, 237, 255, 0.92);
-  filter: drop-shadow(0 0 8px rgba(88, 225, 255, 0.38));
+  border-left: 12px solid transparent;
+  border-right: 12px solid transparent;
+  border-bottom: 16px solid rgba(150, 237, 255, 0.96);
+  filter: drop-shadow(0 0 8px rgba(88, 225, 255, 0.32));
   transform: translateX(-50%);
-}
-
-.viewer-drive-compass__hub {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.96), rgba(118, 224, 255, 0.75));
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  box-shadow: 0 0 14px rgba(93, 224, 255, 0.32);
-  transform: translate(-50%, -50%);
-  z-index: 3;
 }
 
 .viewer-drive-brake {
