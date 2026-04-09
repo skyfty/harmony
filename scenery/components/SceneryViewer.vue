@@ -327,19 +327,6 @@
               <text class="viewer-drive-icon-text">🔄</text>
             </view>
           </button>
-          <button
-            class="viewer-drive-icon-button viewer-drive-icon-button--danger"
-            :class="{ 'is-busy': vehicleDriveExitBusy }"
-            :disabled="vehicleDriveExitBusy"
-            type="button"
-            hover-class="none"
-            aria-label="下车"
-            @tap="handleVehicleDriveExitTap"
-          >
-            <view class="viewer-drive-icon" aria-hidden="true">
-              <text class="viewer-drive-icon-text">🚪</text>
-            </view>
-          </button>
         </view>
         <view
           v-show="drivePadState.visible"
@@ -629,6 +616,7 @@ import type {
   SceneResourceSummaryEntry,
   Vector3Like,
 } from '@harmony/schema/index';
+import { isPointInsideRegionXZ } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
   createSceneCsmShadowRuntime,
@@ -2907,6 +2895,7 @@ const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
 const tempObserverVector = new THREE.Vector3();
+const tempRegionObserverVector = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
@@ -6810,6 +6799,30 @@ function resolveProximityThresholds(nodeId: string, object: THREE.Object3D): Beh
   return nextThreshold;
 }
 
+function resolveRegionBehaviorContainment(
+  nodeId: string,
+  object: THREE.Object3D,
+  observerPosition: THREE.Vector3,
+): { inside: boolean; distance: number } | null {
+  const node = previewNodeMap.get(nodeId);
+  if (!node || node.dynamicMesh?.type !== 'Region') {
+    return null;
+  }
+  const vertices = (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : [])
+    .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
+    .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z));
+  if (vertices.length < 3) {
+    return { inside: false, distance: Number.POSITIVE_INFINITY };
+  }
+  const localObserver = object.worldToLocal(tempRegionObserverVector.copy(observerPosition));
+  const inside = isPointInsideRegionXZ({ x: localObserver.x, z: localObserver.z }, vertices);
+  const focusPoint = resolveNodeFocusPoint(nodeId) ?? object.getWorldPosition(tempVector);
+  return {
+    inside,
+    distance: focusPoint.distanceTo(observerPosition),
+  };
+}
+
 function updateBehaviorProximity(): void {
   const camera = renderContext?.camera;
   if (!camera || !behaviorProximityCandidates.size) {
@@ -6840,11 +6853,39 @@ function updateBehaviorProximity(): void {
     if (!object) {
       return;
     }
-    const thresholds = resolveProximityThresholds(nodeId, object);
     const state = behaviorProximityState.get(nodeId);
     if (!state) {
       return;
     }
+    const regionContainment = resolveRegionBehaviorContainment(nodeId, object, observerPosition);
+    if (regionContainment) {
+      if (!state.inside && regionContainment.inside) {
+        state.inside = true;
+        if (candidate.hasApproach) {
+          const followUps = triggerBehaviorAction(nodeId, 'approach', {
+            payload: {
+              distance: regionContainment.distance,
+              threshold: 0,
+            },
+          });
+          processBehaviorEvents(followUps);
+        }
+      } else if (state.inside && !regionContainment.inside) {
+        state.inside = false;
+        if (candidate.hasDepart) {
+          const followUps = triggerBehaviorAction(nodeId, 'depart', {
+            payload: {
+              distance: regionContainment.distance,
+              threshold: 0,
+            },
+          });
+          processBehaviorEvents(followUps);
+        }
+      }
+      state.lastDistance = regionContainment.distance;
+      return;
+    }
+    const thresholds = resolveProximityThresholds(nodeId, object);
     const focusPoint = resolveNodeFocusPoint(nodeId) ?? object.getWorldPosition(tempVector);
     const distance = focusPoint.distanceTo(observerPosition);
     if (!Number.isFinite(distance)) {
@@ -12297,7 +12338,7 @@ onUnmounted(() => {
 .viewer-drive-speed-left-floating {
   position: absolute;
   left: 24px;
-  bottom: 190px;
+  bottom: 206px;
   z-index: 1580;
   display: flex;
   align-items: center;

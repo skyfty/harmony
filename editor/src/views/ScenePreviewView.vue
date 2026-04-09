@@ -11,6 +11,7 @@ import {
 	DEFAULT_ENVIRONMENT_RESTITUTION,
 	DEFAULT_ENVIRONMENT_FRICTION,
 	cloneEnvironmentSettings,
+	isPointInsideRegionXZ,
 	resolveDocumentEnvironment,
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
@@ -1231,6 +1232,7 @@ const tempBox = new THREE.Box3()
 const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
 const tempObserverPosition = new THREE.Vector3()
+const tempRegionObserverPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
 const instancedCullingProjView = new THREE.Matrix4()
@@ -4928,6 +4930,30 @@ function resolveProximityThresholds(nodeId: string, object: THREE.Object3D): Beh
 	return nextThreshold
 }
 
+function resolveRegionBehaviorContainment(
+	nodeId: string,
+	object: THREE.Object3D,
+	observerPosition: THREE.Vector3,
+): { inside: boolean; distance: number } | null {
+	const node = previewNodeMap.get(nodeId)
+	if (!node || node.dynamicMesh?.type !== 'Region') {
+		return null
+	}
+	const vertices = (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : [])
+		.map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
+		.filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+	if (vertices.length < 3) {
+		return { inside: false, distance: Number.POSITIVE_INFINITY }
+	}
+	const localObserver = object.worldToLocal(tempRegionObserverPosition.copy(observerPosition))
+	const inside = isPointInsideRegionXZ({ x: localObserver.x, z: localObserver.z }, vertices)
+	const focusPoint = resolveNodeFocusPoint(nodeId, tempPosition) ?? object.getWorldPosition(tempPosition)
+	return {
+		inside,
+		distance: focusPoint.distanceTo(observerPosition),
+	}
+}
+
 function updateBehaviorProximity(): void {
 	if (!camera || !behaviorProximityCandidates.size) {
 		return
@@ -4960,11 +4986,39 @@ function updateBehaviorProximity(): void {
 		if (!object) {
 			return
 		}
-		const thresholds = resolveProximityThresholds(nodeId, object)
 		const state = behaviorProximityState.get(nodeId)
 		if (!state) {
 			return
 		}
+		const regionContainment = resolveRegionBehaviorContainment(nodeId, object, observerPosition)
+		if (regionContainment) {
+			if (!state.inside && regionContainment.inside) {
+				state.inside = true
+				if (candidate.hasApproach) {
+					const followUps = triggerBehaviorAction(nodeId, 'approach', {
+						payload: {
+							distance: regionContainment.distance,
+							threshold: 0,
+						},
+					})
+					processBehaviorEvents(followUps)
+				}
+			} else if (state.inside && !regionContainment.inside) {
+				state.inside = false
+				if (candidate.hasDepart) {
+					const followUps = triggerBehaviorAction(nodeId, 'depart', {
+						payload: {
+							distance: regionContainment.distance,
+							threshold: 0,
+						},
+					})
+					processBehaviorEvents(followUps)
+				}
+			}
+			state.lastDistance = regionContainment.distance
+			return
+		}
+		const thresholds = resolveProximityThresholds(nodeId, object)
 		const focusPoint = resolveNodeFocusPoint(nodeId, tempPosition) ?? object.getWorldPosition(tempPosition)
 		const distance = focusPoint.distanceTo(observerPosition)
 		if (!Number.isFinite(distance)) {

@@ -166,6 +166,17 @@ export { createWaterRuntime } from './waterRuntime'
 export type { WaterRuntime, WaterRuntimeFrame } from './waterRuntime'
 
 export {
+  buildRegionWorldPoints,
+  computeRegionCenter,
+  buildRegionDynamicMeshFromWorldPoints,
+  buildRegionDynamicMeshFromLocalVertices,
+  normalizeRegionVertex2D,
+  normalizeRegionVertices2D,
+  isPointOnRegionSegmentXZ,
+  isPointInsideRegionXZ,
+} from './regionUtils'
+
+export {
   DEFAULT_CAMERA_FOLLOW_TUNING,
   DEFAULT_OBJECT_SIZE_FALLBACK,
   FollowCameraController,
@@ -1105,7 +1116,7 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
   csm?: Partial<EnvironmentCsmSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute' | 'Region'
 
 export type GroundHeightMap = Float64Array
 
@@ -1460,6 +1471,8 @@ export interface RoadDynamicMesh {
 
 export type FloorVertex2D = [number, number]
 
+export type RegionVertex2D = [number, number]
+
 export interface FloorDynamicMesh {
   type: 'Floor'
   /**
@@ -1511,7 +1524,13 @@ export interface GuideRouteDynamicMesh {
   vertices: Vector3Like[]
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh | LandformDynamicMesh | GuideRouteDynamicMesh
+export interface RegionDynamicMesh {
+  type: 'Region'
+  /** Closed polygon vertices projected onto local XZ space. */
+  vertices: RegionVertex2D[]
+}
+
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh | LandformDynamicMesh | GuideRouteDynamicMesh | RegionDynamicMesh
 
 export interface ClipboardEntry {
   sourceId: string

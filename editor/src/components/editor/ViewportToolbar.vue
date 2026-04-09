@@ -2265,6 +2265,7 @@ const buildToolButtons = [
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Brush' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Brush' },
   { id: 'landform', icon: 'mdi-image-filter-hdr', label: 'Landform Brush' },
+  { id: 'region', icon: 'mdi-vector-polygon', label: 'Region Tool (Left Mouse)' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
   { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
   { id: 'displayBoard', icon: 'mdi-advertisements', label: 'Display Surface Tools' },
@@ -2355,7 +2356,15 @@ function handleBuildToolToggle(tool: BuildTool) {
   const primaryId = primaryNode?.id as string | undefined
   const isSingleSelection = selectionIds.length === 1 && typeof primaryId === 'string' && selectionIds.includes(primaryId)
 
-  const expectedDynamicMeshType = tool === 'wall' ? 'Wall' : tool === 'floor' ? 'Floor' : tool === 'road' ? 'Road' : null
+  const expectedDynamicMeshType = tool === 'wall'
+    ? 'Wall'
+    : tool === 'floor'
+    ? 'Floor'
+    : tool === 'road'
+    ? 'Road'
+    : tool === 'region'
+    ? 'Region'
+    : null
   const primaryDynamicMeshType = primaryNode?.dynamicMesh?.type as string | undefined
   const toolMatchesPrimarySelection = tool === 'water'
     ? isWaterSurfaceNode(primaryNode)
