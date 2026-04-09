@@ -234,15 +234,9 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
 
   const updateDoc: {
     $set: Record<string, unknown>
-    $setOnInsert: Record<string, unknown>
     $unset?: Record<string, ''>
   } = {
     $set: updateSet,
-    $setOnInsert: {
-      userId: userObjectId,
-      scenicId,
-      vehicleIdentifier,
-    },
   }
 
   if (Object.keys(updateUnset).length) {
