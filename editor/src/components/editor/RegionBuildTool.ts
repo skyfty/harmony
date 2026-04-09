@@ -94,6 +94,7 @@ export function createRegionBuildTool(options: {
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: { excludeNodeIds?: readonly string[]; keepSourceY?: boolean }) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
+  isRelativeAngleSnapActive?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
   holdStartIndicatorUntilNodeVisible?: (options: { nodeId: string; point: THREE.Vector3; height?: number | null }) => void
