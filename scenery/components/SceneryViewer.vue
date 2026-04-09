@@ -348,21 +348,6 @@
         v-if="vehicleDriveUi.visible"
         class="viewer-drive-console viewer-drive-console--mobile"
       >
-        <view class="viewer-drive-cluster viewer-drive-cluster--actions">
-          <button
-            class="viewer-drive-icon-button"
-            :class="{ 'is-busy': vehicleDriveResetBusy }"
-            type="button"
-            hover-class="none"
-            :disabled="vehicleDriveResetBusy"
-            aria-label="重置车辆"
-            @tap="handleVehicleDriveResetTap"
-          >
-            <view class="viewer-drive-icon" aria-hidden="true">
-              <text class="viewer-drive-icon-text">🔄</text>
-            </view>
-          </button>
-        </view>
         <view
           v-show="drivePadState.visible"
           class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
@@ -388,11 +373,24 @@
           </view>
         </view>
       </view>
-      <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating" aria-hidden="true">
-        <view class="viewer-drive-speed-readout">
+      <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
+        <view class="viewer-drive-speed-readout" aria-hidden="true">
           <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
           <text class="viewer-drive-speed-readout__unit">km/h</text>
         </view>
+        <button
+          class="viewer-drive-icon-button"
+          :class="{ 'is-busy': vehicleDriveResetBusy }"
+          type="button"
+          hover-class="none"
+          :disabled="vehicleDriveResetBusy"
+          aria-label="重置车辆"
+          @tap="handleVehicleDriveResetTap"
+        >
+          <view class="viewer-drive-icon" aria-hidden="true">
+            <text class="viewer-drive-icon-text">🔄</text>
+          </view>
+        </button>
       </view>
 
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-compass-right-floating" aria-hidden="true">
@@ -518,8 +516,6 @@ const emit = defineEmits<{
   loaded: [];
   error: [message: string];
   progress: [payload: {
-    title: string;
-    percent: number;
     bytesLabel: string;
     loaded: number;
     total: number;
@@ -737,11 +733,6 @@ import {
   protagonistComponentDefinition,
 } from '@harmony/schema/components/definitions/protagonistComponent';
 import {
-  signboardComponentDefinition,
-  SIGNBOARD_COMPONENT_TYPE,
-  type SignboardComponentProps,
-} from '@harmony/schema/components/definitions/signboardComponent';
-import {
   lodComponentDefinition,
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
@@ -800,11 +791,6 @@ import {
 import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
-import {
-  computeSignboardPlacement,
-  resolveSignboardAnchorWorldPosition,
-  resolveSignboardDisplayLabel,
-} from '@harmony/schema/signboardOverlay';
 import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@harmony/schema/cameraGuard';
 import {
   addBehaviorRuntimeListener,
@@ -2057,7 +2043,6 @@ previewComponentManager.registerDefinition(landformComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);
 previewComponentManager.registerDefinition(displayBoardComponentDefinition);
 previewComponentManager.registerDefinition(billboardComponentDefinition);
-previewComponentManager.registerDefinition(signboardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
@@ -4076,16 +4061,8 @@ function closeBehaviorAlert() {
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   assetNodeIdMap.clear();
-  signboardNodeIds.clear();
   rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
   for (const node of previewNodeMap.values()) {
-    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
-      | SceneNodeComponentState<SignboardComponentProps>
-      | undefined;
-    if (signboardState?.enabled) {
-      signboardNodeIds.add(node.id);
-    }
-
     if (isWeChatMiniProgram && node.nodeType === 'Light' && node.light) {
       if (node.light.type === 'Point') {
         node.light.castShadow = false;
@@ -4163,95 +4140,6 @@ function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null
 
 function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
-}
-
-function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' | 'vehicle' } | null {
-  if (vehicleDriveActive.value && vehicleDriveVehicle?.chassisBody?.position) {
-    const bodyPosition = vehicleDriveVehicle.chassisBody.position;
-    signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-    return { position: signboardReferenceScratch, kind: 'vehicle' };
-  }
-  if (autoTourFollowNodeId.value) {
-    const autoTourVehicle = vehicleInstances.get(autoTourFollowNodeId.value)?.vehicle ?? null;
-    const bodyPosition = autoTourVehicle?.chassisBody?.position;
-    if (bodyPosition) {
-      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-      return { position: signboardReferenceScratch, kind: 'vehicle' };
-    }
-    const followObject = nodeObjectMap.get(autoTourFollowNodeId.value) ?? null;
-    if (followObject) {
-      followObject.getWorldPosition(signboardReferenceScratch);
-      return { position: signboardReferenceScratch, kind: 'vehicle' };
-    }
-  }
-  const activeCamera = renderContext?.camera ?? null;
-  if (!activeCamera) {
-    return null;
-  }
-  activeCamera.getWorldPosition(signboardReferenceScratch);
-  return { position: signboardReferenceScratch, kind: 'camera' };
-}
-
-function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
-  if (!signboardNodeIds.size) {
-    if (signboardOverlayEntries.value.length) {
-      signboardOverlayEntries.value = [];
-    }
-    return;
-  }
-  const reference = resolveSignboardReference();
-  if (!reference) {
-    signboardOverlayEntries.value = [];
-    return;
-  }
-
-  const nextEntries: Array<{
-    id: string;
-    label: string;
-    distanceLabel: string;
-    xPercent: number;
-    yPercent: number;
-    scale: number;
-    opacity: number;
-    referenceKind: 'camera' | 'vehicle';
-  }> = [];
-  for (const nodeId of signboardNodeIds) {
-    const node = resolveNodeById(nodeId);
-    const object = nodeObjectMap.get(nodeId) ?? null;
-    if (!node || !object || !isRuntimeObjectEffectivelyVisible(object)) {
-      continue;
-    }
-    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
-      | SceneNodeComponentState<SignboardComponentProps>
-      | undefined;
-    if (!signboardState?.enabled) {
-      continue;
-    }
-    const label = resolveSignboardDisplayLabel(signboardState.props?.label, node.name, nodeId);
-    if (!label) {
-      continue;
-    }
-    resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
-    const placement = computeSignboardPlacement({
-      anchorWorld: signboardAnchorScratch,
-      referenceWorld: reference.position,
-      camera: activeCamera,
-    });
-    if (!placement) {
-      continue;
-    }
-    nextEntries.push({
-      id: nodeId,
-      label,
-      distanceLabel: placement.distanceLabel,
-      xPercent: placement.xPercent,
-      yPercent: placement.yPercent,
-      scale: placement.scale,
-      opacity: placement.opacity,
-      referenceKind: reference.kind,
-    });
-  }
-  signboardOverlayEntries.value = nextEntries;
 }
 
 function normalizeSteerIdentifier(value: unknown): string {
@@ -10973,7 +10861,6 @@ function startRenderLoop(
         }
 
         updateBillboardInstanceCameraWorldPosition(camera.position);
-        updateSignboardOverlayEntries(camera);
 
         if (vehicleDriveActive.value) {
           updateVehicleDriveCamera(deltaSeconds);
@@ -12936,14 +12823,16 @@ onUnmounted(() => {
   bottom: 206px;
   z-index: 1580;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  pointer-events: none;
+  gap: 12px;
+  pointer-events: auto;
 }
 
 .viewer-drive-compass-right-floating {
   position: absolute;
   right: 24px;
-  bottom: 190px;
+  bottom: 220px;
   z-index: 1580;
   display: flex;
   align-items: center;
@@ -12968,7 +12857,7 @@ onUnmounted(() => {
   backdrop-filter: blur(12px);
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 2px;
   color: #f7fbff;
   font-weight: 700;
@@ -12979,7 +12868,7 @@ onUnmounted(() => {
   font-size: 1.5rem;
   line-height: 1;
   width: 100%;
-  text-align: left;
+  text-align: center;
 }
 
 .viewer-drive-speed-readout__unit {
@@ -12992,8 +12881,9 @@ onUnmounted(() => {
   align-self: center;
 }
 
-  width: 80px;
-  height: 80px;
+.viewer-drive-compass {
+  width: 108px;
+  height: 108px;
   border-radius: 50%;
   position: relative;
   overflow: hidden;
@@ -13073,7 +12963,7 @@ onUnmounted(() => {
   left: 50%;
   top: 36px;
   width: 8px;
-  height: 49px;
+  height: 44px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(130, 231, 255, 0.94), rgba(56, 181, 255, 0.88));
   box-shadow: 0 0 16px rgba(84, 221, 255, 0.4);
