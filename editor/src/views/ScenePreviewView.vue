@@ -12018,6 +12018,7 @@ watch(
 	backdrop-filter: blur(10px);
 	color: #eff8ff;
 	white-space: nowrap;
+	flex-wrap: nowrap;
 }
 
 .scene-preview__signboard--vehicle .scene-preview__signboard-pill {
@@ -12026,20 +12027,24 @@ watch(
 }
 
 .scene-preview__signboard-name {
+	display: inline-block;
 	font-size: 0.84rem;
 	font-weight: 700;
 	letter-spacing: 0.02em;
 	max-width: 220px;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .scene-preview__signboard-distance {
+	display: inline-block;
 	padding-left: 10px;
 	border-left: 1px solid rgba(255, 255, 255, 0.14);
 	font-size: 0.76rem;
 	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 	color: rgba(226, 242, 255, 0.82);
+	white-space: nowrap;
 }
 
 .scene-preview__stats {

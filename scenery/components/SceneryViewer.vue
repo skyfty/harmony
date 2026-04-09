@@ -11332,6 +11332,7 @@ onUnmounted(() => {
   backdrop-filter: blur(10px);
   color: #eff8ff;
   white-space: nowrap;
+  flex-wrap: nowrap;
 }
 
 .viewer-signboard--vehicle .viewer-signboard__pill {
@@ -11340,19 +11341,23 @@ onUnmounted(() => {
 }
 
 .viewer-signboard__name {
+  display: inline-block;
   max-width: 360rpx;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 24rpx;
   font-weight: 700;
   letter-spacing: 0.4rpx;
+  white-space: nowrap;
 }
 
 .viewer-signboard__distance {
+  display: inline-block;
   padding-left: 14rpx;
   border-left: 1px solid rgba(255, 255, 255, 0.14);
   font-size: 21rpx;
   color: rgba(226, 242, 255, 0.82);
+  white-space: nowrap;
 }
 
 .viewer-debug-overlay {
