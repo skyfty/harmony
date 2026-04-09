@@ -12421,9 +12421,8 @@ onUnmounted(() => {
   align-self: center;
 }
 
-.viewer-drive-compass {
-  width: 108px;
-  height: 108px;
+  width: 80px;
+  height: 80px;
   border-radius: 50%;
   position: relative;
   overflow: hidden;
