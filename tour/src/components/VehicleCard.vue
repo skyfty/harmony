@@ -150,6 +150,8 @@ const hasStats = computed(() => {
   border-radius: 999px;
   background: #eef4ff;
   color: #1f7aec;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .badge--locked {
