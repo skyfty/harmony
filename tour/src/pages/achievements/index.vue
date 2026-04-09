@@ -365,7 +365,7 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-card {
-  padding: 10px 10px;
+  padding: 5px 5px;
   border-radius: 22px;
   display: flex;
   align-items: center;
