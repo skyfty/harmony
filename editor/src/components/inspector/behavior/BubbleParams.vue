@@ -54,7 +54,7 @@ const params = computed<BubbleBehaviorParams>(() => ({
   anchorMode: props.modelValue?.anchorMode ?? 'screenFixed',
   targetNodeId: props.modelValue?.targetNodeId ?? null,
   repeat: props.modelValue?.repeat ?? true,
-  maxDistanceMeters: Math.max(0, props.modelValue?.maxDistanceMeters ?? 30),
+  maxDistanceMeters: Math.max(0, props.modelValue?.maxDistanceMeters ?? 0),
   styleVariant: props.modelValue?.styleVariant ?? 'info',
   animationPreset: props.modelValue?.animationPreset ?? 'float',
   screenOffsetX: Number.isFinite(props.modelValue?.screenOffsetX) ? props.modelValue?.screenOffsetX ?? 0 : 0,
