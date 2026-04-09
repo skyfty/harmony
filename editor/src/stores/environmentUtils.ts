@@ -110,8 +110,7 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     a.background.negativeYAssetId === b.background.negativeYAssetId &&
     a.background.positiveZAssetId === b.background.positiveZAssetId &&
     a.background.negativeZAssetId === b.background.negativeZAssetId &&
-    (a.environmentOrientationPreset ?? DEFAULT_ENVIRONMENT_ORIENTATION_PRESET) ===
-      (b.environmentOrientationPreset ?? DEFAULT_ENVIRONMENT_ORIENTATION_PRESET) &&
+    a.environmentOrientationPreset === b.environmentOrientationPreset &&
     Math.abs((a.environmentRotationDegrees?.x ?? 0) - (b.environmentRotationDegrees?.x ?? 0)) <= epsilon &&
     Math.abs((a.environmentRotationDegrees?.y ?? 0) - (b.environmentRotationDegrees?.y ?? 0)) <= epsilon &&
     Math.abs((a.environmentRotationDegrees?.z ?? 0) - (b.environmentRotationDegrees?.z ?? 0)) <= epsilon &&
@@ -135,7 +134,8 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs((a.csm?.maxFar ?? 1200) - (b.csm?.maxFar ?? 1200)) <= epsilon &&
     Math.abs((a.csm?.shadowMapSize ?? 2048) - (b.csm?.shadowMapSize ?? 2048)) <= epsilon &&
     Math.abs((a.csm?.shadowBias ?? -0.00015) - (b.csm?.shadowBias ?? -0.00015)) <= epsilon &&
-    Boolean(a.viewportPerformanceMode) === Boolean(b.viewportPerformanceMode)
+    Boolean(a.viewportPerformanceMode) === Boolean(b.viewportPerformanceMode) &&
+    a.northDirection === b.northDirection
   )
 }
 

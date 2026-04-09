@@ -11330,6 +11330,7 @@ const environmentSignature = computed(() => {
     fogNear: settings.fogNear,
     fogFar: settings.fogFar,
     fogDensity: settings.fogDensity,
+    northDirection: settings.northDirection,
     csm: resolveEnvironmentCsmSettings(settings),
   })
 })
