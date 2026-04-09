@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import type {
   EnvironmentBackgroundMode,
   EnvironmentFogMode,
+  EnvironmentNorthDirection,
   EnvironmentOrientationPreset,
   EnvironmentRotationDegrees,
   SkyCubeBackgroundFormat,
@@ -33,6 +34,13 @@ const orientationPresetOptions: Array<{ title: string; value: EnvironmentOrienta
   { title: '+Z Up (Z-up assets)', value: 'zUp' },
   { title: '+X Up (X-up assets)', value: 'xUp' },
   { title: 'Custom', value: 'custom' },
+]
+
+const northDirectionOptions: Array<{ title: string; value: EnvironmentNorthDirection }> = [
+  { title: '+X', value: '+X' },
+  { title: '-X', value: '-X' },
+  { title: '+Z', value: '+Z' },
+  { title: '-Z', value: '-Z' },
 ]
 
 const backgroundColorMenuOpen = ref(false)
@@ -282,6 +290,13 @@ function updateOrientationPreset(preset: EnvironmentOrientationPreset | null) {
     environmentOrientationPreset: preset,
     environmentRotationDegrees: resolvePresetRotationDegrees(preset),
   })
+}
+
+function updateNorthDirection(direction: EnvironmentNorthDirection | null) {
+  if (!direction || direction === environmentSettings.value.northDirection) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ northDirection: direction })
 }
 
 function handleRotationDegreesInput(axis: keyof EnvironmentRotationDegrees, value: unknown) {
@@ -1519,6 +1534,20 @@ function handleBackgroundDrop(event: DragEvent) {
               @update:model-value="handleViewportPerformanceModeToggle"
             />
           </div>
+        </section>
+
+        <section class="environment-section">
+          <div class="section-title">Navigation</div>
+          <v-select
+            :items="northDirectionOptions"
+            :model-value="environmentSettings.northDirection ?? '+X'"
+            density="compact"
+            hide-details
+            variant="underlined"
+            class="section-select"
+            label="North Direction"
+            @update:model-value="(value) => updateNorthDirection(value as EnvironmentNorthDirection | null)"
+          />
         </section>
 
         <section class="environment-section">

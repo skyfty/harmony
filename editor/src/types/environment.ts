@@ -1,5 +1,6 @@
 export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
+export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
@@ -34,6 +35,7 @@ export interface EnvironmentBackgroundSettings {
 
 export interface EnvironmentSettings {
   background: EnvironmentBackgroundSettings
+  northDirection?: EnvironmentNorthDirection
   environmentOrientationPreset?: EnvironmentOrientationPreset
   environmentRotationDegrees?: EnvironmentRotationDegrees
   ambientLightColor: string

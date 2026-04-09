@@ -1028,6 +1028,7 @@ export interface SceneResourceSummary {
 
 export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
+export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
@@ -1074,6 +1075,8 @@ export interface EnvironmentBackgroundSettings {
 
 export interface EnvironmentSettings {
   background: EnvironmentBackgroundSettings
+  /** Which world axis should be treated as geographic north by viewers. */
+  northDirection?: EnvironmentNorthDirection
   /**
    * Optional orientation helper for environment textures (HDRI / SkyCube).
    * Used by the editor UI to adapt cubemaps authored with different up axes.

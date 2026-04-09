@@ -1,4 +1,4 @@
-export type { EnvironmentSettings, EnvironmentCsmSettings } from './index';
+export type { EnvironmentSettings, EnvironmentCsmSettings, EnvironmentNorthDirection } from './index';
 import {
   DEFAULT_SCENE_CSM_CONFIG,
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
@@ -6,6 +6,7 @@ import {
 } from './sceneCsm'
 import type {
   EnvironmentCsmSettings,
+  EnvironmentNorthDirection,
   EnvironmentSettings,
   SceneJsonExportDocument,
   SceneNode,
@@ -23,6 +24,7 @@ export const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 export const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 export const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 export const DEFAULT_ENVIRONMENT_FRICTION = 0.3
+export const DEFAULT_ENVIRONMENT_NORTH_DIRECTION = '+X' as const
 export const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
 export const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
 
@@ -61,6 +63,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     positiveZAssetId: null,
     negativeZAssetId: null,
   },
+  northDirection: DEFAULT_ENVIRONMENT_NORTH_DIRECTION,
   environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
   environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
   ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
@@ -121,6 +124,25 @@ function normalizeAssetId(value: unknown): string | null {
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : null
+}
+
+function normalizeNorthDirection(value: unknown): EnvironmentNorthDirection {
+  if (value === '+X' || value === '-X' || value === '+Z' || value === '-Z') {
+    return value
+  }
+  if (value === '+x') {
+    return '+X'
+  }
+  if (value === '-x') {
+    return '-X'
+  }
+  if (value === '+z') {
+    return '+Z'
+  }
+  if (value === '-z') {
+    return '-Z'
+  }
+  return DEFAULT_ENVIRONMENT_NORTH_DIRECTION
 }
 
 function normalizeEnvironmentCsmSettings(value: unknown): EnvironmentCsmSettings {
@@ -289,6 +311,7 @@ export function cloneEnvironmentSettings(
       positiveZAssetId: skycubeFaceAssetIds.positiveZAssetId,
       negativeZAssetId: skycubeFaceAssetIds.negativeZAssetId,
     },
+    northDirection: normalizeNorthDirection((normalizedSource as any)?.northDirection),
     environmentOrientationPreset: preset,
     environmentRotationDegrees,
     ambientLightColor: normalizeHexColor(normalizedSource.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),

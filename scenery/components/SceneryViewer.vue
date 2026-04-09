@@ -567,11 +567,13 @@ import { syncContinuousInstancedModelCommitted } from '@harmony/schema/continuou
 import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@harmony/schema/wallInstancing';
 import {
   DEFAULT_ENVIRONMENT_SETTINGS,
+  DEFAULT_ENVIRONMENT_NORTH_DIRECTION,
   DEFAULT_ENVIRONMENT_GRAVITY,
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
   cloneEnvironmentSettings,
   resolveDocumentEnvironment,
+  type EnvironmentNorthDirection,
   type EnvironmentSettings,
   type EnvironmentCsmSettings,
 } from '@harmony/schema/environmentSettingsUtils';
@@ -1705,6 +1707,7 @@ let skyCubeZipAssetId: string | null = null;
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null;
 let backgroundLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
+let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
 let groundSurfacePreviewLoadToken = 0;
@@ -7956,6 +7959,20 @@ function applyVehicleDriveForces(deltaSeconds: number): void {
   vehicleDriveController.applyForces(deltaSeconds);
 }
 
+function resolveNorthDirectionAngleDegrees(direction: EnvironmentNorthDirection | null | undefined): number {
+  switch (direction ?? DEFAULT_ENVIRONMENT_NORTH_DIRECTION) {
+    case '-X':
+      return 180;
+    case '+Z':
+      return 90;
+    case '-Z':
+      return 270;
+    case '+X':
+    default:
+      return 0;
+  }
+}
+
 function updateVehicleSpeedFromVehicle(): void {
   const vehicle = vehicleDriveVehicle;
   const chassisBody = vehicle?.chassisBody ?? null;
@@ -7979,10 +7996,11 @@ function updateVehicleSpeedFromVehicle(): void {
     + vehicleCompassForward.z * vehicleCompassForward.z;
   if (horizontalLengthSq > 1e-8) {
     vehicleCompassForward.multiplyScalar(1 / Math.sqrt(horizontalLengthSq));
-    const headingDegrees = THREE.MathUtils.radToDeg(
+    const worldHeadingDegrees = THREE.MathUtils.radToDeg(
       Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
     );
-    vehicleHeadingDegrees.value = (headingDegrees + 360) % 360;
+    const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
+    vehicleHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360;
   }
 
   const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
@@ -9245,6 +9263,7 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const scene = renderContext?.scene ?? null;
   const snapshot = cloneEnvironmentSettings(settings);
+  activeEnvironmentSettings = snapshot;
   applyPhysicsEnvironmentSettings(snapshot);
   if (!scene) {
     pendingEnvironmentSettings = snapshot;
@@ -9276,6 +9295,7 @@ function disposeEnvironmentResources() {
   disposeBackgroundResources();
   backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
+  activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 }
 
 function resetRemovedSkyState() {
