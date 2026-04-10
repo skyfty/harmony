@@ -12,19 +12,24 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import Loader from '@schema/loader'
-import type { FloorDynamicMesh, SceneMaterial, SceneMaterialProps, SceneMaterialTextureRef, SceneMaterialType, SceneNodeMaterial } from '@schema'
-import { applyMaterialOverrides, DEFAULT_SCENE_MATERIAL_TYPE, type MaterialTextureAssignmentOptions } from '@schema/material'
-import { createFloorGroup } from '@schema/floorMesh'
+import type { FloorDynamicMesh, SceneMaterial, SceneMaterialProps, SceneMaterialTextureRef, SceneMaterialType, SceneNode, SceneNodeMaterial } from '@schema'
+import { DEFAULT_SCENE_MATERIAL_TYPE } from '@schema/material'
+import { FLOOR_COMPONENT_TYPE } from '@schema/components/definitions/floorComponent'
+import { WALL_COMPONENT_TYPE } from '@schema/components/definitions/wallComponent'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { parseFloorPresetData } from '@/stores/floorPresetActions'
 import { parseWallPresetData } from '@/stores/wallPresetActions'
 import {
-  buildWallPresetPreviewObject,
-  prepareWallPreviewImportedObject,
+  buildWallPresetPreviewDynamicMesh,
   WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY,
 } from '@/utils/wallPresetSceneGraphPreview'
+import {
+  buildFloorPreviewObjectFromNode,
+  buildWallPreviewObjectFromNode,
+  createPreviewMaterialOverrideOptions,
+} from '@/utils/wallFloorPreviewBuilder'
+import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import type { FloorPresetData, FloorPresetMaterialPatch } from '@/utils/floorPreset'
 import type { WallPresetData } from '@/utils/wallPreset'
 
@@ -66,14 +71,11 @@ function logWallPresetComponent(message: string, payload?: Record<string, unknow
   console.info(WALL_PRESET_COMPONENT_LOG_PREFIX, message)
 }
 
-const materialOverrideOptions: MaterialTextureAssignmentOptions = {
-  resolveTexture: resolveMaterialTexture,
-  warn: (message) => {
-    if (message) {
-      console.warn('[preset-preview]', message)
-    }
-  },
-}
+const materialOverrideOptions = createPreviewMaterialOverrideOptions(ensureAssetFile, (message) => {
+  if (message) {
+    console.warn('[preset-preview]', message)
+  }
+})
 
 function cloneTextureRef(ref: SceneMaterialTextureRef | null | undefined): SceneMaterialTextureRef | null {
   if (!ref) {
@@ -243,10 +245,10 @@ function disposeObject(object: THREE.Object3D | null): void {
     if (!mesh?.isMesh) {
       return
     }
-    if ((mesh.userData as Record<string, unknown> | undefined)?.[WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY]) {
-      return
+    const isSharedPreviewAsset = Boolean((mesh.userData as Record<string, unknown> | undefined)?.[WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY])
+    if (!isSharedPreviewAsset) {
+      mesh.geometry?.dispose?.()
     }
-    mesh.geometry?.dispose?.()
     const material = mesh.material
     if (Array.isArray(material)) {
       material.forEach((entry) => entry?.dispose?.())
@@ -294,51 +296,6 @@ async function ensureAssetFile(assetId: string): Promise<File | null> {
   return downloaded
 }
 
-async function loadModelObjectFromFile(file: File): Promise<THREE.Object3D | null> {
-  const loader = new Loader()
-  logWallPresetComponent('model load start', { fileName: file.name, size: file.size })
-  return await new Promise<THREE.Object3D | null>((resolve, reject) => {
-    const handleLoaded = (object: THREE.Object3D | null) => {
-      loader.removeEventListener('loaded', handleLoaded)
-      if (!object) {
-        logWallPresetComponent('model load failed: empty object', { fileName: file.name })
-        reject(new Error('模型加载失败'))
-        return
-      }
-      logWallPresetComponent('model load success', { fileName: file.name })
-      resolve(prepareWallPreviewImportedObject(object))
-    }
-    loader.addEventListener('loaded', handleLoaded)
-    try {
-      loader.loadFiles([file])
-    } catch (loadError) {
-      loader.removeEventListener('loaded', handleLoaded)
-      reject(loadError)
-    }
-  })
-}
-
-async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THREE.Texture | null> {
-  const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
-  if (!assetId) {
-    return null
-  }
-  const file = await ensureAssetFile(assetId)
-  if (!file) {
-    return null
-  }
-  const blobUrl = URL.createObjectURL(file)
-  try {
-    const loader = new THREE.TextureLoader()
-    const texture = await loader.loadAsync(blobUrl)
-    texture.name = ref.name ?? file.name ?? assetId
-    texture.needsUpdate = true
-    return texture
-  } finally {
-    URL.revokeObjectURL(blobUrl)
-  }
-}
-
 async function parsePreset(file: File): Promise<ParsedPreset> {
   const text = await file.text()
   if (props.kind === 'wall') {
@@ -367,36 +324,72 @@ function buildDefaultFloorDefinition(preset: FloorPresetData): FloorDynamicMesh 
   }
 }
 
-async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Object3D> {
-  logWallPresetComponent('build wall preview start', {
-    name: preset.name || null,
-    bodyAssetId: preset.wallProps.bodyAssetId ?? null,
-    headAssetId: preset.wallProps.headAssetId ?? null,
-    footAssetId: preset.wallProps.footAssetId ?? null,
-    cornerModelCount: Array.isArray(preset.wallProps.cornerModels) ? preset.wallProps.cornerModels.length : 0,
-  })
-  const object = await buildWallPresetPreviewObject({
-    preset,
-    loadAssetMesh: async (assetId: string) => {
-      const file = await ensureAssetFile(assetId)
-      if (!file) {
-        logWallPresetComponent('build wall preview asset missing file', { assetId })
-        return null
-      }
-      return await loadModelObjectFromFile(file)
+function createPreviewBaseNode(name: string): SceneNode {
+  return {
+    id: `${props.kind}-preset-preview`,
+    name,
+    nodeType: 'Mesh',
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+    visible: true,
+    children: [],
+  }
+}
+
+function buildWallPreviewNode(preset: WallPresetData): SceneNode {
+  return {
+    ...createPreviewBaseNode(preset.name || 'Wall Preset Preview'),
+    dynamicMesh: buildWallPresetPreviewDynamicMesh(preset, { rectSizeMeters: 10 }),
+    materials: buildWallNodeMaterialsFromPreset(preset, sceneStore.materials),
+    components: {
+      [WALL_COMPONENT_TYPE]: {
+        id: `${WALL_COMPONENT_TYPE}-preset-preview`,
+        type: WALL_COMPONENT_TYPE,
+        enabled: true,
+        props: preset.wallProps,
+      },
     },
+  }
+}
+
+function buildFloorPreviewNode(preset: FloorPresetData): SceneNode {
+  return {
+    ...createPreviewBaseNode(preset.name || 'Floor Preset Preview'),
+    dynamicMesh: buildDefaultFloorDefinition(preset),
+    materials: buildFloorNodeMaterials(preset),
+    components: {
+      [FLOOR_COMPONENT_TYPE]: {
+        id: `${FLOOR_COMPONENT_TYPE}-preset-preview`,
+        type: FLOOR_COMPONENT_TYPE,
+        enabled: true,
+        props: preset.floorProps,
+      },
+    },
+  }
+}
+
+async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Object3D> {
+  const object = await buildWallPreviewObjectFromNode({
+    node: buildWallPreviewNode(preset),
+    resolveAssetFile: ensureAssetFile,
+    materialOverrideOptions,
   })
   if (!object) {
     throw new Error('无法构建墙体预览对象')
   }
-  logWallPresetComponent('build wall preview success', { hasObject: true })
   return object
 }
 
 async function buildFloorPreviewObject(preset: FloorPresetData): Promise<THREE.Object3D> {
-  const group = createFloorGroup(buildDefaultFloorDefinition(preset))
-  applyMaterialOverrides(group, buildFloorNodeMaterials(preset), materialOverrideOptions)
-  return group
+  const object = await buildFloorPreviewObjectFromNode({
+    node: buildFloorPreviewNode(preset),
+    materialOverrideOptions,
+  })
+  if (!object) {
+    throw new Error('无法构建地面预览对象')
+  }
+  return object
 }
 
 async function loadPresetScene(): Promise<void> {
