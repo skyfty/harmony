@@ -9,7 +9,7 @@
         <text class="hero-desc">从需求提交到运营上线，实时查看项目推进状态。</text>
       </view>
 
-      <scroll-view class="timeline-scroll" scroll-x>
+      <view class="timeline-scroll">
         <view class="timeline-row">
           <view v-for="(item, index) in stageItems" :key="item.key" class="timeline-item">
             <view class="timeline-dot" :class="timelineDotClass(item.key)">{{ index + 1 }}</view>
@@ -17,7 +17,7 @@
             <view v-if="index < stageItems.length - 1" class="timeline-line" :class="{ 'timeline-line--active': isStageReached(stageItems[index + 1].key) }" />
           </view>
         </view>
-      </scroll-view>
+      </view>
 
       <view v-if="loading" class="state-card">
         <text class="state-title">加载中...</text>
@@ -340,20 +340,38 @@ function formatDateTime(value: string) {
 <style scoped lang="scss">
 .page {
   min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at top left, rgba(30, 112, 255, 0.18), transparent 32%),
     linear-gradient(180deg, #eef5ff 0%, #f8fafc 42%, #f3f6fb 100%);
 }
 
 .content {
+  width: 100%;
+  box-sizing: border-box;
   padding: 14px 16px 28px;
-  display: grid;
-  gap: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+.content > * {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin-bottom: 14px;
+}
+
+.content > *:last-child {
+  margin-bottom: 0;
 }
 
 .hero-card,
 .card,
 .state-card {
+  width: 100%;
+  box-sizing: border-box;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(8px);
   border-radius: 20px;
@@ -362,8 +380,8 @@ function formatDateTime(value: string) {
 
 .hero-card {
   padding: 18px;
-  display: grid;
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
 }
 
 .hero-title {
@@ -373,27 +391,32 @@ function formatDateTime(value: string) {
 }
 
 .hero-desc {
+  margin-top: 6px;
   font-size: 13px;
   color: #667085;
   line-height: 1.5;
 }
 
 .timeline-scroll {
-  white-space: nowrap;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .timeline-row {
   display: flex;
   align-items: flex-start;
-  min-width: max-content;
+  width: 100%;
   padding: 8px 4px 0;
 }
 
 .timeline-item {
   display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
   align-items: center;
   position: relative;
-  min-width: 88px;
+  padding: 0 4px;
 }
 
 .timeline-dot {
@@ -422,9 +445,13 @@ function formatDateTime(value: string) {
 }
 
 .timeline-label {
-  margin-left: 8px;
+  margin-top: 8px;
   color: #8a94a6;
   font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .timeline-label--active {
@@ -433,10 +460,13 @@ function formatDateTime(value: string) {
 }
 
 .timeline-line {
-  width: 40px;
+  position: absolute;
+  top: 14px;
+  left: calc(50% + 19px);
+  width: calc(100% - 38px);
   height: 2px;
   background: #d7e3f5;
-  margin: 0 8px;
+  margin: 0;
 }
 
 .timeline-line--active {
@@ -456,11 +486,12 @@ function formatDateTime(value: string) {
 }
 
 .state-card {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
 }
 
 .state-desc {
+  margin-top: 8px;
   font-size: 13px;
   color: #667085;
   line-height: 1.6;
@@ -471,8 +502,8 @@ function formatDateTime(value: string) {
 }
 
 .field {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
   margin-top: 14px;
 }
 
@@ -496,19 +527,24 @@ function formatDateTime(value: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .field-input,
 .field-picker,
 .field-textarea {
+  display: block;
   width: 100%;
   box-sizing: border-box;
   border-radius: 14px;
   background: #f7f9fc;
   border: 1px solid #dde5f0;
-  padding: 12px 14px;
+  padding: 16px 14px;
   color: #172033;
   font-size: 14px;
+  line-height: 1.5;
+  min-height: 52px;
+  margin-top: 8px;
 }
 
 .field-textarea {
@@ -579,8 +615,8 @@ function formatDateTime(value: string) {
 }
 
 .summary-item {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
 }
 
 .summary-label {
@@ -589,6 +625,7 @@ function formatDateTime(value: string) {
 }
 
 .summary-value {
+  margin-top: 4px;
   font-size: 13px;
   color: #172033;
   word-break: break-all;
@@ -641,8 +678,8 @@ function formatDateTime(value: string) {
 .vertical-content {
   flex: 1;
   padding-bottom: 18px;
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
 }
 
 .vertical-title {
@@ -657,7 +694,52 @@ function formatDateTime(value: string) {
   color: #667085;
 }
 
+.vertical-status {
+  margin-top: 4px;
+}
+
+.vertical-meta {
+  margin-top: 4px;
+}
+
 @media (max-width: 420px) {
+  .content {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .timeline-row {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .timeline-dot {
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
+    font-size: 11px;
+  }
+
+  .timeline-line {
+    top: 12px;
+    left: calc(50% + 17px);
+    width: calc(100% - 34px);
+  }
+
+  .timeline-label {
+    font-size: 11px;
+  }
+
+  .field-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .ghost-btn,
+  .state-btn {
+    width: 100%;
+  }
+
   .field-row,
   .form-actions,
   .summary-grid {
