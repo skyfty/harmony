@@ -6,7 +6,13 @@ import {
   MATERIAL_TEXTURE_REPEAT_INFO_KEY,
 } from './material'
 import { compileWallSegmentsFromDefinition, resolveWallDimensionsFromDefinition, type WallRenderSegment } from './wallLayout'
-import { resolveWallTotalHeight, resolveWallVerticalLayout, type WallVerticalLayout, type WallVerticalLayoutOptions } from './wallVerticalLayout'
+import {
+  resolveWallPartAnchoredY,
+  resolveWallTotalHeight,
+  resolveWallVerticalLayout,
+  type WallVerticalLayout,
+  type WallVerticalLayoutOptions,
+} from './wallVerticalLayout'
 
 export type WallRenderAssetObjects = {
   /** Lower wall body model root (instanced along segments). */
@@ -791,6 +797,7 @@ function buildStretchedWallInstancesForSegs(
   const { tileLengthLocal, minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
   const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
   const templateMinY = template.bounds.min.y
+  const templateMaxY = template.bounds.max.y
   const info = wallForwardAxisInfo(orientation.forwardAxis)
 
   const start = new THREE.Vector3()
@@ -847,14 +854,14 @@ function buildStretchedWallInstancesForSegs(
     )
 
     // Y anchor (same logic as the original instancing code).
-    let anchoredY: number
-    if (mode === 'body') {
-      anchoredY = start.y + layout.bodyBaseY - scaleY * templateMinY
-    } else if (mode === 'head') {
-      anchoredY = start.y + layout.headBaseY - templateMinY
-    } else {
-      anchoredY = start.y + layout.footBaseY - templateMinY
-    }
+    const anchoredY = resolveWallPartAnchoredY({
+      layout,
+      mode,
+      minY: templateMinY,
+      maxY: templateMaxY,
+      scaleY,
+      baselineY: start.y,
+    })
 
     // Position: place mesh so its min-face in the forward axis aligns with `start`.
     // After scale the stretched min-face local coord = minAlongAxis * stretchFactor.
@@ -904,6 +911,7 @@ function buildRepeatedWallInstancesForSegs(
   const { tileLengthLocal, minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
   const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
   const templateMinY = template.bounds.min.y
+  const templateMaxY = template.bounds.max.y
 
   const start = new THREE.Vector3()
   const end = new THREE.Vector3()
@@ -951,14 +959,14 @@ function buildRepeatedWallInstancesForSegs(
 
     scale.set(1, scaleY, 1)
 
-    let anchoredY: number
-    if (mode === 'body') {
-      anchoredY = start.y + layout.bodyBaseY - scaleY * templateMinY
-    } else if (mode === 'head') {
-      anchoredY = start.y + layout.headBaseY - templateMinY
-    } else {
-      anchoredY = start.y + layout.footBaseY - templateMinY
-    }
+    const anchoredY = resolveWallPartAnchoredY({
+      layout,
+      mode,
+      minY: templateMinY,
+      maxY: templateMaxY,
+      scaleY,
+      baselineY: start.y,
+    })
 
     const maxLocalStart = trimmedLength - tileLengthLocal
     if (maxLocalStart < -WALL_EPSILON) {
@@ -1565,16 +1573,19 @@ function computeWallCornerInstanceMatricesByAsset(
     const layout = resolveWallVerticalLayout(resolveWallSegmentTotalHeight(current as any), verticalLayoutOptions)
     const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
     const templateMinY = template.bounds.min.y
+    const templateMaxY = template.bounds.max.y
     if (mode === 'body' && layout.bodyHeight <= WALL_EPSILON) {
       return
     }
     const scaleY = mode === 'body' ? layout.bodyHeight / templateHeight : 1
-    let anchoredY = cornerY + layout.headBaseY - templateMinY
-    if (mode === 'body') {
-      anchoredY = cornerY + layout.bodyBaseY - scaleY * templateMinY
-    } else if (mode === 'foot') {
-      anchoredY = cornerY + layout.footBaseY - templateMinY
-    }
+    const anchoredY = resolveWallPartAnchoredY({
+      layout,
+      mode,
+      minY: templateMinY,
+      maxY: templateMaxY,
+      scaleY,
+      baselineY: cornerY,
+    })
     scale.set(1, scaleY, 1)
 
     bisector.copy(incoming).multiplyScalar(-1).add(outgoing)
@@ -1646,6 +1657,7 @@ function computeWallEndCapInstanceMatrices(
   const { minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
   const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
   const templateMinY = template.bounds.min.y
+  const templateMaxY = template.bounds.max.y
 
   const dir = new THREE.Vector3()
   const unitDir = new THREE.Vector3()
@@ -1687,12 +1699,14 @@ function computeWallEndCapInstanceMatrices(
       return
     }
     const scaleY = mode === 'body' ? layout.bodyHeight / templateHeight : 1
-    let anchoredY = point.y + layout.headBaseY - templateMinY
-    if (mode === 'body') {
-      anchoredY = point.y + layout.bodyBaseY - scaleY * templateMinY
-    } else if (mode === 'foot') {
-      anchoredY = point.y + layout.footBaseY - templateMinY
-    }
+    const anchoredY = resolveWallPartAnchoredY({
+      layout,
+      mode,
+      minY: templateMinY,
+      maxY: templateMaxY,
+      scaleY,
+      baselineY: point.y,
+    })
     pos.y = anchoredY
     offsetWorld.copy(readOffsetLocal(offsetLocalValue)).applyQuaternion(quat)
     pos.add(offsetWorld)

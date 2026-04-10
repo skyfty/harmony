@@ -17,7 +17,12 @@ import {
   updateModelInstanceMatrix,
 } from './modelObjectCache'
 import { syncInstancedModelCommittedLocalMatrices } from './continuousInstancedModel'
-import { resolveWallTotalHeight, resolveWallVerticalLayout, type WallVerticalLayoutOptions } from './wallVerticalLayout'
+import {
+  resolveWallPartAnchoredY,
+  resolveWallTotalHeight,
+  resolveWallVerticalLayout,
+  type WallVerticalLayoutOptions,
+} from './wallVerticalLayout'
 
 export const WALL_INSTANCED_BINDINGS_USERDATA_KEY = '__harmonyWallInstancedBindings'
 
@@ -465,6 +470,7 @@ function computeWallBodyLocalPlacementsStretchTiledUv(
   const { tileLengthLocal, minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
   const templateHeight = resolveWallModelHeight(bounds)
   const minY = bounds.min.y
+  const maxY = bounds.max.y
   const trims = computeWallSegmentJointTrims(segments, cornerModels, mode)
 
   for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
@@ -511,11 +517,14 @@ function computeWallBodyLocalPlacementsStretchTiledUv(
     wallSyncPosHelper.copy(wallSyncLocalStartHelper).sub(wallSyncLocalOffsetHelper)
 
     const baselineY = wallSyncPosHelper.y
-    const posY = mode === 'body'
-      ? (baselineY + layout.bodyBaseY - scaleY * minY)
-      : mode === 'head'
-        ? (baselineY + layout.headBaseY - minY)
-        : (baselineY + layout.footBaseY - minY)
+    const posY = resolveWallPartAnchoredY({
+      layout,
+      mode,
+      minY,
+      maxY,
+      scaleY,
+      baselineY,
+    })
     wallSyncPosHelper.y = posY
 
     switch (orientation.forwardAxis) {
@@ -562,6 +571,7 @@ function computeWallBodyLocalPlacementsRepeated(
   const { tileLengthLocal, minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
   const templateHeight = resolveWallModelHeight(bounds)
   const minY = bounds.min.y
+  const maxY = bounds.max.y
   const trims = computeWallSegmentJointTrims(segments, cornerModels, mode)
   const repeatSlotByChain = new Map<number, number>()
 
@@ -625,11 +635,14 @@ function computeWallBodyLocalPlacementsRepeated(
       wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
 
       const baselineY = wallSyncPosHelper.y
-      const posY = mode === 'body'
-        ? (baselineY + layout.bodyBaseY - scaleY * minY)
-        : mode === 'head'
-          ? (baselineY + layout.headBaseY - minY)
-          : (baselineY + layout.footBaseY - minY)
+      const posY = resolveWallPartAnchoredY({
+        layout,
+        mode,
+        minY,
+        maxY,
+        scaleY,
+        baselineY,
+      })
       wallSyncPosHelper.y = posY
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
       placements.push({
@@ -743,13 +756,17 @@ function computeWallJointLocalMatricesByAsset(
     }
     const templateHeight = bounds ? resolveWallModelHeight(bounds) : 1
     const minY = bounds ? bounds.min.y : 0
+    const maxY = bounds ? bounds.max.y : 0
     const scaleY = options.mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
     const baselineY = corner.y
-    const posY = options.mode === 'body'
-      ? (baselineY + layout.bodyBaseY - scaleY * minY)
-      : options.mode === 'head'
-        ? (baselineY + layout.headBaseY - minY)
-        : (baselineY + layout.footBaseY - minY)
+    const posY = resolveWallPartAnchoredY({
+      layout,
+      mode: options.mode,
+      minY,
+      maxY,
+      scaleY,
+      baselineY,
+    })
 
     wallSyncBisectorHelper.copy(wallSyncIncomingHelper).multiplyScalar(-1).add(wallSyncOutgoingHelper)
     if (wallSyncBisectorHelper.lengthSq() < WALL_SYNC_EPSILON) {
@@ -853,6 +870,7 @@ function computeWallEndCapLocalMatrices(
   const { minAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
   const templateHeight = resolveWallModelHeight(bounds)
   const minY = bounds.min.y
+  const maxY = bounds.max.y
   const endCapOffsetLocal = new THREE.Vector3(
     Number((offsetLocalValue as any)?.x) || 0,
     Number((offsetLocalValue as any)?.y) || 0,
@@ -897,11 +915,14 @@ function computeWallEndCapLocalMatrices(
       wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis)
       wallSyncLocalOffsetHelper.applyQuaternion(quat)
       const baselineY = firstSeg.start.y
-      const posY = mode === 'body'
-        ? (baselineY + layout.bodyBaseY - scaleY * minY)
-        : mode === 'head'
-          ? (baselineY + layout.headBaseY - minY)
-          : (baselineY + layout.footBaseY - minY)
+      const posY = resolveWallPartAnchoredY({
+        layout,
+        mode,
+        minY,
+        maxY,
+        scaleY,
+        baselineY,
+      })
       wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
       wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
       wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
@@ -926,11 +947,14 @@ function computeWallEndCapLocalMatrices(
       wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis)
       wallSyncLocalOffsetHelper.applyQuaternion(quat)
       const baselineY = lastSeg.end.y
-      const posY = mode === 'body'
-        ? (baselineY + layout.bodyBaseY - scaleY * minY)
-        : mode === 'head'
-          ? (baselineY + layout.headBaseY - minY)
-          : (baselineY + layout.footBaseY - minY)
+      const posY = resolveWallPartAnchoredY({
+        layout,
+        mode,
+        minY,
+        maxY,
+        scaleY,
+        baselineY,
+      })
       wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
       wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
       wallSyncStartHelper.copy(endCapOffsetLocal).applyQuaternion(quat)
