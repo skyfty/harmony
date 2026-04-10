@@ -10,8 +10,8 @@
         <text v-if="summary" class="summary">{{ summary }}</text>
         <view v-if="hasStats" class="meta-row">
           <text v-if="typeof maxSpeed === 'number'">速度 {{ maxSpeed }} km/h</text>
-          <text v-if="typeof acceleration === 'number'"> · 加速 {{ acceleration }} m/s²</text>
-          <text v-if="typeof handling === 'number'"> · 操控 {{ handling }}</text>
+          <text v-if="typeof acceleration === 'number'">加速 {{ acceleration }} m/s²</text>
+          <text v-if="typeof handling === 'number'">操控 {{ handling }}</text>
         </view>
       </view>
     </view>
@@ -127,8 +127,8 @@ const hasStats = computed(() => {
   display: flex;
   gap: 8px;
   align-items: center;
-  color: #8a94a6;
-  font-size: 12px;
+  color: #bcc2cc;
+  font-size: 11px;
 }
 
 .row {

@@ -249,7 +249,7 @@ const routes: RouteRecordRaw[] = [
     path: '/business-orders',
     meta: {
       icon: 'lucide:briefcase-business',
-      title: '商业订单管理',
+      title: '商业管理',
     },
     children: [
       {
@@ -258,7 +258,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/business-orders/index.vue'),
         meta: {
           icon: 'lucide:briefcase-business',
-          title: '商业订单管理',
+          title: '商业管理',
         },
       },
       {
@@ -266,7 +266,7 @@ const routes: RouteRecordRaw[] = [
         path: ':id',
         component: () => import('#/views/business-orders/detail.vue'),
         meta: {
-          title: '商业订单详情',
+          title: '商业详情',
           hideInMenu: true,
         },
       },
