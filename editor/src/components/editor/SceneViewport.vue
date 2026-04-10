@@ -4671,6 +4671,7 @@ type LeftEmptyClickSessionState = {
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
+  clickHitResult: NodeHitResult | null
   cameraGesture: 'none' | 'planar-pan' | 'orbit-rotate'
 }
 
@@ -14712,13 +14713,23 @@ async function handlePointerDown(event: PointerEvent) {
 
   const effectiveSelectionTool = uiStore.activeSelectionContext ? 'blocked' : props.activeTool
 
-  // Select mode: left click on empty space should clear selection (if it's a click) or pan the camera (if it's a drag).
-  // We detect empty-space on pointerdown and decide on pointerup using a drag threshold.
+  // Select mode: left click should preserve click-selection semantics, but in camera-control modes
+  // any press that does not land on the current selection should allow a drag camera gesture.
   if (event.button === 0 && effectiveSelectionTool === 'select') {
     const activeSelectionNode = resolveSceneNodeById(sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
     const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
-    const hit = pickNodeAtPointer(event) ?? (allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null)
-    if (!hit) {
+    const directHit = pickNodeAtPointer(event)
+    const boundingBoxHit = !directHit && allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null
+    const selectedNodeIds = sceneStore.selectedNodeIds
+    const hitBelongsToSelection = Boolean(
+      directHit && (
+        selectedNodeIds.includes(directHit.nodeId)
+        || selectedNodeIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, directHit.nodeId))
+      ),
+    )
+    const shouldStartCameraSession = !hitBelongsToSelection
+
+    if (shouldStartCameraSession) {
       let cameraGesture: LeftEmptyClickSessionState['cameraGesture'] = 'none'
       if (Boolean(mapControls?.enabled)) {
         if (sceneStore.viewportSettings.cameraControlMode === 'map') {
@@ -14740,6 +14751,7 @@ async function handlePointerDown(event: PointerEvent) {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
+        clickHitResult: directHit ?? boundingBoxHit,
         cameraGesture,
       }
       return
@@ -16024,11 +16036,33 @@ async function handlePointerUp(event: PointerEvent) {
       }
 
       if (!session.moved) {
-        const isToggle = session.ctrlKey || session.metaKey
-        const isRange = session.shiftKey
-        sceneStore.clearSelectedRoadSegment()
-        if (!isToggle && !isRange) {
-          emitSelectionChange([])
+        if (session.clickHitResult) {
+          const clickTrackingState: PointerTrackingState = {
+            pointerId: session.pointerId,
+            startX: session.startX,
+            startY: session.startY,
+            moved: false,
+            button: 0,
+            hitResult: session.clickHitResult,
+            selectionDrag: null,
+            ctrlKey: session.ctrlKey,
+            metaKey: session.metaKey,
+            shiftKey: session.shiftKey,
+            cameraGesture: 'none',
+            transformAxis: null,
+            deferredDuplicateDrag: null,
+            deferredDuplicateInFlight: false,
+          }
+          handleClickSelection(event, clickTrackingState, {
+            allowDeselectOnReselect: true,
+          })
+        } else {
+          const isToggle = session.ctrlKey || session.metaKey
+          const isRange = session.shiftKey
+          sceneStore.clearSelectedRoadSegment()
+          if (!isToggle && !isRange) {
+            emitSelectionChange([])
+          }
         }
       }
       return
