@@ -91,6 +91,21 @@ export async function prepareLocalAssetImport(
   }
 }
 
+export async function renderModelFileThumbnailDataUrl(
+  asset: ProjectAsset,
+  file: File,
+  signal?: AbortSignal,
+): Promise<string> {
+  const object = await loadModelObject(file, signal)
+
+  try {
+    const thumbnailFile = await renderModelThumbnail(asset, object, signal)
+    return await readBlobAsDataUrl(thumbnailFile, signal)
+  } finally {
+    disposeObject(object)
+  }
+}
+
 function isGltfLikeFile(file: File): boolean {
   const extension = extractExtension(file.name)?.toLowerCase()
   return extension === 'glb' || extension === 'gltf'

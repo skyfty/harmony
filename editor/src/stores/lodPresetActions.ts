@@ -16,6 +16,7 @@ import {
   type LodPresetAssetReference,
   type LodPresetData,
 } from '@/utils/lodPreset'
+import { generateLodPresetThumbnailDataUrl } from '@/utils/lodPreview'
 import { generateUuid } from '@/utils/uuid'
 import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
 import { createServerAssetSource } from '@/utils/serverAssetSource'
@@ -90,13 +91,15 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         filename: fileName,
       })
 
+      const thumbnailDataUrl = await generateLodPresetThumbnailDataUrl(store, assetCache, { props })
+
       const projectAsset: ProjectAsset = {
         id: assetId,
         name: name?.trim().length ? name.trim() : 'LOD Preset',
         type: 'lod',
         downloadUrl: assetId,
         previewColor: deps.LOD_PRESET_PREVIEW_COLOR,
-        thumbnail: null,
+        thumbnail: thumbnailDataUrl,
         description: fileName,
         gleaned: true,
         extension: extractExtension(fileName) ?? null,

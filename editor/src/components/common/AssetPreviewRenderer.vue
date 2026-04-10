@@ -6,6 +6,13 @@
         type="image"
         class="upload-preview__skeleton"
       />
+      <LodPreview
+        v-else-if="showLodPreview"
+        :asset="props.asset"
+        class="upload-preview__renderer"
+        ref="threePreviewRef"
+        @dimensions="(payload) => emit('dimensions', payload)"
+      />
       <ModelPreview
         v-else-if="showModelPreview"
         :file="previewState.file"
@@ -60,13 +67,12 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { useSceneStore } from '@/stores/sceneStore'
+import LodPreview from '@/components/common/LodPreview.vue'
 import ModelPreview from '@/components/common/ModelPreview.vue'
 import PrefabPreview from '@/components/common/PrefabPreview.vue'
 import HDRPreview from '@/components/common/HDRPreview.vue'
 import WallFloorPresetPreview from '@/components/common/WallFloorPresetPreview.vue'
 import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
-import { deserializeLodPreset, resolveFirstLodModelAssetId } from '@/utils/lodPreset'
 
 const props = defineProps<{
   asset: ProjectAsset
@@ -79,7 +85,6 @@ const emit = defineEmits<{
 }>()
 
 const assetCacheStore = useAssetCacheStore()
-const sceneStore = useSceneStore()
 
 const previewState = reactive({
   loading: false,
@@ -87,7 +92,7 @@ const previewState = reactive({
   file: null as File | null,
   imageUrl: null as string | null,
 })
-type ThreePreviewInstance = InstanceType<typeof ModelPreview> | InstanceType<typeof PrefabPreview> | InstanceType<typeof WallFloorPresetPreview>
+type ThreePreviewInstance = InstanceType<typeof LodPreview> | InstanceType<typeof ModelPreview> | InstanceType<typeof PrefabPreview> | InstanceType<typeof WallFloorPresetPreview>
 type EnvironmentPreviewInstance = InstanceType<typeof HDRPreview>
 
 const threePreviewRef = ref<ThreePreviewInstance | null>(null)
@@ -98,10 +103,10 @@ let loadToken = 0
 const metaProbes = new Set<HTMLImageElement>()
 
 const presetPreviewKind = computed(() => detectAssetPreviewPresetKind(props.asset))
-// LOD: 识别 lod 资产类型
 const isLodAsset = computed(() => props.asset.type === 'lod')
+const showLodPreview = computed(() => isLodAsset.value)
 const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'mesh'].includes(props.asset.type))
-const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value && !isLodAsset.value)
+const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value)
 const showPresetPreview = computed(() => Boolean(previewState.file) && Boolean(presetPreviewKind.value))
 const isSkycubeAsset = computed(() => {
   if (props.asset.type !== 'file') {
@@ -129,6 +134,7 @@ const fallbackIcon = computed(() => {
     case 'model':
     case 'mesh':
     case 'prefab':
+    case 'lod':
       return 'mdi-cube-outline'
     case 'image':
     case 'texture':
@@ -210,34 +216,7 @@ async function preparePreview(): Promise<void> {
     return
   }
 
-  // LOD 预设特殊处理
   if (isLodAsset.value) {
-    previewState.loading = true
-    try {
-      // 1. 读取 LOD 文件内容
-      const lodFile = await ensureAssetFile()
-      if (!lodFile) throw new Error('LOD 文件未找到')
-      const text = await lodFile.text()
-      const lodPreset = deserializeLodPreset(text)
-      // 2. 解析首个可用模型 assetId
-      const modelAssetId = resolveFirstLodModelAssetId(lodPreset)
-      if (!modelAssetId) throw new Error('LOD 预设未配置可用模型')
-      // 3. 加载模型文件
-      const modelAsset = sceneStore.getAsset(modelAssetId)
-      if (!modelAsset) throw new Error('LOD 引用模型未导入')
-      let modelFile = assetCacheStore.createFileFromCache(modelAssetId)
-      if (!modelFile) {
-        await assetCacheStore.loadFromIndexedDb(modelAssetId)
-        modelFile = assetCacheStore.createFileFromCache(modelAssetId)
-      }
-      if (!modelFile) throw new Error('LOD 引用模型文件未缓存')
-      if (token !== loadToken) return
-      previewState.file = modelFile
-    } catch (error) {
-      previewState.error = (error as Error).message ?? 'LOD 预览失败'
-    } finally {
-      if (token === loadToken) previewState.loading = false
-    }
     return
   }
 
@@ -306,7 +285,7 @@ onBeforeUnmount(() => {
 })
 
 async function waitForThreePreviewReady(timeoutMs = 4000): Promise<boolean> {
-  if ((showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) && threePreviewRef.value) {
+  if ((showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) && threePreviewRef.value) {
     return true
   }
   if (typeof performance === 'undefined') {
@@ -315,7 +294,7 @@ async function waitForThreePreviewReady(timeoutMs = 4000): Promise<boolean> {
   const start = performance.now()
   while (performance.now() - start < timeoutMs) {
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    if ((showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) && threePreviewRef.value) {
+    if ((showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) && threePreviewRef.value) {
       return true
     }
   }
@@ -340,7 +319,7 @@ async function waitForEnvironmentPreviewReady(timeoutMs = 4000): Promise<boolean
 }
 
 async function captureSnapshot(): Promise<HTMLCanvasElement | null> {
-  if (showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) {
+  if (showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) {
     const ready = await waitForThreePreviewReady()
     if (!ready) {
       return null
