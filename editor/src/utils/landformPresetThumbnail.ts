@@ -6,7 +6,6 @@ import type { LandformPresetData } from '@/utils/landformPreset'
 import { buildLandformNodeMaterialsFromPreset } from '@/utils/landformPresetNodeMaterials'
 import { disposeThumbnailObject, renderObjectThumbnailDataUrl } from '@/utils/objectThumbnailRenderer'
 
-const LANDFORM_PRESET_OUTER_RADIUS = 5.2
 const LANDFORM_PRESET_CENTER_HEIGHT = 0.42
 const LANDFORM_PRESET_RING_POINTS: Array<{ x: number; z: number; y: number }> = [
   { x: -4.6, z: -1.8, y: 0.04 },

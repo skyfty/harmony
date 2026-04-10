@@ -9,7 +9,11 @@ type GroundPanoramaFitResult = CameraFocusTarget & { distance: number }
 
 type CameraResetDependencies = {
   getCamera: () => THREE.PerspectiveCamera | null
-  getMapControls: () => { target: THREE.Vector3; update: () => void } | null
+  getMapControls: () => {
+    target: THREE.Vector3
+    update: (delta?: number) => void
+    setLookAt?: (position: THREE.Vector3, target: THREE.Vector3, enableTransition?: boolean) => void
+  } | null
   getGizmoControls: () => { cameraUpdate: () => void } | null
   getGroundNode: () => SceneNode | null
   getFallbackSceneNodes: () => SceneNode[]
@@ -276,11 +280,15 @@ export function createCameraResetDirectionController(deps: CameraResetDependenci
 
     deps.setApplyingCameraState(true)
     try {
-      camera.position.copy(nextCameraPosition)
-      if (camera.position.y < deps.minCameraHeight) {
-        camera.position.y = deps.minCameraHeight
+      if (nextCameraPosition.y < deps.minCameraHeight) {
+        nextCameraPosition.y = deps.minCameraHeight
       }
-      mapControls.target.copy(focusTarget)
+      if (typeof mapControls.setLookAt === 'function') {
+        mapControls.setLookAt(nextCameraPosition, focusTarget, false)
+      } else {
+        camera.position.copy(nextCameraPosition)
+        mapControls.target.copy(focusTarget)
+      }
       deps.setLastCameraFocusRadius(Math.max(0.25, focus.radiusEstimate))
       deps.syncControlsConstraintsAndSpeeds()
       mapControls.update()
