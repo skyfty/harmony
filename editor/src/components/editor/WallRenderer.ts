@@ -110,6 +110,7 @@ export function computeWallDynamicMeshSignature(
     wallRenderMode?: 'stretch' | 'repeatInstances'
     headAssetHeight?: number
     footAssetHeight?: number
+    cornerModels?: WallRenderOptions['cornerModels']
   } = {},
 ): string {
   const serialized = stableSerialize({
@@ -119,6 +120,7 @@ export function computeWallDynamicMeshSignature(
     wallRenderMode: options.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
     headAssetHeight: Number.isFinite(options.headAssetHeight) ? Number(options.headAssetHeight) : 0,
     footAssetHeight: Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : 0,
+    cornerModels: Array.isArray(options.cornerModels) ? options.cornerModels : [],
   })
   return hashString(serialized)
 }
@@ -780,6 +782,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode: renderOptions.wallRenderMode,
       headAssetHeight: renderOptions.headAssetHeight,
       footAssetHeight: renderOptions.footAssetHeight,
+      cornerModels: renderOptions.cornerModels,
     })
     wallGroup.userData.__harmonyWallBodyMaterialConfigId = renderOptions.bodyMaterialConfigId ?? null
     container.add(wallGroup)
@@ -805,6 +808,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode: options.wallRenderMode,
       headAssetHeight: options.headAssetHeight,
       footAssetHeight: options.footAssetHeight,
+      cornerModels: options.cornerModels,
     })
     const nextBodyMaterialConfigId = options.bodyMaterialConfigId ?? null
     if (
@@ -963,6 +967,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode,
       repeatInstanceStep: wallProps?.repeatInstanceStep,
       bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      cornerModels: Array.isArray(wallProps?.cornerModels) ? wallProps.cornerModels : [],
       headAssetHeight: wallProps?.headAssetHeight,
       footAssetHeight: wallProps?.footAssetHeight,
     })
