@@ -6,6 +6,7 @@ import {
   MATERIAL_TEXTURE_REPEAT_INFO_KEY,
 } from './material'
 import { compileWallSegmentsFromDefinition, resolveWallDimensionsFromDefinition, type WallRenderSegment } from './wallLayout'
+import { resolveWallTotalHeight, resolveWallVerticalLayout, type WallVerticalLayout, type WallVerticalLayoutOptions } from './wallVerticalLayout'
 
 export type WallRenderAssetObjects = {
   /** Lower wall body model root (instanced along segments). */
@@ -121,7 +122,6 @@ function applyWallMeshMaterialConfigId(meshes: THREE.Mesh[], materialConfigId: s
 }
 
 const WALL_DEFAULT_COLOR = 0xcfd2d6
-const WALL_MIN_HEIGHT = 0.0
 const WALL_MIN_WIDTH = 0.0
 const WALL_DEFAULT_HEIGHT = 1
 // (WALL_DEFAULT_WIDTH removed: unused after refactor)
@@ -139,31 +139,6 @@ const WALL_OWNED_TEXTURES_USERDATA_KEY = '__harmonyOwnedTextures'
 type WallRenderSeg = WallRenderSegment
 
 type WallForwardAxisInfo = { axis: 'x' | 'z'; sign: 1 | -1 }
-
-type WallVerticalLayout = {
-  bodyBaseY: number
-  bodyHeight: number
-  headBaseY: number
-  footBaseY: number
-}
-
-type WallVerticalLayoutOptions = {
-  headAssetHeight?: number
-  footAssetHeight?: number
-}
-
-function resolveWallVerticalLayout(totalHeightRaw: number, options: WallVerticalLayoutOptions = {}): WallVerticalLayout {
-  const totalHeight = Math.max(0, Number.isFinite(totalHeightRaw) ? totalHeightRaw : WALL_DEFAULT_HEIGHT)
-  const headAssetHeight = Math.max(0, Number.isFinite(options.headAssetHeight) ? (options.headAssetHeight as number) : 0)
-  const footAssetHeight = Math.max(0, Number.isFinite(options.footAssetHeight) ? (options.footAssetHeight as number) : 0)
-  const bodyHeight = Math.max(0, totalHeight - headAssetHeight - footAssetHeight)
-  return {
-    bodyBaseY: 0,
-    bodyHeight,
-    headBaseY: totalHeight - headAssetHeight,
-    footBaseY: 0,
-  }
-}
 
 function requireWallForwardAxis(value: unknown, label: string): WallForwardAxis {
   if (value === '+x' || value === '-x' || value === '+z' || value === '-z') {
@@ -677,13 +652,13 @@ function extractInstancedAssetTemplate(root: THREE.Object3D): InstancedAssetTemp
   return { geometry, material, meshToRoot, bounds, baseSize }
 }
 
-function resolveWallBodyHeight(segment: WallRenderSeg | null | undefined): number {
+function resolveWallSegmentTotalHeight(segment: WallRenderSeg | null | undefined): number {
   const raw = (segment as any)?.height
   const value = typeof raw === 'number' ? raw : Number(raw)
   if (!Number.isFinite(value)) {
     return WALL_DEFAULT_HEIGHT
   }
-  return Math.max(WALL_MIN_HEIGHT, value)
+  return resolveWallTotalHeight(value, WALL_DEFAULT_HEIGHT)
 }
 
 function sanitizeWallRepeatScale(value: number): number {
@@ -844,7 +819,7 @@ function buildStretchedWallInstancesForSegs(
     const trimmedLength = Math.max(0, length - trimStart - trimEnd)
     if (trimmedLength <= WALL_INSTANCING_DIR_EPSILON) continue
 
-    const segmentTotalHeight = resolveWallBodyHeight(seg)
+    const segmentTotalHeight = resolveWallSegmentTotalHeight(seg)
     const layout = resolveWallVerticalLayout(segmentTotalHeight, verticalLayoutOptions)
     if (mode === 'body' && layout.bodyHeight <= WALL_EPSILON) {
       continue
@@ -956,7 +931,7 @@ function buildRepeatedWallInstancesForSegs(
     const trimmedLength = Math.max(0, length - trimStart - trimEnd)
     if (trimmedLength <= WALL_INSTANCING_DIR_EPSILON) continue
 
-    const segmentTotalHeight = resolveWallBodyHeight(seg)
+    const segmentTotalHeight = resolveWallSegmentTotalHeight(seg)
     const layout = resolveWallVerticalLayout(segmentTotalHeight, verticalLayoutOptions)
     if (mode === 'body' && layout.bodyHeight <= WALL_EPSILON) {
       continue
@@ -1064,7 +1039,7 @@ function buildRepeatedWallArcSlotsForSegs(
     const trimmedLength = Math.max(0, length - trimStart - trimEnd)
     if (trimmedLength <= WALL_INSTANCING_DIR_EPSILON) continue
 
-    const segmentTotalHeight = resolveWallBodyHeight(seg)
+    const segmentTotalHeight = resolveWallSegmentTotalHeight(seg)
     const layout = resolveWallVerticalLayout(segmentTotalHeight, verticalLayoutOptions)
     if (mode === 'body' && layout.bodyHeight <= WALL_EPSILON) {
       continue
@@ -1587,7 +1562,7 @@ function computeWallCornerInstanceMatricesByAsset(
     )
     writeWallLocalForward(localForward, forwardAxis)
 
-    const layout = resolveWallVerticalLayout(resolveWallBodyHeight(current as any), verticalLayoutOptions)
+    const layout = resolveWallVerticalLayout(resolveWallSegmentTotalHeight(current as any), verticalLayoutOptions)
     const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
     const templateMinY = template.bounds.min.y
     if (mode === 'body' && layout.bodyHeight <= WALL_EPSILON) {
@@ -1732,14 +1707,14 @@ function computeWallEndCapInstanceMatrices(
   dir.set(firstSeg.end.x - firstSeg.start.x, 0, firstSeg.end.z - firstSeg.start.z)
   if (dir.lengthSq() > WALL_INSTANCING_DIR_EPSILON) {
     unitDir.copy(dir).normalize().multiplyScalar(-1)
-    pushCap(firstSeg.start, unitDir, resolveWallVerticalLayout(resolveWallBodyHeight(firstSeg as any), verticalLayoutOptions))
+    pushCap(firstSeg.start, unitDir, resolveWallVerticalLayout(resolveWallSegmentTotalHeight(firstSeg as any), verticalLayoutOptions))
   }
 
   // End cap points outward: along the last segment direction.
   dir.set(lastSeg.end.x - lastSeg.start.x, 0, lastSeg.end.z - lastSeg.start.z)
   if (dir.lengthSq() > WALL_INSTANCING_DIR_EPSILON) {
     unitDir.copy(dir).normalize()
-    pushCap(lastSeg.end, unitDir, resolveWallVerticalLayout(resolveWallBodyHeight(lastSeg as any), verticalLayoutOptions))
+    pushCap(lastSeg.end, unitDir, resolveWallVerticalLayout(resolveWallSegmentTotalHeight(lastSeg as any), verticalLayoutOptions))
   }
 
   return matrices
@@ -2060,7 +2035,10 @@ function rebuildWallGroup(
 
     const segmentInfos = segs
       .map((seg) => {
-        const segmentLayout = resolveWallVerticalLayout(resolveWallBodyHeight(seg), { headAssetHeight, footAssetHeight })
+        const segmentLayout = resolveWallVerticalLayout(resolveWallSegmentTotalHeight(seg), {
+          headAssetHeight,
+          footAssetHeight,
+        })
         const segmentBodyHeight = segmentLayout.bodyHeight
         if (segmentBodyHeight <= WALL_EPSILON) {
           return null

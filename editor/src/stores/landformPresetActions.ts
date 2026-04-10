@@ -1,7 +1,9 @@
-import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
+import * as THREE from 'three'
+import type { SceneMaterialTextureRef, SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { extractExtension } from '@/utils/blob'
+import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
 import {
   LANDFORM_COMPONENT_TYPE,
   clampLandformComponentProps,
@@ -16,6 +18,7 @@ import {
   type StrictLandformPresetProps,
 } from '@/utils/landformPreset'
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import { renderLandformPresetThumbnailDataUrl } from '@/utils/landformPresetThumbnail'
 
 export type LandformPresetStoreLike = {
   nodes: SceneNode[]
@@ -191,6 +194,73 @@ export function parseLandformPresetData(text: string): LandformPresetData {
 }
 
 export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
+  async function generateLandformPresetThumbnailDataUrl(
+    store: LandformPresetStoreLike,
+    presetData: LandformPresetData,
+  ): Promise<string | null> {
+    const assetCache = useAssetCacheStore()
+
+    const ensureAssetFile = async (assetId: string): Promise<File | null> => {
+      const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedId.length) {
+        return null
+      }
+
+      let file = assetCache.createFileFromCache(normalizedId)
+      if (file) {
+        return file
+      }
+
+      await assetCache.loadFromIndexedDb(normalizedId)
+      file = assetCache.createFileFromCache(normalizedId)
+      if (file) {
+        return file
+      }
+
+      const asset = store.getAsset(normalizedId)
+      if (!asset) {
+        return null
+      }
+
+      try {
+        await assetCache.downloaProjectAsset(asset)
+      } catch {
+        return null
+      }
+      return assetCache.createFileFromCache(normalizedId)
+    }
+
+    const resolveTexture = async (ref: SceneMaterialTextureRef) => {
+      const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+      if (!assetId) {
+        return null
+      }
+      const file = await ensureAssetFile(assetId)
+      if (!file) {
+        return null
+      }
+
+      const blobUrl = URL.createObjectURL(file)
+      try {
+        const loader = new THREE.TextureLoader()
+        const texture = await loader.loadAsync(blobUrl)
+        texture.name = ref.name ?? file.name ?? assetId
+        texture.needsUpdate = true
+        return texture
+      } finally {
+        URL.revokeObjectURL(blobUrl)
+      }
+    }
+
+    return await renderLandformPresetThumbnailDataUrl({
+      preset: presetData,
+      sharedMaterials: store.materials as any,
+      resolveTexture,
+      width: ASSET_THUMBNAIL_WIDTH,
+      height: ASSET_THUMBNAIL_HEIGHT,
+    })
+  }
+
   return {
     findLandformPresetAssetByFilename(store: LandformPresetStoreLike, filename: string): ProjectAsset | null {
       const normalized = typeof filename === 'string' ? filename.trim().toLowerCase() : ''
@@ -316,6 +386,13 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         filename: fileName,
       })
 
+      let thumbnailDataUrl: string | null = null
+      try {
+        thumbnailDataUrl = await generateLandformPresetThumbnailDataUrl(store, presetData)
+      } catch (thumbnailError) {
+        console.warn('Failed to generate landform preset thumbnail', thumbnailError)
+      }
+
       if (payload.assetId) {
         const existing = store.getAsset(assetId)
         if (!existing) {
@@ -329,6 +406,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
           name: sanitizedName,
           description: fileName,
           previewColor: deps.LANDFORM_PRESET_PREVIEW_COLOR,
+          thumbnail: thumbnailDataUrl ?? existing.thumbnail ?? null,
         }
         const categoryId = store.resolveConfigAssetSaveDirectoryId()
         const sourceMeta = existing.source
@@ -345,7 +423,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         type: 'prefab',
         downloadUrl: assetId,
         previewColor: deps.LANDFORM_PRESET_PREVIEW_COLOR,
-        thumbnail: null,
+        thumbnail: thumbnailDataUrl,
         description: fileName,
         gleaned: true,
         extension: extractExtension(fileName) ?? null,

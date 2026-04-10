@@ -17,6 +17,7 @@ import {
   updateModelInstanceMatrix,
 } from './modelObjectCache'
 import { syncInstancedModelCommittedLocalMatrices } from './continuousInstancedModel'
+import { resolveWallTotalHeight, resolveWallVerticalLayout, type WallVerticalLayoutOptions } from './wallVerticalLayout'
 
 export const WALL_INSTANCED_BINDINGS_USERDATA_KEY = '__harmonyWallInstancedBindings'
 
@@ -92,31 +93,6 @@ const WALL_SYNC_EPSILON = 1e-6
 const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
 const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
 const WALL_SYNC_REPEAT_INSTANCE_STEP_M_DEFAULT = 0.5
-
-type WallVerticalLayout = {
-  bodyBaseY: number
-  bodyHeight: number
-  headBaseY: number
-  footBaseY: number
-}
-
-type WallVerticalLayoutOptions = {
-  headAssetHeight?: number
-  footAssetHeight?: number
-}
-
-function resolveWallVerticalLayout(totalHeightRaw: number, options: WallVerticalLayoutOptions = {}): WallVerticalLayout {
-  const totalHeight = Math.max(0, Number.isFinite(totalHeightRaw) ? totalHeightRaw : 1)
-  const headAssetHeight = Math.max(0, Number.isFinite(options.headAssetHeight) ? (options.headAssetHeight as number) : 0)
-  const footAssetHeight = Math.max(0, Number.isFinite(options.footAssetHeight) ? (options.footAssetHeight as number) : 0)
-  const bodyHeight = Math.max(0, totalHeight - headAssetHeight - footAssetHeight)
-  return {
-    bodyBaseY: footAssetHeight,
-    bodyHeight,
-    headBaseY: totalHeight - headAssetHeight,
-    footBaseY: 0,
-  }
-}
 
 function normalizeWallRepeatInstanceStep(value: unknown): number {
   const raw = typeof value === 'number' ? value : Number(value)
@@ -327,12 +303,9 @@ function buildRepeatErasedSlotSet(definition: WallDynamicMesh): Set<string> {
   )
 }
 
-function resolveWallBodyHeightForSegment(segment: WallRenderSegment): number {
+function resolveWallSegmentTotalHeightForPlacement(segment: WallRenderSegment): number {
   const raw = segment.height
-  if (!Number.isFinite(raw)) {
-    return 1
-  }
-  return Math.max(0.001, raw)
+  return resolveWallTotalHeight(raw, 1)
 }
 
 function resolveWallModelHeight(bounds: THREE.Box3): number {
@@ -527,7 +500,7 @@ function computeWallBodyLocalPlacementsStretchTiledUv(
       quatLocal.multiply(wallSyncYawQuatHelper)
     }
 
-    const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(segment), verticalLayoutOptions)
+    const layout = resolveWallVerticalLayout(resolveWallSegmentTotalHeightForPlacement(segment), verticalLayoutOptions)
     if (mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON) {
       continue
     }
@@ -622,7 +595,7 @@ function computeWallBodyLocalPlacementsRepeated(
       quatLocal.multiply(wallSyncYawQuatHelper)
     }
 
-    const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(segment), verticalLayoutOptions)
+    const layout = resolveWallVerticalLayout(resolveWallSegmentTotalHeightForPlacement(segment), verticalLayoutOptions)
     if (mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON) {
       continue
     }
@@ -764,7 +737,7 @@ function computeWallJointLocalMatricesByAsset(
     }
 
     const bounds = options.getAssetBounds(assetId)
-    const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(current), options.verticalLayoutOptions)
+    const layout = resolveWallVerticalLayout(resolveWallSegmentTotalHeightForPlacement(current), options.verticalLayoutOptions)
     if (options.mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON) {
       return
     }
@@ -912,7 +885,7 @@ function computeWallEndCapLocalMatrices(
 
     const firstDir = findDirectionForSegment(firstSeg, wallSyncLocalUnitDirHelper)
     if (firstDir.lengthSq() > WALL_SYNC_EPSILON) {
-      const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(firstSeg), verticalLayoutOptions)
+      const layout = resolveWallVerticalLayout(resolveWallSegmentTotalHeightForPlacement(firstSeg), verticalLayoutOptions)
       if (!(mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON)) {
         const scaleY = mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
       wallSyncLocalDirHelper.copy(firstDir).multiplyScalar(-1)
@@ -941,7 +914,7 @@ function computeWallEndCapLocalMatrices(
 
     const lastDir = findDirectionForSegment(lastSeg, wallSyncLocalUnitDirHelper)
     if (lastDir.lengthSq() > WALL_SYNC_EPSILON) {
-      const layout = resolveWallVerticalLayout(resolveWallBodyHeightForSegment(lastSeg), verticalLayoutOptions)
+      const layout = resolveWallVerticalLayout(resolveWallSegmentTotalHeightForPlacement(lastSeg), verticalLayoutOptions)
       if (!(mode === 'body' && layout.bodyHeight <= WALL_SYNC_EPSILON)) {
         const scaleY = mode === 'body' ? (layout.bodyHeight / templateHeight) : 1
       wallSyncLocalDirHelper.copy(lastDir)

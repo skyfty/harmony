@@ -29,6 +29,7 @@ import {
   setWallInstancedBindingsOnObject,
   syncWallDragBindingMatrices,
 } from '@schema/wallInstancing'
+import { resolveWallVerticalLayout } from '@schema/wallVerticalLayout'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
@@ -105,13 +106,19 @@ export function applyAirWallVisualToWallGroup(group: THREE.Group, isAirWall: boo
 
 export function computeWallDynamicMeshSignature(
   definition: WallDynamicMesh,
-  options: { wallRenderMode?: 'stretch' | 'repeatInstances' } = {},
+  options: {
+    wallRenderMode?: 'stretch' | 'repeatInstances'
+    headAssetHeight?: number
+    footAssetHeight?: number
+  } = {},
 ): string {
   const serialized = stableSerialize({
     chains: definition.chains ?? [],
     openings: definition.openings ?? [],
     dimensions: definition.dimensions ?? { height: 3, width: 0.2, thickness: 0.1 },
     wallRenderMode: options.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
+    headAssetHeight: Number.isFinite(options.headAssetHeight) ? Number(options.headAssetHeight) : 0,
+    footAssetHeight: Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : 0,
   })
   return hashString(serialized)
 }
@@ -771,6 +778,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     tagWallInternalGroup(wallGroup, node.id)
     wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, {
       wallRenderMode: renderOptions.wallRenderMode,
+      headAssetHeight: renderOptions.headAssetHeight,
+      footAssetHeight: renderOptions.footAssetHeight,
     })
     wallGroup.userData.__harmonyWallBodyMaterialConfigId = renderOptions.bodyMaterialConfigId ?? null
     container.add(wallGroup)
@@ -794,6 +803,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
     const nextSignature = computeWallDynamicMeshSignature(definition, {
       wallRenderMode: options.wallRenderMode,
+      headAssetHeight: options.headAssetHeight,
+      footAssetHeight: options.footAssetHeight,
     })
     const nextBodyMaterialConfigId = options.bodyMaterialConfigId ?? null
     if (
@@ -957,6 +968,20 @@ export function createWallRenderer(options: WallRendererOptions) {
     })
 
     const userData = container.userData ?? (container.userData = {})
+    const wallLayout = wallProps
+      ? resolveWallVerticalLayout(wallProps.height, {
+          headAssetHeight: wallProps.headAssetHeight,
+          footAssetHeight: wallProps.footAssetHeight,
+        })
+      : null
+    console.debug('[wall-layout] sync', {
+      nodeId: node.id,
+      renderPath: wantsInstancing ? (hasProceduralBodyFallback ? 'instanced+procedural-body' : 'instanced') : 'procedural',
+      wallHeight: wallProps?.height,
+      headAssetHeight: wallProps?.headAssetHeight,
+      footAssetHeight: wallProps?.footAssetHeight,
+      layout: wallLayout,
+    })
 
     // ============================
     // 1) 空气墙：强制使用程序墙体（并应用半透明材质覆盖）
@@ -1073,15 +1098,17 @@ export function createWallRenderer(options: WallRendererOptions) {
     // 4) 资源已就绪：进入实例化渲染
     // ============================
     // primaryAssetId 用于标记“本节点当前的实例化主资源”，便于调试/拾取代理/缓存。
-    const primaryAssetId = bodyAssetId
-      ?? headAssetId
-      ?? footAssetId
-      ?? (bodyCornerAssetIds[0] ?? null)
-      ?? (headCornerAssetIds[0] ?? null)
-      ?? (footCornerAssetIds[0] ?? null)
-      ?? bodyEndCapAssetId
-      ?? headEndCapAssetId
-      ?? footEndCapAssetId
+    const primaryAssetId = [
+      bodyAssetId,
+      headAssetId,
+      footAssetId,
+      bodyCornerAssetIds[0],
+      headCornerAssetIds[0],
+      footCornerAssetIds[0],
+      bodyEndCapAssetId,
+      headEndCapAssetId,
+      footEndCapAssetId,
+    ].find((assetId): assetId is string => typeof assetId === 'string' && assetId.length > 0) ?? null
     userData.instancedAssetId = primaryAssetId
     userData.dynamicMeshType = 'Wall'
 

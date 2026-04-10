@@ -2,6 +2,8 @@ import * as THREE from 'three'
 import { AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import type { ProjectAsset } from '@/types/project-asset'
+import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH, createThumbnailFromCanvas } from '@/utils/assetThumbnail'
 import { normalizePrefabSceneDocument } from '@/utils/prefabDocument'
 import { collectPrefabAssetReferences } from '@/stores/prefabActions'
 import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
@@ -361,4 +363,95 @@ export async function acquirePrefabPreviewRoot(options: PrefabPreviewOptions): P
   }
   const clone = cloneObject3DShared(pinned.value.baseRoot)
   return { key: entry.key, root: clone, release: pinned.release }
+}
+
+function fitPreviewCamera(camera: THREE.PerspectiveCamera, object: THREE.Object3D): void {
+  const box = new THREE.Box3().setFromObject(object)
+  if (box.isEmpty()) {
+    camera.position.set(3, 3, 3)
+    camera.lookAt(0, 0, 0)
+    camera.updateProjectionMatrix()
+    return
+  }
+
+  const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z)
+  const fov = THREE.MathUtils.degToRad(camera.fov)
+  const distance = maxDim === 0 ? 5 : maxDim / (2 * Math.tan(fov / 2))
+  const offset = distance * 1.4
+
+  camera.position.set(center.x + offset, center.y + offset, center.z + offset)
+  camera.near = Math.max(0.1, distance / 100)
+  camera.far = Math.max(distance * 100, 100)
+  camera.lookAt(center)
+  camera.updateProjectionMatrix()
+}
+
+async function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read prefab thumbnail data'))
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Failed to read prefab thumbnail data'))
+    }
+    reader.readAsDataURL(blob)
+  })
+}
+
+export async function renderPrefabThumbnailDataUrl(options: {
+  asset: ProjectAsset
+  assetId: string
+  file: File
+  assetCacheStore: AssetCacheStoreLike
+  width?: number
+  height?: number
+  cacheOnly?: boolean
+}): Promise<string> {
+  if (typeof document === 'undefined') {
+    throw new Error('Prefab thumbnail rendering requires a browser environment')
+  }
+
+  const width = Math.max(1, Math.round(options.width ?? ASSET_THUMBNAIL_WIDTH))
+  const height = Math.max(1, Math.round(options.height ?? ASSET_THUMBNAIL_HEIGHT))
+  const handle = await acquirePrefabPreviewRoot({
+    assetId: options.assetId,
+    file: options.file,
+    assetCacheStore: options.assetCacheStore,
+    cacheOnly: options.cacheOnly,
+  })
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.shadowMap.enabled = true
+  renderer.setClearColor(0x000000, 0)
+  renderer.setSize(Math.max(width * 2, 384), Math.max(height * 2, 192), false)
+
+  const scene = new THREE.Scene()
+  const camera = new THREE.PerspectiveCamera(45, renderer.domElement.width / Math.max(renderer.domElement.height, 1), 0.1, 1000)
+  const ambient = new THREE.AmbientLight(0xffffff, 1.5)
+  const directional = new THREE.DirectionalLight(0xffffff, 2.0)
+  directional.position.set(5, 10, 7.5)
+  const fillLight = new THREE.DirectionalLight(0xffffff, 1.0)
+  fillLight.position.set(-5, 2, -6)
+
+  scene.add(ambient)
+  scene.add(directional)
+  scene.add(fillLight)
+  scene.add(handle.root)
+
+  try {
+    fitPreviewCamera(camera, handle.root)
+    renderer.render(scene, camera)
+    const thumbnailFile = await createThumbnailFromCanvas(options.asset, renderer.domElement, { width, height })
+    return await readBlobAsDataUrl(thumbnailFile)
+  } finally {
+    scene.remove(handle.root)
+    handle.release()
+    renderer.dispose()
+  }
 }

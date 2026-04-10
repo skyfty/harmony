@@ -76,7 +76,7 @@ function deriveThumbnailFromAsset(asset: ProjectAsset): string | null {
     }
     return null
   }
-  if (type === 'model' || type == 'prefab' || type === 'mesh') {
+  if (type === 'model' || type == 'prefab' || type === 'mesh' || type === 'lod') {
     const thumbnailCandidate = sanitizeUrlCandidate(asset.thumbnail ?? null)
     return thumbnailCandidate ?? null
   }

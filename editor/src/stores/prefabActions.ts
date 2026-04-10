@@ -639,6 +639,52 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         filename: fileName,
       })
 
+      const thumbnailAsset: ProjectAsset = options.assetId
+        ? {
+            ...(store.getAsset(targetAssetId) ?? {
+              id: targetAssetId,
+              name: prefabData.name,
+              type: 'prefab',
+              downloadUrl: targetAssetId,
+              previewColor: deps.NODE_PREFAB_PREVIEW_COLOR,
+              thumbnail: null,
+              description: fileName,
+              gleaned: true,
+              extension: extractExtension(fileName) ?? null,
+            }),
+            name: prefabData.name,
+            type: 'prefab',
+            downloadUrl: targetAssetId,
+            previewColor: deps.NODE_PREFAB_PREVIEW_COLOR,
+            description: fileName,
+            extension: extractExtension(fileName) ?? null,
+          }
+        : {
+            id: targetAssetId,
+            name: prefabData.name,
+            type: 'prefab',
+            downloadUrl: targetAssetId,
+            previewColor: deps.NODE_PREFAB_PREVIEW_COLOR,
+            thumbnail: null,
+            description: fileName,
+            gleaned: true,
+            extension: extractExtension(fileName) ?? null,
+          }
+
+      let thumbnailDataUrl: string | null = null
+      try {
+        const { renderPrefabThumbnailDataUrl } = await import('@/utils/prefabPreviewBuilder')
+        const file = new File([blob], fileName, { type: 'application/json' })
+        thumbnailDataUrl = await renderPrefabThumbnailDataUrl({
+          asset: thumbnailAsset,
+          assetId: targetAssetId,
+          file,
+          assetCacheStore: assetCache,
+        })
+      } catch (thumbnailError) {
+        console.warn('Failed to generate prefab thumbnail', thumbnailError)
+      }
+
       if (options.assetId) {
         const existing = store.getAsset(targetAssetId)
         if (!existing) {
@@ -652,6 +698,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
           name: prefabData.name,
           description: fileName,
           previewColor: deps.NODE_PREFAB_PREVIEW_COLOR,
+          thumbnail: thumbnailDataUrl ?? existing.thumbnail ?? null,
           extension: extractExtension(fileName) ?? existing.extension ?? null,
         }
         const categoryId = store.resolveConfigAssetSaveDirectoryId()
@@ -667,7 +714,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         type: 'prefab',
         downloadUrl: targetAssetId,
         previewColor: deps.NODE_PREFAB_PREVIEW_COLOR,
-        thumbnail: null,
+        thumbnail: thumbnailDataUrl,
         description: fileName,
         gleaned: true,
         extension: extractExtension(fileName) ?? null,

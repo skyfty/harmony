@@ -1,6 +1,7 @@
 import type { Object3D } from 'three'
 import Loader from '@schema/loader'
-import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
+import * as THREE from 'three'
+import type { SceneMaterialTextureRef, SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
 import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
@@ -573,16 +574,27 @@ async function generateWallPresetThumbnailDataUrl(
   store: WallPresetStoreLike,
   presetData: WallPresetData,
 ): Promise<string | null> {
+  const logWallPresetThumbnail = (message: string, payload?: Record<string, unknown>): void => {
+    if (payload) {
+      console.info('[WallPresetThumbnail]', message, payload)
+      return
+    }
+    console.info('[WallPresetThumbnail]', message)
+  }
+
   const loadModelObjectFromFile = async (file: File): Promise<Object3D | null> => {
     const loader = new Loader()
+    logWallPresetThumbnail('model load start', { fileName: file.name, size: file.size })
     return await new Promise<Object3D | null>(
       (resolve: (value: Object3D | null) => void, reject: (reason?: unknown) => void) => {
         const handleLoaded = (object: Object3D | null) => {
           loader.removeEventListener('loaded', handleLoaded)
           if (!object) {
+            logWallPresetThumbnail('model load failed: empty object', { fileName: file.name })
             reject(new Error('Model load failed'))
             return
           }
+          logWallPresetThumbnail('model load success', { fileName: file.name })
           resolve(prepareWallPreviewImportedObject(object))
         }
         loader.addEventListener('loaded', handleLoaded)
@@ -606,30 +618,69 @@ async function generateWallPresetThumbnailDataUrl(
 
     let file = assetCache.createFileFromCache(normalizedId)
     if (file) {
+      logWallPresetThumbnail('asset file resolved from memory cache', { assetId: normalizedId, fileName: file.name })
       return file
     }
 
     await assetCache.loadFromIndexedDb(normalizedId)
     file = assetCache.createFileFromCache(normalizedId)
     if (file) {
+      logWallPresetThumbnail('asset file restored from indexeddb', { assetId: normalizedId, fileName: file.name })
       return file
     }
 
     const asset = store.getAsset(normalizedId)
     if (!asset) {
+      logWallPresetThumbnail('asset metadata missing', { assetId: normalizedId })
       return null
     }
 
     try {
       await assetCache.downloaProjectAsset(asset)
     } catch {
+      logWallPresetThumbnail('asset download failed', { assetId: normalizedId })
       return null
     }
     const downloaded = assetCache.createFileFromCache(normalizedId)
+    logWallPresetThumbnail('asset file downloaded', {
+      assetId: normalizedId,
+      downloaded: Boolean(downloaded),
+      fileName: downloaded?.name ?? null,
+    })
     return downloaded
   }
+  const resolveTexture = async (ref: SceneMaterialTextureRef) => {
+    const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+    if (!assetId) {
+      return null
+    }
+    const file = await ensureAssetFile(assetId)
+    if (!file) {
+      return null
+    }
+
+    const blobUrl = URL.createObjectURL(file)
+    try {
+      const loader = new THREE.TextureLoader()
+      const texture = await loader.loadAsync(blobUrl)
+      texture.name = ref.name ?? file.name ?? assetId
+      texture.needsUpdate = true
+      return texture
+    } finally {
+      URL.revokeObjectURL(blobUrl)
+    }
+  }
+  logWallPresetThumbnail('thumbnail render start', {
+    name: presetData.name,
+    bodyAssetId: presetData.wallProps.bodyAssetId ?? null,
+    headAssetId: presetData.wallProps.headAssetId ?? null,
+    footAssetId: presetData.wallProps.footAssetId ?? null,
+    cornerModelCount: Array.isArray(presetData.wallProps.cornerModels) ? presetData.wallProps.cornerModels.length : 0,
+  })
   return await renderWallPresetThumbnailDataUrl({
     preset: presetData,
+    sharedMaterials: store.materials as any,
+    resolveTexture,
     width: ASSET_THUMBNAIL_WIDTH,
     height: ASSET_THUMBNAIL_HEIGHT,
     loadAssetMesh: async (assetId: string) => {
@@ -819,7 +870,8 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       try {
         thumbnailDataUrl = await generateWallPresetThumbnailDataUrl(store, presetData)
       } catch (thumbnailError) {
-        console.warn('Failed to generate wall preset thumbnail', thumbnailError)
+        const message = thumbnailError instanceof Error ? thumbnailError.message : String(thumbnailError)
+        console.warn(`Failed to generate wall preset thumbnail: ${message}`, thumbnailError)
       }
 
       if (payload.assetId) {
