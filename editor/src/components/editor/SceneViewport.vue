@@ -4671,7 +4671,7 @@ type LeftEmptyClickSessionState = {
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
-  leftPanActive: boolean
+  cameraGesture: 'none' | 'planar-pan' | 'orbit-rotate'
 }
 
 let leftEmptyClickSessionState: LeftEmptyClickSessionState | null = null
@@ -14719,9 +14719,18 @@ async function handlePointerDown(event: PointerEvent) {
     const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
     const hit = pickNodeAtPointer(event) ?? (allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null)
     if (!hit) {
-      const leftPanActive = sceneStore.viewportSettings.cameraControlMode === 'map' && Boolean(mapControls?.enabled)
-      if (leftPanActive) {
+      let cameraGesture: LeftEmptyClickSessionState['cameraGesture'] = 'none'
+      if (Boolean(mapControls?.enabled)) {
+        if (sceneStore.viewportSettings.cameraControlMode === 'map') {
+          cameraGesture = 'planar-pan'
+        } else if (sceneStore.viewportSettings.cameraControlMode === 'orbit') {
+          cameraGesture = 'orbit-rotate'
+        }
+      }
+      if (cameraGesture === 'planar-pan') {
         mapControls?.beginPlanarPanGesture(event.pointerId, event.clientX, event.clientY)
+      } else if (cameraGesture === 'orbit-rotate') {
+        mapControls?.beginTransientLeftRotateGesture()
       }
       leftEmptyClickSessionState = {
         pointerId: event.pointerId,
@@ -14731,7 +14740,7 @@ async function handlePointerDown(event: PointerEvent) {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
-        leftPanActive,
+        cameraGesture,
       }
       return
     }
@@ -14808,7 +14817,7 @@ function handlePointerMove(event: PointerEvent) {
     }
   }
 
-  if (leftEmptyClickSessionState?.pointerId === event.pointerId && leftEmptyClickSessionState.leftPanActive && leftEmptyClickSessionState.moved) {
+  if (leftEmptyClickSessionState?.pointerId === event.pointerId && leftEmptyClickSessionState.cameraGesture === 'planar-pan' && leftEmptyClickSessionState.moved) {
     mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
   }
 
@@ -15992,8 +16001,10 @@ async function handlePointerUp(event: PointerEvent) {
       const session = leftEmptyClickSessionState
       // Clear session first to avoid re-entrancy issues.
       leftEmptyClickSessionState = null
-      if (session.leftPanActive) {
+      if (session.cameraGesture === 'planar-pan') {
         mapControls?.endPlanarPanGesture(event.pointerId)
+      } else if (session.cameraGesture === 'orbit-rotate') {
+        mapControls?.endTransientLeftRotateGesture()
       }
 
       if (!session.moved) {
@@ -16057,8 +16068,10 @@ async function handlePointerUp(event: PointerEvent) {
     }
 
     if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
-      if (leftEmptyClickSessionState.leftPanActive) {
+      if (leftEmptyClickSessionState.cameraGesture === 'planar-pan') {
         mapControls?.endPlanarPanGesture(event.pointerId)
+      } else if (leftEmptyClickSessionState.cameraGesture === 'orbit-rotate') {
+        mapControls?.endTransientLeftRotateGesture()
       }
       leftEmptyClickSessionState = null
     }
@@ -16103,8 +16116,10 @@ function handlePointerCancel(event: PointerEvent) {
     middleClickSessionState = null
   }
   if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
-    if (leftEmptyClickSessionState.leftPanActive) {
+    if (leftEmptyClickSessionState.cameraGesture === 'planar-pan') {
       mapControls?.endPlanarPanGesture(event.pointerId)
+    } else if (leftEmptyClickSessionState.cameraGesture === 'orbit-rotate') {
+      mapControls?.endTransientLeftRotateGesture()
     }
     leftEmptyClickSessionState = null
   }
