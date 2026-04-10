@@ -20,11 +20,13 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { parseFloorPresetData } from '@/stores/floorPresetActions'
 import { parseWallPresetData } from '@/stores/wallPresetActions'
+import { applyAirWallVisualToWallGroup } from '@/components/editor/WallRenderer'
 import {
   buildWallPresetPreviewObject,
   prepareWallPreviewImportedObject,
   WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY,
 } from '@/utils/wallPresetSceneGraphPreview'
+import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import type { FloorPresetData, FloorPresetMaterialPatch } from '@/utils/floorPreset'
 import type { WallPresetData } from '@/utils/wallPreset'
 
@@ -243,10 +245,10 @@ function disposeObject(object: THREE.Object3D | null): void {
     if (!mesh?.isMesh) {
       return
     }
-    if ((mesh.userData as Record<string, unknown> | undefined)?.[WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY]) {
-      return
+    const isSharedPreviewAsset = Boolean((mesh.userData as Record<string, unknown> | undefined)?.[WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY])
+    if (!isSharedPreviewAsset) {
+      mesh.geometry?.dispose?.()
     }
-    mesh.geometry?.dispose?.()
     const material = mesh.material
     if (Array.isArray(material)) {
       material.forEach((entry) => entry?.dispose?.())
@@ -389,6 +391,16 @@ async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Obj
   if (!object) {
     throw new Error('无法构建墙体预览对象')
   }
+
+  const nodeMaterials = buildWallNodeMaterialsFromPreset(preset, sceneStore.materials)
+  if (nodeMaterials.length > 0) {
+    applyMaterialOverrides(object, nodeMaterials, materialOverrideOptions)
+  }
+
+  if ((object as THREE.Group).isGroup) {
+    applyAirWallVisualToWallGroup(object as THREE.Group, Boolean(preset.wallProps.isAirWall))
+  }
+
   logWallPresetComponent('build wall preview success', { hasObject: true })
   return object
 }
