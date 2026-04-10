@@ -11921,7 +11921,6 @@ function handleViewportDoubleClickNode(nodeId: string): void {
   const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
 
   emitSelectionChange([nodeId])
-  focusCameraOnNode(nodeId)
 
   if (!wasAlreadySingleSelected) {
     return
