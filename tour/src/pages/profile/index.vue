@@ -1,7 +1,7 @@
 <template>
   <view class="page" :style="{ paddingTop: topInset + 'px' }">
     <MiniAuthRecovery />
-    <PageHeader title="个人信息编辑">
+    <PageHeader title="" style="height: 0px;">
       <template #left>
         <button class="business-entry" @tap="openBusinessPage">我是商业管理员</button>
       </template>
@@ -75,6 +75,7 @@ import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
+import PageHeader from '@/components/PageHeader.vue';
 import { bindWechatPhone, getProfile } from '@/api/mini';
 import { requestProfileAndSync } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';

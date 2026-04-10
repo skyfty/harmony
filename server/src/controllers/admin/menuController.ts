@@ -185,14 +185,14 @@ const BACKEND_MENU_TREE: MenuNode[] = [
     path: '/business-orders',
     component: 'BasicLayout',
     requiredPermissions: ['order:read'],
-    meta: { icon: 'lucide:briefcase-business', title: '商业订单管理' },
+    meta: { icon: 'lucide:briefcase-business', title: '商业管理' },
     children: [
       {
         name: 'BusinessOrdersIndex',
         path: '/business-orders',
         component: '/views/business-orders/index.vue',
         requiredPermissions: ['order:read'],
-        meta: { icon: 'lucide:briefcase-business', title: '商业订单管理' },
+        meta: { icon: 'lucide:briefcase-business', title: '商业管理' },
       },
     ],
   },
