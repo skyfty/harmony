@@ -181,6 +181,22 @@ const BACKEND_MENU_TREE: MenuNode[] = [
     ],
   },
   {
+    name: 'BusinessOrders',
+    path: '/business-orders',
+    component: 'BasicLayout',
+    requiredPermissions: ['order:read'],
+    meta: { icon: 'lucide:briefcase-business', title: '商业订单管理' },
+    children: [
+      {
+        name: 'BusinessOrdersIndex',
+        path: '/business-orders',
+        component: '/views/business-orders/index.vue',
+        requiredPermissions: ['order:read'],
+        meta: { icon: 'lucide:briefcase-business', title: '商业订单管理' },
+      },
+    ],
+  },
+  {
     name: 'Users',
     path: '/users',
     component: '/views/users/index.vue',
