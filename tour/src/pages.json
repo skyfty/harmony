@@ -15,7 +15,8 @@
     { "path": "pages/feedback/index" },
     { "path": "pages/feedback/create" },
     { "path": "pages/settings/index" },
-    { "path": "pages/profile/edit" }
+    { "path": "pages/profile/edit" },
+    { "path": "pages/business/index" }
   ],
   
   "subPackages": [

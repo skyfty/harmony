@@ -23,6 +23,7 @@ export interface UserItem {
   avatarUrl?: string | null;
   bio?: null | string;
   birthDate?: null | string;
+  contractStatus?: 'unsigned' | 'signed';
   createdAt: string;
   currentVehicleId?: null | string;
   displayName: null | string;
@@ -56,6 +57,7 @@ export interface UserListParams {
 
 export interface CreateUserPayload {
   bio?: string;
+  contractStatus?: 'unsigned' | 'signed';
   displayName?: string;
   email?: string;
   password: string;
@@ -68,6 +70,7 @@ export interface CreateUserPayload {
 
 export interface UpdateUserPayload {
   bio?: string;
+  contractStatus?: 'unsigned' | 'signed';
   displayName?: string;
   email?: string;
   password?: string;

@@ -269,6 +269,12 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
         slots: { default: 'status' },
       },
       {
+        field: 'contractStatus',
+        minWidth: 120,
+        title: '签约状态',
+        slots: { default: 'contractStatus' },
+      },
+      {
         field: 'createdAt',
         minWidth: 180,
         sortable: true,
@@ -358,6 +364,12 @@ function handleAvatarBeforeUpload(file: UploadFile) {
             @change="(checked) => handleStatusChange(row, !!checked)"
           />
         </Space>
+      </template>
+
+      <template #contractStatus="{ row }">
+        <Tag :color="row.contractStatus === 'signed' ? 'success' : 'default'">
+          {{ row.contractStatus === 'signed' ? '已签约' : '未签约' }}
+        </Tag>
       </template>
 
       <template #avatar="{ row }">

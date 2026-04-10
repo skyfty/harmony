@@ -94,6 +94,11 @@ import {
   createMiniTravelEnterRecord,
   listMiniTravelRecords,
 } from '@/controllers/miniprogram/travelRecordController'
+import {
+  createBusinessOrderHandler,
+  getBusinessOrderBootstrapHandler,
+  getCurrentBusinessOrderHandler,
+} from '@/controllers/miniprogram/businessOrderController'
 
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
 const miniRouter = new Router({ prefix: '/api/mini' })
@@ -199,5 +204,10 @@ miniRouter.delete('/addresses/:id', deleteAddress)
 // feedback
 miniRouter.get('/feedback', listFeedback)
 miniRouter.post('/feedback', createFeedback)
+
+// business orders
+miniRouter.get('/business-orders/bootstrap', getBusinessOrderBootstrapHandler)
+miniRouter.get('/business-orders/current', getCurrentBusinessOrderHandler)
+miniRouter.post('/business-orders', createBusinessOrderHandler)
 
 export default miniRouter

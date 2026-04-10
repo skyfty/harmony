@@ -1,7 +1,6 @@
 <template>
   <view class="page">
     <MiniAuthRecovery />
-    <PageHeader title="个人信息编辑" />
     <view class="content">
       <view class="card">
         <view class="avatar-row" @tap="handleAvatarTap">

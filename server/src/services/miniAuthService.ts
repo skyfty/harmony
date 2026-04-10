@@ -29,6 +29,7 @@ type AppUserLean = {
   wechatProfileSyncedAt?: Date
   wechatIdentitySyncedAt?: Date
   status: 'active' | 'disabled'
+  contractStatus: 'unsigned' | 'signed'
   workShareCount?: number
   exhibitionShareCount?: number
   createdAt: Date
@@ -57,6 +58,7 @@ export interface MiniSessionUser {
   wechatProfileSyncedAt?: string
   wechatIdentitySyncedAt?: string
   status: 'active' | 'disabled'
+  contractStatus: 'unsigned' | 'signed'
   workShareCount: number
   exhibitionShareCount: number
   createdAt: string
@@ -108,6 +110,7 @@ function buildMiniUser(user: AppUserLean): MiniSessionUser {
     wechatProfileSyncedAt: user.wechatProfileSyncedAt?.toISOString(),
     wechatIdentitySyncedAt: user.wechatIdentitySyncedAt?.toISOString(),
     status: user.status,
+    contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
     workShareCount: user.workShareCount ?? 0,
     exhibitionShareCount: user.exhibitionShareCount ?? 0,
     createdAt: user.createdAt.toISOString(),
@@ -287,6 +290,7 @@ export async function miniLoginWithOpenId(input: {
       lastLoginSource: 'mini-wechat-login',
       wechatProfileSyncedAt: displayName || avatarUrl ? createdAt : undefined,
       status: 'active',
+      contractStatus: 'unsigned',
     })
     shouldPromptProfileCompletion = !isMiniProfileComplete({
       displayName: user.displayName,
@@ -383,6 +387,7 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
       displayName: displayName || username,
       lastLoginSource: 'mini-test-bootstrap',
       status: 'active',
+      contractStatus: existing.contractStatus === 'signed' ? 'signed' : 'unsigned',
     })
     return
   }

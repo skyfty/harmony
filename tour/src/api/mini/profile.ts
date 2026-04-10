@@ -18,6 +18,7 @@ type MiniProfileUser = {
   gender?: Gender
   birthDate?: string
   lastLoginAt?: string
+  contractStatus?: 'unsigned' | 'signed'
 }
 
 type MiniProfileResponse = {
@@ -50,6 +51,7 @@ function toUserProfile(user: MiniProfileUser): UserProfile {
     gender: user.gender ?? 'other',
     birthDate: user.birthDate ? user.birthDate.slice(0, 10) : '',
     lastLoginAt: user.lastLoginAt,
+    contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
   })
 }
 

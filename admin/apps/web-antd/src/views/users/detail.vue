@@ -383,6 +383,11 @@ onMounted(async () => {
               {{ user?.status === 'active' ? '启用' : '禁用' }}
             </Tag>
           </Descriptions.Item>
+          <Descriptions.Item label="签约状态">
+            <Tag :color="user?.contractStatus === 'signed' ? 'success' : 'default'">
+              {{ user?.contractStatus === 'signed' ? '已签约' : '未签约' }}
+            </Tag>
+          </Descriptions.Item>
           <Descriptions.Item label="微信 OpenId">{{ user?.wxOpenId || '-' }}</Descriptions.Item>
           <Descriptions.Item label="微信 UnionId">{{ user?.wxUnionId || '-' }}</Descriptions.Item>
           <Descriptions.Item label="手机号">{{ user?.phone || '-' }}</Descriptions.Item>

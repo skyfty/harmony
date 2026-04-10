@@ -1,6 +1,11 @@
 <template>
   <view class="page" :style="{ paddingTop: topInset + 'px' }">
     <MiniAuthRecovery />
+    <PageHeader title="个人信息编辑">
+      <template #left>
+        <button class="business-entry" @tap="openBusinessPage">我是商业管理员</button>
+      </template>
+    </PageHeader>
     <view class="header">
       <view class="profile">
         <view class="avatar">
@@ -174,6 +179,10 @@ function openProfileEdit() {
   uni.navigateTo({ url: '/pages/profile/edit' });
 }
 
+function openBusinessPage() {
+  uni.navigateTo({ url: '/pages/business/index' });
+}
+
 function nav(url: string) {
   uni.navigateTo({ url });
 }
@@ -219,6 +228,18 @@ function handleNavigate(key: NavKey) {
 
 .header {
   padding: 16px;
+}
+
+.business-entry {
+  margin: 0;
+  padding: 0 12px;
+  height: 30px;
+  line-height: 30px;
+  border-radius: 999px;
+  background: rgba(25, 65, 133, 0.1);
+  color: #194185;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .profile {
