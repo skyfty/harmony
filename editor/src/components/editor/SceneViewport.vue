@@ -1824,9 +1824,13 @@ const canRotateSelection = computed(() =>
 const canDropSelection = computed(() =>
   sceneStore.selectedNodeIds.some((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
 )
-const cameraStatusModeText = computed(() =>
-  sceneStore.viewportSettings.cameraControlMode === 'map' ? '地图' : '轨道'
-)
+const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraControlMode)
+const viewportSelectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
+const cameraPointerHintText = computed(() => (
+  cameraControlMode.value === 'map'
+    ? '右键旋转 · 空白处左键拖拽平移 · 滚轮缩放'
+    : '中键旋转 · 右键平移 · 滚轮缩放'
+))
 const cameraStatusZoomRatioText = computed(() => {
   const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
   const ratio = cameraStatusDistance.value / base
@@ -12026,6 +12030,16 @@ function handleResetCameraStatusZoomClick() {
   resetCameraView()
 }
 
+function toggleViewportCameraControlMode() {
+  const nextMode = cameraControlMode.value === 'map' ? 'orbit' : 'map'
+  sceneStore.setCameraControlMode(nextMode)
+}
+
+const showCameraHintsOpen = ref(false)
+function toggleCameraHints() {
+  showCameraHintsOpen.value = !showCameraHintsOpen.value
+}
+
 function clearShiftOrbitPivotSession(pointerId?: number) {
   if (!shiftOrbitPivotSessionState) {
     return
@@ -20963,7 +20977,6 @@ defineExpose<SceneViewportHandle>({
           :scatter-erase-menu-open="scatterEraseMenuOpen"
           :viewport-placement-menu-open="viewportPlacementMenuOpen"
           :viewport-placement-active="viewportPlacementActive"
-        :camera-reset-menu-open="cameraResetMenuOpen"
           :csm-menu-open="csmMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :landform-shape-menu-open="landformShapeMenuOpen"
@@ -21013,11 +21026,6 @@ defineExpose<SceneViewportHandle>({
         :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
-        @reset-camera="resetCameraView"
-        @focus-top-view="enterMapTopView"
-        @focus-selection="focusViewportSelection"
-        @focus-visible="focusViewportVisible"
-        @reset-camera-direction="handleResetCameraDirection"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
@@ -21035,7 +21043,6 @@ defineExpose<SceneViewportHandle>({
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
-          @update:camera-reset-menu-open="handleCameraResetMenuOpen"
           @update:csm-menu-open="handleCsmMenuOpen"
           @update:csm-enabled="handleCsmEnabledUpdate"
           @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
@@ -21156,16 +21163,124 @@ defineExpose<SceneViewportHandle>({
         />
       </div>
       <div class="camera-status-hud">
-        <span class="camera-status-hud__text">镜头：{{ cameraStatusModeText }}</span>
-        <span class="camera-status-hud__divider">·</span>
-        <button
-          type="button"
-          class="camera-status-hud__ratio"
-          title="点击重置缩放"
-          @click="handleResetCameraStatusZoomClick"
-        >
-          缩放：{{ cameraStatusZoomRatioText }}
-        </button>
+        <div class="camera-status-hud__toolbar">
+          <div class="camera-status-hud__controls">
+          <v-btn
+            :icon="cameraControlMode === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            :title="cameraControlMode === 'map' ? '布局模式：地图（点击切换到轨道/装配模式）' : '装配模式：轨道（点击切换到地图/布局模式）'"
+            @click="toggleViewportCameraControlMode"
+          />
+          <v-btn
+            icon="mdi-view-grid-outline"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            title="顶视布局（Alt+3）"
+            @click="enterMapTopView"
+          />
+          <v-btn
+            icon="mdi-crosshairs-gps"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            :title="viewportSelectionCount > 0 ? '聚焦选中（F）' : '聚焦选中（F）- 当前没有选中对象'"
+            :disabled="viewportSelectionCount < 1"
+            @click="focusViewportSelection"
+          />
+          <v-btn
+            icon="mdi-fit-to-screen-outline"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            title="聚焦可见内容（Shift+F）"
+            @click="focusViewportVisible"
+          />
+          <v-menu
+            :model-value="cameraResetMenuOpen"
+            location="top start"
+            :offset="8"
+            :open-on-click="false"
+            :close-on-content-click="true"
+            @update:modelValue="handleCameraResetMenuOpen"
+          >
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="menuProps"
+                icon="mdi-camera"
+                density="compact"
+                size="x-small"
+                variant="text"
+                class="camera-status-hud__icon-btn"
+                title="默认视角（Shift+F 聚焦可见；Alt+1..6 方向视角）"
+                @click="resetCameraView"
+                @contextmenu.prevent.stop="handleCameraResetMenuOpen(true)"
+              />
+            </template>
+            <v-list density="compact" class="camera-reset-menu">
+              <div
+                class="popup-menu-card"
+                @pointerdown.stop
+                @pointerup.stop
+                @mousedown.stop
+                @mouseup.stop
+              >
+                <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                  <div class="toolbar-text">
+                    <div class="menu-title">Camera View</div>
+                  </div>
+                  <v-spacer />
+                  <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="handleCameraResetMenuOpen(false)" />
+                </v-toolbar>
+                <div class="popup-menu-card__content">
+                  <v-list-item title="正面 (+X) - Alt+1" @click="handleResetCameraDirection('pos-x')" />
+                  <v-list-item title="背面 (-X) - Alt+2" @click="handleResetCameraDirection('neg-x')" />
+                  <v-list-item title="顶视布局 (+Y) - Alt+3" @click="enterMapTopView" />
+                  <v-list-item title="下面 (-Y) - Alt+4" @click="handleResetCameraDirection('neg-y')" />
+                  <v-list-item title="左面 (+Z) - Alt+5" @click="handleResetCameraDirection('pos-z')" />
+                  <v-list-item title="右面 (-Z) - Alt+6" @click="handleResetCameraDirection('neg-z')" />
+                </div>
+              </div>
+            </v-list>
+          </v-menu>
+          </div>
+          <span class="camera-status-hud__sep" aria-hidden="true" />
+          <span class="camera-status-hud__meta-label">缩放</span>
+          <button
+            type="button"
+            class="camera-status-hud__ratio"
+            title="点击重置缩放"
+            @click="handleResetCameraStatusZoomClick"
+          >
+            {{ cameraStatusZoomRatioText }}
+          </button>
+          <span class="camera-status-hud__sep" aria-hidden="true" />
+          <button
+            type="button"
+            class="camera-status-hud__help-btn"
+            :class="{ 'camera-status-hud__help-btn--active': showCameraHintsOpen }"
+            title="镜头控制与导航快捷键"
+            @click="toggleCameraHints"
+          >?</button>
+        </div>
+        <Transition name="camera-hints-slide">
+          <div v-if="showCameraHintsOpen" class="camera-status-hud__hints">
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">鼠标</span>
+              <span class="camera-status-hud__hint-text">{{ cameraPointerHintText }}</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">快捷键</span>
+              <span class="camera-status-hud__hint-text">方向键平移 · F 聚焦选中 · Shift+F 聚焦可见 · Alt+1..6 方向视角</span>
+            </div>
+          </div>
+        </Transition>
       </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
@@ -21496,54 +21611,192 @@ defineExpose<SceneViewportHandle>({
   position: absolute;
   left: 16px;
   bottom: 16px;
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  min-width: 0;
+  max-width: min(420px, calc(100vw - 32px));
+  z-index: 9;
+  pointer-events: none;
+}
+
+.camera-status-hud__hints {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 280px;
+  max-width: min(380px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 15, 21, 0.85);
+  color: rgba(236, 241, 248, 0.95);
+  font-size: 11px;
+  line-height: 1.4;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px) saturate(140%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.camera-hints-slide-enter-active,
+.camera-hints-slide-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.camera-hints-slide-enter-from,
+.camera-hints-slide-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.camera-status-hud__toolbar {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
-  border-radius: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(12, 15, 21, 0.72);
   color: rgba(236, 241, 248, 0.95);
-  font-size: 12px;
-  line-height: 1.2;
+  font-size: 11px;
+  line-height: 1.25;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(10px) saturate(140%);
-  z-index: 9;
   pointer-events: auto;
 }
 
-.camera-status-hud__text,
-.camera-status-hud__divider {
-  pointer-events: none;
+.camera-status-hud__controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.camera-status-hud__sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.14);
+  flex: 0 0 auto;
+}
+
+.camera-status-hud__icon-btn {
+  color: rgba(236, 241, 248, 0.95);
+  --v-btn-height: 24px;
+  min-width: 24px !important;
+  width: 24px !important;
+  padding: 0 !important;
+}
+
+.camera-status-hud__meta-label {
+  color: rgba(160, 171, 189, 0.92);
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+
+.camera-status-hud__help-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  margin: 0;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(200, 210, 224, 0.9);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.camera-status-hud__help-btn:hover {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+.camera-status-hud__help-btn--active {
+  background: rgba(134, 218, 255, 0.18);
+  border-color: rgba(134, 218, 255, 0.55);
+  color: rgba(174, 232, 255, 1);
+}
+
+.camera-status-hud__help-btn--active:hover {
+  background: rgba(134, 218, 255, 0.28);
+}
+
+.camera-status-hud__hint-row {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.camera-status-hud__hint-label {
+  color: rgba(160, 171, 189, 0.92);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+
+.camera-status-hud__hint-text {
+  color: rgba(236, 241, 248, 0.95);
+  opacity: 0.92;
 }
 
 .camera-status-hud__ratio {
   appearance: none;
-  border: 0;
+  border: 1px solid rgba(134, 218, 255, 0.24);
   margin: 0;
-  padding: 0;
-  background: transparent;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(21, 41, 52, 0.72);
   color: rgba(134, 218, 255, 0.96);
   font: inherit;
   line-height: inherit;
   cursor: pointer;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
 }
 
 .camera-status-hud__ratio:hover {
+  background: rgba(28, 53, 66, 0.8);
   color: rgba(174, 232, 255, 1);
 }
 
 .camera-status-hud__ratio:active {
+  background: rgba(20, 44, 57, 0.88);
   color: rgba(113, 202, 246, 1);
 }
 
 .camera-status-hud__ratio:focus-visible {
   outline: 2px solid rgba(134, 218, 255, 0.72);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 999px;
+}
+
+@media (max-width: 720px) {
+  .camera-status-hud {
+    left: 12px;
+    bottom: 12px;
+  }
+
+  .camera-status-hud__hints {
+    min-width: 240px;
+    max-width: min(320px, calc(100vw - 24px));
+  }
+
+  .camera-status-hud__hint-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
 }
 
 .protagonist-preview__label {

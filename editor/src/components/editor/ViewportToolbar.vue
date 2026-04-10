@@ -1272,104 +1272,6 @@
         title="Toggle Axes"
         @click="toggleAxesVisibility"
       />
-
-      <v-divider vertical />
-      <v-btn
-        :icon="cameraControlMode === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        color="undefined"
-        variant="text"
-        :title="
-          cameraControlMode === 'map'
-            ? 'Layout Mode: Map (click to switch to Orbit / Assembly Mode)'
-            : 'Assembly Mode: Orbit (click to switch to Map / Layout Mode)'
-        "
-        @click="toggleCameraControlMode"
-      />
-      <v-btn
-        icon="mdi-view-grid-outline"
-        density="compact"
-        size="small"
-        color="undefined"
-        variant="text"
-        class="toolbar-button"
-        title="Layout Top View (Alt+3)"
-        @click="emit('focus-top-view')"
-      />
-      <v-btn
-        icon="mdi-crosshairs-gps"
-        density="compact"
-        size="small"
-        color="undefined"
-        variant="text"
-        class="toolbar-button"
-        :title="selectionCount > 0 ? 'Focus Selection (F)' : 'Focus Selection (F) — no selection'"
-        :disabled="selectionCount < 1"
-        @click="emit('focus-selection')"
-      />
-      <v-btn
-        icon="mdi-fit-to-screen-outline"
-        density="compact"
-        size="small"
-        color="undefined"
-        variant="text"
-        class="toolbar-button"
-        title="Focus Visible (Shift+F)"
-        @click="emit('focus-visible')"
-      />
-
-      <v-menu
-        :activator="menuActivators.cameraReset"
-        :model-value="cameraResetMenuOpen"
-        location="bottom"
-        :offset="6"
-        :open-on-click="false"
-        :close-on-content-click="true"
-        @update:modelValue="handleCameraResetMenuModelUpdate"
-      >
-        <template #activator="{ props: menuProps }">
-          <v-btn
-            v-bind="menuProps"
-            :ref="(el: unknown) => setMenuActivator('cameraReset', el)"
-            icon="mdi-camera"
-            density="compact"
-            size="small"
-            color="undefined"
-            variant="text"
-            class="toolbar-button"
-            title="Reset to Default View (Shift+F: focus visible; Alt+1..6: directional views)"
-            @click="emit('reset-camera')"
-            @contextmenu.prevent.stop="handleCameraResetContextMenu"
-          />
-        </template>
-        <v-list density="compact" class="camera-reset-menu">
-          <div
-            class="popup-menu-card"
-            @pointerdown.stop
-            @pointerup.stop
-            @mousedown.stop
-            @mouseup.stop
-          >
-            <v-toolbar density="compact" class="menu-toolbar" height="36px">
-              <div class="toolbar-text">
-                <div class="menu-title">Camera View</div>
-              </div>
-              <v-spacer />
-              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:camera-reset-menu-open', false)" />
-            </v-toolbar>
-            <div class="popup-menu-card__content">
-              <v-list-item title="正面 (+X) — Alt+1" @click="handleCameraResetDirectionSelect('pos-x')" />
-              <v-list-item title="背面 (-X) — Alt+2" @click="handleCameraResetDirectionSelect('neg-x')" />
-              <v-list-item title="顶视布局 (+Y) — Alt+3" @click="emit('focus-top-view')" />
-              <v-list-item title="下面 (-Y) — Alt+4" @click="handleCameraResetDirectionSelect('neg-y')" />
-              <v-list-item title="左面 (+Z) — Alt+5" @click="handleCameraResetDirectionSelect('pos-z')" />
-              <v-list-item title="右面 (-Z) — Alt+6" @click="handleCameraResetDirectionSelect('neg-z')" />
-            </div>
-          </div>
-        </v-list>
-      </v-menu>
     </v-card>
   </div>
 </template>
@@ -1382,7 +1284,7 @@ import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
-import { PROTAGONIST_NODE_ID, type CameraControlMode } from '@schema'
+import { PROTAGONIST_NODE_ID } from '@schema'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
@@ -1435,7 +1337,6 @@ const props = withDefaults(
   scatterEraseMenuOpen: boolean
   viewportPlacementMenuOpen: boolean
   viewportPlacementActive: boolean
-  cameraResetMenuOpen: boolean
   csmMenuOpen: boolean
   floorShapeMenuOpen: boolean
   landformShapeMenuOpen: boolean
@@ -1493,10 +1394,6 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  (event: 'reset-camera'): void
-  (event: 'focus-top-view'): void
-  (event: 'focus-selection'): void
-  (event: 'focus-visible'): void
   (event: 'drop-to-ground'): void
   (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
@@ -1511,8 +1408,6 @@ const emit = defineEmits<{
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
-  (event: 'reset-camera-direction', direction: CameraResetDirection): void
-  (event: 'update:camera-reset-menu-open', value: boolean): void
   (event: 'update:csm-menu-open', value: boolean): void
   (event: 'update:csm-enabled', value: boolean): void
   (event: 'update:csm-shadow-enabled', value: boolean): void
@@ -1581,7 +1476,6 @@ const {
   scatterEraseMenuOpen,
   viewportPlacementMenuOpen,
   viewportPlacementActive,
-  cameraResetMenuOpen,
   csmMenuOpen,
   floorShapeMenuOpen,
   landformShapeMenuOpen,
@@ -1635,13 +1529,6 @@ const wallPresetPickerAssets = computed<ProjectAsset[]>(() => {
   return builtinAirWallPreset ? [builtinAirWallPreset] : []
 })
 
-const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraControlMode)
-
-function toggleCameraControlMode() {
-  const next: CameraControlMode = cameraControlMode.value === 'map' ? 'orbit' : 'map'
-  sceneStore.setCameraControlMode(next)
-}
-
 const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
@@ -1664,7 +1551,6 @@ type MenuActivatorKey =
   | 'water'
   | 'viewportPlacement'
   | 'scatterErase'
-  | 'cameraReset'
 
 const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined>>({
   sun: undefined,
@@ -1679,7 +1565,6 @@ const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined
   water: undefined,
   viewportPlacement: undefined,
   scatterErase: undefined,
-  cameraReset: undefined,
 })
 
 function setMenuActivator(key: MenuActivatorKey, el: unknown) {
@@ -2001,8 +1886,6 @@ type RotationAxis = 'x' | 'y'
 
 type MirrorMode = 'horizontal' | 'vertical'
 
-type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
-
 type RotationAction = {
   id: string
   label: string
@@ -2123,7 +2006,6 @@ function closeExternalMenus() {
   emit('update:ground-scatter-menu-open', false)
   emit('update:scatter-erase-menu-open', false)
   emit('update:viewport-placement-menu-open', false)
-  emit('update:camera-reset-menu-open', false)
   emit('update:floor-shape-menu-open', false)
   emit('update:landform-shape-menu-open', false)
   emit('update:wall-shape-menu-open', false)
@@ -2740,28 +2622,12 @@ function handleScatterEraseContextMenu(event: MouseEvent) {
   emit('update:scatter-erase-menu-open', true)
 }
 
-function handleCameraResetContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  closeAllMenus()
-  emit('update:camera-reset-menu-open', true)
-}
-
-function handleCameraResetMenuModelUpdate(value: boolean) {
-  emit('update:camera-reset-menu-open', Boolean(value))
-}
-
 function handleCsmMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
   if (open) {
     closeAllMenus()
   }
   emit('update:csm-menu-open', open)
-}
-
-function handleCameraResetDirectionSelect(direction: CameraResetDirection) {
-  emit('reset-camera-direction', direction)
-  emit('update:camera-reset-menu-open', false)
 }
 
 function toggleGridVisibility() {
