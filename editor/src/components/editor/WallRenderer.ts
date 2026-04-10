@@ -297,7 +297,6 @@ export function createWallRenderer(options: WallRendererOptions) {
           getAssetBounds: getWallAssetBounds,
         })
       : null
-
     const bindings: WallDragBindingEntry[] = []
     for (const binding of plan?.bindings ?? []) {
       if (binding.sourceAssetId && binding.repeatScaleU && binding.sourceAssetId !== binding.assetId) {
@@ -979,14 +978,6 @@ export function createWallRenderer(options: WallRendererOptions) {
           footAssetHeight: wallProps.footAssetHeight,
         })
       : null
-    console.debug('[wall-layout] sync', {
-      nodeId: node.id,
-      renderPath: wantsInstancing ? (hasProceduralBodyFallback ? 'instanced+procedural-body' : 'instanced') : 'procedural',
-      wallHeight: wallProps?.height,
-      headAssetHeight: wallProps?.headAssetHeight,
-      footAssetHeight: wallProps?.footAssetHeight,
-      layout: wallLayout,
-    })
 
     // ============================
     // 1) 空气墙：强制使用程序墙体（并应用半透明材质覆盖）

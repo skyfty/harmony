@@ -616,14 +616,6 @@ async function applyWallHeadOrFootAsset(target: 'head' | 'foot', assetId: string
   }
 
   const measuredHeight = await resolveWallAssetMeasuredHeight(assetId)
-  feedback.value = measuredHeight == null ? 'Assigned asset could not be measured. Default height set to 0.' : null
-  console.debug('[wall-layout] assign asset', {
-    nodeId,
-    target,
-    assetId,
-    wallHeight: Number((component.props as any)?.height),
-    measuredHeight,
-  })
 
   sceneStore.updateNodeComponentProps(nodeId, component.id, {
     [assetKey]: assetId,
