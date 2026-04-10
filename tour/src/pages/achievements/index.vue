@@ -37,9 +37,14 @@
                 <view class="medal-progress-core">
                   <image class="medal-icon" :src="resolveMedalIcon(medal)" mode="aspectFit" />
                 </view>
-                <text class="medal-progress-value">
-                  {{ formatMedalCompletionPercent(medal) }}
-                </text>
+                <view class="medal-progress-value">
+                  <view class="medal-progress-track">
+                    <view class="medal-progress-fill" :style="buildMedalProgressBarStyle(medal)" />
+                    <text class="medal-progress-text">
+                      {{ formatMedalCompletionPercent(medal) }}
+                    </text>
+                  </view>
+                </view>
               </view>
               <text :class="['medal-status', medal.earned ? 'medal-status--earned' : 'medal-status--locked']">
                 {{ medal.earned ? '已获得' : '未获得' }}
@@ -228,6 +233,16 @@ function getMedalCompletionPercent(item: MedalItem): number {
 
 function formatMedalCompletionPercent(item: MedalItem): string {
   return `${getMedalCompletionPercent(item)}%`;
+}
+
+function buildMedalProgressBarStyle(item: MedalItem): Record<string, string> {
+  const ratio = getMedalCompletionRatio(item);
+  return {
+    width: `${Math.round(ratio * 100)}%`,
+    background: item.earned
+      ? 'linear-gradient(90deg, rgba(255, 212, 102, 0.98) 0%, rgba(240, 178, 58, 0.98) 52%, rgba(217, 131, 22, 0.98) 100%)'
+      : 'linear-gradient(90deg, rgba(110, 176, 255, 0.98) 0%, rgba(77, 129, 255, 0.98) 55%, rgba(54, 95, 218, 0.98) 100%)',
+  };
 }
 
 function buildMedalRingStyle(item: MedalItem): Record<string, string> {
@@ -513,20 +528,54 @@ function handleNavigate(key: NavKey) {
 
 .medal-progress-value {
   position: absolute;
-  right: -8rpx;
+  right: -14rpx;
   bottom: -2rpx;
-  min-width: 68rpx;
-  height: 36rpx;
-  padding: 0 12rpx;
+  width: 124rpx;
+  height: 38rpx;
+}
+
+.medal-progress-track {
+  width: 100%;
+  height: 100%;
   border-radius: 999px;
-  background: rgba(23, 31, 55, 0.8);
+  background: linear-gradient(180deg, rgba(23, 31, 55, 0.78) 0%, rgba(37, 47, 78, 0.84) 100%);
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 8px 16px rgba(18, 24, 43, 0.18);
+  border: 1rpx solid rgba(255, 255, 255, 0.2);
+}
+
+.medal-progress-track::after {
+  content: '';
+  position: absolute;
+  inset: 1rpx;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.02) 100%);
+  pointer-events: none;
+}
+
+.medal-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  min-width: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.3);
+}
+
+.medal-progress-text {
+  position: absolute;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
   color: #ffffff;
   font-size: 20rpx;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 8px 16px rgba(18, 24, 43, 0.18);
+  text-shadow: 0 1px 4px rgba(11, 16, 30, 0.32);
 }
 
 .medal-body {
