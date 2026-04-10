@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
-import type { WallDynamicMesh } from '@schema'
+import type { SceneMaterial, SceneMaterialTextureRef, WallDynamicMesh } from '@schema'
 import { WALL_COMPONENT_TYPE } from '@schema/components'
+import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { buildWallMesh } from '@schema/sceneGraph/dynamicMeshes/wall'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import {
@@ -9,10 +10,20 @@ import {
   type WallInstancedBindingSpec,
 } from '@schema/wallInstancing'
 import { buildWallDynamicMeshFromWorldSegments } from '@/stores/wallUtils'
+import { disposeThumbnailObject, renderObjectThumbnailDataUrl } from '@/utils/objectThumbnailRenderer'
 import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
 import type { WallPresetData } from '@/utils/wallPreset'
 
 export const WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY = '__harmonyWallPresetPreviewSharedAsset'
+const WALL_PRESET_PREVIEW_LOG_PREFIX = '[WallPresetPreview]'
+
+function logWallPresetPreview(message: string, payload?: Record<string, unknown>): void {
+  if (payload) {
+    console.info(WALL_PRESET_PREVIEW_LOG_PREFIX, message, payload)
+    return
+  }
+  console.info(WALL_PRESET_PREVIEW_LOG_PREFIX, message)
+}
 
 function normalizeWallInstancedBindingSpecs(object: THREE.Object3D | null | undefined): WallInstancedBindingSpec[] {
   const raw = (object?.userData as Record<string, unknown> | undefined)?.[WALL_INSTANCED_BINDINGS_USERDATA_KEY]
@@ -33,6 +44,29 @@ function hasRenderableMesh(object: THREE.Object3D | null | undefined): boolean {
     }
   })
   return found
+}
+
+function coercePreviewMatrix4(value: unknown): THREE.Matrix4 | null {
+  if (value instanceof THREE.Matrix4) {
+    return value
+  }
+
+  const elements = (value as { elements?: unknown } | null | undefined)?.elements
+  if (!elements || typeof elements !== 'object' || !('length' in elements)) {
+    return null
+  }
+
+  const raw = Array.from(elements as ArrayLike<unknown>)
+  if (raw.length !== 16) {
+    return null
+  }
+
+  const numeric = raw.map((entry) => Number(entry))
+  if (numeric.some((entry) => !Number.isFinite(entry))) {
+    return null
+  }
+
+  return new THREE.Matrix4().fromArray(numeric)
 }
 
 
@@ -91,22 +125,26 @@ function resolveWallBindingPreviewSource(binding: WallInstancedBindingSpec, load
 function materializeWallInstancedBindingsToPreviewMeshes(options: {
   wallObject: THREE.Object3D
   loadedAssetObjects: Map<string, THREE.Object3D>
-}): { created: number; missingAssetIds: string[] } {
+}): { created: number; missingAssetIds: string[]; invalidMatrixCount: number; bindingAssetIds: string[] } {
   const bindings = normalizeWallInstancedBindingSpecs(options.wallObject)
   if (!bindings.length) {
-    return { created: 0, missingAssetIds: [] }
+    return { created: 0, missingAssetIds: [], invalidMatrixCount: 0, bindingAssetIds: [] }
   }
 
   const materializedGroup = new THREE.Group()
   materializedGroup.name = 'WallPresetInstancedPreviewMeshes'
   const missingAssetIds = new Set<string>()
+  const bindingAssetIds = new Set<string>()
   let created = 0
+  let invalidMatrixCount = 0
 
   bindings.forEach((binding) => {
     const sourceAssetId = resolveWallBindingSourceAssetId(binding)
     if (!sourceAssetId) {
       return
     }
+
+    bindingAssetIds.add(sourceAssetId)
 
     const resolvedSource = resolveWallBindingPreviewSource(binding, options.loadedAssetObjects)
     const sourceObject = resolvedSource.object
@@ -116,8 +154,10 @@ function materializeWallInstancedBindingsToPreviewMeshes(options: {
     }
 
     const localMatrices = Array.isArray(binding.localMatrices) ? binding.localMatrices : []
-    localMatrices.forEach((matrix) => {
-      if (!(matrix instanceof THREE.Matrix4)) {
+    localMatrices.forEach((matrixValue) => {
+      const matrix = coercePreviewMatrix4(matrixValue)
+      if (!matrix) {
+        invalidMatrixCount += 1
         return
       }
       const cloned = cloneWallPreviewAssetObject(sourceObject)
@@ -141,7 +181,12 @@ function materializeWallInstancedBindingsToPreviewMeshes(options: {
   if (created > 0) {
     options.wallObject.add(materializedGroup)
   }
-  return { created, missingAssetIds: Array.from(missingAssetIds) }
+  return {
+    created,
+    missingAssetIds: Array.from(missingAssetIds),
+    invalidMatrixCount,
+    bindingAssetIds: Array.from(bindingAssetIds),
+  }
 }
 
 export function prepareWallPreviewImportedObject(object: THREE.Object3D): THREE.Object3D {
@@ -206,6 +251,17 @@ export async function buildWallPresetPreviewObject(options: {
 }): Promise<THREE.Object3D | null> {
   const definition = buildWallPresetPreviewDynamicMesh(options.preset, { rectSizeMeters: 10 })
   const loadedAssetObjects = new Map<string, THREE.Object3D>()
+  logWallPresetPreview('build start', {
+    name: options.preset.name || 'Wall Preset Preview',
+    bodyAssetId: options.preset.wallProps.bodyAssetId ?? null,
+    headAssetId: options.preset.wallProps.headAssetId ?? null,
+    footAssetId: options.preset.wallProps.footAssetId ?? null,
+    bodyEndCapAssetId: options.preset.wallProps.bodyEndCapAssetId ?? null,
+    headEndCapAssetId: options.preset.wallProps.headEndCapAssetId ?? null,
+    footEndCapAssetId: options.preset.wallProps.footEndCapAssetId ?? null,
+    cornerModelCount: Array.isArray(options.preset.wallProps.cornerModels) ? options.preset.wallProps.cornerModels.length : 0,
+    wallRenderMode: options.preset.wallProps.wallRenderMode ?? 'stretch',
+  })
 
   const node = {
     id: 'wall-preset-preview-node',
@@ -227,6 +283,11 @@ export async function buildWallPresetPreviewObject(options: {
 
   const tracedLoadAssetMesh = async (assetId: string): Promise<THREE.Object3D | null> => {
     const loaded = await options.loadAssetMesh(assetId)
+    logWallPresetPreview('asset load result', {
+      assetId,
+      loaded: Boolean(loaded),
+      hasRenderableMesh: hasRenderableMesh(loaded),
+    })
     if (loaded) {
       loadedAssetObjects.set(assetId, loaded)
     }
@@ -245,12 +306,45 @@ export async function buildWallPresetPreviewObject(options: {
     node,
   )
 
+  logWallPresetPreview('buildWallMesh result', {
+    hasWallObject: Boolean(wallObject),
+    hasRenderableMesh: hasRenderableMesh(wallObject),
+    bindingCount: wallObject ? normalizeWallInstancedBindingSpecs(wallObject).length : 0,
+    bindingAssetIds: wallObject
+      ? normalizeWallInstancedBindingSpecs(wallObject).map((binding) => resolveWallBindingSourceAssetId(binding))
+      : [],
+    loadedAssetObjectCount: loadedAssetObjects.size,
+  })
+
   if (wallObject) {
-    if (!hasRenderableMesh(wallObject)) {
-      materializeWallInstancedBindingsToPreviewMeshes({
+    const bindings = normalizeWallInstancedBindingSpecs(wallObject)
+    if (bindings.length > 0) {
+      const hadRenderableMeshBeforeMaterialize = hasRenderableMesh(wallObject)
+      const materialized = materializeWallInstancedBindingsToPreviewMeshes({
         wallObject,
         loadedAssetObjects,
       })
+      logWallPresetPreview('materialize instanced bindings result', {
+        bindingCount: bindings.length,
+        bindingAssetIds: materialized.bindingAssetIds,
+        hadRenderableMeshBeforeMaterialize,
+        created: materialized.created,
+        invalidMatrixCount: materialized.invalidMatrixCount,
+        missingAssetIds: materialized.missingAssetIds,
+        hasRenderableMeshAfterMaterialize: hasRenderableMesh(wallObject),
+      })
+
+      if (!hasRenderableMesh(wallObject)) {
+        const detailParts = [
+          `bindings=${bindings.length}`,
+          `created=${materialized.created}`,
+          `invalidMatrices=${materialized.invalidMatrixCount}`,
+        ]
+        if (materialized.missingAssetIds.length > 0) {
+          detailParts.push(`missingAssets=${materialized.missingAssetIds.join(',')}`)
+        }
+        throw new Error(`无法实体化墙体模型预览: ${detailParts.join(' ')}`)
+      }
     }
   }
 
@@ -260,138 +354,48 @@ export async function buildWallPresetPreviewObject(options: {
 export async function renderWallPresetThumbnailDataUrl(options: {
   preset: WallPresetData
   loadAssetMesh: (assetId: string) => Promise<THREE.Object3D | null>
+  sharedMaterials?: readonly SceneMaterial[]
+  resolveTexture?: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
   width: number
   height: number
 }): Promise<string | null> {
+  logWallPresetPreview('thumbnail render start', {
+    name: options.preset.name || 'Wall Preset Preview',
+    width: options.width,
+    height: options.height,
+    sharedMaterialCount: Array.isArray(options.sharedMaterials) ? options.sharedMaterials.length : 0,
+  })
   const wallObject = await buildWallPresetPreviewObject({
     preset: options.preset,
     loadAssetMesh: options.loadAssetMesh,
   })
   if (!wallObject) {
+    logWallPresetPreview('thumbnail render skipped: wallObject missing')
     return null
   }
 
-  const disposeObject = (object: THREE.Object3D | null): void => {
-    if (!object) {
-      return
+  if (options.sharedMaterials && options.resolveTexture) {
+    const materialOverrideOptions: MaterialTextureAssignmentOptions = {
+      resolveTexture: options.resolveTexture,
     }
-    object.traverse((child: THREE.Object3D) => {
-      const mesh = child as THREE.Mesh
-      if (!mesh?.isMesh) {
-        return
-      }
-      if ((mesh.userData as Record<string, unknown> | undefined)?.[WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY]) {
-        return
-      }
-      mesh.geometry?.dispose?.()
-      const material = mesh.material
-      if (Array.isArray(material)) {
-        material.forEach((entry) => entry?.dispose?.())
-      } else {
-        material?.dispose?.()
-      }
-    })
+    applyMaterialOverrides(
+      wallObject,
+      buildWallNodeMaterialsFromPreset(options.preset, options.sharedMaterials),
+      materialOverrideOptions,
+    )
   }
 
-  const fitCamera = (camera: THREE.PerspectiveCamera, object: THREE.Object3D): void => {
-    const box = new THREE.Box3().setFromObject(object)
-    if (box.isEmpty()) {
-      camera.position.set(4, 3, 4)
-      camera.lookAt(0, 0, 0)
-      return
-    }
-    const center = box.getCenter(new THREE.Vector3())
-
-    const corners: THREE.Vector3[] = [
-      new THREE.Vector3(box.min.x, box.min.y, box.min.z),
-      new THREE.Vector3(box.min.x, box.min.y, box.max.z),
-      new THREE.Vector3(box.min.x, box.max.y, box.min.z),
-      new THREE.Vector3(box.min.x, box.max.y, box.max.z),
-      new THREE.Vector3(box.max.x, box.min.y, box.min.z),
-      new THREE.Vector3(box.max.x, box.min.y, box.max.z),
-      new THREE.Vector3(box.max.x, box.max.y, box.min.z),
-      new THREE.Vector3(box.max.x, box.max.y, box.max.z),
-    ]
-
-    const forward = new THREE.Vector3(1, 0.32, 1).normalize()
-    const worldUp = new THREE.Vector3(0, 1, 0)
-    const right = new THREE.Vector3().crossVectors(forward, worldUp)
-    if (right.lengthSq() < 1e-6) {
-      right.set(1, 0, 0)
-    } else {
-      right.normalize()
-    }
-    const up = new THREE.Vector3().crossVectors(right, forward).normalize()
-
-    let halfWidth = 0
-    let halfHeight = 0
-    let halfDepth = 0
-    corners.forEach((corner) => {
-      const relative = corner.clone().sub(center)
-      halfWidth = Math.max(halfWidth, Math.abs(relative.dot(right)))
-      halfHeight = Math.max(halfHeight, Math.abs(relative.dot(up)))
-      halfDepth = Math.max(halfDepth, Math.abs(relative.dot(forward)))
-    })
-
-    const vFov = THREE.MathUtils.degToRad(camera.fov)
-    const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * camera.aspect)
-    const distanceForWidth = halfWidth / Math.max(Math.tan(hFov * 0.5), 1e-5)
-    const distanceForHeight = halfHeight / Math.max(Math.tan(vFov * 0.5), 1e-5)
-    const fitDistance = Math.max(distanceForWidth, distanceForHeight, halfDepth + 0.1)
-    const margin = 1.08
-    const distance = fitDistance * margin
-
-    const size = box.getSize(new THREE.Vector3())
-    const radius = Math.max(size.length() * 0.5, 0.1)
-    const cameraPosition = center.clone().addScaledVector(forward, distance)
-    camera.position.copy(cameraPosition)
-    camera.near = Math.max(0.01, distance - radius * 1.5)
-    camera.far = Math.max(100, distance + radius * 1.5)
-    camera.lookAt(center)
-    camera.updateProjectionMatrix()
-
-  }
-
-  const width = Math.max(1, Math.round(options.width))
-  const height = Math.max(1, Math.round(options.height))
-
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
-  renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.shadowMap.enabled = true
-  renderer.setPixelRatio(1)
-  renderer.setSize(width, height, false)
-  renderer.setClearColor(0x000000, 0)
-
-  const scene = new THREE.Scene()
-  scene.background = null
-  const camera = new THREE.PerspectiveCamera(45, width / Math.max(height, 1), 0.1, 1000)
-
-  const ambient = new THREE.AmbientLight(0xffffff, 1.5)
-  const directional = new THREE.DirectionalLight(0xffffff, 2)
-  directional.position.set(5, 10, 7.5)
-  const fill = new THREE.DirectionalLight(0xffffff, 1)
-  fill.position.set(-5, 2, -6)
-
-  scene.add(ambient)
-  scene.add(directional)
-  scene.add(fill)
-  scene.add(wallObject)
-
-  fitCamera(camera, wallObject)
-  renderer.render(scene, camera)
-
-  const dataUrl = renderer.domElement.toDataURL('image/png')
-
-  scene.remove(wallObject)
-  scene.remove(ambient)
-  scene.remove(directional)
-  scene.remove(fill)
-  disposeObject(wallObject)
-
-  renderer.dispose()
-  if (typeof renderer.forceContextLoss === 'function') {
-    renderer.forceContextLoss()
-  }
-
+  const dataUrl = renderObjectThumbnailDataUrl({
+    object: wallObject,
+    width: options.width,
+    height: options.height,
+  })
+  logWallPresetPreview('thumbnail render complete', {
+    dataUrlLength: dataUrl.length,
+    hasRenderableMesh: hasRenderableMesh(wallObject),
+  })
+  disposeThumbnailObject(wallObject, {
+    preserveMeshUserDataFlag: WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY,
+  })
   return dataUrl
 }

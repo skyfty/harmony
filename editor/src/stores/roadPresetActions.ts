@@ -1,4 +1,6 @@
+import * as THREE from 'three'
 import type {
+  SceneMaterialTextureRef,
   SceneNode,
   SceneNodeComponentState,
   SceneNodeMaterial,
@@ -7,6 +9,7 @@ import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH, clampRoadProps
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { extractExtension } from '@/utils/blob'
+import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
 import {
   ROAD_PRESET_FORMAT_VERSION,
   buildRoadComponentPatchFromPreset,
@@ -18,6 +21,7 @@ import {
 } from '@/utils/roadPreset'
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { buildRoadNodeMaterialsFromPreset } from '@/utils/roadPresetNodeMaterials'
+import { renderRoadPresetThumbnailDataUrl } from '@/utils/roadPresetThumbnail'
 
 type SharedMaterial = { id: string; name: string; type: string } & Record<string, unknown>
 
@@ -241,6 +245,73 @@ export function parseRoadPresetData(text: string): RoadPresetData {
 }
 
 export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
+  async function generateRoadPresetThumbnailDataUrl(
+    store: RoadPresetStoreLike,
+    presetData: RoadPresetData,
+  ): Promise<string | null> {
+    const assetCache = useAssetCacheStore()
+
+    const ensureAssetFile = async (assetId: string): Promise<File | null> => {
+      const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedId.length) {
+        return null
+      }
+
+      let file = assetCache.createFileFromCache(normalizedId)
+      if (file) {
+        return file
+      }
+
+      await assetCache.loadFromIndexedDb(normalizedId)
+      file = assetCache.createFileFromCache(normalizedId)
+      if (file) {
+        return file
+      }
+
+      const asset = store.getAsset(normalizedId)
+      if (!asset) {
+        return null
+      }
+
+      try {
+        await assetCache.downloaProjectAsset(asset)
+      } catch {
+        return null
+      }
+      return assetCache.createFileFromCache(normalizedId)
+    }
+
+    const resolveTexture = async (ref: SceneMaterialTextureRef) => {
+      const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+      if (!assetId) {
+        return null
+      }
+      const file = await ensureAssetFile(assetId)
+      if (!file) {
+        return null
+      }
+
+      const blobUrl = URL.createObjectURL(file)
+      try {
+        const loader = new THREE.TextureLoader()
+        const texture = await loader.loadAsync(blobUrl)
+        texture.name = ref.name ?? file.name ?? assetId
+        texture.needsUpdate = true
+        return texture
+      } finally {
+        URL.revokeObjectURL(blobUrl)
+      }
+    }
+
+    return await renderRoadPresetThumbnailDataUrl({
+      preset: presetData,
+      sharedMaterials: store.materials as any,
+      resolveTexture,
+      width: ASSET_THUMBNAIL_WIDTH,
+      height: ASSET_THUMBNAIL_HEIGHT,
+    })
+  }
+
   return {
     findRoadPresetAssetByFilename(store: RoadPresetStoreLike, filename: string): ProjectAsset | null {
       const normalized = typeof filename === 'string' ? filename.trim().toLowerCase() : ''
@@ -390,6 +461,13 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
         filename: fileName,
       })
 
+      let thumbnailDataUrl: string | null = null
+      try {
+        thumbnailDataUrl = await generateRoadPresetThumbnailDataUrl(store, presetData)
+      } catch (thumbnailError) {
+        console.warn('Failed to generate road preset thumbnail', thumbnailError)
+      }
+
       if (payload.assetId) {
         const existing = store.getAsset(assetId)
         if (!existing) {
@@ -403,6 +481,7 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
           name: sanitizedName,
           description: fileName,
           previewColor: deps.ROAD_PRESET_PREVIEW_COLOR,
+          thumbnail: thumbnailDataUrl ?? existing.thumbnail ?? null,
         }
         const categoryId = store.resolveConfigAssetSaveDirectoryId()
         const sourceMeta = existing.source
@@ -419,6 +498,7 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
         type: 'prefab',
         downloadUrl: assetId,
         previewColor: deps.ROAD_PRESET_PREVIEW_COLOR,
+        thumbnail: thumbnailDataUrl,
         description: fileName,
         gleaned: true,
         extension: extractExtension(fileName) ?? null,

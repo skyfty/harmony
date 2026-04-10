@@ -56,6 +56,15 @@ let controls: OrbitControls | null = null
 let animationHandle = 0
 let currentRoot: THREE.Object3D | null = null
 let loadToken = 0
+const WALL_PRESET_COMPONENT_LOG_PREFIX = '[WallFloorPresetPreview]'
+
+function logWallPresetComponent(message: string, payload?: Record<string, unknown>): void {
+  if (payload) {
+    console.info(WALL_PRESET_COMPONENT_LOG_PREFIX, message, payload)
+    return
+  }
+  console.info(WALL_PRESET_COMPONENT_LOG_PREFIX, message)
+}
 
 const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   resolveTexture: resolveMaterialTexture,
@@ -259,33 +268,44 @@ function clearScene(): void {
 async function ensureAssetFile(assetId: string): Promise<File | null> {
   let file = assetCacheStore.createFileFromCache(assetId)
   if (file) {
+    logWallPresetComponent('asset file resolved from memory cache', { assetId, fileName: file.name })
     return file
   }
 
   await assetCacheStore.loadFromIndexedDb(assetId)
   file = assetCacheStore.createFileFromCache(assetId)
   if (file) {
+    logWallPresetComponent('asset file restored from indexeddb', { assetId, fileName: file.name })
     return file
   }
 
   const asset = sceneStore.getAsset(assetId)
   if (!asset) {
+    logWallPresetComponent('asset metadata missing', { assetId })
     return null
   }
   await assetCacheStore.downloaProjectAsset(asset)
   const downloaded = assetCacheStore.createFileFromCache(assetId)
+  logWallPresetComponent('asset file downloaded', {
+    assetId,
+    downloaded: Boolean(downloaded),
+    fileName: downloaded?.name ?? null,
+  })
   return downloaded
 }
 
 async function loadModelObjectFromFile(file: File): Promise<THREE.Object3D | null> {
   const loader = new Loader()
+  logWallPresetComponent('model load start', { fileName: file.name, size: file.size })
   return await new Promise<THREE.Object3D | null>((resolve, reject) => {
     const handleLoaded = (object: THREE.Object3D | null) => {
       loader.removeEventListener('loaded', handleLoaded)
       if (!object) {
+        logWallPresetComponent('model load failed: empty object', { fileName: file.name })
         reject(new Error('模型加载失败'))
         return
       }
+      logWallPresetComponent('model load success', { fileName: file.name })
       resolve(prepareWallPreviewImportedObject(object))
     }
     loader.addEventListener('loaded', handleLoaded)
@@ -348,11 +368,19 @@ function buildDefaultFloorDefinition(preset: FloorPresetData): FloorDynamicMesh 
 }
 
 async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Object3D> {
+  logWallPresetComponent('build wall preview start', {
+    name: preset.name || null,
+    bodyAssetId: preset.wallProps.bodyAssetId ?? null,
+    headAssetId: preset.wallProps.headAssetId ?? null,
+    footAssetId: preset.wallProps.footAssetId ?? null,
+    cornerModelCount: Array.isArray(preset.wallProps.cornerModels) ? preset.wallProps.cornerModels.length : 0,
+  })
   const object = await buildWallPresetPreviewObject({
     preset,
     loadAssetMesh: async (assetId: string) => {
       const file = await ensureAssetFile(assetId)
       if (!file) {
+        logWallPresetComponent('build wall preview asset missing file', { assetId })
         return null
       }
       return await loadModelObjectFromFile(file)
@@ -361,6 +389,7 @@ async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Obj
   if (!object) {
     throw new Error('无法构建墙体预览对象')
   }
+  logWallPresetComponent('build wall preview success', { hasObject: true })
   return object
 }
 
@@ -399,6 +428,7 @@ async function loadPresetScene(): Promise<void> {
     emitDimensions(object)
   } catch (loadError) {
     if (token === loadToken) {
+      console.warn(WALL_PRESET_COMPONENT_LOG_PREFIX, 'loadPresetScene failed', loadError)
       error.value = (loadError as Error).message ?? '预览生成失败'
     }
   }
