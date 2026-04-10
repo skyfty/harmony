@@ -1834,8 +1834,8 @@ const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraContr
 const viewportSelectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const cameraPointerHintText = computed(() => (
   cameraControlMode.value === 'map'
-    ? '右键旋转 · 空白处左键拖拽平移 · 滚轮缩放'
-    : '中键旋转 · 右键平移 · 滚轮缩放'
+    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Shift+右拖 指定轨道中心'
+    : '中键旋转 · 右键平移 · 滚轮缩放 · Shift+中拖 指定轨道中心 · Shift+左键 对焦轨道'
 ))
 const cameraStatusZoomRatioText = computed(() => {
   const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
@@ -20561,6 +20561,11 @@ function handleViewportShortcut(event: KeyboardEvent) {
         handled = focusViewportSelection()
         break
       }
+      case 'KeyM': {
+        toggleViewportCameraControlMode()
+        handled = true
+        break
+      }
       default: {
         const tool = transformToolKeyMap.get(event.code)
         if (tool) {
@@ -21401,8 +21406,20 @@ defineExpose<SceneViewportHandle>({
               <span class="camera-status-hud__hint-text">{{ cameraPointerHintText }}</span>
             </div>
             <div class="camera-status-hud__hint-row">
-              <span class="camera-status-hud__hint-label">快捷键</span>
-              <span class="camera-status-hud__hint-text">方向键平移 · F 聚焦选中 · Shift+F 聚焦可见 · Alt+1..6 方向视角</span>
+              <span class="camera-status-hud__hint-label">工具</span>
+              <span class="camera-status-hud__hint-text">Q 选择 · W 移动 · E 旋转 · R 缩放</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">视角</span>
+              <span class="camera-status-hud__hint-text">方向键 平移 · F 聚焦选中 · Shift+F 聚焦可见 · Alt+3 顶视图 · Alt+1/2/4/5/6 方向视角</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">导航</span>
+              <span class="camera-status-hud__hint-text">按住 Alt / Space 临时导航模式 · 按住 Shift 顶点吸附并加速</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">操作</span>
+              <span class="camera-status-hud__hint-text">Escape 取消选择/操作 · Delete 删除选中 · M 切换相机模式</span>
             </div>
           </div>
         </Transition>
@@ -21750,8 +21767,8 @@ defineExpose<SceneViewportHandle>({
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
-  min-width: 280px;
-  max-width: min(380px, calc(100vw - 32px));
+  min-width: 320px;
+  max-width: min(480px, calc(100vw - 32px));
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
