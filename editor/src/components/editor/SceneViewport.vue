@@ -1791,6 +1791,12 @@ type DirectionalLightPivotEditState = {
 let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
+const VIEWPORT_COMPOSITION_EPSILON_PX = 0.5
+const viewportCompositionOffsetPx = new THREE.Vector2(Number.NaN, Number.NaN)
+const viewportCompositionOffsetTargetPx = new THREE.Vector2()
+let viewportCompositionUpdateFrame: number | null = null
+let viewportCompositionUpdateQueued = false
+let viewportCompositionUpdateForce = false
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const defaultCameraStatusDistance = new THREE.Vector3(
   DEFAULT_CAMERA_POSITION.x,
@@ -4653,6 +4659,83 @@ const {
 let viewportResizeObserver: ResizeObserver | null = null
 let transformToolbarResizeObserver: ResizeObserver | null = null
 let viewportToolbarResizeObserver: ResizeObserver | null = null
+
+function shouldApplyViewportCompositionOffset(): boolean {
+  return (panelVisibility.value.hierarchy && panelPlacement.value.hierarchy === 'docked')
+    || (panelVisibility.value.inspector && panelPlacement.value.inspector === 'docked')
+}
+
+function resolveViewportCompositionOffsetPx(out: THREE.Vector2 = viewportCompositionOffsetTargetPx): THREE.Vector2 {
+  out.set(0, 0)
+  if (typeof window === 'undefined' || !viewportEl.value || !shouldApplyViewportCompositionOffset()) {
+    return out
+  }
+
+  const rect = viewportEl.value.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) {
+    return out
+  }
+
+  out.x = window.innerWidth * 0.5 - (rect.left + rect.width * 0.5)
+  if (Math.abs(out.x) <= VIEWPORT_COMPOSITION_EPSILON_PX) {
+    out.x = 0
+  }
+  return out
+}
+
+function applyViewportCompositionOffset(force = false): void {
+  if (!mapControls) {
+    viewportCompositionOffsetPx.set(Number.NaN, Number.NaN)
+    return
+  }
+
+  const desiredOffsetPx = resolveViewportCompositionOffsetPx()
+  if (
+    !force
+    && Number.isFinite(viewportCompositionOffsetPx.x)
+    && Number.isFinite(viewportCompositionOffsetPx.y)
+    && viewportCompositionOffsetPx.distanceToSquared(desiredOffsetPx) <= VIEWPORT_COMPOSITION_EPSILON_PX * VIEWPORT_COMPOSITION_EPSILON_PX
+  ) {
+    return
+  }
+
+  viewportCompositionOffsetPx.copy(desiredOffsetPx)
+  if (Math.abs(desiredOffsetPx.x) <= VIEWPORT_COMPOSITION_EPSILON_PX && Math.abs(desiredOffsetPx.y) <= VIEWPORT_COMPOSITION_EPSILON_PX) {
+    mapControls.resetFocalOffset(false)
+    return
+  }
+
+  mapControls.setFocalOffsetByViewportPixels(desiredOffsetPx.x, desiredOffsetPx.y, false)
+}
+
+function scheduleViewportCompositionUpdate(force = false): void {
+  viewportCompositionUpdateForce = viewportCompositionUpdateForce || force
+  if (viewportCompositionUpdateQueued) {
+    return
+  }
+
+  viewportCompositionUpdateQueued = true
+  void nextTick(() => {
+    if (typeof window === 'undefined') {
+      viewportCompositionUpdateQueued = false
+      const shouldForce = viewportCompositionUpdateForce
+      viewportCompositionUpdateForce = false
+      applyViewportCompositionOffset(shouldForce)
+      return
+    }
+
+    if (viewportCompositionUpdateFrame !== null) {
+      window.cancelAnimationFrame(viewportCompositionUpdateFrame)
+    }
+    viewportCompositionUpdateFrame = window.requestAnimationFrame(() => {
+      viewportCompositionUpdateFrame = null
+      viewportCompositionUpdateQueued = false
+      const shouldForce = viewportCompositionUpdateForce
+      viewportCompositionUpdateForce = false
+      applyViewportCompositionOffset(shouldForce)
+    })
+  })
+}
 
 let pointerTrackingState: PointerTrackingState | null = null
 // debugHoverHit removed
@@ -11484,6 +11567,7 @@ function resetCameraView() {
   refreshSceneCsmFrustums()
 
   mapControls.setLookAt(position, target, false)
+  applyViewportCompositionOffset(true)
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(target) / 10)
   syncControlsConstraintsAndSpeeds()
   updateCameraStatusDistance()
@@ -11516,7 +11600,11 @@ const cameraResetDirectionController = createCameraResetDirectionController({
 })
 
 function resetCameraToSelectionDirection(direction: CameraResetDirection): boolean {
-  return cameraResetDirectionController.resetCameraToSelectionDirection(direction)
+  const handled = cameraResetDirectionController.resetCameraToSelectionDirection(direction)
+  if (handled) {
+    applyViewportCompositionOffset(true)
+  }
+  return handled
 }
 
 function handleResetCameraDirection(direction: CameraResetDirection) {
@@ -11582,6 +11670,7 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
     new THREE.Vector3(state.target.x, clampedTargetY, state.target.z),
     false,
   )
+  applyViewportCompositionOffset(true)
   // Keep a best-effort scale hint so clip planes/controls stay usable even without an explicit focus action.
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
   syncControlsConstraintsAndSpeeds()
@@ -11799,6 +11888,7 @@ function applyCameraFocus(target: THREE.Vector3, radiusEstimate: number): boolea
 
   isApplyingCameraState = true
   mapControls.setLookAt(newPosition, focusTarget, false)
+  applyViewportCompositionOffset(true)
   syncControlsConstraintsAndSpeeds()
   isApplyingCameraState = false
 
@@ -11845,6 +11935,7 @@ function applyCameraTopViewFocus(target: THREE.Vector3, radiusEstimate: number):
 
   isApplyingCameraState = true
   mapControls.setLookAt(newPosition, focusTarget, false)
+  applyViewportCompositionOffset(true)
   syncControlsConstraintsAndSpeeds()
   isApplyingCameraState = false
 
@@ -12013,6 +12104,7 @@ function handleControlsChange() {
   }
 
   syncControlsConstraintsAndSpeeds()
+  applyViewportCompositionOffset(true)
   updateCameraStatusDistance()
   gizmoControls?.cameraUpdate()
   terrainGridController.markCameraDirty()
@@ -12027,7 +12119,23 @@ function updateCameraStatusDistance() {
 }
 
 function handleResetCameraStatusZoomClick() {
-  resetCameraView()
+  if (!camera || !mapControls) return
+  const target = mapControls.target.clone()
+  const dir = camera.position.clone().sub(target)
+  const currentDist = dir.length()
+  if (currentDist < 1e-6) return
+  dir.normalize().multiplyScalar(defaultCameraStatusDistance)
+  const newPosition = target.clone().add(dir)
+  isApplyingCameraState = true
+  camera.fov = DEFAULT_PERSPECTIVE_FOV
+  camera.updateProjectionMatrix()
+  refreshSceneCsmFrustums()
+  mapControls.setLookAt(newPosition, target, false)
+  applyViewportCompositionOffset(true)
+  lastCameraFocusRadius = Math.max(0.25, defaultCameraStatusDistance / 10)
+  syncControlsConstraintsAndSpeeds()
+  updateCameraStatusDistance()
+  isApplyingCameraState = false
 }
 
 function toggleViewportCameraControlMode() {
@@ -12233,6 +12341,7 @@ function applyCameraControlMode() {
     lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
   }
   syncControlsConstraintsAndSpeeds()
+  scheduleViewportCompositionUpdate(true)
 
   bindControlsToCamera(camera)
   if (gizmoControls && mapControls) {
@@ -12440,6 +12549,7 @@ function initScene() {
     }
     ;(mapControls as any)?.handleResize?.()
     gizmoControls?.update()
+    scheduleViewportCompositionUpdate(true)
   })
   resizeObserver.observe(viewportEl.value)
 
@@ -13006,6 +13116,7 @@ function animate() {
     camera.position.copy(cameraTransitionCurrentPosition)
     mapControls.target.copy(cameraTransitionCurrentTarget)
     mapControls.update()
+    applyViewportCompositionOffset(true)
 
     if (!previousApplying) {
       isApplyingCameraState = false
@@ -13225,9 +13336,11 @@ function disposeScene() {
 
   if (mapControls) {
     mapControls.removeEventListener('change', handleControlsChange)
+    mapControls.resetFocalOffset(false)
     mapControls.dispose()
   }
   mapControls = null
+  viewportCompositionOffsetPx.set(Number.NaN, Number.NaN)
   orbitDisableCount = 0
   isSelectDragOrbitDisabled = false
   // dispose building label meshes
@@ -20612,8 +20725,12 @@ onMounted(() => {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
   }
   scheduleToolbarUpdate()
+  scheduleViewportCompositionUpdate(true)
   if (viewportEl.value && typeof ResizeObserver !== 'undefined') {
-    viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+    viewportResizeObserver = new ResizeObserver(() => {
+      scheduleToolbarUpdate()
+      scheduleViewportCompositionUpdate(true)
+    })
     viewportResizeObserver.observe(viewportEl.value)
   }
   sceneStore.ensureCurrentSceneLoaded();
@@ -20673,6 +20790,12 @@ onBeforeUnmount(() => {
     viewportToolbarResizeObserver.disconnect()
     viewportToolbarResizeObserver = null
   }
+  if (viewportCompositionUpdateFrame !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(viewportCompositionUpdateFrame)
+    viewportCompositionUpdateFrame = null
+  }
+  viewportCompositionUpdateQueued = false
+  viewportCompositionUpdateForce = false
 })
 
 watch([sceneGraphStructureVersion, sceneNodePropertyVersion], () => {
@@ -20704,6 +20827,7 @@ watch(
   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
   () => {
     scheduleToolbarUpdate()
+    scheduleViewportCompositionUpdate(true)
   }
 )
 
@@ -20711,6 +20835,7 @@ watch(
   () => [panelVisibility.value.inspector, panelPlacement.value.inspector],
   () => {
     scheduleToolbarUpdate()
+    scheduleViewportCompositionUpdate(true)
   }
 )
 

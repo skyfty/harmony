@@ -22,9 +22,11 @@ function ensureInstalled() {
 const TARGET_EPSILON = 1e-8
 const POSITION_EPSILON = 1e-8
 const PLANAR_DIRECTION_EPSILON = 1e-10
+const FOCAL_OFFSET_EPSILON = 1e-8
 
 export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneViewportCameraControlEventMap> {
   readonly target = new THREE.Vector3()
+  readonly focalOffset = new THREE.Vector3()
 
   private readonly controls: CameraControls
   private readonly currentTarget = new THREE.Vector3()
@@ -337,6 +339,36 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     this.dispatchEvent({ type: 'change' })
   }
 
+  setFocalOffset(offset: THREE.Vector3, enableTransition = false) {
+    this.controls.getFocalOffset(this.planarPanDelta, false)
+    if (this.planarPanDelta.distanceToSquared(offset) <= FOCAL_OFFSET_EPSILON) {
+      return false
+    }
+    this.controls.setFocalOffset(offset.x, offset.y, offset.z, enableTransition)
+    this.syncFromControls()
+    this.dispatchEvent({ type: 'change' })
+    return true
+  }
+
+  setFocalOffsetByViewportPixels(horizontalPx: number, verticalPx: number, enableTransition = false) {
+    const target = this.getTarget(this.planarPanTarget, false)
+    const position = this.getPosition(this.planarPanPosition, false)
+    const distance = Math.max(position.distanceTo(target), 1e-3)
+    const unitsPerPixel = this.computeWorldUnitsPerPixel(distance)
+    return this.setFocalOffset(
+      this.planarPanDelta.set(
+      -horizontalPx * unitsPerPixel,
+      -verticalPx * unitsPerPixel,
+      this.focalOffset.z,
+      ),
+      enableTransition,
+    )
+  }
+
+  resetFocalOffset(enableTransition = false) {
+    return this.setFocalOffset(this.planarPanDelta.set(0, 0, 0), enableTransition)
+  }
+
   getTarget(out: THREE.Vector3, receiveEndValue = false): THREE.Vector3 {
     this.controls.getTarget(out, receiveEndValue)
     return out
@@ -344,6 +376,11 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
 
   getPosition(out: THREE.Vector3, receiveEndValue = false): THREE.Vector3 {
     this.controls.getPosition(out, receiveEndValue)
+    return out
+  }
+
+  getFocalOffset(out: THREE.Vector3, receiveEndValue = false): THREE.Vector3 {
+    this.controls.getFocalOffset(out, receiveEndValue)
     return out
   }
 
@@ -462,12 +499,15 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   private syncFromControls(): boolean {
     const previousTarget = new THREE.Vector3().copy(this.target)
     const previousPosition = new THREE.Vector3().copy(this.lastCameraPosition)
+    const previousFocalOffset = new THREE.Vector3().copy(this.focalOffset)
 
     this.controls.getTarget(this.currentTarget, false)
+    this.controls.getFocalOffset(this.focalOffset, false)
     this.target.copy(this.currentTarget)
     this.lastCameraPosition.copy(this.controls.camera.position)
 
     return previousTarget.distanceToSquared(this.target) > TARGET_EPSILON
+      || previousFocalOffset.distanceToSquared(this.focalOffset) > FOCAL_OFFSET_EPSILON
       || previousPosition.distanceToSquared(this.lastCameraPosition) > POSITION_EPSILON
   }
 }

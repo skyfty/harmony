@@ -6,7 +6,7 @@
         density="compact"
         hide-details
         color="primary"
-        label="Enable CSM"
+        label="CSM"
         @update:model-value="handleCsmEnabledUpdate"
       />
       <v-switch
@@ -14,7 +14,7 @@
         density="compact"
         hide-details
         color="primary"
-        label="Enable Shadows"
+        label="Shadows"
         @update:model-value="handleCsmShadowEnabledUpdate"
       />
     </div>
