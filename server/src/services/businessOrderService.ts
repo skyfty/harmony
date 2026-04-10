@@ -331,11 +331,16 @@ export async function listBusinessOrders(params: {
   keyword?: string
   topStage?: string
   contractStatus?: string
+  userId?: string
 }): Promise<{ data: BusinessOrderView[]; total: number; page: number; pageSize: number }> {
   const page = Math.max(Number(params.page) || 1, 1)
   const pageSize = Math.min(Math.max(Number(params.pageSize) || 20, 1), 100)
   const skip = (page - 1) * pageSize
   const filter: Record<string, unknown> = {}
+  const userObjectId = ensureObjectId(normalizeNullableString(params.userId), 'Invalid user id')
+  if (userObjectId) {
+    filter.userId = userObjectId
+  }
   if (params.keyword && params.keyword.trim()) {
     const regex = new RegExp(params.keyword.trim(), 'i')
     filter.$or = [{ orderNumber: regex }, { scenicName: regex }, { addressText: regex }, { contactPhone: regex }]
@@ -345,7 +350,12 @@ export async function listBusinessOrders(params: {
   }
   if (params.contractStatus && ['unsigned', 'signed'].includes(params.contractStatus)) {
     const users = await AppUserModel.find({ contractStatus: params.contractStatus }, { _id: 1 }).lean().exec()
-    filter.userId = { $in: users.map((user: any) => user._id) }
+    const contractUserIds = users.map((user: any) => user._id)
+    if (userObjectId) {
+      filter.userId = contractUserIds.some((id: any) => String(id) === String(userObjectId)) ? userObjectId : { $in: [] }
+    } else {
+      filter.userId = { $in: contractUserIds }
+    }
   }
   const [rows, total, categoryNameMap] = await Promise.all([
     BusinessOrderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(pageSize).lean().exec(),

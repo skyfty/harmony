@@ -67,6 +67,7 @@ export interface ListBusinessOrdersParams {
   page?: number;
   pageSize?: number;
   topStage?: '' | BusinessOrderTopStage;
+  userId?: string;
 }
 
 function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
