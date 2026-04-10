@@ -1,7 +1,3 @@
-import { getBusinessConfig, updateBusinessConfig } from '@/controllers/admin/businessConfigController'
-// 商务配置
-adminRouter.get('/business-config', requireAnyPermission(['admin:super']), getBusinessConfig)
-adminRouter.put('/business-config', requireAnyPermission(['admin:super']), updateBusinessConfig)
 import Router from 'koa-router'
 import { requireAdminAuth } from '@/middleware/authDomains'
 import { requireAnyPermission } from '@/middleware/permission'
@@ -104,6 +100,10 @@ import {
   markBusinessOrderSignedHandler,
   updateBusinessOrderHandler,
 } from '@/controllers/admin/businessOrderController'
+import {
+  getBusinessConfigHandler,
+  updateBusinessConfigHandler,
+} from '@/controllers/admin/businessConfigController'
 import {
   createAppUser,
   deleteAppUser,
@@ -321,7 +321,9 @@ adminRouter.post('/orders/:id/refund/reject', requireAnyPermission(['order:write
 adminRouter.delete('/orders/:id', requireAnyPermission(['order:write']), deleteOrder)
 
 adminRouter.get('/business-orders', requireAnyPermission(['order:read']), listBusinessOrdersHandler)
+adminRouter.get('/business-config', requireAnyPermission(['order:read']), getBusinessConfigHandler)
 adminRouter.get('/business-orders/:id', requireAnyPermission(['order:read']), getBusinessOrderHandler)
+adminRouter.put('/business-config', requireAnyPermission(['order:write']), updateBusinessConfigHandler)
 adminRouter.put('/business-orders/:id', requireAnyPermission(['order:write']), updateBusinessOrderHandler)
 adminRouter.post('/business-orders/:id/sign', requireAnyPermission(['order:write']), markBusinessOrderSignedHandler)
 adminRouter.post('/business-orders/:id/production/advance', requireAnyPermission(['order:write']), advanceBusinessOrderProductionHandler)

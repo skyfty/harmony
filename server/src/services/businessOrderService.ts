@@ -2,7 +2,7 @@ import { Types } from 'mongoose'
 import { BusinessOrderModel } from '@/models/BusinessOrder'
 import { AppUserModel } from '@/models/AppUser'
 import { listSceneSpotCategories } from '@/services/sceneSpotCategoryService'
-import { getBusinessConfig } from './businessConfigService'
+import { getBusinessContactPhone } from '@/services/businessConfigService'
 import type {
   BusinessOrderDocument,
   BusinessOrderProductionNode,
@@ -78,8 +78,6 @@ export interface CreateBusinessOrderInput {
   sceneSpotCategoryId?: string | null
   specialLandscapeTags?: string[]
 }
-
-// const DEFAULT_BUSINESS_CONTACT_PHONE = '400-000-0000'
 
 export const BUSINESS_SPECIAL_LANDSCAPE_OPTIONS: BusinessLandscapeOption[] = [
   { code: 'light-show', label: '灯光秀' },
@@ -248,11 +246,11 @@ async function mapBusinessOrder(order: any, dependencies?: {
 }
 
 export async function getBusinessOrderBootstrap(userId: string): Promise<BusinessOrderBootstrapData> {
-  const [user, latestOrder, categories, businessConfig] = await Promise.all([
+  const [user, latestOrder, categories, businessContactPhone] = await Promise.all([
     AppUserModel.findById(userId, { contractStatus: 1 }).lean().exec(),
     BusinessOrderModel.findOne({ userId }).sort({ createdAt: -1 }).lean().exec(),
     listSceneSpotCategories(),
-    getBusinessConfig(),
+    getBusinessContactPhone(),
   ])
   if (!user) {
     throw new Error('User not found')
@@ -264,7 +262,7 @@ export async function getBusinessOrderBootstrap(userId: string): Promise<Busines
     latestOrder: latestOrder ? await mapBusinessOrder(latestOrder, { categoryNameMap, userMap }) : null,
     scenicTypes: categories.filter((item) => item.enabled).map((item) => ({ id: item.id, name: item.name })),
     specialLandscapeOptions: BUSINESS_SPECIAL_LANDSCAPE_OPTIONS,
-    businessContactPhone: businessConfig?.contactPhone || '',
+    businessContactPhone,
   }
 }
 
@@ -286,6 +284,7 @@ export async function createBusinessOrder(input: CreateBusinessOrderInput): Prom
   if (!user) {
     throw new Error('User not found')
   }
+  const businessContactPhone = await getBusinessContactPhone()
 
   const existingOrder = await BusinessOrderModel.findOne({
     userId: input.userId,
@@ -312,7 +311,7 @@ export async function createBusinessOrder(input: CreateBusinessOrderInput): Prom
     specialLandscapeTags: ensureLandscapeTags(input.specialLandscapeTags),
     topStage: 'signing',
     productionProgress: buildProductionTemplate(),
-    contactPhoneForBusiness: DEFAULT_BUSINESS_CONTACT_PHONE,
+    contactPhoneForBusiness: businessContactPhone,
     quotedAt: now,
   })
   const view = await mapBusinessOrder(created.toObject(), {
@@ -465,7 +464,9 @@ export async function updateBusinessOrderAdminFields(id: string, payload: {
     order.notes = normalizeNullableString(payload.notes)
   }
   if (payload.contactPhoneForBusiness !== undefined) {
-    order.contactPhoneForBusiness = normalizeNullableString(payload.contactPhoneForBusiness) ?? DEFAULT_BUSINESS_CONTACT_PHONE
+    order.contactPhoneForBusiness =
+      normalizeNullableString(payload.contactPhoneForBusiness) ??
+      (await getBusinessContactPhone())
   }
   await order.save()
   return (await getBusinessOrderById(String(order._id))) as BusinessOrderView

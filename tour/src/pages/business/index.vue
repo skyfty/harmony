@@ -264,8 +264,13 @@ async function pickLocation() {
 }
 
 function contactBusiness() {
+  const phoneNumber = currentOrder.value?.contactPhoneForBusiness || bootstrap.businessContactPhone;
+  if (!phoneNumber) {
+    uni.showToast({ title: '暂无商务联系电话', icon: 'none' });
+    return;
+  }
   uni.makePhoneCall({
-    phoneNumber: bootstrap.businessContactPhone,
+    phoneNumber,
     fail: () => {
       uni.showToast({ title: '拨号失败', icon: 'none' });
     },

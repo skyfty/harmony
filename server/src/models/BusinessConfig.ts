@@ -1,13 +1,19 @@
-import mongoose, { Schema, Document } from 'mongoose';
+import { Schema, model } from 'mongoose'
 
-export interface IBusinessConfig extends Document {
-  contactPhone: string;
-  updatedAt: Date;
+export interface BusinessConfigDocument {
+  contactPhone: string
+  createdAt: Date
+  updatedAt: Date
 }
 
-const BusinessConfigSchema: Schema = new Schema<IBusinessConfig>({
-  contactPhone: { type: String, required: true },
-  updatedAt: { type: Date, default: Date.now },
-});
+const businessConfigSchema = new Schema<BusinessConfigDocument>(
+  {
+    contactPhone: { type: String, required: true, trim: true },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  },
+)
 
-export default mongoose.model<IBusinessConfig>('BusinessConfig', BusinessConfigSchema, 'business_config');
+export const BusinessConfigModel = model<BusinessConfigDocument>('BusinessConfig', businessConfigSchema, 'business_config')

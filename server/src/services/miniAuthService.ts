@@ -387,7 +387,7 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
       displayName: displayName || username,
       lastLoginSource: 'mini-test-bootstrap',
       status: 'active',
-      contractStatus: existing.contractStatus === 'signed' ? 'signed' : 'unsigned',
+      contractStatus: 'unsigned',
     })
     return
   }

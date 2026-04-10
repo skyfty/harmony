@@ -56,6 +56,11 @@ export interface BusinessOrderItem {
   };
 }
 
+export interface BusinessConfigItem {
+  contactPhone: string;
+  updatedAt: null | string;
+}
+
 export interface ListBusinessOrdersParams {
   contractStatus?: '' | 'signed' | 'unsigned';
   keyword?: string;
@@ -80,6 +85,14 @@ export async function listBusinessOrdersApi(params: ListBusinessOrdersParams) {
 
 export async function getBusinessOrderApi(id: string) {
   return requestClient.get<BusinessOrderItem>(`/admin/business-orders/${id}`);
+}
+
+export async function getBusinessConfigApi() {
+  return requestClient.get<BusinessConfigItem>('/admin/business-config');
+}
+
+export async function updateBusinessConfigApi(payload: { contactPhone: string }) {
+  return requestClient.put<BusinessConfigItem>('/admin/business-config', payload);
 }
 
 export async function updateBusinessOrderApi(id: string, payload: { contactPhoneForBusiness?: string; notes?: string }) {
