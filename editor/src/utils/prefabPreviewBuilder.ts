@@ -9,6 +9,7 @@ import { collectPrefabAssetReferences } from '@/stores/prefabActions'
 import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
 import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
 import type { SceneNode } from '@schema'
+import type { AssetCacheEntry } from '@schema/assetCache'
 import {
   clampSceneNodeInstanceLayout,
   getInstanceLayoutCount,
@@ -19,6 +20,11 @@ import { getCachedModelObject } from '@schema/modelObjectCache'
 import { hashString } from '@schema/stableSerialize'
 import { PinnedLruCache, cloneObject3DShared } from '@/utils/prefabPreviewCache'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
+import {
+  buildFloorPreviewObjectFromNode,
+  buildWallPreviewObjectFromNode,
+  createPreviewMaterialOverrideOptions,
+} from '@/utils/wallFloorPreviewBuilder'
 
 type AssetCacheStoreLike = {
   hasCache: (assetId: string) => boolean
@@ -188,6 +194,142 @@ function createAssetLoader(assetCacheStore: AssetCacheStoreLike, cacheOnly: bool
   return cacheOnly ? new CacheOnlyAssetLoader(cache) : new AssetLoader(cache)
 }
 
+function collectWallFloorPreviewNodes(root: SceneNode | null | undefined): SceneNode[] {
+  const nodes: SceneNode[] = []
+  const stack: SceneNode[] = root ? [root] : []
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.dynamicMesh?.type === 'Wall' || node.dynamicMesh?.type === 'Floor') {
+      nodes.push(node)
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        const child = node.children[index]
+        if (child) {
+          stack.push(child)
+        }
+      }
+    }
+  }
+  return nodes
+}
+
+function findNodeRootObject(root: THREE.Object3D, nodeId: string): THREE.Object3D | null {
+  let matched: THREE.Object3D | null = null
+  root.traverse((object) => {
+    if (matched) {
+      return
+    }
+    const currentNodeId = (object as any).userData?.nodeId as string | undefined
+    if (currentNodeId !== nodeId) {
+      return
+    }
+    const parentNodeId = (object.parent as any)?.userData?.nodeId as string | undefined
+    if (parentNodeId === nodeId) {
+      return
+    }
+    matched = object
+  })
+  return matched
+}
+
+function extractChildNodeRoots(nodeObject: THREE.Object3D, nodeId: string): THREE.Object3D[] {
+  const childNodeRoots: THREE.Object3D[] = []
+  for (const child of [...nodeObject.children]) {
+    const childNodeId = (child as any).userData?.nodeId as string | undefined
+    if (!childNodeId || childNodeId === nodeId) {
+      continue
+    }
+    nodeObject.remove(child)
+    childNodeRoots.push(child)
+  }
+  return childNodeRoots
+}
+
+function replaceNodeRootObject(root: THREE.Object3D, currentObject: THREE.Object3D, replacement: THREE.Object3D): THREE.Object3D {
+  const currentNodeId = (currentObject as any).userData?.nodeId as string | undefined
+  const childNodeRoots = currentNodeId ? extractChildNodeRoots(currentObject, currentNodeId) : []
+  childNodeRoots.forEach((child) => replacement.add(child))
+
+  const parent = currentObject.parent
+  if (!parent) {
+    return replacement
+  }
+
+  const index = parent.children.indexOf(currentObject)
+  parent.remove(currentObject)
+  parent.add(replacement)
+  const insertedIndex = parent.children.indexOf(replacement)
+  if (index >= 0 && insertedIndex >= 0 && insertedIndex !== index) {
+    parent.children.splice(insertedIndex, 1)
+    parent.children.splice(index, 0, replacement)
+  }
+  return root
+}
+
+function createFileFromAssetEntry(assetId: string, entry: AssetCacheEntry | null): File | null {
+  if (!entry?.blob) {
+    return null
+  }
+  const fileName = typeof entry.filename === 'string' && entry.filename.trim().length ? entry.filename.trim() : assetId
+  const mimeType = entry.mimeType ?? entry.blob.type ?? 'application/octet-stream'
+  try {
+    return new File([entry.blob], fileName, { type: mimeType })
+  } catch (_error) {
+    return null
+  }
+}
+
+async function upgradeWallFloorPreviewNodes(options: {
+  root: THREE.Object3D
+  rootNode: SceneNode | null
+  resourceCache: ResourceCache
+}): Promise<THREE.Object3D> {
+  const previewNodes = collectWallFloorPreviewNodes(options.rootNode)
+  if (!previewNodes.length) {
+    return options.root
+  }
+
+  const resolveAssetFile = async (assetId: string): Promise<File | null> => {
+    const entry = await options.resourceCache.acquireAssetEntry(assetId)
+    return createFileFromAssetEntry(assetId, entry)
+  }
+  const materialOverrideOptions = createPreviewMaterialOverrideOptions(resolveAssetFile, (message) => {
+    if (message) {
+      console.warn('[PrefabPreviewBuilder] material warning:', message)
+    }
+  })
+
+  let nextRoot = options.root
+  for (const node of previewNodes) {
+    const currentObject = findNodeRootObject(nextRoot, node.id)
+    if (!currentObject) {
+      continue
+    }
+
+    const replacement = node.dynamicMesh?.type === 'Wall'
+      ? await buildWallPreviewObjectFromNode({
+          node,
+          resolveAssetFile,
+          materialOverrideOptions,
+        })
+      : await buildFloorPreviewObjectFromNode({
+          node,
+          materialOverrideOptions,
+        })
+
+    if (!replacement) {
+      continue
+    }
+    nextRoot = replaceNodeRootObject(nextRoot, currentObject, replacement)
+  }
+
+  return nextRoot
+}
+
 function applyInstanceLayoutPreview(root: THREE.Object3D, nodeIndex: Map<string, SceneNode>): void {
   const instancedGroupName = '__harmonyPreviewInstanceLayout'
 
@@ -310,13 +452,18 @@ async function buildPrefabPreviewBaseRoot(options: PrefabPreviewOptions, fileTex
     reportDownloadProgress: undefined,
   })
 
-  const { root } = await buildSceneGraph(document, resourceCache, buildOptions)
-
-  // Apply preview-only post-processing for instance layouts.
   const nodeIndex = buildNodeIndex(rootNode)
-  applyInstanceLayoutPreview(root, nodeIndex)
+  const built = await buildSceneGraph(document, resourceCache, buildOptions)
+  const upgradedRoot = await upgradeWallFloorPreviewNodes({
+    root: built.root,
+    rootNode,
+    resourceCache,
+  })
 
-  return { key, assetId, baseRoot: root }
+  // Apply preview-only post-processing for instance layouts after wall/floor replacement.
+  applyInstanceLayoutPreview(upgradedRoot, nodeIndex)
+
+  return { key, assetId, baseRoot: upgradedRoot }
 }
 
 export async function acquirePrefabPreviewRoot(options: PrefabPreviewOptions): Promise<PrefabPreviewHandle> {
