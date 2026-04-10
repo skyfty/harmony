@@ -90,6 +90,18 @@ interface ParsedSubmesh {
   material: MeshMaterial
 }
 
+function computeParsedSubmeshBounds(submeshes: readonly ParsedSubmesh[]): Box3 {
+  const bounds = new Box3().makeEmpty()
+  for (const submesh of submeshes) {
+    const geometryBounds = submesh.geometry.boundingBox ?? (submesh.geometry.computeBoundingBox(), submesh.geometry.boundingBox)
+    if (!geometryBounds || geometryBounds.isEmpty()) {
+      continue
+    }
+    bounds.union(geometryBounds)
+  }
+  return bounds
+}
+
 interface InstancedMeshHandle {
   id: string
   mesh: InstancedMesh
@@ -516,9 +528,9 @@ function mapEntryToGroup(entry: ModelAssetEntry): ModelInstanceGroup {
 
 function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEntry {
   prepared.updateMatrixWorld(true)
-  const boundingBox = new Box3().setFromObject(prepared)
-  const radius = boundingBox.getSize(new Vector3()).length() * 0.5
   const submeshes = extractSubmeshes(prepared)
+  const boundingBox = computeParsedSubmeshBounds(submeshes)
+  const radius = boundingBox.getSize(new Vector3()).length() * 0.5
 
   const initialCapacity = modelObjectCacheConfig.defaultInstanceCapacity
 

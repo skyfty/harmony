@@ -916,7 +916,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         commitOptions: { updateNodes: false },
       })
 
-      if (payload.select !== false) {
+        if (payload.select === true) {
         store.selectAsset(registered.id)
       }
 

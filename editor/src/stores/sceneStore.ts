@@ -11397,7 +11397,7 @@ export const useSceneStore = defineStore('scene', {
     ): Promise<ProjectAsset> {
       return prefabActions.registerPrefabAssetFromData(this as unknown as PrefabStoreLike, prefabData, serialized, options)
     },
-    async saveNodePrefab(nodeId: string, options: { assetId?: string; name?: string } = {}): Promise<ProjectAsset> {
+    async saveNodePrefab(nodeId: string, options: { assetId?: string; name?: string; select?: boolean } = {}): Promise<ProjectAsset> {
       return prefabActions.saveNodePrefab(this as unknown as PrefabStoreLike, nodeId, options)
     },
     async importPrefabAssetFromClipboard(serialized: string): Promise<ProjectAsset | null> {

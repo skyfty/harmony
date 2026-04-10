@@ -21,13 +21,14 @@ function getErrorStatus(error: unknown): number {
 }
 
 export async function listBusinessOrdersHandler(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '20', keyword, topStage, contractStatus } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '20', keyword, topStage, contractStatus, userId } = ctx.query as Record<string, string>
   const result = await listBusinessOrders({
     page: Number(page),
     pageSize: Number(pageSize),
     keyword,
     topStage,
     contractStatus,
+    userId,
   })
   ctx.body = result
 }

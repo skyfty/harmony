@@ -29,7 +29,6 @@ import {
   setWallInstancedBindingsOnObject,
   syncWallDragBindingMatrices,
 } from '@schema/wallInstancing'
-import { resolveWallVerticalLayout } from '@schema/wallVerticalLayout'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
@@ -110,6 +109,7 @@ export function computeWallDynamicMeshSignature(
     wallRenderMode?: 'stretch' | 'repeatInstances'
     headAssetHeight?: number
     footAssetHeight?: number
+    cornerModels?: WallRenderOptions['cornerModels']
   } = {},
 ): string {
   const serialized = stableSerialize({
@@ -119,6 +119,7 @@ export function computeWallDynamicMeshSignature(
     wallRenderMode: options.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
     headAssetHeight: Number.isFinite(options.headAssetHeight) ? Number(options.headAssetHeight) : 0,
     footAssetHeight: Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : 0,
+    cornerModels: Array.isArray(options.cornerModels) ? options.cornerModels : [],
   })
   return hashString(serialized)
 }
@@ -295,7 +296,6 @@ export function createWallRenderer(options: WallRendererOptions) {
           getAssetBounds: getWallAssetBounds,
         })
       : null
-
     const bindings: WallDragBindingEntry[] = []
     for (const binding of plan?.bindings ?? []) {
       if (binding.sourceAssetId && binding.repeatScaleU && binding.sourceAssetId !== binding.assetId) {
@@ -780,6 +780,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode: renderOptions.wallRenderMode,
       headAssetHeight: renderOptions.headAssetHeight,
       footAssetHeight: renderOptions.footAssetHeight,
+      cornerModels: renderOptions.cornerModels,
     })
     wallGroup.userData.__harmonyWallBodyMaterialConfigId = renderOptions.bodyMaterialConfigId ?? null
     container.add(wallGroup)
@@ -805,6 +806,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode: options.wallRenderMode,
       headAssetHeight: options.headAssetHeight,
       footAssetHeight: options.footAssetHeight,
+      cornerModels: options.cornerModels,
     })
     const nextBodyMaterialConfigId = options.bodyMaterialConfigId ?? null
     if (
@@ -963,25 +965,12 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode,
       repeatInstanceStep: wallProps?.repeatInstanceStep,
       bodyMaterialConfigId: resolveWallBodyMaterialConfigIdForRender(definition, wallProps),
+      cornerModels: Array.isArray(wallProps?.cornerModels) ? wallProps.cornerModels : [],
       headAssetHeight: wallProps?.headAssetHeight,
       footAssetHeight: wallProps?.footAssetHeight,
     })
 
     const userData = container.userData ?? (container.userData = {})
-    const wallLayout = wallProps
-      ? resolveWallVerticalLayout(wallProps.height, {
-          headAssetHeight: wallProps.headAssetHeight,
-          footAssetHeight: wallProps.footAssetHeight,
-        })
-      : null
-    console.debug('[wall-layout] sync', {
-      nodeId: node.id,
-      renderPath: wantsInstancing ? (hasProceduralBodyFallback ? 'instanced+procedural-body' : 'instanced') : 'procedural',
-      wallHeight: wallProps?.height,
-      headAssetHeight: wallProps?.headAssetHeight,
-      footAssetHeight: wallProps?.footAssetHeight,
-      layout: wallLayout,
-    })
 
     // ============================
     // 1) 空气墙：强制使用程序墙体（并应用半透明材质覆盖）

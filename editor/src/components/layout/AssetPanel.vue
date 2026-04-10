@@ -3018,7 +3018,7 @@ async function handleSceneNodeDrop(nodeId: string): Promise<void> {
   if (!isNormalSceneNode(node)) {
     throw new Error('该节点无法保存为预制件')
   }
-  await sceneStore.saveNodePrefab(nodeId)
+  await sceneStore.saveNodePrefab(nodeId, { select: false })
   const label = node.name?.trim().length ? node.name.trim() : 'Prefab'
   showDropFeedback('success', `Prefab "${label}" saved to assets`)
 }

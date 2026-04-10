@@ -174,7 +174,7 @@ async function performSaveFloorPreset(overwriteAssetId: string | null): Promise<
       name,
       nodeId: selectedNodeId.value ?? null,
       assetId: overwriteAssetId,
-      select: true,
+      select: false,
     })
     savePresetDialogVisible.value = false
     overwriteConfirmDialogVisible.value = false
