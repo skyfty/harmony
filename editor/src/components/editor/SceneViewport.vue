@@ -5,9 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, t
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { offsetPolyline } from '../../utils/overlayPlacementUtils'
-import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
-import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
-import { CameraControlsMap } from '@/utils/CameraControlsMap'
+import { SceneViewportCameraControls } from '@/utils/SceneViewportCameraControls'
 import {
   isNodeExcludedFromSelectionBoundingBoxFallback,
   mergeUserDataWithDynamicMeshBuildShape,
@@ -1016,7 +1014,7 @@ let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let mapControls: CameraControlsOrbit | CameraControlsTrackball | CameraControlsMap | null = null
+let mapControls: SceneViewportCameraControls | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
 let gizmoControls: ViewportGizmo | null = null
@@ -4660,6 +4658,7 @@ type MiddleClickSessionState = {
   startX: number
   startY: number
   moved: boolean
+  planarPanActive: boolean
 }
 
 let middleClickSessionState: MiddleClickSessionState | null = null
@@ -4672,6 +4671,7 @@ type LeftEmptyClickSessionState = {
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
+  leftPanActive: boolean
 }
 
 let leftEmptyClickSessionState: LeftEmptyClickSessionState | null = null
@@ -11394,15 +11394,13 @@ function resetCameraView() {
   const target = new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, targetY, DEFAULT_CAMERA_TARGET.z)
 
   isApplyingCameraState = true
-  camera.position.copy(position)
   camera.fov = DEFAULT_PERSPECTIVE_FOV
   camera.updateProjectionMatrix()
   refreshSceneCsmFrustums()
 
-  mapControls.target.copy(target)
+  mapControls.setLookAt(position, target, false)
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(target) / 10)
   syncControlsConstraintsAndSpeeds()
-  mapControls.update()
   updateCameraStatusDistance()
   isApplyingCameraState = false
 
@@ -11479,24 +11477,27 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
 
   if (!camera) return
 
-  isApplyingCameraState = true
-  camera.position.set(state.position.x, state.position.y, state.position.z)
-  if (camera.position.y < MIN_CAMERA_HEIGHT) {
-    camera.position.y = MIN_CAMERA_HEIGHT
+  const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
+  const clampedPosition = new THREE.Vector3(state.position.x, state.position.y, state.position.z)
+  if (clampedPosition.y < MIN_CAMERA_HEIGHT) {
+    clampedPosition.y = MIN_CAMERA_HEIGHT
   }
 
+  isApplyingCameraState = true
   if (camera instanceof THREE.PerspectiveCamera) {
     camera.fov = state.fov
     camera.updateProjectionMatrix()
     refreshSceneCsmFrustums()
   }
 
-  const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
-  mapControls.target.set(state.target.x, clampedTargetY, state.target.z)
+  mapControls.setLookAt(
+    clampedPosition,
+    new THREE.Vector3(state.target.x, clampedTargetY, state.target.z),
+    false,
+  )
   // Keep a best-effort scale hint so clip planes/controls stay usable even without an explicit focus action.
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
   syncControlsConstraintsAndSpeeds()
-  mapControls.update()
   updateCameraStatusDistance()
   gizmoControls?.cameraUpdate()
   isApplyingCameraState = false
@@ -11581,8 +11582,7 @@ function syncControlsConstraintsAndSpeeds() {
   mapControls.rotateSpeed = 0.6 * speedScale
   mapControls.zoomSpeed = 0.6
   mapControls.panSpeed = 1 * speedScale
-  // @ts-ignore
-  ;(mapControls as any).keyPanSpeed = 7.5 * speedScale
+  mapControls.keyPanSpeed = 7.5 * speedScale
 
   // debug logs removed
 
@@ -11629,15 +11629,13 @@ function applyCameraFocus(target: THREE.Vector3, radiusEstimate: number): boolea
     : new THREE.Vector3(1, 0.65, 1).normalize()
   const newPosition = focusTarget.clone().addScaledVector(direction, desiredDistance)
 
-  isApplyingCameraState = true
-  camera.position.copy(newPosition)
-  if (camera.position.y < MIN_CAMERA_HEIGHT) {
-    camera.position.y = MIN_CAMERA_HEIGHT
+  if (newPosition.y < MIN_CAMERA_HEIGHT) {
+    newPosition.y = MIN_CAMERA_HEIGHT
   }
 
-  mapControls.target.copy(focusTarget)
+  isApplyingCameraState = true
+  mapControls.setLookAt(newPosition, focusTarget, false)
   syncControlsConstraintsAndSpeeds()
-  mapControls.update()
   isApplyingCameraState = false
 
   if (perspectiveCamera && camera !== perspectiveCamera) {
@@ -11971,27 +11969,18 @@ function applyCameraControlMode() {
   }
 
   const cameraControlMode = sceneStore.viewportSettings.cameraControlMode
-
-  const previousControls = mapControls
-  const previousTarget = previousControls ? previousControls.target.clone() : null
-  const previousEnabled = previousControls?.enabled ?? true
-
-  if (previousControls) {
-    previousControls.removeEventListener('change', handleControlsChange)
-    previousControls.dispose()
-  }
   clearShiftOrbitPivotSession()
 
   const domElement = canvasRef.value
-  mapControls = cameraControlMode === 'map'
-    ? new CameraControlsMap(camera, domElement)
-    : new CameraControlsOrbit(camera, domElement)
-  if (previousTarget) {
-    mapControls.target.copy(previousTarget)
-  } else {
+  if (!mapControls) {
+    mapControls = new SceneViewportCameraControls(camera, domElement)
     mapControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
+    mapControls.addEventListener('change', handleControlsChange)
+  } else {
+    bindControlsToCamera(camera)
   }
-  mapControls.enabled = previousEnabled
+
+  mapControls.applyMode(cameraControlMode)
 
   // debug logs removed
 
@@ -12001,7 +11990,6 @@ function applyCameraControlMode() {
   }
   syncControlsConstraintsAndSpeeds()
 
-  mapControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
   if (gizmoControls && mapControls) {
     gizmoControls.attachControls(mapControls)
@@ -12799,7 +12787,7 @@ function animate() {
 
   if (mapControls && !controlsUpdated) {
     const t0 = performance.now()
-    mapControls.update()
+    mapControls.update(effectiveDelta)
     prof.controls = performance.now() - t0
   }
 
@@ -14379,11 +14367,17 @@ async function handlePointerDown(event: PointerEvent) {
   // Track middle click vs drag so we can preserve "middle click cancels tool" while
   // ensuring "middle drag pans camera" does not cancel tools on release.
   if (event.button === 1) {
+    const planarPanActive = sceneStore.viewportSettings.cameraControlMode === 'map' && Boolean(mapControls?.enabled)
     middleClickSessionState = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
+      planarPanActive,
+    }
+
+    if (planarPanActive) {
+      mapControls?.beginPlanarPanGesture(event.pointerId, event.clientX, event.clientY)
     }
 
     if (sceneStore.viewportSettings.cameraControlMode === 'map') {
@@ -14725,6 +14719,10 @@ async function handlePointerDown(event: PointerEvent) {
     const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
     const hit = pickNodeAtPointer(event) ?? (allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null)
     if (!hit) {
+      const leftPanActive = sceneStore.viewportSettings.cameraControlMode === 'map' && Boolean(mapControls?.enabled)
+      if (leftPanActive) {
+        mapControls?.beginPlanarPanGesture(event.pointerId, event.clientX, event.clientY)
+      }
       leftEmptyClickSessionState = {
         pointerId: event.pointerId,
         startX: event.clientX,
@@ -14733,6 +14731,7 @@ async function handlePointerDown(event: PointerEvent) {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
+        leftPanActive,
       }
       return
     }
@@ -14797,12 +14796,20 @@ function handlePointerMove(event: PointerEvent) {
     }
   }
 
+  if (middleClickSessionState?.pointerId === event.pointerId && middleClickSessionState.planarPanActive && middleClickSessionState.moved) {
+    mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
+  }
+
   if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId && !leftEmptyClickSessionState.moved) {
     const dx = event.clientX - leftEmptyClickSessionState.startX
     const dy = event.clientY - leftEmptyClickSessionState.startY
     if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
       leftEmptyClickSessionState.moved = true
     }
+  }
+
+  if (leftEmptyClickSessionState?.pointerId === event.pointerId && leftEmptyClickSessionState.leftPanActive && leftEmptyClickSessionState.moved) {
+    mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
   }
 
   if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId && !assetPlacementClickSessionState.moved) {
@@ -15985,6 +15992,9 @@ async function handlePointerUp(event: PointerEvent) {
       const session = leftEmptyClickSessionState
       // Clear session first to avoid re-entrancy issues.
       leftEmptyClickSessionState = null
+      if (session.leftPanActive) {
+        mapControls?.endPlanarPanGesture(event.pointerId)
+      }
 
       if (!session.moved) {
         const isToggle = session.ctrlKey || session.metaKey
@@ -16002,6 +16012,9 @@ async function handlePointerUp(event: PointerEvent) {
     // In scatter/scatter-erase contexts, middle click should not cancel the tool state.
     // Middle drag is reserved for camera panning.
     if (event.button === 1 && middleClickSessionState?.pointerId === event.pointerId) {
+      if (middleClickSessionState.planarPanActive) {
+        mapControls?.endPlanarPanGesture(event.pointerId)
+      }
       const wasDrag = Boolean(middleClickSessionState.moved)
       if (wasDrag) {
         return
@@ -16037,10 +16050,16 @@ async function handlePointerUp(event: PointerEvent) {
     clearPlacementSideSnapMarkers()
 
     if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
+      if (middleClickSessionState.planarPanActive) {
+        mapControls?.endPlanarPanGesture(event.pointerId)
+      }
       middleClickSessionState = null
     }
 
     if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
+      if (leftEmptyClickSessionState.leftPanActive) {
+        mapControls?.endPlanarPanGesture(event.pointerId)
+      }
       leftEmptyClickSessionState = null
     }
 
@@ -16078,9 +16097,15 @@ function handlePointerCancel(event: PointerEvent) {
   pendingVertexSnapResult = null
   pointerInteraction.clearIfPointer(event.pointerId)
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
+    if (middleClickSessionState.planarPanActive) {
+      mapControls?.endPlanarPanGesture(event.pointerId)
+    }
     middleClickSessionState = null
   }
   if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
+    if (leftEmptyClickSessionState.leftPanActive) {
+      mapControls?.endPlanarPanGesture(event.pointerId)
+    }
     leftEmptyClickSessionState = null
   }
   if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
