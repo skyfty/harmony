@@ -12,26 +12,7 @@ import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterial
 import type { WallPresetData } from '@/utils/wallPreset'
 
 export const WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY = '__harmonyWallPresetPreviewSharedAsset'
-const WALL_PRESET_PREVIEW_LOG_PREFIX = '[WallPresetPreview]'
 
-function logWallPresetPreview(message: string, payload?: Record<string, unknown>): void {
-  if (payload) {
-    console.info(WALL_PRESET_PREVIEW_LOG_PREFIX, message, payload)
-    return
-  }
-  console.info(WALL_PRESET_PREVIEW_LOG_PREFIX, message)
-}
-
-function shouldDebugWallPresetPreview(): boolean {
-  return Boolean((globalThis as { __HARMONY_DEBUG_WALL_LAYOUT__?: unknown }).__HARMONY_DEBUG_WALL_LAYOUT__)
-}
-
-function debugWallPresetPreview(message: string, payload?: Record<string, unknown>): void {
-  if (!shouldDebugWallPresetPreview()) {
-    return
-  }
-  logWallPresetPreview(message, payload)
-}
 
 function hasRenderableMesh(object: THREE.Object3D | null | undefined): boolean {
   if (!object) {
@@ -266,73 +247,27 @@ export async function buildWallPresetPreviewObject(options: {
   const definition = buildWallPresetPreviewDynamicMesh(options.preset, { rectSizeMeters: 10 })
   const loadedAssetObjects = new Map<string, THREE.Object3D>()
   const assetIds = collectWallPresetAssetIds(options.preset)
-  logWallPresetPreview('build start', {
-    name: options.preset.name || 'Wall Preset Preview',
-    bodyAssetId: options.preset.wallProps.bodyAssetId ?? null,
-    headAssetId: options.preset.wallProps.headAssetId ?? null,
-    footAssetId: options.preset.wallProps.footAssetId ?? null,
-    bodyEndCapAssetId: options.preset.wallProps.bodyEndCapAssetId ?? null,
-    headEndCapAssetId: options.preset.wallProps.headEndCapAssetId ?? null,
-    footEndCapAssetId: options.preset.wallProps.footEndCapAssetId ?? null,
-    cornerModelCount: Array.isArray(options.preset.wallProps.cornerModels) ? options.preset.wallProps.cornerModels.length : 0,
-    wallRenderMode: options.preset.wallProps.wallRenderMode ?? 'stretch',
-    headAssetHeight: options.preset.wallProps.headAssetHeight,
-    footAssetHeight: options.preset.wallProps.footAssetHeight,
-    bodyMaterialConfigId: definition.bodyMaterialConfigId ?? null,
-  })
+
 
   for (const assetId of assetIds) {
     const loaded = await options.loadAssetMesh(assetId)
-    logWallPresetPreview('asset load result', {
-      assetId,
-      loaded: Boolean(loaded),
-      hasRenderableMesh: hasRenderableMesh(loaded),
-    })
+
     if (!loaded) {
       continue
     }
     prepareWallPreviewImportedObject(loaded)
     loadedAssetObjects.set(assetId, loaded)
-    debugWallPresetPreview('asset bounds', {
-      assetId,
-      ...summarizeObjectBounds(loaded),
-    })
+
   }
 
   const renderAssets = buildWallRenderAssetsFromPreset(options.preset, loadedAssetObjects)
   const renderOptions = buildWallRenderOptionsFromPreset(options.preset, definition)
-  debugWallPresetPreview('render options', {
-    ...renderOptions,
-    availableAssets: {
-      body: Boolean(renderAssets.bodyObject),
-      head: Boolean(renderAssets.headObject),
-      foot: Boolean(renderAssets.footObject),
-      bodyEndCap: Boolean(renderAssets.bodyEndCapObject),
-      headEndCap: Boolean(renderAssets.headEndCapObject),
-      footEndCap: Boolean(renderAssets.footEndCapObject),
-      bodyCorners: Object.keys(renderAssets.bodyCornerObjectsByAssetId ?? {}).length,
-      headCorners: Object.keys(renderAssets.headCornerObjectsByAssetId ?? {}).length,
-      footCorners: Object.keys(renderAssets.footCornerObjectsByAssetId ?? {}).length,
-    },
-  })
+
 
   const wallObject = createWallRenderGroup(definition, renderAssets, renderOptions)
   wallObject.name = options.preset.name || 'Wall Preset Preview'
 
-  logWallPresetPreview('createWallRenderGroup result', {
-    hasWallObject: Boolean(wallObject),
-    hasRenderableMesh: hasRenderableMesh(wallObject),
-    loadedAssetObjectCount: loadedAssetObjects.size,
-    meshStats: collectWallPreviewMeshStats(wallObject),
-    objectBounds: summarizeObjectBounds(wallObject).size,
-  })
-  debugWallPresetPreview('layout diagnostics', {
-    presetHeadAssetHeight: options.preset.wallProps.headAssetHeight,
-    presetFootAssetHeight: options.preset.wallProps.footAssetHeight,
-    resolvedHeadAssetBoundsY: summarizeObjectBounds(renderAssets.headObject).size?.y ?? null,
-    resolvedFootAssetBoundsY: summarizeObjectBounds(renderAssets.footObject).size?.y ?? null,
-    renderMeshStats: collectWallPreviewMeshStats(wallObject),
-  })
+
 
   return wallObject
 }
@@ -345,18 +280,12 @@ export async function renderWallPresetThumbnailDataUrl(options: {
   width: number
   height: number
 }): Promise<string | null> {
-  logWallPresetPreview('thumbnail render start', {
-    name: options.preset.name || 'Wall Preset Preview',
-    width: options.width,
-    height: options.height,
-    sharedMaterialCount: Array.isArray(options.sharedMaterials) ? options.sharedMaterials.length : 0,
-  })
+
   const wallObject = await buildWallPresetPreviewObject({
     preset: options.preset,
     loadAssetMesh: options.loadAssetMesh,
   })
   if (!wallObject) {
-    logWallPresetPreview('thumbnail render skipped: wallObject missing')
     return null
   }
 
@@ -376,10 +305,7 @@ export async function renderWallPresetThumbnailDataUrl(options: {
     width: options.width,
     height: options.height,
   })
-  logWallPresetPreview('thumbnail render complete', {
-    dataUrlLength: dataUrl.length,
-    hasRenderableMesh: hasRenderableMesh(wallObject),
-  })
+
   disposeThumbnailObject(wallObject, {
     preserveMeshUserDataFlag: WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY,
   })
