@@ -14763,6 +14763,7 @@ async function handlePointerDown(event: PointerEvent) {
     pickActiveSelectionBoundingBoxHit,
     transformControlsDragging: Boolean(transformControls?.dragging),
     transformControlsAxis: transformControls?.axis ?? null,
+    cameraControlMode: sceneStore.viewportSettings.cameraControlMode,
     createSelectionDragState,
     disableOrbitForSelectDrag,
   })
@@ -15362,6 +15363,16 @@ function handlePointerMove(event: PointerEvent) {
       sceneStore.beginTransformInteraction(nodeId)
       updateOutlineSelectionTargets()
     },
+    beginOrbitRotateGesture: (_event, trackingState) => {
+      if (trackingState.cameraGesture === 'orbit-rotate') {
+        mapControls?.beginOrbitRotateGesture(trackingState.pointerId, trackingState.startX, trackingState.startY)
+      }
+    },
+    updateOrbitRotateGesture: (e, trackingState) => {
+      if (trackingState.cameraGesture === 'orbit-rotate') {
+        mapControls?.updateOrbitRotateGesture(trackingState.pointerId, e.clientX, e.clientY)
+      }
+    },
     onSelectionDragStart: (nodeId) => wallRenderer.beginWallDrag(nodeId),
     beginDeferredDuplicateDrag: (e, trackingState) => beginDeferredDuplicateSelectionDrag(e, trackingState),
     updateSelectDragPosition,
@@ -15879,6 +15890,11 @@ async function handlePointerUp(event: PointerEvent) {
         pointerTrackingState = null
       },
       pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
+      endOrbitRotateGesture: (trackingState) => {
+        if (trackingState.cameraGesture === 'orbit-rotate') {
+          mapControls?.endOrbitRotateGesture(trackingState.pointerId)
+        }
+      },
       transformControlsDragging: Boolean(transformControls?.dragging),
       restoreOrbitAfterSelectDrag,
       updateGridHighlightFromObject,
@@ -16109,6 +16125,12 @@ function handlePointerCancel(event: PointerEvent) {
   clearPlacementSideSnapMarkers()
   pendingVertexSnapResult = null
   pointerInteraction.clearIfPointer(event.pointerId)
+  if (pointerTrackingState?.pointerId === event.pointerId && pointerTrackingState.cameraGesture === 'orbit-rotate') {
+    mapControls?.endOrbitRotateGesture(event.pointerId)
+  }
+  if (pointerTrackingState?.pointerId === event.pointerId) {
+    pointerTrackingState = null
+  }
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
     if (middleClickSessionState.planarPanActive) {
       mapControls?.endPlanarPanGesture(event.pointerId)

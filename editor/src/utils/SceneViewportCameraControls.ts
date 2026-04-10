@@ -35,6 +35,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   private readonly planarPanDelta = new THREE.Vector3()
   private readonly planarPanTarget = new THREE.Vector3()
   private readonly planarPanPosition = new THREE.Vector3()
+  private orbitRotateSession: { pointerId: number; lastX: number; lastY: number } | null = null
   private readonly boundKeyDown: (event: KeyboardEvent) => void
 
   private domElement: HTMLElement
@@ -259,6 +260,51 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     }
     this.transientLeftRotateActive = false
     this.applyMode(this.currentMode)
+  }
+
+  beginOrbitRotateGesture(pointerId: number, clientX: number, clientY: number) {
+    if (this.currentMode !== 'orbit') {
+      return
+    }
+    this.orbitRotateSession = {
+      pointerId,
+      lastX: clientX,
+      lastY: clientY,
+    }
+  }
+
+  updateOrbitRotateGesture(pointerId: number, clientX: number, clientY: number) {
+    if (this.currentMode !== 'orbit' || !this.orbitRotateSession || this.orbitRotateSession.pointerId !== pointerId) {
+      return false
+    }
+
+    const dx = clientX - this.orbitRotateSession.lastX
+    const dy = clientY - this.orbitRotateSession.lastY
+    this.orbitRotateSession.lastX = clientX
+    this.orbitRotateSession.lastY = clientY
+
+    if (Math.abs(dx) <= Number.EPSILON && Math.abs(dy) <= Number.EPSILON) {
+      return false
+    }
+
+    const width = Math.max(1, this.domElement.clientWidth || 1)
+    const height = Math.max(1, this.domElement.clientHeight || 1)
+    const azimuth = (-dx / width) * Math.PI * Math.max(this.rotateSpeed, 1e-3)
+    const polar = (-dy / height) * Math.PI * Math.max(this.rotateSpeed, 1e-3)
+    this.controls.rotate(azimuth, polar, false)
+    this.syncFromControls()
+    this.dispatchEvent({ type: 'change' })
+    return true
+  }
+
+  endOrbitRotateGesture(pointerId?: number) {
+    if (!this.orbitRotateSession) {
+      return
+    }
+    if (typeof pointerId === 'number' && this.orbitRotateSession.pointerId !== pointerId) {
+      return
+    }
+    this.orbitRotateSession = null
   }
 
   setLookAt(position: THREE.Vector3, target: THREE.Vector3, enableTransition = false) {

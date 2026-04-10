@@ -17,6 +17,7 @@ export interface PointerTrackingState {
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
+  cameraGesture: 'none' | 'orbit-rotate'
   transformAxis: string | null
   deferredDuplicateDrag: DeferredDuplicateDragState | null
   deferredDuplicateInFlight: boolean

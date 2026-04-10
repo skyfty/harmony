@@ -23,6 +23,8 @@ export function handlePointerMoveSelection(
       event: PointerEvent,
       trackingState: PointerTrackingState,
     ) => Promise<SelectionDragLike | null>
+    beginOrbitRotateGesture?: (event: PointerEvent, trackingState: PointerTrackingState) => void
+    updateOrbitRotateGesture?: (event: PointerEvent, trackingState: PointerTrackingState) => void
 
     updateSelectDragPosition: (drag: any, event: PointerEvent) => boolean
   },
@@ -118,5 +120,14 @@ export function handlePointerMoveSelection(
 
   if (!ctx.pointerTrackingState.moved && distance >= ctx.clickDragThresholdPx) {
     ctx.pointerTrackingState.moved = true
+    if (ctx.pointerTrackingState.cameraGesture === 'orbit-rotate') {
+      ctx.beginOrbitRotateGesture?.(event, ctx.pointerTrackingState)
+      ctx.updateOrbitRotateGesture?.(event, ctx.pointerTrackingState)
+      return
+    }
+  }
+
+  if (ctx.pointerTrackingState.moved && ctx.pointerTrackingState.cameraGesture === 'orbit-rotate') {
+    ctx.updateOrbitRotateGesture?.(event, ctx.pointerTrackingState)
   }
 }

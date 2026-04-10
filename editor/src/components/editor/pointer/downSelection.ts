@@ -74,6 +74,7 @@ export async function handlePointerDownSelection(
 
     transformControlsDragging: boolean
     transformControlsAxis: string | null
+    cameraControlMode: 'map' | 'orbit'
 
     createSelectionDragState: (nodeId: string, object: THREE.Object3D, point: THREE.Vector3, event: PointerEvent) => unknown
     disableOrbitForSelectDrag: () => void
@@ -192,6 +193,17 @@ export async function handlePointerDownSelection(
         })()
       : null
 
+  const cameraGesture: PointerTrackingState['cameraGesture'] =
+    button === 0 &&
+    ctx.activeTool === 'select' &&
+    ctx.cameraControlMode === 'orbit' &&
+    !selectionDrag &&
+    !currentPrimaryId &&
+    ctx.selectedNodeIds.length === 0 &&
+    Boolean(hit)
+      ? 'orbit-rotate'
+      : 'none'
+
   const nextPointerTrackingState: PointerTrackingState = {
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -203,6 +215,7 @@ export async function handlePointerDownSelection(
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
     shiftKey: event.shiftKey,
+    cameraGesture,
     transformAxis: activeTransformAxis,
     deferredDuplicateDrag,
     deferredDuplicateInFlight: false,

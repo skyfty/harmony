@@ -51,6 +51,7 @@ export function handlePointerUpSelection(
     pointerTrackingState: PointerTrackingState | null
     clearPointerTrackingState: () => void
     pointerInteractionReleaseIfCaptured: (pointerId: number) => void
+    endOrbitRotateGesture?: (trackingState: PointerTrackingState) => void
 
     transformControlsDragging: boolean
 
@@ -87,6 +88,9 @@ export function handlePointerUpSelection(
   }
 
   const trackingState = ctx.pointerTrackingState
+  if (trackingState.cameraGesture === 'orbit-rotate') {
+    ctx.endOrbitRotateGesture?.(trackingState)
+  }
   ctx.clearPointerTrackingState()
   ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
 
