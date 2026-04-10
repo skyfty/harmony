@@ -192,6 +192,7 @@ import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import {
   buildViewportPlacementPreview,
   getViewportPlacementKey,
@@ -7221,10 +7222,6 @@ function patchEnvironmentCsmSettings(patch: Partial<EnvironmentCsmSettings>): vo
       ...patch,
     },
   })
-}
-
-function handleCsmMenuOpen(value: boolean): void {
-  csmMenuOpen.value = Boolean(value)
 }
 
 function handleCsmEnabledUpdate(value: boolean): void {
@@ -21114,7 +21111,6 @@ defineExpose<SceneViewportHandle>({
           :scatter-erase-menu-open="scatterEraseMenuOpen"
           :viewport-placement-menu-open="viewportPlacementMenuOpen"
           :viewport-placement-active="viewportPlacementActive"
-          :csm-menu-open="csmMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :landform-shape-menu-open="landformShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
@@ -21151,16 +21147,6 @@ defineExpose<SceneViewportHandle>({
         :ground-scatter-spacing="scatterSpacing"
         :ground-scatter-density-percent="scatterDensityPercent"
         :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
-        :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
-        :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
-        :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
-        :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
-        :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
-        :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
-        :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
-        :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
-        :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
-        :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @drop-to-ground="dropSelectionToGround"
@@ -21180,17 +21166,6 @@ defineExpose<SceneViewportHandle>({
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
-          @update:csm-menu-open="handleCsmMenuOpen"
-          @update:csm-enabled="handleCsmEnabledUpdate"
-          @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
-          @update:csm-light-color="handleCsmLightColorUpdate"
-          @update:csm-light-intensity="handleCsmLightIntensityUpdate"
-          @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
-          @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
-          @update:csm-cascades="handleCsmCascadesUpdate"
-          @update:csm-max-far="handleCsmMaxFarUpdate"
-          @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
-          @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:ground-terrain-menu-open="handleGroundTerrainMenuOpen"
           @update:ground-paint-menu-open="handleGroundPaintMenuOpen"
@@ -21430,6 +21405,61 @@ defineExpose<SceneViewportHandle>({
             </div>
           </div>
         </Transition>
+      </div>
+      <div class="csm-hud">
+        <v-menu
+          v-model="csmMenuOpen"
+          location="top end"
+          :offset="6"
+          :close-on-content-click="false"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              density="compact"
+              size="large"
+              class="csm-hud__btn"
+              :color="csmMenuOpen ? 'primary' : 'white'"
+              variant="text"
+              title="CSM Sun & Shadow"
+            >
+              <v-icon icon="mdi-white-balance-sunny" size="28" />
+            </v-btn>
+          </template>
+          <v-list density="compact" class="csm-sun-menu">
+            <div
+              class="popup-menu-card csm-sun-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
+         
+              <CsmSunMenuContent
+                :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
+                :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
+                :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
+                :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
+                :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
+                :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
+                :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
+                :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
+                :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
+                :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
+                @update:csm-enabled="handleCsmEnabledUpdate"
+                @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
+                @update:csm-light-color="handleCsmLightColorUpdate"
+                @update:csm-light-intensity="handleCsmLightIntensityUpdate"
+                @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
+                @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
+                @update:csm-cascades="handleCsmCascadesUpdate"
+                @update:csm-max-far="handleCsmMaxFarUpdate"
+                @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
+                @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
+              />
+            </div>
+          </v-list>
+        </v-menu>
       </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
@@ -21754,6 +21784,24 @@ defineExpose<SceneViewportHandle>({
   pointer-events: none;
   overflow: hidden;
   z-index: 9;
+}
+
+.csm-hud {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  z-index: 10;
+  pointer-events: auto;
+}
+
+.csm-hud__btn {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
+  background: transparent !important;
+}
+
+.csm-hud__btn :deep(.v-btn__overlay),
+.csm-hud__btn :deep(.v-btn__underlay) {
+  display: none !important;
 }
 
 .camera-status-hud {

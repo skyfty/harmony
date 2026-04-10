@@ -2,70 +2,6 @@
 <template>
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
-   <v-menu
-        :activator="menuActivators.sun"
-        :model-value="csmMenuOpen"
-        location="bottom"
-        :offset="6"
-        :open-on-click="false"
-        :close-on-content-click="false"
-        @update:modelValue="handleCsmMenuModelUpdate"
-      >
-        <template #activator="{ props: menuProps }">
-          <v-btn
-            v-bind="menuProps"
-            :ref="(el: unknown) => setMenuActivator('sun', el)"
-            icon="mdi-white-balance-sunny"
-            density="compact"
-            size="small"
-            class="toolbar-button"
-            :color="csmMenuOpen ? 'primary' : undefined"
-            :variant="csmMenuOpen ? 'flat' : 'text'"
-            title="CSM Sun & Shadow"
-            @click="emit('update:csm-menu-open', true)"
-          />
-        </template>
-        <v-list density="compact" class="csm-sun-menu">
-          <div
-            class="popup-menu-card csm-sun-menu__card"
-            @pointerdown.stop
-            @pointerup.stop
-            @mousedown.stop
-            @mouseup.stop
-          >
-            <v-toolbar density="compact" class="menu-toolbar" height="36px">
-              <div class="toolbar-text">
-                <div class="menu-title">CSM Sun</div>
-              </div>
-              <v-spacer />
-              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:csm-menu-open', false)" />
-            </v-toolbar>
-            <CsmSunMenuContent
-              :csm-enabled="csmEnabled"
-              :csm-shadow-enabled="csmShadowEnabled"
-              :csm-light-color="csmLightColor"
-              :csm-light-intensity="csmLightIntensity"
-              :csm-sun-azimuth-deg="csmSunAzimuthDeg"
-              :csm-sun-elevation-deg="csmSunElevationDeg"
-              :csm-cascades="csmCascades"
-              :csm-max-far="csmMaxFar"
-              :csm-shadow-map-size="csmShadowMapSize"
-              :csm-shadow-bias="csmShadowBias"
-              @update:csm-enabled="emit('update:csm-enabled', $event)"
-              @update:csm-shadow-enabled="emit('update:csm-shadow-enabled', $event)"
-              @update:csm-light-color="emit('update:csm-light-color', $event)"
-              @update:csm-light-intensity="emit('update:csm-light-intensity', $event)"
-              @update:csm-sun-azimuth-deg="emit('update:csm-sun-azimuth-deg', $event)"
-              @update:csm-sun-elevation-deg="emit('update:csm-sun-elevation-deg', $event)"
-              @update:csm-cascades="emit('update:csm-cascades', $event)"
-              @update:csm-max-far="emit('update:csm-max-far', $event)"
-              @update:csm-shadow-map-size="emit('update:csm-shadow-map-size', $event)"
-              @update:csm-shadow-bias="emit('update:csm-shadow-bias', $event)"
-            />
-          </div>
-        </v-list>
-      </v-menu>
-
       <template v-for="tool in buildToolButtons" :key="tool.id">
         <v-menu
           v-if="tool.id === 'terrain'"
@@ -1279,7 +1215,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
-import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
@@ -1337,7 +1272,6 @@ const props = withDefaults(
   scatterEraseMenuOpen: boolean
   viewportPlacementMenuOpen: boolean
   viewportPlacementActive: boolean
-  csmMenuOpen: boolean
   floorShapeMenuOpen: boolean
   landformShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
@@ -1374,16 +1308,6 @@ const props = withDefaults(
   groundScatterSpacing: number
   groundScatterDensityPercent: number
   groundScatterProviderAssetId?: string | null
-  csmEnabled: boolean
-  csmShadowEnabled: boolean
-  csmLightColor: string
-  csmLightIntensity: number
-  csmSunAzimuthDeg: number
-  csmSunElevationDeg: number
-  csmCascades: number
-  csmMaxFar: number
-  csmShadowMapSize: number
-  csmShadowBias: number
   }>(),
   {
     buildToolsDisabled: false,
@@ -1408,17 +1332,6 @@ const emit = defineEmits<{
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
-  (event: 'update:csm-menu-open', value: boolean): void
-  (event: 'update:csm-enabled', value: boolean): void
-  (event: 'update:csm-shadow-enabled', value: boolean): void
-  (event: 'update:csm-light-color', value: string): void
-  (event: 'update:csm-light-intensity', value: number): void
-  (event: 'update:csm-sun-azimuth-deg', value: number): void
-  (event: 'update:csm-sun-elevation-deg', value: number): void
-  (event: 'update:csm-cascades', value: number): void
-  (event: 'update:csm-max-far', value: number): void
-  (event: 'update:csm-shadow-map-size', value: number): void
-  (event: 'update:csm-shadow-bias', value: number): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:viewport-placement-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
@@ -1476,7 +1389,6 @@ const {
   scatterEraseMenuOpen,
   viewportPlacementMenuOpen,
   viewportPlacementActive,
-  csmMenuOpen,
   floorShapeMenuOpen,
   landformShapeMenuOpen,
   wallShapeMenuOpen,
@@ -1512,16 +1424,6 @@ const {
   groundScatterSpacing,
   groundScatterDensityPercent,
   groundScatterProviderAssetId,
-  csmEnabled,
-  csmShadowEnabled,
-  csmLightColor,
-  csmLightIntensity,
-  csmSunAzimuthDeg,
-  csmSunElevationDeg,
-  csmCascades,
-  csmMaxFar,
-  csmShadowMapSize,
-  csmShadowBias,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 const wallPresetPickerAssets = computed<ProjectAsset[]>(() => {
@@ -1539,7 +1441,6 @@ const fixedPrimaryAsAnchor = ref(true)
 const displayBoardToolMenuOpen = ref(false)
 
 type MenuActivatorKey =
-  | 'sun'
   | 'terrain'
   | 'paint'
   | 'scatter'
@@ -1553,7 +1454,6 @@ type MenuActivatorKey =
   | 'scatterErase'
 
 const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined>>({
-  sun: undefined,
   terrain: undefined,
   paint: undefined,
   scatter: undefined,
@@ -1956,9 +1856,6 @@ watch(canEraseScatterEffective, (enabled) => {
 })
 
 watch(buildToolsDisabled, (disabled) => {
-  if (disabled && csmMenuOpen.value) {
-    emit('update:csm-menu-open', false)
-  }
   if (disabled && displayBoardToolMenuOpen.value) {
     displayBoardToolMenuOpen.value = false
   }
@@ -2000,7 +1897,6 @@ watch(hasGroundNode, (available) => {
 // Mutual exclusivity helpers
 function closeExternalMenus() {
   displayBoardToolMenuOpen.value = false
-  emit('update:csm-menu-open', false)
   emit('update:ground-terrain-menu-open', false)
   emit('update:ground-paint-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
@@ -2620,14 +2516,6 @@ function handleScatterEraseContextMenu(event: MouseEvent) {
   }
   closeAllMenus()
   emit('update:scatter-erase-menu-open', true)
-}
-
-function handleCsmMenuModelUpdate(value: boolean) {
-  const open = Boolean(value)
-  if (open) {
-    closeAllMenus()
-  }
-  emit('update:csm-menu-open', open)
 }
 
 function toggleGridVisibility() {
