@@ -2569,8 +2569,8 @@ function handleClearScatterMenuAction() {
 }
 
 .csm-sun-menu {
-  width: 320px;
-  max-width: min(320px, 92vw);
+  width: 380px;
+  max-width: min(380px, 92vw);
   padding: 6px;
 }
 

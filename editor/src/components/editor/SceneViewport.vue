@@ -21794,6 +21794,11 @@ defineExpose<SceneViewportHandle>({
   pointer-events: auto;
 }
 
+:global(.csm-sun-menu) {
+  width: 260px !important;
+  max-width: min(260px, 92vw) !important;
+}
+
 .csm-hud__btn {
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
   background: transparent !important;
