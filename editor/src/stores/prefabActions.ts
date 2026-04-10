@@ -725,7 +725,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         source: { type: 'local' },
         commitOptions: { updateNodes: false },
       })
-      if (options.select !== false) {
+        if (options.select === true) {
         store.selectAsset(registered.id)
       }
       return registered
@@ -734,7 +734,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
     async saveNodePrefab(
       store: PrefabStoreLike,
       nodeId: string,
-      options: { assetId?: string; name?: string } = {},
+        options: { assetId?: string; name?: string; select?: boolean } = {},
     ): Promise<ProjectAsset> {
       const node = deps.findNodeById(store.nodes, nodeId)
       if (!node) {
@@ -755,6 +755,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
 
       const registered = await this.registerPrefabAssetFromData(store, payload.prefab, payload.serialized, {
         assetId: options.assetId,
+        select: options.select,
       })
 
       attachPrefabMetadata(deps, node, registered.id)

@@ -435,7 +435,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         commitOptions: { updateNodes: false },
       })
 
-      if (payload.select !== false) {
+        if (payload.select === true) {
         store.selectAsset(registered.id)
       }
 

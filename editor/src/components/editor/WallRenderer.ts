@@ -29,7 +29,6 @@ import {
   setWallInstancedBindingsOnObject,
   syncWallDragBindingMatrices,
 } from '@schema/wallInstancing'
-import { resolveWallVerticalLayout } from '@schema/wallVerticalLayout'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
@@ -972,12 +971,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     })
 
     const userData = container.userData ?? (container.userData = {})
-    const wallLayout = wallProps
-      ? resolveWallVerticalLayout(wallProps.height, {
-          headAssetHeight: wallProps.headAssetHeight,
-          footAssetHeight: wallProps.footAssetHeight,
-        })
-      : null
 
     // ============================
     // 1) 空气墙：强制使用程序墙体（并应用半透明材质覆盖）

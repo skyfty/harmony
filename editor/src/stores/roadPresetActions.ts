@@ -510,7 +510,7 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
         commitOptions: { updateNodes: false },
       })
 
-      if (payload.select !== false) {
+        if (payload.select === true) {
         store.selectAsset(registered.id)
       }
 
