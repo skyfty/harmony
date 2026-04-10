@@ -137,6 +137,9 @@ export const appConfig = {
   port: Number(process.env.PORT ?? 4000),
   mongoUri: process.env.MONGODB_URI ?? 'mongodb://localhost:27017/harmony',
   jwtSecret: process.env.JWT_SECRET ?? 'change-me',
+  business: {
+    contactPhone: process.env.BUSINESS_CONTACT_PHONE ?? '400-000-0000',
+  },
   adminAuth: {
     jwtSecret: process.env.ADMIN_JWT_SECRET ?? process.env.JWT_SECRET ?? 'change-me-admin',
     issuer: process.env.ADMIN_JWT_ISSUER ?? 'harmony-admin',

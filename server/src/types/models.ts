@@ -121,9 +121,51 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   wechatProfileSyncedAt?: Date
   wechatIdentitySyncedAt?: Date
   status: 'active' | 'disabled'
+  contractStatus: 'unsigned' | 'signed'
   currentVehicleId?: Types.ObjectId | null
   workShareCount?: number
   exhibitionShareCount?: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type BusinessOrderTopStage = 'quote' | 'signing' | 'production' | 'publish' | 'operation'
+
+export type BusinessOrderProductionNodeStatus = 'pending' | 'active' | 'completed'
+
+export interface BusinessOrderProductionNode {
+  code: string
+  label: string
+  status: BusinessOrderProductionNodeStatus
+  activatedAt?: Date | null
+  remark?: string | null
+  sortOrder: number
+}
+
+export interface BusinessOrderDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  orderNumber: string
+  scenicName: string
+  addressText: string
+  location?: {
+    lat: number
+    lng: number
+  } | null
+  contactPhone: string
+  scenicArea?: number | null
+  sceneSpotCategoryId?: Types.ObjectId | null
+  specialLandscapeTags: string[]
+  topStage: BusinessOrderTopStage
+  productionProgress: BusinessOrderProductionNode[]
+  contactPhoneForBusiness?: string | null
+  notes?: string | null
+  quotedAt?: Date | null
+  signedAt?: Date | null
+  productionStartedAt?: Date | null
+  productionCompletedAt?: Date | null
+  publishReadyAt?: Date | null
+  publishedAt?: Date | null
+  operatingAt?: Date | null
   createdAt: Date
   updatedAt: Date
 }

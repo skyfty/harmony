@@ -20,3 +20,4 @@ export * from './travelRecords';
 export * from './vehicles';
 export * from './mini-apps';
 export * from './medals';
+export * from './business-orders';

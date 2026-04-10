@@ -11,21 +11,25 @@
         class="page-header__navbar"
         :style="{ height: navBarHeight + 'px' }"
       >
-        <view
-          v-if="showBack"
-          class="page-header__back"
-          @tap="handleBack"
-        >
-          <image
-            class="page-header__back-icon"
-            src="/static/images/back.png"
-            mode="aspectFit"
-          />
+        <view class="page-header__left">
+          <slot name="left">
+            <view
+              v-if="showBack"
+              class="page-header__back"
+              @tap="handleBack"
+            >
+              <image
+                class="page-header__back-icon"
+                src="/static/images/back.png"
+                mode="aspectFit"
+              />
+            </view>
+            <view
+              v-else
+              class="page-header__back-placeholder"
+            />
+          </slot>
         </view>
-        <view
-          v-else
-          class="page-header__back-placeholder"
-        />
 
         <text class="page-header__title">
           {{ title }}
@@ -108,7 +112,14 @@ function handleBack() {
   padding: 0 12px;
 }
 
-  .page-header__back {
+.page-header__left {
+  min-width: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.page-header__back {
   width: 32px;
   height: 32px;
   display: flex;

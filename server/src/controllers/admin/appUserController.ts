@@ -26,6 +26,7 @@ function mapAppUser(user: any) {
     wechatIdentitySyncedAt: user.wechatIdentitySyncedAt ? new Date(user.wechatIdentitySyncedAt).toISOString() : null,
     currentVehicleId: user.currentVehicleId?.toString?.() ?? null,
     status: user.status,
+    contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
     workShareCount: user.workShareCount ?? 0,
     exhibitionShareCount: user.exhibitionShareCount ?? 0,
     createdAt: user.createdAt?.toISOString?.() ?? new Date(user.createdAt).toISOString(),
@@ -76,7 +77,7 @@ export async function getAppUser(ctx: Context): Promise<void> {
 }
 
 export async function createAppUser(ctx: Context): Promise<void> {
-  const { username, password, email, displayName, avatarUrl, phone, bio, gender, birthDate, status = 'active' } = ctx.request.body as Record<string, unknown>
+  const { username, password, email, displayName, avatarUrl, phone, bio, gender, birthDate, status = 'active', contractStatus = 'unsigned' } = ctx.request.body as Record<string, unknown>
   if (!username || typeof username !== 'string') {
     ctx.throw(400, 'Username is required')
   }
@@ -97,6 +98,7 @@ export async function createAppUser(ctx: Context): Promise<void> {
     phone,
     bio,
     status,
+    contractStatus: contractStatus === 'signed' ? 'signed' : 'unsigned',
   }
 
   if (typeof password === 'string' && password.trim().length) {
@@ -121,7 +123,7 @@ export async function updateAppUser(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid user id')
   }
-  const { email, displayName, avatarUrl, phone, bio, gender, birthDate, status } = ctx.request.body as Record<string, unknown>
+  const { email, displayName, avatarUrl, phone, bio, gender, birthDate, status, contractStatus } = ctx.request.body as Record<string, unknown>
   const update: Record<string, unknown> = {
     email,
     displayName,
@@ -129,6 +131,9 @@ export async function updateAppUser(ctx: Context): Promise<void> {
     phone,
     bio,
     status,
+  }
+  if (typeof contractStatus === 'string' && ['unsigned', 'signed'].includes(contractStatus)) {
+    update.contractStatus = contractStatus
   }
   if (typeof gender === 'string' && ['male', 'female', 'other'].includes(gender)) {
     update.gender = gender

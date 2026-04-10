@@ -16,4 +16,5 @@ export interface UserProfile {
   gender: Gender;
   birthDate?: string; // YYYY-MM-DD
   lastLoginAt?: string;
+  contractStatus?: 'unsigned' | 'signed';
 }
