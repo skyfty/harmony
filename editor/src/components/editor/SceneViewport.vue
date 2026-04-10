@@ -6391,7 +6391,7 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
     return false
   }
 
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return false
   }
 
@@ -7649,7 +7649,7 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
   if (targetTool !== 'wall' && targetTool !== 'floor' && targetTool !== 'water') {
     return null
   }
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return null
   }
   if (nodePickerStore.isActive || isAutoOverlayBlockedBySelectionContext(targetTool)) {
@@ -7708,7 +7708,7 @@ function resolveScatterAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlay
   if (!scatterAutoOverlayEnabled()) {
     return null
   }
-  if (isAltOverrideActive || nodePickerStore.isActive) {
+  if (isTemporaryNavigationOverrideActive() || nodePickerStore.isActive) {
     return null
   }
 
@@ -8017,7 +8017,7 @@ function resolveAutoOverlaySuggestedMargins(plan: AutoOverlayBuildPlan): { horiz
 }
 
 function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
-  if (event.button !== 0 || isAltOverrideActive || !(event.ctrlKey || event.metaKey)) {
+  if (event.button !== 0 || isTemporaryNavigationOverrideActive() || !(event.ctrlKey || event.metaKey)) {
     return false
   }
   const plan = resolveAutoOverlayPlanForEvent(event)
@@ -9001,11 +9001,28 @@ function setOrbitControlOverride(active: boolean) {
   updateMapControlsEnabled()
 }
 
-function activateAltOverride() {
-  if (isAltOverrideActive) {
+function isTemporaryNavigationOverrideActive(): boolean {
+  return isAltOverrideActive || isSpaceOverrideActive
+}
+
+function activateTemporaryNavigationOverride(kind: 'alt' | 'space') {
+  const wasActive = isTemporaryNavigationOverrideActive()
+  if (kind === 'alt') {
+    if (isAltOverrideActive) {
+      return
+    }
+    isAltOverrideActive = true
+  } else {
+    if (isSpaceOverrideActive) {
+      return
+    }
+    isSpaceOverrideActive = true
+  }
+
+  if (wasActive) {
     return
   }
-  isAltOverrideActive = true
+
   toolOverrideSnapshot = {
     transformTool: props.activeTool ?? null,
     wallBuildActive: Boolean(wallBuildTool.getSession()),
@@ -9017,11 +9034,23 @@ function activateAltOverride() {
   setOrbitControlOverride(true)
 }
 
-function deactivateAltOverride() {
-  if (!isAltOverrideActive) {
+function deactivateTemporaryNavigationOverride(kind: 'alt' | 'space') {
+  if (kind === 'alt') {
+    if (!isAltOverrideActive) {
+      return
+    }
+    isAltOverrideActive = false
+  } else {
+    if (!isSpaceOverrideActive) {
+      return
+    }
+    isSpaceOverrideActive = false
+  }
+
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
-  isAltOverrideActive = false
+
   const snapshot = toolOverrideSnapshot
   toolOverrideSnapshot = null
   setOrbitControlOverride(false)
@@ -9034,6 +9063,22 @@ function deactivateAltOverride() {
   if (snapshot?.groundSelectionActive && groundSelection.value) {
     updateGroundSelectionToolbarPosition()
   }
+}
+
+function activateAltOverride() {
+  activateTemporaryNavigationOverride('alt')
+}
+
+function deactivateAltOverride() {
+  deactivateTemporaryNavigationOverride('alt')
+}
+
+function activateSpaceOverride() {
+  activateTemporaryNavigationOverride('space')
+}
+
+function deactivateSpaceOverride() {
+  deactivateTemporaryNavigationOverride('space')
 }
 
 function isAssetPlacementActiveForOverride(): boolean {
@@ -9053,7 +9098,7 @@ function activateVOverride() {
   if (!isAssetPlacementActiveForOverride()) {
     return
   }
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
   isVOverrideActive = true
@@ -9070,7 +9115,7 @@ function deactivateVOverride() {
   isVOverrideActive = false
   const snapshot = vOverrideSnapshotTool
   vOverrideSnapshotTool = null
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
   if (snapshot && props.activeTool !== snapshot) {
@@ -9136,6 +9181,40 @@ function handleAltOverrideKeyUp(event: KeyboardEvent) {
 
 function handleAltOverrideBlur() {
   deactivateAltOverride()
+}
+
+function handleSpaceOverrideKeyDown(event: KeyboardEvent) {
+  if (event.defaultPrevented) {
+    return
+  }
+  if (event.repeat) {
+    return
+  }
+  if (event.code !== 'Space') {
+    return
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return
+  }
+  if (isEditableKeyboardTarget(event.target)) {
+    return
+  }
+  if (props.previewActive) {
+    return
+  }
+  event.preventDefault()
+  activateSpaceOverride()
+}
+
+function handleSpaceOverrideKeyUp(event: KeyboardEvent) {
+  if (event.code !== 'Space') {
+    return
+  }
+  deactivateSpaceOverride()
+}
+
+function handleSpaceOverrideBlur() {
+  deactivateSpaceOverride()
 }
 
 function handleViewportContextMenu(event: MouseEvent) {
@@ -9986,6 +10065,7 @@ let isGroundSelectionOrbitDisabled = false
 let orbitDisableCount = 0
 let isOrbitControlOverrideActive = false
 let isAltOverrideActive = false
+let isSpaceOverrideActive = false
 let isVOverrideActive = false
 type AltOverrideSnapshot = {
   transformTool: EditorTool | null
@@ -11414,8 +11494,10 @@ const cameraResetDirectionController = createCameraResetDirectionController({
   getGroundNode: () => sceneStore.groundNode,
   getFallbackSceneNodes: () => props.sceneNodes,
   getSelectedNodeId: () => sceneStore.selectedNodeId,
+  getSelectedNodeIds: () => getViewportSelectionFocusIds(),
   getSceneNodeById: (nodeId) => sceneStore.getNodeById(nodeId),
   getRuntimeObject: (nodeId) => objectMap.get(nodeId) ?? getRuntimeObject(nodeId),
+  resolveFocusTargetFromNodeIds: (nodeIds) => resolveFocusTargetForNodeIds(nodeIds),
   getLastCameraFocusRadius: () => lastCameraFocusRadius,
   setLastCameraFocusRadius: (value) => {
     lastCameraFocusRadius = value
@@ -11528,6 +11610,83 @@ function computeFitDistanceForSphere(params: {
   const dv = radius / Math.tan(Math.max(fovV / 2, 1e-6))
   const dh = radius / Math.tan(Math.max(fovH / 2, 1e-6))
   return Math.max(dv, dh) * margin
+}
+
+function resolveFocusTargetForNodeIds(nodeIds: string[]): { target: THREE.Vector3; radiusEstimate: number } | null {
+  const focusIds = nodeIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
+  if (focusIds.length === 0) {
+    return null
+  }
+
+  const target = new THREE.Vector3()
+  const combinedBox = new THREE.Box3()
+  let hasBounds = false
+  const tempBox = new THREE.Box3()
+  const tempVector = new THREE.Vector3()
+
+  for (const nodeId of focusIds) {
+    const candidate = sceneStore.getNodeById(nodeId)
+    if (candidate?.light?.type === 'Directional' && candidate.light.target) {
+      tempVector.set(candidate.light.target.x, candidate.light.target.y, candidate.light.target.z)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+      continue
+    }
+
+    const object = objectMap.get(nodeId)
+    if (object) {
+      object.updateWorldMatrix(true, true)
+      const box = setBoundingBoxFromObject(object, tempBox)
+      if (!box.isEmpty()) {
+        if (!hasBounds) {
+          combinedBox.copy(box)
+          hasBounds = true
+        } else {
+          combinedBox.union(box)
+        }
+        continue
+      }
+      object.getWorldPosition(tempVector)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+      continue
+    }
+
+    const node = findSceneNode(props.sceneNodes, nodeId) ?? findSceneNode(sceneStore.nodes, nodeId)
+    if (node) {
+      tempVector.set(node.position.x, node.position.y, node.position.z)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+    }
+  }
+
+  if (!hasBounds || combinedBox.isEmpty()) {
+    return null
+  }
+
+  combinedBox.getCenter(target)
+  const sphere = new THREE.Sphere()
+  combinedBox.getBoundingSphere(sphere)
+  return { target, radiusEstimate: sphere.radius }
+}
+
+function getViewportSelectionFocusIds(): string[] {
+  return [...new Set([
+    ...sceneStore.selectedNodeIds,
+    props.selectedNodeId ?? null,
+  ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
 }
 
 function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: number | null }) {
@@ -11648,87 +11807,128 @@ function applyCameraFocus(target: THREE.Vector3, radiusEstimate: number): boolea
 }
 
 function focusCameraOnSelection(nodeIds: string[]): boolean {
-  if (!camera || !mapControls) {
-    return false
-  }
-
-  const focusIds = nodeIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
-  if (focusIds.length === 0) {
-    return false
-  }
-
-  const target = new THREE.Vector3()
-  const combinedBox = new THREE.Box3()
-  let hasBounds = false
-  const tempBox = new THREE.Box3()
-  const tempVector = new THREE.Vector3()
-
-  for (const nodeId of focusIds) {
-    // Lights: focus on their target (keeps framing near the scene even if the light position is very high).
-    const candidate = sceneStore.getNodeById(nodeId)
-    if (candidate?.light?.type === 'Directional' && candidate.light.target) {
-      tempVector.set(candidate.light.target.x, candidate.light.target.y, candidate.light.target.z)
-      if (!hasBounds) {
-        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
-        hasBounds = true
-      } else {
-        combinedBox.expandByPoint(tempVector)
-      }
-      continue
-    }
-
-    const object = objectMap.get(nodeId)
-    if (object) {
-      object.updateWorldMatrix(true, true)
-      const box = setBoundingBoxFromObject(object, tempBox)
-      if (!box.isEmpty()) {
-        if (!hasBounds) {
-          combinedBox.copy(box)
-          hasBounds = true
-        } else {
-          combinedBox.union(box)
-        }
-        continue
-      }
-      object.getWorldPosition(tempVector)
-      if (!hasBounds) {
-        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
-        hasBounds = true
-      } else {
-        combinedBox.expandByPoint(tempVector)
-      }
-      continue
-    }
-
-    const node = findSceneNode(props.sceneNodes, nodeId) ?? findSceneNode(sceneStore.nodes, nodeId)
-    if (node) {
-      tempVector.set(node.position.x, node.position.y, node.position.z)
-      if (!hasBounds) {
-        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
-        hasBounds = true
-      } else {
-        combinedBox.expandByPoint(tempVector)
-      }
-    }
-  }
-
-  if (!hasBounds || combinedBox.isEmpty()) {
-    return false
-  }
-
-  combinedBox.getCenter(target)
-  const sphere = new THREE.Sphere()
-  combinedBox.getBoundingSphere(sphere)
-  return applyCameraFocus(target, sphere.radius)
-}
-
-
-function focusCameraOnNode(nodeId: string): boolean {
-  const focus = cameraResetDirectionController.resolveFocusTargetFromNodeId(nodeId)
+  const focus = resolveFocusTargetForNodeIds(nodeIds)
   if (!focus) {
     return false
   }
   return applyCameraFocus(focus.target, focus.radiusEstimate)
+}
+
+function applyCameraTopViewFocus(target: THREE.Vector3, radiusEstimate: number): boolean {
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  const clampedTargetY = Math.max(target.y, MIN_TARGET_HEIGHT)
+  const focusTarget = new THREE.Vector3(target.x, clampedTargetY, target.z)
+  const radiusUsed = computeRadiusUsed(radiusEstimate)
+
+  lastCameraFocusRadius = radiusUsed
+
+  const perspective = camera instanceof THREE.PerspectiveCamera ? camera : null
+  let desiredDistance = perspective
+    ? computeFitDistanceForSphere({ camera: perspective, radius: radiusUsed, margin: 1.18 })
+    : radiusUsed * 2.8
+  desiredDistance = Math.max(desiredDistance, radiusUsed * 1.5, 0.8)
+
+  // Keep a slight oblique angle so map mode constraints and depth cues remain stable.
+  const direction = new THREE.Vector3(0.15, 1, 0.15).normalize()
+  const newPosition = focusTarget.clone().addScaledVector(direction, desiredDistance)
+
+  if (newPosition.y < MIN_CAMERA_HEIGHT) {
+    newPosition.y = MIN_CAMERA_HEIGHT
+  }
+
+  isApplyingCameraState = true
+  mapControls.setLookAt(newPosition, focusTarget, false)
+  syncControlsConstraintsAndSpeeds()
+  isApplyingCameraState = false
+
+  if (perspectiveCamera && camera !== perspectiveCamera) {
+    perspectiveCamera.position.copy(camera.position)
+    perspectiveCamera.quaternion.copy(camera.quaternion)
+  }
+
+  return true
+}
+
+
+function focusCameraOnNode(nodeId: string): boolean {
+  const focus = resolveFocusTargetForNodeIds([nodeId]) ?? cameraResetDirectionController.resolveFocusTargetFromNodeId(nodeId)
+  if (!focus) {
+    return false
+  }
+  return applyCameraFocus(focus.target, focus.radiusEstimate)
+}
+
+function focusViewportSelection(): boolean {
+  const focusIds = getViewportSelectionFocusIds()
+
+  if (focusIds.length === 0) {
+    return false
+  }
+
+  if (!focusCameraOnSelection(focusIds) && focusIds[0]) {
+    sceneStore.requestCameraFocus(focusIds[0])
+  }
+  return true
+}
+
+function focusViewportVisible(): boolean {
+  const focusIds = collectVisibleFocusNodeIds()
+  if (focusIds.length > 0 && focusCameraOnSelection(focusIds)) {
+    return true
+  }
+
+  const fallbackFocusIds = collectVisibleFocusNodeIds({ includeGround: true })
+  if (fallbackFocusIds.length > 0 && focusCameraOnSelection(fallbackFocusIds)) {
+    return true
+  }
+
+  resetCameraView()
+  return true
+}
+
+function enterMapTopView(): boolean {
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  if (sceneStore.viewportSettings.cameraControlMode !== 'map') {
+    sceneStore.setCameraControlMode('map')
+    applyCameraControlMode()
+  }
+
+  const selectedFocus = resolveFocusTargetForNodeIds(getViewportSelectionFocusIds())
+  if (selectedFocus) {
+    return applyCameraTopViewFocus(selectedFocus.target, selectedFocus.radiusEstimate)
+  }
+
+  const visibleFocus = resolveFocusTargetForNodeIds(collectVisibleFocusNodeIds())
+  if (visibleFocus) {
+    return applyCameraTopViewFocus(visibleFocus.target, visibleFocus.radiusEstimate)
+  }
+
+  const fallbackVisibleFocus = resolveFocusTargetForNodeIds(collectVisibleFocusNodeIds({ includeGround: true }))
+  if (fallbackVisibleFocus) {
+    return applyCameraTopViewFocus(fallbackVisibleFocus.target, fallbackVisibleFocus.radiusEstimate)
+  }
+
+  return resetCameraToSelectionDirection('pos-y')
+}
+
+function handleViewportDoubleClickNode(nodeId: string): void {
+  const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
+
+  emitSelectionChange([nodeId])
+  focusCameraOnNode(nodeId)
+
+  if (!wasAlreadySingleSelected) {
+    return
+  }
+
+  const toolForNode = resolveBuildToolForNodeId(nodeId)
+  tryEnterNodeBuildToolEditMode(nodeId, toolForNode)
 }
 
 function collectVisibleFocusNodeIds(options?: { includeGround?: boolean }): string[] {
@@ -11773,10 +11973,13 @@ function collectVisibleFocusNodeIds(options?: { includeGround?: boolean }): stri
 }
 
 function handleDirectionalCameraShortcut(code: string): boolean {
+  if (code === 'Digit3') {
+    return enterMapTopView()
+  }
+
   const directionByCode: Partial<Record<string, CameraResetDirection>> = {
     Digit1: 'pos-x',
     Digit2: 'neg-x',
-    Digit3: 'pos-y',
     Digit4: 'neg-y',
     Digit5: 'pos-z',
     Digit6: 'neg-z',
@@ -11865,10 +12068,37 @@ function beginCameraTransition(params: {
   return true
 }
 
+function doesHitBelongToViewportSelection(hitNodeId: string | null | undefined): boolean {
+  if (!hitNodeId) {
+    return false
+  }
+
+  const selectionIds = getViewportSelectionFocusIds()
+  if (selectionIds.length === 0) {
+    return false
+  }
+
+  return selectionIds.includes(hitNodeId)
+    || selectionIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, hitNodeId))
+}
+
+function resolveSelectionPivotPoint(): THREE.Vector3 | null {
+  const selectionFocus = resolveFocusTargetForNodeIds(getViewportSelectionFocusIds())
+  return selectionFocus?.target.clone() ?? null
+}
+
 function resolveShiftOrbitPivotPoint(event: PointerEvent): THREE.Vector3 | null {
   const sceneHit = pickNodeAtPointer(event)
+  if (sceneHit && doesHitBelongToViewportSelection(sceneHit.nodeId)) {
+    return resolveSelectionPivotPoint() ?? sceneHit.point.clone()
+  }
   if (sceneHit?.point) {
     return sceneHit.point.clone()
+  }
+
+  const selectionBoundingHit = pickActiveSelectionBoundingBoxHit(event)
+  if (selectionBoundingHit?.point) {
+    return resolveSelectionPivotPoint() ?? selectionBoundingHit.point.clone()
   }
 
   const groundPoint = new THREE.Vector3()
@@ -11883,7 +12113,7 @@ function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
   if (!camera || !mapControls || !mapControls.enabled) {
     return
   }
-  if (!event.shiftKey || isApplyingCameraState || isAltOverrideActive) {
+  if (!event.shiftKey || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
     return
   }
   if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
@@ -11927,7 +12157,7 @@ function maybeApplyShiftOrbitLeftClickFocus(event: PointerEvent): void {
   if (!camera || !mapControls || !mapControls.enabled) {
     return
   }
-  if (!event.shiftKey || event.button !== 0 || isApplyingCameraState || isAltOverrideActive) {
+  if (!event.shiftKey || event.button !== 0 || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
     return
   }
   if (sceneStore.viewportSettings.cameraControlMode !== 'orbit') {
@@ -13838,7 +14068,7 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
 }
 
 function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3): boolean {
-  if (!isAltOverrideActive) {
+  if (!isTemporaryNavigationOverrideActive()) {
     const hit = pickNodeAtPointer(event)
     if (hit?.point) {
       result.copy(hit.point)
@@ -14143,7 +14373,7 @@ function refreshBuildStartIndicatorAfterEditExit(event?: MouseEvent | PointerEve
   if (activeBuildTool.value !== 'wall' && activeBuildTool.value !== 'road' && activeBuildTool.value !== 'floor' && activeBuildTool.value !== 'landform' && activeBuildTool.value !== 'region' && activeBuildTool.value !== 'water') {
     return
   }
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
   if (activeBuildTool.value === 'wall' && isSelectedWallEditMode()) {
@@ -14297,7 +14527,7 @@ async function handlePointerDown(event: PointerEvent) {
     hasCanvas: !!canvasRef.value,
     hasCamera: !!camera,
     hasScene: !!scene,
-    isAltOverrideActive,
+    isAltOverrideActive: isTemporaryNavigationOverrideActive(),
   })
   if (guard) {
     applyPointerDownResult(guard)
@@ -14308,7 +14538,7 @@ async function handlePointerDown(event: PointerEvent) {
   maybeBeginShiftOrbitPivotSession(event)
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
-  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
+  if (event.button === 0 && !isTemporaryNavigationOverrideActive() && event.detail >= 2) {
     if (activeBuildTool.value && tryExitActiveNodeBuildToolEditMode(event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -14323,17 +14553,7 @@ async function handlePointerDown(event: PointerEvent) {
     const hit = pickNodeAtPointer(event)
     if (hit) {
       const hitNodeId = hit.nodeId
-      const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === hitNodeId
-      emitSelectionChange([hitNodeId])
-      if (wasAlreadySingleSelected) {
-        const toolForNode = resolveBuildToolForNodeId(hitNodeId)
-        if (tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)) {
-          event.preventDefault()
-          event.stopPropagation()
-          event.stopImmediatePropagation()
-          return
-        }
-      }
+      handleViewportDoubleClickNode(hitNodeId)
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -14346,7 +14566,7 @@ async function handlePointerDown(event: PointerEvent) {
     wallDoorSelectModeActive.value &&
     activeBuildTool.value === 'wall' &&
     selectedNodeIsWall.value &&
-    !isAltOverrideActive
+    !isTemporaryNavigationOverrideActive()
   ) {
     wallDoorRectangleSelectionState = {
       pointerId: event.pointerId,
@@ -14526,7 +14746,7 @@ async function handlePointerDown(event: PointerEvent) {
   const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
 
   if (activeBuildTool.value === 'region') {
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (regionEditModeLocked && selectedNodeIsRegion.value) {
         ensureRegionVertexHandlesForSelectedNode()
       }
@@ -14556,7 +14776,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'landform') {
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (landformEditModeLocked && selectedNodeIsLandform.value) {
         ensureLandformVertexHandlesForSelectedNode()
       }
@@ -14586,7 +14806,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'displayBoard') {
-    if (event.button === 0 && !isAltOverrideActive && !displayBoardBuildTool.getSession()) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive() && !displayBoardBuildTool.getSession()) {
       ensureDisplayBoardCornerHandlesForSelectedNode()
       if (tryBeginDisplayBoardCornerDrag(event)) {
         event.preventDefault()
@@ -14595,7 +14815,7 @@ async function handlePointerDown(event: PointerEvent) {
         return
       }
     }
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (!displayBoardEditModeLocked && displayBoardBuildTool.handlePointerDown(event)) {
         event.preventDefault()
         event.stopPropagation()
@@ -14617,7 +14837,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'water') {
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       ensureWaterCircleHandlesForSelectedNode()
       ensureWaterVertexHandlesForSelectedNode()
 
@@ -14668,7 +14888,7 @@ async function handlePointerDown(event: PointerEvent) {
     floorEditModeActive: floorEditModeLocked,
     roadEditModeActive: roadEditModeLocked,
     floorCircleEditModeActive: isSelectedFloorCircleEditMode(),
-    isAltOverrideActive,
+    isAltOverrideActive: isTemporaryNavigationOverrideActive(),
     nodePickerActive: nodePickerStore.isActive,
     nodePickerCompletePick: (nodeId) => {
       if (canCompleteNodePick(nodeId)) {
@@ -15367,7 +15587,7 @@ function handlePointerMove(event: PointerEvent) {
 
   handlePointerMoveSelection(event, {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
-    isAltOverrideActive,
+    isAltOverrideActive: isTemporaryNavigationOverrideActive(),
     pointerInteractionUpdateMoved: (e) => pointerInteraction.updateMoved(e),
     pointerTrackingState,
     transformControlsDragging: Boolean(transformControls?.dragging),
@@ -16722,7 +16942,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (!scene || !camera || !canvasRef.value) {
     return
   }
-  if (nodePickerStore.isActive || isAltOverrideActive) {
+  if (nodePickerStore.isActive || isTemporaryNavigationOverrideActive()) {
     return
   }
   if (transformControls?.dragging) {
@@ -16764,13 +16984,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   const hitNodeId = hit.nodeId
-  const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === hitNodeId
-
-  emitSelectionChange([hitNodeId])
-  if (wasAlreadySingleSelected) {
-    const toolForNode = resolveBuildToolForNodeId(hitNodeId)
-    tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)
-  }
+  handleViewportDoubleClickNode(hitNodeId)
   event.preventDefault()
   event.stopPropagation()
 }
@@ -17233,7 +17447,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
 
   // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
   // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
-  if (!event.altKey && !isAltOverrideActive) {
+  if (!event.altKey && !isTemporaryNavigationOverrideActive()) {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       const point = surfaceHit.point.clone()
@@ -17274,7 +17488,7 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
 
   // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
   // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
-  if (!event.altKey && !isAltOverrideActive) {
+  if (!event.altKey && !isTemporaryNavigationOverrideActive()) {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       const point = surfaceHit.point.clone()
@@ -20218,16 +20432,7 @@ function handleViewportShortcut(event: KeyboardEvent) {
         break
       }
       case 'KeyF': {
-        const focusIds = [...new Set([
-          ...sceneStore.selectedNodeIds,
-          props.selectedNodeId ?? null,
-        ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
-        if (focusIds.length > 0) {
-          if (!focusCameraOnSelection(focusIds) && focusIds[0]) {
-            sceneStore.requestCameraFocus(focusIds[0])
-          }
-          handled = true
-        }
+        handled = focusViewportSelection()
         break
       }
       default: {
@@ -20249,18 +20454,7 @@ function handleViewportShortcut(event: KeyboardEvent) {
     if (event.code === 'KeyG') {
       handled = wallBuildTool.autofillFromLastCommittedSegment()
     } else if (event.code === 'KeyF') {
-      const focusIds = collectVisibleFocusNodeIds()
-      if (focusIds.length > 0 && focusCameraOnSelection(focusIds)) {
-        handled = true
-      } else {
-        const fallbackFocusIds = collectVisibleFocusNodeIds({ includeGround: true })
-        if (fallbackFocusIds.length > 0 && focusCameraOnSelection(fallbackFocusIds)) {
-          handled = true
-        } else {
-          resetCameraView()
-          handled = true
-        }
-      }
+      handled = focusViewportVisible()
     }
   }
 
@@ -20394,6 +20588,9 @@ onMounted(() => {
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.addEventListener('keydown', handleSpaceOverrideKeyDown, { capture: true })
+  window.addEventListener('keyup', handleSpaceOverrideKeyUp, { capture: true })
+  window.addEventListener('blur', handleSpaceOverrideBlur, { capture: true })
   window.addEventListener('keydown', handleVOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleVOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleVOverrideBlur, { capture: true })
@@ -20441,6 +20638,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.removeEventListener('keydown', handleSpaceOverrideKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleSpaceOverrideKeyUp, { capture: true })
+  window.removeEventListener('blur', handleSpaceOverrideBlur, { capture: true })
   window.removeEventListener('keydown', handleVOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleVOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleVOverrideBlur, { capture: true })
@@ -20815,6 +21015,9 @@ defineExpose<SceneViewportHandle>({
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
+        @focus-top-view="enterMapTopView"
+        @focus-selection="focusViewportSelection"
+        @focus-visible="focusViewportVisible"
         @reset-camera-direction="handleResetCameraDirection"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"

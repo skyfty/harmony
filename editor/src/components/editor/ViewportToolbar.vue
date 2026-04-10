@@ -1283,10 +1283,41 @@
         variant="text"
         :title="
           cameraControlMode === 'map'
-            ? 'Camera Controls: Map (click to switch to Orbit)'
-            : 'Camera Controls: Orbit (click to switch to Map)'
+            ? 'Layout Mode: Map (click to switch to Orbit / Assembly Mode)'
+            : 'Assembly Mode: Orbit (click to switch to Map / Layout Mode)'
         "
         @click="toggleCameraControlMode"
+      />
+      <v-btn
+        icon="mdi-view-grid-outline"
+        density="compact"
+        size="small"
+        color="undefined"
+        variant="text"
+        class="toolbar-button"
+        title="Layout Top View (Alt+3)"
+        @click="emit('focus-top-view')"
+      />
+      <v-btn
+        icon="mdi-crosshairs-gps"
+        density="compact"
+        size="small"
+        color="undefined"
+        variant="text"
+        class="toolbar-button"
+        :title="selectionCount > 0 ? 'Focus Selection (F)' : 'Focus Selection (F) — no selection'"
+        :disabled="selectionCount < 1"
+        @click="emit('focus-selection')"
+      />
+      <v-btn
+        icon="mdi-fit-to-screen-outline"
+        density="compact"
+        size="small"
+        color="undefined"
+        variant="text"
+        class="toolbar-button"
+        title="Focus Visible (Shift+F)"
+        @click="emit('focus-visible')"
       />
 
       <v-menu
@@ -1331,7 +1362,7 @@
             <div class="popup-menu-card__content">
               <v-list-item title="正面 (+X) — Alt+1" @click="handleCameraResetDirectionSelect('pos-x')" />
               <v-list-item title="背面 (-X) — Alt+2" @click="handleCameraResetDirectionSelect('neg-x')" />
-              <v-list-item title="上面 (+Y) — Alt+3" @click="handleCameraResetDirectionSelect('pos-y')" />
+              <v-list-item title="顶视布局 (+Y) — Alt+3" @click="emit('focus-top-view')" />
               <v-list-item title="下面 (-Y) — Alt+4" @click="handleCameraResetDirectionSelect('neg-y')" />
               <v-list-item title="左面 (+Z) — Alt+5" @click="handleCameraResetDirectionSelect('pos-z')" />
               <v-list-item title="右面 (-Z) — Alt+6" @click="handleCameraResetDirectionSelect('neg-z')" />
@@ -1463,6 +1494,9 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (event: 'reset-camera'): void
+  (event: 'focus-top-view'): void
+  (event: 'focus-selection'): void
+  (event: 'focus-visible'): void
   (event: 'drop-to-ground'): void
   (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
