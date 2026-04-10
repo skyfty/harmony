@@ -213,9 +213,19 @@ import { startTourAndFollow, stopTourAndUnfollow } from '@schema/autoTourHelpers
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
 import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
 import {
+	SIGNBOARD_CLOSE_FADE_DISTANCE,
+	SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+	createSignboardPlacementSmoothingState,
+	createSignboardReferenceSmoothingState,
+	DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
+	DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
 	computeSignboardPlacement,
+	resetSignboardReferenceSmoothingState,
 	resolveSignboardAnchorWorldPosition,
 	resolveSignboardDisplayLabel,
+	smoothSignboardPlacement,
+	smoothSignboardReference,
+	type SignboardPlacementSmoothingState,
 } from '@schema/signboardOverlay'
 import type {
 	GuideboardComponentProps,
@@ -1633,6 +1643,8 @@ const signboardOverlayEntries = ref<Array<{
 	opacity: number
 	referenceKind: 'camera' | 'vehicle'
 }>>([])
+const signboardReferenceSmoothingState = createSignboardReferenceSmoothingState()
+const signboardPlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>()
 const signboardReferenceScratch = new THREE.Vector3()
 const signboardAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceScratch = new THREE.Vector3()
@@ -1642,6 +1654,15 @@ const behaviorBubbleAnchorScratch = new THREE.Vector3()
 const behaviorBubbleCameraScratch = new THREE.Vector3()
 const behaviorBubbleSeenKeys = new Set<string>()
 const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5
+const SIGNBOARD_REFERENCE_SMOOTH_SPEED = DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED
+const SIGNBOARD_PLACEMENT_SMOOTH_SPEED = DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED
+const SIGNBOARD_NEAR_FADE_DISTANCE = SIGNBOARD_CLOSE_FADE_DISTANCE
+const SIGNBOARD_MIN_VISIBLE_Y_PERCENT = SIGNBOARD_MIN_SCREEN_Y_PERCENT
+
+function resetSignboardOverlaySmoothing(): void {
+	resetSignboardReferenceSmoothingState(signboardReferenceSmoothingState)
+	signboardPlacementSmoothingStates.clear()
+}
 
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
 	let current: THREE.Object3D | null | undefined = object
@@ -2236,6 +2257,7 @@ function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | nul
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
 	rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap)
 	signboardNodeIds.clear()
+	resetSignboardOverlaySmoothing()
 	for (const [nodeId, node] of previewNodeMap.entries()) {
 		const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
 			| SceneNodeComponentState<SignboardComponentProps>
@@ -2319,17 +2341,32 @@ function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' 
 	return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() }
 }
 
-function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
+
+function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
 	if (!signboardNodeIds.size) {
 		if (signboardOverlayEntries.value.length) {
 			signboardOverlayEntries.value = []
 		}
+		resetSignboardOverlaySmoothing()
 		return
 	}
 	const reference = resolveSignboardReference()
 	if (!reference) {
 		signboardOverlayEntries.value = []
+		resetSignboardOverlaySmoothing()
 		return
+	}
+	const smoothedReferencePosition = smoothSignboardReference(signboardReferenceSmoothingState, {
+		targetWorld: reference.position,
+		deltaSeconds,
+		kind: reference.kind,
+		nodeId: reference.nodeId,
+		speed: SIGNBOARD_REFERENCE_SMOOTH_SPEED,
+	})
+	const smoothedReference = {
+		position: smoothedReferencePosition,
+		kind: reference.kind,
+		nodeId: reference.nodeId,
 	}
 	const nextEntries: Array<{
 		id: string
@@ -2341,6 +2378,7 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
 		opacity: number
 		referenceKind: 'camera' | 'vehicle'
 	}> = []
+	const activePlacementNodeIds = new Set<string>()
 	for (const nodeId of signboardNodeIds) {
 		const node = resolveNodeById(nodeId)
 		const object = nodeObjectMap.get(nodeId) ?? null
@@ -2358,25 +2396,41 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera): void {
 			continue
 		}
 		resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch)
-		const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, reference)
+		const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, smoothedReference)
 		const placement = computeSignboardPlacement({
 			anchorWorld: signboardAnchorScratch,
 			referenceWorld: distanceReferenceWorld,
 			camera: activeCamera,
+			closeFadeDistance: SIGNBOARD_NEAR_FADE_DISTANCE,
+			minScreenYPercent: SIGNBOARD_MIN_VISIBLE_Y_PERCENT,
 		})
 		if (!placement) {
+			signboardPlacementSmoothingStates.delete(nodeId)
 			continue
 		}
+		const placementState = signboardPlacementSmoothingStates.get(nodeId) ?? createSignboardPlacementSmoothingState()
+		signboardPlacementSmoothingStates.set(nodeId, placementState)
+		const smoothedPlacement = smoothSignboardPlacement(placementState, {
+			placement,
+			deltaSeconds,
+			speed: SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
+		})
+		activePlacementNodeIds.add(nodeId)
 		nextEntries.push({
 			id: nodeId,
 			label,
-			distanceLabel: placement.distanceLabel,
-			xPercent: placement.xPercent,
-			yPercent: placement.yPercent,
-			scale: placement.scale,
-			opacity: placement.opacity,
+			distanceLabel: smoothedPlacement.distanceLabel,
+			xPercent: smoothedPlacement.xPercent,
+			yPercent: smoothedPlacement.yPercent,
+			scale: smoothedPlacement.scale,
+			opacity: smoothedPlacement.opacity,
 			referenceKind: reference.kind,
 		})
+	}
+	for (const nodeId of signboardPlacementSmoothingStates.keys()) {
+		if (!activePlacementNodeIds.has(nodeId)) {
+			signboardPlacementSmoothingStates.delete(nodeId)
+		}
 	}
 	signboardOverlayEntries.value = nextEntries
 }
@@ -7862,7 +7916,7 @@ function startAnimationLoop() {
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera)
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
-		updateSignboardOverlayEntries(activeCamera)
+		updateSignboardOverlayEntries(activeCamera, delta)
 		updatePerFrameDiagnostics(delta)
 		if (gradientBackgroundDome) {
 			gradientBackgroundDome.mesh.position.copy(activeCamera.position)
