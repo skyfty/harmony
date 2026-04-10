@@ -1834,8 +1834,8 @@ const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraContr
 const viewportSelectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const cameraPointerHintText = computed(() => (
   cameraControlMode.value === 'map'
-    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Shift+右拖 指定轨道中心'
-    : '中键旋转 · 右键平移 · 滚轮缩放 · Shift+中拖 指定轨道中心 · Shift+左键 对焦轨道'
+    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Shift+右拖 指定轨道中心 · Shift+左键 快速对焦'
+    : '中键旋转 · 右键平移 · 滚轮缩放 · Shift+中拖 指定轨道中心 · Shift+左键 快速对焦'
 ))
 const cameraStatusZoomRatioText = computed(() => {
   const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
@@ -12274,29 +12274,30 @@ function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
   mapControls.update()
 }
 
-function maybeApplyShiftOrbitLeftClickFocus(event: PointerEvent): void {
+function maybeApplyShiftLeftClickFocus(event: PointerEvent): boolean {
   if (!camera || !mapControls || !mapControls.enabled) {
-    return
+    return false
   }
   if (!event.shiftKey || event.button !== 0 || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
-    return
+    return false
   }
-  if (sceneStore.viewportSettings.cameraControlMode !== 'orbit') {
-    return
+  const mode = sceneStore.viewportSettings.cameraControlMode
+  if (mode !== 'orbit' && mode !== 'map') {
+    return false
   }
   if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
-    return
+    return false
   }
   if (scatterEraseModeActive.value || hasPlacementPreviewActive()) {
-    return
+    return false
   }
   if (Boolean(transformControls?.dragging)) {
-    return
+    return false
   }
 
   const pivot = resolveShiftOrbitPivotPoint(event)
   if (!pivot) {
-    return
+    return false
   }
 
   const cameraOffset = new THREE.Vector3().copy(camera.position).sub(mapControls.target)
@@ -12309,10 +12310,11 @@ function maybeApplyShiftOrbitLeftClickFocus(event: PointerEvent): void {
     relativeOffset: cameraOffset,
     durationMs: SHIFT_ORBIT_FOCUS_TRANSITION_MS,
   })) {
-    return
+    return false
   }
 
   lastCameraFocusRadius = Math.max(0.25, endPosition.distanceTo(endTarget) / 10)
+  return true
 }
 
 function applyCameraControlMode() {
@@ -14660,7 +14662,12 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  maybeApplyShiftOrbitLeftClickFocus(event)
+  if (maybeApplyShiftLeftClickFocus(event)) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
   maybeBeginShiftOrbitPivotSession(event)
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
@@ -21301,7 +21308,7 @@ defineExpose<SceneViewportHandle>({
             size="x-small"
             variant="text"
             class="camera-status-hud__icon-btn"
-            :title="cameraControlMode === 'map' ? '布局模式：地图（点击切换到轨道/装配模式）' : '装配模式：轨道（点击切换到地图/布局模式）'"
+            :title="cameraControlMode === 'map' ? '地图/布局模式（点击或按 M 切换到轨道模式）' : '轨道/装配模式（点击或按 M 切换到地图模式）'"
             @click="toggleViewportCameraControlMode"
           />
           <v-btn
