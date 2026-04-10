@@ -1,7 +1,7 @@
 <template>
-  <view class="page" :style="{ paddingTop: topInset + 'px' }">
+  <view class="page">
     <MiniAuthRecovery />
-    <PageHeader title="" style="height: 0px;">
+    <PageHeader title="">
       <template #left>
         <button class="business-entry" @tap="openBusinessPage">我是商业管理员</button>
       </template>
@@ -81,13 +81,11 @@ import { requestProfileAndSync } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
-import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
+import { applyLightNavigationBar } from '@/utils/safeArea';
 import { readStorageJson, writeStorageJson } from '@/utils/storage';
 import { isMiniProfileIncomplete } from '@/utils/miniProfile';
 
 const KEY = 'tour:settings:v1';
-
-const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 
 const profile = ref<UserProfile>({
   id: '',
@@ -108,7 +106,6 @@ const defaultProfile: UserProfile = {
 const settings = reactive(readStorageJson(KEY, { notify: true, autoDownload: false }));
 
 onShow(() => {
-  topInset.value = getTopSafeAreaMetrics().contentTopInset;
   applyLightNavigationBar();
   console.info('[mini-auth-profile-page] onShow reloadProfile start')
   void reloadProfile();
@@ -228,7 +225,7 @@ function handleNavigate(key: NavKey) {
 }
 
 .header {
-  padding: 16px;
+  padding: 8px 16px 12px;
 }
 
 .business-entry {
@@ -246,11 +243,11 @@ function handleNavigate(key: NavKey) {
 .profile {
   background: #ffffff;
   border-radius: 18px;
-  padding: 14px;
+  padding: 12px 14px;
   box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .avatar {

@@ -4,12 +4,12 @@
     <PageHeader title="商业页面" />
 
     <view class="content">
-      <view class="hero-card">
+      <view class="content-section hero-card">
         <text class="hero-title">商业合作中心</text>
         <text class="hero-desc">从需求提交到运营上线，实时查看项目推进状态。</text>
       </view>
 
-      <view class="timeline-scroll">
+      <view class="content-section timeline-scroll">
         <view class="timeline-row">
           <view v-for="(item, index) in stageItems" :key="item.key" class="timeline-item">
             <view class="timeline-dot" :class="timelineDotClass(item.key)">{{ index + 1 }}</view>
@@ -19,12 +19,12 @@
         </view>
       </view>
 
-      <view v-if="loading" class="state-card">
+      <view v-if="loading" class="content-section state-card">
         <text class="state-title">加载中...</text>
       </view>
 
       <template v-else>
-        <view v-if="showQuoteForm" class="card form-card">
+        <view v-if="showQuoteForm" class="content-section card form-card">
           <text class="section-title">需求订单表单</text>
 
           <view class="field">
@@ -79,23 +79,23 @@
           </view>
         </view>
 
-        <view v-else-if="currentStage === 'signing'" class="state-card">
+        <view v-else-if="currentStage === 'signing'" class="content-section state-card">
           <text class="state-title">等待签约</text>
           <text class="state-desc">需求已提交，商务团队会尽快与你联系确认方案与签约安排。</text>
           <button class="secondary-btn state-btn" @tap="contactBusiness">联系商务</button>
         </view>
 
-        <view v-else-if="currentStage === 'publish'" class="state-card">
+        <view v-else-if="currentStage === 'publish'" class="content-section state-card">
           <text class="state-title">发布进度</text>
           <text class="state-desc">等待审核</text>
         </view>
 
-        <view v-else-if="currentStage === 'operation'" class="state-card success-card">
+        <view v-else-if="currentStage === 'operation'" class="content-section state-card success-card">
           <text class="state-title">运营中</text>
           <text class="state-desc">项目已发布上线，当前处于运营阶段。</text>
         </view>
 
-        <view v-if="currentOrder" class="card summary-card">
+        <view v-if="currentOrder" class="content-section card summary-card">
           <text class="section-title">订单信息</text>
           <view class="summary-grid">
             <view class="summary-item">
@@ -117,7 +117,7 @@
           </view>
         </view>
 
-        <view v-if="showProductionTimeline" class="card progress-card">
+        <view v-if="showProductionTimeline" class="content-section card progress-card">
           <text class="section-title">制作进度</text>
           <view class="vertical-timeline">
             <view v-for="item in currentOrder?.productionProgress || []" :key="item.code" class="vertical-node">
@@ -356,14 +356,14 @@ function formatDateTime(value: string) {
   overflow-x: hidden;
 }
 
-.content > * {
+.content-section {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
   margin-bottom: 14px;
 }
 
-.content > *:last-child {
+.content-section:last-child {
   margin-bottom: 0;
 }
 
