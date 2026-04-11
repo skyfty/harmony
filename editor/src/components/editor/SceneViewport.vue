@@ -3352,6 +3352,9 @@ const groundEditor = createGroundEditor({
     enabled: resolveGroundScatterChunkStreamingEnabled,
     getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
   },
+  onSculptStart: () => {
+    handleGroundTerrainMenuOpen(false)
+  },
   onTerrainPaintSurfacePreviewChanged: syncGroundSurfacePreviewFromLiveTerrainPaint,
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,

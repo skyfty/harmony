@@ -164,6 +164,7 @@ export type GroundEditorOptions = {
 		mode: 'live' | 'surface-rebuild'
 		liveChunkPreviews?: GroundSurfaceLiveChunkPreview[] | null
 	}) => void
+	onSculptStart?: () => void
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
@@ -4354,6 +4355,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!worldPoint) {
 			return false
 		}
+		options.onSculptStart?.()
 		ensureSculptSession(definition, groundNode.id)
 		if (!sculptPolygonSession || sculptPolygonSession.nodeId !== groundNode.id) {
 			sculptPolygonSession = {
@@ -6999,6 +7001,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (getActiveBrushShape() === 'polygon') {
 			return beginPolygonSculpt(event)
 		}
+		options.onSculptStart?.()
 		ensureSculptSession(definition, groundNode.id)
 
 		isSculpting.value = true

@@ -259,7 +259,7 @@ function commitNoiseStrengthInput() {
 
     <div v-show="isCircleBrush" class="control-row">
       <div class="control-group control-group--compact">
-        <div class="text-caption">Brush Radius: {{ brushRadiusInput }}</div>
+        <div class="text-caption">Brush Radius:</div>
         <v-text-field
           v-model="brushRadiusInput"
           type="number"
@@ -271,6 +271,7 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
+          :disabled="radiusStrengthDisabled"
           class="numeric-input"
           @blur="commitBrushRadiusInput"
           @keydown.enter.prevent="commitBrushRadiusInput"
@@ -278,7 +279,7 @@ function commitNoiseStrengthInput() {
       </div>
 
       <div class="control-group control-group--compact">
-        <div class="text-caption">Brush Strength: {{ brushStrengthInput }}</div>
+        <div class="text-caption">Brush Strength:</div>
         <v-text-field
           v-model="brushStrengthInput"
           type="number"
@@ -290,6 +291,7 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
+          :disabled="radiusStrengthDisabled"
           class="numeric-input"
           @blur="commitBrushStrengthInput"
           @keydown.enter.prevent="commitBrushStrengthInput"
@@ -299,7 +301,7 @@ function commitNoiseStrengthInput() {
 
     <div v-show="isPolygonBrush" class="control-row">
       <div class="control-group control-group--compact">
-        <div class="text-caption">Depth: {{ brushDepthInput }}</div>
+        <div class="text-caption">Depth:</div>
         <v-text-field
           v-model="brushDepthInput"
           type="number"
@@ -311,6 +313,7 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
+          :disabled="depthSlopeDisabled"
           class="numeric-input"
           @blur="commitBrushDepthInput"
           @keydown.enter.prevent="commitBrushDepthInput"
@@ -318,7 +321,7 @@ function commitNoiseStrengthInput() {
       </div>
 
       <div class="control-group control-group--compact">
-        <div class="text-caption">Slope: {{ brushSlopeInput }}</div>
+        <div class="text-caption">Slope:</div>
         <v-text-field
           v-model="brushSlopeInput"
           type="number"
@@ -329,6 +332,7 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
+          :disabled="depthSlopeDisabled"
           class="numeric-input"
           @blur="commitBrushSlopeInput"
           @keydown.enter.prevent="commitBrushSlopeInput"
@@ -338,39 +342,41 @@ function commitNoiseStrengthInput() {
 
     <v-divider class="ground-panel-divider" />
 
-    <div class="control-group noise-type">
-      <div class="text-caption mb-1">Noise Type</div>
-      <v-select
-        v-model="noiseModeModel"
-        :items="props.noiseModeOptions"
-        item-title="label"
-        item-value="value"
-        density="compact"
-        variant="underlined"
-        hide-details
-        :disabled="!props.hasGround"
-        class="noise-mode-select"
-      />
-    </div>
+    <div class="control-row noise-row">
+      <div class="control-group control-group--compact noise-type">
+        <div class="text-caption mb-1">Noise Type</div>
+        <v-select
+          v-model="noiseModeModel"
+          :items="props.noiseModeOptions"
+          item-title="label"
+          item-value="value"
+          density="compact"
+          variant="underlined"
+          hide-details
+          :disabled="!props.hasGround"
+          class="noise-mode-select"
+        />
+      </div>
 
-    <div class="control-group">
-      <div class="text-caption">Noise Strength: {{ noiseStrengthInput }}</div>
-      <v-text-field
-        v-model="noiseStrengthInput"
-        type="number"
-        suffix="x"
-        :min="NOISE_STRENGTH_MIN"
-        :max="NOISE_STRENGTH_MAX"
-        :step="NOISE_STRENGTH_STEP"
-        variant="underlined"
-        density="compact"
-        hide-details
-        inputmode="decimal"
-        :disabled="!props.hasGround"
-        class="numeric-input"
-        @blur="commitNoiseStrengthInput"
-        @keydown.enter.prevent="commitNoiseStrengthInput"
-      />
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Noise Strength:</div>
+        <v-text-field
+          v-model="noiseStrengthInput"
+          type="number"
+          suffix="x"
+          :min="NOISE_STRENGTH_MIN"
+          :max="NOISE_STRENGTH_MAX"
+          :step="NOISE_STRENGTH_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitNoiseStrengthInput"
+          @keydown.enter.prevent="commitNoiseStrengthInput"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -409,5 +415,9 @@ function commitNoiseStrengthInput() {
 
 .noise-type {
   margin-bottom: 10px;
+}
+
+.noise-row {
+  align-items: flex-start;
 }
 </style>
