@@ -10122,7 +10122,14 @@ function cloneGroundSurfaceChunkMap(
   return Object.keys(result).length ? result : null
 }
 
-const viewportForceDenseGroundMesh = ref(activeBuildTool.value === 'terrain')
+function shouldForceDenseGroundMeshForViewport(
+  tool = activeBuildTool.value,
+  operation = brushOperation.value,
+): boolean {
+  return tool === 'terrain' && operation !== null
+}
+
+const viewportForceDenseGroundMesh = ref(shouldForceDenseGroundMeshForViewport())
 let pendingViewportGroundOptimizedRebuild = false
 let lastGroundRenderDebugSignature: string | null = null
 
@@ -21047,15 +21054,6 @@ watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
   clearBuildToolVertexSnap()
 
-  if (tool === 'terrain') {
-    viewportForceDenseGroundMesh.value = true
-    syncViewportGroundRenderMode()
-  } else if (previous === 'terrain') {
-    const shouldRebuildOptimizedMesh = pendingViewportGroundOptimizedRebuild
-    viewportForceDenseGroundMesh.value = false
-    syncViewportGroundRenderMode({ rebuildOptimizedMesh: shouldRebuildOptimizedMesh })
-  }
-
   // Keep viewport side effects consistent even when the tool is activated via store (e.g. AssetPanel).
   if (isGroundBuildTool(tool)) {
     exitScatterEraseMode()
@@ -21119,6 +21117,37 @@ watch(activeBuildTool, (tool, previous) => {
     uiStore.setActiveSelectionContext(null)
   }
 })
+
+watch(
+  [activeBuildTool, brushOperation],
+  ([tool, operation], [previousTool, previousOperation]) => {
+    const forceDense = shouldForceDenseGroundMeshForViewport(tool, operation)
+    const previousForceDense = shouldForceDenseGroundMeshForViewport(previousTool, previousOperation)
+
+    if (forceDense === previousForceDense) {
+      return
+    }
+
+    viewportForceDenseGroundMesh.value = forceDense
+
+    if (forceDense) {
+      syncViewportGroundRenderMode()
+      return
+    }
+
+    const shouldRebuildOptimizedMesh = pendingViewportGroundOptimizedRebuild
+    syncViewportGroundRenderMode({ rebuildOptimizedMesh: shouldRebuildOptimizedMesh })
+
+    if (shouldRebuildOptimizedMesh) {
+      const groundNode = getGroundNodeFromStore()
+      if (groundNode?.dynamicMesh?.type === 'Ground') {
+        void sceneStore.saveGroundDataImmediately(groundNode.id).catch((error: unknown) => {
+          console.warn('[SceneViewport] Failed to save ground data after sculpt commit', error)
+        })
+      }
+    }
+  },
+)
 
 watch(
   () => props.focusRequestId,

@@ -9273,6 +9273,20 @@ export const useSceneStore = defineStore('scene', {
     refreshGroundOptimizedMesh(nodeId: string) {
       return refreshGroundOptimizedMeshRuntime(this, nodeId)
     },
+    async saveGroundDataImmediately(nodeId: string) {
+      const target = findNodeById(this.nodes, nodeId)
+      const sceneId = typeof this.currentSceneId === 'string'
+        ? this.currentSceneId.trim()
+        : ''
+      if (!target || target.dynamicMesh?.type !== 'Ground' || !sceneId) {
+        return false
+      }
+
+      const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(target)
+      await useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar, { syncServer: false })
+      await this.saveActiveScene({ force: true })
+      return true
+    },
     commitGroundScatterEdit(
       nodeId: string,
       terrainScatter: TerrainScatterStoreSnapshot | null,
