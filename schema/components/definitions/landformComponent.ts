@@ -7,14 +7,19 @@ export const LANDFORM_COMPONENT_TYPE = 'landform'
 export const LANDFORM_DEFAULT_FEATHER = 1
 export const LANDFORM_MIN_FEATHER = 0
 export const LANDFORM_MAX_FEATHER = 50
+export const LANDFORM_DEFAULT_ENABLE_FEATHER = false
 export const LANDFORM_DEFAULT_UV_SCALE: { x: number; y: number } = { x: 1, y: 1 }
 
 export interface LandformComponentProps {
+  enableFeather: boolean
   feather: number
   uvScale: { x: number; y: number }
 }
 
 export function clampLandformComponentProps(props: Partial<LandformComponentProps> | null | undefined): LandformComponentProps {
+  const enableFeather = typeof props?.enableFeather === 'boolean'
+    ? props.enableFeather
+    : LANDFORM_DEFAULT_ENABLE_FEATHER
   const featherRaw = typeof props?.feather === 'number' && Number.isFinite(props.feather)
     ? props.feather
     : LANDFORM_DEFAULT_FEATHER
@@ -28,14 +33,18 @@ export function clampLandformComponentProps(props: Partial<LandformComponentProp
     y: Number.isFinite(scaleY) ? Math.max(1e-3, scaleY) : LANDFORM_DEFAULT_UV_SCALE.y,
   }
 
-  return { feather, uvScale }
+  return { enableFeather, feather, uvScale }
 }
 
 export function resolveLandformComponentPropsFromMesh(mesh: LandformDynamicMesh | undefined | null): LandformComponentProps {
   if (!mesh) {
     return clampLandformComponentProps(null)
   }
+  const hasExplicitEnableFeather = typeof mesh.enableFeather === 'boolean'
+  const hasFeatherData = Array.isArray(mesh.surfaceFeather)
+    && mesh.surfaceFeather.some((value) => Number.isFinite(Number(value)) && Number(value) < 0.999)
   return clampLandformComponentProps({
+    enableFeather: hasExplicitEnableFeather ? mesh.enableFeather : hasFeatherData,
     feather: mesh.feather,
     uvScale: (mesh.uvScale ?? undefined) as Vector2Like | undefined,
   })
@@ -43,6 +52,7 @@ export function resolveLandformComponentPropsFromMesh(mesh: LandformDynamicMesh 
 
 export function cloneLandformComponentProps(props: LandformComponentProps): LandformComponentProps {
   return {
+    enableFeather: props.enableFeather,
     feather: props.feather,
     uvScale: { x: props.uvScale.x, y: props.uvScale.y },
   }
@@ -72,6 +82,11 @@ const landformComponentDefinition: ComponentDefinition<LandformComponentProps> =
       id: 'surface',
       label: 'Surface',
       fields: [
+        {
+          kind: 'boolean',
+          key: 'enableFeather',
+          label: 'Enable Feather',
+        },
         {
           kind: 'number',
           key: 'feather',
@@ -103,6 +118,7 @@ export function createLandformComponentState(
 ): SceneNodeComponentState<LandformComponentProps> {
   const defaults = resolveLandformComponentPropsFromMesh(node.dynamicMesh?.type === 'Landform' ? node.dynamicMesh : null)
   const merged = clampLandformComponentProps({
+    enableFeather: overrides?.enableFeather ?? defaults.enableFeather,
     feather: overrides?.feather ?? defaults.feather,
     uvScale: overrides?.uvScale ?? defaults.uvScale,
   })

@@ -1558,6 +1558,8 @@ export interface LandformDynamicMesh {
   surfaceFeather?: number[] | null
   /** Material config id used for the landform surface mesh. */
   materialConfigId?: string | null
+  /** Whether feathered edge fading is enabled for this landform surface. */
+  enableFeather?: boolean
   /** Feather width in meters used when computing surfaceFeather. */
   feather?: number
   /** Surface UV scale in local XZ meters per UV repeat (U/V). */

@@ -3,6 +3,7 @@ import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Ve
 import { sampleGroundHeight } from '@schema/groundMesh'
 import {
   clampLandformComponentProps,
+  LANDFORM_DEFAULT_ENABLE_FEATHER,
   LANDFORM_DEFAULT_FEATHER,
   LANDFORM_DEFAULT_UV_SCALE,
   type LandformComponentProps,
@@ -25,6 +26,19 @@ const LANDFORM_MAX_CELL_SUBDIVISIONS = 4
 const LANDFORM_MAX_REFINEMENT_STEPS = 8
 const LANDFORM_HEIGHT_ERROR_TOLERANCE = 0.01
 const LANDFORM_MAX_TRIANGLE_SAMPLE_DIVISIONS = 5
+const LANDFORM_INTERIOR_MAX_TRIANGLE_SAMPLE_DIVISIONS = 3
+const LANDFORM_INTERIOR_EDGE_LENGTH_SCALE = 2.25
+const LANDFORM_INTERIOR_HEIGHT_ERROR_TOLERANCE_SCALE = 1.5
+const LANDFORM_COMPACT_EDGE_LENGTH_SCALE = 1.8
+const LANDFORM_COMPACT_INTERIOR_EDGE_LENGTH_SCALE = 1.35
+const LANDFORM_COMPACT_HEIGHT_ERROR_TOLERANCE_SCALE = 1.75
+const LANDFORM_COMPACT_MAX_SAMPLE_DIVISIONS = 3
+const LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE = 0.45
+const LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE = 0.65
+const LANDFORM_SUPPORT_RING_MIN_WIDTH = 0.2
+const LANDFORM_SUPPORT_RING_MAX_WIDTH = 1.5
+const LANDFORM_SUPPORT_RING_WIDTH_SCALE = 0.35
+const LANDFORM_SUPPORT_RING_EDGE_LENGTH_SCALE = 1.5
 
 type GroundTransform = {
   position: { x: number; y: number; z: number }
@@ -34,7 +48,10 @@ type GroundTransform = {
 type LandformFeatherRefinementOptions = {
   footprint: Array<[number, number]>
   featherWidth: number
+  supportRingWidth?: number
+  protectedDistance?: number
   segmentIndex?: FootprintSegmentIndex | null
+  distanceCache?: Map<string, number>
 }
 
 function buildWorldPoints(points: Vector3Like[]): Vector3[] {
@@ -170,6 +187,64 @@ function normalizePolygonWinding(points: Vector3[]): Vector3[] {
     return [...points].reverse()
   }
   return points
+}
+
+function pointToSegmentDistanceXZ(point: Vector3, start: Vector3, end: Vector3): number {
+  return pointToSegmentDistance2D(point.x, point.z, start.x, start.z, end.x, end.z)
+}
+
+function simplifyClosedPolygonXZ(points: Vector3[], tolerance: number, minEdgeLength: number): Vector3[] {
+  if (points.length < 4) {
+    return points.map((point) => point.clone())
+  }
+
+  const normalizedTolerance = Number.isFinite(tolerance) ? Math.max(1e-4, tolerance) : 1e-4
+  const normalizedMinEdgeLength = Number.isFinite(minEdgeLength) ? Math.max(normalizedTolerance, minEdgeLength) : normalizedTolerance
+  const simplified = points.map((point) => point.clone())
+
+  let changed = true
+  while (changed && simplified.length > 3) {
+    changed = false
+
+    for (let index = 0; index < simplified.length; index += 1) {
+      if (simplified.length <= 3) {
+        break
+      }
+      const previousIndex = (index + simplified.length - 1) % simplified.length
+      const nextIndex = (index + 1) % simplified.length
+      const previous = simplified[previousIndex]!
+      const current = simplified[index]!
+      const next = simplified[nextIndex]!
+      const prevDistance = previous.distanceTo(current)
+      const nextDistance = current.distanceTo(next)
+      const boundaryDistance = pointToSegmentDistanceXZ(current, previous, next)
+
+      if (
+        prevDistance <= normalizedMinEdgeLength
+        || nextDistance <= normalizedMinEdgeLength
+        || boundaryDistance <= normalizedTolerance
+      ) {
+        simplified.splice(index, 1)
+        changed = true
+        break
+      }
+    }
+  }
+
+  return simplified.length >= 3 ? simplified : points.map((point) => point.clone())
+}
+
+function simplifyLandformOutlineForCompactMode(points: Vector3[], groundDefinition: GroundDynamicMesh | null): Vector3[] {
+  if (points.length < 4) {
+    return points
+  }
+
+  const baseEdgeLength = groundDefinition
+    ? Math.max(groundDefinition.cellSize, LANDFORM_TARGET_TRI_EDGE_LENGTH)
+    : LANDFORM_TARGET_TRI_EDGE_LENGTH
+  const tolerance = baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE
+  const minEdgeLength = baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE
+  return normalizePolygonWinding(simplifyClosedPolygonXZ(points, tolerance, minEdgeLength))
 }
 
 function buildShapeTriangulation(points: Vector3[]): { vertices: Vector2[]; indices: number[] } | null {
@@ -360,7 +435,11 @@ function buildLandformSurfaceFeather(
   footprint: Array<[number, number]>,
   surfaceVertices: Array<{ x: number; z: number }>,
   featherWidth: number,
+  enableFeather: boolean = true,
 ): number[] {
+  if (!enableFeather) {
+    return surfaceVertices.map(() => 1)
+  }
   const normalizedWidth = Number.isFinite(featherWidth) ? Math.max(0, featherWidth) : 0
   if (normalizedWidth <= 1e-6 || footprint.length < 3 || !surfaceVertices.length) {
     return surfaceVertices.map(() => 1)
@@ -444,6 +523,7 @@ function requiresGroundConformanceRefinement(
   c: Vector2,
   tolerance: number,
   targetEdgeLength: number,
+  maxSampleDivisions: number = LANDFORM_MAX_TRIANGLE_SAMPLE_DIVISIONS,
 ): boolean {
   if (!Number.isFinite(tolerance) || tolerance <= 1e-6) {
     return false
@@ -465,8 +545,9 @@ function requiresGroundConformanceRefinement(
   const normalizedTargetEdgeLength = Number.isFinite(targetEdgeLength) && targetEdgeLength > 1e-6
     ? targetEdgeLength
     : LANDFORM_TARGET_TRI_EDGE_LENGTH
+  const normalizedMaxSampleDivisions = Math.max(2, Math.trunc(maxSampleDivisions || LANDFORM_MAX_TRIANGLE_SAMPLE_DIVISIONS))
   const sampleDivisions = Math.min(
-    LANDFORM_MAX_TRIANGLE_SAMPLE_DIVISIONS,
+    normalizedMaxSampleDivisions,
     Math.max(2, Math.ceil(largestEdge / normalizedTargetEdgeLength)),
   )
 
@@ -516,29 +597,85 @@ function resolveLandformFeatherRefinementEdgeLength(featherWidth: number, target
   return Math.min(normalizedTarget, Math.max(0.1, featherWidth * 0.5))
 }
 
-function requiresLandformFeatherRefinement(
+function resolveLandformSupportRingWidth(featherWidth: number, targetEdgeLength: number): number {
+  const normalizedTarget = Number.isFinite(targetEdgeLength) && targetEdgeLength > 1e-6
+    ? targetEdgeLength
+    : LANDFORM_TARGET_TRI_EDGE_LENGTH
+  const normalizedFeatherWidth = Number.isFinite(featherWidth) ? Math.max(0, featherWidth) : 0
+  const derived = Math.max(
+    normalizedTarget,
+    normalizedFeatherWidth * LANDFORM_SUPPORT_RING_WIDTH_SCALE,
+  )
+  return Math.min(LANDFORM_SUPPORT_RING_MAX_WIDTH, Math.max(LANDFORM_SUPPORT_RING_MIN_WIDTH, derived))
+}
+
+function resolveLandformSupportRingEdgeLength(featherWidth: number, targetEdgeLength: number): number {
+  const featherTargetEdgeLength = resolveLandformFeatherRefinementEdgeLength(featherWidth, targetEdgeLength)
+  const normalizedTarget = Number.isFinite(targetEdgeLength) && targetEdgeLength > 1e-6
+    ? targetEdgeLength
+    : LANDFORM_TARGET_TRI_EDGE_LENGTH
+  return Math.max(featherTargetEdgeLength, normalizedTarget * LANDFORM_SUPPORT_RING_EDGE_LENGTH_SCALE)
+}
+
+function buildLandformBoundaryDistanceResolver(
+  options: LandformFeatherRefinementOptions | null | undefined,
+): ((pointX: number, pointZ: number) => number) | null {
+  if (!options) {
+    return null
+  }
+
+  const normalizedProtectedDistance = Number.isFinite(options.protectedDistance)
+    ? Math.max(0, options.protectedDistance as number)
+    : Math.max(0, Number(options.featherWidth) || 0)
+  if (normalizedProtectedDistance <= 1e-6 || options.footprint.length < 3) {
+    return null
+  }
+
+  const cache = options.distanceCache ?? new Map<string, number>()
+  const segmentIndex = options.segmentIndex
+
+  return (pointX: number, pointZ: number) => {
+    const key = `${pointX.toFixed(6)},${pointZ.toFixed(6)}`
+    const cached = cache.get(key)
+    if (cached !== undefined) {
+      return cached
+    }
+    const distance = distanceToFootprintBoundaryWithin(
+      pointX,
+      pointZ,
+      options.footprint,
+      normalizedProtectedDistance,
+      segmentIndex,
+    )
+    cache.set(key, distance)
+    return distance
+  }
+}
+
+function resolveLandformTriangleBoundaryBand(
   a: Vector2,
   b: Vector2,
   c: Vector2,
   options: LandformFeatherRefinementOptions | null | undefined,
-  targetEdgeLength: number,
-): boolean {
+): 'none' | 'support' | 'feather' {
   if (!options) {
-    return false
+    return 'none'
   }
 
   const normalizedFeatherWidth = Number.isFinite(options.featherWidth) ? Math.max(0, options.featherWidth) : 0
-  if (normalizedFeatherWidth <= 1e-6 || options.footprint.length < 3) {
-    return false
+  const normalizedSupportRingWidth = Number.isFinite(options.supportRingWidth)
+    ? Math.max(0, options.supportRingWidth as number)
+    : 0
+  const protectedDistance = Number.isFinite(options.protectedDistance)
+    ? Math.max(0, options.protectedDistance as number)
+    : normalizedFeatherWidth
+  if (protectedDistance <= 1e-6 || options.footprint.length < 3) {
+    return 'none'
   }
 
-  const d01 = a.distanceTo(b)
-  const d12 = b.distanceTo(c)
-  const d20 = c.distanceTo(a)
-  const largestEdge = Math.max(d01, d12, d20)
-  const featherTargetEdgeLength = resolveLandformFeatherRefinementEdgeLength(normalizedFeatherWidth, targetEdgeLength)
-  if (largestEdge <= featherTargetEdgeLength) {
-    return false
+  const resolveDistance = buildLandformBoundaryDistanceResolver(options)
+  if (!resolveDistance) {
+    return 'none'
   }
 
   const testPoints = [
@@ -551,32 +688,74 @@ function requiresLandformFeatherRefinement(
     { x: (a.x + b.x + c.x) / 3, z: (a.y + b.y + c.y) / 3 },
   ]
 
-  return testPoints.some((point) => {
-    const distance = distanceToFootprintBoundaryWithin(
-      point.x,
-      point.z,
-      options.footprint,
-      normalizedFeatherWidth,
-      options.segmentIndex,
-    )
-    return distance <= normalizedFeatherWidth
+  let minDistance = Number.POSITIVE_INFINITY
+  testPoints.forEach((point) => {
+    minDistance = Math.min(minDistance, resolveDistance(point.x, point.z))
   })
+
+  if (minDistance > protectedDistance) {
+    return 'none'
+  }
+  if (normalizedFeatherWidth > 1e-6 && minDistance <= normalizedFeatherWidth) {
+    return 'feather'
+  }
+  return normalizedSupportRingWidth > 1e-6 ? 'support' : 'none'
+}
+
+function requiresLandformProtectedBandRefinement(
+  a: Vector2,
+  b: Vector2,
+  c: Vector2,
+  boundaryBand: 'none' | 'support' | 'feather',
+  featherWidth: number,
+  targetEdgeLength: number,
+): boolean {
+  if (boundaryBand === 'none') {
+    return false
+  }
+
+  const d01 = a.distanceTo(b)
+  const d12 = b.distanceTo(c)
+  const d20 = c.distanceTo(a)
+  const largestEdge = Math.max(d01, d12, d20)
+  const edgeThreshold = boundaryBand === 'feather'
+    ? resolveLandformFeatherRefinementEdgeLength(featherWidth, targetEdgeLength)
+    : resolveLandformSupportRingEdgeLength(featherWidth, targetEdgeLength)
+  return largestEdge > edgeThreshold
 }
 
 function refineLandformTriangulationForGround(
   triangulation: { vertices: Vector2[]; indices: number[] },
   groundDefinition: GroundDynamicMesh,
   sampleHeight: LandformHeightSampler,
+  enableFeather: boolean,
   featherOptions?: LandformFeatherRefinementOptions | null,
 ): { vertices: Vector2[]; indices: number[] } {
   const cellSize = Math.max(1e-6, groundDefinition.cellSize)
   const subdivisionSteps = resolveLandformSubdivisionSteps(cellSize)
-  const targetEdgeLength = cellSize / Math.max(1, resolveLandformCellSubdivisions(cellSize))
-  const maxSteps = Math.min(LANDFORM_MAX_REFINEMENT_STEPS, Math.max(1, subdivisionSteps + 4))
-  const normalizedFeatherOptions = featherOptions && featherOptions.footprint.length >= 3 && featherOptions.featherWidth > 1e-6
+  const baseTargetEdgeLength = cellSize / Math.max(1, resolveLandformCellSubdivisions(cellSize))
+  const targetEdgeLength = enableFeather
+    ? baseTargetEdgeLength
+    : baseTargetEdgeLength * LANDFORM_COMPACT_EDGE_LENGTH_SCALE
+  const interiorTargetEdgeLength = enableFeather
+    ? targetEdgeLength * LANDFORM_INTERIOR_EDGE_LENGTH_SCALE
+    : targetEdgeLength * LANDFORM_INTERIOR_EDGE_LENGTH_SCALE * LANDFORM_COMPACT_INTERIOR_EDGE_LENGTH_SCALE
+  const interiorHeightTolerance = LANDFORM_HEIGHT_ERROR_TOLERANCE * (
+    enableFeather ? LANDFORM_INTERIOR_HEIGHT_ERROR_TOLERANCE_SCALE : LANDFORM_INTERIOR_HEIGHT_ERROR_TOLERANCE_SCALE * LANDFORM_COMPACT_HEIGHT_ERROR_TOLERANCE_SCALE
+  )
+  const maxSteps = Math.min(LANDFORM_MAX_REFINEMENT_STEPS, Math.max(1, subdivisionSteps + (enableFeather ? 4 : 2)))
+  const normalizedSupportRingWidth = resolveLandformSupportRingWidth(
+    enableFeather ? (featherOptions?.featherWidth ?? 0) : 0,
+    targetEdgeLength,
+  )
+  const protectedDistance = Math.max(0, enableFeather ? (Number(featherOptions?.featherWidth) || 0) : 0) + normalizedSupportRingWidth
+  const normalizedFeatherOptions = enableFeather && featherOptions && featherOptions.footprint.length >= 3 && featherOptions.featherWidth > 1e-6
     ? {
       ...featherOptions,
-      segmentIndex: buildFootprintSegmentIndex(featherOptions.footprint, featherOptions.featherWidth),
+      supportRingWidth: normalizedSupportRingWidth,
+      protectedDistance,
+      segmentIndex: buildFootprintSegmentIndex(featherOptions.footprint, protectedDistance),
+      distanceCache: new Map<string, number>(),
     }
     : null
 
@@ -585,18 +764,79 @@ function refineLandformTriangulationForGround(
     triangulation.indices,
     targetEdgeLength,
     maxSteps,
-    (a, b, c) => (
-      requiresLandformFeatherRefinement(a, b, c, normalizedFeatherOptions, targetEdgeLength)
-      || requiresGroundConformanceRefinement(
+    (a, b, c) => {
+      const boundaryBand = resolveLandformTriangleBoundaryBand(a, b, c, normalizedFeatherOptions)
+      if (requiresLandformProtectedBandRefinement(
+        a,
+        b,
+        c,
+        boundaryBand,
+        normalizedFeatherOptions?.featherWidth ?? 0,
+        targetEdgeLength,
+      )) {
+        return true
+      }
+
+      return requiresGroundConformanceRefinement(
         sampleHeight,
         a,
         b,
         c,
-        LANDFORM_HEIGHT_ERROR_TOLERANCE,
-        targetEdgeLength,
+        boundaryBand === 'none' ? interiorHeightTolerance : LANDFORM_HEIGHT_ERROR_TOLERANCE,
+        boundaryBand === 'none' ? interiorTargetEdgeLength : targetEdgeLength,
+        boundaryBand === 'none'
+          ? Math.min(LANDFORM_INTERIOR_MAX_TRIANGLE_SAMPLE_DIVISIONS, LANDFORM_COMPACT_MAX_SAMPLE_DIVISIONS)
+          : (enableFeather ? LANDFORM_MAX_TRIANGLE_SAMPLE_DIVISIONS : LANDFORM_COMPACT_MAX_SAMPLE_DIVISIONS),
       )
-    ),
+    },
   )
+}
+
+function compactLandformTriangulation(
+  triangulation: { vertices: Vector2[]; indices: number[] },
+): { vertices: Vector2[]; indices: number[] } {
+  if (!triangulation.vertices.length || !triangulation.indices.length) {
+    return { vertices: [], indices: [] }
+  }
+
+  const remappedIndices: number[] = []
+  const nextVertices: Vector2[] = []
+  const indexByKey = new Map<string, number>()
+  const originalToCompacted = new Map<number, number>()
+
+  const resolveVertexIndex = (originalIndex: number): number => {
+    const cached = originalToCompacted.get(originalIndex)
+    if (cached !== undefined) {
+      return cached
+    }
+    const vertex = triangulation.vertices[originalIndex]!
+    const key = `${vertex.x.toFixed(5)},${vertex.y.toFixed(5)}`
+    const existing = indexByKey.get(key)
+    if (existing !== undefined) {
+      originalToCompacted.set(originalIndex, existing)
+      return existing
+    }
+    const nextIndex = nextVertices.length
+    nextVertices.push(vertex.clone())
+    indexByKey.set(key, nextIndex)
+    originalToCompacted.set(originalIndex, nextIndex)
+    return nextIndex
+  }
+
+  for (let index = 0; index + 2 < triangulation.indices.length; index += 3) {
+    const i0 = resolveVertexIndex(triangulation.indices[index]!)
+    const i1 = resolveVertexIndex(triangulation.indices[index + 1]!)
+    const i2 = resolveVertexIndex(triangulation.indices[index + 2]!)
+    if (i0 === i1 || i1 === i2 || i0 === i2) {
+      continue
+    }
+    remappedIndices.push(i0, i1, i2)
+  }
+
+  return {
+    vertices: nextVertices,
+    indices: remappedIndices,
+  }
 }
 
 function refineTriangulation(
@@ -735,7 +975,12 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           .map((entry) => ({ x: Number(entry?.x), z: Number(entry?.z) }))
           .filter((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.z))
         : []
-      const expectedFeather = buildLandformSurfaceFeather(footprint, surfaceVertices, Number(mesh.feather))
+      const expectedFeather = buildLandformSurfaceFeather(
+        footprint,
+        surfaceVertices,
+        Number(mesh.feather),
+        typeof mesh.enableFeather === 'boolean' ? mesh.enableFeather : LANDFORM_DEFAULT_ENABLE_FEATHER,
+      )
       const currentFeather = Array.isArray(mesh.surfaceFeather) ? mesh.surfaceFeather : []
       const featherNeedsSync = expectedFeather.length !== currentFeather.length
         || expectedFeather.some((value, index) => Math.abs(value - Number(currentFeather[index])) > 1e-5)
@@ -763,18 +1008,26 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         return null
       }
 
-      const center = computeCenter(worldPoints)
       const normalizedProps = clampLandformComponentProps(options)
-      const footprint = worldPoints.map((point) => [point.x - center.x, point.z - center.z] as [number, number])
+      const buildPoints = normalizedProps.enableFeather
+        ? worldPoints
+        : simplifyLandformOutlineForCompactMode(worldPoints, groundDefinition)
+      if (buildPoints.length < 3) {
+        return null
+      }
+
+      const center = computeCenter(buildPoints)
+      const featherWidth = normalizedProps.enableFeather ? normalizedProps.feather : 0
+      const footprint = buildPoints.map((point) => [point.x - center.x, point.z - center.z] as [number, number])
 
       if (!groundDefinition) {
-        const triangulation = buildShapeTriangulation(worldPoints)
+        const triangulation = buildShapeTriangulation(buildPoints)
         if (!triangulation) {
           return null
         }
 
         const yByKey = new Map<string, number>()
-        worldPoints.forEach((point) => {
+        buildPoints.forEach((point) => {
           yByKey.set(`${point.x.toFixed(6)},${point.z.toFixed(6)}`, point.y)
         })
         const surfaceWorldVertices = triangulation.vertices.map((vertex) => {
@@ -798,15 +1051,16 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             surfaceIndices,
             surfaceUvs,
             materialConfigId: null,
+            enableFeather: normalizedProps.enableFeather,
             feather: normalizedProps.feather,
             uvScale: { ...normalizedProps.uvScale },
-            surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, normalizedProps.feather),
+            surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, featherWidth, normalizedProps.enableFeather),
           },
         }
       }
 
       const transform = getGroundTransform(groundNode)
-      const polygonLocal = normalizePolygonWinding(worldPoints.map((point) => worldToGroundLocal(point, transform)))
+      const polygonLocal = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
       const polygonTriangulation = buildShapeTriangulation(polygonLocal)
       if (!polygonTriangulation) {
         return null
@@ -818,14 +1072,18 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         polygonTriangulation,
         groundDefinition,
         sampleHeight,
+        normalizedProps.enableFeather,
         {
           footprint: polygonLocal.map((point) => [point.x, point.z] as [number, number]),
-          featherWidth: resolveGroundLocalDistance(normalizedProps.feather, transform),
+          featherWidth: resolveGroundLocalDistance(featherWidth, transform),
         },
       )
+      const triangulation = normalizedProps.enableFeather
+        ? refinedTriangulation
+        : compactLandformTriangulation(refinedTriangulation)
 
-      const surfaceIndices = [...refinedTriangulation.indices]
-      const surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
+      const surfaceIndices = [...triangulation.indices]
+      const surfaceWorldVertices = triangulation.vertices.map((vertex) => {
         const localHeight = sampleHeight(vertex.x, vertex.y)
         return groundLocalToWorld(new Vector3(vertex.x, localHeight, vertex.y), transform)
       })
@@ -852,8 +1110,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           surfaceVertices,
           surfaceIndices,
           surfaceUvs,
-          surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, normalizedProps.feather),
+          surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, featherWidth, normalizedProps.enableFeather),
           materialConfigId: null,
+          enableFeather: normalizedProps.enableFeather,
           feather: normalizedProps.feather,
           uvScale: { ...normalizedProps.uvScale },
         },
@@ -877,7 +1136,14 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       const normalizedProps = clampLandformComponentProps(options)
-      const footprint = worldPoints
+      const buildPoints = normalizedProps.enableFeather
+        ? worldPoints
+        : simplifyLandformOutlineForCompactMode(worldPoints, groundDefinition)
+      if (buildPoints.length < 3) {
+        return null
+      }
+      const featherWidth = normalizedProps.enableFeather ? normalizedProps.feather : 0
+      const footprint = buildPoints
         .map((point) => frameObject.worldToLocal(point.clone()))
         .map((point) => [point.x, point.z] as [number, number])
         .filter((entry) => Number.isFinite(entry[0]) && Number.isFinite(entry[1]))
@@ -890,13 +1156,13 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       let surfaceIndices: number[] = []
 
       if (!groundDefinition) {
-        const triangulation = buildShapeTriangulation(worldPoints)
+        const triangulation = buildShapeTriangulation(buildPoints)
         if (!triangulation) {
           return null
         }
 
         const yByKey = new Map<string, number>()
-        worldPoints.forEach((point) => {
+        buildPoints.forEach((point) => {
           yByKey.set(`${point.x.toFixed(6)},${point.z.toFixed(6)}`, point.y)
         })
         surfaceWorldVertices = triangulation.vertices.map((vertex) => {
@@ -907,7 +1173,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         surfaceIndices = [...triangulation.indices]
       } else {
         const transform = getGroundTransform(groundNode)
-        const polygonLocal = normalizePolygonWinding(worldPoints.map((point) => worldToGroundLocal(point, transform)))
+        const polygonLocal = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
         const polygonTriangulation = buildShapeTriangulation(polygonLocal)
         if (!polygonTriangulation) {
           return null
@@ -919,14 +1185,18 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           polygonTriangulation,
           groundDefinition,
           sampleHeight,
+          normalizedProps.enableFeather,
           {
             footprint: polygonLocal.map((point) => [point.x, point.z] as [number, number]),
-            featherWidth: resolveGroundLocalDistance(normalizedProps.feather, transform),
+            featherWidth: resolveGroundLocalDistance(featherWidth, transform),
           },
         )
+        const triangulation = normalizedProps.enableFeather
+          ? refinedTriangulation
+          : compactLandformTriangulation(refinedTriangulation)
 
-        surfaceIndices = [...refinedTriangulation.indices]
-        surfaceWorldVertices = refinedTriangulation.vertices.map((vertex) => {
+        surfaceIndices = [...triangulation.indices]
+        surfaceWorldVertices = triangulation.vertices.map((vertex) => {
           const localHeight = sampleHeight(vertex.x, vertex.y)
           return groundLocalToWorld(new Vector3(vertex.x, localHeight, vertex.y), transform)
         })
@@ -951,9 +1221,10 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         surfaceIndices,
         surfaceUvs,
         materialConfigId: null,
+        enableFeather: normalizedProps.enableFeather,
         feather: normalizedProps.feather,
         uvScale: { ...normalizedProps.uvScale },
-        surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, normalizedProps.feather),
+        surfaceFeather: buildLandformSurfaceFeather(footprint, surfaceVertices, featherWidth, normalizedProps.enableFeather),
       }
     },
 
@@ -963,10 +1234,14 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
       const normalized = clampLandformComponentProps(props)
       const mesh = node.dynamicMesh as LandformDynamicMesh
+      const currentEnableFeather = typeof mesh.enableFeather === 'boolean'
+        ? mesh.enableFeather
+        : LANDFORM_DEFAULT_ENABLE_FEATHER
       const currentFeather = Number.isFinite(mesh.feather) ? Number(mesh.feather) : LANDFORM_DEFAULT_FEATHER
       const currentU = Number.isFinite(mesh.uvScale?.x) ? Number(mesh.uvScale?.x) : LANDFORM_DEFAULT_UV_SCALE.x
       const currentV = Number.isFinite(mesh.uvScale?.y) ? Number(mesh.uvScale?.y) : LANDFORM_DEFAULT_UV_SCALE.y
-      const unchanged = Math.abs(currentFeather - normalized.feather) <= 1e-6
+      const unchanged = currentEnableFeather === normalized.enableFeather
+        && Math.abs(currentFeather - normalized.feather) <= 1e-6
         && Math.abs(currentU - normalized.uvScale.x) <= 1e-6
         && Math.abs(currentV - normalized.uvScale.y) <= 1e-6
       if (unchanged) {
@@ -975,6 +1250,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
 
       const nextMesh: LandformDynamicMesh = {
         ...mesh,
+        enableFeather: normalized.enableFeather,
         feather: normalized.feather,
         uvScale: { x: normalized.uvScale.x, y: normalized.uvScale.y },
         surfaceFeather: buildLandformSurfaceFeather(
@@ -988,7 +1264,8 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
               .map((entry) => ({ x: Number(entry?.x), z: Number(entry?.z) }))
               .filter((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.z))
             : [],
-          normalized.feather,
+          normalized.enableFeather ? normalized.feather : 0,
+          normalized.enableFeather,
         ),
       }
       node.dynamicMesh = nextMesh

@@ -31,6 +31,7 @@ function buildLandformPresetThumbnailDefinition(preset: LandformPresetData): Lan
     x: Math.max(1e-3, preset.landformProps.uvScale.x),
     y: Math.max(1e-3, preset.landformProps.uvScale.y),
   }
+  const enableFeather = preset.landformProps.enableFeather
   const footprint = LANDFORM_PRESET_RING_POINTS.map((point) => [point.x, point.z] as [number, number])
   const surfaceVertices = [
     { x: 0, y: LANDFORM_PRESET_CENTER_HEIGHT, z: 0 },
@@ -40,7 +41,9 @@ function buildLandformPresetThumbnailDefinition(preset: LandformPresetData): Lan
     x: point.x / uvScale.x,
     y: point.z / uvScale.y,
   }))
-  const surfaceFeather = [1, ...LANDFORM_PRESET_RING_POINTS.map(() => 0)]
+  const surfaceFeather = enableFeather
+    ? [1, ...LANDFORM_PRESET_RING_POINTS.map(() => 0)]
+    : surfaceVertices.map(() => 1)
   const surfaceIndices: number[] = []
   for (let index = 1; index <= LANDFORM_PRESET_RING_POINTS.length; index += 1) {
     const next = index === LANDFORM_PRESET_RING_POINTS.length ? 1 : index + 1
@@ -55,6 +58,7 @@ function buildLandformPresetThumbnailDefinition(preset: LandformPresetData): Lan
     surfaceUvs,
     surfaceFeather,
     materialConfigId: preset.materialSlotId,
+    enableFeather,
     feather: preset.landformProps.feather,
     uvScale,
   }

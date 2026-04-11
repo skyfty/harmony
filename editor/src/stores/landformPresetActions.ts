@@ -114,11 +114,13 @@ function assertStrictLandformPresetProps(value: unknown): StrictLandformPresetPr
   }
 
   const props = clampLandformComponentProps({
+    enableFeather: typeof record.enableFeather === 'boolean' ? record.enableFeather : true,
     feather: record.feather as number | undefined,
     uvScale: uvScaleRaw as any,
   })
 
   return {
+    enableFeather: props.enableFeather,
     feather: props.feather,
     uvScale: { x: props.uvScale.x, y: props.uvScale.y },
   }
@@ -140,8 +142,9 @@ export function parseLandformPresetData(text: string): LandformPresetData {
   if (record.kind !== 'landform-preset') {
     throw new Error('地貌预设格式不受支持')
   }
-  if (record.formatVersion !== LANDFORM_PRESET_FORMAT_VERSION) {
-    throw new Error(`地貌预设版本不匹配 (expected ${LANDFORM_PRESET_FORMAT_VERSION})`)
+  const formatVersion = Number(record.formatVersion)
+  if (formatVersion !== 1 && formatVersion !== LANDFORM_PRESET_FORMAT_VERSION) {
+    throw new Error(`地貌预设版本不匹配 (expected 1 or ${LANDFORM_PRESET_FORMAT_VERSION})`)
   }
 
   const name = typeof record.name === 'string' && record.name.trim().length ? record.name.trim() : ''
@@ -184,7 +187,7 @@ export function parseLandformPresetData(text: string): LandformPresetData {
 
   return {
     kind: 'landform-preset',
-    formatVersion: LANDFORM_PRESET_FORMAT_VERSION,
+    formatVersion,
     name,
     landformProps: assertStrictLandformPresetProps(record.landformProps),
     materialSlotId,
@@ -357,6 +360,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         formatVersion: LANDFORM_PRESET_FORMAT_VERSION,
         name: sanitizedName,
         landformProps: {
+          enableFeather: landformProps.enableFeather,
           feather: landformProps.feather,
           uvScale: { x: landformProps.uvScale.x, y: landformProps.uvScale.y },
         },

@@ -14152,6 +14152,7 @@ export const useSceneStore = defineStore('scene', {
           if (component?.id) {
             const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
             this.updateNodeComponentProps(desiredId, component.id, {
+              enableFeather: nextProps.enableFeather,
               feather: nextProps.feather,
               uvScale: nextProps.uvScale,
             })
@@ -14196,6 +14197,7 @@ export const useSceneStore = defineStore('scene', {
           if (component?.id) {
             const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
             this.updateNodeComponentProps(node.id, component.id, {
+              enableFeather: nextProps.enableFeather,
               feather: nextProps.feather,
               uvScale: nextProps.uvScale,
             })
@@ -15616,19 +15618,25 @@ export const useSceneStore = defineStore('scene', {
       } else if (type === LANDFORM_COMPONENT_TYPE) {
         const currentProps = component.props as LandformComponentProps
         const typedPatch = patch as Partial<LandformComponentProps>
+        const hasEnableFeatherPatch = Object.prototype.hasOwnProperty.call(typedPatch, 'enableFeather')
         const hasFeatherPatch = Object.prototype.hasOwnProperty.call(typedPatch, 'feather')
         const hasUvScalePatch = Object.prototype.hasOwnProperty.call(typedPatch, 'uvScale')
 
         const merged = clampLandformComponentProps({
+          enableFeather: hasEnableFeatherPatch ? (typedPatch.enableFeather ?? undefined) : currentProps.enableFeather,
           feather: hasFeatherPatch ? (typedPatch.feather ?? undefined) : currentProps.feather,
           uvScale: hasUvScalePatch ? (typedPatch.uvScale ?? undefined) : currentProps.uvScale,
         })
 
+        const currentEnableFeather = typeof currentProps.enableFeather === 'boolean'
+          ? currentProps.enableFeather
+          : merged.enableFeather
         const currentFeather = Number.isFinite(currentProps.feather) ? Number(currentProps.feather) : merged.feather
         const currentU = Number.isFinite(currentProps.uvScale?.x) ? Number(currentProps.uvScale.x) : merged.uvScale.x
         const currentV = Number.isFinite(currentProps.uvScale?.y) ? Number(currentProps.uvScale.y) : merged.uvScale.y
 
         const unchanged =
+          currentEnableFeather === merged.enableFeather &&
           Math.abs(currentFeather - merged.feather) <= 1e-6 &&
           Math.abs(currentU - merged.uvScale.x) <= 1e-6 &&
           Math.abs(currentV - merged.uvScale.y) <= 1e-6
@@ -15816,7 +15824,10 @@ export const useSceneStore = defineStore('scene', {
         } else if (currentType === FLOOR_COMPONENT_TYPE) {
           floorHelpers.applyFloorComponentPropsToNode(node, nextProps as FloorComponentProps)
         } else if (currentType === LANDFORM_COMPONENT_TYPE) {
-          landformHelpers.applyLandformComponentPropsToNode(node, nextProps as unknown as LandformComponentProps)
+          const rebuilt = rebuildLandformNodeForTerrain(this, node.id)
+          if (!rebuilt) {
+            landformHelpers.applyLandformComponentPropsToNode(node, nextProps as unknown as LandformComponentProps)
+          }
         }
       })
 

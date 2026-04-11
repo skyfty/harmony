@@ -5,9 +5,10 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const LANDFORM_PRESET_FORMAT_VERSION = 1
+export const LANDFORM_PRESET_FORMAT_VERSION = 2
 
 export type StrictLandformPresetProps = {
+  enableFeather: boolean
   feather: number
   uvScale: { x: number; y: number }
 }
