@@ -1129,7 +1129,7 @@ type SmoothedSculptPolygonOptions = {
 const SCULPT_POLYGON_EPSILON = 1e-6
 const SCULPT_POLYGON_CORNER_COS_STRAIGHT_THRESHOLD = Math.cos((5 * Math.PI) / 180)
 const SCULPT_POLYGON_CORNER_COS_UTURN_THRESHOLD = Math.cos((170 * Math.PI) / 180)
-const SCULPT_POLYGON_DEFAULT_CORNER_SMOOTHING = 0.35
+const SCULPT_POLYGON_DEFAULT_CORNER_SMOOTHING = 0.2
 
 function getSculptPolygonPointDistanceSqXZ(a: SculptPolygonPoint, b: SculptPolygonPoint): number {
   const dx = a.x - b.x
@@ -1206,7 +1206,7 @@ function computeSmoothedSculptPolygonCornerCutDistance(params: {
   }
 
   const cellSize = Math.max(0, params.cellSize)
-  const requested = Math.max(cellSize * 0.75, smoothing * minLength)
+  const requested = Math.max(cellSize * 0.5, smoothing * minLength)
   const maxAllowed = maxRatio * minLength
   const cut = Math.min(requested, maxAllowed)
   return cut > SCULPT_POLYGON_EPSILON ? cut : 0
