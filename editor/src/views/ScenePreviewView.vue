@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
-import * as MW from 'meshwalk'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
+import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import {
@@ -172,7 +172,6 @@ import {
 	sceneStateAnchorComponentDefinition,
 	nominateComponentDefinition,
 	steerComponentDefinition,
-	GUIDE_ROUTE_COMPONENT_TYPE,
 	SIGNBOARD_COMPONENT_TYPE,
 	findDefaultSteerResolvedEntry,
 	applyNominateStateMapToRuntime,
@@ -229,7 +228,6 @@ import {
 	type SignboardPlacementSmoothingState,
 } from '@schema/signboardOverlay'
 import type {
-	GuideRouteComponentProps,
 	GuideboardComponentProps,
 	LodFaceCameraForwardAxis,
 	LodComponentProps,
@@ -267,7 +265,6 @@ import {
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
-import { SceneViewportCameraControls } from '@/utils/SceneViewportCameraControls'
 
 
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
@@ -298,17 +295,8 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
 type ControlMode = 'first-person' | 'third-person'
 type VehicleDriveCameraMode = 'first-person' | 'follow' | 'free'
 type VehicleDriveOrbitMode = 'follow' | 'free'
-type ScenePreviewShortcutGroup = {
-	title: string
-	items: Array<{
-		action: string
-		keys: string
-		description?: string
-	}>
-}
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
-const minimapCanvasRef = ref<HTMLCanvasElement | null>(null)
 const statusMessage = ref('Waiting for scene data...')
 
 const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
@@ -426,56 +414,6 @@ const instancedLodTotalCount = ref(0)
 const terrainScatterVisibleCount = ref(0)
 const terrainScatterTotalCount = ref(0)
 const isDebugMenuOpen = ref(false)
-const isNavigationHelpOpen = ref(false)
-const isFirstPersonPointerLocked = ref(false)
-
-const SHIFT_CLICK_NAVIGATION_TOKEN = '__scene_preview_shift_click__'
-const NORTH_RESET_TOKEN = '__scene_preview_north_reset__'
-const SHIFT_CLICK_MAP_DURATION_SECONDS = 0.42
-const SHIFT_CLICK_FIRST_PERSON_DURATION_SECONDS = 0.3
-const FIRST_PERSON_AUTO_NAV_STOP_DISTANCE = 1.1
-const FIRST_PERSON_ROUTE_SNAP_DISTANCE_MAX = 6
-const FIRST_PERSON_ROUTE_TARGET_DIRECT_CONNECT_MAX = 3.5
-const FIRST_PERSON_ROUTE_NODE_MERGE_DISTANCE = 0.45
-const scenePreviewShortcutGroups: ScenePreviewShortcutGroup[] = [
-	{
-		title: 'Navigation modes',
-		items: [
-			{ action: 'First-person roam', keys: '1', description: 'Switch to on-foot browsing.' },
-			{ action: 'Map overview', keys: '3', description: 'Return to the macro overview camera.' },
-			{ action: 'Open shortcut help', keys: 'H or ?', description: 'Show this help panel.' },
-		],
-	},
-	{
-		title: 'Mouse',
-		items: [
-			{ action: 'Map overview rotate', keys: 'Right drag', description: 'Orbit around the current focus.' },
-			{ action: 'Focus point', keys: 'Double click / F', description: 'Center the camera on the last hit point.' },
-			{ action: 'North reset', keys: 'N', description: 'Restore a north-up overview heading.' },
-			{ action: 'Map overview zoom', keys: 'Wheel', description: 'Zoom around the cursor position.' },
-			{ action: 'Map overview pan', keys: 'Middle drag', description: 'Slide across the scene.' },
-			{ action: 'Fast locate', keys: 'Shift + Click', description: 'Jump toward the clicked point using the current mode.' },
-		],
-	},
-	{
-		title: 'First-person',
-		items: [
-			{ action: 'Move', keys: 'W A S D', description: 'Walk through the scene.' },
-			{ action: 'Pointer lock', keys: 'L / toolbar', description: 'Lock the pointer for continuous mouse look. Esc exits.' },
-			{ action: 'Jump', keys: 'Space', description: 'Step over uneven terrain in first-person mode.' },
-			{ action: 'Turn', keys: 'Mouse move / Q E', description: 'Look around or rotate in place.' },
-			{ action: 'Sprint', keys: 'Shift + W A S D', description: 'Move faster while exploring on foot.' },
-			{ action: 'Auto-run to point', keys: 'Shift + Click', description: 'Prefer guide-route pathfinding, then fall back to direct running.' },
-		],
-	},
-	{
-		title: 'Utility',
-		items: [
-			{ action: 'Screenshot', keys: 'P', description: 'Capture the current viewport.' },
-			{ action: 'Fullscreen', keys: 'Toolbar button', description: 'Toggle immersive preview mode.' },
-		],
-	},
-]
 
 const rendererDebug = reactive({
 	width: 0,
@@ -1009,16 +947,6 @@ const previewParentMap = new Map<string, string | null>()
 
 const behaviorRaycaster = new THREE.Raycaster()
 const behaviorPointer = new THREE.Vector2()
-const minimapRaycaster = new THREE.Raycaster()
-const minimapBounds = new THREE.Box3()
-const minimapBoundsSize = new THREE.Vector3()
-const minimapBoundsCenter = new THREE.Vector3()
-const minimapGroundOrigin = new THREE.Vector3()
-const minimapGroundDirection = new THREE.Vector3(0, -1, 0)
-const minimapArrowTarget = new THREE.Vector3()
-let minimapBoundsDirty = true
-let hasLastCanvasFocusPoint = false
-const lastCanvasFocusPoint = new THREE.Vector3()
 
 const LAYER_BEHAVIOR_INTERACTIVE = 1
 const LAYER_VEHICLE_INTERACTIVE = 2
@@ -1330,22 +1258,11 @@ const tempOutlineScale = new THREE.Vector3()
 const CAMERA_HEIGHT = 1.7
 const FIRST_PERSON_ROTATION_SPEED = 25
 const FIRST_PERSON_MOVE_SPEED = 5
-const FIRST_PERSON_RUN_SPEED = 8
 const FIRST_PERSON_LOOK_SPEED = 0.06
 const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
-const FIRST_PERSON_COLLIDER_RADIUS = 0.35
 const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
 const tempQuaternion = new THREE.Quaternion()
-const firstPersonMoveForward = new THREE.Vector3()
-const firstPersonMoveRight = new THREE.Vector3()
-const firstPersonMoveDirection = new THREE.Vector3()
-const firstPersonAutoNavigateDirection = new THREE.Vector3()
-const firstPersonAutoNavigateTarget = new THREE.Vector3()
-const firstPersonGuideRouteProjectionPoint = new THREE.Vector3()
-const firstPersonGuideRouteSegmentDelta = new THREE.Vector3()
-const firstPersonGuideRouteSegmentOffset = new THREE.Vector3()
-const firstPersonGuideRouteWorldPoint = new THREE.Vector3()
 const protagonistPosePosition = new THREE.Vector3()
 const protagonistPoseDirection = new THREE.Vector3()
 const protagonistPoseTarget = new THREE.Vector3()
@@ -1377,38 +1294,6 @@ type CameraLookTween = {
 	to: THREE.Vector3
 	duration: number
 	elapsed: number
-}
-
-type FirstPersonGuideRouteNavEdge = {
-	to: number
-	cost: number
-}
-
-type FirstPersonGuideRouteNavNode = {
-	position: THREE.Vector3
-	edges: FirstPersonGuideRouteNavEdge[]
-}
-
-type FirstPersonGuideRouteNavSegment = {
-	startNode: number
-	endNode: number
-	start: THREE.Vector3
-	end: THREE.Vector3
-	length: number
-}
-
-type FirstPersonGuideRouteNavProjection = {
-	point: THREE.Vector3
-	startNode: number
-	endNode: number
-	segmentIndex: number
-	distance: number
-}
-
-type FirstPersonGuideRouteNavGraph = {
-	dirty: boolean
-	nodes: FirstPersonGuideRouteNavNode[]
-	segments: FirstPersonGuideRouteNavSegment[]
 }
 let activeCameraLookTween: CameraLookTween | null = null
 const assetObjectUrlCache = new Map<string, string>()
@@ -1544,12 +1429,7 @@ let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
 let firstPersonControls: FirstPersonControls | null = null
-let mapControls: SceneViewportCameraControls | null = null
-let firstPersonNavigationWorld: MW.World | null = null
-let firstPersonNavigationOctree: MW.Octree | null = null
-let firstPersonNavigationRoot: THREE.Object3D | null = null
-let firstPersonNavigationController: MW.CharacterController | null = null
-let firstPersonNavigationCollidersDirty = true
+let mapControls: MapControls | null = null
 let followCameraControlActive = false
 let followCameraControlDirty = false
 let rendererInitialized = false
@@ -2319,19 +2199,6 @@ const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
 const rotationState = { q: false, e: false }
-const firstPersonMoveState = { forward: false, backward: false, left: false, right: false, fast: false }
-const firstPersonAutoNavigateState = {
-	active: false,
-	target: new THREE.Vector3(),
-	route: [] as THREE.Vector3[],
-	routeIndex: 0,
-	stopDistance: FIRST_PERSON_AUTO_NAV_STOP_DISTANCE,
-}
-const firstPersonGuideRouteNavigationGraph: FirstPersonGuideRouteNavGraph = {
-	dirty: true,
-	nodes: [],
-	segments: [],
-}
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
 	direction: new THREE.Vector3(0, 0, -1),
@@ -2954,12 +2821,6 @@ function resolveVehicleComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<VehicleComponentProps> | null {
 	return resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
-}
-
-function resolveGuideRouteComponent(
-	node: SceneNode | null | undefined,
-): SceneNodeComponentState<GuideRouteComponentProps> | null {
-	return resolveEnabledComponentState<GuideRouteComponentProps>(node, GUIDE_ROUTE_COMPONENT_TYPE)
 }
 
 function resolveAutoTourComponent(
@@ -4473,14 +4334,18 @@ function applyAutoTourCameraInputPolicy(): void {
 		setCameraCaging(true, { force: true })
 		if (mapControls) {
 			mapControls.enablePan = false
-			mapControls.enableRotate = false
+			if ('enableRotate' in mapControls) {
+				;(mapControls as unknown as { enableRotate: boolean }).enableRotate = false
+			}
 		}
 		return
 	}
 
 	setCameraCaging(false, { force: true })
 	if (mapControls) {
-		mapControls.enableRotate = true
+		if ('enableRotate' in mapControls) {
+			;(mapControls as unknown as { enableRotate: boolean }).enableRotate = true
+		}
 		mapControls.enablePan = shouldRotateOnly ? false : MAP_CONTROL_DEFAULTS.enablePan
 	}
 }
@@ -4499,169 +4364,6 @@ function syncAutoTourCameraInputPolicyForFrame(delta: number): void {
 	applyAutoTourCameraInputPolicy()
 }
 
-function collectCanvasIntersections(event: MouseEvent): THREE.Intersection[] {
-	if (sceneSwitching.value) {
-		return []
-	}
-	const currentRenderer = renderer
-	const activeCamera = camera
-	const currentScene = scene
-	if (!currentRenderer || !activeCamera || !currentScene) {
-		return []
-	}
-	if (event.button !== 0) {
-		return []
-	}
-	if (event.target !== currentRenderer.domElement) {
-		return []
-	}
-
-	const bounds = currentRenderer.domElement.getBoundingClientRect()
-	const width = bounds.width
-	const height = bounds.height
-	if (width <= 0 || height <= 0) {
-		return []
-	}
-
-	behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
-	behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
-	behaviorRaycaster.setFromCamera(behaviorPointer, activeCamera)
-	behaviorRaycaster.layers.set(LAYER_BEHAVIOR_INTERACTIVE)
-	behaviorRaycaster.layers.enable(LAYER_VEHICLE_INTERACTIVE)
-	if (instancedBoundsHasPending()) {
-		flushInstancedBounds()
-	}
-	const raycastRoots: THREE.Object3D[] = []
-	if (rootGroup) {
-		raycastRoots.push(rootGroup)
-	}
-	if (instancedMeshGroup) {
-		raycastRoots.push(instancedMeshGroup)
-	}
-	if (!raycastRoots.length) {
-		return []
-	}
-	raycastRoots.forEach((root) => root.updateMatrixWorld(true))
-	return behaviorRaycaster.intersectObjects(raycastRoots, true)
-}
-
-function rememberCanvasFocusPoint(point: THREE.Vector3 | null): void {
-	if (!point) {
-		return
-	}
-	hasLastCanvasFocusPoint = true
-	lastCanvasFocusPoint.copy(point)
-}
-
-function focusCameraOnPoint(focusPoint: THREE.Vector3 | null): boolean {
-	const activeCamera = camera
-	if (!focusPoint || !activeCamera) {
-		return false
-	}
-	activeCameraLookTween = null
-	setCameraCaging(false, { force: true })
-	setCameraViewState('level', null)
-	rememberCanvasFocusPoint(focusPoint)
-	if (controlMode.value === 'first-person' && firstPersonControls) {
-		const startTarget = activeCamera.position.clone().add(lastFirstPersonState.direction)
-		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
-			firstPersonControls.lookAt(focusPoint.x, focusPoint.y, focusPoint.z)
-			syncFirstPersonOrientation()
-			resetFirstPersonPointerDelta()
-			syncLastFirstPersonStateFromCamera()
-			return true
-		}
-		activeCameraLookTween = {
-			mode: 'first-person',
-			from: startTarget,
-			to: focusPoint.clone(),
-			duration: 0.28,
-			elapsed: 0,
-		}
-		return true
-	}
-	if (!mapControls) {
-		return false
-	}
-	const startTarget = mapControls.target.clone()
-	if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
-		mapControls.target.copy(focusPoint)
-		mapControls.update()
-		lastOrbitState.target.copy(focusPoint)
-		return true
-	}
-	activeCameraLookTween = {
-		mode: 'orbit',
-		from: startTarget,
-		to: focusPoint.clone(),
-		duration: 0.28,
-		elapsed: 0,
-	}
-	return true
-}
-
-function resetMapOverviewNorth(): boolean {
-	const activeCamera = camera
-	const currentMapControls = mapControls
-	if (!activeCamera || !currentMapControls || controlMode.value !== 'third-person') {
-		return false
-	}
-	const target = currentMapControls.target.clone()
-	const offset = activeCamera.position.clone().sub(target)
-	const planarDistance = Math.max(1.5, Math.hypot(offset.x, offset.z))
-	const destination = new THREE.Vector3(target.x, target.y + offset.y, target.z + planarDistance)
-	const startPosition = activeCamera.position.clone()
-	startTimedAnimation(
-		NORTH_RESET_TOKEN,
-		0.28,
-		(alpha) => {
-			activeCamera.position.lerpVectors(startPosition, destination, alpha)
-			currentMapControls.target.copy(target)
-			currentMapControls.update()
-		},
-		() => {
-			activeCamera.position.copy(destination)
-			currentMapControls.target.copy(target)
-			currentMapControls.update()
-			lastOrbitState.position.copy(destination)
-			lastOrbitState.target.copy(target)
-			scenePreviewPerf.markInstancedCullingDirty()
-		},
-	)
-	return true
-}
-
-function updateFirstPersonPointerLockState(): void {
-	const lockedElement = typeof document !== 'undefined' ? document.pointerLockElement : null
-	isFirstPersonPointerLocked.value = Boolean(renderer?.domElement && lockedElement === renderer.domElement)
-	if (firstPersonControls) {
-		firstPersonControls.activeLook = controlMode.value === 'first-person' && isFirstPersonPointerLocked.value && !isCameraCaged.value
-	}
-	updateCanvasCursor()
-}
-
-function requestFirstPersonPointerLock(): void {
-	if (controlMode.value !== 'first-person' || vehicleDriveState.active || isCameraCaged.value) {
-		return
-	}
-	const canvas = renderer?.domElement as (HTMLCanvasElement & { requestPointerLock?: () => void }) | undefined
-	canvas?.requestPointerLock?.()
-}
-
-function releaseFirstPersonPointerLock(): void {
-	if (typeof document !== 'undefined' && document.pointerLockElement) {
-		document.exitPointerLock()
-	}
-}
-
-function toggleFirstPersonPointerLock(): void {
-	if (isFirstPersonPointerLocked.value) {
-		releaseFirstPersonPointerLock()
-		return
-	}
-	requestFirstPersonPointerLock()
-}
-
 function updateCanvasCursor() {
 	const canvas = renderer?.domElement
 	if (!canvas) {
@@ -4676,7 +4378,7 @@ function updateCanvasCursor() {
 		canvas.style.cursor = canOrbit ? 'grab' : 'default'
 		return
 	}
-	canvas.style.cursor = isFirstPersonPointerLocked.value ? 'none' : 'crosshair'
+	canvas.style.cursor = 'default'
 }
 
 function applyMapControlFollowSettings(active: boolean) {
@@ -6329,7 +6031,6 @@ function captureSceneNodeTransformSnapshot(): Record<string, SceneNodeTransformS
 }
 
 function applySceneNodeTransformSnapshot(snapshot: Record<string, SceneNodeTransformSnapshot>): void {
-	markFirstPersonNavigationCollidersDirty()
 	Object.entries(snapshot).forEach(([nodeId, transform]) => {
 		const object = nodeObjectMap.get(nodeId)
 		if (!object) {
@@ -7318,15 +7019,55 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 }
 
 function handleCanvasClick(event: MouseEvent) {
-	const intersections = collectCanvasIntersections(event)
-	if (!intersections.length) {
+	if (sceneSwitching.value) {
 		return
 	}
-	rememberCanvasFocusPoint(intersections[0]?.point ?? null)
-	if (event.shiftKey) {
-		if (handleShiftClickNavigation(intersections[0]?.point ?? null)) {
-			return
-		}
+	const currentRenderer = renderer
+	const activeCamera = camera
+	const currentScene = scene
+	if (!currentRenderer || !activeCamera || !currentScene) {
+		return
+	}
+	if (event.button !== 0) {
+		return
+	}
+	if (event.target !== currentRenderer.domElement) {
+		return
+	}
+
+	const bounds = currentRenderer.domElement.getBoundingClientRect()
+	const width = bounds.width
+	const height = bounds.height
+	if (width <= 0 || height <= 0) {
+		return
+	}
+
+	behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
+	behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
+	behaviorRaycaster.setFromCamera(behaviorPointer, activeCamera)
+	behaviorRaycaster.layers.set(LAYER_BEHAVIOR_INTERACTIVE)
+	behaviorRaycaster.layers.enable(LAYER_VEHICLE_INTERACTIVE)
+
+	// Keep InstancedMesh bounds in sync before raycasting so recently moved instances remain pickable.
+	if (instancedBoundsHasPending()) {
+		flushInstancedBounds()
+	}
+
+	const raycastRoots: THREE.Object3D[] = [];
+	if (rootGroup) {
+		raycastRoots.push(rootGroup);
+	}
+	if (instancedMeshGroup) {
+		raycastRoots.push(instancedMeshGroup);
+	}
+	if (!raycastRoots.length) {
+		return;
+	}
+	raycastRoots.forEach((root) => root.updateMatrixWorld(true));
+	
+	const intersections = behaviorRaycaster.intersectObjects(raycastRoots, true)
+	if (!intersections.length) {
+		return
 	}
 
 	for (const intersection of intersections) {
@@ -7360,697 +7101,6 @@ function handleCanvasClick(event: MouseEvent) {
 		}
 
 	}
-}
-
-function handleCanvasDoubleClick(event: MouseEvent): void {
-	const intersections = collectCanvasIntersections(event)
-	if (!intersections.length) {
-		return
-	}
-	const focusPoint = intersections[0]?.point ?? null
-	if (focusCameraOnPoint(focusPoint)) {
-		event.preventDefault()
-	}
-}
-
-function moveOrbitCameraToFocusPoint(focusPoint: THREE.Vector3, durationSeconds = SHIFT_CLICK_MAP_DURATION_SECONDS): boolean {
-	const activeCamera = camera
-	const orbitControls = mapControls
-	if (!activeCamera || !orbitControls) {
-		return false
-	}
-	const startPosition = activeCamera.position.clone()
-	const startTarget = orbitControls.target.clone()
-	const offset = startPosition.clone().sub(startTarget)
-	const destination = focusPoint.clone().add(offset)
-	const minimumRadius = Math.max((orbitControls.minDistance ?? 0) + 0.25, 1.5)
-	if (destination.distanceToSquared(focusPoint) < 1e-6) {
-		offset.set(0, 0, 0)
-		activeCamera.getWorldDirection(offset)
-		offset.y = 0
-		if (offset.lengthSq() < 1e-8) {
-			offset.set(0, 0, 1)
-		} else {
-			offset.normalize()
-		}
-		destination.copy(focusPoint).addScaledVector(offset, minimumRadius)
-	}
-	const finalize = () => {
-		activeCamera.position.copy(destination)
-		orbitControls.target.copy(focusPoint)
-		orbitControls.update()
-		lastOrbitState.position.copy(destination)
-		lastOrbitState.target.copy(focusPoint)
-		setCameraCaging(false, { force: true })
-		setCameraViewState('level', null)
-		scenePreviewPerf.markInstancedCullingDirty()
-	}
-	startTimedAnimation(
-		SHIFT_CLICK_NAVIGATION_TOKEN,
-		durationSeconds,
-		(alpha) => {
-			activeCamera.position.lerpVectors(startPosition, destination, alpha)
-			orbitControls.target.lerpVectors(startTarget, focusPoint, alpha)
-			orbitControls.update()
-		},
-		finalize,
-	)
-	return true
-}
-
-function moveFirstPersonCameraToFocusPoint(focusPoint: THREE.Vector3, durationSeconds = SHIFT_CLICK_FIRST_PERSON_DURATION_SECONDS): boolean {
-	void durationSeconds
-	return startFirstPersonAutoNavigate(focusPoint)
-
-	/*
-	const activeCamera = camera
-	if (!activeCamera || !firstPersonControls) {
-		return false
-	}
-	const startPosition = activeCamera.position.clone()
-	const startDirection = new THREE.Vector3(0, 0, 0)
-	activeCamera.getWorldDirection(startDirection)
-	const startTarget = startPosition.clone().add(startDirection)
-	const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + CAMERA_HEIGHT, focusPoint.z)
-	const travelDirection = focusPoint.clone().sub(startPosition)
-	travelDirection.y = 0
-	if (travelDirection.lengthSq() < 1e-8) {
-		travelDirection.copy(startDirection)
-		travelDirection.y = 0
-	}
-	if (travelDirection.lengthSq() < 1e-8) {
-		travelDirection.set(0, 0, -1)
-	} else {
-		travelDirection.normalize()
-	}
-	const destinationTarget = destination.clone().add(travelDirection)
-	resetFirstPersonPointerDelta()
-	startTimedAnimation(
-		SHIFT_CLICK_NAVIGATION_TOKEN,
-		durationSeconds,
-		(alpha) => {
-			activeCamera.position.lerpVectors(startPosition, destination, alpha)
-			tempTarget.copy(startTarget).lerp(destinationTarget, alpha)
-			firstPersonControls?.lookAt(tempTarget.x, tempTarget.y, tempTarget.z)
-		},
-		() => {
-			activeCamera.position.copy(destination)
-			firstPersonControls?.lookAt(destinationTarget.x, destinationTarget.y, destinationTarget.z)
-			syncFirstPersonNavigationFromCamera()
-			clampFirstPersonPitch(true)
-			syncFirstPersonOrientation()
-			resetFirstPersonPointerDelta()
-			syncLastFirstPersonStateFromCamera()
-			setCameraCaging(false, { force: true })
-			setCameraViewState('level', null)
-			scenePreviewPerf.markInstancedCullingDirty()
-		},
-	)
-	return true
-	*/
-}
-
-function handleShiftClickNavigation(focusPoint: THREE.Vector3 | null): boolean {
-	if (!focusPoint || isCameraCaged.value || sceneSwitching.value || vehicleDriveState.active) {
-		return false
-	}
-	if (controlMode.value === 'first-person') {
-		return moveFirstPersonCameraToFocusPoint(focusPoint)
-	}
-	return moveOrbitCameraToFocusPoint(focusPoint)
-}
-
-function updateFirstPersonMovementKeyState(code: string, active: boolean): boolean {
-	switch (code) {
-		case 'KeyW':
-			if (active) cancelFirstPersonAutoNavigate()
-			firstPersonMoveState.forward = active
-			return true
-		case 'KeyS':
-			if (active) cancelFirstPersonAutoNavigate()
-			firstPersonMoveState.backward = active
-			return true
-		case 'KeyA':
-			if (active) cancelFirstPersonAutoNavigate()
-			firstPersonMoveState.left = active
-			return true
-		case 'KeyD':
-			if (active) cancelFirstPersonAutoNavigate()
-			firstPersonMoveState.right = active
-			return true
-		case 'ShiftLeft':
-		case 'ShiftRight':
-			firstPersonMoveState.fast = active
-			return true
-		default:
-			return false
-	}
-}
-
-function ensureFirstPersonNavigationRuntime(): boolean {
-	if (!scene || !camera) {
-		return false
-	}
-	if (!firstPersonNavigationRoot) {
-		firstPersonNavigationRoot = new THREE.Object3D()
-		firstPersonNavigationRoot.visible = false
-		firstPersonNavigationRoot.name = 'ScenePreviewFirstPersonNavigationRoot'
-		scene.add(firstPersonNavigationRoot)
-	}
-	if (!firstPersonNavigationWorld) {
-		firstPersonNavigationWorld = new MW.World()
-	}
-	if (!firstPersonNavigationController) {
-		firstPersonNavigationController = new MW.CharacterController(firstPersonNavigationRoot, FIRST_PERSON_COLLIDER_RADIUS)
-		firstPersonNavigationController.movementSpeed = FIRST_PERSON_MOVE_SPEED
-		firstPersonNavigationWorld.add(firstPersonNavigationController)
-		firstPersonNavigationCollidersDirty = true
-	}
-	if (!firstPersonNavigationOctree) {
-		firstPersonNavigationOctree = new MW.Octree()
-		firstPersonNavigationWorld.add(firstPersonNavigationOctree)
-		firstPersonNavigationCollidersDirty = true
-	}
-	return true
-}
-
-function markFirstPersonNavigationCollidersDirty(): void {
-	firstPersonNavigationCollidersDirty = true
-	firstPersonGuideRouteNavigationGraph.dirty = true
-	minimapBoundsDirty = true
-}
-
-function cancelFirstPersonAutoNavigate(): void {
-	firstPersonAutoNavigateState.active = false
-	firstPersonAutoNavigateState.route.length = 0
-	firstPersonAutoNavigateState.routeIndex = 0
-}
-
-function findOrCreateFirstPersonGuideRouteNode(position: THREE.Vector3): number {
-	for (let index = 0; index < firstPersonGuideRouteNavigationGraph.nodes.length; index += 1) {
-		const candidate = firstPersonGuideRouteNavigationGraph.nodes[index]
-		if (candidate.position.distanceToSquared(position) <= FIRST_PERSON_ROUTE_NODE_MERGE_DISTANCE * FIRST_PERSON_ROUTE_NODE_MERGE_DISTANCE) {
-			return index
-		}
-	}
-	firstPersonGuideRouteNavigationGraph.nodes.push({
-		position: position.clone(),
-		edges: [],
-	})
-	return firstPersonGuideRouteNavigationGraph.nodes.length - 1
-}
-
-function addFirstPersonGuideRouteEdge(fromIndex: number, toIndex: number, cost: number): void {
-	if (fromIndex === toIndex || !Number.isFinite(cost) || cost <= 1e-5) {
-		return
-	}
-	const fromNode = firstPersonGuideRouteNavigationGraph.nodes[fromIndex]
-	if (!fromNode) {
-		return
-	}
-	const existing = fromNode.edges.find((edge) => edge.to === toIndex)
-	if (existing) {
-		existing.cost = Math.min(existing.cost, cost)
-		return
-	}
-	fromNode.edges.push({ to: toIndex, cost })
-}
-
-function rebuildFirstPersonGuideRouteNavigationGraph(): void {
-	firstPersonGuideRouteNavigationGraph.nodes.length = 0
-	firstPersonGuideRouteNavigationGraph.segments.length = 0
-	for (const [nodeId, node] of previewNodeMap) {
-		const component = resolveGuideRouteComponent(node)
-		const rawWaypoints = component?.props?.waypoints
-		if (!Array.isArray(rawWaypoints) || rawWaypoints.length < 2) {
-			continue
-		}
-		const object = nodeObjectMap.get(nodeId) ?? null
-		const worldWaypoints: THREE.Vector3[] = []
-		for (const waypoint of rawWaypoints) {
-			firstPersonGuideRouteWorldPoint.set(waypoint.position.x, waypoint.position.y, waypoint.position.z)
-			if (object) {
-				object.localToWorld(firstPersonGuideRouteWorldPoint)
-			}
-			worldWaypoints.push(firstPersonGuideRouteWorldPoint.clone())
-		}
-		for (let index = 1; index < worldWaypoints.length; index += 1) {
-			const start = worldWaypoints[index - 1]
-			const end = worldWaypoints[index]
-			const length = start.distanceTo(end)
-			if (length <= 1e-5) {
-				continue
-			}
-			const startNode = findOrCreateFirstPersonGuideRouteNode(start)
-			const endNode = findOrCreateFirstPersonGuideRouteNode(end)
-			addFirstPersonGuideRouteEdge(startNode, endNode, length)
-			addFirstPersonGuideRouteEdge(endNode, startNode, length)
-			firstPersonGuideRouteNavigationGraph.segments.push({
-				startNode,
-				endNode,
-				start: start.clone(),
-				end: end.clone(),
-				length,
-			})
-		}
-	}
-	firstPersonGuideRouteNavigationGraph.dirty = false
-}
-
-function ensureFirstPersonGuideRouteNavigationGraph(): boolean {
-	if (firstPersonGuideRouteNavigationGraph.dirty) {
-		rebuildFirstPersonGuideRouteNavigationGraph()
-	}
-	return firstPersonGuideRouteNavigationGraph.segments.length > 0
-}
-
-function projectPointToFirstPersonGuideRoute(point: THREE.Vector3): FirstPersonGuideRouteNavProjection | null {
-	if (!ensureFirstPersonGuideRouteNavigationGraph()) {
-		return null
-	}
-	let best: FirstPersonGuideRouteNavProjection | null = null
-	for (let segmentIndex = 0; segmentIndex < firstPersonGuideRouteNavigationGraph.segments.length; segmentIndex += 1) {
-		const segment = firstPersonGuideRouteNavigationGraph.segments[segmentIndex]
-		firstPersonGuideRouteSegmentDelta.copy(segment.end).sub(segment.start)
-		const denominator = firstPersonGuideRouteSegmentDelta.lengthSq()
-		if (denominator <= 1e-8) {
-			continue
-		}
-		firstPersonGuideRouteSegmentOffset.copy(point).sub(segment.start)
-		const alpha = THREE.MathUtils.clamp(
-			firstPersonGuideRouteSegmentOffset.dot(firstPersonGuideRouteSegmentDelta) / denominator,
-			0,
-			1,
-		)
-		firstPersonGuideRouteProjectionPoint.copy(segment.start).addScaledVector(firstPersonGuideRouteSegmentDelta, alpha)
-		const planarDistance = Math.hypot(
-			point.x - firstPersonGuideRouteProjectionPoint.x,
-			point.z - firstPersonGuideRouteProjectionPoint.z,
-		)
-		if (!best || planarDistance < best.distance) {
-			best = {
-				point: firstPersonGuideRouteProjectionPoint.clone(),
-				startNode: segment.startNode,
-				endNode: segment.endNode,
-				segmentIndex,
-				distance: planarDistance,
-			}
-		}
-	}
-	return best
-}
-
-function connectFirstPersonGuideRouteWorkingNodes(
-	workingNodes: FirstPersonGuideRouteNavNode[],
-	fromIndex: number,
-	toIndex: number,
-	cost: number,
-): void {
-	if (fromIndex === toIndex || !Number.isFinite(cost) || cost <= 1e-5) {
-		return
-	}
-	const fromNode = workingNodes[fromIndex]
-	if (!fromNode) {
-		return
-	}
-	const existing = fromNode.edges.find((edge) => edge.to === toIndex)
-	if (existing) {
-		existing.cost = Math.min(existing.cost, cost)
-		return
-	}
-	fromNode.edges.push({ to: toIndex, cost })
-}
-
-function appendFirstPersonGuideRouteProjectionNode(
-	workingNodes: FirstPersonGuideRouteNavNode[],
-	projection: FirstPersonGuideRouteNavProjection,
-): number {
-	const nodeIndex = workingNodes.length
-	workingNodes.push({
-		position: projection.point.clone(),
-		edges: [],
-	})
-	const startDistance = projection.point.distanceTo(workingNodes[projection.startNode]?.position ?? projection.point)
-	const endDistance = projection.point.distanceTo(workingNodes[projection.endNode]?.position ?? projection.point)
-	connectFirstPersonGuideRouteWorkingNodes(workingNodes, nodeIndex, projection.startNode, startDistance)
-	connectFirstPersonGuideRouteWorkingNodes(workingNodes, projection.startNode, nodeIndex, startDistance)
-	connectFirstPersonGuideRouteWorkingNodes(workingNodes, nodeIndex, projection.endNode, endDistance)
-	connectFirstPersonGuideRouteWorkingNodes(workingNodes, projection.endNode, nodeIndex, endDistance)
-	return nodeIndex
-}
-
-function computeFirstPersonGuideRoutePath(startPoint: THREE.Vector3, focusPoint: THREE.Vector3): THREE.Vector3[] | null {
-	const startProjection = projectPointToFirstPersonGuideRoute(startPoint)
-	const endProjection = projectPointToFirstPersonGuideRoute(focusPoint)
-	if (!startProjection || !endProjection) {
-		return null
-	}
-	if (
-		startProjection.distance > FIRST_PERSON_ROUTE_SNAP_DISTANCE_MAX
-		|| endProjection.distance > FIRST_PERSON_ROUTE_SNAP_DISTANCE_MAX
-	) {
-		return null
-	}
-	if (
-		startProjection.distance > FIRST_PERSON_ROUTE_TARGET_DIRECT_CONNECT_MAX
-		|| endProjection.distance > FIRST_PERSON_ROUTE_TARGET_DIRECT_CONNECT_MAX
-	) {
-		return null
-	}
-	const workingNodes = firstPersonGuideRouteNavigationGraph.nodes.map((node) => ({
-		position: node.position.clone(),
-		edges: node.edges.map((edge) => ({ ...edge })),
-	}))
-	const startIndex = appendFirstPersonGuideRouteProjectionNode(workingNodes, startProjection)
-	const endIndex = appendFirstPersonGuideRouteProjectionNode(workingNodes, endProjection)
-	if (startProjection.segmentIndex === endProjection.segmentIndex) {
-		const directProjectionDistance = startProjection.point.distanceTo(endProjection.point)
-		connectFirstPersonGuideRouteWorkingNodes(workingNodes, startIndex, endIndex, directProjectionDistance)
-		connectFirstPersonGuideRouteWorkingNodes(workingNodes, endIndex, startIndex, directProjectionDistance)
-	}
-
-	const cameFrom = new Map<number, number>()
-	const openSet = new Set<number>([startIndex])
-	const gScore = new Map<number, number>([[startIndex, 0]])
-	const fScore = new Map<number, number>([[startIndex, workingNodes[startIndex].position.distanceTo(workingNodes[endIndex].position)]])
-
-	while (openSet.size > 0) {
-		let current = -1
-		let currentScore = Number.POSITIVE_INFINITY
-		for (const candidate of openSet) {
-			const candidateScore = fScore.get(candidate) ?? Number.POSITIVE_INFINITY
-			if (candidateScore < currentScore) {
-				current = candidate
-				currentScore = candidateScore
-			}
-		}
-		if (current === -1) {
-			break
-		}
-		if (current === endIndex) {
-			const pathIndices: number[] = [current]
-			while (cameFrom.has(current)) {
-				current = cameFrom.get(current) as number
-				pathIndices.push(current)
-			}
-			pathIndices.reverse()
-			const path = pathIndices.map((index) => workingNodes[index].position.clone())
-			if (focusPoint.distanceTo(path[path.length - 1] ?? focusPoint) <= FIRST_PERSON_ROUTE_TARGET_DIRECT_CONNECT_MAX) {
-				path.push(focusPoint.clone())
-			}
-			return path
-		}
-		openSet.delete(current)
-		const currentG = gScore.get(current) ?? Number.POSITIVE_INFINITY
-		for (const edge of workingNodes[current].edges) {
-			const tentativeG = currentG + edge.cost
-			if (tentativeG >= (gScore.get(edge.to) ?? Number.POSITIVE_INFINITY)) {
-				continue
-			}
-			cameFrom.set(edge.to, current)
-			gScore.set(edge.to, tentativeG)
-			fScore.set(
-				edge.to,
-				tentativeG + workingNodes[edge.to].position.distanceTo(workingNodes[endIndex].position),
-			)
-			openSet.add(edge.to)
-		}
-	}
-	return null
-}
-
-function startFirstPersonAutoNavigate(focusPoint: THREE.Vector3): boolean {
-	const activeCamera = camera
-	if (!activeCamera || !firstPersonControls || !firstPersonNavigationRoot) {
-		return false
-	}
-	const route = computeFirstPersonGuideRoutePath(firstPersonNavigationRoot.position, focusPoint)
-	firstPersonAutoNavigateTarget.copy(focusPoint)
-	firstPersonAutoNavigateTarget.y = Math.max(0, focusPoint.y + CAMERA_HEIGHT * 0.25)
-	firstPersonControls.lookAt(firstPersonAutoNavigateTarget.x, firstPersonAutoNavigateTarget.y, firstPersonAutoNavigateTarget.z)
-	resetFirstPersonPointerDelta()
-	syncFirstPersonOrientation()
-	firstPersonAutoNavigateState.target.copy(focusPoint)
-	firstPersonAutoNavigateState.route = route ?? [focusPoint.clone()]
-	firstPersonAutoNavigateState.routeIndex = 0
-	firstPersonAutoNavigateState.active = true
-	setCameraCaging(false, { force: true })
-	setCameraViewState('level', null)
-	return true
-}
-
-function rebuildFirstPersonNavigationColliders(): void {
-	if (!firstPersonNavigationWorld || !rootGroup) {
-		return
-	}
-	if (firstPersonNavigationOctree) {
-		firstPersonNavigationWorld.remove(firstPersonNavigationOctree)
-	}
-	const octree = new MW.Octree()
-	rootGroup.updateMatrixWorld(true)
-	octree.addGraphNode(rootGroup)
-	firstPersonNavigationWorld.add(octree)
-	firstPersonNavigationOctree = octree
-	firstPersonNavigationCollidersDirty = false
-}
-
-function syncFirstPersonNavigationFromCamera(forceRebuild = false): void {
-	if (!camera || !ensureFirstPersonNavigationRuntime() || !firstPersonNavigationController) {
-		return
-	}
-	if (forceRebuild) {
-		firstPersonNavigationCollidersDirty = true
-	}
-	if (firstPersonNavigationCollidersDirty) {
-		rebuildFirstPersonNavigationColliders()
-	}
-	firstPersonNavigationController.teleport(
-		camera.position.x,
-		camera.position.y - CAMERA_HEIGHT,
-		camera.position.z,
-	)
-	if (firstPersonNavigationRoot) {
-		firstPersonNavigationRoot.position.copy(firstPersonNavigationController.position)
-	}
-}
-
-function updateFirstPersonNavigation(delta: number, activeCamera: THREE.PerspectiveCamera): void {
-	if (!ensureFirstPersonNavigationRuntime() || !firstPersonNavigationWorld || !firstPersonNavigationController || !firstPersonNavigationRoot) {
-		return
-	}
-	if (firstPersonNavigationCollidersDirty) {
-		rebuildFirstPersonNavigationColliders()
-	}
-	firstPersonMoveForward.set(0, 0, 0)
-	activeCamera.getWorldDirection(firstPersonMoveForward)
-	firstPersonMoveForward.y = 0
-	if (firstPersonMoveForward.lengthSq() <= 1e-8) {
-		firstPersonMoveForward.set(0, 0, -1)
-	} else {
-		firstPersonMoveForward.normalize()
-	}
-	firstPersonMoveRight.crossVectors(firstPersonMoveForward, THREE.Object3D.DEFAULT_UP)
-	if (firstPersonMoveRight.lengthSq() <= 1e-8) {
-		firstPersonMoveRight.set(1, 0, 0)
-	} else {
-		firstPersonMoveRight.normalize()
-	}
-	firstPersonMoveDirection.set(0, 0, 0)
-	if (firstPersonMoveState.forward) {
-		firstPersonMoveDirection.add(firstPersonMoveForward)
-	}
-	if (firstPersonMoveState.backward) {
-		firstPersonMoveDirection.sub(firstPersonMoveForward)
-	}
-	if (firstPersonMoveState.right) {
-		firstPersonMoveDirection.add(firstPersonMoveRight)
-	}
-	if (firstPersonMoveState.left) {
-		firstPersonMoveDirection.sub(firstPersonMoveRight)
-	}
-	const hasManualMovementInput = firstPersonMoveDirection.lengthSq() > 1e-8
-	if (hasManualMovementInput) {
-		cancelFirstPersonAutoNavigate()
-	}
-	const hasAutoNavigate = firstPersonAutoNavigateState.active
-	if (!hasManualMovementInput && hasAutoNavigate) {
-		let autoNavigateWaypoint = firstPersonAutoNavigateState.route[firstPersonAutoNavigateState.routeIndex] ?? firstPersonAutoNavigateState.target
-		while (autoNavigateWaypoint) {
-			firstPersonAutoNavigateDirection.copy(autoNavigateWaypoint).sub(firstPersonNavigationRoot.position)
-			firstPersonAutoNavigateDirection.y = 0
-			if (firstPersonAutoNavigateDirection.lengthSq() > firstPersonAutoNavigateState.stopDistance * firstPersonAutoNavigateState.stopDistance) {
-				break
-			}
-			firstPersonAutoNavigateState.routeIndex += 1
-			autoNavigateWaypoint = firstPersonAutoNavigateState.route[firstPersonAutoNavigateState.routeIndex] ?? null
-		}
-		if (!autoNavigateWaypoint) {
-			cancelFirstPersonAutoNavigate()
-			firstPersonMoveDirection.set(0, 0, 0)
-		} else {
-			firstPersonAutoNavigateDirection.copy(autoNavigateWaypoint).sub(firstPersonNavigationRoot.position)
-			firstPersonAutoNavigateDirection.y = 0
-			firstPersonMoveDirection.copy(firstPersonAutoNavigateDirection).normalize()
-			firstPersonAutoNavigateTarget.copy(autoNavigateWaypoint)
-			firstPersonAutoNavigateTarget.y = activeCamera.position.y
-			firstPersonControls?.lookAt(
-				firstPersonAutoNavigateTarget.x,
-				firstPersonAutoNavigateTarget.y,
-				firstPersonAutoNavigateTarget.z,
-			)
-		}
-	}
-	const hasMovementInput = firstPersonMoveDirection.lengthSq() > 1e-8
-	firstPersonNavigationController.isRunning = hasMovementInput
-	firstPersonNavigationController.movementSpeed = hasAutoNavigate
-		? FIRST_PERSON_RUN_SPEED
-		: (firstPersonMoveState.fast ? FIRST_PERSON_RUN_SPEED : FIRST_PERSON_MOVE_SPEED)
-	if (hasMovementInput) {
-		firstPersonMoveDirection.normalize()
-		firstPersonNavigationController.direction = Math.atan2(-firstPersonMoveDirection.x, -firstPersonMoveDirection.z)
-	}
-	firstPersonNavigationWorld.step(delta)
-	activeCamera.position.set(
-		firstPersonNavigationRoot.position.x,
-		firstPersonNavigationRoot.position.y + CAMERA_HEIGHT,
-		firstPersonNavigationRoot.position.z,
-	)
-}
-
-function ensureMinimapBounds(activeCamera: THREE.PerspectiveCamera): boolean {
-	if (minimapBoundsDirty) {
-		if (rootGroup) {
-			rootGroup.updateMatrixWorld(true)
-			minimapBounds.setFromObject(rootGroup)
-		}
-		if (minimapBounds.isEmpty()) {
-			minimapBounds.setFromCenterAndSize(
-				new THREE.Vector3(activeCamera.position.x, 0, activeCamera.position.z),
-				new THREE.Vector3(40, 10, 40),
-			)
-		}
-		minimapBounds.expandByScalar(2)
-		minimapBoundsDirty = false
-	}
-	minimapBounds.getSize(minimapBoundsSize)
-	return minimapBoundsSize.x > 1e-6 && minimapBoundsSize.z > 1e-6
-}
-
-function projectWorldToMinimap(worldX: number, worldZ: number, width: number, height: number): { x: number; y: number } {
-	const minX = minimapBounds.min.x
-	const minZ = minimapBounds.min.z
-	const normalizedX = (worldX - minX) / Math.max(1e-6, minimapBoundsSize.x)
-	const normalizedZ = (worldZ - minZ) / Math.max(1e-6, minimapBoundsSize.z)
-	return {
-		x: normalizedX * width,
-		y: height - normalizedZ * height,
-	}
-}
-
-function resolveMinimapNavigationPoint(worldX: number, worldZ: number, fallbackY = 0): THREE.Vector3 {
-	minimapGroundOrigin.set(worldX, Math.max(minimapBounds.max.y, fallbackY) + 500, worldZ)
-	minimapRaycaster.set(minimapGroundOrigin, minimapGroundDirection)
-	if (instancedBoundsHasPending()) {
-		flushInstancedBounds()
-	}
-	const raycastRoots: THREE.Object3D[] = []
-	if (rootGroup) {
-		raycastRoots.push(rootGroup)
-	}
-	if (instancedMeshGroup) {
-		raycastRoots.push(instancedMeshGroup)
-	}
-	if (raycastRoots.length) {
-		raycastRoots.forEach((root) => root.updateMatrixWorld(true))
-		const intersection = minimapRaycaster.intersectObjects(raycastRoots, true)[0]
-		if (intersection?.point) {
-			return intersection.point.clone()
-		}
-	}
-	return new THREE.Vector3(worldX, fallbackY, worldZ)
-}
-
-function handleMinimapPointerDown(event: PointerEvent): void {
-	if (!camera || !ensureMinimapBounds(camera)) {
-		return
-	}
-	const canvas = minimapCanvasRef.value
-	if (!canvas) {
-		return
-	}
-	const bounds = canvas.getBoundingClientRect()
-	if (bounds.width <= 0 || bounds.height <= 0) {
-		return
-	}
-	const normalizedX = THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1)
-	const normalizedZ = THREE.MathUtils.clamp(1 - (event.clientY - bounds.top) / bounds.height, 0, 1)
-	const worldX = minimapBounds.min.x + normalizedX * minimapBoundsSize.x
-	const worldZ = minimapBounds.min.z + normalizedZ * minimapBoundsSize.z
-	const fallbackY = controlMode.value === 'first-person'
-		? Math.max(0, camera.position.y - CAMERA_HEIGHT)
-		: (mapControls?.target.y ?? 0)
-	const focusPoint = resolveMinimapNavigationPoint(worldX, worldZ, fallbackY)
-	if (handleShiftClickNavigation(focusPoint)) {
-		event.preventDefault()
-	}
-}
-
-function drawMinimapOverlay(activeCamera: THREE.PerspectiveCamera): void {
-	const canvas = minimapCanvasRef.value
-	if (!canvas) {
-		return
-	}
-	const bounds = canvas.getBoundingClientRect()
-	const width = Math.max(1, Math.round(bounds.width))
-	const height = Math.max(1, Math.round(bounds.height))
-	const dpr = Math.min(window.devicePixelRatio ?? 1, 2)
-	if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-		canvas.width = Math.round(width * dpr)
-		canvas.height = Math.round(height * dpr)
-	}
-	const context = canvas.getContext('2d')
-	if (!context || !ensureMinimapBounds(activeCamera)) {
-		return
-	}
-	context.setTransform(dpr, 0, 0, dpr, 0, 0)
-	context.clearRect(0, 0, width, height)
-	context.fillStyle = 'rgba(14, 18, 30, 0.86)'
-	context.fillRect(0, 0, width, height)
-	context.strokeStyle = 'rgba(255, 255, 255, 0.14)'
-	context.lineWidth = 1
-	context.strokeRect(0.5, 0.5, width - 1, height - 1)
-	context.strokeStyle = 'rgba(255, 255, 255, 0.08)'
-	context.beginPath()
-	context.moveTo(width * 0.5, 0)
-	context.lineTo(width * 0.5, height)
-	context.moveTo(0, height * 0.5)
-	context.lineTo(width, height * 0.5)
-	context.stroke()
-
-	const cameraPoint = projectWorldToMinimap(activeCamera.position.x, activeCamera.position.z, width, height)
-	if (controlMode.value === 'first-person') {
-		activeCamera.getWorldDirection(minimapArrowTarget)
-		minimapArrowTarget.multiplyScalar(8).add(activeCamera.position)
-	} else if (mapControls) {
-		minimapArrowTarget.copy(mapControls.target)
-	} else {
-		activeCamera.getWorldDirection(minimapArrowTarget)
-		minimapArrowTarget.multiplyScalar(8).add(activeCamera.position)
-	}
-	const targetPoint = projectWorldToMinimap(minimapArrowTarget.x, minimapArrowTarget.z, width, height)
-	context.strokeStyle = controlMode.value === 'first-person' ? 'rgba(255, 192, 92, 0.9)' : 'rgba(88, 190, 255, 0.9)'
-	context.lineWidth = 2
-	context.beginPath()
-	context.moveTo(cameraPoint.x, cameraPoint.y)
-	context.lineTo(targetPoint.x, targetPoint.y)
-	context.stroke()
-	context.fillStyle = controlMode.value === 'first-person' ? '#ffc05c' : '#58beff'
-	context.beginPath()
-	context.arc(cameraPoint.x, cameraPoint.y, 4, 0, Math.PI * 2)
-	context.fill()
-	context.fillStyle = 'rgba(255,255,255,0.72)'
-	context.font = '11px sans-serif'
-	context.fillText('N', width - 14, 14)
 }
 
 function resetFirstPersonPointerDelta() {
@@ -8247,14 +7297,11 @@ function applyControlMode(mode: ControlMode) {
 		activeCamera.position.copy(lastFirstPersonState.position)
 		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
 		activeCamera.lookAt(target)
-		syncFirstPersonNavigationFromCamera(true)
 		clampFirstPersonPitch(true)
 		syncFirstPersonOrientation()
 		resetFirstPersonPointerDelta()
 		syncLastFirstPersonStateFromCamera()
 	} else {
-		releaseFirstPersonPointerLock()
-		cancelFirstPersonAutoNavigate()
 		activeCamera.position.copy(lastOrbitState.position)
 		mapControls?.target.copy(lastOrbitState.target)
 		mapControls?.update()
@@ -8404,12 +7451,10 @@ function initRenderer() {
 	initControls()
 	updateCanvasCursor()
 	renderer.domElement.addEventListener('click', handleCanvasClick)
-	renderer.domElement.addEventListener('dblclick', handleCanvasDoubleClick)
 	handleResize()
 
 	window.addEventListener('resize', handleResize)
 	document.addEventListener('fullscreenchange', handleFullscreenChange)
-	document.addEventListener('pointerlockchange', updateFirstPersonPointerLockState)
 	window.addEventListener('keydown', handleKeyDown)
 	window.addEventListener('keyup', handleKeyUp)
 
@@ -8431,21 +7476,17 @@ function initControls() {
 	}
 	firstPersonControls = new FirstPersonControls(camera, renderer.domElement)
 	firstPersonControls.lookSpeed = FIRST_PERSON_LOOK_SPEED
-	firstPersonControls.movementSpeed = 0
+	firstPersonControls.movementSpeed = FIRST_PERSON_MOVE_SPEED
 	firstPersonControls.lookVertical = true
 
-	mapControls = new SceneViewportCameraControls(camera, renderer.domElement)
-	mapControls.applyMode('map')
+	mapControls = new MapControls(camera, renderer.domElement)
+	mapControls.enableDamping = false
+	mapControls.dampingFactor = 0.08
 	mapControls.maxPolarAngle = Math.PI / 2 - 0.05
 	mapControls.minDistance = MAP_CONTROL_DEFAULTS.minDistance
 	mapControls.maxDistance = MAP_CONTROL_DEFAULTS.maxDistance
-	mapControls.rotateSpeed = 1
-	mapControls.panSpeed = 1
-	mapControls.zoomSpeed = 1
 	mapControls.enablePan = MAP_CONTROL_DEFAULTS.enablePan
-	mapControls.enableRotate = true
 	mapControls.target.copy(lastOrbitState.target)
-	mapControls.update()
 	mapControls.addEventListener('start', () => {
 		activeCameraLookTween = null
 		if (vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow') {
@@ -8499,22 +7540,6 @@ function handleKeyDown(event: KeyboardEvent) {
 	if (handleVehicleDriveKeyboardInput(event, true)) {
 		return
 	}
-	if (event.code === 'Space' && controlMode.value === 'first-person' && !vehicleDriveState.active) {
-		if (ensureFirstPersonNavigationRuntime() && firstPersonNavigationController) {
-			cancelFirstPersonAutoNavigate()
-			firstPersonNavigationController.jump()
-			event.preventDefault()
-		}
-		return
-	}
-	if (updateFirstPersonMovementKeyState(event.code, true)) {
-		if (controlMode.value === 'first-person' && !vehicleDriveState.active) {
-			event.preventDefault()
-		}
-		if (event.repeat) {
-			return
-		}
-	}
 	if (event.repeat) {
 		return
 	}
@@ -8524,31 +7549,6 @@ function handleKeyDown(event: KeyboardEvent) {
 			break
 		case 'Digit3':
 			controlMode.value = 'third-person'
-			break
-		case 'KeyF':
-			if (hasLastCanvasFocusPoint) {
-				event.preventDefault()
-				focusCameraOnPoint(lastCanvasFocusPoint)
-			}
-			break
-		case 'KeyN':
-			event.preventDefault()
-			resetMapOverviewNorth()
-			break
-		case 'KeyL':
-			event.preventDefault()
-			toggleFirstPersonPointerLock()
-			break
-		case 'KeyH':
-			event.preventDefault()
-			isNavigationHelpOpen.value = !isNavigationHelpOpen.value
-			break
-		case 'Slash':
-			if (!event.shiftKey) {
-				break
-			}
-			event.preventDefault()
-			isNavigationHelpOpen.value = !isNavigationHelpOpen.value
 			break
 		case 'KeyP':
 			event.preventDefault()
@@ -8577,9 +7577,6 @@ function handleKeyUp(event: KeyboardEvent) {
 	if (handleVehicleDriveKeyboardInput(event, false)) {
 		return
 	}
-	if (updateFirstPersonMovementKeyState(event.code, false) && controlMode.value === 'first-person' && !vehicleDriveState.active) {
-		event.preventDefault()
-	}
 }
 
 /**
@@ -8607,9 +7604,6 @@ function updateCameraControlsForFrame(
 			controlsInternal._lon = nextLon
 		}
 		firstPersonControls.update(delta)
-		if (activeCameraLookTween?.mode !== 'first-person') {
-			updateFirstPersonNavigation(delta, activeCamera)
-		}
 		updateFirstPersonCameraLookTween(delta)
 		clampFirstPersonPitch()
 		syncLastFirstPersonStateFromCamera()
@@ -8931,7 +7925,6 @@ function startAnimationLoop() {
 		// 4) Render + stats
 		sceneCsmShadowRuntime?.update()
 		currentRenderer.render(currentScene, activeCamera)
-		drawMinimapOverlay(activeCamera)
 		syncRendererDebugForFrame(currentRenderer, currentScene)
 		syncInstancedMatrixUploadEstimateForFrame()
 		fpsStats?.end()
@@ -8949,8 +7942,6 @@ function stopAnimationLoop() {
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
-	cancelFirstPersonAutoNavigate()
-	markFirstPersonNavigationCollidersDirty()
 	void syncGroundCache(null)
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
@@ -9721,7 +8712,6 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 	if (!object) {
 		return
 	}
-	markFirstPersonNavigationCollidersDirty()
 	object.updateMatrixWorld(true)
 	const targets: THREE.Object3D[] = []
 	object.traverse((child) => {
@@ -12141,7 +11131,6 @@ async function applyInitialDocumentGraph(
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
-	markFirstPersonNavigationCollidersDirty()
 	await syncGroundCache(document)
 	// (instancing trace removed)
 	await syncTerrainScatterInstances(document, resourceCache)
@@ -12166,7 +11155,6 @@ async function applyIncrementalDocumentGraph(
 	environmentSettings: EnvironmentSettings,
 ): Promise<void> {
 	reconcileNodeLists(null, document.nodes ?? [], currentDocument?.nodes ?? [], pendingObjects)
-	markFirstPersonNavigationCollidersDirty()
 
 	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
 		if (!nodeObjectMap.has(nodeId)) {
@@ -12472,21 +11460,12 @@ onBeforeUnmount(() => {
 		mapControls.dispose()
 		mapControls = null
 	}
-	firstPersonNavigationController = null
-	firstPersonNavigationOctree = null
-	firstPersonNavigationWorld = null
-	if (firstPersonNavigationRoot) {
-		firstPersonNavigationRoot.removeFromParent()
-		firstPersonNavigationRoot = null
-	}
 	if (renderer) {
 		renderer.domElement.removeEventListener('click', handleCanvasClick)
-		renderer.domElement.removeEventListener('dblclick', handleCanvasDoubleClick)
 		renderer.dispose()
 		renderer.domElement.remove()
 		renderer = null
 	}
-	document.removeEventListener('pointerlockchange', updateFirstPersonPointerLockState)
 	editorResourceCache = null
 	listener = null
 	scene = null
@@ -13036,14 +12015,6 @@ watch(
 				</div>
 			</div>
 		</div>
-		<div class="scene-preview__minimap-shell">
-			<div class="scene-preview__minimap-label">Navigator</div>
-			<canvas
-				ref="minimapCanvasRef"
-				class="scene-preview__minimap-canvas"
-				@pointerdown="handleMinimapPointerDown"
-			/>
-		</div>
 		<v-sheet class="scene-preview__control-bar" elevation="10">
 			<div class="scene-preview__controls">
 				<v-btn
@@ -13069,39 +12040,18 @@ watch(
 						value="first-person"
 						icon="mdi-human-greeting"
 						size="small"
-						:aria-label="'First-person roam'"
-						:title="'First-person roam (Hotkey 1)'"
+						:aria-label="'First-person view'"
+						:title="'First-person view (Hotkey 1)'"
 					/>
 					<v-btn
 						value="third-person"
-						icon="mdi-map-search-outline"
+						icon="mdi-compass"
 						size="small"
 
-						:aria-label="'Map overview'"
-						:title="'Map overview (Hotkey 3)'"
+						:aria-label="'Third-person view'"
+						:title="'Third-person view (Hotkey 3)'"
 					/>
 				</v-btn-toggle>
-					<v-btn
-						class="scene-preview__control-button"
-						icon="mdi-compass-outline"
-						variant="tonal"
-						color="secondary"
-						size="small"
-						aria-label="North reset"
-						title="North reset (Hotkey N)"
-						@click="resetMapOverviewNorth"
-					/>
-					<v-btn
-						class="scene-preview__control-button"
-						:icon="isFirstPersonPointerLocked ? 'mdi-lock' : 'mdi-lock-outline'"
-						variant="tonal"
-						color="secondary"
-						size="small"
-						:disabled="controlMode !== 'first-person'"
-						:aria-label="isFirstPersonPointerLocked ? 'Release pointer lock' : 'Enable pointer lock'"
-						:title="isFirstPersonPointerLocked ? 'Release pointer lock (Hotkey L)' : 'Enable pointer lock (Hotkey L)'"
-						@click="toggleFirstPersonPointerLock"
-					/>
 				<v-menu
 					v-model="isVolumeMenuOpen"
 					location="top"
@@ -13154,46 +12104,6 @@ watch(
 					:title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
 					@click="toggleFullscreen"
 				/>
-				<v-menu
-					v-model="isNavigationHelpOpen"
-					location="top end"
-					offset="12"
-				>
-					<template #activator="{ props: menuProps }">
-						<v-btn
-							class="scene-preview__control-button"
-							v-bind="menuProps"
-							icon="mdi-help-circle-outline"
-							variant="tonal"
-							color="secondary"
-							size="small"
-							aria-label="Navigation help"
-							title="Navigation help (H or ?)"
-						/>
-					</template>
-					<v-card class="scene-preview__help-menu-card" elevation="10">
-						<div class="scene-preview__help-menu-header">Navigation and shortcuts</div>
-						<div class="scene-preview__help-menu-subtitle">
-							Map overview is the default macro mode. Shift + Click jumps quickly using the active mode.
-						</div>
-						<div
-							v-for="group in scenePreviewShortcutGroups"
-							:key="group.title"
-							class="scene-preview__help-group"
-						>
-							<div class="scene-preview__help-group-title">{{ group.title }}</div>
-							<div
-								v-for="item in group.items"
-								:key="`${group.title}-${item.action}-${item.keys}`"
-								class="scene-preview__help-row"
-							>
-								<div class="scene-preview__help-action">{{ item.action }}</div>
-								<div class="scene-preview__help-keys">{{ item.keys }}</div>
-								<div v-if="item.description" class="scene-preview__help-description">{{ item.description }}</div>
-							</div>
-						</div>
-					</v-card>
-				</v-menu>
 			</div>
 		</v-sheet>
 		<div
@@ -14319,114 +13229,11 @@ watch(
 	flex: 0 0 auto;
 }
 
-.scene-preview__minimap-shell {
-	position: absolute;
-	right: 16px;
-	bottom: 84px;
-	z-index: 1200;
-	padding: 10px;
-	border-radius: 16px;
-	background: rgba(18, 18, 32, 0.82);
-	backdrop-filter: blur(14px);
-	box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
-	pointer-events: auto;
-}
-
-.scene-preview__minimap-label {
-	margin-bottom: 8px;
-	font-size: 11px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: rgba(255, 255, 255, 0.72);
-}
-
-.scene-preview__minimap-canvas {
-	display: block;
-	width: 168px;
-	height: 168px;
-	border-radius: 12px;
-	cursor: crosshair;
-}
-
 .scene-preview__volume-menu {
 	padding: 12px 18px;
 	border-radius: 12px;
 	background: rgba(18, 18, 32, 0.92);
 	color: #f5f7ff;
-}
-
-.scene-preview__help-menu-card {
-	width: min(440px, calc(100vw - 32px));
-	max-height: min(70vh, 560px);
-	overflow: auto;
-	padding: 16px;
-	border-radius: 16px;
-	background: rgba(18, 18, 32, 0.96);
-	color: #f5f7ff;
-	backdrop-filter: blur(14px);
-}
-
-.scene-preview__help-menu-header {
-	font-size: 15px;
-	font-weight: 700;
-	letter-spacing: 0.02em;
-}
-
-.scene-preview__help-menu-subtitle {
-	margin-top: 6px;
-	font-size: 12px;
-	line-height: 1.5;
-	color: rgba(245, 247, 255, 0.75);
-}
-
-.scene-preview__help-group {
-	margin-top: 14px;
-	padding-top: 14px;
-	border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.scene-preview__help-group-title {
-	margin-bottom: 10px;
-	font-size: 12px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: rgba(255, 255, 255, 0.68);
-}
-
-.scene-preview__help-row {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	gap: 2px 12px;
-	align-items: start;
-	padding: 8px 0;
-}
-
-.scene-preview__help-action {
-	font-size: 13px;
-	font-weight: 600;
-	color: #f5f7ff;
-}
-
-.scene-preview__help-keys {
-	justify-self: end;
-	padding: 2px 8px;
-	border-radius: 999px;
-	background: rgba(255, 255, 255, 0.08);
-	font-size: 11px;
-	font-weight: 700;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-	white-space: nowrap;
-	color: rgba(255, 255, 255, 0.88);
-}
-
-.scene-preview__help-description {
-	grid-column: 1 / -1;
-	font-size: 12px;
-	line-height: 1.45;
-	color: rgba(245, 247, 255, 0.72);
 }
 
 .scene-preview__volume-slider {

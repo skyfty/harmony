@@ -43,8 +43,6 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   private domElement: HTMLElement
   private keyPanSpeedValue = 7
   private currentMode: SceneViewportCameraControlMode = 'orbit'
-  private enablePanValue = true
-  private enableRotateValue = true
   private planarPanSession: { pointerId: number; lastX: number; lastY: number } | null = null
   private transientLeftRotateActive = false
 
@@ -151,30 +149,6 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     this.keyPanSpeedValue = value
   }
 
-  get enablePan(): boolean {
-    return this.enablePanValue
-  }
-
-  set enablePan(value: boolean) {
-    if (this.enablePanValue === value) {
-      return
-    }
-    this.enablePanValue = value
-    this.applyMode(this.currentMode)
-  }
-
-  get enableRotate(): boolean {
-    return this.enableRotateValue
-  }
-
-  set enableRotate(value: boolean) {
-    if (this.enableRotateValue === value) {
-      return
-    }
-    this.enableRotateValue = value
-    this.applyMode(this.currentMode)
-  }
-
   applyMode(mode: SceneViewportCameraControlMode) {
     this.currentMode = mode
     const { ACTION } = CameraControls
@@ -183,21 +157,21 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     this.controls.mouseButtons.wheel = ACTION.DOLLY
 
     if (mode === 'map') {
-      this.controls.mouseButtons.middle = this.enablePanValue ? ACTION.TRUCK : ACTION.NONE
-      this.controls.mouseButtons.right = this.enableRotateValue ? ACTION.ROTATE : ACTION.NONE
-      this.controls.touches.one = this.enablePanValue ? ACTION.TOUCH_TRUCK : ACTION.NONE
-      this.controls.touches.two = (this.enablePanValue || this.enableRotateValue) ? ACTION.TOUCH_DOLLY_TRUCK : ACTION.NONE
-      this.controls.touches.three = this.enablePanValue ? ACTION.TOUCH_TRUCK : ACTION.NONE
+      this.controls.mouseButtons.middle = ACTION.NONE
+      this.controls.mouseButtons.right = ACTION.ROTATE
+      this.controls.touches.one = ACTION.TOUCH_TRUCK
+      this.controls.touches.two = ACTION.TOUCH_DOLLY_TRUCK
+      this.controls.touches.three = ACTION.TOUCH_TRUCK
       this.controls.minPolarAngle = THREE.MathUtils.degToRad(10)
       this.controls.maxPolarAngle = THREE.MathUtils.degToRad(88)
       this.controls.dollyToCursor = true
       this.controls.draggingSmoothTime = 0.035
     } else {
-      this.controls.mouseButtons.middle = this.enableRotateValue ? ACTION.ROTATE : ACTION.NONE
-      this.controls.mouseButtons.right = this.enablePanValue ? ACTION.TRUCK : ACTION.NONE
-      this.controls.touches.one = this.enableRotateValue ? ACTION.TOUCH_ROTATE : ACTION.NONE
-      this.controls.touches.two = (this.enablePanValue || this.enableRotateValue) ? ACTION.TOUCH_DOLLY_ROTATE : ACTION.NONE
-      this.controls.touches.three = this.enablePanValue ? ACTION.TOUCH_TRUCK : ACTION.NONE
+      this.controls.mouseButtons.middle = ACTION.ROTATE
+      this.controls.mouseButtons.right = ACTION.TRUCK
+      this.controls.touches.one = ACTION.TOUCH_ROTATE
+      this.controls.touches.two = ACTION.TOUCH_DOLLY_ROTATE
+      this.controls.touches.three = ACTION.TOUCH_TRUCK
       this.controls.minPolarAngle = 0.001
       this.controls.maxPolarAngle = Math.PI - 0.001
       this.controls.dollyToCursor = true
