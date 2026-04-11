@@ -157,7 +157,7 @@ import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { sampleGroundHeight } from '@schema/groundMesh'
+import { markGroundOptimizedMeshReady, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
   computeInstanceLayoutGridCenterOffsetLocal,
@@ -244,6 +244,7 @@ import { resetScatterInstanceBinding } from '@/utils/terrainScatterRuntime'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { persistPlanningImageLayersToIndexedDB } from '@/utils/planningImageStorage'
 import { installPlanningImagesResolver } from '@/utils/planningImageComponentResolver'
+import { rebuildOptimizedGroundMeshForDefinition } from '@/utils/groundOptimizedMeshExport'
 import type {
   BillboardComponentProps,
   DisplayBoardComponentProps,
@@ -1486,6 +1487,9 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     textureName: definition.textureName ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
   }
+  if (definition.optimizedMesh !== undefined) {
+    result.optimizedMesh = manualDeepClone(definition.optimizedMesh)
+  }
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
   }
@@ -1667,6 +1671,30 @@ function commitGroundHeightMapRuntimeEdit(
   runtimeDefinition.runtimeDisableOptimizedChunks = true
   useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
   refreshLandformNodesForGroundChange(store, nodeId, dirtyBounds)
+  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
+  persistGroundHeightSidecarForNode(target)
+  return true
+}
+
+function refreshGroundOptimizedMeshRuntime(
+  store: {
+    nodes: SceneNode[]
+    currentSceneId?: string | null
+    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+    bumpSceneNodePropertyVersion: () => void
+  },
+  nodeId: string,
+): boolean {
+  const target = findNodeById(store.nodes, nodeId)
+  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
+    return false
+  }
+
+  const runtimeDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
+  const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(runtimeDefinition)
+  markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
+  markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
+  useGroundHeightmapStore().replaceManualHeightMap(nodeId, runtimeDefinition, runtimeDefinition.manualHeightMap)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
@@ -8238,6 +8266,12 @@ export const useSceneStore = defineStore('scene', {
       )
       const normalizedGroundNode = findGroundNode(normalizedNodes)
       if (normalizedGroundNode) {
+        console.info('[SceneStore] Normalized ground node for active scene', {
+          sceneId: scene.id,
+          hasOptimizedMesh: Boolean((normalizedGroundNode.dynamicMesh as GroundDynamicMesh | undefined)?.optimizedMesh?.chunks?.length),
+          optimizedChunkCells: (normalizedGroundNode.dynamicMesh as GroundDynamicMesh | undefined)?.optimizedMesh?.chunkCells ?? null,
+          optimizedTriangleCount: (normalizedGroundNode.dynamicMesh as GroundDynamicMesh | undefined)?.optimizedMesh?.optimizedTriangleCount ?? 0,
+        })
         // Re-attach runtime sidecars after clone/normalize so hydrated terrain paint
         // remains visible on first scene load after browser refresh.
         attachGroundScatterRuntimeToNode(scene.id, normalizedGroundNode)
@@ -9235,6 +9269,23 @@ export const useSceneStore = defineStore('scene', {
       manualHeightMap: Float64Array,
     ) {
       return commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+    },
+    refreshGroundOptimizedMesh(nodeId: string) {
+      return refreshGroundOptimizedMeshRuntime(this, nodeId)
+    },
+    async saveGroundDataImmediately(nodeId: string) {
+      const target = findNodeById(this.nodes, nodeId)
+      const sceneId = typeof this.currentSceneId === 'string'
+        ? this.currentSceneId.trim()
+        : ''
+      if (!target || target.dynamicMesh?.type !== 'Ground' || !sceneId) {
+        return false
+      }
+
+      const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(target)
+      await useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar, { syncServer: false })
+      await this.saveActiveScene({ force: true })
+      return true
     },
     commitGroundScatterEdit(
       nodeId: string,

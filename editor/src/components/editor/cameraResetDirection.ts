@@ -18,8 +18,10 @@ type CameraResetDependencies = {
   getGroundNode: () => SceneNode | null
   getFallbackSceneNodes: () => SceneNode[]
   getSelectedNodeId: () => string | null
+  getSelectedNodeIds?: () => string[]
   getSceneNodeById: (nodeId: string) => SceneNode | null | undefined
   getRuntimeObject: (nodeId: string) => THREE.Object3D | null
+  resolveFocusTargetFromNodeIds?: (nodeIds: string[]) => CameraFocusTarget | null
   getLastCameraFocusRadius: () => number | null
   setLastCameraFocusRadius: (value: number) => void
   setApplyingCameraState: (value: boolean) => void
@@ -253,11 +255,14 @@ export function createCameraResetDirectionController(deps: CameraResetDependenci
     }
 
     const directionVector = directionToVector(direction)
+    const selectedIds = deps.getSelectedNodeIds?.().filter((id) => typeof id === 'string' && id.trim().length > 0) ?? []
     const selectedId = deps.getSelectedNodeId()
     let focus: CameraFocusTarget
     let forcedDistance: number | null = null
 
-    if (selectedId) {
+    if (selectedIds.length > 0 && typeof deps.resolveFocusTargetFromNodeIds === 'function') {
+      focus = deps.resolveFocusTargetFromNodeIds(selectedIds) ?? resolveFallbackFocusTargetForCameraReset()
+    } else if (selectedId) {
       focus = resolveFocusTargetFromNodeId(selectedId) ?? resolveFallbackFocusTargetForCameraReset()
     } else {
       const groundFit = resolveGroundPanoramaFitDistanceForDirection(directionVector)

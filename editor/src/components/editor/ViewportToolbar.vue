@@ -2,70 +2,6 @@
 <template>
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
-   <v-menu
-        :activator="menuActivators.sun"
-        :model-value="csmMenuOpen"
-        location="bottom"
-        :offset="6"
-        :open-on-click="false"
-        :close-on-content-click="false"
-        @update:modelValue="handleCsmMenuModelUpdate"
-      >
-        <template #activator="{ props: menuProps }">
-          <v-btn
-            v-bind="menuProps"
-            :ref="(el: unknown) => setMenuActivator('sun', el)"
-            icon="mdi-white-balance-sunny"
-            density="compact"
-            size="small"
-            class="toolbar-button"
-            :color="csmMenuOpen ? 'primary' : undefined"
-            :variant="csmMenuOpen ? 'flat' : 'text'"
-            title="CSM Sun & Shadow"
-            @click="emit('update:csm-menu-open', true)"
-          />
-        </template>
-        <v-list density="compact" class="csm-sun-menu">
-          <div
-            class="popup-menu-card csm-sun-menu__card"
-            @pointerdown.stop
-            @pointerup.stop
-            @mousedown.stop
-            @mouseup.stop
-          >
-            <v-toolbar density="compact" class="menu-toolbar" height="36px">
-              <div class="toolbar-text">
-                <div class="menu-title">CSM Sun</div>
-              </div>
-              <v-spacer />
-              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:csm-menu-open', false)" />
-            </v-toolbar>
-            <CsmSunMenuContent
-              :csm-enabled="csmEnabled"
-              :csm-shadow-enabled="csmShadowEnabled"
-              :csm-light-color="csmLightColor"
-              :csm-light-intensity="csmLightIntensity"
-              :csm-sun-azimuth-deg="csmSunAzimuthDeg"
-              :csm-sun-elevation-deg="csmSunElevationDeg"
-              :csm-cascades="csmCascades"
-              :csm-max-far="csmMaxFar"
-              :csm-shadow-map-size="csmShadowMapSize"
-              :csm-shadow-bias="csmShadowBias"
-              @update:csm-enabled="emit('update:csm-enabled', $event)"
-              @update:csm-shadow-enabled="emit('update:csm-shadow-enabled', $event)"
-              @update:csm-light-color="emit('update:csm-light-color', $event)"
-              @update:csm-light-intensity="emit('update:csm-light-intensity', $event)"
-              @update:csm-sun-azimuth-deg="emit('update:csm-sun-azimuth-deg', $event)"
-              @update:csm-sun-elevation-deg="emit('update:csm-sun-elevation-deg', $event)"
-              @update:csm-cascades="emit('update:csm-cascades', $event)"
-              @update:csm-max-far="emit('update:csm-max-far', $event)"
-              @update:csm-shadow-map-size="emit('update:csm-shadow-map-size', $event)"
-              @update:csm-shadow-bias="emit('update:csm-shadow-bias', $event)"
-            />
-          </div>
-        </v-list>
-      </v-menu>
-
       <template v-for="tool in buildToolButtons" :key="tool.id">
         <v-menu
           v-if="tool.id === 'terrain'"
@@ -112,6 +48,8 @@
                 <TerrainSculptPanel
                   v-model:brush-radius="groundBrushRadiusModel"
                   v-model:brush-strength="groundBrushStrengthModel"
+                  v-model:brush-depth="groundBrushDepthModel"
+                  v-model:brush-slope="groundBrushSlopeModel"
                   v-model:brush-shape="groundBrushShapeModel"
                   v-model:brush-operation="groundBrushOperationModel"
                   v-model:noise-strength="groundNoiseStrengthModel"
@@ -1272,73 +1210,6 @@
         title="Toggle Axes"
         @click="toggleAxesVisibility"
       />
-
-      <v-divider vertical />
-      <v-btn
-        :icon="cameraControlMode === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        color="undefined"
-        variant="text"
-        :title="
-          cameraControlMode === 'map'
-            ? 'Camera Controls: Map (click to switch to Orbit)'
-            : 'Camera Controls: Orbit (click to switch to Map)'
-        "
-        @click="toggleCameraControlMode"
-      />
-
-      <v-menu
-        :activator="menuActivators.cameraReset"
-        :model-value="cameraResetMenuOpen"
-        location="bottom"
-        :offset="6"
-        :open-on-click="false"
-        :close-on-content-click="true"
-        @update:modelValue="handleCameraResetMenuModelUpdate"
-      >
-        <template #activator="{ props: menuProps }">
-          <v-btn
-            v-bind="menuProps"
-            :ref="(el: unknown) => setMenuActivator('cameraReset', el)"
-            icon="mdi-camera"
-            density="compact"
-            size="small"
-            color="undefined"
-            variant="text"
-            class="toolbar-button"
-            title="Reset to Default View (Shift+F: focus visible; Alt+1..6: directional views)"
-            @click="emit('reset-camera')"
-            @contextmenu.prevent.stop="handleCameraResetContextMenu"
-          />
-        </template>
-        <v-list density="compact" class="camera-reset-menu">
-          <div
-            class="popup-menu-card"
-            @pointerdown.stop
-            @pointerup.stop
-            @mousedown.stop
-            @mouseup.stop
-          >
-            <v-toolbar density="compact" class="menu-toolbar" height="36px">
-              <div class="toolbar-text">
-                <div class="menu-title">Camera View</div>
-              </div>
-              <v-spacer />
-              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:camera-reset-menu-open', false)" />
-            </v-toolbar>
-            <div class="popup-menu-card__content">
-              <v-list-item title="正面 (+X) — Alt+1" @click="handleCameraResetDirectionSelect('pos-x')" />
-              <v-list-item title="背面 (-X) — Alt+2" @click="handleCameraResetDirectionSelect('neg-x')" />
-              <v-list-item title="上面 (+Y) — Alt+3" @click="handleCameraResetDirectionSelect('pos-y')" />
-              <v-list-item title="下面 (-Y) — Alt+4" @click="handleCameraResetDirectionSelect('neg-y')" />
-              <v-list-item title="左面 (+Z) — Alt+5" @click="handleCameraResetDirectionSelect('pos-z')" />
-              <v-list-item title="右面 (-Z) — Alt+6" @click="handleCameraResetDirectionSelect('neg-z')" />
-            </div>
-          </div>
-        </v-list>
-      </v-menu>
     </v-card>
   </div>
 </template>
@@ -1346,12 +1217,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
-import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
-import { PROTAGONIST_NODE_ID, type CameraControlMode } from '@schema'
+import { PROTAGONIST_NODE_ID } from '@schema'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
@@ -1404,8 +1274,6 @@ const props = withDefaults(
   scatterEraseMenuOpen: boolean
   viewportPlacementMenuOpen: boolean
   viewportPlacementActive: boolean
-  cameraResetMenuOpen: boolean
-  csmMenuOpen: boolean
   floorShapeMenuOpen: boolean
   landformShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
@@ -1429,7 +1297,9 @@ const props = withDefaults(
   groundPanelTab: GroundPanelTab
   groundBrushRadius: number
   groundBrushStrength: number
-  groundBrushShape: 'circle' | 'square' | 'star'
+  groundBrushDepth: number
+  groundBrushSlope: number
+  groundBrushShape: 'circle' | 'polygon'
   groundBrushOperation: GroundSculptOperation | null
   groundNoiseStrength: number
   groundNoiseMode: GroundGenerationMode
@@ -1442,16 +1312,6 @@ const props = withDefaults(
   groundScatterSpacing: number
   groundScatterDensityPercent: number
   groundScatterProviderAssetId?: string | null
-  csmEnabled: boolean
-  csmShadowEnabled: boolean
-  csmLightColor: string
-  csmLightIntensity: number
-  csmSunAzimuthDeg: number
-  csmSunElevationDeg: number
-  csmCascades: number
-  csmMaxFar: number
-  csmShadowMapSize: number
-  csmShadowBias: number
   }>(),
   {
     buildToolsDisabled: false,
@@ -1462,7 +1322,6 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  (event: 'reset-camera'): void
   (event: 'drop-to-ground'): void
   (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
@@ -1477,19 +1336,6 @@ const emit = defineEmits<{
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
-  (event: 'reset-camera-direction', direction: CameraResetDirection): void
-  (event: 'update:camera-reset-menu-open', value: boolean): void
-  (event: 'update:csm-menu-open', value: boolean): void
-  (event: 'update:csm-enabled', value: boolean): void
-  (event: 'update:csm-shadow-enabled', value: boolean): void
-  (event: 'update:csm-light-color', value: string): void
-  (event: 'update:csm-light-intensity', value: number): void
-  (event: 'update:csm-sun-azimuth-deg', value: number): void
-  (event: 'update:csm-sun-elevation-deg', value: number): void
-  (event: 'update:csm-cascades', value: number): void
-  (event: 'update:csm-max-far', value: number): void
-  (event: 'update:csm-shadow-map-size', value: number): void
-  (event: 'update:csm-shadow-bias', value: number): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:viewport-placement-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
@@ -1511,7 +1357,9 @@ const emit = defineEmits<{
   (event: 'activate-ground-tab', tab: GroundPanelTab): void
   (event: 'update:ground-brush-radius', value: number): void
   (event: 'update:ground-brush-strength', value: number): void
-  (event: 'update:ground-brush-shape', value: 'circle' | 'square' | 'star'): void
+  (event: 'update:ground-brush-depth', value: number): void
+  (event: 'update:ground-brush-slope', value: number): void
+  (event: 'update:ground-brush-shape', value: 'circle' | 'polygon'): void
   (event: 'update:ground-brush-operation', value: GroundSculptOperation | null): void
   (event: 'update:ground-noise-strength', value: number): void
   (event: 'update:ground-noise-mode', value: GroundGenerationMode): void
@@ -1547,8 +1395,6 @@ const {
   scatterEraseMenuOpen,
   viewportPlacementMenuOpen,
   viewportPlacementActive,
-  cameraResetMenuOpen,
-  csmMenuOpen,
   floorShapeMenuOpen,
   landformShapeMenuOpen,
   wallShapeMenuOpen,
@@ -1571,6 +1417,8 @@ const {
   groundPanelTab,
   groundBrushRadius,
   groundBrushStrength,
+  groundBrushDepth,
+  groundBrushSlope,
   groundBrushShape,
   groundBrushOperation,
   groundNoiseStrength,
@@ -1584,29 +1432,12 @@ const {
   groundScatterSpacing,
   groundScatterDensityPercent,
   groundScatterProviderAssetId,
-  csmEnabled,
-  csmShadowEnabled,
-  csmLightColor,
-  csmLightIntensity,
-  csmSunAzimuthDeg,
-  csmSunElevationDeg,
-  csmCascades,
-  csmMaxFar,
-  csmShadowMapSize,
-  csmShadowBias,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 const wallPresetPickerAssets = computed<ProjectAsset[]>(() => {
   const builtinAirWallPreset = sceneStore.getAsset(BUILTIN_AIR_WALL_PRESET_ASSET_ID)
   return builtinAirWallPreset ? [builtinAirWallPreset] : []
 })
-
-const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraControlMode)
-
-function toggleCameraControlMode() {
-  const next: CameraControlMode = cameraControlMode.value === 'map' ? 'orbit' : 'map'
-  sceneStore.setCameraControlMode(next)
-}
 
 const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const activeNode = computed(() => sceneStore.selectedNode)
@@ -1618,7 +1449,6 @@ const fixedPrimaryAsAnchor = ref(true)
 const displayBoardToolMenuOpen = ref(false)
 
 type MenuActivatorKey =
-  | 'sun'
   | 'terrain'
   | 'paint'
   | 'scatter'
@@ -1630,10 +1460,8 @@ type MenuActivatorKey =
   | 'water'
   | 'viewportPlacement'
   | 'scatterErase'
-  | 'cameraReset'
 
 const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined>>({
-  sun: undefined,
   terrain: undefined,
   paint: undefined,
   scatter: undefined,
@@ -1645,7 +1473,6 @@ const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined
   water: undefined,
   viewportPlacement: undefined,
   scatterErase: undefined,
-  cameraReset: undefined,
 })
 
 function setMenuActivator(key: MenuActivatorKey, el: unknown) {
@@ -1898,9 +1725,19 @@ const groundBrushStrengthModel = computed({
   set: (value: number) => emit('update:ground-brush-strength', Number(value)),
 })
 
+const groundBrushDepthModel = computed({
+  get: () => groundBrushDepth.value,
+  set: (value: number) => emit('update:ground-brush-depth', Number(value)),
+})
+
+const groundBrushSlopeModel = computed({
+  get: () => groundBrushSlope.value,
+  set: (value: number) => emit('update:ground-brush-slope', Number(value)),
+})
+
 const groundBrushShapeModel = computed({
   get: () => groundBrushShape.value,
-  set: (value: 'circle' | 'square' | 'star') => emit('update:ground-brush-shape', value),
+  set: (value: 'circle' | 'polygon') => emit('update:ground-brush-shape', value),
 })
 
 const groundBrushOperationModel = computed({
@@ -1966,8 +1803,6 @@ const noiseModeOptions: Array<{ value: GroundGenerationMode; label: string; icon
 type RotationAxis = 'x' | 'y'
 
 type MirrorMode = 'horizontal' | 'vertical'
-
-type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
 
 type RotationAction = {
   id: string
@@ -2039,9 +1874,6 @@ watch(canEraseScatterEffective, (enabled) => {
 })
 
 watch(buildToolsDisabled, (disabled) => {
-  if (disabled && csmMenuOpen.value) {
-    emit('update:csm-menu-open', false)
-  }
   if (disabled && displayBoardToolMenuOpen.value) {
     displayBoardToolMenuOpen.value = false
   }
@@ -2083,13 +1915,11 @@ watch(hasGroundNode, (available) => {
 // Mutual exclusivity helpers
 function closeExternalMenus() {
   displayBoardToolMenuOpen.value = false
-  emit('update:csm-menu-open', false)
   emit('update:ground-terrain-menu-open', false)
   emit('update:ground-paint-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
   emit('update:scatter-erase-menu-open', false)
   emit('update:viewport-placement-menu-open', false)
-  emit('update:camera-reset-menu-open', false)
   emit('update:floor-shape-menu-open', false)
   emit('update:landform-shape-menu-open', false)
   emit('update:wall-shape-menu-open', false)
@@ -2706,30 +2536,6 @@ function handleScatterEraseContextMenu(event: MouseEvent) {
   emit('update:scatter-erase-menu-open', true)
 }
 
-function handleCameraResetContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  closeAllMenus()
-  emit('update:camera-reset-menu-open', true)
-}
-
-function handleCameraResetMenuModelUpdate(value: boolean) {
-  emit('update:camera-reset-menu-open', Boolean(value))
-}
-
-function handleCsmMenuModelUpdate(value: boolean) {
-  const open = Boolean(value)
-  if (open) {
-    closeAllMenus()
-  }
-  emit('update:csm-menu-open', open)
-}
-
-function handleCameraResetDirectionSelect(direction: CameraResetDirection) {
-  emit('reset-camera-direction', direction)
-  emit('update:camera-reset-menu-open', false)
-}
-
 function toggleGridVisibility() {
   sceneStore.toggleViewportGridVisible()
 }
@@ -2781,8 +2587,8 @@ function handleClearScatterMenuAction() {
 }
 
 .csm-sun-menu {
-  width: 320px;
-  max-width: min(320px, 92vw);
+  width: 380px;
+  max-width: min(380px, 92vw);
   padding: 6px;
 }
 

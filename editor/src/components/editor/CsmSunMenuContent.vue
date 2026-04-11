@@ -6,7 +6,7 @@
         density="compact"
         hide-details
         color="primary"
-        label="Enable CSM"
+        label="CSM"
         @update:model-value="handleCsmEnabledUpdate"
       />
       <v-switch
@@ -14,7 +14,7 @@
         density="compact"
         hide-details
         color="primary"
-        label="Enable Shadows"
+        label="Shadows"
         @update:model-value="handleCsmShadowEnabledUpdate"
       />
     </div>
@@ -72,11 +72,8 @@
       />
       <div class="csm-sun-dial-card">
         <div class="csm-sun-dial-card__header">
-          <div>
-            <div class="csm-sun-dial-card__title">Sun Direction</div>
-          </div>
-          <div class="csm-sun-dial-card__values">
-            <span class="csm-sun-dial-card__state">{{ currentSunStateLabel }}</span>
+          <span class="csm-sun-dial-card__state">{{ currentSunStateLabel }}</span>
+          <div class="csm-sun-dial-card__angles">
             <span>Az {{ displaySunAzimuthDeg }}°</span>
             <span>El {{ displaySunElevationDeg }}°</span>
           </div>
@@ -114,11 +111,6 @@
           <div class="csm-sun-dial__center" />
           <div class="csm-sun-dial__ray" :style="sunDialRayStyle" />
           <div class="csm-sun-dial__indicator" :style="sunDialIndicatorStyle" />
-        </div>
-        <div class="csm-sun-dial-card__legend">
-          <span>Sunrise is on the east</span>
-          <span>Noon is to the south</span>
-          <span>Sunset is on the west</span>
         </div>
       </div>
       <v-text-field
@@ -635,19 +627,19 @@ function commitCsmShadowBiasInput() {
     margin: 5px;
 }
 .csm-sun-menu__content {
-  padding: 8px 10px 10px;
+  padding: 6px 8px 8px;
 }
 
 .csm-sun-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 6px;
 }
 
 .csm-sun-dial-card {
   grid-column: 1 / -1;
-  padding: 10px 12px 12px;
-  border-radius: 12px;
+  padding: 6px 8px 8px;
+  border-radius: 10px;
   background:
     radial-gradient(circle at top, rgba(255, 221, 143, 0.16), transparent 48%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
@@ -658,13 +650,8 @@ function commitCsmShadowBiasInput() {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.csm-sun-dial-card__title {
-  font-size: 13px;
-  font-weight: 600;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 
 .csm-sun-dial-card__caption {
@@ -674,12 +661,10 @@ function commitCsmShadowBiasInput() {
   color: rgba(255, 255, 255, 0.68);
 }
 
-.csm-sun-dial-card__values {
+.csm-sun-dial-card__angles {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 10px;
   color: rgba(255, 255, 255, 0.8);
   white-space: nowrap;
 }
@@ -688,17 +673,18 @@ function commitCsmShadowBiasInput() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 20px;
-  padding: 0 8px;
+  min-height: 18px;
+  padding: 0 7px;
   border-radius: 999px;
   background: rgba(255, 208, 110, 0.12);
   border: 1px solid rgba(255, 208, 110, 0.24);
   color: rgba(255, 232, 180, 0.92);
+  font-size: 10px;
 }
 
 .csm-sun-dial {
   position: relative;
-  width: min(100%, 190px);
+  width: min(100%, 148px);
   aspect-ratio: 1;
   margin: 0 auto;
   border-radius: 50%;
@@ -855,16 +841,17 @@ function commitCsmShadowBiasInput() {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 6px 10px;
-  margin-top: 10px;
-  font-size: 10px;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font-size: 9px;
   color: rgba(255, 255, 255, 0.58);
 }
 
 .csm-switch-row {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
+  margin-bottom: 2px;
 }
 .csm-switch-row > * {
   flex: 1;

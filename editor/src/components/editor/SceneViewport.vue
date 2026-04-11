@@ -192,6 +192,7 @@ import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import {
   buildViewportPlacementPreview,
   getViewportPlacementKey,
@@ -211,10 +212,13 @@ import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
+  analyzeGroundOptimizedMeshUsage,
   createGroundMesh,
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
+  resolveGroundRuntimeChunkCells,
+  setGroundRuntimeOptimizedChunksEnabled,
   updateGroundMesh,
   releaseGroundMeshCache,
   sampleGroundHeight,
@@ -467,6 +471,8 @@ const { panelVisibility, isSceneReady, sceneGraphStructureVersion, sceneNodeProp
 const {
   brushRadius,
   brushStrength,
+  brushDepth,
+  brushSlope,
   brushShape,
   brushOperation,
   groundPanelTab,
@@ -1791,6 +1797,12 @@ type DirectionalLightPivotEditState = {
 let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
+const VIEWPORT_COMPOSITION_EPSILON_PX = 0.5
+const viewportCompositionOffsetPx = new THREE.Vector2(Number.NaN, Number.NaN)
+const viewportCompositionOffsetTargetPx = new THREE.Vector2()
+let viewportCompositionUpdateFrame: number | null = null
+let viewportCompositionUpdateQueued = false
+let viewportCompositionUpdateForce = false
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const defaultCameraStatusDistance = new THREE.Vector3(
   DEFAULT_CAMERA_POSITION.x,
@@ -1824,9 +1836,13 @@ const canRotateSelection = computed(() =>
 const canDropSelection = computed(() =>
   sceneStore.selectedNodeIds.some((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
 )
-const cameraStatusModeText = computed(() =>
-  sceneStore.viewportSettings.cameraControlMode === 'map' ? '地图' : '轨道'
-)
+const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraControlMode)
+const viewportSelectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
+const cameraPointerHintText = computed(() => (
+  cameraControlMode.value === 'map'
+    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Shift+右拖 指定轨道中心 · Shift+左键 快速对焦'
+    : '中键旋转 · 右键平移 · 滚轮缩放 · Shift+中拖 指定轨道中心 · Shift+左键 快速对焦'
+))
 const cameraStatusZoomRatioText = computed(() => {
   const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
   const ratio = cameraStatusDistance.value / base
@@ -3309,6 +3325,8 @@ const groundEditor = createGroundEditor({
   getScene: () => scene,
   brushRadius,
   brushStrength,
+  brushDepth,
+  brushSlope,
   brushShape,
   brushOperation,
   groundPanelTab,
@@ -3334,16 +3352,21 @@ const groundEditor = createGroundEditor({
     enabled: resolveGroundScatterChunkStreamingEnabled,
     getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
   },
+  onSculptStart: () => {
+    handleGroundTerrainMenuOpen(false)
+  },
   onTerrainPaintSurfacePreviewChanged: syncGroundSurfacePreviewFromLiveTerrainPaint,
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
+  prepareGroundRuntimeDefinition: applyViewportGroundRuntimeMode,
   onSculptCommitApplied: ({ groundObject, definition }: { groundObject: THREE.Object3D; definition: GroundRuntimeDynamicMesh }) => {
     const signature = computeGroundDynamicMeshSignature(definition)
     const signatureTarget = resolveGroundSignatureTarget(groundObject)
     const userData = signatureTarget.userData ?? (signatureTarget.userData = {})
     userData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] = signature
     userData[DYNAMIC_MESH_SIGNATURE_KEY] = signature
+    pendingViewportGroundOptimizedRebuild = true
   },
   onScatterEraseStart: () => {
     scatterEraseMenuOpen.value = false
@@ -3353,6 +3376,7 @@ const groundEditor = createGroundEditor({
 const {
   brushMesh,
   scatterAreaPreviewGroup,
+  terrainSculptPreviewGroup,
   scatterPreviewGroup,
   groundSelectionGroup,
   groundSelection,
@@ -4650,6 +4674,83 @@ let viewportResizeObserver: ResizeObserver | null = null
 let transformToolbarResizeObserver: ResizeObserver | null = null
 let viewportToolbarResizeObserver: ResizeObserver | null = null
 
+function shouldApplyViewportCompositionOffset(): boolean {
+  return (panelVisibility.value.hierarchy && panelPlacement.value.hierarchy === 'docked')
+    || (panelVisibility.value.inspector && panelPlacement.value.inspector === 'docked')
+}
+
+function resolveViewportCompositionOffsetPx(out: THREE.Vector2 = viewportCompositionOffsetTargetPx): THREE.Vector2 {
+  out.set(0, 0)
+  if (typeof window === 'undefined' || !viewportEl.value || !shouldApplyViewportCompositionOffset()) {
+    return out
+  }
+
+  const rect = viewportEl.value.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) {
+    return out
+  }
+
+  out.x = window.innerWidth * 0.5 - (rect.left + rect.width * 0.5)
+  if (Math.abs(out.x) <= VIEWPORT_COMPOSITION_EPSILON_PX) {
+    out.x = 0
+  }
+  return out
+}
+
+function applyViewportCompositionOffset(force = false): void {
+  if (!mapControls) {
+    viewportCompositionOffsetPx.set(Number.NaN, Number.NaN)
+    return
+  }
+
+  const desiredOffsetPx = resolveViewportCompositionOffsetPx()
+  if (
+    !force
+    && Number.isFinite(viewportCompositionOffsetPx.x)
+    && Number.isFinite(viewportCompositionOffsetPx.y)
+    && viewportCompositionOffsetPx.distanceToSquared(desiredOffsetPx) <= VIEWPORT_COMPOSITION_EPSILON_PX * VIEWPORT_COMPOSITION_EPSILON_PX
+  ) {
+    return
+  }
+
+  viewportCompositionOffsetPx.copy(desiredOffsetPx)
+  if (Math.abs(desiredOffsetPx.x) <= VIEWPORT_COMPOSITION_EPSILON_PX && Math.abs(desiredOffsetPx.y) <= VIEWPORT_COMPOSITION_EPSILON_PX) {
+    mapControls.resetFocalOffset(false)
+    return
+  }
+
+  mapControls.setFocalOffsetByViewportPixels(desiredOffsetPx.x, desiredOffsetPx.y, false)
+}
+
+function scheduleViewportCompositionUpdate(force = false): void {
+  viewportCompositionUpdateForce = viewportCompositionUpdateForce || force
+  if (viewportCompositionUpdateQueued) {
+    return
+  }
+
+  viewportCompositionUpdateQueued = true
+  void nextTick(() => {
+    if (typeof window === 'undefined') {
+      viewportCompositionUpdateQueued = false
+      const shouldForce = viewportCompositionUpdateForce
+      viewportCompositionUpdateForce = false
+      applyViewportCompositionOffset(shouldForce)
+      return
+    }
+
+    if (viewportCompositionUpdateFrame !== null) {
+      window.cancelAnimationFrame(viewportCompositionUpdateFrame)
+    }
+    viewportCompositionUpdateFrame = window.requestAnimationFrame(() => {
+      viewportCompositionUpdateFrame = null
+      viewportCompositionUpdateQueued = false
+      const shouldForce = viewportCompositionUpdateForce
+      viewportCompositionUpdateForce = false
+      applyViewportCompositionOffset(shouldForce)
+    })
+  })
+}
+
 let pointerTrackingState: PointerTrackingState | null = null
 // debugHoverHit removed
 
@@ -4671,6 +4772,7 @@ type LeftEmptyClickSessionState = {
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
+  clickHitResult: NodeHitResult | null
   cameraGesture: 'none' | 'planar-pan' | 'orbit-rotate'
 }
 
@@ -6390,7 +6492,7 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
     return false
   }
 
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return false
   }
 
@@ -7135,10 +7237,6 @@ function patchEnvironmentCsmSettings(patch: Partial<EnvironmentCsmSettings>): vo
   })
 }
 
-function handleCsmMenuOpen(value: boolean): void {
-  csmMenuOpen.value = Boolean(value)
-}
-
 function handleCsmEnabledUpdate(value: boolean): void {
   patchEnvironmentCsmSettings({ enabled: Boolean(value) })
 }
@@ -7456,7 +7554,17 @@ function handleGroundBrushStrengthUpdate(value: number) {
   terrainStore.brushStrength = Number.isFinite(next) ? Math.min(10, Math.max(0.1, next)) : terrainStore.brushStrength
 }
 
-function handleGroundBrushShapeUpdate(value: 'circle' | 'square' | 'star') {
+function handleGroundBrushDepthUpdate(value: number) {
+  const next = Number(value)
+  terrainStore.brushDepth = Number.isFinite(next) ? Math.min(50, Math.max(0.1, next)) : terrainStore.brushDepth
+}
+
+function handleGroundBrushSlopeUpdate(value: number) {
+  const next = Number(value)
+  terrainStore.brushSlope = Number.isFinite(next) ? Math.min(1, Math.max(0, next)) : terrainStore.brushSlope
+}
+
+function handleGroundBrushShapeUpdate(value: 'circle' | 'polygon') {
   terrainStore.brushShape = value
 }
 
@@ -7648,7 +7756,7 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
   if (targetTool !== 'wall' && targetTool !== 'floor' && targetTool !== 'water') {
     return null
   }
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return null
   }
   if (nodePickerStore.isActive || isAutoOverlayBlockedBySelectionContext(targetTool)) {
@@ -7707,7 +7815,7 @@ function resolveScatterAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlay
   if (!scatterAutoOverlayEnabled()) {
     return null
   }
-  if (isAltOverrideActive || nodePickerStore.isActive) {
+  if (isTemporaryNavigationOverrideActive() || nodePickerStore.isActive) {
     return null
   }
 
@@ -8016,7 +8124,7 @@ function resolveAutoOverlaySuggestedMargins(plan: AutoOverlayBuildPlan): { horiz
 }
 
 function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
-  if (event.button !== 0 || isAltOverrideActive || !(event.ctrlKey || event.metaKey)) {
+  if (event.button !== 0 || isTemporaryNavigationOverrideActive() || !(event.ctrlKey || event.metaKey)) {
     return false
   }
   const plan = resolveAutoOverlayPlanForEvent(event)
@@ -9000,11 +9108,28 @@ function setOrbitControlOverride(active: boolean) {
   updateMapControlsEnabled()
 }
 
-function activateAltOverride() {
-  if (isAltOverrideActive) {
+function isTemporaryNavigationOverrideActive(): boolean {
+  return isAltOverrideActive || isSpaceOverrideActive
+}
+
+function activateTemporaryNavigationOverride(kind: 'alt' | 'space') {
+  const wasActive = isTemporaryNavigationOverrideActive()
+  if (kind === 'alt') {
+    if (isAltOverrideActive) {
+      return
+    }
+    isAltOverrideActive = true
+  } else {
+    if (isSpaceOverrideActive) {
+      return
+    }
+    isSpaceOverrideActive = true
+  }
+
+  if (wasActive) {
     return
   }
-  isAltOverrideActive = true
+
   toolOverrideSnapshot = {
     transformTool: props.activeTool ?? null,
     wallBuildActive: Boolean(wallBuildTool.getSession()),
@@ -9016,11 +9141,23 @@ function activateAltOverride() {
   setOrbitControlOverride(true)
 }
 
-function deactivateAltOverride() {
-  if (!isAltOverrideActive) {
+function deactivateTemporaryNavigationOverride(kind: 'alt' | 'space') {
+  if (kind === 'alt') {
+    if (!isAltOverrideActive) {
+      return
+    }
+    isAltOverrideActive = false
+  } else {
+    if (!isSpaceOverrideActive) {
+      return
+    }
+    isSpaceOverrideActive = false
+  }
+
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
-  isAltOverrideActive = false
+
   const snapshot = toolOverrideSnapshot
   toolOverrideSnapshot = null
   setOrbitControlOverride(false)
@@ -9033,6 +9170,22 @@ function deactivateAltOverride() {
   if (snapshot?.groundSelectionActive && groundSelection.value) {
     updateGroundSelectionToolbarPosition()
   }
+}
+
+function activateAltOverride() {
+  activateTemporaryNavigationOverride('alt')
+}
+
+function deactivateAltOverride() {
+  deactivateTemporaryNavigationOverride('alt')
+}
+
+function activateSpaceOverride() {
+  activateTemporaryNavigationOverride('space')
+}
+
+function deactivateSpaceOverride() {
+  deactivateTemporaryNavigationOverride('space')
 }
 
 function isAssetPlacementActiveForOverride(): boolean {
@@ -9052,7 +9205,7 @@ function activateVOverride() {
   if (!isAssetPlacementActiveForOverride()) {
     return
   }
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
   isVOverrideActive = true
@@ -9069,7 +9222,7 @@ function deactivateVOverride() {
   isVOverrideActive = false
   const snapshot = vOverrideSnapshotTool
   vOverrideSnapshotTool = null
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
   if (snapshot && props.activeTool !== snapshot) {
@@ -9135,6 +9288,40 @@ function handleAltOverrideKeyUp(event: KeyboardEvent) {
 
 function handleAltOverrideBlur() {
   deactivateAltOverride()
+}
+
+function handleSpaceOverrideKeyDown(event: KeyboardEvent) {
+  if (event.defaultPrevented) {
+    return
+  }
+  if (event.repeat) {
+    return
+  }
+  if (event.code !== 'Space') {
+    return
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return
+  }
+  if (isEditableKeyboardTarget(event.target)) {
+    return
+  }
+  if (props.previewActive) {
+    return
+  }
+  event.preventDefault()
+  activateSpaceOverride()
+}
+
+function handleSpaceOverrideKeyUp(event: KeyboardEvent) {
+  if (event.code !== 'Space') {
+    return
+  }
+  deactivateSpaceOverride()
+}
+
+function handleSpaceOverrideBlur() {
+  deactivateSpaceOverride()
 }
 
 function handleViewportContextMenu(event: MouseEvent) {
@@ -9953,6 +10140,58 @@ function cloneGroundSurfaceChunkMap(
   return Object.keys(result).length ? result : null
 }
 
+function shouldForceDenseGroundMeshForViewport(
+  tool = activeBuildTool.value,
+  operation = brushOperation.value,
+): boolean {
+  return tool === 'terrain' && operation !== null
+}
+
+const viewportForceDenseGroundMesh = ref(shouldForceDenseGroundMeshForViewport())
+let pendingViewportGroundOptimizedRebuild = false
+let lastGroundRenderDebugSignature: string | null = null
+
+function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
+  if (viewportForceDenseGroundMesh.value) {
+    return setGroundRuntimeOptimizedChunksEnabled(definition, false)
+  }
+  return definition
+}
+
+function debugViewportGroundRenderMode(phase: string, definition: GroundRuntimeDynamicMesh): void {
+  const analysis = analyzeGroundOptimizedMeshUsage(definition)
+  const signature = [
+    phase,
+    viewportForceDenseGroundMesh.value ? 'forced-dense' : 'auto',
+    analysis.reason,
+    analysis.canUseOptimizedMesh ? 'optimized' : 'dense',
+    analysis.optimizedChunkCells ?? 'none',
+    analysis.runtimeChunkCells,
+    analysis.surfaceRevision,
+    analysis.runtimeHydratedHeightState,
+  ].join('|')
+
+  if (signature === lastGroundRenderDebugSignature) {
+    return
+  }
+  lastGroundRenderDebugSignature = signature
+
+  console.info('[SceneViewport][GroundRenderMode]', {
+    phase,
+    forcedDense: viewportForceDenseGroundMesh.value,
+    canUseOptimizedMesh: analysis.canUseOptimizedMesh,
+    reason: analysis.reason,
+    runtimeChunkCells: resolveGroundRuntimeChunkCells(definition),
+    optimizedChunkCells: analysis.optimizedChunkCells,
+    sourceChunkCells: analysis.sourceChunkCells,
+    optimizedTriangleCount: analysis.optimizedTriangleCount,
+    sourceTriangleCount: analysis.sourceTriangleCount,
+    surfaceRevision: analysis.surfaceRevision,
+    runtimeHydratedHeightState: analysis.runtimeHydratedHeightState,
+    runtimeDisableOptimizedChunks: analysis.runtimeDisableOptimizedChunks,
+  })
+}
+
 function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
   const node = getGroundNodeFromStore()
   if (node?.dynamicMesh?.type === 'Ground' && sceneStore.currentSceneId) {
@@ -9962,13 +10201,13 @@ function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
     )
     const paintRuntime = useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId)
     if (paintRuntime && paintRuntime.nodeId === node.id) {
-      return {
+      return applyViewportGroundRuntimeMode({
         ...runtimeDefinition,
         terrainPaint: null,
         groundSurfaceChunks: cloneGroundSurfaceChunkMap(paintRuntime.groundSurfaceChunks),
-      }
+      })
     }
-    return runtimeDefinition
+    return applyViewportGroundRuntimeMode(runtimeDefinition)
   }
   return null
 }
@@ -9985,6 +10224,7 @@ let isGroundSelectionOrbitDisabled = false
 let orbitDisableCount = 0
 let isOrbitControlOverrideActive = false
 let isAltOverrideActive = false
+let isSpaceOverrideActive = false
 let isVOverrideActive = false
 type AltOverrideSnapshot = {
   transformTool: EditorTool | null
@@ -11399,6 +11639,7 @@ function resetCameraView() {
   refreshSceneCsmFrustums()
 
   mapControls.setLookAt(position, target, false)
+  applyViewportCompositionOffset(true)
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(target) / 10)
   syncControlsConstraintsAndSpeeds()
   updateCameraStatusDistance()
@@ -11413,8 +11654,10 @@ const cameraResetDirectionController = createCameraResetDirectionController({
   getGroundNode: () => sceneStore.groundNode,
   getFallbackSceneNodes: () => props.sceneNodes,
   getSelectedNodeId: () => sceneStore.selectedNodeId,
+  getSelectedNodeIds: () => getViewportSelectionFocusIds(),
   getSceneNodeById: (nodeId) => sceneStore.getNodeById(nodeId),
   getRuntimeObject: (nodeId) => objectMap.get(nodeId) ?? getRuntimeObject(nodeId),
+  resolveFocusTargetFromNodeIds: (nodeIds) => resolveFocusTargetForNodeIds(nodeIds),
   getLastCameraFocusRadius: () => lastCameraFocusRadius,
   setLastCameraFocusRadius: (value) => {
     lastCameraFocusRadius = value
@@ -11429,7 +11672,11 @@ const cameraResetDirectionController = createCameraResetDirectionController({
 })
 
 function resetCameraToSelectionDirection(direction: CameraResetDirection): boolean {
-  return cameraResetDirectionController.resetCameraToSelectionDirection(direction)
+  const handled = cameraResetDirectionController.resetCameraToSelectionDirection(direction)
+  if (handled) {
+    applyViewportCompositionOffset(true)
+  }
+  return handled
 }
 
 function handleResetCameraDirection(direction: CameraResetDirection) {
@@ -11495,6 +11742,7 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
     new THREE.Vector3(state.target.x, clampedTargetY, state.target.z),
     false,
   )
+  applyViewportCompositionOffset(true)
   // Keep a best-effort scale hint so clip planes/controls stay usable even without an explicit focus action.
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
   syncControlsConstraintsAndSpeeds()
@@ -11527,6 +11775,83 @@ function computeFitDistanceForSphere(params: {
   const dv = radius / Math.tan(Math.max(fovV / 2, 1e-6))
   const dh = radius / Math.tan(Math.max(fovH / 2, 1e-6))
   return Math.max(dv, dh) * margin
+}
+
+function resolveFocusTargetForNodeIds(nodeIds: string[]): { target: THREE.Vector3; radiusEstimate: number } | null {
+  const focusIds = nodeIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
+  if (focusIds.length === 0) {
+    return null
+  }
+
+  const target = new THREE.Vector3()
+  const combinedBox = new THREE.Box3()
+  let hasBounds = false
+  const tempBox = new THREE.Box3()
+  const tempVector = new THREE.Vector3()
+
+  for (const nodeId of focusIds) {
+    const candidate = sceneStore.getNodeById(nodeId)
+    if (candidate?.light?.type === 'Directional' && candidate.light.target) {
+      tempVector.set(candidate.light.target.x, candidate.light.target.y, candidate.light.target.z)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+      continue
+    }
+
+    const object = objectMap.get(nodeId)
+    if (object) {
+      object.updateWorldMatrix(true, true)
+      const box = setBoundingBoxFromObject(object, tempBox)
+      if (!box.isEmpty()) {
+        if (!hasBounds) {
+          combinedBox.copy(box)
+          hasBounds = true
+        } else {
+          combinedBox.union(box)
+        }
+        continue
+      }
+      object.getWorldPosition(tempVector)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+      continue
+    }
+
+    const node = findSceneNode(props.sceneNodes, nodeId) ?? findSceneNode(sceneStore.nodes, nodeId)
+    if (node) {
+      tempVector.set(node.position.x, node.position.y, node.position.z)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+    }
+  }
+
+  if (!hasBounds || combinedBox.isEmpty()) {
+    return null
+  }
+
+  combinedBox.getCenter(target)
+  const sphere = new THREE.Sphere()
+  combinedBox.getBoundingSphere(sphere)
+  return { target, radiusEstimate: sphere.radius }
+}
+
+function getViewportSelectionFocusIds(): string[] {
+  return [...new Set([
+    ...sceneStore.selectedNodeIds,
+    props.selectedNodeId ?? null,
+  ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
 }
 
 function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: number | null }) {
@@ -11635,6 +11960,7 @@ function applyCameraFocus(target: THREE.Vector3, radiusEstimate: number): boolea
 
   isApplyingCameraState = true
   mapControls.setLookAt(newPosition, focusTarget, false)
+  applyViewportCompositionOffset(true)
   syncControlsConstraintsAndSpeeds()
   isApplyingCameraState = false
 
@@ -11647,87 +11973,128 @@ function applyCameraFocus(target: THREE.Vector3, radiusEstimate: number): boolea
 }
 
 function focusCameraOnSelection(nodeIds: string[]): boolean {
-  if (!camera || !mapControls) {
-    return false
-  }
-
-  const focusIds = nodeIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
-  if (focusIds.length === 0) {
-    return false
-  }
-
-  const target = new THREE.Vector3()
-  const combinedBox = new THREE.Box3()
-  let hasBounds = false
-  const tempBox = new THREE.Box3()
-  const tempVector = new THREE.Vector3()
-
-  for (const nodeId of focusIds) {
-    // Lights: focus on their target (keeps framing near the scene even if the light position is very high).
-    const candidate = sceneStore.getNodeById(nodeId)
-    if (candidate?.light?.type === 'Directional' && candidate.light.target) {
-      tempVector.set(candidate.light.target.x, candidate.light.target.y, candidate.light.target.z)
-      if (!hasBounds) {
-        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
-        hasBounds = true
-      } else {
-        combinedBox.expandByPoint(tempVector)
-      }
-      continue
-    }
-
-    const object = objectMap.get(nodeId)
-    if (object) {
-      object.updateWorldMatrix(true, true)
-      const box = setBoundingBoxFromObject(object, tempBox)
-      if (!box.isEmpty()) {
-        if (!hasBounds) {
-          combinedBox.copy(box)
-          hasBounds = true
-        } else {
-          combinedBox.union(box)
-        }
-        continue
-      }
-      object.getWorldPosition(tempVector)
-      if (!hasBounds) {
-        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
-        hasBounds = true
-      } else {
-        combinedBox.expandByPoint(tempVector)
-      }
-      continue
-    }
-
-    const node = findSceneNode(props.sceneNodes, nodeId) ?? findSceneNode(sceneStore.nodes, nodeId)
-    if (node) {
-      tempVector.set(node.position.x, node.position.y, node.position.z)
-      if (!hasBounds) {
-        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
-        hasBounds = true
-      } else {
-        combinedBox.expandByPoint(tempVector)
-      }
-    }
-  }
-
-  if (!hasBounds || combinedBox.isEmpty()) {
-    return false
-  }
-
-  combinedBox.getCenter(target)
-  const sphere = new THREE.Sphere()
-  combinedBox.getBoundingSphere(sphere)
-  return applyCameraFocus(target, sphere.radius)
-}
-
-
-function focusCameraOnNode(nodeId: string): boolean {
-  const focus = cameraResetDirectionController.resolveFocusTargetFromNodeId(nodeId)
+  const focus = resolveFocusTargetForNodeIds(nodeIds)
   if (!focus) {
     return false
   }
   return applyCameraFocus(focus.target, focus.radiusEstimate)
+}
+
+function applyCameraTopViewFocus(target: THREE.Vector3, radiusEstimate: number): boolean {
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  const clampedTargetY = Math.max(target.y, MIN_TARGET_HEIGHT)
+  const focusTarget = new THREE.Vector3(target.x, clampedTargetY, target.z)
+  const radiusUsed = computeRadiusUsed(radiusEstimate)
+
+  lastCameraFocusRadius = radiusUsed
+
+  const perspective = camera instanceof THREE.PerspectiveCamera ? camera : null
+  let desiredDistance = perspective
+    ? computeFitDistanceForSphere({ camera: perspective, radius: radiusUsed, margin: 1.18 })
+    : radiusUsed * 2.8
+  desiredDistance = Math.max(desiredDistance, radiusUsed * 1.5, 0.8)
+
+  // Keep a slight oblique angle so map mode constraints and depth cues remain stable.
+  const direction = new THREE.Vector3(0.15, 1, 0.15).normalize()
+  const newPosition = focusTarget.clone().addScaledVector(direction, desiredDistance)
+
+  if (newPosition.y < MIN_CAMERA_HEIGHT) {
+    newPosition.y = MIN_CAMERA_HEIGHT
+  }
+
+  isApplyingCameraState = true
+  mapControls.setLookAt(newPosition, focusTarget, false)
+  applyViewportCompositionOffset(true)
+  syncControlsConstraintsAndSpeeds()
+  isApplyingCameraState = false
+
+  if (perspectiveCamera && camera !== perspectiveCamera) {
+    perspectiveCamera.position.copy(camera.position)
+    perspectiveCamera.quaternion.copy(camera.quaternion)
+  }
+
+  return true
+}
+
+
+function focusCameraOnNode(nodeId: string): boolean {
+  const focus = resolveFocusTargetForNodeIds([nodeId]) ?? cameraResetDirectionController.resolveFocusTargetFromNodeId(nodeId)
+  if (!focus) {
+    return false
+  }
+  return applyCameraFocus(focus.target, focus.radiusEstimate)
+}
+
+function focusViewportSelection(): boolean {
+  const focusIds = getViewportSelectionFocusIds()
+
+  if (focusIds.length === 0) {
+    return false
+  }
+
+  if (!focusCameraOnSelection(focusIds) && focusIds[0]) {
+    sceneStore.requestCameraFocus(focusIds[0])
+  }
+  return true
+}
+
+function focusViewportVisible(): boolean {
+  const focusIds = collectVisibleFocusNodeIds()
+  if (focusIds.length > 0 && focusCameraOnSelection(focusIds)) {
+    return true
+  }
+
+  const fallbackFocusIds = collectVisibleFocusNodeIds({ includeGround: true })
+  if (fallbackFocusIds.length > 0 && focusCameraOnSelection(fallbackFocusIds)) {
+    return true
+  }
+
+  resetCameraView()
+  return true
+}
+
+function enterMapTopView(): boolean {
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  if (sceneStore.viewportSettings.cameraControlMode !== 'map') {
+    sceneStore.setCameraControlMode('map')
+    applyCameraControlMode()
+  }
+
+  const selectedFocus = resolveFocusTargetForNodeIds(getViewportSelectionFocusIds())
+  if (selectedFocus) {
+    return applyCameraTopViewFocus(selectedFocus.target, selectedFocus.radiusEstimate)
+  }
+
+  const visibleFocus = resolveFocusTargetForNodeIds(collectVisibleFocusNodeIds())
+  if (visibleFocus) {
+    return applyCameraTopViewFocus(visibleFocus.target, visibleFocus.radiusEstimate)
+  }
+
+  const fallbackVisibleFocus = resolveFocusTargetForNodeIds(collectVisibleFocusNodeIds({ includeGround: true }))
+  if (fallbackVisibleFocus) {
+    return applyCameraTopViewFocus(fallbackVisibleFocus.target, fallbackVisibleFocus.radiusEstimate)
+  }
+
+  return resetCameraToSelectionDirection('pos-y')
+}
+
+function handleViewportDoubleClickNode(nodeId: string): void {
+  const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
+
+  emitSelectionChange([nodeId])
+
+  if (!wasAlreadySingleSelected) {
+    return
+  }
+
+  const toolForNode = resolveBuildToolForNodeId(nodeId)
+  tryEnterNodeBuildToolEditMode(nodeId, toolForNode)
 }
 
 function collectVisibleFocusNodeIds(options?: { includeGround?: boolean }): string[] {
@@ -11772,10 +12139,13 @@ function collectVisibleFocusNodeIds(options?: { includeGround?: boolean }): stri
 }
 
 function handleDirectionalCameraShortcut(code: string): boolean {
+  if (code === 'Digit3') {
+    return enterMapTopView()
+  }
+
   const directionByCode: Partial<Record<string, CameraResetDirection>> = {
     Digit1: 'pos-x',
     Digit2: 'neg-x',
-    Digit3: 'pos-y',
     Digit4: 'neg-y',
     Digit5: 'pos-z',
     Digit6: 'neg-z',
@@ -11806,6 +12176,7 @@ function handleControlsChange() {
   }
 
   syncControlsConstraintsAndSpeeds()
+  applyViewportCompositionOffset(true)
   updateCameraStatusDistance()
   gizmoControls?.cameraUpdate()
   terrainGridController.markCameraDirty()
@@ -11820,7 +12191,33 @@ function updateCameraStatusDistance() {
 }
 
 function handleResetCameraStatusZoomClick() {
-  resetCameraView()
+  if (!camera || !mapControls) return
+  const target = mapControls.target.clone()
+  const dir = camera.position.clone().sub(target)
+  const currentDist = dir.length()
+  if (currentDist < 1e-6) return
+  dir.normalize().multiplyScalar(defaultCameraStatusDistance)
+  const newPosition = target.clone().add(dir)
+  isApplyingCameraState = true
+  camera.fov = DEFAULT_PERSPECTIVE_FOV
+  camera.updateProjectionMatrix()
+  refreshSceneCsmFrustums()
+  mapControls.setLookAt(newPosition, target, false)
+  applyViewportCompositionOffset(true)
+  lastCameraFocusRadius = Math.max(0.25, defaultCameraStatusDistance / 10)
+  syncControlsConstraintsAndSpeeds()
+  updateCameraStatusDistance()
+  isApplyingCameraState = false
+}
+
+function toggleViewportCameraControlMode() {
+  const nextMode = cameraControlMode.value === 'map' ? 'orbit' : 'map'
+  sceneStore.setCameraControlMode(nextMode)
+}
+
+const showCameraHintsOpen = ref(false)
+function toggleCameraHints() {
+  showCameraHintsOpen.value = !showCameraHintsOpen.value
 }
 
 function clearShiftOrbitPivotSession(pointerId?: number) {
@@ -11864,10 +12261,37 @@ function beginCameraTransition(params: {
   return true
 }
 
+function doesHitBelongToViewportSelection(hitNodeId: string | null | undefined): boolean {
+  if (!hitNodeId) {
+    return false
+  }
+
+  const selectionIds = getViewportSelectionFocusIds()
+  if (selectionIds.length === 0) {
+    return false
+  }
+
+  return selectionIds.includes(hitNodeId)
+    || selectionIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, hitNodeId))
+}
+
+function resolveSelectionPivotPoint(): THREE.Vector3 | null {
+  const selectionFocus = resolveFocusTargetForNodeIds(getViewportSelectionFocusIds())
+  return selectionFocus?.target.clone() ?? null
+}
+
 function resolveShiftOrbitPivotPoint(event: PointerEvent): THREE.Vector3 | null {
   const sceneHit = pickNodeAtPointer(event)
+  if (sceneHit && doesHitBelongToViewportSelection(sceneHit.nodeId)) {
+    return resolveSelectionPivotPoint() ?? sceneHit.point.clone()
+  }
   if (sceneHit?.point) {
     return sceneHit.point.clone()
+  }
+
+  const selectionBoundingHit = pickActiveSelectionBoundingBoxHit(event)
+  if (selectionBoundingHit?.point) {
+    return resolveSelectionPivotPoint() ?? selectionBoundingHit.point.clone()
   }
 
   const groundPoint = new THREE.Vector3()
@@ -11882,7 +12306,7 @@ function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
   if (!camera || !mapControls || !mapControls.enabled) {
     return
   }
-  if (!event.shiftKey || isApplyingCameraState || isAltOverrideActive) {
+  if (!event.shiftKey || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
     return
   }
   if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
@@ -11922,29 +12346,30 @@ function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
   mapControls.update()
 }
 
-function maybeApplyShiftOrbitLeftClickFocus(event: PointerEvent): void {
+function maybeApplyShiftLeftClickFocus(event: PointerEvent): boolean {
   if (!camera || !mapControls || !mapControls.enabled) {
-    return
+    return false
   }
-  if (!event.shiftKey || event.button !== 0 || isApplyingCameraState || isAltOverrideActive) {
-    return
+  if (!event.shiftKey || event.button !== 0 || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
+    return false
   }
-  if (sceneStore.viewportSettings.cameraControlMode !== 'orbit') {
-    return
+  const mode = sceneStore.viewportSettings.cameraControlMode
+  if (mode !== 'orbit' && mode !== 'map') {
+    return false
   }
   if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
-    return
+    return false
   }
   if (scatterEraseModeActive.value || hasPlacementPreviewActive()) {
-    return
+    return false
   }
   if (Boolean(transformControls?.dragging)) {
-    return
+    return false
   }
 
   const pivot = resolveShiftOrbitPivotPoint(event)
   if (!pivot) {
-    return
+    return false
   }
 
   const cameraOffset = new THREE.Vector3().copy(camera.position).sub(mapControls.target)
@@ -11957,10 +12382,11 @@ function maybeApplyShiftOrbitLeftClickFocus(event: PointerEvent): void {
     relativeOffset: cameraOffset,
     durationMs: SHIFT_ORBIT_FOCUS_TRANSITION_MS,
   })) {
-    return
+    return false
   }
 
   lastCameraFocusRadius = Math.max(0.25, endPosition.distanceTo(endTarget) / 10)
+  return true
 }
 
 function applyCameraControlMode() {
@@ -11989,6 +12415,7 @@ function applyCameraControlMode() {
     lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
   }
   syncControlsConstraintsAndSpeeds()
+  scheduleViewportCompositionUpdate(true)
 
   bindControlsToCamera(camera)
   if (gizmoControls && mapControls) {
@@ -12112,6 +12539,7 @@ function initScene() {
   scene.add(axesHelper)
   scene.add(brushMesh)
   scene.add(scatterAreaPreviewGroup)
+  scene.add(terrainSculptPreviewGroup)
   scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
@@ -12196,6 +12624,7 @@ function initScene() {
     }
     ;(mapControls as any)?.handleResize?.()
     gizmoControls?.update()
+    scheduleViewportCompositionUpdate(true)
   })
   resizeObserver.observe(viewportEl.value)
 
@@ -12762,6 +13191,7 @@ function animate() {
     camera.position.copy(cameraTransitionCurrentPosition)
     mapControls.target.copy(cameraTransitionCurrentTarget)
     mapControls.update()
+    applyViewportCompositionOffset(true)
 
     if (!previousApplying) {
       isApplyingCameraState = false
@@ -12976,14 +13406,17 @@ function disposeScene() {
 
   groundSelectionGroup.removeFromParent()
   scatterAreaPreviewGroup.removeFromParent()
+  terrainSculptPreviewGroup.removeFromParent()
   vertexOverlayGroup.removeFromParent()
   clearVertexSnapMarkers()
 
   if (mapControls) {
     mapControls.removeEventListener('change', handleControlsChange)
+    mapControls.resetFocalOffset(false)
     mapControls.dispose()
   }
   mapControls = null
+  viewportCompositionOffsetPx.set(Number.NaN, Number.NaN)
   orbitDisableCount = 0
   isSelectDragOrbitDisabled = false
   // dispose building label meshes
@@ -13837,7 +14270,7 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
 }
 
 function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3): boolean {
-  if (!isAltOverrideActive) {
+  if (!isTemporaryNavigationOverrideActive()) {
     const hit = pickNodeAtPointer(event)
     if (hit?.point) {
       result.copy(hit.point)
@@ -14142,7 +14575,7 @@ function refreshBuildStartIndicatorAfterEditExit(event?: MouseEvent | PointerEve
   if (activeBuildTool.value !== 'wall' && activeBuildTool.value !== 'road' && activeBuildTool.value !== 'floor' && activeBuildTool.value !== 'landform' && activeBuildTool.value !== 'region' && activeBuildTool.value !== 'water') {
     return
   }
-  if (isAltOverrideActive) {
+  if (isTemporaryNavigationOverrideActive()) {
     return
   }
   if (activeBuildTool.value === 'wall' && isSelectedWallEditMode()) {
@@ -14296,18 +14729,23 @@ async function handlePointerDown(event: PointerEvent) {
     hasCanvas: !!canvasRef.value,
     hasCamera: !!camera,
     hasScene: !!scene,
-    isAltOverrideActive,
+    isAltOverrideActive: isTemporaryNavigationOverrideActive(),
   })
   if (guard) {
     applyPointerDownResult(guard)
     return
   }
 
-  maybeApplyShiftOrbitLeftClickFocus(event)
+  if (maybeApplyShiftLeftClickFocus(event)) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
   maybeBeginShiftOrbitPivotSession(event)
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
-  if (event.button === 0 && !isAltOverrideActive && event.detail >= 2) {
+  if (event.button === 0 && !isTemporaryNavigationOverrideActive() && event.detail >= 2) {
     if (activeBuildTool.value && tryExitActiveNodeBuildToolEditMode(event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -14322,17 +14760,7 @@ async function handlePointerDown(event: PointerEvent) {
     const hit = pickNodeAtPointer(event)
     if (hit) {
       const hitNodeId = hit.nodeId
-      const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === hitNodeId
-      emitSelectionChange([hitNodeId])
-      if (wasAlreadySingleSelected) {
-        const toolForNode = resolveBuildToolForNodeId(hitNodeId)
-        if (tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)) {
-          event.preventDefault()
-          event.stopPropagation()
-          event.stopImmediatePropagation()
-          return
-        }
-      }
+      handleViewportDoubleClickNode(hitNodeId)
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -14345,7 +14773,7 @@ async function handlePointerDown(event: PointerEvent) {
     wallDoorSelectModeActive.value &&
     activeBuildTool.value === 'wall' &&
     selectedNodeIsWall.value &&
-    !isAltOverrideActive
+    !isTemporaryNavigationOverrideActive()
   ) {
     wallDoorRectangleSelectionState = {
       pointerId: event.pointerId,
@@ -14525,7 +14953,7 @@ async function handlePointerDown(event: PointerEvent) {
   const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
 
   if (activeBuildTool.value === 'region') {
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (regionEditModeLocked && selectedNodeIsRegion.value) {
         ensureRegionVertexHandlesForSelectedNode()
       }
@@ -14555,7 +14983,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'landform') {
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (landformEditModeLocked && selectedNodeIsLandform.value) {
         ensureLandformVertexHandlesForSelectedNode()
       }
@@ -14585,7 +15013,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'displayBoard') {
-    if (event.button === 0 && !isAltOverrideActive && !displayBoardBuildTool.getSession()) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive() && !displayBoardBuildTool.getSession()) {
       ensureDisplayBoardCornerHandlesForSelectedNode()
       if (tryBeginDisplayBoardCornerDrag(event)) {
         event.preventDefault()
@@ -14594,7 +15022,7 @@ async function handlePointerDown(event: PointerEvent) {
         return
       }
     }
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (!displayBoardEditModeLocked && displayBoardBuildTool.handlePointerDown(event)) {
         event.preventDefault()
         event.stopPropagation()
@@ -14616,7 +15044,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'water') {
-    if (event.button === 0 && !isAltOverrideActive) {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       ensureWaterCircleHandlesForSelectedNode()
       ensureWaterVertexHandlesForSelectedNode()
 
@@ -14667,7 +15095,7 @@ async function handlePointerDown(event: PointerEvent) {
     floorEditModeActive: floorEditModeLocked,
     roadEditModeActive: roadEditModeLocked,
     floorCircleEditModeActive: isSelectedFloorCircleEditMode(),
-    isAltOverrideActive,
+    isAltOverrideActive: isTemporaryNavigationOverrideActive(),
     nodePickerActive: nodePickerStore.isActive,
     nodePickerCompletePick: (nodeId) => {
       if (canCompleteNodePick(nodeId)) {
@@ -14712,13 +15140,23 @@ async function handlePointerDown(event: PointerEvent) {
 
   const effectiveSelectionTool = uiStore.activeSelectionContext ? 'blocked' : props.activeTool
 
-  // Select mode: left click on empty space should clear selection (if it's a click) or pan the camera (if it's a drag).
-  // We detect empty-space on pointerdown and decide on pointerup using a drag threshold.
+  // Select mode: left click should preserve click-selection semantics, but in camera-control modes
+  // any press that does not land on the current selection should allow a drag camera gesture.
   if (event.button === 0 && effectiveSelectionTool === 'select') {
     const activeSelectionNode = resolveSceneNodeById(sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
     const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
-    const hit = pickNodeAtPointer(event) ?? (allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null)
-    if (!hit) {
+    const directHit = pickNodeAtPointer(event)
+    const boundingBoxHit = !directHit && allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null
+    const selectedNodeIds = sceneStore.selectedNodeIds
+    const hitBelongsToSelection = Boolean(
+      directHit && (
+        selectedNodeIds.includes(directHit.nodeId)
+        || selectedNodeIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, directHit.nodeId))
+      ),
+    )
+    const shouldStartCameraSession = !hitBelongsToSelection
+
+    if (shouldStartCameraSession) {
       let cameraGesture: LeftEmptyClickSessionState['cameraGesture'] = 'none'
       if (Boolean(mapControls?.enabled)) {
         if (sceneStore.viewportSettings.cameraControlMode === 'map') {
@@ -14740,6 +15178,7 @@ async function handlePointerDown(event: PointerEvent) {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
+        clickHitResult: directHit ?? boundingBoxHit,
         cameraGesture,
       }
       return
@@ -15355,7 +15794,7 @@ function handlePointerMove(event: PointerEvent) {
 
   handlePointerMoveSelection(event, {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
-    isAltOverrideActive,
+    isAltOverrideActive: isTemporaryNavigationOverrideActive(),
     pointerInteractionUpdateMoved: (e) => pointerInteraction.updateMoved(e),
     pointerTrackingState,
     transformControlsDragging: Boolean(transformControls?.dragging),
@@ -16024,11 +16463,33 @@ async function handlePointerUp(event: PointerEvent) {
       }
 
       if (!session.moved) {
-        const isToggle = session.ctrlKey || session.metaKey
-        const isRange = session.shiftKey
-        sceneStore.clearSelectedRoadSegment()
-        if (!isToggle && !isRange) {
-          emitSelectionChange([])
+        if (session.clickHitResult) {
+          const clickTrackingState: PointerTrackingState = {
+            pointerId: session.pointerId,
+            startX: session.startX,
+            startY: session.startY,
+            moved: false,
+            button: 0,
+            hitResult: session.clickHitResult,
+            selectionDrag: null,
+            ctrlKey: session.ctrlKey,
+            metaKey: session.metaKey,
+            shiftKey: session.shiftKey,
+            cameraGesture: 'none',
+            transformAxis: null,
+            deferredDuplicateDrag: null,
+            deferredDuplicateInFlight: false,
+          }
+          handleClickSelection(event, clickTrackingState, {
+            allowDeselectOnReselect: true,
+          })
+        } else {
+          const isToggle = session.ctrlKey || session.metaKey
+          const isRange = session.shiftKey
+          sceneStore.clearSelectedRoadSegment()
+          if (!isToggle && !isRange) {
+            emitSelectionChange([])
+          }
         }
       }
       return
@@ -16688,7 +17149,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (!scene || !camera || !canvasRef.value) {
     return
   }
-  if (nodePickerStore.isActive || isAltOverrideActive) {
+  if (nodePickerStore.isActive || isTemporaryNavigationOverrideActive()) {
     return
   }
   if (transformControls?.dragging) {
@@ -16730,13 +17191,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   const hitNodeId = hit.nodeId
-  const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === hitNodeId
-
-  emitSelectionChange([hitNodeId])
-  if (wasAlreadySingleSelected) {
-    const toolForNode = resolveBuildToolForNodeId(hitNodeId)
-    tryEnterNodeBuildToolEditMode(hitNodeId, toolForNode)
-  }
+  handleViewportDoubleClickNode(hitNodeId)
   event.preventDefault()
   event.stopPropagation()
 }
@@ -17199,7 +17654,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
 
   // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
   // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
-  if (!event.altKey && !isAltOverrideActive) {
+  if (!event.altKey && !isTemporaryNavigationOverrideActive()) {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       const point = surfaceHit.point.clone()
@@ -17240,7 +17695,7 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
 
   // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
   // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
-  if (!event.altKey && !isAltOverrideActive) {
+  if (!event.altKey && !isTemporaryNavigationOverrideActive()) {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       const point = surfaceHit.point.clone()
@@ -18949,6 +19404,29 @@ function syncViewportGroundChunks(groundObject: THREE.Object3D, groundDefinition
   }
 }
 
+function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean } = {}): void {
+  const groundNode = getGroundNodeFromStore()
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    pendingViewportGroundOptimizedRebuild = false
+    return
+  }
+
+  if (options.rebuildOptimizedMesh && pendingViewportGroundOptimizedRebuild) {
+    sceneStore.refreshGroundOptimizedMesh(groundNode.id)
+    pendingViewportGroundOptimizedRebuild = false
+  }
+
+  const groundObject = resolveGroundRuntimeObjectFromMap(objectMap, groundNode.id) ?? undefined
+  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  if (!groundObject || !groundDefinition) {
+    return
+  }
+
+  debugViewportGroundRenderMode('sync', groundDefinition)
+  updateGroundMesh(groundObject, groundDefinition)
+  syncViewportGroundChunks(groundObject, groundDefinition)
+}
+
 function updateGroundChunkStreaming() {
   if (!camera) {
     return
@@ -19728,6 +20206,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         containerData.dynamicMeshType = 'Ground'
         return container
       }
+      debugViewportGroundRenderMode('create', groundDefinition)
       const groundMesh = createGroundMesh(groundDefinition)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
@@ -20184,16 +20663,12 @@ function handleViewportShortcut(event: KeyboardEvent) {
         break
       }
       case 'KeyF': {
-        const focusIds = [...new Set([
-          ...sceneStore.selectedNodeIds,
-          props.selectedNodeId ?? null,
-        ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
-        if (focusIds.length > 0) {
-          if (!focusCameraOnSelection(focusIds) && focusIds[0]) {
-            sceneStore.requestCameraFocus(focusIds[0])
-          }
-          handled = true
-        }
+        handled = focusViewportSelection()
+        break
+      }
+      case 'KeyM': {
+        toggleViewportCameraControlMode()
+        handled = true
         break
       }
       default: {
@@ -20215,18 +20690,7 @@ function handleViewportShortcut(event: KeyboardEvent) {
     if (event.code === 'KeyG') {
       handled = wallBuildTool.autofillFromLastCommittedSegment()
     } else if (event.code === 'KeyF') {
-      const focusIds = collectVisibleFocusNodeIds()
-      if (focusIds.length > 0 && focusCameraOnSelection(focusIds)) {
-        handled = true
-      } else {
-        const fallbackFocusIds = collectVisibleFocusNodeIds({ includeGround: true })
-        if (fallbackFocusIds.length > 0 && focusCameraOnSelection(fallbackFocusIds)) {
-          handled = true
-        } else {
-          resetCameraView()
-          handled = true
-        }
-      }
+      handled = focusViewportVisible()
     }
   }
 
@@ -20360,6 +20824,9 @@ onMounted(() => {
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.addEventListener('keydown', handleSpaceOverrideKeyDown, { capture: true })
+  window.addEventListener('keyup', handleSpaceOverrideKeyUp, { capture: true })
+  window.addEventListener('blur', handleSpaceOverrideBlur, { capture: true })
   window.addEventListener('keydown', handleVOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleVOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleVOverrideBlur, { capture: true })
@@ -20368,8 +20835,12 @@ onMounted(() => {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
   }
   scheduleToolbarUpdate()
+  scheduleViewportCompositionUpdate(true)
   if (viewportEl.value && typeof ResizeObserver !== 'undefined') {
-    viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+    viewportResizeObserver = new ResizeObserver(() => {
+      scheduleToolbarUpdate()
+      scheduleViewportCompositionUpdate(true)
+    })
     viewportResizeObserver.observe(viewportEl.value)
   }
   sceneStore.ensureCurrentSceneLoaded();
@@ -20407,6 +20878,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.removeEventListener('keydown', handleSpaceOverrideKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleSpaceOverrideKeyUp, { capture: true })
+  window.removeEventListener('blur', handleSpaceOverrideBlur, { capture: true })
   window.removeEventListener('keydown', handleVOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleVOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleVOverrideBlur, { capture: true })
@@ -20426,6 +20900,12 @@ onBeforeUnmount(() => {
     viewportToolbarResizeObserver.disconnect()
     viewportToolbarResizeObserver = null
   }
+  if (viewportCompositionUpdateFrame !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(viewportCompositionUpdateFrame)
+    viewportCompositionUpdateFrame = null
+  }
+  viewportCompositionUpdateQueued = false
+  viewportCompositionUpdateForce = false
 })
 
 watch([sceneGraphStructureVersion, sceneNodePropertyVersion], () => {
@@ -20457,6 +20937,7 @@ watch(
   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
   () => {
     scheduleToolbarUpdate()
+    scheduleViewportCompositionUpdate(true)
   }
 )
 
@@ -20464,6 +20945,7 @@ watch(
   () => [panelVisibility.value.inspector, panelPlacement.value.inspector],
   () => {
     scheduleToolbarUpdate()
+    scheduleViewportCompositionUpdate(true)
   }
 )
 
@@ -20657,6 +21139,37 @@ watch(activeBuildTool, (tool, previous) => {
 })
 
 watch(
+  [activeBuildTool, brushOperation],
+  ([tool, operation], [previousTool, previousOperation]) => {
+    const forceDense = shouldForceDenseGroundMeshForViewport(tool, operation)
+    const previousForceDense = shouldForceDenseGroundMeshForViewport(previousTool, previousOperation)
+
+    if (forceDense === previousForceDense) {
+      return
+    }
+
+    viewportForceDenseGroundMesh.value = forceDense
+
+    if (forceDense) {
+      syncViewportGroundRenderMode()
+      return
+    }
+
+    const shouldRebuildOptimizedMesh = pendingViewportGroundOptimizedRebuild
+    syncViewportGroundRenderMode({ rebuildOptimizedMesh: shouldRebuildOptimizedMesh })
+
+    if (shouldRebuildOptimizedMesh) {
+      const groundNode = getGroundNodeFromStore()
+      if (groundNode?.dynamicMesh?.type === 'Ground') {
+        void sceneStore.saveGroundDataImmediately(groundNode.id).catch((error: unknown) => {
+          console.warn('[SceneViewport] Failed to save ground data after sculpt commit', error)
+        })
+      }
+    }
+  },
+)
+
+watch(
   () => props.focusRequestId,
   (token, previous) => {
     if (!props.focusNodeId) {
@@ -20730,8 +21243,6 @@ defineExpose<SceneViewportHandle>({
           :scatter-erase-menu-open="scatterEraseMenuOpen"
           :viewport-placement-menu-open="viewportPlacementMenuOpen"
           :viewport-placement-active="viewportPlacementActive"
-        :camera-reset-menu-open="cameraResetMenuOpen"
-          :csm-menu-open="csmMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :landform-shape-menu-open="landformShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
@@ -20755,6 +21266,8 @@ defineExpose<SceneViewportHandle>({
         :ground-panel-tab="groundPanelTab"
         :ground-brush-radius="brushRadius"
         :ground-brush-strength="brushStrength"
+        :ground-brush-depth="brushDepth"
+        :ground-brush-slope="brushSlope"
         :ground-brush-shape="brushShape"
         :ground-brush-operation="brushOperation"
         :ground-noise-strength="groundNoiseStrength"
@@ -20768,20 +21281,8 @@ defineExpose<SceneViewportHandle>({
         :ground-scatter-spacing="scatterSpacing"
         :ground-scatter-density-percent="scatterDensityPercent"
         :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
-        :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
-        :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
-        :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
-        :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
-        :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
-        :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
-        :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
-        :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
-        :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
-        :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
-        @reset-camera="resetCameraView"
-        @reset-camera-direction="handleResetCameraDirection"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
@@ -20799,18 +21300,6 @@ defineExpose<SceneViewportHandle>({
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
-          @update:camera-reset-menu-open="handleCameraResetMenuOpen"
-          @update:csm-menu-open="handleCsmMenuOpen"
-          @update:csm-enabled="handleCsmEnabledUpdate"
-          @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
-          @update:csm-light-color="handleCsmLightColorUpdate"
-          @update:csm-light-intensity="handleCsmLightIntensityUpdate"
-          @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
-          @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
-          @update:csm-cascades="handleCsmCascadesUpdate"
-          @update:csm-max-far="handleCsmMaxFarUpdate"
-          @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
-          @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:ground-terrain-menu-open="handleGroundTerrainMenuOpen"
           @update:ground-paint-menu-open="handleGroundPaintMenuOpen"
@@ -20823,6 +21312,8 @@ defineExpose<SceneViewportHandle>({
           @activate-ground-tab="handleActivateGroundTab"
           @update:ground-brush-radius="handleGroundBrushRadiusUpdate"
           @update:ground-brush-strength="handleGroundBrushStrengthUpdate"
+          @update:ground-brush-depth="handleGroundBrushDepthUpdate"
+          @update:ground-brush-slope="handleGroundBrushSlopeUpdate"
           @update:ground-brush-shape="handleGroundBrushShapeUpdate"
           @update:ground-brush-operation="handleGroundBrushOperationUpdate"
           @update:ground-noise-strength="handleGroundNoiseStrengthUpdate"
@@ -20920,16 +21411,191 @@ defineExpose<SceneViewportHandle>({
         />
       </div>
       <div class="camera-status-hud">
-        <span class="camera-status-hud__text">镜头：{{ cameraStatusModeText }}</span>
-        <span class="camera-status-hud__divider">·</span>
-        <button
-          type="button"
-          class="camera-status-hud__ratio"
-          title="点击重置缩放"
-          @click="handleResetCameraStatusZoomClick"
+        <div class="camera-status-hud__toolbar">
+          <div class="camera-status-hud__controls">
+          <v-btn
+            :icon="cameraControlMode === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            :title="cameraControlMode === 'map' ? '地图/布局模式（点击或按 M 切换到轨道模式）' : '轨道/装配模式（点击或按 M 切换到地图模式）'"
+            @click="toggleViewportCameraControlMode"
+          />
+          <v-btn
+            icon="mdi-view-grid-outline"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            title="顶视布局（Alt+3）"
+            @click="enterMapTopView"
+          />
+          <v-btn
+            icon="mdi-crosshairs-gps"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            :title="viewportSelectionCount > 0 ? '聚焦选中（F）' : '聚焦选中（F）- 当前没有选中对象'"
+            :disabled="viewportSelectionCount < 1"
+            @click="focusViewportSelection"
+          />
+          <v-btn
+            icon="mdi-fit-to-screen-outline"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            title="聚焦可见内容（Shift+F）"
+            @click="focusViewportVisible"
+          />
+          <v-menu
+            :model-value="cameraResetMenuOpen"
+            location="top start"
+            :offset="8"
+            :open-on-click="false"
+            :close-on-content-click="true"
+            @update:modelValue="handleCameraResetMenuOpen"
+          >
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="menuProps"
+                icon="mdi-camera"
+                density="compact"
+                size="x-small"
+                variant="text"
+                class="camera-status-hud__icon-btn"
+                title="默认视角（Shift+F 聚焦可见；Alt+1..6 方向视角）"
+                @click="resetCameraView"
+                @contextmenu.prevent.stop="handleCameraResetMenuOpen(true)"
+              />
+            </template>
+            <v-list density="compact" class="camera-reset-menu">
+              <div
+                class="popup-menu-card"
+                @pointerdown.stop
+                @pointerup.stop
+                @mousedown.stop
+                @mouseup.stop
+              >
+                <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                  <div class="toolbar-text">
+                    <div class="menu-title">Camera View</div>
+                  </div>
+                  <v-spacer />
+                  <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="handleCameraResetMenuOpen(false)" />
+                </v-toolbar>
+                <div class="popup-menu-card__content">
+                  <v-list-item title="正面 (+X) - Alt+1" @click="handleResetCameraDirection('pos-x')" />
+                  <v-list-item title="背面 (-X) - Alt+2" @click="handleResetCameraDirection('neg-x')" />
+                  <v-list-item title="顶视布局 (+Y) - Alt+3" @click="enterMapTopView" />
+                  <v-list-item title="下面 (-Y) - Alt+4" @click="handleResetCameraDirection('neg-y')" />
+                  <v-list-item title="左面 (+Z) - Alt+5" @click="handleResetCameraDirection('pos-z')" />
+                  <v-list-item title="右面 (-Z) - Alt+6" @click="handleResetCameraDirection('neg-z')" />
+                </div>
+              </div>
+            </v-list>
+          </v-menu>
+          </div>
+          <span class="camera-status-hud__sep" aria-hidden="true" />
+          <span class="camera-status-hud__meta-label">缩放</span>
+          <button
+            type="button"
+            class="camera-status-hud__ratio"
+            title="点击重置缩放"
+            @click="handleResetCameraStatusZoomClick"
+          >
+            {{ cameraStatusZoomRatioText }}
+          </button>
+          <span class="camera-status-hud__sep" aria-hidden="true" />
+          <button
+            type="button"
+            class="camera-status-hud__help-btn"
+            :class="{ 'camera-status-hud__help-btn--active': showCameraHintsOpen }"
+            title="镜头控制与导航快捷键"
+            @click="toggleCameraHints"
+          >?</button>
+        </div>
+        <Transition name="camera-hints-slide">
+          <div v-if="showCameraHintsOpen" class="camera-status-hud__hints">
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">鼠标</span>
+              <span class="camera-status-hud__hint-text">{{ cameraPointerHintText }}</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">工具</span>
+              <span class="camera-status-hud__hint-text">Q 选择 · W 移动 · E 旋转 · R 缩放</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">视角</span>
+              <span class="camera-status-hud__hint-text">方向键 平移 · F 聚焦选中 · Shift+F 聚焦可见 · Alt+3 顶视图 · Alt+1/2/4/5/6 方向视角</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">导航</span>
+              <span class="camera-status-hud__hint-text">按住 Alt / Space 临时导航模式 · 按住 Shift 顶点吸附并加速</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">操作</span>
+              <span class="camera-status-hud__hint-text">Escape 取消选择/操作 · Delete 删除选中 · M 切换相机模式</span>
+            </div>
+          </div>
+        </Transition>
+      </div>
+      <div class="csm-hud">
+        <v-menu
+          v-model="csmMenuOpen"
+          location="top end"
+          :offset="6"
+          :close-on-content-click="false"
         >
-          缩放：{{ cameraStatusZoomRatioText }}
-        </button>
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              density="compact"
+              size="large"
+              class="csm-hud__btn"
+              :color="csmMenuOpen ? 'primary' : 'white'"
+              variant="text"
+              title="CSM Sun & Shadow"
+            >
+              <v-icon icon="mdi-white-balance-sunny" size="28" />
+            </v-btn>
+          </template>
+          <v-list density="compact" class="csm-sun-menu">
+            <div
+              class="popup-menu-card csm-sun-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
+         
+              <CsmSunMenuContent
+                :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
+                :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
+                :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
+                :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
+                :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
+                :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
+                :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
+                :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
+                :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
+                :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
+                @update:csm-enabled="handleCsmEnabledUpdate"
+                @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
+                @update:csm-light-color="handleCsmLightColorUpdate"
+                @update:csm-light-intensity="handleCsmLightIntensityUpdate"
+                @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
+                @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
+                @update:csm-cascades="handleCsmCascadesUpdate"
+                @update:csm-max-far="handleCsmMaxFarUpdate"
+                @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
+                @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
+              />
+            </div>
+          </v-list>
+        </v-menu>
       </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
@@ -21256,58 +21922,219 @@ defineExpose<SceneViewportHandle>({
   z-index: 9;
 }
 
+.csm-hud {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  z-index: 10;
+  pointer-events: auto;
+}
+
+:global(.csm-sun-menu) {
+  width: 260px !important;
+  max-width: min(260px, 92vw) !important;
+}
+
+.csm-hud__btn {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
+  background: transparent !important;
+}
+
+.csm-hud__btn :deep(.v-btn__overlay),
+.csm-hud__btn :deep(.v-btn__underlay) {
+  display: none !important;
+}
+
 .camera-status-hud {
   position: absolute;
   left: 16px;
   bottom: 16px;
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  min-width: 0;
+  max-width: min(420px, calc(100vw - 32px));
+  z-index: 9;
+  pointer-events: none;
+}
+
+.camera-status-hud__hints {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 320px;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 15, 21, 0.85);
+  color: rgba(236, 241, 248, 0.95);
+  font-size: 11px;
+  line-height: 1.4;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px) saturate(140%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.camera-hints-slide-enter-active,
+.camera-hints-slide-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.camera-hints-slide-enter-from,
+.camera-hints-slide-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.camera-status-hud__toolbar {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
-  border-radius: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(12, 15, 21, 0.72);
   color: rgba(236, 241, 248, 0.95);
-  font-size: 12px;
-  line-height: 1.2;
+  font-size: 11px;
+  line-height: 1.25;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(10px) saturate(140%);
-  z-index: 9;
   pointer-events: auto;
 }
 
-.camera-status-hud__text,
-.camera-status-hud__divider {
-  pointer-events: none;
+.camera-status-hud__controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.camera-status-hud__sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.14);
+  flex: 0 0 auto;
+}
+
+.camera-status-hud__icon-btn {
+  color: rgba(236, 241, 248, 0.95);
+  --v-btn-height: 24px;
+  min-width: 24px !important;
+  width: 24px !important;
+  padding: 0 !important;
+}
+
+.camera-status-hud__meta-label {
+  color: rgba(160, 171, 189, 0.92);
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+
+.camera-status-hud__help-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  margin: 0;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(200, 210, 224, 0.9);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.camera-status-hud__help-btn:hover {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+.camera-status-hud__help-btn--active {
+  background: rgba(134, 218, 255, 0.18);
+  border-color: rgba(134, 218, 255, 0.55);
+  color: rgba(174, 232, 255, 1);
+}
+
+.camera-status-hud__help-btn--active:hover {
+  background: rgba(134, 218, 255, 0.28);
+}
+
+.camera-status-hud__hint-row {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.camera-status-hud__hint-label {
+  color: rgba(160, 171, 189, 0.92);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+
+.camera-status-hud__hint-text {
+  color: rgba(236, 241, 248, 0.95);
+  opacity: 0.92;
 }
 
 .camera-status-hud__ratio {
   appearance: none;
-  border: 0;
+  border: 1px solid rgba(134, 218, 255, 0.24);
   margin: 0;
-  padding: 0;
-  background: transparent;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(21, 41, 52, 0.72);
   color: rgba(134, 218, 255, 0.96);
   font: inherit;
   line-height: inherit;
   cursor: pointer;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
 }
 
 .camera-status-hud__ratio:hover {
+  background: rgba(28, 53, 66, 0.8);
   color: rgba(174, 232, 255, 1);
 }
 
 .camera-status-hud__ratio:active {
+  background: rgba(20, 44, 57, 0.88);
   color: rgba(113, 202, 246, 1);
 }
 
 .camera-status-hud__ratio:focus-visible {
   outline: 2px solid rgba(134, 218, 255, 0.72);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 999px;
+}
+
+@media (max-width: 720px) {
+  .camera-status-hud {
+    left: 12px;
+    bottom: 12px;
+  }
+
+  .camera-status-hud__hints {
+    min-width: 240px;
+    max-width: min(320px, calc(100vw - 24px));
+  }
+
+  .camera-status-hud__hint-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
 }
 
 .protagonist-preview__label {

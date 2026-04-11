@@ -116,6 +116,9 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     textureName: definition.textureName ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
   }
+  if (definition.optimizedMesh !== undefined) {
+    result.optimizedMesh = manualDeepCloneLocal(definition.optimizedMesh) as GroundDynamicMesh['optimizedMesh']
+  }
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
   }
@@ -187,6 +190,10 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     textureDataUrl: overrides.textureDataUrl ?? null,
     textureName: overrides.textureName ?? null,
     generation: initialGeneration,
+  }
+
+  if (o.optimizedMesh !== undefined) {
+    definition.optimizedMesh = manualDeepCloneLocal(o.optimizedMesh) as GroundDynamicMesh['optimizedMesh']
   }
 
   if (typeof (o as any).castShadow === 'boolean') {

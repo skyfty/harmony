@@ -339,6 +339,29 @@ export function analyzeGroundOptimizedMeshUsage(definition: GroundDynamicMesh): 
   }
 }
 
+export function setGroundRuntimeOptimizedChunksEnabled(
+  definition: GroundDynamicMesh,
+  enabled: boolean,
+): GroundRuntimeDynamicMesh {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  runtimeDefinition.runtimeDisableOptimizedChunks = !enabled
+  return runtimeDefinition
+}
+
+export function markGroundOptimizedMeshReady(
+  definition: GroundDynamicMesh,
+  optimizedMesh?: GroundOptimizedMeshData | null,
+): GroundRuntimeDynamicMesh {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  if (optimizedMesh !== undefined) {
+    runtimeDefinition.optimizedMesh = optimizedMesh
+  }
+  runtimeDefinition.surfaceRevision = 0
+  runtimeDefinition.runtimeHydratedHeightState = 'pristine'
+  runtimeDefinition.runtimeDisableOptimizedChunks = false
+  return runtimeDefinition
+}
+
 export function resolveGroundChunkRadiusMeters(definition: GroundDynamicMesh): number {
   return resolveGroundChunkRadius(definition)
 }
@@ -1085,13 +1108,505 @@ export interface SculptParams {
   point: THREE.Vector3
   radius: number
   strength: number
-  shape: 'circle' | 'square' | 'star'
+  shape: 'circle' | 'polygon'
   operation: GroundSculptOperation
   targetHeight?: number
+  polygonPoints?: THREE.Vector3[]
+  depth?: number
+  slope?: number
+}
+
+type SculptPolygonPoint = {
+  x: number
+  z: number
+}
+
+type SmoothedSculptPolygonOptions = {
+  cellSize?: number
+  cornerSmoothing?: number
+}
+
+const SCULPT_POLYGON_EPSILON = 1e-6
+const SCULPT_POLYGON_CORNER_COS_STRAIGHT_THRESHOLD = Math.cos((5 * Math.PI) / 180)
+const SCULPT_POLYGON_CORNER_COS_UTURN_THRESHOLD = Math.cos((170 * Math.PI) / 180)
+const SCULPT_POLYGON_DEFAULT_CORNER_SMOOTHING = 0.2
+
+function getSculptPolygonPointDistanceSqXZ(a: SculptPolygonPoint, b: SculptPolygonPoint): number {
+  const dx = a.x - b.x
+  const dz = a.z - b.z
+  return dx * dx + dz * dz
+}
+
+function clampSculptPolygonUnit(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  return Math.max(0, Math.min(1, numeric))
+}
+
+function sanitizeSculptPolygonContourPoints(points: THREE.Vector3[]): THREE.Vector3[] {
+  if (!Array.isArray(points) || points.length < 3) {
+    return []
+  }
+  const normalized: THREE.Vector3[] = []
+  const epsilonSq = SCULPT_POLYGON_EPSILON * SCULPT_POLYGON_EPSILON
+  for (const point of points) {
+    if (!(point instanceof THREE.Vector3) || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) {
+      continue
+    }
+    const candidate = point.clone()
+    const previous = normalized[normalized.length - 1]
+    if (previous) {
+      const dx = candidate.x - previous.x
+      const dz = candidate.z - previous.z
+      if ((dx * dx) + (dz * dz) <= epsilonSq) {
+        continue
+      }
+    }
+    normalized.push(candidate)
+  }
+  if (normalized.length >= 2) {
+    const first = normalized[0]
+    const last = normalized[normalized.length - 1]
+    if (first && last) {
+      const dx = first.x - last.x
+      const dz = first.z - last.z
+      if ((dx * dx) + (dz * dz) <= epsilonSq) {
+        normalized.pop()
+      }
+    }
+  }
+  return normalized.length >= 3 ? normalized : []
+}
+
+function computeSculptPolygonSegmentLengthXZ(a: THREE.Vector3, b: THREE.Vector3): number {
+  return Math.hypot(b.x - a.x, b.z - a.z)
+}
+
+function computeSmoothedSculptPolygonCornerCutDistance(params: {
+  smoothing: number
+  inLength: number
+  outLength: number
+  cosTheta: number
+  cellSize: number
+}): number {
+  const smoothing = clampSculptPolygonUnit(params.smoothing, 0)
+  if (smoothing <= 0) {
+    return 0
+  }
+  const minLength = Math.min(params.inLength, params.outLength)
+  if (!(minLength > SCULPT_POLYGON_EPSILON)) {
+    return 0
+  }
+  if (params.cosTheta >= SCULPT_POLYGON_CORNER_COS_STRAIGHT_THRESHOLD) {
+    return 0
+  }
+
+  let maxRatio = 0.45
+  if (params.cosTheta <= SCULPT_POLYGON_CORNER_COS_UTURN_THRESHOLD) {
+    maxRatio = Math.min(maxRatio, 0.25)
+  }
+
+  const cellSize = Math.max(0, params.cellSize)
+  const requested = Math.max(cellSize * 0.5, smoothing * minLength)
+  const maxAllowed = maxRatio * minLength
+  const cut = Math.min(requested, maxAllowed)
+  return cut > SCULPT_POLYGON_EPSILON ? cut : 0
+}
+
+function sampleSculptPolygonQuadraticBezierPoint(
+  start: THREE.Vector3,
+  control: THREE.Vector3,
+  end: THREE.Vector3,
+  t: number,
+): THREE.Vector3 {
+  const oneMinusT = 1 - t
+  const startWeight = oneMinusT * oneMinusT
+  const controlWeight = 2 * oneMinusT * t
+  const endWeight = t * t
+  return new THREE.Vector3(
+    (start.x * startWeight) + (control.x * controlWeight) + (end.x * endWeight),
+    (start.y * startWeight) + (control.y * controlWeight) + (end.y * endWeight),
+    (start.z * startWeight) + (control.z * controlWeight) + (end.z * endWeight),
+  )
+}
+
+function appendSculptPolygonContourPoint(target: THREE.Vector3[], point: THREE.Vector3): void {
+  const previous = target[target.length - 1]
+  if (previous) {
+    const dx = previous.x - point.x
+    const dz = previous.z - point.z
+    if ((dx * dx) + (dz * dz) <= SCULPT_POLYGON_EPSILON * SCULPT_POLYGON_EPSILON) {
+      return
+    }
+  }
+  target.push(point)
+}
+
+export function buildSmoothedSculptPolygonContour(
+  points: THREE.Vector3[],
+  options: SmoothedSculptPolygonOptions = {},
+): THREE.Vector3[] {
+  const sanitizedPoints = sanitizeSculptPolygonContourPoints(points)
+  if (sanitizedPoints.length < 3) {
+    return sanitizedPoints.map((point) => point.clone())
+  }
+
+  const cellSize = Math.max(0, Number(options.cellSize) || 0)
+  const smoothing = clampSculptPolygonUnit(options.cornerSmoothing, SCULPT_POLYGON_DEFAULT_CORNER_SMOOTHING)
+  if (smoothing <= 0) {
+    return sanitizedPoints.map((point) => point.clone())
+  }
+
+  type CornerInfo = {
+    vertex: THREE.Vector3
+    enter: THREE.Vector3
+    exit: THREE.Vector3
+    rounded: boolean
+    curveSegments: number
+  }
+
+  const cornerInfos: CornerInfo[] = sanitizedPoints.map((vertex, index) => {
+    const previous = sanitizedPoints[(index - 1 + sanitizedPoints.length) % sanitizedPoints.length]!
+    const next = sanitizedPoints[(index + 1) % sanitizedPoints.length]!
+    const inLength = computeSculptPolygonSegmentLengthXZ(previous, vertex)
+    const outLength = computeSculptPolygonSegmentLengthXZ(vertex, next)
+    if (!(inLength > SCULPT_POLYGON_EPSILON) || !(outLength > SCULPT_POLYGON_EPSILON)) {
+      return {
+        vertex: vertex.clone(),
+        enter: vertex.clone(),
+        exit: vertex.clone(),
+        rounded: false,
+        curveSegments: 0,
+      }
+    }
+
+    const inDirection = new THREE.Vector2(vertex.x - previous.x, vertex.z - previous.z)
+    const outDirection = new THREE.Vector2(next.x - vertex.x, next.z - vertex.z)
+    const cosTheta = THREE.MathUtils.clamp(inDirection.dot(outDirection) / (inLength * outLength), -1, 1)
+    const cut = computeSmoothedSculptPolygonCornerCutDistance({
+      smoothing,
+      inLength,
+      outLength,
+      cosTheta,
+      cellSize,
+    })
+    if (!(cut > SCULPT_POLYGON_EPSILON)) {
+      return {
+        vertex: vertex.clone(),
+        enter: vertex.clone(),
+        exit: vertex.clone(),
+        rounded: false,
+        curveSegments: 0,
+      }
+    }
+
+    const enterT = THREE.MathUtils.clamp(cut / inLength, 0, 0.49)
+    const exitT = THREE.MathUtils.clamp(cut / outLength, 0, 0.49)
+    const enter = vertex.clone().lerp(previous, enterT)
+    const exit = vertex.clone().lerp(next, exitT)
+    const approxCurveLength = enter.distanceTo(vertex) + vertex.distanceTo(exit)
+    const segmentTarget = Math.max(cellSize * 0.5, 0.25)
+    const curveSegments = Math.max(3, Math.min(12, Math.ceil(approxCurveLength / segmentTarget)))
+
+    return {
+      vertex: vertex.clone(),
+      enter,
+      exit,
+      rounded: true,
+      curveSegments,
+    }
+  })
+
+  const contour: THREE.Vector3[] = []
+  appendSculptPolygonContourPoint(contour, cornerInfos[0]!.enter.clone())
+  for (let index = 0; index < cornerInfos.length; index += 1) {
+    const current = cornerInfos[index]!
+    const next = cornerInfos[(index + 1) % cornerInfos.length]!
+    if (current.rounded) {
+      for (let segment = 1; segment <= current.curveSegments; segment += 1) {
+        const t = segment / current.curveSegments
+        appendSculptPolygonContourPoint(
+          contour,
+          sampleSculptPolygonQuadraticBezierPoint(current.enter, current.vertex, current.exit, t),
+        )
+      }
+    } else {
+      appendSculptPolygonContourPoint(contour, current.vertex.clone())
+    }
+    appendSculptPolygonContourPoint(contour, next.enter.clone())
+  }
+
+  if (contour.length >= 2) {
+    const first = contour[0]
+    const last = contour[contour.length - 1]
+    if (first && last) {
+      const dx = first.x - last.x
+      const dz = first.z - last.z
+      if ((dx * dx) + (dz * dz) <= SCULPT_POLYGON_EPSILON * SCULPT_POLYGON_EPSILON) {
+        contour.pop()
+      }
+    }
+  }
+
+  return contour.length >= 3 ? contour : sanitizedPoints.map((point) => point.clone())
+}
+
+function normalizeSculptPolygonPointsXZ(points: THREE.Vector3[]): SculptPolygonPoint[] {
+  if (points.length < 3) {
+    return []
+  }
+  const normalized: SculptPolygonPoint[] = []
+  const epsilonSq = SCULPT_POLYGON_EPSILON * SCULPT_POLYGON_EPSILON
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.z)) {
+      continue
+    }
+    const candidate = { x: point.x, z: point.z }
+    const previous = normalized[normalized.length - 1]
+    if (previous && getSculptPolygonPointDistanceSqXZ(previous, candidate) <= epsilonSq) {
+      continue
+    }
+    normalized.push(candidate)
+  }
+  if (normalized.length >= 2) {
+    const first = normalized[0]
+    const last = normalized[normalized.length - 1]
+    if (first && last && getSculptPolygonPointDistanceSqXZ(first, last) <= epsilonSq) {
+      normalized.pop()
+    }
+  }
+  return normalized.length >= 3 ? normalized : []
+}
+
+function isPointOnSculptPolygonSegmentXZ(point: SculptPolygonPoint, a: SculptPolygonPoint, b: SculptPolygonPoint): boolean {
+  const epsilon = SCULPT_POLYGON_EPSILON
+  const abx = b.x - a.x
+  const abz = b.z - a.z
+  const apx = point.x - a.x
+  const apz = point.z - a.z
+  const cross = apx * abz - apz * abx
+  if (Math.abs(cross) > epsilon) {
+    return false
+  }
+  const dot = apx * abx + apz * abz
+  if (dot < -epsilon) {
+    return false
+  }
+  const lengthSq = abx * abx + abz * abz
+  if (dot - lengthSq > epsilon) {
+    return false
+  }
+  return true
+}
+
+function isPointInsideSculptPolygonXZ(point: SculptPolygonPoint, polygonPoints: SculptPolygonPoint[]): boolean {
+  if (polygonPoints.length < 3) {
+    return false
+  }
+  let inside = false
+  for (let index = 0, previousIndex = polygonPoints.length - 1; index < polygonPoints.length; previousIndex = index, index += 1) {
+    const a = polygonPoints[index]
+    const b = polygonPoints[previousIndex]
+    if (!a || !b) {
+      continue
+    }
+    if (isPointOnSculptPolygonSegmentXZ(point, a, b)) {
+      return true
+    }
+    const intersects = ((a.z > point.z) !== (b.z > point.z))
+      && (point.x < (((b.x - a.x) * (point.z - a.z)) / ((b.z - a.z) || Number.EPSILON)) + a.x)
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function distancePointToSculptSegmentXZ(point: SculptPolygonPoint, a: SculptPolygonPoint, b: SculptPolygonPoint): number {
+  const abx = b.x - a.x
+  const abz = b.z - a.z
+  const lengthSq = abx * abx + abz * abz
+  if (lengthSq <= SCULPT_POLYGON_EPSILON * SCULPT_POLYGON_EPSILON) {
+    return Math.hypot(point.x - a.x, point.z - a.z)
+  }
+  const t = Math.min(1, Math.max(0, (((point.x - a.x) * abx) + ((point.z - a.z) * abz)) / lengthSq))
+  const closestX = a.x + abx * t
+  const closestZ = a.z + abz * t
+  return Math.hypot(point.x - closestX, point.z - closestZ)
+}
+
+function computeSculptPolygonBoundaryDistance(point: SculptPolygonPoint, polygonPoints: SculptPolygonPoint[]): number {
+  let minDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < polygonPoints.length; index += 1) {
+    const a = polygonPoints[index]
+    const b = polygonPoints[(index + 1) % polygonPoints.length]
+    if (!a || !b) {
+      continue
+    }
+    minDistance = Math.min(minDistance, distancePointToSculptSegmentXZ(point, a, b))
+  }
+  return Number.isFinite(minDistance) ? minDistance : 0
+}
+
+function computeSculptPolygonSignedDistance(point: SculptPolygonPoint, polygonPoints: SculptPolygonPoint[]): number {
+  const boundaryDistance = computeSculptPolygonBoundaryDistance(point, polygonPoints)
+  if (boundaryDistance <= 0) {
+    return 0
+  }
+  return isPointInsideSculptPolygonXZ(point, polygonPoints) ? boundaryDistance : -boundaryDistance
+}
+
+function computeSculptPolygonBounds(polygonPoints: SculptPolygonPoint[]): {
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+} {
+  return polygonPoints.reduce(
+    (bounds, polygonPoint) => ({
+      minX: Math.min(bounds.minX, polygonPoint.x),
+      maxX: Math.max(bounds.maxX, polygonPoint.x),
+      minZ: Math.min(bounds.minZ, polygonPoint.z),
+      maxZ: Math.max(bounds.maxZ, polygonPoint.z),
+    }),
+    {
+      minX: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      minZ: Number.POSITIVE_INFINITY,
+      maxZ: Number.NEGATIVE_INFINITY,
+    },
+  )
+}
+
+function smoothstepScalar(edge0: number, edge1: number, value: number): number {
+  if (edge1 <= edge0) {
+    return value >= edge1 ? 1 : 0
+  }
+  let t = (value - edge0) / (edge1 - edge0)
+  t = Math.max(0, Math.min(1, t))
+  return t * t * (3 - (2 * t))
+}
+
+function computePolygonRaiseDepressProfile(distanceToBoundary: number, maxInteriorDistance: number, slope: number): number {
+  if (maxInteriorDistance <= 1e-6) {
+    return 1
+  }
+  const normalizedDistance = Math.min(1, Math.max(0, distanceToBoundary / maxInteriorDistance))
+  const clampedSlope = Math.min(1, Math.max(0, slope))
+  const exponent = 0.35 + clampedSlope * 0.65
+  return Math.pow(normalizedDistance, exponent)
+}
+
+function resolveGroundEffectiveHeightAtVertexFromManualMap(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  row: number,
+  column: number,
+): number {
+  const base = computeGroundBaseHeightAtVertex(definition, row, column)
+  const index = getGroundVertexIndex(definition.columns, row, column)
+  const manualRaw = map[index]
+  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+  const planningRaw = definition.planningHeightMap[index]
+  const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+  return planning + (manual - base)
+}
+
+function sampleNeighborAverageFromManualMap(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  row: number,
+  column: number,
+  maxRow: number,
+  maxColumn: number,
+): number {
+  let sum = 0
+  let count = 0
+  for (let r = Math.max(0, row - 1); r <= Math.min(maxRow, row + 1); r += 1) {
+    for (let c = Math.max(0, column - 1); c <= Math.min(maxColumn, column + 1); c += 1) {
+      sum += resolveGroundEffectiveHeightAtVertexFromManualMap(definition, map, r, c)
+      count += 1
+    }
+  }
+  return count > 0 ? sum / count : 0
+}
+
+function applyPolygonRaiseDepressSeamSmoothing(
+  definition: GroundRuntimeDynamicMesh,
+  heightMap: GroundHeightMap,
+  polygonPoints: SculptPolygonPoint[],
+  polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  maxBoundaryDistance: number,
+  depth: number,
+  slope: number,
+): boolean {
+  if (polygonPoints.length < 3 || !(depth > 0)) {
+    return false
+  }
+
+  const cellSize = Math.max(1e-6, definition.cellSize)
+  const columns = definition.columns
+  const rows = definition.rows
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const innerBand = Math.max(
+    cellSize * 1.75,
+    Math.min(Math.max(cellSize * 4, depth * (0.75 + slope)), Math.max(cellSize * 1.75, maxBoundaryDistance * 0.65)),
+  )
+  const outerBand = Math.max(cellSize * 1.25, innerBand * 0.45)
+  const totalBand = innerBand + outerBand
+  const bandCells = Math.max(2, Math.ceil(totalBand / cellSize) + 1)
+  const minCol = Math.max(0, Math.floor((polygonBounds.minX + halfWidth) / cellSize) - bandCells)
+  const maxCol = Math.min(columns, Math.ceil((polygonBounds.maxX + halfWidth) / cellSize) + bandCells)
+  const minRow = Math.max(0, Math.floor((polygonBounds.minZ + halfDepth) / cellSize) - bandCells)
+  const maxRow = Math.min(rows, Math.ceil((polygonBounds.maxZ + halfDepth) / cellSize) + bandCells)
+
+  let changed = false
+  for (let pass = 0; pass < 2; pass += 1) {
+    const sourceMap = new Float64Array(heightMap)
+    const passScale = pass === 0 ? 1 : 0.7
+    for (let row = minRow; row <= maxRow; row += 1) {
+      const z = -halfDepth + row * cellSize
+      for (let column = minCol; column <= maxCol; column += 1) {
+        const x = -halfWidth + column * cellSize
+        const signedDistance = computeSculptPolygonSignedDistance({ x, z }, polygonPoints)
+        const currentHeight = resolveGroundEffectiveHeightAtVertexFromManualMap(definition, sourceMap, row, column)
+        let smoothingFactor = 0
+
+        if (signedDistance >= 0) {
+          if (signedDistance > innerBand) {
+            continue
+          }
+          const normalized = 1 - smoothstepScalar(0, innerBand, signedDistance)
+          smoothingFactor = (0.08 + normalized * 0.14) * passScale
+        } else {
+          const outsideDistance = -signedDistance
+          if (outsideDistance > outerBand) {
+            continue
+          }
+          const normalized = 1 - smoothstepScalar(0, outerBand, outsideDistance)
+          smoothingFactor = (0.03 + normalized * 0.08) * passScale
+        }
+
+        if (!(smoothingFactor > 1e-6)) {
+          continue
+        }
+
+        const average = sampleNeighborAverageFromManualMap(definition, sourceMap, row, column, rows, columns)
+        const nextHeight = currentHeight + (average - currentHeight) * smoothingFactor
+        if (Math.abs(nextHeight - currentHeight) <= 1e-4) {
+          continue
+        }
+        setManualHeightOverrideForEffectiveValue(definition, heightMap, row, column, nextHeight)
+        changed = true
+      }
+    }
+  }
+
+  return changed
 }
 
 export function sculptGround(definition: GroundRuntimeDynamicMesh, params: SculptParams): boolean {
-  const { point, radius, strength, shape, operation, targetHeight } = params
+  const { point, radius, strength, shape, operation, targetHeight, polygonPoints, depth, slope } = params
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const cellSize = definition.cellSize
@@ -1102,88 +1617,159 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
   const localX = point.x
   const localZ = point.z
 
-  const minCol = Math.floor((localX - radius + halfWidth) / cellSize)
-  const maxCol = Math.ceil((localX + radius + halfWidth) / cellSize)
-  const minRow = Math.floor((localZ - radius + halfDepth) / cellSize)
-  const maxRow = Math.ceil((localZ + radius + halfDepth) / cellSize)
+  const usesRoundedPolygonContour = shape === 'polygon' && (operation === 'raise' || operation === 'depress')
+  const sculptPolygonContour = shape === 'polygon'
+    ? usesRoundedPolygonContour
+      ? buildSmoothedSculptPolygonContour(polygonPoints ?? [], { cellSize })
+      : (polygonPoints ?? []).map((polygonPoint) => polygonPoint.clone())
+    : []
+  const normalizedPolygon = shape === 'polygon' ? normalizeSculptPolygonPointsXZ(sculptPolygonContour) : []
+  if (shape === 'polygon' && normalizedPolygon.length < 3) {
+    return false
+  }
+
+  const polygonBounds = computeSculptPolygonBounds(normalizedPolygon)
+
+  const minCol = shape === 'polygon'
+    ? Math.floor((polygonBounds.minX + halfWidth) / cellSize)
+    : Math.floor((localX - radius + halfWidth) / cellSize)
+  const maxCol = shape === 'polygon'
+    ? Math.ceil((polygonBounds.maxX + halfWidth) / cellSize)
+    : Math.ceil((localX + radius + halfWidth) / cellSize)
+  const minRow = shape === 'polygon'
+    ? Math.floor((polygonBounds.minZ + halfDepth) / cellSize)
+    : Math.floor((localZ - radius + halfDepth) / cellSize)
+  const maxRow = shape === 'polygon'
+    ? Math.ceil((polygonBounds.maxZ + halfDepth) / cellSize)
+    : Math.ceil((localZ + radius + halfDepth) / cellSize)
 
   let modified = false
   let heightMap = definition.manualHeightMap
 
-  for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
+  if (shape === 'polygon') {
+    const polygonCandidates: Array<{
+      row: number
+      col: number
+      boundaryDistance: number
+      currentHeight: number
+    }> = []
+    let maxBoundaryDistance = 0
+
+    for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
       for (let col = Math.max(0, minCol); col <= Math.min(columns, maxCol); col++) {
-          const x = -halfWidth + col * cellSize
-          const z = -halfDepth + row * cellSize
-          
-          const dx = x - localX
-          const dz = z - localZ
-          
-          let dist = 0
-          let isInside = false
-
-          if (shape === 'square') {
-              const maxDist = Math.max(Math.abs(dx), Math.abs(dz))
-              if (maxDist <= radius) {
-                  dist = maxDist
-                  isInside = true
-              }
-          } else if (shape === 'star') {
-               const r = Math.sqrt(dx * dx + dz * dz);
-               const angle = Math.atan2(dz, dx);
-               const n = 5;
-               const step = Math.PI * 2 / n;
-               let localAngle = (angle % step);
-               if (localAngle < 0) localAngle += step;
-               if (localAngle > step / 2) localAngle = step - localAngle;
-               const alpha = localAngle;
-               const R_out = radius;
-               const R_in = R_out * 0.5;
-               const gamma = step / 2;
-               const m = (R_in * Math.sin(gamma)) / (R_in * Math.cos(gamma) - R_out);
-               const maxR = (-m * R_out) / (Math.sin(alpha) - m * Math.cos(alpha));
-               if (r < maxR) {
-                   dist = (r / maxR) * radius;
-                   isInside = true;
-               }
-          } else {
-              // Circle
-              const distSq = dx * dx + dz * dz
-              if (distSq < radius * radius) {
-                  dist = Math.sqrt(distSq)
-                  isInside = true
-              }
-          }
-
-          if (isInside) {
-            let influence = Math.cos((dist / radius) * (Math.PI / 2))
-            const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
-            influence *= 1.0 + noiseVal * 0.1
-
-            const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, col)
-            let nextHeight = currentHeight
-
-            if (operation === 'smooth') {
-              const average = sampleNeighborAverage(definition, row, col, rows, columns)
-              const smoothingFactor = Math.min(1, strength * 0.25)
-              nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
-            } else if (operation === 'flatten') {
-              const reference = targetHeight ?? currentHeight
-              const flattenFactor = Math.min(1, strength * 0.4)
-              nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
-            } else if (operation === 'flatten-zero') {
-              const reference = targetHeight ?? 0
-              const flattenFactor = Math.min(1, 0.2 + strength * 0.3)
-              nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
-            } else {
-              const direction = operation === 'depress' ? -1 : 1
-              const offset = direction * strength * influence * 0.3
-              nextHeight = currentHeight + offset
-            }
-
-            setManualHeightOverrideForEffectiveValue(definition, heightMap, row, col, nextHeight)
-            modified = true
-          }
+        const x = -halfWidth + col * cellSize
+        const z = -halfDepth + row * cellSize
+        const samplePoint = { x, z }
+        if (!isPointInsideSculptPolygonXZ(samplePoint, normalizedPolygon)) {
+          continue
+        }
+        const boundaryDistance = computeSculptPolygonBoundaryDistance(samplePoint, normalizedPolygon)
+        maxBoundaryDistance = Math.max(maxBoundaryDistance, boundaryDistance)
+        polygonCandidates.push({
+          row,
+          col,
+          boundaryDistance,
+          currentHeight: resolveGroundEffectiveHeightAtVertex(definition, row, col),
+        })
       }
+    }
+
+    if (!polygonCandidates.length) {
+      return false
+    }
+
+    const effectiveDepth = Number.isFinite(depth) ? Math.max(0, depth ?? 0) : 0
+    const effectiveSlope = Number.isFinite(slope) ? slope ?? 0.5 : 0.5
+
+    for (const candidate of polygonCandidates) {
+      const { row, col, boundaryDistance, currentHeight } = candidate
+      let nextHeight = currentHeight
+
+      if (operation === 'smooth') {
+        const average = sampleNeighborAverage(definition, row, col, rows, columns)
+        const smoothingFactor = Math.min(1, strength * 0.25)
+        nextHeight = currentHeight + (average - currentHeight) * smoothingFactor
+      } else if (operation === 'flatten') {
+        const reference = targetHeight ?? currentHeight
+        const flattenFactor = Math.min(1, strength * 0.4)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor
+      } else if (operation === 'flatten-zero') {
+        const reference = targetHeight ?? 0
+        const flattenFactor = Math.min(1, 0.2 + strength * 0.3)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor
+      } else {
+        const direction = operation === 'depress' ? -1 : 1
+        if (effectiveDepth > 0) {
+          const profile = computePolygonRaiseDepressProfile(boundaryDistance, maxBoundaryDistance, effectiveSlope)
+          nextHeight = currentHeight + direction * effectiveDepth * profile
+        } else {
+          nextHeight = currentHeight + direction * strength * 0.3
+        }
+      }
+
+      setManualHeightOverrideForEffectiveValue(definition, heightMap, row, col, nextHeight)
+      modified = true
+    }
+
+    if (modified && usesRoundedPolygonContour) {
+      applyPolygonRaiseDepressSeamSmoothing(
+        definition,
+        heightMap,
+        normalizedPolygon,
+        polygonBounds,
+        maxBoundaryDistance,
+        effectiveDepth,
+        effectiveSlope,
+      )
+    }
+
+    if (modified) {
+      definition.manualHeightMap = heightMap
+    }
+    return modified
+  }
+
+  for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
+    for (let col = Math.max(0, minCol); col <= Math.min(columns, maxCol); col++) {
+      const x = -halfWidth + col * cellSize
+      const z = -halfDepth + row * cellSize
+
+      const dx = x - localX
+      const dz = z - localZ
+      const distSq = dx * dx + dz * dz
+      if (distSq >= radius * radius) {
+        continue
+      }
+
+      const dist = Math.sqrt(distSq)
+      let influence = Math.cos((dist / radius) * (Math.PI / 2))
+      const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
+      influence *= 1.0 + noiseVal * 0.1
+
+      const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, col)
+      let nextHeight = currentHeight
+
+      if (operation === 'smooth') {
+        const average = sampleNeighborAverage(definition, row, col, rows, columns)
+        const smoothingFactor = Math.min(1, strength * 0.25)
+        nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
+      } else if (operation === 'flatten') {
+        const reference = targetHeight ?? currentHeight
+        const flattenFactor = Math.min(1, strength * 0.4)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+      } else if (operation === 'flatten-zero') {
+        const reference = targetHeight ?? 0
+        const flattenFactor = Math.min(1, 0.2 + strength * 0.3)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+      } else {
+        const direction = operation === 'depress' ? -1 : 1
+        const offset = direction * strength * influence * 0.3
+        nextHeight = currentHeight + offset
+      }
+
+      setManualHeightOverrideForEffectiveValue(definition, heightMap, row, col, nextHeight)
+      modified = true
+    }
   }
   if (operation === 'flatten-zero') {
     const smoothingBand = Math.max(cellSize * 1.5, radius * 0.35)

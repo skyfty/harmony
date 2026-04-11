@@ -56,7 +56,9 @@ export const useTerrainStore = defineStore('terrain', () => {
 
   const brushRadius = ref(3)
   const brushStrength = ref(1.5)
-  const brushShape = ref<'circle' | 'square' | 'star'>('circle')
+  const brushDepth = ref(2)
+  const brushSlope = ref(0.5)
+  const brushShape = ref<'circle' | 'polygon'>('circle')
   const brushOperation = ref<GroundSculptOperation | null>(null)
   const groundPanelTab = ref<GroundPanelTab>('terrain')
 
@@ -198,6 +200,8 @@ export const useTerrainStore = defineStore('terrain', () => {
   return {
     brushRadius,
     brushStrength,
+    brushDepth,
+    brushSlope,
     brushShape,
     brushOperation,
     isDigging,

@@ -10,6 +10,14 @@ const BRUSH_STRENGTH_MIN = 0.1
 const BRUSH_STRENGTH_MAX = 10
 const BRUSH_STRENGTH_STEP = 0.1
 
+const BRUSH_DEPTH_MIN = 0.1
+const BRUSH_DEPTH_MAX = 50
+const BRUSH_DEPTH_STEP = 0.1
+
+const BRUSH_SLOPE_MIN = 0
+const BRUSH_SLOPE_MAX = 1
+const BRUSH_SLOPE_STEP = 0.1
+
 const NOISE_STRENGTH_MIN = 0
 const NOISE_STRENGTH_MAX = 5
 const NOISE_STRENGTH_STEP = 0.1
@@ -22,7 +30,9 @@ const props = defineProps<{
   hasGround: boolean
   brushRadius: number
   brushStrength: number
-  brushShape: 'circle' | 'square' | 'star'
+  brushDepth: number
+  brushSlope: number
+  brushShape: 'circle' | 'polygon'
   brushOperation: GroundSculptOperation | null
   terrainOperations: TerrainOperationOption[]
   noiseStrength: number
@@ -33,7 +43,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'update:brushRadius', value: number): void
   (event: 'update:brushStrength', value: number): void
-  (event: 'update:brushShape', value: 'circle' | 'square' | 'star'): void
+  (event: 'update:brushDepth', value: number): void
+  (event: 'update:brushSlope', value: number): void
+  (event: 'update:brushShape', value: 'circle' | 'polygon'): void
   (event: 'update:brushOperation', value: GroundSculptOperation | null): void
   (event: 'update:noiseStrength', value: number): void
   (event: 'update:noiseMode', value: GroundGenerationMode): void
@@ -41,7 +53,7 @@ const emit = defineEmits<{
 
 const brushShapeModel = computed({
   get: () => props.brushShape,
-  set: (value: 'circle' | 'square' | 'star') => emit('update:brushShape', value),
+  set: (value: 'circle' | 'polygon') => emit('update:brushShape', value),
 })
 
 const brushOperationModel = computed({
@@ -59,6 +71,16 @@ const brushStrengthModel = computed({
   set: (value: number) => emit('update:brushStrength', value),
 })
 
+const brushDepthModel = computed({
+  get: () => props.brushDepth,
+  set: (value: number) => emit('update:brushDepth', value),
+})
+
+const brushSlopeModel = computed({
+  get: () => props.brushSlope,
+  set: (value: number) => emit('update:brushSlope', value),
+})
+
 const noiseStrengthModel = computed({
   get: () => props.noiseStrength,
   set: (value: number) => emit('update:noiseStrength', value),
@@ -69,8 +91,16 @@ const noiseModeModel = computed({
   set: (value: GroundGenerationMode) => emit('update:noiseMode', value),
 })
 
+const isCircleBrush = computed(() => props.brushShape === 'circle')
+const isPolygonBrush = computed(() => props.brushShape === 'polygon')
+const isDepthSlopeOperation = computed(() => props.brushOperation === 'raise' || props.brushOperation === 'depress')
+const radiusStrengthDisabled = computed(() => !props.hasGround || !isCircleBrush.value)
+const depthSlopeDisabled = computed(() => !props.hasGround || !isPolygonBrush.value || !isDepthSlopeOperation.value)
+
 const brushRadiusInput = ref(formatNumericValue(props.brushRadius))
 const brushStrengthInput = ref(formatNumericValue(props.brushStrength))
+const brushDepthInput = ref(formatNumericValue(props.brushDepth))
+const brushSlopeInput = ref(formatNumericValue(props.brushSlope))
 const noiseStrengthInput = ref(formatNumericValue(props.noiseStrength))
 
 watch(
@@ -84,6 +114,20 @@ watch(
   () => props.brushStrength,
   (value) => {
     brushStrengthInput.value = formatNumericValue(value)
+  },
+)
+
+watch(
+  () => props.brushDepth,
+  (value) => {
+    brushDepthInput.value = formatNumericValue(value)
+  },
+)
+
+watch(
+  () => props.brushSlope,
+  (value) => {
+    brushSlopeInput.value = formatNumericValue(value)
   },
 )
 
@@ -140,6 +184,30 @@ function commitBrushStrengthInput() {
   brushStrengthInput.value = formatNumericValue(normalized)
 }
 
+function commitBrushDepthInput() {
+  const normalized = parseAndNormalize(
+    brushDepthInput.value,
+    props.brushDepth,
+    BRUSH_DEPTH_MIN,
+    BRUSH_DEPTH_MAX,
+    BRUSH_DEPTH_STEP,
+  )
+  brushDepthModel.value = normalized
+  brushDepthInput.value = formatNumericValue(normalized)
+}
+
+function commitBrushSlopeInput() {
+  const normalized = parseAndNormalize(
+    brushSlopeInput.value,
+    props.brushSlope,
+    BRUSH_SLOPE_MIN,
+    BRUSH_SLOPE_MAX,
+    BRUSH_SLOPE_STEP,
+  )
+  brushSlopeModel.value = normalized
+  brushSlopeInput.value = formatNumericValue(normalized)
+}
+
 function commitNoiseStrengthInput() {
   const normalized = parseAndNormalize(
     noiseStrengthInput.value,
@@ -160,8 +228,7 @@ function commitNoiseStrengthInput() {
         <div class="text-caption mb-1">Brush Shape</div>
         <v-btn-toggle v-model="brushShapeModel" density="compact" mandatory divided variant="outlined" color="primary">
           <v-btn value="circle" icon="mdi-circle-outline" title="Circle"></v-btn>
-          <v-btn value="square" icon="mdi-square-outline" title="Square"></v-btn>
-          <v-btn value="star" icon="mdi-star-outline" title="Star"></v-btn>
+          <v-btn value="polygon" icon="mdi-shape-polygon-plus" title="Polygon"></v-btn>
         </v-btn-toggle>
       </div>
 
@@ -190,9 +257,9 @@ function commitNoiseStrengthInput() {
       </div>
     </div>
 
-    <div class="control-row">
+    <div v-show="isCircleBrush" class="control-row">
       <div class="control-group control-group--compact">
-        <div class="text-caption">Brush Radius: {{ brushRadiusInput }}</div>
+        <div class="text-caption">Brush Radius:</div>
         <v-text-field
           v-model="brushRadiusInput"
           type="number"
@@ -204,7 +271,6 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
-          :disabled="!props.hasGround"
           class="numeric-input"
           @blur="commitBrushRadiusInput"
           @keydown.enter.prevent="commitBrushRadiusInput"
@@ -212,7 +278,7 @@ function commitNoiseStrengthInput() {
       </div>
 
       <div class="control-group control-group--compact">
-        <div class="text-caption">Brush Strength: {{ brushStrengthInput }}</div>
+        <div class="text-caption">Brush Strength:</div>
         <v-text-field
           v-model="brushStrengthInput"
           type="number"
@@ -224,7 +290,6 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
-          :disabled="!props.hasGround"
           class="numeric-input"
           @blur="commitBrushStrengthInput"
           @keydown.enter.prevent="commitBrushStrengthInput"
@@ -232,41 +297,82 @@ function commitNoiseStrengthInput() {
       </div>
     </div>
 
-    <v-divider class="ground-panel-divider" />
+    <div v-show="isPolygonBrush" class="control-row">
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Depth:</div>
+        <v-text-field
+          v-model="brushDepthInput"
+          type="number"
+          suffix="m"
+          :min="BRUSH_DEPTH_MIN"
+          :max="BRUSH_DEPTH_MAX"
+          :step="BRUSH_DEPTH_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          class="numeric-input"
+          @blur="commitBrushDepthInput"
+          @keydown.enter.prevent="commitBrushDepthInput"
+        />
+      </div>
 
-    <div class="control-group noise-type">
-      <div class="text-caption mb-1">Noise Type</div>
-      <v-select
-        v-model="noiseModeModel"
-        :items="props.noiseModeOptions"
-        item-title="label"
-        item-value="value"
-        density="compact"
-        variant="underlined"
-        hide-details
-        :disabled="!props.hasGround"
-        class="noise-mode-select"
-      />
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Slope:</div>
+        <v-text-field
+          v-model="brushSlopeInput"
+          type="number"
+          :min="BRUSH_SLOPE_MIN"
+          :max="BRUSH_SLOPE_MAX"
+          :step="BRUSH_SLOPE_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          class="numeric-input"
+          @blur="commitBrushSlopeInput"
+          @keydown.enter.prevent="commitBrushSlopeInput"
+        />
+      </div>
     </div>
 
-    <div class="control-group">
-      <div class="text-caption">Noise Strength: {{ noiseStrengthInput }}</div>
-      <v-text-field
-        v-model="noiseStrengthInput"
-        type="number"
-        suffix="x"
-        :min="NOISE_STRENGTH_MIN"
-        :max="NOISE_STRENGTH_MAX"
-        :step="NOISE_STRENGTH_STEP"
-        variant="underlined"
-        density="compact"
-        hide-details
-        inputmode="decimal"
-        :disabled="!props.hasGround"
-        class="numeric-input"
-        @blur="commitNoiseStrengthInput"
-        @keydown.enter.prevent="commitNoiseStrengthInput"
-      />
+    <v-divider class="ground-panel-divider" />
+
+    <div class="control-row noise-row">
+      <div class="control-group control-group--compact noise-type">
+        <div class="text-caption mb-1">Noise Type</div>
+        <v-select
+          v-model="noiseModeModel"
+          :items="props.noiseModeOptions"
+          item-title="label"
+          item-value="value"
+          density="compact"
+          variant="underlined"
+          hide-details
+          :disabled="!props.hasGround"
+          class="noise-mode-select"
+        />
+      </div>
+
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Noise Strength:</div>
+        <v-text-field
+          v-model="noiseStrengthInput"
+          type="number"
+          suffix="x"
+          :min="NOISE_STRENGTH_MIN"
+          :max="NOISE_STRENGTH_MAX"
+          :step="NOISE_STRENGTH_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitNoiseStrengthInput"
+          @keydown.enter.prevent="commitNoiseStrengthInput"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -305,5 +411,9 @@ function commitNoiseStrengthInput() {
 
 .noise-type {
   margin-bottom: 10px;
+}
+
+.noise-row {
+  align-items: flex-start;
 }
 </style>
