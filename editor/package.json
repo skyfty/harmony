@@ -21,6 +21,7 @@
     "camera-controls": "^3.1.2",
     "cannon-es": "^0.20.0",
     "fflate": "^0.8.2",
+    "meshwalk": "0.0.1",
     "pako": "^2.1.0",
     "pica": "^9.0.1",
     "pinia": "^2.2.6",
