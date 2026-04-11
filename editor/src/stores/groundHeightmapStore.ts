@@ -14,6 +14,9 @@ export type GroundHeightRuntimeState = {
   manualHeightMap: Float64Array
   planningHeightMap: Float64Array
   planningMetadata: GroundPlanningMetadata | null
+  runtimeHydratedHeightState?: 'pristine' | 'dirty'
+  runtimeDisableOptimizedChunks?: boolean
+  surfaceRevision?: number
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
@@ -57,6 +60,9 @@ function createRuntimeState(nodeId: string, definition: GroundDynamicMesh): Grou
     manualHeightMap: new Float64Array(createGroundHeightMap(definition.rows, definition.columns).buffer.slice(0, vertexCount * Float64Array.BYTES_PER_ELEMENT)),
     planningHeightMap: new Float64Array(createGroundHeightMap(definition.rows, definition.columns).buffer.slice(0, vertexCount * Float64Array.BYTES_PER_ELEMENT)),
     planningMetadata: clonePlanningMetadata(definition.planningMetadata ?? null),
+    runtimeHydratedHeightState: (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState,
+    runtimeDisableOptimizedChunks: (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks,
+    surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
   }
 }
 
@@ -103,6 +109,9 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
     manualHeightMap: new Float64Array(runtimeDefinition.manualHeightMap),
     planningHeightMap: new Float64Array(runtimeDefinition.planningHeightMap),
     planningMetadata: clonePlanningMetadata(runtimeDefinition.planningMetadata ?? null),
+    runtimeHydratedHeightState: runtimeDefinition.runtimeHydratedHeightState,
+    runtimeDisableOptimizedChunks: runtimeDefinition.runtimeDisableOptimizedChunks,
+    surfaceRevision: Number.isFinite(runtimeDefinition.surfaceRevision) ? Math.max(0, Math.trunc(runtimeDefinition.surfaceRevision as number)) : 0,
   })
 }
 
@@ -155,6 +164,9 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
         manualHeightMap: state.manualHeightMap,
         planningHeightMap: state.planningHeightMap,
         planningMetadata: clonePlanningMetadata(state.planningMetadata ?? definition.planningMetadata ?? null),
+        runtimeHydratedHeightState: state.runtimeHydratedHeightState,
+        runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,
+        surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
       }
     },
     replaceManualHeightMap(
@@ -166,6 +178,9 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.rows = definition.rows
       state.columns = definition.columns
       state.manualHeightMap = new Float64Array(manualHeightMap)
+      state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
+      state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
+      state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
       return state
     },
     replacePlanningHeightMap(
@@ -178,6 +193,9 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.rows = definition.rows
       state.columns = definition.columns
       state.planningHeightMap = new Float64Array(planningHeightMap)
+      state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
+      state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
+      state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
       if (planningMetadata !== undefined) {
         state.planningMetadata = clonePlanningMetadata(planningMetadata)
       }
@@ -190,6 +208,9 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
     ): GroundHeightRuntimeState {
       const state = ensureNodeRuntimeState(nodeId, definition)
       state.planningMetadata = clonePlanningMetadata(planningMetadata)
+      state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
+      state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
+      state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
       return state
     },
   },

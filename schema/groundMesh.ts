@@ -339,6 +339,29 @@ export function analyzeGroundOptimizedMeshUsage(definition: GroundDynamicMesh): 
   }
 }
 
+export function setGroundRuntimeOptimizedChunksEnabled(
+  definition: GroundDynamicMesh,
+  enabled: boolean,
+): GroundRuntimeDynamicMesh {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  runtimeDefinition.runtimeDisableOptimizedChunks = !enabled
+  return runtimeDefinition
+}
+
+export function markGroundOptimizedMeshReady(
+  definition: GroundDynamicMesh,
+  optimizedMesh?: GroundOptimizedMeshData | null,
+): GroundRuntimeDynamicMesh {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  if (optimizedMesh !== undefined) {
+    runtimeDefinition.optimizedMesh = optimizedMesh
+  }
+  runtimeDefinition.surfaceRevision = 0
+  runtimeDefinition.runtimeHydratedHeightState = 'pristine'
+  runtimeDefinition.runtimeDisableOptimizedChunks = false
+  return runtimeDefinition
+}
+
 export function resolveGroundChunkRadiusMeters(definition: GroundDynamicMesh): number {
   return resolveGroundChunkRadius(definition)
 }

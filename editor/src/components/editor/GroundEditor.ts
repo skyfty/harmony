@@ -104,6 +104,7 @@ export type GroundCellSelection = {
 export type GroundEditorOptions = {
 	sceneStore: ReturnType<typeof useSceneStore>
 	getSceneNodes: () => SceneNode[]
+	prepareGroundRuntimeDefinition?: (definition: GroundRuntimeDynamicMesh) => GroundRuntimeDynamicMesh
 	pickNodeAtPointer?: (event: PointerEvent, options?: { includeSelectionLocked?: boolean }) => NodeHitResult | null
 	canvasRef: Ref<HTMLCanvasElement | null>
 	surfaceRef: Ref<HTMLDivElement | null>
@@ -3472,7 +3473,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				return sculptSessionState.definition
 			}
-			return mergedRuntimeDefinition
+			return options.prepareGroundRuntimeDefinition
+				? options.prepareGroundRuntimeDefinition(mergedRuntimeDefinition)
+				: mergedRuntimeDefinition
 		}
 		return null
 	}

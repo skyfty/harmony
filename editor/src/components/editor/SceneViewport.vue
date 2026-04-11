@@ -212,10 +212,13 @@ import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
+  analyzeGroundOptimizedMeshUsage,
   createGroundMesh,
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
+  resolveGroundRuntimeChunkCells,
+  setGroundRuntimeOptimizedChunksEnabled,
   updateGroundMesh,
   releaseGroundMeshCache,
   sampleGroundHeight,
@@ -3349,12 +3352,14 @@ const groundEditor = createGroundEditor({
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
+  prepareGroundRuntimeDefinition: applyViewportGroundRuntimeMode,
   onSculptCommitApplied: ({ groundObject, definition }: { groundObject: THREE.Object3D; definition: GroundRuntimeDynamicMesh }) => {
     const signature = computeGroundDynamicMeshSignature(definition)
     const signatureTarget = resolveGroundSignatureTarget(groundObject)
     const userData = signatureTarget.userData ?? (signatureTarget.userData = {})
     userData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] = signature
     userData[DYNAMIC_MESH_SIGNATURE_KEY] = signature
+    pendingViewportGroundOptimizedRebuild = true
   },
   onScatterEraseStart: () => {
     scatterEraseMenuOpen.value = false
@@ -10117,6 +10122,51 @@ function cloneGroundSurfaceChunkMap(
   return Object.keys(result).length ? result : null
 }
 
+const viewportForceDenseGroundMesh = ref(activeBuildTool.value === 'terrain')
+let pendingViewportGroundOptimizedRebuild = false
+let lastGroundRenderDebugSignature: string | null = null
+
+function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
+  if (viewportForceDenseGroundMesh.value) {
+    return setGroundRuntimeOptimizedChunksEnabled(definition, false)
+  }
+  return definition
+}
+
+function debugViewportGroundRenderMode(phase: string, definition: GroundRuntimeDynamicMesh): void {
+  const analysis = analyzeGroundOptimizedMeshUsage(definition)
+  const signature = [
+    phase,
+    viewportForceDenseGroundMesh.value ? 'forced-dense' : 'auto',
+    analysis.reason,
+    analysis.canUseOptimizedMesh ? 'optimized' : 'dense',
+    analysis.optimizedChunkCells ?? 'none',
+    analysis.runtimeChunkCells,
+    analysis.surfaceRevision,
+    analysis.runtimeHydratedHeightState,
+  ].join('|')
+
+  if (signature === lastGroundRenderDebugSignature) {
+    return
+  }
+  lastGroundRenderDebugSignature = signature
+
+  console.info('[SceneViewport][GroundRenderMode]', {
+    phase,
+    forcedDense: viewportForceDenseGroundMesh.value,
+    canUseOptimizedMesh: analysis.canUseOptimizedMesh,
+    reason: analysis.reason,
+    runtimeChunkCells: resolveGroundRuntimeChunkCells(definition),
+    optimizedChunkCells: analysis.optimizedChunkCells,
+    sourceChunkCells: analysis.sourceChunkCells,
+    optimizedTriangleCount: analysis.optimizedTriangleCount,
+    sourceTriangleCount: analysis.sourceTriangleCount,
+    surfaceRevision: analysis.surfaceRevision,
+    runtimeHydratedHeightState: analysis.runtimeHydratedHeightState,
+    runtimeDisableOptimizedChunks: analysis.runtimeDisableOptimizedChunks,
+  })
+}
+
 function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
   const node = getGroundNodeFromStore()
   if (node?.dynamicMesh?.type === 'Ground' && sceneStore.currentSceneId) {
@@ -10126,13 +10176,13 @@ function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
     )
     const paintRuntime = useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId)
     if (paintRuntime && paintRuntime.nodeId === node.id) {
-      return {
+      return applyViewportGroundRuntimeMode({
         ...runtimeDefinition,
         terrainPaint: null,
         groundSurfaceChunks: cloneGroundSurfaceChunkMap(paintRuntime.groundSurfaceChunks),
-      }
+      })
     }
-    return runtimeDefinition
+    return applyViewportGroundRuntimeMode(runtimeDefinition)
   }
   return null
 }
@@ -19327,6 +19377,29 @@ function syncViewportGroundChunks(groundObject: THREE.Object3D, groundDefinition
   }
 }
 
+function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean } = {}): void {
+  const groundNode = getGroundNodeFromStore()
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    pendingViewportGroundOptimizedRebuild = false
+    return
+  }
+
+  if (options.rebuildOptimizedMesh && pendingViewportGroundOptimizedRebuild) {
+    sceneStore.refreshGroundOptimizedMesh(groundNode.id)
+    pendingViewportGroundOptimizedRebuild = false
+  }
+
+  const groundObject = resolveGroundRuntimeObjectFromMap(objectMap, groundNode.id) ?? undefined
+  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  if (!groundObject || !groundDefinition) {
+    return
+  }
+
+  debugViewportGroundRenderMode('sync', groundDefinition)
+  updateGroundMesh(groundObject, groundDefinition)
+  syncViewportGroundChunks(groundObject, groundDefinition)
+}
+
 function updateGroundChunkStreaming() {
   if (!camera) {
     return
@@ -20106,6 +20179,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         containerData.dynamicMeshType = 'Ground'
         return container
       }
+      debugViewportGroundRenderMode('create', groundDefinition)
       const groundMesh = createGroundMesh(groundDefinition)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
@@ -20972,6 +21046,15 @@ watch(
 watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
   clearBuildToolVertexSnap()
+
+  if (tool === 'terrain') {
+    viewportForceDenseGroundMesh.value = true
+    syncViewportGroundRenderMode()
+  } else if (previous === 'terrain') {
+    const shouldRebuildOptimizedMesh = pendingViewportGroundOptimizedRebuild
+    viewportForceDenseGroundMesh.value = false
+    syncViewportGroundRenderMode({ rebuildOptimizedMesh: shouldRebuildOptimizedMesh })
+  }
 
   // Keep viewport side effects consistent even when the tool is activated via store (e.g. AssetPanel).
   if (isGroundBuildTool(tool)) {

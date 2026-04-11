@@ -1,4 +1,4 @@
-import type { SceneJsonExportDocument, SceneNode } from '@schema'
+import type { GroundDynamicMesh, SceneJsonExportDocument, SceneNode } from '@schema'
 import { buildGroundOptimizedMeshData, type GroundOptimizedMeshBuildOptions } from '@schema/groundOptimizedMesh'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
@@ -29,4 +29,40 @@ export function attachOptimizedGroundMeshToDocument(
   }
   groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh, options)
   return document
+}
+
+export function ensureOptimizedGroundMeshOnDocument(
+  document: SceneJsonExportDocument,
+  options: GroundOptimizedMeshBuildOptions = {},
+): SceneJsonExportDocument {
+  const groundNode = findGroundNode(document.nodes)
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return document
+  }
+  if (groundNode.dynamicMesh.optimizedMesh?.chunks?.length) {
+    console.info('[GroundOptimizedMesh] Scene document already contains optimized mesh', {
+      chunkCount: groundNode.dynamicMesh.optimizedMesh.chunkCount,
+      chunkCells: groundNode.dynamicMesh.optimizedMesh.chunkCells,
+      optimizedTriangles: groundNode.dynamicMesh.optimizedMesh.optimizedTriangleCount,
+      sourceTriangles: groundNode.dynamicMesh.optimizedMesh.sourceTriangleCount,
+    })
+    return document
+  }
+  groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh, options)
+  console.info('[GroundOptimizedMesh] Rebuilt missing optimized mesh during scene load', {
+    chunkCount: groundNode.dynamicMesh.optimizedMesh.chunkCount,
+    chunkCells: groundNode.dynamicMesh.optimizedMesh.chunkCells,
+    optimizedTriangles: groundNode.dynamicMesh.optimizedMesh.optimizedTriangleCount,
+    sourceTriangles: groundNode.dynamicMesh.optimizedMesh.sourceTriangleCount,
+  })
+  return document
+}
+
+export function rebuildOptimizedGroundMeshForDefinition(
+  definition: GroundDynamicMesh,
+  options: GroundOptimizedMeshBuildOptions = {},
+) {
+  const optimizedMesh = buildGroundOptimizedMeshData(definition, options)
+  definition.optimizedMesh = optimizedMesh
+  return optimizedMesh
 }
