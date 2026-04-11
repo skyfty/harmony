@@ -48,6 +48,8 @@
                 <TerrainSculptPanel
                   v-model:brush-radius="groundBrushRadiusModel"
                   v-model:brush-strength="groundBrushStrengthModel"
+                  v-model:brush-depth="groundBrushDepthModel"
+                  v-model:brush-slope="groundBrushSlopeModel"
                   v-model:brush-shape="groundBrushShapeModel"
                   v-model:brush-operation="groundBrushOperationModel"
                   v-model:noise-strength="groundNoiseStrengthModel"
@@ -1295,7 +1297,9 @@ const props = withDefaults(
   groundPanelTab: GroundPanelTab
   groundBrushRadius: number
   groundBrushStrength: number
-  groundBrushShape: 'circle' | 'square' | 'star'
+  groundBrushDepth: number
+  groundBrushSlope: number
+  groundBrushShape: 'circle' | 'polygon'
   groundBrushOperation: GroundSculptOperation | null
   groundNoiseStrength: number
   groundNoiseMode: GroundGenerationMode
@@ -1353,7 +1357,9 @@ const emit = defineEmits<{
   (event: 'activate-ground-tab', tab: GroundPanelTab): void
   (event: 'update:ground-brush-radius', value: number): void
   (event: 'update:ground-brush-strength', value: number): void
-  (event: 'update:ground-brush-shape', value: 'circle' | 'square' | 'star'): void
+  (event: 'update:ground-brush-depth', value: number): void
+  (event: 'update:ground-brush-slope', value: number): void
+  (event: 'update:ground-brush-shape', value: 'circle' | 'polygon'): void
   (event: 'update:ground-brush-operation', value: GroundSculptOperation | null): void
   (event: 'update:ground-noise-strength', value: number): void
   (event: 'update:ground-noise-mode', value: GroundGenerationMode): void
@@ -1411,6 +1417,8 @@ const {
   groundPanelTab,
   groundBrushRadius,
   groundBrushStrength,
+  groundBrushDepth,
+  groundBrushSlope,
   groundBrushShape,
   groundBrushOperation,
   groundNoiseStrength,
@@ -1717,9 +1725,19 @@ const groundBrushStrengthModel = computed({
   set: (value: number) => emit('update:ground-brush-strength', Number(value)),
 })
 
+const groundBrushDepthModel = computed({
+  get: () => groundBrushDepth.value,
+  set: (value: number) => emit('update:ground-brush-depth', Number(value)),
+})
+
+const groundBrushSlopeModel = computed({
+  get: () => groundBrushSlope.value,
+  set: (value: number) => emit('update:ground-brush-slope', Number(value)),
+})
+
 const groundBrushShapeModel = computed({
   get: () => groundBrushShape.value,
-  set: (value: 'circle' | 'square' | 'star') => emit('update:ground-brush-shape', value),
+  set: (value: 'circle' | 'polygon') => emit('update:ground-brush-shape', value),
 })
 
 const groundBrushOperationModel = computed({

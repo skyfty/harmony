@@ -80,7 +80,7 @@ import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCull
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 
-export type TerrainBrushShape = 'circle' | 'square' | 'star'
+export type TerrainBrushShape = 'circle' | 'polygon'
 
 type GroundSelectionPhase = 'pending' | 'sizing' | 'finalizing'
 
@@ -116,6 +116,8 @@ export type GroundEditorOptions = {
 	getScene: () => THREE.Scene | null
 	brushRadius: Ref<number>
 	brushStrength: Ref<number>
+	brushDepth: Ref<number>
+	brushSlope: Ref<number>
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
@@ -777,6 +779,8 @@ const SCATTER_DOUBLE_CLICK_INTERVAL_MS = 320
 const SCATTER_DOUBLE_CLICK_DISTANCE_PX = 8
 const SCATTER_ERASE_COMMIT_INTERVAL_MS = 16
 const SCATTER_PERF_REPORT_INTERVAL_MS = 1000
+const SCULPT_POLYGON_DOUBLE_CLICK_INTERVAL_MS = 320
+const SCULPT_POLYGON_DOUBLE_CLICK_DISTANCE_PX = 8
 
 function isScatterLeftDoubleClick(event: PointerEvent): boolean {
 	if (event.button !== 0) {
@@ -1159,7 +1163,24 @@ type SculptSessionState = {
 	touchedChunkKeys: Set<string>
 }
 
+type SculptPolygonSessionState = {
+	pointerId: number
+	nodeId: string
+	definition: GroundRuntimeDynamicMesh
+	groundObject: THREE.Object3D
+	points: THREE.Vector3[]
+	previewEnd: THREE.Vector3 | null
+}
+
+type SculptPolygonLeftClickState = {
+	atMs: number
+	clientX: number
+	clientY: number
+}
+
 let sculptSessionState: SculptSessionState | null = null
+	let sculptPolygonSession: SculptPolygonSessionState | null = null
+	let sculptPolygonLeftClickState: SculptPolygonLeftClickState | null = null
 	let sculptStrokePointerId: number | null = null
 	let sculptStrokeLastLocalPoint: THREE.Vector3 | null = null
 	let paintStrokePointerId: number | null = null
@@ -1188,26 +1209,10 @@ function resolveChunkCellsForDefinition(definition: GroundDynamicMesh): number {
 	return Math.max(4, Math.min(512, Math.trunc(candidate)))
 }
 
-function createStarShape(points = 5, outerRadius = 1, innerRadius = 0.5): THREE.Shape {
-	const shape = new THREE.Shape()
-	const step = Math.PI / points
-	let angle = -Math.PI / 2
-	shape.moveTo(Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius)
-	for (let i = 0; i < points * 2; i += 1) {
-		const radius = i % 2 === 0 ? innerRadius : outerRadius
-		angle += step
-		shape.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius)
-	}
-	shape.closePath()
-	return shape
-}
-
 function createBrushGeometry(shape: TerrainBrushShape | undefined): THREE.BufferGeometry {
 	switch (shape) {
-		case 'square':
+		case 'polygon':
 			return new THREE.PlaneGeometry(2, 2, 1, 1)
-		case 'star':
-			return new THREE.ShapeGeometry(createStarShape(5, 1, 0.5))
 		case 'circle':
 		default:
 			return new THREE.CircleGeometry(1, 64)
@@ -1482,6 +1487,34 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	scatterAreaPreviewGroup.add(scatterAreaPreviewFill)
 	scatterAreaPreviewGroup.add(scatterAreaPreviewOutline)
 
+	const terrainSculptPreviewGroup = new THREE.Group()
+	terrainSculptPreviewGroup.name = 'TerrainSculptPolygonPreview'
+	terrainSculptPreviewGroup.visible = false
+	terrainSculptPreviewGroup.renderOrder = 996
+
+	const terrainSculptPreviewFillMaterial = new THREE.MeshBasicMaterial({
+		color: 0x66bb6a,
+		transparent: true,
+		opacity: 0.2,
+		side: THREE.DoubleSide,
+		depthTest: false,
+		depthWrite: false,
+	})
+	const terrainSculptPreviewFill = new THREE.Mesh(new THREE.BufferGeometry(), terrainSculptPreviewFillMaterial)
+	terrainSculptPreviewFill.renderOrder = 996
+
+	const terrainSculptPreviewOutlineMaterial = new THREE.LineBasicMaterial({
+		color: 0x66bb6a,
+		transparent: true,
+		opacity: 0.95,
+		depthTest: false,
+		depthWrite: false,
+	})
+	const terrainSculptPreviewOutline = new THREE.Line(new THREE.BufferGeometry(), terrainSculptPreviewOutlineMaterial)
+	terrainSculptPreviewOutline.renderOrder = 997
+	terrainSculptPreviewGroup.add(terrainSculptPreviewFill)
+	terrainSculptPreviewGroup.add(terrainSculptPreviewOutline)
+
 	let scatterPreviewAssetId: string | null = null
 	let scatterPreviewObject: THREE.Object3D | null = null
 
@@ -1595,7 +1628,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function getActiveBrushShape(): TerrainBrushShape {
 		const value = options.brushShape.value
-		if (value === 'square' || value === 'star') {
+		if (value === 'polygon') {
 			return value
 		}
 		return 'circle'
@@ -1625,7 +1658,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		if (scatterModeEnabled()) {
 			const shape = resolveScatterBrushShape()
-			return shape === 'rectangle' || shape === 'line' || shape === 'polygon' ? 'square' : 'circle'
+			return shape === 'rectangle' || shape === 'line' || shape === 'polygon' ? 'polygon' : 'circle'
 		}
 		if (options.groundPanelTab.value === 'paint') {
 			return 'circle'
@@ -1655,6 +1688,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	const stopBrushShapeWatch = watch(options.brushShape, () => {
+		if (options.brushShape.value !== 'polygon') {
+			cancelSculptPolygonSession()
+		}
 		refreshBrushAppearance()
 	})
 	const stopScatterEraseModeWatch = watch(options.scatterEraseModeActive, () => {
@@ -1666,12 +1702,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	watch(options.scatterBrushShape, () => {
 		refreshBrushAppearance()
 	})
+	watch(options.brushOperation, () => {
+		refreshBrushAppearance()
+		syncTerrainSculptPreviewAppearance()
+	})
 	refreshBrushAppearance()
 
 	const stopTabWatch = watch(options.groundPanelTab, (tab) => {
 		if (tab === 'terrain' || tab === 'paint') {
 			cancelScatterPlacement()
 			cancelScatterErase()
+		}
+		if (tab !== 'terrain') {
+			cancelSculptPolygonSession()
 		}
 		if (tab === 'paint') {
 			const groundNode = getGroundNodeFromScene()
@@ -4159,6 +4202,212 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return !!options.raycaster.ray.intersectPlane(options.groundPlane, result)
 	}
 
+	function resolveGroundSurfacePointFromEvent(
+		event: PointerEvent,
+		definition: GroundRuntimeDynamicMesh,
+		groundObject: THREE.Object3D,
+	): THREE.Vector3 | null {
+		const camera = options.getCamera()
+		if (!camera || !options.canvasRef.value) {
+			return null
+		}
+		const rect = options.canvasRef.value.getBoundingClientRect()
+		if (rect.width === 0 || rect.height === 0) {
+			return null
+		}
+		options.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+		options.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+		options.raycaster.setFromCamera(options.pointer, camera)
+		const hit = options.raycaster.intersectObject(groundObject, true)[0] ?? null
+		if (hit?.point) {
+			return hit.point.clone()
+		}
+		if (!raycastGroundPoint(event, groundPointerHelper)) {
+			return null
+		}
+		const localPoint = groundPointerHelper.clone()
+		groundObject.worldToLocal(localPoint)
+		clampPointToGround(definition, localPoint)
+		localPoint.y = sampleGroundHeight(definition, localPoint.x, localPoint.z)
+		return groundObject.localToWorld(localPoint)
+	}
+
+	function isSculptPolygonLeftDoubleClick(event: PointerEvent): boolean {
+		if (event.button !== 0) {
+			return false
+		}
+		const now = Number.isFinite(event.timeStamp) ? Number(event.timeStamp) : Date.now()
+		const previous = sculptPolygonLeftClickState
+		sculptPolygonLeftClickState = {
+			atMs: now,
+			clientX: event.clientX,
+			clientY: event.clientY,
+		}
+		if (!previous) {
+			return false
+		}
+		const dt = now - previous.atMs
+		if (dt < 0 || dt > SCULPT_POLYGON_DOUBLE_CLICK_INTERVAL_MS) {
+			return false
+		}
+		const distance = Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY)
+		return distance <= SCULPT_POLYGON_DOUBLE_CLICK_DISTANCE_PX
+	}
+
+	function cancelSculptPolygonSession(): void {
+		sculptPolygonSession = null
+		sculptPolygonLeftClickState = null
+		clearTerrainSculptPreview()
+	}
+
+	function buildSculptPolygonLocalPoints(session: SculptPolygonSessionState): THREE.Vector3[] {
+		const points = session.points.map((point) => point.clone())
+		const previewEnd = session.previewEnd
+		const lastCommitted = points[points.length - 1] ?? null
+		if (previewEnd && (!lastCommitted || previewEnd.distanceToSquared(lastCommitted) > 1e-6)) {
+			points.push(previewEnd.clone())
+		}
+		return points.map((point) => session.groundObject.worldToLocal(point.clone()))
+	}
+
+	function applySculptPolygonSession(session: SculptPolygonSessionState): boolean {
+		const localPolygonPoints = buildSculptPolygonLocalPoints(session)
+		if (localPolygonPoints.length < 3) {
+			return false
+		}
+		const center = new THREE.Vector3()
+		for (const point of localPolygonPoints) {
+			center.add(point)
+		}
+		center.multiplyScalar(1 / localPolygonPoints.length)
+		const operation = options.brushOperation.value
+		if (!operation) {
+			return false
+		}
+		const targetHeight = operation === 'flatten'
+			? sampleGroundHeight(session.definition, center.x, center.z)
+			: operation === 'flatten-zero'
+				? 0
+				: undefined
+		const modified = sculptGround(session.definition, {
+			point: center,
+			radius: 0,
+			strength: options.brushStrength.value * 0.4,
+			depth: options.brushDepth.value,
+			slope: options.brushSlope.value,
+			shape: 'polygon',
+			operation,
+			targetHeight,
+			polygonPoints: localPolygonPoints,
+		})
+		if (!modified) {
+			return false
+		}
+		let minX = Number.POSITIVE_INFINITY
+		let maxX = Number.NEGATIVE_INFINITY
+		let minZ = Number.POSITIVE_INFINITY
+		let maxZ = Number.NEGATIVE_INFINITY
+		for (const point of localPolygonPoints) {
+			minX = Math.min(minX, point.x)
+			maxX = Math.max(maxX, point.x)
+			minZ = Math.min(minZ, point.z)
+			maxZ = Math.max(maxZ, point.z)
+		}
+		const halfWidth = session.definition.width * 0.5
+		const halfDepth = session.definition.depth * 0.5
+		const region: GroundGeometryUpdateRegion = {
+			minRow: Math.max(0, Math.floor((minZ + halfDepth) / session.definition.cellSize)),
+			maxRow: Math.min(session.definition.rows, Math.ceil((maxZ + halfDepth) / session.definition.cellSize)),
+			minColumn: Math.max(0, Math.floor((minX + halfWidth) / session.definition.cellSize)),
+			maxColumn: Math.min(session.definition.columns, Math.ceil((maxX + halfWidth) / session.definition.cellSize)),
+		}
+		if (sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
+			sculptSessionState.dirty = true
+			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
+		}
+		updateGroundMeshRegion(session.groundObject, session.definition, region)
+		const padded: GroundGeometryUpdateRegion = {
+			minRow: Math.max(0, region.minRow - 2),
+			maxRow: Math.min(session.definition.rows, region.maxRow + 2),
+			minColumn: Math.max(0, region.minColumn - 2),
+			maxColumn: Math.min(session.definition.columns, region.maxColumn + 2),
+		}
+		stitchGroundChunkNormals(session.groundObject, session.definition, padded)
+		commitSculptSession(getGroundNodeFromScene())
+		return true
+	}
+
+	function beginPolygonSculpt(event: PointerEvent): boolean {
+		if (!options.brushOperation.value) {
+			return false
+		}
+		const groundNode = getGroundNodeFromScene()
+		if (groundNode?.dynamicMesh?.type !== 'Ground') {
+			return false
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		const groundObject = getGroundObject()
+		if (!definition || !groundObject) {
+			return false
+		}
+		const worldPoint = resolveGroundSurfacePointFromEvent(event, definition, groundObject)
+		if (!worldPoint) {
+			return false
+		}
+		ensureSculptSession(definition, groundNode.id)
+		if (!sculptPolygonSession || sculptPolygonSession.nodeId !== groundNode.id) {
+			sculptPolygonSession = {
+				pointerId: event.pointerId,
+				nodeId: groundNode.id,
+				definition,
+				groundObject,
+				points: [],
+				previewEnd: null,
+			}
+		}
+		const session = sculptPolygonSession
+		session.pointerId = event.pointerId
+		const lastPoint = session.points[session.points.length - 1] ?? null
+		if (lastPoint && lastPoint.distanceToSquared(worldPoint) <= 1e-6) {
+			session.previewEnd = worldPoint.clone()
+			refreshTerrainSculptPolygonPreview()
+			event.preventDefault()
+			event.stopPropagation()
+			event.stopImmediatePropagation()
+			return true
+		}
+		session.points.push(worldPoint.clone())
+		session.previewEnd = worldPoint.clone()
+		refreshTerrainSculptPolygonPreview()
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
+	function updatePolygonSculpt(event: PointerEvent): boolean {
+		if (!sculptPolygonSession) {
+			if (getActiveBrushShape() === 'polygon') {
+				clearTerrainSculptPreview()
+			}
+			return false
+		}
+		const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+		if (isCameraNavActive || sculptPolygonSession.points.length < 1) {
+			return false
+		}
+		const worldPoint = resolveGroundSurfacePointFromEvent(event, sculptPolygonSession.definition, sculptPolygonSession.groundObject)
+		if (!worldPoint) {
+			return false
+		}
+		sculptPolygonSession.previewEnd = worldPoint.clone()
+		refreshTerrainSculptPolygonPreview()
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
 	function clampPointToGround(definition: GroundDynamicMesh, point: THREE.Vector3): THREE.Vector3 {
 		const halfWidth = definition.width * 0.5
 		const halfDepth = definition.depth * 0.5
@@ -4414,6 +4663,28 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterAreaPreviewGroup.visible = false
 	}
 
+	function getTerrainSculptPreviewColor(): number {
+		const operation = options.brushOperation.value
+		if (operation === 'depress') {
+			return 0xef5350
+		}
+		if (operation === 'raise') {
+			return 0x66bb6a
+		}
+		return 0x5fb0ff
+	}
+
+	function syncTerrainSculptPreviewAppearance(): void {
+		terrainSculptPreviewFillMaterial.color.setHex(getTerrainSculptPreviewColor())
+		terrainSculptPreviewOutlineMaterial.color.setHex(getTerrainSculptPreviewColor())
+	}
+
+	function clearTerrainSculptPreview(): void {
+		terrainSculptPreviewFill.visible = false
+		terrainSculptPreviewOutline.visible = false
+		terrainSculptPreviewGroup.visible = false
+	}
+
 	function createScatterAreaOutlineGeometry(points: THREE.Vector3[], closed: boolean): THREE.BufferGeometry | null {
 		if (points.length < 2) {
 			return null
@@ -4541,6 +4812,39 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		scatterAreaPreviewOutline.visible = true
 		scatterAreaPreviewGroup.visible = true
+	}
+
+	function refreshTerrainSculptPolygonPreview(): void {
+		if (!sculptPolygonSession) {
+			clearTerrainSculptPreview()
+			return
+		}
+		const points = sculptPolygonSession.points.map((point) => point.clone())
+		const previewEnd = sculptPolygonSession.previewEnd
+		const lastCommitted = points[points.length - 1] ?? null
+		if (previewEnd && (!lastCommitted || previewEnd.distanceToSquared(lastCommitted) > 1e-6)) {
+			points.push(previewEnd.clone())
+		}
+		if (points.length < 2) {
+			clearTerrainSculptPreview()
+			return
+		}
+		syncTerrainSculptPreviewAppearance()
+		const outlineGeometry = createScatterAreaOutlineGeometry(points, points.length >= 3)
+		if (!outlineGeometry) {
+			clearTerrainSculptPreview()
+			return
+		}
+		setScatterAreaPreviewGeometry(terrainSculptPreviewOutline, outlineGeometry)
+		const fillGeometry = points.length >= 3 ? createScatterAreaFillGeometry(points) : null
+		if (fillGeometry) {
+			setScatterAreaPreviewGeometry(terrainSculptPreviewFill, fillGeometry)
+			terrainSculptPreviewFill.visible = true
+		} else {
+			terrainSculptPreviewFill.visible = false
+		}
+		terrainSculptPreviewOutline.visible = true
+		terrainSculptPreviewGroup.visible = true
 	}
 
 	function createScatterPreviewInstance(
@@ -6375,6 +6679,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const intersects = options.raycaster.intersectObject(groundObject, true)
 		const hit = intersects[0]
 		if (hit) {
+			if (options.groundPanelTab.value === 'terrain' && getActiveBrushShape() === 'polygon' && !scatterModeEnabled()) {
+				brushMesh.visible = false
+				return
+			}
 			let targetPoint = hit.point.clone()
 			if (scatterModeEnabled()) {
 				const snapped = resolveScatterPointFromEvent(event, definition, groundObject)
@@ -6411,6 +6719,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function performSculpt(event: PointerEvent) {
+		if (getActiveBrushShape() === 'polygon') {
+			return
+		}
 		if (!brushMesh.visible) return
 
 		const groundNode = getGroundNodeFromScene()
@@ -6685,6 +6996,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition) {
 			return false
 		}
+		if (getActiveBrushShape() === 'polygon') {
+			return beginPolygonSculpt(event)
+		}
 		ensureSculptSession(definition, groundNode.id)
 
 		isSculpting.value = true
@@ -6723,6 +7037,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function finalizeSculpt(event: PointerEvent): boolean {
+		if (sculptPolygonSession) {
+			if (event.button === 0 && event.pointerId === sculptPolygonSession.pointerId) {
+				if (isSculptPolygonLeftDoubleClick(event) && sculptPolygonSession.points.length >= 3) {
+					sculptPolygonSession.previewEnd = null
+					refreshTerrainSculptPolygonPreview()
+					const completedSession = sculptPolygonSession
+					cancelSculptPolygonSession()
+					return applySculptPolygonSession(completedSession)
+				}
+				return true
+			}
+		}
 		if (!isSculpting.value) {
 			return false
 		}
@@ -6915,6 +7241,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 
+		if (updatePolygonSculpt(event)) {
+			return true
+		}
+
 		if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
 			const definition = getGroundDynamicMeshDefinition()
 			if (!definition) {
@@ -7005,6 +7335,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handlePointerCancel(event: PointerEvent): boolean {
+		if (sculptPolygonSession && event.pointerId === sculptPolygonSession.pointerId) {
+			cancelSculptPolygonSession()
+			return true
+		}
 		if (scatterSession && event.pointerId === scatterSession.pointerId) {
 			cancelScatterPlacement()
 			return true
@@ -7108,6 +7442,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function handleActiveBuildToolChange(tool: BuildTool | null) {
 		if (tool !== 'terrain') {
+			cancelSculptPolygonSession()
 			groundSelectionDragState = null
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()
@@ -7132,10 +7467,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		;(scatterAreaPreviewFill.material as THREE.Material).dispose()
 		scatterAreaPreviewOutline.geometry.dispose()
 		;(scatterAreaPreviewOutline.material as THREE.Material).dispose()
+		terrainSculptPreviewFill.geometry.dispose()
+		terrainSculptPreviewFillMaterial.dispose()
+		terrainSculptPreviewOutline.geometry.dispose()
+		terrainSculptPreviewOutlineMaterial.dispose()
 		scatterAreaPreviewGroup.clear()
+		terrainSculptPreviewGroup.clear()
 		groundSelectionGroup.clear()
 		scatterPreviewGroup.clear()
 		sculptSessionState = null
+		sculptPolygonSession = null
 		pendingTerrainPaintFlush = null
 		resetScatterStoreState('dispose')
 	}
@@ -7143,6 +7484,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	return {
 		brushMesh,
 		scatterAreaPreviewGroup,
+		terrainSculptPreviewGroup,
 		scatterPreviewGroup,
 		groundSelectionGroup,
 		groundSelection,

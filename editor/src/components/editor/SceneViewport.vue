@@ -471,6 +471,8 @@ const { panelVisibility, isSceneReady, sceneGraphStructureVersion, sceneNodeProp
 const {
   brushRadius,
   brushStrength,
+  brushDepth,
+  brushSlope,
   brushShape,
   brushOperation,
   groundPanelTab,
@@ -3323,6 +3325,8 @@ const groundEditor = createGroundEditor({
   getScene: () => scene,
   brushRadius,
   brushStrength,
+  brushDepth,
+  brushSlope,
   brushShape,
   brushOperation,
   groundPanelTab,
@@ -3369,6 +3373,7 @@ const groundEditor = createGroundEditor({
 const {
   brushMesh,
   scatterAreaPreviewGroup,
+  terrainSculptPreviewGroup,
   scatterPreviewGroup,
   groundSelectionGroup,
   groundSelection,
@@ -7546,7 +7551,17 @@ function handleGroundBrushStrengthUpdate(value: number) {
   terrainStore.brushStrength = Number.isFinite(next) ? Math.min(10, Math.max(0.1, next)) : terrainStore.brushStrength
 }
 
-function handleGroundBrushShapeUpdate(value: 'circle' | 'square' | 'star') {
+function handleGroundBrushDepthUpdate(value: number) {
+  const next = Number(value)
+  terrainStore.brushDepth = Number.isFinite(next) ? Math.min(50, Math.max(0.1, next)) : terrainStore.brushDepth
+}
+
+function handleGroundBrushSlopeUpdate(value: number) {
+  const next = Number(value)
+  terrainStore.brushSlope = Number.isFinite(next) ? Math.min(1, Math.max(0, next)) : terrainStore.brushSlope
+}
+
+function handleGroundBrushShapeUpdate(value: 'circle' | 'polygon') {
   terrainStore.brushShape = value
 }
 
@@ -12521,6 +12536,7 @@ function initScene() {
   scene.add(axesHelper)
   scene.add(brushMesh)
   scene.add(scatterAreaPreviewGroup)
+  scene.add(terrainSculptPreviewGroup)
   scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
@@ -13387,6 +13403,7 @@ function disposeScene() {
 
   groundSelectionGroup.removeFromParent()
   scatterAreaPreviewGroup.removeFromParent()
+  terrainSculptPreviewGroup.removeFromParent()
   vertexOverlayGroup.removeFromParent()
   clearVertexSnapMarkers()
 
@@ -21246,6 +21263,8 @@ defineExpose<SceneViewportHandle>({
         :ground-panel-tab="groundPanelTab"
         :ground-brush-radius="brushRadius"
         :ground-brush-strength="brushStrength"
+        :ground-brush-depth="brushDepth"
+        :ground-brush-slope="brushSlope"
         :ground-brush-shape="brushShape"
         :ground-brush-operation="brushOperation"
         :ground-noise-strength="groundNoiseStrength"
@@ -21290,6 +21309,8 @@ defineExpose<SceneViewportHandle>({
           @activate-ground-tab="handleActivateGroundTab"
           @update:ground-brush-radius="handleGroundBrushRadiusUpdate"
           @update:ground-brush-strength="handleGroundBrushStrengthUpdate"
+          @update:ground-brush-depth="handleGroundBrushDepthUpdate"
+          @update:ground-brush-slope="handleGroundBrushSlopeUpdate"
           @update:ground-brush-shape="handleGroundBrushShapeUpdate"
           @update:ground-brush-operation="handleGroundBrushOperationUpdate"
           @update:ground-noise-strength="handleGroundNoiseStrengthUpdate"
