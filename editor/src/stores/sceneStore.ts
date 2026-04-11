@@ -2357,6 +2357,27 @@ function rebuildLandformNodeForTerrain(store: {
     materialConfigId: mesh.materialConfigId ?? rebuilt.definition.materialConfigId ?? null,
   }
   node.position = createVector(rebuilt.center.x, rebuilt.center.y, rebuilt.center.z)
+
+  const runtime = getRuntimeObject(nodeId)
+  if (runtime) {
+    runtime.position.set(
+      Number(node.position?.x) || 0,
+      Number(node.position?.y) || 0,
+      Number(node.position?.z) || 0,
+    )
+    runtime.rotation.set(
+      Number(node.rotation?.x) || 0,
+      Number(node.rotation?.y) || 0,
+      Number(node.rotation?.z) || 0,
+    )
+    runtime.scale.set(
+      Number(node.scale?.x) || 1,
+      Number(node.scale?.y) || 1,
+      Number(node.scale?.z) || 1,
+    )
+    updateLandformGroup(runtime, node.dynamicMesh as LandformDynamicMesh)
+  }
+
   return true
 }
 

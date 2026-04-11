@@ -1,4 +1,4 @@
-import { Object3D, Shape, ShapeGeometry, Vector2, Vector3 } from 'three'
+import { Object3D, Shape, ShapeGeometry, ShapeUtils, Vector2, Vector3 } from 'three'
 import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import {
@@ -39,6 +39,9 @@ const LANDFORM_SUPPORT_RING_MIN_WIDTH = 0.2
 const LANDFORM_SUPPORT_RING_MAX_WIDTH = 1.5
 const LANDFORM_SUPPORT_RING_WIDTH_SCALE = 0.35
 const LANDFORM_SUPPORT_RING_EDGE_LENGTH_SCALE = 1.5
+const LANDFORM_INTERIOR_SIMPLIFICATION_PASSES = 6
+const LANDFORM_INTERIOR_SIMPLIFICATION_MIN_AREA = 1e-5
+const LANDFORM_INTERIOR_SIMPLIFICATION_MAX_SAMPLE_DIVISIONS = 3
 
 type GroundTransform = {
   position: { x: number; y: number; z: number }
@@ -286,6 +289,27 @@ function buildShapeTriangulation(points: Vector3[]): { vertices: Vector2[]; indi
   return { vertices, indices }
 }
 
+function buildContourTriangulation(points: Vector2[]): { indices: number[] } | null {
+  if (points.length < 3) {
+    return null
+  }
+
+  const faces = ShapeUtils.triangulateShape(points, [])
+  if (!Array.isArray(faces) || !faces.length) {
+    return null
+  }
+
+  const indices: number[] = []
+  faces.forEach((face) => {
+    if (!Array.isArray(face) || face.length !== 3) {
+      return
+    }
+    indices.push(face[0]!, face[1]!, face[2]!)
+  })
+
+  return indices.length >= 3 ? { indices } : null
+}
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
     return 0
@@ -313,6 +337,20 @@ function pointToSegmentDistance2D(
   const closestX = startX + abX * projection
   const closestZ = startZ + abZ * projection
   return Math.hypot(pointX - closestX, pointZ - closestZ)
+}
+
+function computeSignedArea2D(points: Vector2[]): number {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    area += current.x * next.y - next.x * current.y
+  }
+  return area * 0.5
+}
+
+function computeTriangleSignedArea2D(a: Vector2, b: Vector2, c: Vector2): number {
+  return ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) * 0.5
 }
 
 function distanceToFootprintBoundary(pointX: number, pointZ: number, footprint: Array<[number, number]>): number {
@@ -652,6 +690,27 @@ function buildLandformBoundaryDistanceResolver(
   }
 }
 
+function buildLandformTriangleBandSamples(
+  a: Vector2,
+  b: Vector2,
+  c: Vector2,
+): Array<{ x: number; z: number }> {
+  const edgeMidAB = { x: (a.x + b.x) * 0.5, z: (a.y + b.y) * 0.5 }
+  const edgeMidBC = { x: (b.x + c.x) * 0.5, z: (b.y + c.y) * 0.5 }
+  const edgeMidCA = { x: (c.x + a.x) * 0.5, z: (c.y + a.y) * 0.5 }
+  const centroid = { x: (a.x + b.x + c.x) / 3, z: (a.y + b.y + c.y) / 3 }
+
+  return [
+    edgeMidAB,
+    edgeMidBC,
+    edgeMidCA,
+    centroid,
+    { x: (centroid.x + edgeMidAB.x) * 0.5, z: (centroid.z + edgeMidAB.z) * 0.5 },
+    { x: (centroid.x + edgeMidBC.x) * 0.5, z: (centroid.z + edgeMidBC.z) * 0.5 },
+    { x: (centroid.x + edgeMidCA.x) * 0.5, z: (centroid.z + edgeMidCA.z) * 0.5 },
+  ]
+}
+
 function resolveLandformTriangleBoundaryBand(
   a: Vector2,
   b: Vector2,
@@ -678,28 +737,32 @@ function resolveLandformTriangleBoundaryBand(
     return 'none'
   }
 
-  const testPoints = [
-    { x: a.x, z: a.y },
-    { x: b.x, z: b.y },
-    { x: c.x, z: c.y },
-    { x: (a.x + b.x) * 0.5, z: (a.y + b.y) * 0.5 },
-    { x: (b.x + c.x) * 0.5, z: (b.y + c.y) * 0.5 },
-    { x: (c.x + a.x) * 0.5, z: (c.y + a.y) * 0.5 },
-    { x: (a.x + b.x + c.x) / 3, z: (a.y + b.y + c.y) / 3 },
-  ]
+  const testPoints = buildLandformTriangleBandSamples(a, b, c)
 
   let minDistance = Number.POSITIVE_INFINITY
+  let featherSampleCount = 0
+  let supportSampleCount = 0
   testPoints.forEach((point) => {
-    minDistance = Math.min(minDistance, resolveDistance(point.x, point.z))
+    const distance = resolveDistance(point.x, point.z)
+    minDistance = Math.min(minDistance, distance)
+    if (normalizedFeatherWidth > 1e-6 && distance <= normalizedFeatherWidth) {
+      featherSampleCount += 1
+    }
+    if (distance <= protectedDistance) {
+      supportSampleCount += 1
+    }
   })
 
   if (minDistance > protectedDistance) {
     return 'none'
   }
-  if (normalizedFeatherWidth > 1e-6 && minDistance <= normalizedFeatherWidth) {
+  if (normalizedFeatherWidth > 1e-6 && featherSampleCount >= 2) {
     return 'feather'
   }
-  return normalizedSupportRingWidth > 1e-6 ? 'support' : 'none'
+  if (supportSampleCount >= 1 && normalizedSupportRingWidth > 1e-6) {
+    return 'support'
+  }
+  return 'none'
 }
 
 function requiresLandformProtectedBandRefinement(
@@ -759,7 +822,7 @@ function refineLandformTriangulationForGround(
     }
     : null
 
-  return refineTriangulation(
+  const refined = refineTriangulation(
     triangulation.vertices,
     triangulation.indices,
     targetEdgeLength,
@@ -789,6 +852,18 @@ function refineLandformTriangulationForGround(
           : (enableFeather ? LANDFORM_MAX_TRIANGLE_SAMPLE_DIVISIONS : LANDFORM_COMPACT_MAX_SAMPLE_DIVISIONS),
       )
     },
+  )
+
+  if (!enableFeather || !normalizedFeatherOptions) {
+    return refined
+  }
+
+  return simplifyLandformInteriorTriangulation(
+    refined,
+    sampleHeight,
+    normalizedFeatherOptions,
+    interiorHeightTolerance,
+    interiorTargetEdgeLength,
   )
 }
 
@@ -837,6 +912,265 @@ function compactLandformTriangulation(
     vertices: nextVertices,
     indices: remappedIndices,
   }
+}
+
+function buildLandformTriangleList(indices: number[]): Array<[number, number, number]> {
+  const triangles: Array<[number, number, number]> = []
+  for (let index = 0; index + 2 < indices.length; index += 3) {
+    triangles.push([indices[index]!, indices[index + 1]!, indices[index + 2]!])
+  }
+  return triangles
+}
+
+function buildLandformBoundaryVertexSet(indices: number[]): Set<number> {
+  const edgeCounts = new Map<string, number>()
+
+  const recordEdge = (a: number, b: number) => {
+    const min = Math.min(a, b)
+    const max = Math.max(a, b)
+    const key = `${min}:${max}`
+    edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1)
+  }
+
+  for (let index = 0; index + 2 < indices.length; index += 3) {
+    const i0 = indices[index]!
+    const i1 = indices[index + 1]!
+    const i2 = indices[index + 2]!
+    recordEdge(i0, i1)
+    recordEdge(i1, i2)
+    recordEdge(i2, i0)
+  }
+
+  const boundaryVertices = new Set<number>()
+  edgeCounts.forEach((count, key) => {
+    if (count !== 1) {
+      return
+    }
+    const parts = key.split(':')
+    const a = Number(parts[0])
+    const b = Number(parts[1])
+    if (Number.isInteger(a) && Number.isInteger(b)) {
+      boundaryVertices.add(a)
+      boundaryVertices.add(b)
+    }
+  })
+
+  return boundaryVertices
+}
+
+function orderLandformInteriorVertexRing(
+  vertexIndex: number,
+  triangles: Array<[number, number, number]>,
+  incidentTriangleIndices: number[],
+): number[] | null {
+  const adjacency = new Map<number, Set<number>>()
+
+  incidentTriangleIndices.forEach((triangleIndex) => {
+    const triangle = triangles[triangleIndex]
+    if (!triangle) {
+      return
+    }
+    const neighbors = triangle.filter((entry) => entry !== vertexIndex)
+    if (neighbors.length !== 2) {
+      return
+    }
+    const [a, b] = neighbors
+    if (a === undefined || b === undefined || a === b) {
+      return
+    }
+    const aNeighbors = adjacency.get(a) ?? new Set<number>()
+    aNeighbors.add(b)
+    adjacency.set(a, aNeighbors)
+    const bNeighbors = adjacency.get(b) ?? new Set<number>()
+    bNeighbors.add(a)
+    adjacency.set(b, bNeighbors)
+  })
+
+  if (adjacency.size < 3) {
+    return null
+  }
+  for (const neighbors of adjacency.values()) {
+    if (neighbors.size !== 2) {
+      return null
+    }
+  }
+
+  const start = adjacency.keys().next().value as number | undefined
+  if (start === undefined) {
+    return null
+  }
+
+  const ordered: number[] = []
+  let previous: number | null = null
+  let current = start
+  while (true) {
+    ordered.push(current)
+    const neighbors = [...(adjacency.get(current) ?? [])]
+    const next = neighbors.find((candidate) => candidate !== previous)
+    if (next === undefined) {
+      return null
+    }
+    previous = current
+    current = next
+    if (current === start) {
+      break
+    }
+    if (ordered.length > adjacency.size) {
+      return null
+    }
+  }
+
+  return ordered.length === adjacency.size ? ordered : null
+}
+
+function simplifyLandformInteriorTriangulation(
+  triangulation: { vertices: Vector2[]; indices: number[] },
+  sampleHeight: LandformHeightSampler,
+  featherOptions: LandformFeatherRefinementOptions,
+  interiorHeightTolerance: number,
+  interiorTargetEdgeLength: number,
+): { vertices: Vector2[]; indices: number[] } {
+  if (triangulation.vertices.length < 3 || triangulation.indices.length < 3) {
+    return triangulation
+  }
+
+  const protectedDistance = Number.isFinite(featherOptions.protectedDistance)
+    ? Math.max(0, featherOptions.protectedDistance as number)
+    : 0
+  const resolveDistance = buildLandformBoundaryDistanceResolver(featherOptions)
+  if (!resolveDistance || protectedDistance <= 1e-6) {
+    return triangulation
+  }
+
+  let indices = [...triangulation.indices]
+  const vertices = triangulation.vertices.map((entry) => entry.clone())
+  const distanceCache = new Map<number, number>()
+
+  const resolveVertexDistance = (vertexIndex: number): number => {
+    const cached = distanceCache.get(vertexIndex)
+    if (cached !== undefined) {
+      return cached
+    }
+    const vertex = vertices[vertexIndex]
+    if (!vertex) {
+      return 0
+    }
+    const distance = resolveDistance(vertex.x, vertex.y)
+    distanceCache.set(vertexIndex, distance)
+    return distance
+  }
+
+  const isProtectedVertex = (vertexIndex: number): boolean => resolveVertexDistance(vertexIndex) <= protectedDistance
+
+  for (let pass = 0; pass < LANDFORM_INTERIOR_SIMPLIFICATION_PASSES; pass += 1) {
+    const triangles = buildLandformTriangleList(indices)
+    const incidentByVertex = new Map<number, number[]>()
+
+    triangles.forEach((triangle, triangleIndex) => {
+      triangle.forEach((vertexIndex) => {
+        const incident = incidentByVertex.get(vertexIndex)
+        if (incident) {
+          incident.push(triangleIndex)
+        } else {
+          incidentByVertex.set(vertexIndex, [triangleIndex])
+        }
+      })
+    })
+
+    const boundaryVertices = buildLandformBoundaryVertexSet(indices)
+    let changed = false
+
+    for (let vertexIndex = 0; vertexIndex < vertices.length; vertexIndex += 1) {
+      if (boundaryVertices.has(vertexIndex) || isProtectedVertex(vertexIndex)) {
+        continue
+      }
+
+      const incidentTriangleIndices = incidentByVertex.get(vertexIndex) ?? []
+      if (incidentTriangleIndices.length < 3) {
+        continue
+      }
+
+      const ring = orderLandformInteriorVertexRing(vertexIndex, triangles, incidentTriangleIndices)
+      if (!ring || ring.some((entry) => boundaryVertices.has(entry) || isProtectedVertex(entry))) {
+        continue
+      }
+
+      let ringPoints = ring.map((entry) => vertices[entry]!.clone())
+      if (computeSignedArea2D(ringPoints) < 0) {
+        ring.reverse()
+        ringPoints = ring.map((entry) => vertices[entry]!.clone())
+      }
+
+      const retriangulated = buildContourTriangulation(ringPoints)
+      if (!retriangulated) {
+        continue
+      }
+
+      const nextTriangles: Array<[number, number, number]> = []
+      let valid = true
+      for (let index = 0; index + 2 < retriangulated.indices.length; index += 3) {
+        const i0 = ring[retriangulated.indices[index]!]
+        const i1 = ring[retriangulated.indices[index + 1]!]
+        const i2 = ring[retriangulated.indices[index + 2]!]
+        if (i0 === undefined || i1 === undefined || i2 === undefined || i0 === i1 || i1 === i2 || i0 === i2) {
+          valid = false
+          break
+        }
+
+        const v0 = vertices[i0]!
+        const v1 = vertices[i1]!
+        const v2 = vertices[i2]!
+        if (Math.abs(computeTriangleSignedArea2D(v0, v1, v2)) <= LANDFORM_INTERIOR_SIMPLIFICATION_MIN_AREA) {
+          valid = false
+          break
+        }
+        if (resolveLandformTriangleBoundaryBand(v0, v1, v2, featherOptions) !== 'none') {
+          valid = false
+          break
+        }
+        if (requiresGroundConformanceRefinement(
+          sampleHeight,
+          v0,
+          v1,
+          v2,
+          interiorHeightTolerance,
+          interiorTargetEdgeLength,
+          LANDFORM_INTERIOR_SIMPLIFICATION_MAX_SAMPLE_DIVISIONS,
+        )) {
+          valid = false
+          break
+        }
+
+        nextTriangles.push([i0, i1, i2])
+      }
+
+      if (!valid || nextTriangles.length >= incidentTriangleIndices.length) {
+        continue
+      }
+
+      const removedTriangles = new Set<number>(incidentTriangleIndices)
+      const nextIndices: number[] = []
+      triangles.forEach((triangle, triangleIndex) => {
+        if (removedTriangles.has(triangleIndex)) {
+          return
+        }
+        nextIndices.push(triangle[0], triangle[1], triangle[2])
+      })
+      nextTriangles.forEach((triangle) => {
+        nextIndices.push(triangle[0], triangle[1], triangle[2])
+      })
+
+      indices = nextIndices
+      changed = true
+      break
+    }
+
+    if (!changed) {
+      break
+    }
+  }
+
+  return compactLandformTriangulation({ vertices, indices })
 }
 
 function refineTriangulation(
