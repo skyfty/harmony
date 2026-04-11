@@ -24,6 +24,7 @@ import {
 	type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import {
+	buildSmoothedSculptPolygonContour,
 	sculptGround,
 	sampleGroundHeight,
 	resolveGroundEffectiveHeightAtVertex,
@@ -4271,6 +4272,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return points.map((point) => session.groundObject.worldToLocal(point.clone()))
 	}
 
+	function resolveTerrainSculptDisplayPoints(points: THREE.Vector3[], definition: GroundDynamicMesh): THREE.Vector3[] {
+		if (points.length < 3) {
+			return points
+		}
+		const operation = options.brushOperation.value
+		if (operation !== 'raise' && operation !== 'depress') {
+			return points
+		}
+		const rounded = buildSmoothedSculptPolygonContour(points, { cellSize: definition.cellSize })
+		return rounded.length >= 3 ? rounded : points
+	}
+
 	function applySculptPolygonSession(session: SculptPolygonSessionState): boolean {
 		const localPolygonPoints = buildSculptPolygonLocalPoints(session)
 		if (localPolygonPoints.length < 3) {
@@ -4304,11 +4317,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!modified) {
 			return false
 		}
+		const regionPoints = (operation === 'raise' || operation === 'depress')
+			? buildSmoothedSculptPolygonContour(localPolygonPoints, { cellSize: session.definition.cellSize })
+			: localPolygonPoints
 		let minX = Number.POSITIVE_INFINITY
 		let maxX = Number.NEGATIVE_INFINITY
 		let minZ = Number.POSITIVE_INFINITY
 		let maxZ = Number.NEGATIVE_INFINITY
-		for (const point of localPolygonPoints) {
+		for (const point of regionPoints) {
 			minX = Math.min(minX, point.x)
 			maxX = Math.max(maxX, point.x)
 			minZ = Math.min(minZ, point.z)
@@ -4327,11 +4343,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
 		}
 		updateGroundMeshRegion(session.groundObject, session.definition, region)
+		const seamPaddingCells = operation === 'raise' || operation === 'depress'
+			? Math.max(4, Math.ceil(Math.max(session.definition.cellSize * 4, options.brushDepth.value * (0.75 + options.brushSlope.value)) / session.definition.cellSize))
+			: 2
 		const padded: GroundGeometryUpdateRegion = {
-			minRow: Math.max(0, region.minRow - 2),
-			maxRow: Math.min(session.definition.rows, region.maxRow + 2),
-			minColumn: Math.max(0, region.minColumn - 2),
-			maxColumn: Math.min(session.definition.columns, region.maxColumn + 2),
+			minRow: Math.max(0, region.minRow - seamPaddingCells),
+			maxRow: Math.min(session.definition.rows, region.maxRow + seamPaddingCells),
+			minColumn: Math.max(0, region.minColumn - seamPaddingCells),
+			maxColumn: Math.min(session.definition.columns, region.maxColumn + seamPaddingCells),
 		}
 		stitchGroundChunkNormals(session.groundObject, session.definition, padded)
 		commitSculptSession(getGroundNodeFromScene())
@@ -4831,14 +4850,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			clearTerrainSculptPreview()
 			return
 		}
+		const displayPoints = resolveTerrainSculptDisplayPoints(points, sculptPolygonSession.definition)
 		syncTerrainSculptPreviewAppearance()
-		const outlineGeometry = createScatterAreaOutlineGeometry(points, points.length >= 3)
+		const outlineGeometry = createScatterAreaOutlineGeometry(displayPoints, displayPoints.length >= 3)
 		if (!outlineGeometry) {
 			clearTerrainSculptPreview()
 			return
 		}
 		setScatterAreaPreviewGeometry(terrainSculptPreviewOutline, outlineGeometry)
-		const fillGeometry = points.length >= 3 ? createScatterAreaFillGeometry(points) : null
+		const fillGeometry = displayPoints.length >= 3 ? createScatterAreaFillGeometry(displayPoints) : null
 		if (fillGeometry) {
 			setScatterAreaPreviewGeometry(terrainSculptPreviewFill, fillGeometry)
 			terrainSculptPreviewFill.visible = true

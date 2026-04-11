@@ -271,7 +271,6 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
-          :disabled="radiusStrengthDisabled"
           class="numeric-input"
           @blur="commitBrushRadiusInput"
           @keydown.enter.prevent="commitBrushRadiusInput"
@@ -291,7 +290,6 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
-          :disabled="radiusStrengthDisabled"
           class="numeric-input"
           @blur="commitBrushStrengthInput"
           @keydown.enter.prevent="commitBrushStrengthInput"
@@ -313,7 +311,6 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
-          :disabled="depthSlopeDisabled"
           class="numeric-input"
           @blur="commitBrushDepthInput"
           @keydown.enter.prevent="commitBrushDepthInput"
@@ -332,7 +329,6 @@ function commitNoiseStrengthInput() {
           density="compact"
           hide-details
           inputmode="decimal"
-          :disabled="depthSlopeDisabled"
           class="numeric-input"
           @blur="commitBrushSlopeInput"
           @keydown.enter.prevent="commitBrushSlopeInput"
