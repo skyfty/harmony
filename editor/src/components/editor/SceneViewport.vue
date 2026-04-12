@@ -3371,6 +3371,9 @@ const groundEditor = createGroundEditor({
   onScatterEraseStart: () => {
     scatterEraseMenuOpen.value = false
   },
+  onScatterPlacementStart: () => {
+    groundScatterMenuOpen.value = false
+  },
 })
 
 const {

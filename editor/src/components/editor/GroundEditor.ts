@@ -135,6 +135,7 @@ export type GroundEditorOptions = {
 	activeBuildTool: Ref<BuildTool | null>
 	resolveAutoOverlayPlan?: (event: PointerEvent) => AutoOverlayBuildPlan | null
 	onScatterEraseStart?: () => void
+	onScatterPlacementStart?: () => void
 	scatterEraseModeActive: Ref<boolean>
 	resolveVertexSnapPoint?: (
 		event: PointerEvent,
@@ -5733,6 +5734,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 									applyScatterPlacement(pt, { yaw: 0 })
 								}
 								queueScatterSidecarSave()
+								options.onScatterPlacementStart?.()
 							} finally {
 								scatterSession = previousSession
 							}
@@ -5837,6 +5839,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}`,
 			previewInstances: [],
 		}
+			options.onScatterPlacementStart?.()
 		if (brushShape === 'circle') {
 			traceScatterPath(startPoint)
 		} else {
