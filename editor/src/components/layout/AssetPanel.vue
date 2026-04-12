@@ -41,6 +41,7 @@ import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@/types/material'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
+import { getAssetTypeIcon, getAssetTypePresentation } from '@/utils/assetTypePresentation'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -2241,14 +2242,8 @@ watch(uploadDialogOpen, (open) => {
 })
 
 function handleUploadCompleted(payload: { successCount: number; replacementMap: Record<string, string> }) {
-  const replacement = new Map<string, string>(Object.entries(payload?.replacementMap ?? {}))
-  if (replacement.size) {
-    selectedAssetIds.value = Array.from(new Set(selectedAssetIds.value.map((id) => replacement.get(id) ?? id)))
-    const lastId = Array.from(replacement.values()).pop()
-    if (lastId) {
-      sceneStore.selectAsset(lastId)
-    }
-  }
+  selectedAssetIds.value = []
+  sceneStore.selectAsset(null)
   showDropFeedback('success', `Switched ${payload.successCount} assets to server references`)
 }
 
@@ -2835,9 +2830,8 @@ async function handleGalleryDrop(event: DragEvent) {
         }
       })
       // Do not change active directory on import; keep previousActive
-      const lastAsset = assets[assets.length - 1]!
-      sceneStore.selectAsset(lastAsset.id)
-      selectedAssetIds.value = [lastAsset.id]
+      sceneStore.selectAsset(null)
+      selectedAssetIds.value = []
       if (previousActive) {
         // restore previous active directory to be explicit (no-op if unchanged)
         sceneStore.setActiveDirectory(previousActive)
@@ -3351,27 +3345,11 @@ function handleSearchFieldKeydown(event: KeyboardEvent) {
 }
 
 function assetIcon(type: ProjectAsset['type']) {
-  return iconForAssetType(type)
+  return getAssetTypeIcon(type)
 }
 
-function iconForAssetType(type: ProjectAsset['type']) {
-  switch (type) {
-    case 'model':
-      return 'mdi-cube'
-    case 'image':
-      return 'mdi-image-outline'
-    case 'texture':
-      return 'mdi-texture'
-    case 'material':
-      return 'mdi-palette'
-    case 'behavior':
-      return 'mdi-script-text-outline'
-    case 'prefab':
-      return 'mdi-cube-outline'
-    case 'file':
-    default:
-      return 'mdi-file-outline'
-  }
+function assetTypePresentation(asset: ProjectAsset) {
+  return getAssetTypePresentation(asset)
 }
 
 function createDragPreview(asset: ProjectAsset) {
@@ -3410,7 +3388,7 @@ function createDragPreview(asset: ProjectAsset) {
     wrapper.appendChild(thumbnail)
   } else {
     const iconSpan = document.createElement('span')
-    iconSpan.className = `mdi ${iconForAssetType(asset.type)}`
+    iconSpan.className = `mdi ${getAssetTypeIcon(asset.type)}`
     iconSpan.style.fontSize = '48px'
     iconSpan.style.color = '#FFFFFF'
     iconSpan.style.textShadow = '0 4px 14px rgba(0,0,0,0.4)'
@@ -3785,6 +3763,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       @click.stop
                       @update:model-value="() => toggleAssetSelection(asset)"
                     />
+                  </div>
+                  <div
+                    class="asset-type-badge"
+                    :style="{ '--asset-type-accent': assetTypePresentation(asset).color }"
+                    :title="assetTypePresentation(asset).label"
+                    :aria-label="assetTypePresentation(asset).label"
+                  >
+                    <v-icon size="12">{{ assetTypePresentation(asset).icon }}</v-icon>
+                    <span>{{ assetTypePresentation(asset).label }}</span>
                   </div>
                   <div class="asset-actions">
                     <v-btn
@@ -4454,6 +4441,36 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   overflow: hidden;
 }
 
+.asset-type-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 40px);
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--asset-type-accent) 78%, transparent);
+  border-radius: 999px;
+  background: rgba(8, 12, 18, 0.74);
+  color: var(--asset-type-accent);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.asset-type-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .asset-selected-badge {
   position: absolute;
   top: 6px;
@@ -4520,7 +4537,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
-  padding: 6px;
+  padding: 36px 6px 6px;
 }
 
 .asset-info-overlay {
@@ -4578,7 +4595,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
 .asset-actions {
   position: absolute;
-  top: 6px;
+  top: 34px;
   right: 6px;
   display: flex;
   align-items: center;

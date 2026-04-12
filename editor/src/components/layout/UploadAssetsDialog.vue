@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -28,26 +27,13 @@ import {
 } from '@/utils/assetThumbnail'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
+import { getAssetTypeLabel as getSharedAssetTypeLabel, getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import {
   collectConfigAssetDependencyIds,
   isConfigAssetExtension,
   resolveConfigAssetReferenceId,
 } from '@/utils/assetDependencySubset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
-
-const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
-  model: '#26c6da',
-  mesh: '#26c6da',
-  image: '#1e88e5',
-  texture: '#8e24aa',
-  hdri: '#009688',
-  material: '#ffb74d',
-  prefab: '#7986cb',
-  lod: '#7986cb',
-  video: '#ff7043',
-  file: '#546e7a',
-  behavior: '#607d8b',
-}
 
 const scatterPresetOptions = Object.entries(terrainScatterPresets).map(([value, preset]) => ({
   value: value as TerrainScatterCategory,
@@ -810,7 +796,7 @@ async function buildPreparedEntryMetadata(
   const description = entry.description.trim()
   const category = buildEntryCategoryMetadata(entry)
   const color = normalizeHexColor(entry.color)
-  const previewColor = color ?? asset.previewColor ?? TYPE_COLOR_FALLBACK[asset.type] ?? '#455A64'
+  const previewColor = color ?? asset.previewColor ?? getAssetTypePresentation(asset).color
   const dimensionLength = typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) ? entry.dimensionLength : null
   const dimensionWidth = typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) ? entry.dimensionWidth : null
   const dimensionHeight = typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) ? entry.dimensionHeight : null
@@ -1247,15 +1233,11 @@ function isSkycubeFileAsset(asset: ProjectAsset): boolean {
   if (asset.type !== 'file') {
     return false
   }
-  const extension = getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id)
-  return isSkyCubeArchiveExtension(extension)
+  return getSharedAssetTypeLabel(asset) === 'Skycube'
 }
 
 function getAssetTypeLabel(asset: ProjectAsset): string {
-  if (isSkycubeFileAsset(asset)) {
-    return 'skycube'
-  }
-  return asset.type
+  return getSharedAssetTypeLabel(asset)
 }
 
 function isModelAsset(asset: ProjectAsset): boolean {

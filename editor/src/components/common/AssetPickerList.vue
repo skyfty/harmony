@@ -8,6 +8,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { assetProvider } from '@/resources/projectProviders/asset'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { createServerAssetSource } from '@/utils/serverAssetSource'
+import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 
 const props = withDefaults(
   defineProps<{
@@ -337,6 +338,10 @@ function resolveInitials(asset: ProjectAsset): string {
   return letters || '?'
 }
 
+function assetTypePresentation(asset: ProjectAsset) {
+  return getAssetTypePresentation(asset)
+}
+
 watch(
   () => props.assetId,
   (next) => {
@@ -440,10 +445,10 @@ onMounted(() => {
                 :data-asset-id="asset.id"
                 @click="handleAssetClick(asset)"
                 tabindex="0"
-                :aria-label="`Select ${asset.name}`"
+                :aria-label="`Select ${asset.name} (${assetTypePresentation(asset).label})`"
                 @keydown.enter.prevent="handleAssetClick(asset)"
                 @keydown.space.prevent="handleAssetClick(asset)"
-                :title="asset.name"
+                :title="`${asset.name} · ${assetTypePresentation(asset).label}`"
               >
                 <div class="asset-picker-list__thumbnail">
                   <v-img
@@ -459,6 +464,13 @@ onMounted(() => {
                     :style="{ backgroundColor: asset.previewColor || '#455A64' }"
                   >
                     {{ resolveInitials(asset) }}
+                  </div>
+                  <div
+                    class="asset-picker-list__type-indicator"
+                    :style="{ '--asset-type-accent': assetTypePresentation(asset).color }"
+                    :title="assetTypePresentation(asset).label"
+                  >
+                    {{ assetTypePresentation(asset).shortLabel }}
                   </div>
                 </div>
 
@@ -478,7 +490,7 @@ onMounted(() => {
                 </div>
               </div>
             </template>
-            <div>{{ asset.name }}</div>
+              <div>{{ asset.name }} · {{ assetTypePresentation(asset).label }}</div>
           </v-tooltip>
         </template>
       </div>
@@ -561,6 +573,28 @@ onMounted(() => {
   height: 100%;
   background: radial-gradient(circle at 30% 20%, rgba(77, 208, 225, 0.18), rgba(33, 150, 243, 0.06) 55%, rgba(0, 0, 0, 0.08));
   overflow: hidden;
+}
+
+.asset-picker-list__type-indicator {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 1;
+  max-width: calc(100% - 8px);
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--asset-type-accent) 78%, transparent);
+  border-radius: 999px;
+  background: rgba(6, 10, 16, 0.78);
+  color: var(--asset-type-accent);
+  font-size: 0.52rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 .asset-picker-list__progress-overlay,
