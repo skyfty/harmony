@@ -3764,15 +3764,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       @update:model-value="() => toggleAssetSelection(asset)"
                     />
                   </div>
-                  <div
-                    class="asset-type-badge"
-                    :style="{ '--asset-type-accent': assetTypePresentation(asset).color }"
-                    :title="assetTypePresentation(asset).label"
-                    :aria-label="assetTypePresentation(asset).label"
-                  >
-                    <v-icon size="12">{{ assetTypePresentation(asset).icon }}</v-icon>
-                    <span>{{ assetTypePresentation(asset).label }}</span>
-                  </div>
                   <div class="asset-actions">
                     <v-btn
                       v-if="getAssetMutationScope(asset) === 'local' || (providerIdForAsset(asset) === PRESET_PROVIDER_ID && authStore.canResourceWrite)"
@@ -3811,7 +3802,19 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     <v-icon size="20" color="error">mdi-alert-circle-outline</v-icon>
                   </div>
                   <div class="asset-info-overlay">
-                    <span class="asset-title">{{ asset.name }}</span>
+                    <div
+                      class="asset-title-row"
+                      :style="{ '--asset-type-accent': assetTypePresentation(asset).color }"
+                    >
+                      <span
+                        class="asset-type-icon"
+                        :title="assetTypePresentation(asset).label"
+                        :aria-label="assetTypePresentation(asset).label"
+                      >
+                        <v-icon size="12">{{ assetTypePresentation(asset).icon }}</v-icon>
+                      </span>
+                      <span class="asset-title">{{ asset.name }}</span>
+                    </div>
                     <span v-if="assetDownloadError(asset)" class="asset-subtitle">{{ assetDownloadError(asset) }}</span>
                   </div>
                 </div>
@@ -4441,36 +4444,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   overflow: hidden;
 }
 
-.asset-type-badge {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 3;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 40px);
-  padding: 3px 7px;
-  border: 1px solid color-mix(in srgb, var(--asset-type-accent) 78%, transparent);
-  border-radius: 999px;
-  background: rgba(8, 12, 18, 0.74);
-  color: var(--asset-type-accent);
-  backdrop-filter: blur(4px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  line-height: 1;
-  text-transform: uppercase;
-  pointer-events: none;
-}
-
-.asset-type-badge span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .asset-selected-badge {
   position: absolute;
   top: 6px;
@@ -4489,8 +4462,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
 .asset-select-control {
   position: absolute;
-  top: 6px;
-  left: 6px;
+  top: 0px;
+  left: 0px;
   z-index: 3;
   opacity: 0;
   pointer-events: none;
@@ -4537,7 +4510,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
-  padding: 36px 6px 6px;
+  padding: 6px;
 }
 
 .asset-info-overlay {
@@ -4545,12 +4518,33 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 6px 8px 8px;
+  padding: 3px 2px 3px;
   display: flex;
   flex-direction: column;
   gap: 3px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.6) 100%);
   backdrop-filter: blur(1px);
+}
+
+.asset-title-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.asset-type-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(8, 12, 18, 0.72);
+  color: var(--asset-type-accent);
+  border: 1px solid color-mix(in srgb, var(--asset-type-accent) 70%, transparent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
 }
 
 .asset-title {
@@ -4595,13 +4589,13 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
 .asset-actions {
   position: absolute;
-  top: 34px;
-  right: 6px;
+  top: 3px;
+  right: 3px;
   display: flex;
   align-items: center;
   gap: 8px;
   background-color: rgba(0, 0, 0, 0.35);
-  border-radius: 10px;
+  border-radius: 5px;
   backdrop-filter: blur(2px);
   z-index: 2;
   opacity: 0;

@@ -470,7 +470,7 @@ onMounted(() => {
                     :style="{ '--asset-type-accent': assetTypePresentation(asset).color }"
                     :title="assetTypePresentation(asset).label"
                   >
-                    {{ assetTypePresentation(asset).shortLabel }}
+                    <v-icon size="11">{{ assetTypePresentation(asset).icon }}</v-icon>
                   </div>
                 </div>
 
@@ -580,21 +580,17 @@ onMounted(() => {
   right: 4px;
   bottom: 4px;
   z-index: 1;
-  max-width: calc(100% - 8px);
-  padding: 2px 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   border: 1px solid color-mix(in srgb, var(--asset-type-accent) 78%, transparent);
   border-radius: 999px;
   background: rgba(6, 10, 16, 0.78);
   color: var(--asset-type-accent);
-  font-size: 0.52rem;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
 }
 
 .asset-picker-list__progress-overlay,
