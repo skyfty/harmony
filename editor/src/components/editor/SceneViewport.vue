@@ -15140,9 +15140,12 @@ async function handlePointerDown(event: PointerEvent) {
 
   const effectiveSelectionTool = uiStore.activeSelectionContext ? 'blocked' : props.activeTool
 
-  // Select mode: left click should preserve click-selection semantics, but in camera-control modes
+  // Left click should preserve click-selection semantics, but in camera-control modes
   // any press that does not land on the current selection should allow a drag camera gesture.
-  if (event.button === 0 && effectiveSelectionTool === 'select') {
+  // This applies to all transform tools (select/translate/rotate/scale) so the viewport
+  // remains controllable even when a non-select tool is active.  Skip when the transform
+  // gizmo axis is hovered (transformControls.axis is set) — that click belongs to the gizmo.
+  if (event.button === 0 && effectiveSelectionTool !== 'blocked' && !transformControls?.axis) {
     const activeSelectionNode = resolveSceneNodeById(sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
     const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
     const directHit = pickNodeAtPointer(event)
