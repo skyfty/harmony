@@ -10446,6 +10446,7 @@ export const useSceneStore = defineStore('scene', {
       scale?: THREE.Vector3
       parentId?: string | null
       snapToGrid?: boolean
+      skipGroundAlignment?: boolean
       editorFlags?: SceneNodeEditorFlags
       appendToParentEnd?: boolean
     }): Promise<SceneNode | null> {
@@ -10502,6 +10503,162 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return result
+    },
+
+    async spawnAssetIntoEmptyGroupAtWorldTransform(
+      assetId: string,
+      groupId: string,
+      transform: { position: THREE.Vector3; rotation?: THREE.Vector3 | null; scale?: THREE.Vector3 | null },
+    ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
+      const groupNode = groupId ? findNodeById(this.nodes, groupId) : null
+      const isEmptyGroup = Boolean(
+        groupNode
+        && groupNode.nodeType === 'Group'
+        && (!groupNode.children || groupNode.children.length === 0),
+      )
+
+      if (isEmptyGroup) {
+        this.setNodeWorldPositionPositionOnly(groupId, transform.position)
+      }
+
+      const result = await this.spawnAssetAtWorldTransform(assetId, {
+        position: transform.position,
+        rotation: transform.rotation ?? null,
+        scale: transform.scale ?? null,
+        parentId: groupId,
+        preserveWorldPosition: Boolean(groupId),
+      })
+
+      if (isEmptyGroup) {
+        this.updateNodeProperties({
+          id: result.node.id,
+          position: { x: 0, y: 0, z: 0 },
+        })
+      }
+
+      return result
+    },
+
+    async spawnAssetAtWorldTransform(
+      assetId: string,
+      options: {
+        position: THREE.Vector3
+        rotation?: THREE.Vector3 | null
+        scale?: THREE.Vector3 | null
+        parentId?: string | null
+        preserveWorldPosition?: boolean
+      },
+    ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
+      const asset = findAssetInTree(this.projectTree, assetId)
+      if (!asset) {
+        throw new Error('Unable to find the requested asset')
+      }
+
+      const parentMap = buildParentMap(this.nodes)
+      let targetParentId = options.parentId ?? null
+      while (targetParentId) {
+        const candidate = findNodeById(this.nodes, targetParentId)
+        if (allowsChildNodes(candidate)) {
+          break
+        }
+        targetParentId = parentMap.get(targetParentId) ?? null
+      }
+
+      const desiredWorldPosition = options.position.clone()
+      const desiredWorldQuaternion = new Quaternion().setFromEuler(
+        new Euler(options.rotation?.x ?? 0, options.rotation?.y ?? 0, options.rotation?.z ?? 0, 'XYZ'),
+      )
+      const desiredWorldScale = new Vector3(
+        options.scale?.x ?? 1,
+        options.scale?.y ?? 1,
+        options.scale?.z ?? 1,
+      )
+
+      const adjustNodeWorldTransform = (nodeId: string | null) => {
+        if (!nodeId) {
+          return
+        }
+
+        let localPosition = desiredWorldPosition.clone()
+        let localQuaternion = desiredWorldQuaternion.clone()
+        let localScale = desiredWorldScale.clone()
+
+        if (targetParentId) {
+          const parentMatrix = computeWorldMatrixForNode(this.nodes, targetParentId)
+          if (!parentMatrix) {
+            return
+          }
+
+          const desiredWorldMatrix = new Matrix4().compose(
+            desiredWorldPosition.clone(),
+            desiredWorldQuaternion.clone(),
+            desiredWorldScale.clone(),
+          )
+          const parentInverse = parentMatrix.clone().invert()
+          const localMatrix = new Matrix4().multiplyMatrices(parentInverse, desiredWorldMatrix)
+          localMatrix.decompose(localPosition, localQuaternion, localScale)
+        }
+
+        const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
+        this.updateNodeTransform({
+          id: nodeId,
+          position: toPlainVector(localPosition),
+          rotation: { x: localEuler.x, y: localEuler.y, z: localEuler.z } as Vector3Like,
+          scale: toPlainVector(localScale),
+        })
+      }
+
+      if (asset.type === 'prefab') {
+        const node = await this.spawnPrefabWithPlaceholder(asset.id, desiredWorldPosition, {
+          parentId: targetParentId,
+          rotation: options.rotation ?? null,
+        })
+        await this.withHistorySuppressed(() => adjustNodeWorldTransform(node?.id ?? null))
+        return { asset, node }
+      }
+
+      const supportsDirectPlacement = asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod'
+      const node = supportsDirectPlacement
+        ? await this.addPlaceableAssetNode({
+            asset,
+            position: desiredWorldPosition,
+            rotation: options.rotation ?? undefined,
+            scale: options.scale ?? undefined,
+            parentId: targetParentId ?? undefined,
+            skipGroundAlignment: true,
+          })
+        : null
+      if (node) {
+        if (options.preserveWorldPosition) {
+          await this.withHistorySuppressed(() => adjustNodeWorldTransform(node.id))
+        }
+        return { asset, node }
+      }
+
+      const placeholder = this.addPlaceholderNode(asset, {
+        position: toPlainVector(desiredWorldPosition),
+        rotation: options.rotation ? toPlainVector(options.rotation) : { x: 0, y: 0, z: 0 },
+        scale: options.scale ? toPlainVector(options.scale) : { x: 1, y: 1, z: 1 },
+      }, {
+        parentId: targetParentId,
+      })
+      if (options.preserveWorldPosition) {
+        await this.withHistorySuppressed(() => adjustNodeWorldTransform(placeholder.id))
+      }
+
+      const assetCache = useAssetCacheStore()
+      this.observeAssetDownloadForNode(placeholder.id, asset)
+      assetCache.setError(asset.id, null)
+      void assetCache.downloaProjectAsset(asset).catch((error) => {
+        const target = findNodeById(this.nodes, placeholder.id)
+        if (target) {
+          target.downloadStatus = 'error'
+          target.downloadError = (error as Error).message ?? 'Asset download failed'
+          this.queueSceneNodePatch(placeholder.id, ['download'])
+        }
+      })
+
+      return { asset, node: placeholder }
     },
 
     async spawnAssetAtPosition(
@@ -12974,6 +13131,7 @@ export const useSceneStore = defineStore('scene', {
       scale?: THREE.Vector3
       parentId?: string | null
       snapToGrid?: boolean
+      skipGroundAlignment?: boolean
       editorFlags?: SceneNodeEditorFlags
       appendToParentEnd?: boolean
     }): Promise<SceneNode | null> {
@@ -13071,7 +13229,7 @@ export const useSceneStore = defineStore('scene', {
         })
       }
 
-      if (Number.isFinite(minY)) {
+      if (!payload.skipGroundAlignment && Number.isFinite(minY)) {
         spawnVector.y -= minY
         spawnVector.y += GROUND_CONTACT_EPSILON
       }

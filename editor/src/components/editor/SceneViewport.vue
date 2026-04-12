@@ -10301,6 +10301,16 @@ ensureUvDebugMaterialsForMissingMeshes(warpGatePlacementPreviewGroup, { tint: 0x
 const dragPreviewBoundingBoxHelper = new THREE.Box3()
 const dragPreviewWorldPositionHelper = new THREE.Vector3()
 const dragPreviewAlignedPointHelper = new THREE.Vector3()
+const placementPreviewWorldScaleHelper = new THREE.Vector3()
+const placementPreviewWorldQuaternionHelper = new THREE.Quaternion()
+const placementPreviewWorldEulerHelper = new THREE.Euler()
+
+type AssetPlacementPreviewSnapshot = {
+  assetId: string
+  worldPosition: THREE.Vector3
+  rotation: THREE.Vector3
+  scale: THREE.Vector3
+}
 
 function hideWarpGatePlacementPreview(): void {
   warpGatePlacementPreviewGroup.visible = false
@@ -10395,6 +10405,76 @@ function computeSpawnPointForSelectionClick(
   return spawnPoint
 }
 
+function clonePlacementPreviewSnapshot(snapshot: AssetPlacementPreviewSnapshot | null): AssetPlacementPreviewSnapshot | null {
+  if (!snapshot) {
+    return null
+  }
+
+  return {
+    assetId: snapshot.assetId,
+    worldPosition: snapshot.worldPosition.clone(),
+    rotation: snapshot.rotation.clone(),
+    scale: snapshot.scale.clone(),
+  }
+}
+
+function clearAssetPlacementPreviewSnapshot(): void {
+  assetPlacementPreviewSnapshot = null
+}
+
+function setAssetPlacementPreviewSnapshot(assetId: string, previewRoot: THREE.Object3D): void {
+  previewRoot.updateWorldMatrix(true, true)
+  previewRoot.getWorldPosition(dragPreviewWorldPositionHelper)
+  previewRoot.getWorldQuaternion(placementPreviewWorldQuaternionHelper)
+  placementPreviewWorldEulerHelper.setFromQuaternion(placementPreviewWorldQuaternionHelper, 'XYZ')
+  previewRoot.getWorldScale(placementPreviewWorldScaleHelper)
+  assetPlacementPreviewSnapshot = {
+    assetId,
+    worldPosition: dragPreviewWorldPositionHelper.clone(),
+    rotation: new THREE.Vector3(
+      placementPreviewWorldEulerHelper.x,
+      placementPreviewWorldEulerHelper.y,
+      placementPreviewWorldEulerHelper.z,
+    ),
+    scale: placementPreviewWorldScaleHelper.clone(),
+  }
+}
+
+function getAssetPlacementPreviewSnapshot(assetId: string | null): AssetPlacementPreviewSnapshot | null {
+  if (!assetId || !assetPlacementPreviewSnapshot || assetPlacementPreviewSnapshot.assetId !== assetId) {
+    return null
+  }
+  return clonePlacementPreviewSnapshot(assetPlacementPreviewSnapshot)
+}
+
+function finalizeAssetPlacementPreview(params: {
+  assetId: string
+  basePoint: THREE.Vector3 | null
+  snapResult: PlacementSnapResult | null
+}): AssetPlacementPreviewSnapshot | null {
+  const { assetId, basePoint, snapResult } = params
+
+  if (!basePoint) {
+    clearAssetPlacementPreviewSnapshot()
+    dragPreviewGroup.visible = false
+    return null
+  }
+
+  dragPreviewGroup.rotation.set(0, placementPreviewYaw, 0)
+
+  const aligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint.clone()
+  const finalPosition = aligned.clone()
+  const bestSnap = snapResult?.best ?? null
+  if (bestSnap?.delta) {
+    finalPosition.add(bestSnap.delta)
+  }
+
+  dragPreviewGroup.position.copy(finalPosition)
+  dragPreviewGroup.visible = true
+  setAssetPlacementPreviewSnapshot(assetId, dragPreviewGroup)
+  return clonePlacementPreviewSnapshot(assetPlacementPreviewSnapshot)
+}
+
 function isUserCreatedEmptyGroupForPlacement(selectedId: string | null, parentGroupId: string | null): boolean {
   if (!selectedId || parentGroupId !== selectedId) return false
   const { nodeMap } = buildHierarchyMaps()
@@ -10412,25 +10492,30 @@ function isUserCreatedEmptyGroupForPlacement(selectedId: string | null, parentGr
 
 async function spawnAssetFromSelectionClick(params: {
   assetId: string
-  spawnPoint: THREE.Vector3
+  worldPosition: THREE.Vector3
   rotation: THREE.Vector3
+  scale?: THREE.Vector3 | null
   parentGroupId: string | null
   selectedId: string | null
 }): Promise<void> {
-  const { assetId, spawnPoint, rotation, parentGroupId, selectedId } = params
+  const { assetId, worldPosition, rotation, scale, parentGroupId, selectedId } = params
   const isEmptySelectedGroup = isUserCreatedEmptyGroupForPlacement(selectedId, parentGroupId)
 
   if (isEmptySelectedGroup && parentGroupId) {
-    await sceneStore.spawnAssetIntoEmptyGroupAtPosition(assetId, parentGroupId, spawnPoint, {
+    await sceneStore.spawnAssetIntoEmptyGroupAtWorldTransform(assetId, parentGroupId, {
+      position: worldPosition,
       rotation,
+      scale: scale ?? null,
     })
     return
   }
 
-  await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
+  await sceneStore.spawnAssetAtWorldTransform(assetId, {
+    position: worldPosition,
+    rotation,
+    scale: scale ?? null,
     parentId: parentGroupId,
     preserveWorldPosition: Boolean(parentGroupId),
-    rotation,
   })
 }
 
@@ -10442,6 +10527,7 @@ let nodePlacementPreviewKey: string | null = null
 let lastSelectionPreviewUpdate = 0
 let lastDragHoverPreviewUpdate = 0
 let placementPreviewYaw = 0
+let assetPlacementPreviewSnapshot: AssetPlacementPreviewSnapshot | null = null
 
 let lastPointerClientX = 0
 let lastPointerClientY = 0
@@ -10479,6 +10565,7 @@ function hideSelectionHoverPreview(): void {
   if (isDragHovering.value) {
     return
   }
+  clearAssetPlacementPreviewSnapshot()
   dragPreview.setPosition(null)
   dragPreviewGroup.visible = false
   snapController.resetPlacementSideSnap()
@@ -10543,6 +10630,7 @@ function cancelAssetPlacementInteraction(): boolean {
 
   if (cancelled) {
     stopSelectionPreviewVisibilityMonitor()
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.setPosition(null)
     dragPreviewGroup.visible = false
     updateGridHighlight(null)
@@ -10586,6 +10674,7 @@ watch(
         selectionPreviewActive = false
         selectionPreviewAssetId = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
@@ -10596,6 +10685,7 @@ watch(
         selectionPreviewActive = false
         selectionPreviewAssetId = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
@@ -10606,6 +10696,7 @@ watch(
         selectionPreviewActive = false
         selectionPreviewAssetId = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
@@ -10618,9 +10709,11 @@ watch(
         dragPreviewGroup.rotation.set(0, 0, 0)
         // prepare preview object (use existing drag preview loader)
         try {
+          clearAssetPlacementPreviewSnapshot()
           dragPreview.prepare(asset.id)
         } catch (e) {
           console.warn('Failed to prepare selection preview', e)
+          clearAssetPlacementPreviewSnapshot()
           dragPreview.dispose()
           selectionPreviewActive = false
           selectionPreviewAssetId = null
@@ -10631,6 +10724,7 @@ watch(
         selectionPreviewActive = false
         selectionPreviewAssetId = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
       }
@@ -10651,6 +10745,7 @@ watch(
           selectionPreviewActive = false
           selectionPreviewAssetId = null
           placementPreviewYaw = 0
+          clearAssetPlacementPreviewSnapshot()
           dragPreviewGroup.rotation.set(0, 0, 0)
           dragPreview.dispose()
         }
@@ -10662,6 +10757,7 @@ watch(
         selectionPreviewActive = false
         selectionPreviewAssetId = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
@@ -10672,6 +10768,7 @@ watch(
         selectionPreviewActive = false
         selectionPreviewAssetId = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
@@ -10683,9 +10780,11 @@ watch(
         placementPreviewYaw = 0
         dragPreviewGroup.rotation.set(0, 0, 0)
         try {
+          clearAssetPlacementPreviewSnapshot()
           dragPreview.prepare(asset.id)
         } catch (e) {
           console.warn('Failed to prepare scatter selection preview', e)
+          clearAssetPlacementPreviewSnapshot()
           dragPreview.dispose()
           selectionPreviewActive = false
           selectionPreviewAssetId = null
@@ -10696,6 +10795,7 @@ watch(
         selectionPreviewActive = false
         selectionPreviewAssetId = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
       }
@@ -10714,6 +10814,7 @@ watch(
           nodePlacementPreviewActive = false
           nodePlacementPreviewKey = null
           placementPreviewYaw = 0
+          clearAssetPlacementPreviewSnapshot()
           dragPreviewGroup.rotation.set(0, 0, 0)
           if (selectionPreviewActive && selectionPreviewAssetId) {
             dragPreview.prepare(selectionPreviewAssetId)
@@ -10728,6 +10829,7 @@ watch(
         nodePlacementPreviewActive = false
         nodePlacementPreviewKey = null
         placementPreviewYaw = 0
+        clearAssetPlacementPreviewSnapshot()
         dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
@@ -10737,6 +10839,7 @@ watch(
       nodePlacementPreviewActive = true
       nodePlacementPreviewKey = previewKey
       placementPreviewYaw = 0
+      clearAssetPlacementPreviewSnapshot()
       dragPreviewGroup.rotation.set(0, 0, 0)
       dragPreview.prepareObject(previewKey, buildViewportPlacementPreview(next))
     } catch (error) {
@@ -10744,6 +10847,7 @@ watch(
       nodePlacementPreviewActive = false
       nodePlacementPreviewKey = null
       pendingViewportPlacement.value = null
+      clearAssetPlacementPreviewSnapshot()
       dragPreview.dispose()
     }
   },
@@ -15837,10 +15941,12 @@ function handlePointerMove(event: PointerEvent) {
         // Keep dragPreview internal state aligned to the *surface* point so grid highlight remains correct.
         dragPreview.setPosition(basePoint)
         dragPreviewGroup.rotation.y = placementPreviewYaw
-        const aligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
-        if (aligned) {
-          dragPreviewGroup.position.copy(aligned)
-          dragPreviewGroup.visible = true
+        if (basePoint) {
+          const provisionalAligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
+          if (provisionalAligned) {
+            dragPreviewGroup.position.copy(provisionalAligned)
+            dragPreviewGroup.visible = true
+          }
 
           const placementSnapActive = isVertexSnapActiveEffective.value && props.activeTool === 'select'
           const result = snapController.updatePlacementSideSnap({
@@ -15851,7 +15957,18 @@ function handlePointerMove(event: PointerEvent) {
             excludeNodeIds: new Set([GROUND_NODE_ID]),
           })
           updatePlacementSideSnapMarkers(result)
+          if (selectionPreviewAssetId) {
+            finalizeAssetPlacementPreview({
+              assetId: selectionPreviewAssetId,
+              basePoint,
+              snapResult: result,
+            })
+          } else {
+            clearAssetPlacementPreviewSnapshot()
+          }
         } else {
+          clearAssetPlacementPreviewSnapshot()
+          dragPreviewGroup.visible = false
           snapController.resetPlacementSideSnap()
           clearPlacementSideSnapMarkers()
         }
@@ -16411,13 +16528,15 @@ async function handlePointerUp(event: PointerEvent) {
           clearPlacementSideSnapMarkers()
 
           try {
-            const spawnPoint = computeSpawnPointForSelectionClick(event, session.assetId, placementSideSnap)
+            const previewSnapshot = getAssetPlacementPreviewSnapshot(session.assetId)
+            const fallbackPosition = computeSpawnPointForSelectionClick(event, session.assetId, placementSideSnap)
             const parentGroupId = resolveSelectedGroupDropParent()
-            const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
+            const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
             await spawnAssetFromSelectionClick({
               assetId: session.assetId,
-              spawnPoint,
+              worldPosition: previewSnapshot?.worldPosition ?? fallbackPosition,
               rotation,
+              scale: previewSnapshot?.scale ?? null,
               parentGroupId,
               selectedId: props.selectedNodeId ?? null,
             })
@@ -16579,6 +16698,7 @@ function handlePointerCancel(event: PointerEvent) {
   deactivateVOverride()
   // Ensure any selection-hover preview is hidden when pointer is cancelled.
   stopSelectionPreviewVisibilityMonitor()
+  clearAssetPlacementPreviewSnapshot()
   dragPreview.setPosition(null)
   dragPreviewGroup.visible = false
   hideWarpGatePlacementPreview()
@@ -18009,6 +18129,7 @@ function handleViewportDragOver(event: DragEvent) {
     } else {
       updateGridHighlight(null)
     }
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     return
   }
@@ -18025,6 +18146,7 @@ function handleViewportDragOver(event: DragEvent) {
     } else {
       updateGridHighlight(null)
     }
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     return
   }
@@ -18038,6 +18160,7 @@ function handleViewportDragOver(event: DragEvent) {
       }
       isDragHovering.value = true
       updateGridHighlightFromObject(target.object)
+      clearAssetPlacementPreviewSnapshot()
       dragPreview.dispose()
       return
     }
@@ -18055,6 +18178,7 @@ function handleViewportDragOver(event: DragEvent) {
     } else {
       updateGridHighlight(null)
     }
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     return
   }
@@ -18082,6 +18206,7 @@ function handleViewportDragOver(event: DragEvent) {
     updateGridHighlight(null)
     snapController.resetPlacementSideSnap()
     clearPlacementSideSnapMarkers()
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.setPosition(null)
     dragPreviewGroup.visible = false
     return
@@ -18099,11 +18224,12 @@ function handleViewportDragOver(event: DragEvent) {
   dragPreview.setPosition(basePoint)
   if (info) {
     dragPreview.prepare(info.assetId)
-    // If preview object is already available, align it so its world-AABB bottom rests on the surface point.
-    const aligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
-    if (aligned) {
-      dragPreviewGroup.position.copy(aligned)
-      dragPreviewGroup.visible = true
+    if (basePoint) {
+      const provisionalAligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
+      if (provisionalAligned) {
+        dragPreviewGroup.position.copy(provisionalAligned)
+        dragPreviewGroup.visible = true
+      }
 
       const now = Date.now()
       if (now - lastDragHoverPreviewUpdate > 8) {
@@ -18117,12 +18243,20 @@ function handleViewportDragOver(event: DragEvent) {
           excludeNodeIds: new Set([GROUND_NODE_ID]),
         })
         updatePlacementSideSnapMarkers(result)
+        finalizeAssetPlacementPreview({
+          assetId: info.assetId,
+          basePoint,
+          snapResult: result,
+        })
       }
     } else {
+      clearAssetPlacementPreviewSnapshot()
+      dragPreviewGroup.visible = false
       snapController.resetPlacementSideSnap()
       clearPlacementSideSnapMarkers()
     }
   } else {
+    clearAssetPlacementPreviewSnapshot()
     snapController.resetPlacementSideSnap()
     clearPlacementSideSnapMarkers()
     dragPreview.dispose()
@@ -18141,6 +18275,7 @@ function handleViewportDragLeave(event: DragEvent) {
   updateGridHighlight(null)
   snapController.resetPlacementSideSnap()
   clearPlacementSideSnapMarkers()
+  clearAssetPlacementPreviewSnapshot()
   dragPreview.dispose()
   restoreGridHighlightForSelection()
 }
@@ -18154,6 +18289,7 @@ async function handleViewportDrop(event: DragEvent) {
   clearPlacementSideSnapMarkers()
   isDragHovering.value = false
   if (!info) {
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -18168,6 +18304,7 @@ async function handleViewportDrop(event: DragEvent) {
   const isTexture = assetType === 'texture' || assetType === 'image'
 
   if (asset && isWallPresetAsset(asset)) {
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -18180,6 +18317,7 @@ async function handleViewportDrop(event: DragEvent) {
     const target = resolveDisplayBoardDropTarget(event)
     if (target) {
       await sceneStore.applyDisplayBoardAsset(target.nodeId, target.component.id, assetId, { updateMaterial: true })
+      clearAssetPlacementPreviewSnapshot()
       dragPreview.dispose()
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
@@ -18193,6 +18331,7 @@ async function handleViewportDrop(event: DragEvent) {
     const target = resolveMaterialDropTarget(event)
     if (!target) {
       console.warn('No compatible mesh found for material drop', assetId)
+      clearAssetPlacementPreviewSnapshot()
       dragPreview.dispose()
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
@@ -18204,6 +18343,7 @@ async function handleViewportDrop(event: DragEvent) {
     if (!applied) {
       console.warn('Failed to apply material asset to node', assetId, target.nodeId)
     }
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -18223,6 +18363,7 @@ async function handleViewportDrop(event: DragEvent) {
         console.warn('Failed to apply behavior prefab to node', assetId, error)
       }
     }
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -18235,6 +18376,7 @@ async function handleViewportDrop(event: DragEvent) {
     const target = resolveMaterialDropTarget(event)
     if (!target) {
       console.warn('No compatible mesh found for texture drop', assetId)
+      clearAssetPlacementPreviewSnapshot()
       dragPreview.dispose()
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
@@ -18246,6 +18388,7 @@ async function handleViewportDrop(event: DragEvent) {
     if (!applied) {
       console.warn('Failed to apply texture asset to node', assetId, target.nodeId)
     } 
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -18258,14 +18401,15 @@ async function handleViewportDrop(event: DragEvent) {
     ? snapController.consumePlacementSideSnapResult()
     : null
 
+  const previewSnapshot = getAssetPlacementPreviewSnapshot(assetId)
   const placement = computeDropPlacement(event)
   const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
   const canUsePreviewBounds = Boolean(dragPreviewGroup.children && dragPreviewGroup.children.length > 0)
-  let spawnPoint = canUsePreviewBounds
+  let fallbackPosition = canUsePreviewBounds
     ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
     : basePoint
   if (placementSideSnap) {
-    spawnPoint.add(placementSideSnap.delta)
+    fallbackPosition.add(placementSideSnap.delta)
   }
   const parentGroupId = assetType === 'prefab' ? null : resolveSelectedGroupDropParent()
   try {
@@ -18279,11 +18423,21 @@ async function handleViewportDrop(event: DragEvent) {
     })()
 
     let spawnResult: { node: { id: string } } | null = null
+    const worldPosition = previewSnapshot?.worldPosition ?? fallbackPosition
+    const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
+    const scale = previewSnapshot?.scale ?? null
 
     if (isEmptySelectedGroup && parentGroupId) {
-      spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtPosition(assetId, parentGroupId, spawnPoint)
+      spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtWorldTransform(assetId, parentGroupId, {
+        position: worldPosition,
+        rotation,
+        scale,
+      })
     } else {
-      spawnResult = await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
+      spawnResult = await sceneStore.spawnAssetAtWorldTransform(assetId, {
+        position: worldPosition,
+        rotation,
+        scale,
         parentId: parentGroupId,
         preserveWorldPosition: Boolean(parentGroupId),
       })
@@ -18292,6 +18446,7 @@ async function handleViewportDrop(event: DragEvent) {
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
+    clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     snapController.resetPlacementSideSnap()
