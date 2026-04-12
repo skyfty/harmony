@@ -6366,10 +6366,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function clearScatterInstances(): boolean {
 		const store = ensureScatterStoreRef()
-		const cleanupAssetIds = new Set<string>()
 		let removed = false
 		for (const layer of Array.from(store.layers.values())) {
-			removed = removeScatterLayerFromStore(store, layer, cleanupAssetIds) || removed
+			removed = removeScatterLayerFromStore(store, layer, new Set<string>()) || removed
 		}
 		if (removed) {
 			syncTerrainScatterSnapshotToScene(store, {
@@ -6378,7 +6377,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			})
 			scatterSidecarPersistPending = true
 			queueScatterSidecarSave()
-			queueScatterAssetCleanup(cleanupAssetIds)
 		}
 		return removed
 	}

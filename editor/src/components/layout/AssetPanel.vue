@@ -42,6 +42,7 @@ import type { SceneMaterialTextureRef } from '@/types/material'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { getAssetTypeIcon, getAssetTypePresentation } from '@/utils/assetTypePresentation'
+import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -3803,17 +3804,22 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                   </div>
                   <div class="asset-info-overlay">
                     <div
-                      class="asset-title-row"
-                      :style="{ '--asset-type-accent': assetTypePresentation(asset).color }"
+                      class="asset-title-surface"
+                      :style="{
+                        '--asset-type-accent': assetTypePresentation(asset).color,
+                        '--asset-source-accent': getAssetSourcePresentation(asset).color,
+                      }"
                     >
-                      <span
-                        class="asset-type-icon"
-                        :title="assetTypePresentation(asset).label"
-                        :aria-label="assetTypePresentation(asset).label"
-                      >
-                        <v-icon size="12">{{ assetTypePresentation(asset).icon }}</v-icon>
+                      <span class="asset-title-row">
+                        <span
+                          class="asset-type-icon"
+                          :title="assetTypePresentation(asset).label"
+                          :aria-label="assetTypePresentation(asset).label"
+                        >
+                          <v-icon size="12">{{ assetTypePresentation(asset).icon }}</v-icon>
+                        </span>
+                        <span class="asset-title">{{ asset.name }}</span>
                       </span>
-                      <span class="asset-title">{{ asset.name }}</span>
                     </div>
                     <span v-if="assetDownloadError(asset)" class="asset-subtitle">{{ assetDownloadError(asset) }}</span>
                   </div>
@@ -4014,34 +4020,18 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   transition: color 120ms ease;
 }
 
-.asset-filter-popover {
+.asset-title-surface {
   width: 900px;
   max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 96px);
+  gap: 6px;
   background: rgba(12, 18, 26, 0.96);
-  border-radius: 12px;
+  padding: 6px 8px;
   padding: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: #e9ecf1;
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-.asset-filter-popover__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.asset-filter-popover__title {
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-
-.asset-filter-popover__body {
-  display: flex;
-  align-items: stretch;
   gap: 20px;
   flex: 1;
 }
@@ -4248,39 +4238,54 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   overflow-y: auto;
 }
 
-.project-gallery {
+.asset-title-surface {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  gap: 8px;
   min-height: 0;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--asset-source-accent) 28%, rgba(8, 12, 18, 0.78)), rgba(8, 12, 18, 0.72));
+  border: 1px solid color-mix(in srgb, var(--asset-source-accent) 42%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
   position: relative;
 }
-
+.asset-source-label {
 .project-gallery.is-drop-target {
   outline: 1px dashed rgba(77, 208, 225, 0.45);
   outline-offset: -4px;
 }
-
-.drop-overlay {
-  position: absolute;
-  inset: 48px 12px 12px 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  border-radius: 12px;
-  border: 1px dashed rgba(77, 208, 225, 0.6);
-  background: rgba(10, 14, 20, 0.76);
-  color: #e9ecf1;
-  pointer-events: none;
-  text-align: center;
-  padding: 16px;
+  padding: 2px 6px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--asset-source-accent);
+  background: rgba(8, 12, 18, 0.54);
+  border: 1px solid color-mix(in srgb, var(--asset-source-accent) 60%, transparent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
 }
 
-.drop-overlay__message {
-  font-size: 15px;
-  font-weight: 500;
+.asset-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.asset-type-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(8, 12, 18, 0.72);
+  color: var(--asset-type-accent);
+  border: 1px solid color-mix(in srgb, var(--asset-type-accent) 70%, transparent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
 }
 
 .drop-overlay__status {

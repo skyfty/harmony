@@ -9,6 +9,7 @@ import { assetProvider } from '@/resources/projectProviders/asset'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { createServerAssetSource } from '@/utils/serverAssetSource'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
+import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 
 const props = withDefaults(
   defineProps<{
@@ -49,6 +50,8 @@ const loading = ref(false)
 const selectingAssetId = ref<string | null>(null)
 const errorMessage = ref<string | null>(null)
 const searchTerm = ref('')
+const showLocalSources = ref(true)
+const showRemoteSources = ref(true)
 const gridRef = ref<HTMLDivElement | null>(null)
 
 function isAssetDownloading(asset: ProjectAsset): boolean {
@@ -155,6 +158,14 @@ const filteredAssets = computed(() => {
 
   const term = searchTerm.value.trim().toLowerCase()
   return allAssets.value.filter((asset) => {
+    const sourceKind = getAssetSourcePresentation(asset).kind
+    const isRemoteSource = sourceKind === 'remote'
+    if (isRemoteSource && !showRemoteSources.value) {
+      return false
+    }
+    if (!isRemoteSource && !showLocalSources.value) {
+      return false
+    }
     if (typeFilters.length && !typeFilters.includes(asset.type)) {
       return false
     }
@@ -342,6 +353,14 @@ function assetTypePresentation(asset: ProjectAsset) {
   return getAssetTypePresentation(asset)
 }
 
+function toggleLocalSourceFilter(): void {
+  showLocalSources.value = !showLocalSources.value
+}
+
+function toggleRemoteSourceFilter(): void {
+  showRemoteSources.value = !showRemoteSources.value
+}
+
 watch(
   () => props.assetId,
   (next) => {
@@ -398,11 +417,42 @@ onMounted(() => {
         class="asset-picker-list__search"
         density="compact"
         variant="underlined"
-        prepend-inner-icon="mdi-magnify"
         placeholder="Search assets"
+        prepend-inner-icon="mdi-magnify"
         clearable
         hide-details
-      />
+      >
+        <template #append-inner>
+          <div class="asset-picker-list__search-actions" aria-label="Source filters">
+            <v-btn
+              class="asset-picker-list__search-action"
+              :class="{ 'asset-picker-list__search-action--active': showLocalSources }"
+              :color="showLocalSources ? 'primary' : undefined"
+              variant="plain"
+              icon="mdi-folder-outline"
+              density="compact"
+              size="x-small"
+              title="本地"
+              aria-label="Toggle local assets"
+              :aria-pressed="showLocalSources"
+              @click="toggleLocalSourceFilter"
+            />
+            <v-btn
+              class="asset-picker-list__search-action"
+              :class="{ 'asset-picker-list__search-action--active': showRemoteSources }"
+              :color="showRemoteSources ? 'primary' : undefined"
+              variant="plain"
+              icon="mdi-cloud-outline"
+              density="compact"
+              size="x-small"
+              title="远程"
+              aria-label="Toggle remote assets"
+              :aria-pressed="showRemoteSources"
+              @click="toggleRemoteSourceFilter"
+            />
+          </div>
+        </template>
+      </v-text-field>
     </div>
 
     <div class="asset-picker-list__body">
@@ -465,13 +515,21 @@ onMounted(() => {
                   >
                     {{ resolveInitials(asset) }}
                   </div>
-                  <div
-                    class="asset-picker-list__type-indicator"
-                    :style="{ '--asset-type-accent': assetTypePresentation(asset).color }"
-                    :title="assetTypePresentation(asset).label"
-                  >
-                    <v-icon size="11">{{ assetTypePresentation(asset).icon }}</v-icon>
-                  </div>
+                </div>
+
+                <div
+                  class="asset-picker-list__meta-overlay"
+                  :style="{
+                    '--asset-source-accent': getAssetSourcePresentation(asset).color,
+                    '--asset-type-accent': assetTypePresentation(asset).color,
+                  }"
+                >
+                  <span class="asset-picker-list__meta-title">
+                    <span class="asset-picker-list__type-icon" :title="assetTypePresentation(asset).label">
+                      <v-icon size="10">{{ assetTypePresentation(asset).icon }}</v-icon>
+                    </span>
+                    <span class="asset-picker-list__title-text">{{ asset.name }}</span>
+                  </span>
                 </div>
 
                 <div v-if="isAssetDownloading(asset)" class="asset-picker-list__progress-overlay">
@@ -490,7 +548,7 @@ onMounted(() => {
                 </div>
               </div>
             </template>
-              <div>{{ asset.name }} · {{ assetTypePresentation(asset).label }}</div>
+              <div>{{ asset.name }}</div>
           </v-tooltip>
         </template>
       </div>
@@ -518,6 +576,34 @@ onMounted(() => {
 .asset-picker-list__search {
   flex: 1;
   margin-left: auto;
+}
+
+.asset-picker-list__search :deep(.v-field__append-inner) {
+  align-items: center;
+  padding-inline-start: 4px;
+  gap: 4px;
+}
+
+.asset-picker-list__search-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.asset-picker-list__search-action {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.asset-picker-list__search-action--active {
+  background: color-mix(in srgb, rgb(var(--v-theme-primary)) 12%, transparent);
 }
 
 .asset-picker-list__body {
@@ -575,22 +661,53 @@ onMounted(() => {
   overflow: hidden;
 }
 
-.asset-picker-list__type-indicator {
+.asset-picker-list__meta-overlay {
   position: absolute;
+  left: 4px;
   right: 4px;
   bottom: 4px;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--asset-source-accent) 24%, rgba(6, 10, 16, 0.76)), rgba(6, 10, 16, 0.7));
+  border: 1px solid color-mix(in srgb, var(--asset-source-accent) 38%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+}
+
+.asset-picker-list__meta-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #fff;
+}
+
+.asset-picker-list__type-icon {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: 1px solid color-mix(in srgb, var(--asset-type-accent) 78%, transparent);
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
-  background: rgba(6, 10, 16, 0.78);
+  background: rgba(8, 12, 18, 0.72);
   color: var(--asset-type-accent);
-  pointer-events: none;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+  border: 1px solid color-mix(in srgb, var(--asset-type-accent) 70%, transparent);
+}
+
+.asset-picker-list__title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .asset-picker-list__progress-overlay,
@@ -642,7 +759,6 @@ onMounted(() => {
   justify-content: center;
   background: transparent;
 }
-
 
 .asset-picker-list__empty {
   padding: 12px 0 18px;

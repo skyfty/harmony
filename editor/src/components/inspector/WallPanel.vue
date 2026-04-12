@@ -1445,7 +1445,6 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
             <v-switch
               density="compact"
               hide-details
-              inset
               color="warning"
               label="Forbidden Collider"
               :disabled="!wallComponent"
