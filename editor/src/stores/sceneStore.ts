@@ -182,10 +182,8 @@ import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
   resolveFirstLodModelAssetId,
-  deserializeLodPreset,
   type LodPresetData,
 } from '@/utils/lodPreset'
-import { visitExplicitTerrainScatterAssetReferences } from '@/utils/sceneExplicitAssetReferences'
 import { createLodPresetActions } from './lodPresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
@@ -217,8 +215,7 @@ import {
   collectSceneAssetReferences,
   collectRetainedAssetIdsForSceneCleanup,
   pruneAssetCatalogByRetainedIds,
-  collectPrefabAssetIdsFromSceneReferences,
-  collectPrefabTransitiveDependencyAssetIds,
+  collectTransitiveConfigDependencyAssetIds,
 } from './sceneAssetCleanup'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
@@ -4794,97 +4791,40 @@ function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: s
   return null
 }
 
-function collectTerrainScatterLodPresetIds(nodes: SceneNode[] | null | undefined): Set<string> {
-  const presetIds = new Set<string>()
-  if (!Array.isArray(nodes) || !nodes.length) {
-    return presetIds
-  }
-  const stack: SceneNode[] = [...nodes]
-  while (stack.length) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (node.dynamicMesh?.type === 'Ground') {
-      const definition = node.dynamicMesh as GroundDynamicMesh & {
-        terrainScatter?: TerrainScatterStoreSnapshot | null
-      }
-      visitExplicitTerrainScatterAssetReferences(definition.terrainScatter, ({ assetId }) => {
-        const normalized = typeof assetId === 'string' ? assetId.trim() : ''
-        if (normalized) {
-          presetIds.add(normalized)
-        }
-      })
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children)
-    }
-  }
-  return presetIds
-}
-
-async function loadLodPresetDependencyIds(
+async function loadConfigAssetTextForDependencyTraversal(
   assetId: string,
   assetCatalog: Record<string, ProjectAsset[]>,
-): Promise<Set<string>> {
-  const dependencyIds = new Set<string>()
+): Promise<string | null> {
   const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
   if (!normalizedAssetId) {
-    return dependencyIds
+    return null
   }
-  dependencyIds.add(normalizedAssetId)
 
   const assetCache = useAssetCacheStore()
   const asset = getAssetFromCatalog(assetCatalog, normalizedAssetId)
-  let cacheEntry = assetCache.getEntry(normalizedAssetId)
-  if (cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-    cacheEntry = (await assetCache.loadFromIndexedDb(normalizedAssetId)) ?? cacheEntry
+  let file = assetCache.createFileFromCache(normalizedAssetId)
+  if (!file) {
+    await assetCache.loadFromIndexedDb(normalizedAssetId)
+    file = assetCache.createFileFromCache(normalizedAssetId)
   }
-  if ((!cacheEntry.blob || cacheEntry.status !== 'cached') && asset?.downloadUrl) {
+  if (!file && asset) {
     try {
-      cacheEntry = await assetCache.downloaProjectAsset(asset)
+      await assetCache.downloaProjectAsset(asset)
     } catch {
-      return dependencyIds
+      return null
     }
+    file = assetCache.createFileFromCache(normalizedAssetId)
   }
-  if (!cacheEntry.blob) {
-    return dependencyIds
-  }
-
-  try {
-    const preset = deserializeLodPreset(await cacheEntry.blob.text())
-    ;(preset.assetRefs ?? []).forEach((ref) => {
-      const refAssetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
-      if (refAssetId) {
-        dependencyIds.add(refAssetId)
-      }
-    })
-    preset.props.levels.forEach((level) => {
-      const modelAssetId = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
-      if (modelAssetId) {
-        dependencyIds.add(modelAssetId)
-      }
-      const billboardAssetId = typeof level?.billboardAssetId === 'string' ? level.billboardAssetId.trim() : ''
-      if (billboardAssetId) {
-        dependencyIds.add(billboardAssetId)
-      }
-    })
-  } catch {
-    return dependencyIds
+  if (file) {
+    return file.text()
   }
 
-  return dependencyIds
-}
-
-async function collectTerrainScatterLodPresetDependencyAssetIds(scene: StoredSceneDocument): Promise<Set<string>> {
-  const dependencyIds = new Set<string>()
-  const assetCatalog = scene.assetCatalog ?? {}
-  const presetIds = collectTerrainScatterLodPresetIds(scene.nodes ?? [])
-  for (const presetId of presetIds) {
-    const presetDependencyIds = await loadLodPresetDependencyIds(presetId, assetCatalog)
-    presetDependencyIds.forEach((assetId) => dependencyIds.add(assetId))
+  const cacheEntry = assetCache.getEntry(normalizedAssetId)
+  if (cacheEntry.status === 'cached' && cacheEntry.blob) {
+    return cacheEntry.blob.text()
   }
-  return dependencyIds
+
+  return null
 }
 
 function replaceMaterialTextureReferences(
@@ -5030,8 +4970,19 @@ export async function buildAssetRegistryForExport(
 ): Promise<Record<string, SceneAssetRegistryEntry>> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
-  const terrainScatterLodDependencyIds = await collectTerrainScatterLodPresetDependencyAssetIds(runtimeAwareScene)
-  terrainScatterLodDependencyIds.forEach((assetId) => usedAssetIds.add(assetId))
+  const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(runtimeAwareScene)
+  const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
+    directReferenceAssetIds,
+    runtimeAwareScene.assetCatalog ?? {},
+    {
+      loadPrefab: async (assetId) => prefabActions.loadNodePrefab({
+        getAsset: (queryAssetId: string) => getAssetFromCatalog(runtimeAwareScene.assetCatalog ?? {}, queryAssetId),
+        registerAsset: () => { throw new Error('registerAsset should not be called during export dependency collection') },
+      } as unknown as PrefabStoreLike, assetId),
+      loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(assetId, runtimeAwareScene.assetCatalog ?? {}),
+    },
+  )
+  configDependencyAssetIds.forEach((assetId) => usedAssetIds.add(assetId))
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
   const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
   const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
@@ -5098,7 +5049,16 @@ export async function calculateSceneResourceSummary(
   options: SceneBundleExportOptions,
 ): Promise<SceneResourceSummary> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
-  const terrainScatterLodDependencyIds = await collectTerrainScatterLodPresetDependencyAssetIds(runtimeAwareScene)
+  const transitiveConfigDependencyIds = await collectTransitiveConfigDependencyAssetIds(
+    collectDirectSceneAssetReferenceIds(runtimeAwareScene),
+    runtimeAwareScene.assetCatalog ?? {},
+    {
+      loadPrefab: async (assetId) => prefabActions.loadNodePrefab({
+        getAsset: (queryAssetId: string) => getAssetFromCatalog(runtimeAwareScene.assetCatalog ?? {}, queryAssetId),
+      } as unknown as PrefabStoreLike, assetId),
+      loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(assetId, runtimeAwareScene.assetCatalog ?? {}),
+    },
+  )
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
   const assetRegistry = await buildAssetRegistryForExport(runtimeAwareScene)
 
@@ -5138,7 +5098,7 @@ export async function calculateSceneResourceSummary(
   let textureBytes = 0
 
   const assetIds = new Set<string>()
-  terrainScatterLodDependencyIds.forEach((assetId) => assetIds.add(assetId))
+  transitiveConfigDependencyIds.forEach((assetId) => assetIds.add(assetId))
 
   const registerTextureUsage = (node: SceneNode, assetId: string | null | undefined): void => {
     const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
@@ -11464,15 +11424,16 @@ export const useSceneStore = defineStore('scene', {
       normalizeCurrentSceneMeta(this)
       const document = buildSceneDocumentFromState(this)
       const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
-      const prefabAssetIds = collectPrefabAssetIdsFromSceneReferences(document, this.assetCatalog)
-      if (prefabAssetIds.size) {
-        const prefabDependencyAssetIds = await collectPrefabTransitiveDependencyAssetIds(
-          prefabAssetIds,
-          this.assetCatalog,
-          (assetId) => this.loadNodePrefab(assetId),
-        )
-        prefabDependencyAssetIds.forEach((assetId) => retainedAssetIds.add(assetId))
-      }
+      const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(document)
+      const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
+        directReferenceAssetIds,
+        this.assetCatalog,
+        {
+          loadPrefab: (assetId) => this.loadNodePrefab(assetId),
+          loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(assetId, this.assetCatalog),
+        },
+      )
+      configDependencyAssetIds.forEach((assetId) => retainedAssetIds.add(assetId))
       const {
         nextCatalog,
         removedAssetIds,
@@ -11513,15 +11474,15 @@ export const useSceneStore = defineStore('scene', {
       const document = buildSceneDocumentFromState(this)
       const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
       const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(document)
-      const prefabAssetIds = collectPrefabAssetIdsFromSceneReferences(document, this.assetCatalog)
-      if (prefabAssetIds.size) {
-        const prefabDependencyAssetIds = await collectPrefabTransitiveDependencyAssetIds(
-          prefabAssetIds,
-          this.assetCatalog,
-          (assetId) => this.loadNodePrefab(assetId),
-        )
-        prefabDependencyAssetIds.forEach((assetId) => retainedAssetIds.add(assetId))
-      }
+      const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
+        directReferenceAssetIds,
+        this.assetCatalog,
+        {
+          loadPrefab: (assetId) => this.loadNodePrefab(assetId),
+          loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(assetId, this.assetCatalog),
+        },
+      )
+      configDependencyAssetIds.forEach((assetId) => retainedAssetIds.add(assetId))
 
       const removableCandidateIds = new Set(
         normalizedCandidateIds.filter((assetId) => !retainedAssetIds.has(assetId) && !directReferenceAssetIds.has(assetId)),

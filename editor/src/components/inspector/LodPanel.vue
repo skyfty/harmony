@@ -402,7 +402,7 @@ async function handleSavePreset(): Promise<void> {
     enableCulling: localEnableCulling.value,
     levels: localLevels.value,
   })
-  await sceneStore.saveLodPreset({ name, props, select: true })
+  await sceneStore.saveLodPreset({ name, props, select: false })
 }
 
 async function handleDropPreset(event: DragEvent): Promise<void> {

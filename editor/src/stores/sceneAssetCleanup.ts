@@ -6,6 +6,12 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial } from '@/types/material'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
+import {
+  collectConfigAssetDependencyIds,
+  isConfigAssetExtension,
+  normalizeAssetReferenceCandidate,
+} from '@/utils/assetDependencySubset'
+import { extractExtension } from '@/utils/blob'
 import { isPlanningImageConversionNode } from '@/utils/planningToScene'
 import {
   type ExplicitSceneAssetReference,
@@ -16,7 +22,6 @@ import { useGroundScatterStore } from './groundScatterStore'
 import { useGroundPaintStore } from './groundPaintStore'
 import { collectPrefabAssetReferences } from './prefabActions'
 
-const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 const ASSET_REFERENCE_SKIP_KEYS = new Set<string>([PREFAB_SOURCE_METADATA_KEY])
 const ASSET_REFERENCE_EXACT_KEYS = new Set<string>([
@@ -130,18 +135,9 @@ function normalizeAssetIdCandidate(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
   }
-  let candidate = value.trim()
+  const trimmed = value.trim()
+  let candidate = normalizeAssetReferenceCandidate(trimmed) ?? trimmed
   if (!candidate) {
-    return null
-  }
-  const assetProtocol = 'asset://'
-  if (candidate.startsWith(assetProtocol)) {
-    candidate = candidate.slice(assetProtocol.length)
-  }
-  if (!candidate) {
-    return null
-  }
-  if (candidate.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
     return null
   }
   if (/^(?:https?:|data:|blob:)/i.test(candidate)) {
@@ -151,6 +147,127 @@ function normalizeAssetIdCandidate(value: unknown): string | null {
     return null
   }
   return candidate
+}
+
+function resolveAssetExtension(asset: ProjectAsset | null | undefined): string {
+  return (
+    (typeof asset?.extension === 'string' ? asset.extension.trim().toLowerCase() : '')
+    || (extractExtension(asset?.description ?? null) ?? '').trim().toLowerCase()
+  )
+}
+
+function resolveTraversableConfigAssetKind(asset: ProjectAsset | null): 'prefab' | 'config' | null {
+  if (!asset) {
+    return null
+  }
+  const extension = resolveAssetExtension(asset)
+  if (asset.type === 'lod' || extension === 'lod') {
+    return 'config'
+  }
+  if (extension === 'prefab' || (asset.type === 'prefab' && !extension)) {
+    return 'prefab'
+  }
+  if (isConfigAssetExtension(extension)) {
+    return extension === 'prefab' ? 'prefab' : 'config'
+  }
+  return null
+}
+
+function collectPrefabDependencyAssetIds(prefabData: NodePrefabData): Set<string> {
+  const dependencyAssetIds = new Set<string>()
+  collectPrefabAssetReferences(prefabData.root).forEach((assetId) => {
+    const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+    if (normalized) {
+      dependencyAssetIds.add(normalized)
+    }
+  })
+  Object.keys(prefabData.assetRegistry ?? {}).forEach((assetId) => {
+    const normalized = assetId.trim()
+    if (normalized) {
+      dependencyAssetIds.add(normalized)
+    }
+  })
+  return dependencyAssetIds
+}
+
+function queueDependencyAssetId(
+  dependencyAssetIds: Set<string>,
+  pendingAssetIds: string[],
+  queuedAssetIds: Set<string>,
+  catalog: Record<string, ProjectAsset[]>,
+  rawAssetId: string,
+): void {
+  const normalized = normalizeAssetIdCandidate(rawAssetId)
+  if (!normalized) {
+    return
+  }
+  dependencyAssetIds.add(normalized)
+  const dependencyAsset = getAssetFromCatalog(catalog, normalized)
+  if (!dependencyAsset || !resolveTraversableConfigAssetKind(dependencyAsset) || queuedAssetIds.has(normalized)) {
+    return
+  }
+  queuedAssetIds.add(normalized)
+  pendingAssetIds.push(normalized)
+}
+
+export async function collectTransitiveConfigDependencyAssetIds(
+  rootAssetIds: Iterable<string>,
+  catalog: Record<string, ProjectAsset[]>,
+  options: {
+    loadPrefab: (assetId: string) => Promise<NodePrefabData>
+    loadConfigAssetText: (assetId: string, asset: ProjectAsset) => Promise<string | null>
+  },
+): Promise<Set<string>> {
+  const dependencyAssetIds = new Set<string>()
+  const queuedAssetIds = new Set<string>()
+  const visitedAssetIds = new Set<string>()
+  const pendingAssetIds: string[] = []
+
+  Array.from(rootAssetIds).forEach((assetId) => {
+    const normalized = normalizeAssetIdCandidate(assetId)
+    if (!normalized || queuedAssetIds.has(normalized)) {
+      return
+    }
+    queuedAssetIds.add(normalized)
+    pendingAssetIds.push(normalized)
+  })
+
+  while (pendingAssetIds.length) {
+    const assetId = pendingAssetIds.shift()
+    if (!assetId || visitedAssetIds.has(assetId)) {
+      continue
+    }
+    visitedAssetIds.add(assetId)
+
+    const asset = getAssetFromCatalog(catalog, assetId)
+    const traversalKind = resolveTraversableConfigAssetKind(asset)
+    if (!asset || !traversalKind) {
+      continue
+    }
+
+    try {
+      if (traversalKind === 'prefab') {
+        const prefabData = await options.loadPrefab(assetId)
+        collectPrefabDependencyAssetIds(prefabData).forEach((dependencyAssetId) => {
+          queueDependencyAssetId(dependencyAssetIds, pendingAssetIds, queuedAssetIds, catalog, dependencyAssetId)
+        })
+        continue
+      }
+
+      const fileText = await options.loadConfigAssetText(assetId, asset)
+      if (!fileText) {
+        continue
+      }
+      const parsed = JSON.parse(fileText) as unknown
+      collectConfigAssetDependencyIds(parsed).forEach((dependencyAssetId) => {
+        queueDependencyAssetId(dependencyAssetIds, pendingAssetIds, queuedAssetIds, catalog, dependencyAssetId)
+      })
+    } catch (error) {
+      console.warn('Failed to collect config asset dependencies during cleanup/export', assetId, error)
+    }
+  }
+
+  return dependencyAssetIds
 }
 
 function collectAssetIdCandidate(bucket: Set<string>, value: unknown) {
@@ -496,47 +613,8 @@ export async function collectPrefabTransitiveDependencyAssetIds(
   catalog: Record<string, ProjectAsset[]>,
   loadPrefab: (assetId: string) => Promise<NodePrefabData>,
 ): Promise<Set<string>> {
-  const dependencyAssetIds = new Set<string>()
-  const visitedPrefabs = new Set<string>()
-  const queue = Array.from(prefabAssetIds)
-
-  while (queue.length) {
-    const prefabAssetId = queue.shift()
-    if (!prefabAssetId || visitedPrefabs.has(prefabAssetId)) {
-      continue
-    }
-    visitedPrefabs.add(prefabAssetId)
-
-    try {
-      const prefabData = await loadPrefab(prefabAssetId)
-      const directDependencies = collectPrefabAssetReferences(prefabData.root)
-      directDependencies.forEach((assetId) => {
-        const normalized = typeof assetId === 'string' ? assetId.trim() : ''
-        if (!normalized) {
-          return
-        }
-        dependencyAssetIds.add(normalized)
-        const dependencyAsset = getAssetFromCatalog(catalog, normalized)
-        if (dependencyAsset?.type === 'prefab' && !visitedPrefabs.has(normalized)) {
-          queue.push(normalized)
-        }
-      })
-
-      Object.keys(prefabData.assetRegistry ?? {}).forEach((assetId) => {
-        const normalized = assetId.trim()
-        if (!normalized) {
-          return
-        }
-        dependencyAssetIds.add(normalized)
-        const dependencyAsset = getAssetFromCatalog(catalog, normalized)
-        if (dependencyAsset?.type === 'prefab' && !visitedPrefabs.has(normalized)) {
-          queue.push(normalized)
-        }
-      })
-    } catch (error) {
-      console.warn('Failed to collect prefab dependencies during cleanup', prefabAssetId, error)
-    }
-  }
-
-  return dependencyAssetIds
+  return collectTransitiveConfigDependencyAssetIds(prefabAssetIds, catalog, {
+    loadPrefab,
+    loadConfigAssetText: async () => null,
+  })
 }
