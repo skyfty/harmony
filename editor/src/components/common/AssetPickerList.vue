@@ -6,8 +6,7 @@ import type { ProjectDirectory } from '@/types/project-directory'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { assetProvider } from '@/resources/projectProviders/asset'
-import { determineAssetCategoryId } from '@/stores/assetCatalog'
-import { createServerAssetSource } from '@/utils/serverAssetSource'
+import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 
@@ -239,6 +238,7 @@ async function loadRemoteAssets() {
   try {
     const directories = await assetProvider.load?.()
     if (directories) {
+      sceneStore.setPackageDirectories(SERVER_ASSET_PROVIDER_ID, directories)
       remoteAssets.value = flattenDirectories(directories)
     } else {
       remoteAssets.value = []
@@ -261,27 +261,16 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
     return asset
   }
 
-  const existing = sceneStore.getAsset(asset.id)
-  if (existing) {
-    const registryEntry = sceneStore.assetRegistry?.[existing.id]
-    const hasRemoteRegistry = registryEntry?.sourceType === 'url'
-      || (registryEntry?.sourceType === 'server' && typeof registryEntry.resolvedUrl === 'string' && registryEntry.resolvedUrl.trim().length > 0)
-    if (!hasRemoteRegistry && existing.downloadUrl && existing.downloadUrl.trim().length) {
-      void sceneStore.syncAssetRegistryEntry(existing, existing.source)
-    }
-    return existing
-  }
-
   try {
     const normalizedAsset: ProjectAsset = {
       ...asset,
       gleaned: asset.gleaned ?? true,
     }
-    return sceneStore.registerAsset(normalizedAsset, {
-      categoryId: determineAssetCategoryId(normalizedAsset),
-      source: isServerProviderAsset(normalizedAsset)
-        ? createServerAssetSource(normalizedAsset.id)
-        : { type: 'url' },
+    if (isServerProviderAsset(normalizedAsset)) {
+      return sceneStore.copyPackageAssetToAssets(SERVER_ASSET_PROVIDER_ID, normalizedAsset)
+    }
+    return sceneStore.ensureProjectAssetRegistered(normalizedAsset, {
+      source: normalizedAsset.source ?? { type: 'url' },
       commitOptions: { updateNodes: false },
     })
   } catch (error) {

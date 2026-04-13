@@ -936,7 +936,7 @@ export class SceneMaterialFactory {
 
   private async loadTextureFromEntry(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
     try {
-      const downloadUrl = !asset.downloadUrl || asset.downloadUrl?.startsWith("builtin") ? asset.blobUrl : asset.downloadUrl;
+      const downloadUrl = asset.blobUrl ||  (!asset.downloadUrl || asset.downloadUrl?.startsWith("builtin"))  ? asset.blobUrl : asset.downloadUrl;
       if (!downloadUrl) {
         console.warn('纹理资源下载链接缺失', asset.assetId);
         return null;

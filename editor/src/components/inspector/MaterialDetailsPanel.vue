@@ -813,6 +813,23 @@ function ensureTextureAssetCached(asset: ProjectAsset) {
   })
 }
 
+function ensureSceneTextureAsset(asset: ProjectAsset | null): ProjectAsset | null {
+  if (!asset) {
+    return null
+  }
+  if (asset.type !== 'image' && asset.type !== 'texture' && asset.type !== 'hdri') {
+    return null
+  }
+  try {
+    return sceneStore.ensureProjectAssetRegistered(asset, {
+      commitOptions: { updateNodes: false },
+    })
+  } catch (error) {
+    console.warn('Failed to ensure texture asset is registered in scene assets', asset.id, error)
+    return asset
+  }
+}
+
 function resolveDefaultTileSizeMeters(asset: ProjectAsset): { x: number; y: number } | null {
   const imageWidth = typeof asset.imageWidth === 'number' ? asset.imageWidth : Number.NaN
   const imageHeight = typeof asset.imageHeight === 'number' ? asset.imageHeight : Number.NaN
@@ -912,7 +929,10 @@ function handleTextureUpdate(asset: ProjectAsset | null) {
     assetDialogVisible.value = false
     return
   }
-  applyTextureAsset(slot, asset)
+  const mappedAsset = ensureSceneTextureAsset(asset)
+  if (mappedAsset) {
+    applyTextureAsset(slot, mappedAsset)
+  }
   assetDialogVisible.value = false
 }
 
@@ -945,15 +965,19 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
     console.warn('Dragged asset is not an image and cannot be used as a material texture')
     return
   }
+  const mappedAsset = ensureSceneTextureAsset(asset)
+  if (!mappedAsset) {
+    return
+  }
   event.preventDefault()
   event.stopPropagation()
   draggingSlot.value = null
-  ensureTextureAssetCached(asset)
+  ensureTextureAssetCached(mappedAsset)
   const baseSettings = resolveInitialTextureSettings(slot)
   assignTexture(slot, {
-    assetId: asset.id,
-    name: asset.name,
-    settings: applyDefaultTileSizeMeters(baseSettings, asset),
+    assetId: mappedAsset.id,
+    name: mappedAsset.name,
+    settings: applyDefaultTileSizeMeters(baseSettings, mappedAsset),
   })
 }
 

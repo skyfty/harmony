@@ -11164,6 +11164,18 @@ export const useSceneStore = defineStore('scene', {
       }
       return cloneProjectTree(cached)
     },
+    findPackageProviderIdForAsset(assetId: string): string | null {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+      for (const [providerId, directories] of Object.entries(this.packageDirectoryCache)) {
+        if (findAssetInTree(directories ?? [], normalizedAssetId)) {
+          return providerId
+        }
+      }
+      return null
+    },
     isPackageLoaded(providerId: string): boolean {
       return !!this.packageDirectoryLoaded[providerId]
     },
@@ -11174,9 +11186,12 @@ export const useSceneStore = defineStore('scene', {
       this.ensureActiveDirectoryAndSelectionValid()
       this.selectedAssetId = null
     },
-    
+    getRegisteredAsset(assetId: string): ProjectAsset | null {
+      return this.findAssetInCatalog(assetId)
+    },
+
     getAsset(assetId: string): ProjectAsset | null {
-      const foundInCatalog = this.findAssetInCatalog(assetId)
+      const foundInCatalog = this.getRegisteredAsset(assetId)
       if (foundInCatalog) {
         return foundInCatalog
       }
@@ -11415,6 +11430,60 @@ export const useSceneStore = defineStore('scene', {
         autoSave: options.autoSave,
       })
       return registered[0] ?? { ...asset }
+    },
+    ensureProjectAssetRegistered(
+      asset: ProjectAsset,
+      options: {
+        categoryId?: string
+        source?: AssetSourceMetadata
+        commitOptions?: { updateNodes?: boolean }
+        autoSave?: boolean
+      } = {},
+    ): ProjectAsset {
+      const assetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
+      if (!assetId) {
+        return asset
+      }
+
+      const existing = this.getRegisteredAsset(assetId)
+      if (existing) {
+        const syncSource = options.source ?? existing.source ?? asset.source
+        if (syncSource) {
+          void this.syncAssetRegistryEntry(existing, syncSource)
+        }
+        return existing
+      }
+
+      const providerId = this.findPackageProviderIdForAsset(assetId)
+      if (providerId) {
+        return this.copyPackageAssetToAssets(providerId, {
+          ...asset,
+          id: assetId,
+          gleaned: asset.gleaned ?? true,
+        }, {
+          packagePathSegments: this.getPackageAssetPathSegments(providerId, assetId),
+        })
+      }
+
+      const normalizedAsset: ProjectAsset = {
+        ...asset,
+        id: assetId,
+        gleaned: asset.gleaned ?? true,
+      }
+
+      const inferredSource =
+        options.source
+        ?? normalizedAsset.source
+        ?? (typeof normalizedAsset.fileKey === 'string' && normalizedAsset.fileKey.trim().length > 0
+          ? createServerAssetSource(assetId)
+          : (resolveAssetDownloadUrl(normalizedAsset) ? { type: 'url' } satisfies AssetSourceMetadata : undefined))
+
+      return this.registerAsset(normalizedAsset, {
+        categoryId: options.categoryId ?? determineAssetCategoryId(normalizedAsset),
+        source: inferredSource,
+        commitOptions: options.commitOptions ?? { updateNodes: false },
+        autoSave: options.autoSave,
+      })
     },
     async cleanUnusedAssets(): Promise<{ removedAssetIds: string[] }> {
       if (!this.currentSceneId) {
