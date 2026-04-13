@@ -5,7 +5,6 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { assetProvider } from '@/resources/projectProviders/asset'
 import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
@@ -236,9 +235,8 @@ async function loadRemoteAssets() {
   loading.value = true
   errorMessage.value = null
   try {
-    const directories = await assetProvider.load?.()
-    if (directories) {
-      sceneStore.setPackageDirectories(SERVER_ASSET_PROVIDER_ID, directories)
+    const directories = await sceneStore.ensurePackageDirectoriesLoaded(SERVER_ASSET_PROVIDER_ID)
+    if (directories.length) {
       remoteAssets.value = flattenDirectories(directories)
     } else {
       remoteAssets.value = []
@@ -266,10 +264,8 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
       ...asset,
       gleaned: asset.gleaned ?? true,
     }
-    if (isServerProviderAsset(normalizedAsset)) {
-      return sceneStore.copyPackageAssetToAssets(SERVER_ASSET_PROVIDER_ID, normalizedAsset)
-    }
-    return sceneStore.ensureProjectAssetRegistered(normalizedAsset, {
+    return sceneStore.ensureSceneAssetRegistered(normalizedAsset, {
+      providerId: isServerProviderAsset(normalizedAsset) ? SERVER_ASSET_PROVIDER_ID : undefined,
       source: normalizedAsset.source ?? { type: 'url' },
       commitOptions: { updateNodes: false },
     })

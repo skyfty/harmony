@@ -40,21 +40,9 @@ export function ensureOptimizedGroundMeshOnDocument(
     return document
   }
   if (groundNode.dynamicMesh.optimizedMesh?.chunks?.length) {
-    console.info('[GroundOptimizedMesh] Scene document already contains optimized mesh', {
-      chunkCount: groundNode.dynamicMesh.optimizedMesh.chunkCount,
-      chunkCells: groundNode.dynamicMesh.optimizedMesh.chunkCells,
-      optimizedTriangles: groundNode.dynamicMesh.optimizedMesh.optimizedTriangleCount,
-      sourceTriangles: groundNode.dynamicMesh.optimizedMesh.sourceTriangleCount,
-    })
     return document
   }
   groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh, options)
-  console.info('[GroundOptimizedMesh] Rebuilt missing optimized mesh during scene load', {
-    chunkCount: groundNode.dynamicMesh.optimizedMesh.chunkCount,
-    chunkCells: groundNode.dynamicMesh.optimizedMesh.chunkCells,
-    optimizedTriangles: groundNode.dynamicMesh.optimizedMesh.optimizedTriangleCount,
-    sourceTriangles: groundNode.dynamicMesh.optimizedMesh.sourceTriangleCount,
-  })
   return document
 }
 

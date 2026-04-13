@@ -821,7 +821,7 @@ function ensureSceneTextureAsset(asset: ProjectAsset | null): ProjectAsset | nul
     return null
   }
   try {
-    return sceneStore.ensureProjectAssetRegistered(asset, {
+    return sceneStore.ensureSceneAssetRegistered(asset, {
       commitOptions: { updateNodes: false },
     })
   } catch (error) {

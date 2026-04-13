@@ -963,7 +963,8 @@ function resolveHierarchyAssetFromEvent(event: DragEvent): ProjectAsset | null {
   }
   const sourceMeta = asset.source
   if (sourceMeta?.type === 'package' && sourceMeta.providerId) {
-    asset = sceneStore.copyPackageAssetToAssets(sourceMeta.providerId, asset, {
+    asset = sceneStore.ensureSceneAssetRegistered(asset, {
+      providerId: sourceMeta.providerId,
       packagePathSegments: Array.isArray(sourceMeta.packagePathSegments) ? sourceMeta.packagePathSegments : [],
     })
   }

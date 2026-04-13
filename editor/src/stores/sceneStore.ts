@@ -80,6 +80,7 @@ import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placemen
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
+import { resourceProviders } from '@/resources/projectProviders'
 import { getExtensionFromMimeType } from '@schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
@@ -121,7 +122,7 @@ export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NOD
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
-import { createServerAssetSource, isServerBackedProviderId } from '@/utils/serverAssetSource'
+import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import { createLandformNodeMaterials } from '@/utils/landformNodeMaterials'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
@@ -8247,12 +8248,6 @@ export const useSceneStore = defineStore('scene', {
       )
       const normalizedGroundNode = findGroundNode(normalizedNodes)
       if (normalizedGroundNode) {
-        console.info('[SceneStore] Normalized ground node for active scene', {
-          sceneId: scene.id,
-          hasOptimizedMesh: Boolean((normalizedGroundNode.dynamicMesh as GroundDynamicMesh | undefined)?.optimizedMesh?.chunks?.length),
-          optimizedChunkCells: (normalizedGroundNode.dynamicMesh as GroundDynamicMesh | undefined)?.optimizedMesh?.chunkCells ?? null,
-          optimizedTriangleCount: (normalizedGroundNode.dynamicMesh as GroundDynamicMesh | undefined)?.optimizedMesh?.optimizedTriangleCount ?? 0,
-        })
         // Re-attach runtime sidecars after clone/normalize so hydrated terrain paint
         // remains visible on first scene load after browser refresh.
         attachGroundScatterRuntimeToNode(scene.id, normalizedGroundNode)
@@ -11186,6 +11181,107 @@ export const useSceneStore = defineStore('scene', {
       this.ensureActiveDirectoryAndSelectionValid()
       this.selectedAssetId = null
     },
+    async ensurePackageDirectoriesLoaded(providerId: string): Promise<ProjectDirectory[]> {
+      const normalizedProviderId = typeof providerId === 'string' ? providerId.trim() : ''
+      if (!normalizedProviderId) {
+        return []
+      }
+
+      const cached = this.getPackageDirectories(normalizedProviderId)
+      if (cached?.length) {
+        return cached
+      }
+
+      const provider = resourceProviders.find((entry) => entry.id === normalizedProviderId)
+      if (!provider?.load) {
+        return []
+      }
+
+      const directories = await provider.load()
+      const normalizedDirectories = Array.isArray(directories) ? directories : []
+      this.setPackageDirectories(normalizedProviderId, normalizedDirectories)
+      return this.getPackageDirectories(normalizedProviderId) ?? []
+    },
+    resolvePackageProviderIdForAsset(
+      asset: ProjectAsset,
+      options: { providerId?: string; packagePathSegments?: string[] } = {},
+    ): string | null {
+      const explicitProviderId = typeof options.providerId === 'string' ? options.providerId.trim() : ''
+      if (explicitProviderId) {
+        return explicitProviderId
+      }
+
+      const sourceMeta = asset.source
+      if (sourceMeta?.type === 'package' && typeof sourceMeta.providerId === 'string' && sourceMeta.providerId.trim().length > 0) {
+        return sourceMeta.providerId.trim()
+      }
+
+      if (typeof asset.fileKey === 'string' && asset.fileKey.trim().length > 0) {
+        return SERVER_ASSET_PROVIDER_ID
+      }
+
+      return this.findPackageProviderIdForAsset(asset.id)
+    },
+    ensureSceneAssetRegistered(
+      asset: ProjectAsset,
+      options: {
+        providerId?: string
+        packagePathSegments?: string[]
+        categoryId?: string
+        source?: AssetSourceMetadata
+        internal?: boolean
+        isEditorOnly?: boolean
+        commitOptions?: { updateNodes?: boolean }
+        autoSave?: boolean
+      } = {},
+    ): ProjectAsset {
+      const assetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
+      if (!assetId) {
+        return asset
+      }
+
+      const normalizedAsset: ProjectAsset = {
+        ...asset,
+        id: assetId,
+        gleaned: asset.gleaned ?? true,
+      }
+
+      const existing = this.getRegisteredAsset(assetId)
+      if (existing) {
+        const syncSource = options.source ?? existing.source ?? normalizedAsset.source
+        if (syncSource) {
+          void this.syncAssetRegistryEntry(existing, syncSource)
+        }
+        return existing
+      }
+
+      const providerId = this.resolvePackageProviderIdForAsset(normalizedAsset, {
+        providerId: options.providerId,
+        packagePathSegments: options.packagePathSegments,
+      })
+      if (providerId) {
+        const packagePathSegments = Array.isArray(options.packagePathSegments)
+          ? options.packagePathSegments
+          : this.getPackageAssetPathSegments(providerId, assetId)
+        return this.copyPackageAssetToAssets(providerId, normalizedAsset, { packagePathSegments })
+      }
+
+      const inferredSource =
+        options.source
+        ?? normalizedAsset.source
+        ?? (typeof normalizedAsset.fileKey === 'string' && normalizedAsset.fileKey.trim().length > 0
+          ? createServerAssetSource(assetId)
+          : (resolveAssetDownloadUrl(normalizedAsset) ? { type: 'url' } satisfies AssetSourceMetadata : undefined))
+
+      return this.registerAsset(normalizedAsset, {
+        categoryId: options.categoryId ?? determineAssetCategoryId(normalizedAsset),
+        source: inferredSource,
+        internal: options.internal,
+        isEditorOnly: options.isEditorOnly,
+        commitOptions: options.commitOptions ?? { updateNodes: false },
+        autoSave: options.autoSave,
+      })
+    },
     getRegisteredAsset(assetId: string): ProjectAsset | null {
       return this.findAssetInCatalog(assetId)
     },
@@ -11434,53 +11530,19 @@ export const useSceneStore = defineStore('scene', {
     ensureProjectAssetRegistered(
       asset: ProjectAsset,
       options: {
+        providerId?: string
+        packagePathSegments?: string[]
         categoryId?: string
         source?: AssetSourceMetadata
         commitOptions?: { updateNodes?: boolean }
         autoSave?: boolean
       } = {},
     ): ProjectAsset {
-      const assetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
-      if (!assetId) {
-        return asset
-      }
-
-      const existing = this.getRegisteredAsset(assetId)
-      if (existing) {
-        const syncSource = options.source ?? existing.source ?? asset.source
-        if (syncSource) {
-          void this.syncAssetRegistryEntry(existing, syncSource)
-        }
-        return existing
-      }
-
-      const providerId = this.findPackageProviderIdForAsset(assetId)
-      if (providerId) {
-        return this.copyPackageAssetToAssets(providerId, {
-          ...asset,
-          id: assetId,
-          gleaned: asset.gleaned ?? true,
-        }, {
-          packagePathSegments: this.getPackageAssetPathSegments(providerId, assetId),
-        })
-      }
-
-      const normalizedAsset: ProjectAsset = {
-        ...asset,
-        id: assetId,
-        gleaned: asset.gleaned ?? true,
-      }
-
-      const inferredSource =
-        options.source
-        ?? normalizedAsset.source
-        ?? (typeof normalizedAsset.fileKey === 'string' && normalizedAsset.fileKey.trim().length > 0
-          ? createServerAssetSource(assetId)
-          : (resolveAssetDownloadUrl(normalizedAsset) ? { type: 'url' } satisfies AssetSourceMetadata : undefined))
-
-      return this.registerAsset(normalizedAsset, {
-        categoryId: options.categoryId ?? determineAssetCategoryId(normalizedAsset),
-        source: inferredSource,
+      return this.ensureSceneAssetRegistered(asset, {
+        providerId: options.providerId,
+        packagePathSegments: options.packagePathSegments,
+        categoryId: options.categoryId,
+        source: options.source,
         commitOptions: options.commitOptions ?? { updateNodes: false },
         autoSave: options.autoSave,
       })

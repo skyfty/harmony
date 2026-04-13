@@ -10161,39 +10161,6 @@ function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): G
   return definition
 }
 
-function debugViewportGroundRenderMode(phase: string, definition: GroundRuntimeDynamicMesh): void {
-  const analysis = analyzeGroundOptimizedMeshUsage(definition)
-  const signature = [
-    phase,
-    viewportForceDenseGroundMesh.value ? 'forced-dense' : 'auto',
-    analysis.reason,
-    analysis.canUseOptimizedMesh ? 'optimized' : 'dense',
-    analysis.optimizedChunkCells ?? 'none',
-    analysis.runtimeChunkCells,
-    analysis.surfaceRevision,
-    analysis.runtimeHydratedHeightState,
-  ].join('|')
-
-  if (signature === lastGroundRenderDebugSignature) {
-    return
-  }
-  lastGroundRenderDebugSignature = signature
-
-  console.info('[SceneViewport][GroundRenderMode]', {
-    phase,
-    forcedDense: viewportForceDenseGroundMesh.value,
-    canUseOptimizedMesh: analysis.canUseOptimizedMesh,
-    reason: analysis.reason,
-    runtimeChunkCells: resolveGroundRuntimeChunkCells(definition),
-    optimizedChunkCells: analysis.optimizedChunkCells,
-    sourceChunkCells: analysis.sourceChunkCells,
-    optimizedTriangleCount: analysis.optimizedTriangleCount,
-    sourceTriangleCount: analysis.sourceTriangleCount,
-    surfaceRevision: analysis.surfaceRevision,
-    runtimeHydratedHeightState: analysis.runtimeHydratedHeightState,
-    runtimeDisableOptimizedChunks: analysis.runtimeDisableOptimizedChunks,
-  })
-}
 
 function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
   const node = getGroundNodeFromStore()
@@ -19583,7 +19550,6 @@ function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean 
     return
   }
 
-  debugViewportGroundRenderMode('sync', groundDefinition)
   updateGroundMesh(groundObject, groundDefinition)
   syncViewportGroundChunks(groundObject, groundDefinition)
 }
@@ -20367,7 +20333,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         containerData.dynamicMeshType = 'Ground'
         return container
       }
-      debugViewportGroundRenderMode('create', groundDefinition)
       const groundMesh = createGroundMesh(groundDefinition)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id

@@ -2520,10 +2520,8 @@ function importRemoteAssetFromUrl(url: string): DropImportOutcome {
     gleaned: true,
     extension: extractExtension(name) ?? null,
   }
-  const categoryId = determineAssetCategoryId(asset)
   return {
-    asset: sceneStore.registerAsset(asset, {
-      categoryId,
+    asset: sceneStore.ensureSceneAssetRegistered(asset, {
       source: { type: 'url' },
     }),
     isNew: true,
@@ -3148,7 +3146,7 @@ function prepareAssetForOperations(asset: ProjectAsset): ProjectAsset {
     return asset
   }
   const packagePathSegments = assetPackagePathMap.value.get(asset.id) ?? []
-  return sceneStore.copyPackageAssetToAssets(providerId, asset, { packagePathSegments })
+  return sceneStore.ensureSceneAssetRegistered(asset, { providerId, packagePathSegments })
 }
 
 const indexedDbLoadQueue = new Set<string>()

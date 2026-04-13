@@ -698,19 +698,6 @@ async function readSceneDocument(
       await groundScatterStore.hydrateSceneDocument(hydrated.id, findGroundNodeInDocument(hydrated), scatterSidecar)
       const paintSidecar = await readSceneGroundPaintSidecar(workspaceId, hydrated.id)
       await groundPaintStore.hydrateSceneDocument(hydrated.id, findGroundNodeInDocument(hydrated), paintSidecar)
-      const groundNode = findGroundNodeInDocument(hydrated)
-      if (groundNode?.dynamicMesh?.type === 'Ground') {
-        const runtimeDefinition = groundHeightmapStore.resolveGroundRuntimeMesh(groundNode.id, groundNode.dynamicMesh)
-        console.info('[ScenesStore] Loaded scene ground runtime (memory)', {
-          sceneId: hydrated.id,
-          hasOptimizedMesh: Boolean(runtimeDefinition.optimizedMesh?.chunks?.length),
-          optimizedChunkCells: runtimeDefinition.optimizedMesh?.chunkCells ?? null,
-          optimizedTriangleCount: runtimeDefinition.optimizedMesh?.optimizedTriangleCount ?? 0,
-          surfaceRevision: runtimeDefinition.surfaceRevision ?? null,
-          runtimeHydratedHeightState: runtimeDefinition.runtimeHydratedHeightState ?? 'none',
-          runtimeDisableOptimizedChunks: runtimeDefinition.runtimeDisableOptimizedChunks ?? false,
-        })
-      }
     }
     return stripGroundHeightMapsFromSceneDocument(hydrated)
   }
@@ -729,19 +716,6 @@ async function readSceneDocument(
     await groundScatterStore.hydrateSceneDocument(result.id, findGroundNodeInDocument(result), scatterSidecar)
     const paintSidecar = await readSceneGroundPaintSidecar(workspaceId, result.id)
     await groundPaintStore.hydrateSceneDocument(result.id, findGroundNodeInDocument(result), paintSidecar)
-    const groundNode = findGroundNodeInDocument(result)
-    if (groundNode?.dynamicMesh?.type === 'Ground') {
-      const runtimeDefinition = groundHeightmapStore.resolveGroundRuntimeMesh(groundNode.id, groundNode.dynamicMesh)
-      console.info('[ScenesStore] Loaded scene ground runtime (indexeddb)', {
-        sceneId: result.id,
-        hasOptimizedMesh: Boolean(runtimeDefinition.optimizedMesh?.chunks?.length),
-        optimizedChunkCells: runtimeDefinition.optimizedMesh?.chunkCells ?? null,
-        optimizedTriangleCount: runtimeDefinition.optimizedMesh?.optimizedTriangleCount ?? 0,
-        surfaceRevision: runtimeDefinition.surfaceRevision ?? null,
-        runtimeHydratedHeightState: runtimeDefinition.runtimeHydratedHeightState ?? 'none',
-        runtimeDisableOptimizedChunks: runtimeDefinition.runtimeDisableOptimizedChunks ?? false,
-      })
-    }
   }
   return stripGroundHeightMapsFromSceneDocument(result)
 }

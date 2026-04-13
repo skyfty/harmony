@@ -85,7 +85,9 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
         await ensureAssetCached(source.asset)
         selectedAsset = source.asset
       } else {
-        const registered = sceneStore.copyPackageAssetToAssets(assetProvider.id, source.asset)
+        const registered = sceneStore.ensureSceneAssetRegistered(source.asset, {
+          providerId: assetProvider.id,
+        })
         await ensureAssetCached(registered)
         selectedAsset = registered
       }
