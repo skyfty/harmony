@@ -16,6 +16,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { isRoadPresetFilename } from '@/utils/roadPreset'
 import { isWallPresetFilename } from '@/utils/wallPreset'
+import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 import { ASSETS_ROOT_DIRECTORY_ID, PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -3160,6 +3161,13 @@ function assetPreviewUrl(asset: ProjectAsset): string | undefined {
   return assetCacheStore.resolveAssetThumbnail({ asset, cacheId }) ?? undefined
 }
 
+function assetPreviewStyle(asset: ProjectAsset): { backgroundColor?: string } | undefined {
+  if (usesTransparentThumbnailBackground(asset)) {
+    return undefined
+  }
+  return asset.previewColor ? { backgroundColor: asset.previewColor } : undefined
+}
+
 async function ensureAssetPreview(asset: ProjectAsset) {
   const cacheId = resolveAssetCacheId(asset)
   if (assetCacheStore.hasCache(cacheId) || assetCacheStore.isDownloading(cacheId)) {
@@ -3383,7 +3391,9 @@ function createDragPreview(asset: ProjectAsset) {
     thumbnail.style.width = '64px'
     thumbnail.style.height = '64px'
     thumbnail.style.borderRadius = '10px'
-    thumbnail.style.backgroundColor = asset.previewColor ?? '#455A64'
+    if (!usesTransparentThumbnailBackground(asset)) {
+      thumbnail.style.backgroundColor = asset.previewColor ?? '#455A64'
+    }
     thumbnail.style.backgroundSize = 'cover'
     thumbnail.style.backgroundPosition = 'center'
     thumbnail.style.backgroundImage = `url("${thumbnailUrl}")`
@@ -3756,7 +3766,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 @dragleave="handleAssetCardDragLeave($event, asset.id)"
                 @drop="handleAssetCardDrop($event, asset.id)"
               >
-                <div class="asset-preview" :style="{ background: asset.previewColor }">
+                <div class="asset-preview" :style="assetPreviewStyle(asset)">
                   <div class="asset-select-control" :class="{ 'is-visible': isAssetSelected(asset.id) }">
                     <v-checkbox-btn
                       :model-value="isAssetSelected(asset.id)"
@@ -4403,7 +4413,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 .resource-card {
   display: flex;
   flex-direction: column;
-  background-color: rgba(18, 20, 24, 0.9);
+  background-color: transparent;
   border: 1px solid transparent;
   transition: border-color 150ms ease, transform 150ms ease;
   cursor: pointer;

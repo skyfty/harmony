@@ -698,8 +698,71 @@ function clearBehaviorDelayTimers(): void {
 	activeBehaviorDelayTimers.clear()
 }
 
+function clearBehaviorSoundTimers(instance: BehaviorSoundInstance): void {
+	if (instance.startTimer !== null) {
+		window.clearTimeout(instance.startTimer)
+		instance.startTimer = null
+	}
+	if (instance.stopTimer !== null) {
+		window.clearTimeout(instance.stopTimer)
+		instance.stopTimer = null
+	}
+	if (instance.intervalTimer !== null) {
+		window.clearTimeout(instance.intervalTimer)
+		instance.intervalTimer = null
+	}
+}
+
+function detachBehaviorSound(sound: THREE.Audio | THREE.PositionalAudio | null): void {
+	if (!sound) {
+		return
+	}
+	try {
+		if (sound.isPlaying) {
+			sound.stop()
+		}
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to stop audio instance', error)
+	}
+	try {
+		sound.disconnect()
+	} catch {
+		// ignore disconnect errors for partially initialized nodes
+	}
+	if (sound.parent) {
+		sound.parent.remove(sound)
+	}
+}
+
+function disposeBehaviorSoundInstance(
+	key: string,
+	resolution: BehaviorEventResolution | null = null,
+): void {
+	const instance = activeBehaviorSounds.get(key)
+	if (!instance) {
+		return
+	}
+	activeBehaviorSounds.delete(key)
+	instance.stopped = true
+	clearBehaviorSoundTimers(instance)
+	detachBehaviorSound(instance.sound)
+	instance.sound = null
+	const finish = instance.onFinish
+	instance.onFinish = null
+	if (finish && resolution) {
+		finish(resolution)
+	}
+}
+
+function clearBehaviorSounds(): void {
+	Array.from(activeBehaviorSounds.keys()).forEach((key) => {
+		disposeBehaviorSoundInstance(key, null)
+	})
+}
+
 function cleanupForUnrelatedSceneSwitch(): void {
 	clearBehaviorDelayTimers()
+	clearBehaviorSounds()
 	resetAnimationControllers()
 	waterRuntime.reset()
 	forceInitialDocumentGraphOnNextSnapshot = true
@@ -1174,6 +1237,23 @@ function ensureEditorResourceCache(
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
+type BehaviorSoundInstance = {
+	key: string
+	params: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>['params']
+	targetNodeId: string | null
+	sound: THREE.Audio | THREE.PositionalAudio | null
+	startTimer: number | null
+	stopTimer: number | null
+	intervalTimer: number | null
+	onFinish: ((resolution: BehaviorEventResolution) => void) | null
+	stopped: boolean
+	startedAt: number
+}
+
+const behaviorAudioLoader = new THREE.AudioLoader()
+const behaviorAudioBufferCache = new Map<string, AudioBuffer>()
+const pendingBehaviorAudioBufferRequests = new Map<string, Promise<AudioBuffer | null>>()
+const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>()
 const nodeAnimationControllers = new Map<string, {
 	mixer: THREE.AnimationMixer
 	clips: THREE.AnimationClip[]
@@ -3900,6 +3980,48 @@ async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAsse
 	return await resolveAssetUrlFromCache(assetId)
 }
 
+async function loadBehaviorAudioBuffer(assetId: string): Promise<AudioBuffer | null> {
+	const normalizedAssetId = assetId.trim()
+	if (!normalizedAssetId.length) {
+		return null
+	}
+	const cached = behaviorAudioBufferCache.get(normalizedAssetId)
+	if (cached) {
+		return cached
+	}
+	const pending = pendingBehaviorAudioBufferRequests.get(normalizedAssetId)
+	if (pending) {
+		return await pending
+	}
+	const request = (async () => {
+		const resolved = await resolveAssetUrlReference(normalizedAssetId)
+		if (!resolved?.url) {
+			return null
+		}
+		return await new Promise<AudioBuffer | null>((resolve) => {
+			behaviorAudioLoader.load(
+				resolved.url,
+				(buffer) => resolve(buffer ?? null),
+				undefined,
+				(error) => {
+					console.warn('[ScenePreview] Failed to load sound asset', normalizedAssetId, error)
+					resolve(null)
+				},
+			)
+		})
+	})()
+	pendingBehaviorAudioBufferRequests.set(normalizedAssetId, request)
+	try {
+		const buffer = await request
+		if (buffer) {
+			behaviorAudioBufferCache.set(normalizedAssetId, buffer)
+		}
+		return buffer
+	} finally {
+		pendingBehaviorAudioBufferRequests.delete(normalizedAssetId)
+	}
+}
+
 
 
 function inferMimeTypeFromUrl(url: string): string | null {
@@ -4976,6 +5098,227 @@ function stopBehaviorAnimation(token: string) {
 	} finally {
 		activeBehaviorAnimations.delete(token)
 	}
+}
+
+function buildBehaviorSoundInstanceKey(event: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>): string {
+	const explicitKey = event.params.instanceKey?.trim()
+	if (explicitKey) {
+		return `${event.nodeId}:${explicitKey}`
+	}
+	return `${event.nodeId}:${event.behaviorSequenceId}:${event.behaviorId}`
+}
+
+function randomBetween(min: number, max: number): number {
+	if (max <= min) {
+		return min
+	}
+	return min + Math.random() * (max - min)
+}
+
+function buildBehaviorSoundObject(
+	event: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>,
+	buffer: AudioBuffer,
+): THREE.Audio | THREE.PositionalAudio | null {
+	const activeListener = listener
+	if (!activeListener) {
+		return null
+	}
+	if (!event.params.spatial) {
+		const sound = new THREE.Audio(activeListener)
+		sound.setBuffer(buffer)
+		return sound
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId
+	const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null
+	if (!targetObject) {
+		return null
+	}
+	const sound = new THREE.PositionalAudio(activeListener)
+	sound.setBuffer(buffer)
+	sound.setRefDistance(Math.max(0.01, event.params.refDistanceMeters))
+	sound.setMaxDistance(Math.max(event.params.refDistanceMeters, event.params.maxDistanceMeters || event.params.refDistanceMeters))
+	sound.setRolloffFactor(event.params.rolloffFactor)
+	targetObject.add(sound)
+	return sound
+}
+
+function applyBehaviorSoundEnvelope(
+	sound: THREE.Audio | THREE.PositionalAudio,
+	params: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>['params'],
+): void {
+	const desiredVolume = Math.min(1, Math.max(0, params.volume))
+	const now = sound.context.currentTime
+	const gain = sound.gain.gain
+	gain.cancelScheduledValues(now)
+	if (params.fadeInSeconds > 0) {
+		gain.setValueAtTime(0, now)
+		gain.linearRampToValueAtTime(desiredVolume, now + params.fadeInSeconds)
+	} else {
+		gain.setValueAtTime(desiredVolume, now)
+	}
+	sound.setPlaybackRate(params.playbackRate)
+	if (typeof sound.setDetune === 'function') {
+		sound.setDetune(params.detuneCents)
+	}
+}
+
+function triggerBehaviorSoundFadeOut(instance: BehaviorSoundInstance): void {
+	if (!instance.sound || instance.params.fadeOutSeconds <= 0) {
+		return
+	}
+	const now = instance.sound.context.currentTime
+	const gain = instance.sound.gain.gain
+	gain.cancelScheduledValues(now)
+	gain.setValueAtTime(gain.value, now)
+	gain.linearRampToValueAtTime(0, now + instance.params.fadeOutSeconds)
+}
+
+function scheduleBehaviorSoundStop(key: string, instance: BehaviorSoundInstance): void {
+	if (instance.params.durationSeconds <= 0) {
+		return
+	}
+	const fadeOutDelayMs = Math.max(0, (instance.params.durationSeconds - instance.params.fadeOutSeconds) * 1000)
+	const stopDelayMs = Math.max(0, instance.params.durationSeconds * 1000)
+	if (instance.params.fadeOutSeconds > 0) {
+		instance.intervalTimer = window.setTimeout(() => {
+			const current = activeBehaviorSounds.get(key)
+			if (!current || current.stopped) {
+				return
+			}
+			triggerBehaviorSoundFadeOut(current)
+		}, fadeOutDelayMs)
+	}
+	instance.stopTimer = window.setTimeout(() => {
+		disposeBehaviorSoundInstance(key, instance.onFinish ? { type: 'continue' } : null)
+	}, stopDelayMs)
+}
+
+function attachBehaviorSoundCompletion(
+	key: string,
+	instance: BehaviorSoundInstance,
+	sound: THREE.Audio | THREE.PositionalAudio,
+	onEnded?: () => void,
+): void {
+	const source = sound.source
+	if (!source) {
+		return
+	}
+	const previousOnEnded = source.onended
+	source.onended = (endedEvent) => {
+		if (typeof previousOnEnded === 'function') {
+			previousOnEnded.call(source, endedEvent)
+		}
+		onEnded?.()
+		if (instance.stopped) {
+			return
+		}
+		disposeBehaviorSoundInstance(key, instance.onFinish ? { type: 'continue' } : null)
+	}
+}
+
+async function playBehaviorSoundEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>): Promise<void> {
+	const assetId = event.params.assetId?.trim() ?? ''
+	if (!assetId.length) {
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Sound asset not configured.' })
+		}
+		return
+	}
+	const activeListener = listener
+	if (!activeListener) {
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Audio listener unavailable.' })
+		}
+		return
+	}
+	try {
+		if (activeListener.context.state === 'suspended') {
+			await activeListener.context.resume()
+		}
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to resume audio context', error)
+	}
+	const buffer = await loadBehaviorAudioBuffer(assetId)
+	if (!buffer) {
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Unable to load sound asset.' })
+		}
+		return
+	}
+	const key = buildBehaviorSoundInstanceKey(event)
+	disposeBehaviorSoundInstance(key, null)
+	const instance: BehaviorSoundInstance = {
+		key,
+		params: event.params,
+		targetNodeId: event.targetNodeId,
+		sound: null,
+		startTimer: null,
+		stopTimer: null,
+		intervalTimer: null,
+		onFinish: event.token ? (resolution) => resolveBehaviorToken(event.token!, resolution) : null,
+		stopped: false,
+		startedAt: performance.now(),
+	}
+	activeBehaviorSounds.set(key, instance)
+	const beginPlayback = () => {
+		const current = activeBehaviorSounds.get(key)
+		if (!current || current.stopped) {
+			return
+		}
+		const sound = buildBehaviorSoundObject(event, buffer)
+		if (!sound) {
+			disposeBehaviorSoundInstance(key, current.onFinish ? { type: 'fail', message: 'Sound target node unavailable.' } : null)
+			return
+		}
+		current.sound = sound
+		sound.setLoop(event.params.playbackMode === 'loop')
+		applyBehaviorSoundEnvelope(sound, event.params)
+		if (event.params.playbackMode === 'interval') {
+			attachBehaviorSoundCompletion(key, current, sound, () => {
+				const latest = activeBehaviorSounds.get(key)
+				if (!latest || latest.stopped) {
+					return
+				}
+				latest.sound = null
+				const delaySeconds = randomBetween(latest.params.minIntervalSeconds, latest.params.maxIntervalSeconds)
+				latest.intervalTimer = window.setTimeout(() => {
+					void playBehaviorSoundEvent({ ...event, token: undefined, params: latest.params })
+				}, delaySeconds * 1000)
+				activeBehaviorSounds.delete(key)
+			})
+		} else if (event.params.playbackMode === 'once') {
+			attachBehaviorSoundCompletion(key, current, sound)
+		}
+		sound.play()
+		scheduleBehaviorSoundStop(key, current)
+		if (event.params.playbackMode === 'loop' && !current.onFinish) {
+			return
+		}
+		if (event.params.playbackMode !== 'once' && current.onFinish) {
+			const finish = current.onFinish
+			current.onFinish = null
+			finish({ type: 'continue' })
+		}
+	}
+	if (event.params.startDelaySeconds > 0) {
+		instance.startTimer = window.setTimeout(beginPlayback, event.params.startDelaySeconds * 1000)
+		if (event.params.playbackMode !== 'once' && instance.onFinish) {
+			const finish = instance.onFinish
+			instance.onFinish = null
+			finish({ type: 'continue' })
+		}
+		return
+	}
+	beginPlayback()
+}
+
+function handlePlaySoundEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>) {
+	const key = buildBehaviorSoundInstanceKey(event)
+	if (event.params.command === 'stop') {
+		disposeBehaviorSoundInstance(key, null)
+		return
+	}
+	void playBehaviorSoundEvent(event)
 }
 
 function resetEffectRuntimeTickers(): void {
@@ -6959,6 +7302,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'show-bubble':
 			presentBehaviorBubble(event)
 			break
+		case 'play-sound':
+			handlePlaySoundEvent(event)
+			break
 		case 'show-alert':
 			presentBehaviorAlert(event)
 			break
@@ -7942,6 +8288,7 @@ function stopAnimationLoop() {
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
+	clearBehaviorSounds()
 	void syncGroundCache(null)
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
@@ -11431,6 +11778,7 @@ onBeforeUnmount(() => {
 		}
 	})
 	activeBehaviorAnimations.clear()
+	clearBehaviorSounds()
 	unsubscribe?.()
 	unsubscribe = null
 	stopAnimationLoop()

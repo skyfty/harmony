@@ -8,6 +8,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
+import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 
 const props = withDefaults(
   defineProps<{
@@ -92,6 +93,13 @@ function flattenCatalog(catalog: Record<string, ProjectAsset[]> | undefined): Pr
 
 function assetThumbnailUrl(asset: ProjectAsset): string | null {
   return assetCacheStore.resolveAssetThumbnail({ asset })
+}
+
+function assetThumbnailPlaceholderStyle(asset: ProjectAsset): { backgroundColor?: string } | undefined {
+  if (usesTransparentThumbnailBackground(asset)) {
+    return undefined
+  }
+  return { backgroundColor: asset.previewColor || '#455A64' }
 }
 
 function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
@@ -496,7 +504,7 @@ onMounted(() => {
                   <div
                     v-else
                     class="asset-picker-list__thumbnail-placeholder"
-                    :style="{ backgroundColor: asset.previewColor || '#455A64' }"
+                    :style="assetThumbnailPlaceholderStyle(asset)"
                   >
                     {{ resolveInitials(asset) }}
                   </div>
@@ -621,7 +629,7 @@ onMounted(() => {
   aspect-ratio: 1 / 1;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
-  background: rgba(20, 24, 30, 0.8);
+  background: transparent;
   overflow: hidden;
   cursor: pointer;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
@@ -642,7 +650,7 @@ onMounted(() => {
   inset: 0;
   width: 100%;
   height: 100%;
-  background: radial-gradient(circle at 30% 20%, rgba(77, 208, 225, 0.18), rgba(33, 150, 243, 0.06) 55%, rgba(0, 0, 0, 0.08));
+  background: transparent;
   overflow: hidden;
 }
 

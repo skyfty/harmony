@@ -13,6 +13,9 @@ import type {
   BubbleBehaviorAnchorMode,
   BubbleBehaviorParams,
   BubbleBehaviorVariant,
+  PlaySoundBehaviorParams,
+  SoundBehaviorCommand,
+  SoundPlaybackMode,
   ShowBehaviorParams,
   LanternBehaviorParams,
   LanternSlideDefinition,
@@ -77,6 +80,18 @@ const DEFAULT_BUBBLE_MAX_DISTANCE_METERS = 0
 const DEFAULT_BUBBLE_SCREEN_OFFSET_X = 0
 const DEFAULT_BUBBLE_SCREEN_OFFSET_Y = -12
 const DEFAULT_BUBBLE_WORLD_OFFSET_Y = 1.6
+const DEFAULT_PLAY_SOUND_VOLUME = 1
+const DEFAULT_PLAY_SOUND_PLAYBACK_RATE = 1
+const DEFAULT_PLAY_SOUND_DETUNE_CENTS = 0
+const DEFAULT_PLAY_SOUND_START_DELAY_SECONDS = 0
+const DEFAULT_PLAY_SOUND_DURATION_SECONDS = 0
+const DEFAULT_PLAY_SOUND_FADE_IN_SECONDS = 0
+const DEFAULT_PLAY_SOUND_FADE_OUT_SECONDS = 0
+const DEFAULT_PLAY_SOUND_MIN_INTERVAL_SECONDS = 4
+const DEFAULT_PLAY_SOUND_MAX_INTERVAL_SECONDS = 12
+const DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS = 20
+const DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS = 1.5
+const DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR = 1
 
 function normalizeAssetId(value: string | null | undefined): string | null {
   if (typeof value !== 'string') {
@@ -100,6 +115,11 @@ function normalizeFiniteNumber(value: unknown, fallback: number): number {
     return fallback
   }
   return numeric
+}
+
+function normalizeClampedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = normalizeFiniteNumber(value, fallback)
+  return Math.min(max, Math.max(min, numeric))
 }
 
 function normalizeBubbleVariant(value: string | null | undefined): BubbleBehaviorVariant {
@@ -130,6 +150,20 @@ function normalizeBubbleAnchorMode(value: string | null | undefined): BubbleBeha
       return 'nodeAnchored'
     default:
       return 'screenFixed'
+  }
+}
+
+function normalizeSoundCommand(value: string | null | undefined): SoundBehaviorCommand {
+  return value === 'stop' ? 'stop' : 'play'
+}
+
+function normalizeSoundPlaybackMode(value: string | null | undefined): SoundPlaybackMode {
+  switch (value) {
+    case 'loop':
+    case 'interval':
+      return value
+    default:
+      return 'once'
   }
 }
 
@@ -262,6 +296,35 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
         screenOffsetY: DEFAULT_BUBBLE_SCREEN_OFFSET_Y,
         worldOffsetY: DEFAULT_BUBBLE_WORLD_OFFSET_Y,
         requireVisibleInView: true,
+      }
+    },
+  },
+  {
+    id: 'playSound',
+    label: 'Play Sound',
+    description: 'Play, loop, interval-trigger, or stop an audio asset.',
+    icon: 'mdi-volume-high',
+    createDefaultParams(): PlaySoundBehaviorParams {
+      return {
+        assetId: null,
+        command: 'play',
+        instanceKey: null,
+        targetNodeId: null,
+        spatial: false,
+        playbackMode: 'once',
+        volume: DEFAULT_PLAY_SOUND_VOLUME,
+        playbackRate: DEFAULT_PLAY_SOUND_PLAYBACK_RATE,
+        detuneCents: DEFAULT_PLAY_SOUND_DETUNE_CENTS,
+        startDelaySeconds: DEFAULT_PLAY_SOUND_START_DELAY_SECONDS,
+        durationSeconds: DEFAULT_PLAY_SOUND_DURATION_SECONDS,
+        fadeInSeconds: DEFAULT_PLAY_SOUND_FADE_IN_SECONDS,
+        fadeOutSeconds: DEFAULT_PLAY_SOUND_FADE_OUT_SECONDS,
+        minIntervalSeconds: DEFAULT_PLAY_SOUND_MIN_INTERVAL_SECONDS,
+        maxIntervalSeconds: DEFAULT_PLAY_SOUND_MAX_INTERVAL_SECONDS,
+        maxDistanceMeters: DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS,
+        refDistanceMeters: DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS,
+        rolloffFactor: DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR,
+        waitForCompletion: false,
       }
     },
   },
@@ -726,6 +789,38 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         },
       }
     }
+    case 'playSound': {
+      const params = binding.params as PlaySoundBehaviorParams | undefined
+      const command = normalizeSoundCommand(params?.command)
+      const playbackMode = normalizeSoundPlaybackMode(params?.playbackMode)
+      return {
+        type: 'playSound',
+        params: {
+          assetId: normalizeAssetId(params?.assetId),
+          command,
+          instanceKey: normalizeAssetId(params?.instanceKey),
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          spatial: params?.spatial === true,
+          playbackMode,
+          volume: normalizeClampedNumber(params?.volume, DEFAULT_PLAY_SOUND_VOLUME, 0, 1),
+          playbackRate: normalizeClampedNumber(params?.playbackRate, DEFAULT_PLAY_SOUND_PLAYBACK_RATE, 0.25, 4),
+          detuneCents: normalizeClampedNumber(params?.detuneCents, DEFAULT_PLAY_SOUND_DETUNE_CENTS, -2400, 2400),
+          startDelaySeconds: normalizeNonNegativeNumber(params?.startDelaySeconds, DEFAULT_PLAY_SOUND_START_DELAY_SECONDS),
+          durationSeconds: normalizeNonNegativeNumber(params?.durationSeconds, DEFAULT_PLAY_SOUND_DURATION_SECONDS),
+          fadeInSeconds: normalizeNonNegativeNumber(params?.fadeInSeconds, DEFAULT_PLAY_SOUND_FADE_IN_SECONDS),
+          fadeOutSeconds: normalizeNonNegativeNumber(params?.fadeOutSeconds, DEFAULT_PLAY_SOUND_FADE_OUT_SECONDS),
+          minIntervalSeconds: normalizeNonNegativeNumber(params?.minIntervalSeconds, DEFAULT_PLAY_SOUND_MIN_INTERVAL_SECONDS),
+          maxIntervalSeconds: Math.max(
+            normalizeNonNegativeNumber(params?.minIntervalSeconds, DEFAULT_PLAY_SOUND_MIN_INTERVAL_SECONDS),
+            normalizeNonNegativeNumber(params?.maxIntervalSeconds, DEFAULT_PLAY_SOUND_MAX_INTERVAL_SECONDS),
+          ),
+          maxDistanceMeters: normalizeNonNegativeNumber(params?.maxDistanceMeters, DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS),
+          refDistanceMeters: normalizeNonNegativeNumber(params?.refDistanceMeters, DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS),
+          rolloffFactor: normalizeNonNegativeNumber(params?.rolloffFactor, DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR),
+          waitForCompletion: command === 'play' && playbackMode === 'once' ? Boolean(params?.waitForCompletion) : false,
+        },
+      }
+    }
     case 'watch': {
       const params = binding.params as WatchBehaviorParams | undefined
       return {
@@ -1014,6 +1109,39 @@ export function ensureBehaviorParams(
             screenOffsetY: normalizeFiniteNumber(params?.screenOffsetY, DEFAULT_BUBBLE_SCREEN_OFFSET_Y),
             worldOffsetY: normalizeFiniteNumber(params?.worldOffsetY, DEFAULT_BUBBLE_WORLD_OFFSET_Y),
             requireVisibleInView: params?.requireVisibleInView !== false,
+          },
+        }
+      }
+      case 'playSound': {
+        const params = script.params as Partial<PlaySoundBehaviorParams> | undefined
+        const command = normalizeSoundCommand(params?.command)
+        const playbackMode = normalizeSoundPlaybackMode(params?.playbackMode)
+        const minIntervalSeconds = normalizeNonNegativeNumber(params?.minIntervalSeconds, DEFAULT_PLAY_SOUND_MIN_INTERVAL_SECONDS)
+        return {
+          type: 'playSound',
+          params: {
+            assetId: normalizeAssetId(params?.assetId),
+            command,
+            instanceKey: normalizeAssetId(params?.instanceKey),
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            spatial: params?.spatial === true,
+            playbackMode,
+            volume: normalizeClampedNumber(params?.volume, DEFAULT_PLAY_SOUND_VOLUME, 0, 1),
+            playbackRate: normalizeClampedNumber(params?.playbackRate, DEFAULT_PLAY_SOUND_PLAYBACK_RATE, 0.25, 4),
+            detuneCents: normalizeClampedNumber(params?.detuneCents, DEFAULT_PLAY_SOUND_DETUNE_CENTS, -2400, 2400),
+            startDelaySeconds: normalizeNonNegativeNumber(params?.startDelaySeconds, DEFAULT_PLAY_SOUND_START_DELAY_SECONDS),
+            durationSeconds: normalizeNonNegativeNumber(params?.durationSeconds, DEFAULT_PLAY_SOUND_DURATION_SECONDS),
+            fadeInSeconds: normalizeNonNegativeNumber(params?.fadeInSeconds, DEFAULT_PLAY_SOUND_FADE_IN_SECONDS),
+            fadeOutSeconds: normalizeNonNegativeNumber(params?.fadeOutSeconds, DEFAULT_PLAY_SOUND_FADE_OUT_SECONDS),
+            minIntervalSeconds,
+            maxIntervalSeconds: Math.max(
+              minIntervalSeconds,
+              normalizeNonNegativeNumber(params?.maxIntervalSeconds, DEFAULT_PLAY_SOUND_MAX_INTERVAL_SECONDS),
+            ),
+            maxDistanceMeters: normalizeNonNegativeNumber(params?.maxDistanceMeters, DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS),
+            refDistanceMeters: normalizeNonNegativeNumber(params?.refDistanceMeters, DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS),
+            rolloffFactor: normalizeNonNegativeNumber(params?.rolloffFactor, DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR),
+            waitForCompletion: command === 'play' && playbackMode === 'once' ? Boolean(params?.waitForCompletion) : false,
           },
         }
       }

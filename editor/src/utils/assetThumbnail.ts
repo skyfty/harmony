@@ -4,6 +4,7 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import { disposeSkyCubeTexture, extractSkycubeZipFaces, loadSkyCubeTexture } from '@schema/skyCubeTexture'
 import type { ProjectAsset } from '@/types/project-asset'
+import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 
 const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image', 'texture'])
 const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab'])
@@ -133,14 +134,21 @@ async function generateDefaultThumbnail(asset: ProjectAsset, width: number, heig
     throw new Error('Unable to create drawing context')
   }
 
-  const baseColor = resolvePreviewColor(asset)
-  const gradient = context.createLinearGradient(0, 0, width, height)
-  gradient.addColorStop(0, blendColor(baseColor, '#ffffff', 0.25))
-  gradient.addColorStop(1, baseColor)
-  context.fillStyle = gradient
-  context.fillRect(0, 0, width, height)
+  const transparentBackground = usesTransparentThumbnailBackground(asset)
+  if (!transparentBackground) {
+    const baseColor = resolvePreviewColor(asset)
+    const gradient = context.createLinearGradient(0, 0, width, height)
+    gradient.addColorStop(0, blendColor(baseColor, '#ffffff', 0.25))
+    gradient.addColorStop(1, baseColor)
+    context.fillStyle = gradient
+    context.fillRect(0, 0, width, height)
+  } else {
+    context.clearRect(0, 0, width, height)
+  }
 
-  context.fillStyle = 'rgba(255, 255, 255, 0.88)'
+  context.fillStyle = transparentBackground ? 'rgba(255, 255, 255, 0.82)' : 'rgba(255, 255, 255, 0.88)'
+  context.shadowColor = transparentBackground ? 'rgba(0, 0, 0, 0.42)' : 'transparent'
+  context.shadowBlur = transparentBackground ? Math.max(4, Math.round(height * 0.08)) : 0
   context.font = `700 ${Math.round(height * 0.42)}px "Inter", "Segoe UI", sans-serif`
   context.textAlign = 'center'
   context.textBaseline = 'middle'

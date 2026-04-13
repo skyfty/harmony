@@ -553,6 +553,7 @@ export type BehaviorScriptType =
   | 'moveTo'
   | 'showAlert'
   | 'bubble'
+  | 'playSound'
   | 'watch'
   | 'showPurpose'
   | 'hidePurpose'
@@ -632,6 +633,51 @@ export interface BubbleBehaviorParams {
   worldOffsetY: number
   /** Require the source node anchor to be inside the current camera view before showing. */
   requireVisibleInView: boolean
+}
+
+export type SoundBehaviorCommand = 'play' | 'stop'
+
+export type SoundPlaybackMode = 'once' | 'loop' | 'interval'
+
+export interface PlaySoundBehaviorParams {
+  /** Audio asset id from the project asset registry. */
+  assetId: string | null
+  /** Whether this script starts playback or stops an active sound instance. */
+  command: SoundBehaviorCommand
+  /** Optional stable identifier used to stop or replace looping/interval sounds. */
+  instanceKey: string | null
+  /** Optional node used as the source position when spatial playback is enabled. */
+  targetNodeId: string | null
+  /** Use node-anchored spatial playback instead of listener-relative audio. */
+  spatial: boolean
+  /** One-shot, continuous loop, or repeated interval playback. */
+  playbackMode: SoundPlaybackMode
+  /** Output volume between 0 and 1. */
+  volume: number
+  /** Playback rate multiplier. */
+  playbackRate: number
+  /** Pitch shift in cents. */
+  detuneCents: number
+  /** Delay before playback starts, in seconds. */
+  startDelaySeconds: number
+  /** Optional playback cap in seconds. Values <= 0 disable auto-stop. */
+  durationSeconds: number
+  /** Fade-in duration in seconds. */
+  fadeInSeconds: number
+  /** Fade-out duration in seconds. */
+  fadeOutSeconds: number
+  /** Minimum delay between repeated interval sounds, in seconds. */
+  minIntervalSeconds: number
+  /** Maximum delay between repeated interval sounds, in seconds. */
+  maxIntervalSeconds: number
+  /** Maximum audible distance in meters for spatial playback. */
+  maxDistanceMeters: number
+  /** Distance at which volume begins to fall off for spatial playback. */
+  refDistanceMeters: number
+  /** Strength of spatial volume falloff. */
+  rolloffFactor: number
+  /** Block the behavior sequence until a one-shot sound finishes playing. */
+  waitForCompletion: boolean
 }
 
 export interface WatchBehaviorParams {
@@ -751,6 +797,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'bubble'
       params: BubbleBehaviorParams
+    }
+  | {
+      type: 'playSound'
+      params: PlaySoundBehaviorParams
     }
   | {
       type: 'watch'

@@ -2940,6 +2940,22 @@ const lanternImagePromises = new Map<string, Promise<void>>();
 
 const activeBehaviorDelayTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const activeBehaviorAnimations = new Map<string, () => void>();
+type ViewerInnerAudioContext = ReturnType<typeof uni.createInnerAudioContext>;
+
+type BehaviorSoundInstance = {
+  key: string;
+  params: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>['params'];
+  targetNodeId: string | null;
+  audio: ViewerInnerAudioContext | null;
+  startTimer: ReturnType<typeof setTimeout> | null;
+  stopTimer: ReturnType<typeof setTimeout> | null;
+  intervalTimer: ReturnType<typeof setTimeout> | null;
+  fadeTimer: ReturnType<typeof setInterval> | null;
+  onFinish: ((resolution: BehaviorEventResolution) => void) | null;
+  stopped: boolean;
+};
+
+const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>();
 const nodeAnimationControllers = new Map<string, {
   mixer: THREE.AnimationMixer;
   clips: THREE.AnimationClip[];
@@ -6965,6 +6981,265 @@ function stopBehaviorAnimation(token: string): void {
   }
 }
 
+function buildBehaviorSoundInstanceKey(event: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>): string {
+  const explicitKey = event.params.instanceKey?.trim();
+  if (explicitKey) {
+    return `${event.nodeId}:${explicitKey}`;
+  }
+  return `${event.nodeId}:${event.behaviorSequenceId}:${event.behaviorId}`;
+}
+
+function clearBehaviorSoundTimers(instance: BehaviorSoundInstance): void {
+  if (instance.startTimer) {
+    clearTimeout(instance.startTimer);
+    instance.startTimer = null;
+  }
+  if (instance.stopTimer) {
+    clearTimeout(instance.stopTimer);
+    instance.stopTimer = null;
+  }
+  if (instance.intervalTimer) {
+    clearTimeout(instance.intervalTimer);
+    instance.intervalTimer = null;
+  }
+  if (instance.fadeTimer) {
+    clearInterval(instance.fadeTimer);
+    instance.fadeTimer = null;
+  }
+}
+
+function disposeBehaviorSoundInstance(
+  key: string,
+  resolution: BehaviorEventResolution | null = null,
+): void {
+  const instance = activeBehaviorSounds.get(key);
+  if (!instance) {
+    return;
+  }
+  activeBehaviorSounds.delete(key);
+  instance.stopped = true;
+  clearBehaviorSoundTimers(instance);
+  if (instance.audio) {
+    try {
+      instance.audio.stop();
+    } catch {
+      // ignore
+    }
+    try {
+      instance.audio.destroy();
+    } catch {
+      // ignore
+    }
+    instance.audio = null;
+  }
+  const finish = instance.onFinish;
+  instance.onFinish = null;
+  if (finish && resolution) {
+    finish(resolution);
+  }
+}
+
+function clearBehaviorSounds(): void {
+  Array.from(activeBehaviorSounds.keys()).forEach((key) => {
+    disposeBehaviorSoundInstance(key, null);
+  });
+}
+
+function randomBetween(min: number, max: number): number {
+  if (max <= min) {
+    return min;
+  }
+  return min + Math.random() * (max - min);
+}
+
+function computeViewerSpatialVolume(instance: BehaviorSoundInstance): number {
+  if (!instance.params.spatial) {
+    return instance.params.volume;
+  }
+  const targetPoint = resolveNodeAnchorPoint(instance.targetNodeId) ?? resolveNodeFocusPoint(instance.targetNodeId);
+  const camera = renderContext?.camera ?? null;
+  if (!targetPoint || !camera) {
+    return 0;
+  }
+  const distance = camera.position.distanceTo(targetPoint);
+  const maxDistance = Math.max(instance.params.refDistanceMeters, instance.params.maxDistanceMeters || instance.params.refDistanceMeters);
+  if (maxDistance <= 0) {
+    return instance.params.volume;
+  }
+  if (distance >= maxDistance) {
+    return 0;
+  }
+  const refDistance = Math.max(0.001, instance.params.refDistanceMeters || 1);
+  const normalized = Math.max(0, 1 - Math.max(0, distance - refDistance) / Math.max(0.001, maxDistance - refDistance));
+  const attenuation = Math.pow(normalized, Math.max(0.01, instance.params.rolloffFactor || 1));
+  return Math.max(0, Math.min(1, instance.params.volume * attenuation));
+}
+
+function setBehaviorSoundVolume(instance: BehaviorSoundInstance, volume: number): void {
+  if (!instance.audio) {
+    return;
+  }
+  instance.audio.volume = Math.max(0, Math.min(1, volume));
+}
+
+function scheduleBehaviorSoundFade(
+  instance: BehaviorSoundInstance,
+  fromVolume: number,
+  toVolume: number,
+  durationSeconds: number,
+): void {
+  if (!instance.audio) {
+    return;
+  }
+  if (instance.fadeTimer) {
+    clearInterval(instance.fadeTimer);
+    instance.fadeTimer = null;
+  }
+  if (durationSeconds <= 0) {
+    setBehaviorSoundVolume(instance, toVolume);
+    return;
+  }
+  const startedAt = Date.now();
+  const durationMs = durationSeconds * 1000;
+  setBehaviorSoundVolume(instance, fromVolume);
+  instance.fadeTimer = setInterval(() => {
+    const current = activeBehaviorSounds.get(instance.key);
+    if (!current || !current.audio) {
+      if (instance.fadeTimer) {
+        clearInterval(instance.fadeTimer);
+        instance.fadeTimer = null;
+      }
+      return;
+    }
+    const elapsed = Date.now() - startedAt;
+    const alpha = Math.min(1, Math.max(0, elapsed / durationMs));
+    setBehaviorSoundVolume(current, fromVolume + (toVolume - fromVolume) * alpha);
+    if (alpha >= 1) {
+      if (current.fadeTimer) {
+        clearInterval(current.fadeTimer);
+        current.fadeTimer = null;
+      }
+    }
+  }, 80);
+}
+
+function scheduleBehaviorSoundStop(key: string, instance: BehaviorSoundInstance): void {
+  if (instance.params.durationSeconds <= 0) {
+    return;
+  }
+  const fadeStartMs = Math.max(0, (instance.params.durationSeconds - instance.params.fadeOutSeconds) * 1000);
+  const stopDelayMs = Math.max(0, instance.params.durationSeconds * 1000);
+  if (instance.params.fadeOutSeconds > 0) {
+    instance.fadeTimer = setTimeout(() => {
+      const current = activeBehaviorSounds.get(key);
+      if (!current) {
+        return;
+      }
+      const currentVolume = computeViewerSpatialVolume(current);
+      scheduleBehaviorSoundFade(current, currentVolume, 0, current.params.fadeOutSeconds);
+    }, fadeStartMs) as unknown as ReturnType<typeof setInterval>;
+  }
+  instance.stopTimer = setTimeout(() => {
+    disposeBehaviorSoundInstance(key, instance.onFinish ? { type: 'continue' } : null);
+  }, stopDelayMs);
+}
+
+async function playBehaviorSoundEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>): Promise<void> {
+  const assetId = event.params.assetId?.trim() ?? '';
+  if (!assetId.length) {
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'fail', message: '未配置音频资源' });
+    }
+    return;
+  }
+  const resolved = await resolveAssetUrlReference(assetId);
+  if (!resolved?.url) {
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'fail', message: '音频资源加载失败' });
+    }
+    return;
+  }
+  const key = buildBehaviorSoundInstanceKey(event);
+  disposeBehaviorSoundInstance(key, null);
+  const audio = uni.createInnerAudioContext();
+  audio.autoplay = false;
+  audio.loop = event.params.playbackMode === 'loop';
+  audio.src = resolved.url;
+  audio.playbackRate = event.params.playbackRate;
+  const instance: BehaviorSoundInstance = {
+    key,
+    params: event.params,
+    targetNodeId: event.targetNodeId,
+    audio,
+    startTimer: null,
+    stopTimer: null,
+    intervalTimer: null,
+    fadeTimer: null,
+    onFinish: event.token ? (resolution) => resolveBehaviorToken(event.token!, resolution) : null,
+    stopped: false,
+  };
+  activeBehaviorSounds.set(key, instance);
+
+  const beginPlayback = () => {
+    const current = activeBehaviorSounds.get(key);
+    if (!current || !current.audio || current.stopped) {
+      return;
+    }
+    const baseVolume = computeViewerSpatialVolume(current);
+    if (current.params.fadeInSeconds > 0) {
+      scheduleBehaviorSoundFade(current, 0, baseVolume, current.params.fadeInSeconds);
+    } else {
+      setBehaviorSoundVolume(current, baseVolume);
+    }
+    current.audio.onEnded(() => {
+      const latest = activeBehaviorSounds.get(key);
+      if (!latest) {
+        return;
+      }
+      if (latest.params.playbackMode === 'interval' && !latest.stopped) {
+        const delaySeconds = randomBetween(latest.params.minIntervalSeconds, latest.params.maxIntervalSeconds);
+        latest.intervalTimer = setTimeout(() => {
+          const fresh = activeBehaviorSounds.get(key);
+          if (!fresh || !fresh.audio || fresh.stopped) {
+            return;
+          }
+          fresh.audio.seek?.(0);
+          fresh.audio.play();
+        }, delaySeconds * 1000);
+        return;
+      }
+      disposeBehaviorSoundInstance(key, latest.onFinish ? { type: 'continue' } : null);
+    });
+    current.audio.play();
+    scheduleBehaviorSoundStop(key, current);
+    if (current.params.playbackMode !== 'once' && current.onFinish) {
+      const finish = current.onFinish;
+      current.onFinish = null;
+      finish({ type: 'continue' });
+    }
+  };
+
+  if (event.params.startDelaySeconds > 0) {
+    instance.startTimer = setTimeout(beginPlayback, event.params.startDelaySeconds * 1000);
+    if (instance.params.playbackMode !== 'once' && instance.onFinish) {
+      const finish = instance.onFinish;
+      instance.onFinish = null;
+      finish({ type: 'continue' });
+    }
+    return;
+  }
+  beginPlayback();
+}
+
+function handlePlaySoundEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>): void {
+  const key = buildBehaviorSoundInstanceKey(event);
+  if (event.params.command === 'stop') {
+    disposeBehaviorSoundInstance(key, null);
+    return;
+  }
+  void playBehaviorSoundEvent(event);
+}
+
 function startTimedAnimation(
   token: string,
   durationSeconds: number,
@@ -9203,6 +9478,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'show-bubble':
       presentBehaviorBubble(event);
       break;
+    case 'play-sound':
+      handlePlaySoundEvent(event);
+      break;
     case 'show-alert':
       presentBehaviorAlert(event);
       break;
@@ -10635,6 +10913,7 @@ function teardownRenderer() {
   resetBehaviorProximity();
   activeBehaviorDelayTimers.forEach((handle) => clearTimeout(handle));
   activeBehaviorDelayTimers.clear();
+  clearBehaviorSounds();
   resetAnimationControllers();
   previewNodeMap.clear();
   autoTourRuntime.reset();
@@ -11069,6 +11348,12 @@ function startRenderLoop(
           previewComponentManager.update(deltaSeconds);
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
+          activeBehaviorSounds.forEach((instance) => {
+            if (!instance.audio || !instance.params.spatial || instance.stopped) {
+              return;
+            }
+            setBehaviorSoundVolume(instance, computeViewerSpatialVolume(instance));
+          });
 
           effectRuntimeTickers.forEach((tick) => {
             try {
@@ -11179,6 +11464,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   resetBehaviorProximity();
   activeBehaviorDelayTimers.forEach((handle) => clearTimeout(handle));
   activeBehaviorDelayTimers.clear();
+  clearBehaviorSounds();
   resetAnimationControllers();
 
   previewNodeMap.clear();
@@ -11511,6 +11797,7 @@ function cleanupRuntime(): void {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
   }
+  clearBehaviorSounds();
   resetSceneDownloadState();
   waterRuntime.reset();
   sharedResourceCache = null;

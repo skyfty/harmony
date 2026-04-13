@@ -20,6 +20,7 @@ import DelayParams from '@/components/inspector/behavior/DelayParams.vue'
 import MoveToParams from '@/components/inspector/behavior/MoveToParams.vue'
 import ShowAlertParams from '@/components/inspector/behavior/ShowAlertParams.vue'
 import BubbleParams from '@/components/inspector/behavior/BubbleParams.vue'
+import PlaySoundParams from '@/components/inspector/behavior/PlaySoundParams.vue'
 import WatchParams from '@/components/inspector/behavior/WatchParams.vue'
 import ShowParams from '@/components/inspector/behavior/ShowParams.vue'
 import HideParams from '@/components/inspector/behavior/HideParams.vue'
@@ -89,6 +90,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   moveTo: MoveToParams,
   showAlert: ShowAlertParams,
   bubble: BubbleParams,
+  playSound: PlaySoundParams,
   watch: WatchParams,
   showPurpose: WatchParams,
   show: ShowParams,
@@ -209,7 +211,8 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'hide' &&
     scriptType !== 'watch' &&
     scriptType !== 'animation' &&
-    scriptType !== 'moveTo'
+    scriptType !== 'moveTo' &&
+    scriptType !== 'playSound'
   ) {
     return
   }

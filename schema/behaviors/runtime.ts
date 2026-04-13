@@ -1,6 +1,7 @@
 import type { Object3D } from 'three'
 import type {
   BehaviorEventType,
+  PlaySoundBehaviorParams,
   BubbleBehaviorParams,
   DelayBehaviorParams,
   HideBehaviorParams,
@@ -77,6 +78,17 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       params: BubbleBehaviorParams
       token: string
+    }
+  | {
+      type: 'play-sound'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string | null
+      params: PlaySoundBehaviorParams
+      token?: string
     }
   | {
       type: 'watch-node'
@@ -704,6 +716,47 @@ function createAnimationEvent(
   }
 }
 
+function createPlaySoundEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'play-sound' }> {
+  const params = behavior.script.params as PlaySoundBehaviorParams | undefined
+  const normalizedParams = ensureBehaviorParams({
+    type: 'playSound',
+    params: (params ?? {}) as PlaySoundBehaviorParams,
+  } as SceneBehavior['script']) as Extract<SceneBehavior['script'], { type: 'playSound' }>
+  const soundParams = normalizedParams.params
+  const fallbackTarget = state.nodeId
+  const rawTargetNodeId = soundParams.targetNodeId && soundParams.targetNodeId.trim().length
+    ? soundParams.targetNodeId.trim()
+    : null
+  const targetNodeId = soundParams.spatial ? (rawTargetNodeId ?? fallbackTarget) : null
+  const waitForCompletion = soundParams.command === 'play'
+    && soundParams.playbackMode === 'once'
+    && soundParams.waitForCompletion
+  let token: string | undefined
+  if (waitForCompletion) {
+    token = createToken(state.id, state.index)
+    pendingTokens.set(token, {
+      token,
+      sequenceId: state.id,
+      stepIndex: state.index,
+    })
+    state.status = 'waiting'
+  }
+  return {
+    type: 'play-sound',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+    params: soundParams,
+    token,
+  }
+}
+
 function createDriveVehicleEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
@@ -820,6 +873,15 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'bubble':
         events.push(createShowBubbleEvent(state, behavior))
         return events
+      case 'playSound': {
+        const event = createPlaySoundEvent(state, behavior)
+        events.push(event)
+        if (event.token) {
+          return events
+        }
+        state.index += 1
+        continue
+      }
       case 'lantern':
         events.push(createLanternEvent(state, behavior))
         return events
