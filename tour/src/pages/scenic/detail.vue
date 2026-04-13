@@ -241,6 +241,7 @@ async function enterScenery() {
 
   const queryParts = [
     `packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
+    `packageCacheKey=${encodeURIComponent(scenic.value.scene.fileKey)}`,
     `sceneSpotId=${encodeURIComponent(scenic.value.id)}`,
     `sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
     `vehicleIdentifier=${encodeURIComponent(vehicleIdentifier)}`,

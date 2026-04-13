@@ -493,11 +493,18 @@ import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
 import { useProjectStore } from '../common/stores/projectStore';
-import { loadScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
+import {
+  loadScenePackageZip,
+  removeScenePackageZip,
+  resolveScenePackageZipPointerByCacheKey,
+  saveScenePackageZipByCacheKey,
+  type ScenePackagePointer,
+} from '@harmony/utils';
 
 type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
+  packageCacheKey?: string;
   nominateStateMap?: NominateExternalStateMap;
   defaultSteerIdentifier?: string;
   physicsInterpolation?: boolean;
@@ -10368,7 +10375,7 @@ function requestBinary(url: string): Promise<ArrayBuffer> {
   });
 }
 
-async function loadProjectFromScenePackageUrl(url: string): Promise<void> {
+async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
   addRuntimeStageLog('[SceneryViewer] Start loading scene package from url', { url });
   error.value = null;
   activeScenePackageAssetOverrides = null;
@@ -10377,6 +10384,27 @@ async function loadProjectFromScenePackageUrl(url: string): Promise<void> {
   try {
     resetSceneDownloadState();
     sceneDownload.active = true;
+    const cacheKeyParam = typeof cacheKey === 'string' && cacheKey.trim() ? cacheKey.trim() : '';
+    if (cacheKeyParam) {
+      const cachePointer = resolveScenePackageZipPointerByCacheKey(cacheKeyParam);
+      try {
+        sceneDownload.phase = 'parse';
+        sceneDownload.label = '正在读取本地缓存场景包…';
+        const cachedBuffer = await loadScenePackageZip(cachePointer);
+        addRuntimeStageLog('[SceneryViewer] Scene package cache hit', { cacheKey: cacheKeyParam, bytes: cachedBuffer.byteLength });
+        try {
+          await loadProjectFromScenePackageBytes(cachedBuffer);
+          addRuntimeStageLog('[SceneryViewer] Scene package parsed successfully from cache');
+          return;
+        } catch (parseError) {
+          pushRuntimeLog('warn', 'runtime', ['[SceneryViewer] Cached scene package failed to parse, removing cache entry', parseError]);
+          await removeScenePackageZip(cachePointer);
+        }
+      } catch (cacheError) {
+        addRuntimeStageLog('[SceneryViewer] Scene package cache miss', { cacheKey: cacheKeyParam, reason: cacheError });
+      }
+    }
+
     sceneDownload.phase = 'download';
     sceneDownload.label = '正在下载场景包…';
     const buffer = await requestBinary(url);
@@ -10386,6 +10414,11 @@ async function loadProjectFromScenePackageUrl(url: string): Promise<void> {
     sceneDownload.label = '正在解析场景包…';
     await loadProjectFromScenePackageBytes(buffer);
     addRuntimeStageLog('[SceneryViewer] Scene package parsed successfully');
+    if (cacheKeyParam) {
+      void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
+        pushRuntimeLog('warn', 'runtime', ['[SceneryViewer] Failed to persist scene package cache', saveError]);
+      });
+    }
   } catch (loadError) {
     pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Failed loading scene package from url', loadError]);
     throw loadError;
@@ -11677,6 +11710,7 @@ function configurePhysicsInterpolation(physinterpParam: string): void {
 function applyInput(params: {
   projectId?: string;
   packageUrl?: string;
+  packageCacheKey?: string;
   physinterp?: string;
 }): void {
   bootstrapRuntimeIfNeeded();
@@ -11684,6 +11718,7 @@ function applyInput(params: {
 
   const projectIdParam = typeof params.projectId === 'string' ? params.projectId.trim() : '';
   const packageUrlParamRaw = typeof params.packageUrl === 'string' ? params.packageUrl.trim() : '';
+  const packageCacheKeyParam = typeof params.packageCacheKey === 'string' ? params.packageCacheKey.trim() : '';
   let packageUrlParam = packageUrlParamRaw;
   if (packageUrlParam.includes('%')) {
     try {
@@ -11694,7 +11729,7 @@ function applyInput(params: {
   }
   const physinterpParam = typeof params.physinterp === 'string' ? params.physinterp.trim() : '';
 
-  const inputKey = `${projectIdParam}::${packageUrlParam}::${String(props.physicsInterpolation ?? '')}::${physinterpParam}`;
+  const inputKey = `${projectIdParam}::${packageUrlParam}::${packageCacheKeyParam}::${String(props.physicsInterpolation ?? '')}::${physinterpParam}`;
   if (inputKey === lastAppliedInputKey) {
     return;
   }
@@ -11708,7 +11743,8 @@ function applyInput(params: {
     requestedMode.value = 'project';
     currentProjectId.value = null;
     loading.value = true;
-    void loadProjectFromScenePackageUrl(packageUrlParam);
+    const effectiveCacheKey = packageCacheKeyParam || packageUrlParam;
+    void loadProjectFromScenePackageUrl(packageUrlParam, effectiveCacheKey);
   } else if (projectIdParam) {
     addRuntimeStageLog('[SceneryViewer] Input resolved to projectId mode', { projectId: projectIdParam });
     requestedMode.value = 'project';
@@ -11757,13 +11793,14 @@ onMounted(() => {
     applyInput({
       projectId: props.projectId,
       packageUrl: props.packageUrl,
+      packageCacheKey: props.packageCacheKey,
       physinterp: '',
     });
   }
 });
 
 watch(
-  () => [props.projectId, props.packageUrl, props.physicsInterpolation],
+  () => [props.projectId, props.packageUrl, props.packageCacheKey, props.physicsInterpolation],
   () => {
     if (!hasAnyPropInput()) {
       return;
@@ -11771,6 +11808,7 @@ watch(
     applyInput({
       projectId: props.projectId,
       packageUrl: props.packageUrl,
+      packageCacheKey: props.packageCacheKey,
       physinterp: '',
     });
   },

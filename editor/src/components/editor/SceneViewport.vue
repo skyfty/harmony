@@ -212,12 +212,10 @@ import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
-  analyzeGroundOptimizedMeshUsage,
   createGroundMesh,
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
-  resolveGroundRuntimeChunkCells,
   setGroundRuntimeOptimizedChunksEnabled,
   updateGroundMesh,
   releaseGroundMeshCache,
@@ -10130,7 +10128,6 @@ function shouldForceDenseGroundMeshForViewport(
 
 const viewportForceDenseGroundMesh = ref(shouldForceDenseGroundMeshForViewport())
 let pendingViewportGroundOptimizedRebuild = false
-let lastGroundRenderDebugSignature: string | null = null
 
 function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
   if (viewportForceDenseGroundMesh.value) {

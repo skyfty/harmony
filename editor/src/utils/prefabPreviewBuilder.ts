@@ -25,13 +25,7 @@ import {
   buildWallPreviewObjectFromNode,
   createPreviewMaterialOverrideOptions,
 } from '@/utils/wallFloorPreviewBuilder'
-
-type AssetCacheStoreLike = {
-  hasCache: (assetId: string) => boolean
-  ensureAssetEntry: (assetId: string) => Promise<unknown>
-  createFileFromCache: (assetId: string) => File | null
-  releaseInMemoryBlob: (assetId: string) => void
-}
+import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
 
 type PrefabPreviewOptions = {
   assetId: string

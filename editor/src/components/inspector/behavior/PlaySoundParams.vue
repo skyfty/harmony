@@ -161,10 +161,6 @@ function handleAssetDialogCancel() {
   assetDialogVisible.value = false
 }
 
-function clearAsset() {
-  updateField('assetId', null)
-}
-
 function handleTargetChange(nodeId: string | null) {
   updateField('targetNodeId', nodeId)
 }

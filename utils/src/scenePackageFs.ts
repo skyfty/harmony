@@ -32,10 +32,35 @@ function normalizeToArrayBuffer(input: ArrayBuffer | Uint8Array | any): ArrayBuf
 
 function ensureDirExistsSync(dirPath: string): void {
   const fs = getWxFileSystemManager();
+  if (typeof fs.mkdirSync !== 'function') {
+    throw new Error('当前环境不支持 mkdirSync');
+  }
   fs.mkdirSync(dirPath, true);
 }
 
 const SCENE_PACKAGE_DIR_NAME = 'harmony/scene-packages';
+
+export function normalizeScenePackageCacheKey(rawKey: string): string {
+  const trimmed = String(rawKey ?? '').trim();
+  if (!trimmed) {
+    return 'scene-package';
+  }
+
+  let hash = 2166136261;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    hash ^= trimmed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  const hashSuffix = (hash >>> 0).toString(36);
+  const safePrefix = trimmed
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[_\.]+|[_\.]+$/g, '')
+    .slice(0, 48);
+
+  return safePrefix ? `${safePrefix}-${hashSuffix}` : `scene-package-${hashSuffix}`;
+}
 
 export function resolveScenePackageDir(): string {
   const base = getUserDataPath().replace(/\/$/, '');
@@ -48,18 +73,33 @@ export function resolveScenePackageZipPath(projectId: string): string {
   return `${dir}/${safeId}.zip`;
 }
 
-export function writeScenePackageZipSync(bytes: ArrayBuffer | Uint8Array, projectId: string): string {
+export function resolveScenePackageCacheZipPath(cacheKey: string): string {
+  const safeKey = normalizeScenePackageCacheKey(cacheKey);
+  const dir = resolveScenePackageDir();
+  return `${dir}/${safeKey}.zip`;
+}
+
+export function writeScenePackageZipSyncAtPath(bytes: ArrayBuffer | Uint8Array, filePath: string): string {
   const fs = getWxFileSystemManager();
   if (typeof fs.writeFileSync !== 'function') {
     throw new Error('当前环境不支持 writeFileSync');
   }
 
-  const dir = resolveScenePackageDir();
+  const normalizedFilePath = String(filePath).replace(/\\/g, '/');
+  const dirSeparatorIndex = normalizedFilePath.lastIndexOf('/');
+  const dir = dirSeparatorIndex >= 0 ? normalizedFilePath.slice(0, dirSeparatorIndex) : '';
   ensureDirExistsSync(dir);
-  const filePath = resolveScenePackageZipPath(projectId);
   const buffer = normalizeToArrayBuffer(bytes);
-  fs.writeFileSync(filePath, buffer as any);
-  return filePath;
+  fs.writeFileSync(normalizedFilePath, buffer as any);
+  return normalizedFilePath;
+}
+
+export function writeScenePackageZipSync(bytes: ArrayBuffer | Uint8Array, projectId: string): string {
+  return writeScenePackageZipSyncAtPath(bytes, resolveScenePackageZipPath(projectId));
+}
+
+export function writeScenePackageZipSyncByCacheKey(bytes: ArrayBuffer | Uint8Array, cacheKey: string): string {
+  return writeScenePackageZipSyncAtPath(bytes, resolveScenePackageCacheZipPath(cacheKey));
 }
 
 export function readScenePackageZipSync(filePath: string): ArrayBuffer {

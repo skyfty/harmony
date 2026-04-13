@@ -8,6 +8,7 @@ import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectC
 import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { deserializeLodPreset, resolveFirstLodModelAssetId } from '@/utils/lodPreset'
 import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
+import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
 
 export type DragPreviewController = {
   group: THREE.Group
@@ -16,12 +17,6 @@ export type DragPreviewController = {
   prepare: (assetId: string) => void
   prepareObject: (previewId: string, object: THREE.Object3D) => void
   dispose: (cancelLoad?: boolean) => void
-}
-
-type AssetCacheStoreLike = {
-  hasCache: (assetId: string) => boolean
-  ensureAssetFile: (assetId: string, options?: { asset?: ProjectAsset | null }) => Promise<File | null>
-  releaseInMemoryBlob: (assetId: string) => void
 }
 
 type Options = {
