@@ -17,6 +17,7 @@ import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { parseMaterialAssetDocument } from '@/utils/materialAsset'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 
@@ -600,17 +601,17 @@ function handleSaveMaterial() {
     saveSharedDialogVisible.value = true
     return
   }
-  saveCurrentMaterialAsShared()
+  void saveCurrentMaterialAsShared()
 }
 
-function saveCurrentMaterialAsShared() {
+async function saveCurrentMaterialAsShared() {
   flushPendingMaterialPropsCommit()
   if (!selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
   const normalizedName = materialForm.name.trim()
   const normalizedDescription = materialForm.description.trim()
-  const result = sceneStore.saveNodeMaterialAsShared(selectedNodeId.value, activeNodeMaterial.value.id, {
+  const result = await sceneStore.saveNodeMaterialAsShared(selectedNodeId.value, activeNodeMaterial.value.id, {
     name: normalizedName.length ? normalizedName : undefined,
     description: normalizedDescription.length ? normalizedDescription : undefined,
   })
@@ -621,7 +622,7 @@ function saveCurrentMaterialAsShared() {
   }
 }
 
-function handleConfirmSaveShared() {
+async function handleConfirmSaveShared() {
   flushPendingMaterialPropsCommit()
   if (!originalSharedMaterialId.value) {
     saveSharedDialogVisible.value = false
@@ -630,7 +631,7 @@ function handleConfirmSaveShared() {
   const props = buildMaterialPropsFromForm()
   const normalizedName = materialForm.name.trim()
   const normalizedDescription = materialForm.description.trim()
-  const updated = sceneStore.updateMaterialDefinition(originalSharedMaterialId.value, {
+  const updated = await sceneStore.updateMaterialDefinition(originalSharedMaterialId.value, {
     ...props,
     name: normalizedName.length ? normalizedName : undefined,
     description: normalizedDescription.length ? normalizedDescription : undefined,
@@ -1002,84 +1003,6 @@ function handleNameChange(value: string) {
   }
 }
 
-function sanitizeImportedMaterial(
-  data: unknown,
-): { props: SceneMaterialProps; name?: string; description?: string } | null {
-  if (!data || typeof data !== 'object') {
-    return null
-  }
-  const payload = (data as Record<string, unknown>).props
-  const source =
-    payload && typeof payload === 'object'
-      ? (payload as Record<string, unknown>)
-      : (data as Record<string, unknown>)
-
-  const texturesInput =
-    source.textures && typeof source.textures === 'object'
-      ? (source.textures as Record<string, unknown>)
-      : {}
-  const textures = createEmptyTextureMap()
-  TEXTURE_SLOTS.forEach((slot) => {
-    const entry = texturesInput[slot]
-    if (!entry || typeof entry !== 'object') {
-      textures[slot] = null
-      return
-    }
-    const ref = entry as Record<string, unknown>
-    if (typeof ref.assetId === 'string' && ref.assetId.trim().length) {
-      const settings = typeof ref.settings === 'object' && ref.settings
-        ? createTextureSettings(ref.settings as Partial<SceneMaterialTextureSettings>)
-        : undefined
-      textures[slot] = {
-        assetId: ref.assetId,
-        name: typeof ref.name === 'string' ? ref.name : undefined,
-        settings,
-      }
-    } else {
-      textures[slot] = null
-    }
-  })
-
-  const props: SceneMaterialProps = {
-    color: normalizeHexColor(source.color, DEFAULT_PROPS.color),
-    transparent: typeof source.transparent === 'boolean' ? source.transparent : DEFAULT_PROPS.transparent,
-    opacity: clampNumber(Number(source.opacity ?? DEFAULT_PROPS.opacity), 0, 1, DEFAULT_PROPS.opacity),
-    side: (typeof source.side === 'string' && ['front', 'back', 'double'].includes(source.side)
-      ? source.side
-      : DEFAULT_PROPS.side) as SceneMaterialSide,
-    wireframe: typeof source.wireframe === 'boolean' ? source.wireframe : DEFAULT_PROPS.wireframe,
-    metalness: clampNumber(Number(source.metalness ?? DEFAULT_PROPS.metalness), 0, 1, DEFAULT_PROPS.metalness),
-    roughness: clampNumber(Number(source.roughness ?? DEFAULT_PROPS.roughness), 0, 1, DEFAULT_PROPS.roughness),
-    emissive: normalizeHexColor(source.emissive, DEFAULT_PROPS.emissive),
-    emissiveIntensity: clampNumber(
-      Number(source.emissiveIntensity ?? DEFAULT_PROPS.emissiveIntensity),
-      SLIDER_CONFIG.emissiveIntensity.min,
-      SLIDER_CONFIG.emissiveIntensity.max,
-      DEFAULT_PROPS.emissiveIntensity,
-    ),
-    aoStrength: clampNumber(
-      Number(source.aoStrength ?? DEFAULT_PROPS.aoStrength),
-      SLIDER_CONFIG.aoStrength.min,
-      SLIDER_CONFIG.aoStrength.max,
-      DEFAULT_PROPS.aoStrength,
-    ),
-    envMapIntensity: clampNumber(
-      Number(source.envMapIntensity ?? DEFAULT_PROPS.envMapIntensity),
-      SLIDER_CONFIG.envMapIntensity.min,
-      SLIDER_CONFIG.envMapIntensity.max,
-      DEFAULT_PROPS.envMapIntensity,
-    ),
-    textures,
-  }
-
-  const rawName = (data as Record<string, unknown>).name
-  const rawDescription = (data as Record<string, unknown>).description
-  const name = typeof rawName === 'string' ? rawName : undefined
-  const description = typeof rawDescription === 'string' ? rawDescription : undefined
-
-  return { props, name, description }
-}
-
 function applyImportedMaterialPayload(payload: {
   props: SceneMaterialProps
   name?: string
@@ -1118,7 +1041,7 @@ async function handleImportFileChange(event: Event) {
   try {
     const text = await file.text()
     const parsed = JSON.parse(text) as unknown
-    const sanitized = sanitizeImportedMaterial(parsed)
+    const sanitized = parseMaterialAssetDocument(parsed)
     if (!sanitized) {
       throw new Error('Invalid material file')
     }

@@ -121,7 +121,7 @@ import {
 export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
-import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import { buildAssetDependencySubset, sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import { createLandformNodeMaterials } from '@/utils/landformNodeMaterials'
@@ -180,7 +180,16 @@ import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
 import { buildRegionDynamicMeshFromLocalVertices, buildRegionDynamicMeshFromWorldPoints } from '@schema/regionUtils'
 import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
+import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
+import {
+  buildMaterialAssetFilename,
+  collectMaterialAssetDependencyIds,
+  createMaterialAssetTextureResolver,
+  parseMaterialAssetDocument,
+  renderMaterialThumbnailDataUrl,
+  serializeMaterialAsset,
+} from '@/utils/materialAsset'
 import {
   resolveFirstLodModelAssetId,
   type LodPresetData,
@@ -1247,6 +1256,46 @@ function createSceneMaterial(
     updatedAt: now,
     ...resolvedProps,
   }
+}
+
+function buildLocalMaterialProjectAsset(
+  material: SceneMaterial,
+  options: {
+    existingAsset?: ProjectAsset | null
+    thumbnail?: string | null
+  } = {},
+): ProjectAsset {
+  const previewColor = typeof material.color === 'string' && material.color.trim().length ? material.color : '#607d8b'
+  const existingAsset = options.existingAsset ?? null
+  return {
+    ...(existingAsset ?? {}),
+    id: material.id,
+    name: material.name,
+    type: 'material',
+    downloadUrl: existingAsset?.downloadUrl ?? `material://${material.id}.material`,
+    previewColor,
+    thumbnail: options.thumbnail ?? existingAsset?.thumbnail ?? null,
+    description: material.description,
+    gleaned: true,
+    extension: 'material',
+  }
+}
+
+function upsertAssetRegistryEntries(
+  currentAssetRegistry: Record<string, SceneAssetRegistryEntry>,
+  updates: Record<string, SceneAssetRegistryEntry>,
+): Record<string, SceneAssetRegistryEntry> {
+  let changed = false
+  const nextAssetRegistry = { ...currentAssetRegistry }
+  Object.entries(updates).forEach(([assetId, entry]) => {
+    const previous = nextAssetRegistry[assetId]
+    if (previous && JSON.stringify(previous) === JSON.stringify(entry)) {
+      return
+    }
+    nextAssetRegistry[assetId] = entry
+    changed = true
+  })
+  return changed ? nextAssetRegistry : currentAssetRegistry
 }
 
 function cloneSceneMaterial(material: SceneMaterial): SceneMaterial {
@@ -4846,8 +4895,36 @@ function replaceMaterialTextureReferences(
 
 function replaceAssetIdInMaterials(materials: SceneMaterial[], previousId: string, nextId: string) {
   materials.forEach((material) => {
+    if (material.id === previousId) {
+      material.id = nextId
+    }
     replaceMaterialTextureReferences(material.textures, previousId, nextId)
   })
+}
+
+function replaceSharedMaterialIdInNodes(nodes: SceneNode[], previousId: string, nextId: string): boolean {
+  let changed = false
+  nodes.forEach((node) => {
+    if (Array.isArray(node.materials) && node.materials.length) {
+      node.materials = node.materials.map((entry) => {
+        if (entry.materialId !== previousId) {
+          return entry
+        }
+        changed = true
+        return createNodeMaterial(nextId, entry, {
+          id: entry.id,
+          name: entry.name,
+          type: entry.type,
+        })
+      })
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      if (replaceSharedMaterialIdInNodes(node.children, previousId, nextId)) {
+        changed = true
+      }
+    }
+  })
+  return changed
 }
 
 function replaceAssetIdInNodes(nodes: SceneNode[], previousId: string, nextId: string) {
@@ -9362,6 +9439,9 @@ export const useSceneStore = defineStore('scene', {
       if (requiresDynamicMeshPatch) {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
       }
+      if (shared?.id) {
+        void this.syncLocalMaterialDependencyRegistryEntries(shared.id)
+      }
       commitSceneSnapshot(this)
       return created
     },
@@ -9628,11 +9708,137 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
-    saveNodeMaterialAsShared(
+    async syncLocalMaterialDependencyRegistryEntries(materialId: string): Promise<void> {
+      const material = this.materials.find((entry) => entry.id === materialId)
+      if (!material) {
+        return
+      }
+      const nextEntries: Record<string, SceneAssetRegistryEntry> = {}
+      collectMaterialAssetDependencyIds(material).forEach((assetId) => {
+        const asset = this.getAsset(assetId)
+        if (!asset) {
+          return
+        }
+        const entry = buildRegistryEntryFromSource(asset, asset.source)
+        if (entry) {
+          nextEntries[assetId] = entry
+        }
+      })
+      if (!Object.keys(nextEntries).length) {
+        return
+      }
+      this.assetRegistry = upsertAssetRegistryEntries(this.assetRegistry, nextEntries)
+    },
+    async ensureMaterialAssetDefinitionLoaded(materialAssetId: string): Promise<SceneMaterial | null> {
+      const normalizedAssetId = typeof materialAssetId === 'string' ? materialAssetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      const existing = this.materials.find((entry) => entry.id === normalizedAssetId) ?? null
+      if (existing) {
+        return existing
+      }
+
+      const asset = this.getAsset(normalizedAssetId)
+      if (!asset || asset.type !== 'material') {
+        return null
+      }
+
+      const fileText = await loadConfigAssetTextForDependencyTraversal(normalizedAssetId, this.assetCatalog)
+      if (!fileText) {
+        return null
+      }
+
+      let parsed: ReturnType<typeof parseMaterialAssetDocument>
+      try {
+        parsed = parseMaterialAssetDocument(JSON.parse(fileText) as unknown)
+      } catch (error) {
+        console.warn('Failed to parse material asset file', normalizedAssetId, error)
+        return null
+      }
+      if (!parsed) {
+        return null
+      }
+
+      const now = new Date().toISOString()
+      const material: SceneMaterial = {
+        id: normalizedAssetId,
+        name: parsed.name?.trim() || asset.name || `Material ${this.materials.length + 1}`,
+        description: parsed.description ?? asset.description,
+        type: parsed.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+        createdAt: now,
+        updatedAt: now,
+        ...parsed.props,
+      }
+      this.materials = [...this.materials, material]
+
+      if (parsed.assetRegistry) {
+        this.assetRegistry = upsertAssetRegistryEntries(this.assetRegistry, parsed.assetRegistry)
+      }
+      await this.syncLocalMaterialDependencyRegistryEntries(normalizedAssetId)
+      return material
+    },
+    async syncLocalMaterialAsset(materialId: string): Promise<ProjectAsset | null> {
+      const material = this.materials.find((entry) => entry.id === materialId)
+      if (!material) {
+        return null
+      }
+
+      const dependencyAssetIds = collectMaterialAssetDependencyIds(material)
+      const dependencySubset = dependencyAssetIds.length
+        ? buildAssetDependencySubset({
+            assetIds: dependencyAssetIds,
+            assetRegistry: this.assetRegistry,
+          })
+        : {}
+      const serialized = serializeMaterialAsset(material, {
+        assetRegistry: dependencySubset.assetRegistry,
+      })
+      const fileName = buildMaterialAssetFilename(material.name)
+      const blob = new Blob([serialized], { type: 'application/json' })
+      const assetCache = useAssetCacheStore()
+      await assetCache.storeAssetBlob(material.id, {
+        blob,
+        mimeType: 'application/json',
+        filename: fileName,
+      })
+
+      const existingAsset = this.getAsset(material.id)
+      let thumbnailDataUrl = existingAsset?.thumbnail ?? null
+      try {
+        thumbnailDataUrl = await renderMaterialThumbnailDataUrl({
+          material,
+          resolveTexture: createMaterialAssetTextureResolver({
+            assetCacheStore: assetCache,
+            getAsset: (assetId: string) => this.getAsset(assetId),
+          }),
+          width: ASSET_THUMBNAIL_WIDTH,
+          height: ASSET_THUMBNAIL_HEIGHT,
+        })
+      } catch (error) {
+        console.warn('Failed to generate material thumbnail', material.id, error)
+      }
+
+      const asset = buildLocalMaterialProjectAsset(material, {
+        existingAsset,
+        thumbnail: thumbnailDataUrl,
+      })
+      const registered = this.registerAsset(asset, {
+        categoryId: determineAssetCategoryId(asset),
+        source: existingAsset?.source ?? { type: 'local' },
+        commitOptions: { updateNodes: false },
+        autoSave: false,
+      })
+
+      await this.syncLocalMaterialDependencyRegistryEntries(material.id)
+      return registered
+    },
+    async saveNodeMaterialAsShared(
       nodeId: string,
       nodeMaterialId: string,
       options: { name?: string; description?: string } = {},
-    ): SceneMaterial | null {
+    ): Promise<SceneMaterial | null> {
       const targetNode = findNodeById(this.nodes, nodeId)
       if (!targetNode || !nodeSupportsMaterials(targetNode) || !targetNode.materials?.length) {
         return null
@@ -9687,24 +9893,9 @@ export const useSceneStore = defineStore('scene', {
       this.materials = [...this.materials, material]
       this.queueSceneNodePatch(nodeId, ['materials'])
 
-      const previewColor = typeof props.color === 'string' && props.color.trim().length ? props.color : '#607d8b'
-      const asset: ProjectAsset = {
-        id: material.id,
-        name: material.name,
-        type: 'material',
-        description: material.description,
-        downloadUrl: `material://${material.id}.material`,
-        previewColor,
-        thumbnail: null,
-        gleaned: true,
-        extension: extractExtension(`material://${material.id}.material`) ?? null,
-      }
+      await this.syncLocalMaterialAsset(material.id)
 
-      this.registerAsset(asset, {
-        categoryId: determineAssetCategoryId(asset),
-        source: { type: 'local' },
-        commitOptions: { updateNodes: true },
-      })
+      commitSceneSnapshot(this)
 
       return material
     },
@@ -9759,7 +9950,7 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this, { updateNodes: false })
       return duplicated
     },
-    updateMaterialDefinition(materialId: string, update: Partial<SceneMaterialProps> & { name?: string; description?: string; type?: SceneMaterialType }) {
+    async updateMaterialDefinition(materialId: string, update: Partial<SceneMaterialProps> & { name?: string; description?: string; type?: SceneMaterialType }) {
       const existingIndex = this.materials.findIndex((entry) => entry.id === materialId)
       if (existingIndex === -1) {
         return false
@@ -9811,6 +10002,8 @@ export const useSceneStore = defineStore('scene', {
       if (changedNodes) {
         this.queueSceneStructurePatch('updateMaterialDefinition')
       }
+
+      await this.syncLocalMaterialAsset(materialId)
 
       commitSceneSnapshot(this, { updateNodes: changedNodes })
       return true
@@ -12157,8 +12350,15 @@ export const useSceneStore = defineStore('scene', {
 
       replaceAssetIdInMaterials(this.materials, localAssetId, storedAsset.id)
       replaceAssetIdInNodes(this.nodes, localAssetId, storedAsset.id)
+      if (localAsset.type === 'material' || storedAsset.type === 'material') {
+        replaceSharedMaterialIdInNodes(this.nodes, localAssetId, storedAsset.id)
+      }
       this.materials = [...this.materials]
       this.queueSceneStructurePatch('replaceAssetIdInNodes')
+
+      if (storedAsset.type === 'material') {
+        void this.syncLocalMaterialDependencyRegistryEntries(storedAsset.id)
+      }
 
       if (this.selectedAssetId === localAssetId) {
         this.selectedAssetId = storedAsset.id

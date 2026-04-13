@@ -28,6 +28,12 @@
         ref="threePreviewRef"
         @dimensions="(payload) => emit('dimensions', payload)"
       />
+      <MaterialPreview
+        v-else-if="showMaterialPreview"
+        :file="previewState.file"
+        class="upload-preview__renderer"
+        ref="threePreviewRef"
+      />
       <WallFloorPresetPreview
         v-else-if="showPresetPreview"
         :file="previewState.file"
@@ -68,6 +74,7 @@ import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@s
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import LodPreview from '@/components/common/LodPreview.vue'
+import MaterialPreview from '@/components/common/MaterialPreview.vue'
 import ModelPreview from '@/components/common/ModelPreview.vue'
 import PrefabPreview from '@/components/common/PrefabPreview.vue'
 import HDRPreview from '@/components/common/HDRPreview.vue'
@@ -92,7 +99,7 @@ const previewState = reactive({
   file: null as File | null,
   imageUrl: null as string | null,
 })
-type ThreePreviewInstance = InstanceType<typeof LodPreview> | InstanceType<typeof ModelPreview> | InstanceType<typeof PrefabPreview> | InstanceType<typeof WallFloorPresetPreview>
+type ThreePreviewInstance = InstanceType<typeof LodPreview> | InstanceType<typeof ModelPreview> | InstanceType<typeof PrefabPreview> | InstanceType<typeof MaterialPreview> | InstanceType<typeof WallFloorPresetPreview>
 type EnvironmentPreviewInstance = InstanceType<typeof HDRPreview>
 
 const threePreviewRef = ref<ThreePreviewInstance | null>(null)
@@ -107,6 +114,7 @@ const isLodAsset = computed(() => props.asset.type === 'lod')
 const showLodPreview = computed(() => isLodAsset.value)
 const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'mesh'].includes(props.asset.type))
 const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value)
+const showMaterialPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'material')
 const showPresetPreview = computed(() => Boolean(previewState.file) && Boolean(presetPreviewKind.value))
 const isSkycubeAsset = computed(() => {
   if (props.asset.type !== 'file') {
@@ -120,7 +128,7 @@ const showEnvironmentPreview = computed(
   () => Boolean(previewState.file) && (props.asset.type === 'hdri' || isSkycubeAsset.value),
 )
 const requiresLocalFile = computed(
-  () => ['model', 'prefab', 'mesh', 'hdri'].includes(props.asset.type) || isSkycubeAsset.value || Boolean(presetPreviewKind.value),
+  () => ['model', 'prefab', 'mesh', 'hdri', 'material'].includes(props.asset.type) || isSkycubeAsset.value || Boolean(presetPreviewKind.value),
 )
 
 const fallbackColor = computed(() => {
@@ -136,6 +144,8 @@ const fallbackIcon = computed(() => {
     case 'prefab':
     case 'lod':
       return 'mdi-cube-outline'
+    case 'material':
+      return 'mdi-palette-outline'
     case 'image':
     case 'texture':
       return 'mdi-image-outline'
@@ -285,7 +295,7 @@ onBeforeUnmount(() => {
 })
 
 async function waitForThreePreviewReady(timeoutMs = 4000): Promise<boolean> {
-  if ((showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) && threePreviewRef.value) {
+  if ((showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showMaterialPreview.value || showPresetPreview.value) && threePreviewRef.value) {
     return true
   }
   if (typeof performance === 'undefined') {
@@ -294,7 +304,7 @@ async function waitForThreePreviewReady(timeoutMs = 4000): Promise<boolean> {
   const start = performance.now()
   while (performance.now() - start < timeoutMs) {
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    if ((showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) && threePreviewRef.value) {
+    if ((showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showMaterialPreview.value || showPresetPreview.value) && threePreviewRef.value) {
       return true
     }
   }
@@ -319,7 +329,7 @@ async function waitForEnvironmentPreviewReady(timeoutMs = 4000): Promise<boolean
 }
 
 async function captureSnapshot(): Promise<HTMLCanvasElement | null> {
-  if (showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showPresetPreview.value) {
+  if (showLodPreview.value || showModelPreview.value || showPrefabPreview.value || showMaterialPreview.value || showPresetPreview.value) {
     const ready = await waitForThreePreviewReady()
     if (!ready) {
       return null

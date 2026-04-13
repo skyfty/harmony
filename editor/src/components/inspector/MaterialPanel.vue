@@ -318,7 +318,7 @@ function handleSlotDragLeave(slotId: string, event: DragEvent) {
   dragOverSlotId.value = null
 }
 
-function handleSlotDrop(slotId: string, event: DragEvent) {
+async function handleSlotDrop(slotId: string, event: DragEvent) {
   if (props.disabled || !selectedNodeId.value) {
     return
   }
@@ -336,6 +336,10 @@ function handleSlotDrop(slotId: string, event: DragEvent) {
   dragOverSlotId.value = null
   isListDragActive.value = false
   if (materialAsset) {
+    const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(materialAsset.id)
+    if (!materialDefinition) {
+      return
+    }
     const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, slotId, materialAsset.id)
     if (assigned) {
       internalActiveId.value = slotId
@@ -382,7 +386,7 @@ function handleListDragLeave(event: DragEvent) {
   isListDragActive.value = false
 }
 
-function handleListDrop(event: DragEvent) {
+async function handleListDrop(event: DragEvent) {
   if (props.disabled || !selectedNodeId.value) {
     return
   }
@@ -394,6 +398,10 @@ function handleListDrop(event: DragEvent) {
   event.stopPropagation()
   dragOverSlotId.value = null
   isListDragActive.value = false
+  const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(asset.id)
+  if (!materialDefinition) {
+    return
+  }
   const newSlot = sceneStore.addNodeMaterial(selectedNodeId.value) as SceneNodeMaterial | null
   if (!newSlot) {
     return

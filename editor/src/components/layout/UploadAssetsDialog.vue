@@ -1244,7 +1244,7 @@ function isModelAsset(asset: ProjectAsset): boolean {
   if (detectAssetPreviewPresetKind(asset)) {
     return true
   }
-  if (['model', 'mesh', 'prefab', 'lod', 'hdri'].includes(asset.type)) {
+  if (['model', 'mesh', 'prefab', 'lod', 'hdri', 'material'].includes(asset.type)) {
     return true
   }
   return isSkycubeFileAsset(asset)

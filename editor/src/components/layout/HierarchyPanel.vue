@@ -1064,8 +1064,12 @@ async function handleAssetDropOnRoot(asset: ProjectAsset): Promise<void> {
   }
 }
 
-function applyMaterialAssetToNode(nodeId: string, asset: MaterialAsset): boolean {
+async function applyMaterialAssetToNode(nodeId: string, asset: MaterialAsset): Promise<boolean> {
   if (!supportsMaterialDrop(nodeId)) {
+    return false
+  }
+  const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(asset.id)
+  if (!materialDefinition) {
     return false
   }
   const node = sceneStore.getNodeById(nodeId)
@@ -1552,7 +1556,7 @@ async function handleDrop(event: DragEvent, targetId: string) {
     }
     event.preventDefault()
     event.stopPropagation()
-    const applied = applyMaterialAssetToNode(targetId, materialAsset)
+    const applied = await applyMaterialAssetToNode(targetId, materialAsset)
     if (!applied) {
       console.warn('Failed to apply material asset to node', materialAsset.id, targetId)
     }

@@ -17982,7 +17982,11 @@ function ensureEditablePrimaryMaterial(nodeId: string, material: SceneNodeMateri
   return material.id
 }
 
-function applyMaterialAssetToNode(nodeId: string, materialAssetId: string): boolean {
+async function applyMaterialAssetToNode(nodeId: string, materialAssetId: string): Promise<boolean> {
+  const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(materialAssetId)
+  if (!materialDefinition) {
+    return false
+  }
   const sceneNode = findSceneNode(sceneStore.nodes, nodeId)
   if (!nodeSupportsMaterials(sceneNode)) {
     return false
@@ -18309,7 +18313,7 @@ async function handleViewportDrop(event: DragEvent) {
       snapController.resetPlacementSideSnap()
       return
     }
-    const applied = applyMaterialAssetToNode(target.nodeId, assetId)
+    const applied = await applyMaterialAssetToNode(target.nodeId, assetId)
     if (!applied) {
       console.warn('Failed to apply material asset to node', assetId, target.nodeId)
     }

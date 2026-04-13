@@ -723,6 +723,10 @@ async function handleAddAsset(asset: ProjectAsset) {
       if (!currentNode || !nodeSupportsMaterials(currentNode)) {
         throw new Error('Select a compatible node to apply the material')
       }
+      const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(preparedAsset.id)
+      if (!materialDefinition) {
+        throw new Error('Failed to load material asset definition')
+      }
       const primary = currentNode.materials?.[0] ?? null
       const applied = primary
         ? sceneStore.assignNodeMaterial(currentNode.id, primary.id, preparedAsset.id)
@@ -4243,7 +4247,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   min-height: 0;
   padding: 6px 8px;
   border-radius: 12px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--asset-source-accent) 28%, rgba(8, 12, 18, 0.78)), rgba(8, 12, 18, 0.72));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--asset-source-accent) 28%, rgba(8, 12, 18, 0.28)), rgba(8, 12, 18, 0.22));
   border: 1px solid color-mix(in srgb, var(--asset-source-accent) 42%, transparent);
   backdrop-filter: blur(8px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
