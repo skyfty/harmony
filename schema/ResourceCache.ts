@@ -1,4 +1,4 @@
-import { AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCache';
+import { AssetLoader, type AssetCacheEntry, type AssetLoadPersistenceOptions, type AssetSource } from './assetCache';
 import { inferMimeTypeFromAssetId } from './assetTypeConversion';
 import { collectBuiltinAssetLookupIds } from './builtinAssetMapping';
 import type { SceneGraphBuildOptions } from './sceneGraph';
@@ -101,13 +101,17 @@ export default class ResourceCache {
       return this.assetEntryCache.get(assetId)!;
     }
 
+    const lookupAssetIds = this.collectAssetLookupIds(assetId);
+
     const cached = await this.assetLoader.getCache().getEntry(assetId);
     if (cached?.status === 'cached') {
       this.assetLoader.getCache().touch(assetId);
       return cached;
     }
 
-    const pending = this.resolveAssetSource(assetId)
+    const persistence = this.resolveAssetPersistence(assetId, lookupAssetIds);
+
+    const pending = this.resolveAssetSource(assetId, lookupAssetIds)
       .then(async (source) => {
         if (!source) {
           return null;
@@ -123,6 +127,7 @@ export default class ResourceCache {
                 progress: value,
               });
             },
+            persistence,
           });
           this.assetLoader.getCache().touch(assetId);
           return entry;
@@ -147,37 +152,37 @@ export default class ResourceCache {
     return pending;
   }
 
-  private async resolveAssetSource(assetId: string): Promise<AssetSource | null> {
+  private async resolveAssetSource(assetId: string, lookupAssetIds?: string[]): Promise<AssetSource | null> {
     if (!assetId) {
       return null;
     }
 
-    const lookupAssetIds = this.collectAssetLookupIds(assetId);
+    const resolvedLookupAssetIds = lookupAssetIds ?? this.collectAssetLookupIds(assetId);
 
     if (assetId.startsWith('data:')) {
       return { kind: 'data-url', dataUrl: assetId };
     }
 
-    for (const lookupAssetId of lookupAssetIds) {
+    for (const lookupAssetId of resolvedLookupAssetIds) {
       const override = this.resolveOverride(lookupAssetId);
       if (override) {
         return override;
       }
     }
 
-    for (const lookupAssetId of lookupAssetIds) {
+    for (const lookupAssetId of resolvedLookupAssetIds) {
       const registryResolved = await this.resolveFromUnifiedAssetRegistry(lookupAssetId);
       if (registryResolved) {
         return registryResolved;
       }
     }
 
-    const documentOverride = this.resolveDocumentAssetUrlOverride(lookupAssetIds);
+    const documentOverride = this.resolveDocumentAssetUrlOverride(resolvedLookupAssetIds);
     if (documentOverride) {
       return documentOverride;
     }
 
-    const builtinMappedPath = await this.resolveBuiltinMappedPath(lookupAssetIds);
+    const builtinMappedPath = await this.resolveBuiltinMappedPath(resolvedLookupAssetIds);
     if (builtinMappedPath) {
       return builtinMappedPath;
     }
@@ -188,6 +193,24 @@ export default class ResourceCache {
     }
 
     return null;
+  }
+
+  private resolveAssetPersistence(assetId: string, assetIds: string[]): AssetLoadPersistenceOptions {
+    for (const candidateId of assetIds) {
+      const descriptor = this.resolveEffectiveAssetDescriptor(candidateId);
+      if (!descriptor) {
+        continue;
+      }
+      return {
+        contentHash: typeof (descriptor as any).contentHash === 'string' ? (descriptor as any).contentHash : null,
+        contentHashAlgorithm: typeof (descriptor as any).contentHashAlgorithm === 'string'
+          ? (descriptor as any).contentHashAlgorithm
+          : null,
+      };
+    }
+    return {
+      keys: [assetId],
+    };
   }
 
   private async resolveFromUnifiedAssetRegistry(assetId: string): Promise<AssetSource | null> {

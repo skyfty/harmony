@@ -299,7 +299,7 @@ function handleImageDrop(index: number, event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   draggingSlideIndex.value = null
-  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
     console.warn('Failed to cache image asset for lantern slide', error)
   })
   updateSlideAsset(index, asset.id)
@@ -354,7 +354,7 @@ function handleDescriptionDrop(index: number, event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   descriptionDragIndex.value = null
-  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
     console.warn('Failed to cache text asset for lantern slide', error)
   })
   updateSlideDescriptionAsset(index, asset.id)
@@ -439,11 +439,11 @@ async function ensureDescriptionPreview(assetId: string): Promise<void> {
     state.error = null
     try {
       if (!assetCacheStore.hasCache(asset.id)) {
-        await assetCacheStore.downloaProjectAsset(asset)
+        await assetCacheStore.downloadProjectAsset(asset)
       } else {
         assetCacheStore.touch(asset.id)
       }
-      const file = assetCacheStore.createFileFromCache(asset.id)
+      const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
       if (!file) {
         throw new Error('无法读取文本资源内容')
       }

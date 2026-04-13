@@ -545,7 +545,7 @@ async function ensureAssetCached(asset: ProjectAsset) {
   if (assetCacheStore.hasCache(asset.id)) {
     return
   }
-  const entry = await assetCacheStore.downloaProjectAsset(asset)
+  const entry = await assetCacheStore.downloadProjectAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
     throw new Error(entry.error ?? 'Asset download is not complete')
   }
@@ -3178,7 +3178,7 @@ async function ensureAssetPreview(asset: ProjectAsset) {
   }
   indexedDbLoadQueue.add(cacheId)
   try {
-    await assetCacheStore.loadFromIndexedDb(cacheId)
+    await assetCacheStore.ensureAssetEntry(cacheId)
   } catch (error) {
     console.warn('Failed to load asset from IndexedDB', error)
   } finally {

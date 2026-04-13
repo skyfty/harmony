@@ -291,7 +291,7 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<boolean> {
   }
 
   try {
-    await assetCacheStore.loadFromIndexedDb(asset.id)
+    await assetCacheStore.ensureAssetEntry(asset.id, { asset })
   } catch (error) {
     console.warn('Failed to load asset from IndexedDB', asset.id, error)
   }
@@ -304,7 +304,7 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<boolean> {
     return false
   }
 
-  await assetCacheStore.downloaProjectAsset(asset)
+  await assetCacheStore.downloadProjectAsset(asset)
   return assetCacheStore.hasCache(asset.id)
 }
 
@@ -317,7 +317,7 @@ async function ensureBillboardAssetCached(asset: ProjectAsset): Promise<boolean>
   }
 
   try {
-    await assetCacheStore.loadFromIndexedDb(asset.id)
+    await assetCacheStore.ensureAssetEntry(asset.id, { asset })
   } catch (error) {
     console.warn('Failed to load billboard asset from IndexedDB', asset.id, error)
   }
@@ -330,7 +330,7 @@ async function ensureBillboardAssetCached(asset: ProjectAsset): Promise<boolean>
     return false
   }
 
-  await assetCacheStore.downloaProjectAsset(asset)
+  await assetCacheStore.downloadProjectAsset(asset)
   return assetCacheStore.hasCache(asset.id)
 }
 

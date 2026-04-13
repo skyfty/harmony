@@ -788,11 +788,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       const assetCache = useAssetCacheStore()
       let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
       if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
+        entry = await assetCache.ensureAssetEntry(assetId, { asset })
       }
       if (!entry || !entry.blob) {
         throw new Error('无法加载节点预制件数据')
@@ -1165,7 +1161,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
               return
             }
             try {
-              await assetCache.downloaProjectAsset(asset)
+              await assetCache.downloadProjectAsset(asset)
             } catch (error) {
               const message = (error as Error).message ?? '资源下载失败'
               errors.push({ assetId: asset.id, message })
@@ -1587,11 +1583,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       const assetCache = useAssetCacheStore()
       let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
       if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
+        entry = await assetCache.ensureAssetEntry(assetId, { asset })
       }
       if (!entry || !entry.blob) {
         throw new Error('无法加载行为预制件数据')

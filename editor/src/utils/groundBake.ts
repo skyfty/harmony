@@ -106,7 +106,9 @@ async function resolveSceneAssetBlob(scene: StoredSceneDocument, assetId: string
     assetCache.touch(normalizedId)
     return entry.blob
   }
-  const indexed = await assetCache.loadFromIndexedDb(normalizedId)
+  const indexed = await assetCache.ensureAssetEntry(normalizedId, {
+    downloadUrl: findAssetDownloadUrl(scene, normalizedId),
+  })
   if (indexed?.status === 'cached' && indexed.blob) {
     assetCache.touch(normalizedId)
     return indexed.blob

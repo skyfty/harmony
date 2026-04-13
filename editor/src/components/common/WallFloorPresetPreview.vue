@@ -268,32 +268,18 @@ function clearScene(): void {
 }
 
 async function ensureAssetFile(assetId: string): Promise<File | null> {
-  let file = assetCacheStore.createFileFromCache(assetId)
+  const asset = sceneStore.getAsset(assetId)
+  let file = await assetCacheStore.ensureAssetFile(assetId, { asset })
   if (file) {
     logWallPresetComponent('asset file resolved from memory cache', { assetId, fileName: file.name })
     return file
   }
-
-  await assetCacheStore.loadFromIndexedDb(assetId)
-  file = assetCacheStore.createFileFromCache(assetId)
-  if (file) {
-    logWallPresetComponent('asset file restored from indexeddb', { assetId, fileName: file.name })
-    return file
-  }
-
-  const asset = sceneStore.getAsset(assetId)
   if (!asset) {
     logWallPresetComponent('asset metadata missing', { assetId })
     return null
   }
-  await assetCacheStore.downloaProjectAsset(asset)
-  const downloaded = assetCacheStore.createFileFromCache(assetId)
-  logWallPresetComponent('asset file downloaded', {
-    assetId,
-    downloaded: Boolean(downloaded),
-    fileName: downloaded?.name ?? null,
-  })
-  return downloaded
+  logWallPresetComponent('asset file unavailable after ensure', { assetId })
+  return null
 }
 
 async function parsePreset(file: File): Promise<ParsedPreset> {

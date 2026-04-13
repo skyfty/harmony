@@ -309,7 +309,7 @@ async function handleAssetClick(asset: ProjectAsset) {
 
   selectingAssetId.value = mapped.id
   try {
-    await assetCacheStore.downloaProjectAsset(mapped)
+    await assetCacheStore.downloadProjectAsset(mapped)
     if (!assetCacheStore.hasCache(mapped.id)) {
       return
     }

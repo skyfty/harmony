@@ -51,9 +51,10 @@ type AssetCacheLike = {
   getEntry: (assetId: string) => AssetCacheEntryLike
   hasCache: (assetId: string) => boolean
   touch: (assetId: string) => void
-  loadFromIndexedDb: (assetId: string) => Promise<unknown>
+  restoreAssetEntry: (assetId: string) => Promise<unknown>
   downloadAsset: (assetId: string, downloadUrl: string, label: string) => Promise<unknown>
   createFileFromCache: (assetId: string) => File | null
+  ensureAssetFile: (assetId: string, options?: { asset?: ProjectAsset | null }) => Promise<File | null>
   releaseInMemoryBlob: (assetId: string) => void
 }
 
@@ -292,7 +293,7 @@ export async function updateSceneAssets(args: {
     ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
 
     if (entry.status !== 'cached') {
-      await assetCache.loadFromIndexedDb(assetId)
+      await assetCache.restoreAssetEntry(assetId)
       entry = assetCache.getEntry(assetId)
       ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
     }
@@ -341,7 +342,7 @@ export async function updateSceneAssets(args: {
     }
 
     if (!baseObject) {
-      const file = assetCache.createFileFromCache(assetId)
+      const file = await assetCache.ensureAssetFile(assetId, { asset: getAsset(assetId) })
       if (!file) {
         throw new Error('Missing asset file in cache')
       }

@@ -809,7 +809,7 @@ function assignTexture(slot: SceneMaterialTextureSlot, ref: SceneMaterialTexture
 }
 
 function ensureTextureAssetCached(asset: ProjectAsset) {
-  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
     console.warn('Failed to cache texture asset', error)
   })
 }

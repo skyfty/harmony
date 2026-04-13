@@ -20,8 +20,7 @@ export type DragPreviewController = {
 
 type AssetCacheStoreLike = {
   hasCache: (assetId: string) => boolean
-  loadFromIndexedDb: (assetId: string) => Promise<unknown>
-  createFileFromCache: (assetId: string) => File | null
+  ensureAssetFile: (assetId: string, options?: { asset?: ProjectAsset | null }) => Promise<File | null>
   releaseInMemoryBlob: (assetId: string) => void
 }
 
@@ -148,11 +147,7 @@ export function useDragPreview(options: Options): DragPreviewController {
       let baseGroup = getCachedModelObject(asset.id)
 
       if (!baseGroup) {
-        let file = options.assetCacheStore.createFileFromCache(asset.id)
-        if (!file) {
-          await options.assetCacheStore.loadFromIndexedDb(asset.id)
-          file = options.assetCacheStore.createFileFromCache(asset.id)
-        }
+        const file = await options.assetCacheStore.ensureAssetFile(asset.id, { asset })
         if (!file) {
           pendingPreviewAssetId = null
           return false
@@ -201,11 +196,7 @@ export function useDragPreview(options: Options): DragPreviewController {
     const token = ++dragPreviewLoadToken
 
     try {
-      let file = options.assetCacheStore.createFileFromCache(asset.id)
-      if (!file) {
-        await options.assetCacheStore.loadFromIndexedDb(asset.id)
-        file = options.assetCacheStore.createFileFromCache(asset.id)
-      }
+      const file = await options.assetCacheStore.ensureAssetFile(asset.id, { asset })
       if (!file) {
         pendingPreviewAssetId = null
         return false
@@ -262,11 +253,7 @@ export function useDragPreview(options: Options): DragPreviewController {
     const token = ++dragPreviewLoadToken
 
     try {
-      let file = options.assetCacheStore.createFileFromCache(asset.id)
-      if (!file) {
-        await options.assetCacheStore.loadFromIndexedDb(asset.id)
-        file = options.assetCacheStore.createFileFromCache(asset.id)
-      }
+      const file = await options.assetCacheStore.ensureAssetFile(asset.id, { asset })
       if (!file) {
         pendingPreviewAssetId = null
         return false

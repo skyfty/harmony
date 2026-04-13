@@ -9,9 +9,7 @@ export type LodPreviewStoreLike = {
 }
 
 export type LodPreviewAssetCacheLike = {
-  createFileFromCache: (assetId: string) => File | null
-  loadFromIndexedDb: (assetId: string) => Promise<unknown>
-  downloaProjectAsset: (asset: ProjectAsset) => Promise<unknown>
+  ensureAssetFile: (assetId: string, options?: { asset?: ProjectAsset | null }) => Promise<File | null>
 }
 
 export type ResolvedLodPreviewModel = {
@@ -24,19 +22,7 @@ export async function ensureProjectAssetFile(
   assetCache: LodPreviewAssetCacheLike,
   asset: ProjectAsset,
 ): Promise<File> {
-  let file = assetCache.createFileFromCache(asset.id)
-  if (file) {
-    return file
-  }
-
-  await assetCache.loadFromIndexedDb(asset.id)
-  file = assetCache.createFileFromCache(asset.id)
-  if (file) {
-    return file
-  }
-
-  await assetCache.downloaProjectAsset(asset)
-  file = assetCache.createFileFromCache(asset.id)
+  const file = await assetCache.ensureAssetFile(asset.id, { asset })
   if (file) {
     return file
   }

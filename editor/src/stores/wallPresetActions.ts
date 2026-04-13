@@ -616,38 +616,18 @@ async function generateWallPresetThumbnailDataUrl(
       return null
     }
 
-    let file = assetCache.createFileFromCache(normalizedId)
+    const asset = store.getAsset(normalizedId)
+    const file = await assetCache.ensureAssetFile(normalizedId, { asset })
     if (file) {
       logWallPresetThumbnail('asset file resolved from memory cache', { assetId: normalizedId, fileName: file.name })
       return file
     }
-
-    await assetCache.loadFromIndexedDb(normalizedId)
-    file = assetCache.createFileFromCache(normalizedId)
-    if (file) {
-      logWallPresetThumbnail('asset file restored from indexeddb', { assetId: normalizedId, fileName: file.name })
-      return file
-    }
-
-    const asset = store.getAsset(normalizedId)
     if (!asset) {
       logWallPresetThumbnail('asset metadata missing', { assetId: normalizedId })
       return null
     }
-
-    try {
-      await assetCache.downloaProjectAsset(asset)
-    } catch {
-      logWallPresetThumbnail('asset download failed', { assetId: normalizedId })
-      return null
-    }
-    const downloaded = assetCache.createFileFromCache(normalizedId)
-    logWallPresetThumbnail('asset file downloaded', {
-      assetId: normalizedId,
-      downloaded: Boolean(downloaded),
-      fileName: downloaded?.name ?? null,
-    })
-    return downloaded
+    logWallPresetThumbnail('asset file unavailable after ensure', { assetId: normalizedId })
+    return null
   }
   const resolveTexture = async (ref: SceneMaterialTextureRef) => {
     const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
@@ -941,11 +921,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       const assetCache = useAssetCacheStore()
       let entry: any = assetCache.getEntry(assetId)
       if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
+        entry = await assetCache.ensureAssetEntry(assetId, { asset })
       }
       if (!entry || !entry.blob) {
         throw new Error('无法加载墙体预设数据')

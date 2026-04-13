@@ -126,8 +126,7 @@ export function computeWallDynamicMeshSignature(
 
 type WallRendererOptions = {
   assetCacheStore: {
-    createFileFromCache: (assetId: string) => File | null
-    loadFromIndexedDb: (assetId: string) => Promise<unknown>
+    ensureAssetFile: (assetId: string, options?: { asset?: { id: string; extension?: string | null } | null }) => Promise<File | null>
     releaseInMemoryBlob: (assetId: string) => void
   }
   getNodeById: (nodeId: string) => SceneNode | null
@@ -434,16 +433,13 @@ export function createWallRenderer(options: WallRendererOptions) {
     const promise = (async () => {
       try {
         let group = getCachedModelObject(assetId)
-          if (!group) {
-          let file = options.assetCacheStore.createFileFromCache(assetId)
-          if (!file) {
-            await options.assetCacheStore.loadFromIndexedDb(assetId)
-            file = options.assetCacheStore.createFileFromCache(assetId)
-          }
+        if (!group) {
+          const asset = useSceneStore().getAsset(assetId)
+          const file = await options.assetCacheStore.ensureAssetFile(assetId, { asset })
           if (!file) {
             return
           }
-          const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
+          const ext = asset?.extension ?? undefined
           group = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
           options.assetCacheStore.releaseInMemoryBlob(assetId)
         }

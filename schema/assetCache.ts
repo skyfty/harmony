@@ -1,4 +1,8 @@
 import { fetchAssetBlob as fetchAssetBlobInternal } from './assetDownload'
+import {
+  resolvePersistentAssetKeys,
+  type PersistentAssetStorage,
+} from './persistentAssetStorage'
 
 export {
   configureAssetBlobDownloader,
@@ -29,6 +33,10 @@ export interface AssetCacheEntry {
   mimeType: string | null
   filename: string | null
   downloadUrl: string | null
+  serverUpdatedAt?: string | null
+  contentHash?: string | null
+  contentHashAlgorithm?: string | null
+  persistentKey?: string | null
 }
 
 export interface AssetSource {
@@ -43,19 +51,31 @@ export interface AssetSource {
 
 export interface AssetCacheOptions {
   maxEntries?: number
+  persistentStorage?: PersistentAssetStorage | null
+}
+
+export interface AssetLoadPersistenceOptions {
+  keys?: string[]
+  contentHash?: string | null
+  contentHashAlgorithm?: string | null
+  serverUpdatedAt?: string | null
 }
 
 export interface AssetLoadOptions {
   force?: boolean
   onProgress?: (value: number) => void
+  persistence?: AssetLoadPersistenceOptions
 }
 
 export class AssetCache {
   private readonly entries = new Map<string, AssetCacheEntry>()
+  private readonly persistentStorage: PersistentAssetStorage | null
+  private readonly pendingHydrations = new Map<string, Promise<AssetCacheEntry | null>>()
   private maxEntries: number
 
   constructor(options: AssetCacheOptions = {}) {
     this.maxEntries = Number.isFinite(options.maxEntries ?? Infinity) ? (options.maxEntries as number) : Infinity
+    this.persistentStorage = options.persistentStorage ?? null
   }
 
   ensureEntry(assetId: string): AssetCacheEntry {
@@ -71,6 +91,43 @@ export class AssetCache {
     return this.entries.get(assetId) ?? null
   }
 
+  peekEntry(assetId: string): AssetCacheEntry | null {
+    return this.entries.get(assetId) ?? null
+  }
+
+  async hydrateFromPersistent(assetId: string, persistence: AssetLoadPersistenceOptions = {}): Promise<AssetCacheEntry | null> {
+    const existing = this.entries.get(assetId)
+    if (existing?.status === 'cached') {
+      return existing
+    }
+    if (!this.persistentStorage) {
+      return null
+    }
+
+    const keys = resolvePersistentAssetKeys({
+      assetId,
+      contentHash: persistence.contentHash,
+      keys: persistence.keys,
+    })
+    if (!keys.length) {
+      return null
+    }
+
+    const hydrationKey = `${assetId}::${keys.join('|')}`
+    const pending = this.pendingHydrations.get(hydrationKey)
+    if (pending) {
+      return pending
+    }
+
+    const hydratePromise = this.readFromPersistent(assetId, keys, persistence)
+      .finally(() => {
+        this.pendingHydrations.delete(hydrationKey)
+      })
+
+    this.pendingHydrations.set(hydrationKey, hydratePromise)
+    return hydratePromise
+  }
+
   hasCache(assetId: string): boolean {
     return this.entries.get(assetId)?.status === 'cached'
   }
@@ -81,6 +138,9 @@ export class AssetCache {
       return
     }
     entry.lastUsedAt = now()
+    if (entry.persistentKey) {
+      void this.persistentStorage?.touch?.(entry.persistentKey, entry.lastUsedAt)
+    }
   }
 
   setMaxEntries(count: number): void {
@@ -91,22 +151,13 @@ export class AssetCache {
     mimeType?: string | null
     filename?: string | null
     downloadUrl?: string | null
+    serverUpdatedAt?: string | null
+    contentHash?: string | null
+    contentHashAlgorithm?: string | null
+    persistentKeys?: string[]
   } = {}): Promise<AssetCacheEntry> {
-    const entry = this.ensureEntry(assetId)
-    revokeEntryBlobUrl(entry)
-
-    let blob: Blob | null = null
-    if (typeof Blob !== 'undefined') {
-      blob = new Blob([arrayBuffer], { type: payload.mimeType ?? entry.mimeType ?? 'application/octet-stream' })
-      entry.blobUrl = createObjectUrl(blob)
-    }
-
-    entry.blob = blob
-    entry.mimeType = payload.mimeType ?? blob?.type ?? entry.mimeType ?? null
-    entry.filename = payload.filename ?? entry.filename ?? null
-    entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
-    entry.size = arrayBuffer.byteLength
-    finalizeCachedEntry(entry)
+    const entry = this.applyArrayBufferToEntry(assetId, arrayBuffer, payload)
+    await this.persistArrayBuffer(assetId, arrayBuffer, entry, payload)
     return entry
   }
 
@@ -114,17 +165,13 @@ export class AssetCache {
     mimeType?: string | null
     filename?: string | null
     downloadUrl?: string | null
+    serverUpdatedAt?: string | null
+    contentHash?: string | null
+    contentHashAlgorithm?: string | null
+    persistentKeys?: string[]
   } = {}): Promise<AssetCacheEntry> {
-    const entry = this.ensureEntry(assetId)
-    revokeEntryBlobUrl(entry)
-
-    entry.blob = blob
-    entry.mimeType = payload.mimeType ?? blob.type ?? entry.mimeType ?? null
-    entry.filename = payload.filename ?? entry.filename ?? (blob instanceof File ? blob.name : null)
-    entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
-    entry.size = blob.size
-    entry.blobUrl = createObjectUrl(blob)
-    finalizeCachedEntry(entry)
+    const entry = this.applyBlobToEntry(assetId, blob, payload)
+    await this.persistBlob(assetId, blob, entry, payload)
     return entry
   }
 
@@ -147,7 +194,20 @@ export class AssetCache {
     entry.mimeType = null
     entry.filename = null
     entry.downloadUrl = null
+    entry.serverUpdatedAt = null
+    entry.contentHash = null
+    entry.contentHashAlgorithm = null
+    const persistentKeys = resolvePersistentAssetKeys({
+      assetId,
+      contentHash: entry.contentHash ?? null,
+      keys: entry.persistentKey ? [entry.persistentKey] : [],
+    })
+    entry.persistentKey = null
     entry.lastUsedAt = now()
+
+    for (const key of persistentKeys) {
+      void this.persistentStorage?.delete(key)
+    }
   }
 
   setError(assetId: string, message: string): void {
@@ -194,12 +254,12 @@ export class AssetCache {
       if (removed >= totalToRemove) {
         break
       }
-      this.removeCache(entry.assetId)
+      this.releaseInMemoryBlob(entry.assetId)
       removed += 1
     }
 
     if (cachedEntries.length - removed > this.maxEntries && preferredAssetId) {
-      this.removeCache(preferredAssetId)
+      this.releaseInMemoryBlob(preferredAssetId)
     }
   }
 
@@ -215,6 +275,184 @@ export class AssetCache {
     } catch (_error) {
       return null
     }
+  }
+
+  getPersistentStorage(): PersistentAssetStorage | null {
+    return this.persistentStorage
+  }
+
+  private async readFromPersistent(
+    assetId: string,
+    keys: string[],
+    persistence: AssetLoadPersistenceOptions,
+  ): Promise<AssetCacheEntry | null> {
+    for (const key of keys) {
+      const record = await this.persistentStorage?.get(key)
+      if (!record || this.isStalePersistentRecord(record, persistence)) {
+        continue
+      }
+      const entry = this.applyArrayBufferToEntry(assetId, record.bytes, {
+        mimeType: record.mimeType,
+        filename: record.filename,
+        downloadUrl: record.downloadUrl,
+        serverUpdatedAt: record.serverUpdatedAt ?? persistence.serverUpdatedAt ?? null,
+        contentHash: record.contentHash ?? persistence.contentHash ?? null,
+        contentHashAlgorithm: record.contentHashAlgorithm ?? persistence.contentHashAlgorithm ?? null,
+        persistentKeys: [key],
+      })
+      entry.persistentKey = key
+      entry.lastUsedAt = now()
+      void this.persistentStorage?.touch?.(key, entry.lastUsedAt)
+      return entry
+    }
+    return null
+  }
+
+  private applyArrayBufferToEntry(
+    assetId: string,
+    arrayBuffer: ArrayBuffer,
+    payload: {
+      mimeType?: string | null
+      filename?: string | null
+      downloadUrl?: string | null
+      serverUpdatedAt?: string | null
+      contentHash?: string | null
+      contentHashAlgorithm?: string | null
+      persistentKeys?: string[]
+    },
+  ): AssetCacheEntry {
+    const entry = this.ensureEntry(assetId)
+    revokeEntryBlobUrl(entry)
+
+    let blob: Blob | null = null
+    if (typeof Blob !== 'undefined') {
+      blob = new Blob([arrayBuffer], { type: payload.mimeType ?? entry.mimeType ?? 'application/octet-stream' })
+      entry.blobUrl = createObjectUrl(blob)
+    }
+
+    entry.blob = blob
+    entry.mimeType = payload.mimeType ?? blob?.type ?? entry.mimeType ?? null
+    entry.filename = payload.filename ?? entry.filename ?? null
+    entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
+    entry.size = arrayBuffer.byteLength
+    entry.serverUpdatedAt = payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null
+    entry.contentHash = payload.contentHash ?? entry.contentHash ?? null
+    entry.contentHashAlgorithm = payload.contentHashAlgorithm ?? entry.contentHashAlgorithm ?? null
+    entry.persistentKey = resolvePersistentAssetKeys({
+      assetId,
+      contentHash: payload.contentHash ?? entry.contentHash ?? null,
+      keys: payload.persistentKeys,
+    })[0] ?? entry.persistentKey ?? null
+    finalizeCachedEntry(entry)
+    return entry
+  }
+
+  private applyBlobToEntry(
+    assetId: string,
+    blob: Blob,
+    payload: {
+      mimeType?: string | null
+      filename?: string | null
+      downloadUrl?: string | null
+      serverUpdatedAt?: string | null
+      contentHash?: string | null
+      contentHashAlgorithm?: string | null
+      persistentKeys?: string[]
+    },
+  ): AssetCacheEntry {
+    const entry = this.ensureEntry(assetId)
+    revokeEntryBlobUrl(entry)
+
+    entry.blob = blob
+    entry.mimeType = payload.mimeType ?? blob.type ?? entry.mimeType ?? null
+    entry.filename = payload.filename ?? entry.filename ?? (blob instanceof File ? blob.name : null)
+    entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
+    entry.size = blob.size
+    entry.blobUrl = createObjectUrl(blob)
+    entry.serverUpdatedAt = payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null
+    entry.contentHash = payload.contentHash ?? entry.contentHash ?? null
+    entry.contentHashAlgorithm = payload.contentHashAlgorithm ?? entry.contentHashAlgorithm ?? null
+    entry.persistentKey = resolvePersistentAssetKeys({
+      assetId,
+      contentHash: payload.contentHash ?? entry.contentHash ?? null,
+      keys: payload.persistentKeys,
+    })[0] ?? entry.persistentKey ?? null
+    finalizeCachedEntry(entry)
+    return entry
+  }
+
+  private async persistArrayBuffer(
+    assetId: string,
+    arrayBuffer: ArrayBuffer,
+    entry: AssetCacheEntry,
+    payload: {
+      mimeType?: string | null
+      filename?: string | null
+      downloadUrl?: string | null
+      serverUpdatedAt?: string | null
+      contentHash?: string | null
+      contentHashAlgorithm?: string | null
+      persistentKeys?: string[]
+    },
+  ): Promise<void> {
+    const keys = resolvePersistentAssetKeys({
+      assetId,
+      contentHash: payload.contentHash ?? entry.contentHash ?? null,
+      keys: payload.persistentKeys,
+    })
+    if (!keys.length || !this.persistentStorage) {
+      return
+    }
+    const bytes = cloneArrayBuffer(arrayBuffer)
+    for (const key of keys) {
+      await this.persistentStorage.put({
+        key,
+        bytes,
+        size: arrayBuffer.byteLength,
+        mimeType: entry.mimeType,
+        filename: entry.filename,
+        downloadUrl: entry.downloadUrl,
+        assetId,
+        contentHash: payload.contentHash ?? entry.contentHash ?? null,
+        contentHashAlgorithm: payload.contentHashAlgorithm ?? entry.contentHashAlgorithm ?? null,
+        serverUpdatedAt: payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null,
+      })
+    }
+  }
+
+  private async persistBlob(
+    assetId: string,
+    blob: Blob,
+    entry: AssetCacheEntry,
+    payload: {
+      mimeType?: string | null
+      filename?: string | null
+      downloadUrl?: string | null
+      serverUpdatedAt?: string | null
+      contentHash?: string | null
+      contentHashAlgorithm?: string | null
+      persistentKeys?: string[]
+    },
+  ): Promise<void> {
+    if (!this.persistentStorage || typeof blob.arrayBuffer !== 'function') {
+      return
+    }
+    try {
+      const bytes = await blob.arrayBuffer()
+      await this.persistArrayBuffer(assetId, bytes, entry, payload)
+    } catch (error) {
+      console.warn('持久化资源 Blob 失败', assetId, error)
+    }
+  }
+
+  private isStalePersistentRecord(
+    record: { serverUpdatedAt?: string | null },
+    persistence: AssetLoadPersistenceOptions,
+  ): boolean {
+    if (!persistence.serverUpdatedAt || !record.serverUpdatedAt) {
+      return false
+    }
+    return persistence.serverUpdatedAt !== record.serverUpdatedAt
   }
 }
 
@@ -245,6 +483,11 @@ export class AssetLoader {
       if (cached?.status === 'cached') {
         this.cache.touch(assetId)
         return cached
+      }
+      const hydrated = await this.cache.hydrateFromPersistent(assetId, options.persistence)
+      if (hydrated?.status === 'cached') {
+        this.cache.touch(assetId)
+        return hydrated
       }
     }
 
@@ -284,6 +527,10 @@ export class AssetLoader {
           mimeType: source.mimeType ?? null,
           filename: source.filename ?? null,
           downloadUrl: source.url ?? null,
+          serverUpdatedAt: options.persistence?.serverUpdatedAt ?? null,
+          contentHash: options.persistence?.contentHash ?? null,
+          contentHashAlgorithm: options.persistence?.contentHashAlgorithm ?? null,
+          persistentKeys: options.persistence?.keys,
         })
       case 'data-url': {
         const arrayBuffer = decodeDataUrl(source.dataUrl ?? '')
@@ -294,6 +541,10 @@ export class AssetLoader {
           mimeType: source.mimeType ?? null,
           filename: source.filename ?? null,
           downloadUrl: source.url ?? null,
+          serverUpdatedAt: options.persistence?.serverUpdatedAt ?? null,
+          contentHash: options.persistence?.contentHash ?? null,
+          contentHashAlgorithm: options.persistence?.contentHashAlgorithm ?? null,
+          persistentKeys: options.persistence?.keys,
         })
       }
       case 'blob': {
@@ -301,6 +552,10 @@ export class AssetLoader {
           mimeType: source.mimeType ?? null,
           filename: source.filename ?? null,
           downloadUrl: source.url ?? null,
+          serverUpdatedAt: options.persistence?.serverUpdatedAt ?? null,
+          contentHash: options.persistence?.contentHash ?? null,
+          contentHashAlgorithm: options.persistence?.contentHashAlgorithm ?? null,
+          persistentKeys: options.persistence?.keys,
         })
         return entry
       }
@@ -331,6 +586,10 @@ export class AssetLoader {
       mimeType: source.mimeType ?? mimeType ?? null,
       filename: source.filename ?? filename ?? null,
       downloadUrl: resolvedUrl ?? source.url,
+      serverUpdatedAt: options.persistence?.serverUpdatedAt ?? null,
+      contentHash: options.persistence?.contentHash ?? null,
+      contentHashAlgorithm: options.persistence?.contentHashAlgorithm ?? null,
+      persistentKeys: options.persistence?.keys,
     })
   }
 }
@@ -349,6 +608,10 @@ function createEmptyEntry(assetId: string): AssetCacheEntry {
     mimeType: null,
     filename: null,
     downloadUrl: null,
+    serverUpdatedAt: null,
+    contentHash: null,
+    contentHashAlgorithm: null,
+    persistentKey: null,
   }
 }
 
@@ -432,4 +695,8 @@ function decodeDataUrl(dataUrl: string): ArrayBuffer | null {
     }
   }
   return null
+}
+
+function cloneArrayBuffer(value: ArrayBuffer): ArrayBuffer {
+  return value.slice(0)
 }

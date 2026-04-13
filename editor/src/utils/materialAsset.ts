@@ -218,35 +218,18 @@ export function parseMaterialAssetDocument(data: unknown): ParsedMaterialAsset |
 
 async function ensureMaterialTextureFile(
   assetCacheStore: {
-    createFileFromCache: (assetId: string) => File | null
-    loadFromIndexedDb: (assetId: string) => Promise<unknown>
-    downloaProjectAsset: (asset: ProjectAsset) => Promise<unknown>
+    ensureAssetFile: (assetId: string, options?: { asset?: ProjectAsset | null }) => Promise<File | null>
   },
   assetId: string,
   getAsset?: (assetId: string) => ProjectAsset | null,
 ): Promise<File | null> {
-  let file = assetCacheStore.createFileFromCache(assetId)
-  if (file) {
-    return file
-  }
-  await assetCacheStore.loadFromIndexedDb(assetId)
-  file = assetCacheStore.createFileFromCache(assetId)
-  if (file) {
-    return file
-  }
   const asset = getAsset?.(assetId) ?? null
-  if (!asset) {
-    return null
-  }
-  await assetCacheStore.downloaProjectAsset(asset)
-  return assetCacheStore.createFileFromCache(assetId)
+  return await assetCacheStore.ensureAssetFile(assetId, { asset })
 }
 
 export function createMaterialAssetTextureResolver(options: {
   assetCacheStore: {
-    createFileFromCache: (assetId: string) => File | null
-    loadFromIndexedDb: (assetId: string) => Promise<unknown>
-    downloaProjectAsset: (asset: ProjectAsset) => Promise<unknown>
+    ensureAssetFile: (assetId: string, options?: { asset?: ProjectAsset | null }) => Promise<File | null>
   }
   getAsset?: (assetId: string) => ProjectAsset | null
 }): (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null> {

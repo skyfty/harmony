@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { AssetLoader } from '@schema/assetCache'
+import { AssetCache, AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -7,7 +7,7 @@ import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH, createThumbnailFromCanva
 import { normalizePrefabSceneDocument } from '@/utils/prefabDocument'
 import { collectPrefabAssetReferences } from '@/stores/prefabActions'
 import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
-import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
+import { createEditorRuntimeAssetCache } from '@/utils/editorPersistentAssetStorage'
 import type { SceneNode } from '@schema'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import {
@@ -28,7 +28,7 @@ import {
 
 type AssetCacheStoreLike = {
   hasCache: (assetId: string) => boolean
-  loadFromIndexedDb: (assetId: string) => Promise<unknown>
+  ensureAssetEntry: (assetId: string) => Promise<unknown>
   createFileFromCache: (assetId: string) => File | null
   releaseInMemoryBlob: (assetId: string) => void
 }
@@ -184,13 +184,14 @@ async function ensureAssetsCachedLocally(assetCacheStore: AssetCacheStoreLike, a
   }
   const missing = assetIds.filter((id) => id && !assetCacheStore.hasCache(id))
   if (missing.length) {
-    await Promise.all(missing.map((id) => assetCacheStore.loadFromIndexedDb(id)))
+    await Promise.all(missing.map((id) => assetCacheStore.ensureAssetEntry(id)))
   }
   return assetIds.every((id) => !id || assetCacheStore.hasCache(id))
 }
 
 function createAssetLoader(assetCacheStore: AssetCacheStoreLike, cacheOnly: boolean): AssetLoader {
-  const cache = new StoreBackedAssetCache(assetCacheStore as any)
+  void assetCacheStore
+  const cache: AssetCache = createEditorRuntimeAssetCache()
   return cacheOnly ? new CacheOnlyAssetLoader(cache) : new AssetLoader(cache)
 }
 

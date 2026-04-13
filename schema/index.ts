@@ -2,6 +2,7 @@
 import * as THREE from 'three'
 import type { SceneNodeInstanceLayout } from './instanceLayout'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
+import type { AssetBundleHashAlgorithm } from './asset-api'
 import type { AssetType } from './asset-types'
 import { createUvDebugMaterial } from './debugTextures'
 
@@ -11,7 +12,24 @@ export const MULTIUSER_NODE_ID = 'harmony:multiuser'
 export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 
 export { AssetCache, AssetLoader } from './assetCache'
-export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'
+export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions, AssetLoadPersistenceOptions } from './assetCache'
+export {
+  createIndexedDbPersistentAssetStorage,
+  createNoopPersistentAssetStorage,
+  createWeChatFileSystemPersistentAssetStorage,
+  isIndexedDbPersistentAssetStorageSupported,
+  isWeChatFileSystemPersistentAssetStorageSupported,
+  normalizePersistentAssetKey,
+  resolvePersistentAssetKeys,
+} from './persistentAssetStorage'
+export type {
+  IndexedDbPersistentAssetStorageOptions,
+  PersistentAssetKeyInput,
+  PersistentAssetRecord,
+  PersistentAssetStorage,
+  PersistentAssetWritePayload,
+  WeChatFileSystemPersistentAssetStorageOptions,
+} from './persistentAssetStorage'
 
 export {
   SKY_CUBE_FACE_KEYS,
@@ -498,6 +516,8 @@ type SceneAssetCommonEntry = {
   assetType?: AssetType
   name?: string
   bytes?: number
+  contentHash?: string | null
+  contentHashAlgorithm?: AssetBundleHashAlgorithm | null
 }
 
 export type SceneAssetServerEntry = SceneAssetCommonEntry & {

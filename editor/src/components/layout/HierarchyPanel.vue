@@ -978,7 +978,7 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<void> {
   if (assetCacheStore.hasCache(asset.id)) {
     return
   }
-  await assetCacheStore.downloaProjectAsset(asset)
+  await assetCacheStore.downloadProjectAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
     const reason = assetCacheStore.getError(asset.id)
     throw new Error(reason ?? 'Model asset is not ready')

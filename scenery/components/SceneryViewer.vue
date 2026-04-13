@@ -994,19 +994,31 @@ const resourcePreloadBytesLabel = computed(() => {
   }
   return '';
 });
+import {
+  createIndexedDbPersistentAssetStorage,
+  createNoopPersistentAssetStorage,
+  createWeChatFileSystemPersistentAssetStorage,
+  isIndexedDbPersistentAssetStorageSupported,
+  isWeChatFileSystemPersistentAssetStorageSupported,
+} from '@harmony/schema';
 
 // Configure multi-source mirrors for asset downloads (优先切源).
 // Note: asset identifiers / cache keys remain the original URLs/assetIds.
 configureAssetDownloadHostMirrors(ASSET_DOWNLOAD_HOST_MIRRORS);
-const sceneAssetCache = new AssetCache();
+const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
+const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
+const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersistentAssetStorageSupported()
+  ? createWeChatFileSystemPersistentAssetStorage()
+  : isIndexedDbPersistentAssetStorageSupported()
+    ? createIndexedDbPersistentAssetStorage()
+    : createNoopPersistentAssetStorage();
+const sceneAssetCache = new AssetCache({ persistentStorage: scenePersistentStorage });
 const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
 let activeScenePackagePkg: ScenePackageUnzipped | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
-const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
-const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;

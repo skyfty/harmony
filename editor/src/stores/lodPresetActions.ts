@@ -132,11 +132,7 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const assetCache = useAssetCacheStore()
       let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
       if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
+        entry = await assetCache.ensureAssetEntry(assetId, { asset })
       }
       if (!entry || !entry.blob) {
         throw new Error('无法加载 LOD 预设数据')
@@ -200,7 +196,7 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
           if (!refAsset) {
             return
           }
-          void assetCache.downloaProjectAsset(refAsset).catch((error: unknown) => {
+          void assetCache.downloadProjectAsset(refAsset).catch((error: unknown) => {
             console.warn('[LodPresetActions] Failed to download referenced LOD asset', ref.assetId, error)
           })
         })
