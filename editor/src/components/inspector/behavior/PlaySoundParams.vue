@@ -403,7 +403,7 @@ onBeforeUnmount(() => {
     <AssetPickerDialog
       v-model="assetDialogVisible"
       :asset-id="params.assetId ?? ''"
-      asset-type="file"
+      asset-type="audio"
       :extensions="audioAssetExtensions"
       title="Select Sound Asset"
       confirm-text="选择"

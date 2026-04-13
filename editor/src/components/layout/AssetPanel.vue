@@ -42,6 +42,7 @@ import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@/types/material'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
+import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypeIcon, getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 
@@ -57,6 +58,12 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const authStore = useAuthStore()
 const uiStore = useUiStore()
+const {
+  playingAssetId: previewPlayingAssetId,
+  pendingAssetId: previewPendingAssetId,
+  stopPreview: stopAudioPreview,
+  toggleAssetPreview,
+} = useAudioAssetPreview()
 
 const PRESET_PROVIDER_ID = assetProvider.id
 const PRESET_PROVIDER_ROOT_DIRECTORY_ID = buildPackageDirectoryId(PRESET_PROVIDER_ID)
@@ -2283,6 +2290,7 @@ const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   model: '#455A64',
   image: '#5E35B1',
   texture: '#00897B',
+  audio: '#2E7D32',
   material: '#6D4C41',
   behavior: '#546E7A',
   prefab: '#7B1FA2',
@@ -3201,6 +3209,9 @@ watch(displayedAssets, () => {
     const asset = displayedAssets.value.find((item) => item.id === id)
     return asset ? canDeleteAsset(asset) : false
   })
+  if (previewPlayingAssetId.value && !availableIds.has(previewPlayingAssetId.value)) {
+    stopAudioPreview()
+  }
 })
 
 watch(normalizedSearchQuery, (value) => {
@@ -3363,6 +3374,24 @@ function assetTypePresentation(asset: ProjectAsset) {
   return getAssetTypePresentation(asset)
 }
 
+function isAudioPreviewAsset(asset: ProjectAsset): boolean {
+  return isAudioAsset(asset)
+}
+
+function isAssetPreviewPlaying(asset: ProjectAsset): boolean {
+  return previewPlayingAssetId.value === asset.id
+}
+
+function isAssetPreviewPending(asset: ProjectAsset): boolean {
+  return previewPendingAssetId.value === asset.id
+}
+
+async function handleAssetPreviewClick(event: MouseEvent, asset: ProjectAsset): Promise<void> {
+  event.preventDefault()
+  event.stopPropagation()
+  await toggleAssetPreview(asset)
+}
+
 function createDragPreview(asset: ProjectAsset) {
   destroyDragPreview()
 
@@ -3434,6 +3463,7 @@ function destroyDragPreview() {
 }
 
 onBeforeUnmount(() => {
+  stopAudioPreview()
   dropImportAbortController?.abort()
   destroyDragPreview()
   detachDragSuppressionListeners()
@@ -3778,6 +3808,16 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     />
                   </div>
                   <div class="asset-actions">
+                    <v-btn
+                      v-if="isAudioPreviewAsset(asset)"
+                      :icon="isAssetPreviewPlaying(asset) ? 'mdi-stop-circle-outline' : 'mdi-play-circle-outline'"
+                      variant="text"
+                      density="compact"
+                      size="small"
+                      :loading="isAssetPreviewPending(asset)"
+                      :title="isAssetPreviewPlaying(asset) ? 'Stop audio preview' : 'Play audio preview'"
+                      @click="handleAssetPreviewClick($event, asset)"
+                    />
                     <v-btn
                       v-if="getAssetMutationScope(asset) === 'local' || (providerIdForAsset(asset) === PRESET_PROVIDER_ID && authStore.canResourceWrite)"
                       icon="mdi-pencil-outline"
@@ -4610,7 +4650,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   right: 3px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 1px;
   background-color: rgba(0, 0, 0, 0.35);
   border-radius: 5px;
   backdrop-filter: blur(2px);

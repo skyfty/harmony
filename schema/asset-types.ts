@@ -2,6 +2,7 @@ const AssetTypesList = [
   'model',
   'image',
   'texture',
+  'audio',
   'hdri',
   'material',
   'file',

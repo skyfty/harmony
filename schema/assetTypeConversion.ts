@@ -47,6 +47,14 @@ const ASSET_TYPE_BY_EXTENSION: Readonly<Record<string, AssetType>> = {
   hdr: 'hdri',
   exr: 'hdri',
 
+  // audio
+  mp3: 'audio',
+  wav: 'audio',
+  flac: 'audio',
+  aac: 'audio',
+  m4a: 'audio',
+  opus: 'audio',
+
   // videos
   mp4: 'video',
   mov: 'video',
@@ -111,6 +119,14 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   m4v: 'video/x-m4v',
   mkv: 'video/x-matroska',
   avi: 'video/x-msvideo',
+
+  // audio
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  m4a: 'audio/mp4',
+  opus: 'audio/opus',
 
   // models
   gltf: 'model/gltf+json',
@@ -204,6 +220,9 @@ export function getAssetTypeFromMimeType(mimeType: string | null | undefined): A
     return null
   }
   const normalized = mimeType.toLowerCase()
+  if (normalized.startsWith('audio/')) {
+    return 'audio'
+  }
   if (normalized.startsWith('image/')) {
     return 'image'
   }
@@ -266,6 +285,10 @@ export function getExtensionFromMimeType(mimeType: string | null | undefined): s
   const modelMatch = /^model\/([a-z0-9.+-]+)$/i.exec(normalized)
   if (modelMatch) {
     return modelMatch[1]!.toLowerCase()
+  }
+  const audioMatch = /^audio\/([a-z0-9.+-]+)$/i.exec(normalized)
+  if (audioMatch) {
+    return audioMatch[1]!.toLowerCase()
   }
   const videoMatch = /^video\/([a-z0-9.+-]+)$/i.exec(normalized)
   if (videoMatch) {

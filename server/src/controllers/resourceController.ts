@@ -80,6 +80,7 @@ const ASSET_COLORS: Record<string, string> = {
   model: '#26c6da',
   image: '#1e88e5',
   texture: '#8e24aa',
+  audio: '#43a047',
   material: '#ffb74d',
   prefab: '#7986cb',
   lod: '#7986cb',

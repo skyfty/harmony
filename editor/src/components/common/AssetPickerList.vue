@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
+import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
@@ -41,6 +42,12 @@ const emit = defineEmits<{
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { assetCatalog } = storeToRefs(sceneStore)
+const {
+  playingAssetId: previewPlayingAssetId,
+  pendingAssetId: previewPendingAssetId,
+  stopPreview: stopAudioPreview,
+  toggleAssetPreview,
+} = useAudioAssetPreview()
 
 const selectedAssetId = ref(props.assetId ?? '')
 const remoteAssets = ref<ProjectAsset[]>([])
@@ -346,6 +353,24 @@ function assetTypePresentation(asset: ProjectAsset) {
   return getAssetTypePresentation(asset)
 }
 
+function isAudioPreviewAsset(asset: ProjectAsset): boolean {
+  return isAudioAsset(asset)
+}
+
+function isAssetPreviewPlaying(asset: ProjectAsset): boolean {
+  return previewPlayingAssetId.value === asset.id
+}
+
+function isAssetPreviewPending(asset: ProjectAsset): boolean {
+  return previewPendingAssetId.value === asset.id
+}
+
+async function handleAudioPreviewClick(event: MouseEvent, asset: ProjectAsset): Promise<void> {
+  event.preventDefault()
+  event.stopPropagation()
+  await toggleAssetPreview(asset)
+}
+
 function toggleLocalSourceFilter(): void {
   showLocalSources.value = !showLocalSources.value
 }
@@ -369,6 +394,10 @@ watch(
 watch(
   () => filteredAssets.value.map((asset) => asset.id).join('|'),
   () => {
+    const availableIds = new Set(filteredAssets.value.map((asset) => asset.id))
+    if (previewPlayingAssetId.value && !availableIds.has(previewPlayingAssetId.value)) {
+      stopAudioPreview()
+    }
     void scheduleScrollToSelected()
   },
 )
@@ -399,6 +428,10 @@ onMounted(() => {
   if (!props.assets?.length) {
     void loadRemoteAssets()
   }
+})
+
+onBeforeUnmount(() => {
+  stopAudioPreview()
 })
 </script>
 
@@ -494,6 +527,17 @@ onMounted(() => {
                 :title="`${asset.name} · ${assetTypePresentation(asset).label}`"
               >
                 <div class="asset-picker-list__thumbnail">
+                  <v-btn
+                    v-if="isAudioPreviewAsset(asset)"
+                    class="asset-picker-list__preview-action"
+                    :icon="isAssetPreviewPlaying(asset) ? 'mdi-stop-circle-outline' : 'mdi-play-circle-outline'"
+                    variant="tonal"
+                    density="comfortable"
+                    size="x-small"
+                    :loading="isAssetPreviewPending(asset)"
+                    :title="isAssetPreviewPlaying(asset) ? 'Stop audio preview' : 'Play audio preview'"
+                    @click="handleAudioPreviewClick($event, asset)"
+                  />
                   <v-img
                     v-if="assetThumbnailUrl(asset)"
                     class="asset-picker-list__img"
@@ -652,6 +696,19 @@ onMounted(() => {
   height: 100%;
   background: transparent;
   overflow: hidden;
+}
+
+.asset-picker-list__preview-action {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(7, 12, 18, 0.72);
+  backdrop-filter: blur(8px);
 }
 
 .asset-picker-list__meta-overlay {

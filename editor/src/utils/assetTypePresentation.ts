@@ -30,6 +30,12 @@ const ASSET_TYPE_PRESENTATIONS: Record<ProjectAsset['type'], AssetTypePresentati
     icon: 'mdi-texture',
     color: '#AB47BC',
   },
+  audio: {
+    label: 'Audio',
+    shortLabel: 'AUD',
+    icon: 'mdi-music-note-outline',
+    color: '#43A047',
+  },
   hdri: {
     label: 'HDRI',
     shortLabel: 'HDRI',
