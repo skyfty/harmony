@@ -136,7 +136,24 @@
         "detail": "Detail",
         "comments": "Comments",
         "edit": "Edit",
-        "delete": "Delete"
+        "delete": "Delete",
+        "wechatQrLink": "WeChat Mini Program QR Rule Link"
+      },
+      "wechatQr": {
+        "modal": {
+          "title": "WeChat Mini Program QR Rule Link",
+          "hint": "The link below is generated from the scene package URL, scene spot ID, and scene ID. Copy it directly into the WeChat Mini Program QR rule configuration, or edit it as needed.",
+          "placeholder": "WeChat Mini Program QR Rule Link",
+          "copy": "Copy Link",
+          "close": "Close"
+        },
+        "message": {
+          "loadFailed": "Failed to load scene information and generate the QR rule link",
+          "sceneFileUrlMissing": "The scene file URL is empty, so the QR rule link cannot be generated",
+          "copySuccess": "QR rule link copied",
+          "copyFailed": "Copy failed. Please copy the text from the box manually.",
+          "empty": "The link is empty and cannot be copied"
+        }
       },
       "formFields": {
         "sceneId": {
