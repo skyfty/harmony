@@ -3155,7 +3155,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 						? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
 						: ({} as Record<string, unknown>)
 					if (payload.lodPresetAssetId !== asset.id) {
-						await assetCacheStore.ensureAssetEntry(assetId, { asset })
+						payload.lodPresetAssetId = asset.id
+						scatterLayer = upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
+					}
+				}
+			}
 		}
 
 		const group = bindingAssetId ? await loadScatterModelGroupById(bindingAssetId) : null
