@@ -135,7 +135,7 @@ function handleContentDrop(event: DragEvent) {
   event.stopPropagation()
   isContentDragActive.value = false
   updateContentAsset(asset.id)
-  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
     console.warn('Failed to cache alert text asset', error)
   })
 }

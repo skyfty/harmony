@@ -209,28 +209,8 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         return null
       }
 
-      let file = assetCache.createFileFromCache(normalizedId)
-      if (file) {
-        return file
-      }
-
-      await assetCache.loadFromIndexedDb(normalizedId)
-      file = assetCache.createFileFromCache(normalizedId)
-      if (file) {
-        return file
-      }
-
       const asset = store.getAsset(normalizedId)
-      if (!asset) {
-        return null
-      }
-
-      try {
-        await assetCache.downloaProjectAsset(asset)
-      } catch {
-        return null
-      }
-      return assetCache.createFileFromCache(normalizedId)
+      return await assetCache.ensureAssetFile(normalizedId, { asset })
     }
 
     const resolveTexture = async (ref: SceneMaterialTextureRef) => {
@@ -461,11 +441,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
       const assetCache = useAssetCacheStore()
       let entry: any = assetCache.getEntry(assetId)
       if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
+        entry = await assetCache.ensureAssetEntry(assetId, { asset })
       }
       if (!entry || !entry.blob) {
         throw new Error('无法加载地貌预设数据')

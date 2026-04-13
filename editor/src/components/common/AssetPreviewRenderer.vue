@@ -174,23 +174,7 @@ function resetPreviewState(): void {
 
 async function ensureAssetFile(): Promise<File | null> {
   const asset = props.asset
-  let file = assetCacheStore.createFileFromCache(asset.id)
-  if (file) {
-    return file
-  }
-  const restored = await assetCacheStore.loadFromIndexedDb(asset.id)
-  if (restored) {
-    file = assetCacheStore.createFileFromCache(asset.id)
-    if (file) {
-      return file
-    }
-  }
-  try {
-    await assetCacheStore.downloaProjectAsset(asset)
-  } catch (error) {
-    throw new Error((error as Error).message ?? '资源未缓存且无法下载')
-  }
-  file = assetCacheStore.createFileFromCache(asset.id)
+  let file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
   if (file) {
     return file
   }

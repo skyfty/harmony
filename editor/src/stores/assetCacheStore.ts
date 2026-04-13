@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
+import { createIndexedDbPersistentAssetStorage, resolvePersistentAssetKeys } from '@schema'
 import { extractExtension, ensureExtension } from '@/utils/blob'
 import { invalidateModelObject } from '@schema/modelObjectCache'
 import { isImageLikeExtension } from '@schema'
@@ -15,6 +16,14 @@ export type AssetCacheEntry = SharedAssetCacheEntry & {
 export interface AssetDownloadOptions {
   force?: boolean
   expectedServerUpdatedAt?: string | null
+  contentHash?: string | null
+  contentHashAlgorithm?: string | null
+}
+
+export interface AssetAccessOptions extends AssetDownloadOptions {
+  asset?: ProjectAsset | null
+  downloadUrl?: string | null
+  name?: string | null
 }
 
 export interface AssetThumbnailOptions {
@@ -114,8 +123,6 @@ function inferFetchedFilename(candidate: string | null, fallbackName: string | n
 const INDEXED_DB_NAME = 'harmony-asset-cache'
 const INDEXED_DB_VERSION = 3
 const INDEXED_DB_STORE = 'assets'
-const INDEXED_DB_MAX_RECORDS = 1000
-const INDEXED_DB_PRUNE_BATCH = 100
 
 interface StoredAssetRecord {
   assetId: string
@@ -127,6 +134,8 @@ interface StoredAssetRecord {
   size: number
   cachedAt: number
 }
+
+const persistentAssetStorage = createIndexedDbPersistentAssetStorage()
 
 let dbPromise: Promise<IDBDatabase | null> | null = null
 
@@ -209,70 +218,6 @@ function readAssetFromIndexedDb(assetId: string) {
   return runIndexedDbOperation<StoredAssetRecord>('readonly', (store) => store.get(assetId))
 }
 
-async function writeAssetToIndexedDb(record: StoredAssetRecord) {
-  await runIndexedDbOperation<IDBValidKey>('readwrite', (store) => store.put(record))
-  await enforceIndexedDbLimit()
-}
-
-function deleteAssetFromIndexedDb(assetId: string) {
-  return runIndexedDbOperation<undefined>('readwrite', (store) => store.delete(assetId))
-}
-
-function countAssetsInIndexedDb() {
-  return runIndexedDbOperation<number>('readonly', (store) => store.count())
-}
-
-async function enforceIndexedDbLimit() {
-  const total = await countAssetsInIndexedDb()
-  if (!total || total <= INDEXED_DB_MAX_RECORDS) {
-    return
-  }
-  const pruneCount = Math.min(INDEXED_DB_PRUNE_BATCH, total)
-  await deleteOldestAssetsFromIndexedDb(pruneCount)
-}
-
-async function deleteOldestAssetsFromIndexedDb(count: number) {
-  if (count <= 0) {
-    return
-  }
-  const db = await openIndexedDb()
-  if (!db) {
-    return
-  }
-  await new Promise<void>((resolve) => {
-    try {
-      const transaction = db.transaction(INDEXED_DB_STORE, 'readwrite')
-      const store = transaction.objectStore(INDEXED_DB_STORE)
-      const index = store.index('cachedAt')
-      let remaining = count
-      const request = index.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (cursor && remaining > 0) {
-          cursor.delete()
-          remaining -= 1
-          cursor.continue()
-        }
-      }
-      request.onerror = () => {
-        console.warn('IndexedDB 删除旧缓存失败', request.error)
-      }
-      transaction.oncomplete = () => resolve()
-      transaction.onerror = () => {
-        console.warn('IndexedDB 删除事务失败', transaction.error)
-        resolve()
-      }
-      transaction.onabort = () => {
-        console.warn('IndexedDB 删除事务中止', transaction.error)
-        resolve()
-      }
-    } catch (error) {
-      console.warn('IndexedDB 删除旧缓存异常', error)
-      resolve()
-    }
-  })
-}
-
 function now() {
   return Date.now()
 }
@@ -292,6 +237,9 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
     filename: null,
     downloadUrl: null,
     serverUpdatedAt: null,
+    contentHash: null,
+    contentHashAlgorithm: null,
+    persistentKey: null,
   }
 }
 
@@ -301,6 +249,9 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   filename: string | null
   downloadUrl: string | null
   serverUpdatedAt?: string | null
+  contentHash?: string | null
+  contentHashAlgorithm?: string | null
+  persistentKey?: string | null
 }) {
   if (entry.blobUrl) {
     URL.revokeObjectURL(entry.blobUrl)
@@ -338,6 +289,9 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   entry.filename = ext ? ensureExtension(initialFilename, ext) : initialFilename
   entry.downloadUrl = payload.downloadUrl
   entry.serverUpdatedAt = payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null
+  entry.contentHash = payload.contentHash ?? entry.contentHash ?? null
+  entry.contentHashAlgorithm = payload.contentHashAlgorithm ?? entry.contentHashAlgorithm ?? null
+  entry.persistentKey = payload.persistentKey ?? entry.persistentKey ?? null
 }
 
 export const useAssetCacheStore = defineStore('assetCache', {
@@ -446,11 +400,36 @@ export const useAssetCacheStore = defineStore('assetCache', {
       const entry = this.ensureEntry(assetId)
       entry.error = message
     },
-    async loadFromIndexedDb(assetId: string): Promise<AssetCacheEntry | null> {
+    async loadFromIndexedDb(
+      assetId: string,
+      options: { contentHash?: string | null; contentHashAlgorithm?: string | null } = {},
+    ): Promise<AssetCacheEntry | null> {
       if (this.hasCache(assetId)) {
         this.touch(assetId)
         return this.entries[assetId] ?? null
       }
+      const persistentKeys = resolvePersistentAssetKeys({ assetId, contentHash: options.contentHash ?? null })
+      for (const key of persistentKeys) {
+        const stored = await persistentAssetStorage.get(key)
+        if (!stored?.bytes) {
+          continue
+        }
+        const blob = new Blob([stored.bytes], { type: stored.mimeType ?? 'application/octet-stream' })
+        const entry = this.ensureEntry(assetId)
+        applyBlobToEntry(entry, {
+          blob,
+          mimeType: stored.mimeType ?? blob.type ?? null,
+          filename: stored.filename,
+          downloadUrl: stored.downloadUrl ?? null,
+          serverUpdatedAt: stored.serverUpdatedAt ?? null,
+          contentHash: stored.contentHash ?? options.contentHash ?? null,
+          contentHashAlgorithm: stored.contentHashAlgorithm ?? options.contentHashAlgorithm ?? null,
+          persistentKey: stored.key,
+        })
+        entry.lastUsedAt = now()
+        return entry
+      }
+
       const stored = await readAssetFromIndexedDb(assetId)
       if (!stored?.blob) {
         return null
@@ -462,9 +441,18 @@ export const useAssetCacheStore = defineStore('assetCache', {
         filename: stored.filename,
         downloadUrl: stored.downloadUrl ?? null,
         serverUpdatedAt: stored.serverUpdatedAt ?? null,
+        contentHash: options.contentHash ?? null,
+        contentHashAlgorithm: options.contentHashAlgorithm ?? null,
+        persistentKey: assetId,
       })
       entry.lastUsedAt = now()
       return entry
+    },
+    async restoreAssetEntry(
+      assetId: string,
+      options: { contentHash?: string | null; contentHashAlgorithm?: string | null } = {},
+    ): Promise<AssetCacheEntry | null> {
+      return await this.loadFromIndexedDb(assetId, options)
     },
 
     async storeAssetBlob(
@@ -475,11 +463,17 @@ export const useAssetCacheStore = defineStore('assetCache', {
         filename?: string | null
         downloadUrl?: string | null
         serverUpdatedAt?: string | null
+        contentHash?: string | null
+        contentHashAlgorithm?: string | null
       },
     ): Promise<AssetCacheEntry> {
       const entry = this.ensureEntry(assetId)
       invalidateModelObject(assetId)
       const filename = payload.filename ?? (payload.blob instanceof File ? payload.blob.name : null)
+      const persistentKeys = resolvePersistentAssetKeys({
+        assetId,
+        contentHash: payload.contentHash ?? entry.contentHash ?? null,
+      })
 
       applyBlobToEntry(entry, {
         blob: payload.blob,
@@ -487,24 +481,32 @@ export const useAssetCacheStore = defineStore('assetCache', {
         filename,
         downloadUrl: payload.downloadUrl ?? entry.downloadUrl ?? null,
         serverUpdatedAt: payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null,
+        contentHash: payload.contentHash ?? entry.contentHash ?? null,
+        contentHashAlgorithm: payload.contentHashAlgorithm ?? entry.contentHashAlgorithm ?? null,
+        persistentKey: persistentKeys[0] ?? entry.persistentKey ?? null,
       })
 
       entry.size = payload.blob.size
       entry.lastUsedAt = now()
 
       try {
-        await writeAssetToIndexedDb({
-          assetId,
-          blob: payload.blob,
-          mimeType: entry.mimeType,
-          filename: entry.filename,
-          downloadUrl: entry.downloadUrl,
-          serverUpdatedAt: entry.serverUpdatedAt ?? null,
-          size: payload.blob.size,
-          cachedAt: now(),
-        })
+        const bytes = await payload.blob.arrayBuffer()
+        for (const key of persistentKeys) {
+          await persistentAssetStorage.put({
+            key,
+            bytes,
+            size: payload.blob.size,
+            mimeType: entry.mimeType,
+            filename: entry.filename,
+            downloadUrl: entry.downloadUrl,
+            assetId,
+            contentHash: entry.contentHash ?? null,
+            contentHashAlgorithm: entry.contentHashAlgorithm ?? null,
+            serverUpdatedAt: entry.serverUpdatedAt ?? null,
+          })
+        }
       } catch (error) {
-        console.warn('写入 IndexedDB 失败', error)
+        console.warn('写入持久化资产存储失败', error)
       }
 
       return entry
@@ -529,7 +531,10 @@ export const useAssetCacheStore = defineStore('assetCache', {
 
       const promise = (async () => {
         if (!options.force) {
-          const restored = await scope.loadFromIndexedDb(assetId)
+          const restored = await scope.restoreAssetEntry(assetId, {
+            contentHash: options.contentHash ?? null,
+            contentHashAlgorithm: options.contentHashAlgorithm ?? null,
+          })
           if (restored) {
             if (expectedServerUpdatedAt && restored.serverUpdatedAt && expectedServerUpdatedAt !== restored.serverUpdatedAt) {
               // IndexedDB blob is stale; continue to re-download.
@@ -574,6 +579,8 @@ export const useAssetCacheStore = defineStore('assetCache', {
             filename: data.filename,
             downloadUrl: raw.url ?? downloadUrl,
             serverUpdatedAt: expectedServerUpdatedAt,
+            contentHash: options.contentHash ?? null,
+            contentHashAlgorithm: options.contentHashAlgorithm ?? null,
           })
 
         } catch (error) {
@@ -599,7 +606,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
       return promise
     },
 
-    async downloaProjectAsset(asset: ProjectAsset, options: AssetDownloadOptions = {}): Promise<AssetCacheEntry> {
+    async downloadProjectAsset(asset: ProjectAsset, options: AssetDownloadOptions = {}): Promise<AssetCacheEntry> {
       const scope = this
       const url = asset.downloadUrl ?? asset.description ?? null
       if (!url) {
@@ -609,7 +616,83 @@ export const useAssetCacheStore = defineStore('assetCache', {
         options.expectedServerUpdatedAt
         ?? (typeof asset.updatedAt === 'string' ? asset.updatedAt : null)
         ?? null
-      return scope.downloadAsset(asset.id, url, asset.name, { ...options, expectedServerUpdatedAt })
+      const entry = await scope.downloadAsset(asset.id, url, asset.name, {
+        ...options,
+        expectedServerUpdatedAt,
+        contentHash: asset.contentHash ?? options.contentHash ?? null,
+        contentHashAlgorithm: asset.contentHashAlgorithm ?? options.contentHashAlgorithm ?? null,
+      })
+      entry.contentHash = asset.contentHash ?? entry.contentHash ?? null
+      entry.contentHashAlgorithm = asset.contentHashAlgorithm ?? entry.contentHashAlgorithm ?? null
+      return entry
+    },
+    async ensureAssetEntry(assetId: string, options: AssetAccessOptions = {}): Promise<AssetCacheEntry | null> {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      const asset = options.asset ?? null
+      const contentHash = asset?.contentHash ?? options.contentHash ?? null
+      const contentHashAlgorithm = asset?.contentHashAlgorithm ?? options.contentHashAlgorithm ?? null
+      let entry = this.getEntry(normalizedAssetId)
+
+      if (entry.status !== 'cached') {
+        entry = (await this.restoreAssetEntry(normalizedAssetId, {
+          contentHash,
+          contentHashAlgorithm,
+        })) ?? this.getEntry(normalizedAssetId)
+      }
+
+      if (entry.status === 'cached') {
+        if (!entry.downloadUrl) {
+          entry.downloadUrl = options.downloadUrl ?? asset?.downloadUrl ?? asset?.description ?? null
+        }
+        this.touch(normalizedAssetId)
+        return entry
+      }
+
+      if (asset) {
+        return await this.downloadProjectAsset(asset, {
+          ...options,
+          contentHash,
+          contentHashAlgorithm,
+        })
+      }
+
+      const downloadUrl = options.downloadUrl ?? entry.downloadUrl ?? null
+      if (!downloadUrl) {
+        return null
+      }
+
+      return await this.downloadAsset(normalizedAssetId, downloadUrl, options.name ?? normalizedAssetId, {
+        ...options,
+        contentHash,
+        contentHashAlgorithm,
+      })
+    },
+    async ensureAssetFile(assetId: string, options: AssetAccessOptions = {}): Promise<File | null> {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      let file = this.createFileFromCache(normalizedAssetId)
+      if (file) {
+        this.touch(normalizedAssetId)
+        return file
+      }
+
+      const entry = await this.ensureAssetEntry(normalizedAssetId, options)
+      if (!entry || entry.status !== 'cached') {
+        return null
+      }
+
+      file = this.createFileFromCache(normalizedAssetId)
+      if (file) {
+        this.touch(normalizedAssetId)
+      }
+      return file
     },
     
     cancelDownload(assetId: string) {
@@ -648,9 +731,17 @@ export const useAssetCacheStore = defineStore('assetCache', {
         size: 0,
         abortController: null,
         error: null,
+        persistentKey: null,
       }
 
-      void deleteAssetFromIndexedDb(assetId)
+      const persistentKeys = resolvePersistentAssetKeys({
+        assetId,
+        contentHash: entry.contentHash ?? null,
+        keys: entry.persistentKey ? [entry.persistentKey] : [],
+      })
+      for (const key of persistentKeys) {
+        void persistentAssetStorage.delete(key)
+      }
     },
     touch(assetId: string) {
       const entry = this.ensureEntry(assetId)
@@ -695,12 +786,12 @@ export const useAssetCacheStore = defineStore('assetCache', {
         if (removed >= totalToRemove) {
           break
         }
-        this.removeCache(entry.assetId)
+        this.releaseInMemoryBlob(entry.assetId)
         removed += 1
       }
 
       if (cached.length - removed > maxEntries && preferredAssetId) {
-        this.removeCache(preferredAssetId)
+        this.releaseInMemoryBlob(preferredAssetId)
       }
     },
     setMaxEntries(count: number) {

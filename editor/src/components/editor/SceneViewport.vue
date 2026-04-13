@@ -1293,31 +1293,13 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
 
   const loader = async (): Promise<THREE.Texture | null> => {
     const asset = sceneStore.getAsset(cacheKey)
-    let entry = assetCacheStore.getEntry(cacheKey)
-    if (entry.status !== 'cached') {
-      await assetCacheStore.loadFromIndexedDb(cacheKey)
-      entry = assetCacheStore.getEntry(cacheKey)
+    let file: File | null = null
+    try {
+      file = await assetCacheStore.ensureAssetFile(cacheKey, { asset })
+    } catch (error) {
+      console.warn('Failed to download texture asset', cacheKey, error)
+      return null
     }
-
-    if (entry.status !== 'cached') {
-      const url = entry.downloadUrl ?? asset?.downloadUrl ?? asset?.description ?? null
-      if (!url) {
-        console.warn('Texture asset missing download URL', cacheKey)
-        return null
-      }
-      try {
-        await assetCacheStore.downloadAsset(cacheKey, url, asset?.name ?? cacheKey)
-      } catch (error) {
-        console.warn('Failed to download texture asset', cacheKey, error)
-        return null
-      }
-      entry = assetCacheStore.getEntry(cacheKey)
-      if (entry.status !== 'cached') {
-        return null
-      }
-    }
-
-    const file = assetCacheStore.createFileFromCache(cacheKey)
     if (!file) {
       return null
     }
@@ -8385,11 +8367,7 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
     if (getCachedModelObject(asset.id)) {
       return
     }
-    let file = assetCacheStore.createFileFromCache(asset.id)
-    if (!file) {
-      await assetCacheStore.loadFromIndexedDb(asset.id)
-      file = assetCacheStore.createFileFromCache(asset.id)
-    }
+    const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
     if (!file) {
       return
     }
@@ -12731,7 +12709,7 @@ async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string 
   const asset = sceneStore.getAsset(normalized)
   if (!asset) {
     try {
-      const cachedEntry = await assetCacheStore.loadFromIndexedDb(normalized)
+      const cachedEntry = await assetCacheStore.ensureAssetEntry(normalized)
       if (cachedEntry?.blobUrl) {
         assetCacheStore.touch(normalized)
         return { url: cachedEntry.blobUrl }
@@ -12743,7 +12721,7 @@ async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string 
     return { url: normalized }
   }
   try {
-    const entry = await assetCacheStore.downloaProjectAsset(asset)
+    const entry = await assetCacheStore.downloadProjectAsset(asset)
     const url = entry.blobUrl ?? asset.downloadUrl ?? asset.description ?? null
     if (!url) {
       return null
@@ -12823,9 +12801,9 @@ async function resolveEnvironmentAssetUrl(assetId: string): Promise<{ url: strin
     return null
   }
 
-  let entry: Awaited<ReturnType<typeof assetCacheStore.downloaProjectAsset>> | null = null
+  let entry: Awaited<ReturnType<typeof assetCacheStore.downloadProjectAsset>> | null = null
   try {
-    entry = await assetCacheStore.downloaProjectAsset(asset)
+    entry = await assetCacheStore.downloadProjectAsset(asset)
   } catch (error) {
     console.warn('Failed to cache environment asset', assetId, error)
   }

@@ -343,7 +343,7 @@ async function loadTerrainPaintBrushImage(asset: ProjectAsset): Promise<LoadedPa
 		const cache = useAssetCacheStore()
 		let blob: Blob | null = null
 		try {
-			const entry = await cache.downloaProjectAsset(asset)
+			const entry = await cache.downloadProjectAsset(asset)
 			blob = entry.blob ?? null
 		} catch (error) {
 			console.warn('加载地貌绘制笔刷失败：', error)
@@ -2013,17 +2013,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return
 			}
 			try {
-				if (!assetCacheStore.hasCache(id)) {
-					await assetCacheStore.loadFromIndexedDb(id)
-				}
-				if (assetCacheStore.hasCache(id)) {
-					return
-				}
 				const asset = options.sceneStore.getAsset(id)
 				if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'image' && asset.type !== 'texture')) {
 					return
 				}
-				await assetCacheStore.downloaProjectAsset(asset)
+				await assetCacheStore.ensureAssetEntry(id, { asset })
 			} catch (error) {
 				console.warn('缓存 LOD 预设引用资源失败', id, error)
 			}
@@ -2161,12 +2155,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return
 			}
 			try {
-				if (!assetCacheStore.hasCache(normalized)) {
-					await assetCacheStore.loadFromIndexedDb(normalized)
-				}
-				if (!assetCacheStore.hasCache(normalized)) {
-					await assetCacheStore.downloaProjectAsset(asset)
-				}
+				await assetCacheStore.ensureAssetEntry(normalized, { asset })
 			} catch (error) {
 				console.warn('缓存散布 Billboard 资源失败', normalized, error)
 			}
@@ -2241,16 +2230,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return
 			}
 			try {
-				if (!assetCacheStore.hasCache(normalized)) {
-					await assetCacheStore.loadFromIndexedDb(normalized)
-				}
-				if (!assetCacheStore.hasCache(normalized)) {
-					await assetCacheStore.downloaProjectAsset(asset)
-				}
+				await assetCacheStore.ensureAssetEntry(normalized, { asset })
 			} catch (error) {
 				console.warn('缓存散布 LOD 资源失败', normalized, error)
 			}
-			const file = assetCacheStore.createFileFromCache(normalized)
+			const file = await assetCacheStore.ensureAssetFile(normalized, { asset })
 			if (!file) {
 				return
 			}
@@ -2532,12 +2516,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 						return null
 					}
 					try {
-						if (!assetCacheStore.hasCache(assetId)) {
-							await assetCacheStore.loadFromIndexedDb(assetId)
-						}
-						if (!assetCacheStore.hasCache(assetId)) {
-							await assetCacheStore.downloaProjectAsset(asset)
-						}
+						await assetCacheStore.ensureAssetEntry(assetId, { asset })
 					} catch (error) {
 						console.warn('缓存地面散布资源失败', assetId, error)
 					}
@@ -2753,12 +2732,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return null
 			}
 			try {
-				if (!assetCacheStore.hasCache(normalized)) {
-					await assetCacheStore.loadFromIndexedDb(normalized)
-				}
-				if (!assetCacheStore.hasCache(normalized)) {
-					await assetCacheStore.downloaProjectAsset(asset)
-				}
+				await assetCacheStore.ensureAssetEntry(normalized, { asset })
 			} catch (error) {
 				console.warn('缓存地面散布资源失败', normalized, error)
 			}
@@ -3127,11 +3101,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			ensureInstancedMeshesRegistered(asset.id)
 			return group
 		}
-		if (!assetCacheStore.hasCache(asset.id)) {
-			console.warn('Scatter asset未缓存，无法加载', asset.id)
-			return null
-		}
-		const file = assetCacheStore.createFileFromCache(asset.id)
+		const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
 		if (!file) {
 			console.warn('无法读取散布资源文件', asset.id)
 			return null
@@ -3185,12 +3155,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 						? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
 						: ({} as Record<string, unknown>)
 					if (payload.lodPresetAssetId !== asset.id) {
-						payload.lodPresetAssetId = asset.id
-						scatterLayer = upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
-						syncTerrainScatterSnapshotToScene(store)
-					}
-				}
-			}
+						await assetCacheStore.ensureAssetEntry(assetId, { asset })
 		}
 
 		const group = bindingAssetId ? await loadScatterModelGroupById(bindingAssetId) : null
@@ -3829,12 +3794,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			state.loadPromise = (async () => {
 				try {
 					const cache = useAssetCacheStore()
-					let entry = cache.getEntry(textureAssetId)
-					let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
-					if (!blob) {
-						entry = (await cache.loadFromIndexedDb(textureAssetId)) ?? entry
-						blob = entry.status === 'cached' ? (entry.blob ?? null) : null
-					}
+					const entry = await cache.ensureAssetEntry(textureAssetId, {
+						downloadUrl: textureAssetId,
+						name: textureAssetId,
+					})
+					let blob: Blob | null = entry?.status === 'cached' ? (entry.blob ?? null) : null
 					if (!blob) {
 						const response = await fetch(textureAssetId, { credentials: 'include' }).catch(() => null)
 						blob = response?.ok ? await response.blob() : null

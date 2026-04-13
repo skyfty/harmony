@@ -232,7 +232,7 @@ function applyAlbedoTexture(slotId: string, asset: TextureAsset): boolean {
       },
     },
   })
-  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
     console.warn('Failed to cache texture asset', error)
   })
   return true

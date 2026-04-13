@@ -1330,10 +1330,7 @@ watch(
 )
 
 async function createUploadFileFromCache(asset: ProjectAsset): Promise<File> {
-  let file = assetCacheStore.createFileFromCache(asset.id)
-  if (file) return file
-  await assetCacheStore.loadFromIndexedDb(asset.id)
-  file = assetCacheStore.createFileFromCache(asset.id)
+  const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
   if (file) return file
   throw new Error('资源文件尚未缓存，无法上传')
 }

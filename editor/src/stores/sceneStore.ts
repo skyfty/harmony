@@ -1040,40 +1040,17 @@ const CAN_MEASURE_MEDIA =
 
 async function ensureAssetFileForMeasurement(assetId: string, asset: ProjectAsset | null): Promise<File | null> {
   const assetCache = useAssetCacheStore()
-  let entry = assetCache.getEntry(assetId)
-  if (entry.status !== 'cached') {
-    await assetCache.loadFromIndexedDb(assetId)
-    entry = assetCache.getEntry(assetId)
+  try {
+    return await assetCache.ensureAssetFile(assetId, { asset })
+  } catch (error) {
+    console.warn('Failed to download asset for measurement', assetId, error)
+    return null
   }
-
-  if (entry.status !== 'cached') {
-    const downloadUrl = entry.downloadUrl ?? asset?.downloadUrl ?? asset?.description ?? null
-    if (!downloadUrl) {
-      return null
-    }
-    try {
-      await assetCache.downloadAsset(assetId, downloadUrl, asset?.name ?? assetId)
-    } catch (error) {
-      console.warn('Failed to download asset for measurement', assetId, error)
-      return null
-    }
-    entry = assetCache.getEntry(assetId)
-    if (entry.status !== 'cached') {
-      return null
-    }
-  }
-
-  return assetCache.createFileFromCache(assetId)
 }
 
 async function ensureModelAssetCached(assetCache: ReturnType<typeof useAssetCacheStore>, asset: ProjectAsset): Promise<void> {
-  await assetCache.loadFromIndexedDb(asset.id)
-  if (assetCache.hasCache(asset.id)) {
-    return
-  }
-  await assetCache.downloaProjectAsset(asset)
-  await assetCache.loadFromIndexedDb(asset.id)
-  if (!assetCache.hasCache(asset.id)) {
+  const entry = await assetCache.ensureAssetEntry(asset.id, { asset })
+  if (!entry || entry.status !== 'cached') {
     throw new Error('Model asset is not ready')
   }
 }
@@ -4852,18 +4829,11 @@ async function loadConfigAssetTextForDependencyTraversal(
 
   const assetCache = useAssetCacheStore()
   const asset = getAssetFromCatalog(assetCatalog, normalizedAssetId)
-  let file = assetCache.createFileFromCache(normalizedAssetId)
-  if (!file) {
-    await assetCache.loadFromIndexedDb(normalizedAssetId)
-    file = assetCache.createFileFromCache(normalizedAssetId)
-  }
-  if (!file && asset) {
-    try {
-      await assetCache.downloaProjectAsset(asset)
-    } catch {
-      return null
-    }
-    file = assetCache.createFileFromCache(normalizedAssetId)
+  let file: File | null = null
+  try {
+    file = await assetCache.ensureAssetFile(normalizedAssetId, { asset })
+  } catch {
+    return null
   }
   if (file) {
     return file.text()
@@ -10603,7 +10573,7 @@ export const useSceneStore = defineStore('scene', {
       if (resolved.lodPresetAssetId) {
         const assetCache = useAssetCacheStore()
         if (!assetCache.hasCache(resolved.modelAsset.id)) {
-          const entry = await assetCache.downloaProjectAsset(resolved.modelAsset)
+          const entry = await assetCache.downloadProjectAsset(resolved.modelAsset)
           if (!assetCache.hasCache(resolved.modelAsset.id)) {
             throw new Error(entry.error ?? 'Referenced LOD model asset is not ready yet')
           }
@@ -10797,7 +10767,7 @@ export const useSceneStore = defineStore('scene', {
       const assetCache = useAssetCacheStore()
       this.observeAssetDownloadForNode(placeholder.id, asset)
       assetCache.setError(asset.id, null)
-      void assetCache.downloaProjectAsset(asset).catch((error) => {
+      void assetCache.downloadProjectAsset(asset).catch((error) => {
         const target = findNodeById(this.nodes, placeholder.id)
         if (target) {
           target.downloadStatus = 'error'
@@ -10909,7 +10879,7 @@ export const useSceneStore = defineStore('scene', {
       }
       this.observeAssetDownloadForNode(placeholder.id, asset)
       assetCache.setError(asset.id, null)
-      void assetCache.downloaProjectAsset(asset).catch((error) => {
+      void assetCache.downloadProjectAsset(asset).catch((error) => {
         const target = findNodeById(this.nodes, placeholder.id)
       if (target) {
         target.downloadStatus = 'error'
@@ -11509,15 +11479,14 @@ export const useSceneStore = defineStore('scene', {
       const assetId = BUILTIN_WATER_NORMAL_ASSET_ID
       const assetCache = useAssetCacheStore()
 
-      let cached = assetCache.getEntry(assetId)
-      if (cached.status !== 'cached' || !cached.blob) {
-        await assetCache.loadFromIndexedDb(assetId)
-        cached = assetCache.getEntry(assetId)
-      }
+      let cached = await assetCache.ensureAssetEntry(assetId, {
+        downloadUrl: builtinWaterNormalUrl,
+        name: BUILTIN_WATER_NORMAL_FILENAME,
+      })
 
-      if (cached.status !== 'cached' || !cached.blob) {
+      if (!cached || cached.status !== 'cached' || !cached.blob) {
         const blob = await loadBuiltinWaterNormalBlob()
-        await assetCache.storeAssetBlob(assetId, {
+        cached = await assetCache.storeAssetBlob(assetId, {
           blob,
           mimeType: blob.type || 'image/jpeg',
           filename: BUILTIN_WATER_NORMAL_FILENAME,
@@ -11577,7 +11546,7 @@ export const useSceneStore = defineStore('scene', {
 
       let entry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
       if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
+        entry = await assetCache.ensureAssetEntry(assetId, { contentHash: assetId })
       }
       if (!entry || entry.status !== 'cached' || !entry.blob) {
         entry = await assetCache.storeAssetBlob(assetId, {
@@ -11883,7 +11852,7 @@ export const useSceneStore = defineStore('scene', {
       const assetCache = useAssetCacheStore()
       let entry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
       if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
+        entry = await assetCache.ensureAssetEntry(assetId, { asset })
       }
       const blob = entry?.blob ?? null
       if (!blob) {
@@ -13090,7 +13059,7 @@ export const useSceneStore = defineStore('scene', {
       assetCache.setError(asset.id, null)
 
       try {
-        await assetCache.downloaProjectAsset(asset)
+        await assetCache.downloadProjectAsset(asset)
         return true
       } catch (error) {
         const target = findNodeById(this.nodes, nodeId)
@@ -13140,7 +13109,7 @@ export const useSceneStore = defineStore('scene', {
         }
 
         if (!baseObject) {
-          const file = assetCache.createFileFromCache(asset.id)
+          const file = await assetCache.ensureAssetFile(asset.id, { asset })
           if (!file) {
             throw new Error('Resource not fully cached')
           }
@@ -13313,7 +13282,7 @@ export const useSceneStore = defineStore('scene', {
       const assetCache = useAssetCacheStore()
       await ensureModelAssetCached(assetCache, asset)
 
-      const file = assetCache.createFileFromCache(asset.id)
+      const file = await assetCache.ensureAssetFile(asset.id, { asset })
       if (!file) {
             throw new Error('Model asset file unavailable')
           }
@@ -13470,10 +13439,7 @@ export const useSceneStore = defineStore('scene', {
         if (cached) {
           modelGroup = cached
         } else {
-          if (!assetCache.hasCache(asset.id)) {
-            return null
-          }
-          const file = assetCache.createFileFromCache(asset.id)
+          const file = await assetCache.ensureAssetFile(asset.id, { asset })
           if (!file) {
             throw new Error('Missing asset data in cache')
           }

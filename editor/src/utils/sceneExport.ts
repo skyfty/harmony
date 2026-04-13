@@ -508,13 +508,10 @@ async function generateOutlineMeshesForCandidates(
     if (!outlineMeshMap[assetId]) {
       let baseGroup = getCachedModelObject(assetId)
       if (!baseGroup) {
-        let file = assetCacheStore.createFileFromCache(assetId)
-        if (!file) {
-          await assetCacheStore.loadFromIndexedDb(assetId)
-          file = assetCacheStore.createFileFromCache(assetId)
-        }
+        const asset = useSceneStore().getAsset(assetId)
+        const file = await assetCacheStore.ensureAssetFile(assetId, { asset })
         if (file) {
-          const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
+          const ext = asset?.extension ?? undefined
           baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
         }
       }
@@ -754,15 +751,12 @@ async function loadAssetObjectForNode(
 
   let baseGroup = getCachedModelObject(assetId)
   if (!baseGroup) {
-    let file = assetCacheStore.createFileFromCache(assetId)
-    if (!file) {
-      await assetCacheStore.loadFromIndexedDb(assetId)
-      file = assetCacheStore.createFileFromCache(assetId)
+    const asset = useSceneStore().getAsset(assetId)
+    const file = await assetCacheStore.ensureAssetFile(assetId, { asset })
+    if (file) {
+      const ext = asset?.extension ?? undefined
+      baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
     }
-      if (file) {
-          const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
-          baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file!, ext))
-        }
   }
 
   const baseObject = baseGroup?.object ?? null

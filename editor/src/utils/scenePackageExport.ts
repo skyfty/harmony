@@ -844,7 +844,7 @@ export async function exportScenePackageZip(payload: {
 
       let entry = assetCache.getEntry(assetId)
       if (entry.status !== 'cached' || !entry.blob) {
-        await assetCache.loadFromIndexedDb(assetId)
+        await assetCache.ensureAssetEntry(assetId)
         entry = assetCache.getEntry(assetId)
       }
       if (entry.status !== 'cached' || !entry.blob) {

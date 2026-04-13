@@ -70,7 +70,7 @@ import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader } from '@schema/assetCache'
 import { inferMimeTypeFromAssetId } from '@schema/assetTypeConversion'
 import type { AssetCacheEntry } from '@schema/assetCache'
-import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
+import { createEditorRuntimeAssetCache } from '@/utils/editorPersistentAssetStorage'
 import {
 	buildGroundCollisionDebugShapesFromNode,
 	isGroundDynamicMesh,
@@ -778,7 +778,7 @@ const resourceAssetInfoMap = new Map<string, { name: string; bytes: number }>()
 
 const assetCacheStore = useAssetCacheStore()
 
-const editorAssetCache = new StoreBackedAssetCache(assetCacheStore)
+const editorAssetCache = createEditorRuntimeAssetCache()
 const editorAssetLoader = new AssetLoader(editorAssetCache)
 let editorResourceCache: ResourceCache | null = null
 
@@ -1485,7 +1485,7 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
 	if (!trimmed) {
 		return null
 	}
-	const entry = assetCacheStore.entries?.[trimmed]
+	const entry = editorAssetCache.peekEntry(trimmed) ?? assetCacheStore.entries?.[trimmed] ?? null
 	const serverUpdatedAt = entry?.serverUpdatedAt ?? null
 	const blobUrl = entry?.blobUrl ?? null
 	return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}`

@@ -20,7 +20,7 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
     if (assetCacheStore.hasCache(asset.id)) {
       return
     }
-    await assetCacheStore.downloaProjectAsset(asset)
+    await assetCacheStore.downloadProjectAsset(asset)
   }
 
   function computeHorizontalBoundingCircleDiameter(bounds: { min: { x: number; z: number }; max: { x: number; z: number } }): number | null {

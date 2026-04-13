@@ -195,7 +195,7 @@ function handleContentDrop(event: DragEvent) {
   event.stopPropagation()
   isContentDragActive.value = false
   updateField('contentAssetId', asset.id)
-  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
     console.warn('Failed to cache bubble text asset', error)
   })
 }
