@@ -64,6 +64,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { guardedNavigateTo } from '@/utils/navigationGuard'
 
 import BottomNav from '@/components/BottomNav.vue'
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue'
@@ -142,7 +143,8 @@ function handleSearch() {
 }
 
 function openDetail(id: string) {
-  void uni.navigateTo({ url: `/pages/scenic/detail?id=${encodeURIComponent(id)}` })
+  const url = `/pages/scenic/detail?id=${encodeURIComponent(id)}`;
+  void guardedNavigateTo(url);
 }
 
 function handleNavigate(key: NavKey) {

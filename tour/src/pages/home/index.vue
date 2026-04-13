@@ -54,6 +54,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
+import { guardedNavigateTo } from '@/utils/navigationGuard';
 
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
@@ -108,11 +109,12 @@ const filtered = computed(() => {
 });
 
 function openDetail(id: string) {
-  void uni.navigateTo({ url: `/pages/scenic/detail?id=${encodeURIComponent(id)}` });
+  const url = `/pages/scenic/detail?id=${encodeURIComponent(id)}`;
+  void guardedNavigateTo(url);
 }
 
 function openScenicSearch() {
-  void uni.navigateTo({ url: '/pages/scenic/index' });
+  void guardedNavigateTo('/pages/scenic/index');
 }
 
 function resolveScenicProgress(_scenicId: string): { percent: number; description: string } {
