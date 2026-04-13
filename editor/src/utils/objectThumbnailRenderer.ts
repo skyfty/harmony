@@ -1,7 +1,11 @@
 import * as THREE from 'three'
 import { disposeMaterialTextures } from '@schema/material'
 
-export function fitThumbnailCamera(camera: THREE.PerspectiveCamera, object: THREE.Object3D): void {
+export function fitThumbnailCamera(
+  camera: THREE.PerspectiveCamera,
+  object: THREE.Object3D,
+  options: { padding?: number } = {},
+): void {
   const box = new THREE.Box3().setFromObject(object)
   if (box.isEmpty()) {
     camera.position.set(4, 3, 4)
@@ -46,7 +50,8 @@ export function fitThumbnailCamera(camera: THREE.PerspectiveCamera, object: THRE
   const distanceForWidth = halfWidth / Math.max(Math.tan(hFov * 0.5), 1e-5)
   const distanceForHeight = halfHeight / Math.max(Math.tan(vFov * 0.5), 1e-5)
   const fitDistance = Math.max(distanceForWidth, distanceForHeight, halfDepth + 0.1)
-  const distance = fitDistance * 1.08
+  const padding = typeof options.padding === 'number' && Number.isFinite(options.padding) ? options.padding : 1.08
+  const distance = fitDistance * Math.max(0.1, padding)
 
   const size = box.getSize(new THREE.Vector3())
   const radius = Math.max(size.length() * 0.5, 0.1)
@@ -90,6 +95,7 @@ export function renderObjectThumbnailDataUrl(options: {
   object: THREE.Object3D
   width: number
   height: number
+  cameraFitPadding?: number
 }): string {
   const width = Math.max(1, Math.round(options.width))
   const height = Math.max(1, Math.round(options.height))
@@ -116,7 +122,7 @@ export function renderObjectThumbnailDataUrl(options: {
   scene.add(fill)
   scene.add(options.object)
 
-  fitThumbnailCamera(camera, options.object)
+  fitThumbnailCamera(camera, options.object, { padding: options.cameraFitPadding })
   renderer.render(scene, camera)
 
   const dataUrl = renderer.domElement.toDataURL('image/png')

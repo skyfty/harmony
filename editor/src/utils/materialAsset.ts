@@ -277,7 +277,7 @@ export async function renderMaterialThumbnailDataUrl(options: {
   width: number
   height: number
 }): Promise<string> {
-  const geometry = new THREE.SphereGeometry(0.75, 64, 64)
+  const geometry = new THREE.SphereGeometry(1.0, 64, 64)
   const material = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     metalness: 0.1,
@@ -315,19 +315,20 @@ export async function renderMaterialThumbnailDataUrl(options: {
     })
     await Promise.resolve()
     const pedestal = new THREE.Mesh(
-      new THREE.CircleGeometry(1.05, 48),
+      new THREE.CircleGeometry(0.78, 48),
       new THREE.ShadowMaterial({ opacity: 0.12 }),
     )
     pedestal.rotation.x = -Math.PI / 2
-    pedestal.position.y = -0.95
+    pedestal.position.y = -1.08
 
     const root = new THREE.Group()
     root.add(mesh)
     root.add(pedestal)
-    const dataUrl = renderObjectThumbnailDataUrl({
+      const dataUrl = renderObjectThumbnailDataUrl({
       object: root,
       width: options.width,
       height: options.height,
+        cameraFitPadding: 0.72,
     })
     root.remove(mesh)
     root.remove(pedestal)
