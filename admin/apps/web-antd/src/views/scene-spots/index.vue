@@ -355,6 +355,11 @@ function openComments(row: SceneSpotItem) {
   });
 }
 
+function openWechatQRCode(row: SceneSpotItem) {
+ 
+}
+
+
 async function submitSceneSpot() {
   const form = sceneSpotFormRef.value;
   if (!form) {
@@ -610,6 +615,11 @@ onMounted(async () => {
             </Button>
           </Tooltip>
 
+          <Tooltip :title="t('page.sceneSpots.index.actions.wechatqrcode')">
+            <Button size="small" type="text" @click="openWechatQRCode(row)">
+              <QrcodeOutlined />
+            </Button>
+          </Tooltip>
           <Tooltip :title="t('page.sceneSpots.index.actions.delete')">
             <Button v-access:code="'sceneSpot:write'" danger size="small" type="text" @click="handleDelete(row)">
               <DeleteOutlined />

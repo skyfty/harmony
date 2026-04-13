@@ -1090,6 +1090,19 @@ class SceneGraphBuilder {
     return group;
   }
 
+  private async buildRegionMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = new THREE.Group();
+    group.name = node.name ?? 'Region';
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+    }
+
+    return group;
+  }
+
   private applyVisibility(object: THREE.Object3D, node: SceneNodeWithExtras): void {
     if (typeof node.visible === 'boolean') {
       object.visible = node.visible;
@@ -1143,6 +1156,9 @@ class SceneGraphBuilder {
     }
     if (meshInfo?.type === 'GuideRoute') {
       return this.buildGuideRouteMesh(meshInfo as GuideRouteDynamicMesh, node);
+    }
+    if (meshInfo?.type === 'Region') {
+      return this.buildRegionMeshNode(node);
     }
 
     const waterSurfaceMesh = extractWaterSurfaceMeshMetadataFromUserData(node.userData);
