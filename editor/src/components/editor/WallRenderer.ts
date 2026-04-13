@@ -29,6 +29,7 @@ import {
   setWallInstancedBindingsOnObject,
   syncWallDragBindingMatrices,
 } from '@schema/wallInstancing'
+import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
@@ -125,10 +126,7 @@ export function computeWallDynamicMeshSignature(
 }
 
 type WallRendererOptions = {
-  assetCacheStore: {
-    ensureAssetFile: (assetId: string, options?: { asset?: { id: string; extension?: string | null } | null }) => Promise<File | null>
-    releaseInMemoryBlob: (assetId: string) => void
-  }
+  assetCacheStore: AssetCacheStoreLike
   getNodeById: (nodeId: string) => SceneNode | null
   getObjectById: (nodeId: string) => THREE.Object3D | null
   ensureInstancedPickProxy: (container: THREE.Object3D, node: SceneNode) => void

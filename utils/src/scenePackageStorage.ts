@@ -1,5 +1,8 @@
 import {
-  writeScenePackageZipSync,
+  normalizeScenePackageCacheKey,
+  resolveScenePackageCacheZipPath,
+  resolveScenePackageZipPath,
+  writeScenePackageZipSyncAtPath,
   readScenePackageZipSync,
   removeScenePackageZipSync,
 } from './scenePackageFs';
@@ -109,20 +112,51 @@ function toArrayBuffer(input: ArrayBuffer | Uint8Array | any): ArrayBuffer {
   return input as ArrayBuffer;
 }
 
-export async function saveScenePackageZip(bytes: ArrayBuffer | Uint8Array, projectId: string): Promise<ScenePackagePointer> {
-  const buffer = toArrayBuffer(bytes);
+export function resolveScenePackageZipPointer(projectId: string): ScenePackagePointer {
   if (isWeChatFileSystemAvailable()) {
-    const filePath = writeScenePackageZipSync(buffer, projectId);
-    return { kind: 'wxfs', ref: filePath };
+    return { kind: 'wxfs', ref: resolveScenePackageZipPath(projectId) };
   }
 
   if (isIndexedDbAvailable()) {
-    const key = String(projectId ?? '').trim() || `project-${Date.now()}`;
-    await idbPutZip(key, buffer);
-    return { kind: 'idb', ref: key };
+    return { kind: 'idb', ref: String(projectId ?? '').trim() || `project-${Date.now()}` };
   }
 
   throw new Error('当前环境不支持持久化大体积场景包（缺少文件系统/IndexedDB）');
+}
+
+export function resolveScenePackageZipPointerByCacheKey(cacheKey: string): ScenePackagePointer {
+  const normalizedKey = normalizeScenePackageCacheKey(cacheKey);
+  if (isWeChatFileSystemAvailable()) {
+    return { kind: 'wxfs', ref: resolveScenePackageCacheZipPath(normalizedKey) };
+  }
+
+  if (isIndexedDbAvailable()) {
+    return { kind: 'idb', ref: normalizedKey };
+  }
+
+  throw new Error('当前环境不支持持久化大体积场景包（缺少文件系统/IndexedDB）');
+}
+
+export async function saveScenePackageZipAtPointer(bytes: ArrayBuffer | Uint8Array, pointer: ScenePackagePointer): Promise<void> {
+  const buffer = toArrayBuffer(bytes);
+  if (pointer.kind === 'wxfs') {
+    writeScenePackageZipSyncAtPath(buffer, pointer.ref);
+    return;
+  }
+
+  await idbPutZip(pointer.ref, buffer);
+}
+
+export async function saveScenePackageZip(bytes: ArrayBuffer | Uint8Array, projectId: string): Promise<ScenePackagePointer> {
+  const pointer = resolveScenePackageZipPointer(projectId);
+  await saveScenePackageZipAtPointer(bytes, pointer);
+  return pointer;
+}
+
+export async function saveScenePackageZipByCacheKey(bytes: ArrayBuffer | Uint8Array, cacheKey: string): Promise<ScenePackagePointer> {
+  const pointer = resolveScenePackageZipPointerByCacheKey(cacheKey);
+  await saveScenePackageZipAtPointer(bytes, pointer);
+  return pointer;
 }
 
 export async function loadScenePackageZip(pointer: ScenePackagePointer): Promise<ArrayBuffer> {
@@ -130,6 +164,10 @@ export async function loadScenePackageZip(pointer: ScenePackagePointer): Promise
     return readScenePackageZipSync(pointer.ref);
   }
   return await idbGetZip(pointer.ref);
+}
+
+export async function loadScenePackageZipByCacheKey(cacheKey: string): Promise<ArrayBuffer> {
+  return await loadScenePackageZip(resolveScenePackageZipPointerByCacheKey(cacheKey));
 }
 
 export async function removeScenePackageZip(pointer: ScenePackagePointer | null | undefined): Promise<void> {
@@ -143,4 +181,8 @@ export async function removeScenePackageZip(pointer: ScenePackagePointer | null 
   } catch (_e) {
     // Ignore cleanup failures.
   }
+}
+
+export async function removeScenePackageZipByCacheKey(cacheKey: string): Promise<void> {
+  await removeScenePackageZip(resolveScenePackageZipPointerByCacheKey(cacheKey));
 }

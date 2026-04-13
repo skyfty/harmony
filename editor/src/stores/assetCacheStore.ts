@@ -26,6 +26,14 @@ export interface AssetAccessOptions extends AssetDownloadOptions {
   name?: string | null
 }
 
+export type AssetCacheStoreLike = {
+  hasCache: (assetId: string) => boolean
+  ensureAssetEntry: (assetId: string, options?: AssetAccessOptions) => Promise<AssetCacheEntry | null>
+  ensureAssetFile: (assetId: string, options?: AssetAccessOptions) => Promise<File | null>
+  createFileFromCache: (assetId: string) => File | null
+  releaseInMemoryBlob: (assetId: string) => void
+}
+
 export interface AssetThumbnailOptions {
   asset?: ProjectAsset | null
   assetId?: string | null

@@ -141,7 +141,24 @@
         "detail": "详情",
         "comments": "留言",
         "edit": "编辑",
-        "delete": "删除"
+        "delete": "删除",
+        "wechatQrLink": "微信小程序二维码规则链接"
+      },
+      "wechatQr": {
+        "modal": {
+          "title": "微信小程序二维码规则链接",
+          "hint": "默认链接已按场景包地址、景点ID和场景ID生成，可直接复制到微信小程序后台二维码规则配置中，或按需编辑后使用。",
+          "placeholder": "微信小程序二维码规则链接",
+          "copy": "复制链接",
+          "close": "关闭"
+        },
+        "message": {
+          "loadFailed": "加载场景信息失败，无法生成二维码规则链接",
+          "sceneFileUrlMissing": "场景文件地址为空，无法生成二维码规则链接",
+          "copySuccess": "二维码规则链接已复制",
+          "copyFailed": "复制失败，请手动复制文本框内容",
+          "empty": "链接为空，无法复制"
+        }
       },
       "formFields": {
         "sceneId": {

@@ -93,9 +93,6 @@ const noiseModeModel = computed({
 
 const isCircleBrush = computed(() => props.brushShape === 'circle')
 const isPolygonBrush = computed(() => props.brushShape === 'polygon')
-const isDepthSlopeOperation = computed(() => props.brushOperation === 'raise' || props.brushOperation === 'depress')
-const radiusStrengthDisabled = computed(() => !props.hasGround || !isCircleBrush.value)
-const depthSlopeDisabled = computed(() => !props.hasGround || !isPolygonBrush.value || !isDepthSlopeOperation.value)
 
 const brushRadiusInput = ref(formatNumericValue(props.brushRadius))
 const brushStrengthInput = ref(formatNumericValue(props.brushStrength))

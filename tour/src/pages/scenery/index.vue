@@ -7,6 +7,7 @@
     <SceneryViewer
       :project-id="projectId"
       :package-url="packageUrl"
+      :package-cache-key="packageCacheKey"
       :nominate-state-map="nominateStateMap"
       :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
@@ -35,6 +36,7 @@ import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
+const packageCacheKey = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
@@ -103,6 +105,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
+  packageCacheKey.value = typeof record.packageCacheKey === 'string' ? record.packageCacheKey : '';
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string'
@@ -122,6 +125,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
       metadata: {
         projectId: projectId.value,
         packageUrl: packageUrl.value,
+        packageCacheKey: packageCacheKey.value,
         vehicleIdentifier: selectedVehicleIdentifier.value || '',
       },
     });
