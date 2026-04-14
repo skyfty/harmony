@@ -79,6 +79,13 @@ function visitBehaviorAssetReferences(
           path: `behaviors[${index}].script.params.slides[${slideIndex}].imageAssetId`,
         })
       })
+      return
+    }
+    if (script.type === 'playSound') {
+      visit({
+        assetId: (script.params as { assetId?: string | null } | null | undefined)?.assetId,
+        path: `behaviors[${index}].script.params.assetId`,
+      })
     }
   })
 }

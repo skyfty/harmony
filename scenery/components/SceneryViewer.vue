@@ -3254,6 +3254,19 @@ function isExternalAssetReference(value: string): boolean {
   return EXTERNAL_ASSET_PATTERN.test(value);
 }
 
+function mergeSceneAssetOverrides(
+  primary: SceneGraphBuildOptions['assetOverrides'] | undefined,
+  secondary: SceneGraphBuildOptions['assetOverrides'] | undefined,
+): SceneGraphBuildOptions['assetOverrides'] | undefined {
+  if (!primary && !secondary) {
+    return undefined;
+  }
+  return {
+    ...(primary ?? {}),
+    ...(secondary ?? {}),
+  };
+}
+
 function getArrayBufferView(bytes: Uint8Array): ArrayBuffer {
   const safe = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(safe).set(bytes);
@@ -10845,8 +10858,12 @@ async function buildSceneGraphWithProgress(
         resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
       },
     };
-    if (payload.assetOverrides) {
-      buildOptions.assetOverrides = payload.assetOverrides;
+    const mergedAssetOverrides = mergeSceneAssetOverrides(
+      payload.assetOverrides,
+      activeScenePackageAssetOverrides ?? undefined,
+    );
+    if (mergedAssetOverrides) {
+      buildOptions.assetOverrides = mergedAssetOverrides;
     }
     if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
       buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
