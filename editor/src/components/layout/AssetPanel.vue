@@ -4094,11 +4094,20 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 .project-tree {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.project-gallery {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   min-height: 0;
 }
 
 .project-gallery-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
