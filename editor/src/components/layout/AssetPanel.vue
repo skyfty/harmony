@@ -13,9 +13,7 @@ import {
 import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { useAuthStore } from '@/stores/authStore'
-import { isFloorPresetFilename } from '@/utils/floorPreset'
-import { isRoadPresetFilename } from '@/utils/roadPreset'
-import { isWallPresetFilename } from '@/utils/wallPreset'
+import { detectBuildPresetAssetKind, type BuildPresetAssetKind, isBuildPresetAsset } from '@/utils/buildPresetAsset'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 import { ASSETS_ROOT_DIRECTORY_ID, PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -58,6 +56,7 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const authStore = useAuthStore()
 const uiStore = useUiStore()
+const buildToolsStore = useBuildToolsStore()
 const {
   playingAssetId: previewPlayingAssetId,
   pendingAssetId: previewPendingAssetId,
@@ -441,8 +440,27 @@ function handleProjectSplitResized(event: SplitpanesResizedEvent) {
   sceneStore.setProjectPanelTreeSize(nextSize)
 }
 
+function activateBuildPresetAsset(asset: ProjectAsset, kind: BuildPresetAssetKind): boolean {
+  sceneStore.selectAsset(asset.id)
+  sceneStore.setSelection([])
+
+  if (kind === 'wall') {
+    buildToolsStore.setWallBuildShape('line')
+  } else if (kind === 'floor') {
+    buildToolsStore.setFloorBuildShape('polygon')
+  }
+
+  const activated = kind === 'wall'
+    ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
+    : kind === 'floor'
+      ? buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
+      : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
+
+  uiStore.setActiveSelectionContext(activated ? `build-tool:${kind}` : 'asset-panel')
+  return activated
+}
+
 async function selectAsset(asset: ProjectAsset) {
-  const buildToolsStore = useBuildToolsStore()
   // For model-like assets, ensure the asset is downloaded/cached before selecting.
   if (asset.type === 'model' || asset.type === 'mesh') {
     const prepared = prepareAssetForOperations(asset)
@@ -464,32 +482,9 @@ async function selectAsset(asset: ProjectAsset) {
   // build tool and apply the preset. This intentionally switches context from asset-panel
   // to build-tool so the user can edit directly in the viewport.
   if (asset.type === 'prefab') {
-    const extension = typeof asset.extension === 'string' ? asset.extension.trim().toLowerCase() : ''
-    const filename = asset.description ?? asset.name
-    const isWallPreset = extension === 'wall' || isWallPresetFilename(filename)
-    const isFloorPreset = extension === 'floor' || isFloorPresetFilename(filename)
-    const isRoadPreset = extension === 'road' || isRoadPresetFilename(filename)
-    if (isWallPreset || isFloorPreset || isRoadPreset) {
-      sceneStore.selectAsset(asset.id)
-      sceneStore.setSelection([])
-
-      if (isWallPreset) {
-        buildToolsStore.setWallBuildShape('line')
-      } else if (isFloorPreset) {
-        buildToolsStore.setFloorBuildShape('polygon')
-      }
-
-      const activated = isWallPreset
-        ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
-        : isFloorPreset
-          ? buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
-          : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
-
-      if (activated) {
-        uiStore.setActiveSelectionContext(`build-tool:${isWallPreset ? 'wall' : isFloorPreset ? 'floor' : 'road'}`)
-      } else {
-        uiStore.setActiveSelectionContext('asset-panel')
-      }
+    const presetKind = detectBuildPresetAssetKind(asset)
+    if (presetKind) {
+      activateBuildPresetAsset(asset, presetKind)
       return
     }
 
@@ -746,6 +741,11 @@ async function handleAddAsset(asset: ProjectAsset) {
     const currentNode = selectedSceneNode.value
     const parentNode = resolveModelParentNode(currentNode)
     if (preparedAsset.type === 'prefab') {
+      const presetKind = detectBuildPresetAssetKind(preparedAsset)
+      if (presetKind) {
+        activateBuildPresetAsset(preparedAsset, presetKind)
+        return
+      }
       await sceneStore.preparePrefabAsset(preparedAsset.id, {
         prefabAssetIdForDownloadProgress: preparedAsset.id,
       })
@@ -806,7 +806,7 @@ async function handleAddAsset(asset: ProjectAsset) {
 
 function primePrefabAsset(asset: ProjectAsset): void {
   const preparedAsset = prepareAssetForOperations(asset)
-  if (preparedAsset.type !== 'prefab') {
+  if (preparedAsset.type !== 'prefab' || isBuildPresetAsset(preparedAsset)) {
     return
   }
   assetCacheStore.setError(preparedAsset.id, null)

@@ -181,7 +181,7 @@ import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
 import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
 import { buildLandformNodeMaterialsFromPreset } from '@/utils/landformPresetNodeMaterials'
 import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
-import { isWallPresetFilename } from '@/utils/wallPreset'
+import { detectBuildPresetAssetKind, isBuildPresetAsset } from '@/utils/buildPresetAsset'
 import { collectFloorPresetDependencyAssetIds } from '@/stores/floorPresetActions'
 import { collectLandformPresetDependencyAssetIds } from '@/stores/landformPresetActions'
 import { collectRoadPresetDependencyAssetIds } from '@/stores/roadPresetActions'
@@ -10649,7 +10649,7 @@ watch(
         return
       }
 
-      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod') {
+      if ((asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod') && !isBuildToolPresetAsset(asset)) {
         selectionPreviewActive = true
         selectionPreviewAssetId = asset.id
         placementPreviewYaw = 0
@@ -14892,7 +14892,7 @@ async function handlePointerDown(event: PointerEvent) {
     Boolean(selectedAssetId) &&
     Boolean(selectedAsset) &&
     (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab' || selectedAsset?.type === 'lod') &&
-    !isWallPresetAsset(selectedAsset) &&
+    !isBuildToolPresetAsset(selectedAsset) &&
     !sceneStore.draggingAssetId
 
   if (event.button === 0 && canPlaceSelectedAsset) {
@@ -17881,14 +17881,33 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
   return getLastExtensionFromFilenameOrUrl(source)
 }
 
-function isWallPresetAsset(asset: ProjectAsset | null): boolean {
-  if (!asset) {
+function isBuildToolPresetAsset(asset: ProjectAsset | null): boolean {
+  return isBuildPresetAsset(asset)
+}
+
+function activateDroppedBuildPresetAsset(asset: ProjectAsset): boolean {
+  const presetKind = detectBuildPresetAssetKind(asset)
+  if (!presetKind) {
     return false
   }
-  if (typeof asset.description === 'string' && asset.description.length > 0 && isWallPresetFilename(asset.description)) {
-    return true
+
+  sceneStore.selectAsset(asset.id)
+  sceneStore.setSelection([])
+
+  if (presetKind === 'wall') {
+    buildToolsStore.setWallBuildShape('line')
+  } else if (presetKind === 'floor') {
+    buildToolsStore.setFloorBuildShape('polygon')
   }
-  return inferAssetExtension(asset) === '.wall'
+
+  const activated = presetKind === 'wall'
+    ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
+    : presetKind === 'floor'
+      ? buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
+      : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
+
+  uiStore.setActiveSelectionContext(activated ? `build-tool:${presetKind}` : 'asset-panel')
+  return activated
 }
 
 function isDisplayBoardCompatibleAsset(asset: ProjectAsset | null): asset is ProjectAsset {
@@ -18134,14 +18153,14 @@ function handleViewportDragOver(event: DragEvent) {
     return
   }
 
-  // Wall presets (.wall) are not placeable in the viewport.
-  if (asset && isWallPresetAsset(asset)) {
+  // Build-tool presets switch the editor into the matching construction tool on drop.
+  if (asset && isBuildToolPresetAsset(asset)) {
     event.preventDefault()
     isDragHovering.value = true
     updateGridHighlight(null)
     dragPreview.dispose()
     if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'none'
+      event.dataTransfer.dropEffect = 'copy'
     }
     return
   }
@@ -18254,7 +18273,8 @@ async function handleViewportDrop(event: DragEvent) {
   const assetType = asset?.type ?? null
   const isTexture = assetType === 'texture' || assetType === 'image'
 
-  if (asset && isWallPresetAsset(asset)) {
+  if (asset && isBuildToolPresetAsset(asset)) {
+    activateDroppedBuildPresetAsset(asset)
     clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)

@@ -510,10 +510,6 @@ export function parseNodePrefab(deps: PrefabActionsDeps, raw: string): NodePrefa
     throw new Error('节点预制件数据格式错误')
   }
   const candidate = parsed as Partial<NodePrefabData> & { root?: SceneNode | null }
-  const formatVersion = Number.isFinite(candidate.formatVersion) ? Number(candidate.formatVersion) : deps.NODE_PREFAB_FORMAT_VERSION
-  if (formatVersion !== deps.NODE_PREFAB_FORMAT_VERSION) {
-    throw new Error(`不支持的节点预制件版本: ${candidate.formatVersion}`)
-  }
   if (!candidate.root || typeof candidate.root !== 'object') {
     throw new Error('节点预制件缺少有效的节点数据')
   }

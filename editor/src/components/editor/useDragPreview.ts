@@ -9,6 +9,7 @@ import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { deserializeLodPreset, resolveFirstLodModelAssetId } from '@/utils/lodPreset'
 import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
 import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
+import { isBuildPresetAsset } from '@/utils/buildPresetAsset'
 
 export type DragPreviewController = {
   group: THREE.Group
@@ -183,6 +184,11 @@ export function useDragPreview(options: Options): DragPreviewController {
   }
 
   const loadForPrefab = async (asset: ProjectAsset): Promise<boolean> => {
+    if (isBuildPresetAsset(asset)) {
+      dispose(true)
+      return false
+    }
+
     if (pendingPreviewAssetId === asset.id) {
       return false
     }
@@ -305,6 +311,10 @@ export function useDragPreview(options: Options): DragPreviewController {
     }
 
     if (asset.type === 'prefab') {
+      if (isBuildPresetAsset(asset)) {
+        dispose(true)
+        return
+      }
       void loadForPrefab(asset)
     } else if (asset.type === 'lod') {
       void loadForLodPreset(asset)
