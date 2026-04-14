@@ -419,20 +419,9 @@
       <view v-if="debugOverlayVisible && debugMode !== 'off'" class="viewer-debug-overlay">
         <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
         <template v-if="debugMode === 'full'">
-          <text class="viewer-debug-line">[Renderer]</text>
-          <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
-          <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
-          <text class="viewer-debug-line">GPU render tris(raw): {{ rendererDebug.renderTriangles }}</text>
-          <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
-          <text class="viewer-debug-line">[Instancing]</text>
-          <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
-          <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
-          <text class="viewer-debug-line">Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}</text>
-          <text class="viewer-debug-line">Instanced matrix upload est: {{ instancingDebug.instanceMatrixUploadKb }} KB/frame</text>
-          <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
-          <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
-          <text class="viewer-debug-line">[Ground]</text>
-          <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
+          <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}</text>
+          <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
+          <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
 
         </template>
       </view>
@@ -1005,24 +994,10 @@ function getGroundVertexCount(rows: number, columns: number): number {
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
 const debugEnabled = ref(true);
-// debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show all debug info
+// debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show compact summary
 const debugMode = ref<'off' | 'fps' | 'full'>('fps');
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
-
-type RuntimeLogLevel = 'info' | 'warn' | 'error';
-
-function pushRuntimeLog(level: RuntimeLogLevel, _source: 'console' | 'runtime', args: unknown[]): void {
-  if (level === 'warn') {
-    console.warn(...args);
-    return;
-  }
-  if (level === 'error') {
-    console.error(...args);
-    return;
-  }
-  console.info(...args);
-}
 
 const instancingDebug = reactive({
   instancedMeshAssets: 0,
@@ -10120,7 +10095,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
           await loadProjectFromScenePackageBytes(cachedBuffer);
           return;
         } catch (parseError) {
-          pushRuntimeLog('warn', 'runtime', ['[SceneryViewer] Cached scene package failed to parse, removing cache entry', parseError]);
+          console.warn('[SceneryViewer] Cached scene package failed to parse, removing cache entry', parseError);
           await removeScenePackageZip(cachePointer);
         }
       } catch (cacheError) {
@@ -10135,11 +10110,11 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     await loadProjectFromScenePackageBytes(buffer);
     if (cacheKeyParam) {
       void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
-        pushRuntimeLog('warn', 'runtime', ['[SceneryViewer] Failed to persist scene package cache', saveError]);
+        console.warn('[SceneryViewer] Failed to persist scene package cache', saveError);
       });
     }
   } catch (loadError) {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Failed loading scene package from url', loadError]);
+    console.error('[SceneryViewer] Failed loading scene package from url', loadError);
     throw loadError;
   } finally {
     sceneDownload.active = false;
@@ -10352,7 +10327,6 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
     }
     await loadProjectFromScenePackageBytes(buffer);
   } catch (e) {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Failed loading local scene package pointer', e]);
     console.error(e);
     error.value = '项目加载失败，请返回首页重新导入';
     previewPayload.value = null;
@@ -10504,7 +10478,7 @@ async function startRenderIfReady() {
       emit('loaded');
     }
   } catch (initializationError) {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Renderer initialization failed', initializationError]);
+    console.error('[SceneryViewer] Renderer initialization failed', initializationError);
     console.error(initializationError);
     if (token === initializeToken) {
       error.value = '初始化渲染器失败';
@@ -11450,7 +11424,7 @@ function applyInput(params: {
       void loadProjectFromScenePackagePointer(entry.scenePackage);
     }
   } else {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Input missing projectId and packageUrl']);
+    console.error('[SceneryViewer] Input missing projectId and packageUrl');
     requestedMode.value = null;
     error.value = '缺少工程数据';
     loading.value = false;
