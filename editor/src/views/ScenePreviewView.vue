@@ -3995,8 +3995,8 @@ async function buildPreviewLocalAssetOverrides(
 }
 
 function mergePreviewAssetOverrides(
-	base: SceneGraphBuildOptions['assetOverrides'],
-	local: SceneGraphBuildOptions['assetOverrides'],
+	base: SceneGraphBuildOptions['assetOverrides'] | null | undefined,
+	local: SceneGraphBuildOptions['assetOverrides'] | null | undefined,
 ): SceneGraphBuildOptions['assetOverrides'] {
 	if (!base && !local) {
 		return undefined
