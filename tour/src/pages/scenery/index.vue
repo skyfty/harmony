@@ -4,6 +4,10 @@
       <text class="floating-back__icon">‹</text>
     </view>
 
+    <view class="floating-title" :style="{ top: `${backButtonTop}px` }">
+      <text class="floating-title__text">{{ scenicTitle || '未命名景区' }}</text>
+    </view>
+
     <SceneryViewer
       :project-id="projectId"
       :package-url="packageUrl"
@@ -37,6 +41,7 @@ import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
 const packageCacheKey = ref<string>('');
+const scenicTitle = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
@@ -106,6 +111,11 @@ onLoad((query: Record<string, unknown> | undefined) => {
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
   packageCacheKey.value = typeof record.packageCacheKey === 'string' ? record.packageCacheKey : '';
+  scenicTitle.value = typeof record.scenicTitle === 'string'
+    ? decodeURIComponent(record.scenicTitle)
+    : typeof record.sceneName === 'string'
+      ? decodeURIComponent(record.sceneName)
+      : '';
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string'
@@ -208,6 +218,32 @@ onUnload(() => {
   color: #ffffff;
   line-height: 1;
   margin-top: -2px;
+}
+
+.floating-title {
+  position: fixed;
+  left: 56px;
+  right: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2200;
+  pointer-events: none;
+}
+
+.floating-title__text {
+  max-width: 100%;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.32);
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 </style>

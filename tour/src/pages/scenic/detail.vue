@@ -244,6 +244,7 @@ async function enterScenery() {
     `packageCacheKey=${encodeURIComponent(scenic.value.scene.fileKey)}`,
     `sceneSpotId=${encodeURIComponent(scenic.value.id)}`,
     `sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
+    `scenicTitle=${encodeURIComponent(scenic.value.title)}`,
     `vehicleIdentifier=${encodeURIComponent(vehicleIdentifier)}`,
   ];
   uni.navigateTo({
