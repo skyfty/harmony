@@ -2,6 +2,7 @@
   "name": "@harmony/utils",
   "version": "1.0.0",
   "private": true,
+  "sideEffects": false,
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,6 +21,26 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./http": {
+      "import": "./dist/http.js",
+      "default": "./dist/http.js",
+      "types": "./dist/http.d.ts"
+    },
+    "./mini-client": {
+      "import": "./dist/miniClient.js",
+      "default": "./dist/miniClient.js",
+      "types": "./dist/miniClient.d.ts"
+    },
+    "./scene-package-storage": {
+      "import": "./dist/scenePackageStorage.js",
+      "default": "./dist/scenePackageStorage.js",
+      "types": "./dist/scenePackageStorage.d.ts"
+    },
+    "./scene-package-fs": {
+      "import": "./dist/scenePackageFs.js",
+      "default": "./dist/scenePackageFs.js",
+      "types": "./dist/scenePackageFs.d.ts"
     }
   },
   "devDependencies": {

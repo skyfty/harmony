@@ -7,10 +7,12 @@ export type LoaderProgressPayload = {
 };
 
 export type LoaderLoadedPayload = THREE.Object3D | THREE.Group | THREE.Mesh | THREE.Points | null;
+export type LoaderErrorPayload = Error;
 
 type LoaderEventMap = {
   loaded: LoaderLoadedPayload;
   progress: LoaderProgressPayload;
+  error: LoaderErrorPayload;
 };
 
 type LoaderEventHandler<K extends keyof LoaderEventMap> = (payload: LoaderEventMap[K]) => void;
@@ -39,6 +41,27 @@ type FilesMap = Record<string, File>;
 async function safeImport<T>(importer: () => Promise<T>): Promise<T> {
 
   return importer();
+}
+
+const GLTF_DRACO_ENABLED = (() => {
+  const raw = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SCENERY_ENABLE_GLTF_DRACO;
+  const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return normalized !== 'false' && normalized !== '0' && normalized !== 'no';
+})();
+
+function toError(error: unknown, fallbackMessage: string): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return new Error(error.trim());
+  }
+  return new Error(fallbackMessage);
+}
+
+function disposeLoaderResources(loader: any): void {
+  loader?.dracoLoader?.dispose?.();
+  loader?.ktx2Loader?.dispose?.();
 }
 
 export default class Loader {
@@ -127,8 +150,7 @@ export default class Loader {
     const ext = inferred;
 
     if (!ext) {
-      console.error('Unable to determine file extension.');
-      this.emit('loaded', null);
+      this.emit('error', new Error(`无法识别资源文件扩展名 (${filename})`));
       return;
     }
 
@@ -140,34 +162,65 @@ export default class Loader {
         filename,
       });
     });
+    reader.addEventListener('error', () => {
+      this.emit('error', toError(reader.error, `读取资源文件失败 (${filename})`));
+    });
+    reader.addEventListener('abort', () => {
+      this.emit('error', new Error(`读取资源文件被取消 (${filename})`));
+    });
 
     switch (ext) {
       case 'glb': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
           const contents = event.target?.result as ArrayBuffer;
-          if (!contents) return;
+          if (!contents) {
+            this.emit('error', new Error(`资源文件内容为空 (${filename})`));
+            return;
+          }
 
-          const loader = await this.createGLTFLoader();
-
-          loader.parse(contents, '', (result: any) => {
-            const scene = result.scene;
-            scene.name = filename;
-
-            scene.animations.push(...result.animations);
-
-            if (loader.dracoLoader) loader.dracoLoader.dispose();
-            if (loader.ktx2Loader) loader.ktx2Loader.dispose();
-
-            this.emit('loaded', scene);
-          });
+          let loader: any = null;
+          try {
+            loader = await this.createGLTFLoader();
+            loader.parse(
+              contents,
+              '',
+              (result: any) => {
+                try {
+                  const scene = result?.scene;
+                  if (!scene) {
+                    this.emit('error', new Error(`GLTF 场景对象为空 (${filename})`));
+                    return;
+                  }
+                  scene.name = filename;
+                  if (Array.isArray(result?.animations) && Array.isArray((scene as any).animations)) {
+                    scene.animations.push(...result.animations);
+                  }
+                  this.emit('loaded', scene);
+                } catch (error) {
+                  this.emit('error', toError(error, `GLTF 结果处理失败 (${filename})`));
+                } finally {
+                  disposeLoaderResources(loader);
+                }
+              },
+              (error: unknown) => {
+                try {
+                  this.emit('error', toError(error, `GLTF 解析失败 (${filename})`));
+                } finally {
+                  disposeLoaderResources(loader);
+                }
+              },
+            );
+          } catch (error) {
+            disposeLoaderResources(loader);
+            this.emit('error', toError(error, `GLTF 加载器初始化失败 (${filename})`));
+          }
         });
         reader.readAsArrayBuffer(file);
         break;
       }
 
       default:
-        console.error(`Unsupported file format (${ext}).`);
-        this.emit('loaded', null);
+        this.emit('error', new Error(`不支持的文件格式 (${ext})`));
         break;
     }
   }
@@ -211,13 +264,16 @@ export async function createGltfLoader(options: GltfParseOptions = {}): Promise<
   const { GLTFLoader } = await safeImport(
     () => import('three/examples/jsm/loaders/GLTFLoader.js'),
   );
-  const { DRACOLoader } = await safeImport(
-    () => import('three/examples/jsm/loaders/DRACOLoader.js'),
-  );
   const loader = new GLTFLoader(options.manager);
-  const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
-  loader.setDRACOLoader(dracoLoader);
+
+  if (GLTF_DRACO_ENABLED) {
+    const { DRACOLoader } = await safeImport(
+      () => import('three/examples/jsm/loaders/DRACOLoader.js'),
+    );
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
+    loader.setDRACOLoader(dracoLoader);
+  }
 
   // loader.setMeshoptDecoder(MeshoptDecoder);
   return loader;

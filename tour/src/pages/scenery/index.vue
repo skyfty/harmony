@@ -24,13 +24,13 @@
 import { computed, ref } from 'vue';
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
+import { getDownloadCdnBaseUrl } from '@harmony/utils/http';
 import {
   completeTravelLeaveRecord,
   createPunchRecord,
   createTravelEnterRecord,
-  getDownloadCdnBaseUrl,
   trackAnalyticsEvent,
-} from '@harmony/utils';
+} from '@harmony/utils/mini-client';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 

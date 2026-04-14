@@ -1,5 +1,7 @@
 import { fileURLToPath, URL } from 'node:url';
 import { createRequire } from 'node:module';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import uni from '@dcloudio/vite-plugin-uni';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
@@ -35,8 +37,69 @@ const pollingInterval =
     ? parsedPollingInterval
     : 300;
 
+function rewriteWorkerWasmPaths() {
+  const rewriteSource = (fileName: string, source: string) => {
+    if (!fileName.startsWith('workers/') || !source.includes('setWASMInstantiateInputMapper')) {
+      return source;
+    }
+
+    return source.replace(
+      /setWASMInstantiateInputMapper\(\(\) => '([^']+)'\)/g,
+      (_match, wasmPath: string) => {
+        const relativePath = path.posix.relative(path.posix.dirname(fileName), wasmPath);
+        const normalizedPath = relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+        return `setWASMInstantiateInputMapper(() => '${normalizedPath}')`;
+      },
+    );
+  };
+
+  return {
+    name: 'rewrite-worker-wasm-paths',
+    async writeBundle(outputOptions: { dir?: string }) {
+      if (!outputOptions.dir) {
+        return;
+      }
+
+      const outputDir = outputOptions.dir;
+      const workersDir = path.join(outputDir, 'workers');
+
+      const visit = async (currentDir: string): Promise<void> => {
+        let entries: Awaited<ReturnType<typeof fs.readdir>>;
+        try {
+          entries = await fs.readdir(currentDir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+
+        for (const entry of entries) {
+          const entryPath = path.join(currentDir, entry.name);
+          if (entry.isDirectory()) {
+            await visit(entryPath);
+            continue;
+          }
+
+          if (!entry.isFile() || !entry.name.endsWith('.js')) {
+            continue;
+          }
+
+          const source = await fs.readFile(entryPath, 'utf8');
+          const normalizedFileName = path.relative(outputDir, entryPath).split(path.sep).join('/');
+          const rewrittenSource = rewriteSource(normalizedFileName, source);
+          if (rewrittenSource !== source) {
+            await fs.writeFile(entryPath, rewrittenSource, 'utf8');
+          }
+        }
+
+      };
+
+      await visit(workersDir);
+    },
+  };
+}
+
 export default {
     define: {
+      'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('false'),
       'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('false'),
     },
     optimizeDeps: {
@@ -85,10 +148,11 @@ export default {
       // Safe for H5: the plugin only emits these assets for non-web platforms.
       threePlatformAdapter({
         assetsOutput: {
-          worker: 'pages/scenery/workers',
-          wasm: 'pages/scenery/wasms',
+          worker: 'workers',
+          wasm: 'wasms',
         },
       }),
+      rewriteWorkerWasmPaths(),
       createMpChunkSplitterPlugin({
         subpackages: ['pages/scenery'],
         singleChunkMode: true,

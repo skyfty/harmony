@@ -453,7 +453,7 @@ import {
   resolveScenePackageZipPointerByCacheKey,
   saveScenePackageZipByCacheKey,
   type ScenePackagePointer,
-} from '@harmony/utils';
+} from '@harmony/utils/scene-package-storage';
 
 type SceneryProps = {
   projectId?: string;
