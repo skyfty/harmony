@@ -13081,7 +13081,7 @@ onUnmounted(() => {
 
 .viewer-drive-speed-left-floating {
   position: absolute;
-  left: 24px;
+  left: 6px;
   bottom: 206px;
   z-index: 1580;
   display: flex;
@@ -13093,7 +13093,7 @@ onUnmounted(() => {
 
 .viewer-drive-compass-right-floating {
   position: absolute;
-  right: 24px;
+  right: 6px;
   bottom: 220px;
   z-index: 1580;
   display: flex;
