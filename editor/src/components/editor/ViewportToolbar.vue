@@ -2096,6 +2096,7 @@ const buildToolButtons = [
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Brush' },
   { id: 'landform', icon: 'mdi-image-filter-hdr', label: 'Landform Brush' },
   { id: 'region', icon: 'mdi-vector-polygon', label: 'Region Tool (Left Mouse)' },
+  { id: 'guideRoute', icon: 'mdi-map-marker-path', label: 'Guide Route Tool (Left Mouse)' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
   { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
   { id: 'displayBoard', icon: 'mdi-advertisements', label: 'Display Surface Tools' },
@@ -2194,6 +2195,8 @@ function handleBuildToolToggle(tool: BuildTool) {
     ? 'Road'
     : tool === 'region'
     ? 'Region'
+    : tool === 'guideRoute'
+    ? 'GuideRoute'
     : null
   const primaryDynamicMeshType = primaryNode?.dynamicMesh?.type as string | undefined
   const toolMatchesPrimarySelection = tool === 'water'

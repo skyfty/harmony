@@ -1639,12 +1639,6 @@ async function handleDrop(event: DragEvent, targetId: string) {
     if (nodeId === targetId) {
       continue
     }
-    if (resolvedTarget.position === 'inside') {
-      const { parentId } = findParentInfo(nodeId)
-      if (parentId === resolvedTarget.targetId) {
-        continue
-      }
-    }
     const moveTargetId = resolvedTarget.position === 'after' ? afterAnchorId : resolvedTarget.targetId
     const moved = sceneStore.moveNode({
       nodeId,
