@@ -28,6 +28,8 @@ import {
 	resolveEnabledComponentState,
 	type EnvironmentCsmSettings,
 	type EnvironmentSettings,
+	computePlaySoundDistanceGain,
+	resolvePlaySoundSourcePoint,
 	createGradientBackgroundDome,
 	disposeSkyCubeTexture,
 	disposeGradientBackgroundDome,
@@ -735,6 +737,18 @@ function detachBehaviorSound(sound: THREE.Audio | THREE.PositionalAudio | null):
 	}
 }
 
+function detachBehaviorSoundDistanceGain(instance: BehaviorSoundInstance): void {
+	if (!instance.distanceGainNode) {
+		return
+	}
+	try {
+		instance.distanceGainNode.disconnect()
+	} catch {
+		// ignore disconnect errors for partially initialized nodes
+	}
+	instance.distanceGainNode = null
+}
+
 function disposeBehaviorSoundInstance(
 	key: string,
 	resolution: BehaviorEventResolution | null = null,
@@ -746,6 +760,7 @@ function disposeBehaviorSoundInstance(
 	activeBehaviorSounds.delete(key)
 	instance.stopped = true
 	clearBehaviorSoundTimers(instance)
+	detachBehaviorSoundDistanceGain(instance)
 	detachBehaviorSound(instance.sound)
 	instance.sound = null
 	const finish = instance.onFinish
@@ -1243,6 +1258,7 @@ type BehaviorSoundInstance = {
 	params: Extract<BehaviorRuntimeEvent, { type: 'play-sound' }>['params']
 	targetNodeId: string | null
 	sound: THREE.Audio | THREE.PositionalAudio | null
+	distanceGainNode: GainNode | null
 	startTimer: number | null
 	stopTimer: number | null
 	intervalTimer: number | null
@@ -1255,6 +1271,7 @@ const behaviorAudioLoader = new THREE.AudioLoader()
 const behaviorAudioBufferCache = new Map<string, AudioBuffer>()
 const pendingBehaviorAudioBufferRequests = new Map<string, Promise<AudioBuffer | null>>()
 const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>()
+const behaviorSoundDistanceScratch = new THREE.Vector3()
 const nodeAnimationControllers = new Map<string, {
 	mixer: THREE.AnimationMixer
 	clips: THREE.AnimationClip[]
@@ -5232,11 +5249,59 @@ function buildBehaviorSoundObject(
 	}
 	const sound = new THREE.PositionalAudio(activeListener)
 	sound.setBuffer(buffer)
-	sound.setRefDistance(Math.max(0.01, event.params.refDistanceMeters))
-	sound.setMaxDistance(Math.max(event.params.refDistanceMeters, event.params.maxDistanceMeters || event.params.refDistanceMeters))
-	sound.setRolloffFactor(event.params.rolloffFactor)
+	sound.setDistanceModel('inverse')
+	sound.setRefDistance(1)
+	sound.setMaxDistance(100000)
+	sound.setRolloffFactor(0)
 	targetObject.add(sound)
 	return sound
+}
+
+function createBehaviorSoundDistanceGainNode(
+	sound: THREE.Audio | THREE.PositionalAudio,
+	activeListener: THREE.AudioListener,
+): GainNode | null {
+	const listenerInput = typeof activeListener.getInput === 'function'
+		? activeListener.getInput()
+		: null
+	if (!listenerInput) {
+		return null
+	}
+	const distanceGainNode = sound.context.createGain()
+	distanceGainNode.gain.value = 1
+	try {
+		sound.gain.disconnect()
+	} catch {
+		// ignore disconnect errors for partially initialized nodes
+	}
+	sound.gain.connect(distanceGainNode)
+	distanceGainNode.connect(listenerInput)
+	return distanceGainNode
+}
+
+function computeBehaviorSoundDistanceMeters(instance: BehaviorSoundInstance): number | null {
+	if (!instance.params.spatial || !camera) {
+		return instance.params.spatial ? null : 0
+	}
+	const targetObject = instance.targetNodeId ? nodeObjectMap.get(instance.targetNodeId) ?? null : null
+	if (!targetObject) {
+		return null
+	}
+	const targetPoint = resolvePlaySoundSourcePoint(targetObject, camera.position, behaviorSoundDistanceScratch)
+	if (!targetPoint) {
+		return null
+	}
+	return camera.position.distanceTo(targetPoint)
+}
+
+function updateBehaviorSoundDistanceGain(instance: BehaviorSoundInstance): void {
+	if (!instance.distanceGainNode || !instance.sound || instance.stopped) {
+		return
+	}
+	instance.distanceGainNode.gain.value = computePlaySoundDistanceGain(
+		instance.params,
+		computeBehaviorSoundDistanceMeters(instance),
+	)
 }
 
 function applyBehaviorSoundEnvelope(
@@ -5349,6 +5414,7 @@ async function playBehaviorSoundEvent(event: Extract<BehaviorRuntimeEvent, { typ
 		params: event.params,
 		targetNodeId: event.targetNodeId,
 		sound: null,
+		distanceGainNode: null,
 		startTimer: null,
 		stopTimer: null,
 		intervalTimer: null,
@@ -5368,6 +5434,8 @@ async function playBehaviorSoundEvent(event: Extract<BehaviorRuntimeEvent, { typ
 			return
 		}
 		current.sound = sound
+		current.distanceGainNode = event.params.spatial ? createBehaviorSoundDistanceGainNode(sound, activeListener) : null
+		updateBehaviorSoundDistanceGain(current)
 		sound.setLoop(event.params.playbackMode === 'loop')
 		applyBehaviorSoundEnvelope(sound, event.params)
 		if (event.params.playbackMode === 'interval') {
@@ -5376,6 +5444,8 @@ async function playBehaviorSoundEvent(event: Extract<BehaviorRuntimeEvent, { typ
 				if (!latest || latest.stopped) {
 					return
 				}
+				detachBehaviorSoundDistanceGain(latest)
+				detachBehaviorSound(latest.sound)
 				latest.sound = null
 				const delaySeconds = randomBetween(latest.params.minIntervalSeconds, latest.params.maxIntervalSeconds)
 				latest.intervalTimer = window.setTimeout(() => {
@@ -8082,6 +8152,12 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 	})
 	previewComponentManager.update(delta)
 	animationMixers.forEach((mixer) => mixer.update(delta))
+	activeBehaviorSounds.forEach((instance) => {
+		if (!instance.params.spatial || instance.stopped) {
+			return
+		}
+		updateBehaviorSoundDistanceGain(instance)
+	})
 	effectRuntimeTickers.forEach((tick) => {
 		try {
 			tick(delta)

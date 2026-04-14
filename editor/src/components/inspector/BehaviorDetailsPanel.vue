@@ -945,11 +945,18 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
 }
 
 .behavior-details__params {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 4px;
   padding: 12px;
   background: rgba(12, 16, 22, 0.55);
   min-height: 60px;
+  scrollbar-gutter: stable both-edges;
 }
 
 .behavior-details__no-selection,

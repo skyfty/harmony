@@ -1093,6 +1093,7 @@ class SceneGraphBuilder {
   private async buildRegionMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     const group = new THREE.Group();
     group.name = node.name ?? 'Region';
+    group.userData = { ...(group.userData ?? {}), dynamicMeshType: 'Region' };
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
 
