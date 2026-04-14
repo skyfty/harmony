@@ -802,6 +802,12 @@ function isMultiuserNodeId(nodeId: string | null | undefined): boolean {
 
 type ParentInfo = { parentId: string | null; parentNode: SceneNode | null }
 
+type HierarchyDropTargetResolution = {
+  targetId: string
+  position: HierarchyDropPosition
+  parentId: string | null
+} | null
+
 function findParentInfo(nodeId: string): ParentInfo {
   if (!nodeId) {
     return { parentId: null, parentNode: null }
@@ -809,6 +815,33 @@ function findParentInfo(nodeId: string): ParentInfo {
   const parentId = sceneStore.getParentNodeId(nodeId)
   const parentNode = parentId ? sceneStore.getNodeById(parentId) : null
   return { parentId, parentNode }
+}
+
+function resolveHierarchyNodeDropTarget(targetId: string): HierarchyDropTargetResolution {
+  if (!targetId) {
+    return null
+  }
+
+  const targetNode = sceneStore.getNodeById(targetId)
+  if (!targetNode) {
+    return null
+  }
+
+  if (targetNode.nodeType === 'Group') {
+    if (!sceneStore.nodeAllowsChildCreation(targetId)) {
+      return null
+    }
+    return { targetId, position: 'inside', parentId: targetId }
+  }
+
+  const { parentId, parentNode } = findParentInfo(targetId)
+  if (!parentId || parentNode?.nodeType !== 'Group') {
+    return null
+  }
+  if (!sceneStore.nodeAllowsChildCreation(parentId)) {
+    return null
+  }
+  return { targetId, position: 'after', parentId }
 }
 
 function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): string | null {
@@ -1369,6 +1402,7 @@ function getNodeDropClasses(id: string) {
   return {
     ...classes,
     'drop-inside': dragState.value.position === 'inside',
+    'drop-after': dragState.value.position === 'after',
   }
 }
 
@@ -1503,10 +1537,8 @@ function handleDragOver(event: DragEvent, targetId: string) {
     current = sceneStore.getParentNodeId(current)
   }
 
-  const targetNode = sceneStore.getNodeById(targetId)
-  const supportsChildren =
-    targetNode?.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(targetId)
-  if (isInvalid || !supportsChildren) {
+  const resolvedTarget = resolveHierarchyNodeDropTarget(targetId)
+  if (isInvalid || !resolvedTarget) {
     scheduleDragHoverUpdate({ targetId, position: null })
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
@@ -1515,7 +1547,7 @@ function handleDragOver(event: DragEvent, targetId: string) {
     event.stopPropagation()
     return
   }
-  scheduleDragHoverUpdate({ targetId, position: 'inside' })
+  scheduleDragHoverUpdate({ targetId: resolvedTarget.targetId, position: resolvedTarget.position })
   event.preventDefault()
   event.stopPropagation()
   if (event.dataTransfer) {
@@ -1596,32 +1628,37 @@ async function handleDrop(event: DragEvent, targetId: string) {
   }
   event.preventDefault()
   event.stopPropagation()
-  const targetNode = sceneStore.getNodeById(targetId)
-  const canAdopt =
-    targetNode?.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(targetId)
-  if (!canAdopt) {
+  const resolvedTarget = resolveHierarchyNodeDropTarget(targetId)
+  if (!resolvedTarget) {
     resetDragState()
     return
   }
   let movedAny = false
+  let afterAnchorId = resolvedTarget.targetId
   for (const nodeId of sourceIds) {
     if (nodeId === targetId) {
       continue
     }
-    const { parentId } = findParentInfo(nodeId)
-    if (parentId === targetId) {
-      continue
+    if (resolvedTarget.position === 'inside') {
+      const { parentId } = findParentInfo(nodeId)
+      if (parentId === resolvedTarget.targetId) {
+        continue
+      }
     }
+    const moveTargetId = resolvedTarget.position === 'after' ? afterAnchorId : resolvedTarget.targetId
     const moved = sceneStore.moveNode({
       nodeId,
-      targetId,
-      position: 'inside',
-      recenterSkipGroupIds: [targetId],
+      targetId: moveTargetId,
+      position: resolvedTarget.position,
+      recenterSkipGroupIds: [resolvedTarget.parentId ?? resolvedTarget.targetId],
     })
     movedAny = movedAny || moved
+    if (moved && resolvedTarget.position === 'after') {
+      afterAnchorId = nodeId
+    }
   }
-  if (movedAny) {
-    sceneStore.setGroupExpanded(targetId, true, { captureHistory: false })
+  if (movedAny && resolvedTarget.position === 'inside') {
+    sceneStore.setGroupExpanded(resolvedTarget.targetId, true, { captureHistory: false })
   }
   resetDragState()
 }
@@ -2277,7 +2314,7 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
 
 /* Make selection/active states clearly visible.
    Do not override explicit drop/material/asset highlight backgrounds. */
-.node-label.is-selected:not(.drop-inside):not(.material-drop-target):not(.asset-drop-target):not(.drop-disabled) {
+.node-label.is-selected:not(.drop-inside):not(.drop-after):not(.material-drop-target):not(.asset-drop-target):not(.drop-disabled) {
   background: rgba(77, 208, 225, 0.08);
 }
 
@@ -2285,7 +2322,7 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
   color: #fafafa;
 }
 
-.node-label.is-active:not(.drop-inside):not(.material-drop-target):not(.asset-drop-target):not(.drop-disabled) {
+.node-label.is-active:not(.drop-inside):not(.drop-after):not(.material-drop-target):not(.asset-drop-target):not(.drop-disabled) {
   background: rgba(77, 208, 225, 0.14);
   box-shadow: inset 0 0 0 1px rgba(77, 208, 225, 0.35);
 }
@@ -2304,6 +2341,11 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
 
 .node-label.drop-inside {
   background: rgba(77, 208, 225, 0.12);
+}
+
+.node-label.drop-after {
+  box-shadow: inset 0 -2px 0 rgba(77, 208, 225, 0.95);
+  background: rgba(77, 208, 225, 0.08);
 }
 
 .node-label.material-drop-target {

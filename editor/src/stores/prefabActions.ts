@@ -467,8 +467,6 @@ export function bakePrefabSubtreeTransforms(deps: PrefabActionsDeps, root: Scene
 
   sanitizeSubtree(root)
   root.position = deps.createVector(0, 0, 0)
-  root.rotation = deps.createVector(0, 0, 0)
-  root.scale = deps.createVector(1, 1, 1)
   return root
 }
 
