@@ -119,6 +119,22 @@ class SceneGraphBuilder {
   private readonly preloadedAssetIds = new Set<string>();
   private progressBytesTotal = 0;
   private progressBytesLoaded = 0;
+
+  private roundDebugNumber(value: number): number {
+    return Number.isFinite(value) ? Number(value.toFixed(5)) : 0;
+  }
+
+  private summarizeDebugVector(vector: THREE.Vector3 | { x?: number; y?: number; z?: number } | null | undefined): { x: number; y: number; z: number } {
+    return {
+      x: this.roundDebugNumber(typeof vector?.x === 'number' ? vector.x : 0),
+      y: this.roundDebugNumber(typeof vector?.y === 'number' ? vector.y : 0),
+      z: this.roundDebugNumber(typeof vector?.z === 'number' ? vector.z : 0),
+    };
+  }
+
+  private logImportedMeshDebug(label: string, payload: Record<string, unknown>): void {
+    console.log('[SceneGraphPrefabDebug]', label, payload);
+  }
   constructor(
     document: SceneJsonExportDocument,
     options: SceneGraphBuildOptions,
@@ -802,6 +818,36 @@ class SceneGraphBuilder {
     });
   }
 
+  private resetImportedObjectLocalTransform(object: THREE.Object3D): void {
+    object.position.set(0, 0, 0);
+    object.rotation.set(0, 0, 0);
+    object.quaternion.identity();
+    object.scale.set(1, 1, 1);
+    object.matrix.identity();
+    object.matrixAutoUpdate = true;
+    object.updateMatrixWorld(true);
+  }
+
+  private async loadNodeAssetMesh(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+    if (!assetId) {
+      return null;
+    }
+
+    const objectPath = node.importMetadata?.objectPath;
+    const hasObjectPath = Array.isArray(objectPath) && objectPath.length > 0;
+    if (hasObjectPath) {
+      const loaded = await loadNodeObject(this.resourceCache, assetId, node.importMetadata ?? null);
+      if (!loaded) {
+        return null;
+      }
+      this.prepareImportedObject(loaded);
+      return loaded;
+    }
+
+    return this.loadAssetMesh(assetId);
+  }
+
   private async preloadTextureAsset(assetId: string): Promise<void> {
     if (!assetId) {
       return;
@@ -1044,16 +1090,36 @@ class SceneGraphBuilder {
     if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
+        placeholder.name = `${node.name ?? 'Group'}::LazyPlaceholder`;
+        this.resetImportedObjectLocalTransform(placeholder);
         group.add(placeholder);
         this.recordMeshStatistics(placeholder);
       }
     } else if (node.sourceAssetId) {
-      const asset = await this.loadAssetMesh(node.sourceAssetId);
+      const asset = await this.loadNodeAssetMesh(node);
       if (asset) {
         await this.applyMaterialOverridesToImportedObject(asset, node);
+        this.resetImportedObjectLocalTransform(asset);
         asset.userData = asset.userData ?? {};
         asset.userData.sourceAssetId = node.sourceAssetId;
+        asset.userData.objectPath = node.importMetadata?.objectPath ?? null;
         group.add(asset);
+        this.logImportedMeshDebug('buildGroupNode:sourceAsset', {
+          nodeId: node.id,
+          name: node.name,
+          sourceAssetId: node.sourceAssetId,
+          objectPath: node.importMetadata?.objectPath ?? null,
+          nodePosition: this.summarizeDebugVector(node.position),
+          nodeRotation: this.summarizeDebugVector(node.rotation),
+          nodeScale: this.summarizeDebugVector(node.scale),
+          resetAssetPosition: this.summarizeDebugVector(asset.position),
+          resetAssetRotation: this.summarizeDebugVector(asset.rotation),
+          resetAssetScale: this.summarizeDebugVector(asset.scale),
+          groupPosition: this.summarizeDebugVector(group.position),
+          groupRotation: this.summarizeDebugVector(group.rotation),
+          groupScale: this.summarizeDebugVector(group.scale),
+          childCount: group.children.length,
+        });
       }
     }
 
@@ -1185,21 +1251,83 @@ class SceneGraphBuilder {
     if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
-        this.applyTransform(placeholder, node);
-        this.applyVisibility(placeholder, node);
+        const container = new THREE.Group();
+        container.name = node.name ?? 'Mesh';
+        this.applyTransform(container, node);
+        this.applyVisibility(container, node);
+        placeholder.name = `${node.name ?? 'Mesh'}::LazyPlaceholder`;
+        this.resetImportedObjectLocalTransform(placeholder);
+        container.add(placeholder);
+        if (Array.isArray(node.children) && node.children.length) {
+          await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+        }
+        this.logImportedMeshDebug('buildMeshNode:lazyPlaceholder', {
+          nodeId: node.id,
+          name: node.name,
+          sourceAssetId: node.sourceAssetId,
+          objectPath: node.importMetadata?.objectPath ?? null,
+          nodePosition: this.summarizeDebugVector(node.position),
+          nodeRotation: this.summarizeDebugVector(node.rotation),
+          nodeScale: this.summarizeDebugVector(node.scale),
+          containerPosition: this.summarizeDebugVector(container.position),
+          placeholderPosition: this.summarizeDebugVector(placeholder.position),
+          placeholderRotation: this.summarizeDebugVector(placeholder.rotation),
+          placeholderScale: this.summarizeDebugVector(placeholder.scale),
+          childCount: container.children.length,
+        });
         this.recordMeshStatistics(placeholder);
-        return placeholder;
+        return container;
       }
     }
 
     if (node.sourceAssetId) {
-      const asset = await this.loadAssetMesh(node.sourceAssetId);
+      const container = new THREE.Group();
+      container.name = node.name ?? 'Mesh';
+      this.applyTransform(container, node);
+      this.applyVisibility(container, node);
+      const hasChildNodes = Array.isArray(node.children) && node.children.length > 0;
+
+      const asset = await this.loadNodeAssetMesh(node);
       if (asset) {
+        const loadedAssetPosition = this.summarizeDebugVector(asset.position);
+        const loadedAssetRotation = this.summarizeDebugVector(asset.rotation);
+        const loadedAssetScale = this.summarizeDebugVector(asset.scale);
         await this.applyMaterialOverridesToImportedObject(asset, node);
-        this.applyTransform(asset, node);
-        this.applyVisibility(asset, node);
+        this.resetImportedObjectLocalTransform(asset);
+        asset.userData = {
+          ...(asset.userData ?? {}),
+          sourceAssetId: node.sourceAssetId,
+          objectPath: node.importMetadata?.objectPath ?? null,
+        };
+        container.add(asset);
+        if (hasChildNodes) {
+          await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+        }
+        this.logImportedMeshDebug('buildMeshNode:sourceAsset', {
+          nodeId: node.id,
+          name: node.name,
+          sourceAssetId: node.sourceAssetId,
+          objectPath: node.importMetadata?.objectPath ?? null,
+          nodePosition: this.summarizeDebugVector(node.position),
+          nodeRotation: this.summarizeDebugVector(node.rotation),
+          nodeScale: this.summarizeDebugVector(node.scale),
+          loadedAssetPosition,
+          loadedAssetRotation,
+          loadedAssetScale,
+          resetAssetPosition: this.summarizeDebugVector(asset.position),
+          resetAssetRotation: this.summarizeDebugVector(asset.rotation),
+          resetAssetScale: this.summarizeDebugVector(asset.scale),
+          containerPosition: this.summarizeDebugVector(container.position),
+          containerRotation: this.summarizeDebugVector(container.rotation),
+          containerScale: this.summarizeDebugVector(container.scale),
+          childCount: container.children.length,
+        });
         this.recordMeshStatistics(asset);
-        return asset;
+        return container;
+      }
+      if (hasChildNodes) {
+        await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+        return container;
       }
       this.warn(`使用源资源失败 ${node.sourceAssetId}`);
     }

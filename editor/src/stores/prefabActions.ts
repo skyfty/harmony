@@ -335,6 +335,44 @@ export function collectPrefabAssetReferences(root: SceneNode | null | undefined)
   return Array.from(bucket)
 }
 
+function roundPrefabDebugNumber(value: number): number {
+  return Number.isFinite(value) ? Number(value.toFixed(5)) : 0
+}
+
+function summarizePrefabDebugVector(value: Vector3Like | null | undefined, fallback: Vector3Like): Vector3Like {
+  const sanitized = sanitizeFiniteVector3Like(value, fallback)
+  return {
+    x: roundPrefabDebugNumber(sanitized.x),
+    y: roundPrefabDebugNumber(sanitized.y),
+    z: roundPrefabDebugNumber(sanitized.z),
+  }
+}
+
+function summarizePrefabDebugNode(node: SceneNode | null | undefined, depth = 3): Record<string, unknown> | null {
+  if (!node) {
+    return null
+  }
+  const summary: Record<string, unknown> = {
+    id: node.id,
+    name: node.name,
+    nodeType: node.nodeType,
+    sourceAssetId: (node as any).sourceAssetId ?? null,
+    objectPath: (node as any).importMetadata?.objectPath ?? null,
+    position: summarizePrefabDebugVector(node.position, { x: 0, y: 0, z: 0 }),
+    rotation: summarizePrefabDebugVector(node.rotation, { x: 0, y: 0, z: 0 }),
+    scale: summarizePrefabDebugVector(node.scale, { x: 1, y: 1, z: 1 }),
+    childCount: Array.isArray(node.children) ? node.children.length : 0,
+  }
+  if (depth > 0 && Array.isArray(node.children) && node.children.length) {
+    summary.children = node.children.map((child) => summarizePrefabDebugNode(child, depth - 1))
+  }
+  return summary
+}
+
+function logPrefabDebug(label: string, payload: Record<string, unknown>): void {
+  console.log('[PrefabDebug]', label, payload)
+}
+
 export function normalizePrefabName(value: string | null | undefined): string {
   if (typeof value !== 'string') {
     return ''
@@ -441,39 +479,34 @@ function sanitizeFiniteVector3Like(value: Vector3Like | null | undefined, fallba
 }
 
 export function bakePrefabSubtreeTransforms(deps: PrefabActionsDeps, root: SceneNode, sceneNodes: SceneNode[]): SceneNode {
-  const identity = new Matrix4()
-  const rootWorld = deps.computeWorldMatrixForNode(sceneNodes, root.id) ?? identity
-  const rootDet = rootWorld.determinant()
-  const rootInverse = Number.isFinite(rootDet) && Math.abs(rootDet) > 1e-12 ? rootWorld.clone().invert() : identity
+  void sceneNodes
 
-  const rewrite = (node: SceneNode, parentRelativeWorld: Matrix4, parentSceneWorld: Matrix4) => {
-    const sceneWorld =
-      deps.computeWorldMatrixForNode(sceneNodes, node.id) ??
-      new Matrix4().multiplyMatrices(parentSceneWorld, deps.composeNodeMatrix(node))
-    const relativeWorld = new Matrix4().multiplyMatrices(rootInverse, sceneWorld)
-    const parentInverse = parentRelativeWorld.clone().invert()
-    const localMatrix = new Matrix4().multiplyMatrices(parentInverse, relativeWorld)
-
-    const position = new Vector3()
-    const quaternion = new Quaternion()
-    const scale = new Vector3()
-    localMatrix.decompose(position, quaternion, scale)
-
-    const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
-    const nextPosition = sanitizeFiniteVector3Like({ x: position.x, y: position.y, z: position.z }, { x: 0, y: 0, z: 0 })
-    const nextRotation = sanitizeFiniteVector3Like({ x: euler.x, y: euler.y, z: euler.z }, { x: 0, y: 0, z: 0 })
-    const nextScale = sanitizeFiniteVector3Like({ x: scale.x, y: scale.y, z: scale.z }, { x: 1, y: 1, z: 1 })
-
-    node.position = deps.createVector(nextPosition.x, nextPosition.y, nextPosition.z)
-    node.rotation = deps.createVector(nextRotation.x, nextRotation.y, nextRotation.z)
-    node.scale = deps.createVector(nextScale.x, nextScale.y, nextScale.z)
+  const sanitizeSubtree = (node: SceneNode) => {
+    node.position = deps.createVector(
+      sanitizeFiniteVector3Like(node.position, { x: 0, y: 0, z: 0 }).x,
+      sanitizeFiniteVector3Like(node.position, { x: 0, y: 0, z: 0 }).y,
+      sanitizeFiniteVector3Like(node.position, { x: 0, y: 0, z: 0 }).z,
+    )
+    node.rotation = deps.createVector(
+      sanitizeFiniteVector3Like(node.rotation, { x: 0, y: 0, z: 0 }).x,
+      sanitizeFiniteVector3Like(node.rotation, { x: 0, y: 0, z: 0 }).y,
+      sanitizeFiniteVector3Like(node.rotation, { x: 0, y: 0, z: 0 }).z,
+    )
+    node.scale = deps.createVector(
+      sanitizeFiniteVector3Like(node.scale, { x: 1, y: 1, z: 1 }).x,
+      sanitizeFiniteVector3Like(node.scale, { x: 1, y: 1, z: 1 }).y,
+      sanitizeFiniteVector3Like(node.scale, { x: 1, y: 1, z: 1 }).z,
+    )
 
     if (node.children?.length) {
-      node.children.forEach((child) => rewrite(child, relativeWorld, sceneWorld))
+      node.children.forEach((child) => sanitizeSubtree(child))
     }
   }
 
-  rewrite(root, identity, identity)
+  sanitizeSubtree(root)
+  root.position = deps.createVector(0, 0, 0)
+  root.rotation = deps.createVector(0, 0, 0)
+  root.scale = deps.createVector(1, 1, 1)
   return root
 }
 
@@ -561,8 +594,18 @@ export function buildSerializedPrefabPayload(
   },
 ): SerializedPrefabPayload {
   const prefabRoot = ensurePrefabRoot(deps, node)
+  logPrefabDebug('buildSerializedPrefabPayload:source', {
+    nodeId: node.id,
+    name: node.name,
+    sourceSummary: summarizePrefabDebugNode(node),
+  })
   const prefabData = createNodePrefabData(deps, prefabRoot, context.name ?? node.name ?? '')
   bakePrefabSubtreeTransforms(deps, prefabData.root, context.sceneNodes)
+  logPrefabDebug('buildSerializedPrefabPayload:prefabRootAfterBake', {
+    nodeId: node.id,
+    name: node.name,
+    prefabSummary: summarizePrefabDebugNode(prefabData.root),
+  })
   const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)
   if (dependencyAssetIds.length) {
     const dependencySubset = buildAssetDependencySubset({
@@ -578,6 +621,11 @@ export function buildSerializedPrefabPayload(
     delete (prefabData as any).assetRegistry
   }
   const serialized = serializeNodePrefab(prefabData)
+  logPrefabDebug('buildSerializedPrefabPayload:serialized', {
+    nodeId: node.id,
+    dependencyAssetIds,
+    serializedLength: serialized.length,
+  })
   return {
     prefab: prefabData,
     serialized,
