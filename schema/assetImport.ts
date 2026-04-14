@@ -1,8 +1,10 @@
 import * as THREE from 'three'
-import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
+import Loader, { type LoaderErrorPayload, type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
 import { createUvDebugMaterial } from './debugTextures'
 import { MeshBVH } from 'three-mesh-bvh'
 import { normalizeScatterMaterials } from './scatterMaterials'
+
+const DEFAULT_OBJECT_LOAD_TIMEOUT_MS = 45000
 
 export interface LoadObjectOptions {
   onProgress?: (payload: LoaderProgressPayload) => void
@@ -69,7 +71,6 @@ export function prepareImportedObject(object: THREE.Object3D) {
     }
     child.matrixAutoUpdate = true
   })
-
   object.updateMatrixWorld(true)
 
   const boundingBox = new THREE.Box3().setFromObject(object)
@@ -81,6 +82,10 @@ export function prepareImportedObject(object: THREE.Object3D) {
     object.position.y -= (minY - center.y)
     object.updateMatrixWorld(true)
   }
+}
+
+function createLoadTimeoutError(fileName: string): Error {
+  return new Error(`加载资源对象超时 (${fileName})`)
 }
 
 function buildObjectBvh(object: THREE.Object3D): void {
@@ -119,15 +124,35 @@ export async function loadObjectFromFile(
 
   return new Promise<THREE.Object3D>((resolve, reject) => {
     const loader = new Loader()
+    let settled = false
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null
 
     const cleanup = () => {
+      if (timeoutId !== null) {
+        globalThis.clearTimeout(timeoutId)
+        timeoutId = null
+      }
       loader.removeEventListener('loaded', handleLoaded)
+      loader.removeEventListener('error', handleError)
       if (options.onProgress) {
         loader.removeEventListener('progress', options.onProgress)
       }
     }
 
+    timeoutId = globalThis.setTimeout(() => {
+      if (settled) {
+        return
+      }
+      settled = true
+      cleanup()
+      reject(createLoadTimeoutError(file.name))
+    }, DEFAULT_OBJECT_LOAD_TIMEOUT_MS)
+
     const handleLoaded = (payload: LoaderLoadedPayload) => {
+      if (settled) {
+        return
+      }
+      settled = true
       cleanup()
       if (!payload) {
         reject(new Error('未能加载资源对象'))
@@ -141,7 +166,17 @@ export async function loadObjectFromFile(
       resolve(object)
     }
 
+    const handleError = (payload: LoaderErrorPayload) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      cleanup()
+      reject(payload instanceof Error ? payload : new Error(String(payload)))
+    }
+
     loader.addEventListener('loaded', handleLoaded)
+    loader.addEventListener('error', handleError)
 
     if (options.onProgress) {
       loader.addEventListener('progress', options.onProgress)
@@ -150,6 +185,7 @@ export async function loadObjectFromFile(
     try {
       loader.loadFile(file)
     } catch (error) {
+      settled = true
       cleanup()
       reject(error)
     }

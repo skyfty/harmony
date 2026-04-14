@@ -1,5 +1,5 @@
 import { ref, type Ref } from 'vue';
-import { removeScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
+import { removeScenePackageZip, type ScenePackagePointer } from '@harmony/utils/scene-package-storage';
 
 export interface ProjectConfig {
 	id: string;
