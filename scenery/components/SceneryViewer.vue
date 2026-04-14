@@ -15,6 +15,10 @@
         class="viewer-canvas"
         @useCanvas="handleUseCanvas"
       />
+      <view v-if="punchTotalCount > 0" class="viewer-punch-summary" aria-hidden="true">
+        <text class="viewer-punch-summary__label">打卡</text>
+        <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
+      </view>
       <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
         <view
           v-for="entry in signboardOverlayEntries"
@@ -31,7 +35,26 @@
           <view class="viewer-signboard__pill">
             <text class="viewer-signboard__name">{{ entry.label }}</text>
             <text class="viewer-signboard__distance">{{ entry.distanceLabel }}</text>
+            <view v-if="entry.showPunchBadge" class="viewer-signboard__punch-badge" aria-hidden="true">
+              <text class="viewer-signboard__punch-badge-icon">✓</text>
+            </view>
           </view>
+        </view>
+      </view>
+      <view v-if="punchBadgeOverlayEntries.length" class="viewer-punch-badge-layer" aria-hidden="true">
+        <view
+          v-for="entry in punchBadgeOverlayEntries"
+          :key="entry.id"
+          class="viewer-punch-badge"
+          :class="{ 'viewer-punch-badge--vehicle': entry.referenceKind === 'vehicle' }"
+          :style="{
+            left: `${entry.xPercent}%`,
+            top: `${entry.yPercent}%`,
+            transform: `translate(-50%, -100%) scale(${entry.scale})`,
+            opacity: String(entry.opacity),
+          }"
+        >
+          <text class="viewer-punch-badge__icon">✓</text>
         </view>
       </view>
       <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
@@ -463,6 +486,7 @@ type SceneryProps = {
   defaultSteerIdentifier?: string;
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
+  initialPunchedNodeIds?: string[];
 };
 
 const props = defineProps<SceneryProps>();
@@ -1972,6 +1996,7 @@ function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean
 
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 const signboardNodeIds = new Set<string>();
+const punchNodeIds = new Set<string>();
 const signboardOverlayEntries = ref<Array<{
   id: string;
   label: string;
@@ -1981,9 +2006,22 @@ const signboardOverlayEntries = ref<Array<{
   scale: number;
   opacity: number;
   referenceKind: 'camera' | 'vehicle';
+  showPunchBadge: boolean;
 }>>([]);
+const punchBadgeOverlayEntries = ref<Array<{
+  id: string;
+  xPercent: number;
+  yPercent: number;
+  scale: number;
+  opacity: number;
+  referenceKind: 'camera' | 'vehicle';
+}>>([]);
+const punchedNodeIds = ref<Set<string>>(new Set());
+const punchTotalCount = ref(0);
+const punchSceneRevision = ref(0);
 const signboardReferenceSmoothingState = createSignboardReferenceSmoothingState();
 const signboardPlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>();
+const punchBadgePlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>();
 const signboardReferenceScratch = new THREE.Vector3();
 const signboardAnchorScratch = new THREE.Vector3();
 const overlayDistanceReferenceScratch = new THREE.Vector3();
@@ -1997,6 +2035,42 @@ const SIGNBOARD_REFERENCE_SMOOTH_SPEED = DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEE
 const SIGNBOARD_PLACEMENT_SMOOTH_SPEED = DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED;
 const SIGNBOARD_NEAR_FADE_DISTANCE = SIGNBOARD_CLOSE_FADE_DISTANCE;
 const SIGNBOARD_MIN_VISIBLE_Y_PERCENT = SIGNBOARD_MIN_SCREEN_Y_PERCENT;
+const punchCheckedCount = computed(() => {
+  punchSceneRevision.value;
+  if (!punchTotalCount.value || !punchedNodeIds.value.size) {
+    return 0;
+  }
+
+  let count = 0;
+  punchedNodeIds.value.forEach((nodeId: string) => {
+    if (punchNodeIds.has(nodeId)) {
+      count += 1;
+    }
+  });
+  return count;
+});
+
+watch(
+  () => props.initialPunchedNodeIds ?? [],
+  (nodeIds: string[]) => {
+    const next = new Set<string>();
+    nodeIds.forEach((nodeId: string) => {
+      if (typeof nodeId === 'string') {
+        const normalized = nodeId.trim();
+        if (normalized) {
+          next.add(normalized);
+        }
+      }
+    });
+    punchedNodeIds.value = next;
+  },
+  { immediate: true },
+);
+
+function resetPunchOverlaySmoothing(): void {
+  punchBadgePlacementSmoothingStates.clear();
+  punchBadgeOverlayEntries.value = [];
+}
 
 function resetSignboardOverlaySmoothing(): void {
   resetSignboardReferenceSmoothingState(signboardReferenceSmoothingState);
@@ -3907,11 +3981,23 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   assetNodeIdMap.clear();
   rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
   signboardNodeIds.clear();
+  punchNodeIds.clear();
+  punchTotalCount.value = 0;
   resetSignboardOverlaySmoothing();
+  resetPunchOverlaySmoothing();
   for (const [nodeId, node] of previewNodeMap.entries()) {
     const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
     if (signboardState?.enabled) {
       signboardNodeIds.add(nodeId);
+    }
+
+    try {
+      const behaviorActions = listRegisteredBehaviorActions(nodeId) as string[];
+      if (Array.isArray(behaviorActions) && behaviorActions.includes('punch')) {
+        punchNodeIds.add(nodeId);
+      }
+    } catch {
+      // keep scanning other nodes when the behavior registry is unavailable
     }
 
     if (isWeChatMiniProgram && node.nodeType === 'Light' && node.light) {
@@ -3933,6 +4019,8 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
       bucket.add(node.id);
     }
   }
+  punchTotalCount.value = punchNodeIds.size;
+  punchSceneRevision.value += 1;
 }
 
 function resolveParentNodeId(nodeId: string): string | null {
@@ -4015,18 +4103,24 @@ function resolveSignboardReference(activeCamera: THREE.Camera): { position: THRE
 }
 
 function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
-  if (!signboardNodeIds.size) {
+  if (!signboardNodeIds.size && !punchNodeIds.size) {
     if (signboardOverlayEntries.value.length) {
       signboardOverlayEntries.value = [];
     }
+    if (punchBadgeOverlayEntries.value.length) {
+      punchBadgeOverlayEntries.value = [];
+    }
     resetSignboardOverlaySmoothing();
+    resetPunchOverlaySmoothing();
     return;
   }
 
   const reference = resolveSignboardReference(activeCamera);
   if (!reference) {
     signboardOverlayEntries.value = [];
+    punchBadgeOverlayEntries.value = [];
     resetSignboardOverlaySmoothing();
+    resetPunchOverlaySmoothing();
     return;
   }
 
@@ -4052,8 +4146,18 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
     scale: number;
     opacity: number;
     referenceKind: 'camera' | 'vehicle';
+    showPunchBadge: boolean;
+  }> = [];
+  const nextPunchBadgeEntries: Array<{
+    id: string;
+    xPercent: number;
+    yPercent: number;
+    scale: number;
+    opacity: number;
+    referenceKind: 'camera' | 'vehicle';
   }> = [];
   const activePlacementNodeIds = new Set<string>();
+  const activePunchBadgeNodeIds = new Set<string>();
 
   for (const nodeId of signboardNodeIds) {
     const node = resolveNodeById(nodeId);
@@ -4071,6 +4175,8 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
     if (!label) {
       continue;
     }
+
+    const isPunched = punchedNodeIds.value.has(nodeId) && punchNodeIds.has(nodeId);
 
     resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
     const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, smoothedReference);
@@ -4104,6 +4210,55 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
       scale: smoothedPlacement.scale,
       opacity: smoothedPlacement.opacity,
       referenceKind: reference.kind,
+      showPunchBadge: isPunched,
+    });
+  }
+
+  for (const nodeId of punchNodeIds) {
+    if (signboardNodeIds.has(nodeId) || !punchedNodeIds.value.has(nodeId)) {
+      continue;
+    }
+
+    const node = resolveNodeById(nodeId);
+    const object = nodeObjectMap.get(nodeId) ?? null;
+    if (!node || !object || !isRuntimeObjectEffectivelyVisible(object)) {
+      continue;
+    }
+
+    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
+    if (signboardState?.enabled) {
+      continue;
+    }
+
+    resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
+    const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, smoothedReference);
+    const placement = computeSignboardPlacement({
+      anchorWorld: signboardAnchorScratch,
+      referenceWorld: distanceReferenceWorld,
+      camera: activeCamera,
+      closeFadeDistance: SIGNBOARD_NEAR_FADE_DISTANCE,
+      minScreenYPercent: SIGNBOARD_MIN_VISIBLE_Y_PERCENT,
+    });
+    if (!placement) {
+      punchBadgePlacementSmoothingStates.delete(nodeId);
+      continue;
+    }
+
+    const placementState = punchBadgePlacementSmoothingStates.get(nodeId) ?? createSignboardPlacementSmoothingState();
+    punchBadgePlacementSmoothingStates.set(nodeId, placementState);
+    const smoothedPlacement = smoothSignboardPlacement(placementState, {
+      placement,
+      deltaSeconds,
+      speed: SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
+    });
+    activePunchBadgeNodeIds.add(nodeId);
+    nextPunchBadgeEntries.push({
+      id: nodeId,
+      xPercent: smoothedPlacement.xPercent,
+      yPercent: smoothedPlacement.yPercent,
+      scale: smoothedPlacement.scale,
+      opacity: smoothedPlacement.opacity,
+      referenceKind: reference.kind,
     });
   }
 
@@ -4113,7 +4268,14 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
     }
   }
 
+  for (const nodeId of punchBadgePlacementSmoothingStates.keys()) {
+    if (!activePunchBadgeNodeIds.has(nodeId)) {
+      punchBadgePlacementSmoothingStates.delete(nodeId);
+    }
+  }
+
   signboardOverlayEntries.value = nextEntries;
+  punchBadgeOverlayEntries.value = nextPunchBadgeEntries;
 }
 
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
@@ -9195,6 +9357,11 @@ async function handleExitSceneEvent(): Promise<void> {
 }
 
 function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }>): void {
+  if (punchNodeIds.has(event.nodeId)) {
+    const next = new Set(punchedNodeIds.value);
+    next.add(event.nodeId);
+    punchedNodeIds.value = next;
+  }
   const sceneId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
   const sceneName = (currentDocument?.name ?? '').trim();
   const node = previewNodeMap.get(event.nodeId);
@@ -11709,6 +11876,37 @@ onUnmounted(() => {
   background: linear-gradient(135deg, rgba(36, 22, 8, 0.86), rgba(62, 44, 18, 0.8));
 }
 
+.viewer-punch-summary {
+  position: absolute;
+  top: calc(12px + var(--viewer-safe-area-top, 0px));
+  right: 12px;
+  z-index: 1460;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999rpx;
+  border: 1px solid rgba(122, 198, 255, 0.22);
+  background: rgba(10, 18, 30, 0.72);
+  box-shadow: 0 12rpx 26rpx rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  color: #edf5ff;
+}
+
+.viewer-punch-summary__label {
+  font-size: 20rpx;
+  font-weight: 600;
+  letter-spacing: 0.4rpx;
+  color: rgba(234, 244, 255, 0.8);
+}
+
+.viewer-punch-summary__value {
+  font-size: 24rpx;
+  font-weight: 700;
+  letter-spacing: 0.4rpx;
+}
+
 .viewer-signboard__name {
   display: inline-block;
   max-width: 360rpx;
@@ -11727,6 +11925,64 @@ onUnmounted(() => {
   font-size: 21rpx;
   color: rgba(226, 242, 255, 0.82);
   white-space: nowrap;
+}
+
+.viewer-signboard__punch-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28rpx;
+  height: 28rpx;
+  padding: 0 8rpx;
+  margin-left: 4rpx;
+  border-radius: 999rpx;
+  border: 1px solid rgba(115, 231, 170, 0.34);
+  background: rgba(20, 48, 34, 0.82);
+  color: #d8ffea;
+}
+
+.viewer-signboard__punch-badge-icon {
+  font-size: 18rpx;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.viewer-punch-badge-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1455;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.viewer-punch-badge {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34rpx;
+  min-height: 34rpx;
+  padding: 0 10rpx;
+  border-radius: 999rpx;
+  border: 1px solid rgba(115, 231, 170, 0.34);
+  background: rgba(13, 34, 24, 0.84);
+  box-shadow: 0 12rpx 24rpx rgba(0, 0, 0, 0.2);
+  color: #dfffea;
+  transform-origin: center bottom;
+  transition: opacity 0.12s linear, transform 0.12s ease-out;
+  will-change: transform, opacity;
+}
+
+.viewer-punch-badge--vehicle {
+  border-color: rgba(255, 210, 127, 0.34);
+  background: rgba(42, 29, 10, 0.84);
+  color: #fff0cc;
+}
+
+.viewer-punch-badge__icon {
+  font-size: 20rpx;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .viewer-bubble-layer {
@@ -13081,7 +13337,7 @@ onUnmounted(() => {
 
 .viewer-drive-speed-left-floating {
   position: absolute;
-  left: 24px;
+  left: 6px;
   bottom: 206px;
   z-index: 1580;
   display: flex;
@@ -13093,7 +13349,7 @@ onUnmounted(() => {
 
 .viewer-drive-compass-right-floating {
   position: absolute;
-  right: 24px;
+  right: 6px;
   bottom: 220px;
   z-index: 1580;
   display: flex;

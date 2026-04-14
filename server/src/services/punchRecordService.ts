@@ -36,6 +36,19 @@ export interface QueryPunchRecordsOptions {
   end?: string
 }
 
+export interface PunchProgressBySceneInput {
+  userId: string
+  sceneId: string
+  scenicId: string
+}
+
+export interface PunchProgressBySceneResult {
+  sceneId: string
+  scenicId: string
+  checkedCount: number
+  punchedNodeIds: string[]
+}
+
 function normalizeText(value: unknown): string {
   if (typeof value !== 'string') {
     return ''
@@ -174,13 +187,13 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
   const [items, total] = await Promise.all([
     PunchRecordModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(pageSize).lean(),
     PunchRecordModel.countDocuments(filter),
-  ])
+  ]) as [Array<Record<string, unknown>>, number]
 
   const scenicIds = Array.from(
     new Set(
       items
-        .map((item) => normalizeText((item as { scenicId?: string }).scenicId))
-        .filter((id) => Boolean(id) && Types.ObjectId.isValid(id)),
+        .map((item: Record<string, unknown>) => normalizeText(item.scenicId))
+        .filter((id: string) => Boolean(id) && Types.ObjectId.isValid(id)),
     ),
   )
 
@@ -203,12 +216,12 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
   }
 
   const vehicleNameMap = await loadVehicleNameMapByIdentifier(
-    items.map((item) => normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)),
+    items.map((item: Record<string, unknown>) => normalizeText(item.vehicleIdentifier)),
   )
 
-  const enrichedItems = items.map((item) => {
-    const scenicId = normalizeText((item as { scenicId?: string }).scenicId)
-    const vehicleIdentifier = normalizeText((item as { vehicleIdentifier?: string }).vehicleIdentifier)
+  const enrichedItems = items.map((item: Record<string, unknown>) => {
+    const scenicId = normalizeText(item.scenicId)
+    const vehicleIdentifier = normalizeText(item.vehicleIdentifier)
     return {
       ...item,
       scenicTitle: scenicTitleMap.get(scenicId) || undefined,
@@ -221,6 +234,41 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
     total,
     page,
     pageSize,
+  }
+}
+
+export async function getPunchProgressBySceneForUser(input: PunchProgressBySceneInput): Promise<PunchProgressBySceneResult> {
+  const userId = normalizeText(input.userId)
+  const sceneId = normalizeText(input.sceneId)
+  const scenicId = normalizeText(input.scenicId)
+  if (!Types.ObjectId.isValid(userId) || !sceneId || !scenicId) {
+    return {
+      sceneId,
+      scenicId,
+      checkedCount: 0,
+      punchedNodeIds: [],
+    }
+  }
+
+  const punchedNodeIds = (await PunchRecordModel.distinct('nodeId', {
+    userId: new Types.ObjectId(userId),
+    sceneId,
+    scenicId,
+  })) as string[]
+
+  const uniqueNodeIds = Array.from(
+    new Set(
+      punchedNodeIds
+        .map((nodeId: string) => normalizeText(nodeId))
+        .filter((nodeId: string) => Boolean(nodeId)),
+    ),
+  ).sort((left: string, right: string) => left.localeCompare(right))
+
+  return {
+    sceneId,
+    scenicId,
+    checkedCount: uniqueNodeIds.length,
+    punchedNodeIds: uniqueNodeIds,
   }
 }
 

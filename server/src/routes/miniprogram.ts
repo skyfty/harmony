@@ -94,6 +94,7 @@ import {
   createMiniTravelEnterRecord,
   listMiniTravelRecords,
 } from '@/controllers/miniprogram/travelRecordController'
+import { getMiniPunchProgress } from '@/controllers/miniprogram/punchRecordController'
 import {
   createBusinessOrderHandler,
   getBusinessOrderBootstrapHandler,
@@ -135,6 +136,7 @@ miniRouter.post('/scene-spots/:id/favorite', toggleSceneSpotFavorite)
 miniRouter.post('/scene-spots/:id/rate', rateSceneSpot)
 miniRouter.post('/scene-spots/:id/comments', createSceneSpotComment)
 miniRouter.delete('/scene-spots/:id/comments/:commentId', deleteSceneSpotComment)
+miniRouter.get('/punch-records/progress', getMiniPunchProgress)
 miniRouter.post('/punch-records', createMiniPunchRecord)
 miniRouter.post('/travel-records/enter', createMiniTravelEnterRecord)
 miniRouter.post('/travel-records/leave', completeMiniTravelLeaveRecord)
