@@ -102,6 +102,7 @@ export default class ResourceCache {
     }
 
     const lookupAssetIds = this.collectAssetLookupIds(assetId);
+    const persistence = this.resolveAssetPersistence(assetId, lookupAssetIds);
 
     const cached = await this.assetLoader.getCache().getEntry(assetId);
     if (cached?.status === 'cached') {
@@ -109,7 +110,11 @@ export default class ResourceCache {
       return cached;
     }
 
-    const persistence = this.resolveAssetPersistence(assetId, lookupAssetIds);
+    const hydrated = await this.assetLoader.getCache().hydrateFromPersistent(assetId, persistence)
+    if (hydrated?.status === 'cached') {
+      this.assetLoader.getCache().touch(assetId)
+      return hydrated
+    }
 
     const pending = this.resolveAssetSource(assetId, lookupAssetIds)
       .then(async (source) => {

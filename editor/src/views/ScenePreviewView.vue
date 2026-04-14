@@ -36,6 +36,7 @@ import {
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
+	type SceneAssetRegistryEntry,
 	type SceneJsonExportDocument,
 	type SceneNode,
 	type SceneNodeComponentState,
@@ -3911,9 +3912,101 @@ function clearAssetObjectUrlCache(): void {
 }
 
 const EXTERNAL_ASSET_PATTERN = /^(https?:)?\/\//i
+const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
 function isExternalAssetReference(value: string): boolean {
 	return EXTERNAL_ASSET_PATTERN.test(value)
+}
+
+function buildEffectivePreviewAssetRegistry(document: SceneJsonExportDocument): Record<string, SceneAssetRegistryEntry> {
+	const effectiveRegistry: Record<string, SceneAssetRegistryEntry> = {}
+	const applyEntries = (entries: Record<string, SceneAssetRegistryEntry> | null | undefined) => {
+		if (!entries || typeof entries !== 'object') {
+			return
+		}
+		Object.entries(entries).forEach(([assetId, entry]) => {
+			if (!entry || typeof entry !== 'object') {
+				return
+			}
+			effectiveRegistry[assetId] = entry
+		})
+	}
+	applyEntries(document.assetRegistry)
+	applyEntries(document.projectOverrideAssets)
+	applyEntries(document.sceneOverrideAssets)
+	return effectiveRegistry
+}
+
+function collectPreviewLocalAssetIds(document: SceneJsonExportDocument): string[] {
+	const localAssetIds = new Set<string>()
+	Object.entries(buildEffectivePreviewAssetRegistry(document)).forEach(([assetId, entry]) => {
+		const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+		if (!normalizedAssetId || entry.sourceType !== 'package') {
+			return
+		}
+		const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : ''
+		if (zipPath === `${LOCAL_EMBEDDED_ASSET_PREFIX}${normalizedAssetId}` || zipPath.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+			localAssetIds.add(normalizedAssetId)
+		}
+	})
+	return Array.from(localAssetIds)
+}
+
+async function buildPreviewLocalAssetOverrides(
+	document: SceneJsonExportDocument,
+): Promise<NonNullable<SceneGraphBuildOptions['assetOverrides']>> {
+	const overrides: NonNullable<SceneGraphBuildOptions['assetOverrides']> = {}
+	const localAssetIds = collectPreviewLocalAssetIds(document)
+	if (!localAssetIds.length) {
+		return overrides
+	}
+
+	await Promise.all(localAssetIds.map(async (assetId) => {
+		const entry = await assetCacheStore.ensureAssetEntry(assetId, { contentHash: assetId })
+		if (entry?.status !== 'cached' || !entry.blob) {
+			return
+		}
+		const bytes = await entry.blob.arrayBuffer()
+		overrides[assetId] = {
+			bytes,
+			mimeType: entry.mimeType,
+			filename: entry.filename,
+		}
+	}))
+
+	return overrides
+}
+
+function mergePreviewAssetOverrides(
+	base: SceneGraphBuildOptions['assetOverrides'],
+	local: SceneGraphBuildOptions['assetOverrides'],
+): SceneGraphBuildOptions['assetOverrides'] {
+	if (!base && !local) {
+		return undefined
+	}
+	return {
+		...(base ?? {}),
+		...(local ?? {}),
+	}
+}
+
+async function hydratePreviewAssetEntryFromLocalCache(assetId: string): Promise<AssetCacheEntry | null> {
+	const localEntry = await assetCacheStore.ensureAssetEntry(assetId, { contentHash: assetId })
+	if (localEntry?.status !== 'cached' || !localEntry.blob) {
+		return null
+	}
+	try {
+		return await editorAssetCache.storeBlob(assetId, localEntry.blob, {
+			mimeType: localEntry.mimeType,
+			filename: localEntry.filename,
+			downloadUrl: localEntry.downloadUrl,
+			contentHash: localEntry.contentHash ?? assetId,
+			contentHashAlgorithm: localEntry.contentHashAlgorithm ?? null,
+		})
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to hydrate local asset into preview cache', assetId, error)
+		return null
+	}
 }
 
 async function acquirePreviewAssetEntry(assetId: string): Promise<AssetCacheEntry | null> {
@@ -3926,10 +4019,14 @@ async function acquirePreviewAssetEntry(assetId: string): Promise<AssetCacheEntr
 		return null
 	}
 	try {
-		return await cache.acquireAssetEntry(trimmed)
+		const resolved = await cache.acquireAssetEntry(trimmed)
+		if (resolved) {
+			return resolved
+		}
+		return await hydratePreviewAssetEntryFromLocalCache(trimmed)
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to acquire asset entry', trimmed, error)
-		return null
+		return await hydratePreviewAssetEntryFromLocalCache(trimmed)
 	}
 }
 
@@ -11562,6 +11659,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
 	let resourceCache: ResourceCache | null = null
 	try {
+		const localAssetOverrides = await buildPreviewLocalAssetOverrides(document)
 		const buildOptions: SceneGraphBuildOptions = {
 			serverAssetBaseUrl: readServerDownloadBaseUrl(),
 			onProgress: (info) => {
@@ -11583,8 +11681,12 @@ async function updateScene(document: SceneJsonExportDocument) {
 				hdrLoader: rgbeLoader,
 			},
 		}
-		if (activeScenePackageAssetOverrides) {
-			buildOptions.assetOverrides = activeScenePackageAssetOverrides
+		const mergedAssetOverrides = mergePreviewAssetOverrides(
+			activeScenePackageAssetOverrides,
+			Object.keys(localAssetOverrides).length ? localAssetOverrides : undefined,
+		)
+		if (mergedAssetOverrides) {
+			buildOptions.assetOverrides = mergedAssetOverrides
 		}
 		resourceCache = ensureEditorResourceCache(document, buildOptions)
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
