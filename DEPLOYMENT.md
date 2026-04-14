@@ -33,7 +33,6 @@ docker compose -f docker-compose.prod.yml build server
 docker compose -f docker-compose.prod.yml up -d server
 docker compose -f docker-compose.prod.yml logs -f server
 
-docker system prune -a -f --volumes   # 谨慎：会删除所有未使用的卷
 docker system prune -a -f
 
 ```

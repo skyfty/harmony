@@ -419,57 +419,11 @@
       <view v-if="debugOverlayVisible && debugMode !== 'off'" class="viewer-debug-overlay">
         <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
         <template v-if="debugMode === 'full'">
-          <text class="viewer-debug-line">[Renderer]</text>
-          <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
-          <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
-          <text class="viewer-debug-line">GPU render tris(raw): {{ rendererDebug.renderTriangles }}</text>
-          <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
-          <text class="viewer-debug-line">[Instancing]</text>
-          <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
-          <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
-          <text class="viewer-debug-line">Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}</text>
-          <text class="viewer-debug-line">Instanced matrix upload est: {{ instancingDebug.instanceMatrixUploadKb }} KB/frame</text>
-          <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
-          <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
-          <text class="viewer-debug-line">[Ground]</text>
-          <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
-          <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
+          <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}</text>
+          <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
+          <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
 
         </template>
-      </view>
-      <view v-if="debugConsoleEnabled" class="viewer-log-floating">
-        <view v-if="debugConsoleVisible" class="viewer-log-overlay">
-          <view class="viewer-log-overlay__header">
-            <text class="viewer-log-overlay__title">运行日志 ({{ runtimeLogs.length }})</text>
-            <view class="viewer-log-overlay__actions">
-              <text class="viewer-log-overlay__action" @tap="handleToggleLogPanelExpand">
-                {{ debugConsoleExpanded ? '收起' : '展开' }}
-              </text>
-              <text class="viewer-log-overlay__action" @tap="handleClearRuntimeLogs">清空</text>
-              <text class="viewer-log-overlay__action" @tap="handleCloseLogPanel">关闭</text>
-            </view>
-          </view>
-          <scroll-view
-            v-if="debugConsoleExpanded"
-            scroll-y
-            class="viewer-log-overlay__list"
-            :scroll-into-view="debugConsoleScrollTarget"
-          >
-            <text v-if="!runtimeLogs.length" class="viewer-log-overlay__empty">暂无日志，等待场景生命周期事件…</text>
-            <text
-              v-for="item in runtimeLogs"
-              :id="item.anchorId"
-              :key="item.id"
-              class="viewer-log-overlay__item"
-              :class="`is-${item.level}`"
-            >
-              [{{ item.time }}] [{{ item.source }}] {{ item.message }}
-            </text>
-          </scroll-view>
-        </view>
-        <view v-else class="viewer-log-fab" @tap="handleReopenLogPanel">
-          <text class="viewer-log-fab__text">日志 {{ runtimeLogs.length }}</text>
-        </view>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -509,16 +463,9 @@ type SceneryProps = {
   defaultSteerIdentifier?: string;
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
-  debugConsoleEnabled?: boolean;
-  debugConsoleDefaultExpanded?: boolean;
-  debugConsoleMaxEntries?: number;
 };
 
-const props = withDefaults(defineProps<SceneryProps>(), {
-  debugConsoleEnabled: false,
-  debugConsoleDefaultExpanded: true,
-  debugConsoleMaxEntries: 120,
-});
+const props = defineProps<SceneryProps>();
 const emit = defineEmits<{
   loaded: [];
   error: [message: string];
@@ -1049,199 +996,10 @@ function getGroundVertexCount(rows: number, columns: number): number {
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
 const debugEnabled = ref(true);
-// debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show all debug info
+// debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show compact summary
 const debugMode = ref<'off' | 'fps' | 'full'>('fps');
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
-
-type RuntimeLogLevel = 'info' | 'warn' | 'error';
-
-type RuntimeLogEntry = {
-  id: number;
-  anchorId: string;
-  time: string;
-  level: RuntimeLogLevel;
-  source: 'console' | 'runtime';
-  message: string;
-};
-
-type ConsoleMethod = (...args: unknown[]) => void;
-
-const runtimeLogs = ref<RuntimeLogEntry[]>([]);
-const debugConsoleVisible = ref(Boolean(props.debugConsoleEnabled));
-const debugConsoleExpanded = ref(Boolean(props.debugConsoleEnabled));
-const debugConsoleEnabled = computed(() => props.debugConsoleEnabled);
-const debugConsoleScrollTarget = ref('');
-let runtimeLogId = 0;
-let consoleCaptureAttached = false;
-let originalConsoleLog: ConsoleMethod | null = null;
-let originalConsoleWarn: ConsoleMethod | null = null;
-let originalConsoleError: ConsoleMethod | null = null;
-
-function safeStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key, currentValue) => {
-    if (typeof currentValue === 'object' && currentValue !== null) {
-      if (seen.has(currentValue as object)) {
-        return '[Circular]';
-      }
-      seen.add(currentValue as object);
-    }
-    return currentValue;
-  });
-}
-
-function normalizeLogArg(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean' || value === null || value === undefined) {
-    return String(value);
-  }
-  if (value instanceof Error) {
-    return value.stack || value.message || String(value);
-  }
-  try {
-    return safeStringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function toLogMessage(args: unknown[]): string {
-  return args.map((arg) => normalizeLogArg(arg)).join(' ');
-}
-
-function getLogTimeLabel(): string {
-  const now = new Date();
-  const hh = String(now.getHours()).padStart(2, '0');
-  const mm = String(now.getMinutes()).padStart(2, '0');
-  const ss = String(now.getSeconds()).padStart(2, '0');
-  const ms = String(now.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
-}
-
-function pushRuntimeLog(level: RuntimeLogLevel, source: RuntimeLogEntry['source'], args: unknown[]): void {
-  if (!debugConsoleEnabled.value) {
-    return;
-  }
-  runtimeLogId += 1;
-  const entry: RuntimeLogEntry = {
-    id: runtimeLogId,
-    anchorId: `viewer-runtime-log-${runtimeLogId}`,
-    time: getLogTimeLabel(),
-    level,
-    source,
-    message: toLogMessage(args),
-  };
-  const maxEntries = Math.max(20, Math.min(500, Math.trunc(props.debugConsoleMaxEntries)));
-  const nextLogs = runtimeLogs.value.concat(entry);
-  if (nextLogs.length > maxEntries) {
-    nextLogs.splice(0, nextLogs.length - maxEntries);
-  }
-  runtimeLogs.value = nextLogs;
-  debugConsoleScrollTarget.value = entry.anchorId;
-}
-
-function addRuntimeStageLog(message: string, details?: unknown): void {
-  if (typeof details === 'undefined') {
-    pushRuntimeLog('info', 'runtime', [message]);
-    return;
-  }
-  pushRuntimeLog('info', 'runtime', [message, details]);
-}
-
-function attachConsoleCaptureIfNeeded(): void {
-  if (!debugConsoleEnabled.value || consoleCaptureAttached) {
-    return;
-  }
-  originalConsoleLog = typeof console.log === 'function' ? console.log.bind(console) : null;
-  originalConsoleWarn = typeof console.warn === 'function' ? console.warn.bind(console) : null;
-  originalConsoleError = typeof console.error === 'function' ? console.error.bind(console) : null;
-
-  console.log = (...args: unknown[]) => {
-    originalConsoleLog?.(...args);
-    pushRuntimeLog('info', 'console', args);
-  };
-  console.warn = (...args: unknown[]) => {
-    originalConsoleWarn?.(...args);
-    pushRuntimeLog('warn', 'console', args);
-  };
-  console.error = (...args: unknown[]) => {
-    originalConsoleError?.(...args);
-    pushRuntimeLog('error', 'console', args);
-  };
-
-  consoleCaptureAttached = true;
-  addRuntimeStageLog('[SceneryViewer] Console capture attached');
-}
-
-function restoreConsoleCapture(): void {
-  if (!consoleCaptureAttached) {
-    return;
-  }
-  if (originalConsoleLog) {
-    console.log = originalConsoleLog;
-  }
-  if (originalConsoleWarn) {
-    console.warn = originalConsoleWarn;
-  }
-  if (originalConsoleError) {
-    console.error = originalConsoleError;
-  }
-  originalConsoleLog = null;
-  originalConsoleWarn = null;
-  originalConsoleError = null;
-  consoleCaptureAttached = false;
-}
-
-function handleToggleLogPanelExpand(): void {
-  debugConsoleExpanded.value = !debugConsoleExpanded.value;
-}
-
-function handleClearRuntimeLogs(): void {
-  runtimeLogs.value = [];
-  debugConsoleScrollTarget.value = '';
-  addRuntimeStageLog('[SceneryViewer] Runtime logs cleared');
-}
-
-function handleCloseLogPanel(): void {
-  debugConsoleVisible.value = false;
-}
-
-function handleReopenLogPanel(): void {
-  debugConsoleVisible.value = true;
-  debugConsoleExpanded.value = true;
-}
-
-watch(
-  () => props.debugConsoleDefaultExpanded,
-  (value: boolean) => {
-    if (!debugConsoleEnabled.value) {
-      return;
-    }
-    debugConsoleVisible.value = value;
-    debugConsoleExpanded.value = value;
-  },
-  { immediate: true },
-);
-
-watch(
-  debugConsoleEnabled,
-  (enabled: boolean) => {
-    if (enabled) {
-      debugConsoleVisible.value = true;
-      debugConsoleExpanded.value = props.debugConsoleDefaultExpanded;
-      attachConsoleCaptureIfNeeded();
-      addRuntimeStageLog('[SceneryViewer] Runtime debug panel enabled');
-      return;
-    }
-    debugConsoleVisible.value = false;
-    debugConsoleExpanded.value = false;
-    restoreConsoleCapture();
-  },
-  { immediate: true },
-);
 
 const instancingDebug = reactive({
   instancedMeshAssets: 0,
@@ -1745,7 +1503,6 @@ const overlayCaption = computed(() => {
 });
 
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
-const SKY_SCALE = 2500;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_WATCH_DURATION = 0.35;
@@ -2143,7 +1900,6 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
 const instancedCullingLastVisibleAt = new Map<string, number>();
 
 const INSTANCED_CULL_GRACE_MS = 250;
-const INSTANCED_CULL_RADIUS_MULTIPLIER = 1.15;
 
 const scenePreviewPerf = createScenePreviewPerfController({ isWeChatMiniProgram });
 const TERRAIN_SCATTER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.12 : 0.06;
@@ -2642,9 +2398,8 @@ const vehicleHeadingDegrees = ref(0);
 const vehicleCompassStyle = computed(() => ({
   '--vehicle-heading': `${vehicleHeadingDegrees.value}deg`,
 }));
-const vehicleCompassCardinalTickIndices = new Set([0, 6, 12, 18]);
 const vehicleCompassTicks = Array.from({ length: 24 }, (_, index) => index)
-  .filter((index) => !vehicleCompassCardinalTickIndices.has(index))
+  .filter((index) => ![0, 6, 12, 18].includes(index))
   .map((index) => ({
     key: `vehicle-compass-tick-${index}`,
     major: index % 3 === 0,
@@ -3058,7 +2813,6 @@ const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
 const tempObserverVector = new THREE.Vector3();
 const tempRegionObserverVector = new THREE.Vector3();
-const tempQuaternion = new THREE.Quaternion();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
 const LANTERN_SWIPE_DETECTION_THRESHOLD = 18;
@@ -3191,9 +2945,7 @@ function resetLanternImageMetrics(): void {
 }
 
 function getLanternViewerElement(): HTMLElement | null {
-  // #ifndef H5
-  return null;
-  // #endif
+
   const target = lanternViewerRoot.value;
   if (!target) {
     return null;
@@ -3211,9 +2963,7 @@ function getLanternViewerElement(): HTMLElement | null {
 }
 
 function resolveLanternViewer(): Viewer | null {
-  // #ifndef H5
-  return null;
-  // #endif
+
   if (lanternViewerInstance) {
     return lanternViewerInstance;
   }
@@ -3230,9 +2980,7 @@ function resolveLanternViewer(): Viewer | null {
 }
 
 function isLanternViewerOpen(): boolean {
-  // #ifndef H5
-  return false;
-  // #endif
+
   const viewer = resolveLanternViewer();
   if (!viewer) {
     return false;
@@ -3242,17 +2990,12 @@ function isLanternViewerOpen(): boolean {
 }
 
 function syncLanternViewer(): void {
-  // #ifndef H5
-  return;
-  // #endif
+
   const viewer = resolveLanternViewer();
   viewer?.update?.();
 }
 
 function syncLanternViewerLater(): void {
-  // #ifndef H5
-  return;
-  // #endif
   nextTick(() => {
     syncLanternViewer();
   });
@@ -4498,7 +4241,6 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
 }
 
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
-  const previousGroundObject = dynamicGroundCache ? nodeObjectMap.get(dynamicGroundCache.nodeId) ?? null : null;
   groundSurfacePreviewLoadToken += 1;
   if (!document) {
     dynamicGroundCache = null;
@@ -8972,13 +8714,6 @@ function restoreVehicleDriveCameraState(): void {
   vehicleDriveController.restoreCamera(ctx);
 }
 
-function alignVehicleDriveExitCamera(): boolean {
-  const ctx = renderContext
-    ? { camera: renderContext.camera, mapControls: renderContext.controls }
-    : { camera: null as THREE.PerspectiveCamera | null };
-  return vehicleDriveController.alignExitCamera(ctx);
-}
-
 async function handleVehicleDrivePromptTap(): Promise<void> {
   const event = pendingVehicleDriveEvent.value;
   if (!event || vehicleDrivePromptBusy.value) {
@@ -9207,40 +8942,6 @@ function handleVehicleAutoTourPauseToggleTap(): void {
     applyAutoTourPauseForActiveNodes();
   }
   // Do not mutate camera when pausing; only stop vehicle motion.
-}
-
-function handleVehicleDriveExitTap(): void {
-  if (!vehicleDriveActive.value || vehicleDriveExitBusy.value) {
-    return;
-  }
-  const event = activeVehicleDriveEvent.value;
-  if (!event) {
-    uni.showToast({ title: '缺少驾驶上下文', icon: 'none' });
-    handleVehicleDebusEvent();
-    return;
-  }
-  vehicleDriveExitBusy.value = true;
-  try {
-
-    const aligned = alignVehicleDriveExitCamera();
-    if (!aligned) {
-      uni.showToast({ title: '无法定位默认下车位置，已恢复默认视角', icon: 'none' });
-    }
-
-    // Stop driving but keep the aligned exit camera pose.
-    vehicleDriveController.stopDrive(
-      { resolution: { type: 'continue' }, preserveCamera: true },
-      renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
-    );
-    autoTourRotationOnlyHold.value = false;
-    handleVehicleAutoTourResumeTap({ rotateOnly: false });
-    handleHideVehicleCockpitEvent();
-    setVehicleDriveUiOverride('hide');
-    resetVehicleDriveInputs();
-    activeVehicleDriveEvent.value = null;
-  } finally {
-    vehicleDriveExitBusy.value = false;
-  }
 }
 
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
@@ -10402,7 +10103,6 @@ function requestBinary(url: string): Promise<ArrayBuffer> {
 }
 
 async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
-  addRuntimeStageLog('[SceneryViewer] Start loading scene package from url', { url });
   error.value = null;
   activeScenePackageAssetOverrides = null;
   activeScenePackagePkg = null;
@@ -10417,36 +10117,30 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
         sceneDownload.phase = 'parse';
         sceneDownload.label = '正在读取本地缓存场景包…';
         const cachedBuffer = await loadScenePackageZip(cachePointer);
-        addRuntimeStageLog('[SceneryViewer] Scene package cache hit', { cacheKey: cacheKeyParam, bytes: cachedBuffer.byteLength });
         try {
           await loadProjectFromScenePackageBytes(cachedBuffer);
-          addRuntimeStageLog('[SceneryViewer] Scene package parsed successfully from cache');
           return;
         } catch (parseError) {
-          pushRuntimeLog('warn', 'runtime', ['[SceneryViewer] Cached scene package failed to parse, removing cache entry', parseError]);
+          console.warn('[SceneryViewer] Cached scene package failed to parse, removing cache entry', parseError);
           await removeScenePackageZip(cachePointer);
         }
       } catch (cacheError) {
-        addRuntimeStageLog('[SceneryViewer] Scene package cache miss', { cacheKey: cacheKeyParam, reason: cacheError });
       }
     }
 
     sceneDownload.phase = 'download';
     sceneDownload.label = '正在下载场景包…';
     const buffer = await requestBinary(url);
-    addRuntimeStageLog('[SceneryViewer] Scene package downloaded', { bytes: buffer.byteLength });
-
     sceneDownload.phase = 'parse';
     sceneDownload.label = '正在解析场景包…';
     await loadProjectFromScenePackageBytes(buffer);
-    addRuntimeStageLog('[SceneryViewer] Scene package parsed successfully');
     if (cacheKeyParam) {
       void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
-        pushRuntimeLog('warn', 'runtime', ['[SceneryViewer] Failed to persist scene package cache', saveError]);
+        console.warn('[SceneryViewer] Failed to persist scene package cache', saveError);
       });
     }
   } catch (loadError) {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Failed loading scene package from url', loadError]);
+    console.error('[SceneryViewer] Failed loading scene package from url', loadError);
     throw loadError;
   } finally {
     sceneDownload.active = false;
@@ -10644,7 +10338,6 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<vo
 }
 
 async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer): Promise<void> {
-  addRuntimeStageLog('[SceneryViewer] Start loading local scene package pointer');
   error.value = null;
   activeScenePackageAssetOverrides = null;
   activeScenePackagePkg = null;
@@ -10658,10 +10351,8 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
     if (!buffer || buffer.byteLength <= 0) {
       throw new Error('项目数据为空，请重新导入');
     }
-    addRuntimeStageLog('[SceneryViewer] Local scene package loaded', { bytes: buffer.byteLength });
     await loadProjectFromScenePackageBytes(buffer);
   } catch (e) {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Failed loading local scene package pointer', e]);
     console.error(e);
     error.value = '项目加载失败，请返回首页重新导入';
     previewPayload.value = null;
@@ -10767,17 +10458,11 @@ watch(
 
 function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   if (!payload) {
-    addRuntimeStageLog('[SceneryViewer] Preview payload cleared');
     teardownRenderer();
     resetRemovedSkyState();
     warnings.value = [];
     return;
   }
-  addRuntimeStageLog('[SceneryViewer] Preview payload ready', {
-    sceneId: payload.document?.id,
-    title: payload.title,
-    nodeCount: Array.isArray(payload.document?.nodes) ? payload.document.nodes.length : 0,
-  });
   error.value = null;
   warnings.value = [];
   resetRemovedSkyState();
@@ -10794,8 +10479,6 @@ async function startRenderIfReady() {
   if (!previewPayload.value || !canvasResult) {
     return;
   }
-
-  addRuntimeStageLog('[SceneryViewer] startRenderIfReady triggered');
 
   if (initializing) {
     // A newer payload arrived while we're initializing. Cancel the current init and restart after it settles.
@@ -10815,15 +10498,13 @@ async function startRenderIfReady() {
 
   try {
     await ensureRendererContext(canvasResult);
-    addRuntimeStageLog('[SceneryViewer] Renderer context ready');
     await initializeRenderer(previewPayload.value, canvasResult, token);
     if (token === initializeToken && !error.value) {
-      addRuntimeStageLog('[SceneryViewer] Scene render initialization completed');
       hasRenderedSceneOnce = true;
       emit('loaded');
     }
   } catch (initializationError) {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Renderer initialization failed', initializationError]);
+    console.error('[SceneryViewer] Renderer initialization failed', initializationError);
     console.error(initializationError);
     if (token === initializeToken) {
       error.value = '初始化渲染器失败';
@@ -11589,10 +11270,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   if (!renderContext) {
     throw new Error('Render context missing');
   }
-  addRuntimeStageLog('[SceneryViewer] Initialize renderer start', {
-    token,
-    sceneId: payload.document?.id,
-  });
   const { scene, renderer, camera, controls } = renderContext;
   activeCameraWatchTween = null;
   const { canvas } = result;
@@ -11611,7 +11288,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
 
   // Phase 1: bind state for the new payload.
-  addRuntimeStageLog('[SceneryViewer] Phase 1 bind scene state');
   currentDocument = payload.document;
   resetAppliedDefaultSteerDriveKey();
   refreshDynamicGroundCache(currentDocument);
@@ -11625,7 +11301,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
 
   // Phase 2: build the scene graph (loads assets) with UI progress updates.
-  addRuntimeStageLog('[SceneryViewer] Phase 2 build scene graph');
   resetResourcePreloadState();
   const buildResult = await buildSceneGraphWithProgress(payload);
   if (token !== initializeToken) {
@@ -11638,15 +11313,11 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     return;
   }
   const { graph, resourceCache } = buildResult;
-  addRuntimeStageLog('[SceneryViewer] Phase 2 scene graph built', {
-    warnings: graph.warnings.length,
-  });
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
   }
 
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
-  addRuntimeStageLog('[SceneryViewer] Phase 4 mount scene graph');
   await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
   applyNominateOverridesForCurrentScene();
   applyDefaultSteerDriveForCurrentScene();
@@ -11656,12 +11327,10 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
 
   // Phase 5: apply view settings (camera alignment, environment, projection).
-  addRuntimeStageLog('[SceneryViewer] Phase 5 apply document view settings');
   applyDocumentViewSettings(payload.document, camera);
   markInstancedCullingDirty();
 
   // Phase 6: start the render loop.
-  addRuntimeStageLog('[SceneryViewer] Phase 6 start render loop');
   startRenderLoop(result, renderer, scene, camera, controls);
 }
 
@@ -11744,8 +11413,6 @@ function applyInput(params: {
   physinterp?: string;
 }): void {
   bootstrapRuntimeIfNeeded();
-  addRuntimeStageLog('[SceneryViewer] applyInput invoked', params);
-
   const projectIdParam = typeof params.projectId === 'string' ? params.projectId.trim() : '';
   const packageUrlParamRaw = typeof params.packageUrl === 'string' ? params.packageUrl.trim() : '';
   const packageCacheKeyParam = typeof params.packageCacheKey === 'string' ? params.packageCacheKey.trim() : '';
@@ -11769,14 +11436,12 @@ function applyInput(params: {
   error.value = null;
 
   if (packageUrlParam) {
-    addRuntimeStageLog('[SceneryViewer] Input resolved to packageUrl mode');
     requestedMode.value = 'project';
     currentProjectId.value = null;
     loading.value = true;
     const effectiveCacheKey = packageCacheKeyParam || packageUrlParam;
     void loadProjectFromScenePackageUrl(packageUrlParam, effectiveCacheKey);
   } else if (projectIdParam) {
-    addRuntimeStageLog('[SceneryViewer] Input resolved to projectId mode', { projectId: projectIdParam });
     requestedMode.value = 'project';
     currentProjectId.value = projectIdParam;
     const entry = projectStore.getProject();
@@ -11789,7 +11454,7 @@ function applyInput(params: {
       void loadProjectFromScenePackagePointer(entry.scenePackage);
     }
   } else {
-    pushRuntimeLog('error', 'runtime', ['[SceneryViewer] Input missing projectId and packageUrl']);
+    console.error('[SceneryViewer] Input missing projectId and packageUrl');
     requestedMode.value = null;
     error.value = '缺少工程数据';
     loading.value = false;
@@ -11812,8 +11477,6 @@ function hasAnyPropInput(): boolean {
 }
 
 onMounted(() => {
-  addRuntimeStageLog('[SceneryViewer] Component mounted');
-  attachConsoleCaptureIfNeeded();
   if (!resizeListener) {
     resizeListener = handleResize;
     uni.onWindowResize(handleResize);
@@ -11861,10 +11524,8 @@ watch(
 );
 
 function cleanupRuntime(): void {
-  addRuntimeStageLog('[SceneryViewer] Cleanup runtime');
   dismissBehaviorBubble({ type: 'continue' });
   resetAppliedDefaultSteerDriveKey();
-  restoreConsoleCapture();
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
   if (resizeListener) {

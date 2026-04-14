@@ -68,9 +68,6 @@ const defaultHandler = (e: any) => {
   additionHandler?.(e);
 };
 
-
-console.log(props.canvasId);
-
 const instance = getCurrentInstance();
 
 onMounted(() => {
