@@ -193,6 +193,14 @@ export function createWaterSurfaceRuntimeMesh(
 
   const mesh = new THREE.Mesh(geometry, material)
   mesh.name = options.name ?? 'Water Surface'
+  mesh.userData = {
+    ...(mesh.userData ?? {}),
+    dynamicMeshType: 'WaterSurface',
+    [WATER_SURFACE_MESH_USERDATA_KEY]: {
+      version: WATER_SURFACE_MESH_VERSION,
+      contour: [...metadata.contour],
+    },
+  }
   mesh.castShadow = false
   mesh.receiveShadow = false
   return mesh

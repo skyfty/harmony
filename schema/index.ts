@@ -69,6 +69,8 @@ export type {
   ExtractSkycubeZipFacesResult,
 } from './skyCubeTexture'
 
+export { computePlaySoundDistanceGain, resolvePlaySoundSourcePoint } from './soundDistance'
+
 export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 
 export {
@@ -659,6 +661,8 @@ export type SoundBehaviorCommand = 'play' | 'stop'
 
 export type SoundPlaybackMode = 'once' | 'loop' | 'interval'
 
+export type SoundDistanceResponseMode = 'off' | 'near-loud' | 'near-quiet'
+
 export interface PlaySoundBehaviorParams {
   /** Audio asset id from the project asset registry. */
   assetId: string | null
@@ -696,6 +700,16 @@ export interface PlaySoundBehaviorParams {
   refDistanceMeters: number
   /** Strength of spatial volume falloff. */
   rolloffFactor: number
+  /** Optional secondary distance-response curve layered on top of base spatial falloff. */
+  distanceResponseMode: SoundDistanceResponseMode
+  /** Distance where the secondary response curve starts, in meters. */
+  distanceResponseStartMeters: number
+  /** Distance where the secondary response curve reaches its suppressed/full target, in meters. */
+  distanceResponseEndMeters: number
+  /** Gain used on the suppressed side of the secondary distance-response curve. */
+  distanceResponseSuppressedGain: number
+  /** Curve exponent applied to the secondary distance-response remap. */
+  distanceResponseCurvePower: number
   /** Block the behavior sequence until a one-shot sound finishes playing. */
   waitForCompletion: boolean
 }

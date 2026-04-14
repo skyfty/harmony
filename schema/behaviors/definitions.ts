@@ -14,6 +14,7 @@ import type {
   BubbleBehaviorParams,
   BubbleBehaviorVariant,
   PlaySoundBehaviorParams,
+  SoundDistanceResponseMode,
   SoundBehaviorCommand,
   SoundPlaybackMode,
   ShowBehaviorParams,
@@ -92,6 +93,11 @@ const DEFAULT_PLAY_SOUND_MAX_INTERVAL_SECONDS = 12
 const DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS = 20
 const DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS = 1.5
 const DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR = 1
+const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_MODE: SoundDistanceResponseMode = 'off'
+const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_START_METERS = 0
+const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_END_METERS = 8
+const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_SUPPRESSED_GAIN = 0.15
+const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_CURVE_POWER = 1
 
 function normalizeAssetId(value: string | null | undefined): string | null {
   if (typeof value !== 'string') {
@@ -164,6 +170,16 @@ function normalizeSoundPlaybackMode(value: string | null | undefined): SoundPlay
       return value
     default:
       return 'once'
+  }
+}
+
+function normalizeSoundDistanceResponseMode(value: string | null | undefined): SoundDistanceResponseMode {
+  switch (value) {
+    case 'near-loud':
+    case 'near-quiet':
+      return value
+    default:
+      return 'off'
   }
 }
 
@@ -324,6 +340,11 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
         maxDistanceMeters: DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS,
         refDistanceMeters: DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS,
         rolloffFactor: DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR,
+        distanceResponseMode: DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_MODE,
+        distanceResponseStartMeters: DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_START_METERS,
+        distanceResponseEndMeters: DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_END_METERS,
+        distanceResponseSuppressedGain: DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_SUPPRESSED_GAIN,
+        distanceResponseCurvePower: DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_CURVE_POWER,
         waitForCompletion: false,
       }
     },
@@ -793,6 +814,10 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
       const params = binding.params as PlaySoundBehaviorParams | undefined
       const command = normalizeSoundCommand(params?.command)
       const playbackMode = normalizeSoundPlaybackMode(params?.playbackMode)
+      const distanceResponseStartMeters = normalizeNonNegativeNumber(
+        params?.distanceResponseStartMeters,
+        DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_START_METERS,
+      )
       return {
         type: 'playSound',
         params: {
@@ -817,6 +842,25 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
           maxDistanceMeters: normalizeNonNegativeNumber(params?.maxDistanceMeters, DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS),
           refDistanceMeters: normalizeNonNegativeNumber(params?.refDistanceMeters, DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS),
           rolloffFactor: normalizeNonNegativeNumber(params?.rolloffFactor, DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR),
+          distanceResponseMode: normalizeSoundDistanceResponseMode(params?.distanceResponseMode),
+          distanceResponseStartMeters,
+          distanceResponseEndMeters: Math.max(
+            distanceResponseStartMeters,
+            normalizeNonNegativeNumber(params?.distanceResponseEndMeters, DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_END_METERS),
+          ),
+          distanceResponseSuppressedGain: normalizeClampedNumber(
+            params?.distanceResponseSuppressedGain,
+            DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_SUPPRESSED_GAIN,
+            0,
+            1,
+          ),
+          distanceResponseCurvePower: Math.max(
+            0.01,
+            normalizeNonNegativeNumber(
+              params?.distanceResponseCurvePower,
+              DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_CURVE_POWER,
+            ),
+          ),
           waitForCompletion: command === 'play' && playbackMode === 'once' ? Boolean(params?.waitForCompletion) : false,
         },
       }
@@ -1117,6 +1161,10 @@ export function ensureBehaviorParams(
         const command = normalizeSoundCommand(params?.command)
         const playbackMode = normalizeSoundPlaybackMode(params?.playbackMode)
         const minIntervalSeconds = normalizeNonNegativeNumber(params?.minIntervalSeconds, DEFAULT_PLAY_SOUND_MIN_INTERVAL_SECONDS)
+        const distanceResponseStartMeters = normalizeNonNegativeNumber(
+          params?.distanceResponseStartMeters,
+          DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_START_METERS,
+        )
         return {
           type: 'playSound',
           params: {
@@ -1141,6 +1189,25 @@ export function ensureBehaviorParams(
             maxDistanceMeters: normalizeNonNegativeNumber(params?.maxDistanceMeters, DEFAULT_PLAY_SOUND_MAX_DISTANCE_METERS),
             refDistanceMeters: normalizeNonNegativeNumber(params?.refDistanceMeters, DEFAULT_PLAY_SOUND_REF_DISTANCE_METERS),
             rolloffFactor: normalizeNonNegativeNumber(params?.rolloffFactor, DEFAULT_PLAY_SOUND_ROLLOFF_FACTOR),
+            distanceResponseMode: normalizeSoundDistanceResponseMode(params?.distanceResponseMode),
+            distanceResponseStartMeters,
+            distanceResponseEndMeters: Math.max(
+              distanceResponseStartMeters,
+              normalizeNonNegativeNumber(params?.distanceResponseEndMeters, DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_END_METERS),
+            ),
+            distanceResponseSuppressedGain: normalizeClampedNumber(
+              params?.distanceResponseSuppressedGain,
+              DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_SUPPRESSED_GAIN,
+              0,
+              1,
+            ),
+            distanceResponseCurvePower: Math.max(
+              0.01,
+              normalizeNonNegativeNumber(
+                params?.distanceResponseCurvePower,
+                DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_CURVE_POWER,
+              ),
+            ),
             waitForCompletion: command === 'play' && playbackMode === 'once' ? Boolean(params?.waitForCompletion) : false,
           },
         }

@@ -949,6 +949,8 @@ const resourcePreloadBytesLabel = computed(() => {
   return '';
 });
 import {
+  computePlaySoundDistanceGain,
+  resolvePlaySoundSourcePoint,
   createIndexedDbPersistentAssetStorage,
   createNoopPersistentAssetStorage,
   createWeChatFileSystemPersistentAssetStorage,
@@ -2725,7 +2727,9 @@ type BehaviorSoundInstance = {
   stopTimer: ReturnType<typeof setTimeout> | null;
   intervalTimer: ReturnType<typeof setTimeout> | null;
   fadeTimer: ReturnType<typeof setInterval> | null;
+  fadeStartTimer: ReturnType<typeof setTimeout> | null;
   onFinish: ((resolution: BehaviorEventResolution) => void) | null;
+  envelopeGain: number;
   stopped: boolean;
 };
 
@@ -6780,6 +6784,10 @@ function clearBehaviorSoundTimers(instance: BehaviorSoundInstance): void {
     clearInterval(instance.fadeTimer);
     instance.fadeTimer = null;
   }
+  if (instance.fadeStartTimer) {
+    clearTimeout(instance.fadeStartTimer);
+    instance.fadeStartTimer = null;
+  }
 }
 
 function disposeBehaviorSoundInstance(
@@ -6826,40 +6834,41 @@ function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-function computeViewerSpatialVolume(instance: BehaviorSoundInstance): number {
+function computeViewerSoundDistanceMeters(instance: BehaviorSoundInstance): number | null {
   if (!instance.params.spatial) {
-    return instance.params.volume;
+    return 0;
   }
-  const targetPoint = resolveNodeAnchorPoint(instance.targetNodeId) ?? resolveNodeFocusPoint(instance.targetNodeId);
   const camera = renderContext?.camera ?? null;
-  if (!targetPoint || !camera) {
-    return 0;
+  if (!camera) {
+    return null;
   }
-  const distance = camera.position.distanceTo(targetPoint);
-  const maxDistance = Math.max(instance.params.refDistanceMeters, instance.params.maxDistanceMeters || instance.params.refDistanceMeters);
-  if (maxDistance <= 0) {
-    return instance.params.volume;
+  const targetObject = instance.targetNodeId ? nodeObjectMap.get(instance.targetNodeId) ?? null : null;
+  if (!targetObject) {
+    return null;
   }
-  if (distance >= maxDistance) {
-    return 0;
+  const targetPoint = resolvePlaySoundSourcePoint(targetObject, camera.position, tempVector);
+  if (!targetPoint) {
+    return null;
   }
-  const refDistance = Math.max(0.001, instance.params.refDistanceMeters || 1);
-  const normalized = Math.max(0, 1 - Math.max(0, distance - refDistance) / Math.max(0.001, maxDistance - refDistance));
-  const attenuation = Math.pow(normalized, Math.max(0.01, instance.params.rolloffFactor || 1));
-  return Math.max(0, Math.min(1, instance.params.volume * attenuation));
+  return camera.position.distanceTo(targetPoint);
 }
 
-function setBehaviorSoundVolume(instance: BehaviorSoundInstance, volume: number): void {
+function computeViewerSpatialGain(instance: BehaviorSoundInstance): number {
+  return computePlaySoundDistanceGain(instance.params, computeViewerSoundDistanceMeters(instance));
+}
+
+function applyBehaviorSoundVolume(instance: BehaviorSoundInstance): void {
   if (!instance.audio) {
     return;
   }
+  const volume = instance.params.volume * instance.envelopeGain * computeViewerSpatialGain(instance);
   instance.audio.volume = Math.max(0, Math.min(1, volume));
 }
 
 function scheduleBehaviorSoundFade(
   instance: BehaviorSoundInstance,
-  fromVolume: number,
-  toVolume: number,
+  fromGain: number,
+  toGain: number,
   durationSeconds: number,
 ): void {
   if (!instance.audio) {
@@ -6870,12 +6879,14 @@ function scheduleBehaviorSoundFade(
     instance.fadeTimer = null;
   }
   if (durationSeconds <= 0) {
-    setBehaviorSoundVolume(instance, toVolume);
+    instance.envelopeGain = Math.max(0, Math.min(1, toGain));
+    applyBehaviorSoundVolume(instance);
     return;
   }
   const startedAt = Date.now();
   const durationMs = durationSeconds * 1000;
-  setBehaviorSoundVolume(instance, fromVolume);
+  instance.envelopeGain = Math.max(0, Math.min(1, fromGain));
+  applyBehaviorSoundVolume(instance);
   instance.fadeTimer = setInterval(() => {
     const current = activeBehaviorSounds.get(instance.key);
     if (!current || !current.audio) {
@@ -6887,7 +6898,8 @@ function scheduleBehaviorSoundFade(
     }
     const elapsed = Date.now() - startedAt;
     const alpha = Math.min(1, Math.max(0, elapsed / durationMs));
-    setBehaviorSoundVolume(current, fromVolume + (toVolume - fromVolume) * alpha);
+    current.envelopeGain = Math.max(0, Math.min(1, fromGain + (toGain - fromGain) * alpha));
+    applyBehaviorSoundVolume(current);
     if (alpha >= 1) {
       if (current.fadeTimer) {
         clearInterval(current.fadeTimer);
@@ -6904,14 +6916,13 @@ function scheduleBehaviorSoundStop(key: string, instance: BehaviorSoundInstance)
   const fadeStartMs = Math.max(0, (instance.params.durationSeconds - instance.params.fadeOutSeconds) * 1000);
   const stopDelayMs = Math.max(0, instance.params.durationSeconds * 1000);
   if (instance.params.fadeOutSeconds > 0) {
-    instance.fadeTimer = setTimeout(() => {
+    instance.fadeStartTimer = setTimeout(() => {
       const current = activeBehaviorSounds.get(key);
       if (!current) {
         return;
       }
-      const currentVolume = computeViewerSpatialVolume(current);
-      scheduleBehaviorSoundFade(current, currentVolume, 0, current.params.fadeOutSeconds);
-    }, fadeStartMs) as unknown as ReturnType<typeof setInterval>;
+      scheduleBehaviorSoundFade(current, current.envelopeGain, 0, current.params.fadeOutSeconds);
+    }, fadeStartMs);
   }
   instance.stopTimer = setTimeout(() => {
     disposeBehaviorSoundInstance(key, instance.onFinish ? { type: 'continue' } : null);
@@ -6949,7 +6960,9 @@ async function playBehaviorSoundEvent(event: Extract<BehaviorRuntimeEvent, { typ
     stopTimer: null,
     intervalTimer: null,
     fadeTimer: null,
+    fadeStartTimer: null,
     onFinish: event.token ? (resolution) => resolveBehaviorToken(event.token!, resolution) : null,
+    envelopeGain: event.params.fadeInSeconds > 0 ? 0 : 1,
     stopped: false,
   };
   activeBehaviorSounds.set(key, instance);
@@ -6959,11 +6972,11 @@ async function playBehaviorSoundEvent(event: Extract<BehaviorRuntimeEvent, { typ
     if (!current || !current.audio || current.stopped) {
       return;
     }
-    const baseVolume = computeViewerSpatialVolume(current);
     if (current.params.fadeInSeconds > 0) {
-      scheduleBehaviorSoundFade(current, 0, baseVolume, current.params.fadeInSeconds);
+      scheduleBehaviorSoundFade(current, 0, 1, current.params.fadeInSeconds);
     } else {
-      setBehaviorSoundVolume(current, baseVolume);
+      current.envelopeGain = 1;
+      applyBehaviorSoundVolume(current);
     }
     current.audio.onEnded(() => {
       const latest = activeBehaviorSounds.get(key);
@@ -11095,7 +11108,7 @@ function startRenderLoop(
             if (!instance.audio || !instance.params.spatial || instance.stopped) {
               return;
             }
-            setBehaviorSoundVolume(instance, computeViewerSpatialVolume(instance));
+            applyBehaviorSoundVolume(instance);
           });
 
           effectRuntimeTickers.forEach((tick) => {
