@@ -38,6 +38,8 @@ export interface SceneState {
 
   /** Optional sub-selection for road editing (segment-level). */
   selectedRoadSegment: { nodeId: string; segmentIndex: number } | null
+  /** Optional sub-selection for GuideRoute editing (waypoint-level). */
+  selectedGuideRouteWaypoint: { nodeId: string; waypointIndex: number } | null
   activeTool: EditorTool
   projectTree: ProjectDirectory[]
   assetCatalog: Record<string, ProjectAsset[]>

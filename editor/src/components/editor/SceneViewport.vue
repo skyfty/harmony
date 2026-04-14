@@ -337,6 +337,7 @@ import {
   GUIDEBOARD_EFFECT_ACTIVE_FLAG,
   cloneWarpGateComponentProps,
   cloneGuideboardComponentProps,
+  GUIDE_ROUTE_COMPONENT_TYPE,
   createWarpGateEffectInstance,
   createGuideboardEffectInstance,
   PROTAGONIST_COMPONENT_TYPE,
@@ -349,6 +350,7 @@ import type {
   ViewPointComponentProps,
   DisplayBoardComponentProps,
   GuideboardComponentProps,
+  GuideRouteComponentProps,
   WarpGateComponentProps,
   WallComponentProps,
   RoadComponentProps,
@@ -2215,7 +2217,8 @@ function enterGuideRouteEditMode(nodeId: string | null | undefined): void {
   clearLandformEditMode()
   clearRegionEditMode()
   clearWaterEditMode()
-  setGuideRouteEditNodeId(resolveEditableGuideRouteNode(nodeId)?.id ?? null)
+  const editableNodeId = resolveEditableGuideRouteNode(nodeId)?.id ?? null
+  setGuideRouteEditNodeId(editableNodeId)
 }
 
 function enterWaterEditMode(nodeId: string | null | undefined): void {
@@ -2288,16 +2291,32 @@ function isSelectedRegionEditMode(): boolean {
   return Boolean(resolveEditableRegionNode(selectedId))
 }
 
-function isSelectedGuideRouteEditMode(): boolean {
-  const selectedId = getPrimarySelectedNodeId()
-  if (!selectedId || guideRouteEditNodeId.value !== selectedId) {
-    return false
+function getActiveGuideRouteEditNodeId(): string | null {
+  const editNodeId = guideRouteEditNodeId.value
+  if (!editNodeId || !resolveEditableGuideRouteNode(editNodeId)) {
+    return null
   }
+
+  const primarySelectedId = getPrimarySelectedNodeId()
+  if (primarySelectedId === editNodeId) {
+    return editNodeId
+  }
+
   const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
-  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
-    return false
+  if (selectedIds.length === 1 && selectedIds[0] === editNodeId) {
+    return editNodeId
   }
-  return Boolean(resolveEditableGuideRouteNode(selectedId))
+
+  const selectedNodeId = sceneStore.selectedNode?.id ?? null
+  if (selectedNodeId === editNodeId) {
+    return editNodeId
+  }
+
+  return null
+}
+
+function isSelectedGuideRouteEditMode(): boolean {
+  return Boolean(getActiveGuideRouteEditNodeId())
 }
 
 function isSelectedWaterEditMode(): boolean {
@@ -2551,7 +2570,16 @@ watch(
     if (selectedIds.length !== 1 || selectedIds[0] !== waterEditNodeId.value) {
       clearWaterEditMode()
     }
+    syncSelectedGuideRouteVertexHandle()
   },
+)
+
+watch(
+  () => sceneStore.selectedGuideRouteWaypoint,
+  () => {
+    syncSelectedGuideRouteVertexHandle()
+  },
+  { deep: true },
 )
 
 const buildToolsDisabled = computed(() => false)
@@ -5986,8 +6014,8 @@ function ensureRegionVertexHandlesForSelectedNode(options?: { force?: boolean; p
 }
 
 function ensureGuideRouteVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Vector3Like[] }) {
-  const selectedId = isSelectedGuideRouteEditMode() ? getPrimarySelectedNodeId() : null
-  const active = activeBuildTool.value === 'guideRoute' && isSelectedGuideRouteEditMode() && !guideRouteBuildTool.getSession()
+  const selectedId = getActiveGuideRouteEditNodeId()
+  const active = activeBuildTool.value === 'guideRoute' && !!selectedId && !guideRouteBuildTool.getSession()
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -6004,6 +6032,7 @@ function ensureGuideRouteVertexHandlesForSelectedNode(options?: { force?: boolea
   } else {
     guideRouteVertexRenderer.ensure(common)
   }
+  syncSelectedGuideRouteVertexHandle()
 }
 
 function pickRegionVertexHandleAtPointer(event: PointerEvent): RegionVertexHandlePickResult | null {
@@ -6032,6 +6061,19 @@ function pickGuideRouteVertexHandleAtPointer(event: PointerEvent): GuideRouteVer
 
 function setActiveGuideRouteVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
   guideRouteVertexRenderer.setActiveHandle(active as any)
+}
+
+function syncSelectedGuideRouteVertexHandle() {
+  const selected = sceneStore.selectedGuideRouteWaypoint
+  const selectedId = getActiveGuideRouteEditNodeId() ?? getPrimarySelectedNodeId()
+  if (!selected || !selectedId || selected.nodeId !== selectedId) {
+    guideRouteVertexRenderer.setSelectedHandle(null)
+    return
+  }
+  guideRouteVertexRenderer.setSelectedHandle({
+    nodeId: selected.nodeId,
+    vertexIndex: selected.waypointIndex,
+  })
 }
 
 function pickLandformVertexHandleAtPointer(event: PointerEvent): LandformVertexHandlePickResult | null {
@@ -6104,10 +6146,118 @@ function commitGuideRouteNode(nodeId: string, points: Vector3Like[]): boolean {
   if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
     return false
   }
-  sceneStore.updateNodeDynamicMesh(nodeId, {
-    ...(node.dynamicMesh as GuideRouteDynamicMesh),
-    vertices: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+  const selectedWaypointIndex = sceneStore.selectedGuideRouteWaypoint?.nodeId === nodeId
+    ? sceneStore.selectedGuideRouteWaypoint.waypointIndex
+    : null
+  return sceneStore.updateGuideRouteWaypoints(nodeId, {
+    vertices: points,
+    selectedWaypointIndex,
   })
+}
+
+function pickGuideRouteSegmentInsertion(): { nodeId: string; insertIndex: number; point: Vector3Like } | null {
+  const selectedId = getActiveGuideRouteEditNodeId()
+  if (!selectedId || !camera || !canvasRef.value) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  const runtimeObject = objectMap.get(selectedId) ?? null
+  if (!node || !runtimeObject || node.dynamicMesh?.type !== 'GuideRoute') {
+    return null
+  }
+
+  const routeObject = (runtimeObject.userData?.guideRouteGroup as THREE.Object3D | undefined) ?? runtimeObject
+  raycaster.setFromCamera(pointer, camera)
+  const hits = raycaster.intersectObjects(routeObject.children, true)
+  for (const hit of hits) {
+    let owner: THREE.Object3D | null = hit.object
+    while (owner && owner !== routeObject && owner.name !== 'GuideRouteSegments') {
+      owner = owner.parent ?? null
+    }
+    if (!owner || owner.name !== 'GuideRouteSegments') {
+      continue
+    }
+    if (typeof hit.instanceId !== 'number' || hit.instanceId < 0) {
+      continue
+    }
+
+    const segmentIndex = Math.floor(hit.instanceId)
+    const points = cloneGuideRouteLocalPoints(node)
+    const start = points[segmentIndex]
+    const end = points[segmentIndex + 1]
+    if (!start || !end) {
+      continue
+    }
+
+    const localHit = runtimeObject.worldToLocal(hit.point.clone())
+    const dx = end.x - start.x
+    const dz = end.z - start.z
+    const denominator = dx * dx + dz * dz
+    const t = denominator > 1e-10
+      ? Math.max(0, Math.min(1, ((localHit.x - start.x) * dx + (localHit.z - start.z) * dz) / denominator))
+      : 0
+    const point = {
+      x: start.x + dx * t,
+      y: start.y + (end.y - start.y) * t,
+      z: start.z + dz * t,
+    }
+    return {
+      nodeId: selectedId,
+      insertIndex: segmentIndex + 1,
+      point,
+    }
+  }
+
+  return null
+}
+
+function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
+  if (!isSelectedGuideRouteEditMode() || guideRouteBuildTool.getSession()) {
+    return false
+  }
+  if (event.button !== 0 || event.detail !== 1) {
+    return false
+  }
+  const selectedId = getActiveGuideRouteEditNodeId()
+  if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
+    return false
+  }
+
+  const insertion = pickGuideRouteSegmentInsertion()
+  if (!insertion || insertion.nodeId !== selectedId) {
+    return false
+  }
+
+  const currentPoints = cloneGuideRouteLocalPoints(node)
+  const nextPoints = currentPoints.slice()
+  nextPoints.splice(insertion.insertIndex, 0, insertion.point)
+
+  const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
+  const currentWaypoints = Array.isArray(component?.props?.waypoints) ? component.props.waypoints : []
+  const nextWaypoints = currentWaypoints.map((entry: GuideRouteComponentProps['waypoints'][number]) => ({
+    name: typeof entry?.name === 'string' ? entry.name : '',
+    dock: entry?.dock === true,
+    position: entry.position,
+  }))
+  nextWaypoints.splice(insertion.insertIndex, 0, {
+    name: '',
+    dock: false,
+    position: insertion.point,
+  })
+
+  const updated = sceneStore.updateGuideRouteWaypoints(selectedId, {
+    vertices: nextPoints,
+    waypoints: nextWaypoints,
+    selectedWaypointIndex: insertion.insertIndex,
+  })
+  if (!updated) {
+    return false
+  }
+  ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
   return true
 }
 
@@ -6118,7 +6268,7 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
   if (!isSelectedGuideRouteEditMode() || guideRouteBuildTool.getSession()) {
     return false
   }
-  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const selectedId = getActiveGuideRouteEditNodeId()
   if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
     return false
   }
@@ -6133,6 +6283,9 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
   if (!hit || hit.nodeId !== selectedId) {
     return false
   }
+
+  sceneStore.setSelectedGuideRouteWaypoint(selectedId, hit.vertexIndex)
+  syncSelectedGuideRouteVertexHandle()
 
   const basePoints = cloneGuideRouteLocalPoints(node)
   const startPoint = basePoints[hit.vertexIndex]
@@ -15282,7 +15435,7 @@ async function handlePointerDown(event: PointerEvent) {
   const floorEditModeLocked = activeBuildTool.value === 'floor' && isSelectedFloorEditMode()
   const landformEditModeLocked = activeBuildTool.value === 'landform' && isSelectedLandformEditMode()
   const regionEditModeLocked = activeBuildTool.value === 'region' && isSelectedRegionEditMode()
-  const guideRouteEditModeLocked = activeBuildTool.value === 'guideRoute' && isSelectedGuideRouteEditMode()
+  const guideRouteEditModeLocked = activeBuildTool.value === 'guideRoute' && !!getActiveGuideRouteEditNodeId()
   const roadEditModeLocked = activeBuildTool.value === 'road' && isSelectedRoadEditMode()
   const waterEditModeLocked = activeBuildTool.value === 'water' && isSelectedWaterEditMode()
   const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
@@ -15349,10 +15502,17 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (activeBuildTool.value === 'guideRoute') {
     if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
-      if (guideRouteEditModeLocked && selectedNodeIsGuideRoute.value) {
+      if (guideRouteEditModeLocked) {
         ensureGuideRouteVertexHandlesForSelectedNode()
       }
       if (tryBeginGuideRouteVertexDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      if (guideRouteEditModeLocked && tryInsertGuideRouteWaypoint(event)) {
         event.preventDefault()
         event.stopPropagation()
         event.stopImmediatePropagation()

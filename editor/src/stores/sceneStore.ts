@@ -257,6 +257,7 @@ import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
   GuideRouteComponentProps,
+  GuideRouteWaypoint,
   GuideboardComponentProps,
   NominateComponentProps,
   OnlineComponentProps,
@@ -301,6 +302,7 @@ import {
   resolveRoadComponentPropsFromMesh,
   clampRoadProps,
   cloneRoadComponentProps,
+  buildGuideRouteWaypointsFromPositions,
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
   clampBillboardComponentProps,
@@ -7284,6 +7286,7 @@ function createInitialSceneState(): SceneState {
     selectedNodeId: null,
     selectedNodeIds: [],
     selectedRoadSegment: null,
+    selectedGuideRouteWaypoint: null,
     activeTool: 'select',
     assetCatalog,
     assetManifest,
@@ -7341,6 +7344,7 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.selectedNodeId = null
   store.selectedNodeIds = []
   store.selectedRoadSegment = null
+  store.selectedGuideRouteWaypoint = null
   store.assetCatalog = cloneAssetCatalog(initialState.assetCatalog)
   store.assetRegistry = cloneSceneAssetRegistry(initialState.assetRegistry)
   store.packageDirectoryCache = {}
@@ -8748,6 +8752,9 @@ export const useSceneStore = defineStore('scene', {
       if (this.selectedRoadSegment && (normalized.length !== 1 || normalized[0] !== this.selectedRoadSegment.nodeId)) {
         this.selectedRoadSegment = null
       }
+      if (this.selectedGuideRouteWaypoint && (normalized.length !== 1 || normalized[0] !== this.selectedGuideRouteWaypoint.nodeId)) {
+        this.selectedGuideRouteWaypoint = null
+      }
       return true
     },
     setSelectedRoadSegment(nodeId: string, segmentIndex: number | null) {
@@ -8764,6 +8771,22 @@ export const useSceneStore = defineStore('scene', {
     clearSelectedRoadSegment() {
       if (this.selectedRoadSegment) {
         this.selectedRoadSegment = null
+      }
+    },
+    setSelectedGuideRouteWaypoint(nodeId: string, waypointIndex: number | null) {
+      const normalizedNodeId = typeof nodeId === 'string' ? nodeId.trim() : ''
+      const normalizedIndex = typeof waypointIndex === 'number' && Number.isFinite(waypointIndex)
+        ? Math.max(0, Math.floor(waypointIndex))
+        : null
+      if (!normalizedNodeId || normalizedIndex === null) {
+        this.selectedGuideRouteWaypoint = null
+        return
+      }
+      this.selectedGuideRouteWaypoint = { nodeId: normalizedNodeId, waypointIndex: normalizedIndex }
+    },
+    clearSelectedGuideRouteWaypoint() {
+      if (this.selectedGuideRouteWaypoint) {
+        this.selectedGuideRouteWaypoint = null
       }
     },
     isGroupExpanded(nodeId: string): boolean {
@@ -15042,13 +15065,8 @@ export const useSceneStore = defineStore('scene', {
           const result = this.addNodeComponent(nodeId, GUIDE_ROUTE_COMPONENT_TYPE)
           const component = result?.component ?? (findNodeById(this.nodes, nodeId)?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as any)
           if (component?.id) {
-            const names = Array.isArray(payload.waypoints) ? payload.waypoints : []
-            const waypoints = build.definition.vertices.map((position: Vector3Like, index: number) => {
-              const rawName = (names[index]?.name ?? '').trim()
-              const name = rawName.length ? rawName : `P${index + 1}`
-              return { name, position, dock: names[index]?.dock === true }
-            })
-            this.updateNodeComponentProps(node.id, component.id, { waypoints })
+            const waypoints = buildGuideRouteWaypointsFromPositions(build.definition.vertices, payload.waypoints)
+            this.updateNodeComponentProps(nodeId, component.id, { waypoints })
           }
         }
 
@@ -15084,6 +15102,60 @@ export const useSceneStore = defineStore('scene', {
         }
 
         return node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+    updateGuideRouteWaypoints(nodeId: string, options: {
+      vertices: Vector3Like[]
+      waypoints?: Array<Partial<GuideRouteWaypoint> | null | undefined>
+      selectedWaypointIndex?: number | null
+    }): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target || target.dynamicMesh?.type !== 'GuideRoute') {
+        return false
+      }
+
+      const nextVertices = buildGuideRouteWaypointsFromPositions(options.vertices).map((entry) => entry.position)
+      if (nextVertices.length < 2) {
+        return false
+      }
+
+      const componentResult = this.addNodeComponent(nodeId, GUIDE_ROUTE_COMPONENT_TYPE)
+      const component = componentResult?.component
+        ?? (findNodeById(this.nodes, nodeId)?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined)
+      if (!component?.id) {
+        return false
+      }
+
+      const currentWaypoints = Array.isArray(component.props?.waypoints) ? component.props.waypoints : []
+      const waypointSource = Array.isArray(options.waypoints) ? options.waypoints : currentWaypoints
+      const nextWaypoints = buildGuideRouteWaypointsFromPositions(nextVertices, waypointSource)
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        this.updateNodeDynamicMesh(nodeId, {
+          ...(target.dynamicMesh as GuideRouteDynamicMesh),
+          vertices: nextVertices.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+        })
+        this.updateNodeComponentProps(nodeId, component.id, { waypoints: nextWaypoints })
+
+        const requestedIndex = typeof options.selectedWaypointIndex === 'number' && Number.isFinite(options.selectedWaypointIndex)
+          ? Math.max(0, Math.floor(options.selectedWaypointIndex))
+          : null
+        const nextSelectedIndex = requestedIndex === null
+          ? (this.selectedGuideRouteWaypoint?.nodeId === nodeId
+              ? Math.min(this.selectedGuideRouteWaypoint.waypointIndex, nextWaypoints.length - 1)
+              : null)
+          : Math.min(requestedIndex, nextWaypoints.length - 1)
+
+        if (nextSelectedIndex === null || nextWaypoints.length === 0) {
+          this.clearSelectedGuideRouteWaypoint()
+        } else {
+          this.setSelectedGuideRouteWaypoint(nodeId, nextSelectedIndex)
+        }
+        return true
       } finally {
         this.endHistoryCaptureSuppression()
       }

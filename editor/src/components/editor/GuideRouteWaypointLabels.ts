@@ -113,7 +113,7 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
           geom.translate(-center.x, -center.y, -center.z)
         }
 
-        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff })
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffeb3b })
         mat.depthTest = false
         mat.toneMapped = false
 

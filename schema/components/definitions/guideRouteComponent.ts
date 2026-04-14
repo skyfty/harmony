@@ -16,6 +16,11 @@ export interface GuideRouteComponentProps {
   waypoints: GuideRouteWaypoint[]
 }
 
+function normalizeGuideRouteWaypointName(value: unknown, index: number): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  return raw.length ? raw : `P${index + 1}`
+}
+
 function clampVector3Like(value: unknown): Vector3Like {
   const v = (value as { x?: unknown; y?: unknown; z?: unknown } | null | undefined) ?? undefined
   const x = typeof v?.x === 'number' && Number.isFinite(v.x) ? v.x : 0
@@ -24,25 +29,31 @@ function clampVector3Like(value: unknown): Vector3Like {
   return { x, y, z }
 }
 
+export function buildGuideRouteWaypointsFromPositions(
+  positions: Array<Vector3Like | null | undefined> | null | undefined,
+  source: Array<Partial<GuideRouteWaypoint> | null | undefined> = [],
+): GuideRouteWaypoint[] {
+  const rawPositions = Array.isArray(positions) ? positions : []
+  return rawPositions.map((position, index) => {
+    const entry = source[index]
+    return {
+      name: normalizeGuideRouteWaypointName(entry?.name, index),
+      position: clampVector3Like(position),
+      dock: entry?.dock === true,
+    }
+  })
+}
+
 export function clampGuideRouteComponentProps(props: Partial<GuideRouteComponentProps> | null | undefined): GuideRouteComponentProps {
   const rawWaypoints = Array.isArray((props as GuideRouteComponentProps | undefined)?.waypoints)
     ? (props as GuideRouteComponentProps).waypoints
     : []
 
-  const waypoints = rawWaypoints
-    .map((entry): GuideRouteWaypoint | null => {
-      if (!entry || typeof entry !== 'object') {
-        return null
-      }
-      const nameRaw = (entry as any).name
-      const name = typeof nameRaw === 'string' ? nameRaw : ''
-      return {
-        name,
-        position: clampVector3Like((entry as any).position),
-        dock: (entry as any).dock === true,
-      }
-    })
-    .filter((entry): entry is GuideRouteWaypoint => entry !== null)
+  const sanitizedEntries = rawWaypoints.filter((entry) => !!entry && typeof entry === 'object') as Array<Partial<GuideRouteWaypoint>>
+  const waypoints = buildGuideRouteWaypointsFromPositions(
+    sanitizedEntries.map((entry) => entry.position),
+    sanitizedEntries,
+  )
 
   return { waypoints }
 }
@@ -51,9 +62,9 @@ export function resolveGuideRouteComponentPropsFromMesh(mesh: GuideRouteDynamicM
   if (!mesh || !Array.isArray(mesh.vertices)) {
     return { waypoints: [] }
   }
-  return clampGuideRouteComponentProps({
-    waypoints: mesh.vertices.map((pos) => ({ name: '', position: clampVector3Like(pos) })),
-  })
+  return {
+    waypoints: buildGuideRouteWaypointsFromPositions(mesh.vertices),
+  }
 }
 
 export function cloneGuideRouteComponentProps(props: GuideRouteComponentProps): GuideRouteComponentProps {

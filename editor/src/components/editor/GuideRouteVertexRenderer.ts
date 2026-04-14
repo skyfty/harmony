@@ -17,6 +17,7 @@ export type GuideRouteVertexRenderer = {
   clear(): void
   clearHover(): void
   setActiveHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: EndpointGizmoPart } | null): void
+  setSelectedHandle(selected: { nodeId: string; vertexIndex: number; gizmoPart?: EndpointGizmoPart } | null): void
   updateHover(options: {
     camera: THREE.Camera | null
     canvas: HTMLCanvasElement | null
@@ -94,6 +95,7 @@ export function createGuideRouteVertexRenderer(): GuideRouteVertexRenderer {
   let state: { nodeId: string; group: THREE.Group; signature: string } | null = null
   let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
+  let selected: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
 
   const tmpWorldPos = new THREE.Vector3()
   const tmpCameraWorldPos = new THREE.Vector3()
@@ -127,6 +129,8 @@ export function createGuideRouteVertexRenderer(): GuideRouteVertexRenderer {
       const key = typeof handle.userData?.handleKey === 'string' ? handle.userData.handleKey : ''
       if (active && key === active.handleKey) {
         gizmo.setState(active.gizmoPart, 'active')
+      } else if (selected && key === selected.handleKey) {
+        gizmo.setState(selected.gizmoPart, 'active')
       } else if (hovered && key === hovered.handleKey) {
         gizmo.setState(hovered.gizmoPart, 'hover')
       }
@@ -156,6 +160,25 @@ export function createGuideRouteVertexRenderer(): GuideRouteVertexRenderer {
     active = {
       handleKey: `${next.nodeId}:${next.vertexIndex}`,
       gizmoPart: next.gizmoPart,
+    }
+    refreshHighlight()
+  }
+
+  function setSelectedHandle(next: { nodeId: string; vertexIndex: number; gizmoPart?: EndpointGizmoPart } | null) {
+    if (!state) {
+      selected = null
+      return
+    }
+
+    if (!next) {
+      selected = null
+      refreshHighlight()
+      return
+    }
+
+    selected = {
+      handleKey: `${next.nodeId}:${next.vertexIndex}`,
+      gizmoPart: next.gizmoPart ?? 'center',
     }
     refreshHighlight()
   }
@@ -250,6 +273,7 @@ export function createGuideRouteVertexRenderer(): GuideRouteVertexRenderer {
     state = { nodeId: selectedNodeId, group, signature }
     hovered = null
     active = null
+    selected = null
   }
 
   function pick(options: {
@@ -345,6 +369,7 @@ export function createGuideRouteVertexRenderer(): GuideRouteVertexRenderer {
     clear,
     clearHover,
     setActiveHandle,
+    setSelectedHandle,
     updateHover,
     ensure: (options) => attachOrRebuild(options),
     forceRebuild: (options) => attachOrRebuild({ ...options, force: true }),

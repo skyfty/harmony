@@ -3,11 +3,13 @@ import type { GuideRouteDynamicMesh } from './index'
 
 export type GuideRouteRenderOptions = {
   segmentThickness?: number
+  segmentHeight?: number
   waypointRadius?: number
 }
 
-const DEFAULT_SEGMENT_THICKNESS = 0.04
-const DEFAULT_WAYPOINT_RADIUS = 0.08
+const DEFAULT_SEGMENT_THICKNESS = 0.24
+const DEFAULT_SEGMENT_HEIGHT = 0.03
+const DEFAULT_WAYPOINT_RADIUS = 0.14
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const numeric = typeof value === 'number' && Number.isFinite(value) ? value : fallback
@@ -54,7 +56,7 @@ function sanitizeVertices(mesh: GuideRouteDynamicMesh): THREE.Vector3[] {
 
 function ensureSegmentsMesh(count: number, thickness: number): THREE.InstancedMesh {
   const geometry = new THREE.BoxGeometry(1, 1, 1)
-  const material = new THREE.MeshStandardMaterial({ color: 0x4b4f55 })
+  const material = new THREE.MeshStandardMaterial({ color: 0x3f464f, roughness: 0.62, metalness: 0.08 })
   const mesh = new THREE.InstancedMesh(geometry, material, Math.max(0, count))
   mesh.name = 'GuideRouteSegments'
   mesh.castShadow = false
@@ -66,7 +68,7 @@ function ensureSegmentsMesh(count: number, thickness: number): THREE.InstancedMe
 
 function ensureWaypointsMesh(count: number, radius: number): THREE.InstancedMesh {
   const geometry = new THREE.SphereGeometry(1, 16, 12)
-  const material = new THREE.MeshStandardMaterial({ color: 0x27ffff })
+  const material = new THREE.MeshStandardMaterial({ color: 0x5dfdff, emissive: 0x0f6c72, emissiveIntensity: 0.65, roughness: 0.35 })
   const mesh = new THREE.InstancedMesh(geometry, material, Math.max(0, count))
   mesh.name = 'GuideRouteWaypoints'
   mesh.castShadow = false
@@ -75,7 +77,7 @@ function ensureWaypointsMesh(count: number, radius: number): THREE.InstancedMesh
   return mesh
 }
 
-function updateSegmentsInstances(mesh: THREE.InstancedMesh, vertices: THREE.Vector3[], thickness: number) {
+function updateSegmentsInstances(mesh: THREE.InstancedMesh, vertices: THREE.Vector3[], width: number, height: number) {
   const segmentCount = Math.max(0, vertices.length - 1)
   const up = new THREE.Vector3(0, 1, 0)
   const dir = new THREE.Vector3()
@@ -99,7 +101,7 @@ function updateSegmentsInstances(mesh: THREE.InstancedMesh, vertices: THREE.Vect
       // Rotate unit Z axis to the segment direction.
       quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)
       mid.copy(a).add(b).multiplyScalar(0.5)
-      scale.set(thickness, thickness, length)
+      scale.set(width, height, length)
     }
     matrix.compose(mid, quat, scale)
     mesh.setMatrixAt(i, matrix)
@@ -126,11 +128,12 @@ function rebuildGuideRouteGroup(group: THREE.Group, definition: GuideRouteDynami
   clearGroupContent(group)
 
   const vertices = sanitizeVertices(definition)
-  const thickness = clampNumber(options.segmentThickness, 0.005, 1, DEFAULT_SEGMENT_THICKNESS)
+  const thickness = clampNumber(options.segmentThickness, 0.02, 1, DEFAULT_SEGMENT_THICKNESS)
+  const segmentHeight = clampNumber(options.segmentHeight, 0.01, 0.4, DEFAULT_SEGMENT_HEIGHT)
   const radius = clampNumber(options.waypointRadius, 0.01, 2, DEFAULT_WAYPOINT_RADIUS)
 
   const segments = ensureSegmentsMesh(Math.max(0, vertices.length - 1), thickness)
-  updateSegmentsInstances(segments, vertices, thickness)
+  updateSegmentsInstances(segments, vertices, thickness, segmentHeight)
 
   const waypoints = ensureWaypointsMesh(vertices.length, radius)
   updateWaypointInstances(waypoints, vertices, radius)
