@@ -197,14 +197,17 @@ export async function renderWallPresetThumbnailDataUrl(options: {
   }
 
   if (options.sharedMaterials && options.resolveTexture) {
+    const nodeMaterials = buildWallNodeMaterialsFromPreset(options.preset, options.sharedMaterials)
     const materialOverrideOptions: MaterialTextureAssignmentOptions = {
       resolveTexture: options.resolveTexture,
     }
-    applyMaterialOverrides(
-      wallObject,
-      buildWallNodeMaterialsFromPreset(options.preset, options.sharedMaterials),
-      materialOverrideOptions,
-    )
+    if (nodeMaterials.length > 0) {
+      applyMaterialOverrides(
+        wallObject,
+        nodeMaterials,
+        materialOverrideOptions,
+      )
+    }
   }
 
   const dataUrl = renderObjectThumbnailDataUrl({

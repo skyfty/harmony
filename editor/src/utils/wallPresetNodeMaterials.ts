@@ -8,6 +8,11 @@ import type {
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 import type { WallPresetData, WallPresetMaterialPatch } from '@/utils/wallPreset'
 
+function normalizeOptionalString(value: unknown): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized.length ? normalized : null
+}
+
 function cloneTextureRef(ref: SceneMaterialTextureRef | null | undefined): SceneMaterialTextureRef | null {
   if (!ref) {
     return null
@@ -59,6 +64,110 @@ function createDefaultMaterialProps(): SceneMaterialProps {
   }
 }
 
+function textureRefEquals(a: SceneMaterialTextureRef | null | undefined, b: SceneMaterialTextureRef | null | undefined): boolean {
+  if (!a && !b) {
+    return true
+  }
+  if (!a || !b) {
+    return false
+  }
+
+  const aAssetId = normalizeOptionalString(a.assetId)
+  const bAssetId = normalizeOptionalString(b.assetId)
+  const aName = normalizeOptionalString(a.name)
+  const bName = normalizeOptionalString(b.name)
+  if (aAssetId !== bAssetId || aName !== bName) {
+    return false
+  }
+
+  const aSettings = a.settings ?? null
+  const bSettings = b.settings ?? null
+  if (!aSettings && !bSettings) {
+    return true
+  }
+  if (!aSettings || !bSettings) {
+    return false
+  }
+
+  return aSettings.wrapS === bSettings.wrapS
+    && aSettings.wrapT === bSettings.wrapT
+    && aSettings.wrapR === bSettings.wrapR
+    && aSettings.offset.x === bSettings.offset.x
+    && aSettings.offset.y === bSettings.offset.y
+    && aSettings.repeat.x === bSettings.repeat.x
+    && aSettings.repeat.y === bSettings.repeat.y
+    && aSettings.tileSizeMeters.x === bSettings.tileSizeMeters.x
+    && aSettings.tileSizeMeters.y === bSettings.tileSizeMeters.y
+    && aSettings.rotation === bSettings.rotation
+    && aSettings.center.x === bSettings.center.x
+    && aSettings.center.y === bSettings.center.y
+    && aSettings.matrixAutoUpdate === bSettings.matrixAutoUpdate
+    && aSettings.generateMipmaps === bSettings.generateMipmaps
+    && aSettings.premultiplyAlpha === bSettings.premultiplyAlpha
+    && aSettings.flipY === bSettings.flipY
+}
+
+function materialPropsEqual(a: SceneMaterialProps, b: SceneMaterialProps): boolean {
+  return a.color === b.color
+    && a.transparent === b.transparent
+    && a.opacity === b.opacity
+    && a.side === b.side
+    && a.wireframe === b.wireframe
+    && a.metalness === b.metalness
+    && a.roughness === b.roughness
+    && a.emissive === b.emissive
+    && a.emissiveIntensity === b.emissiveIntensity
+    && a.aoStrength === b.aoStrength
+    && a.envMapIntensity === b.envMapIntensity
+    && textureRefEquals(a.textures.albedo, b.textures.albedo)
+    && textureRefEquals(a.textures.normal, b.textures.normal)
+    && textureRefEquals(a.textures.metalness, b.textures.metalness)
+    && textureRefEquals(a.textures.roughness, b.textures.roughness)
+    && textureRefEquals(a.textures.ao, b.textures.ao)
+    && textureRefEquals(a.textures.emissive, b.textures.emissive)
+    && textureRefEquals(a.textures.displacement, b.textures.displacement)
+}
+
+const DEFAULT_LOCAL_WALL_PREVIEW_PROPS = createDefaultMaterialProps()
+
+export function hasMeaningfulWallPreviewMaterialOverride(material: SceneNodeMaterial | null | undefined): boolean {
+  if (!material) {
+    return false
+  }
+  if (normalizeOptionalString(material.materialId)) {
+    return true
+  }
+  if (normalizeOptionalString(material.type) && material.type !== DEFAULT_SCENE_MATERIAL_TYPE) {
+    return true
+  }
+  return !materialPropsEqual(material, DEFAULT_LOCAL_WALL_PREVIEW_PROPS)
+}
+
+export function filterWallPreviewMaterialOverrides(options: {
+  materials: readonly SceneNodeMaterial[] | null | undefined
+  bodyAssetId?: string | null
+  bodyMaterialConfigId?: string | null
+}): SceneNodeMaterial[] {
+  const bodyAssetId = normalizeOptionalString(options.bodyAssetId)
+  const bodyMaterialConfigId = normalizeOptionalString(options.bodyMaterialConfigId)
+
+  return (options.materials ?? []).filter((entry): entry is SceneNodeMaterial => {
+    if (!hasMeaningfulWallPreviewMaterialOverride(entry)) {
+      return false
+    }
+    const entryId = normalizeOptionalString(entry?.id)
+    if (
+      bodyAssetId
+      && bodyMaterialConfigId
+      && entryId === bodyMaterialConfigId
+      && !normalizeOptionalString(entry.materialId)
+    ) {
+      return false
+    }
+    return true
+  })
+}
+
 function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneMaterialProps> | null): SceneMaterialProps {
   if (!overrides) {
     return {
@@ -91,24 +200,30 @@ function createNodeMaterialFromPatch(
   slotId: string,
   patch: WallPresetMaterialPatch,
   sharedMaterials: readonly SceneMaterial[],
-): SceneNodeMaterial {
+) : SceneNodeMaterial | null {
   const sharedMaterialId = patch.materialId === null ? null : typeof patch.materialId === 'string' ? patch.materialId.trim() : null
   const sharedMaterial = sharedMaterialId
     ? (sharedMaterials.find((entry) => entry.id === sharedMaterialId) ?? null)
     : null
+
+  if (sharedMaterialId && !sharedMaterial) {
+    return null
+  }
 
   const baseProps = sharedMaterial ? mergeMaterialProps(createDefaultMaterialProps(), sharedMaterial) : createDefaultMaterialProps()
   const mergedProps = sharedMaterial && patch.props && Object.keys(patch.props).length
     ? baseProps
     : mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
 
-  return {
+  const nextMaterial: SceneNodeMaterial = {
     id: slotId,
     materialId: sharedMaterial?.id ?? null,
     name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : sharedMaterial?.name,
     type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : sharedMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
     ...mergedProps,
   }
+
+  return hasMeaningfulWallPreviewMaterialOverride(nextMaterial) ? nextMaterial : null
 }
 
 export function buildWallNodeMaterialsFromPreset(
@@ -119,7 +234,7 @@ export function buildWallNodeMaterialsFromPreset(
     return []
   }
 
-  return (preset.materialOrder ?? [])
+  const materials = (preset.materialOrder ?? [])
     .map((slotId) => {
       const normalizedId = typeof slotId === 'string' ? slotId.trim() : ''
       if (!normalizedId) {
@@ -132,4 +247,10 @@ export function buildWallNodeMaterialsFromPreset(
       return createNodeMaterialFromPatch(normalizedId, patch, sharedMaterials)
     })
     .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
+
+  return filterWallPreviewMaterialOverrides({
+    materials,
+    bodyAssetId: preset.wallProps.bodyAssetId,
+    bodyMaterialConfigId: preset.wallProps.bodyMaterialConfigId,
+  })
 }

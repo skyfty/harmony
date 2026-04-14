@@ -443,8 +443,8 @@ function handleProjectSplitResized(event: SplitpanesResizedEvent) {
 
 async function selectAsset(asset: ProjectAsset) {
   const buildToolsStore = useBuildToolsStore()
-  // For model-like assets, ensure the asset is downloaded/cached before selecting
-  if (MODEL_ASSET_TYPES.has(asset.type)) {
+  // For model-like assets, ensure the asset is downloaded/cached before selecting.
+  if (asset.type === 'model' || asset.type === 'mesh') {
     const prepared = prepareAssetForOperations(asset)
     try {
       assetCacheStore.setError(prepared.id, null)
@@ -492,9 +492,7 @@ async function selectAsset(asset: ProjectAsset) {
       }
       return
     }
-  
 
-  if (asset.type === 'prefab') {
     const prepared = prepareAssetForOperations(asset)
     try {
       assetCacheStore.setError(prepared.id, null)
@@ -505,6 +503,23 @@ async function selectAsset(asset: ProjectAsset) {
       const message = (error as Error).message ?? 'Failed to prepare prefab asset'
       assetCacheStore.setError(prepared.id, message)
       console.error('Failed to prepare prefab before select', error)
+      return
+    }
+
+    sceneStore.selectAsset(prepared.id)
+    uiStore.setActiveSelectionContext('asset-panel')
+    return
+  }
+
+  if (asset.type === 'lod') {
+    const prepared = prepareAssetForOperations(asset)
+    try {
+      assetCacheStore.setError(prepared.id, null)
+      await sceneStore.loadLodPreset(prepared.id)
+    } catch (error) {
+      const message = (error as Error).message ?? 'Failed to prepare LOD asset'
+      assetCacheStore.setError(prepared.id, message)
+      console.error('Failed to prepare LOD before select', error)
       return
     }
 
@@ -1864,7 +1879,7 @@ async function submitDirectoryDialog() {
       } else if (isPresetDirectoryMutable(directoryDialogTargetId.value)) {
         await updateResourceCategory(directoryDialogTargetId.value, { name })
         await refreshPresetProviderAssets()
-    }
+      }
     }
     cancelDirectoryDialog()
   } catch (error) {

@@ -18,6 +18,7 @@ import {
   type WallRenderOptions,
 } from '@schema/wallMesh'
 import { applyAirWallVisualToWallGroup } from '@/components/editor/WallRenderer'
+import { filterWallPreviewMaterialOverrides } from '@/utils/wallPresetNodeMaterials'
 import { prepareWallPreviewImportedObject } from '@/utils/wallPresetSceneGraphPreview'
 
 export type PreviewAssetFileResolver = (assetId: string) => Promise<File | null>
@@ -199,6 +200,7 @@ export async function buildWallPreviewObjectFromNode(options: {
     return null
   }
   const wallProps = clampWallProps((wallState.props ?? null) as Record<string, unknown> | null | undefined)
+  const renderOptions = buildWallRenderOptionsFromNode(options.node, definition)
 
   const loadedAssetObjects = new Map<string, THREE.Object3D>()
   const assetIds = collectWallAssetIds(options.node)
@@ -216,16 +218,20 @@ export async function buildWallPreviewObjectFromNode(options: {
   const wallObject = createWallRenderGroup(
     definition,
     buildWallRenderAssetsFromNode(options.node, loadedAssetObjects),
-    buildWallRenderOptionsFromNode(options.node, definition),
+    renderOptions,
   )
   wallObject.name = options.node.name || 'Wall'
   applyNodeTransform(wallObject, options.node)
   applyNodeVisibility(wallObject, options.node)
   applyPreviewNodeMetadata(wallObject, options.node)
 
-  const nodeMaterials = Array.isArray(options.node.materials)
-    ? options.node.materials.filter((entry): entry is SceneNodeMaterial => Boolean(entry))
-    : []
+  const nodeMaterials = filterWallPreviewMaterialOverrides({
+    materials: Array.isArray(options.node.materials)
+      ? options.node.materials.filter((entry): entry is SceneNodeMaterial => Boolean(entry))
+      : [],
+    bodyAssetId: wallProps.bodyAssetId,
+    bodyMaterialConfigId: renderOptions.bodyMaterialConfigId ?? null,
+  })
   if (nodeMaterials.length > 0 && options.materialOverrideOptions) {
     applyMaterialOverrides(wallObject, nodeMaterials, options.materialOverrideOptions)
   }
