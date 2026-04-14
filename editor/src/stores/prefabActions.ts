@@ -335,44 +335,6 @@ export function collectPrefabAssetReferences(root: SceneNode | null | undefined)
   return Array.from(bucket)
 }
 
-function roundPrefabDebugNumber(value: number): number {
-  return Number.isFinite(value) ? Number(value.toFixed(5)) : 0
-}
-
-function summarizePrefabDebugVector(value: Vector3Like | null | undefined, fallback: Vector3Like): Vector3Like {
-  const sanitized = sanitizeFiniteVector3Like(value, fallback)
-  return {
-    x: roundPrefabDebugNumber(sanitized.x),
-    y: roundPrefabDebugNumber(sanitized.y),
-    z: roundPrefabDebugNumber(sanitized.z),
-  }
-}
-
-function summarizePrefabDebugNode(node: SceneNode | null | undefined, depth = 3): Record<string, unknown> | null {
-  if (!node) {
-    return null
-  }
-  const summary: Record<string, unknown> = {
-    id: node.id,
-    name: node.name,
-    nodeType: node.nodeType,
-    sourceAssetId: (node as any).sourceAssetId ?? null,
-    objectPath: (node as any).importMetadata?.objectPath ?? null,
-    position: summarizePrefabDebugVector(node.position, { x: 0, y: 0, z: 0 }),
-    rotation: summarizePrefabDebugVector(node.rotation, { x: 0, y: 0, z: 0 }),
-    scale: summarizePrefabDebugVector(node.scale, { x: 1, y: 1, z: 1 }),
-    childCount: Array.isArray(node.children) ? node.children.length : 0,
-  }
-  if (depth > 0 && Array.isArray(node.children) && node.children.length) {
-    summary.children = node.children.map((child) => summarizePrefabDebugNode(child, depth - 1))
-  }
-  return summary
-}
-
-function logPrefabDebug(label: string, payload: Record<string, unknown>): void {
-  console.log('[PrefabDebug]', label, payload)
-}
-
 export function normalizePrefabName(value: string | null | undefined): string {
   if (typeof value !== 'string') {
     return ''
@@ -594,18 +556,8 @@ export function buildSerializedPrefabPayload(
   },
 ): SerializedPrefabPayload {
   const prefabRoot = ensurePrefabRoot(deps, node)
-  logPrefabDebug('buildSerializedPrefabPayload:source', {
-    nodeId: node.id,
-    name: node.name,
-    sourceSummary: summarizePrefabDebugNode(node),
-  })
   const prefabData = createNodePrefabData(deps, prefabRoot, context.name ?? node.name ?? '')
   bakePrefabSubtreeTransforms(deps, prefabData.root, context.sceneNodes)
-  logPrefabDebug('buildSerializedPrefabPayload:prefabRootAfterBake', {
-    nodeId: node.id,
-    name: node.name,
-    prefabSummary: summarizePrefabDebugNode(prefabData.root),
-  })
   const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)
   if (dependencyAssetIds.length) {
     const dependencySubset = buildAssetDependencySubset({
@@ -621,11 +573,6 @@ export function buildSerializedPrefabPayload(
     delete (prefabData as any).assetRegistry
   }
   const serialized = serializeNodePrefab(prefabData)
-  logPrefabDebug('buildSerializedPrefabPayload:serialized', {
-    nodeId: node.id,
-    dependencyAssetIds,
-    serializedLength: serialized.length,
-  })
   return {
     prefab: prefabData,
     serialized,

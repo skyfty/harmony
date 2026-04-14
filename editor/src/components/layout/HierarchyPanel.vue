@@ -1612,7 +1612,12 @@ async function handleDrop(event: DragEvent, targetId: string) {
     if (parentId === targetId) {
       continue
     }
-    const moved = sceneStore.moveNode({ nodeId, targetId, position: 'inside' })
+    const moved = sceneStore.moveNode({
+      nodeId,
+      targetId,
+      position: 'inside',
+      recenterSkipGroupIds: [targetId],
+    })
     movedAny = movedAny || moved
   }
   if (movedAny) {

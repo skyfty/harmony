@@ -69,64 +69,6 @@ function buildNodeIndex(root: SceneNode | null | undefined): Map<string, SceneNo
   return index
 }
 
-function roundPrefabPreviewDebugNumber(value: number): number {
-  return Number.isFinite(value) ? Number(value.toFixed(5)) : 0
-}
-
-function summarizePrefabPreviewVector(vector: { x: number; y: number; z: number } | null | undefined): { x: number; y: number; z: number } {
-  return {
-    x: roundPrefabPreviewDebugNumber(vector?.x ?? 0),
-    y: roundPrefabPreviewDebugNumber(vector?.y ?? 0),
-    z: roundPrefabPreviewDebugNumber(vector?.z ?? 0),
-  }
-}
-
-function summarizePrefabPreviewNode(node: SceneNode | null | undefined, depth = 3): Record<string, unknown> | null {
-  if (!node) {
-    return null
-  }
-  const summary: Record<string, unknown> = {
-    id: node.id,
-    name: node.name,
-    nodeType: node.nodeType,
-    sourceAssetId: (node as any).sourceAssetId ?? null,
-    objectPath: (node as any).importMetadata?.objectPath ?? null,
-    position: summarizePrefabPreviewVector(node.position ?? null),
-    rotation: summarizePrefabPreviewVector(node.rotation ?? null),
-    scale: summarizePrefabPreviewVector(node.scale ?? null),
-    childCount: Array.isArray(node.children) ? node.children.length : 0,
-  }
-  if (depth > 0 && Array.isArray(node.children) && node.children.length) {
-    summary.children = node.children.map((child) => summarizePrefabPreviewNode(child, depth - 1))
-  }
-  return summary
-}
-
-function summarizePrefabPreviewObject(object: THREE.Object3D | null | undefined, depth = 3): Record<string, unknown> | null {
-  if (!object) {
-    return null
-  }
-  const summary: Record<string, unknown> = {
-    name: object.name,
-    type: object.type,
-    nodeId: (object as any).userData?.nodeId ?? null,
-    sourceAssetId: (object as any).userData?.sourceAssetId ?? null,
-    objectPath: (object as any).userData?.objectPath ?? null,
-    position: summarizePrefabPreviewVector(object.position),
-    rotation: summarizePrefabPreviewVector(object.rotation),
-    scale: summarizePrefabPreviewVector(object.scale),
-    childCount: object.children.length,
-  }
-  if (depth > 0 && object.children.length) {
-    summary.children = object.children.map((child) => summarizePrefabPreviewObject(child, depth - 1))
-  }
-  return summary
-}
-
-function logPrefabPreviewDebug(label: string, payload: Record<string, unknown>): void {
-  console.log('[PrefabPreviewDebug]', label, payload)
-}
-
 const INSTANCE_LAYOUT_INTERNAL_NAME_PARTS = ['PickProxy', 'Outline', 'InstancedOutline']
 
 function isInternalViewportObjectName(name: unknown): boolean {
@@ -485,11 +427,6 @@ async function buildPrefabPreviewBaseRoot(options: PrefabPreviewOptions, fileTex
   const parsed = JSON.parse(fileText) as unknown
   const document = normalizePrefabSceneDocument(parsed)
   const rootNode = document.nodes?.[0] ?? null
-  logPrefabPreviewDebug('buildPrefabPreviewBaseRoot:document', {
-    assetId,
-    cacheOnly,
-    rootNode: summarizePrefabPreviewNode(rootNode),
-  })
 
   if (cacheOnly) {
     const dependencyAssetIds = collectPrefabAssetReferences(rootNode)
@@ -520,11 +457,6 @@ async function buildPrefabPreviewBaseRoot(options: PrefabPreviewOptions, fileTex
 
   // Apply preview-only post-processing for instance layouts after wall/floor replacement.
   applyInstanceLayoutPreview(upgradedRoot, nodeIndex)
-  logPrefabPreviewDebug('buildPrefabPreviewBaseRoot:builtRoot', {
-    assetId,
-    cacheOnly,
-    objectTree: summarizePrefabPreviewObject(upgradedRoot),
-  })
 
   return { key, assetId, baseRoot: upgradedRoot }
 }

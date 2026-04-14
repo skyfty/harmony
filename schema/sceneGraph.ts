@@ -119,22 +119,6 @@ class SceneGraphBuilder {
   private readonly preloadedAssetIds = new Set<string>();
   private progressBytesTotal = 0;
   private progressBytesLoaded = 0;
-
-  private roundDebugNumber(value: number): number {
-    return Number.isFinite(value) ? Number(value.toFixed(5)) : 0;
-  }
-
-  private summarizeDebugVector(vector: THREE.Vector3 | { x?: number; y?: number; z?: number } | null | undefined): { x: number; y: number; z: number } {
-    return {
-      x: this.roundDebugNumber(typeof vector?.x === 'number' ? vector.x : 0),
-      y: this.roundDebugNumber(typeof vector?.y === 'number' ? vector.y : 0),
-      z: this.roundDebugNumber(typeof vector?.z === 'number' ? vector.z : 0),
-    };
-  }
-
-  private logImportedMeshDebug(label: string, payload: Record<string, unknown>): void {
-    console.log('[SceneGraphPrefabDebug]', label, payload);
-  }
   constructor(
     document: SceneJsonExportDocument,
     options: SceneGraphBuildOptions,
@@ -1104,22 +1088,6 @@ class SceneGraphBuilder {
         asset.userData.sourceAssetId = node.sourceAssetId;
         asset.userData.objectPath = node.importMetadata?.objectPath ?? null;
         group.add(asset);
-        this.logImportedMeshDebug('buildGroupNode:sourceAsset', {
-          nodeId: node.id,
-          name: node.name,
-          sourceAssetId: node.sourceAssetId,
-          objectPath: node.importMetadata?.objectPath ?? null,
-          nodePosition: this.summarizeDebugVector(node.position),
-          nodeRotation: this.summarizeDebugVector(node.rotation),
-          nodeScale: this.summarizeDebugVector(node.scale),
-          resetAssetPosition: this.summarizeDebugVector(asset.position),
-          resetAssetRotation: this.summarizeDebugVector(asset.rotation),
-          resetAssetScale: this.summarizeDebugVector(asset.scale),
-          groupPosition: this.summarizeDebugVector(group.position),
-          groupRotation: this.summarizeDebugVector(group.rotation),
-          groupScale: this.summarizeDebugVector(group.scale),
-          childCount: group.children.length,
-        });
       }
     }
 
@@ -1261,20 +1229,6 @@ class SceneGraphBuilder {
         if (Array.isArray(node.children) && node.children.length) {
           await this.buildNodes(node.children as SceneNodeWithExtras[], container);
         }
-        this.logImportedMeshDebug('buildMeshNode:lazyPlaceholder', {
-          nodeId: node.id,
-          name: node.name,
-          sourceAssetId: node.sourceAssetId,
-          objectPath: node.importMetadata?.objectPath ?? null,
-          nodePosition: this.summarizeDebugVector(node.position),
-          nodeRotation: this.summarizeDebugVector(node.rotation),
-          nodeScale: this.summarizeDebugVector(node.scale),
-          containerPosition: this.summarizeDebugVector(container.position),
-          placeholderPosition: this.summarizeDebugVector(placeholder.position),
-          placeholderRotation: this.summarizeDebugVector(placeholder.rotation),
-          placeholderScale: this.summarizeDebugVector(placeholder.scale),
-          childCount: container.children.length,
-        });
         this.recordMeshStatistics(placeholder);
         return container;
       }
@@ -1289,9 +1243,6 @@ class SceneGraphBuilder {
 
       const asset = await this.loadNodeAssetMesh(node);
       if (asset) {
-        const loadedAssetPosition = this.summarizeDebugVector(asset.position);
-        const loadedAssetRotation = this.summarizeDebugVector(asset.rotation);
-        const loadedAssetScale = this.summarizeDebugVector(asset.scale);
         await this.applyMaterialOverridesToImportedObject(asset, node);
         this.resetImportedObjectLocalTransform(asset);
         asset.userData = {
@@ -1303,25 +1254,6 @@ class SceneGraphBuilder {
         if (hasChildNodes) {
           await this.buildNodes(node.children as SceneNodeWithExtras[], container);
         }
-        this.logImportedMeshDebug('buildMeshNode:sourceAsset', {
-          nodeId: node.id,
-          name: node.name,
-          sourceAssetId: node.sourceAssetId,
-          objectPath: node.importMetadata?.objectPath ?? null,
-          nodePosition: this.summarizeDebugVector(node.position),
-          nodeRotation: this.summarizeDebugVector(node.rotation),
-          nodeScale: this.summarizeDebugVector(node.scale),
-          loadedAssetPosition,
-          loadedAssetRotation,
-          loadedAssetScale,
-          resetAssetPosition: this.summarizeDebugVector(asset.position),
-          resetAssetRotation: this.summarizeDebugVector(asset.rotation),
-          resetAssetScale: this.summarizeDebugVector(asset.scale),
-          containerPosition: this.summarizeDebugVector(container.position),
-          containerRotation: this.summarizeDebugVector(container.rotation),
-          containerScale: this.summarizeDebugVector(container.scale),
-          childCount: container.children.length,
-        });
         this.recordMeshStatistics(asset);
         return container;
       }

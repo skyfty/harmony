@@ -12852,8 +12852,10 @@ export const useSceneStore = defineStore('scene', {
 
       this.nodes = tree
 
-      // Ensure viewport/overlays can update topology even when group recentering is skipped.
-      this.queueSceneNodePatch(nodeId, ['transform'])
+      // Reparenting changes hierarchy topology. The viewport must reconcile parent-child
+      // relationships immediately; a transform-only patch updates local values but does not
+      // move existing Object3D instances under their new parent.
+      this.queueSceneStructurePatch('moveNode')
 
       const postMoveParentMap = buildParentMap(this.nodes)
       if (oldParentId) {
