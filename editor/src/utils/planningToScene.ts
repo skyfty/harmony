@@ -644,7 +644,7 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
   const kind = planningData.layers.find((layer) => layer.id === layerId)?.kind
-  return kind === 'terrain' || kind === 'guide-route' ? kind : null
+  return kind === 'terrain' ? kind : null
 }
 
 function resolveLayerNameFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
@@ -1783,86 +1783,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           groundDepth,
           groundHeightAt,
         })
-      }
-    } else if (kind === 'guide-route') {
-      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-
-      for (const line of group.polylines) {
-        const label = `Converting guide route: ${line.name?.trim() || line.id}`
-        emitUnitProgress(label, 0)
-        try {
-          throwIfAborted(options.signal)
-
-          const names = Array.isArray(line.waypoints) ? line.waypoints : []
-          const points: Array<{ x: number; y: number; z: number }> = []
-          const waypoints: Array<{ name?: string; dock?: boolean }> = []
-          const duplicateEpsilon = 1e-10
-
-          for (let i = 0; i < (line.points ?? []).length; i += 1) {
-            if ((i & 63) === 0) {
-              await yieldController.maybeYield()
-            }
-            const point = line.points[i]
-            if (!point) continue
-
-            const world = toWorldPoint(point, groundWidth, groundDepth, 0)
-            const y = groundHeightAt(world.x, world.z)
-
-            const previous = points[points.length - 1]
-            if (previous) {
-              const dx = world.x - previous.x
-              const dz = world.z - previous.z
-              if (dx * dx + dz * dz <= duplicateEpsilon) {
-                continue
-              }
-            }
-
-            points.push({ x: world.x, y, z: world.z })
-            waypoints.push({ name: names[i]?.name, dock: names[i]?.dock === true })
-          }
-
-          if (points.length < 2) {
-            continue
-          }
-
-          const nodeName = line.name?.trim()
-            ? line.name.trim()
-            : (layerName ? `${layerName} Guide Route` : 'Planning Guide Route')
-
-          const guideRouteNode = sceneStore.createGuideRouteNode({
-            nodeId: line.id,
-            points,
-            waypoints,
-            name: nodeName,
-          })
-
-          if (!guideRouteNode) {
-            continue
-          }
-
-          sceneStore.moveNode({
-            nodeId: guideRouteNode.id,
-            targetId: root.id,
-            position: 'inside',
-            recenterSkipGroupIds: [root.id],
-          })
-          sceneStore.updateNodeUserData(guideRouteNode.id, {
-            source: PLANNING_CONVERSION_SOURCE,
-            planningLayerId: layerId,
-            kind: 'guide-route',
-            planningFeatureId: line.id,
-          })
-
-          // Safety: ensure guideRoute component exists for identification.
-          const component = guideRouteNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as { id?: string } | undefined
-          if (!component?.id) {
-            sceneStore.addNodeComponent<typeof GUIDE_ROUTE_COMPONENT_TYPE>(guideRouteNode.id, GUIDE_ROUTE_COMPONENT_TYPE)
-          }
-
-          sceneStore.setNodeLocked(guideRouteNode.id, true)
-        } finally {
-          await updateProgressForUnit(label)
-        }
       }
     }
   }

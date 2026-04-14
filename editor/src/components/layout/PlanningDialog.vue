@@ -52,7 +52,7 @@ const layerKindLabels: Record<LayerKind, string> = {
   'guide-route': 'Guide Route',
 }
 
-const addableLayerKinds: LayerKind[] = ['terrain', 'guide-route']
+const addableLayerKinds: LayerKind[] = ['terrain']
 
 interface PlanningLayer {
   id: string
@@ -231,7 +231,6 @@ interface LineDraft {
 
 const layerPresets: PlanningLayer[] = [
   { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#6D4C41', locked: false, conversionEnabled: true },
-  { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false, conversionEnabled: true },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -880,14 +879,7 @@ function buildPlanningSnapshot(): PlanningSceneData {
       name: line.name,
       layerId: line.layerId,
       points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
-      waypoints: getLayerKind(line.layerId) === 'guide-route'
-        ? (Array.isArray(line.waypoints)
-          ? line.waypoints.map((w) => ({
-            name: typeof w?.name === 'string' ? w.name : undefined,
-            dock: w?.dock === true ? true : undefined,
-          }))
-          : undefined)
-        : undefined,
+      waypoints: undefined,
       airWallEnabled: line.airWallEnabled ? true : undefined,
       scatter: undefined,
     })),
@@ -1259,11 +1251,11 @@ function loadPlanningFromScene() {
     activeLayerId.value = data.activeLayerId
   }
   layers.value = data.layers
-    .filter((layer) => layer.kind === 'terrain' || layer.kind === 'guide-route')
+    .filter((layer) => layer.kind === 'terrain')
     .map((layer) => ({
       id: layer.id,
       name: layer.name,
-      kind: layer.kind === 'terrain' ? 'terrain' : 'guide-route',
+      kind: 'terrain',
       visible: layer.visible,
       color: layer.color,
       locked: layer.locked,
@@ -1341,27 +1333,16 @@ function loadPlanningFromScene() {
         })
         : []
 
-      const layerKind = getLayerKind(line.layerId)
-      const rawWaypoints = Array.isArray(line.waypoints) ? line.waypoints : null
-      const waypoints = layerKind === 'guide-route'
-        ? points.map((_point, index) => {
-          const rawName = rawWaypoints?.[index]?.name
-          const name = typeof rawName === 'string' ? rawName : `Point ${index + 1}`
-          const dock = rawWaypoints?.[index]?.dock === true
-          return { name, dock }
-        })
-        : undefined
-
       return {
         id: normalizePlanningFeatureId(line.id, usedFeatureIds),
         name: line.name,
         layerId: line.layerId,
         points,
-        waypoints,
+        waypoints: undefined,
         airWallEnabled: Boolean(line.airWallEnabled),
         scatter: undefined,
       }
-    })
+    }).filter((line) => layers.value.some((layer) => layer.id === line.layerId))
     : []
 
   planningImages.value = Array.isArray(data.images)
@@ -5670,37 +5651,6 @@ onBeforeUnmount(() => {
                   hide-details
                   readonly
                   :suffix="selectedMeasurementSuffix"
-                />
-              </div>
-            </div>
-
-            <div v-if="selectedGuideRouteVertex" class="property-panel__block">
-              <div style="display:flex;gap:8px;align-items:center;">
-                <v-text-field
-                  v-model="guideRouteWaypointNameModel"
-                  density="compact"
-                  hide-details
-                  label="Name"
-                  :disabled="propertyPanelDisabled"
-                  style="flex:1"
-                />
-              </div>
-              <div style="margin-top:8px;">
-                <v-text-field
-                  :model-value="selectedGuideRouteVertex.typeLabel"
-                  density="compact"
-                  hide-details
-                  label="Type"
-                  readonly
-                />
-              </div>
-              <div style="margin-top:8px;">
-                <v-switch
-                  v-model="guideRouteWaypointDockModel"
-                  density="compact"
-                  hide-details
-                  label="Dock"
-                  :disabled="propertyPanelDisabled"
                 />
               </div>
             </div>

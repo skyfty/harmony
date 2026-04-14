@@ -76,6 +76,7 @@ import type {
   LandformDynamicMesh,
   GuideRouteDynamicMesh,
   RegionDynamicMesh,
+  Vector3Like,
   WallDynamicMesh,
 } from '@schema/index'
 import {
@@ -259,6 +260,7 @@ import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
 import { createLandformBuildTool } from './LandformBuildTool'
 import { createRegionBuildTool } from './RegionBuildTool'
+import { createGuideRouteBuildTool } from './GuideRouteBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
 import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
@@ -285,6 +287,7 @@ import {
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
 import { createLandformVertexRenderer, type LandformVertexHandlePickResult } from './LandformVertexRenderer'
 import { createRegionVertexRenderer, type RegionVertexHandlePickResult } from './RegionVertexRenderer'
+import { createGuideRouteVertexRenderer, type GuideRouteVertexHandlePickResult } from './GuideRouteVertexRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
 import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './WaterVertexRenderer'
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
@@ -1895,6 +1898,9 @@ const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'region') {
     return 'cursor-floor'
   }
+  if (activeBuildTool.value === 'guideRoute') {
+    return 'cursor-floor'
+  }
   if (activeBuildTool.value === 'water') {
     return 'cursor-water'
   }
@@ -1921,6 +1927,7 @@ const roadEditNodeId = ref<string | null>(null)
 const floorEditNodeId = ref<string | null>(null)
 const landformEditNodeId = ref<string | null>(null)
 const regionEditNodeId = ref<string | null>(null)
+const guideRouteEditNodeId = ref<string | null>(null)
 const waterEditNodeId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
 const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
@@ -1929,6 +1936,7 @@ const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
 const selectedNodeIsLandform = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Landform')
 const selectedNodeIsRegion = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Region')
+const selectedNodeIsGuideRoute = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'GuideRoute')
 const selectedNodeIsWater = computed(() => isWaterSurfaceNode(sceneStore.selectedNode))
 const selectionContainsLandform = computed(() => {
   const selectedIds = new Set<string>()
@@ -2034,6 +2042,20 @@ function resolveEditableRegionNode(nodeId: string | null | undefined): SceneNode
   return node
 }
 
+function resolveEditableGuideRouteNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return node
+}
+
 function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode | null {
   if (!nodeId) {
     return null
@@ -2096,6 +2118,14 @@ function setRegionEditNodeId(nodeId: string | null): void {
   refreshSelectionHighlightsForEditModeChange()
 }
 
+function setGuideRouteEditNodeId(nodeId: string | null): void {
+  if (guideRouteEditNodeId.value === nodeId) {
+    return
+  }
+  guideRouteEditNodeId.value = nodeId
+  refreshSelectionHighlightsForEditModeChange()
+}
+
 function setWaterEditNodeId(nodeId: string | null): void {
   if (waterEditNodeId.value === nodeId) {
     return
@@ -2122,6 +2152,10 @@ function clearLandformEditMode(): void {
 
 function clearRegionEditMode(): void {
   setRegionEditNodeId(null)
+}
+
+function clearGuideRouteEditMode(): void {
+  setGuideRouteEditNodeId(null)
 }
 
 function clearWaterEditMode(): void {
@@ -2169,8 +2203,19 @@ function enterRegionEditMode(nodeId: string | null | undefined): void {
   clearRoadEditMode()
   clearFloorEditMode()
   clearLandformEditMode()
+  clearGuideRouteEditMode()
   clearWaterEditMode()
   setRegionEditNodeId(resolveEditableRegionNode(nodeId)?.id ?? null)
+}
+
+function enterGuideRouteEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearRoadEditMode()
+  clearFloorEditMode()
+  clearLandformEditMode()
+  clearRegionEditMode()
+  clearWaterEditMode()
+  setGuideRouteEditNodeId(resolveEditableGuideRouteNode(nodeId)?.id ?? null)
 }
 
 function enterWaterEditMode(nodeId: string | null | undefined): void {
@@ -2179,6 +2224,7 @@ function enterWaterEditMode(nodeId: string | null | undefined): void {
   clearFloorEditMode()
   clearLandformEditMode()
   clearRegionEditMode()
+  clearGuideRouteEditMode()
   setWaterEditNodeId(resolveEditableWaterNode(nodeId)?.id ?? null)
 }
 
@@ -2240,6 +2286,18 @@ function isSelectedRegionEditMode(): boolean {
     return false
   }
   return Boolean(resolveEditableRegionNode(selectedId))
+}
+
+function isSelectedGuideRouteEditMode(): boolean {
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId || guideRouteEditNodeId.value !== selectedId) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return false
+  }
+  return Boolean(resolveEditableGuideRouteNode(selectedId))
 }
 
 function isSelectedWaterEditMode(): boolean {
@@ -2426,6 +2484,9 @@ watch(
     if (tool !== 'road') {
       clearRoadEditMode()
     }
+    if (tool !== 'guideRoute') {
+      clearGuideRouteEditMode()
+    }
     if (tool !== 'floor') {
       clearFloorEditMode()
     }
@@ -2455,6 +2516,9 @@ watch(
     if (!isSelectedRoadEditMode()) {
       clearRoadEditMode()
     }
+    if (!isSelectedGuideRouteEditMode()) {
+      clearGuideRouteEditMode()
+    }
     if (!isSelectedFloorEditMode()) {
       clearFloorEditMode()
     }
@@ -2477,6 +2541,9 @@ watch(
     }
     if (selectedIds.length !== 1 || selectedIds[0] !== roadEditNodeId.value) {
       clearRoadEditMode()
+    }
+    if (selectedIds.length !== 1 || selectedIds[0] !== guideRouteEditNodeId.value) {
+      clearGuideRouteEditMode()
     }
     if (selectedIds.length !== 1 || selectedIds[0] !== floorEditNodeId.value) {
       clearFloorEditMode()
@@ -4919,6 +4986,23 @@ type RegionContourVertexDragState = {
   workingPoints: Array<[number, number]>
 }
 
+type GuideRouteVertexDragState = {
+  pointerId: number
+  nodeId: string
+  vertexIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  dragMode: 'free' | 'axis'
+  axisWorld: THREE.Vector3 | null
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+  runtimeObject: THREE.Object3D
+  basePoints: Vector3Like[]
+  workingPoints: Vector3Like[]
+}
+
 type WaterCircleCenterDragState = {
   pointerId: number
   nodeId: string
@@ -5004,6 +5088,7 @@ type WaterRectangleEdgeConstraint = WaterRectangleFrame & {
 let waterContourVertexDragState: WaterContourVertexDragState | null = null
 let landformContourVertexDragState: LandformContourVertexDragState | null = null
 let regionContourVertexDragState: RegionContourVertexDragState | null = null
+let guideRouteVertexDragState: GuideRouteVertexDragState | null = null
 let waterCircleCenterDragState: WaterCircleCenterDragState | null = null
 let waterCircleRadiusDragState: WaterCircleRadiusDragState | null = null
 let waterEdgeDragState: WaterEdgeDragState | null = null
@@ -5013,6 +5098,7 @@ const wallEndpointRenderer = createWallEndpointRenderer()
 const floorVertexRenderer = createFloorVertexRenderer()
 const landformVertexRenderer = createLandformVertexRenderer()
 const regionVertexRenderer = createRegionVertexRenderer()
+const guideRouteVertexRenderer = createGuideRouteVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
 const displayBoardCornerHandleRenderer = createDisplayBoardCornerHandleRenderer()
 const waterVertexRenderer = createWaterVertexRenderer()
@@ -5899,6 +5985,27 @@ function ensureRegionVertexHandlesForSelectedNode(options?: { force?: boolean; p
   }
 }
 
+function ensureGuideRouteVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Vector3Like[] }) {
+  const selectedId = isSelectedGuideRouteEditMode() ? getPrimarySelectedNodeId() : null
+  const active = activeBuildTool.value === 'guideRoute' && isSelectedGuideRouteEditMode() && !guideRouteBuildTool.getSession()
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveGuideRouteDefinition: (nodeId: string) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      return node?.dynamicMesh?.type === 'GuideRoute' ? (node.dynamicMesh as GuideRouteDynamicMesh) : null
+    },
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+    previewPoints: options?.previewPoints,
+  }
+  if (options?.force) {
+    guideRouteVertexRenderer.forceRebuild(common)
+  } else {
+    guideRouteVertexRenderer.ensure(common)
+  }
+}
+
 function pickRegionVertexHandleAtPointer(event: PointerEvent): RegionVertexHandlePickResult | null {
   return regionVertexRenderer.pick({
     camera,
@@ -5911,6 +6018,20 @@ function pickRegionVertexHandleAtPointer(event: PointerEvent): RegionVertexHandl
 
 function setActiveRegionVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
   regionVertexRenderer.setActiveHandle(active as any)
+}
+
+function pickGuideRouteVertexHandleAtPointer(event: PointerEvent): GuideRouteVertexHandlePickResult | null {
+  return guideRouteVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function setActiveGuideRouteVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
+  guideRouteVertexRenderer.setActiveHandle(active as any)
 }
 
 function pickLandformVertexHandleAtPointer(event: PointerEvent): LandformVertexHandlePickResult | null {
@@ -5945,6 +6066,115 @@ function cloneRegionLocalPoints(node: SceneNode | null | undefined): Array<[numb
   return vertices
     .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
     .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+}
+
+function cloneGuideRouteLocalPoints(node: SceneNode | null | undefined): Vector3Like[] {
+  if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
+    return []
+  }
+  const vertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
+  return vertices
+    .map((entry) => ({
+      x: Number.isFinite(Number(entry?.x)) ? Number(entry?.x) : 0,
+      y: Number.isFinite(Number(entry?.y)) ? Number(entry?.y) : 0,
+      z: Number.isFinite(Number(entry?.z)) ? Number(entry?.z) : 0,
+    }))
+}
+
+function buildGuideRoutePreviewFromLocalPoints(nodeId: string, points: Vector3Like[]): boolean {
+  if (points.length < 2) {
+    return false
+  }
+  const runtimeObject = objectMap.get(nodeId) ?? null
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!runtimeObject || node?.dynamicMesh?.type !== 'GuideRoute') {
+    return false
+  }
+  return updateGuideRouteGroup(runtimeObject, {
+    ...(node.dynamicMesh as GuideRouteDynamicMesh),
+    vertices: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+  })
+}
+
+function commitGuideRouteNode(nodeId: string, points: Vector3Like[]): boolean {
+  if (points.length < 2) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
+    return false
+  }
+  sceneStore.updateNodeDynamicMesh(nodeId, {
+    ...(node.dynamicMesh as GuideRouteDynamicMesh),
+    vertices: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+  })
+  return true
+}
+
+function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
+  if (guideRouteVertexDragState) {
+    return false
+  }
+  if (!isSelectedGuideRouteEditMode() || guideRouteBuildTool.getSession()) {
+    return false
+  }
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  const runtime = objectMap.get(selectedId) ?? null
+  if (!node || !runtime || node.dynamicMesh?.type !== 'GuideRoute') {
+    return false
+  }
+
+  ensureGuideRouteVertexHandlesForSelectedNode()
+  const hit = pickGuideRouteVertexHandleAtPointer(event)
+  if (!hit || hit.nodeId !== selectedId) {
+    return false
+  }
+
+  const basePoints = cloneGuideRouteLocalPoints(node)
+  const startPoint = basePoints[hit.vertexIndex]
+  if (!startPoint) {
+    return false
+  }
+
+  const startPointWorld = runtime.localToWorld(new THREE.Vector3(startPoint.x, startPoint.y, startPoint.z))
+  const worldQuaternion = runtime.getWorldQuaternion(new THREE.Quaternion())
+  const rawAxisWorld = hit.gizmoKind === 'axis' && hit.gizmoAxis
+    ? hit.gizmoAxis.clone().applyQuaternion(worldQuaternion)
+    : null
+  const axisWorld = rawAxisWorld
+    ? new THREE.Vector3(rawAxisWorld.x, 0, rawAxisWorld.z).normalize()
+    : null
+  const dragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? 'axis' : 'free'
+
+  guideRouteVertexDragState = {
+    pointerId: event.pointerId,
+    nodeId: selectedId,
+    vertexIndex: hit.vertexIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    dragMode,
+    axisWorld: dragMode === 'axis' ? axisWorld : null,
+    dragPlane: createEndpointDragPlane({
+      mode: dragMode,
+      axisWorld: dragMode === 'axis' ? axisWorld : null,
+      startPointWorld,
+      freePlaneNormal: new THREE.Vector3(0, 1, 0),
+    }),
+    startPointWorld: startPointWorld.clone(),
+    startHitWorld: null,
+    runtimeObject: runtime,
+    basePoints,
+    workingPoints: basePoints.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+  }
+
+  setActiveGuideRouteVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
+  pointerInteraction.capture(event.pointerId)
+  return true
 }
 
 function resolveRegionEditorRuntimeObject(nodeId: string): THREE.Group | null {
@@ -6534,6 +6764,9 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
     case 'region':
       handled = regionBuildTool.cancel()
       break
+    case 'guideRoute':
+      handled = guideRouteBuildTool.cancel()
+      break
     case 'water':
       handled = waterBuildTool.cancel()
       break
@@ -7044,6 +7277,22 @@ const regionBuildTool = createRegionBuildTool({
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
   isRelativeAngleSnapActive: () => relativeAngleSnapCModifierActive.value,
+  showStartIndicator: showBuildStartIndicator,
+  hideStartIndicator: hideBuildStartIndicator,
+  holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
+  clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+})
+
+const guideRouteBuildTool = createGuideRouteBuildTool({
+  activeBuildTool,
+  sceneStore,
+  rootGroup,
+  raycastGroundPoint,
+  resolveBuildPlacementPoint,
+  snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
+  isAltOverrideActive: () => isAltOverrideActive,
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
   holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
@@ -12137,14 +12386,19 @@ function enterMapTopView(): boolean {
 
 function handleViewportDoubleClickNode(nodeId: string): void {
   const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
+  const toolForNode = resolveBuildToolForNodeId(nodeId)
 
   emitSelectionChange([nodeId])
+
+  if (toolForNode === 'guideRoute') {
+    tryEnterNodeBuildToolEditMode(nodeId, toolForNode)
+    return
+  }
 
   if (!wasAlreadySingleSelected) {
     return
   }
 
-  const toolForNode = resolveBuildToolForNodeId(nodeId)
   tryEnterNodeBuildToolEditMode(nodeId, toolForNode)
 }
 
@@ -13294,6 +13548,7 @@ function animate() {
   floorBuildTool.flushPreviewIfNeeded(scene)
   landformBuildTool.flushPreviewIfNeeded(scene)
   regionBuildTool.flushPreviewIfNeeded(scene)
+  guideRouteBuildTool.flushPreviewIfNeeded(scene)
   waterBuildTool.flushPreviewIfNeeded(scene)
   updatePendingBuildStartIndicator()
   ensureDisplayBoardCornerHandlesForSelectedNode()
@@ -13308,6 +13563,7 @@ function animate() {
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   landformVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   regionVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
+  guideRouteVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   floorCircleHandleRenderer.updateScreenSize({
     camera,
     canvas: canvasRef.value,
@@ -13545,6 +13801,7 @@ function disposeScene() {
   floorBuildTool.dispose()
   landformBuildTool.dispose()
   regionBuildTool.dispose()
+  guideRouteBuildTool.dispose()
   buildStartIndicatorRenderer?.dispose()
   buildStartIndicatorRenderer = null
   waterBuildTool.dispose()
@@ -13771,6 +14028,10 @@ function shouldSuppressNodeHighlightDuringBuildOrEdit(nodeId: string | null | un
 
   if (meshType === 'Floor') {
     return activeBuildTool.value === 'floor' || floorEditNodeId.value === nodeId
+  }
+
+  if (meshType === 'GuideRoute') {
+    return activeBuildTool.value === 'guideRoute' || guideRouteEditNodeId.value === nodeId
   }
 
   return false
@@ -14199,6 +14460,9 @@ function emitSelectionChange(nextSelection: string[]) {
   if (deduped.length !== 1 || deduped[0] !== roadEditNodeId.value) {
     clearRoadEditMode()
   }
+  if (deduped.length !== 1 || deduped[0] !== guideRouteEditNodeId.value) {
+    clearGuideRouteEditMode()
+  }
   if (deduped.length !== 1 || deduped[0] !== floorEditNodeId.value) {
     clearFloorEditMode()
   }
@@ -14559,6 +14823,10 @@ function cancelBuildSessionForTool(tool: BuildTool): void {
     regionBuildTool.cancel()
     return
   }
+  if (tool === 'guideRoute' && guideRouteBuildTool.getSession()) {
+    guideRouteBuildTool.cancel()
+    return
+  }
   if (tool === 'water' && waterBuildTool.getSession()) {
     waterBuildTool.cancel()
   }
@@ -14578,6 +14846,8 @@ function resolveBuildToolForNode(node: any): BuildTool | null {
     ? 'landform'
     : dynamicMeshType === 'Region'
     ? 'region'
+    : dynamicMeshType === 'GuideRoute'
+    ? 'guideRoute'
     : dynamicMeshType === 'Road'
     ? 'road'
     : null
@@ -14609,6 +14879,8 @@ function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | 
     enterLandformEditMode(nodeId)
   } else if (toolForNode === 'region') {
     enterRegionEditMode(nodeId)
+  } else if (toolForNode === 'guideRoute') {
+    enterGuideRouteEditMode(nodeId)
   } else if (toolForNode === 'water') {
     enterWaterEditMode(nodeId)
   }
@@ -14623,7 +14895,7 @@ function refreshBuildStartIndicatorAfterEditExit(event?: MouseEvent | PointerEve
   if (!event || !activeBuildTool.value) {
     return
   }
-  if (activeBuildTool.value !== 'wall' && activeBuildTool.value !== 'road' && activeBuildTool.value !== 'floor' && activeBuildTool.value !== 'landform' && activeBuildTool.value !== 'region' && activeBuildTool.value !== 'water') {
+  if (activeBuildTool.value !== 'wall' && activeBuildTool.value !== 'road' && activeBuildTool.value !== 'floor' && activeBuildTool.value !== 'landform' && activeBuildTool.value !== 'region' && activeBuildTool.value !== 'guideRoute' && activeBuildTool.value !== 'water') {
     return
   }
   if (isTemporaryNavigationOverrideActive()) {
@@ -14642,6 +14914,9 @@ function refreshBuildStartIndicatorAfterEditExit(event?: MouseEvent | PointerEve
     return
   }
   if (activeBuildTool.value === 'region' && isSelectedRegionEditMode()) {
+    return
+  }
+  if (activeBuildTool.value === 'guideRoute' && isSelectedGuideRouteEditMode()) {
     return
   }
   if (activeBuildTool.value === 'water' && isSelectedWaterEditMode()) {
@@ -14695,6 +14970,14 @@ function tryExitActiveNodeBuildToolEditMode(event?: MouseEvent | PointerEvent): 
     setActiveRegionVertexHandle(null)
     regionVertexRenderer.clearHover()
     regionVertexRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
+    return true
+  }
+  if (activeBuildTool.value === 'guideRoute' && isSelectedGuideRouteEditMode()) {
+    clearGuideRouteEditMode()
+    setActiveGuideRouteVertexHandle(null)
+    guideRouteVertexRenderer.clearHover()
+    guideRouteVertexRenderer.clear()
     refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
@@ -14999,6 +15282,7 @@ async function handlePointerDown(event: PointerEvent) {
   const floorEditModeLocked = activeBuildTool.value === 'floor' && isSelectedFloorEditMode()
   const landformEditModeLocked = activeBuildTool.value === 'landform' && isSelectedLandformEditMode()
   const regionEditModeLocked = activeBuildTool.value === 'region' && isSelectedRegionEditMode()
+  const guideRouteEditModeLocked = activeBuildTool.value === 'guideRoute' && isSelectedGuideRouteEditMode()
   const roadEditModeLocked = activeBuildTool.value === 'road' && isSelectedRoadEditMode()
   const waterEditModeLocked = activeBuildTool.value === 'water' && isSelectedWaterEditMode()
   const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
@@ -15057,6 +15341,36 @@ async function handlePointerDown(event: PointerEvent) {
     if (event.button === 2) {
       if (!landformEditModeLocked) {
         landformBuildTool.handlePointerDown(event)
+      }
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
+  }
+
+  if (activeBuildTool.value === 'guideRoute') {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
+      if (guideRouteEditModeLocked && selectedNodeIsGuideRoute.value) {
+        ensureGuideRouteVertexHandlesForSelectedNode()
+      }
+      if (tryBeginGuideRouteVertexDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      if (!guideRouteEditModeLocked) {
+        guideRouteBuildTool.handlePointerDown(event)
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    if (event.button === 2) {
+      if (!guideRouteEditModeLocked) {
+        guideRouteBuildTool.handlePointerDown(event)
       }
       pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
       return
@@ -15374,6 +15688,7 @@ function handlePointerMove(event: PointerEvent) {
     !roadVertexDragState &&
     !floorVertexDragState &&
     !regionContourVertexDragState &&
+    !guideRouteVertexDragState &&
     !landformContourVertexDragState &&
     !displayBoardCornerDragState &&
     !waterContourVertexDragState &&
@@ -15396,6 +15711,7 @@ function handlePointerMove(event: PointerEvent) {
     ensureFloorVertexHandlesForSelectedNode()
     ensureLandformVertexHandlesForSelectedNode()
     ensureRegionVertexHandlesForSelectedNode()
+    ensureGuideRouteVertexHandlesForSelectedNode()
     ensureFloorCircleHandlesForSelectedNode()
     ensureDisplayBoardCornerHandlesForSelectedNode()
     ensureWaterVertexHandlesForSelectedNode()
@@ -15406,6 +15722,7 @@ function handlePointerMove(event: PointerEvent) {
     floorVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     landformVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     regionVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    guideRouteVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     displayBoardCornerHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
@@ -15416,6 +15733,7 @@ function handlePointerMove(event: PointerEvent) {
     floorVertexRenderer.clearHover()
     landformVertexRenderer.clearHover()
     regionVertexRenderer.clearHover()
+    guideRouteVertexRenderer.clearHover()
     floorCircleHandleRenderer.clearHover()
     displayBoardCornerHandleRenderer.clearHover()
     waterVertexRenderer.clearHover()
@@ -15573,6 +15891,51 @@ function handlePointerMove(event: PointerEvent) {
     state.workingPoints = nextPoints
     if (buildRegionPreviewFromLocalPoints(state.nodeId, nextPoints)) {
       ensureRegionVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    }
+    return
+  }
+
+  if (guideRouteVertexDragState && event.pointerId === guideRouteVertexDragState.pointerId) {
+    const state = guideRouteVertexDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      return
+    }
+    state.moved = true
+
+    if ((event.buttons & 1) === 0) {
+      return
+    }
+
+    if (!state.startHitWorld) {
+      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+        return
+      }
+      state.startHitWorld = waterDragIntersectionHelper.clone()
+    }
+    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      return
+    }
+
+    let world = waterDragIntersectionHelper.clone()
+    if (state.dragMode === 'axis' && state.axisWorld) {
+      const axis = state.axisWorld.clone().normalize()
+      const delta = world.clone().sub(state.startHitWorld)
+      const t = axis.dot(delta)
+      world = state.startHitWorld.clone().add(axis.multiplyScalar(t))
+    }
+
+    const local = state.runtimeObject.worldToLocal(world)
+    const nextPoints = state.workingPoints.map((point) => ({ x: point.x, y: point.y, z: point.z }))
+    const current = nextPoints[state.vertexIndex]
+    if (!current) {
+      return
+    }
+    nextPoints[state.vertexIndex] = { x: local.x, y: current.y, z: local.z }
+    state.workingPoints = nextPoints
+    if (buildGuideRoutePreviewFromLocalPoints(state.nodeId, nextPoints)) {
+      ensureGuideRouteVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
     }
     return
   }
@@ -15830,6 +16193,7 @@ function handlePointerMove(event: PointerEvent) {
     billboardBuildToolHandlePointerMove: (e) => billboardBuildTool.handlePointerMove(e),
     landformBuildToolHandlePointerMove: (e) => landformBuildTool.handlePointerMove(e),
     regionBuildToolHandlePointerMove: (e) => regionBuildTool.handlePointerMove(e),
+    guideRouteBuildToolHandlePointerMove: (e) => guideRouteBuildTool.handlePointerMove(e),
     waterBuildToolHandlePointerMove: (e) => waterBuildTool.handlePointerMove(e),
     floorBuildToolHandlePointerMove: (e) => floorBuildTool.handlePointerMove(e),
     wallBuildToolHandlePointerMove: (e) => wallBuildTool.handlePointerMove(e),
@@ -15944,6 +16308,7 @@ async function handlePointerUp(event: PointerEvent) {
       roadVertexDragState?.pointerId === event.pointerId ||
       floorVertexDragState?.pointerId === event.pointerId ||
       regionContourVertexDragState?.pointerId === event.pointerId ||
+      guideRouteVertexDragState?.pointerId === event.pointerId ||
       displayBoardCornerDragState?.pointerId === event.pointerId ||
       waterContourVertexDragState?.pointerId === event.pointerId ||
       waterCircleCenterDragState?.pointerId === event.pointerId ||
@@ -16224,6 +16589,31 @@ async function handlePointerUp(event: PointerEvent) {
         return
       }
 
+      if (guideRouteVertexDragState && event.pointerId === guideRouteVertexDragState.pointerId && event.button === 0) {
+        const state = guideRouteVertexDragState
+        guideRouteVertexDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveGuideRouteVertexHandle(null)
+
+        if (state.moved) {
+          if (!commitGuideRouteNode(state.nodeId, state.workingPoints)) {
+            buildGuideRoutePreviewFromLocalPoints(state.nodeId, state.basePoints)
+          }
+          ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+          void nextTick(() => {
+            ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+          })
+        } else {
+          buildGuideRoutePreviewFromLocalPoints(state.nodeId, state.basePoints)
+          ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
       if (displayBoardCornerDragState && event.pointerId === displayBoardCornerDragState.pointerId && event.button === 0) {
         const state = displayBoardCornerDragState
         displayBoardCornerDragState = null
@@ -16326,6 +16716,7 @@ async function handlePointerUp(event: PointerEvent) {
         billboardBuildToolHandlePointerUp: (e) => billboardBuildTool.handlePointerUp(e),
         landformBuildToolHandlePointerUp: (e) => landformBuildTool.handlePointerUp(e),
         regionBuildToolHandlePointerUp: (e) => regionBuildTool.handlePointerUp(e),
+        guideRouteBuildToolHandlePointerUp: (e) => guideRouteBuildTool.handlePointerUp(e),
         waterBuildToolHandlePointerUp: (e) => waterBuildTool.handlePointerUp(e),
         wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
         roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
@@ -17091,6 +17482,25 @@ function handlePointerCancel(event: PointerEvent) {
       event.stopImmediatePropagation()
       return
     }
+
+    if (guideRouteVertexDragState && event.pointerId === guideRouteVertexDragState.pointerId) {
+      const state = guideRouteVertexDragState
+      guideRouteVertexDragState = null
+      pointerInteraction.releaseIfCaptured(event.pointerId)
+      setActiveGuideRouteVertexHandle(null)
+
+      try {
+        buildGuideRoutePreviewFromLocalPoints(state.nodeId, state.basePoints)
+        ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+      } catch {
+        /* noop */
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
   }
 
   if (activeBuildTool.value === 'billboard') {
@@ -17122,6 +17532,15 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (activeBuildTool.value === 'region') {
     if (regionBuildTool.handlePointerCancel(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
+  if (activeBuildTool.value === 'guideRoute') {
+    if (guideRouteBuildTool.handlePointerCancel(event)) {
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -17375,6 +17794,11 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'guideRoute':
+      guideRouteBuildTool.cancel()
+      handleBuildToolChange(null)
+      handled = true
+      break
     case 'road':
       roadBuildTool.cancel()
       handleBuildToolChange(null)
@@ -17428,6 +17852,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'region' && tool !== 'region') {
     regionBuildTool.cancel()
+  }
+  if (activeBuildTool.value === 'guideRoute' && tool !== 'guideRoute') {
+    guideRouteBuildTool.cancel()
   }
   if (activeBuildTool.value === 'water' && tool !== 'water') {
     waterBuildTool.cancel()
@@ -21235,6 +21662,9 @@ watch(activeBuildTool, (tool, previous) => {
   }
   if (tool !== 'region') {
     regionBuildTool.cancel()
+  }
+  if (tool !== 'guideRoute') {
+    guideRouteBuildTool.cancel()
   }
   if (tool !== 'water') {
     waterBuildTool.cancel()

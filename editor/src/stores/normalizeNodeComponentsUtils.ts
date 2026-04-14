@@ -221,9 +221,14 @@ export function normalizeNodeComponents(
     const baseProps = resolveGuideRouteComponentPropsFromMesh(node.dynamicMesh as GuideRouteDynamicMesh)
     const existing = normalized[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
     const existingProps = existing?.props as any | undefined
+    const mergedWaypoints = baseProps.waypoints.map((waypoint, index) => ({
+      name: typeof existingProps?.waypoints?.[index]?.name === 'string' ? existingProps.waypoints[index].name : waypoint.name,
+      position: waypoint.position,
+      dock: existingProps?.waypoints?.[index]?.dock === true,
+    }))
     const nextProps = cloneGuideRouteComponentProps(
       clampGuideRouteComponentProps({
-        waypoints: existingProps?.waypoints ?? baseProps.waypoints,
+        waypoints: mergedWaypoints,
       }),
     )
 
