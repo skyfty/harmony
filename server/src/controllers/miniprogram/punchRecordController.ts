@@ -1,5 +1,5 @@
 import type { Context } from 'koa'
-import { createPunchRecord } from '@/services/punchRecordService'
+import { createPunchRecord, getPunchProgressBySceneForUser } from '@/services/punchRecordService'
 import { evaluatePendingMedalsForUser } from '@/services/medalService'
 
 type CreatePunchRecordBody = {
@@ -69,5 +69,38 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
   ctx.body = {
     success: true,
     id,
+  }
+}
+
+export async function getMiniPunchProgress(ctx: Context): Promise<void> {
+  const userId = ctx.state.miniAuthUser?.id
+  if (!userId) {
+    ctx.throw(401, 'Unauthorized')
+    return
+  }
+
+  const { sceneId, scenicId } = ctx.query as { sceneId?: string; scenicId?: string }
+  const normalizedSceneId = typeof sceneId === 'string' ? sceneId.trim() : ''
+  const normalizedScenicId = typeof scenicId === 'string' ? scenicId.trim() : ''
+  if (!normalizedSceneId) {
+    ctx.throw(400, 'sceneId is required')
+    return
+  }
+  if (!normalizedScenicId) {
+    ctx.throw(400, 'scenicId is required')
+    return
+  }
+
+  const progress = await getPunchProgressBySceneForUser({
+    userId,
+    sceneId: normalizedSceneId,
+    scenicId: normalizedScenicId,
+  })
+
+  ctx.body = {
+    sceneId: progress.sceneId,
+    scenicId: progress.scenicId,
+    checkedCount: progress.checkedCount,
+    punchedNodeIds: progress.punchedNodeIds,
   }
 }

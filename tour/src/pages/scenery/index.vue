@@ -18,6 +18,7 @@
       :debug-console-enabled="false"
       :debug-console-default-expanded="true"
       :debug-console-max-entries="200"
+      :initial-punched-node-ids="initialPunchedNodeIds"
       @punch="handlePunch"
     />
 
@@ -33,6 +34,7 @@ import {
   completeTravelLeaveRecord,
   createPunchRecord,
   createTravelEnterRecord,
+  getPunchProgress,
   trackAnalyticsEvent,
 } from '@harmony/utils/mini-client';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
@@ -47,6 +49,7 @@ const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
 const selectedVehicleIdentifier = ref<string>('');
 const backButtonTop = ref<number>(8);
+const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
@@ -96,6 +99,25 @@ function handlePunch(payload: PunchEventPayload): void {
   });
 }
 
+async function loadPunchProgress(): Promise<void> {
+  if (!sceneId.value || !sceneSpotId.value) {
+    initialPunchedNodeIds.value = [];
+    return;
+  }
+
+  try {
+    const progress = await getPunchProgress({
+      sceneId: sceneId.value,
+      scenicId: sceneSpotId.value,
+    });
+    initialPunchedNodeIds.value = Array.isArray(progress.punchedNodeIds)
+      ? (progress.punchedNodeIds as string[]).filter((nodeId: string) => nodeId.trim().length > 0)
+      : [];
+  } catch {
+    initialPunchedNodeIds.value = [];
+  }
+}
+
 function handleBack(): void {
   uni.navigateBack({
     fail: () => {
@@ -123,6 +145,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
     : getSelectedVehicleIdentifier();
 
   enterAt.value = Date.now();
+  void loadPunchProgress();
 
   if (sceneId.value && sceneSpotId.value) {
     void createTravelEnterRecord({

@@ -37,6 +37,18 @@ export interface CreatePunchRecordPayload {
   path?: string;
 }
 
+export interface GetPunchProgressPayload {
+  sceneId: string;
+  scenicId: string;
+}
+
+export interface PunchProgressSummary {
+  sceneId: string;
+  scenicId: string;
+  checkedCount: number;
+  punchedNodeIds: string[];
+}
+
 export interface CreateTravelEnterPayload {
   sceneId: string;
   scenicId: string;
@@ -169,17 +181,18 @@ function buildQueryString(query?: Record<string, string | number | boolean | nul
 async function requestWithUni<R>(target: string, options: HttpRequestOptions): Promise<R> {
   const method = options.method ?? 'GET';
   const authHeader = options.auth === false || !getAuthToken() ? {} : { Authorization: `Bearer ${getAuthToken()}` };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> | undefined),
+    ...(authHeader as Record<string, string>),
+  };
   return await new Promise<R>((resolve, reject) => {
     uni.request({
       url: `${target}${buildQueryString(options.query)}`,
       method,
       data: options.body as any,
       timeout: options.timeoutMs ?? 20000,
-      header: {
-        'Content-Type': 'application/json',
-        ...(options.headers ?? {}),
-        ...authHeader,
-      },
+      header: headers,
       success: (response: { statusCode?: number; data?: unknown }) => {
         const statusCode = response.statusCode ?? 0;
         if (statusCode >= 200 && statusCode < 300) {
@@ -201,13 +214,14 @@ async function requestWithUni<R>(target: string, options: HttpRequestOptions): P
 
 async function requestWithFetch<R>(target: string, options: HttpRequestOptions): Promise<R> {
   const authHeader = options.auth === false || !getAuthToken() ? {} : { Authorization: `Bearer ${getAuthToken()}` };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> | undefined),
+    ...(authHeader as Record<string, string>),
+  };
   const response = await fetch(`${target}${buildQueryString(options.query)}`, {
     method: options.method ?? 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-      ...authHeader,
-    },
+    headers,
     ...(options.body === undefined
       ? {}
       : {
@@ -419,6 +433,16 @@ export function createPunchRecord(payload: CreatePunchRecordPayload): Promise<{ 
   return miniRequest<{ success: boolean; id: string }>('/punch-records', {
     method: 'POST',
     body: payload,
+  });
+}
+
+export function getPunchProgress(payload: GetPunchProgressPayload): Promise<PunchProgressSummary> {
+  return miniRequest<PunchProgressSummary>('/punch-records/progress', {
+    method: 'GET',
+    query: {
+      sceneId: payload.sceneId,
+      scenicId: payload.scenicId,
+    },
   });
 }
 
