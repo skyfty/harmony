@@ -41,7 +41,7 @@ import type { SceneMaterialTextureRef } from '@/types/material'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
-import { getAssetTypeIcon, getAssetTypePresentation } from '@/utils/assetTypePresentation'
+import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
@@ -3421,8 +3421,8 @@ function handleSearchFieldKeydown(event: KeyboardEvent) {
   }
 }
 
-function assetIcon(type: ProjectAsset['type']) {
-  return getAssetTypeIcon(type)
+function assetIcon(asset: ProjectAsset) {
+  return getAssetTypePresentation(asset).icon
 }
 
 function assetTypePresentation(asset: ProjectAsset) {
@@ -3485,7 +3485,7 @@ function createDragPreview(asset: ProjectAsset) {
     wrapper.appendChild(thumbnail)
   } else {
     const iconSpan = document.createElement('span')
-    iconSpan.className = `mdi ${getAssetTypeIcon(asset.type)}`
+    iconSpan.className = `mdi ${assetIcon(asset)}`
     iconSpan.style.fontSize = '48px'
     iconSpan.style.color = '#FFFFFF'
     iconSpan.style.textShadow = '0 4px 14px rgba(0,0,0,0.4)'
@@ -3898,7 +3898,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     :alt="`${asset.name} preview`"
                     draggable="false"
                   />
-                  <v-icon v-else size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
+                  <v-icon v-else size="32" color="white">{{ assetIcon(asset) }}</v-icon>
                   <div v-if="isAssetDownloading(asset)" class="asset-progress-overlay">
                     <v-progress-circular
                       :model-value="assetDownloadProgress(asset)"
