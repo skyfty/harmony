@@ -23,6 +23,7 @@ type Options = {
   getProjectTree: () => ProjectDirectory[] | undefined
   assetCacheStore: AssetCacheStoreLike
   disposeObjectResources: (object: THREE.Object3D) => void
+  preparePrefabAsset?: (assetId: string) => Promise<unknown>
 }
 
 function findAssetMetadata(assetId: string, projectTree: ProjectDirectory[] | undefined): ProjectAsset | null {
@@ -191,6 +192,8 @@ export function useDragPreview(options: Options): DragPreviewController {
     const token = ++dragPreviewLoadToken
 
     try {
+      await options.preparePrefabAsset?.(asset.id)
+
       const file = await options.assetCacheStore.ensureAssetFile(asset.id, { asset })
       if (!file) {
         pendingPreviewAssetId = null

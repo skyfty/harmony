@@ -102,6 +102,13 @@ export type PrefabStoreLike = {
   updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
 }
 
+type PreparePrefabAssetOptions = {
+  providerId?: string | null
+  prefabAssetIdForDownloadProgress?: string | null
+}
+
+const pendingPrefabPreparationTasks = new Map<string, Promise<NodePrefabData>>()
+
 export type PrefabActionsDeps = {
   PREFAB_SOURCE_METADATA_KEY: string
   NODE_PREFAB_FORMAT_VERSION: number
@@ -799,6 +806,59 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       return parseNodePrefab(deps, text)
     },
 
+    async preparePrefabAsset(
+      store: PrefabStoreLike,
+      assetId: string,
+      options: PreparePrefabAssetOptions = {},
+    ): Promise<NodePrefabData> {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        throw new Error('节点预制件资源不存在')
+      }
+
+      const existingTask = pendingPrefabPreparationTasks.get(normalizedAssetId)
+      if (existingTask) {
+        return existingTask
+      }
+
+      const task = (async () => {
+        const asset = store.getAsset(normalizedAssetId)
+        if (!asset) {
+          throw new Error('节点预制件资源不存在')
+        }
+        if (asset.type !== 'prefab') {
+          throw new Error('指定资源并非节点预制件')
+        }
+
+        const prefab = await this.loadNodePrefab(store, normalizedAssetId)
+        const dependencyAssetIds = Array.from(
+          new Set(
+            [
+              ...collectPrefabAssetReferences(prefab.root),
+              ...Object.keys(prefab.assetRegistry ?? {}),
+            ]
+              .map((value) => (typeof value === 'string' ? value.trim() : ''))
+              .filter((value) => value.length > 0),
+          ),
+        )
+
+        if (dependencyAssetIds.length) {
+          await this.ensurePrefabDependencies(store, dependencyAssetIds, {
+            providerId: options.providerId ?? null,
+            prefabAssetIdForDownloadProgress: options.prefabAssetIdForDownloadProgress ?? normalizedAssetId,
+            prefabAssetRegistry: prefab.assetRegistry ?? null,
+          })
+        }
+
+        return prefab
+      })().finally(() => {
+        pendingPrefabPreparationTasks.delete(normalizedAssetId)
+      })
+
+      pendingPrefabPreparationTasks.set(normalizedAssetId, task)
+      return task
+    },
+
     async ensurePrefabDependencies(
       store: PrefabStoreLike,
       assetIds: string[],
@@ -1283,7 +1343,9 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         throw new Error('指定资源并非节点预制件')
       }
 
-      const prefab = await this.loadNodePrefab(store, assetId)
+      const prefab = await this.preparePrefabAsset(store, assetId, {
+        prefabAssetIdForDownloadProgress: assetId,
+      })
       const duplicate = await this.instantiatePrefabData(store, prefab, {
         sourceAssetId: assetId,
         position: position ?? null,

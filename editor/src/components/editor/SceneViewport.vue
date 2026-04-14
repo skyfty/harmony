@@ -10215,6 +10215,8 @@ const dragPreview = useDragPreview({
   getProjectTree: () => sceneStore.projectTree,
   assetCacheStore,
   disposeObjectResources,
+  preparePrefabAsset: (assetId: string) =>
+    sceneStore.preparePrefabAsset(assetId, { prefabAssetIdForDownloadProgress: assetId }),
 })
 const dragPreviewGroup = dragPreview.group
 const warpGatePlacementPreviewController = createWarpGateEffectInstance(clampWarpGateComponentProps(null))

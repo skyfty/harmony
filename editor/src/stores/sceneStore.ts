@@ -11889,6 +11889,15 @@ export const useSceneStore = defineStore('scene', {
     async loadNodePrefab(assetId: string): Promise<NodePrefabData> {
       return prefabActions.loadNodePrefab(this as unknown as PrefabStoreLike, assetId)
     },
+    async preparePrefabAsset(
+      assetId: string,
+      options: {
+        providerId?: string | null
+        prefabAssetIdForDownloadProgress?: string | null
+      } = {},
+    ): Promise<NodePrefabData> {
+      return prefabActions.preparePrefabAsset(this as unknown as PrefabStoreLike, assetId, options)
+    },
     async ensurePrefabDependencies(
       assetIds: string[],
       options: {

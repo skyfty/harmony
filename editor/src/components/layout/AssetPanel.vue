@@ -492,6 +492,25 @@ async function selectAsset(asset: ProjectAsset) {
       }
       return
     }
+  
+
+  if (asset.type === 'prefab') {
+    const prepared = prepareAssetForOperations(asset)
+    try {
+      assetCacheStore.setError(prepared.id, null)
+      await sceneStore.preparePrefabAsset(prepared.id, {
+        prefabAssetIdForDownloadProgress: prepared.id,
+      })
+    } catch (error) {
+      const message = (error as Error).message ?? 'Failed to prepare prefab asset'
+      assetCacheStore.setError(prepared.id, message)
+      console.error('Failed to prepare prefab before select', error)
+      return
+    }
+
+    sceneStore.selectAsset(prepared.id)
+    uiStore.setActiveSelectionContext('asset-panel')
+    return
   }
 
   sceneStore.selectAsset(asset.id)
@@ -712,6 +731,9 @@ async function handleAddAsset(asset: ProjectAsset) {
     const currentNode = selectedSceneNode.value
     const parentNode = resolveModelParentNode(currentNode)
     if (preparedAsset.type === 'prefab') {
+      await sceneStore.preparePrefabAsset(preparedAsset.id, {
+        prefabAssetIdForDownloadProgress: preparedAsset.id,
+      })
       const spawnPosition = parentNode?.id ? sceneStore.getNodeWorldCenter(parentNode.id) : null
       await sceneStore.spawnPrefabWithPlaceholder(preparedAsset.id, spawnPosition, { parentId: null })
       return
@@ -767,6 +789,21 @@ async function handleAddAsset(asset: ProjectAsset) {
   }
 }
 
+function primePrefabAsset(asset: ProjectAsset): void {
+  const preparedAsset = prepareAssetForOperations(asset)
+  if (preparedAsset.type !== 'prefab') {
+    return
+  }
+  assetCacheStore.setError(preparedAsset.id, null)
+  void sceneStore.preparePrefabAsset(preparedAsset.id, {
+    prefabAssetIdForDownloadProgress: preparedAsset.id,
+  }).catch((error) => {
+    const message = (error as Error).message ?? 'Failed to prepare prefab asset'
+    assetCacheStore.setError(preparedAsset.id, message)
+    console.error('Failed to prepare prefab before drag preview', error)
+  })
+}
+
 void handleAddAsset
 
 function refreshGallery() {
@@ -778,6 +815,9 @@ function refreshGallery() {
 
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   const preparedAsset = prepareAssetForOperations(asset)
+  if (preparedAsset.type === 'prefab') {
+    primePrefabAsset(preparedAsset)
+  }
   sceneStore.setDraggingAssetId(asset.id)
   assetCacheStore.touch(preparedAsset.id)
 
@@ -3788,6 +3828,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 ]"
                 elevation="4"
                 :draggable="true"
+                @pointerdown.left="primePrefabAsset(asset)"
                 @click="selectAsset(asset)"
                 @dragstart.stop="handleAssetDragStart($event, asset)"
                 @dragend="handleAssetDragEnd"
