@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
@@ -30,20 +31,24 @@ const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
 const deleteDialogVisible = ref(false)
 const dragOverSlotId = ref<string | null>(null)
 const isListDragActive = ref(false)
-const activeColorPickerId = ref<string | null>(null)
+const materialPickerVisible = ref(false)
+const materialPickerSlotId = ref<string | null>(null)
+const materialPickerSelectedId = ref('')
+const materialPickerAnchor = ref<{ x: number; y: number } | null>(null)
+const materialPreviewThumbnails = ref<Record<string, string>>({})
 
 const DEFAULT_MATERIAL_COLOR = '#ffffff'
 
 watch(
   () => props.activeNodeMaterialId,
-  (value) => {
+  (value: string | null | undefined) => {
     internalActiveId.value = value ?? null
   },
 )
 
 watch(
   nodeMaterials,
-  (list) => {
+  (list: SceneNodeMaterial[]) => {
     if (!list.length) {
       if (internalActiveId.value !== null) {
         internalActiveId.value = null
@@ -57,6 +62,14 @@ watch(
       emit('update:active-node-material-id', null)
       emit('close-details')
     }
+    const activeIds = new Set(list.map((entry) => entry.id))
+    const nextThumbnails: Record<string, string> = {}
+    ;(Object.entries(materialPreviewThumbnails.value) as Array<[string, string]>).forEach(([slotId, thumbnail]) => {
+      if (activeIds.has(slotId)) {
+        nextThumbnails[slotId] = thumbnail
+      }
+    })
+    materialPreviewThumbnails.value = nextThumbnails
   },
   { immediate: true },
 )
@@ -70,7 +83,7 @@ const deleteDialogMessage = computed(() => {
   if (!internalActiveId.value) {
     return '确认删除当前选中的材质项？此操作无法撤销。'
   }
-  const entry = nodeMaterials.value.find((item) => item.id === internalActiveId.value) ?? null
+  const entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === internalActiveId.value) ?? null
   if (!entry) {
     return '确认删除当前选中的材质项？此操作无法撤销。'
   }
@@ -81,8 +94,11 @@ const deleteDialogMessage = computed(() => {
 })
 
 const materialListEntries = computed(() =>
-  nodeMaterials.value.map((entry, index) => {
-    const shared = entry.materialId ? materials.value.find((item) => item.id === entry.materialId) ?? null : null
+  nodeMaterials.value.map((entry: SceneNodeMaterial, index: number) => {
+    const shared = entry.materialId
+      ? materials.value.find((item: { id: string }) => item.id === entry.materialId) ?? null
+      : null
+    const thumbnail = getMaterialPreviewThumbnail(entry.id, shared?.id ?? null)
     const color = normalizeHexColor(shared ? shared.color : entry.color, DEFAULT_MATERIAL_COLOR)
     return {
       id: entry.id,
@@ -90,22 +106,23 @@ const materialListEntries = computed(() =>
       subtitle: shared ? '共享材质' : '本地材质',
       shared: Boolean(shared),
       color,
+      thumbnail,
       index,
     }
   }),
 )
 
-watch(nodeMaterials, (list) => {
-  if (activeColorPickerId.value && !list.some((entry) => entry.id === activeColorPickerId.value)) {
-    activeColorPickerId.value = null
+watch(nodeMaterials, (list: SceneNodeMaterial[]) => {
+  if (materialPickerSlotId.value && !list.some((entry) => entry.id === materialPickerSlotId.value)) {
+    handleMaterialAssetPickerCancel()
   }
 })
 
 watch(
   () => props.disabled,
-  (disabled) => {
+  (disabled: boolean | undefined) => {
     if (disabled) {
-      activeColorPickerId.value = null
+      handleMaterialAssetPickerCancel()
     }
   },
 )
@@ -116,6 +133,45 @@ function handleSelect(id: string) {
   emit('open-details', id)
 }
 
+function setActiveSlot(id: string) {
+  internalActiveId.value = id
+  emit('update:active-node-material-id', id)
+}
+
+function getMaterialPreviewThumbnail(slotId: string, sharedMaterialId: string | null): string | null {
+  const localThumbnail = materialPreviewThumbnails.value[slotId]
+  if (typeof localThumbnail === 'string' && localThumbnail.trim().length) {
+    return localThumbnail.trim()
+  }
+  if (!sharedMaterialId) {
+    return null
+  }
+  const sharedAsset = sceneStore.getAsset(sharedMaterialId)
+  const sharedThumbnail = typeof sharedAsset?.thumbnail === 'string' ? sharedAsset.thumbnail.trim() : ''
+  return sharedThumbnail.length ? sharedThumbnail : null
+}
+
+function setMaterialPreviewThumbnail(slotId: string, thumbnail: string | null | undefined) {
+  const normalized = typeof thumbnail === 'string' ? thumbnail.trim() : ''
+  if (!normalized) {
+    clearMaterialPreviewThumbnail(slotId)
+    return
+  }
+  materialPreviewThumbnails.value = {
+    ...materialPreviewThumbnails.value,
+    [slotId]: normalized,
+  }
+}
+
+function clearMaterialPreviewThumbnail(slotId: string) {
+  if (!(slotId in materialPreviewThumbnails.value)) {
+    return
+  }
+  const next = { ...materialPreviewThumbnails.value }
+  delete next[slotId]
+  materialPreviewThumbnails.value = next
+}
+
 function handleAddMaterialSlot() {
   if (!canAddMaterialSlot.value || !selectedNodeId.value) {
     return
@@ -124,8 +180,7 @@ function handleAddMaterialSlot() {
   if (!created) {
     return
   }
-  internalActiveId.value = created.id
-  emit('update:active-node-material-id', created.id)
+  setActiveSlot(created.id)
   emit('open-details', created.id)
 }
 
@@ -200,7 +255,7 @@ function ensureEditableNodeMaterial(slotId: string): SceneNodeMaterial | null {
   if (!selectedNodeId.value) {
     return null
   }
-  let entry = nodeMaterials.value.find((item) => item.id === slotId) ?? null
+  let entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
   if (!entry) {
     return null
   }
@@ -211,7 +266,7 @@ function ensureEditableNodeMaterial(slotId: string): SceneNodeMaterial | null {
   if (!detached) {
     return null
   }
-  entry = nodeMaterials.value.find((item) => item.id === slotId) ?? null
+  entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
   return entry ?? null
 }
 
@@ -256,38 +311,53 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return `#${hexValue.toLowerCase()}`
 }
 
-function handleColorPickerVisibility(slotId: string, visible: boolean) {
-  if (visible) {
-    if (!props.disabled) {
-      activeColorPickerId.value = slotId
-    }
-    return
-  }
-  if (activeColorPickerId.value === slotId) {
-    activeColorPickerId.value = null
-  }
-}
-
-function toggleColorPicker(slotId: string) {
+function handleOpenMaterialAssetPicker(slotId: string, event?: MouseEvent) {
   if (props.disabled) {
     return
   }
-  activeColorPickerId.value = activeColorPickerId.value === slotId ? null : slotId
+  setActiveSlot(slotId)
+  const entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
+  materialPickerSlotId.value = slotId
+  materialPickerSelectedId.value = entry?.materialId ?? ''
+  materialPickerAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
+  materialPickerVisible.value = true
 }
 
-function handleColorPickerInput(slotId: string, value: string | null) {
-  if (typeof value !== 'string' || !selectedNodeId.value) {
+function handleMaterialAssetPickerCancel() {
+  materialPickerVisible.value = false
+  materialPickerAnchor.value = null
+  materialPickerSlotId.value = null
+  materialPickerSelectedId.value = ''
+}
+
+async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
+  const slotId = materialPickerSlotId.value
+  materialPickerSelectedId.value = asset?.id ?? ''
+  materialPickerVisible.value = false
+  materialPickerAnchor.value = null
+  materialPickerSlotId.value = null
+  if (!selectedNodeId.value || !slotId) {
     return
   }
-  const editable = ensureEditableNodeMaterial(slotId)
-  if (!editable) {
+  if (!asset) {
+    clearMaterialPreviewThumbnail(slotId)
+    const reset = sceneStore.resetNodeMaterialSlotToDefault(selectedNodeId.value, slotId)
+    if (reset) {
+      setActiveSlot(slotId)
+      emit('open-details', slotId)
+    }
     return
   }
-  const fallbackColor = normalizeHexColor(editable.color ?? null, DEFAULT_MATERIAL_COLOR)
-  const normalized = normalizeHexColor(value, fallbackColor)
-  sceneStore.updateNodeMaterialProps(selectedNodeId.value, slotId, {
-    color: normalized,
-  })
+  if (asset.type !== 'material') {
+    return
+  }
+  const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, slotId, asset.id)
+  if (!applied) {
+    return
+  }
+  setMaterialPreviewThumbnail(slotId, asset.thumbnail)
+  setActiveSlot(slotId)
+  emit('open-details', slotId)
 }
 
 function handleSlotDragOver(slotId: string, event: DragEvent) {
@@ -336,14 +406,14 @@ async function handleSlotDrop(slotId: string, event: DragEvent) {
   dragOverSlotId.value = null
   isListDragActive.value = false
   if (materialAsset) {
-    const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(materialAsset.id)
-    if (!materialDefinition) {
-      return
-    }
-    const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, slotId, materialAsset.id)
-    if (assigned) {
-      internalActiveId.value = slotId
-      emit('update:active-node-material-id', slotId)
+    const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(
+      selectedNodeId.value,
+      slotId,
+      materialAsset.id,
+    )
+    if (applied) {
+      setMaterialPreviewThumbnail(slotId, materialAsset.thumbnail)
+      setActiveSlot(slotId)
       emit('open-details', slotId)
     }
     return
@@ -351,8 +421,8 @@ async function handleSlotDrop(slotId: string, event: DragEvent) {
   if (textureAsset) {
     const applied = applyAlbedoTexture(slotId, textureAsset)
     if (applied) {
-      internalActiveId.value = slotId
-      emit('update:active-node-material-id', slotId)
+      clearMaterialPreviewThumbnail(slotId)
+      setActiveSlot(slotId)
       emit('open-details', slotId)
     }
   }
@@ -408,8 +478,8 @@ async function handleListDrop(event: DragEvent) {
   }
   const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, newSlot.id, asset.id)
   if (assigned) {
-    internalActiveId.value = newSlot.id
-    emit('update:active-node-material-id', newSlot.id)
+    setMaterialPreviewThumbnail(newSlot.id, asset.thumbnail)
+    setActiveSlot(newSlot.id)
     emit('open-details', newSlot.id)
   }
 }
@@ -424,7 +494,7 @@ function handleConfirmDeleteSlot() {
     return
   }
   const targetId = internalActiveId.value
-  const targetEntry = nodeMaterials.value.find((item) => item.id === targetId) ?? null
+  const targetEntry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === targetId) ?? null
   const sharedMaterialId = targetEntry?.materialId ?? null
   if (sharedMaterialId) {
     sceneStore.resetSharedMaterialAssignments(sharedMaterialId)
@@ -434,6 +504,7 @@ function handleConfirmDeleteSlot() {
   if (!removed) {
     return
   }
+  clearMaterialPreviewThumbnail(targetId)
   internalActiveId.value = null
   emit('update:active-node-material-id', null)
   emit('close-details')
@@ -489,34 +560,16 @@ function handleConfirmDeleteSlot() {
               <template #prepend>
                 <div
                   class="material-color-control"
-                  :class="{
-                    'is-open': activeColorPickerId === entry.id,
-                    'is-disabled': props.disabled,
-                  }"
-                  @click.stop="toggleColorPicker(entry.id)"
+                  :class="{ 'is-disabled': props.disabled }"
+                  @click.stop="handleOpenMaterialAssetPicker(entry.id, $event)"
                 >
-                  <div class="material-sphere" :style="{ backgroundColor: entry.color }"></div>
-                  <v-menu
-                    activator="parent"
-                    :model-value="activeColorPickerId === entry.id"
-                    :close-on-content-click="false"
-                    :open-on-click="false"
-                    location="end"
-                    :offset="[0, 8]"
-                    @update:model-value="(value) => handleColorPickerVisibility(entry.id, Boolean(value))"
-                  >
-                    <div class="material-color-menu">
-                      <v-color-picker
-                        :model-value="entry.color"
-                        mode="hex"
-                        :modes="['hex']"
-                        hide-inputs
-                        elevation="0"
-                        width="200"
-                        @update:model-value="(value) => handleColorPickerInput(entry.id, value as string | null)"
-                      />
-                    </div>
-                  </v-menu>
+                  <div
+                    class="material-sphere"
+                    :class="{ 'material-sphere--thumbnail': !!entry.thumbnail }"
+                    :style="entry.thumbnail
+                      ? { backgroundImage: `url(${entry.thumbnail})`, backgroundColor: entry.color }
+                      : { backgroundColor: entry.color }"
+                  ></div>
                 </div>
               </template>
               <v-list-item-title  @click="handleSelect(entry.id)">{{ entry.title }}</v-list-item-title>
@@ -535,6 +588,18 @@ function handleConfirmDeleteSlot() {
           </v-card-actions>
         </v-card>
       </v-dialog>
+      <AssetPickerDialog
+        v-model="materialPickerVisible"
+        :asset-id="materialPickerSelectedId"
+        asset-type="material"
+        :extensions="['material']"
+        title="选择材质预置"
+        :anchor="materialPickerAnchor"
+        confirm-text="选择"
+        cancel-text="取消"
+        @update:asset="handleMaterialAssetPicked"
+        @cancel="handleMaterialAssetPickerCancel"
+      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -629,11 +694,20 @@ function handleConfirmDeleteSlot() {
   height: 20px;
   border-radius: 50%;
   margin-right: 8px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   box-shadow: 
     inset -3px -3px 6px rgba(0, 0, 0, 0.3),
     inset 3px 3px 6px rgba(255, 255, 255, 0.3);
   position: relative;
   cursor: pointer;
+}
+
+.material-sphere--thumbnail {
+  box-shadow:
+    inset -2px -2px 5px rgba(0, 0, 0, 0.2),
+    inset 2px 2px 5px rgba(255, 255, 255, 0.22);
 }
 
 .material-sphere::before {
@@ -659,13 +733,6 @@ function handleConfirmDeleteSlot() {
 .material-color-control.is-disabled {
   pointer-events: none;
   opacity: 0.6;
-}
-
-.material-color-menu {
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(22, 29, 38, 0.9);
 }
 
 </style>

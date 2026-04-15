@@ -152,23 +152,6 @@ const filteredAssets = computed(() => {
     : []
   const seriesFilter = props.seriesId?.trim() ?? ''
 
-  const normalizedExtensions = (Array.isArray(props.extensions) ? props.extensions : [])
-    .map((ext) => (typeof ext === 'string' ? ext.trim().toLowerCase().replace(/^\./, '') : ''))
-    .filter((ext) => ext.length > 0)
-
-  const matchesExtension = (asset: ProjectAsset): boolean => {
-    if (!normalizedExtensions.length) {
-      return true
-    }
-    const source = (asset.description ?? asset.name ?? '').trim().toLowerCase()
-    const dotIndex = source.lastIndexOf('.')
-    if (dotIndex < 0 || dotIndex === source.length - 1) {
-      return false
-    }
-    const ext = source.slice(dotIndex + 1)
-    return normalizedExtensions.includes(ext)
-  }
-
   const term = searchTerm.value.trim().toLowerCase()
   return allAssets.value.filter((asset) => {
     const sourceKind = getAssetSourcePresentation(asset).kind
@@ -188,9 +171,6 @@ const filteredAssets = computed(() => {
         return false
       }
     }
-      if (!matchesExtension(asset)) {
-        return false
-      }
 
     if (!term) {
       return true
