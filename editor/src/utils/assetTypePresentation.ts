@@ -137,7 +137,7 @@ function isSkycubeFileAsset(asset: AssetTypePresentationSource): boolean {
   if (asset.type !== 'file') {
     return false
   }
-  const extension = getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id || '')
+  const extension = getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id || '') ?? ''
   return isSkyCubeArchiveExtension(extension)
 }
 
@@ -146,7 +146,7 @@ function normalizeAssetExtension(asset: AssetTypePresentationSource): string {
   if (directExtension.length > 0) {
     return directExtension
   }
-  return getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id || '')
+  return getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id || '') ?? ''
 }
 
 function resolvePresetPresentation(asset: AssetTypePresentationSource): AssetTypePresentation | null {

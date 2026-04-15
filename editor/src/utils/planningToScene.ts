@@ -31,7 +31,6 @@ import type {
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
-  GUIDE_ROUTE_COMPONENT_TYPE,
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   WATER_COMPONENT_TYPE,

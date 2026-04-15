@@ -1599,6 +1599,8 @@ const guideRouteWaypointNameModel = computed<string>({
   },
 })
 
+void guideRouteWaypointNameModel
+
 const guideRouteWaypointDockModel = computed<boolean>({
   get: () => {
     const info = selectedGuideRouteVertex.value
@@ -1615,6 +1617,8 @@ const guideRouteWaypointDockModel = computed<boolean>({
     markPlanningDirty()
   },
 })
+
+void guideRouteWaypointDockModel
 
 const selectedImage = computed<PlanningImage | null>(() => {
   return planningImages.value.find((img) => img.id === activeImageId.value) ?? null
