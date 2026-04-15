@@ -65,7 +65,6 @@ const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.5
 const PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M = 0.35
 const PLANNING_TERRAIN_AIR_WALL_OUTSET_M = 0.35
 const WATER_OPACITY_EPSILON = 1e-3
-const GUIDE_ROUTE_COMPONENT_TYPE = 'guideRoute' as const
 
 export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
   if (!node || typeof node !== 'object') {
