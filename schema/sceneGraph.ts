@@ -7,7 +7,6 @@ import ResourceCache from './ResourceCache';
 import type {
   SceneAssetRegistryEntry,
   SceneJsonExportDocument,
-  SceneMaterial,
   SceneNode,
   SceneNodeComponentState,
   
@@ -154,9 +153,8 @@ class SceneGraphBuilder {
     });
     this.onProgress = options.onProgress;
 
-    const materials = Array.isArray(document.materials) ? (document.materials as SceneMaterial[]) : [];
     const nodes = Array.isArray(document.nodes) ? (document.nodes as SceneNodeWithExtras[]) : [];
-    this.computeExpectedDownloadAssetIds(nodes, materials);
+    this.computeExpectedDownloadAssetIds(nodes);
 
     runtimeResources.forEach((entry) => {
       if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
@@ -320,10 +318,10 @@ class SceneGraphBuilder {
     return true;
   }
 
-  private computeExpectedDownloadAssetIds(nodes: SceneNodeWithExtras[], materials: SceneMaterial[]): void {
+  private computeExpectedDownloadAssetIds(nodes: SceneNodeWithExtras[]): void {
     this.expectedDownloadAssetIds.clear();
 
-    const textureAssetIds = this.collectTextureAssetIds(nodes, materials);
+    const textureAssetIds = this.collectTextureAssetIds(nodes);
     textureAssetIds.forEach((id) => this.expectedDownloadAssetIds.add(id));
 
     // Preload meshes (depends on lazyLoadMeshes and document.assetPreload).
@@ -435,11 +433,9 @@ class SceneGraphBuilder {
   }
 
   async build(): Promise<THREE.Group> {
-    const materials = Array.isArray(this.document.materials) ? (this.document.materials as SceneMaterial[]) : [];
     const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
-    await this.preloadAssets(nodes, materials);
+    await this.preloadAssets(nodes);
     await this.preloadInstanceLayoutModels(nodes);
-    await this.materialFactory.prepareTemplates(materials);
     await this.buildNodes(nodes, this.root);
     return this.root;
   }
@@ -562,10 +558,9 @@ class SceneGraphBuilder {
 
   private async preloadAssets(
     nodes: SceneNodeWithExtras[],
-    materials: SceneMaterial[],
   ): Promise<void> {
     const meshAssetIds = this.getMeshPreloadIds(nodes);
-    const textureAssetIds = this.collectTextureAssetIds(nodes, materials);
+    const textureAssetIds = this.collectTextureAssetIds(nodes);
     const total = meshAssetIds.length + textureAssetIds.length;
     this.beginProgress(total);
     if (total === 0) {
@@ -740,21 +735,8 @@ class SceneGraphBuilder {
     )
   }
 
-  private collectTextureAssetIds(
-    nodes: SceneNodeWithExtras[],
-    materials: SceneMaterial[],
-  ): string[] {
+  private collectTextureAssetIds(nodes: SceneNodeWithExtras[]): string[] {
     const ids = new Set<string>();
-    const materialMap = new Map<string, SceneMaterial>();
-    materials.forEach((material: SceneMaterial) => {
-      if (!material || typeof material !== 'object' || typeof material.id !== 'string') {
-        return;
-      }
-      const trimmed = material.id.trim();
-      if (trimmed) {
-        materialMap.set(trimmed, material);
-      }
-    });
 
     const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : [];
     while (stack.length) {
@@ -765,13 +747,6 @@ class SceneGraphBuilder {
       if (Array.isArray(node.materials) && node.materials.length) {
         (node.materials as SceneNodeMaterial[]).forEach((nodeMaterial: SceneNodeMaterial) => {
           this.collectTextureRefsFromMaterial(nodeMaterial, ids);
-          const baseId = typeof nodeMaterial?.materialId === 'string' ? nodeMaterial.materialId.trim() : '';
-          if (baseId) {
-            const baseMaterial = materialMap.get(baseId);
-            if (baseMaterial) {
-              this.collectTextureRefsFromMaterial(baseMaterial, ids);
-            }
-          }
         });
       }
       if (Array.isArray(node.children) && node.children.length) {
@@ -783,7 +758,7 @@ class SceneGraphBuilder {
   }
 
   private collectTextureRefsFromMaterial(
-    material: SceneMaterial | SceneNodeMaterial | null | undefined,
+    material: SceneNodeMaterial | null | undefined,
     bucket: Set<string>,
   ): void {
     if (!material || typeof material !== 'object') {

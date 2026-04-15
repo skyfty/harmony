@@ -1305,13 +1305,12 @@ function findDefaultSceneMaterial(materials: SceneMaterial[]): SceneMaterial | n
 }
 
 function createNodeMaterial(
-  materialId: string | null,
+  _materialId: string | null,
   props: SceneMaterialProps,
   options: { id?: string; name?: string; type?: SceneMaterialType } = {},
 ): SceneNodeMaterial {
   return {
     id: options.id ?? generateUuid(),
-    materialId,
     name: options.name,
     type: options.type ?? 'MeshStandardMaterial',
     ...cloneMaterialProps(props),
@@ -1319,7 +1318,7 @@ function createNodeMaterial(
 }
 
 function cloneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
-  return createNodeMaterial(material.materialId, material, {
+  return createNodeMaterial(null, material, {
     id: material.id,
     name: material.name,
     type: material.type ?? 'MeshStandardMaterial',
@@ -1382,6 +1381,67 @@ function extractMaterialProps(material: SceneNodeMaterial | undefined | null): S
     textures: material.textures,
   }
   return createMaterialProps(partial)
+}
+
+function resolveLegacyNodeMaterialId(material: SceneNodeMaterial | undefined | null): string {
+  const raw = (material as SceneNodeMaterial & { materialId?: unknown } | null | undefined)?.materialId
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function bakeLegacySharedMaterialsIntoNodes(
+  nodes: SceneNode[] | null | undefined,
+  sharedMaterials: SceneMaterial[] | null | undefined,
+): SceneNode[] {
+  const clonedNodes = cloneSceneNodes(nodes ?? [])
+  if (!Array.isArray(sharedMaterials) || !sharedMaterials.length) {
+    return clonedNodes
+  }
+
+  const sharedById = new Map<string, SceneMaterial>()
+  sharedMaterials.forEach((material) => {
+    const materialId = typeof material?.id === 'string' ? material.id.trim() : ''
+    if (materialId) {
+      sharedById.set(materialId, material)
+    }
+  })
+  if (!sharedById.size) {
+    return clonedNodes
+  }
+
+  const bakeNodeMaterials = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      if (Array.isArray(node.materials) && node.materials.length) {
+        node.materials = node.materials.map((entry) => {
+          const legacyMaterialId = resolveLegacyNodeMaterialId(entry)
+          if (!legacyMaterialId) {
+            return createNodeMaterial(null, entry, {
+              id: entry.id,
+              name: entry.name,
+              type: entry.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+            })
+          }
+          const shared = sharedById.get(legacyMaterialId)
+          const bakedProps = shared ? mergeMaterialProps(shared, extractMaterialProps(entry)) : extractMaterialProps(entry)
+          return createNodeMaterial(null, bakedProps, {
+            id: entry.id,
+            name: entry.name ?? shared?.name,
+            type: entry.type ?? shared?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+          })
+        })
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        bakeNodeMaterials(node.children)
+      }
+    })
+  }
+
+  bakeNodeMaterials(clonedNodes)
+  return clonedNodes
+}
+
+function getLegacySceneMaterials(document: StoredSceneDocument): SceneMaterial[] | null {
+  const rawMaterials = (document as StoredSceneDocument & { materials?: unknown }).materials
+  return Array.isArray(rawMaterials) ? cloneSceneMaterials(rawMaterials as SceneMaterial[]) : null
 }
 
 function resolveSceneNodeTypeFromObject(object: Object3D | null | undefined, fallback: SceneNodeType = 'Mesh'): SceneNodeType {
@@ -4616,85 +4676,6 @@ function visitNode(nodes: SceneNode[], id: string, mutate: (node: SceneNode) => 
   return false
 }
 
-function applyMaterialPropsToNodeTree(
-  nodes: SceneNode[],
-  materialId: string,
-  props: SceneMaterialProps,
-  assignedId: string | null = materialId,
-  type: SceneMaterialType | undefined = undefined,
-): boolean {
-  let changed = false
-  nodes.forEach((node) => {
-    if (node.materials?.length) {
-      let nodeChanged = false
-      const nextMaterials = node.materials.map((entry) => {
-        if (entry.materialId !== materialId) {
-          return entry
-        }
-        nodeChanged = true
-        return createNodeMaterial(assignedId, props, {
-          id: entry.id,
-          name: entry.name,
-          type: type ?? entry.type,
-        })
-      })
-      if (nodeChanged) {
-        node.materials = nextMaterials
-        changed = true
-      }
-    }
-    if (node.children?.length) {
-      if (applyMaterialPropsToNodeTree(node.children, materialId, props, assignedId, type)) {
-        changed = true
-      }
-    }
-  })
-  return changed
-}
-
-function nodeTreeIncludesMaterial(nodes: SceneNode[], materialId: string): boolean {
-  for (const node of nodes) {
-    if (node.materials?.some((entry) => entry.materialId === materialId)) {
-      return true
-    }
-    if (node.children?.length && nodeTreeIncludesMaterial(node.children, materialId)) {
-      return true
-    }
-  }
-  return false
-}
-
-function reassignMaterialInNodeTree(nodes: SceneNode[], fromId: string, target: SceneMaterial): boolean {
-  let changed = false
-  const targetId = target.id
-  nodes.forEach((node) => {
-    if (node.materials?.length) {
-      let nodeChanged = false
-      const nextMaterials = node.materials.map((entry) => {
-        if (entry.materialId !== fromId) {
-          return entry
-        }
-        nodeChanged = true
-        return createNodeMaterial(targetId, target, {
-          id: entry.id,
-          name: entry.name,
-          type: target.type,
-        })
-      })
-      if (nodeChanged) {
-        node.materials = nextMaterials
-        changed = true
-      }
-    }
-    if (node.children?.length) {
-      if (reassignMaterialInNodeTree(node.children, fromId, target)) {
-        changed = true
-      }
-    }
-  })
-  return changed
-}
-
 function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
   return {
     id: node.id,
@@ -4881,28 +4862,10 @@ function replaceAssetIdInMaterials(materials: SceneMaterial[], previousId: strin
 }
 
 function replaceSharedMaterialIdInNodes(nodes: SceneNode[], previousId: string, nextId: string): boolean {
-  let changed = false
-  nodes.forEach((node) => {
-    if (Array.isArray(node.materials) && node.materials.length) {
-      node.materials = node.materials.map((entry) => {
-        if (entry.materialId !== previousId) {
-          return entry
-        }
-        changed = true
-        return createNodeMaterial(nextId, entry, {
-          id: entry.id,
-          name: entry.name,
-          type: entry.type,
-        })
-      })
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      if (replaceSharedMaterialIdInNodes(node.children, previousId, nextId)) {
-        changed = true
-      }
-    }
-  })
-  return changed
+  void nodes
+  void previousId
+  void nextId
+  return false
 }
 
 function replaceAssetIdInNodes(nodes: SceneNode[], previousId: string, nextId: string) {
@@ -5149,18 +5112,6 @@ export async function calculateSceneResourceSummary(
     totalBytes: number
   }
 
-  const materialById = new Map<string, SceneMaterial>()
-  ;(runtimeAwareScene.materials ?? []).forEach((material) => {
-    if (!material || typeof material !== 'object' || typeof material.id !== 'string') {
-      return
-    }
-    const trimmed = material.id.trim()
-    if (!trimmed) {
-      return
-    }
-    materialById.set(trimmed, material)
-  })
-
   const meshTextureUsageMap = new Map<string, MeshTextureUsageAccumulator>()
   const textureAssetConsumers = new Map<string, Set<string>>()
   const nodeNameById = new Map<string, string | undefined>()
@@ -5291,13 +5242,6 @@ export async function calculateSceneResourceSummary(
       if (Array.isArray(node.materials) && node.materials.length) {
         node.materials.forEach((nodeMaterial) => {
           collectMaterialTextureRefs(nodeMaterial, node)
-          const baseId = nodeMaterial?.materialId?.trim()
-          if (baseId) {
-            const baseMaterial = materialById.get(baseId)
-            if (baseMaterial) {
-              collectMaterialTextureRefs(baseMaterial, node)
-            }
-          }
         })
       }
       collectScatterAssetRefs(node)
@@ -5478,7 +5422,6 @@ export async function cloneSceneDocumentForExport(
     sceneOverrideAssets: scene.sceneOverrideAssets,
     resourceSummary: scene.resourceSummary,
     planningData: scene.planningData,
-    materials: scene.materials,
     viewportSettings: scene.viewportSettings,
     shadowsEnabled: scene.shadowsEnabled,
     panelVisibility: scene.panelVisibility,
@@ -6531,7 +6474,7 @@ function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetCatalog = mergeCatalogAssetMetadataFromIndex(baseCatalog)
   ensureBuiltinWallPresetAssets(store.assetCatalog)
   store.assetCatalog = mergeCatalogAssetMetadataFromIndex(store.assetCatalog)
-  store.materials = cloneSceneMaterials(Array.isArray(scene.materials) ? scene.materials : initialMaterials)
+  store.materials = cloneSceneMaterials(initialMaterials)
   const nextTree = buildSceneProjectTree(store.assetManifest, store.assetCatalog, store.packageDirectoryCache)
   store.projectTree = nextTree
   if (store.activeDirectoryId && !findDirectory(nextTree, store.activeDirectoryId)) {
@@ -7093,8 +7036,8 @@ function createSceneDocument(
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? generateUuid()
-  const clonedNodes = options.nodes ? cloneSceneNodes(options.nodes) : []
-  const materials = options.materials ? cloneSceneMaterials(options.materials) : cloneSceneMaterials(initialMaterials)
+  const legacyMaterials = options.materials ? cloneSceneMaterials(options.materials) : null
+  const clonedNodes = bakeLegacySharedMaterialsIntoNodes(options.nodes ?? [], legacyMaterials)
   const existingGround = findGroundNode(clonedNodes)
   const existingGroundMesh = existingGround?.dynamicMesh?.type === 'Ground'
     ? existingGround.dynamicMesh
@@ -7141,7 +7084,6 @@ function createSceneDocument(
     name,
     projectId: options.projectId ?? '',
     nodes,
-    materials,
     camera,
     viewportSettings,
     shadowsEnabled,
@@ -7210,7 +7152,6 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     name: meta.name,
     projectId,
     nodes,
-    materials: cloneSceneMaterials(store.materials),
     camera: cloneCameraState(store.camera),
     viewportSettings: cloneViewportSettings(store.viewportSettings),
     shadowsEnabled: normalizeShadowsEnabledInput(store.shadowsEnabled),
@@ -8340,7 +8281,7 @@ export const useSceneStore = defineStore('scene', {
       applyCurrentSceneMeta(this, scene)
       applySceneAssetState(this, scene)
       this.environment = resolveSceneDocumentEnvironment(scene)
-      const clonedNodes = cloneSceneNodes(scene.nodes)
+      const clonedNodes = bakeLegacySharedMaterialsIntoNodes(scene.nodes, getLegacySceneMaterials(scene))
       const effectiveGroundSettings = resolveGroundSettingsFromNodes(clonedNodes, cloneGroundSettings(scene.groundSettings))
       const normalizedNodes = ensureEnvironmentNode(
         ensureGroundNode(clonedNodes, effectiveGroundSettings),
@@ -9500,14 +9441,6 @@ export const useSceneStore = defineStore('scene', {
       let primary = target.materials?.[0] ?? null
       if (!primary) {
         primary = this.addNodeMaterial(nodeId)
-      } else if (primary.materialId) {
-        const primaryId = primary.id
-        const detached = this.assignNodeMaterial(nodeId, primaryId, null)
-        if (!detached) {
-          return false
-        }
-        const refreshed = findNodeById(this.nodes, nodeId)
-        primary = refreshed?.materials?.find((entry) => entry.id === primaryId) ?? null
       }
 
       if (!primary) {
@@ -9594,9 +9527,6 @@ export const useSceneStore = defineStore('scene', {
           if (entry.id !== nodeMaterialId) {
             return entry
           }
-          if (entry.materialId) {
-            return entry
-          }
           updated = true
           const mergedProps = mergeMaterialProps(entry, overrides)
           return createNodeMaterial(null, mergedProps, {
@@ -9626,8 +9556,7 @@ export const useSceneStore = defineStore('scene', {
             return entry
           }
           updated = true
-          // create a new node material preserving props but with new type
-          return createNodeMaterial(entry.materialId, entry, {
+          return createNodeMaterial(null, entry, {
             id: entry.id,
             name: entry.name,
             type: type,
@@ -9662,7 +9591,7 @@ export const useSceneStore = defineStore('scene', {
           }
           updated = true
           if (shared) {
-            return createNodeMaterial(shared.id, shared, {
+            return createNodeMaterial(null, shared, {
               id: entry.id,
               name: shared.name,
               type: shared.type,
@@ -9728,27 +9657,8 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     resetSharedMaterialAssignments(materialId: string) {
-      if (!materialId || !nodeTreeIncludesMaterial(this.nodes, materialId)) {
-        return false
-      }
-
-      this.captureHistorySnapshot()
-      const fallbackMaterial = findDefaultSceneMaterial(this.materials)
-      const defaultProps = fallbackMaterial ? createMaterialProps(fallbackMaterial) : createMaterialProps()
-      const changed = applyMaterialPropsToNodeTree(
-        this.nodes,
-        materialId,
-        defaultProps,
-        null,
-        DEFAULT_SCENE_MATERIAL_TYPE,
-      )
-
-      if (!changed) {
-        return false
-      }
-      this.queueSceneStructurePatch('resetSharedMaterialAssignments')
-      commitSceneSnapshot(this)
-      return true
+      void materialId
+      return false
     },
     async syncLocalMaterialDependencyRegistryEntries(materialId: string): Promise<void> {
       const material = this.materials.find((entry) => entry.id === materialId)
@@ -10013,65 +9923,10 @@ export const useSceneStore = defineStore('scene', {
       nodeMaterialId: string,
       options: { name?: string; description?: string } = {},
     ): Promise<SceneMaterial | null> {
-      const targetNode = findNodeById(this.nodes, nodeId)
-      if (!targetNode || !nodeSupportsMaterials(targetNode) || !targetNode.materials?.length) {
-        return null
-      }
-      const existingMaterial = (targetNode.materials as SceneNodeMaterial[]).find((entry) => entry.id === nodeMaterialId)
-      if (!existingMaterial) {
-        return null
-      }
-
-      if (existingMaterial.materialId) {
-        return this.materials.find((entry) => entry.id === existingMaterial.materialId) ?? null
-      }
-
-      const props = extractMaterialProps(existingMaterial)
-      const nameCandidates = [
-        typeof options.name === 'string' ? options.name.trim() : '',
-        typeof existingMaterial.name === 'string' ? existingMaterial.name.trim() : '',
-      ]
-      const fallbackName = `Material ${this.materials.length + 1}`
-      const resolvedName = nameCandidates.find((value) => value && value.length) ?? fallbackName
-      const normalizedDescription =
-        typeof options.description === 'string' ? options.description.trim() : undefined
-
-      const material = createSceneMaterial(resolvedName, props, { type: existingMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE })
-      if (normalizedDescription && normalizedDescription.length) {
-        material.description = normalizedDescription
-      }
-
-      let nodeUpdated = false
-      visitNode(this.nodes, nodeId, (node) => {
-        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
-          return
-        }
-        const nextMaterials = node.materials.map((entry) => {
-          if (entry.id !== nodeMaterialId) {
-            return entry
-          }
-          nodeUpdated = true
-          return createNodeMaterial(material.id, material, {
-            id: entry.id,
-            name: material.name,
-            type: material.type,
-          })
-        })
-        node.materials = nextMaterials
-      })
-
-      if (!nodeUpdated) {
-        return null
-      }
-
-      this.materials = [...this.materials, material]
-      this.queueSceneNodePatch(nodeId, ['materials'])
-
-      await this.syncLocalMaterialAsset(material.id)
-
-      commitSceneSnapshot(this)
-
-      return material
+      void nodeId
+      void nodeMaterialId
+      void options
+      return null
     },
     updateNodeMaterialMetadata(nodeId: string, nodeMaterialId: string, metadata: { name?: string | null }) {
       const rawName = metadata.name
@@ -10085,9 +9940,6 @@ export const useSceneStore = defineStore('scene', {
         }
         node.materials = node.materials.map((entry) => {
           if (entry.id !== nodeMaterialId) {
-            return entry
-          }
-          if (entry.materialId) {
             return entry
           }
           updated = true
@@ -10160,26 +10012,9 @@ export const useSceneStore = defineStore('scene', {
       nextList.splice(existingIndex, 1, nextMaterial)
       this.materials = nextList
 
-      let changedNodes = false
-      if (
-        applyMaterialPropsToNodeTree(
-          this.nodes,
-          materialId,
-          nextMaterial,
-          materialId,
-          nextType,
-        )
-      ) {
-        changedNodes = true
-      }
-
-      if (changedNodes) {
-        this.queueSceneStructurePatch('updateMaterialDefinition')
-      }
-
       await this.syncLocalMaterialAsset(materialId)
 
-      commitSceneSnapshot(this, { updateNodes: changedNodes })
+      commitSceneSnapshot(this, { updateNodes: false })
       return true
     },
     deleteMaterial(materialId: string, options: { fallbackMaterialId?: string | null } = {}) {
@@ -10198,31 +10033,8 @@ export const useSceneStore = defineStore('scene', {
       nextMaterials.splice(index, 1)
       this.materials = nextMaterials
 
-      let changedNodes = false
-      if (fallbackMaterial) {
-        if (reassignMaterialInNodeTree(this.nodes, materialId, fallbackMaterial)) {
-          changedNodes = true
-        }
-      } else {
-        const defaultProps = createMaterialProps()
-        if (
-          applyMaterialPropsToNodeTree(
-            this.nodes,
-            materialId,
-            defaultProps,
-            null,
-            DEFAULT_SCENE_MATERIAL_TYPE,
-          )
-        ) {
-          changedNodes = true
-        }
-      }
-
-      if (changedNodes) {
-        this.queueSceneStructurePatch('deleteMaterial')
-      }
-
-      commitSceneSnapshot(this, { updateNodes: changedNodes })
+      void fallbackMaterial
+      commitSceneSnapshot(this, { updateNodes: false })
       return true
     },
     updateLightProperties(
@@ -10618,7 +10430,7 @@ export const useSceneStore = defineStore('scene', {
             transparent: targetOpacity < 0.999,
           }
           const merged = mergeMaterialProps(entry, overrides)
-          return createNodeMaterial(entry.materialId, merged, {
+          return createNodeMaterial(null, merged, {
             id: entry.id,
             name: entry.name,
             type: entry.type,
@@ -17596,12 +17408,14 @@ export const useSceneStore = defineStore('scene', {
 
       this.isSceneReady = false
       try {
+        const sceneNodes = bakeLegacySharedMaterialsIntoNodes(scene.nodes, getLegacySceneMaterials(scene))
         await this.ensureSceneAssetsReady({
-          nodes: scene.nodes,
+          nodes: sceneNodes,
           showOverlay: true,
           refreshViewport: false,
         })
 
+        scene.nodes = sceneNodes
         attachRuntimeGroundSidecarsToDocument(scene)
         this.applySceneDocumentToState(scene)
       } finally {

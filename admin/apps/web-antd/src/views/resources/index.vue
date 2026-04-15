@@ -922,22 +922,7 @@ onMounted(async () => {
 
 <template>
   <div class="p-5">
-    <Space style="width: 100%; justify-content: space-between; margin-bottom: 12px" align="center" wrap>
-      <Space wrap>
-        <Tag color="blue">资源工作台</Tag>
-        <Tag>资产 {{ resourceSummary.assetCount }}</Tag>
-        <Tag>目录 {{ resourceSummary.categoryCount }}</Tag>
-        <Tag>标签 {{ resourceSummary.tagCount }}</Tag>
-        <Tag>系列 {{ resourceSummary.seriesCount }}</Tag>
-        <Tag v-if="resourceSummary.deletedCount">回收站 {{ resourceSummary.deletedCount }}</Tag>
-      </Space>
-      <Space wrap>
-        <Button @click="() => goToResourceSection('/resources')">资产</Button>
-        <Button @click="() => goToResourceSection('/resources/tags')">标签</Button>
-        <Button @click="() => goToResourceSection('/resources/series')">系列</Button>
-        <Button @click="() => goToResourceSection('/resources/categories')">分类</Button>
-      </Space>
-    </Space>
+
 
     <div style="display: flex; gap: 16px; align-items: stretch">
       <div style="width: 320px; flex: 0 0 320px; border: 1px solid #f0f0f0; border-radius: 8px; background: #fff">

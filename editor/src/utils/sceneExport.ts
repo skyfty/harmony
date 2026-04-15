@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
-import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
+import type { SceneNodeMaterial } from '@/types/material'
 import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type GroundRuntimeDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
@@ -234,7 +234,6 @@ export async function prepareJsonSceneExportBundle(
     updatedAt: snapshot.updatedAt,
     environment,
     nodes: snapshot.nodes,
-    materials: snapshot.materials,
     groundSettings: snapshot.groundSettings,
     assetRegistry,
     projectOverrideAssets: snapshot.projectOverrideAssets,
@@ -251,7 +250,6 @@ export async function prepareJsonSceneExportBundle(
     {
       ...snapshot,
       nodes: sanitizedDocument.nodes,
-      materials: sanitizedDocument.materials,
       environment: sanitizedDocument.environment,
       groundSettings: sanitizedDocument.groundSettings ?? snapshot.groundSettings,
       assetRegistry,
@@ -304,7 +302,6 @@ async function sanitizeSceneDocumentForJsonExport(
   const outlineCandidates: OutlineCandidate[] = []
   const rigidbodyCandidates: RigidbodyExportCandidate[] = []
   const nodeProgress = createNodeExportProgressTracker(document, reportEvent)
-  const sanitizedMaterials = document.materials.map((material) => sanitizeSceneMaterial(material))
   reportNodeExportStart(nodeProgress)
   const sanitizedNodes = sanitizeNodesForJsonExport(
     document.nodes,
@@ -324,7 +321,6 @@ async function sanitizeSceneDocumentForJsonExport(
 
   const sanitizedDocument: SceneJsonExportDocument = {
     ...document,
-    materials: sanitizedMaterials,
     nodes: sanitizedNodes,
   }
   const assetPreload = buildSceneAssetPreloadInfo(sanitizedNodes, options)
@@ -939,14 +935,6 @@ function collectNodeTreeIds(node: SceneNode, bucket: Set<string>) {
     for (const child of node.children) {
       collectNodeTreeIds(child, bucket)
     }
-  }
-}
-
-function sanitizeSceneMaterial(material: SceneMaterial): SceneMaterial {
-  const existingTextures = material.textures ?? {}
-  return {
-    ...material,
-    textures: { ...existingTextures },
   }
 }
 

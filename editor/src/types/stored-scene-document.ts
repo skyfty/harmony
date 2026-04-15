@@ -12,7 +12,6 @@ import type { ProjectAsset } from './project-asset'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'
 import type { PanelPlacementState } from './panel-placement-state'
-import type { SceneMaterial } from '@/types/material'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 
 export interface StoredSceneDocument {
@@ -21,7 +20,6 @@ export interface StoredSceneDocument {
   projectId: string
   thumbnail?: string | null
   nodes: SceneNode[]
-  materials: SceneMaterial[]
   // Legacy persisted fields. Selection is runtime-only and should not be serialized.
   selectedNodeId?: string | null
   selectedNodeIds?: string[]

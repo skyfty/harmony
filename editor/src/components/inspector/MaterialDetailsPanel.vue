@@ -4,7 +4,6 @@ import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
-  DEFAULT_SCENE_MATERIAL_ID,
   type SceneMaterialProps,
   type SceneMaterialSide,
   type SceneMaterialTextureRef,
@@ -119,7 +118,7 @@ const DEFAULT_PROPS: SceneMaterialProps = {
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { selectedNode, selectedNodeId, materials } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
 const activeNodeMaterial = computed(() => {
@@ -132,16 +131,8 @@ const activeNodeMaterial = computed(() => {
 const baseColorMenuOpen = ref(false)
 const emissiveColorMenuOpen = ref(false)
 
-const activeMaterialId = ref<string | null>(null)
 const draggingSlot = ref<SceneMaterialTextureSlot | null>(null)
 const hasPendingChanges = ref(false)
-const originalSharedMaterialId = ref<string | null>(null)
-const saveSharedDialogVisible = ref(false)
-const defaultMaterialId = computed(() => (
-  materials.value.some((material) => material.id === DEFAULT_SCENE_MATERIAL_ID)
-    ? DEFAULT_SCENE_MATERIAL_ID
-    : null
-))
 const lastSyncedMaterialId = ref<string | null>(null)
 const showAllProperties = ref(false)
 
@@ -197,12 +188,6 @@ const activeMaterialIndex = computed(() => {
 
 const selectedMaterialType = ref<SceneMaterialType | null>(null)
 const isUiDisabled = computed(() => !!props.disabled)
-const canSaveMaterial = computed(() =>
-  !!selectedNodeId.value &&
-  !!activeNodeMaterial.value &&
-  !isUiDisabled.value &&
-  hasPendingChanges.value,
-)
 
 const visibleSliderFields = computed<SliderField[]>(() =>
   showAllProperties.value ? [...SLIDER_FIELDS] : [...COMMON_SLIDER_FIELDS],
@@ -243,10 +228,6 @@ const currentMaterialTitle = computed(() => {
   if (!entry) {
     return 'Material'
   }
-  if (entry.materialId) {
-    const shared = materials.value.find((item) => item.id === entry.materialId)
-    return shared?.name ?? entry.name ?? 'Material'
-  }
   return entry.name ?? `Material ${activeMaterialIndex.value + 1}`
 })
 
@@ -271,7 +252,6 @@ watch(
       flushPendingMaterialPropsCommit()
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
-      saveSharedDialogVisible.value = false
       showAllProperties.value = false
       resetTexturePanelExpansion()
     }
@@ -303,30 +283,19 @@ watch(
     if (!entry) {
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
-      activeMaterialId.value = null
-      originalSharedMaterialId.value = null
       lastSyncedMaterialId.value = null
       selectedMaterialType.value = null
       resetDirtyState()
-      saveSharedDialogVisible.value = false
       showAllProperties.value = false
       resetTexturePanelExpansion()
       applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
       return
     }
     const isNewSelection = entry.id !== lastSyncedMaterialId.value
-    const shared = entry.materialId ? materials.value.find((material) => material.id === entry.materialId) ?? null : null
-    activeMaterialId.value = shared?.id ?? null
-    const metadata = shared
-      ? { name: shared.name, description: shared.description ?? '' }
-      : { name: entry.name ?? '', description: '' }
-    applyPropsToForm(shared ?? entry, metadata)
-    const type = shared?.type ?? entry.type ?? null
-    selectedMaterialType.value = type
+    applyPropsToForm(entry, { name: entry.name ?? '', description: '' })
+    selectedMaterialType.value = entry.type ?? null
     if (isNewSelection) {
-      originalSharedMaterialId.value = shared?.id ?? null
       resetDirtyState()
-      saveSharedDialogVisible.value = false
       showAllProperties.value = false
       resetTexturePanelExpansion()
     }
@@ -389,58 +358,6 @@ function flushPendingMaterialPropsCommit() {
 function handleClose() {
   flushPendingMaterialPropsCommit()
   emit('close')
-}
-
-function ensureEditableMaterial(): boolean {
-  if (!activeNodeMaterial.value || !selectedNodeId.value) {
-    return false
-  }
-  const defaultId = defaultMaterialId.value
-  if (defaultId && activeNodeMaterial.value.materialId === defaultId) {
-    const detached = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, null)
-    if (detached) {
-      originalSharedMaterialId.value = null
-      activeMaterialId.value = null
-      return true
-    }
-    return false
-  }
-  if (!activeNodeMaterial.value.materialId) {
-    return true
-  }
-  if (!originalSharedMaterialId.value) {
-    originalSharedMaterialId.value = activeNodeMaterial.value.materialId
-  }
-  const detached = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, null)
-  return detached
-}
-
-function buildMaterialPropsFromForm(): SceneMaterialProps {
-  const textures = createEmptyTextureMap()
-  TEXTURE_SLOTS.forEach((slot) => {
-    const ref = formTextures[slot]
-    textures[slot] = ref
-      ? { assetId: ref.assetId, name: ref.name, settings: cloneTextureSettings(ref.settings) }
-      : null
-  })
-  const toNumber = (value: unknown, fallback: number): number => {
-    const numeric = typeof value === 'number' ? value : Number(value)
-    return Number.isFinite(numeric) ? numeric : fallback
-  }
-  return {
-    color: materialForm.color,
-    transparent: materialForm.transparent,
-    opacity: toNumber(materialForm.opacity, DEFAULT_PROPS.opacity),
-    side: materialForm.side,
-    wireframe: materialForm.wireframe,
-    metalness: toNumber(materialForm.metalness, DEFAULT_PROPS.metalness),
-    roughness: toNumber(materialForm.roughness, DEFAULT_PROPS.roughness),
-    emissive: materialForm.emissive,
-    emissiveIntensity: toNumber(materialForm.emissiveIntensity, DEFAULT_PROPS.emissiveIntensity),
-    aoStrength: toNumber(materialForm.aoStrength, DEFAULT_PROPS.aoStrength),
-    envMapIntensity: toNumber(materialForm.envMapIntensity, DEFAULT_PROPS.envMapIntensity),
-    textures,
-  }
 }
 
 function clampNumber(value: number, min: number, max: number, fallback: number): number {
@@ -525,9 +442,6 @@ function commitMaterialProps(update: Partial<SceneMaterialProps>) {
   if (!activeNodeMaterial.value || !selectedNodeId.value) {
     return
   }
-  if (!ensureEditableMaterial()) {
-    return
-  }
   const nodeEntry = activeNodeMaterial.value
   if (!nodeEntry) {
     return
@@ -553,9 +467,6 @@ function commitMaterialProps(update: Partial<SceneMaterialProps>) {
 
 function commitMaterialMetadata(update: { name?: string }) {
   if (!activeNodeMaterial.value || !selectedNodeId.value) {
-    return
-  }
-  if (!ensureEditableMaterial()) {
     return
   }
   const nodeEntry = activeNodeMaterial.value
@@ -590,74 +501,6 @@ function handleColorPickerInput(field: 'color' | 'emissive', value: string | nul
     return
   }
   handleHexColorChange(field, value)
-}
-
-function handleSaveMaterial() {
-  flushPendingMaterialPropsCommit()
-  if (!canSaveMaterial.value || !selectedNodeId.value || !activeNodeMaterial.value) {
-    return
-  }
-  if (originalSharedMaterialId.value) {
-    saveSharedDialogVisible.value = true
-    return
-  }
-  void saveCurrentMaterialAsShared()
-}
-
-async function saveCurrentMaterialAsShared() {
-  flushPendingMaterialPropsCommit()
-  if (!selectedNodeId.value || !activeNodeMaterial.value) {
-    return
-  }
-  const normalizedName = materialForm.name.trim()
-  const normalizedDescription = materialForm.description.trim()
-  const result = await sceneStore.saveNodeMaterialAsShared(selectedNodeId.value, activeNodeMaterial.value.id, {
-    name: normalizedName.length ? normalizedName : undefined,
-    description: normalizedDescription.length ? normalizedDescription : undefined,
-  })
-  if (result) {
-    activeMaterialId.value = result.id
-    originalSharedMaterialId.value = result.id
-    resetDirtyState()
-  }
-}
-
-async function handleConfirmSaveShared() {
-  flushPendingMaterialPropsCommit()
-  if (!originalSharedMaterialId.value) {
-    saveSharedDialogVisible.value = false
-    return
-  }
-  const props = buildMaterialPropsFromForm()
-  const normalizedName = materialForm.name.trim()
-  const normalizedDescription = materialForm.description.trim()
-  const updated = await sceneStore.updateMaterialDefinition(originalSharedMaterialId.value, {
-    ...props,
-    name: normalizedName.length ? normalizedName : undefined,
-    description: normalizedDescription.length ? normalizedDescription : undefined,
-    type: selectedMaterialType.value ?? undefined,
-  })
-  if (!updated) {
-    saveSharedDialogVisible.value = false
-    return
-  }
-  if (selectedNodeId.value && activeNodeMaterial.value) {
-    sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, originalSharedMaterialId.value)
-    activeMaterialId.value = originalSharedMaterialId.value
-  }
-  saveSharedDialogVisible.value = false
-  resetDirtyState()
-}
-
-function handleDetachSharedMaterial() {
-  saveSharedDialogVisible.value = false
-  originalSharedMaterialId.value = null
-  activeMaterialId.value = null
-  resetDirtyState()
-}
-
-function handleCancelSharedDialog() {
-  saveSharedDialogVisible.value = false
 }
 
 function handleSideChange(value: SceneMaterialSide) {
@@ -1015,9 +858,6 @@ function applyImportedMaterialPayload(payload: {
   if (!selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
-  if (!ensureEditableMaterial()) {
-    return
-  }
   const nodeEntry = activeNodeMaterial.value
   if (!nodeEntry) {
     return
@@ -1067,16 +907,6 @@ async function handleImportFileChange(event: Event) {
             <div class="material-title">{{ currentMaterialTitle }}</div>
           </div>
           <v-spacer />
-          <v-btn
-            class="toolbar-save"
-            variant="text"
-            size="small"
-            :disabled="!canSaveMaterial"
-            title="Save material as shared"
-            @click="handleSaveMaterial"
-          >
-            <v-icon size="16px">mdi-content-save</v-icon>
-          </v-btn>
           <v-btn
             class="toolbar-more"
             variant="text"
@@ -1298,20 +1128,6 @@ async function handleImportFileChange(event: Event) {
               style="display: none"
               @change="handleImportFileChange"
             />
-            <v-dialog v-model="saveSharedDialogVisible" max-width="420">
-              <v-card>
-                <v-card-title class="text-h6">Update Shared Material</v-card-title>
-                <v-card-text>
-                  Choosing "Update Shared" will overwrite the shared material and synchronize it across all referencing objects; choosing "Detach" will keep only the current object's material as a separate instance.
-                </v-card-text>
-                <v-card-actions>
-                  <v-btn variant="text" @click="handleCancelSharedDialog">Cancel</v-btn>
-                  <v-spacer />
-                  <v-btn variant="text" @click="handleDetachSharedMaterial">Detach</v-btn>
-                  <v-btn color="primary" variant="tonal" @click="handleConfirmSaveShared">Update Shared</v-btn>
-                </v-card-actions>
-              </v-card>
-            </v-dialog>
             <AssetPickerDialog
               v-model="assetDialogVisible"
               :asset-id="assetDialogSelectedId"

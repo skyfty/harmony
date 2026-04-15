@@ -24,7 +24,7 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { selectedNode, selectedNodeId, materials } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
@@ -83,28 +83,21 @@ const deleteDialogMessage = computed(() => {
   if (!internalActiveId.value) {
     return '确认删除当前选中的材质项？此操作无法撤销。'
   }
-  const entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === internalActiveId.value) ?? null
-  if (!entry) {
+  if (!nodeMaterials.value.some((item: SceneNodeMaterial) => item.id === internalActiveId.value)) {
     return '确认删除当前选中的材质项？此操作无法撤销。'
-  }
-  if (entry.materialId) {
-    return '该材质槽引用共享材质，删除后场景中使用此共享材质的对象将改为默认材质。确认继续删除？'
   }
   return '删除后该材质槽及其独立材质将被移除，操作不可撤销。确认继续删除？'
 })
 
 const materialListEntries = computed(() =>
   nodeMaterials.value.map((entry: SceneNodeMaterial, index: number) => {
-    const shared = entry.materialId
-      ? materials.value.find((item: { id: string }) => item.id === entry.materialId) ?? null
-      : null
-    const thumbnail = getMaterialPreviewThumbnail(entry.id, shared?.id ?? null)
-    const color = normalizeHexColor(shared ? shared.color : entry.color, DEFAULT_MATERIAL_COLOR)
+    const thumbnail = getMaterialPreviewThumbnail(entry.id)
+    const color = normalizeHexColor(entry.color, DEFAULT_MATERIAL_COLOR)
     return {
       id: entry.id,
-      title: shared?.name ?? entry.name ?? `材质 ${index + 1}`,
-      subtitle: shared ? '共享材质' : '本地材质',
-      shared: Boolean(shared),
+      title: entry.name ?? `材质 ${index + 1}`,
+      subtitle: '材质副本',
+      shared: false,
       color,
       thumbnail,
       index,
@@ -138,17 +131,12 @@ function setActiveSlot(id: string) {
   emit('update:active-node-material-id', id)
 }
 
-function getMaterialPreviewThumbnail(slotId: string, sharedMaterialId: string | null): string | null {
+function getMaterialPreviewThumbnail(slotId: string): string | null {
   const localThumbnail = materialPreviewThumbnails.value[slotId]
   if (typeof localThumbnail === 'string' && localThumbnail.trim().length) {
     return localThumbnail.trim()
   }
-  if (!sharedMaterialId) {
-    return null
-  }
-  const sharedAsset = sceneStore.getAsset(sharedMaterialId)
-  const sharedThumbnail = typeof sharedAsset?.thumbnail === 'string' ? sharedAsset.thumbnail.trim() : ''
-  return sharedThumbnail.length ? sharedThumbnail : null
+  return null
 }
 
 function setMaterialPreviewThumbnail(slotId: string, thumbnail: string | null | undefined) {
@@ -255,19 +243,7 @@ function ensureEditableNodeMaterial(slotId: string): SceneNodeMaterial | null {
   if (!selectedNodeId.value) {
     return null
   }
-  let entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
-  if (!entry) {
-    return null
-  }
-  if (!entry.materialId) {
-    return entry
-  }
-  const detached = sceneStore.assignNodeMaterial(selectedNodeId.value, slotId, null)
-  if (!detached) {
-    return null
-  }
-  entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
-  return entry ?? null
+  return nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
 }
 
 function applyAlbedoTexture(slotId: string, asset: TextureAsset): boolean {
@@ -316,9 +292,8 @@ function handleOpenMaterialAssetPicker(slotId: string, event?: MouseEvent) {
     return
   }
   setActiveSlot(slotId)
-  const entry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
   materialPickerSlotId.value = slotId
-  materialPickerSelectedId.value = entry?.materialId ?? ''
+  materialPickerSelectedId.value = ''
   materialPickerAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   materialPickerVisible.value = true
 }
@@ -494,11 +469,6 @@ function handleConfirmDeleteSlot() {
     return
   }
   const targetId = internalActiveId.value
-  const targetEntry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === targetId) ?? null
-  const sharedMaterialId = targetEntry?.materialId ?? null
-  if (sharedMaterialId) {
-    sceneStore.resetSharedMaterialAssignments(sharedMaterialId)
-  }
   const removed = sceneStore.removeNodeMaterial(selectedNodeId.value, targetId)
   deleteDialogVisible.value = false
   if (!removed) {

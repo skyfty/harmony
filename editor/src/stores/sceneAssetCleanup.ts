@@ -4,7 +4,6 @@ import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { NodePrefabData } from '@/types/node-prefab'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
-import type { SceneMaterial } from '@/types/material'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import {
   collectConfigAssetDependencyIds,
@@ -422,7 +421,6 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
 
 export function collectDirectSceneAssetReferenceIds(scene: StoredSceneDocument): Set<string> {
   const bucket = new Set<string>()
-  const materialIds = new Set<string>()
 
   const traverseNodes = (nodes: SceneNode[] | null | undefined): void => {
     if (!Array.isArray(nodes) || !nodes.length) {
@@ -436,14 +434,6 @@ export function collectDirectSceneAssetReferenceIds(scene: StoredSceneDocument):
         return
       }
       collectNodeAssetDependencies(node, bucket)
-      if (Array.isArray(node.materials) && node.materials.length) {
-        node.materials.forEach((material) => {
-          const baseId = typeof material?.materialId === 'string' ? material.materialId.trim() : ''
-          if (baseId) {
-            materialIds.add(baseId)
-          }
-        })
-      }
       if (Array.isArray(node.children) && node.children.length) {
         traverseNodes(node.children as SceneNode[])
       }
@@ -453,23 +443,6 @@ export function collectDirectSceneAssetReferenceIds(scene: StoredSceneDocument):
   traverseNodes(scene.nodes ?? [])
   collectGroundScatterAssetDependencies(scene, bucket)
   collectGroundPaintAssetDependencies(scene, bucket)
-
-  const materialById = new Map<string, SceneMaterial>()
-  if (Array.isArray(scene.materials) && scene.materials.length) {
-    scene.materials.forEach((material) => {
-      const materialId = typeof material?.id === 'string' ? material.id.trim() : ''
-      if (materialId) {
-        materialById.set(materialId, material)
-      }
-    })
-  }
-
-  materialIds.forEach((materialId) => {
-    const material = materialById.get(materialId)
-    if (material) {
-      collectAssetIdsFromUnknown(material, bucket)
-    }
-  })
 
   collectAssetIdsFromUnknown(sanitizeEnvironmentAssetReferences(scene.environment), bucket)
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)

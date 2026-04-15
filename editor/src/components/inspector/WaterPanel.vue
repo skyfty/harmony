@@ -123,9 +123,6 @@ function ensureEditablePrimaryMaterialId(nodeId: string): string | null {
   if (!primary) {
     return null
   }
-  if (primary.materialId) {
-    sceneStore.assignNodeMaterial(nodeId, primary.id, null)
-  }
   return primary.id
 }
 

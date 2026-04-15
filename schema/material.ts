@@ -526,7 +526,6 @@ export const DEFAULT_SCENE_MATERIAL_ID = '__scene_default_material__';
 export const DEFAULT_SCENE_MATERIAL_TYPE: SceneMaterialType = 'MeshStandardMaterial';
 
 export class SceneMaterialFactory {
-  private readonly materialTemplates = new Map<string, THREE.Material>();
   private readonly textureCache = new Map<string, Promise<THREE.Texture | null>>();
   private readonly disposableUrls = new Set<string>();
   private readonly provider: ResourceCache;
@@ -566,28 +565,6 @@ export class SceneMaterialFactory {
       this.hdrLoaderPromise = createRgbELoader(this.loadingManager);
     }
     return this.hdrLoaderPromise;
-  }
-
-  async prepareTemplates(materials: readonly SceneMaterial[] | null | undefined): Promise<void> {
-    if (!Array.isArray(materials) || !materials.length) {
-      return;
-    }
-
-    for (const material of materials) {
-      if (!material || typeof material !== 'object') {
-        continue;
-      }
-      try {
-        const instance = await this.instantiateMaterial(material);
-        if (instance && material.id) {
-          this.materialTemplates.set(material.id, instance);
-        }
-      } catch (error) {
-        console.warn('创建材质失败', material?.id, error);
-        const label = material?.name || material?.id || 'unknown-material';
-        this.warn?.(`材质 ${label} 初始化失败`);
-      }
-    }
   }
 
   async resolveNodeMaterials(
@@ -631,25 +608,10 @@ export class SceneMaterialFactory {
   }
 
   async createMaterialForNode(entry: SceneNodeMaterial): Promise<THREE.Material | null> {
-    if (entry.materialId) {
-      const template = this.materialTemplates.get(entry.materialId);
-      if (template) {
-        const clone = template.clone();
-        this.applyMaterialProps(clone, entry);
-        await this.applyMaterialTextures(clone, entry.textures ?? null);
-        return clone;
-      }
-    }
     return this.instantiateMaterial(entry);
   }
 
   dispose(): void {
-    this.materialTemplates.forEach((material) => {
-      if (typeof (material as THREE.Material).dispose === 'function') {
-        (material as THREE.Material).dispose();
-      }
-    });
-    this.materialTemplates.clear();
     this.textureCache.clear();
     this.disposableUrls.forEach((url) => {
       try {

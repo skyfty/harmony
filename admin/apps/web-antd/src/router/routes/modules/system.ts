@@ -377,6 +377,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           icon: 'lucide:folder-tree',
           title: '资源分类',
+          hideInMenu: true,
         },
       },
     ],

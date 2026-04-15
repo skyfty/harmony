@@ -121,7 +121,6 @@ type AssetLookupScene = Pick<
   | 'id'
   | 'name'
   | 'nodes'
-  | 'materials'
   | 'environment'
   | 'groundSettings'
   | 'planningData'
@@ -484,12 +483,6 @@ function dedupeSceneAssetReferenceRecords(references: SceneAssetReferenceRecord[
 export function collectSceneAssetReferenceRecords(scene: AssetLookupScene): SceneAssetReferenceRecord[] {
   const references: SceneAssetReferenceRecord[] = []
   scene.nodes.forEach((node) => scanNode(node, references, 'nodes'))
-  scene.materials.forEach((material, index) => {
-    collectMaterialReferences(material, references, {
-      path: `materials[${index}:${material.id ?? 'unknown'}]`,
-      category: 'material',
-    })
-  })
   const normalizedEnvironment = cloneEnvironmentSettings(scene.environment as EnvironmentSettings | null | undefined)
   collectReferencesFromUnknown(normalizedEnvironment, references, {
     path: 'environment',

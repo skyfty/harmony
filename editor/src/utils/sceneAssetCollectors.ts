@@ -132,8 +132,6 @@ export function collectSceneNodeDependencyAssetIds(
   if (!Array.isArray(nodes) || !nodes.length) {
     return bucket
   }
-
-  const materialIds = new Set<string>()
   const stack: SceneNode[] = [...nodes]
 
   while (stack.length) {
@@ -155,10 +153,6 @@ export function collectSceneNodeDependencyAssetIds(
     if (Array.isArray(node.materials) && node.materials.length) {
       node.materials.forEach((material) => {
         collectAssetIdsFromUnknown(material, bucket)
-        const materialId = typeof material?.materialId === 'string' ? material.materialId.trim() : ''
-        if (materialId) {
-          materialIds.add(materialId)
-        }
       })
     }
 
@@ -183,21 +177,7 @@ export function collectSceneNodeDependencyAssetIds(
     }
   }
 
-  if (materialIds.size && sharedMaterials.length) {
-    const materialById = new Map<string, SceneMaterial | ({ id: string } & Record<string, unknown>)>()
-    sharedMaterials.forEach((material) => {
-      const materialId = typeof material?.id === 'string' ? material.id.trim() : ''
-      if (materialId) {
-        materialById.set(materialId, material)
-      }
-    })
-    materialIds.forEach((materialId) => {
-      const shared = materialById.get(materialId)
-      if (shared) {
-        collectAssetIdsFromUnknown(shared, bucket)
-      }
-    })
-  }
+  void sharedMaterials
 
   return bucket
 }

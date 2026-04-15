@@ -18550,15 +18550,8 @@ function resolveDisplayBoardDropTarget(event: DragEvent): {
   return null
 }
 
-function ensureEditablePrimaryMaterial(nodeId: string, material: SceneNodeMaterial | null): string | null {
+function ensureEditablePrimaryMaterial(_nodeId: string, material: SceneNodeMaterial | null): string | null {
   if (!material) {
-    return null
-  }
-  if (!material.materialId) {
-    return material.id
-  }
-  const detached = sceneStore.assignNodeMaterial(nodeId, material.id, null)
-  if (!detached) {
     return null
   }
   return material.id
@@ -18575,7 +18568,7 @@ async function applyMaterialAssetToNode(nodeId: string, materialAssetId: string)
   }
   const materials = Array.isArray(sceneNode?.materials) ? sceneNode.materials : []
   if (materials.length > 0) {
-  const primary = materials[0] ?? null
+    const primary = materials[0] ?? null
     const editableId = ensureEditablePrimaryMaterial(nodeId, primary)
     if (!editableId) {
       return false

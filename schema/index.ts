@@ -489,7 +489,6 @@ export interface SceneMaterial extends SceneMaterialProps {
 
 export interface SceneNodeMaterial extends SceneMaterialProps {
   id: string;
-  materialId: string | null;
   type: SceneMaterialType;
   name?: string;
 }
@@ -1095,7 +1094,6 @@ export interface SceneJsonExportDocument {
   updatedAt: string;
   environment?: EnvironmentSettings;
   nodes: SceneNode[];
-  materials: SceneMaterial[];
   groundSettings?: GroundSettings;
   outlineMeshMap?: SceneOutlineMeshMap;
   /** Canonical asset source registry (single source of truth). */
