@@ -128,6 +128,15 @@ type AssetData = {
 
 type AssetSource = LeanAsset | AssetData
 
+type PersistedBundleAssetReference = {
+  serverAssetId: string
+  fileKey: string | null
+  resolvedUrl: string | null
+  bytes?: number
+  assetType?: AssetType
+  name?: string
+}
+
 type AssetManifestResourceDto = {
   kind: 'embedded' | 'remote' | 'local' | 'inline' | 'manifest'
   url?: string | null
@@ -714,12 +723,91 @@ function rewriteAssetReferenceString(value: string, assetIdMap: Map<string, stri
   return value
 }
 
-function rewriteJsonAssetReferences(value: unknown, assetIdMap: Map<string, string>): unknown {
+function buildPersistedBundleAssetReference(
+  asset: AssetDocument,
+  options: {
+    bytes?: number
+    assetType?: AssetType
+    name?: string | null
+  } = {},
+): PersistedBundleAssetReference {
+  const assetId = (asset as AssetDocument & { _id: Types.ObjectId })._id.toString()
+  return {
+    serverAssetId: assetId,
+    fileKey: resolveAssetFileKey(asset),
+    resolvedUrl: sanitizeString(asset.url),
+    bytes: typeof options.bytes === 'number' && Number.isFinite(options.bytes) ? options.bytes : undefined,
+    assetType: options.assetType ?? asset.type,
+    name: sanitizeString(options.name) ?? sanitizeString(asset.name) ?? undefined,
+  }
+}
+
+function buildServerAssetRegistryEntry(
+  persistedAsset: PersistedBundleAssetReference,
+  existingEntry?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const nextEntry: Record<string, unknown> = {
+    sourceType: 'server',
+    serverAssetId: persistedAsset.serverAssetId,
+    fileKey: persistedAsset.fileKey ?? null,
+    resolvedUrl: persistedAsset.resolvedUrl ?? null,
+  }
+
+  const existingBytes = typeof existingEntry?.bytes === 'number' && Number.isFinite(existingEntry.bytes)
+    ? existingEntry.bytes
+    : undefined
+  const existingAssetType = sanitizeString(existingEntry?.assetType)
+  const existingName = sanitizeString(existingEntry?.name)
+
+  if (typeof existingBytes === 'number') {
+    nextEntry.bytes = existingBytes
+  } else if (typeof persistedAsset.bytes === 'number') {
+    nextEntry.bytes = persistedAsset.bytes
+  }
+  if (existingAssetType) {
+    nextEntry.assetType = existingAssetType
+  } else if (persistedAsset.assetType) {
+    nextEntry.assetType = persistedAsset.assetType
+  }
+  if (existingName) {
+    nextEntry.name = existingName
+  } else if (persistedAsset.name) {
+    nextEntry.name = persistedAsset.name
+  }
+
+  return nextEntry
+}
+
+function rewriteAssetRegistryEntries(
+  assetRegistry: Record<string, unknown>,
+  persistedBundleAssets: Map<string, PersistedBundleAssetReference>,
+): Record<string, unknown> {
+  const nextAssetRegistry: Record<string, unknown> = {}
+  for (const [assetId, entryValue] of Object.entries(assetRegistry)) {
+    const normalizedAssetId = sanitizeString(assetId)
+    const persistedAsset = normalizedAssetId ? persistedBundleAssets.get(normalizedAssetId) : undefined
+    if (!persistedAsset) {
+      nextAssetRegistry[assetId] = entryValue
+      continue
+    }
+    nextAssetRegistry[assetId] = buildServerAssetRegistryEntry(
+      persistedAsset,
+      isObjectRecord(entryValue) ? entryValue : null,
+    )
+  }
+  return nextAssetRegistry
+}
+
+function rewriteJsonAssetReferences(
+  value: unknown,
+  assetIdMap: Map<string, string>,
+  persistedBundleAssets: Map<string, PersistedBundleAssetReference>,
+): unknown {
   if (typeof value === 'string') {
     return rewriteAssetReferenceString(value, assetIdMap)
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => rewriteJsonAssetReferences(entry, assetIdMap))
+    return value.map((entry) => rewriteJsonAssetReferences(entry, assetIdMap, persistedBundleAssets))
   }
   if (!isObjectRecord(value)) {
     return value
@@ -727,7 +815,11 @@ function rewriteJsonAssetReferences(value: unknown, assetIdMap: Map<string, stri
 
   const next: Record<string, unknown> = {}
   for (const [key, entryValue] of Object.entries(value)) {
-    next[key] = rewriteJsonAssetReferences(entryValue, assetIdMap)
+    if (key === 'assetRegistry' && isObjectRecord(entryValue)) {
+      next[key] = rewriteAssetRegistryEntries(entryValue, persistedBundleAssets)
+      continue
+    }
+    next[key] = rewriteJsonAssetReferences(entryValue, assetIdMap, persistedBundleAssets)
   }
   return next
 }
@@ -736,9 +828,10 @@ function maybeRewriteJsonBundleAsset(
   entry: AssetBundleFileEntry,
   bytes: Uint8Array,
   assetIdMap: Map<string, string>,
+  persistedBundleAssets: Map<string, PersistedBundleAssetReference>,
 ): Uint8Array {
   const extension = sanitizeString(entry.extension)?.toLowerCase() ?? path.extname(entry.filename).replace(/^\./, '').toLowerCase()
-  if (!CONFIG_ASSET_EXTENSION_SET.has(extension) || !assetIdMap.size) {
+  if (!CONFIG_ASSET_EXTENSION_SET.has(extension) || (!assetIdMap.size && !persistedBundleAssets.size)) {
     return bytes
   }
   let parsed: unknown
@@ -747,7 +840,7 @@ function maybeRewriteJsonBundleAsset(
   } catch {
     return bytes
   }
-  const rewritten = rewriteJsonAssetReferences(parsed, assetIdMap)
+  const rewritten = rewriteJsonAssetReferences(parsed, assetIdMap, persistedBundleAssets)
   return Buffer.from(JSON.stringify(rewritten, null, 2), 'utf8')
 }
 
@@ -2224,6 +2317,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
 
   const categoryId = categoryDoc._id as Types.ObjectId
   const assetIdMap = new Map<string, string>()
+  const persistedBundleAssets = new Map<string, PersistedBundleAssetReference>()
   const persistedAssetIds = new Set<string>()
 
   for (const dependencyEntry of manifest.files.filter((entry) => entry.role === 'dependency')) {
@@ -2231,6 +2325,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     if (!dependencyBytes) {
       ctx.throw(400, `Bundle file is missing: ${dependencyEntry.path}`)
     }
+    const dependencyType = normalizeAssetType(dependencyEntry.assetType ?? 'file', 'file')
 
     let dependencyAsset = await AssetModel.findOne({
       contentHash: dependencyEntry.hash,
@@ -2242,7 +2337,6 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
         filename: dependencyEntry.filename,
         mimeType: dependencyEntry.mimeType ?? null,
       })
-      const dependencyType = normalizeAssetType(dependencyEntry.assetType ?? 'file', 'file')
       dependencyAsset = await AssetModel.create({
         name: path.parse(dependencyEntry.filename).name || dependencyEntry.filename,
         categoryId,
@@ -2277,6 +2371,16 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     const sourceLocalAssetId = sanitizeString(dependencyEntry.sourceLocalAssetId)
     if (sourceLocalAssetId) {
       assetIdMap.set(sourceLocalAssetId, dependencyAsset._id.toString())
+      persistedBundleAssets.set(
+        sourceLocalAssetId,
+        buildPersistedBundleAssetReference(dependencyAsset, {
+          bytes: typeof dependencyEntry.size === 'number' && Number.isFinite(dependencyEntry.size)
+            ? dependencyEntry.size
+            : undefined,
+          assetType: dependencyType,
+          name: path.parse(dependencyEntry.filename).name || dependencyEntry.filename,
+        }),
+      )
     }
   }
 
@@ -2292,7 +2396,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
 
   if (!primaryAsset) {
     const rewrittenPrimaryBytes = manifest.primaryAsset.rewriteReferences
-      ? maybeRewriteJsonBundleAsset(primaryBundleFile.entry, primaryBundleFile.bytes, assetIdMap)
+      ? maybeRewriteJsonBundleAsset(primaryBundleFile.entry, primaryBundleFile.bytes, assetIdMap, persistedBundleAssets)
       : primaryBundleFile.bytes
     const storedPrimary = await storeBufferAsFile(rewrittenPrimaryBytes, {
       filename: primaryBundleFile.entry.filename,
