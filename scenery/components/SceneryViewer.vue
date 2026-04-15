@@ -4722,8 +4722,10 @@ function updateInstancedCullingAndLod(): void {
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView);
 
-  const candidateIds: string[] = [];
-  const candidateObjects = new Map<string, THREE.Object3D>();
+  const lodNodeIds: string[] = [];
+  const lodObjects = new Map<string, THREE.Object3D>();
+  const cullingCandidateIds: string[] = [];
+  const cullingCandidateObjects = new Map<string, THREE.Object3D>();
   nodeObjectMap.forEach((object, nodeId) => {
     // Accept both instancedAssetId (model) and billboardImageAssetId (billboard)
     if (!object?.userData?.instancedAssetId && !object?.userData?.billboardImageAssetId) {
@@ -4737,18 +4739,20 @@ function updateInstancedCullingAndLod(): void {
     if (!component || !component.enabled) {
       return;
     }
+    lodNodeIds.push(nodeId);
+    lodObjects.set(nodeId, object);
     const props = clampLodComponentProps(component.props);
     if (props.enableCulling === false) {
       return;
     }
-    candidateIds.push(nodeId);
-    candidateObjects.set(nodeId, object);
+    cullingCandidateIds.push(nodeId);
+    cullingCandidateObjects.set(nodeId, object);
   });
 
-  candidateIds.sort();
-  instancedLodFrustumCuller.setIds(candidateIds);
+  cullingCandidateIds.sort();
+  instancedLodFrustumCuller.setIds(cullingCandidateIds);
   const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
-    const object = candidateObjects.get(id);
+    const object = cullingCandidateObjects.get(id);
     if (!object) {
       return null;
     }
@@ -4773,10 +4777,9 @@ function updateInstancedCullingAndLod(): void {
   }
   });
 
-  syncInstancingDebugCounters(candidateIds.length, visibleIds.size);
-
-  candidateIds.forEach((nodeId) => {
-    const object = candidateObjects.get(nodeId);
+  let lodVisibleCount = 0;
+  lodNodeIds.forEach((nodeId) => {
+    const object = lodObjects.get(nodeId);
     if (!object) {
       return;
     }
@@ -4784,8 +4787,14 @@ function updateInstancedCullingAndLod(): void {
     if (!node) {
       return;
     }
-    const isVisible = visibleIds.has(nodeId);
-    if (!isVisible) {
+    const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined;
+    if (!component || !component.enabled) {
+      return;
+    }
+    const props = clampLodComponentProps(component.props);
+    const cullingEnabled = props.enableCulling !== false;
+    const isVisible = !cullingEnabled || visibleIds.has(nodeId);
+    if (cullingEnabled && !isVisible) {
       const lastSeen = instancedCullingLastVisibleAt.get(nodeId) ?? 0;
       if (INSTANCED_CULL_GRACE_MS > 0 && now - lastSeen < INSTANCED_CULL_GRACE_MS) {
         return;
@@ -4798,7 +4807,10 @@ function updateInstancedCullingAndLod(): void {
       return;
     }
 
-    instancedCullingLastVisibleAt.set(nodeId, now);
+    lodVisibleCount += 1;
+    if (cullingEnabled) {
+      instancedCullingLastVisibleAt.set(nodeId, now);
+    }
     const desiredTarget = resolveDesiredLodTarget(node, object, camera);
     if (!desiredTarget) {
       return;
@@ -4830,6 +4842,8 @@ function updateInstancedCullingAndLod(): void {
       syncInstancedTransform(object, true);
     }
   });
+
+  syncInstancingDebugCounters(lodNodeIds.length, lodVisibleCount);
 }
 
 async function prepareInstancedNodesForGraph(
@@ -11482,6 +11496,13 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   const { graph, resourceCache } = buildResult;
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
+  }
+
+  const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
+  await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
+  if (token !== initializeToken) {
+    disposeObject(graph.root);
+    return;
   }
 
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
