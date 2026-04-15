@@ -20,17 +20,16 @@
         <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
       <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
-        <view
+        <OverlayPinnedItem
           v-for="entry in signboardOverlayEntries"
           :key="entry.id"
-          class="viewer-signboard"
-          :class="{ 'viewer-signboard--vehicle': entry.referenceKind === 'vehicle' }"
-          :style="{
-            left: `${entry.xPercent}%`,
-            top: `${entry.yPercent}%`,
-            transform: `translate(-50%, -100%) scale(${entry.scale})`,
-            opacity: String(entry.opacity),
-          }"
+          base-class="viewer-signboard"
+          vehicle-class="viewer-signboard--vehicle"
+          :reference-kind="entry.referenceKind"
+          :x-percent="entry.xPercent"
+          :y-percent="entry.yPercent"
+          :scale="entry.scale"
+          :opacity="entry.opacity"
         >
           <view class="viewer-signboard__pill">
             <text class="viewer-signboard__name">{{ entry.label }}</text>
@@ -39,23 +38,22 @@
               <text class="viewer-signboard__punch-badge-icon">✓</text>
             </view>
           </view>
-        </view>
+        </OverlayPinnedItem>
       </view>
       <view v-if="punchBadgeOverlayEntries.length" class="viewer-punch-badge-layer" aria-hidden="true">
-        <view
+        <OverlayPinnedItem
           v-for="entry in punchBadgeOverlayEntries"
           :key="entry.id"
-          class="viewer-punch-badge"
-          :class="{ 'viewer-punch-badge--vehicle': entry.referenceKind === 'vehicle' }"
-          :style="{
-            left: `${entry.xPercent}%`,
-            top: `${entry.yPercent}%`,
-            transform: `translate(-50%, -100%) scale(${entry.scale})`,
-            opacity: String(entry.opacity),
-          }"
+          base-class="viewer-punch-badge"
+          vehicle-class="viewer-punch-badge--vehicle"
+          :reference-kind="entry.referenceKind"
+          :x-percent="entry.xPercent"
+          :y-percent="entry.yPercent"
+          :scale="entry.scale"
+          :opacity="entry.opacity"
         >
           <text class="viewer-punch-badge__icon">✓</text>
-        </view>
+        </OverlayPinnedItem>
       </view>
       <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
         <view
@@ -114,86 +112,35 @@
           <button class="viewer-lantern-close" aria-label="关闭幻灯片" @tap="cancelLanternOverlay">
             <text class="viewer-lantern-close-icon">{{ lanternCloseIcon }}</text>
           </button>
-          <!-- #ifdef H5 -->
-          <view
-            v-if="lanternCurrentSlideImage"
-            class="viewer-lantern-image-wrapper"
-            :style="lanternImageBoxStyle"
-            v-viewer="lanternViewerOptions"
+          <LanternImageFrame
             ref="lanternViewerRoot"
-          >
-            <image
-              :src="lanternCurrentSlideImage"
-              mode="aspectFit"
-              class="viewer-lantern-image"
-              @load="handleLanternImageLoad"
-              @tap="openLanternImageFullscreen"
-            />
-          </view>
-          <!-- #endif -->
-          <!-- #ifndef H5 -->
-          <view
-            v-if="lanternCurrentSlideImage"
-            class="viewer-lantern-image-wrapper"
-            :style="lanternImageBoxStyle"
-            ref="lanternViewerRoot"
-          >
-            <image
-              :src="lanternCurrentSlideImage"
-              mode="aspectFit"
-              class="viewer-lantern-image"
-              @load="handleLanternImageLoad"
-              @tap="openLanternImageFullscreen"
-            />
-          </view>
-          <!-- #endif -->
+            :image-url="lanternCurrentSlideImage"
+            :box-style="lanternImageBoxStyle"
+            :viewer-options="lanternViewerOptions"
+            @load="handleLanternImageLoad"
+            @tap="openLanternImageFullscreen"
+          />
           <view class="viewer-lantern-body">
             <text class="viewer-lantern-title">{{ lanternCurrentTitle }}</text>
             <view
               class="viewer-drive-cluster viewer-drive-cluster--joystick">
               <view class="viewer-drive-joystick-layout">
-                <view
+                <DriveJoystick
                   ref="lanternJoystickRef"
-                  class="viewer-drive-joystick"
-                  :class="{ 'is-active': vehicleDriveUi.joystickActive }"
-                  role="slider"
-                  aria-label="驾驶摇杆"
-                  aria-valuemin="-100"
-                  aria-valuemax="100"
-                  :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
-                  @touchstart.stop.prevent="handleJoystickTouchStart"
-                  @touchmove.stop.prevent="handleJoystickTouchMove"
-                  @touchend.stop.prevent="handleJoystickTouchEnd"
-                  @touchcancel.stop.prevent="handleJoystickTouchEnd"
-                >
-                  <view class="viewer-drive-joystick__base"></view>
-                  <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
-                </view>
+                  :is-active="vehicleDriveUi.joystickActive"
+                  :throttle="vehicleDriveInput.throttle"
+                  :knob-style="joystickKnobStyle"
+                  @joystick-touch-start="handleJoystickTouchStart"
+                  @joystick-touch-move="handleJoystickTouchMove"
+                  @joystick-touch-end="handleJoystickTouchEnd"
+                />
                 <view class="viewer-drive-hud" aria-hidden="true">
-                  <view class="viewer-drive-speed-readout">
-                    <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
-                    <text class="viewer-drive-speed-readout__unit">km/h</text>
-                  </view>
-                  <view class="viewer-drive-compass" :style="vehicleCompassStyle">
-                    <view class="viewer-drive-compass__ticks">
-                      <view
-                        v-for="tick in vehicleCompassTicks"
-                        :key="tick.key"
-                        class="viewer-drive-compass__tick"
-                        :class="{ 'is-major': tick.major }"
-                        :style="tick.style"
-                      ></view>
-                    </view>
-                    <view
-                      v-for="label in vehicleCompassLabels"
-                      :key="label.key"
-                      class="viewer-drive-compass__label-slot"
-                      :style="label.slotStyle"
-                    >
-                      <text class="viewer-drive-compass__label" :style="label.textStyle">{{ label.text }}</text>
-                    </view>
-                    <view class="viewer-drive-compass__pointer"></view>
-                  </view>
+                  <SpeedReadout :speed="vehicleSpeedKmh" />
+                  <DriveCompass
+                    :compass-style="vehicleCompassStyle"
+                    :ticks="vehicleCompassTicks"
+                    :labels="vehicleCompassLabels"
+                  />
                 </view>
               </view>
             </view>
@@ -377,30 +324,19 @@
           :class="{ 'is-fading': drivePadState.fading }"
           :style="drivePadStyle"
         >
-          <view
+          <DriveJoystick
             ref="floatingJoystickRef"
-            class="viewer-drive-joystick"
-            :class="{ 'is-active': vehicleDriveUi.joystickActive }"
-            role="slider"
-            aria-label="驾驶摇杆"
-            aria-valuemin="-100"
-            aria-valuemax="100"
-            :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
-            @touchstart.stop.prevent="handleJoystickTouchStart"
-            @touchmove.stop.prevent="handleJoystickTouchMove"
-            @touchend.stop.prevent="handleJoystickTouchEnd"
-            @touchcancel.stop.prevent="handleJoystickTouchEnd"
-          >
-            <view class="viewer-drive-joystick__base"></view>
-            <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
-          </view>
+            :is-active="vehicleDriveUi.joystickActive"
+            :throttle="vehicleDriveInput.throttle"
+            :knob-style="joystickKnobStyle"
+            @joystick-touch-start="handleJoystickTouchStart"
+            @joystick-touch-move="handleJoystickTouchMove"
+            @joystick-touch-end="handleJoystickTouchEnd"
+          />
         </view>
       </view>
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
-        <view class="viewer-drive-speed-readout" aria-hidden="true">
-          <text class="viewer-drive-speed-readout__value">{{ vehicleSpeedKmh }}</text>
-          <text class="viewer-drive-speed-readout__unit">km/h</text>
-        </view>
+        <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
         <button
           class="viewer-drive-icon-button"
           :class="{ 'is-busy': vehicleDriveResetBusy }"
@@ -417,26 +353,11 @@
       </view>
 
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-compass-right-floating" aria-hidden="true">
-        <view class="viewer-drive-compass" :style="vehicleCompassStyle">
-          <view class="viewer-drive-compass__ticks">
-            <view
-              v-for="tick in vehicleCompassTicks"
-              :key="tick.key"
-              class="viewer-drive-compass__tick"
-              :class="{ 'is-major': tick.major }"
-              :style="tick.style"
-            ></view>
-          </view>
-          <view
-            v-for="label in vehicleCompassLabels"
-            :key="label.key"
-            class="viewer-drive-compass__label-slot"
-            :style="label.slotStyle"
-          >
-            <text class="viewer-drive-compass__label" :style="label.textStyle">{{ label.text }}</text>
-          </view>
-          <view class="viewer-drive-compass__pointer"></view>
-        </view>
+        <DriveCompass
+          :compass-style="vehicleCompassStyle"
+          :ticks="vehicleCompassTicks"
+          :labels="vehicleCompassLabels"
+        />
       </view>
 
       <view v-if="debugOverlayVisible && debugMode !== 'off'" class="viewer-debug-overlay">
@@ -469,7 +390,16 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
+import OverlayPinnedItem from './OverlayPinnedItem.vue';
+import LanternImageFrame from './LanternImageFrame.vue';
+import DriveJoystick from './DriveJoystick.vue';
+import DriveCompass from './DriveCompass.vue';
+import SpeedReadout from './SpeedReadout.vue';
 import { useProjectStore } from '../common/stores/projectStore';
+import { useDebugOverlay } from '../composables/useDebugOverlay';
+import { useBehaviorAlert } from '../composables/useBehaviorAlert';
+import { useBehaviorBubble } from '../composables/useBehaviorBubble';
+import { useLanternAssets } from '../composables/useLanternAssets';
 import {
   loadScenePackageZip,
   removeScenePackageZip,
@@ -524,8 +454,6 @@ import {
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
-  resolveGroundChunkRadiusMeters,
-  resolveGroundRuntimeChunkCells,
   updateGroundChunks,
 } from '@harmony/schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
@@ -1019,89 +947,20 @@ function getGroundVertexCount(rows: number, columns: number): number {
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
-const debugEnabled = ref(true);
 // debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show compact summary
-const debugMode = ref<'off' | 'fps' | 'full'>('full');
-const debugOverlayVisible = computed(() => debugEnabled.value);
-const debugFps = ref(0);
-
-const instancingDebug = reactive({
-  instancedMeshAssets: 0,
-  instancedMeshActive: 0,
-  instancedInstanceCount: 0,
-  instanceMatrixUploadKb: 0,
-  lodTotal: 0,
-  lodVisible: 0,
-  scatterTotal: 0,
-  scatterVisible: 0,
-});
-
-const rendererDebug = reactive({
-  calls: 0,
-  triangles: 0,
-  renderTriangles: 0,
-  geometries: 0,
-  textures: 0,
-  width: 0,
-  height: 0,
-  pixelRatio: 1,
-});
-
-function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
-  let current: THREE.Object3D | null = object;
-  while (current) {
-    const currentName = typeof current.name === 'string' ? current.name : '';
-    if (
-      currentName === 'GroundChunkDebugHelpers'
-      || currentName === 'RigidbodyDebugHelpers'
-      || currentName === 'AirWallDebug'
-      || currentName.startsWith('GroundChunkDebug')
-      || currentName.startsWith('AirWallDebug')
-    ) {
-      return true;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
-function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry): number {
-  const positionAttribute = geometry.getAttribute('position');
-  const positionCount = positionAttribute?.count ?? 0;
-  if (positionCount <= 0) {
-    return 0;
-  }
-
-  const availableElementCount = geometry.index?.count ?? positionCount;
-  const drawRangeStart = Number.isFinite(geometry.drawRange.start)
-    ? Math.max(0, Math.trunc(geometry.drawRange.start))
-    : 0;
-  const remainingElementCount = Math.max(0, availableElementCount - drawRangeStart);
-  const drawRangeCount = Number.isFinite(geometry.drawRange.count)
-    ? Math.max(0, Math.trunc(geometry.drawRange.count))
-    : remainingElementCount;
-
-  return Math.floor(Math.min(remainingElementCount, drawRangeCount) / 3);
-}
-
-function estimateSceneTriangleCount(root: THREE.Object3D): number {
-  let total = 0;
-  root.traverseVisible((object: THREE.Object3D) => {
-    if (!(object instanceof THREE.Mesh) || shouldIgnoreDebugTriangleObject(object)) {
-      return;
-    }
-    const triangleCount = resolveGeometryTriangleCount(object.geometry);
-    if (triangleCount <= 0) {
-      return;
-    }
-    if (object instanceof THREE.InstancedMesh) {
-      total += triangleCount * Math.max(0, Math.trunc(object.count));
-      return;
-    }
-    total += triangleCount;
-  });
-  return total;
-}
+const {
+  debugEnabled,
+  debugMode,
+  debugOverlayVisible,
+  debugFps,
+  instancingDebug,
+  rendererDebug,
+  groundChunkDebug,
+  updateDebugFps,
+  syncInstancingDebugCounters,
+  syncRendererDebug,
+  syncGroundChunkDebugCounters,
+} = useDebugOverlay();
 
 type InstancedTransformCacheEntry = {
   assetId: string | null;
@@ -1130,197 +989,6 @@ function matricesAlmostEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon
     }
   }
   return true;
-}
-
-const groundChunkDebug = reactive({
-  loaded: 0,
-  target: 0,
-  total: 0,
-  pending: 0,
-  unloaded: 0,
-});
-
-let debugFpsFrames = 0;
-let debugFpsAccumSeconds = 0;
-let debugFpsLastSyncAt = 0;
-
-let debugInstancingLastSyncAt = 0;
-let debugGroundChunksLastSyncAt = 0;
-let debugGroundUnloadedTotal = 0;
-let debugLastGroundChunkKeys: Set<string> | null = null;
-
-function clampInclusive(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  if (value < min) {
-    return min;
-  }
-  if (value > max) {
-    return max;
-  }
-  return value;
-}
-
-function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
-  const rows = Math.max(1, Math.trunc(definition.rows));
-  const columns = Math.max(1, Math.trunc(definition.columns));
-  const safeCells = Math.max(1, Math.trunc(chunkCells));
-  const rowChunks = Math.ceil(rows / safeCells);
-  const columnChunks = Math.ceil(columns / safeCells);
-  return Math.max(1, rowChunks * columnChunks);
-}
-
-function computeTargetLoadChunkCount(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): number {
-  const chunkCells = resolveGroundRuntimeChunkCells(definition);
-  const rows = Math.max(1, Math.trunc(definition.rows));
-  const columns = Math.max(1, Math.trunc(definition.columns));
-  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells));
-  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells));
-
-  let localX = 0;
-  let localZ = 0;
-  if (camera) {
-    groundObject.updateMatrixWorld(true);
-    const cameraWorld = new THREE.Vector3();
-    camera.getWorldPosition(cameraWorld);
-    const cameraLocal = (groundObject as THREE.Group).worldToLocal(cameraWorld);
-    localX = cameraLocal.x;
-    localZ = cameraLocal.z;
-  }
-
-  const loadRadius = resolveGroundChunkRadiusMeters(definition);
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
-  const halfWidth = definition.width * 0.5;
-  const halfDepth = definition.depth * 0.5;
-
-  const minLoadColumn = clampInclusive(Math.floor((localX - loadRadius + halfWidth) / cellSize), 0, columns);
-  const maxLoadColumn = clampInclusive(Math.ceil((localX + loadRadius + halfWidth) / cellSize), 0, columns);
-  const minLoadRow = clampInclusive(Math.floor((localZ - loadRadius + halfDepth) / cellSize), 0, rows);
-  const maxLoadRow = clampInclusive(Math.ceil((localZ + loadRadius + halfDepth) / cellSize), 0, rows);
-
-  const minLoadChunkColumn = clampInclusive(Math.floor(minLoadColumn / chunkCells), 0, maxChunkColumnIndex);
-  const maxLoadChunkColumn = clampInclusive(Math.floor(maxLoadColumn / chunkCells), 0, maxChunkColumnIndex);
-  const minLoadChunkRow = clampInclusive(Math.floor(minLoadRow / chunkCells), 0, maxChunkRowIndex);
-  const maxLoadChunkRow = clampInclusive(Math.floor(maxLoadRow / chunkCells), 0, maxChunkRowIndex);
-
-  const count = (maxLoadChunkRow - minLoadChunkRow + 1) * (maxLoadChunkColumn - minLoadChunkColumn + 1);
-  return Math.max(1, count);
-}
-
-function updateDebugFps(deltaSeconds: number): void {
-  if (!debugEnabled.value) {
-    return;
-  }
-  if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
-    return;
-  }
-  debugFpsFrames += 1;
-  debugFpsAccumSeconds += deltaSeconds;
-  const now = Date.now();
-  if (now - debugFpsLastSyncAt < 500) {
-    return;
-  }
-  debugFpsLastSyncAt = now;
-  const fps = debugFpsFrames / Math.max(1e-6, debugFpsAccumSeconds);
-  debugFps.value = Math.max(0, Math.round(fps));
-  debugFpsFrames = 0;
-  debugFpsAccumSeconds = 0;
-}
-
-function syncInstancingDebugCounters(lodTotal: number, lodVisible: number): void {
-  if (!debugEnabled.value) {
-    return;
-  }
-  const now = Date.now();
-  if (now - debugInstancingLastSyncAt < 250) {
-    return;
-  }
-  debugInstancingLastSyncAt = now;
-  instancingDebug.instancedMeshAssets = instancedMeshes.length;
-
-  let activeMeshes = 0;
-  let instanceCountSum = 0;
-  instancedMeshes.forEach((mesh) => {
-    const count = Number.isFinite(mesh.count) ? mesh.count : 0;
-    if (count > 0) {
-      activeMeshes += 1;
-      instanceCountSum += count;
-    }
-  });
-  instancingDebug.instancedMeshActive = activeMeshes;
-  instancingDebug.instancedInstanceCount = instanceCountSum;
-  // Worst-case estimate: three.js may upload the full instanceMatrix buffer when needsUpdate is set.
-  // DEFAULT_INSTANCE_CAPACITY is 2048 in modelObjectCache; matrix is 16 floats (4 bytes each).
-  const instanceMatrixBytesPerMesh = 2048 * 16 * 4;
-  instancingDebug.instanceMatrixUploadKb = Math.round((activeMeshes * instanceMatrixBytesPerMesh) / 1024);
-
-  instancingDebug.lodTotal = lodTotal;
-  instancingDebug.lodVisible = lodVisible;
-  const scatterStats = terrainScatterRuntime.getInstanceStats();
-  instancingDebug.scatterTotal = scatterStats.total;
-  instancingDebug.scatterVisible = scatterStats.visible;
-}
-
-function syncRendererDebug(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
-  if (!debugEnabled.value) {
-    return;
-  }
-  const info = renderer.info;
-  rendererDebug.calls = info?.render?.calls ?? 0;
-  rendererDebug.renderTriangles = info?.render?.triangles ?? 0;
-  const sceneTriangles = estimateSceneTriangleCount(scene);
-  rendererDebug.triangles = sceneTriangles > 0 ? sceneTriangles : rendererDebug.renderTriangles;
-  rendererDebug.geometries = info?.memory?.geometries ?? 0;
-  rendererDebug.textures = info?.memory?.textures ?? 0;
-  rendererDebug.pixelRatio = typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : 1;
-  // In mini-programs the canvas size is the most reliable viewport indicator.
-  rendererDebug.width = (canvasResult?.canvas?.width || canvasResult?.canvas?.clientWidth || 0) as number;
-  rendererDebug.height = (canvasResult?.canvas?.height || canvasResult?.canvas?.clientHeight || 0) as number;
-}
-
-function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): void {
-  if (!debugEnabled.value) {
-    return;
-  }
-  const now = Date.now();
-  if (now - debugGroundChunksLastSyncAt < 250) {
-    return;
-  }
-  debugGroundChunksLastSyncAt = now;
-
-  const loadedKeys = new Set<string>();
-  groundObject.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) {
-      return;
-    }
-    const mesh = object;
-    const chunk = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null;
-    if (!chunk || typeof chunk.chunkRow !== 'number' || typeof chunk.chunkColumn !== 'number') {
-      return;
-    }
-    loadedKeys.add(`${chunk.chunkRow}:${chunk.chunkColumn}`);
-  });
-
-  if (debugLastGroundChunkKeys) {
-    let removed = 0;
-    debugLastGroundChunkKeys.forEach((key) => {
-      if (!loadedKeys.has(key)) {
-        removed += 1;
-      }
-    });
-    if (removed > 0) {
-      debugGroundUnloadedTotal += removed;
-    }
-  }
-  debugLastGroundChunkKeys = loadedKeys;
-
-  const chunkCells = resolveGroundRuntimeChunkCells(definition);
-  groundChunkDebug.loaded = loadedKeys.size;
-  groundChunkDebug.total = computeTotalGroundChunkCount(definition, chunkCells);
-  groundChunkDebug.target = computeTargetLoadChunkCount(groundObject, definition, camera);
-  groundChunkDebug.pending = Math.max(0, groundChunkDebug.target - groundChunkDebug.loaded);
-  groundChunkDebug.unloaded = debugGroundUnloadedTotal;
 }
 
 const textureLoader = new THREE.TextureLoader();
@@ -2029,7 +1697,6 @@ const overlayDistanceTargetAnchorScratch = new THREE.Vector3();
 const overlayDistanceReferenceAnchorScratch = new THREE.Vector3();
 const behaviorBubbleAnchorScratch = new THREE.Vector3();
 const behaviorBubbleCameraScratch = new THREE.Vector3();
-const behaviorBubbleSeenKeys = new Set<string>();
 const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5;
 const SIGNBOARD_REFERENCE_SMOOTH_SPEED = DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED;
 const SIGNBOARD_PLACEMENT_SMOOTH_SPEED = DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED;
@@ -2272,33 +1939,32 @@ function syncLastFirstPersonStateFromCamera(): void {
 
 let wheelListenerCleanup: (() => void) | null = null;
 
-const behaviorAlertVisible = ref(false);
-const behaviorAlertTitle = ref('');
-const behaviorAlertMessage = ref('');
-const behaviorAlertToken = ref<string | null>(null);
-const behaviorAlertShowConfirm = ref(true);
-const behaviorAlertShowCancel = ref(false);
-const behaviorAlertConfirmText = ref('确定');
-const behaviorAlertCancelText = ref('取消');
-const behaviorBubbleVisible = ref(false);
-const behaviorBubbleMessage = ref('');
-const behaviorBubbleToken = ref<string | null>(null);
-const behaviorBubbleVariant = ref<'info' | 'success' | 'warning' | 'danger'>('info');
-const behaviorBubbleAnimation = ref<'fade' | 'float' | 'scale' | 'shake'>('float');
-const behaviorBubbleAnchorMode = ref<'screenFixed' | 'nodeAnchored'>('screenFixed');
-const behaviorBubbleAnchorXPercent = ref(50);
-const behaviorBubbleAnchorYPercent = ref(12);
-const behaviorBubbleOffsetX = ref(0);
-const behaviorBubbleOffsetY = ref(-12);
-let behaviorBubbleDelayTimer: ReturnType<typeof setTimeout> | null = null;
-let behaviorBubbleDismissTimer: ReturnType<typeof setTimeout> | null = null;
+const behaviorAlert = useBehaviorAlert({
+  resolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
+  loadTextAssetContent: (assetId) => loadTextAssetContent(assetId),
+});
+const behaviorAlertVisible = behaviorAlert.visible;
+const behaviorAlertToken = behaviorAlert.token;
+const behaviorAlertTitle = behaviorAlert.title;
+const behaviorAlertMessage = behaviorAlert.message;
+const behaviorAlertShowConfirm = behaviorAlert.showConfirm;
+const behaviorAlertShowCancel = behaviorAlert.showCancel;
+const behaviorAlertConfirmText = behaviorAlert.confirmText;
+const behaviorAlertCancelText = behaviorAlert.cancelText;
 
-const behaviorBubbleStyle = computed<Record<string, string>>(() => ({
-  left: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorXPercent.value}%` : '',
-  top: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorYPercent.value}%` : '',
-  '--behavior-bubble-offset-x': `${behaviorBubbleOffsetX.value}px`,
-  '--behavior-bubble-offset-y': `${behaviorBubbleOffsetY.value}px`,
-}));
+const behaviorBubble = useBehaviorBubble({
+  resolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
+  loadTextAssetContent: (assetId) => loadTextAssetContent(assetId),
+  canPresent: (event) => canPresentBehaviorBubble(event),
+});
+const behaviorBubbleVisible = behaviorBubble.visible;
+const behaviorBubbleMessage = behaviorBubble.message;
+const behaviorBubbleVariant = behaviorBubble.variant;
+const behaviorBubbleAnimation = behaviorBubble.animation;
+const behaviorBubbleAnchorMode = behaviorBubble.anchorMode;
+const behaviorBubbleAnchorXPercent = behaviorBubble.anchorXPercent;
+const behaviorBubbleAnchorYPercent = behaviorBubble.anchorYPercent;
+const behaviorBubbleStyle = behaviorBubble.style;
 
 const lanternOverlayVisible = ref(false);
 const lanternSlides = ref<LanternSlideDefinition[]>([]);
@@ -2366,6 +2032,15 @@ const lanternImageBoxStyle = computed(() => {
   }
   return style;
 });
+
+const lanternAssets = useLanternAssets({
+  loadTextAssetContent: (assetId) => loadTextAssetContent(assetId),
+  resolveAssetUrlFromCache: (assetId) => resolveAssetUrlFromCache(assetId),
+});
+const lanternImageState = lanternAssets.lanternImageState;
+const ensureLanternText = lanternAssets.ensureLanternText;
+const ensureLanternImage = lanternAssets.ensureLanternImage;
+const pruneLanternAssets = lanternAssets.pruneActiveAssets;
 
 const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
@@ -2780,14 +2455,6 @@ watch(vehicleDriveActive, (active) => {
 });
 const isCameraCaged = ref(false);
 
-type LanternTextState = { text: string; loading: boolean; error: string | null };
-type LanternImageState = { url: string | null; loading: boolean; error: string | null };
-
-const lanternTextState = reactive<Record<string, LanternTextState>>({});
-const lanternTextPromises = new Map<string, Promise<void>>();
-const lanternImageState = reactive<Record<string, LanternImageState>>({});
-const lanternImagePromises = new Map<string, Promise<void>>();
-
 const activeBehaviorDelayTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const activeBehaviorAnimations = new Map<string, () => void>();
 type ViewerInnerAudioContext = ReturnType<typeof uni.createInnerAudioContext>;
@@ -2940,28 +2607,6 @@ const lanternCurrentTitle = computed(() => {
   return title?.length ? title : '幻灯片';
 });
 
-function getLanternTextState(assetId: string): LanternTextState {
-  if (!lanternTextState[assetId]) {
-    lanternTextState[assetId] = reactive({
-      text: '',
-      loading: false,
-      error: null,
-    }) as LanternTextState;
-  }
-  return lanternTextState[assetId];
-}
-
-function getLanternImageState(assetId: string): LanternImageState {
-  if (!lanternImageState[assetId]) {
-    lanternImageState[assetId] = reactive({
-      url: null,
-      loading: false,
-      error: null,
-    }) as LanternImageState;
-  }
-  return lanternImageState[assetId];
-}
-
 const lanternCurrentSlideImage = computed(() => {
   const slide = lanternCurrentSlide.value;
   if (!slide?.imageAssetId) {
@@ -3019,10 +2664,19 @@ function resetLanternImageMetrics(): void {
 }
 
 function getLanternViewerElement(): HTMLElement | null {
-
   const target = lanternViewerRoot.value;
   if (!target) {
     return null;
+  }
+  const exposedRootRef = (target as { rootRef?: unknown }).rootRef;
+  if (exposedRootRef) {
+    if (typeof (exposedRootRef as HTMLElement).getBoundingClientRect === 'function') {
+      return exposedRootRef as HTMLElement;
+    }
+    const exposedElement = (exposedRootRef as unknown as { $el?: unknown }).$el;
+    if (exposedElement && typeof (exposedElement as HTMLElement).getBoundingClientRect === 'function') {
+      return exposedElement as HTMLElement;
+    }
   }
   if (typeof (target as ComponentPublicInstance).$el !== 'undefined') {
     const element = (target as ComponentPublicInstance & { $el?: HTMLElement }).$el;
@@ -3161,26 +2815,7 @@ watch(
     if (lanternActiveSlideIndex.value >= list.length) {
       lanternActiveSlideIndex.value = list.length ? list.length - 1 : 0;
     }
-    Object.keys(lanternTextState).forEach((key) => {
-      if (!activeTextIds.has(key)) {
-        delete lanternTextState[key];
-      }
-    });
-    Object.keys(lanternImageState).forEach((key) => {
-      if (!activeImageIds.has(key)) {
-        delete lanternImageState[key];
-      }
-    });
-    Array.from(lanternTextPromises.keys()).forEach((key) => {
-      if (!activeTextIds.has(key)) {
-        lanternTextPromises.delete(key);
-      }
-    });
-    Array.from(lanternImagePromises.keys()).forEach((key) => {
-      if (!activeImageIds.has(key)) {
-        lanternImagePromises.delete(key);
-      }
-    });
+    pruneLanternAssets(activeTextIds, activeImageIds);
   },
   { deep: true },
 );
@@ -3234,69 +2869,6 @@ watch(
     syncLanternViewerLater();
   },
 );
-
-async function ensureLanternText(assetId: string): Promise<void> {
-  const trimmed = assetId.trim();
-  if (!trimmed.length) {
-    return;
-  }
-  if (lanternTextPromises.has(trimmed)) {
-    await lanternTextPromises.get(trimmed);
-    return;
-  }
-  const promise = (async () => {
-    const state = getLanternTextState(trimmed);
-    state.loading = true;
-    state.error = null;
-    try {
-      const text = await loadTextAssetContent(trimmed);
-      state.text = text ?? '';
-      if (text == null) {
-        state.error = '内容加载失败';
-      }
-    } catch (error) {
-      console.warn('加载幻灯片文本失败', error);
-      state.error = error instanceof Error ? error.message : '内容加载失败';
-      state.text = '';
-    } finally {
-      state.loading = false;
-      lanternTextPromises.delete(trimmed);
-    }
-  })();
-  lanternTextPromises.set(trimmed, promise);
-  await promise;
-}
-
-async function ensureLanternImage(assetId: string): Promise<void> {
-  const trimmed = assetId.trim();
-  if (!trimmed.length) {
-    return;
-  }
-  if (lanternImagePromises.has(trimmed)) {
-    await lanternImagePromises.get(trimmed);
-    return;
-  }
-  const promise = (async () => {
-    const state = getLanternImageState(trimmed);
-    state.loading = true;
-    state.error = null;
-    try {
-      const resolved = await resolveAssetUrlFromCache(trimmed);
-      if (!resolved) {
-        throw new Error('无法解析图片资源');
-      }
-      state.url = resolved.url;
-    } catch (error) {
-      state.error = (error as Error).message ?? '图片资源加载失败';
-      state.url = null;
-    } finally {
-      state.loading = false;
-      lanternImagePromises.delete(trimmed);
-    }
-  })();
-  lanternImagePromises.set(trimmed, promise);
-  await promise;
-}
 
 async function fetchTextFromUrl(url: string): Promise<string> {
   if (typeof fetch === 'function') {
@@ -3731,58 +3303,8 @@ function handleLanternTouchCancel(): void {
   resetLanternSwipeTracking();
 }
 
-async function loadBehaviorAlertContent(assetId: string, token: string, fallback: string): Promise<void> {
-  try {
-    const content = await loadTextAssetContent(assetId);
-    if (behaviorAlertToken.value !== token) {
-      return;
-    }
-    behaviorAlertMessage.value = content ?? fallback;
-  } catch (error) {
-    console.warn('加载行为弹窗文本失败', error);
-    if (behaviorAlertToken.value === token) {
-      behaviorAlertMessage.value = fallback;
-    }
-  }
-}
-
-function clearBehaviorBubbleTimers(): void {
-  if (behaviorBubbleDelayTimer != null) {
-    clearTimeout(behaviorBubbleDelayTimer);
-    behaviorBubbleDelayTimer = null;
-  }
-  if (behaviorBubbleDismissTimer != null) {
-    clearTimeout(behaviorBubbleDismissTimer);
-    behaviorBubbleDismissTimer = null;
-  }
-}
-
-function clearBehaviorBubbleState(): string | null {
-  clearBehaviorBubbleTimers();
-  const token = behaviorBubbleToken.value;
-  behaviorBubbleVisible.value = false;
-  behaviorBubbleMessage.value = '';
-  behaviorBubbleToken.value = null;
-  behaviorBubbleVariant.value = 'info';
-  behaviorBubbleAnimation.value = 'float';
-  behaviorBubbleAnchorMode.value = 'screenFixed';
-  behaviorBubbleAnchorXPercent.value = 50;
-  behaviorBubbleAnchorYPercent.value = 12;
-  behaviorBubbleOffsetX.value = 0;
-  behaviorBubbleOffsetY.value = -12;
-  return token;
-}
-
-function dismissBehaviorBubble(resolution?: BehaviorEventResolution): void {
-  const token = clearBehaviorBubbleState();
-  if (resolution && token) {
-    resolveBehaviorToken(token, resolution);
-  }
-}
-
-function buildBehaviorBubbleSeenKey(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): string {
-  return [event.nodeId, event.action, event.behaviorSequenceId, event.behaviorId].join(':');
-}
+const dismissBehaviorBubble = behaviorBubble.dismiss;
+const presentBehaviorBubble = behaviorBubble.present;
 
 function resolveBehaviorBubbleAnchorNodeId(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): string | null {
   const targetNodeId = event.params.targetNodeId?.trim();
@@ -3848,134 +3370,9 @@ function canPresentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: '
   return true;
 }
 
-async function loadBehaviorBubbleContent(assetId: string, token: string, fallback: string): Promise<void> {
-  try {
-    const content = await loadTextAssetContent(assetId);
-    if (behaviorBubbleToken.value !== token) {
-      return;
-    }
-    behaviorBubbleMessage.value = content ?? fallback;
-  } catch (error) {
-    console.warn('加载行为气泡文本失败', error);
-    if (behaviorBubbleToken.value === token) {
-      behaviorBubbleMessage.value = fallback;
-    }
-  }
-}
-
-function presentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): void {
-  const repeatKey = buildBehaviorBubbleSeenKey(event);
-  if (!event.params.repeat && behaviorBubbleSeenKeys.has(repeatKey)) {
-    resolveBehaviorToken(event.token, { type: 'continue' });
-    return;
-  }
-  if (!canPresentBehaviorBubble(event)) {
-    resolveBehaviorToken(event.token, { type: 'continue' });
-    return;
-  }
-  dismissBehaviorBubble({ type: 'continue' });
-  const fallbackMessage = typeof event.params.content === 'string' ? event.params.content : '';
-  behaviorBubbleToken.value = event.token;
-  behaviorBubbleMessage.value = fallbackMessage;
-  behaviorBubbleVariant.value = event.params.styleVariant;
-  behaviorBubbleAnimation.value = event.params.animationPreset;
-  behaviorBubbleAnchorMode.value = event.params.anchorMode;
-  behaviorBubbleOffsetX.value = event.params.screenOffsetX;
-  behaviorBubbleOffsetY.value = event.params.screenOffsetY;
-  const contentAssetId = typeof event.params.contentAssetId === 'string' ? event.params.contentAssetId.trim() : '';
-  if (contentAssetId) {
-    void loadBehaviorBubbleContent(contentAssetId, event.token, fallbackMessage);
-  }
-  const showBubble = () => {
-    if (behaviorBubbleToken.value !== event.token) {
-      return;
-    }
-    behaviorBubbleVisible.value = true;
-    if (!event.params.repeat) {
-      behaviorBubbleSeenKeys.add(repeatKey);
-    }
-    const durationMs = Math.max(0, event.params.durationSeconds ?? 0) * 1000;
-    if (durationMs <= 0) {
-      dismissBehaviorBubble({ type: 'continue' });
-      return;
-    }
-    behaviorBubbleDismissTimer = setTimeout(() => {
-      if (behaviorBubbleToken.value === event.token) {
-        dismissBehaviorBubble({ type: 'continue' });
-      }
-    }, durationMs);
-  };
-  const delayMs = Math.max(0, event.params.delaySeconds ?? 0) * 1000;
-  if (delayMs <= 0) {
-    showBubble();
-    return;
-  }
-  behaviorBubbleDelayTimer = setTimeout(() => {
-    behaviorBubbleDelayTimer = null;
-    showBubble();
-  }, delayMs);
-}
-
-function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
-  behaviorAlertToken.value = event.token;
-  const legacyParams = event.params as typeof event.params & { title?: string; message?: string };
-  const anyParams = event.params as unknown as Record<string, unknown>;
-  const rawTitle = typeof anyParams.title === 'string' ? anyParams.title : legacyParams.title;
-  const title = typeof rawTitle === 'string' && rawTitle.trim().length ? rawTitle.trim() : '提示';
-  const legacyMessage = typeof legacyParams.message === 'string' ? legacyParams.message : '';
-  const contentParam = typeof anyParams.content === 'string' ? (anyParams.content as string) : undefined;
-  const messageFallback = typeof contentParam === 'string' ? contentParam : legacyMessage;
-  behaviorAlertTitle.value = title;
-  behaviorAlertMessage.value = messageFallback;
-  behaviorAlertShowConfirm.value = event.params.showConfirm ?? true;
-  behaviorAlertShowCancel.value = event.params.showCancel ?? false;
-  behaviorAlertConfirmText.value = (event.params.confirmText ?? '确定') || '确定';
-  behaviorAlertCancelText.value = (event.params.cancelText ?? '取消') || '取消';
-  const contentAssetId = (event.params as { contentAssetId?: string | null }).contentAssetId;
-  if (typeof contentAssetId === 'string' && contentAssetId.trim().length) {
-    void loadBehaviorAlertContent(contentAssetId.trim(), event.token, messageFallback);
-  }
-  if (!behaviorAlertShowConfirm.value && !behaviorAlertShowCancel.value) {
-    resolveBehaviorToken(event.token, { type: 'continue' });
-    return;
-  }
-  behaviorAlertVisible.value = true;
-}
-
-function confirmBehaviorAlert() {
-  const token = behaviorAlertToken.value;
-  if (!token) {
-    return;
-  }
-  try {
-    resolveBehaviorToken(token, { type: 'continue' });
-  } finally {
-    closeBehaviorAlert();
-  }
-}
-
-function cancelBehaviorAlert() {
-  const token = behaviorAlertToken.value;
-  if (!token) {
-    return;
-  }
-  try {
-    resolveBehaviorToken(token, { type: 'abort', message: '用户取消了提示框' });
-  } finally {
-    closeBehaviorAlert();
-  }
-}
-
-function closeBehaviorAlert() {
-  behaviorAlertVisible.value = false;
-  behaviorAlertTitle.value = '';
-  behaviorAlertMessage.value = '';
-  behaviorAlertToken.value = null;
-  behaviorAlertShowConfirm.value = true;
-  behaviorAlertShowCancel.value = false;
-  behaviorAlertConfirmText.value = '确定';
-  behaviorAlertCancelText.value = '取消';
-}
+const presentBehaviorAlert = behaviorAlert.present;
+const confirmBehaviorAlert = behaviorAlert.confirm;
+const cancelBehaviorAlert = behaviorAlert.cancel;
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   assetNodeIdMap.clear();
@@ -4722,8 +4119,10 @@ function updateInstancedCullingAndLod(): void {
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView);
 
-  const candidateIds: string[] = [];
-  const candidateObjects = new Map<string, THREE.Object3D>();
+  const lodNodeIds: string[] = [];
+  const lodObjects = new Map<string, THREE.Object3D>();
+  const cullingCandidateIds: string[] = [];
+  const cullingCandidateObjects = new Map<string, THREE.Object3D>();
   nodeObjectMap.forEach((object, nodeId) => {
     // Accept both instancedAssetId (model) and billboardImageAssetId (billboard)
     if (!object?.userData?.instancedAssetId && !object?.userData?.billboardImageAssetId) {
@@ -4737,18 +4136,20 @@ function updateInstancedCullingAndLod(): void {
     if (!component || !component.enabled) {
       return;
     }
+    lodNodeIds.push(nodeId);
+    lodObjects.set(nodeId, object);
     const props = clampLodComponentProps(component.props);
     if (props.enableCulling === false) {
       return;
     }
-    candidateIds.push(nodeId);
-    candidateObjects.set(nodeId, object);
+    cullingCandidateIds.push(nodeId);
+    cullingCandidateObjects.set(nodeId, object);
   });
 
-  candidateIds.sort();
-  instancedLodFrustumCuller.setIds(candidateIds);
+  cullingCandidateIds.sort();
+  instancedLodFrustumCuller.setIds(cullingCandidateIds);
   const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
-    const object = candidateObjects.get(id);
+    const object = cullingCandidateObjects.get(id);
     if (!object) {
       return null;
     }
@@ -4773,10 +4174,9 @@ function updateInstancedCullingAndLod(): void {
   }
   });
 
-  syncInstancingDebugCounters(candidateIds.length, visibleIds.size);
-
-  candidateIds.forEach((nodeId) => {
-    const object = candidateObjects.get(nodeId);
+  let lodVisibleCount = 0;
+  lodNodeIds.forEach((nodeId) => {
+    const object = lodObjects.get(nodeId);
     if (!object) {
       return;
     }
@@ -4784,8 +4184,14 @@ function updateInstancedCullingAndLod(): void {
     if (!node) {
       return;
     }
-    const isVisible = visibleIds.has(nodeId);
-    if (!isVisible) {
+    const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined;
+    if (!component || !component.enabled) {
+      return;
+    }
+    const props = clampLodComponentProps(component.props);
+    const cullingEnabled = props.enableCulling !== false;
+    const isVisible = !cullingEnabled || visibleIds.has(nodeId);
+    if (cullingEnabled && !isVisible) {
       const lastSeen = instancedCullingLastVisibleAt.get(nodeId) ?? 0;
       if (INSTANCED_CULL_GRACE_MS > 0 && now - lastSeen < INSTANCED_CULL_GRACE_MS) {
         return;
@@ -4798,7 +4204,10 @@ function updateInstancedCullingAndLod(): void {
       return;
     }
 
-    instancedCullingLastVisibleAt.set(nodeId, now);
+    lodVisibleCount += 1;
+    if (cullingEnabled) {
+      instancedCullingLastVisibleAt.set(nodeId, now);
+    }
     const desiredTarget = resolveDesiredLodTarget(node, object, camera);
     if (!desiredTarget) {
       return;
@@ -4830,6 +4239,8 @@ function updateInstancedCullingAndLod(): void {
       syncInstancedTransform(object, true);
     }
   });
+
+  syncInstancingDebugCounters(lodNodeIds.length, lodVisibleCount, instancedMeshes, terrainScatterRuntime);
 }
 
 async function prepareInstancedNodesForGraph(
@@ -10855,8 +10266,7 @@ function teardownRenderer() {
   controls.dispose();
   disposeEnvironmentResources();
   disposeSceneCsmShadowRuntime();
-  lanternTextPromises.clear();
-  Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
+  pruneLanternAssets(new Set<string>(), new Set<string>());
   resetAssetResolutionCaches();
   stopInstancedMeshSubscription?.();
   stopInstancedMeshSubscription = null;
@@ -11345,7 +10755,7 @@ function startRenderLoop(
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {
-          syncRendererDebug(renderer, scene);
+          syncRendererDebug(renderer, scene, canvasResult?.canvas ?? null);
         }
       });
       onCleanup(() => {
@@ -11414,8 +10824,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
 
   disposeEnvironmentResources();
 
-  lanternTextPromises.clear();
-  Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
+  pruneLanternAssets(new Set<string>(), new Set<string>());
 
   stopInstancedMeshSubscription?.();
   stopInstancedMeshSubscription = null;
@@ -11482,6 +10891,13 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   const { graph, resourceCache } = buildResult;
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
+  }
+
+  const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
+  await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
+  if (token !== initializeToken) {
+    disposeObject(graph.root);
+    return;
   }
 
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
