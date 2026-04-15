@@ -129,6 +129,7 @@ import {
 } from '@/controllers/admin/miniAppController'
 import {
   bulkMoveAssetsCategory,
+  bulkUpdateAssets,
   createAssetSeries,
   createAssetTag,
   createAssetCategory,
@@ -150,6 +151,7 @@ import {
   updateAsset,
   updateAssetCategory,
   uploadAsset,
+  restoreAsset,
 } from '@/controllers/resourceController'
 import {
   createProject,
@@ -370,7 +372,9 @@ adminRouter.put(
   updateAsset,
 )
 adminRouter.delete('/resources/assets/:id', requireAnyPermission(['resource:write']), deleteAsset)
+adminRouter.post('/resources/assets/:id/restore', requireAnyPermission(['resource:write']), restoreAsset)
 adminRouter.post('/resources/assets/bulk-move-category', requireAnyPermission(['resource:write']), bulkMoveAssetsCategory)
+adminRouter.post('/resources/assets/bulk-update', requireAnyPermission(['resource:write']), bulkUpdateAssets)
 
 adminRouter.get('/resources/tags', requireAnyPermission(['resource:read']), listAssetTags)
 adminRouter.post('/resources/tags', requireAnyPermission(['resource:write']), createAssetTag)

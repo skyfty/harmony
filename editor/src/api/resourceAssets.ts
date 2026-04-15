@@ -640,6 +640,9 @@ export async function uploadAssetBundleToServer(options: UploadAssetBundleOption
 
 export async function uploadAssetToServer(options: UploadAssetOptions): Promise<ServerAssetDto> {
   const url = buildServerApiUrl('/resources/assets')
+  if (typeof options.categoryId !== 'string' || !options.categoryId.trim().length) {
+    throw new Error('请选择后台已维护的资源目录后再上传')
+  }
   const formData = new FormData()
   formData.append('file', options.file)
   if (options.thumbnailFile) {
@@ -678,7 +681,7 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   if (typeof options.terrainScatterPreset === 'string' && options.terrainScatterPreset.trim().length) {
     formData.append('terrainScatterPreset', options.terrainScatterPreset.trim())
   }
-  if (Array.isArray(options.categoryPathSegments)) {
+  if (Array.isArray(options.categoryPathSegments) && !options.categoryId) {
     options.categoryPathSegments
       .map((segment) => (typeof segment === 'string' ? segment.trim() : ''))
       .filter((segment) => segment.length > 0)

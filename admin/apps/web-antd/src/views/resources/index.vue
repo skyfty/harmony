@@ -3,10 +3,12 @@ import type { FormInstance, UploadChangeParam, UploadFile, UploadProps } from 'a
 import type { TableProps } from 'ant-design-vue';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 
 import {
   buildResourceDownloadUrl,
   bulkMoveResourceAssetsCategoryApi,
+  bulkUpdateResourceAssetsApi,
   createResourceAssetApi,
   createResourceCategoryTreeItemApi,
   deleteResourceAssetApi,
@@ -18,6 +20,7 @@ import {
   listResourceSeriesApi,
   listResourceTagsApi,
   moveResourceCategoryTreeItemApi,
+  restoreResourceAssetApi,
   updateResourceAssetApi,
   updateResourceCategoryTreeItemApi,
   type ResourceAssetItem,
@@ -39,6 +42,7 @@ import {
   PlusOutlined,
   ArrowRightOutlined,
 } from '@ant-design/icons-vue';
+import { Checkbox } from 'ant-design-vue';
 
 interface AssetFormModel {
   categoryId: string;
@@ -57,7 +61,18 @@ interface AssetFormModel {
   type: string;
 }
 
+interface DirectoryTreeListItem {
+  ancestorIds: string[];
+  depth: number;
+  hasChildren: boolean;
+  id: string;
+  name: string;
+  parentId: null | string;
+  pathLabel: string;
+}
+
 const { TextArea } = Input;
+const router = useRouter();
 
 const typeOptions = [
   { label: '模型', value: 'model' },
@@ -89,10 +104,15 @@ const currentDirectoryPath = ref<Array<{ id: string; name: string }>>([]);
 const mixedItems = ref<ResourceCategoryEntry[]>([]);
 const loadingEntries = ref(false);
 const keyword = ref('');
+const assetTypeFilter = ref('');
+const assetSeriesFilter = ref('');
+const assetTagFilter = ref('');
 const selectedAssetIds = ref<string[]>([]);
 const movingAssets = ref(false);
 const movingAssetIds = ref<string[]>([]);
 const movingDirectoryId = ref<null | string>(null);
+const batchEditModalOpen = ref(false);
+const batchEditSubmitting = ref(false);
 const moveModalOpen = ref(false);
 const moveTargetDirectoryId = ref('');
 const moveMode = ref<'asset' | 'directory'>('asset');
@@ -100,6 +120,8 @@ const directoryModalOpen = ref(false);
 const directoryModalMode = ref<'create' | 'edit'>('create');
 const directoryName = ref('');
 const dragPayload = ref<null | { id: string; kind: 'asset' | 'directory' }>(null);
+const directoryKeyword = ref('');
+const showDeletedOnly = ref(false);
 
 const categoryOptions = computed(() => {
   const output: Array<{ label: string; value: string }> = [];
@@ -118,10 +140,6 @@ const categoryOptions = computed(() => {
 
 const tagOptions = computed(() => tags.value.map((item) => ({ label: item.name, value: item.id })));
 const seriesOptions = computed(() => series.value.map((item) => ({ label: item.name, value: item.id })));
-
-const filterCategoryOptions = computed(() => [{ label: '全部', value: '' }, ...categoryOptions.value]);
-const filterSeriesOptions = computed(() => [{ label: '全部', value: '' }, ...seriesOptions.value]);
-const filterTagOptions = computed(() => [{ label: '全部', value: '' }, ...tagOptions.value]);
 
 const modalTitle = computed(() => (editingId.value ? '编辑资产' : '新增资产'));
 const directoryModalTitle = computed(() => (directoryModalMode.value === 'create' ? '新建分类' : '编辑分类'));
@@ -154,6 +172,24 @@ const assetFormModel = reactive<AssetFormModel>({
   type: 'file',
 });
 
+interface BatchEditFormModel {
+  applyCategory: boolean;
+  applySeries: boolean;
+  applyTags: boolean;
+  categoryId: string;
+  seriesId: null | string;
+  tagIds: string[];
+}
+
+const batchEditFormModel = reactive<BatchEditFormModel>({
+  applyCategory: false,
+  applySeries: false,
+  applyTags: false,
+  categoryId: '',
+  seriesId: null,
+  tagIds: [],
+});
+
 function resetForm() {
   assetFormModel.name = '';
   assetFormModel.type = 'file';
@@ -177,6 +213,43 @@ function isDirectoryEntry(item: ResourceCategoryEntry): item is ResourceCategory
   return (item as ResourceCategoryEntryDirectory).kind === 'directory';
 }
 
+function normalizeDirectoryTree(nodes: ResourceCategoryTreeItem[]): ResourceCategoryTreeItem[] {
+  if (
+    nodes.length === 1 &&
+    !nodes[0]?.parentId &&
+    Array.isArray(nodes[0]?.children) &&
+    nodes[0].children.length > 0
+  ) {
+    return nodes[0].children;
+  }
+  return nodes;
+}
+
+function flattenDirectoryTree(
+  nodes: ResourceCategoryTreeItem[],
+  prefix = '',
+  depth = 0,
+  ancestorIds: string[] = [],
+): DirectoryTreeListItem[] {
+  const rows: DirectoryTreeListItem[] = [];
+  nodes.forEach((node) => {
+    const pathLabel = prefix ? `${prefix} / ${node.name}` : node.name;
+    rows.push({
+      ancestorIds,
+      depth,
+      hasChildren: Array.isArray(node.children) && node.children.length > 0,
+      id: node.id,
+      name: node.name,
+      parentId: node.parentId,
+      pathLabel,
+    });
+    if (Array.isArray(node.children) && node.children.length) {
+      rows.push(...flattenDirectoryTree(node.children, pathLabel, depth + 1, [...ancestorIds, node.id]));
+    }
+  });
+  return rows;
+}
+
 const directoryOptions = computed(() => {
   const output: Array<{ label: string; value: string }> = [];
   function walk(nodes: ResourceCategoryTreeItem[], prefix = '') {
@@ -192,23 +265,89 @@ const directoryOptions = computed(() => {
   return output;
 });
 
+const directoryRows = computed(() => flattenDirectoryTree(directoryItems.value));
+
+const directoryRowMap = computed(() => {
+  const map = new Map<string, DirectoryTreeListItem>();
+  directoryRows.value.forEach((item) => map.set(item.id, item));
+  return map;
+});
+
+const currentAssets = computed(() => mixedItems.value.filter((item): item is ResourceAssetItem => !isDirectoryEntry(item)));
+const currentChildDirectories = computed(() =>
+  mixedItems.value.filter((item): item is ResourceCategoryEntryDirectory => isDirectoryEntry(item)),
+);
+
+const filteredDirectoryRows = computed(() => {
+  const search = directoryKeyword.value.trim().toLowerCase();
+  if (!search) {
+    return directoryRows.value;
+  }
+  return directoryRows.value.filter((item) => {
+    return item.name.toLowerCase().includes(search) || item.pathLabel.toLowerCase().includes(search);
+  });
+});
+
 const filteredItems = computed(() => {
   const search = keyword.value.trim().toLowerCase();
-  const raw = mixedItems.value;
-  const sorted = [...raw].sort((a, b) => {
-    const aDir = isDirectoryEntry(a);
-    const bDir = isDirectoryEntry(b);
-    if (aDir && !bDir) return -1;
-    if (!aDir && bDir) return 1;
+  const sorted = [...currentAssets.value].sort((a, b) => {
     return a.name.localeCompare(b.name);
   });
-  if (!search) {
-    return sorted;
+  return sorted.filter((item) => {
+    const matchesKeyword = !search || item.name.toLowerCase().includes(search);
+    const matchesType = !assetTypeFilter.value || item.type === assetTypeFilter.value;
+    const matchesSeries =
+      !assetSeriesFilter.value ||
+      (assetSeriesFilter.value === 'none' ? !item.seriesId : item.seriesId === assetSeriesFilter.value);
+    const matchesTag =
+      !assetTagFilter.value || Array.isArray(item.tagIds) && item.tagIds.includes(assetTagFilter.value);
+    return matchesKeyword && matchesType && matchesSeries && matchesTag;
+  });
+});
+
+const assetTypeOptions = computed(() => [{ label: '全部类型', value: '' }, ...typeOptions]);
+const assetSeriesFilterOptions = computed(() => [
+  { label: '全部系列', value: '' },
+  { label: '未分配系列', value: 'none' },
+  ...seriesOptions.value,
+]);
+const assetTagFilterOptions = computed(() => [{ label: '全部标签', value: '' }, ...tagOptions.value]);
+
+const currentDirectoryName = computed(() => currentDirectoryPath.value[currentDirectoryPath.value.length - 1]?.name || '全部资源');
+const currentDirectoryIsRoot = computed(() => currentDirectoryPath.value.length <= 1);
+const rootDirectoryId = computed(() => currentDirectoryPath.value[0]?.id || directoryItems.value[0]?.id || '');
+const currentDirectoryStats = computed(() => ({
+  assetCount: currentAssets.value.length,
+  childDirectoryCount: currentChildDirectories.value.length,
+}));
+
+const resourceSummary = computed(() => ({
+  assetCount: currentAssets.value.length,
+  categoryCount: directoryRows.value.length,
+  deletedCount: mixedItems.value.filter((item): item is ResourceAssetItem => !isDirectoryEntry(item) && Boolean(item.deletedAt)).length,
+  seriesCount: series.value.length,
+  tagCount: tags.value.length,
+}));
+
+const moveTargetOptions = computed(() => {
+  if (moveMode.value !== 'directory' || !movingDirectoryId.value) {
+    return directoryOptions.value;
   }
-  return sorted.filter((item) => item.name.toLowerCase().includes(search));
+  return directoryOptions.value.filter((item) => {
+    if (item.value === movingDirectoryId.value) {
+      return false;
+    }
+    const targetRow = directoryRowMap.value.get(item.value);
+    return !targetRow?.ancestorIds.includes(movingDirectoryId.value!);
+  });
 });
 
 const selectedAssetsCount = computed(() => selectedAssetIds.value.length);
+
+const selectedAssets = computed(() => {
+  const selected = new Set(selectedAssetIds.value);
+  return currentAssets.value.filter((item) => selected.has(item.id));
+});
 
 function mapDoneFile(url: null | string, name: string): UploadFile[] {
   if (!url) {
@@ -234,13 +373,16 @@ async function loadLookups() {
   categories.value = categoryList || [];
   tags.value = tagList || [];
   series.value = seriesList || [];
-  directoryItems.value = dirTree || [];
+  directoryItems.value = normalizeDirectoryTree(dirTree || []);
 }
 
 async function loadCurrentDirectoryEntries() {
   loadingEntries.value = true;
   try {
-    const result = await listResourceCategoryEntriesApi(currentDirectoryId.value || undefined);
+    const result = await listResourceCategoryEntriesApi({
+      categoryId: currentDirectoryId.value || undefined,
+      deletedOnly: showDeletedOnly.value,
+    });
     currentDirectoryId.value = result.currentDirectory.id;
     currentDirectoryPath.value = result.currentDirectory.path || [];
     mixedItems.value = result.items || [];
@@ -256,13 +398,55 @@ async function refreshDirectoryContext() {
 }
 
 function openCreateModal() {
+  if (showDeletedOnly.value) {
+    message.warning('回收站中不能新增资产，请先退出回收站');
+    return;
+  }
   editingId.value = null;
   resetForm();
+  assetFormModel.categoryId = currentDirectoryId.value;
   modalOpen.value = true;
+}
+
+function clearAssetFilters() {
+  keyword.value = '';
+  assetTypeFilter.value = '';
+  assetSeriesFilter.value = '';
+  assetTagFilter.value = '';
+}
+
+function resetBatchEditForm() {
+  batchEditFormModel.applyCategory = false;
+  batchEditFormModel.applySeries = false;
+  batchEditFormModel.applyTags = false;
+  batchEditFormModel.categoryId = currentDirectoryId.value || rootDirectoryId.value;
+  batchEditFormModel.seriesId = null;
+  batchEditFormModel.tagIds = [];
+}
+
+function openBatchEditModal() {
+  if (showDeletedOnly.value) {
+    message.warning('回收站中不能批量编辑资产，请先退出回收站');
+    return;
+  }
+  if (!selectedAssetsCount.value) {
+    message.warning('请先选择要批量编辑的资产');
+    return;
+  }
+  resetBatchEditForm();
+  batchEditModalOpen.value = true;
+}
+
+function goToResourceSection(path: string) {
+  void router.push(path);
 }
 
 async function openEditModal(row: ResourceAssetItem) {
   const detail = await getResourceAssetApi(row.id);
+  if (detail.deletedAt) {
+    message.warning('回收站中的资产请先恢复后再编辑');
+    return;
+  }
   editingId.value = detail.id;
   assetFormModel.name = detail.name || '';
   assetFormModel.type = detail.type || 'file';
@@ -284,33 +468,34 @@ async function openEditModal(row: ResourceAssetItem) {
   modalOpen.value = true;
 }
 
-function openDirectory(item: ResourceCategoryEntryDirectory) {
-  currentDirectoryId.value = item.id;
+function selectDirectory(directoryId: string) {
+  currentDirectoryId.value = directoryId;
   loadCurrentDirectoryEntries();
 }
 
 function openDirectoryCreateModal() {
   directoryModalMode.value = 'create';
   directoryName.value = '';
+  movingDirectoryId.value = null;
   directoryModalOpen.value = true;
 }
 
 function openDirectoryEditModal(directoryId?: string) {
   const id = directoryId || currentDirectoryId.value;
-  const target = directoryOptions.value.find((item) => item.value === id);
-  if (!target || currentDirectoryPath.value.length <= 1) {
+  const target = directoryRowMap.value.get(id);
+  if (!target || (id === currentDirectoryId.value && currentDirectoryIsRoot.value)) {
     message.warning('根分类不支持编辑');
     return;
   }
   directoryModalMode.value = 'edit';
-  directoryName.value = target.label.split('/').pop()?.trim() || '';
+  directoryName.value = target.name;
   movingDirectoryId.value = id;
   directoryModalOpen.value = true;
 }
 
 function handleDirectoryDelete(directoryId?: string) {
   const id = directoryId || currentDirectoryId.value;
-  const isRoot = currentDirectoryPath.value.length <= 1 && id === currentDirectoryId.value;
+  const isRoot = id === currentDirectoryId.value && currentDirectoryIsRoot.value;
   if (isRoot) {
     message.warning('根分类不支持删除');
     return;
@@ -331,6 +516,10 @@ function handleDirectoryDelete(directoryId?: string) {
 }
 
 function openMoveAssetModal(assetId?: string) {
+  if (showDeletedOnly.value) {
+    message.warning('回收站中不能移动资产，请先恢复后再操作');
+    return;
+  }
   moveMode.value = 'asset';
   movingAssetIds.value = assetId ? [assetId] : [...selectedAssetIds.value];
   if (!movingAssetIds.value.length) {
@@ -342,9 +531,12 @@ function openMoveAssetModal(assetId?: string) {
 }
 
 function openMoveDirectoryModal(directoryId: string) {
+  if (!directoryId) {
+    return;
+  }
   moveMode.value = 'directory';
   movingDirectoryId.value = directoryId;
-  moveTargetDirectoryId.value = currentDirectoryId.value;
+  moveTargetDirectoryId.value = directoryRowMap.value.get(directoryId)?.parentId || rootDirectoryId.value;
   moveModalOpen.value = true;
 }
 
@@ -362,6 +554,15 @@ async function submitMove() {
       });
       message.success('资产移动成功');
     } else if (movingDirectoryId.value) {
+      if (movingDirectoryId.value === moveTargetDirectoryId.value) {
+        message.warning('分类不能移动到自身');
+        return;
+      }
+      const targetRow = directoryRowMap.value.get(moveTargetDirectoryId.value);
+      if (targetRow?.ancestorIds.includes(movingDirectoryId.value)) {
+        message.warning('分类不能移动到自己的后代下');
+        return;
+      }
       await moveResourceCategoryTreeItemApi(movingDirectoryId.value, moveTargetDirectoryId.value);
       message.success('分类移动成功');
     }
@@ -493,15 +694,107 @@ async function submitAsset() {
 
 function handleDelete(row: ResourceAssetItem) {
   Modal.confirm({
-    title: `确认删除资产 “${row.name}” 吗？`,
-    content: '删除后不可恢复。',
+    title: row.deletedAt ? `确认彻底删除资产 “${row.name}” 吗？` : `确认删除资产 “${row.name}” 吗？`,
+    content: row.deletedAt ? '彻底删除后不可恢复。' : '该操作会把资产移入回收站。',
     okType: 'danger',
     onOk: async () => {
       await deleteResourceAssetApi(row.id);
-      message.success('资产已删除');
+      message.success(row.deletedAt ? '资产已彻底删除' : '资产已删除');
       loadCurrentDirectoryEntries();
     },
   });
+}
+
+async function handleRestore(row: ResourceAssetItem) {
+  await restoreResourceAssetApi(row.id);
+  message.success('资产已恢复');
+  await refreshDirectoryContext();
+}
+
+async function handleBatchRestore() {
+  if (!showDeletedOnly.value || !selectedAssets.value.length) {
+    return;
+  }
+  movingAssets.value = true;
+  try {
+    await Promise.all(selectedAssets.value.map((item) => restoreResourceAssetApi(item.id)));
+    message.success('已恢复选中的资产');
+    await refreshDirectoryContext();
+  } finally {
+    movingAssets.value = false;
+  }
+}
+
+async function handleBatchPermanentDelete() {
+  if (!showDeletedOnly.value || !selectedAssets.value.length) {
+    return;
+  }
+  Modal.confirm({
+    title: `确认彻底删除选中的 ${selectedAssets.value.length} 个资产吗？`,
+    content: '彻底删除后不可恢复。',
+    okType: 'danger',
+    onOk: async () => {
+      movingAssets.value = true;
+      try {
+        await Promise.all(selectedAssets.value.map((item) => deleteResourceAssetApi(item.id)));
+        message.success('已彻底删除选中的资产');
+        await refreshDirectoryContext();
+      } finally {
+        movingAssets.value = false;
+      }
+    },
+  });
+}
+
+async function submitBatchEdit() {
+  if (!selectedAssetsCount.value) {
+    message.warning('请先选择要批量编辑的资产');
+    return;
+  }
+
+  const payload: {
+    assetIds: string[];
+    categoryId?: string;
+    seriesId?: null | string;
+    tagIds?: string[];
+  } = {
+    assetIds: [...selectedAssetIds.value],
+  };
+
+  let hasFieldToUpdate = false;
+  if (batchEditFormModel.applyCategory) {
+    if (!batchEditFormModel.categoryId) {
+      message.warning('请选择目标分类');
+      return;
+    }
+    payload.categoryId = batchEditFormModel.categoryId;
+    hasFieldToUpdate = true;
+  }
+
+  if (batchEditFormModel.applySeries) {
+    payload.seriesId = batchEditFormModel.seriesId;
+    hasFieldToUpdate = true;
+  }
+
+  if (batchEditFormModel.applyTags) {
+    payload.tagIds = [...batchEditFormModel.tagIds];
+    hasFieldToUpdate = true;
+  }
+
+  if (!hasFieldToUpdate) {
+    message.warning('请至少勾选一个要批量修改的字段');
+    return;
+  }
+
+  batchEditSubmitting.value = true;
+  try {
+    const result = await bulkUpdateResourceAssetsApi(payload);
+    message.success(`已更新 ${result.modifiedCount} 个资产`);
+    batchEditModalOpen.value = false;
+    await refreshDirectoryContext();
+  } finally {
+    batchEditSubmitting.value = false;
+  }
 }
 
 function handleDownload(id: string) {
@@ -539,7 +832,7 @@ const columns = [
 
 const rowSelection = computed<TableProps['rowSelection']>(() => ({
   selectedRowKeys: selectedAssetIds.value,
-  onChange: (keys, rows) => {
+  onChange: (_keys, rows) => {
     selectedAssetIds.value = rows
       .filter((item) => !isDirectoryEntry(item as ResourceCategoryEntry))
       .map((item) => (item as ResourceAssetItem).id);
@@ -556,43 +849,70 @@ function formatDateTime(value?: string) {
   return new Date(value).toLocaleString();
 }
 
+function asAssetRecord(record: Record<string, any>): ResourceAssetItem {
+  return record as ResourceAssetItem;
+}
+
 function customRow(record: ResourceCategoryEntry) {
-  const item = record;
+  const item = record as ResourceAssetItem;
   return {
     draggable: true,
     onDragstart: () => {
       dragPayload.value = {
         id: item.id,
-        kind: isDirectoryEntry(item) ? 'directory' : 'asset',
+        kind: 'asset',
       };
-    },
-    onDragover: (event: DragEvent) => {
-      if (isDirectoryEntry(item) && dragPayload.value) {
-        event.preventDefault();
-      }
-    },
-    onDrop: async (event: DragEvent) => {
-      if (!isDirectoryEntry(item) || !dragPayload.value) {
-        return;
-      }
-      event.preventDefault();
-      if (dragPayload.value.kind === 'asset') {
-        await bulkMoveResourceAssetsCategoryApi({
-          assetIds: [dragPayload.value.id],
-          targetDirectoryId: item.id,
-        });
-        message.success('资产移动成功');
-      } else if (dragPayload.value.id !== item.id) {
-        await moveResourceCategoryTreeItemApi(dragPayload.value.id, item.id);
-        message.success('分类移动成功');
-      }
-      dragPayload.value = null;
-      await refreshDirectoryContext();
     },
     onDragend: () => {
       dragPayload.value = null;
     },
   };
+}
+
+async function handleDirectoryTreeDrop(targetDirectoryId: string) {
+  if (!dragPayload.value || !targetDirectoryId) {
+    return;
+  }
+  const payload = dragPayload.value;
+  if (payload.kind === 'asset') {
+    await bulkMoveResourceAssetsCategoryApi({
+      assetIds: [payload.id],
+      targetDirectoryId,
+    });
+    message.success('资产移动成功');
+  } else if (payload.id !== targetDirectoryId) {
+    const targetRow = directoryRowMap.value.get(targetDirectoryId);
+    if (targetRow?.ancestorIds.includes(payload.id)) {
+      message.warning('分类不能移动到自己的后代下');
+      dragPayload.value = null;
+      return;
+    }
+    await moveResourceCategoryTreeItemApi(payload.id, targetDirectoryId);
+    message.success('分类移动成功');
+  }
+  dragPayload.value = null;
+  await refreshDirectoryContext();
+}
+
+function handleDirectoryTreeDragStart(directoryId: string) {
+  dragPayload.value = {
+    id: directoryId,
+    kind: 'directory',
+  };
+}
+
+function canDropOnDirectory(targetDirectoryId: string) {
+  if (!dragPayload.value) {
+    return false;
+  }
+  if (dragPayload.value.id === targetDirectoryId) {
+    return false;
+  }
+  if (dragPayload.value.kind === 'directory') {
+    const targetRow = directoryRowMap.value.get(targetDirectoryId);
+    return !targetRow?.ancestorIds.includes(dragPayload.value.id);
+  }
+  return true;
 }
 
 onMounted(async () => {
@@ -602,82 +922,152 @@ onMounted(async () => {
 
 <template>
   <div class="p-5">
-    <Space style="width: 100%; justify-content: space-between; margin-bottom: 12px" align="center">
-      <Space>
-        <Button v-access:code="'resource:write'" type="primary" @click="openCreateModal">
-          <PlusOutlined />
-          新增资产
-        </Button>
-        <Button v-access:code="'resource:write'" @click="openDirectoryCreateModal">新建分类</Button>
-        <Button v-access:code="'resource:write'" @click="() => openDirectoryEditModal()">编辑分类</Button>
-        <Button v-access:code="'resource:write'" danger @click="() => handleDirectoryDelete()">删除分类</Button>
-        <Button v-access:code="'resource:write'" @click="() => openMoveAssetModal()" :disabled="selectedAssetsCount === 0">
-          移动选中资产
-        </Button>
+    <Space style="width: 100%; justify-content: space-between; margin-bottom: 12px" align="center" wrap>
+      <Space wrap>
+        <Tag color="blue">资源工作台</Tag>
+        <Tag>资产 {{ resourceSummary.assetCount }}</Tag>
+        <Tag>目录 {{ resourceSummary.categoryCount }}</Tag>
+        <Tag>标签 {{ resourceSummary.tagCount }}</Tag>
+        <Tag>系列 {{ resourceSummary.seriesCount }}</Tag>
+        <Tag v-if="resourceSummary.deletedCount">回收站 {{ resourceSummary.deletedCount }}</Tag>
       </Space>
-      <Input v-model:value="keyword" allow-clear style="width: 260px" placeholder="搜索当前分类文件/子分类" />
+      <Space wrap>
+        <Button @click="() => goToResourceSection('/resources')">资产</Button>
+        <Button @click="() => goToResourceSection('/resources/tags')">标签</Button>
+        <Button @click="() => goToResourceSection('/resources/series')">系列</Button>
+        <Button @click="() => goToResourceSection('/resources/categories')">分类</Button>
+      </Space>
     </Space>
 
-    <Space style="margin-bottom: 12px" wrap>
-      <Tag color="blue">当前分类</Tag>
-      <template v-for="(crumb, index) in currentDirectoryPath" :key="crumb.id">
-        <Button type="link" size="small" @click="() => { currentDirectoryId = crumb.id; loadCurrentDirectoryEntries(); }">{{ crumb.name }}</Button>
-        <ArrowRightOutlined v-if="index < currentDirectoryPath.length - 1" />
-      </template>
-    </Space>
+    <div style="display: flex; gap: 16px; align-items: stretch">
+      <div style="width: 320px; flex: 0 0 320px; border: 1px solid #f0f0f0; border-radius: 8px; background: #fff">
+        <div style="padding: 12px 12px 8px; border-bottom: 1px solid #f0f0f0">
+          <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px">资产目录树</div>
+          <Input v-model:value="directoryKeyword" allow-clear size="small" placeholder="搜索目录" style="margin-bottom: 8px" />
+          <Space wrap>
+            <Button v-access:code="'category:write'" size="small" @click="openDirectoryCreateModal">新建目录</Button>
+            <Button v-access:code="'category:write'" size="small" @click="() => openDirectoryEditModal()" :disabled="currentDirectoryIsRoot">重命名</Button>
+            <Button v-access:code="'category:write'" size="small" @click="() => openMoveDirectoryModal(currentDirectoryId)" :disabled="currentDirectoryIsRoot">移动</Button>
+            <Button v-access:code="'category:write'" size="small" danger @click="() => handleDirectoryDelete()" :disabled="currentDirectoryIsRoot">删除</Button>
+          </Space>
+        </div>
+        <div style="padding: 8px 0; max-height: calc(100vh - 240px); overflow-y: auto">
+          <div
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer"
+            :style="currentDirectoryIsRoot ? { background: '#e6f4ff' } : null"
+            @click="() => rootDirectoryId && selectDirectory(rootDirectoryId)"
+            @dragover.prevent="() => undefined"
+            @drop="() => rootDirectoryId && handleDirectoryTreeDrop(rootDirectoryId)"
+          >
+            <FolderOpenOutlined style="color: #1677ff" />
+            <span>全部资源</span>
+          </div>
+          <div v-if="!filteredDirectoryRows.length" style="padding: 12px; color: #999; text-align: center">没有匹配的目录</div>
+          <div
+            v-for="item in filteredDirectoryRows"
+            :key="item.id"
+            draggable="true"
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; user-select: none"
+            :style="[
+              { paddingLeft: `${12 + item.depth * 20}px` },
+              currentDirectoryId === item.id ? { background: '#e6f4ff' } : null,
+            ]"
+            @click="() => selectDirectory(item.id)"
+            @dragstart="() => handleDirectoryTreeDragStart(item.id)"
+            @dragend="() => (dragPayload = null)"
+            @dragover.prevent="() => undefined"
+            @drop="() => canDropOnDirectory(item.id) && handleDirectoryTreeDrop(item.id)"
+          >
+            <component :is="currentDirectoryId === item.id ? FolderOpenOutlined : FolderOutlined" style="color: #1677ff" />
+            <span style="flex: 1">{{ item.name }}</span>
+            <span v-if="item.hasChildren" style="font-size: 12px; color: #999">子级</span>
+          </div>
+        </div>
+      </div>
 
-    <Table
-      :columns="columns"
-      :data-source="filteredItems"
-      :loading="loadingEntries"
-      :pagination="false"
-      :row-selection="rowSelection"
-      :custom-row="customRow"
-      :row-key="(row: any) => row.id"
-      size="middle"
-    >
+      <div style="min-width: 0; flex: 1">
+        <Space style="width: 100%; justify-content: space-between; margin-bottom: 12px" align="center">
+          <Space>
+            <Button v-access:code="'resource:write'" type="primary" @click="openCreateModal" :disabled="showDeletedOnly">
+              <PlusOutlined />
+              新增资产
+            </Button>
+            <Button v-access:code="'resource:write'" @click="openBatchEditModal" :disabled="selectedAssetsCount === 0 || showDeletedOnly">
+              批量编辑
+            </Button>
+              <Button v-access:code="'resource:write'" @click="clearAssetFilters">
+                清除筛选
+              </Button>
+            <Button v-access:code="'resource:write'" @click="() => openMoveAssetModal()" :disabled="selectedAssetsCount === 0 || showDeletedOnly">
+              移动选中资产
+            </Button>
+            <Button v-access:code="'resource:read'" @click="() => { showDeletedOnly = !showDeletedOnly; loadCurrentDirectoryEntries(); }">
+              {{ showDeletedOnly ? '退出回收站' : '回收站' }}
+            </Button>
+            <Button v-access:code="'resource:write'" :disabled="!showDeletedOnly || selectedAssetsCount === 0" @click="handleBatchRestore">
+              批量恢复
+            </Button>
+            <Button v-access:code="'resource:write'" danger :disabled="!showDeletedOnly || selectedAssetsCount === 0" @click="handleBatchPermanentDelete">
+              批量彻底删除
+            </Button>
+          </Space>
+          <Input v-model:value="keyword" allow-clear style="width: 320px" placeholder="搜索当前目录资产" />
+        </Space>
+
+        <Space style="margin-bottom: 12px; width: 100%" wrap>
+          <Select v-model:value="assetTypeFilter" :options="assetTypeOptions" style="width: 140px" />
+          <Select v-model:value="assetSeriesFilter" :options="assetSeriesFilterOptions" style="width: 180px" show-search option-filter-prop="label" />
+          <Select v-model:value="assetTagFilter" :options="assetTagFilterOptions" style="width: 180px" show-search option-filter-prop="label" />
+        </Space>
+
+        <Space style="margin-bottom: 12px" wrap>
+          <Tag color="blue">当前目录</Tag>
+          <template v-for="(crumb, index) in currentDirectoryPath" :key="crumb.id">
+            <Button type="link" size="small" @click="() => selectDirectory(crumb.id)">{{ crumb.name }}</Button>
+            <ArrowRightOutlined v-if="index < currentDirectoryPath.length - 1" />
+          </template>
+          <Tag>{{ currentDirectoryName }}</Tag>
+          <Tag>{{ `子目录 ${currentDirectoryStats.childDirectoryCount}` }}</Tag>
+          <Tag>{{ `资产 ${currentDirectoryStats.assetCount}` }}</Tag>
+        </Space>
+
+        <Table
+          :columns="columns"
+          :data-source="filteredItems"
+          :loading="loadingEntries"
+          :pagination="false"
+          :row-selection="rowSelection"
+          :custom-row="customRow"
+          :row-key="(row: any) => row.id"
+          size="middle"
+        >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'thumbnail'">
-          <template v-if="isDirectoryEntry(record)">
-            <FolderOutlined style="font-size: 20px; color: #1677ff" />
-          </template>
-          <template v-else>
-            <Image
-              v-if="isThumbnailAvailable(record)"
-              :src="getThumbnailUrl(record)"
-              :width="42"
-              :height="42"
-              style="object-fit: cover; border-radius: 4px"
-              @error="() => handleThumbnailError(record)"
-            />
-            <span v-else>-</span>
-          </template>
+          <Image
+            v-if="isThumbnailAvailable(asAssetRecord(record))"
+            :src="getThumbnailUrl(asAssetRecord(record))"
+            :width="42"
+            :height="42"
+            style="object-fit: cover; border-radius: 4px"
+            @error="() => handleThumbnailError(asAssetRecord(record))"
+          />
+          <span v-else>-</span>
         </template>
 
         <template v-else-if="column.key === 'name'">
-          <template v-if="isDirectoryEntry(record)">
-            <Button type="link" @click="openDirectory(record)">
-              <FolderOpenOutlined /> {{ record.name }}
-            </Button>
-          </template>
-          <template v-else>
-            {{ record.name }}
-          </template>
+          {{ record.name }}
         </template>
 
         <template v-else-if="column.key === 'type'">
-          <template v-if="isDirectoryEntry(record)">分类</template>
-          <template v-else>{{ record.type }}</template>
+          {{ record.type }}
         </template>
 
         <template v-else-if="column.key === 'categoryPathString'">
-          <template v-if="isDirectoryEntry(record)">-</template>
-          <template v-else>{{ record.categoryPathString || '-' }}</template>
+          {{ record.categoryPathString || '-' }}
         </template>
 
         <template v-else-if="column.key === 'size'">
-          <template v-if="isDirectoryEntry(record)">-</template>
-          <template v-else>{{ record.size }}</template>
+          {{ record.size }}
         </template>
 
         <template v-else-if="column.key === 'updatedAt'">
@@ -686,34 +1076,33 @@ onMounted(async () => {
 
         <template v-else-if="column.key === 'actions'">
           <Space>
-            <template v-if="isDirectoryEntry(record)">
-              <Button v-access:code="'resource:write'" type="text" size="small" @click="openDirectory(record)">打开</Button>
-              <Button v-access:code="'resource:write'" type="text" size="small" @click="() => openDirectoryEditModal(record.id)">编辑</Button>
-              <Button v-access:code="'resource:write'" type="text" size="small" @click="() => openMoveDirectoryModal(record.id)">移动</Button>
-              <Button v-access:code="'resource:write'" danger type="text" size="small" @click="() => handleDirectoryDelete(record.id)">删除</Button>
-            </template>
-            <template v-else>
-              <Tooltip title="下载">
-                <Button type="text" size="small" @click="handleDownload(record.id)">
-                  <DownloadOutlined />
-                </Button>
-              </Tooltip>
+            <Tooltip title="下载">
+              <Button type="text" size="small" @click="handleDownload(record.id)">
+                <DownloadOutlined />
+              </Button>
+            </Tooltip>
+            <template v-if="!asAssetRecord(record).deletedAt">
               <Tooltip title="编辑">
-                <Button v-access:code="'resource:write'" type="text" size="small" @click="openEditModal(record)">
+                <Button v-access:code="'resource:write'" type="text" size="small" @click="openEditModal(asAssetRecord(record))">
                   <EditOutlined />
                 </Button>
               </Tooltip>
               <Button v-access:code="'resource:write'" type="text" size="small" @click="() => openMoveAssetModal(record.id)">移动</Button>
-              <Tooltip title="删除">
-                <Button v-access:code="'resource:write'" danger type="text" size="small" @click="handleDelete(record)">
-                  <DeleteOutlined />
-                </Button>
-              </Tooltip>
             </template>
+            <template v-if="asAssetRecord(record).deletedAt">
+              <Button v-access:code="'resource:write'" type="text" size="small" @click="() => handleRestore(asAssetRecord(record))">恢复</Button>
+            </template>
+            <Tooltip :title="asAssetRecord(record).deletedAt ? '彻底删除' : '删除'">
+              <Button v-access:code="'resource:write'" danger type="text" size="small" @click="handleDelete(asAssetRecord(record))">
+                <DeleteOutlined />
+              </Button>
+            </Tooltip>
           </Space>
         </template>
       </template>
-    </Table>
+        </Table>
+      </div>
+    </div>
 
     <Modal
       :open="modalOpen"
@@ -844,9 +1233,68 @@ onMounted(async () => {
             v-model:value="moveTargetDirectoryId"
             show-search
             option-filter-prop="label"
-            :options="directoryOptions"
+            :options="moveTargetOptions"
             placeholder="选择目标分类"
           />
+        </Form.Item>
+      </Form>
+    </Modal>
+
+    <Modal
+      :open="batchEditModalOpen"
+      :confirm-loading="batchEditSubmitting"
+      title="批量编辑资产"
+      ok-text="保存"
+      cancel-text="取消"
+      @ok="submitBatchEdit"
+      @cancel="batchEditModalOpen = false"
+    >
+      <div style="margin-bottom: 12px; color: #666">未勾选的字段不会被修改；标签和系列支持清空。</div>
+      <Form :label-col="{ span: 6 }" :wrapper-col="{ span: 16 }">
+        <Form.Item label="分类">
+          <Space align="start" style="width: 100%">
+            <Checkbox v-model:checked="batchEditFormModel.applyCategory">修改</Checkbox>
+            <Select
+              v-model:value="batchEditFormModel.categoryId"
+              :disabled="!batchEditFormModel.applyCategory"
+              show-search
+              option-filter-prop="label"
+              :options="categoryOptions"
+              placeholder="选择目标分类"
+              style="flex: 1"
+            />
+          </Space>
+        </Form.Item>
+        <Form.Item label="系列">
+          <Space align="start" style="width: 100%">
+            <Checkbox v-model:checked="batchEditFormModel.applySeries">修改</Checkbox>
+            <Select
+              v-model:value="batchEditFormModel.seriesId"
+              :disabled="!batchEditFormModel.applySeries"
+              allow-clear
+              show-search
+              option-filter-prop="label"
+              :options="seriesOptions"
+              placeholder="选择系列，留空则清空"
+              style="flex: 1"
+            />
+          </Space>
+        </Form.Item>
+        <Form.Item label="标签">
+          <Space align="start" style="width: 100%">
+            <Checkbox v-model:checked="batchEditFormModel.applyTags">修改</Checkbox>
+            <Select
+              v-model:value="batchEditFormModel.tagIds"
+              :disabled="!batchEditFormModel.applyTags"
+              mode="multiple"
+              allow-clear
+              show-search
+              option-filter-prop="label"
+              :options="tagOptions"
+              placeholder="选择标签，留空则清空"
+              style="flex: 1"
+            />
+          </Space>
         </Form.Item>
       </Form>
     </Modal>
