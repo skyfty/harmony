@@ -332,7 +332,6 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
   }
   setMaterialPreviewThumbnail(slotId, asset.thumbnail)
   setActiveSlot(slotId)
-  emit('open-details', slotId)
 }
 
 function handleSlotDragOver(slotId: string, event: DragEvent) {
