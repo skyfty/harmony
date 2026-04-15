@@ -67,9 +67,13 @@ COPY --from=build /app/server/dist ./dist
 # If the installer links @harmony/schema to /app/schema, ensure the target exists at runtime
 COPY --from=build /app/schema /app/schema
 COPY server/package.json ./package.json
+# Run the resource-category migration before starting the server process.
+COPY server/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Copy any runtime assets (uploads will be a volume)
 VOLUME ["/app/uploads"]
 # Expose application port (default 4000)
 EXPOSE 4000
 # Default command
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]
