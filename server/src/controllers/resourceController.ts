@@ -60,7 +60,7 @@ import { appConfig } from '@/config/env'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
-const JSON_REWRITE_EXTENSIONS = new Set(CONFIG_ASSET_EXTENSIONS)
+const JSON_REWRITE_EXTENSIONS = new Set<string>(CONFIG_ASSET_EXTENSIONS)
 
 const ASSET_COLORS: Record<string, string> = {
   model: '#26c6da',
