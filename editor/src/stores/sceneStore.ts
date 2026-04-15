@@ -9821,6 +9821,88 @@ export const useSceneStore = defineStore('scene', {
       await this.syncLocalMaterialDependencyRegistryEntries(normalizedAssetId)
       return material
     },
+    async applyMaterialAssetToNodeMaterialSlot(
+      nodeId: string,
+      nodeMaterialId: string,
+      materialAssetId: string,
+    ): Promise<SceneNodeMaterial | null> {
+      const normalizedAssetId = typeof materialAssetId === 'string' ? materialAssetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      const targetNode = findNodeById(this.nodes, nodeId)
+      if (!targetNode || !nodeSupportsMaterials(targetNode) || !targetNode.materials?.length) {
+        return null
+      }
+
+      const material = await this.ensureMaterialAssetDefinitionLoaded(normalizedAssetId)
+      if (!material) {
+        return null
+      }
+
+      let updated = false
+      let requiresDynamicMeshPatch = false
+      let appliedEntry: SceneNodeMaterial | null = null
+
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
+          return
+        }
+        node.materials = node.materials.map((entry, index) => {
+          if (entry.id !== nodeMaterialId) {
+            return entry
+          }
+          updated = true
+          const fallbackName = entry.name?.trim() || `Material ${index + 1}`
+          const resolvedName = material.name?.trim() || fallbackName
+          const nextEntry = createNodeMaterial(null, material, {
+            id: entry.id,
+            name: resolvedName,
+            type: material.type ?? entry.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+          })
+          appliedEntry = nextEntry
+          return nextEntry
+        })
+        const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
+        const wallResult = wallHelpers.ensureWallMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged) {
+          requiresDynamicMeshPatch = true
+        }
+      })
+
+      if (!updated || !appliedEntry) {
+        return null
+      }
+
+      this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
+      commitSceneSnapshot(this)
+
+      const refreshedNode = findNodeById(this.nodes, nodeId)
+      if (refreshedNode) {
+        try {
+          await this.ensureSceneAssetsReady({
+            nodes: [refreshedNode],
+            showOverlay: false,
+            refreshViewport: true,
+          })
+        } catch (error) {
+          console.warn('Failed to prepare material asset dependencies for node material slot', {
+            nodeId,
+            nodeMaterialId,
+            materialAssetId: normalizedAssetId,
+            error,
+          })
+        }
+      }
+
+      this.queueSceneNodePatch(nodeId, ['materials'])
+      return appliedEntry
+    },
     async syncLocalMaterialAsset(materialId: string): Promise<ProjectAsset | null> {
       const material = this.materials.find((entry) => entry.id === materialId)
       if (!material) {
