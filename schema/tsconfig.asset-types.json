@@ -10,7 +10,7 @@
     "strict": false,
     "declaration": true,
     "emitDeclarationOnly": false,
-    "outDir": "./",
+    "outDir": "./dist",
     "allowSyntheticDefaultImports": true,
     "importsNotUsedAsValues": "remove",
     "resolveJsonModule": true,
