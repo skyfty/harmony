@@ -25,7 +25,7 @@ export type SyncSceneryToConsumerUniModulesOptions = SyncSceneryCommonOptions & 
   consumerRoot?: string;
 };
 
-const DEFAULT_ALLOWED_ROOTS = ["package.json", "components", "common", "static"];
+const DEFAULT_ALLOWED_ROOTS = ["package.json", "components", "common", "composables", "static"];
 
 const DEFAULT_EXCLUDES = [
   "scripts/",
