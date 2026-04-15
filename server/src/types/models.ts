@@ -841,6 +841,10 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   mimeType?: string | null
   /** 中文：额外元数据 */
   metadata?: Record<string, unknown>
+  /** 中文：是否已删除 */
+  isDeleted?: boolean
+  /** 中文：删除时间（可选） */
+  deletedAt?: Date | null
   /** 中文：地形散布预设（可选） */
   terrainScatterPreset?: TerrainScatterCategory | null
   /** 中文：创建时间 */

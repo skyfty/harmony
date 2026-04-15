@@ -18,6 +18,7 @@ const props = defineProps<{
   placeholder?: string
   disabled?: boolean
   hint?: string
+  allowCreate?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -215,7 +216,7 @@ const searchItems = computed(() => {
     }
   })
   const exactMatch = currentChildren.value.some((child) => child.name.trim().toLowerCase() === lowerKeyword)
-  if (!exactMatch) {
+  if (props.allowCreate && !exactMatch) {
     result.push({
       id: `__create__:${keyword}`,
       label: `创建分类 “${keyword}”`,
@@ -409,7 +410,7 @@ function handleClear(): void {
             :model-value="searchText"
             density="compact"
             variant="outlined"
-            placeholder="搜索分类或输入路径创建"
+            :placeholder="allowCreate ? '搜索分类或输入路径创建' : '搜索分类'"
             clearable
             autofocus
             hide-details
@@ -467,7 +468,7 @@ function handleClear(): void {
               </v-list-item>
             </v-list>
             <div v-if="!searchItems.length" class="category-menu__empty text-medium-emphasis">
-              没有匹配的分类，可输入完整路径创建。
+              {{ allowCreate ? '没有匹配的分类，可输入完整路径创建。' : '没有匹配的分类。' }}
             </div>
           </template>
         </div>

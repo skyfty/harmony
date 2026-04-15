@@ -196,7 +196,7 @@ const tagAccessHint = computed(() => {
 })
 const categoryAccessHint = computed(() => {
   if (canUseRemoteCategorySelector.value) {
-    return ''
+    return '上传到服务器时必须选择后台已维护的资源目录。上传弹窗中不再创建新目录。'
   }
   if (!authStore.isAuthenticated) {
     return 'Category selector is unavailable while logged out. You can still edit Category Path manually for local metadata.'
@@ -1134,15 +1134,6 @@ function handleEntryCategorySelected(entry: UploadAssetEntry, payload: { id: str
   markEntryDirty(entry)
 }
 
-function handleEntryCategoryCreated(entry: UploadAssetEntry, category: ResourceCategory): void {
-  const label = buildCategoryLabel(category ?? null)
-  handleEntryCategoryChange(entry, category?.id ?? null)
-  if (label) {
-    entry.categoryPathLabel = label
-  }
-  void loadResourceCategories({ force: true })
-}
-
 /* Series helpers removed (Series input temporarily disabled) */
 
 function handlePreviewDimensions(entry: UploadAssetEntry, payload: { length: number; width: number; height: number }): void {
@@ -1440,6 +1431,9 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
         if (!prepared.file) {
           throw new Error('Asset source file is not available for upload')
         }
+        if (!prepared.categoryId) {
+          throw new Error('请选择后台已维护的资源目录后再上传')
+        }
         const tagIds = tagMap.get(entry.assetId) ?? []
         const dependencies = await resolveBundleDependencies(prepared.asset, prepared.file)
 
@@ -1451,7 +1445,7 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
           name: prepared.name,
           description: prepared.description.length ? prepared.description : null,
           categoryId: prepared.categoryId,
-          categoryPathSegments: prepared.categoryPathSegments,
+          categoryPathSegments: [],
           tagIds,
           color: prepared.color,
           dimensionLength: prepared.dimensionLength,
@@ -1636,13 +1630,12 @@ function keepLocalReferencesAfterUpload(): void {
                         :model-value="entry.categoryId"
                         :categories="resourceCategories"
                         label="Asset Category"
-                        placeholder="Select or create a category"
-                        hint="Optional. Leave empty to keep the asset in the root category."
+                        placeholder="选择后台已维护的资源目录"
+                        hint="上传到服务器时必须选择后台已维护的目录。"
                         class="category-selector"
                         :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset || !canUseRemoteCategorySelector"
                         @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
                         @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
-                        @category-created="(category) => handleEntryCategoryCreated(entry, category)"
                       />
                     </div>
                     <div v-if="categoryAccessHint" class="upload-entry__field-hint upload-entry__field-hint--warning">{{ categoryAccessHint }}</div>
@@ -1652,9 +1645,9 @@ function keepLocalReferencesAfterUpload(): void {
                         label="Category Path"
                         density="compact"
                         variant="underlined"
-                        hint="Optional local category path. Example: Nature / Trees / Pine"
+                        hint="仅用于本地元数据展示；服务器上传以所选后台目录为准。"
                         persistent-hint
-                        :disabled="uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
+                        :disabled="canUseRemoteCategorySelector || uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
                         @update:model-value="(value) => handleEntryCategoryPathLabelChange(entry, value)"
                       />
                     </div>

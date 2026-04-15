@@ -119,6 +119,8 @@ type AssetData = {
   originalFilename?: string | null
   mimeType?: string | null
   metadata?: Record<string, unknown>
+  isDeleted?: boolean
+  deletedAt?: Date | null
   terrainScatterPreset?: TerrainScatterCategory | null
   createdAt: Date
   updatedAt: Date
@@ -189,6 +191,8 @@ type AssetListQuery = {
   page: number
   pageSize: number
   keyword?: string
+  deletedOnly?: boolean
+  includeDeleted?: boolean
   types?: AssetDocument['type'][]
   tagIds?: string[]
   seriesId?: string | null
@@ -342,6 +346,7 @@ type AssetSummaryWithLocation = AssetSummary & {
   directoryId?: string | null
   directoryPath?: CategoryPathItemDto[]
   directoryPathString?: string
+  deletedAt?: string | null
   contentHash?: string | null
   contentHashAlgorithm?: string | null
   sourceLocalAssetId?: string | null
@@ -792,6 +797,21 @@ function isInvalidDirectoryId(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.length > 0 && !Types.ObjectId.isValid(value)
 }
 
+function isAdminResourceRequest(ctx: Context): boolean {
+  return ctx.path.includes('/admin/resources/')
+}
+
+function enforceManagedCategorySelection(ctx: Context, payload: AssetMutationPayload): void {
+  if (isAdminResourceRequest(ctx)) {
+    return
+  }
+  const hasCategoryId = typeof payload.categoryId === 'string' && payload.categoryId.trim().length > 0
+  const hasCategoryPathSegments = Boolean(payload.categoryPathSegments && payload.categoryPathSegments.length)
+  if (!hasCategoryId || hasCategoryPathSegments) {
+    ctx.throw(400, 'Editor uploads must select an existing managed category')
+  }
+}
+
 async function resolveCategoryForPayload(
   type: AssetDocument['type'],
   payload: AssetMutationPayload,
@@ -1105,7 +1125,7 @@ async function writeManifestToDisk(manifest: AssetManifestDto): Promise<void> {
 
 async function buildManifest(): Promise<AssetManifestDto> {
   await ensureRootCategory()
-  const assets = (await AssetModel.find()
+  const assets = (await AssetModel.find({ deletedAt: null })
     .sort({ updatedAt: -1 })
     .populate('tags')
     .populate('seriesId')
@@ -1183,7 +1203,11 @@ function resolveThumbnailFileKey(asset: AssetDocument | AssetData): string | nul
 }
 
 async function buildAssetFilter(query: AssetListQuery): Promise<Record<string, unknown>> {
-  const filter: Record<string, unknown> = {}
+  const filter: Record<string, unknown> = query.deletedOnly
+    ? { deletedAt: { $ne: null } }
+    : query.includeDeleted
+      ? {}
+      : { deletedAt: null }
   if (query.keyword) {
     filter.name = new RegExp(query.keyword, 'i')
   }
@@ -1401,6 +1425,8 @@ function parsePagination(query: Record<string, string | string[] | undefined>): 
     ? query.includeDescendants[0]
     : query.includeDescendants
   const includeDescendants = includeDescendantsRaw === undefined ? true : includeDescendantsRaw !== 'false'
+  const includeDeletedRaw = Array.isArray(query.includeDeleted) ? query.includeDeleted[0] : query.includeDeleted
+  const deletedOnlyRaw = Array.isArray(query.deletedOnly) ? query.deletedOnly[0] : query.deletedOnly
   return {
     page: page > 0 ? page : 1,
     pageSize: pageSize > 0 ? pageSize : 20,
@@ -1412,6 +1438,8 @@ function parsePagination(query: Record<string, string | string[] | undefined>): 
     directoryId: directoryId ?? undefined,
     categoryPath: categoryPath.length ? categoryPath : undefined,
     includeDescendants,
+    includeDeleted: includeDeletedRaw === undefined ? false : includeDeletedRaw !== 'false',
+    deletedOnly: deletedOnlyRaw === 'true',
   }
 }
 
@@ -1464,6 +1492,10 @@ export async function listResourceCategoryEntries(ctx: Context): Promise<void> {
   const rawCategoryId = sanitizeString(
     Array.isArray(ctx.query.categoryId) ? ctx.query.categoryId[0] : ctx.query.categoryId,
   )
+  const includeDeletedRaw = Array.isArray(ctx.query.includeDeleted)
+    ? ctx.query.includeDeleted[0]
+    : ctx.query.includeDeleted
+  const deletedOnlyRaw = Array.isArray(ctx.query.deletedOnly) ? ctx.query.deletedOnly[0] : ctx.query.deletedOnly
   const root = (await getRootCategory()) ?? (await ensureRootCategory())
   const rootId = (root._id as Types.ObjectId).toString()
   const requestedCategoryId = rawCategoryId
@@ -1479,7 +1511,13 @@ export async function listResourceCategoryEntries(ctx: Context): Promise<void> {
 
   const [childDirectories, assets] = await Promise.all([
     listCategoryChildrenService(currentCategoryId),
-    AssetModel.find({ categoryId: currentCategory._id })
+    AssetModel.find(
+      deletedOnlyRaw === 'true'
+        ? { categoryId: currentCategory._id, deletedAt: { $ne: null } }
+        : includeDeletedRaw === 'true'
+          ? { categoryId: currentCategory._id }
+          : { categoryId: currentCategory._id, deletedAt: null },
+    )
       .populate('tags')
       .populate('seriesId')
       .sort({ updatedAt: -1 })
@@ -1872,6 +1910,88 @@ export async function bulkMoveAssetsCategory(ctx: Context): Promise<void> {
   }
 }
 
+export async function bulkUpdateAssets(ctx: Context): Promise<void> {
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const assetIds = [...new Set(ensureArrayString(body?.assetIds))]
+  if (!assetIds.length) {
+    ctx.throw(400, 'Asset ids are required')
+  }
+
+  const objectIds = assetIds.filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id))
+  if (objectIds.length !== assetIds.length) {
+    ctx.throw(400, 'Invalid asset id')
+  }
+
+  const matchedAssets = await AssetModel.find({ _id: { $in: objectIds }, deletedAt: null }).select('_id').lean().exec()
+  if (matchedAssets.length !== objectIds.length) {
+    ctx.throw(404, 'One or more assets not found')
+  }
+
+  const updateFields: Record<string, unknown> = {}
+  let shouldRefreshManifest = false
+
+  if (Object.prototype.hasOwnProperty.call(body, 'categoryId')) {
+    const categoryId = sanitizeString(body?.categoryId)
+    if (!categoryId || !Types.ObjectId.isValid(categoryId)) {
+      ctx.throw(400, 'Invalid category id')
+    }
+    const categoryExists = await AssetCategoryModel.exists({ _id: categoryId }).exec()
+    if (!categoryExists) {
+      ctx.throw(404, 'Category not found')
+    }
+    updateFields.categoryId = new Types.ObjectId(categoryId)
+    shouldRefreshManifest = true
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'seriesId')) {
+    const rawSeriesId = body?.seriesId
+    if (rawSeriesId === null || rawSeriesId === undefined || rawSeriesId === '' || rawSeriesId === 'none') {
+      updateFields.seriesId = null
+    } else {
+      const seriesId = sanitizeString(rawSeriesId)
+      if (!seriesId) {
+        ctx.throw(400, 'Invalid series identifier')
+      }
+      updateFields.seriesId = await resolveSeriesObjectId(seriesId)
+    }
+    shouldRefreshManifest = true
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'tagIds') || Object.prototype.hasOwnProperty.call(body, 'tags')) {
+    const tagIds = ensureArrayString(body?.tagIds ?? body?.tags)
+    const tagObjectIds = tagIds.filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id))
+    if (tagObjectIds.length !== tagIds.length) {
+      ctx.throw(400, 'Invalid tag ids provided')
+    }
+    if (tagObjectIds.length) {
+      const count = await AssetTagModel.countDocuments({ _id: { $in: tagObjectIds } })
+      if (count !== tagObjectIds.length) {
+        ctx.throw(400, 'One or more tag ids do not exist')
+      }
+    }
+    updateFields.tags = tagObjectIds
+    shouldRefreshManifest = true
+  }
+
+  if (!Object.keys(updateFields).length) {
+    ctx.throw(400, 'No asset fields provided')
+  }
+
+  const result = await AssetModel.updateMany(
+    { _id: { $in: objectIds }, deletedAt: null },
+    { $set: updateFields },
+  ).exec()
+
+  if (shouldRefreshManifest && result.modifiedCount > 0) {
+    await refreshManifest()
+  }
+
+  ctx.body = {
+    matchedCount: result.matchedCount ?? objectIds.length,
+    modifiedCount: result.modifiedCount ?? 0,
+  }
+}
+
 export async function searchAssetCategories(ctx: Context): Promise<void> {
   await ensureDefaultCategories()
   const keyword = sanitizeString(Array.isArray(ctx.query.keyword) ? ctx.query.keyword[0] : ctx.query.keyword) ?? ''
@@ -1943,6 +2063,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   }
 
   const payload = extractMutationPayload(ctx)
+  enforceManagedCategorySelection(ctx, payload)
   const type = normalizeAssetType(payload.type ?? 'file')
   const tagsRaw = payload.tagIds ?? []
   const tagObjectIds = tagsRaw
@@ -2072,6 +2193,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     terrainScatterPreset: sanitizeTerrainScatterPreset(manifest.primaryAsset.terrainScatterPreset),
     metadata: isObjectRecord(manifest.primaryAsset.metadata) ? manifest.primaryAsset.metadata : null,
   }
+  enforceManagedCategorySelection(ctx, payload)
 
   const tagObjectIds = (payload.tagIds ?? [])
     .filter((id) => Types.ObjectId.isValid(id))
@@ -2447,19 +2569,46 @@ export async function deleteAsset(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid asset id')
   }
-  const asset = await AssetModel.findByIdAndDelete(id).lean().exec()
+  const asset = await AssetModel.findById(id).lean().exec()
   if (asset) {
-    const fileKey = resolveAssetFileKey(asset)
-    const thumbnailKey = resolveThumbnailFileKey(asset)
-    await deleteStoredFile(fileKey)
-    if (thumbnailKey && thumbnailKey !== fileKey) {
-      await deleteStoredFile(thumbnailKey)
+    if (asset.deletedAt) {
+      const fileKey = resolveAssetFileKey(asset)
+      const thumbnailKey = resolveThumbnailFileKey(asset)
+      await AssetModel.findByIdAndDelete(id).exec()
+      await deleteStoredFile(fileKey)
+      if (thumbnailKey && thumbnailKey !== fileKey) {
+        await deleteStoredFile(thumbnailKey)
+      }
+    } else {
+      await AssetModel.findByIdAndUpdate(id, { $set: { deletedAt: new Date(), isDeleted: true } }).exec()
     }
     await refreshManifest()
   }
   // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
   ctx.status = 200
   ctx.body = {}
+}
+
+export async function restoreAsset(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid asset id')
+  }
+  const asset = await AssetModel.findByIdAndUpdate(
+    id,
+    { $set: { deletedAt: null, isDeleted: false } },
+    { new: true },
+  )
+    .populate('tags')
+    .populate('seriesId')
+    .lean()
+    .exec()
+  if (!asset) {
+    ctx.throw(404, 'Asset not found')
+  }
+  await refreshManifest()
+  const categoryLookup = await loadCategoryInfoMap([asset.categoryId as Types.ObjectId])
+  ctx.body = mapAssetDocument(asset as LeanAsset, categoryLookup)
 }
 
 export async function downloadAsset(ctx: Context): Promise<void> {

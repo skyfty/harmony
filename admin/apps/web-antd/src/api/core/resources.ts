@@ -58,6 +58,7 @@ export interface ResourceAssetItem {
   dimensionLength: null | number;
   dimensionWidth: null | number;
   downloadUrl: string;
+  deletedAt: null | string;
   id: string;
   imageHeight: null | number;
   imageWidth: null | number;
@@ -81,6 +82,8 @@ export interface ResourceAssetItem {
 export interface ListResourceAssetsParams {
   categoryId?: string;
   directoryId?: string;
+  deletedOnly?: boolean;
+  includeDeleted?: boolean;
   includeDescendants?: boolean;
   keyword?: string;
   page?: number;
@@ -100,6 +103,13 @@ export interface BulkMoveAssetsPayload {
 export interface BulkMoveAssetsCategoryPayload {
   assetIds: string[];
   targetDirectoryId: string;
+}
+
+export interface BulkUpdateAssetsPayload {
+  assetIds: string[];
+  categoryId?: string;
+  seriesId?: null | string;
+  tagIds?: string[];
 }
 
 export interface ResourceCategoryTreeItem {
@@ -138,6 +148,12 @@ export interface ResourceCategoryEntriesResult {
     path: ResourceCategoryPathItem[];
   };
   items: ResourceCategoryEntry[];
+}
+
+export interface ListResourceCategoryEntriesParams {
+  categoryId?: string;
+  deletedOnly?: boolean;
+  includeDeleted?: boolean;
 }
 
 export interface MergeCategoryPayload {
@@ -187,6 +203,10 @@ export async function deleteResourceAssetApi(id: string) {
   return requestClient.delete(`/admin/resources/assets/${id}`);
 }
 
+export async function restoreResourceAssetApi(id: string) {
+  return requestClient.post<ResourceAssetItem>(`/admin/resources/assets/${id}/restore`);
+}
+
 export async function bulkMoveResourceAssetsApi(payload: BulkMoveAssetsPayload) {
   return requestClient.post<{ matchedCount: number; modifiedCount: number }>(
     '/admin/resources/assets/bulk-move-category',
@@ -204,15 +224,21 @@ export async function bulkMoveResourceAssetsCategoryApi(payload: BulkMoveAssetsC
   );
 }
 
+export async function bulkUpdateResourceAssetsApi(payload: BulkUpdateAssetsPayload) {
+  return requestClient.post<{ matchedCount: number; modifiedCount: number }>(
+    '/admin/resources/assets/bulk-update',
+    payload,
+  );
+}
+
 export async function listResourceCategoriesTreeApi() {
   return requestClient.get<ResourceCategoryTreeItem[]>('/admin/resources/categories');
 }
 
-export async function listResourceCategoryEntriesApi(categoryId?: string) {
+export async function listResourceCategoryEntriesApi(params?: ListResourceCategoryEntriesParams | string) {
+  const normalizedParams = typeof params === 'string' ? { categoryId: params } : params || {};
   return requestClient.get<ResourceCategoryEntriesResult>('/admin/resources/categories/entries', {
-    params: {
-      categoryId,
-    },
+    params: normalizedParams,
   });
 }
 
