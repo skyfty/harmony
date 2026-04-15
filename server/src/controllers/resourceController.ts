@@ -4,6 +4,7 @@ import {
   ASSET_BUNDLE_MANIFEST_FILENAME,
   ASSET_BUNDLE_VERSION,
   AssetTypes,
+  CONFIG_ASSET_EXTENSIONS,
   DEFAULT_ASSET_TYPE,
   isAssetType,
 } from '@harmony/schema'
@@ -74,7 +75,7 @@ import { appConfig } from '@/config/env'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
-const JSON_REWRITE_EXTENSIONS = new Set(['json', 'prefab', 'lod', 'wall', 'floor', 'material'])
+const JSON_REWRITE_EXTENSIONS = new Set(CONFIG_ASSET_EXTENSIONS)
 
 const ASSET_COLORS: Record<string, string> = {
   model: '#26c6da',

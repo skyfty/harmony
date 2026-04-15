@@ -1,8 +1,16 @@
-import type { SceneAssetRegistryEntry } from '@schema'
+import {
+  isConfigAssetExtension as isSchemaConfigAssetExtension,
+  isEditorOnlyConfigAssetExtension,
+  normalizeExtension,
+  type SceneAssetRegistryEntry,
+} from '@schema'
+import type { ProjectAsset } from '@/types/project-asset'
 
 export type AssetDependencySubset = {
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
 }
+
+type ProjectAssetLike = Pick<ProjectAsset, 'type' | 'extension' | 'description' | 'isEditorOnly'>
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -145,8 +153,68 @@ export function cloneSceneAssetRegistrySubset(
 }
 
 export function isConfigAssetExtension(extension: string | null | undefined): boolean {
-  const normalized = typeof extension === 'string' ? extension.trim().toLowerCase() : ''
-  return ['json', 'prefab', 'lod', 'wall', 'floor', 'road', 'landform', 'material'].includes(normalized)
+  return isSchemaConfigAssetExtension(extension)
+}
+
+function inferAssetExtensionFromFilename(filename: string | null | undefined): string {
+  const raw = typeof filename === 'string' ? filename.trim() : ''
+  if (!raw) {
+    return ''
+  }
+  const dotIndex = raw.lastIndexOf('.')
+  if (dotIndex <= 0 || dotIndex >= raw.length - 1) {
+    return ''
+  }
+  return normalizeExtension(raw.slice(dotIndex + 1)) ?? ''
+}
+
+export function resolveProjectAssetExtension(asset: Pick<ProjectAsset, 'extension' | 'description'> | null | undefined): string {
+  const explicitExtension = normalizeExtension(asset?.extension) ?? ''
+  if (explicitExtension) {
+    return explicitExtension
+  }
+  return inferAssetExtensionFromFilename(asset?.description)
+}
+
+export type ConfigAssetKind = 'prefab' | 'config'
+
+export function resolveProjectAssetConfigKind(asset: ProjectAssetLike | null | undefined): ConfigAssetKind | null {
+  if (!asset) {
+    return null
+  }
+  if (asset.type === 'lod') {
+    return 'config'
+  }
+  const extension = resolveProjectAssetExtension(asset)
+  if (extension === 'prefab') {
+    return 'prefab'
+  }
+  if (isConfigAssetExtension(extension)) {
+    return 'config'
+  }
+  if (asset.type === 'prefab' && !extension) {
+    return 'prefab'
+  }
+  return null
+}
+
+export function isEditorConfigAsset(asset: ProjectAssetLike | null | undefined): boolean {
+  const extension = resolveProjectAssetExtension(asset)
+  if (extension) {
+    return isEditorOnlyConfigAssetExtension(extension)
+  }
+  return resolveProjectAssetConfigKind(asset) === 'prefab'
+}
+
+export function shouldAssetDefaultToEditorOnly(asset: ProjectAssetLike | null | undefined): boolean {
+  return isEditorConfigAsset(asset)
+}
+
+export function shouldExcludeAssetFromRuntimeExport(asset: ProjectAssetLike | null | undefined): boolean {
+  if (!asset) {
+    return false
+  }
+  return asset.isEditorOnly === true || isEditorConfigAsset(asset)
 }
 
 export function normalizeAssetReferenceCandidate(value: string): string | null {

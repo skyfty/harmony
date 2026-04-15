@@ -7,7 +7,6 @@ import {
 } from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore, type AssetCacheEntry } from './assetCacheStore'
-import { determineAssetCategoryId } from './assetCatalog'
 import { extractExtension } from '@/utils/blob'
 import {
   buildLodPresetFilename,
@@ -18,17 +17,18 @@ import {
 } from '@/utils/lodPreset'
 import { generateLodPresetThumbnailDataUrl } from '@/utils/lodPreview'
 import { generateUuid } from '@/utils/uuid'
-import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
-import { createServerAssetSource } from '@/utils/serverAssetSource'
+import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 
 export type LodPresetStoreLike = {
   nodes: SceneNode[]
+  assetRegistry: Record<string, any>
 
   getAsset: (id: string) => ProjectAsset | null
   registerAsset: (asset: ProjectAsset, options: any) => ProjectAsset
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
   resolveConfigAssetSaveDirectoryId: () => string
+  ensurePrefabDependencies: (assetIds: string[], options: any) => Promise<void>
 
   addNodeComponent: <T extends string>(nodeId: string, type: T) => any
   updateNodeComponentProps: (nodeId: string, componentId: string, patch: any) => boolean
@@ -38,6 +38,22 @@ export type LodPresetActionsDeps = {
   LOD_PRESET_PREVIEW_COLOR: string
 
   findNodeById: (nodes: SceneNode[], id: string) => SceneNode | null
+}
+
+function collectLodPresetDependencyAssetIds(preset: LodPresetData | null | undefined): string[] {
+  if (!preset) {
+    return []
+  }
+  return Array.from(
+    new Set(
+      [
+        ...preset.props.levels.map((level) => getLodLevelAssetId(level) ?? ''),
+        ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+      ]
+        .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+        .filter((assetId) => assetId.length > 0),
+    ),
+  )
 }
 
 export function createLodPresetActions(deps: LodPresetActionsDeps) {
@@ -81,7 +97,15 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         })
         .filter((ref): ref is LodPresetAssetReference => ref !== null)
 
-      const serialized = serializeLodPreset({ name, props, assetRefs })
+      const dependencySubset = referencedAssetIds.length
+        ? buildAssetDependencySubset({ assetIds: referencedAssetIds, assetRegistry: store.assetRegistry })
+        : null
+      const serialized = serializeLodPreset({
+        name,
+        props,
+        assetRefs,
+        assetRegistry: dependencySubset?.assetRegistry ?? null,
+      })
       const assetId = generateUuid()
       const fileName = buildLodPresetFilename(name)
       const blob = new Blob([serialized], { type: 'application/json' })
@@ -142,64 +166,8 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const text = await entry.blob.text()
       const preset = deserializeLodPreset(text)
 
-      const refs = Array.isArray(preset.assetRefs) ? preset.assetRefs : []
-      if (refs.length) {
-        // Best-effort: ensure referenced LOD assets exist in this project, and trigger download if possible.
-        refs.forEach((ref) => {
-          if (!ref?.assetId || store.getAsset(ref.assetId)) {
-            return
-          }
-          if (ref.type !== 'model' && ref.type !== 'mesh' && ref.type !== 'image' && ref.type !== 'texture') {
-            return
-          }
-
-          const remoteUrl = typeof ref.downloadUrl === 'string' && /^https?:\/\//i.test(ref.downloadUrl)
-            ? ref.downloadUrl
-            : ''
-
-          const projectAsset: ProjectAsset = {
-            id: ref.assetId,
-            name:
-              typeof ref.name === 'string' && ref.name.trim().length
-                ? ref.name.trim()
-                : `LOD Ref ${ref.assetId}`,
-            type: ref.type,
-            downloadUrl: remoteUrl,
-            previewColor: SERVER_ASSET_PREVIEW_COLORS[ref.type],
-            thumbnail: ref.thumbnail ?? null,
-            description: ref.description ?? (ref.filename ?? undefined),
-            gleaned: true,
-            extension: extractExtension(ref.filename ?? ref.description ?? remoteUrl) ?? null,
-          }
-
-          store.registerAsset(projectAsset, {
-            categoryId: determineAssetCategoryId(projectAsset),
-            source: createServerAssetSource(ref.assetId),
-            commitOptions: { updateNodes: false },
-          })
-        })
-
-        refs.forEach((ref) => {
-          if (!ref?.assetId) {
-            return
-          }
-          const remoteUrl = typeof ref.downloadUrl === 'string' && /^https?:\/\//i.test(ref.downloadUrl)
-            ? ref.downloadUrl
-            : ''
-          if (!remoteUrl) {
-            return
-          }
-          if (assetCache.hasCache(ref.assetId) || assetCache.isDownloading(ref.assetId)) {
-            return
-          }
-          const refAsset = store.getAsset(ref.assetId)
-          if (!refAsset) {
-            return
-          }
-          void assetCache.downloadProjectAsset(refAsset).catch((error: unknown) => {
-            console.warn('[LodPresetActions] Failed to download referenced LOD asset', ref.assetId, error)
-          })
-        })
+      if (preset.assetRegistry !== undefined && preset.assetRegistry !== null && !isSceneAssetRegistry(preset.assetRegistry)) {
+        throw new Error('LOD 预设 assetRegistry 格式无效')
       }
 
       return preset
@@ -212,6 +180,15 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       }
 
       const preset = await this.loadLodPreset(store, assetId)
+      const dependencyAssetIds = collectLodPresetDependencyAssetIds(preset)
+      const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry) ? preset.assetRegistry : undefined
+
+      if (dependencyAssetIds.length) {
+        await store.ensurePrefabDependencies(dependencyAssetIds, {
+          prefabAssetIdForDownloadProgress: assetId,
+          prefabAssetRegistry: presetAssetRegistry ?? null,
+        })
+      }
 
       if (!node.components?.[LOD_COMPONENT_TYPE]) {
         const result = store.addNodeComponent<typeof LOD_COMPONENT_TYPE>(nodeId, LOD_COMPONENT_TYPE)

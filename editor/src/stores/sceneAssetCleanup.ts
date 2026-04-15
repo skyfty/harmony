@@ -8,10 +8,10 @@ import type { SceneMaterial } from '@/types/material'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import {
   collectConfigAssetDependencyIds,
-  isConfigAssetExtension,
+  isEditorConfigAsset,
   normalizeAssetReferenceCandidate,
+  resolveProjectAssetConfigKind,
 } from '@/utils/assetDependencySubset'
-import { extractExtension } from '@/utils/blob'
 import { isPlanningImageConversionNode } from '@/utils/planningToScene'
 import {
   type ExplicitSceneAssetReference,
@@ -149,28 +149,8 @@ function normalizeAssetIdCandidate(value: unknown): string | null {
   return candidate
 }
 
-function resolveAssetExtension(asset: ProjectAsset | null | undefined): string {
-  return (
-    (typeof asset?.extension === 'string' ? asset.extension.trim().toLowerCase() : '')
-    || (extractExtension(asset?.description ?? null) ?? '').trim().toLowerCase()
-  )
-}
-
 function resolveTraversableConfigAssetKind(asset: ProjectAsset | null): 'prefab' | 'config' | null {
-  if (!asset) {
-    return null
-  }
-  const extension = resolveAssetExtension(asset)
-  if (asset.type === 'lod' || extension === 'lod') {
-    return 'config'
-  }
-  if (extension === 'prefab' || (asset.type === 'prefab' && !extension)) {
-    return 'prefab'
-  }
-  if (isConfigAssetExtension(extension)) {
-    return extension === 'prefab' ? 'prefab' : 'config'
-  }
-  return null
+  return resolveProjectAssetConfigKind(asset)
 }
 
 function collectPrefabDependencyAssetIds(prefabData: NodePrefabData): Set<string> {
@@ -526,12 +506,43 @@ function collectInternalAssetIdsFromCatalog(catalog: Record<string, ProjectAsset
   return internalAssetIds
 }
 
+function collectEditorOnlyAssetIdsFromCatalog(catalog: Record<string, ProjectAsset[]>): Set<string> {
+  const editorOnlyAssetIds = new Set<string>()
+  Object.values(catalog).forEach((assets) => {
+    assets.forEach((asset) => {
+      if (asset?.isEditorOnly && asset.id) {
+        editorOnlyAssetIds.add(asset.id)
+      }
+    })
+  })
+  return editorOnlyAssetIds
+}
+
+export function collectEditorOnlyConfigAssetIdsFromCatalog(catalog: Record<string, ProjectAsset[]>): Set<string> {
+  const configAssetIds = new Set<string>()
+  Object.values(catalog).forEach((assets) => {
+    assets.forEach((asset) => {
+      if (!asset?.id) {
+        return
+      }
+      if (asset.isEditorOnly === true || isEditorConfigAsset(asset)) {
+        const traversalKind = resolveTraversableConfigAssetKind(asset)
+        if (traversalKind) {
+          configAssetIds.add(asset.id)
+        }
+      }
+    })
+  })
+  return configAssetIds
+}
+
 export function collectRetainedAssetIdsForSceneCleanup(
   scene: StoredSceneDocument,
   catalog: Record<string, ProjectAsset[]>,
 ): Set<string> {
   const retainedAssetIds = new Set<string>(collectSceneAssetReferences(scene))
   collectInternalAssetIdsFromCatalog(catalog).forEach((assetId) => retainedAssetIds.add(assetId))
+  collectEditorOnlyAssetIdsFromCatalog(catalog).forEach((assetId) => retainedAssetIds.add(assetId))
   return retainedAssetIds
 }
 

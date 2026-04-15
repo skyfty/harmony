@@ -36,6 +36,7 @@ import {
 } from '@/types/material'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
+import { shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
 
 export type SceneAssetDiagnosticSeverity = 'error' | 'warning'
 
@@ -681,6 +682,9 @@ export function buildSceneAssetReferenceSummaryMap(
 
   referenceMap.forEach((assetReferences, assetId) => {
     const catalogAsset = getAssetFromCatalog(scene.assetCatalog ?? {}, assetId)
+    if (shouldExcludeAssetFromRuntimeExport(catalogAsset)) {
+      return
+    }
     const registryEntry = resolveEffectiveRegistryEntry(scene, assetRegistry, assetId)
     const summaryEntry = getResourceSummaryEntry(scene, assetId)
     const { sourceType, sourceLabel, resolvedUrl } = resolveReferenceSummarySourceLabel(catalogAsset, registryEntry)
@@ -833,6 +837,9 @@ export function validateSceneAssetReferences(
 
   referenceMap.forEach((assetReferences, assetId) => {
     const catalogAsset = getAssetFromCatalog(scene.assetCatalog ?? {}, assetId)
+    if (shouldExcludeAssetFromRuntimeExport(catalogAsset)) {
+      return
+    }
     const entry = resolveEffectiveRegistryEntry(scene, assetRegistry, assetId)
     if (!entry) {
       issues.push(createIssue(

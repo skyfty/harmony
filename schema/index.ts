@@ -1152,6 +1152,7 @@ export interface SceneResourceSummary {
   computedAt: string;
   assets: SceneResourceSummaryEntry[];
   unknownAssetIds?: string[];
+  excludedAssetIds?: string[];
   textureBytes?: number;
   meshTextureUsage?: SceneResourceMeshTextureUsage[];
 }

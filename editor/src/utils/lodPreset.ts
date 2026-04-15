@@ -14,8 +14,10 @@ export function resolveFirstLodModelAssetId(props: LodComponentProps | { props: 
   return null
 }
 import { generateUuid } from '@/utils/uuid'
+import type { SceneAssetRegistryEntry } from '@schema'
 import type { LodComponentProps } from '@schema/components'
 import { clampLodComponentProps } from '@schema/components/definitions/lodComponent'
+import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 
@@ -35,6 +37,7 @@ export interface LodPresetData {
   name: string
   props: LodComponentProps
   assetRefs?: LodPresetAssetReference[]
+  assetRegistry?: Record<string, SceneAssetRegistryEntry>
 }
 
 function normalizeName(value: string | null | undefined): string {
@@ -100,16 +103,19 @@ export function createLodPresetData(payload: {
   name: string
   props: LodComponentProps
   assetRefs?: LodPresetAssetReference[]
+  assetRegistry?: Record<string, SceneAssetRegistryEntry> | null
 }): LodPresetData {
   const normalizedName = normalizeName(payload.name) || 'LOD Preset'
   const props = clampLodComponentProps(payload.props)
   const assetRefs = normalizeAssetRefs(payload.assetRefs)
+  const assetRegistry = sanitizeSceneAssetRegistry(payload.assetRegistry)
   return {
     formatVersion: LOD_PRESET_FORMAT_VERSION,
     id: generateUuid(),
     name: normalizedName,
     props,
     ...(assetRefs.length ? { assetRefs } : null),
+    ...(assetRegistry ? { assetRegistry } : null),
   }
 }
 
@@ -117,6 +123,7 @@ export function serializeLodPreset(payload: {
   name: string
   props: LodComponentProps
   assetRefs?: LodPresetAssetReference[]
+  assetRegistry?: Record<string, SceneAssetRegistryEntry> | null
 }): string {
   const normalized = createLodPresetData(payload)
   return JSON.stringify(normalized, null, 2)
@@ -150,12 +157,14 @@ export function deserializeLodPreset(raw: string): LodPresetData {
   const name = normalizeName(typeof candidate.name === 'string' ? candidate.name : '') || 'LOD Preset'
   const props = clampLodComponentProps(propsCandidate)
   const assetRefs = normalizeAssetRefs(candidate.assetRefs)
+  const assetRegistry = sanitizeSceneAssetRegistry(candidate.assetRegistry)
   return {
     formatVersion: LOD_PRESET_FORMAT_VERSION,
     id: typeof candidate.id === 'string' && candidate.id.trim().length ? candidate.id.trim() : generateUuid(),
     name,
     props,
     ...(assetRefs.length ? { assetRefs } : null),
+    ...(assetRegistry ? { assetRegistry } : null),
   }
 }
 

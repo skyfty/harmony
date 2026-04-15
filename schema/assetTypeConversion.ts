@@ -6,6 +6,29 @@ export type InferAssetTypeOptions = {
   fallbackType?: AssetType
 }
 
+export const CONFIG_ASSET_EXTENSIONS = [
+  'json',
+  'prefab',
+  'lod',
+  'wall',
+  'floor',
+  'road',
+  'landform',
+  'material',
+] as const
+
+export const EDITOR_ONLY_CONFIG_ASSET_EXTENSIONS = [
+  'prefab',
+  'lod',
+  'wall',
+  'floor',
+  'road',
+  'landform',
+] as const
+
+const CONFIG_ASSET_EXTENSION_SET = new Set<string>(CONFIG_ASSET_EXTENSIONS)
+const EDITOR_ONLY_CONFIG_ASSET_EXTENSION_SET = new Set<string>(EDITOR_ONLY_CONFIG_ASSET_EXTENSIONS)
+
 const ASSET_TYPE_BY_EXTENSION: Readonly<Record<string, AssetType>> = {
   // images
   jpg: 'image',
@@ -213,6 +236,16 @@ export function getAssetTypeFromExtension(extension: string | null | undefined):
     return null
   }
   return ASSET_TYPE_BY_EXTENSION[normalized] ?? null
+}
+
+export function isConfigAssetExtension(extension: string | null | undefined): boolean {
+  const normalized = normalizeExtension(extension)
+  return normalized !== null && CONFIG_ASSET_EXTENSION_SET.has(normalized)
+}
+
+export function isEditorOnlyConfigAssetExtension(extension: string | null | undefined): boolean {
+  const normalized = normalizeExtension(extension)
+  return normalized !== null && EDITOR_ONLY_CONFIG_ASSET_EXTENSION_SET.has(normalized)
 }
 
 export function getAssetTypeFromMimeType(mimeType: string | null | undefined): AssetType | null {

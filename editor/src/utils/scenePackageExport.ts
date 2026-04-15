@@ -48,6 +48,8 @@ import {
   BUILTIN_WATER_NORMAL_FILENAME,
   isBuiltinWaterNormalAsset,
 } from '@/constants/builtinAssets'
+import type { ProjectAsset } from '@/types/project-asset'
+import { shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
 
 function buildEffectiveAssetRegistry(
   document: SceneJsonExportDocument | null | undefined,
@@ -78,10 +80,14 @@ function buildEffectiveAssetRegistry(
 function collectLocalAssetIdsForExport(document: SceneJsonExportDocument): string[] {
   const localIds = new Set<string>()
   const effectiveRegistry = buildEffectiveAssetRegistry(document)
+  const exportDocument = document as SceneExportDocumentWithEditorFields
 
   Object.entries(effectiveRegistry).forEach(([assetId, entry]) => {
     const normalized = typeof assetId === 'string' ? assetId.trim() : ''
     if (!normalized) {
+      return
+    }
+    if (shouldSkipRuntimeExportAsset(exportDocument, normalized)) {
       return
     }
     if (entry.sourceType !== 'package') {
@@ -159,12 +165,36 @@ type SceneResourceSummaryAsset = {
 type SceneResourceSummary = {
   assets?: SceneResourceSummaryAsset[] | null
   unknownAssetIds?: string[] | null
+  excludedAssetIds?: string[] | null
 }
 
 type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
   assetUrlOverrides?: Record<string, string>
   resourceSummary?: SceneResourceSummary
   planningData?: unknown
+  assetCatalog?: Record<string, ProjectAsset[]>
+}
+
+function getAssetFromCatalog(
+  catalog: Record<string, ProjectAsset[]> | null | undefined,
+  assetId: string,
+): ProjectAsset | null {
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedAssetId || !catalog) {
+    return null
+  }
+  for (const assets of Object.values(catalog)) {
+    const found = assets.find((asset) => asset.id === normalizedAssetId)
+    if (found) {
+      return found
+    }
+  }
+  return null
+}
+
+function shouldSkipRuntimeExportAsset(document: SceneExportDocumentWithEditorFields, assetId: string): boolean {
+  const asset = getAssetFromCatalog(document.assetCatalog, assetId)
+  return shouldExcludeAssetFromRuntimeExport(asset)
 }
 
 type AssetEventContext = {
@@ -407,6 +437,43 @@ function emitGroundOptimizationDiagnostics(
 function stripEditorOnlySceneFields(
   document: SceneExportDocumentWithEditorFields,
 ): void {
+  const filterAssetMap = <T>(value: Record<string, T> | null | undefined): Record<string, T> | undefined => {
+    if (!value || typeof value !== 'object') {
+      return undefined
+    }
+    const filtered = Object.fromEntries(
+      Object.entries(value).filter(([assetId]) => !shouldSkipRuntimeExportAsset(document, assetId)),
+    )
+    return Object.keys(filtered).length ? filtered : undefined
+  }
+
+  if (document.assetRegistry) {
+    document.assetRegistry = filterAssetMap(document.assetRegistry) ?? {}
+  }
+  if (document.projectOverrideAssets) {
+    document.projectOverrideAssets = filterAssetMap(document.projectOverrideAssets) ?? {}
+  }
+  if (document.sceneOverrideAssets) {
+    document.sceneOverrideAssets = filterAssetMap(document.sceneOverrideAssets) ?? {}
+  }
+  if (Array.isArray(document.resourceSummary?.assets)) {
+    document.resourceSummary.assets = document.resourceSummary.assets.filter((entry) => {
+      const assetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''
+      return !assetId || !shouldSkipRuntimeExportAsset(document, assetId)
+    })
+  }
+  if (Array.isArray(document.resourceSummary?.unknownAssetIds)) {
+    document.resourceSummary.unknownAssetIds = document.resourceSummary.unknownAssetIds.filter((assetId) => {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      return !normalizedAssetId || !shouldSkipRuntimeExportAsset(document, normalizedAssetId)
+    })
+  }
+  if (Array.isArray(document.resourceSummary?.excludedAssetIds)) {
+    document.resourceSummary.excludedAssetIds = document.resourceSummary.excludedAssetIds.filter((assetId) => {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      return Boolean(normalizedAssetId)
+    })
+  }
   if ('assetUrlOverrides' in document) {
     delete document.assetUrlOverrides
   }
@@ -444,6 +511,7 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
     for (const item of resourceAssets) {
       const assetId = typeof item?.assetId === 'string' ? item.assetId.trim() : ''
       if (!assetId) continue
+      if (shouldSkipRuntimeExportAsset(doc, assetId)) continue
       const downloadUrl = typeof item?.downloadUrl === 'string' ? item.downloadUrl.trim() : ''
       if (!downloadUrl) continue
 
@@ -466,6 +534,9 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
     for (const [assetId, registryEntry] of Object.entries(effectiveRegistry)) {
       const normalized = typeof assetId === 'string' ? assetId.trim() : ''
       if (!normalized || out.has(normalized)) {
+        continue
+      }
+      if (shouldSkipRuntimeExportAsset(doc, normalized)) {
         continue
       }
 
@@ -815,6 +886,25 @@ export async function exportScenePackageZip(payload: {
 
     const localAssetIds = collectLocalAssetIdsForExport(docClone)
     const sceneAssetReferenceSummaries = sceneReferenceSummaryMaps.get(scene.id) ?? new Map<string, SceneAssetReferenceSummary>()
+    const excludedAssetIds = Array.isArray(docClone.resourceSummary?.excludedAssetIds)
+      ? docClone.resourceSummary.excludedAssetIds
+          .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+          .filter((assetId) => assetId.length > 0)
+      : []
+
+    if (excludedAssetIds.length) {
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'asset',
+        level: 'warning',
+        status: 'skipped',
+        sceneId: scene.id,
+        sceneName,
+        current: excludedAssetIds.length,
+        total: excludedAssetIds.length,
+        detail: excludedAssetIds.join(', '),
+        message: `已跳过 ${excludedAssetIds.length} 个仅编辑器配置资产`,
+      })
+    }
 
     if (!Array.isArray(docClone.punchPoints) || docClone.punchPoints.length === 0) {
       const computedPunchPoints = collectPunchPointsFromNodes(docClone.nodes)

@@ -98,6 +98,15 @@ const summaryCards = computed(() => {
     { key: 'logs', label: '日志条目', value: String(props.exportSummary?.logs ?? 0) },
   ]
 
+  const skippedEntries = props.logs.filter((entry: SceneExportLogEntry) => entry.status === 'skipped')
+  if (skippedEntries.length) {
+    cards.push({
+      key: 'skipped',
+      label: '已跳过配置资产',
+      value: String(skippedEntries.length),
+    })
+  }
+
   if (props.exportSummary?.scenes) {
     cards.push({
       key: 'scenes',

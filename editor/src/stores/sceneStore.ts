@@ -121,7 +121,12 @@ import {
 export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
-import { buildAssetDependencySubset, sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import {
+  buildAssetDependencySubset,
+  sanitizeSceneAssetRegistry,
+  shouldAssetDefaultToEditorOnly,
+  shouldExcludeAssetFromRuntimeExport,
+} from '@/utils/assetDependencySubset'
 import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import { createLandformNodeMaterials } from '@/utils/landformNodeMaterials'
@@ -223,6 +228,7 @@ import {
 import {
   collectDirectSceneAssetReferenceIds,
   collectSceneAssetReferences,
+  collectEditorOnlyConfigAssetIdsFromCatalog,
   collectRetainedAssetIdsForSceneCleanup,
   pruneAssetCatalogByRetainedIds,
   collectTransitiveConfigDependencyAssetIds,
@@ -781,7 +787,7 @@ function mergeCatalogAssetMetadataFromIndex(
         categoryId,
         source: asset.source ? { ...asset.source } : undefined,
         internal: asset.internal === true ? true : undefined,
-        isEditorOnly: asset.isEditorOnly === true ? true : undefined,
+        isEditorOnly: asset.isEditorOnly === true || shouldAssetDefaultToEditorOnly(asset) ? true : undefined,
       }
       return nextAsset
     })
@@ -5032,10 +5038,23 @@ export async function buildAssetRegistryForExport(
       loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(assetId, runtimeAwareScene.assetCatalog ?? {}),
     },
   )
-  configDependencyAssetIds.forEach((assetId) => usedAssetIds.add(assetId))
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
   const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
   const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
+  const exportAssetIds = new Set<string>()
+
+  usedAssetIds.forEach((assetId) => {
+    const asset = getAssetFromCatalog(assetCatalog, assetId)
+    if (!shouldExcludeAssetFromRuntimeExport(asset)) {
+      exportAssetIds.add(assetId)
+    }
+  })
+  configDependencyAssetIds.forEach((assetId) => {
+    const asset = getAssetFromCatalog(assetCatalog, assetId)
+    if (!shouldExcludeAssetFromRuntimeExport(asset)) {
+      exportAssetIds.add(assetId)
+    }
+  })
 
   ;(runtimeAwareScene.resourceSummary?.assets ?? []).forEach((entry) => {
     const summaryAssetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''
@@ -5045,7 +5064,7 @@ export async function buildAssetRegistryForExport(
   })
 
   const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
-  usedAssetIds.forEach((assetId) => {
+  exportAssetIds.forEach((assetId) => {
     const asset = getAssetFromCatalog(assetCatalog, assetId)
     const sourceMeta =
       asset?.source
@@ -5118,6 +5137,7 @@ export async function calculateSceneResourceSummary(
     externalBytes: 0,
     computedAt: new Date().toISOString(),
     assets: [],
+    excludedAssetIds: [],
     unknownAssetIds: [],
   }
 
@@ -5148,7 +5168,14 @@ export async function calculateSceneResourceSummary(
   let textureBytes = 0
 
   const assetIds = new Set<string>()
-  transitiveConfigDependencyIds.forEach((assetId) => assetIds.add(assetId))
+  transitiveConfigDependencyIds.forEach((assetId) => {
+    const asset = getAssetFromCatalog(assetCatalog, assetId)
+    if (!shouldExcludeAssetFromRuntimeExport(asset)) {
+      assetIds.add(assetId)
+      return
+    }
+    summary.excludedAssetIds?.push(assetId)
+  })
 
   const registerTextureUsage = (node: SceneNode, assetId: string | null | undefined): void => {
     const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
@@ -5317,6 +5344,13 @@ export async function calculateSceneResourceSummary(
 
   Object.keys(assetRegistry).forEach((assetId) => {
     if (assetId) {
+      const asset = getAssetFromCatalog(assetCatalog, assetId)
+      if (shouldExcludeAssetFromRuntimeExport(asset)) {
+        if (!summary.excludedAssetIds?.includes(assetId)) {
+          summary.excludedAssetIds?.push(assetId)
+        }
+        return
+      }
       assetIds.add(assetId)
     }
   })
@@ -5386,6 +5420,9 @@ export async function calculateSceneResourceSummary(
 
   if (!summary.unknownAssetIds?.length) {
     delete summary.unknownAssetIds
+  }
+  if (!summary.excludedAssetIds?.length) {
+    delete summary.excludedAssetIds
   }
 
   if (!summary.totalBytes) {
@@ -11658,7 +11695,7 @@ export const useSceneStore = defineStore('scene', {
 
       const editorOnlyForAsset = (asset: ProjectAsset): boolean | undefined => {
         if (typeof options.isEditorOnly === 'undefined') {
-          return undefined
+          return shouldAssetDefaultToEditorOnly(asset) ? true : undefined
         }
         if (typeof options.isEditorOnly === 'function') {
           return Boolean(options.isEditorOnly(asset))
@@ -11741,8 +11778,10 @@ export const useSceneStore = defineStore('scene', {
       const document = buildSceneDocumentFromState(this)
       const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
       const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(document)
+      const configRootAssetIds = new Set<string>(directReferenceAssetIds)
+      collectEditorOnlyConfigAssetIdsFromCatalog(this.assetCatalog).forEach((assetId) => configRootAssetIds.add(assetId))
       const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
-        directReferenceAssetIds,
+        configRootAssetIds,
         this.assetCatalog,
         {
           loadPrefab: (assetId) => this.loadNodePrefab(assetId),
@@ -11790,8 +11829,10 @@ export const useSceneStore = defineStore('scene', {
       const document = buildSceneDocumentFromState(this)
       const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
       const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(document)
+      const configRootAssetIds = new Set<string>(directReferenceAssetIds)
+      collectEditorOnlyConfigAssetIdsFromCatalog(this.assetCatalog).forEach((assetId) => configRootAssetIds.add(assetId))
       const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
-        directReferenceAssetIds,
+        configRootAssetIds,
         this.assetCatalog,
         {
           loadPrefab: (assetId) => this.loadNodePrefab(assetId),
