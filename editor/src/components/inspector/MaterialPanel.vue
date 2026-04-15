@@ -706,8 +706,12 @@ function handleConfirmDeleteSlot() {
 
 .material-sphere--thumbnail {
   box-shadow:
-    inset -2px -2px 5px rgba(0, 0, 0, 0.2),
-    inset 2px 2px 5px rgba(255, 255, 255, 0.22);
+    inset -2px -2px 5px rgba(0, 0, 0, 0.24),
+    inset 2px 2px 5px rgba(0, 0, 0, 0.08);
+}
+
+.material-sphere--thumbnail::before {
+  display: none;
 }
 
 .material-sphere::before {
