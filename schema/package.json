@@ -6,8 +6,11 @@
   "private": false,
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "build:asset-types": "tsc -p tsconfig.asset-types.json"
+    "build": "pnpm run build:asset-types && tsc -p tsconfig.build.json",
+    "build:asset-types": "tsc -p tsconfig.asset-types.json",
+    "type-check": "tsc -p tsconfig.build.json --noEmit",
+    "type-check:asset-types": "tsc -p tsconfig.asset-types.json --noEmit",
+    "check": "pnpm run type-check && pnpm run type-check:asset-types"
   },
   "engines": {
     "pnpm": ">=10.0.0"

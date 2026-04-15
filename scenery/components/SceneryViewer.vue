@@ -552,6 +552,8 @@ import type {
   SceneAssetRegistryEntry,
   SceneMaterialTextureRef,
   GroundDynamicMesh,
+  GroundRuntimeDynamicMesh,
+  LanternSlideDefinition,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
   Vector3Like,
@@ -774,6 +776,7 @@ declare namespace UniApp {
 }
 
 interface SceneDownloadProgress extends UniApp.OnProgressUpdateResult {
+  progress?: number;
   totalBytesWritten?: number;
   totalBytesExpectedToWrite?: number;
 }
@@ -1235,7 +1238,7 @@ let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SET
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
 let groundSurfacePreviewLoadToken = 0;
-let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundDynamicMesh } | null = null;
+let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRuntimeDynamicMesh } | null = null;
 let sceneGraphRoot: THREE.Object3D | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
@@ -1244,9 +1247,7 @@ let initializing = false;
 let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
 
-const SCENERY_SCENE_CSM_CONFIG: SceneCsmConfig = {
-  ...DEFAULT_SCENE_CSM_CONFIG,
-};
+const SCENERY_SCENE_CSM_CONFIG = DEFAULT_SCENE_CSM_CONFIG;
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
 let sceneCsmRuntimeConfigKey = '';
 
@@ -1914,10 +1915,18 @@ type VehicleWheelBinding = {
 };
 
 type VehicleInstanceWithWheels = VehicleInstance & {
+  vehicle: CANNON.RaycastVehicle;
   wheelBindings: VehicleWheelBinding[];
   forwardAxis: THREE.Vector3;
   lastChassisPosition: THREE.Vector3;
   hasChassisPositionSample: boolean;
+};
+
+type Viewer = {
+  isShown?: boolean;
+  update?: () => void;
+  view?: (index?: number) => void;
+  hide?: () => void;
 };
 
 function runWithProgrammaticCameraMutationAndAnchor<T>(callback: () => T, onComplete?: () => void): T {
@@ -2744,7 +2753,7 @@ function handleLanternImageLoad(event: UniImageLoadEvent): void {
   }
   uni.getImageInfo?.({
     src: currentSrc,
-    success: (info) => {
+    success: (info: { width?: number; height?: number }) => {
       if (info?.width && info?.height) {
         lanternImageNaturalSize.width = info.width;
         lanternImageNaturalSize.height = info.height;
@@ -2882,7 +2891,7 @@ async function fetchTextFromUrl(url: string): Promise<string> {
     uni.request({
       url,
       method: 'GET',
-      success: (res) => {
+      success: (res: { data: unknown }) => {
         if (typeof res.data === 'string') {
           resolve(res.data);
         } else if (res.data != null) {
@@ -2891,8 +2900,8 @@ async function fetchTextFromUrl(url: string): Promise<string> {
           resolve('');
         }
       },
-      fail: (err) => {
-        reject(new Error(err?.errMsg || '网络请求失败'));
+      fail: (err: { errMsg?: unknown } | null) => {
+        reject(new Error(String(err?.errMsg ?? '网络请求失败')));
       },
     });
   });
@@ -3023,7 +3032,7 @@ function requestBinaryFromUrl(url: string): Promise<ArrayBuffer> {
       method: 'GET',
       responseType: 'arraybuffer',
       timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res) => {
+      success: (res: { statusCode?: number; data: unknown }) => {
         const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
         if (statusCode >= 400) {
           reject(new Error(`下载失败（${statusCode}）`));
@@ -3036,7 +3045,7 @@ function requestBinaryFromUrl(url: string): Promise<ArrayBuffer> {
         }
         resolve(buffer);
       },
-      fail: (requestError) => {
+      fail: (requestError: { errMsg?: unknown } | null) => {
         const message =
           requestError && typeof requestError === 'object' && 'errMsg' in requestError
             ? String((requestError as { errMsg: unknown }).errMsg)
@@ -3807,7 +3816,11 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   }
   const groundNode = findGroundNode(document.nodes);
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    dynamicGroundCache = { nodeId: groundNode.id, node: groundNode, dynamicMesh: groundNode.dynamicMesh };
+    dynamicGroundCache = {
+      nodeId: groundNode.id,
+      node: groundNode,
+      dynamicMesh: groundNode.dynamicMesh as GroundRuntimeDynamicMesh,
+    };
   } else {
     dynamicGroundCache = null;
   }
@@ -4161,7 +4174,7 @@ function updateInstancedCullingAndLod(): void {
     const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius;
     return { radius };
   // 保守中心点推导，与 editor 端一致
-  function resolveInstancedProxyWorldCenter(object, target) {
+  function resolveInstancedProxyWorldCenter(object: THREE.Object3D, target: THREE.Vector3) {
     const bounds = object.userData?.instancedBounds;
     if (bounds?.min && bounds?.max) {
       instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0);
@@ -4749,7 +4762,7 @@ function isFloorDynamicMeshForPhysics(mesh: unknown): mesh is { type: 'Floor'; t
 }
 
 function hasAutoGeneratedDynamicShape(mesh: unknown): boolean {
-  if (isGroundDynamicMesh(mesh)) {
+  if (isGroundDynamicMesh(mesh as GroundDynamicMesh | null | undefined)) {
     return true;
   }
   if (!isFloorDynamicMeshForPhysics(mesh)) {
@@ -7610,7 +7623,7 @@ function refreshJoystickMetrics(): void {
 
     query
       .selectAll('.viewer-drive-joystick')
-      .boundingClientRect((rects) => {
+      .boundingClientRect((rects: unknown) => {
         const items = (Array.isArray(rects) ? rects : []) as UniApp.NodeInfo[];
         if (items.length === 0) {
           joystickState.ready = false;
@@ -9449,7 +9462,7 @@ function hydrateGroundSidecarFromPackage(
   sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string; groundPaintPath?: string },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
-  const definition = findFirstGroundDynamicMesh(document);
+  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
   if (!definition) {
     return document;
   }
@@ -9639,7 +9652,7 @@ function requestBinary(url: string): Promise<ArrayBuffer> {
       method: 'GET',
       responseType: 'arraybuffer',
       timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res) => {
+      success: (res: { statusCode?: number; data: unknown }) => {
         const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
         if (statusCode >= 400) {
           reject(new Error(`场景包下载失败（${statusCode}）`));
@@ -9652,7 +9665,7 @@ function requestBinary(url: string): Promise<ArrayBuffer> {
         }
         resolve(buffer);
       },
-      fail: (requestError) => {
+      fail: (requestError: { errMsg?: unknown } | null) => {
         const message =
           requestError && typeof requestError === 'object' && 'errMsg' in requestError
             ? String((requestError as { errMsg: unknown }).errMsg)
@@ -9951,7 +9964,7 @@ function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
       method: 'GET',
       responseType: 'text',
       timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res) => {
+      success: (res: { statusCode?: number; data: unknown }) => {
         const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
         if (statusCode >= 400) {
           reject(new Error(`场景下载失败（${statusCode}）`));
@@ -9966,7 +9979,7 @@ function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
           reject(new Error(message));
         }
       },
-      fail: (requestError) => {
+      fail: (requestError: { errMsg?: unknown } | null) => {
         const message =
           requestError && typeof requestError === 'object' && 'errMsg' in requestError
             ? String((requestError as { errMsg: unknown }).errMsg)
@@ -10630,8 +10643,10 @@ function startRenderLoop(
   let accumulatedDelta = 0;
   renderScope.run(() => {
     watchEffect((onCleanup) => {
-      const { cancel } = result.useFrame((delta, rawTimestamp) => {
-        const now = typeof rawTimestamp === 'number' ? rawTimestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+      const { cancel } = result.useFrame((delta: number) => {
+        const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
         const deltaSecondsRaw = normalizeFrameDelta(delta);
         accumulatedDelta += deltaSecondsRaw;
         if (now - lastFrameTime < minFrameInterval) {
@@ -10917,7 +10932,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   startRenderLoop(result, renderer, scene, camera, controls);
 }
 
-const handleResize: WindowResizeCallback = (_result) => {
+const handleResize: WindowResizeCallback = (_result: unknown) => {
   if (!renderContext || !canvasResult) {
     return;
   }
@@ -10946,15 +10961,13 @@ watch(error, (value) => {
 
 watch(
   [overlayTitle, overlayPercent, overlayBytesLabel],
-  ([title, percent, bytesLabel]) => {
+  ([title, _percent, bytesLabel]) => {
     if (!title) {
       return;
     }
     const loaded = sceneDownload.active ? sceneDownload.loaded : resourcePreload.loadedBytes;
     const total = sceneDownload.active ? sceneDownload.total : resourcePreload.totalBytes;
     emit('progress', {
-      title,
-      percent,
       bytesLabel,
       loaded,
       total,

@@ -113,11 +113,6 @@ function isBusinessAuthFailure(code: number, message: string): boolean {
   return /UnauthorizedError|unauthorized|unauthenticated|token\s*(expired|invalid)|forbidden|未授权|登录失效/i.test(normalized);
 }
 
-function isMiniAuthDebugEnabled(): boolean {
-  const raw = String((import.meta as any)?.env?.VITE_MINI_DEBUG_AUTH ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes';
-}
-
 function summarizeToken(token?: string): string {
   if (!token) {
     return 'none';
