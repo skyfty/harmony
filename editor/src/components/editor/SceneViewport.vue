@@ -1938,7 +1938,6 @@ const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
 const selectedNodeIsLandform = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Landform')
 const selectedNodeIsRegion = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Region')
-const selectedNodeIsGuideRoute = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'GuideRoute')
 const selectedNodeIsWater = computed(() => isWaterSurfaceNode(sceneStore.selectedNode))
 const selectionContainsLandform = computed(() => {
   const selectedIds = new Set<string>()

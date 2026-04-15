@@ -3,8 +3,7 @@ import {
   ASSET_BUNDLE_HASH_ALGORITHM,
   ASSET_BUNDLE_MANIFEST_FILENAME,
   ASSET_BUNDLE_VERSION,
-  AssetTypes,
-  CONFIG_ASSET_EXTENSIONS,
+  CONFIG_ASSET_EXTENSION_SET,
   DEFAULT_ASSET_TYPE,
   isAssetType,
 } from '@harmony/schema'
@@ -14,7 +13,6 @@ import type {
   AssetBundleFileEntry,
   AssetBundleManifest,
   AssetBundleUploadResponse,
-  AssetDirectory,
   AssetSeries,
   AssetSummary,
   AssetTag,
@@ -60,7 +58,6 @@ import { appConfig } from '@/config/env'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
-const JSON_REWRITE_EXTENSIONS = new Set<string>(CONFIG_ASSET_EXTENSIONS)
 
 const ASSET_COLORS: Record<string, string> = {
   model: '#26c6da',
@@ -263,8 +260,12 @@ type ProjectDirectoryAsset = {
   terrainScatterPreset?: TerrainScatterCategory | null
 }
 
-type ProjectDirectory = AssetDirectory<ProjectDirectoryAsset> & {
+type ProjectDirectory = {
+  id: string
+  name: string
   type: AssetType
+  assets: ProjectDirectoryAsset[]
+  children?: ProjectDirectory[]
 }
 
 function ensureArrayString(input: unknown): string[] {
@@ -732,7 +733,7 @@ function maybeRewriteJsonBundleAsset(
   assetIdMap: Map<string, string>,
 ): Uint8Array {
   const extension = sanitizeString(entry.extension)?.toLowerCase() ?? path.extname(entry.filename).replace(/^\./, '').toLowerCase()
-  if (!JSON_REWRITE_EXTENSIONS.has(extension) || !assetIdMap.size) {
+  if (!CONFIG_ASSET_EXTENSION_SET.has(extension) || !assetIdMap.size) {
     return bytes
   }
   let parsed: unknown
