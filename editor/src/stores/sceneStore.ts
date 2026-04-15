@@ -7531,6 +7531,18 @@ function findAssetPathSegmentsInDirectories(
   return null
 }
 
+function extractServerCategoryMirrorSegments(asset: ProjectAsset): string[] {
+  const rawSegments = Array.isArray(asset.categoryPath)
+    ? asset.categoryPath
+        .map((item) => item?.name)
+        .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+    : []
+  if (!rawSegments.length) {
+    return []
+  }
+  return rawSegments.filter((segment, index) => !(index === 0 && segment.trim() === '全部资源'))
+}
+
 function findNodeById(nodes: SceneNode[], id: string): SceneNode | null {
   for (const node of nodes) {
     if (node.id === id) return node
@@ -12203,6 +12215,13 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const resolvePackagePathSegments = (assetId: string): string[] => {
+        const currentAsset = normalized.find((entry) => entry.id === assetId) ?? null
+        if (currentAsset && isServerBackedProviderId(providerId)) {
+          const categorySegments = extractServerCategoryMirrorSegments(currentAsset)
+          if (categorySegments.length) {
+            return categorySegments
+          }
+        }
         if (options.packagePathByAssetId && Array.isArray(options.packagePathByAssetId[assetId])) {
           return options.packagePathByAssetId[assetId]!
         }

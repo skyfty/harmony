@@ -766,27 +766,6 @@ export interface AssetCategoryDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
-export interface AssetDirectoryDocument extends Document<Types.ObjectId> {
-  /** 中文：目录名称 */
-  name: string
-  /** 中文：规范化名称（用于搜索/匹配） */
-  normalizedName: string
-  /** 中文：父目录 ID（可选） */
-  parentId?: Types.ObjectId | null
-  /** 中文：目录深度（层级） */
-  depth: number
-  /** 中文：从根到当前的 ID 路径 */
-  pathIds: Types.ObjectId[]
-  /** 中文：从根到当前的名称路径 */
-  pathNames: string[]
-  /** 中文：根目录 ID */
-  rootId: Types.ObjectId
-  /** 中文：创建时间 */
-  createdAt: Date
-  /** 中文：更新时间 */
-  updatedAt: Date
-}
-
 export interface AssetTagDocument extends Document<Types.ObjectId> {
   /** 中文：标签名称 */
   name: string
@@ -814,8 +793,6 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   name: string
   /** 中文：分类 ID */
   categoryId: Types.ObjectId
-  /** 中文：目录 ID（用于文件浏览器层级） */
-  directoryId?: Types.ObjectId | null
   /** 中文：资源类型（来自 schema） */
   type: AssetType
   /** 中文：标签 ID 列表 */

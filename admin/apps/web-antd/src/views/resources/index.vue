@@ -6,25 +6,25 @@ import { computed, onMounted, reactive, ref } from 'vue';
 
 import {
   buildResourceDownloadUrl,
-  bulkMoveResourceAssetsDirectoryApi,
+  bulkMoveResourceAssetsCategoryApi,
   createResourceAssetApi,
-  createResourceDirectoryApi,
+  createResourceCategoryTreeItemApi,
   deleteResourceAssetApi,
-  deleteResourceDirectoryApi,
+  deleteResourceCategoryTreeItemApi,
   getResourceAssetApi,
   listResourceCategoriesApi,
-  listResourceDirectoriesApi,
-  listResourceDirectoryEntriesApi,
+  listResourceCategoriesTreeApi,
+  listResourceCategoryEntriesApi,
   listResourceSeriesApi,
   listResourceTagsApi,
-  moveResourceDirectoryApi,
+  moveResourceCategoryTreeItemApi,
   updateResourceAssetApi,
-  updateResourceDirectoryApi,
+  updateResourceCategoryTreeItemApi,
   type ResourceAssetItem,
   type ResourceCategoryItem,
-  type ResourceDirectoryEntry,
-  type ResourceDirectoryEntryDirectory,
-  type ResourceDirectoryItem,
+  type ResourceCategoryEntry,
+  type ResourceCategoryEntryDirectory,
+  type ResourceCategoryTreeItem,
   type ResourceSeriesItem,
   type ResourceTagItem,
 } from '#/api';
@@ -83,10 +83,10 @@ const brokenThumbnailUrls = ref<Set<string>>(new Set());
 const previewVisible = ref(false);
 const previewImage = ref('');
 const previewTitle = ref('');
-const directoryItems = ref<ResourceDirectoryItem[]>([]);
+const directoryItems = ref<ResourceCategoryTreeItem[]>([]);
 const currentDirectoryId = ref('');
 const currentDirectoryPath = ref<Array<{ id: string; name: string }>>([]);
-const mixedItems = ref<ResourceDirectoryEntry[]>([]);
+const mixedItems = ref<ResourceCategoryEntry[]>([]);
 const loadingEntries = ref(false);
 const keyword = ref('');
 const selectedAssetIds = ref<string[]>([]);
@@ -124,7 +124,7 @@ const filterSeriesOptions = computed(() => [{ label: '全部', value: '' }, ...s
 const filterTagOptions = computed(() => [{ label: '全部', value: '' }, ...tagOptions.value]);
 
 const modalTitle = computed(() => (editingId.value ? '编辑资产' : '新增资产'));
-const directoryModalTitle = computed(() => (directoryModalMode.value === 'create' ? '新建目录' : '编辑目录'));
+const directoryModalTitle = computed(() => (directoryModalMode.value === 'create' ? '新建分类' : '编辑分类'));
 
 const assetUploadProps: UploadProps = {
   beforeUpload: () => false,
@@ -173,13 +173,13 @@ function resetForm() {
   thumbnailFileList.value = [];
 }
 
-function isDirectoryEntry(item: ResourceDirectoryEntry): item is ResourceDirectoryEntryDirectory {
-  return (item as ResourceDirectoryEntryDirectory).kind === 'directory';
+function isDirectoryEntry(item: ResourceCategoryEntry): item is ResourceCategoryEntryDirectory {
+  return (item as ResourceCategoryEntryDirectory).kind === 'directory';
 }
 
 const directoryOptions = computed(() => {
   const output: Array<{ label: string; value: string }> = [];
-  function walk(nodes: ResourceDirectoryItem[], prefix = '') {
+  function walk(nodes: ResourceCategoryTreeItem[], prefix = '') {
     nodes.forEach((node) => {
       const label = prefix ? `${prefix} / ${node.name}` : node.name;
       output.push({ label, value: node.id });
@@ -229,7 +229,7 @@ async function loadLookups() {
     listResourceCategoriesApi(),
     listResourceTagsApi(),
     listResourceSeriesApi(),
-    listResourceDirectoriesApi(),
+    listResourceCategoriesTreeApi(),
   ]);
   categories.value = categoryList || [];
   tags.value = tagList || [];
@@ -240,7 +240,7 @@ async function loadLookups() {
 async function loadCurrentDirectoryEntries() {
   loadingEntries.value = true;
   try {
-    const result = await listResourceDirectoryEntriesApi(currentDirectoryId.value || undefined);
+    const result = await listResourceCategoryEntriesApi(currentDirectoryId.value || undefined);
     currentDirectoryId.value = result.currentDirectory.id;
     currentDirectoryPath.value = result.currentDirectory.path || [];
     mixedItems.value = result.items || [];
@@ -284,7 +284,7 @@ async function openEditModal(row: ResourceAssetItem) {
   modalOpen.value = true;
 }
 
-function openDirectory(item: ResourceDirectoryEntryDirectory) {
+function openDirectory(item: ResourceCategoryEntryDirectory) {
   currentDirectoryId.value = item.id;
   loadCurrentDirectoryEntries();
 }
@@ -299,7 +299,7 @@ function openDirectoryEditModal(directoryId?: string) {
   const id = directoryId || currentDirectoryId.value;
   const target = directoryOptions.value.find((item) => item.value === id);
   if (!target || currentDirectoryPath.value.length <= 1) {
-    message.warning('根目录不支持编辑');
+    message.warning('根分类不支持编辑');
     return;
   }
   directoryModalMode.value = 'edit';
@@ -312,16 +312,16 @@ function handleDirectoryDelete(directoryId?: string) {
   const id = directoryId || currentDirectoryId.value;
   const isRoot = currentDirectoryPath.value.length <= 1 && id === currentDirectoryId.value;
   if (isRoot) {
-    message.warning('根目录不支持删除');
+    message.warning('根分类不支持删除');
     return;
   }
   Modal.confirm({
-    title: '确认删除目录吗？',
-    content: '仅支持删除空目录。',
+    title: '确认删除分类吗？',
+    content: '仅支持删除空分类。',
     okType: 'danger',
     onOk: async () => {
-      await deleteResourceDirectoryApi(id);
-      message.success('目录已删除');
+      await deleteResourceCategoryTreeItemApi(id);
+      message.success('分类已删除');
       if (id === currentDirectoryId.value && currentDirectoryPath.value.length > 1) {
         currentDirectoryId.value = currentDirectoryPath.value[currentDirectoryPath.value.length - 2]!.id;
       }
@@ -350,20 +350,20 @@ function openMoveDirectoryModal(directoryId: string) {
 
 async function submitMove() {
   if (!moveTargetDirectoryId.value) {
-    message.warning('请选择目标目录');
+    message.warning('请选择目标分类');
     return;
   }
   movingAssets.value = true;
   try {
     if (moveMode.value === 'asset') {
-      await bulkMoveResourceAssetsDirectoryApi({
+      await bulkMoveResourceAssetsCategoryApi({
         assetIds: movingAssetIds.value,
         targetDirectoryId: moveTargetDirectoryId.value,
       });
       message.success('资产移动成功');
     } else if (movingDirectoryId.value) {
-      await moveResourceDirectoryApi(movingDirectoryId.value, moveTargetDirectoryId.value);
-      message.success('目录移动成功');
+      await moveResourceCategoryTreeItemApi(movingDirectoryId.value, moveTargetDirectoryId.value);
+      message.success('分类移动成功');
     }
     moveModalOpen.value = false;
     await refreshDirectoryContext();
@@ -375,18 +375,18 @@ async function submitMove() {
 async function submitDirectoryModal() {
   const name = directoryName.value.trim();
   if (!name) {
-    message.warning('请输入目录名');
+    message.warning('请输入分类名');
     return;
   }
   if (directoryModalMode.value === 'create') {
-    await createResourceDirectoryApi({
+    await createResourceCategoryTreeItemApi({
       name,
       parentId: currentDirectoryId.value || undefined,
     });
-    message.success('目录创建成功');
+    message.success('分类创建成功');
   } else if (movingDirectoryId.value) {
-    await updateResourceDirectoryApi(movingDirectoryId.value, { name });
-    message.success('目录更新成功');
+    await updateResourceCategoryTreeItemApi(movingDirectoryId.value, { name });
+    message.success('分类更新成功');
   }
   directoryModalOpen.value = false;
   await refreshDirectoryContext();
@@ -541,11 +541,11 @@ const rowSelection = computed<TableProps['rowSelection']>(() => ({
   selectedRowKeys: selectedAssetIds.value,
   onChange: (keys, rows) => {
     selectedAssetIds.value = rows
-      .filter((item) => !isDirectoryEntry(item as ResourceDirectoryEntry))
+      .filter((item) => !isDirectoryEntry(item as ResourceCategoryEntry))
       .map((item) => (item as ResourceAssetItem).id);
   },
   getCheckboxProps: (record) => ({
-    disabled: isDirectoryEntry(record as ResourceDirectoryEntry),
+    disabled: isDirectoryEntry(record as ResourceCategoryEntry),
   }),
 }));
 
@@ -556,7 +556,7 @@ function formatDateTime(value?: string) {
   return new Date(value).toLocaleString();
 }
 
-function customRow(record: ResourceDirectoryEntry) {
+function customRow(record: ResourceCategoryEntry) {
   const item = record;
   return {
     draggable: true,
@@ -577,14 +577,14 @@ function customRow(record: ResourceDirectoryEntry) {
       }
       event.preventDefault();
       if (dragPayload.value.kind === 'asset') {
-        await bulkMoveResourceAssetsDirectoryApi({
+        await bulkMoveResourceAssetsCategoryApi({
           assetIds: [dragPayload.value.id],
           targetDirectoryId: item.id,
         });
         message.success('资产移动成功');
       } else if (dragPayload.value.id !== item.id) {
-        await moveResourceDirectoryApi(dragPayload.value.id, item.id);
-        message.success('目录移动成功');
+        await moveResourceCategoryTreeItemApi(dragPayload.value.id, item.id);
+        message.success('分类移动成功');
       }
       dragPayload.value = null;
       await refreshDirectoryContext();
@@ -608,18 +608,18 @@ onMounted(async () => {
           <PlusOutlined />
           新增资产
         </Button>
-        <Button v-access:code="'resource:write'" @click="openDirectoryCreateModal">新建目录</Button>
-        <Button v-access:code="'resource:write'" @click="() => openDirectoryEditModal()">编辑目录</Button>
-        <Button v-access:code="'resource:write'" danger @click="() => handleDirectoryDelete()">删除目录</Button>
+        <Button v-access:code="'resource:write'" @click="openDirectoryCreateModal">新建分类</Button>
+        <Button v-access:code="'resource:write'" @click="() => openDirectoryEditModal()">编辑分类</Button>
+        <Button v-access:code="'resource:write'" danger @click="() => handleDirectoryDelete()">删除分类</Button>
         <Button v-access:code="'resource:write'" @click="() => openMoveAssetModal()" :disabled="selectedAssetsCount === 0">
           移动选中资产
         </Button>
       </Space>
-      <Input v-model:value="keyword" allow-clear style="width: 260px" placeholder="搜索当前目录文件/目录" />
+      <Input v-model:value="keyword" allow-clear style="width: 260px" placeholder="搜索当前分类文件/子分类" />
     </Space>
 
     <Space style="margin-bottom: 12px" wrap>
-      <Tag color="blue">当前目录</Tag>
+      <Tag color="blue">当前分类</Tag>
       <template v-for="(crumb, index) in currentDirectoryPath" :key="crumb.id">
         <Button type="link" size="small" @click="() => { currentDirectoryId = crumb.id; loadCurrentDirectoryEntries(); }">{{ crumb.name }}</Button>
         <ArrowRightOutlined v-if="index < currentDirectoryPath.length - 1" />
@@ -666,7 +666,7 @@ onMounted(async () => {
         </template>
 
         <template v-else-if="column.key === 'type'">
-          <template v-if="isDirectoryEntry(record)">目录</template>
+          <template v-if="isDirectoryEntry(record)">分类</template>
           <template v-else>{{ record.type }}</template>
         </template>
 
@@ -742,7 +742,7 @@ onMounted(async () => {
             placeholder="选择分类"
           />
         </Form.Item>
-        <Form.Item label="当前目录">
+        <Form.Item label="当前分类">
           <Input :value="currentDirectoryPath.map((item) => item.name).join(' / ')" disabled />
         </Form.Item>
         <Form.Item label="标签" name="tagIds">
@@ -823,8 +823,8 @@ onMounted(async () => {
       @cancel="directoryModalOpen = false"
     >
       <Form :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
-        <Form.Item label="目录名" required>
-          <Input v-model:value="directoryName" placeholder="请输入目录名" />
+        <Form.Item label="分类名" required>
+          <Input v-model:value="directoryName" placeholder="请输入分类名" />
         </Form.Item>
       </Form>
     </Modal>
@@ -832,20 +832,20 @@ onMounted(async () => {
     <Modal
       :open="moveModalOpen"
       :confirm-loading="movingAssets"
-      title="移动到目录"
+      title="移动到分类"
       ok-text="移动"
       cancel-text="取消"
       @ok="submitMove"
       @cancel="moveModalOpen = false"
     >
       <Form :label-col="{ span: 6 }" :wrapper-col="{ span: 16 }">
-        <Form.Item label="目标目录" required>
+        <Form.Item label="目标分类" required>
           <Select
             v-model:value="moveTargetDirectoryId"
             show-search
             option-filter-prop="label"
             :options="directoryOptions"
-            placeholder="选择目标目录"
+            placeholder="选择目标分类"
           />
         </Form.Item>
       </Form>

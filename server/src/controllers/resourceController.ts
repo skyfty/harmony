@@ -30,13 +30,11 @@ import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
 import type {
   AssetCategoryDocument,
-  AssetDirectoryDocument,
   AssetDocument,
   AssetSeriesDocument,
   AssetTagDocument,
 } from '@/types/models'
 import { AssetCategoryModel, normalizeCategoryName as normalizeCategoryLabel } from '@/models/AssetCategory'
-import { AssetDirectoryModel } from '@/models/AssetDirectory'
 import { AssetModel } from '@/models/Asset'
 import { AssetTagModel } from '@/models/AssetTag'
 import { AssetSeriesModel } from '@/models/AssetSeries'
@@ -58,19 +56,6 @@ import {
   searchCategories,
   updateCategoryInfo,
 } from '@/services/assetCategoryService'
-import type { DirectoryNodeDto, DirectoryTreeNode } from '@/services/assetDirectoryService'
-import {
-  bulkMoveAssetsToDirectory,
-  createDirectory,
-  deleteDirectoryStrict,
-  ensureRootDirectory,
-  getDirectoryById,
-  getDirectoryTree,
-  getRootDirectory,
-  listDirectoryChildren,
-  moveDirectory,
-  updateDirectoryInfo,
-} from '@/services/assetDirectoryService'
 import { appConfig } from '@/config/env'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
@@ -119,7 +104,6 @@ type AssetData = {
   _id: Types.ObjectId
   name: AssetDocument['name']
   categoryId: Types.ObjectId
-  directoryId?: Types.ObjectId | null
   type: AssetDocument['type']
   tags: Types.ObjectId[] | AssetTagDocument[]
   size: number
@@ -353,14 +337,7 @@ type CategoryInfo = {
   pathString: string
 }
 
-type DirectoryInfo = {
-  id: string
-  name: string
-  path: CategoryPathItemDto[]
-  pathString: string
-}
-
-type AssetSummaryWithDirectory = AssetSummary & {
+type AssetSummaryWithLocation = AssetSummary & {
   directoryId?: string | null
   directoryPath?: CategoryPathItemDto[]
   directoryPathString?: string
@@ -409,49 +386,6 @@ async function loadCategoryInfoMap(categoryIds: Array<Types.ObjectId | string>):
   return map
 }
 
-async function loadDirectoryInfoMap(directoryIds: Array<Types.ObjectId | string | null | undefined>): Promise<Map<string, DirectoryInfo>> {
-  const uniqueIds = Array.from(
-    new Set(
-      directoryIds
-        .map((id) => {
-          if (id instanceof Types.ObjectId) {
-            return id.toString()
-          }
-          if (typeof id === 'string' && Types.ObjectId.isValid(id)) {
-            return id
-          }
-          return null
-        })
-        .filter((value): value is string => value !== null),
-    ),
-  )
-  if (!uniqueIds.length) {
-    return new Map()
-  }
-  const objectIds = uniqueIds.map((id) => new Types.ObjectId(id))
-  const directories = (await AssetDirectoryModel.find({ _id: { $in: objectIds } }).lean().exec()) as Array<{
-    _id: Types.ObjectId
-    name: string
-    pathIds: Types.ObjectId[]
-    pathNames: string[]
-  }>
-  const map = new Map<string, DirectoryInfo>()
-  directories.forEach((directory) => {
-    const id = (directory._id as Types.ObjectId).toString()
-    const path = directory.pathIds.map((value, index) => ({
-      id: (value as Types.ObjectId).toString(),
-      name: directory.pathNames[index] ?? '',
-    }))
-    map.set(id, {
-      id,
-      name: directory.name,
-      path,
-      pathString: path.map((item) => item.name).join('/') || directory.name,
-    })
-  })
-  return map
-}
-
 function categoryDocumentToTreeNode(category: AssetCategoryDocument, options: { hasChildren?: boolean } = {}): CategoryTreeNode {
   const createdAt =
     category.createdAt instanceof Date ? category.createdAt.toISOString() : new Date(category.createdAt).toISOString()
@@ -479,13 +413,6 @@ function categoryNodeToTreeNode(node: CategoryNodeDto): CategoryTreeNode {
   }
 }
 
-function directoryNodeToTreeNode(node: DirectoryNodeDto): DirectoryTreeNode {
-  return {
-    ...node,
-    children: [],
-  }
-}
-
 function mapCategoryTreeNode(node: CategoryTreeNode): AssetCategoryDto {
   const path = node.pathIds.map((id, index) => ({
     id,
@@ -502,25 +429,6 @@ function mapCategoryTreeNode(node: CategoryTreeNode): AssetCategoryDto {
     createdAt: node.createdAt,
     updatedAt: node.updatedAt,
     children: node.children.map(mapCategoryTreeNode),
-  }
-}
-
-function mapDirectoryTreeNode(node: DirectoryTreeNode): AssetCategoryDto {
-  const path = node.pathIds.map((id, index) => ({
-    id,
-    name: node.pathNames[index] ?? '',
-  }))
-  return {
-    id: node.id,
-    name: node.name,
-    description: null,
-    parentId: node.parentId ?? null,
-    depth: node.depth,
-    path,
-    hasChildren: node.hasChildren,
-    createdAt: node.createdAt,
-    updatedAt: node.updatedAt,
-    children: node.children.map(mapDirectoryTreeNode),
   }
 }
 
@@ -861,7 +769,6 @@ async function deleteStoredFile(fileKey: string | null | undefined): Promise<voi
 }
 
 let defaultCategoryInitialization: Promise<void> | null = null
-let defaultDirectoryInitialization: Promise<void> | null = null
 
 async function ensureDefaultCategories(): Promise<void> {
   if (!defaultCategoryInitialization) {
@@ -874,18 +781,6 @@ async function ensureDefaultCategories(): Promise<void> {
     })
   }
   await defaultCategoryInitialization
-}
-
-async function ensureDefaultDirectories(): Promise<void> {
-  if (!defaultDirectoryInitialization) {
-    defaultDirectoryInitialization = (async () => {
-      await ensureRootDirectory()
-    })().catch((error) => {
-      defaultDirectoryInitialization = null
-      throw error
-    })
-  }
-  await defaultDirectoryInitialization
 }
 
 function isInvalidCategoryId(value: string | null | undefined): boolean {
@@ -919,23 +814,6 @@ async function resolveCategoryForPayload(
   }
   const rootCategory = (await getRootCategory()) ?? (await ensureRootCategory())
   return rootCategory
-}
-
-async function resolveDirectoryForPayload(payload: AssetMutationPayload): Promise<AssetDirectoryDocument> {
-  await ensureDefaultDirectories()
-  if (payload.directoryId) {
-    if (isInvalidDirectoryId(payload.directoryId)) {
-      throw Object.assign(new Error('Invalid directory identifier'), { code: 'INVALID_DIRECTORY_ID' })
-    }
-    const directory = await AssetDirectoryModel.findById(payload.directoryId).exec()
-    if (!directory) {
-      throw Object.assign(new Error('Directory not found'), { code: 'DIRECTORY_NOT_FOUND' })
-    }
-    return directory
-  }
-
-  const rootDirectory = (await getRootDirectory()) ?? (await ensureRootDirectory())
-  return rootDirectory
 }
 
 async function resolveSeriesObjectId(input: string | null | undefined): Promise<Types.ObjectId | null> {
@@ -992,18 +870,15 @@ function mapSeriesDocument(series: SeriesDocumentLike, assetCount?: number): Ass
 function mapAssetDocument(
   asset: AssetSource,
   categoryLookup?: Map<string, CategoryInfo>,
-  directoryLookup?: Map<string, DirectoryInfo>,
-): AssetSummaryWithDirectory {
+): AssetSummaryWithLocation {
   const assetId = (asset._id as Types.ObjectId).toString()
   const categoryObjectId = (asset.categoryId as Types.ObjectId).toString()
   const categoryInfo = categoryLookup?.get(categoryObjectId) ?? null
   const categoryPath = categoryInfo?.path ?? []
   const categoryPathString = categoryInfo?.pathString ?? categoryPath.map((item) => item.name).join('/')
-  const rawDirectoryId = (asset.directoryId as Types.ObjectId | null | undefined) ?? null
-  const directoryObjectId = rawDirectoryId ? rawDirectoryId.toString() : null
-  const directoryInfo = directoryObjectId ? (directoryLookup?.get(directoryObjectId) ?? null) : null
-  const directoryPath = directoryInfo?.path ?? []
-  const directoryPathString = directoryInfo?.pathString ?? directoryPath.map((item) => item.name).join('/')
+  const directoryObjectId = categoryObjectId
+  const assetDirectoryPath = categoryPath
+  const assetDirectoryPathString = categoryPathString
   const tagsRaw = Array.isArray(asset.tags) ? asset.tags : []
   const tags = tagsRaw
     .map((tag) => mapTagDocument(tag as AssetTagDocument | Types.ObjectId))
@@ -1067,8 +942,8 @@ function mapAssetDocument(
     categoryPath,
     categoryPathString,
     directoryId: directoryObjectId,
-    directoryPath,
-    directoryPathString,
+    directoryPath: assetDirectoryPath,
+    directoryPathString: assetDirectoryPathString,
     type: asset.type,
     tags,
     tagIds: tags.map((tag) => tag.id),
@@ -1121,7 +996,10 @@ function mapAssetTagDocument(tag: AssetTagDocumentLike): AssetTag {
   }
 }
 
-function mapManifestAsset(asset: AssetSource, categoryLookup?: Map<string, CategoryInfo>): AssetManifestAssetDto {
+function mapManifestAsset(
+  asset: AssetSource,
+  categoryLookup?: Map<string, CategoryInfo>,
+): AssetManifestAssetDto {
   const response = mapAssetDocument(asset, categoryLookup)
   const assetFileKey = resolveAssetFileKey(asset)
   const thumbnailFileKey = resolveThumbnailFileKey(asset)
@@ -1367,7 +1245,12 @@ async function buildAssetFilter(query: AssetListQuery): Promise<Record<string, u
     if (isInvalidDirectoryId(query.directoryId)) {
       throw Object.assign(new Error('Invalid directory identifier'), { code: 'INVALID_DIRECTORY_ID' })
     }
-    filter.directoryId = new Types.ObjectId(query.directoryId)
+    const categoryIds = includeDescendants
+      ? await listDescendantCategoryIds(query.directoryId)
+      : [query.directoryId]
+    filter.categoryId = {
+      $in: categoryIds.map((id) => new Types.ObjectId(id)),
+    }
   }
   return filter
 }
@@ -1391,7 +1274,7 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     type: sanitizeString(rawBody.type) ?? undefined,
     description: sanitizeString(rawBody.description),
     tagIds: hasTagIds ? tagIds : undefined,
-    categoryId: sanitizeString(rawBody.categoryId),
+    categoryId: sanitizeString(rawBody.categoryId) ?? sanitizeString(rawBody.directoryId),
     directoryId: sanitizeString(rawBody.directoryId),
   }
 
@@ -1575,211 +1458,27 @@ export async function listResourceCategories(ctx: Context): Promise<void> {
   ctx.body = tree.map(mapCategoryTreeNode)
 }
 
-export async function listAssetDirectories(ctx: Context): Promise<void> {
-  await ensureDefaultDirectories()
-  const tree = await getDirectoryTree()
-  ctx.body = tree.map(mapDirectoryTreeNode)
-}
-
-export async function createAssetDirectory(ctx: Context): Promise<void> {
-  await ensureDefaultDirectories()
-  const body = ctx.request.body as Record<string, unknown> | undefined
-  const name = sanitizeString(body?.name)
-  if (!name) {
-    ctx.throw(400, 'Directory name is required')
-  }
-  const rawParentId = sanitizeString(body?.parentId)
-  const parentId = !rawParentId || rawParentId.toLowerCase() === 'root' ? null : rawParentId
-  try {
-    const created = await createDirectory(name, parentId)
-    const hasChildren =
-      (await AssetDirectoryModel.exists({ parentId: created._id as Types.ObjectId }).select('_id').lean().exec()) !== null
-    const node = directoryNodeToTreeNode({
-      id: (created._id as Types.ObjectId).toString(),
-      name: created.name,
-      parentId: created.parentId ? (created.parentId as Types.ObjectId).toString() : null,
-      depth: created.depth,
-      pathIds: created.pathIds.map((value) => (value as Types.ObjectId).toString()),
-      pathNames: [...created.pathNames],
-      hasChildren,
-      createdAt: created.createdAt.toISOString(),
-      updatedAt: created.updatedAt.toISOString(),
-    })
-    ctx.status = 201
-    ctx.body = mapDirectoryTreeNode(node)
-  } catch (error) {
-    if (error instanceof Error) {
-      if (error.message.includes('Invalid parent directory id')) {
-        ctx.throw(400, 'Invalid parent directory id')
-      }
-      if (error.message.includes('Parent directory not found')) {
-        ctx.throw(404, 'Parent directory not found')
-      }
-      if (error.message.includes('Directory name already exists at this level')) {
-        ctx.throw(409, 'Directory name already exists at this level')
-      }
-      if (error.message.includes('Directory name is required')) {
-        ctx.throw(400, 'Directory name is required')
-      }
-    }
-    throw error
-  }
-}
-
-export async function updateAssetDirectory(ctx: Context): Promise<void> {
-  const { id } = ctx.params
-  if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, 'Invalid directory id')
-  }
-  const body = ctx.request.body as Record<string, unknown> | undefined
-  const name = sanitizeString(body?.name)
-  if (!name) {
-    ctx.throw(400, 'Directory name is required')
-  }
-  try {
-    const updated = await updateDirectoryInfo(id, { name })
-    const hasChildren =
-      (await AssetDirectoryModel.exists({ parentId: updated._id as Types.ObjectId }).select('_id').lean().exec()) !== null
-    const node = directoryNodeToTreeNode({
-      id: (updated._id as Types.ObjectId).toString(),
-      name: updated.name,
-      parentId: updated.parentId ? (updated.parentId as Types.ObjectId).toString() : null,
-      depth: updated.depth,
-      pathIds: updated.pathIds.map((value) => (value as Types.ObjectId).toString()),
-      pathNames: [...updated.pathNames],
-      hasChildren,
-      createdAt: updated.createdAt.toISOString(),
-      updatedAt: updated.updatedAt.toISOString(),
-    })
-    ctx.body = mapDirectoryTreeNode(node)
-  } catch (error) {
-    if (error instanceof Error) {
-      if (error.message.includes('Invalid directory id')) {
-        ctx.throw(400, 'Invalid directory id')
-      }
-      if (error.message.includes('Directory not found')) {
-        ctx.throw(404, 'Directory not found')
-      }
-      if (error.message.includes('Directory name already exists at this level')) {
-        ctx.throw(409, 'Directory name already exists at this level')
-      }
-      if (error.message.includes('Directory name is required')) {
-        ctx.throw(400, 'Directory name is required')
-      }
-    }
-    throw error
-  }
-}
-
-export async function deleteAssetDirectory(ctx: Context): Promise<void> {
-  const { id } = ctx.params
-  if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, 'Invalid directory id')
-  }
-  try {
-    await deleteDirectoryStrict(id)
-  } catch (error) {
-    if (error instanceof Error) {
-      if (error.message.includes('Directory not found')) {
-        ctx.throw(404, 'Directory not found')
-      }
-      if (error.message.includes('Root directory cannot be deleted')) {
-        ctx.throw(409, 'Root directory cannot be deleted')
-      }
-      if (error.message.includes('Directory has child directories')) {
-        ctx.throw(409, 'Directory has child directories and cannot be deleted')
-      }
-      if (error.message.includes('Directory still contains assets')) {
-        ctx.throw(409, 'Directory still contains assets and cannot be deleted')
-      }
-    }
-    throw error
-  }
-  ctx.status = 200
-  ctx.body = {}
-}
-
-export async function moveAssetDirectory(ctx: Context): Promise<void> {
-  const { id } = ctx.params
-  if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, 'Invalid directory id')
-  }
-  const body = ctx.request.body as Record<string, unknown> | undefined
-  const rawTargetParentId = sanitizeString(body?.targetParentId)
-  const targetParentId = !rawTargetParentId || rawTargetParentId.toLowerCase() === 'null' ? null : rawTargetParentId
-
-  try {
-    const moved = await moveDirectory(id, targetParentId)
-    const hasChildren =
-      (await AssetDirectoryModel.exists({ parentId: moved._id as Types.ObjectId }).select('_id').lean().exec()) !== null
-    const node = directoryNodeToTreeNode({
-      id: (moved._id as Types.ObjectId).toString(),
-      name: moved.name,
-      parentId: moved.parentId ? (moved.parentId as Types.ObjectId).toString() : null,
-      depth: moved.depth,
-      pathIds: moved.pathIds.map((value) => (value as Types.ObjectId).toString()),
-      pathNames: [...moved.pathNames],
-      hasChildren,
-      createdAt: moved.createdAt.toISOString(),
-      updatedAt: moved.updatedAt.toISOString(),
-    })
-    ctx.body = mapDirectoryTreeNode(node)
-  } catch (error) {
-    if (error instanceof Error) {
-      const message = error.message
-      if (message.includes('Invalid directory id')) {
-        ctx.throw(400, 'Invalid directory id')
-      }
-      if (message.includes('Invalid target parent directory id')) {
-        ctx.throw(400, 'Invalid target parent directory id')
-      }
-      if (message.includes('Directory not found') || message.includes('Target parent directory not found')) {
-        ctx.throw(404, message.includes('Target') ? 'Target parent directory not found' : 'Directory not found')
-      }
-      if (message.includes('Root directory cannot be moved')) {
-        ctx.throw(409, 'Root directory cannot be moved')
-      }
-      if (message.includes('Cannot move directory')) {
-        ctx.throw(409, message)
-      }
-      if (message.includes('Directory name already exists at target level')) {
-        ctx.throw(409, 'Directory name already exists at target level')
-      }
-    }
-    throw error
-  }
-}
-
-export async function listAssetDirectoryEntries(ctx: Context): Promise<void> {
-  await ensureDefaultDirectories()
-  const rawDirectoryId = sanitizeString(
-    Array.isArray(ctx.query.directoryId) ? ctx.query.directoryId[0] : ctx.query.directoryId,
+export async function listResourceCategoryEntries(ctx: Context): Promise<void> {
+  await ensureDefaultCategories()
+  const rawCategoryId = sanitizeString(
+    Array.isArray(ctx.query.categoryId) ? ctx.query.categoryId[0] : ctx.query.categoryId,
   )
-  const root = (await getRootDirectory()) ?? (await ensureRootDirectory())
+  const root = (await getRootCategory()) ?? (await ensureRootCategory())
   const rootId = (root._id as Types.ObjectId).toString()
-  const currentDirectoryId = !rawDirectoryId || rawDirectoryId.toLowerCase() === 'root' ? rootId : rawDirectoryId
+  const requestedCategoryId = rawCategoryId
+  const currentCategoryId = !requestedCategoryId || requestedCategoryId.toLowerCase() === 'root' ? rootId : requestedCategoryId
 
-  if (!Types.ObjectId.isValid(currentDirectoryId)) {
-    ctx.throw(400, 'Invalid directory id')
+  if (!Types.ObjectId.isValid(currentCategoryId)) {
+    ctx.throw(400, 'Invalid category id')
   }
-  const currentDirectory = await getDirectoryById(currentDirectoryId)
-  if (!currentDirectory) {
-    ctx.throw(404, 'Directory not found')
+  const currentCategory = await AssetCategoryModel.findById(currentCategoryId).exec()
+  if (!currentCategory) {
+    ctx.throw(404, 'Category not found')
   }
 
   const [childDirectories, assets] = await Promise.all([
-    listDirectoryChildren(currentDirectoryId),
-    AssetModel.find(
-      currentDirectory.parentId
-        ? { directoryId: currentDirectory._id }
-        : {
-            $or: [
-              { directoryId: currentDirectory._id },
-              { directoryId: { $exists: false } },
-              { directoryId: null },
-            ],
-          },
-    )
+    listCategoryChildrenService(currentCategoryId),
+    AssetModel.find({ categoryId: currentCategory._id })
       .populate('tags')
       .populate('seriesId')
       .sort({ updatedAt: -1 })
@@ -1788,11 +1487,8 @@ export async function listAssetDirectoryEntries(ctx: Context): Promise<void> {
   ])
 
   const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
-  const directoryLookup = await loadDirectoryInfoMap(
-    assets.map((asset) => (asset.directoryId as Types.ObjectId | null | undefined) ?? null),
-  )
 
-  const directories = childDirectories.map((node: DirectoryNodeDto) => ({
+  const directories = childDirectories.map((node: CategoryNodeDto) => ({
     ...node,
     kind: 'directory' as const,
     path: node.pathIds.map((id: string, index: number) => ({ id, name: node.pathNames[index] ?? '' })),
@@ -1800,61 +1496,22 @@ export async function listAssetDirectoryEntries(ctx: Context): Promise<void> {
 
   const fileItems = assets.map((asset: LeanAsset) => ({
     kind: 'asset' as const,
-    ...mapAssetDocument(asset, categoryLookup, directoryLookup),
+    ...mapAssetDocument(asset, categoryLookup),
   }))
 
-  const currentPath = currentDirectory.pathIds.map((value, index) => ({
+  const currentPath = currentCategory.pathIds.map((value, index) => ({
     id: (value as Types.ObjectId).toString(),
-    name: currentDirectory.pathNames[index] ?? '',
+    name: currentCategory.pathNames[index] ?? '',
   }))
 
   ctx.body = {
     currentDirectory: {
-      id: (currentDirectory._id as Types.ObjectId).toString(),
-      name: currentDirectory.name,
-      parentId: currentDirectory.parentId ? (currentDirectory.parentId as Types.ObjectId).toString() : null,
+      id: (currentCategory._id as Types.ObjectId).toString(),
+      name: currentCategory.name,
+      parentId: currentCategory.parentId ? (currentCategory.parentId as Types.ObjectId).toString() : null,
       path: currentPath,
     },
     items: [...directories, ...fileItems],
-  }
-}
-
-export async function bulkMoveAssetsDirectory(ctx: Context): Promise<void> {
-  const body = ctx.request.body as Record<string, unknown> | undefined
-  const targetDirectoryId = sanitizeString(body?.targetDirectoryId)
-  if (!targetDirectoryId) {
-    ctx.throw(400, 'Target directory id is required')
-  }
-  const assetIds = ensureArrayString(body?.assetIds)
-  if (!assetIds.length) {
-    ctx.throw(400, 'Asset ids are required')
-  }
-  try {
-    const result = await bulkMoveAssetsToDirectory({
-      assetIds,
-      targetDirectoryId,
-    })
-    if (result.modifiedCount > 0) {
-      await refreshManifest()
-    }
-    ctx.body = result
-  } catch (error) {
-    if (error instanceof Error) {
-      const message = error.message
-      if (message.includes('Invalid target directory id')) {
-        ctx.throw(400, 'Invalid target directory id')
-      }
-      if (message.includes('Target directory not found')) {
-        ctx.throw(404, 'Target directory not found')
-      }
-      if (message.includes('Asset ids are required')) {
-        ctx.throw(400, 'Asset ids are required')
-      }
-      if (message.includes('Invalid asset id')) {
-        ctx.throw(400, 'Invalid asset id')
-      }
-    }
-    throw error
   }
 }
 
@@ -2000,12 +1657,9 @@ export async function listCategoryAssets(ctx: Context): Promise<void> {
   ])
 
   const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
-  const directoryLookup = await loadDirectoryInfoMap(
-    assets.map((asset) => (asset.directoryId as Types.ObjectId | null | undefined) ?? null),
-  )
 
   ctx.body = {
-    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup, directoryLookup)),
+    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup)),
     page: query.page,
     pageSize: query.pageSize,
     total,
@@ -2258,12 +1912,9 @@ export async function listAssets(ctx: Context): Promise<void> {
   ])
 
   const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
-  const directoryLookup = await loadDirectoryInfoMap(
-    assets.map((asset) => (asset.directoryId as Types.ObjectId | null | undefined) ?? null),
-  )
 
   ctx.body = {
-    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup, directoryLookup)),
+    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup)),
     page: query.page,
     pageSize: query.pageSize,
     total,
@@ -2280,8 +1931,7 @@ export async function getAsset(ctx: Context): Promise<void> {
     ctx.throw(404, 'Asset not found')
   }
   const categoryLookup = await loadCategoryInfoMap([asset.categoryId as Types.ObjectId])
-  const directoryLookup = await loadDirectoryInfoMap([(asset.directoryId as Types.ObjectId | null | undefined) ?? null])
-  ctx.body = mapAssetDocument(asset, categoryLookup, directoryLookup)
+  ctx.body = mapAssetDocument(asset, categoryLookup)
 }
 
 export async function uploadAsset(ctx: Context): Promise<void> {
@@ -2332,22 +1982,6 @@ export async function uploadAsset(ctx: Context): Promise<void> {
 
   const categoryId = categoryDoc._id as Types.ObjectId
 
-  let directoryDoc: AssetDirectoryDocument
-  try {
-    directoryDoc = await resolveDirectoryForPayload(payload)
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code
-    if (code === 'INVALID_DIRECTORY_ID') {
-      ctx.throw(400, 'Invalid directory identifier')
-    }
-    if (code === 'DIRECTORY_NOT_FOUND') {
-      ctx.throw(404, 'Directory not found')
-    }
-    throw error
-  }
-
-  const directoryId = directoryDoc._id as Types.ObjectId
-
   let seriesObjectId: Types.ObjectId | null = null
   try {
     seriesObjectId = await resolveSeriesObjectId(payload.seriesId)
@@ -2374,7 +2008,6 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   const asset = await AssetModel.create({
     name: payload.name ?? fileInfo.originalFilename ?? fileInfo.fileKey,
     categoryId,
-    directoryId,
     type,
     tags: tagObjectIds,
   seriesId: seriesObjectId,
@@ -2402,10 +2035,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     { path: 'seriesId' },
   ])) as AssetDocument & { tags: AssetTagDocument[]; seriesId?: AssetSeriesDocument | null }
   const categoryLookup = await loadCategoryInfoMap([categoryId])
-  const directoryLookup = await loadDirectoryInfoMap([
-    (populated.directoryId as Types.ObjectId | null | undefined) ?? null,
-  ])
-  const response = mapAssetDocument(populated, categoryLookup, directoryLookup)
+  const response = mapAssetDocument(populated, categoryLookup)
   await refreshManifest()
   ctx.body = { asset: response }
 }
@@ -2469,9 +2099,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     throw error
   }
 
-  const directoryDoc = await resolveDirectoryForPayload(payload)
   const categoryId = categoryDoc._id as Types.ObjectId
-  const directoryId = directoryDoc._id as Types.ObjectId
   const assetIdMap = new Map<string, string>()
   const persistedAssetIds = new Set<string>()
 
@@ -2495,7 +2123,6 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       dependencyAsset = await AssetModel.create({
         name: path.parse(dependencyEntry.filename).name || dependencyEntry.filename,
         categoryId,
-        directoryId,
         type: dependencyType,
         tags: [],
         size: storedDependency.size,
@@ -2564,7 +2191,6 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     primaryAsset = await AssetModel.create({
       name: payload.name ?? storedPrimary.originalFilename ?? storedPrimary.fileKey,
       categoryId,
-      directoryId,
       type: primaryType,
       tags: tagObjectIds,
       seriesId: null,
@@ -2625,8 +2251,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     .populate([{ path: 'tags' }, { path: 'seriesId' }])
     .exec()
   const categoryLookup = await loadCategoryInfoMap(populatedAssets.map((asset) => asset.categoryId as Types.ObjectId))
-  const directoryLookup = await loadDirectoryInfoMap(populatedAssets.map((asset) => asset.directoryId as Types.ObjectId | null | undefined))
-  const mappedAssets = populatedAssets.map((asset) => mapAssetDocument(asset, categoryLookup, directoryLookup))
+  const mappedAssets = populatedAssets.map((asset) => mapAssetDocument(asset, categoryLookup))
   const primaryResponse = mappedAssets.find((asset) => asset.id === primaryAsset!._id.toString())
   if (!primaryResponse) {
     ctx.throw(500, 'Failed to resolve uploaded primary asset')
@@ -2721,8 +2346,6 @@ export async function updateAsset(ctx: Context): Promise<void> {
     Boolean(payload.categoryId && payload.categoryId.length) ||
     Boolean(payload.categoryPathSegments && payload.categoryPathSegments.length)
 
-  const shouldResolveDirectory = payload.directoryId !== undefined
-
   if (shouldResolveCategory) {
     try {
       const resolvedCategoryDoc = await resolveCategoryForPayload(nextType, payload)
@@ -2734,22 +2357,6 @@ export async function updateAsset(ctx: Context): Promise<void> {
       }
       if (code === 'CATEGORY_NOT_FOUND') {
         ctx.throw(404, 'Category not found')
-      }
-      throw error
-    }
-  }
-
-  if (shouldResolveDirectory) {
-    try {
-      const resolvedDirectoryDoc = await resolveDirectoryForPayload(payload)
-      updates.directoryId = resolvedDirectoryDoc._id as Types.ObjectId
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code
-      if (code === 'INVALID_DIRECTORY_ID') {
-        ctx.throw(400, 'Invalid directory identifier')
-      }
-      if (code === 'DIRECTORY_NOT_FOUND') {
-        ctx.throw(404, 'Directory not found')
       }
       throw error
     }
@@ -2820,10 +2427,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
       { path: 'seriesId' },
     ])) as AssetDocument & { tags: AssetTagDocument[]; seriesId?: AssetSeriesDocument | null }
     const categoryLookup = await loadCategoryInfoMap([populated.categoryId as Types.ObjectId])
-    const directoryLookup = await loadDirectoryInfoMap([
-      (populated.directoryId as Types.ObjectId | null | undefined) ?? null,
-    ])
-    ctx.body = mapAssetDocument(populated, categoryLookup, directoryLookup)
+    ctx.body = mapAssetDocument(populated, categoryLookup)
     return
   }
 
@@ -2834,8 +2438,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
   }
   await refreshManifest()
   const categoryLookup = await loadCategoryInfoMap([updated.categoryId as Types.ObjectId])
-  const directoryLookup = await loadDirectoryInfoMap([(updated.directoryId as Types.ObjectId | null | undefined) ?? null])
-  ctx.body = mapAssetDocument(updated, categoryLookup, directoryLookup)
+  ctx.body = mapAssetDocument(updated, categoryLookup)
 }
 
 export async function deleteAsset(ctx: Context): Promise<void> {
@@ -3005,12 +2608,9 @@ export async function listSeriesAssets(ctx: Context): Promise<void> {
   ])
 
   const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
-  const directoryLookup = await loadDirectoryInfoMap(
-    assets.map((asset) => (asset.directoryId as Types.ObjectId | null | undefined) ?? null),
-  )
 
   ctx.body = {
-    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup, directoryLookup)),
+    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup)),
     page: query.page,
     pageSize: query.pageSize,
     total,

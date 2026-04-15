@@ -10,6 +10,7 @@
     "seed": "tsx --env-file=.env.development src/scripts/seed.ts",
     "seed:prod": "node --env-file=.env.production dist/scripts/seed.js",
     "migrate:coupon-types": "tsx --env-file=.env.development src/scripts/migrate-coupon-types.ts",
+    "migrate:resource-categories": "tsx --env-file=.env.development src/scripts/migrate-resource-categories.ts",
     "mock:wechat-notify": "tsx --env-file=.env.development src/scripts/mock-wechat-notify.ts"
   },
   "engines": {

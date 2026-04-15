@@ -337,7 +337,7 @@ export interface BulkMoveResourceAssetsResult {
   modifiedCount: number
 }
 
-export async function bulkMoveResourceAssetsToCategory(
+export async function bulkMoveResourceAssets(
   payload: BulkMoveResourceAssetsPayload,
 ): Promise<BulkMoveResourceAssetsResult> {
   const targetCategoryId = payload.targetCategoryId.trim()

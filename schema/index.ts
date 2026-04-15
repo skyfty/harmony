@@ -89,7 +89,6 @@ export type {
   AssetBundlePrimaryAsset,
   AssetBundleUploadResponse,
   AssetCategoryPathItem,
-  AssetDirectory,
   AssetManifest,
   AssetManifestAsset,
   AssetManifestDirectory,

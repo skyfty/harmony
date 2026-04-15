@@ -1021,7 +1021,7 @@ function getGroundVertexCount(rows: number, columns: number): number {
 // Enable temporarily via query param `?debug=1`.
 const debugEnabled = ref(true);
 // debugMode: 'off' = hide overlay; 'fps' = show only FPS; 'full' = show compact summary
-const debugMode = ref<'off' | 'fps' | 'full'>('fps');
+const debugMode = ref<'off' | 'fps' | 'full'>('full');
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
 

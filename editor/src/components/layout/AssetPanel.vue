@@ -22,7 +22,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
 import { assetProvider, invalidateAssetManifestCache } from '@/resources/projectProviders/asset'
 import {
-  bulkMoveResourceAssetsToCategory,
+  bulkMoveResourceAssets,
   createResourceCategory,
   deleteResourceAsset,
   deleteResourceCategory,
@@ -2140,7 +2140,7 @@ async function handleAssetCardDrop(event: DragEvent, targetAssetId: string) {
         name: folderName,
         parentId: resolveServerCategoryId(parentDirectoryId),
       })
-      await bulkMoveResourceAssetsToCategory({
+      await bulkMoveResourceAssets({
         assetIds: Array.from(new Set([draggedAssetId, targetAssetId])),
         targetCategoryId: created.id,
       })
@@ -2250,7 +2250,7 @@ async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
       if (!targetCategoryId) {
         return
       }
-      await bulkMoveResourceAssetsToCategory({ assetIds: [assetId], targetCategoryId })
+      await bulkMoveResourceAssets({ assetIds: [assetId], targetCategoryId })
       await refreshPresetProviderAssets()
     }
   } catch (error) {

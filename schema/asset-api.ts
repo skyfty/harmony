@@ -45,9 +45,6 @@ export interface AssetSummary {
   categoryId: string
   categoryPath: AssetCategoryPathItem[]
   categoryPathString: string
-  directoryId?: string | null
-  directoryPath?: AssetCategoryPathItem[]
-  directoryPathString?: string
   type: AssetType
   tags: AssetTagSummary[]
   tagIds: string[]
@@ -151,13 +148,6 @@ export interface LegacyAssetManifestEntry extends AssetManifestAsset {}
 export interface LegacyAssetManifest {
   generatedAt: string
   assets: LegacyAssetManifestEntry[]
-}
-
-export interface AssetDirectory<TAsset = AssetSummary> {
-  id: string
-  name: string
-  children?: AssetDirectory<TAsset>[]
-  assets?: TAsset[]
 }
 
 export interface PagedRequest {

@@ -138,6 +138,7 @@ import {
   deleteAssetTag,
   deleteAssetCategory,
   getAsset,
+  listResourceCategoryEntries,
   listAssetSeries,
   listAssetTags,
   listAssets,
@@ -382,6 +383,7 @@ adminRouter.put('/resources/series/:id', requireAnyPermission(['resource:write']
 adminRouter.delete('/resources/series/:id', requireAnyPermission(['resource:write']), deleteAssetSeries)
 
 adminRouter.get('/resources/categories', requireAnyPermission(['category:read']), listResourceCategories)
+adminRouter.get('/resources/categories/entries', requireAnyPermission(['resource:read']), listResourceCategoryEntries)
 adminRouter.post('/resources/categories', requireAnyPermission(['category:write']), createAssetCategory)
 adminRouter.put('/resources/categories/:id', requireAnyPermission(['category:write']), updateAssetCategory)
 adminRouter.delete('/resources/categories/:id', requireAnyPermission(['category:write']), deleteAssetCategory)

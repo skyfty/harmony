@@ -7,7 +7,6 @@ const assetSchema = new Schema<AssetDocument>(
   {
     name: { type: String, required: true, trim: true },
     categoryId: { type: Schema.Types.ObjectId, ref: 'AssetCategory', required: true },
-    directoryId: { type: Schema.Types.ObjectId, ref: 'AssetDirectory', default: null },
     type: {
       type: String,
       enum: AssetTypes,
@@ -49,7 +48,6 @@ const assetSchema = new Schema<AssetDocument>(
 )
 
 assetSchema.index({ categoryId: 1, createdAt: -1 })
-assetSchema.index({ directoryId: 1, createdAt: -1 })
 assetSchema.index({ type: 1, createdAt: -1 })
 assetSchema.index({ tags: 1 })
 assetSchema.index({ seriesId: 1 })
