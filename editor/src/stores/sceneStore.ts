@@ -9903,6 +9903,56 @@ export const useSceneStore = defineStore('scene', {
       this.queueSceneNodePatch(nodeId, ['materials'])
       return appliedEntry
     },
+    resetNodeMaterialSlotToDefault(nodeId: string, nodeMaterialId: string): SceneNodeMaterial | null {
+      const targetNode = findNodeById(this.nodes, nodeId)
+      if (!targetNode || !nodeSupportsMaterials(targetNode) || !targetNode.materials?.length) {
+        return null
+      }
+
+      const defaultMaterial = findDefaultSceneMaterial(this.materials)
+      const defaultProps = defaultMaterial ? createMaterialProps(defaultMaterial) : createMaterialProps()
+
+      let updated = false
+      let requiresDynamicMeshPatch = false
+      let resetEntry: SceneNodeMaterial | null = null
+
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
+          return
+        }
+        node.materials = node.materials.map((entry, index) => {
+          if (entry.id !== nodeMaterialId) {
+            return entry
+          }
+          updated = true
+          const fallbackName = entry.name?.trim() || `Material ${index + 1}`
+          const nextEntry = createNodeMaterial(null, defaultProps, {
+            id: entry.id,
+            name: defaultMaterial?.name?.trim() || fallbackName,
+            type: defaultMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+          })
+          resetEntry = nextEntry
+          return nextEntry
+        })
+        const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
+        const wallResult = wallHelpers.ensureWallMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged) {
+          requiresDynamicMeshPatch = true
+        }
+      })
+
+      if (!updated || !resetEntry) {
+        return null
+      }
+
+      this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
+      commitSceneSnapshot(this)
+      return resetEntry
+    },
     async syncLocalMaterialAsset(materialId: string): Promise<ProjectAsset | null> {
       const material = this.materials.find((entry) => entry.id === materialId)
       if (!material) {

@@ -35,6 +35,7 @@ const materialPickerVisible = ref(false)
 const materialPickerSlotId = ref<string | null>(null)
 const materialPickerSelectedId = ref('')
 const materialPickerAnchor = ref<{ x: number; y: number } | null>(null)
+const materialPreviewThumbnails = ref<Record<string, string>>({})
 
 const DEFAULT_MATERIAL_COLOR = '#ffffff'
 
@@ -61,6 +62,14 @@ watch(
       emit('update:active-node-material-id', null)
       emit('close-details')
     }
+    const activeIds = new Set(list.map((entry) => entry.id))
+    const nextThumbnails: Record<string, string> = {}
+    ;(Object.entries(materialPreviewThumbnails.value) as Array<[string, string]>).forEach(([slotId, thumbnail]) => {
+      if (activeIds.has(slotId)) {
+        nextThumbnails[slotId] = thumbnail
+      }
+    })
+    materialPreviewThumbnails.value = nextThumbnails
   },
   { immediate: true },
 )
@@ -89,6 +98,7 @@ const materialListEntries = computed(() =>
     const shared = entry.materialId
       ? materials.value.find((item: { id: string }) => item.id === entry.materialId) ?? null
       : null
+    const thumbnail = getMaterialPreviewThumbnail(entry.id, shared?.id ?? null)
     const color = normalizeHexColor(shared ? shared.color : entry.color, DEFAULT_MATERIAL_COLOR)
     return {
       id: entry.id,
@@ -96,6 +106,7 @@ const materialListEntries = computed(() =>
       subtitle: shared ? '共享材质' : '本地材质',
       shared: Boolean(shared),
       color,
+      thumbnail,
       index,
     }
   }),
@@ -125,6 +136,40 @@ function handleSelect(id: string) {
 function setActiveSlot(id: string) {
   internalActiveId.value = id
   emit('update:active-node-material-id', id)
+}
+
+function getMaterialPreviewThumbnail(slotId: string, sharedMaterialId: string | null): string | null {
+  const localThumbnail = materialPreviewThumbnails.value[slotId]
+  if (typeof localThumbnail === 'string' && localThumbnail.trim().length) {
+    return localThumbnail.trim()
+  }
+  if (!sharedMaterialId) {
+    return null
+  }
+  const sharedAsset = sceneStore.getAsset(sharedMaterialId)
+  const sharedThumbnail = typeof sharedAsset?.thumbnail === 'string' ? sharedAsset.thumbnail.trim() : ''
+  return sharedThumbnail.length ? sharedThumbnail : null
+}
+
+function setMaterialPreviewThumbnail(slotId: string, thumbnail: string | null | undefined) {
+  const normalized = typeof thumbnail === 'string' ? thumbnail.trim() : ''
+  if (!normalized) {
+    clearMaterialPreviewThumbnail(slotId)
+    return
+  }
+  materialPreviewThumbnails.value = {
+    ...materialPreviewThumbnails.value,
+    [slotId]: normalized,
+  }
+}
+
+function clearMaterialPreviewThumbnail(slotId: string) {
+  if (!(slotId in materialPreviewThumbnails.value)) {
+    return
+  }
+  const next = { ...materialPreviewThumbnails.value }
+  delete next[slotId]
+  materialPreviewThumbnails.value = next
 }
 
 function handleAddMaterialSlot() {
@@ -291,13 +336,26 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
   materialPickerVisible.value = false
   materialPickerAnchor.value = null
   materialPickerSlotId.value = null
-  if (!asset || asset.type !== 'material' || !selectedNodeId.value || !slotId) {
+  if (!selectedNodeId.value || !slotId) {
+    return
+  }
+  if (!asset) {
+    clearMaterialPreviewThumbnail(slotId)
+    const reset = sceneStore.resetNodeMaterialSlotToDefault(selectedNodeId.value, slotId)
+    if (reset) {
+      setActiveSlot(slotId)
+      emit('open-details', slotId)
+    }
+    return
+  }
+  if (asset.type !== 'material') {
     return
   }
   const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, slotId, asset.id)
   if (!applied) {
     return
   }
+  setMaterialPreviewThumbnail(slotId, asset.thumbnail)
   setActiveSlot(slotId)
   emit('open-details', slotId)
 }
@@ -354,6 +412,7 @@ async function handleSlotDrop(slotId: string, event: DragEvent) {
       materialAsset.id,
     )
     if (applied) {
+      setMaterialPreviewThumbnail(slotId, materialAsset.thumbnail)
       setActiveSlot(slotId)
       emit('open-details', slotId)
     }
@@ -362,6 +421,7 @@ async function handleSlotDrop(slotId: string, event: DragEvent) {
   if (textureAsset) {
     const applied = applyAlbedoTexture(slotId, textureAsset)
     if (applied) {
+      clearMaterialPreviewThumbnail(slotId)
       setActiveSlot(slotId)
       emit('open-details', slotId)
     }
@@ -418,6 +478,7 @@ async function handleListDrop(event: DragEvent) {
   }
   const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, newSlot.id, asset.id)
   if (assigned) {
+    setMaterialPreviewThumbnail(newSlot.id, asset.thumbnail)
     setActiveSlot(newSlot.id)
     emit('open-details', newSlot.id)
   }
@@ -443,6 +504,7 @@ function handleConfirmDeleteSlot() {
   if (!removed) {
     return
   }
+  clearMaterialPreviewThumbnail(targetId)
   internalActiveId.value = null
   emit('update:active-node-material-id', null)
   emit('close-details')
@@ -501,7 +563,13 @@ function handleConfirmDeleteSlot() {
                   :class="{ 'is-disabled': props.disabled }"
                   @click.stop="handleOpenMaterialAssetPicker(entry.id, $event)"
                 >
-                  <div class="material-sphere" :style="{ backgroundColor: entry.color }"></div>
+                  <div
+                    class="material-sphere"
+                    :class="{ 'material-sphere--thumbnail': !!entry.thumbnail }"
+                    :style="entry.thumbnail
+                      ? { backgroundImage: `url(${entry.thumbnail})`, backgroundColor: entry.color }
+                      : { backgroundColor: entry.color }"
+                  ></div>
                 </div>
               </template>
               <v-list-item-title  @click="handleSelect(entry.id)">{{ entry.title }}</v-list-item-title>
@@ -626,11 +694,20 @@ function handleConfirmDeleteSlot() {
   height: 20px;
   border-radius: 50%;
   margin-right: 8px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   box-shadow: 
     inset -3px -3px 6px rgba(0, 0, 0, 0.3),
     inset 3px 3px 6px rgba(255, 255, 255, 0.3);
   position: relative;
   cursor: pointer;
+}
+
+.material-sphere--thumbnail {
+  box-shadow:
+    inset -2px -2px 5px rgba(0, 0, 0, 0.2),
+    inset 2px 2px 5px rgba(255, 255, 255, 0.22);
 }
 
 .material-sphere::before {
