@@ -723,6 +723,78 @@ function rewriteAssetReferenceString(value: string, assetIdMap: Map<string, stri
   return value
 }
 
+function normalizeBundleAssetReferenceCandidate(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed.length || trimmed.length > 512) {
+    return null
+  }
+  if (/^(https?:|data:|blob:)/i.test(trimmed)) {
+    return null
+  }
+  if (trimmed.startsWith('asset://')) {
+    const id = trimmed.slice('asset://'.length).trim()
+    return id.length ? id : null
+  }
+  if (trimmed.startsWith('local::')) {
+    const id = trimmed.slice('local::'.length).trim()
+    return id.length ? id : null
+  }
+  if (trimmed.startsWith('url::')) {
+    const id = trimmed.slice('url::'.length).trim()
+    return id.length ? id : null
+  }
+  return trimmed
+}
+
+function collectBundleAssetReferenceIdsFromValue(value: unknown, bucket: Set<string>, parentKey = ''): void {
+  if (typeof value === 'string') {
+    const normalized = normalizeBundleAssetReferenceCandidate(value)
+    if (!normalized) {
+      return
+    }
+    if (/assetid|asset_id|asset$/i.test(parentKey) || parentKey === 'id') {
+      bucket.add(normalized)
+      return
+    }
+    if (/^[a-z0-9_-]{8,}$/i.test(normalized)) {
+      bucket.add(normalized)
+    }
+    return
+  }
+  if (!value || typeof value !== 'object') {
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectBundleAssetReferenceIdsFromValue(entry, bucket, parentKey))
+    return
+  }
+  Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
+    if (parentKey === 'assetRegistry') {
+      const normalized = normalizeBundleAssetReferenceCandidate(key)
+      if (normalized) {
+        bucket.add(normalized)
+      }
+    }
+    collectBundleAssetReferenceIdsFromValue(entry, bucket, key)
+  })
+}
+
+function collectBundleAssetReferenceIds(entry: AssetBundleFileEntry, bytes: Uint8Array): string[] {
+  const extension = sanitizeString(entry.extension)?.toLowerCase() ?? path.extname(entry.filename).replace(/^\./, '').toLowerCase()
+  if (!CONFIG_ASSET_EXTENSION_SET.has(extension)) {
+    return []
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(strFromU8(bytes))
+  } catch {
+    return []
+  }
+  const bucket = new Set<string>()
+  collectBundleAssetReferenceIdsFromValue(parsed, bucket)
+  return Array.from(bucket)
+}
+
 function buildPersistedBundleAssetReference(
   asset: AssetDocument,
   options: {
@@ -2320,60 +2392,92 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   const persistedBundleAssets = new Map<string, PersistedBundleAssetReference>()
   const persistedAssetIds = new Set<string>()
 
-  for (const dependencyEntry of manifest.files.filter((entry) => entry.role === 'dependency')) {
+  type PendingBundleDependency = {
+    entry: AssetBundleFileEntry
+    bytes: Uint8Array
+    sourceLocalAssetId: string
+    dependencyType: AssetDocument['type']
+    rewriteTarget: boolean
+    referencedDependencyIds: string[]
+  }
+
+  const dependencyEntries = (manifest.files as AssetBundleFileEntry[]).filter((entry) => entry.role === 'dependency')
+  const pendingDependencies: PendingBundleDependency[] = []
+
+  const persistDependency = async (dependency: PendingBundleDependency): Promise<void> => {
+    const storedBytes = dependency.rewriteTarget
+      ? maybeRewriteJsonBundleAsset(dependency.entry, dependency.bytes, assetIdMap, persistedBundleAssets)
+      : dependency.bytes
+
+    const storedDependency = await storeBufferAsFile(storedBytes, {
+      filename: dependency.entry.filename,
+      mimeType: dependency.entry.mimeType ?? null,
+    })
+    const dependencyAsset = await AssetModel.create({
+      name: path.parse(dependency.entry.filename).name || dependency.entry.filename,
+      categoryId,
+      type: dependency.dependencyType,
+      tags: [],
+      size: storedDependency.size,
+      color: null,
+      dimensionLength: null,
+      dimensionWidth: null,
+      dimensionHeight: null,
+      sizeCategory: null,
+      imageWidth: null,
+      imageHeight: null,
+      url: storedDependency.url,
+      fileKey: storedDependency.fileKey,
+      previewUrl: dependency.dependencyType === 'image' ? storedDependency.url : null,
+      thumbnailUrl: dependency.dependencyType === 'image' ? storedDependency.url : null,
+      description: dependency.entry.filename,
+      originalFilename: storedDependency.originalFilename,
+      mimeType: storedDependency.mimeType,
+      metadata: undefined,
+      terrainScatterPreset: null,
+      contentHash: dependency.entry.hash,
+      contentHashAlgorithm: dependency.entry.hashAlgorithm,
+      sourceLocalAssetId: dependency.sourceLocalAssetId,
+      bundleRole: 'dependency',
+      bundlePrimaryAssetId: null,
+    })
+
+    persistedAssetIds.add(dependencyAsset._id.toString())
+    assetIdMap.set(dependency.sourceLocalAssetId, dependencyAsset._id.toString())
+    persistedBundleAssets.set(
+      dependency.sourceLocalAssetId,
+      buildPersistedBundleAssetReference(dependencyAsset, {
+        bytes: typeof dependency.entry.size === 'number' && Number.isFinite(dependency.entry.size)
+          ? dependency.entry.size
+          : undefined,
+        assetType: dependency.dependencyType,
+        name: path.parse(dependency.entry.filename).name || dependency.entry.filename,
+      }),
+    )
+  }
+
+  for (const dependencyEntry of dependencyEntries) {
+    const sourceLocalAssetId = sanitizeString(dependencyEntry.sourceLocalAssetId)
+    if (!sourceLocalAssetId) {
+      continue
+    }
     const dependencyBytes = archiveEntries.get(dependencyEntry.path)
     if (!dependencyBytes) {
       ctx.throw(400, `Bundle file is missing: ${dependencyEntry.path}`)
     }
+    const resolvedDependencyBytes = dependencyBytes as Uint8Array
     const dependencyType = normalizeAssetType(dependencyEntry.assetType ?? 'file', 'file')
-
-    let dependencyAsset = await AssetModel.findOne({
+    const existingDependencyAsset = await AssetModel.findOne({
       contentHash: dependencyEntry.hash,
       contentHashAlgorithm: dependencyEntry.hashAlgorithm,
     }).exec()
 
-    if (!dependencyAsset) {
-      const storedDependency = await storeBufferAsFile(dependencyBytes, {
-        filename: dependencyEntry.filename,
-        mimeType: dependencyEntry.mimeType ?? null,
-      })
-      dependencyAsset = await AssetModel.create({
-        name: path.parse(dependencyEntry.filename).name || dependencyEntry.filename,
-        categoryId,
-        type: dependencyType,
-        tags: [],
-        size: storedDependency.size,
-        color: null,
-        dimensionLength: null,
-        dimensionWidth: null,
-        dimensionHeight: null,
-        sizeCategory: null,
-        imageWidth: null,
-        imageHeight: null,
-        url: storedDependency.url,
-        fileKey: storedDependency.fileKey,
-        previewUrl: dependencyType === 'image' ? storedDependency.url : null,
-        thumbnailUrl: dependencyType === 'image' ? storedDependency.url : null,
-        description: dependencyEntry.filename,
-        originalFilename: storedDependency.originalFilename,
-        mimeType: storedDependency.mimeType,
-        metadata: undefined,
-        terrainScatterPreset: null,
-        contentHash: dependencyEntry.hash,
-        contentHashAlgorithm: dependencyEntry.hashAlgorithm,
-        sourceLocalAssetId: sanitizeString(dependencyEntry.sourceLocalAssetId) ?? null,
-        bundleRole: 'dependency',
-        bundlePrimaryAssetId: null,
-      })
-    }
-
-    persistedAssetIds.add(dependencyAsset._id.toString())
-    const sourceLocalAssetId = sanitizeString(dependencyEntry.sourceLocalAssetId)
-    if (sourceLocalAssetId) {
-      assetIdMap.set(sourceLocalAssetId, dependencyAsset._id.toString())
+    if (existingDependencyAsset) {
+      persistedAssetIds.add(existingDependencyAsset._id.toString())
+      assetIdMap.set(sourceLocalAssetId, existingDependencyAsset._id.toString())
       persistedBundleAssets.set(
         sourceLocalAssetId,
-        buildPersistedBundleAssetReference(dependencyAsset, {
+        buildPersistedBundleAssetReference(existingDependencyAsset, {
           bytes: typeof dependencyEntry.size === 'number' && Number.isFinite(dependencyEntry.size)
             ? dependencyEntry.size
             : undefined,
@@ -2381,7 +2485,49 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
           name: path.parse(dependencyEntry.filename).name || dependencyEntry.filename,
         }),
       )
+      continue
     }
+
+    pendingDependencies.push({
+      entry: dependencyEntry,
+      bytes: resolvedDependencyBytes,
+      sourceLocalAssetId,
+      dependencyType,
+      rewriteTarget: dependencyEntry.rewriteTarget === true,
+      referencedDependencyIds: dependencyEntry.rewriteTarget === true
+        ? collectBundleAssetReferenceIds(dependencyEntry, resolvedDependencyBytes).filter((referenceId) => referenceId !== sourceLocalAssetId)
+        : [],
+    })
+  }
+
+  let remainingDependencies = pendingDependencies
+  while (remainingDependencies.length) {
+    const remainingDependencyIds = new Set(remainingDependencies.map((dependency) => dependency.sourceLocalAssetId))
+    const nextRemainingDependencies: PendingBundleDependency[] = []
+    let progressed = false
+
+    for (const dependency of remainingDependencies) {
+      const hasUnresolvedDependency = dependency.referencedDependencyIds.some(
+        (referenceId) => remainingDependencyIds.has(referenceId),
+      )
+      if (dependency.rewriteTarget && hasUnresolvedDependency) {
+        nextRemainingDependencies.push(dependency)
+        continue
+      }
+
+      await persistDependency(dependency)
+      progressed = true
+    }
+
+    if (!progressed) {
+      for (const dependency of nextRemainingDependencies) {
+        await persistDependency(dependency)
+      }
+      remainingDependencies = []
+      break
+    }
+
+    remainingDependencies = nextRemainingDependencies
   }
 
   const metadataBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.metadataLogicalId)
