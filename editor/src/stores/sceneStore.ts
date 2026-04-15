@@ -9918,6 +9918,171 @@ export const useSceneStore = defineStore('scene', {
       await this.syncLocalMaterialDependencyRegistryEntries(material.id)
       return registered
     },
+    findMaterialAssetByFilenameInDirectory(filename: string, directoryId?: string | null): ProjectAsset | null {
+      const normalized = buildMaterialAssetFilename(filename).trim().toLowerCase()
+      if (!normalized.length) {
+        return null
+      }
+
+      const targetDirectoryId = typeof directoryId === 'string' && directoryId.trim().length
+        ? directoryId.trim()
+        : this.resolveConfigAssetSaveDirectoryId()
+      const manifest = this.assetManifest
+      if (manifest) {
+        const resolvedDirectoryId = manifest.directoriesById[targetDirectoryId]
+          ? targetDirectoryId
+          : this.resolveConfigAssetSaveDirectoryId()
+        const directory = manifest.directoriesById[resolvedDirectoryId]
+        if (!directory) {
+          return null
+        }
+        for (const assetId of directory.assetIds) {
+          const asset = this.getAsset(assetId)
+          if (!asset || asset.type !== 'material') {
+            continue
+          }
+          const description = typeof asset.description === 'string' ? asset.description.trim().toLowerCase() : ''
+          if (description === normalized) {
+            return asset
+          }
+        }
+        return null
+      }
+
+      const categories = Object.values(this.assetCatalog ?? {})
+      for (const assets of categories) {
+        if (!Array.isArray(assets)) {
+          continue
+        }
+        for (const asset of assets) {
+          if (!asset || asset.type !== 'material') {
+            continue
+          }
+          const description = typeof asset.description === 'string' ? asset.description.trim().toLowerCase() : ''
+          if (description === normalized) {
+            return asset
+          }
+        }
+      }
+
+      return null
+    },
+    async saveNodeMaterialAsset(payload: {
+      nodeId?: string | null
+      nodeMaterialId?: string | null
+      assetId?: string | null
+      select?: boolean
+    }): Promise<ProjectAsset> {
+      const nodeId = (payload.nodeId ?? this.selectedNodeId ?? '').trim()
+      if (!nodeId) {
+        throw new Error('未选择材质节点')
+      }
+
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node || !nodeSupportsMaterials(node) || !node.materials?.length) {
+        throw new Error('当前节点没有可保存的材质')
+      }
+
+      const materialId = typeof payload.nodeMaterialId === 'string' ? payload.nodeMaterialId.trim() : ''
+      if (!materialId) {
+        throw new Error('未选择材质槽位')
+      }
+
+      const materialIndex = node.materials.findIndex((entry) => entry.id === materialId)
+      const nodeMaterial = materialIndex >= 0 ? node.materials[materialIndex] ?? null : null
+      if (!nodeMaterial) {
+        throw new Error('材质槽位不存在或已被移除')
+      }
+
+      const resolvedName = nodeMaterial.name?.trim() || `Material ${materialIndex + 1}`
+      const fileName = buildMaterialAssetFilename(resolvedName)
+      const dependencyAssetIds = collectMaterialAssetDependencyIds(nodeMaterial)
+      const dependencySubset = dependencyAssetIds.length
+        ? buildAssetDependencySubset({
+            assetIds: dependencyAssetIds,
+            assetRegistry: this.assetRegistry,
+          })
+        : {}
+      const serialized = serializeMaterialAsset({
+        ...nodeMaterial,
+        name: resolvedName,
+        description: undefined,
+        type: nodeMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+      }, {
+        assetRegistry: dependencySubset.assetRegistry,
+      })
+
+      const targetDirectoryId = this.resolveConfigAssetSaveDirectoryId()
+      const assetId = typeof payload.assetId === 'string' && payload.assetId.trim().length
+        ? payload.assetId.trim()
+        : generateUuid()
+      const existingAsset = payload.assetId ? this.getAsset(assetId) : null
+      if (payload.assetId && !existingAsset) {
+        throw new Error('材质资源不存在')
+      }
+      if (existingAsset && existingAsset.type !== 'material') {
+        throw new Error('指定资源并非材质资产')
+      }
+
+      const blob = new Blob([serialized], { type: 'application/json' })
+      const assetCache = useAssetCacheStore()
+      await assetCache.storeAssetBlob(assetId, {
+        blob,
+        mimeType: 'application/json',
+        filename: fileName,
+      })
+
+      let thumbnailDataUrl = existingAsset?.thumbnail ?? null
+      try {
+        thumbnailDataUrl = await renderMaterialThumbnailDataUrl({
+          material: {
+            ...nodeMaterial,
+            name: resolvedName,
+            type: nodeMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+          },
+          resolveTexture: createMaterialAssetTextureResolver({
+            assetCacheStore: assetCache,
+            getAsset: (textureAssetId: string) => this.getAsset(textureAssetId),
+          }),
+          width: ASSET_THUMBNAIL_WIDTH,
+          height: ASSET_THUMBNAIL_HEIGHT,
+        })
+      } catch (error) {
+        console.warn('Failed to generate material thumbnail', assetId, error)
+      }
+
+      if (dependencySubset.assetRegistry) {
+        this.assetRegistry = upsertAssetRegistryEntries(this.assetRegistry, dependencySubset.assetRegistry)
+      }
+
+      const previewColor = typeof nodeMaterial.color === 'string' && nodeMaterial.color.trim().length
+        ? nodeMaterial.color
+        : existingAsset?.previewColor ?? '#607d8b'
+      const projectAsset: ProjectAsset = {
+        ...(existingAsset ?? {}),
+        id: assetId,
+        name: resolvedName,
+        type: 'material',
+        downloadUrl: existingAsset?.downloadUrl ?? `material://${assetId}.material`,
+        previewColor,
+        thumbnail: thumbnailDataUrl ?? existingAsset?.thumbnail ?? null,
+        description: fileName,
+        gleaned: true,
+        extension: extractExtension(fileName) ?? 'material',
+      }
+
+      const registered = this.registerAsset(projectAsset, {
+        categoryId: targetDirectoryId,
+        source: existingAsset?.source ?? { type: 'local' },
+        commitOptions: { updateNodes: false },
+      })
+
+      if (payload.select === true) {
+        this.selectAsset(registered.id)
+      }
+
+      return registered
+    },
     async saveNodeMaterialAsShared(
       nodeId: string,
       nodeMaterialId: string,

@@ -16,7 +16,7 @@ import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
-import { parseMaterialAssetDocument } from '@/utils/materialAsset'
+import { buildMaterialAssetFilename, parseMaterialAssetDocument } from '@/utils/materialAsset'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 
@@ -165,6 +165,11 @@ const assetDialogVisible = ref(false)
 const assetDialogSlot = ref<SceneMaterialTextureSlot | null>(null)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const materialSaveError = ref<string | null>(null)
+const materialSaveInProgress = ref(false)
+const overwriteConfirmDialogVisible = ref(false)
+const overwriteTargetAssetId = ref<string | null>(null)
+const overwriteTargetFilename = ref<string | null>(null)
 const TEXTURE_ASSET_TYPE = 'texture,image,hdri' as const
 let pendingMaterialPropsCommitTimer: ReturnType<typeof setTimeout> | null = null
 let pendingMaterialPropsTarget: { nodeId: string; materialId: string } | null = null
@@ -253,6 +258,7 @@ watch(
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
       showAllProperties.value = false
+      resetMaterialSaveState()
       resetTexturePanelExpansion()
     }
   },
@@ -286,6 +292,7 @@ watch(
       lastSyncedMaterialId.value = null
       selectedMaterialType.value = null
       resetDirtyState()
+      resetMaterialSaveState()
       showAllProperties.value = false
       resetTexturePanelExpansion()
       applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
@@ -296,6 +303,7 @@ watch(
     selectedMaterialType.value = entry.type ?? null
     if (isNewSelection) {
       resetDirtyState()
+      resetMaterialSaveState()
       showAllProperties.value = false
       resetTexturePanelExpansion()
     }
@@ -306,6 +314,14 @@ watch(
 
 function resetDirtyState() {
   hasPendingChanges.value = false
+}
+
+function resetMaterialSaveState() {
+  materialSaveError.value = null
+  materialSaveInProgress.value = false
+  overwriteConfirmDialogVisible.value = false
+  overwriteTargetAssetId.value = null
+  overwriteTargetFilename.value = null
 }
 
 function resetTexturePanelExpansion() {
@@ -357,6 +373,7 @@ function flushPendingMaterialPropsCommit() {
 
 function handleClose() {
   flushPendingMaterialPropsCommit()
+  resetMaterialSaveState()
   emit('close')
 }
 
@@ -846,6 +863,70 @@ function handleNameChange(value: string) {
   }
 }
 
+function resolveMaterialSaveName(): string {
+  const formName = materialForm.name.trim()
+  if (formName) {
+    return formName
+  }
+  const entryName = activeNodeMaterial.value?.name?.trim()
+  if (entryName) {
+    return entryName
+  }
+  return `Material ${Math.max(1, activeMaterialIndex.value + 1)}`
+}
+
+async function performSaveMaterialAsset(overwriteAssetId: string | null): Promise<void> {
+  const nodeId = selectedNodeId.value?.trim() ?? ''
+  const nodeMaterialId = activeNodeMaterial.value?.id?.trim() ?? ''
+  if (!nodeId || !nodeMaterialId) {
+    return
+  }
+
+  flushPendingMaterialPropsCommit()
+  materialSaveInProgress.value = true
+  materialSaveError.value = null
+  try {
+    await sceneStore.saveNodeMaterialAsset({
+      nodeId,
+      nodeMaterialId,
+      assetId: overwriteAssetId,
+      select: false,
+    })
+    overwriteConfirmDialogVisible.value = false
+    overwriteTargetAssetId.value = null
+    overwriteTargetFilename.value = null
+  } catch (error) {
+    console.error('Failed to save material asset', error)
+    materialSaveError.value = (error as Error).message ?? 'Failed to save material asset.'
+  } finally {
+    materialSaveInProgress.value = false
+  }
+}
+
+async function handleSaveMaterialAsset(): Promise<void> {
+  if (!activeNodeMaterial.value || !selectedNodeId.value) {
+    return
+  }
+
+  materialSaveError.value = null
+  const fileName = buildMaterialAssetFilename(resolveMaterialSaveName())
+  const existing = sceneStore.findMaterialAssetByFilenameInDirectory(fileName)
+  if (existing) {
+    overwriteTargetAssetId.value = existing.id
+    overwriteTargetFilename.value = fileName
+    overwriteConfirmDialogVisible.value = true
+    return
+  }
+
+  await performSaveMaterialAsset(null)
+}
+
+function cancelOverwriteMaterialAsset(): void {
+  overwriteConfirmDialogVisible.value = false
+  overwriteTargetAssetId.value = null
+  overwriteTargetFilename.value = null
+}
+
 function applyImportedMaterialPayload(payload: {
   props: SceneMaterialProps
   name?: string
@@ -908,6 +989,17 @@ async function handleImportFileChange(event: Event) {
           </div>
           <v-spacer />
           <v-btn
+            class="toolbar-save"
+            variant="text"
+            size="small"
+            :disabled="!activeNodeMaterial || isUiDisabled || materialSaveInProgress"
+            title="Save material as shared"
+            @click="handleSaveMaterialAsset"
+          >
+            <v-icon size="16px">mdi-content-save</v-icon>
+          </v-btn>
+
+          <v-btn
             class="toolbar-more"
             variant="text"
             size="small"
@@ -930,6 +1022,15 @@ async function handleImportFileChange(event: Event) {
                 @update:model-value="handleNameChange"
               />
             </div>
+
+            <v-alert
+              v-if="materialSaveError"
+              density="compact"
+              type="error"
+              variant="tonal"
+            >
+              {{ materialSaveError }}
+            </v-alert>
 
             <div class="material-properties">
               <div class="material-color">
@@ -1139,6 +1240,19 @@ async function handleImportFileChange(event: Event) {
               @update:asset="handleTextureUpdate"
               @cancel="handleTextureAssetCancel"
             />
+            <v-dialog v-model="overwriteConfirmDialogVisible" max-width="420">
+              <v-card>
+                <v-card-title>Overwrite material asset?</v-card-title>
+                <v-card-text>
+                  This material already exists in the current folder: <strong>{{ overwriteTargetFilename }}</strong>. Overwrite it?
+                </v-card-text>
+                <v-card-actions>
+                  <v-spacer />
+                  <v-btn variant="text" @click="cancelOverwriteMaterialAsset">Cancel</v-btn>
+                  <v-btn color="primary" :loading="materialSaveInProgress" @click="performSaveMaterialAsset(overwriteTargetAssetId)">Overwrite</v-btn>
+                </v-card-actions>
+              </v-card>
+            </v-dialog>
           </div>
           <div v-else class="panel-empty-state">
             <div class="empty-message">该节点没有材质信息</div>
