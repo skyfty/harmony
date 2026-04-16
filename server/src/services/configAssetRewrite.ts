@@ -2,7 +2,7 @@ import {
   CONFIG_ASSET_EXTENSION_SET,
   type AssetBundleFileEntry,
   type AssetType,
-} from '@schema'
+} from '@harmony/schema'
 
 export type PersistedBundleAssetReference = {
   serverAssetId: string
@@ -239,7 +239,7 @@ function rewriteConfigAssetJson(
 }
 
 export function rewriteConfigAssetBundleBytes(
-  entry: Pick<AssetBundleFileEntry, 'filename' | 'extension'>,
+  entry: AssetBundleFileEntry,
   bytes: Uint8Array,
   context: ConfigAssetRewriteContext,
 ): Uint8Array {
