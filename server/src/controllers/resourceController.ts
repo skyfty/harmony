@@ -42,6 +42,7 @@ import {
   deleteCategoryStrict,
   ensureCategoryConsistency,
   ensureRootCategory,
+  ensurePresetCategories,
   ensureCategoryPath,
   getRootCategory,
   getCategoryPathItems,
@@ -938,6 +939,7 @@ async function ensureDefaultCategories(): Promise<void> {
   if (!defaultCategoryInitialization) {
     defaultCategoryInitialization = (async () => {
       await ensureRootCategory()
+      await ensurePresetCategories()
       await ensureCategoryConsistency()
     })().catch((error) => {
       defaultCategoryInitialization = null
