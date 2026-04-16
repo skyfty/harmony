@@ -296,6 +296,8 @@ async function generateFloorPresetThumbnailDataUrl(
       texture.name = ref.name ?? file.name ?? assetId
       texture.needsUpdate = true
       return texture
+      } catch {
+      return null
     } finally {
       URL.revokeObjectURL(blobUrl)
     }

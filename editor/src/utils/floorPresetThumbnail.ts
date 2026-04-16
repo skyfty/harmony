@@ -113,6 +113,35 @@ function fitCamera(camera: THREE.PerspectiveCamera, object: THREE.Object3D): voi
   camera.updateProjectionMatrix()
 }
 
+function buildTextureRefKey(ref: SceneMaterialTextureRef): string {
+  const assetId = typeof ref.assetId === 'string' ? ref.assetId.trim() : ''
+  const name = typeof ref.name === 'string' ? ref.name.trim() : ''
+  return JSON.stringify({
+    assetId,
+    name,
+    settings: ref.settings ?? null,
+  })
+}
+
+async function preloadFloorPresetTextures(
+  refs: readonly SceneMaterialTextureRef[],
+  resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>,
+): Promise<Map<string, THREE.Texture | null>> {
+  const resolved = new Map<string, THREE.Texture | null>()
+
+  await Promise.all(refs.map(async (ref) => {
+    const key = buildTextureRefKey(ref)
+    try {
+      const texture = await resolveTexture(ref)
+      resolved.set(key, texture)
+    } catch {
+      resolved.set(key, null)
+    }
+  }))
+
+  return resolved
+}
+
 export async function renderFloorPresetThumbnailDataUrl(options: RenderFloorPresetThumbnailOptions): Promise<string | null> {
   const width = Math.max(1, Math.round(options.width))
   const height = Math.max(1, Math.round(options.height))
@@ -125,7 +154,13 @@ export async function renderFloorPresetThumbnailDataUrl(options: RenderFloorPres
     resolveTexture: options.resolveTexture,
   }
   if (nodeMaterials.length > 0) {
+    const textureRefs = nodeMaterials.flatMap((material) => Object.values(material.textures ?? {}).filter((ref): ref is SceneMaterialTextureRef => Boolean(ref)))
+    const resolvedTextures = await preloadFloorPresetTextures(textureRefs, options.resolveTexture)
+    materialOverrideOptions.resolveTexture = async (ref) => {
+      return resolvedTextures.get(buildTextureRefKey(ref)) ?? null
+    }
     applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
+    await Promise.resolve()
   }
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })

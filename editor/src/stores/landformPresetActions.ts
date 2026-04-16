@@ -230,6 +230,8 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         texture.name = ref.name ?? file.name ?? assetId
         texture.needsUpdate = true
         return texture
+      } catch {
+        return null
       } finally {
         URL.revokeObjectURL(blobUrl)
       }
@@ -304,10 +306,11 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         throw new Error('地貌节点材质槽位 id 无效')
       }
 
-      const materialPatch: LandformPresetMaterialPatch = typeof surfaceSlot.materialId === 'string' && surfaceSlot.materialId.trim().length
+      const surfaceMaterialId = typeof (surfaceSlot as any).materialId === 'string' ? (surfaceSlot as any).materialId.trim() : ''
+      const materialPatch: LandformPresetMaterialPatch = surfaceMaterialId
         ? {
             id: materialSlotId,
-            materialId: surfaceSlot.materialId.trim(),
+            materialId: surfaceMaterialId,
           }
         : {
             id: materialSlotId,
@@ -322,7 +325,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
           nodeMaterials
             .flatMap((material) => {
               const localTextureAssetIds = collectTextureAssetIdsFromMaterialLike(material)
-              const sharedMaterialId = typeof material?.materialId === 'string' ? material.materialId.trim() : ''
+              const sharedMaterialId = typeof (material as any)?.materialId === 'string' ? (material as any).materialId.trim() : ''
               if (!sharedMaterialId) {
                 return localTextureAssetIds
               }
