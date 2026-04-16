@@ -17,6 +17,10 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
   const selectingAssetId = ref<string | null>(null)
 
   async function ensureAssetCached(asset: ProjectAsset) {
+    if (asset.type === 'lod') {
+      await sceneStore.prepareLodAsset(asset)
+      return
+    }
     if (assetCacheStore.hasCache(asset.id)) {
       return
     }
@@ -80,23 +84,38 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
     selectingAssetId.value = source.providerAssetId
     try {
       let selectedAsset: ProjectAsset
+      let spacingAsset: ProjectAsset
 
       if (source.source === 'scene') {
-        await ensureAssetCached(source.asset)
-        selectedAsset = source.asset
+        if (source.asset.type === 'lod') {
+          const prepared = await sceneStore.prepareLodAsset(source.asset)
+          selectedAsset = prepared.requestedAsset
+          spacingAsset = prepared.modelAsset
+        } else {
+          await ensureAssetCached(source.asset)
+          selectedAsset = source.asset
+          spacingAsset = source.asset
+        }
       } else {
         const registered = sceneStore.ensureSceneAssetRegistered(source.asset, {
           providerId: assetProvider.id,
         })
-        await ensureAssetCached(registered)
-        selectedAsset = registered
+        if (registered.type === 'lod') {
+          const prepared = await sceneStore.prepareLodAsset(registered)
+          selectedAsset = prepared.requestedAsset
+          spacingAsset = prepared.modelAsset
+        } else {
+          await ensureAssetCached(registered)
+          selectedAsset = registered
+          spacingAsset = registered
+        }
       }
 
       if (options?.updateTerrainSelection !== false) {
         terrainStore.setScatterSelection({ asset: selectedAsset, providerAssetId: source.providerAssetId })
       }
 
-      await applyAutoScatterSpacing(selectedAsset)
+      await applyAutoScatterSpacing(spacingAsset)
       options?.onSelected?.(selectedAsset, source.providerAssetId)
       return selectedAsset
     } catch (error) {

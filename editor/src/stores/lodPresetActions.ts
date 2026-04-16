@@ -11,6 +11,7 @@ import { extractExtension } from '@/utils/blob'
 import {
   buildLodPresetFilename,
   deserializeLodPreset,
+  resolveFirstLodModelAssetId,
   serializeLodPreset,
   type LodPresetAssetReference,
   type LodPresetData,
@@ -38,6 +39,12 @@ export type LodPresetActionsDeps = {
   LOD_PRESET_PREVIEW_COLOR: string
 
   findNodeById: (nodes: SceneNode[], id: string) => SceneNode | null
+}
+
+export type PreparedLodAsset = {
+  requestedAsset: ProjectAsset
+  modelAsset: ProjectAsset
+  preset: LodPresetData
 }
 
 function collectLodPresetDependencyAssetIds(preset: LodPresetData | null | undefined): string[] {
@@ -171,6 +178,53 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       }
 
       return preset
+    },
+
+    async prepareLodAsset(store: LodPresetStoreLike, assetOrId: ProjectAsset | string): Promise<PreparedLodAsset> {
+      const requestedAsset = typeof assetOrId === 'string'
+        ? store.getAsset(assetOrId)
+        : assetOrId
+      if (!requestedAsset) {
+        throw new Error('LOD 预设资源不存在')
+      }
+      if (requestedAsset.type !== 'lod') {
+        throw new Error('指定资源并非 LOD 预设')
+      }
+
+      const preset = await this.loadLodPreset(store, requestedAsset.id)
+      const dependencyAssetIds = collectLodPresetDependencyAssetIds(preset)
+      const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry) ? preset.assetRegistry : undefined
+      if (dependencyAssetIds.length) {
+        await store.ensurePrefabDependencies(dependencyAssetIds, {
+          prefabAssetIdForDownloadProgress: requestedAsset.id,
+          prefabAssetRegistry: presetAssetRegistry ?? null,
+        })
+      }
+
+      const modelAssetId = resolveFirstLodModelAssetId(preset)
+      if (!modelAssetId) {
+        throw new Error('LOD 预设未配置可用模型')
+      }
+
+      const modelAsset = store.getAsset(modelAssetId)
+      if (!modelAsset) {
+        throw new Error('Referenced LOD model asset is not available in this project')
+      }
+      if (modelAsset.type !== 'model' && modelAsset.type !== 'mesh') {
+        throw new Error('Referenced LOD asset is not a model or mesh asset')
+      }
+
+      const assetCache = useAssetCacheStore()
+      const entry = await assetCache.ensureAssetEntry(modelAsset.id, { asset: modelAsset })
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        throw new Error(entry?.error ?? 'Referenced LOD model asset is not ready yet')
+      }
+
+      return {
+        requestedAsset,
+        modelAsset,
+        preset,
+      }
     },
 
     async applyLodPresetToNode(store: LodPresetStoreLike, nodeId: string, assetId: string): Promise<LodPresetData> {

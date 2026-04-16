@@ -196,7 +196,6 @@ import {
   serializeMaterialAsset,
 } from '@/utils/materialAsset'
 import {
-  resolveFirstLodModelAssetId,
   type LodPresetData,
 } from '@/utils/lodPreset'
 import { createLodPresetActions } from './lodPresetActions'
@@ -227,6 +226,7 @@ import {
 } from './prefabActions'
 import {
   collectDirectSceneAssetReferenceIds,
+  collectRuntimeRequiredConfigAssetIds,
   collectSceneAssetReferences,
   collectEditorOnlyConfigAssetIdsFromCatalog,
   collectRetainedAssetIdsForSceneCleanup,
@@ -396,6 +396,12 @@ type ResolvedPlaceableAsset = {
   modelAsset: ProjectAsset
   lodPresetAssetId: string | null
   lodPresetData: LodPresetData | null
+}
+
+type PreparedLodAssetResult = {
+  requestedAsset: ProjectAsset
+  modelAsset: ProjectAsset
+  preset: LodPresetData
 }
 
 installPlanningImagesResolver()
@@ -4990,6 +4996,7 @@ export async function buildAssetRegistryForExport(
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
   const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(runtimeAwareScene)
+  const retainedConfigAssetIds = collectRuntimeRequiredConfigAssetIds(runtimeAwareScene)
   const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
     directReferenceAssetIds,
     runtimeAwareScene.assetCatalog ?? {},
@@ -5008,13 +5015,13 @@ export async function buildAssetRegistryForExport(
 
   usedAssetIds.forEach((assetId) => {
     const asset = getAssetFromCatalog(assetCatalog, assetId)
-    if (!shouldExcludeAssetFromRuntimeExport(asset)) {
+    if (!shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
       exportAssetIds.add(assetId)
     }
   })
   configDependencyAssetIds.forEach((assetId) => {
     const asset = getAssetFromCatalog(assetCatalog, assetId)
-    if (!shouldExcludeAssetFromRuntimeExport(asset)) {
+    if (!shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
       exportAssetIds.add(assetId)
     }
   })
@@ -5081,6 +5088,7 @@ export async function calculateSceneResourceSummary(
   options: SceneBundleExportOptions,
 ): Promise<SceneResourceSummary> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
+  const retainedConfigAssetIds = collectRuntimeRequiredConfigAssetIds(runtimeAwareScene)
   const transitiveConfigDependencyIds = await collectTransitiveConfigDependencyAssetIds(
     collectDirectSceneAssetReferenceIds(runtimeAwareScene),
     runtimeAwareScene.assetCatalog ?? {},
@@ -5121,7 +5129,7 @@ export async function calculateSceneResourceSummary(
   const assetIds = new Set<string>()
   transitiveConfigDependencyIds.forEach((assetId) => {
     const asset = getAssetFromCatalog(assetCatalog, assetId)
-    if (!shouldExcludeAssetFromRuntimeExport(asset)) {
+    if (!shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
       assetIds.add(assetId)
       return
     }
@@ -5289,7 +5297,7 @@ export async function calculateSceneResourceSummary(
   Object.keys(assetRegistry).forEach((assetId) => {
     if (assetId) {
       const asset = getAssetFromCatalog(assetCatalog, assetId)
-      if (shouldExcludeAssetFromRuntimeExport(asset)) {
+      if (shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
         if (!summary.excludedAssetIds?.includes(assetId)) {
           summary.excludedAssetIds?.push(assetId)
         }
@@ -10714,25 +10722,13 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Asset is not a placeable model asset')
       }
 
-      const preset = await this.loadLodPreset(requestedAsset.id)
-      const modelAssetId = resolveFirstLodModelAssetId(preset)
-      if (!modelAssetId) {
-        throw new Error('LOD preset does not contain a usable model level')
-      }
-
-      const modelAsset = this.getAsset(modelAssetId)
-      if (!modelAsset) {
-        throw new Error('Referenced LOD model asset is not available in this project')
-      }
-      if (modelAsset.type !== 'model' && modelAsset.type !== 'mesh') {
-        throw new Error('Referenced LOD asset is not a model or mesh asset')
-      }
+      const prepared = await this.prepareLodAsset(requestedAsset)
 
       return {
-        requestedAsset,
-        modelAsset,
+        requestedAsset: prepared.requestedAsset,
+        modelAsset: prepared.modelAsset,
         lodPresetAssetId: requestedAsset.id,
-        lodPresetData: preset,
+        lodPresetData: prepared.preset,
       }
     },
 
@@ -12265,6 +12261,10 @@ export const useSceneStore = defineStore('scene', {
 
     async loadLodPreset(assetId: string): Promise<LodPresetData> {
       return lodPresetActions.loadLodPreset(this as any, assetId)
+    },
+
+    async prepareLodAsset(assetOrId: ProjectAsset | string): Promise<PreparedLodAssetResult> {
+      return lodPresetActions.prepareLodAsset(this as any, assetOrId)
     },
 
     async applyLodPresetToNode(nodeId: string, assetId: string): Promise<LodPresetData> {

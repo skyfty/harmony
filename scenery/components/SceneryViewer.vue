@@ -4400,9 +4400,44 @@ async function syncTerrainScatterInstances(
   terrainScatterRuntime.dispose();
   markTerrainScatterUpdateDirty();
   if (!resourceCache) {
+    console.warn('[SceneryViewer] Skipping terrain scatter sync because resource cache is unavailable');
     return;
   }
+  const groundDefinition = findFirstGroundDynamicMesh(document) as (GroundRuntimeDynamicMesh & {
+    terrainScatter?: {
+      layers?: Array<{
+        id?: string;
+        assetId?: string;
+        profileId?: string;
+        params?: { payload?: { lodPresetAssetId?: string } };
+        instances?: unknown[];
+      }> | null;
+    };
+  }) | null;
+  const scatterLayers = Array.isArray(groundDefinition?.terrainScatter?.layers) ? groundDefinition.terrainScatter.layers : [];
+  const lodPresetAssetIds = Array.from(new Set(
+    scatterLayers
+      .map((layer) => {
+        const payload = layer?.params?.payload;
+        return typeof payload?.lodPresetAssetId === 'string' ? payload.lodPresetAssetId.trim() : '';
+      })
+      .filter((assetId) => assetId.length > 0),
+  ));
+  const totalScatterInstances = scatterLayers.reduce((sum, layer) => {
+    return sum + (Array.isArray(layer?.instances) ? layer.instances.length : 0);
+  }, 0);
+  console.info('[SceneryViewer] Starting terrain scatter sync', {
+    scatterLayerCount: scatterLayers.length,
+    totalScatterInstances,
+    lodPresetAssetIds,
+    assetRegistryCount: Object.keys(document.assetRegistry ?? {}).length,
+    registryHasLodPresetIds: lodPresetAssetIds.map((assetId) => ({
+      assetId,
+      hasRegistryEntry: Boolean(document.assetRegistry?.[assetId]),
+    })),
+  });
   await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject);
+  console.info('[SceneryViewer] Terrain scatter sync finished', terrainScatterRuntime.getInstanceStats());
   markTerrainScatterUpdateDirty();
 }
 
@@ -9522,6 +9557,9 @@ function hydrateGroundSidecarFromPackage(
   const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
   if (!scatterSidecarPath) {
     definition.terrainScatter = null;
+    console.info('[SceneryViewer] Scene package has no ground scatter sidecar path', {
+      sceneId: sceneEntry.sceneId,
+    });
   } else {
     const scatterSidecarBytes = pkg.files[scatterSidecarPath];
     if (!scatterSidecarBytes) {
@@ -9533,6 +9571,25 @@ function hydrateGroundSidecarFromPackage(
     );
     const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
     definition.terrainScatter = scatterPayload.terrainScatter;
+    const scatterLayers = Array.isArray(scatterPayload.terrainScatter?.layers) ? scatterPayload.terrainScatter.layers : [];
+    const lodPresetAssetIds = Array.from(new Set(
+      scatterLayers
+        .map((layer) => {
+          const payload = layer?.params?.payload as { lodPresetAssetId?: unknown } | undefined;
+          return typeof payload?.lodPresetAssetId === 'string' ? payload.lodPresetAssetId.trim() : '';
+        })
+        .filter((assetId) => assetId.length > 0),
+    ));
+    const totalScatterInstances = scatterLayers.reduce((sum, layer) => {
+      return sum + (Array.isArray(layer?.instances) ? layer.instances.length : 0);
+    }, 0);
+    console.info('[SceneryViewer] Hydrated ground scatter sidecar from package', {
+      sceneId: sceneEntry.sceneId,
+      sidecarPath: scatterSidecarPath,
+      scatterLayerCount: scatterLayers.length,
+      totalScatterInstances,
+      lodPresetAssetIds,
+    });
   }
 
   const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';

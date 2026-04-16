@@ -10,7 +10,12 @@ export type AssetDependencySubset = {
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
 }
 
-type ProjectAssetLike = Pick<ProjectAsset, 'type' | 'extension' | 'description' | 'isEditorOnly'>
+type ProjectAssetLike = Pick<ProjectAsset, 'id' | 'type' | 'extension' | 'description' | 'isEditorOnly'>
+
+type RuntimeExportFilterOptions = {
+  assetId?: string | null | undefined
+  retainedConfigAssetIds?: ReadonlySet<string> | null | undefined
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -210,8 +215,30 @@ export function shouldAssetDefaultToEditorOnly(asset: ProjectAssetLike | null | 
   return isEditorConfigAsset(asset)
 }
 
-export function shouldExcludeAssetFromRuntimeExport(asset: ProjectAssetLike | null | undefined): boolean {
+function shouldRetainConfigAssetForRuntimeExport(
+  asset: ProjectAssetLike | null | undefined,
+  options: RuntimeExportFilterOptions = {},
+): boolean {
+  const retainedConfigAssetIds = options.retainedConfigAssetIds
+  if (!retainedConfigAssetIds || retainedConfigAssetIds.size === 0) {
+    return false
+  }
+  const normalizedAssetId = typeof options.assetId === 'string' && options.assetId.trim().length
+    ? options.assetId.trim()
+    : typeof asset?.id === 'string' && asset.id.trim().length
+      ? asset.id.trim()
+      : ''
+  return normalizedAssetId.length > 0 && retainedConfigAssetIds.has(normalizedAssetId)
+}
+
+export function shouldExcludeAssetFromRuntimeExport(
+  asset: ProjectAssetLike | null | undefined,
+  options: RuntimeExportFilterOptions = {},
+): boolean {
   if (!asset) {
+    return false
+  }
+  if (shouldRetainConfigAssetForRuntimeExport(asset, options)) {
     return false
   }
   return asset.isEditorOnly === true || isEditorConfigAsset(asset)

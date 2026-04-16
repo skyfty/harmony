@@ -279,6 +279,23 @@ async function handleAssetClick(asset: ProjectAsset) {
     return
   }
 
+  if (mapped.type === 'lod') {
+    if (selectingAssetId.value) {
+      return
+    }
+
+    selectingAssetId.value = mapped.id
+    try {
+      const prepared = await sceneStore.prepareLodAsset(mapped)
+      emit('update:asset', prepared.requestedAsset)
+    } catch (error) {
+      console.warn('Failed to prepare selected LOD asset', mapped.id, error)
+    } finally {
+      selectingAssetId.value = null
+    }
+    return
+  }
+
   const requiresCache = mapped.type === 'model' || mapped.type === 'mesh'
   if (!requiresCache) {
     emit('update:asset', mapped)

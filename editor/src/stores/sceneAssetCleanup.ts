@@ -10,6 +10,7 @@ import {
   isEditorConfigAsset,
   normalizeAssetReferenceCandidate,
   resolveProjectAssetConfigKind,
+  resolveProjectAssetExtension,
 } from '@/utils/assetDependencySubset'
 import { isPlanningImageConversionNode } from '@/utils/planningToScene'
 import {
@@ -315,6 +316,54 @@ function collectTerrainScatterAssetDependencies(
   })
 }
 
+function isGroundScatterRuntimeRequiredConfigAssetId(
+  assetId: string | null | undefined,
+  catalog: Record<string, ProjectAsset[]>,
+): boolean {
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedAssetId) {
+    return false
+  }
+  const asset = getAssetFromCatalog(catalog, normalizedAssetId)
+  if (asset) {
+    return asset.type === 'lod' || resolveProjectAssetExtension(asset) === 'lod'
+  }
+  return normalizedAssetId.toLowerCase().endsWith('.lod')
+}
+
+function collectTerrainScatterRuntimeRequiredConfigAssetIds(
+  snapshot: TerrainScatterStoreSnapshot | null | undefined,
+  bucket: Set<string>,
+  catalog: Record<string, ProjectAsset[]>,
+): void {
+  if (!snapshot || !Array.isArray(snapshot.layers) || !snapshot.layers.length) {
+    return
+  }
+
+  snapshot.layers.forEach((layer) => {
+    const candidates = [layer?.assetId, layer?.profileId]
+    candidates.forEach((candidate) => {
+      const normalizedCandidate = typeof candidate === 'string' ? candidate.trim() : ''
+      if (!normalizedCandidate) {
+        return
+      }
+      if (isGroundScatterRuntimeRequiredConfigAssetId(normalizedCandidate, catalog)) {
+        bucket.add(normalizedCandidate)
+      }
+    })
+  })
+
+  visitExplicitTerrainScatterAssetReferences(snapshot, ({ assetId }: ExplicitSceneAssetReference) => {
+    const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedAssetId) {
+      return
+    }
+    if (isGroundScatterRuntimeRequiredConfigAssetId(normalizedAssetId, catalog)) {
+      bucket.add(normalizedAssetId)
+    }
+  })
+}
+
 function collectTerrainPaintAssetDependencies(
   groundSurfaceChunks: GroundDynamicMesh['groundSurfaceChunks'] | null | undefined,
   bakedTextureAssetId: string | null | undefined,
@@ -448,6 +497,27 @@ export function collectDirectSceneAssetReferenceIds(scene: StoredSceneDocument):
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)
   collectPlanningAssetDependencies(scene.planningData, bucket)
 
+  return bucket
+}
+
+export function collectRuntimeRequiredConfigAssetIds(scene: StoredSceneDocument): Set<string> {
+  const bucket = new Set<string>()
+  const catalog = scene.assetCatalog ?? {}
+  const groundNode = findGroundNode(scene.nodes ?? [])
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return bucket
+  }
+
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh & {
+    terrainScatter?: TerrainScatterStoreSnapshot | null
+  }
+  const runtimeState = useGroundScatterStore().getSceneGroundScatter(scene.id)
+  if (runtimeState?.nodeId === groundNode.id) {
+    collectTerrainScatterRuntimeRequiredConfigAssetIds(runtimeState.terrainScatter, bucket, catalog)
+    return bucket
+  }
+
+  collectTerrainScatterRuntimeRequiredConfigAssetIds(definition.terrainScatter, bucket, catalog)
   return bucket
 }
 

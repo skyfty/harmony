@@ -49,7 +49,11 @@ import {
   isBuiltinWaterNormalAsset,
 } from '@/constants/builtinAssets'
 import type { ProjectAsset } from '@/types/project-asset'
-import { shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
+import { resolveProjectAssetExtension, shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
+import {
+  collectRuntimeRequiredConfigAssetIds,
+  collectTransitiveConfigDependencyAssetIds,
+} from '@/stores/sceneAssetCleanup'
 
 function buildEffectiveAssetRegistry(
   document: SceneJsonExportDocument | null | undefined,
@@ -77,7 +81,64 @@ function buildEffectiveAssetRegistry(
   return out
 }
 
-function collectLocalAssetIdsForExport(document: SceneJsonExportDocument): string[] {
+function collectRuntimeRetainedConfigAssetIds(
+  document: SceneJsonExportDocument | null | undefined,
+): Set<string> {
+  if (!document || typeof document !== 'object' || !('assetCatalog' in document)) {
+    return new Set<string>()
+  }
+  return collectRuntimeRequiredConfigAssetIds(document as StoredSceneDocument)
+}
+
+async function collectRuntimeRetainedEmbedAssetIds(
+  document: SceneExportDocumentWithEditorFields,
+): Promise<Set<string>> {
+  const retainedConfigAssetIds = collectRuntimeRetainedConfigAssetIds(document)
+  if (!retainedConfigAssetIds.size) {
+    return retainedConfigAssetIds
+  }
+
+  const assetCatalog = document.assetCatalog ?? {}
+  const assetCache = useAssetCacheStore()
+  const transitiveDependencyIds = await collectTransitiveConfigDependencyAssetIds(
+    retainedConfigAssetIds,
+    assetCatalog,
+    {
+      loadPrefab: async (assetId) => {
+        throw new Error(`Unexpected prefab traversal while collecting retained embed assets (${assetId})`)
+      },
+      loadConfigAssetText: async (assetId) => {
+        const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+        if (!normalizedAssetId) {
+          return null
+        }
+        const asset = getAssetFromCatalog(assetCatalog, normalizedAssetId)
+        let file: File | null = null
+        try {
+          file = await assetCache.ensureAssetFile(normalizedAssetId, { asset })
+        } catch {
+          return null
+        }
+        if (file) {
+          return file.text()
+        }
+        const cacheEntry = assetCache.getEntry(normalizedAssetId)
+        if (cacheEntry.status === 'cached' && cacheEntry.blob) {
+          return cacheEntry.blob.text()
+        }
+        return null
+      },
+    },
+  )
+
+  transitiveDependencyIds.forEach((assetId) => retainedConfigAssetIds.add(assetId))
+  return retainedConfigAssetIds
+}
+
+function collectLocalAssetIdsForExport(
+  document: SceneJsonExportDocument,
+  retainedConfigAssetIds: ReadonlySet<string> = new Set<string>(),
+): string[] {
   const localIds = new Set<string>()
   const effectiveRegistry = buildEffectiveAssetRegistry(document)
   const exportDocument = document as SceneExportDocumentWithEditorFields
@@ -87,7 +148,7 @@ function collectLocalAssetIdsForExport(document: SceneJsonExportDocument): strin
     if (!normalized) {
       return
     }
-    if (shouldSkipRuntimeExportAsset(exportDocument, normalized)) {
+    if (shouldSkipRuntimeExportAsset(exportDocument, normalized, retainedConfigAssetIds)) {
       return
     }
     if (entry.sourceType !== 'package') {
@@ -153,6 +214,7 @@ type ResolvedEmbedAsset = {
   downloadUrl: string | null
   mimeTypeHint?: string | null
   filenameHint?: string | null
+  extensionHint?: string | null
 }
 
 type SceneResourceSummaryAsset = {
@@ -192,9 +254,13 @@ function getAssetFromCatalog(
   return null
 }
 
-function shouldSkipRuntimeExportAsset(document: SceneExportDocumentWithEditorFields, assetId: string): boolean {
+function shouldSkipRuntimeExportAsset(
+  document: SceneExportDocumentWithEditorFields,
+  assetId: string,
+  retainedConfigAssetIds: ReadonlySet<string> = new Set<string>(),
+): boolean {
   const asset = getAssetFromCatalog(document.assetCatalog, assetId)
-  return shouldExcludeAssetFromRuntimeExport(asset)
+  return shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })
 }
 
 type AssetEventContext = {
@@ -221,6 +287,11 @@ function describeAssetName(assetId: string, filename?: string | null): string {
 function describeSceneName(scene: ScenePackageExportScene): string {
   const rawName = typeof scene.document?.name === 'string' ? scene.document.name.trim() : ''
   return rawName || scene.id
+}
+
+function resolveEmbedAssetExtensionHint(asset: ProjectAsset | null | undefined): string | null {
+  const extension = resolveProjectAssetExtension(asset ?? null)
+  return extension || null
 }
 
 function cloneSceneExportDocument<T>(document: T): T {
@@ -436,13 +507,14 @@ function emitGroundOptimizationDiagnostics(
 
 function stripEditorOnlySceneFields(
   document: SceneExportDocumentWithEditorFields,
+  retainedConfigAssetIds: ReadonlySet<string> = new Set<string>(),
 ): void {
   const filterAssetMap = <T>(value: Record<string, T> | null | undefined): Record<string, T> | undefined => {
     if (!value || typeof value !== 'object') {
       return undefined
     }
     const filtered = Object.fromEntries(
-      Object.entries(value).filter(([assetId]) => !shouldSkipRuntimeExportAsset(document, assetId)),
+      Object.entries(value).filter(([assetId]) => !shouldSkipRuntimeExportAsset(document, assetId, retainedConfigAssetIds)),
     )
     return Object.keys(filtered).length ? filtered : undefined
   }
@@ -459,13 +531,13 @@ function stripEditorOnlySceneFields(
   if (Array.isArray(document.resourceSummary?.assets)) {
     document.resourceSummary.assets = document.resourceSummary.assets.filter((entry) => {
       const assetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''
-      return !assetId || !shouldSkipRuntimeExportAsset(document, assetId)
+      return !assetId || !shouldSkipRuntimeExportAsset(document, assetId, retainedConfigAssetIds)
     })
   }
   if (Array.isArray(document.resourceSummary?.unknownAssetIds)) {
     document.resourceSummary.unknownAssetIds = document.resourceSummary.unknownAssetIds.filter((assetId) => {
       const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
-      return !normalizedAssetId || !shouldSkipRuntimeExportAsset(document, normalizedAssetId)
+      return !normalizedAssetId || !shouldSkipRuntimeExportAsset(document, normalizedAssetId, retainedConfigAssetIds)
     })
   }
   if (Array.isArray(document.resourceSummary?.excludedAssetIds)) {
@@ -486,7 +558,10 @@ function stripEditorOnlySceneFields(
 
 }
 
-function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<string, ResolvedEmbedAsset> {
+async function collectEmbedAssetsFromScenes(
+  scenes: ScenePackageExportScene[],
+  options: { includeAllRuntimeAssets: boolean },
+): Promise<Map<string, ResolvedEmbedAsset>> {
   const out = new Map<string, ResolvedEmbedAsset>()
 
   for (const scene of scenes) {
@@ -494,6 +569,7 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
     if (!doc || typeof doc !== 'object') {
       continue
     }
+    const retainedConfigAssetIds = await collectRuntimeRetainedEmbedAssetIds(doc)
 
     const effectiveRegistry = buildEffectiveAssetRegistry(doc)
     const resourceAssets = Array.isArray(doc.resourceSummary?.assets) ? doc.resourceSummary.assets : []
@@ -511,9 +587,11 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
     for (const item of resourceAssets) {
       const assetId = typeof item?.assetId === 'string' ? item.assetId.trim() : ''
       if (!assetId) continue
-      if (shouldSkipRuntimeExportAsset(doc, assetId)) continue
+      if (shouldSkipRuntimeExportAsset(doc, assetId, retainedConfigAssetIds)) continue
+      if (!options.includeAllRuntimeAssets && !retainedConfigAssetIds.has(assetId)) continue
       const downloadUrl = typeof item?.downloadUrl === 'string' ? item.downloadUrl.trim() : ''
       if (!downloadUrl) continue
+      const asset = getAssetFromCatalog(doc.assetCatalog, assetId)
 
       // Skip already-known local assets.
       if (entryHasLocalSource(assetId)) {
@@ -526,6 +604,7 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
           downloadUrl,
           mimeTypeHint: typeof item?.mimeType === 'string' ? item.mimeType : null,
           filenameHint: typeof item?.filename === 'string' ? item.filename : null,
+          extensionHint: resolveEmbedAssetExtensionHint(asset),
         })
       }
     }
@@ -536,7 +615,10 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
       if (!normalized || out.has(normalized)) {
         continue
       }
-      if (shouldSkipRuntimeExportAsset(doc, normalized)) {
+      if (shouldSkipRuntimeExportAsset(doc, normalized, retainedConfigAssetIds)) {
+        continue
+      }
+      if (!options.includeAllRuntimeAssets && !retainedConfigAssetIds.has(normalized)) {
         continue
       }
 
@@ -555,7 +637,12 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
         downloadUrl = normalized
       }
 
-      out.set(normalized, { assetId: normalized, downloadUrl })
+      const asset = getAssetFromCatalog(doc.assetCatalog, normalized)
+      out.set(normalized, {
+        assetId: normalized,
+        downloadUrl,
+        extensionHint: resolveEmbedAssetExtensionHint(asset),
+      })
     }
 
   }
@@ -734,8 +821,10 @@ export async function exportScenePackageZip(payload: {
 
   // Shared (project-wide) embedded assets
   const sharedAssetPathById = new Map<string, string>()
-  if (payload.embedAssets) {
-    const embedAssets = collectEmbedAssetsFromScenes(payload.scenes)
+  const embedAssets = await collectEmbedAssetsFromScenes(payload.scenes, {
+    includeAllRuntimeAssets: payload.embedAssets === true,
+  })
+  if (embedAssets.size > 0) {
     const total = embedAssets.size
     let done = 0
 
@@ -797,7 +886,7 @@ export async function exportScenePackageZip(payload: {
       }
 
       const bytes = new Uint8Array(await blob.arrayBuffer())
-      const ext = inferExtFromFilename(filename) ?? inferExtFromMimeType(mimeType ?? '') ?? 'bin'
+      const ext = item.extensionHint ?? inferExtFromFilename(filename) ?? inferExtFromMimeType(mimeType ?? '') ?? 'bin'
 
       // Store in a shared folder (`resources/`); stable hashed name to avoid path issues.
       const hash = await sha256Hex(item.assetId)
@@ -882,9 +971,10 @@ export async function exportScenePackageZip(payload: {
     }
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
-    stripEditorOnlySceneFields(docClone)
+    const retainedConfigAssetIds = collectRuntimeRetainedConfigAssetIds(docClone)
+    stripEditorOnlySceneFields(docClone, retainedConfigAssetIds)
 
-    const localAssetIds = collectLocalAssetIdsForExport(docClone)
+    const localAssetIds = collectLocalAssetIdsForExport(docClone, retainedConfigAssetIds)
     const sceneAssetReferenceSummaries = sceneReferenceSummaryMaps.get(scene.id) ?? new Map<string, SceneAssetReferenceSummary>()
     const excludedAssetIds = Array.isArray(docClone.resourceSummary?.excludedAssetIds)
       ? docClone.resourceSummary.excludedAssetIds

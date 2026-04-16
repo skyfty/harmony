@@ -510,7 +510,7 @@ async function selectAsset(asset: ProjectAsset) {
     const prepared = prepareAssetForOperations(asset)
     try {
       assetCacheStore.setError(prepared.id, null)
-      await sceneStore.loadLodPreset(prepared.id)
+      await sceneStore.prepareLodAsset(prepared.id)
     } catch (error) {
       const message = (error as Error).message ?? 'Failed to prepare LOD asset'
       assetCacheStore.setError(prepared.id, message)
@@ -578,6 +578,10 @@ function assetDownloadError(asset: ProjectAsset) {
 }
 
 async function ensureAssetCached(asset: ProjectAsset) {
+  if (asset.type === 'lod') {
+    await sceneStore.prepareLodAsset(asset)
+    return
+  }
   if (assetCacheStore.hasCache(asset.id)) {
     return
   }
@@ -4360,7 +4364,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   flex-direction: column;
   gap: 8px;
   min-height: 0;
-  padding: 6px 8px;
+  padding: 2px 2px;
   border-radius: 12px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--asset-source-accent) 28%, rgba(8, 12, 18, 0.28)), rgba(8, 12, 18, 0.22));
   border: 1px solid color-mix(in srgb, var(--asset-source-accent) 42%, transparent);
