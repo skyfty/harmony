@@ -124,7 +124,9 @@ export async function renderFloorPresetThumbnailDataUrl(options: RenderFloorPres
   const materialOverrideOptions: MaterialTextureAssignmentOptions = {
     resolveTexture: options.resolveTexture,
   }
-  applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
+  if (nodeMaterials.length > 0) {
+    applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
+  }
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
   renderer.outputColorSpace = THREE.SRGBColorSpace

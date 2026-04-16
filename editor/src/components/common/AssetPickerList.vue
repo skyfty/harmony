@@ -142,6 +142,15 @@ const allAssets = computed(() => {
   return Array.from(unique.values())
 })
 
+const extensionFilters = computed(() => {
+  const allowedExtensions = props.extensions ?? []
+  return new Set(
+    allowedExtensions
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0),
+  )
+})
+
 const filteredAssets = computed(() => {
   const typeFilterRaw = props.assetType?.trim() ?? ''
   const typeFilters = typeFilterRaw.length
@@ -164,6 +173,12 @@ const filteredAssets = computed(() => {
     }
     if (typeFilters.length && !typeFilters.includes(asset.type)) {
       return false
+    }
+    if (extensionFilters.value.size) {
+      const assetExtension = asset.extension?.trim().toLowerCase() ?? ''
+      if (!assetExtension || !extensionFilters.value.has(assetExtension)) {
+        return false
+      }
     }
     if (seriesFilter) {
       const assetSeries = asset.seriesId?.trim() ?? ''

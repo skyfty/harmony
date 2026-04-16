@@ -50,7 +50,9 @@ export async function renderRoadPresetThumbnailDataUrl(options: RenderRoadPreset
   const materialOverrideOptions: MaterialTextureAssignmentOptions = {
     resolveTexture: options.resolveTexture,
   }
-  applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
+  if (nodeMaterials.length > 0) {
+    applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
+  }
 
   const dataUrl = renderObjectThumbnailDataUrl({
     object: group,

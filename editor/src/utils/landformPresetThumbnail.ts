@@ -72,7 +72,9 @@ export async function renderLandformPresetThumbnailDataUrl(options: RenderLandfo
   const materialOverrideOptions: MaterialTextureAssignmentOptions = {
     resolveTexture: options.resolveTexture,
   }
-  applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
+  if (nodeMaterials.length > 0) {
+    applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
+  }
 
   group.rotation.x = -0.08
   const dataUrl = renderObjectThumbnailDataUrl({

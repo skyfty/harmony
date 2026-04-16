@@ -7,6 +7,10 @@ import type {
 } from '@schema'
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 import type { LandformPresetData, LandformPresetMaterialPatch } from '@/utils/landformPreset'
+import {
+  createDefaultPreviewMaterialProps,
+  hasMeaningfulPreviewMaterialOverride,
+} from '@/utils/presetPreviewMaterialOverride'
 
 function cloneTextureRef(ref: SceneMaterialTextureRef | null | undefined): SceneMaterialTextureRef | null {
   if (!ref) {
@@ -31,31 +35,6 @@ function cloneTextureRef(ref: SceneMaterialTextureRef | null | undefined): Scene
           flipY: ref.settings.flipY,
         }
       : undefined,
-  }
-}
-
-function createDefaultMaterialProps(): SceneMaterialProps {
-  return {
-    color: '#ffffff',
-    transparent: false,
-    opacity: 1,
-    side: 'front',
-    wireframe: false,
-    metalness: 0.1,
-    roughness: 1,
-    emissive: '#000000',
-    emissiveIntensity: 0,
-    aoStrength: 1,
-    envMapIntensity: 1,
-    textures: {
-      albedo: null,
-      normal: null,
-      metalness: null,
-      roughness: null,
-      ao: null,
-      emissive: null,
-      displacement: null,
-    },
   }
 }
 
@@ -91,24 +70,30 @@ function createNodeMaterialFromPatch(
   slotId: string,
   patch: LandformPresetMaterialPatch,
   sharedMaterials: readonly SceneMaterial[],
-): SceneNodeMaterial {
+): SceneNodeMaterial | null {
   const sharedMaterialId = patch.materialId === null ? null : typeof patch.materialId === 'string' ? patch.materialId.trim() : null
   const sharedMaterial = sharedMaterialId
     ? (sharedMaterials.find((entry) => entry.id === sharedMaterialId) ?? null)
     : null
 
-  const baseProps = sharedMaterial ? mergeMaterialProps(createDefaultMaterialProps(), sharedMaterial) : createDefaultMaterialProps()
+  if (sharedMaterialId && !sharedMaterial) {
+    return null
+  }
+
+  const baseProps = sharedMaterial ? mergeMaterialProps(createDefaultPreviewMaterialProps(), sharedMaterial) : createDefaultPreviewMaterialProps()
   const mergedProps = sharedMaterial && patch.props && Object.keys(patch.props).length
     ? baseProps
     : mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
 
-  return {
+  const nextMaterial: SceneNodeMaterial = {
     id: slotId,
     materialId: sharedMaterial?.id ?? null,
     name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : sharedMaterial?.name,
     type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : sharedMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
     ...mergedProps,
   }
+
+  return hasMeaningfulPreviewMaterialOverride(nextMaterial) ? nextMaterial : null
 }
 
 export function buildLandformNodeMaterialsFromPreset(
