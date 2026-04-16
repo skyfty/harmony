@@ -12,14 +12,33 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import type { FloorDynamicMesh, SceneMaterial, SceneMaterialProps, SceneMaterialTextureRef, SceneMaterialType, SceneNode, SceneNodeMaterial } from '@schema'
+import type {
+  FloorDynamicMesh,
+  SceneMaterial,
+  SceneMaterialProps,
+  SceneMaterialTextureRef,
+  SceneMaterialType,
+  SceneNode,
+  SceneNodeMaterial,
+} from '@schema'
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@schema/material'
 import { FLOOR_COMPONENT_TYPE } from '@schema/components/definitions/floorComponent'
+import { createLandformGroup } from '@schema/landformMesh'
+import { applyMaterialOverrides } from '@schema/material'
+import { createRoadGroup } from '@schema/roadMesh'
 import { WALL_COMPONENT_TYPE } from '@schema/components/definitions/wallComponent'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { parseLandformPresetData } from '@/stores/landformPresetActions'
+import { parseRoadPresetData } from '@/stores/roadPresetActions'
 import { useSceneStore } from '@/stores/sceneStore'
 import { parseFloorPresetData } from '@/stores/floorPresetActions'
 import { parseWallPresetData } from '@/stores/wallPresetActions'
+import { buildLandformNodeMaterialsFromPreset } from '@/utils/landformPresetNodeMaterials'
+import type { LandformPresetData } from '@/utils/landformPreset'
+import { buildLandformPresetPreviewDefinition } from '@/utils/landformPresetThumbnail'
+import { buildRoadNodeMaterialsFromPreset } from '@/utils/roadPresetNodeMaterials'
+import type { RoadPresetData } from '@/utils/roadPreset'
+import { buildRoadPresetPreviewDefinition } from '@/utils/roadPresetThumbnail'
 import {
   buildWallPresetPreviewDynamicMesh,
   WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY,
@@ -35,7 +54,7 @@ import type { WallPresetData } from '@/utils/wallPreset'
 
 const props = defineProps<{
   file: File | null
-  kind: 'wall' | 'floor'
+  kind: 'wall' | 'floor' | 'road' | 'landform'
 }>()
 
 const emit = defineEmits<{
@@ -45,6 +64,8 @@ const emit = defineEmits<{
 type ParsedPreset =
   | { kind: 'wall'; data: WallPresetData }
   | { kind: 'floor'; data: FloorPresetData }
+  | { kind: 'road'; data: RoadPresetData }
+  | { kind: 'landform'; data: LandformPresetData }
 
 const DEFAULT_RECT_HALF_SIZE = 2
 
@@ -287,6 +308,12 @@ async function parsePreset(file: File): Promise<ParsedPreset> {
   if (props.kind === 'wall') {
     return { kind: 'wall', data: parseWallPresetData(text) }
   }
+  if (props.kind === 'road') {
+    return { kind: 'road', data: parseRoadPresetData(text) }
+  }
+  if (props.kind === 'landform') {
+    return { kind: 'landform', data: parseLandformPresetData(text) }
+  }
   return { kind: 'floor', data: parseFloorPresetData(text) }
 }
 
@@ -378,6 +405,43 @@ async function buildFloorPreviewObject(preset: FloorPresetData): Promise<THREE.O
   return object
 }
 
+async function buildRoadPreviewObject(preset: RoadPresetData): Promise<THREE.Object3D> {
+  const object = createRoadGroup(buildRoadPresetPreviewDefinition(preset), {
+    junctionSmoothing: preset.roadProps.junctionSmoothing,
+    laneLines: preset.roadProps.laneLines,
+    shoulders: preset.roadProps.shoulders,
+    materialConfigId: preset.materialOrder?.[0] ?? null,
+    samplingDensityFactor: preset.roadProps.samplingDensityFactor,
+    smoothingStrengthFactor: preset.roadProps.smoothingStrengthFactor,
+    minClearance: preset.roadProps.minClearance,
+    laneLineWidth: preset.roadProps.laneLineWidth,
+    shoulderWidth: preset.roadProps.shoulderWidth,
+  })
+  object.name = preset.name || 'Road Preset Preview'
+
+  const nodeMaterials = buildRoadNodeMaterialsFromPreset(preset, sceneStore.materials)
+  if (nodeMaterials.length > 0) {
+    applyMaterialOverrides(object, nodeMaterials, materialOverrideOptions)
+  }
+
+  return object
+}
+
+async function buildLandformPreviewObject(preset: LandformPresetData): Promise<THREE.Object3D> {
+  const object = createLandformGroup(buildLandformPresetPreviewDefinition(preset))
+  object.name = preset.name || 'Landform Preset Preview'
+  object.rotation.x = -0.08
+
+  const nodeMaterials = buildLandformNodeMaterialsFromPreset(preset, sceneStore.materials).filter(
+    (entry): entry is SceneNodeMaterial => Boolean(entry),
+  )
+  if (nodeMaterials.length > 0) {
+    applyMaterialOverrides(object, nodeMaterials, materialOverrideOptions)
+  }
+
+  return object
+}
+
 async function loadPresetScene(): Promise<void> {
   const token = ++loadToken
   clearScene()
@@ -392,9 +456,22 @@ async function loadPresetScene(): Promise<void> {
       return
     }
 
-    const object = parsed.kind === 'wall'
-      ? await buildWallPreviewObject(parsed.data)
-      : await buildFloorPreviewObject(parsed.data)
+    let object: THREE.Object3D
+    switch (parsed.kind) {
+      case 'wall':
+        object = await buildWallPreviewObject(parsed.data)
+        break
+      case 'road':
+        object = await buildRoadPreviewObject(parsed.data)
+        break
+      case 'landform':
+        object = await buildLandformPreviewObject(parsed.data)
+        break
+      case 'floor':
+      default:
+        object = await buildFloorPreviewObject(parsed.data)
+        break
+    }
 
     if (token !== loadToken) {
       disposeObject(object)

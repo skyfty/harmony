@@ -26,7 +26,7 @@ type RenderLandformPresetThumbnailOptions = {
   height: number
 }
 
-function buildLandformPresetThumbnailDefinition(preset: LandformPresetData): LandformDynamicMesh {
+export function buildLandformPresetPreviewDefinition(preset: LandformPresetData): LandformDynamicMesh {
   const uvScale = {
     x: Math.max(1e-3, preset.landformProps.uvScale.x),
     y: Math.max(1e-3, preset.landformProps.uvScale.y),
@@ -94,7 +94,7 @@ async function preloadLandformPresetTextures(
 }
 
 export async function renderLandformPresetThumbnailDataUrl(options: RenderLandformPresetThumbnailOptions): Promise<string | null> {
-  const definition = buildLandformPresetThumbnailDefinition(options.preset)
+  const definition = buildLandformPresetPreviewDefinition(options.preset)
   const group = createLandformGroup(definition)
 
   const nodeMaterials = buildLandformNodeMaterialsFromPreset(options.preset, options.sharedMaterials)

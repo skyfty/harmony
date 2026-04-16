@@ -14,7 +14,7 @@ type RenderRoadPresetThumbnailOptions = {
   height: number
 }
 
-function buildRoadPresetThumbnailDefinition(preset: RoadPresetData): RoadDynamicMesh {
+export function buildRoadPresetPreviewDefinition(preset: RoadPresetData): RoadDynamicMesh {
   return {
     type: 'Road',
     width: Math.max(0.2, preset.width),
@@ -62,7 +62,7 @@ async function preloadRoadPresetTextures(
 }
 
 export async function renderRoadPresetThumbnailDataUrl(options: RenderRoadPresetThumbnailOptions): Promise<string | null> {
-  const definition = buildRoadPresetThumbnailDefinition(options.preset)
+  const definition = buildRoadPresetPreviewDefinition(options.preset)
   const group = createRoadGroup(definition, {
     junctionSmoothing: options.preset.roadProps.junctionSmoothing,
     laneLines: options.preset.roadProps.laneLines,
