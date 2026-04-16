@@ -18,34 +18,6 @@ export type ConfigAssetRewriteContext = {
   persistedBundleAssets: Map<string, PersistedBundleAssetReference>
 }
 
-const LOD_UPLOAD_LOG_PREFIX = '[LOD-UPLOAD]'
-
-function logLodUploadInfo(message: string, payload?: Record<string, unknown>): void {
-  if (payload) {
-    console.info(LOD_UPLOAD_LOG_PREFIX, message, payload)
-    return
-  }
-  console.info(LOD_UPLOAD_LOG_PREFIX, message)
-}
-
-function summarizeLodLevelEntries(levels: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(levels)) {
-    return []
-  }
-  return levels.map((level, index) => {
-    if (!isObjectRecord(level)) {
-      return { index, valueType: typeof level }
-    }
-    return {
-      index,
-      kind: sanitizeString(level.kind) || 'model',
-      modelAssetId: typeof level.modelAssetId === 'string' ? level.modelAssetId : null,
-      billboardAssetId: typeof level.billboardAssetId === 'string' ? level.billboardAssetId : null,
-      distance: typeof level.distance === 'number' ? level.distance : null,
-    }
-  })
-}
-
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
@@ -129,15 +101,6 @@ function rewriteAssetRegistryEntries(
     }
 
     nextAssetRegistry[assetId] = nextEntry
-
-    logLodUploadInfo('rewriteAssetRegistryEntries mapped dependency', {
-      assetId,
-      sourceType: existingAssetType || null,
-      existingName: existingName || null,
-      persistedServerAssetId: persistedAsset.serverAssetId,
-      persistedFileKey: persistedAsset.fileKey ?? null,
-      persistedResolvedUrl: persistedAsset.resolvedUrl ?? null,
-    })
   }
   return nextAssetRegistry
 }
@@ -146,13 +109,6 @@ function rewriteLodPresetFields(value: unknown, assetIdMap: Map<string, string>)
   if (!isObjectRecord(value)) {
     return value
   }
-
-  const beforeLevels = isObjectRecord(value.props) ? summarizeLodLevelEntries(value.props.levels) : []
-  const beforeAssetRefs = Array.isArray(value.assetRefs)
-    ? value.assetRefs.map((ref, index) => isObjectRecord(ref)
-      ? { index, assetId: typeof ref.assetId === 'string' ? ref.assetId : null, type: sanitizeString(ref.type) || null }
-      : { index, valueType: typeof ref })
-    : []
 
   const next: Record<string, unknown> = { ...value }
   const props = value.props
@@ -186,22 +142,6 @@ function rewriteLodPresetFields(value: unknown, assetIdMap: Map<string, string>)
       return nextRef
     })
   }
-
-  const afterLevels = isObjectRecord(next.props) ? summarizeLodLevelEntries(next.props.levels) : []
-  const afterAssetRefs = Array.isArray(next.assetRefs)
-    ? next.assetRefs.map((ref, index) => isObjectRecord(ref)
-      ? { index, assetId: typeof ref.assetId === 'string' ? ref.assetId : null, type: sanitizeString(ref.type) || null }
-      : { index, valueType: typeof ref })
-    : []
-  logLodUploadInfo('rewriteLodPresetFields rewrote lod references', {
-    assetIdMap: Object.fromEntries(assetIdMap.entries()),
-    beforeLevels,
-    afterLevels,
-    beforeAssetRefs,
-    afterAssetRefs,
-    assetRegistryKeys: isObjectRecord(next.assetRegistry) ? Object.keys(next.assetRegistry) : [],
-  })
-
   return next
 }
 
@@ -255,37 +195,7 @@ export function rewriteConfigAssetBundleBytes(
     return bytes
   }
 
-  if (extension === 'lod') {
-    logLodUploadInfo('rewriteConfigAssetBundleBytes start', {
-      filename: entry.filename,
-      extension,
-      assetIdMap: Object.fromEntries(context.assetIdMap.entries()),
-      persistedBundleAssets: Object.fromEntries(
-        Array.from(context.persistedBundleAssets.entries()).map(([assetId, persisted]) => [assetId, {
-          serverAssetId: persisted.serverAssetId,
-          fileKey: persisted.fileKey ?? null,
-          resolvedUrl: persisted.resolvedUrl ?? null,
-          assetType: persisted.assetType ?? null,
-          name: persisted.name ?? null,
-        }]),
-      ),
-      originalAssetRegistryKeys: isObjectRecord(parsed) && isObjectRecord(parsed.assetRegistry)
-        ? Object.keys(parsed.assetRegistry)
-        : [],
-      originalLevels: isObjectRecord(parsed) && isObjectRecord(parsed.props)
-        ? summarizeLodLevelEntries(parsed.props.levels)
-        : [],
-    })
-  }
-
   const rewritten = rewriteConfigAssetJson(parsed, context, extension)
-  if (extension === 'lod' && isObjectRecord(rewritten)) {
-    logLodUploadInfo('rewriteConfigAssetBundleBytes completed', {
-      filename: entry.filename,
-      rewrittenAssetRegistryKeys: isObjectRecord(rewritten.assetRegistry) ? Object.keys(rewritten.assetRegistry) : [],
-      rewrittenLevels: isObjectRecord(rewritten.props) ? summarizeLodLevelEntries(rewritten.props.levels) : [],
-    })
-  }
   return new TextEncoder().encode(JSON.stringify(rewritten, null, 2))
 }
 
