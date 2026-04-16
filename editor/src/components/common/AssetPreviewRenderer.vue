@@ -79,6 +79,7 @@ import ModelPreview from '@/components/common/ModelPreview.vue'
 import PrefabPreview from '@/components/common/PrefabPreview.vue'
 import HDRPreview from '@/components/common/HDRPreview.vue'
 import WallFloorPresetPreview from '@/components/common/WallFloorPresetPreview.vue'
+import { isBuildPresetAsset } from '@/utils/buildPresetAsset'
 import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
 
 const props = defineProps<{
@@ -113,7 +114,7 @@ const presetPreviewKind = computed(() => detectAssetPreviewPresetKind(props.asse
 const isLodAsset = computed(() => props.asset.type === 'lod')
 const showLodPreview = computed(() => isLodAsset.value)
 const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'mesh'].includes(props.asset.type))
-const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value)
+const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab' && !presetPreviewKind.value && !isBuildPresetAsset(props.asset))
 const showMaterialPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'material')
 const showPresetPreview = computed(() => Boolean(previewState.file) && Boolean(presetPreviewKind.value))
 const isSkycubeAsset = computed(() => {

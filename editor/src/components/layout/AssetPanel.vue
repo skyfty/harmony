@@ -448,13 +448,17 @@ function activateBuildPresetAsset(asset: ProjectAsset, kind: BuildPresetAssetKin
     buildToolsStore.setWallBuildShape('line')
   } else if (kind === 'floor') {
     buildToolsStore.setFloorBuildShape('polygon')
+  } else if (kind === 'landform') {
+    buildToolsStore.setLandformBuildShape('polygon')
   }
 
   const activated = kind === 'wall'
     ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
     : kind === 'floor'
       ? buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
-      : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
+      : kind === 'landform'
+        ? buildToolsStore.setLandformBrushPresetAssetId(asset.id, { activate: true })
+        : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
 
   uiStore.setActiveSelectionContext(activated ? `build-tool:${kind}` : 'asset-panel')
   return activated

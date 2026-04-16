@@ -18484,13 +18484,17 @@ function activateDroppedBuildPresetAsset(asset: ProjectAsset): boolean {
     buildToolsStore.setWallBuildShape('line')
   } else if (presetKind === 'floor') {
     buildToolsStore.setFloorBuildShape('polygon')
+  } else if (presetKind === 'landform') {
+    buildToolsStore.setLandformBuildShape('polygon')
   }
 
   const activated = presetKind === 'wall'
     ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
     : presetKind === 'floor'
       ? buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
-      : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
+      : presetKind === 'landform'
+        ? buildToolsStore.setLandformBrushPresetAssetId(asset.id, { activate: true })
+        : buildToolsStore.setRoadBrushPresetAssetId(asset.id, { activate: true })
 
   uiStore.setActiveSelectionContext(activated ? `build-tool:${presetKind}` : 'asset-panel')
   return activated
