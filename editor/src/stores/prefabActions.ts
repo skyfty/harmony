@@ -1083,10 +1083,32 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
                   return
                 }
                 const serverAsset = await fetchResourceAsset(remoteLookupAssetId)
-                const mappedAsset = mapServerAssetToProjectAsset(serverAsset)
-                const projectAsset = mappedAsset.id === assetId ? mappedAsset : { ...mappedAsset, id: assetId }
+                const fallbackRegistryEntry = resolveRegistryEntry(assetId) ?? resolveRegistryEntryByServerAssetId(assetId)
+                const fallbackAsset = typeof serverAsset.sourceLocalAssetId === 'string'
+                  ? store.getAsset(serverAsset.sourceLocalAssetId)
+                  : null
+                const registryFallbackAsset = !fallbackAsset && fallbackRegistryEntry
+                  ? ({
+                      id: assetId,
+                      name: typeof fallbackRegistryEntry.name === 'string' && fallbackRegistryEntry.name.trim().length
+                        ? fallbackRegistryEntry.name.trim()
+                        : serverAsset.name,
+                      type: serverAsset.type,
+                      downloadUrl: serverAsset.downloadUrl ?? serverAsset.url ?? '',
+                      previewColor: serverAsset.type === 'model' ? '#26C6DA' : '#90A4AE',
+                      thumbnail: null,
+                      gleaned: false,
+                    } as ProjectAsset)
+                  : null
+                const mappedAsset = mapServerAssetToProjectAsset(serverAsset, fallbackAsset)
+                const projectAsset = mappedAsset.id === assetId
+                  ? mappedAsset
+                  : { ...mappedAsset, id: assetId }
+                const normalizedProjectAsset = registryFallbackAsset
+                  ? { ...projectAsset, name: registryFallbackAsset.name }
+                  : projectAsset
                 fetchedRemoteAssets.push({
-                  asset: projectAsset,
+                  asset: normalizedProjectAsset,
                   source: resolveDependencySourceMeta(assetId) ?? createServerAssetSource(remoteLookupAssetId),
                   targetAssetId: assetId,
                 })
@@ -1220,12 +1242,8 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       try {
         await Promise.all(
           resolvedAssets.map(async (asset) => {
-            if (assetCache.hasCache(asset.id)) {
-              assetCache.touch(asset.id)
-              return
-            }
             try {
-              await assetCache.downloadProjectAsset(asset)
+              await assetCache.ensureAssetEntry(asset.id, { asset })
             } catch (error) {
               const message = (error as Error).message ?? '资源下载失败'
               errors.push({ assetId: asset.id, message })

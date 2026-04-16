@@ -6164,20 +6164,21 @@ function synchronizeManifestWithCatalog(
     const preferredDirectoryId = options.preferredDirectoryId && options.preferredDirectoryId in nextManifest.directoriesById
       ? options.preferredDirectoryId
       : (typeof asset.categoryId === 'string' && asset.categoryId in nextManifest.directoriesById ? asset.categoryId : nextManifest.rootDirectoryId)
+    const existing = nextManifest.assetsById[assetId] ?? null
 
-    if (!nextManifest.assetsById[assetId]) {
+    if (!existing) {
       nextManifest.assetsById[assetId] = mapProjectAssetToManifestAsset(asset, preferredDirectoryId, nextManifest.directoriesById[preferredDirectoryId]?.name ?? preferredDirectoryId, nextManifest.generatedAt)
       const directory = nextManifest.directoriesById[preferredDirectoryId]
       if (directory && !directory.assetIds.includes(assetId)) {
         directory.assetIds.push(assetId)
       }
     } else {
-      const existing = nextManifest.assetsById[assetId]!
       nextManifest.assetsById[assetId] = {
         ...existing,
         ...mapProjectAssetToManifestAsset(asset, existing.categoryId ?? preferredDirectoryId, nextManifest.directoriesById[existing.categoryId ?? preferredDirectoryId]?.name ?? asset.name, existing.updatedAt ?? nextManifest.generatedAt),
       }
     }
+
   })
 
   ensureManifestDirectory(

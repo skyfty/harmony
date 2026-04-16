@@ -87,7 +87,15 @@ export function normalizeServerAssetType(type: string | undefined): ProjectAsset
   return DEFAULT_ASSET_TYPE
 }
 
-export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsset {
+function looksLikeGeneratedAssetName(value: string): boolean {
+  const normalized = value.trim()
+  if (!normalized.length) {
+    return true
+  }
+  return /^sha256-[a-f0-9]+$/i.test(normalized) || /^[a-f0-9]{24}$/i.test(normalized)
+}
+
+export function mapServerAssetToProjectAsset(asset: ServerAssetDto, fallbackAsset?: ProjectAsset | null): ProjectAsset {
   const type = normalizeServerAssetType(asset.type)
   const downloadUrl = resolveServerAssetDownloadUrl({
     assetBaseUrl: readServerDownloadBaseUrl(),
@@ -98,21 +106,32 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
   const rawTags = Array.isArray(asset.tags) ? asset.tags.filter((tag): tag is ServerAssetTagDto => !!tag && typeof tag.id === 'string') : []
   const tagIds = Array.isArray(asset.tagIds) && asset.tagIds.length ? asset.tagIds.filter((id): id is string => typeof id === 'string') : rawTags.map((tag) => tag.id)
   const tagNames = rawTags.map((tag) => tag.name).filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+  const sourceLocalAssetId = typeof asset.sourceLocalAssetId === 'string' ? asset.sourceLocalAssetId.trim() : ''
+  const fallbackName = typeof fallbackAsset?.name === 'string' ? fallbackAsset.name.trim() : ''
+  const thumbnail = asset.thumbnailUrl ?? asset.previewUrl ?? fallbackAsset?.thumbnail ?? null
+  const resolvedName = fallbackName && sourceLocalAssetId && looksLikeGeneratedAssetName(asset.name) ? fallbackName : asset.name
+  const resolvedCategoryId = typeof asset.categoryId === 'string' && asset.categoryId.trim().length
+    ? asset.categoryId
+    : fallbackAsset?.categoryId
+  const resolvedCategoryPath = Array.isArray(asset.categoryPath) && asset.categoryPath.length
+    ? asset.categoryPath.filter((item): item is { id: string; name: string } => !!item && typeof item.id === 'string' && typeof item.name === 'string')
+    : fallbackAsset?.categoryPath
+  const resolvedCategoryPathString = typeof asset.categoryPathString === 'string' && asset.categoryPathString.trim().length
+    ? asset.categoryPathString
+    : fallbackAsset?.categoryPathString
 
   return {
     id: asset.id,
-    name: asset.name,
-    categoryId: typeof asset.categoryId === 'string' ? asset.categoryId : undefined,
-    categoryPath: Array.isArray(asset.categoryPath)
-      ? asset.categoryPath.filter((item): item is { id: string; name: string } => !!item && typeof item.id === 'string' && typeof item.name === 'string')
-      : undefined,
-    categoryPathString: typeof asset.categoryPathString === 'string' ? asset.categoryPathString : undefined,
+    name: resolvedName,
+    categoryId: resolvedCategoryId,
+    categoryPath: resolvedCategoryPath,
+    categoryPathString: resolvedCategoryPathString,
     type,
     description: asset.description ?? undefined,
     downloadUrl,
     fileKey: typeof asset.fileKey === 'string' ? asset.fileKey : null,
     previewColor: SERVER_ASSET_PREVIEW_COLORS[type],
-    thumbnail: asset.thumbnailUrl ?? asset.previewUrl ?? null,
+    thumbnail,
     tags: tagNames.length ? tagNames : undefined,
     tagIds: tagIds.length ? tagIds : undefined,
     color: typeof asset.color === 'string' ? asset.color : undefined,
@@ -124,7 +143,7 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : undefined,
     contentHash: typeof asset.contentHash === 'string' ? asset.contentHash : undefined,
     contentHashAlgorithm: typeof asset.contentHashAlgorithm === 'string' ? asset.contentHashAlgorithm : undefined,
-    sourceLocalAssetId: typeof asset.sourceLocalAssetId === 'string' ? asset.sourceLocalAssetId : undefined,
+    sourceLocalAssetId: sourceLocalAssetId || undefined,
     bundleRole: typeof asset.bundleRole === 'string' ? asset.bundleRole : undefined,
     bundlePrimaryAssetId: typeof asset.bundlePrimaryAssetId === 'string' ? asset.bundlePrimaryAssetId : undefined,
     metadata: asset.metadata && typeof asset.metadata === 'object' ? { ...asset.metadata } : undefined,

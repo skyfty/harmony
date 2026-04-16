@@ -100,6 +100,62 @@ function deriveThumbnailFromAsset(asset: ProjectAsset): string | null {
   return null
 }
 
+function shouldGenerateThumbnailForAsset(asset: ProjectAsset): boolean {
+  return asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab'
+}
+
+async function generateDownloadedAssetThumbnail(
+  asset: ProjectAsset,
+  assetCacheStore: AssetCacheStoreLike,
+): Promise<string | null> {
+  if (!shouldGenerateThumbnailForAsset(asset)) {
+    return null
+  }
+
+  const file = assetCacheStore.createFileFromCache(asset.id)
+  if (!file) {
+    return null
+  }
+
+  try {
+    if (asset.type === 'prefab') {
+      const { renderPrefabThumbnailDataUrl } = await import('@/utils/prefabPreviewBuilder')
+      return await renderPrefabThumbnailDataUrl({
+        asset,
+        assetId: asset.id,
+        file,
+        assetCacheStore,
+      })
+    }
+
+    const { renderModelFileThumbnailDataUrl } = await import('@/utils/localAssetImport')
+    return await renderModelFileThumbnailDataUrl(asset, file)
+  } catch (error) {
+    console.warn('Failed to generate downloaded asset thumbnail', asset.id, error)
+    return null
+  }
+}
+
+async function persistThumbnailToCatalog(assetId: string, thumbnailDataUrl: string | null): Promise<void> {
+  if (!thumbnailDataUrl) {
+    return
+  }
+
+  try {
+    const { useSceneStore } = await import('@/stores/sceneStore')
+    const sceneStore = useSceneStore()
+    const current = sceneStore.getRegisteredAsset(assetId)
+    if (!current || current.thumbnail === thumbnailDataUrl) {
+      return
+    }
+    sceneStore.updateProjectAssetMetadata(assetId, {
+      thumbnail: thumbnailDataUrl,
+    })
+  } catch (error) {
+    console.warn('Failed to persist downloaded asset thumbnail', assetId, error)
+  }
+}
+
 function inferFetchedFilename(candidate: string | null, fallbackName: string | null, sourceUrl: string): string | null {
   if (candidate && candidate.trim()) {
     return candidate.trim()
@@ -632,6 +688,12 @@ export const useAssetCacheStore = defineStore('assetCache', {
       })
       entry.contentHash = asset.contentHash ?? entry.contentHash ?? null
       entry.contentHashAlgorithm = asset.contentHashAlgorithm ?? entry.contentHashAlgorithm ?? null
+
+      if (!asset.thumbnail && shouldGenerateThumbnailForAsset(asset)) {
+        const thumbnailDataUrl = await generateDownloadedAssetThumbnail(asset, scope)
+        await persistThumbnailToCatalog(asset.id, thumbnailDataUrl)
+      }
+
       return entry
     },
     async ensureAssetEntry(assetId: string, options: AssetAccessOptions = {}): Promise<AssetCacheEntry | null> {
@@ -655,6 +717,10 @@ export const useAssetCacheStore = defineStore('assetCache', {
       if (entry.status === 'cached') {
         if (!entry.downloadUrl) {
           entry.downloadUrl = options.downloadUrl ?? asset?.downloadUrl ?? asset?.description ?? null
+        }
+        if (asset && !asset.thumbnail && shouldGenerateThumbnailForAsset(asset)) {
+          const thumbnailDataUrl = await generateDownloadedAssetThumbnail(asset, this)
+          await persistThumbnailToCatalog(asset.id, thumbnailDataUrl)
         }
         this.touch(normalizedAssetId)
         return entry
