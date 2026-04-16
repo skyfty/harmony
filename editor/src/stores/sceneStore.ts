@@ -1311,12 +1311,14 @@ function findDefaultSceneMaterial(materials: SceneMaterial[]): SceneMaterial | n
 }
 
 function createNodeMaterial(
-  _materialId: string | null,
+  materialId: string | null,
   props: SceneMaterialProps,
   options: { id?: string; name?: string; type?: SceneMaterialType } = {},
 ): SceneNodeMaterial {
+  const normalizedMaterialId = typeof materialId === 'string' && materialId.trim().length ? materialId.trim() : null
   return {
     id: options.id ?? generateUuid(),
+    materialId: normalizedMaterialId,
     name: options.name,
     type: options.type ?? 'MeshStandardMaterial',
     ...cloneMaterialProps(props),
@@ -1324,7 +1326,7 @@ function createNodeMaterial(
 }
 
 function cloneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
-  return createNodeMaterial(null, material, {
+  return createNodeMaterial(material.materialId ?? null, material, {
     id: material.id,
     name: material.name,
     type: material.type ?? 'MeshStandardMaterial',
@@ -1428,7 +1430,7 @@ function bakeLegacySharedMaterialsIntoNodes(
           }
           const shared = sharedById.get(legacyMaterialId)
           const bakedProps = shared ? mergeMaterialProps(shared, extractMaterialProps(entry)) : extractMaterialProps(entry)
-          return createNodeMaterial(null, bakedProps, {
+          return createNodeMaterial(legacyMaterialId, bakedProps, {
             id: entry.id,
             name: entry.name ?? shared?.name,
             type: entry.type ?? shared?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
@@ -1676,9 +1678,10 @@ function applyDynamicMeshToSceneNode(node: SceneNode, dynamicMesh: any, options:
 
   const floorConvention = floorHelpers.ensureFloorMaterialConvention(node)
   const wallConvention = wallHelpers.ensureWallMaterialConvention(node)
+  const landformConvention = landformHelpers.ensureLandformMaterialConvention(node)
   return {
-    materialsChanged: floorConvention.materialsChanged || wallConvention.materialsChanged,
-    meshChanged: floorConvention.meshChanged || wallConvention.meshChanged,
+    materialsChanged: floorConvention.materialsChanged || wallConvention.materialsChanged || landformConvention.materialsChanged,
+    meshChanged: floorConvention.meshChanged || wallConvention.meshChanged || landformConvention.meshChanged,
   }
 }
 
@@ -9417,7 +9420,8 @@ export const useSceneStore = defineStore('scene', {
         node.materials = [...(node.materials ?? []), entry]
         const floorConvention = floorHelpers.ensureFloorMaterialConvention(node)
         const wallConvention = wallHelpers.ensureWallMaterialConvention(node)
-        if (floorConvention.meshChanged || wallConvention.meshChanged) {
+        const landformConvention = landformHelpers.ensureLandformMaterialConvention(node)
+        if (floorConvention.meshChanged || wallConvention.meshChanged || landformConvention.meshChanged) {
           requiresDynamicMeshPatch = true
         }
         created = entry
@@ -9503,7 +9507,8 @@ export const useSceneStore = defineStore('scene', {
 
           const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
           const wallResult = wallHelpers.ensureWallMaterialConvention(node)
-          if (floorResult.meshChanged || wallResult.meshChanged) {
+          const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+          if (floorResult.meshChanged || wallResult.meshChanged || landformResult.meshChanged) {
             requiresDynamicMeshPatch = true
           }
         }
@@ -9527,6 +9532,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       let updated = false
+      let requiresDynamicMeshPatch = false
       this.captureCoalescedMaterialHistorySnapshot(nodeId, nodeMaterialId)
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
@@ -9538,12 +9544,14 @@ export const useSceneStore = defineStore('scene', {
           }
           updated = true
           const mergedProps = mergeMaterialProps(entry, overrides)
-          return createNodeMaterial(null, mergedProps, {
+          return createNodeMaterial(entry.materialId ?? null, mergedProps, {
             id: entry.id,
             name: entry.name,
             type: entry.type,
           })
         })
+        const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+        requiresDynamicMeshPatch ||= landformResult.meshChanged
       })
 
       if (!updated) {
@@ -9551,10 +9559,14 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
     },
     updateNodeMaterialType(nodeId: string, nodeMaterialId: string, type: SceneMaterialType) {
       let updated = false
+      let requiresDynamicMeshPatch = false
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
@@ -9565,12 +9577,14 @@ export const useSceneStore = defineStore('scene', {
             return entry
           }
           updated = true
-          return createNodeMaterial(null, entry, {
+          return createNodeMaterial(entry.materialId ?? null, entry, {
             id: entry.id,
             name: entry.name,
             type: type,
           })
         })
+        const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+        requiresDynamicMeshPatch ||= landformResult.meshChanged
       })
 
       if (!updated) {
@@ -9578,6 +9592,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
       return true
     },
@@ -9600,7 +9617,7 @@ export const useSceneStore = defineStore('scene', {
           }
           updated = true
           if (shared) {
-            return createNodeMaterial(null, shared, {
+            return createNodeMaterial(shared.id, shared, {
               id: entry.id,
               name: shared.name,
               type: shared.type,
@@ -9608,7 +9625,7 @@ export const useSceneStore = defineStore('scene', {
           }
           const currentProps = extractMaterialProps(entry)
           const fallbackName = entry.name ?? `Material ${index + 1}`
-          return createNodeMaterial(null, currentProps, {
+          return createNodeMaterial(entry.materialId ?? null, currentProps, {
             id: entry.id,
             name: fallbackName,
             type: entry.type,
@@ -9616,7 +9633,8 @@ export const useSceneStore = defineStore('scene', {
         })
         const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
         const wallResult = wallHelpers.ensureWallMaterialConvention(node)
-        if (floorResult.meshChanged || wallResult.meshChanged) {
+        const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged || landformResult.meshChanged) {
           requiresDynamicMeshPatch = true
         }
       })
@@ -9648,7 +9666,8 @@ export const useSceneStore = defineStore('scene', {
         node.materials = clones
         const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
         const wallResult = wallHelpers.ensureWallMaterialConvention(node)
-        if (floorResult.meshChanged || wallResult.meshChanged) {
+        const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged || landformResult.meshChanged) {
           requiresDynamicMeshPatch = true
         }
         updated = true
@@ -9776,7 +9795,7 @@ export const useSceneStore = defineStore('scene', {
           updated = true
           const fallbackName = entry.name?.trim() || `Material ${index + 1}`
           const resolvedName = material.name?.trim() || fallbackName
-          const nextEntry = createNodeMaterial(null, material, {
+          const nextEntry = createNodeMaterial(normalizedAssetId, material, {
             id: entry.id,
             name: resolvedName,
             type: material.type ?? entry.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
@@ -9786,7 +9805,8 @@ export const useSceneStore = defineStore('scene', {
         })
         const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
         const wallResult = wallHelpers.ensureWallMaterialConvention(node)
-        if (floorResult.meshChanged || wallResult.meshChanged) {
+        const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged || landformResult.meshChanged) {
           requiresDynamicMeshPatch = true
         }
       })
@@ -9856,7 +9876,8 @@ export const useSceneStore = defineStore('scene', {
         })
         const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
         const wallResult = wallHelpers.ensureWallMaterialConvention(node)
-        if (floorResult.meshChanged || wallResult.meshChanged) {
+        const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+        if (floorResult.meshChanged || wallResult.meshChanged || landformResult.meshChanged) {
           requiresDynamicMeshPatch = true
         }
       })
@@ -10118,7 +10139,7 @@ export const useSceneStore = defineStore('scene', {
           }
           updated = true
           const currentProps = extractMaterialProps(entry)
-          return createNodeMaterial(null, currentProps, {
+          return createNodeMaterial(entry.materialId ?? null, currentProps, {
             id: entry.id,
             name: trimmedName && trimmedName.length ? trimmedName : undefined,
             type: entry.type,
@@ -10604,7 +10625,7 @@ export const useSceneStore = defineStore('scene', {
             transparent: targetOpacity < 0.999,
           }
           const merged = mergeMaterialProps(entry, overrides)
-          return createNodeMaterial(null, merged, {
+          return createNodeMaterial(entry.materialId ?? null, merged, {
             id: entry.id,
             name: entry.name,
             type: entry.type,

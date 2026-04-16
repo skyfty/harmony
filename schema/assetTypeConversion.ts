@@ -137,19 +137,8 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   mp4: 'video/mp4',
   mov: 'video/quicktime',
   webm: 'video/webm',
-  ogv: 'video/ogg',
-  ogg: 'video/ogg',
-  m4v: 'video/x-m4v',
-  mkv: 'video/x-matroska',
-  avi: 'video/x-msvideo',
-
   // audio
   mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  flac: 'audio/flac',
-  aac: 'audio/aac',
-  m4a: 'audio/mp4',
-  opus: 'audio/opus',
 
   // models
   gltf: 'model/gltf+json',

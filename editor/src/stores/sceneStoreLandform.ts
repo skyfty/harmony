@@ -1271,12 +1271,17 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         nextMaterials = deps.createLandformNodeMaterials({ surfaceName: 'Surface' })
       } else {
         const normalizedMaterials = currentMaterials.map((entry) => {
-          if (entry?.side === 'double') {
+          const nextType = entry?.type === 'MeshStandardMaterial' ? entry.type : 'MeshStandardMaterial'
+          const nextSide = entry?.side === 'double' ? entry.side : 'double'
+          const nextTransparent = entry?.transparent === true ? entry.transparent : true
+          if (nextType === entry?.type && nextSide === entry?.side && nextTransparent === entry?.transparent) {
             return entry
           }
           return {
             ...entry,
-            side: 'double',
+            type: nextType,
+            side: nextSide,
+            transparent: nextTransparent,
           }
         })
         const sideChanged = normalizedMaterials.some((entry, index) => entry !== currentMaterials[index])

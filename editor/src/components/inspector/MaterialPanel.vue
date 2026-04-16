@@ -91,7 +91,7 @@ const deleteDialogMessage = computed(() => {
 
 const materialListEntries = computed(() =>
   nodeMaterials.value.map((entry: SceneNodeMaterial, index: number) => {
-    const thumbnail = getMaterialPreviewThumbnail(entry.id)
+    const thumbnail = getMaterialPreviewThumbnail(entry)
     const color = normalizeHexColor(entry.color, DEFAULT_MATERIAL_COLOR)
     return {
       id: entry.id,
@@ -131,12 +131,27 @@ function setActiveSlot(id: string) {
   emit('update:active-node-material-id', id)
 }
 
-function getMaterialPreviewThumbnail(slotId: string): string | null {
-  const localThumbnail = materialPreviewThumbnails.value[slotId]
+function resolveNodeMaterialAssetId(entry: SceneNodeMaterial): string | null {
+  const raw = (entry as SceneNodeMaterial & { materialId?: unknown }).materialId
+  return typeof raw === 'string' && raw.trim().length ? raw.trim() : null
+}
+
+function resolveMaterialAssetThumbnail(assetId: string | null | undefined): string | null {
+  const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedId) {
+    return null
+  }
+  const asset = sceneStore.getAsset(normalizedId)
+  const thumbnail = typeof asset?.thumbnail === 'string' ? asset.thumbnail.trim() : ''
+  return thumbnail || null
+}
+
+function getMaterialPreviewThumbnail(entry: SceneNodeMaterial): string | null {
+  const localThumbnail = materialPreviewThumbnails.value[entry.id]
   if (typeof localThumbnail === 'string' && localThumbnail.trim().length) {
     return localThumbnail.trim()
   }
-  return null
+  return resolveMaterialAssetThumbnail(resolveNodeMaterialAssetId(entry))
 }
 
 function setMaterialPreviewThumbnail(slotId: string, thumbnail: string | null | undefined) {
@@ -293,7 +308,8 @@ function handleOpenMaterialAssetPicker(slotId: string, event?: MouseEvent) {
   }
   setActiveSlot(slotId)
   materialPickerSlotId.value = slotId
-  materialPickerSelectedId.value = ''
+  const currentEntry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
+  materialPickerSelectedId.value = currentEntry ? resolveNodeMaterialAssetId(currentEntry) ?? '' : ''
   materialPickerAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   materialPickerVisible.value = true
 }
@@ -330,7 +346,7 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
   if (!applied) {
     return
   }
-  setMaterialPreviewThumbnail(slotId, asset.thumbnail)
+  setMaterialPreviewThumbnail(slotId, resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
   setActiveSlot(slotId)
 }
 
@@ -386,7 +402,7 @@ async function handleSlotDrop(slotId: string, event: DragEvent) {
       materialAsset.id,
     )
     if (applied) {
-      setMaterialPreviewThumbnail(slotId, materialAsset.thumbnail)
+      setMaterialPreviewThumbnail(slotId, resolveMaterialAssetThumbnail(materialAsset.id) ?? materialAsset.thumbnail)
       setActiveSlot(slotId)
       emit('open-details', slotId)
     }
@@ -452,7 +468,7 @@ async function handleListDrop(event: DragEvent) {
   }
   const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, newSlot.id, asset.id)
   if (assigned) {
-    setMaterialPreviewThumbnail(newSlot.id, asset.thumbnail)
+    setMaterialPreviewThumbnail(newSlot.id, resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
     setActiveSlot(newSlot.id)
     emit('open-details', newSlot.id)
   }
