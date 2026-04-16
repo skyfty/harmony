@@ -2384,6 +2384,28 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   const assetIdMap = new Map<string, string>()
   const persistedBundleAssets = new Map<string, PersistedBundleAssetReference>()
   const persistedAssetIds = new Set<string>()
+  const logLodUploadInfo = (message: string, payload?: Record<string, unknown>): void => {
+    if (payload) {
+      console.info('[LOD-UPLOAD]', message, payload)
+      return
+    }
+    console.info('[LOD-UPLOAD]', message)
+  }
+
+  logLodUploadInfo('uploadAssetBundle start', {
+    primaryFilename: primaryBundleFile.entry.filename,
+    primaryExtension: primaryBundleFile.entry.extension ?? null,
+    primarySourceLocalAssetId: sanitizeString(manifest.primaryAsset.sourceLocalAssetId) ?? null,
+    dependencyEntries: (manifest.files as AssetBundleFileEntry[])
+      .filter((entry) => entry.role === 'dependency')
+      .map((entry) => ({
+        filename: entry.filename,
+        extension: entry.extension ?? null,
+        sourceLocalAssetId: sanitizeString(entry.sourceLocalAssetId) ?? null,
+        assetType: entry.assetType ?? null,
+        rewriteTarget: entry.rewriteTarget === true,
+      })),
+  })
 
   type PendingBundleDependency = {
     entry: AssetBundleFileEntry
@@ -2398,6 +2420,14 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   const pendingDependencies: PendingBundleDependency[] = []
 
   const persistDependency = async (dependency: PendingBundleDependency): Promise<void> => {
+    logLodUploadInfo('persistDependency start', {
+      filename: dependency.entry.filename,
+      sourceLocalAssetId: dependency.sourceLocalAssetId,
+      dependencyType: dependency.dependencyType,
+      rewriteTarget: dependency.rewriteTarget,
+      referencedDependencyIds: dependency.referencedDependencyIds,
+      currentAssetIdMap: Object.fromEntries(assetIdMap.entries()),
+    })
     const storedBytes = dependency.rewriteTarget
       ? maybeRewriteJsonBundleAsset(dependency.entry, dependency.bytes, assetIdMap, persistedBundleAssets)
       : dependency.bytes
@@ -2447,6 +2477,14 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
         name: path.parse(dependency.entry.filename).name || dependency.entry.filename,
       }),
     )
+    logLodUploadInfo('persistDependency stored dependency asset', {
+      filename: dependency.entry.filename,
+      sourceLocalAssetId: dependency.sourceLocalAssetId,
+      dependencyAssetId: dependencyAsset._id.toString(),
+      dependencyAssetName: dependencyAsset.name,
+      dependencyAssetType: dependency.dependencyType,
+      thumbnailUrl: dependencyAsset.thumbnailUrl ?? null,
+    })
   }
 
   for (const dependencyEntry of dependencyEntries) {
@@ -2478,6 +2516,14 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
           name: path.parse(dependencyEntry.filename).name || dependencyEntry.filename,
         }),
       )
+      logLodUploadInfo('uploadAssetBundle reused existing dependency asset', {
+        filename: dependencyEntry.filename,
+        sourceLocalAssetId,
+        dependencyAssetId: existingDependencyAsset._id.toString(),
+        dependencyAssetName: existingDependencyAsset.name,
+        dependencyAssetType: dependencyType,
+        thumbnailUrl: existingDependencyAsset.thumbnailUrl ?? null,
+      })
       continue
     }
 
@@ -2534,6 +2580,20 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   }).exec()
 
   if (!primaryAsset) {
+    logLodUploadInfo('uploadAssetBundle creating primary asset', {
+      primaryFilename: primaryBundleFile.entry.filename,
+      rewriteReferences: manifest.primaryAsset.rewriteReferences === true,
+      assetIdMap: Object.fromEntries(assetIdMap.entries()),
+      persistedBundleAssets: Object.fromEntries(
+        Array.from(persistedBundleAssets.entries()).map(([assetId, persisted]) => [assetId, {
+          serverAssetId: persisted.serverAssetId,
+          fileKey: persisted.fileKey ?? null,
+          resolvedUrl: persisted.resolvedUrl ?? null,
+          assetType: persisted.assetType ?? null,
+          name: persisted.name ?? null,
+        }]),
+      ),
+    })
     const rewrittenPrimaryBytes = manifest.primaryAsset.rewriteReferences
       ? maybeRewriteJsonBundleAsset(primaryBundleFile.entry, primaryBundleFile.bytes, assetIdMap, persistedBundleAssets)
       : primaryBundleFile.bytes
@@ -2583,6 +2643,12 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       bundleRole: 'primary',
       bundlePrimaryAssetId: null,
     })
+    logLodUploadInfo('uploadAssetBundle created primary asset', {
+      primaryAssetId: primaryAsset._id.toString(),
+      primaryAssetName: primaryAsset.name,
+      primaryAssetType: primaryType,
+      thumbnailUrl: primaryAsset.thumbnailUrl ?? null,
+    })
   } else if (thumbnailBundleFile) {
     const thumbnailInfo = await storeBufferAsFile(thumbnailBundleFile.bytes, {
       filename: thumbnailBundleFile.entry.filename,
@@ -2604,6 +2670,13 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   if (primarySourceLocalAssetId) {
     assetIdMap.set(primarySourceLocalAssetId, primaryAsset._id.toString())
   }
+
+  logLodUploadInfo('uploadAssetBundle completed', {
+    primaryAssetId: primaryAsset._id.toString(),
+    primaryAssetName: primaryAsset.name,
+    assetIdMap: Object.fromEntries(assetIdMap.entries()),
+    persistedAssetIds: Array.from(persistedAssetIds),
+  })
 
   await AssetModel.updateMany(
     {

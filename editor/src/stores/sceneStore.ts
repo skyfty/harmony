@@ -677,6 +677,43 @@ function buildRegistryEntryFromSource(
   return null
 }
 
+const LOD_TREE_LOG_PREFIX = '[LOD-TREE]'
+
+function summarizeAssetSource(source: AssetSourceMetadata | ProjectAsset['source'] | undefined): Record<string, unknown> | null {
+  if (!source) {
+    return null
+  }
+  return {
+    type: source.type,
+    providerId: 'providerId' in source ? source.providerId ?? null : null,
+    originalAssetId: 'originalAssetId' in source ? source.originalAssetId ?? null : null,
+    serverAssetId: 'serverAssetId' in source ? source.serverAssetId ?? null : null,
+    packagePathSegments: 'packagePathSegments' in source ? source.packagePathSegments ?? null : null,
+  }
+}
+
+function summarizeRegistryEntry(entry: SceneAssetRegistryEntry | undefined): Record<string, unknown> | null {
+  if (!entry) {
+    return null
+  }
+  return {
+    sourceType: entry.sourceType,
+    serverAssetId: 'serverAssetId' in entry ? entry.serverAssetId ?? null : null,
+    zipPath: 'zipPath' in entry ? entry.zipPath ?? null : null,
+    resolvedUrl: 'resolvedUrl' in entry ? entry.resolvedUrl ?? null : null,
+    assetType: entry.assetType ?? null,
+    name: entry.name ?? null,
+  }
+}
+
+function logLodTreeInfo(message: string, payload?: Record<string, unknown>): void {
+  if (payload) {
+    console.info(LOD_TREE_LOG_PREFIX, message, payload)
+    return
+  }
+  console.info(LOD_TREE_LOG_PREFIX, message)
+}
+
 function filterAssetRegistryByCatalog(
   assetRegistry: Record<string, SceneAssetRegistryEntry>,
   assetCatalog: Record<string, ProjectAsset[]>,
@@ -11580,6 +11617,16 @@ export const useSceneStore = defineStore('scene', {
         return asset
       }
 
+      logLodTreeInfo('ensureSceneAssetRegistered start', {
+        assetId,
+        assetName: asset.name,
+        assetType: asset.type,
+        providerId: options.providerId ?? null,
+        packagePathSegments: options.packagePathSegments ?? null,
+        categoryId: options.categoryId ?? null,
+        source: summarizeAssetSource(options.source ?? asset.source),
+      })
+
       const normalizedAsset: ProjectAsset = {
         ...asset,
         id: assetId,
@@ -11589,6 +11636,14 @@ export const useSceneStore = defineStore('scene', {
       const existing = this.getRegisteredAsset(assetId)
       if (existing) {
         const syncSource = options.source ?? existing.source ?? normalizedAsset.source
+        logLodTreeInfo('ensureSceneAssetRegistered found existing asset', {
+          assetId,
+          existingName: existing.name,
+          existingType: existing.type,
+          existingCategoryId: existing.categoryId ?? null,
+          registryEntry: summarizeRegistryEntry(this.assetRegistry?.[assetId]),
+          syncSource: summarizeAssetSource(syncSource),
+        })
         if (syncSource) {
           void this.syncAssetRegistryEntry(existing, syncSource)
         }
@@ -11603,6 +11658,11 @@ export const useSceneStore = defineStore('scene', {
         const packagePathSegments = Array.isArray(options.packagePathSegments)
           ? options.packagePathSegments
           : this.getPackageAssetPathSegments(providerId, assetId)
+        logLodTreeInfo('ensureSceneAssetRegistered delegating to package mirror', {
+          assetId,
+          providerId,
+          packagePathSegments,
+        })
         return this.copyPackageAssetToAssets(providerId, normalizedAsset, { packagePathSegments })
       }
 
@@ -11613,7 +11673,7 @@ export const useSceneStore = defineStore('scene', {
           ? createServerAssetSource(assetId)
           : (resolveAssetDownloadUrl(normalizedAsset) ? { type: 'url' } satisfies AssetSourceMetadata : undefined))
 
-      return this.registerAsset(normalizedAsset, {
+      const registeredAsset = this.registerAsset(normalizedAsset, {
         categoryId: options.categoryId ?? determineAssetCategoryId(normalizedAsset),
         source: inferredSource,
         internal: options.internal,
@@ -11621,6 +11681,14 @@ export const useSceneStore = defineStore('scene', {
         commitOptions: options.commitOptions ?? { updateNodes: false },
         autoSave: options.autoSave,
       })
+      logLodTreeInfo('ensureSceneAssetRegistered registered asset', {
+        assetId,
+        registeredAssetId: registeredAsset.id,
+        registeredCategoryId: registeredAsset.categoryId ?? null,
+        inferredSource: summarizeAssetSource(inferredSource),
+        registryEntry: summarizeRegistryEntry(this.assetRegistry?.[registeredAsset.id]),
+      })
+      return registeredAsset
     },
     getRegisteredAsset(assetId: string): ProjectAsset | null {
       return this.findAssetInCatalog(assetId)
@@ -12301,6 +12369,13 @@ export const useSceneStore = defineStore('scene', {
         return []
       }
 
+      logLodTreeInfo('copyPackageAssetsToAssets start', {
+        providerId,
+        requestedAssets: normalized.map((asset) => ({ id: asset.id, name: asset.name, type: asset.type })),
+        packagePathSegments: options.packagePathSegments ?? null,
+        packagePathByAssetId: options.packagePathByAssetId ?? null,
+      })
+
       const resolved: ProjectAsset[] = []
       const toRegister: Array<{ asset: ProjectAsset; originalAssetId: string; packagePathSegments: string[] }> = []
       const targetCategoryIdByAssetId = new Map<string, string>()
@@ -12346,6 +12421,12 @@ export const useSceneStore = defineStore('scene', {
           // Only skip registration when the asset already exists in scene assets.
           const existingServerAsset = this.findAssetInCatalog(asset.id)
           if (existingServerAsset) {
+            logLodTreeInfo('copyPackageAssetsToAssets reused existing server-backed asset', {
+              providerId,
+              assetId: asset.id,
+              existingAssetId: existingServerAsset.id,
+              existingName: existingServerAsset.name,
+            })
             resolved.push(existingServerAsset)
             return
           }
@@ -12354,6 +12435,13 @@ export const useSceneStore = defineStore('scene', {
         const mapKey = `${providerId}::${asset.id}`
         const existingAsset = findExistingByPackageLookupKey(mapKey)
         if (existingAsset) {
+          logLodTreeInfo('copyPackageAssetsToAssets reused existing package lookup asset', {
+            providerId,
+            assetId: asset.id,
+            lookupKey: mapKey,
+            existingAssetId: existingAsset.id,
+            existingName: existingAsset.name,
+          })
           resolved.push(existingAsset)
           return
         }
@@ -12374,6 +12462,16 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (toRegister.length) {
+        logLodTreeInfo('copyPackageAssetsToAssets registering mirrored assets', {
+          providerId,
+          toRegister: toRegister.map((entry) => ({
+            assetId: entry.asset.id,
+            assetName: entry.asset.name,
+            assetType: entry.asset.type,
+            packagePathSegments: entry.packagePathSegments,
+            targetCategoryId: targetCategoryIdByAssetId.get(entry.asset.id) ?? null,
+          })),
+        })
         const registered = this.registerAssets(toRegister.map((entry) => entry.asset), {
           categoryId: (asset) => targetCategoryIdByAssetId.get(asset.id) ?? determineAssetCategoryId(asset),
           source: (asset) => {
@@ -12388,6 +12486,15 @@ export const useSceneStore = defineStore('scene', {
             }
           },
           commitOptions: { updateNodes: false },
+        })
+        logLodTreeInfo('copyPackageAssetsToAssets registered mirrored assets', {
+          providerId,
+          registered: registered.map((asset) => ({
+            id: asset.id,
+            name: asset.name,
+            categoryId: asset.categoryId ?? null,
+            registryEntry: summarizeRegistryEntry(this.assetRegistry?.[asset.id]),
+          })),
         })
         resolved.push(...registered)
       }
@@ -12487,6 +12594,17 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
+      logLodTreeInfo('replaceLocalAssetWithServerAsset start', {
+        localAssetId,
+        localAssetName: localAsset.name,
+        localAssetType: localAsset.type,
+        localRegistryEntry: summarizeRegistryEntry(this.assetRegistry?.[localAssetId]),
+        remoteAssetId: remoteAsset.id,
+        remoteAssetName: remoteAsset.name,
+        remoteAssetType: remoteAsset.type,
+        source: summarizeAssetSource(options.source ?? createServerAssetSource(remoteAsset.id)),
+      })
+
       const storedAsset: ProjectAsset = {
         ...remoteAsset,
         gleaned: false,
@@ -12540,6 +12658,15 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this, { updateNodes: true })
       // Persist scene after replacing a local asset with a server asset
       void this.saveActiveScene({ force: true }).catch(() => {})
+      logLodTreeInfo('replaceLocalAssetWithServerAsset completed', {
+        localAssetId,
+        storedAssetId: storedAsset.id,
+        storedAssetName: storedAsset.name,
+        previousCategoryId,
+        nextCategoryId,
+        hasLocalRegistryEntryAfter: Boolean(this.assetRegistry?.[localAssetId]),
+        storedRegistryEntry: summarizeRegistryEntry(this.assetRegistry?.[storedAsset.id]),
+      })
       return storedAsset
     },
     setResourceProviderId(providerId: string) {

@@ -47,6 +47,43 @@ export type PreparedLodAsset = {
   preset: LodPresetData
 }
 
+const LOD_PRESET_LOG_PREFIX = '[LOD-PRESET]'
+
+function summarizeLodLevels(props: LodComponentProps | null | undefined): Array<Record<string, unknown>> {
+  return Array.isArray(props?.levels)
+    ? props.levels.map((level, index) => ({
+        index,
+        distance: level?.distance ?? null,
+        kind: level?.kind ?? 'model',
+        modelAssetId: level?.modelAssetId ?? null,
+        billboardAssetId: level?.billboardAssetId ?? null,
+      }))
+    : []
+}
+
+function summarizeLodRegistry(registry: LodPresetData['assetRegistry'] | null | undefined): Array<Record<string, unknown>> {
+  return Object.entries(registry ?? {}).map(([assetId, entry]) => {
+    const record = (entry ?? {}) as Record<string, unknown>
+    return {
+      assetId,
+      sourceType: entry?.sourceType ?? null,
+      serverAssetId: typeof record.serverAssetId === 'string' ? record.serverAssetId : null,
+      zipPath: typeof record.zipPath === 'string' ? record.zipPath : null,
+      resolvedUrl: typeof record.resolvedUrl === 'string' ? record.resolvedUrl : null,
+      assetType: entry?.assetType ?? null,
+      name: entry?.name ?? null,
+    }
+  })
+}
+
+function logLodPresetInfo(message: string, payload?: Record<string, unknown>): void {
+  if (payload) {
+    console.info(LOD_PRESET_LOG_PREFIX, message, payload)
+    return
+  }
+  console.info(LOD_PRESET_LOG_PREFIX, message)
+}
+
 function collectLodPresetDependencyAssetIds(preset: LodPresetData | null | undefined): string[] {
   if (!preset) {
     return []
@@ -107,6 +144,20 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const dependencySubset = referencedAssetIds.length
         ? buildAssetDependencySubset({ assetIds: referencedAssetIds, assetRegistry: store.assetRegistry })
         : null
+      logLodPresetInfo('saveLodPreset preparing payload', {
+        name,
+        referencedAssetIds,
+        assetRefs: assetRefs.map((ref) => ({
+          assetId: ref.assetId,
+          type: ref.type,
+          name: ref.name ?? null,
+          filename: ref.filename ?? null,
+          downloadUrl: ref.downloadUrl ?? null,
+          hasThumbnail: typeof ref.thumbnail === 'string' && ref.thumbnail.length > 0,
+        })),
+        levels: summarizeLodLevels(props),
+        assetRegistry: summarizeLodRegistry(dependencySubset?.assetRegistry),
+      })
       const serialized = serializeLodPreset({
         name,
         props,
@@ -143,6 +194,14 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         commitOptions: { updateNodes: false },
       })
 
+      logLodPresetInfo('saveLodPreset registered asset', {
+        requestedAssetId: assetId,
+        registeredAssetId: registered.id,
+        categoryId,
+        fileName,
+        hasThumbnail: typeof thumbnailDataUrl === 'string' && thumbnailDataUrl.length > 0,
+      })
+
       if (payload.select !== false) {
         store.setActiveDirectory(categoryId)
         store.selectAsset(registered.id)
@@ -177,6 +236,15 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         throw new Error('LOD 预设 assetRegistry 格式无效')
       }
 
+      logLodPresetInfo('loadLodPreset parsed preset', {
+        assetId,
+        presetId: preset.id,
+        presetName: preset.name,
+        levels: summarizeLodLevels(preset.props),
+        dependencyAssetIds: collectLodPresetDependencyAssetIds(preset),
+        assetRegistry: summarizeLodRegistry(preset.assetRegistry),
+      })
+
       return preset
     },
 
@@ -194,6 +262,13 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const preset = await this.loadLodPreset(store, requestedAsset.id)
       const dependencyAssetIds = collectLodPresetDependencyAssetIds(preset)
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry) ? preset.assetRegistry : undefined
+      logLodPresetInfo('prepareLodAsset resolved preset', {
+        requestedAssetId: requestedAsset.id,
+        requestedAssetName: requestedAsset.name,
+        dependencyAssetIds,
+        levels: summarizeLodLevels(preset.props),
+        assetRegistry: summarizeLodRegistry(presetAssetRegistry),
+      })
       if (dependencyAssetIds.length) {
         await store.ensurePrefabDependencies(dependencyAssetIds, {
           prefabAssetIdForDownloadProgress: requestedAsset.id,
@@ -220,6 +295,13 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         throw new Error(entry?.error ?? 'Referenced LOD model asset is not ready yet')
       }
 
+      logLodPresetInfo('prepareLodAsset resolved preview model', {
+        requestedAssetId: requestedAsset.id,
+        modelAssetId,
+        modelAssetName: modelAsset.name,
+        modelAssetType: modelAsset.type,
+      })
+
       return {
         requestedAsset,
         modelAsset,
@@ -236,6 +318,14 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const preset = await this.loadLodPreset(store, assetId)
       const dependencyAssetIds = collectLodPresetDependencyAssetIds(preset)
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry) ? preset.assetRegistry : undefined
+
+      logLodPresetInfo('applyLodPresetToNode loaded preset', {
+        nodeId,
+        assetId,
+        dependencyAssetIds,
+        levels: summarizeLodLevels(preset.props),
+        assetRegistry: summarizeLodRegistry(presetAssetRegistry),
+      })
 
       if (dependencyAssetIds.length) {
         await store.ensurePrefabDependencies(dependencyAssetIds, {
@@ -264,6 +354,12 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         lodComponent.id,
         preset.props as unknown as Partial<Record<string, unknown>>,
       )
+      logLodPresetInfo('applyLodPresetToNode updated node component', {
+        nodeId,
+        assetId,
+        lodComponentId: lodComponent.id,
+        levels: summarizeLodLevels(preset.props),
+      })
       return preset
     },
   }

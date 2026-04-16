@@ -82,6 +82,20 @@ const {
 
 const WALL_PRESETS_CATEGORY_ID = `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`
 
+const LOD_TREE_LOG_PREFIX = '[LOD-TREE]'
+
+function shouldLogLodTreeAsset(asset: ProjectAsset): boolean {
+  return asset.type === 'lod' || asset.id.startsWith('sha256-')
+}
+
+function logLodTreeInfo(message: string, payload?: Record<string, unknown>): void {
+  if (payload) {
+    console.info(LOD_TREE_LOG_PREFIX, message, payload)
+    return
+  }
+  console.info(LOD_TREE_LOG_PREFIX, message)
+}
+
 function filterOutWallPresets(nodes: ProjectDirectory[] | undefined): ProjectDirectory[] {
   if (!nodes || !nodes.length) return []
   return nodes
@@ -3215,17 +3229,54 @@ function resolveAssetCacheId(asset: ProjectAsset): string {
 function prepareAssetForOperations(asset: ProjectAsset): ProjectAsset {
   const providerId = providerIdForAsset(asset)
   if (!providerId) {
+    if (shouldLogLodTreeAsset(asset)) {
+      logLodTreeInfo('prepareAssetForOperations using asset directly', {
+        assetId: asset.id,
+        assetName: asset.name,
+        assetType: asset.type,
+      })
+    }
     return asset
   }
   const packagePathSegments = assetPackagePathMap.value.get(asset.id) ?? []
-  return sceneStore.ensureSceneAssetRegistered(asset, { providerId, packagePathSegments })
+  if (shouldLogLodTreeAsset(asset)) {
+    logLodTreeInfo('prepareAssetForOperations mirroring package asset', {
+      assetId: asset.id,
+      assetName: asset.name,
+      assetType: asset.type,
+      providerId,
+      packagePathSegments,
+    })
+  }
+  const prepared = sceneStore.ensureSceneAssetRegistered(asset, { providerId, packagePathSegments })
+  if (shouldLogLodTreeAsset(prepared)) {
+    logLodTreeInfo('prepareAssetForOperations prepared asset', {
+      originalAssetId: asset.id,
+      preparedAssetId: prepared.id,
+      preparedAssetName: prepared.name,
+      preparedAssetType: prepared.type,
+      preparedCategoryId: prepared.categoryId ?? null,
+    })
+  }
+  return prepared
 }
 
 const indexedDbLoadQueue = new Set<string>()
 
 function assetPreviewUrl(asset: ProjectAsset): string | undefined {
   const cacheId = resolveAssetCacheId(asset)
-  return assetCacheStore.resolveAssetThumbnail({ asset, cacheId }) ?? undefined
+  const thumbnailUrl = assetCacheStore.resolveAssetThumbnail({ asset, cacheId }) ?? undefined
+  if (shouldLogLodTreeAsset(asset)) {
+    logLodTreeInfo('assetPreviewUrl resolved thumbnail', {
+      assetId: asset.id,
+      assetName: asset.name,
+      assetType: asset.type,
+      cacheId,
+      hasThumbnailUrl: typeof thumbnailUrl === 'string' && thumbnailUrl.length > 0,
+      thumbnailUrl: thumbnailUrl ?? null,
+    })
+  }
+  return thumbnailUrl
 }
 
 function assetPreviewStyle(asset: ProjectAsset): { backgroundColor?: string } | undefined {
