@@ -1524,11 +1524,11 @@ async function confirmReplaceUploaded(): Promise<void> {
       if (!replaced) {
         throw new Error('Failed to update asset reference')
       }
-      await assetCacheStore.storeAssetBlob(replaced.id, {
-        blob: candidate.file,
-        mimeType: candidate.file.type || null,
-        filename: candidate.file.name,
-        downloadUrl: replaced.downloadUrl,
+      await assetCacheStore.downloadAsset(replaced.id, replaced.downloadUrl, replaced.name, {
+        force: true,
+        expectedServerUpdatedAt: replaced.updatedAt ?? null,
+        contentHash: replaced.contentHash ?? null,
+        contentHashAlgorithm: replaced.contentHashAlgorithm ?? null,
       })
       assetCacheStore.removeCache(candidate.localAssetId)
       replacementMap.set(candidate.localAssetId, replaced.id)

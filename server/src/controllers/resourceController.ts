@@ -55,6 +55,7 @@ import {
   updateCategoryInfo,
 } from '@/services/assetCategoryService'
 import { appConfig } from '@/config/env'
+import { rewriteConfigAssetBundleBytes } from '@/services/configAssetRewrite'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
@@ -902,18 +903,10 @@ function maybeRewriteJsonBundleAsset(
   assetIdMap: Map<string, string>,
   persistedBundleAssets: Map<string, PersistedBundleAssetReference>,
 ): Uint8Array {
-  const extension = sanitizeString(entry.extension)?.toLowerCase() ?? path.extname(entry.filename).replace(/^\./, '').toLowerCase()
-  if (!CONFIG_ASSET_EXTENSION_SET.has(extension) || (!assetIdMap.size && !persistedBundleAssets.size)) {
-    return bytes
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(strFromU8(bytes))
-  } catch {
-    return bytes
-  }
-  const rewritten = rewriteJsonAssetReferences(parsed, assetIdMap, persistedBundleAssets)
-  return Buffer.from(JSON.stringify(rewritten, null, 2), 'utf8')
+  return rewriteConfigAssetBundleBytes(entry, bytes, {
+    assetIdMap,
+    persistedBundleAssets,
+  })
 }
 
 function parseBundleMetadataPayload(bytes: Uint8Array): Record<string, unknown> | null {
