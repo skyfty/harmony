@@ -4,6 +4,7 @@ import type { ClientSession } from 'mongoose'
 import type { AssetCategoryDocument } from '@/types/models'
 import { AssetCategoryModel, normalizeCategoryName } from '@/models/AssetCategory'
 import { AssetModel } from '@/models/Asset'
+import { ASSET_CATEGORY_PRESET_PATHS } from '@/services/assetCategoryPresets'
 
 const ROOT_CATEGORY_NAME = '资产库'
 const ROOT_CATEGORY_DESCRIPTION = 'Default root bucket for uncategorized assets'
@@ -724,4 +725,10 @@ export async function ensureCategoryConsistency(): Promise<void> {
       await category.save()
     }),
   )
+}
+
+export async function ensurePresetCategories(): Promise<void> {
+  for (const segments of ASSET_CATEGORY_PRESET_PATHS) {
+    await ensureCategoryPath([...segments])
+  }
 }

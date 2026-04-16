@@ -122,6 +122,8 @@ const directoryName = ref('');
 const dragPayload = ref<null | { id: string; kind: 'asset' | 'directory' }>(null);
 const directoryKeyword = ref('');
 const showDeletedOnly = ref(false);
+const assetSortField = ref<'categoryPathString' | 'name' | 'size' | 'type' | 'updatedAt'>('name');
+const assetSortOrder = ref<'ascend' | 'descend'>('ascend');
 
 const categoryOptions = computed(() => {
   const output: Array<{ label: string; value: string }> = [];
@@ -290,10 +292,7 @@ const filteredDirectoryRows = computed(() => {
 
 const filteredItems = computed(() => {
   const search = keyword.value.trim().toLowerCase();
-  const sorted = [...currentAssets.value].sort((a, b) => {
-    return a.name.localeCompare(b.name);
-  });
-  return sorted.filter((item) => {
+  const filtered = currentAssets.value.filter((item) => {
     const matchesKeyword = !search || item.name.toLowerCase().includes(search);
     const matchesType = !assetTypeFilter.value || item.type === assetTypeFilter.value;
     const matchesSeries =
@@ -303,7 +302,53 @@ const filteredItems = computed(() => {
       !assetTagFilter.value || Array.isArray(item.tagIds) && item.tagIds.includes(assetTagFilter.value);
     return matchesKeyword && matchesType && matchesSeries && matchesTag;
   });
+
+  const compareText = (left: string, right: string) => {
+    return left.localeCompare(right, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+  };
+
+  const direction = assetSortOrder.value === 'descend' ? -1 : 1;
+
+  return [...filtered].sort((left, right) => {
+    switch (assetSortField.value) {
+      case 'size': {
+        const leftSize = Number(left.size || 0);
+        const rightSize = Number(right.size || 0);
+        return (leftSize - rightSize) * direction;
+      }
+      case 'updatedAt': {
+        const leftTime = left.updatedAt ? new Date(left.updatedAt).getTime() : 0;
+        const rightTime = right.updatedAt ? new Date(right.updatedAt).getTime() : 0;
+        return (leftTime - rightTime) * direction;
+      }
+      case 'categoryPathString': {
+        const primary = compareText(left.categoryPathString || '', right.categoryPathString || '');
+        return primary ? primary * direction : compareText(left.name || '', right.name || '') * direction;
+      }
+      case 'type': {
+        const primary = compareText(left.type || '', right.type || '');
+        return primary ? primary * direction : compareText(left.name || '', right.name || '') * direction;
+      }
+      case 'name':
+      default:
+        return compareText(left.name || '', right.name || '') * direction;
+    }
+  });
 });
+
+function handleAssetTableChange(_pagination: unknown, _filters: unknown, sorter: any) {
+  const nextSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+  if (!nextSorter?.order || !nextSorter?.field) {
+    assetSortField.value = 'name';
+    assetSortOrder.value = 'ascend';
+    return;
+  }
+  const field = nextSorter.field as 'categoryPathString' | 'name' | 'size' | 'type' | 'updatedAt';
+  if (field === 'categoryPathString' || field === 'name' || field === 'size' || field === 'type' || field === 'updatedAt') {
+    assetSortField.value = field;
+    assetSortOrder.value = nextSorter.order;
+  }
+}
 
 const assetTypeOptions = computed(() => [{ label: '全部类型', value: '' }, ...typeOptions]);
 const assetSeriesFilterOptions = computed(() => [
@@ -820,15 +865,49 @@ function handleThumbnailError(row: ResourceAssetItem) {
   brokenThumbnailUrls.value = next;
 }
 
-const columns = [
+const columns = computed(() => [
   { dataIndex: 'thumbnail', key: 'thumbnail', title: '缩略图', width: 90 },
-  { dataIndex: 'name', key: 'name', title: '名称' },
-  { dataIndex: 'type', key: 'type', title: '类型', width: 120 },
-  { dataIndex: 'categoryPathString', key: 'categoryPathString', title: '分类路径', width: 260 },
-  { dataIndex: 'size', key: 'size', title: '大小(B)', width: 120 },
-  { dataIndex: 'updatedAt', key: 'updatedAt', title: '更新时间', width: 180 },
+  {
+    dataIndex: 'name',
+    key: 'name',
+    sorter: true,
+    sortOrder: assetSortField.value === 'name' ? assetSortOrder.value : undefined,
+    title: '名称',
+  },
+  {
+    dataIndex: 'type',
+    key: 'type',
+    sorter: true,
+    sortOrder: assetSortField.value === 'type' ? assetSortOrder.value : undefined,
+    title: '类型',
+    width: 120,
+  },
+  {
+    dataIndex: 'categoryPathString',
+    key: 'categoryPathString',
+    sorter: true,
+    sortOrder: assetSortField.value === 'categoryPathString' ? assetSortOrder.value : undefined,
+    title: '分类路径',
+    width: 260,
+  },
+  {
+    dataIndex: 'size',
+    key: 'size',
+    sorter: true,
+    sortOrder: assetSortField.value === 'size' ? assetSortOrder.value : undefined,
+    title: '大小(B)',
+    width: 120,
+  },
+  {
+    dataIndex: 'updatedAt',
+    key: 'updatedAt',
+    sorter: true,
+    sortOrder: assetSortField.value === 'updatedAt' ? assetSortOrder.value : undefined,
+    title: '更新时间',
+    width: 180,
+  },
   { dataIndex: 'actions', key: 'actions', title: '操作', width: 280 },
-];
+]);
 
 const rowSelection = computed<TableProps['rowSelection']>(() => ({
   selectedRowKeys: selectedAssetIds.value,
@@ -1016,11 +1095,13 @@ onMounted(async () => {
           <Tag>{{ `资产 ${currentDirectoryStats.assetCount}` }}</Tag>
         </Space>
 
+        <div style="max-height: calc(100vh - 240px); overflow-y: auto">
         <Table
           :columns="columns"
           :data-source="filteredItems"
           :loading="loadingEntries"
           :pagination="false"
+          @change="handleAssetTableChange"
           :row-selection="rowSelection"
           :custom-row="customRow"
           :row-key="(row: any) => row.id"
@@ -1086,6 +1167,7 @@ onMounted(async () => {
         </template>
       </template>
         </Table>
+        </div>
       </div>
     </div>
 
