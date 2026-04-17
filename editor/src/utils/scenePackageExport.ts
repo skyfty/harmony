@@ -33,7 +33,7 @@ import type { SceneExportEventReporter } from '@/types/scene-export'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
-import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
+import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import {
   GROUND_HEIGHTMAP_SIDECAR_FILENAME,
   createGroundRuntimeMeshFromSidecar,
@@ -244,13 +244,25 @@ type SceneExportDocumentWithEditorFields = SceneJsonExportDocument & {
 function getAssetFromCatalog(
   catalog: Record<string, ProjectAsset[]> | null | undefined,
   assetId: string,
+  assetAliases: ReadonlyMap<string, string> | null | undefined = null,
 ): ProjectAsset | null {
   const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
   if (!normalizedAssetId || !catalog) {
     return null
   }
+
+  const canonicalAssetId = assetAliases?.get(normalizedAssetId) ?? normalizedAssetId
+  const candidateAssetIds = new Set<string>([normalizedAssetId, canonicalAssetId])
+  if (assetAliases) {
+    for (const [alias, mappedAssetId] of assetAliases.entries()) {
+      if (mappedAssetId === canonicalAssetId) {
+        candidateAssetIds.add(alias)
+      }
+    }
+  }
+
   for (const assets of Object.values(catalog)) {
-    const found = assets.find((asset) => asset.id === normalizedAssetId)
+    const found = assets.find((asset) => candidateAssetIds.has(asset.id))
     if (found) {
       return found
     }
@@ -262,8 +274,9 @@ function shouldSkipRuntimeExportAsset(
   document: SceneExportDocumentWithEditorFields,
   assetId: string,
   retainedConfigAssetIds: ReadonlySet<string> = new Set<string>(),
+  assetAliases: ReadonlyMap<string, string> | null | undefined = null,
 ): boolean {
-  const asset = getAssetFromCatalog(document.assetCatalog, assetId)
+  const asset = getAssetFromCatalog(document.assetCatalog, assetId, assetAliases)
   return shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })
 }
 
@@ -576,6 +589,7 @@ async function collectEmbedAssetsFromScenes(
     const retainedConfigAssetIds = await collectRuntimeRetainedEmbedAssetIds(doc)
 
     const effectiveRegistry = buildEffectiveAssetRegistry(doc)
+    const assetAliases = buildAssetRegistryAliasMap(effectiveRegistry)
     const resourceAssets = Array.isArray(doc.resourceSummary?.assets) ? doc.resourceSummary.assets : []
 
     // Prefer resourceSummary entries (they often include downloadUrl).
@@ -591,20 +605,21 @@ async function collectEmbedAssetsFromScenes(
     for (const item of resourceAssets) {
       const assetId = typeof item?.assetId === 'string' ? item.assetId.trim() : ''
       if (!assetId) continue
-      if (shouldSkipRuntimeExportAsset(doc, assetId, retainedConfigAssetIds)) continue
-      if (!options.includeAllRuntimeAssets && !retainedConfigAssetIds.has(assetId)) continue
+      const canonicalAssetId = assetAliases.get(assetId) ?? assetId
+      if (shouldSkipRuntimeExportAsset(doc, canonicalAssetId, retainedConfigAssetIds, assetAliases)) continue
+      if (!options.includeAllRuntimeAssets && !retainedConfigAssetIds.has(canonicalAssetId)) continue
       const downloadUrl = typeof item?.downloadUrl === 'string' ? item.downloadUrl.trim() : ''
       if (!downloadUrl) continue
-      const asset = getAssetFromCatalog(doc.assetCatalog, assetId)
+      const asset = getAssetFromCatalog(doc.assetCatalog, canonicalAssetId, assetAliases)
 
       // Skip already-known local assets.
-      if (entryHasLocalSource(assetId)) {
+      if (entryHasLocalSource(canonicalAssetId)) {
         continue
       }
 
-      if (!out.has(assetId)) {
-        out.set(assetId, {
-          assetId,
+      if (!out.has(canonicalAssetId)) {
+        out.set(canonicalAssetId, {
+          assetId: canonicalAssetId,
           downloadUrl,
           mimeTypeHint: typeof item?.mimeType === 'string' ? item.mimeType : null,
           filenameHint: typeof item?.filename === 'string' ? item.filename : null,
@@ -619,14 +634,15 @@ async function collectEmbedAssetsFromScenes(
       if (!normalized || out.has(normalized)) {
         continue
       }
-      if (shouldSkipRuntimeExportAsset(doc, normalized, retainedConfigAssetIds)) {
+      const canonicalAssetId = assetAliases.get(normalized) ?? normalized
+      if (shouldSkipRuntimeExportAsset(doc, canonicalAssetId, retainedConfigAssetIds, assetAliases)) {
         continue
       }
-      if (!options.includeAllRuntimeAssets && !retainedConfigAssetIds.has(normalized)) {
+      if (!options.includeAllRuntimeAssets && !retainedConfigAssetIds.has(canonicalAssetId)) {
         continue
       }
 
-      if (entryHasLocalSource(normalized)) {
+      if (entryHasLocalSource(canonicalAssetId)) {
         continue
       }
 
@@ -641,9 +657,9 @@ async function collectEmbedAssetsFromScenes(
         downloadUrl = normalized
       }
 
-      const asset = getAssetFromCatalog(doc.assetCatalog, normalized)
-      out.set(normalized, {
-        assetId: normalized,
+      const asset = getAssetFromCatalog(doc.assetCatalog, canonicalAssetId, assetAliases)
+      out.set(canonicalAssetId, {
+        assetId: canonicalAssetId,
         downloadUrl,
         extensionHint: resolveEmbedAssetExtensionHint(asset),
       })
