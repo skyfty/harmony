@@ -88,7 +88,6 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
     createdAt: now,
     updatedAt: now,
     nodes,
-    materials: [],
     assetRegistry: dependencySubset.assetRegistry,
   }
 }
