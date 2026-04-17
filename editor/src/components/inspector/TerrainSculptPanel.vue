@@ -333,8 +333,6 @@ function commitNoiseStrengthInput() {
       </div>
     </div>
 
-    <v-divider class="ground-panel-divider" />
-
     <div class="control-row noise-row">
       <div class="control-group control-group--compact noise-type">
         <div class="text-caption mb-1">Noise Type</div>
