@@ -1163,9 +1163,6 @@ onMounted(async () => {
             >
               批量删除
             </Button>
-              <Button v-access:code="'resource:write'" @click="clearAssetFilters">
-                清除筛选
-              </Button>
             <Button v-access:code="'resource:write'" @click="() => openMoveAssetModal()" :disabled="selectedAssetsCount === 0 || showDeletedOnly">
               移动选中资产
             </Button>
@@ -1179,13 +1176,20 @@ onMounted(async () => {
               批量彻底删除
             </Button>
           </Space>
-          <Input v-model:value="keyword" allow-clear style="width: 320px" placeholder="搜索当前目录资产" />
         </Space>
 
         <Space style="margin-bottom: 12px; width: 100%" wrap>
           <Select v-model:value="assetTypeFilter" :options="assetTypeOptions" style="width: 140px" />
           <Select v-model:value="assetSeriesFilter" :options="assetSeriesFilterOptions" style="width: 180px" show-search option-filter-prop="label" />
           <Select v-model:value="assetTagFilter" :options="assetTagFilterOptions" style="width: 180px" show-search option-filter-prop="label" />
+          <div style="margin-left: auto; min-width: 320px; flex: 1; display: flex; justify-content: flex-end">
+            <Space>
+              <Button v-access:code="'resource:write'" @click="clearAssetFilters">
+                清除筛选
+              </Button>
+              <Input v-model:value="keyword" allow-clear style="width: 320px" placeholder="搜索当前目录资产" />
+            </Space>
+          </div>
         </Space>
 
         <Space style="margin-bottom: 12px" wrap>
