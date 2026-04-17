@@ -19,6 +19,7 @@ import {
 import { generateLodPresetThumbnailDataUrl } from '@/utils/lodPreview'
 import { generateUuid } from '@/utils/uuid'
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import { normalizeAssetIdWithRegistry, normalizeAssetIdsWithRegistry } from '@/utils/assetRegistryIdNormalization'
 
 export type LodPresetStoreLike = {
   nodes: SceneNode[]
@@ -51,36 +52,33 @@ function collectLodPresetDependencyAssetIds(preset: LodPresetData | null | undef
   if (!preset) {
     return []
   }
-  const registryDependencyIds = Object.entries((preset.assetRegistry ?? {}) as Record<string, unknown>)
-    .map(([assetId, entry]) => {
-      if (!entry || typeof entry !== 'object') {
-        return assetId
-      }
-      const record = entry as Record<string, unknown>
-      const sourceType = typeof record.sourceType === 'string' ? record.sourceType.trim() : ''
-      if (sourceType === 'server') {
-        const serverAssetId = typeof record.serverAssetId === 'string' ? record.serverAssetId.trim() : ''
-        return serverAssetId || assetId
-      }
-      return assetId
-    })
-  return Array.from(
-    new Set(
-      [
-        ...preset.props.levels.map((level) => getLodLevelAssetId(level) ?? ''),
-        ...registryDependencyIds,
-      ]
-        .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
-        .filter((assetId) => assetId.length > 0),
-    ),
+  return normalizeAssetIdsWithRegistry(
+    [
+      ...preset.props.levels.map((level) => getLodLevelAssetId(level) ?? ''),
+      ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+    ],
+    preset.assetRegistry,
   )
+}
+
+function normalizeLodPresetPropsAssetIds(
+  preset: LodPresetData,
+): LodComponentProps {
+  return {
+    ...preset.props,
+    levels: preset.props.levels.map((level) => ({
+      ...level,
+      modelAssetId: normalizeAssetIdWithRegistry(level.modelAssetId, preset.assetRegistry),
+      billboardAssetId: normalizeAssetIdWithRegistry(level.billboardAssetId, preset.assetRegistry),
+    })),
+  }
 }
 
 function syncResolvedLodDependencyMetadata(store: LodPresetStoreLike, preset: LodPresetData): void {
   const metadataByAssetId = new Map<string, Partial<ProjectAsset>>()
 
   ;(preset.assetRefs ?? []).forEach((assetRef) => {
-    const assetId = typeof assetRef.assetId === 'string' ? assetRef.assetId.trim() : ''
+    const assetId = normalizeAssetIdWithRegistry(assetRef.assetId, preset.assetRegistry)
     if (!assetId) {
       return
     }
@@ -299,7 +297,8 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         syncResolvedLodDependencyMetadata(store, preset)
       }
 
-      const modelAssetId = resolveFirstLodModelAssetId(preset)
+      const normalizedProps = normalizeLodPresetPropsAssetIds(preset)
+      const modelAssetId = resolveFirstLodModelAssetId(normalizedProps)
       if (!modelAssetId) {
         throw new Error('LOD 预设未配置可用模型')
       }
@@ -361,7 +360,7 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       store.updateNodeComponentProps(
         nodeId,
         lodComponent.id,
-        preset.props as unknown as Partial<Record<string, unknown>>,
+        normalizeLodPresetPropsAssetIds(preset) as unknown as Partial<Record<string, unknown>>,
       )
       return preset
     },

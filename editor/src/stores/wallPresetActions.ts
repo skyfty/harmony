@@ -131,6 +131,40 @@ function normalizeOptionalAssetId(value: unknown): string | null {
   return raw.length ? raw : null
 }
 
+function buildWallPresetDependencyAliasMap(
+  preset: WallPresetData | null | undefined,
+): Map<string, string> {
+  const aliases = new Map<string, string>()
+  const registry = (preset?.assetRegistry ?? null) as Record<string, unknown> | null
+  if (!registry || typeof registry !== 'object') {
+    return aliases
+  }
+
+  Object.entries(registry).forEach(([registryKey, rawEntry]) => {
+    const normalizedKey = normalizeOptionalAssetId(registryKey)
+    if (!normalizedKey || !rawEntry || typeof rawEntry !== 'object') {
+      return
+    }
+    aliases.set(normalizedKey, normalizedKey)
+
+    const entry = rawEntry as Record<string, unknown>
+    const serverAssetId = normalizeOptionalAssetId(entry.serverAssetId)
+    if (serverAssetId) {
+      aliases.set(serverAssetId, normalizedKey)
+    }
+  })
+
+  return aliases
+}
+
+function normalizeWallPresetDependencyAssetId(assetId: unknown, aliases: Map<string, string>): string | null {
+  const normalizedAssetId = normalizeOptionalAssetId(assetId)
+  if (!normalizedAssetId) {
+    return null
+  }
+  return aliases.get(normalizedAssetId) ?? normalizedAssetId
+}
+
 export function collectWallPresetDependencyAssetIds(
   preset: WallPresetData | null | undefined,
 ): string[] {
@@ -139,30 +173,39 @@ export function collectWallPresetDependencyAssetIds(
   }
 
   const wallProps = preset.wallProps
-  return Array.from(
+  const aliases = buildWallPresetDependencyAliasMap(preset)
+  const wallAssetIds = [
+    wallProps.bodyAssetId,
+    wallProps.headAssetId,
+    wallProps.footAssetId,
+    wallProps.bodyEndCapAssetId,
+    wallProps.headEndCapAssetId,
+    wallProps.footEndCapAssetId,
+  ]
+  const registryAssetIds = Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>)
+  const cornerAssetIds = (((wallProps as any).cornerModels ?? []) as any[])
+    .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
+  const textureAssetIds = Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
+    const textures = ((patch as any)?.props as any)?.textures as Record<string, any> | null | undefined
+    if (!textures || typeof textures !== 'object') {
+      return []
+    }
+    return Object.values(textures).map((ref) => (typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''))
+  })
+
+  const normalizedAssetIds = Array.from(
     new Set(
       [
-        wallProps.bodyAssetId,
-        wallProps.headAssetId,
-        wallProps.footAssetId,
-        wallProps.bodyEndCapAssetId,
-        wallProps.headEndCapAssetId,
-        wallProps.footEndCapAssetId,
-        ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
-        ...(((wallProps as any).cornerModels ?? []) as any[])
-          .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId]),
-        ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
-          const textures = ((patch as any)?.props as any)?.textures as Record<string, any> | null | undefined
-          if (!textures || typeof textures !== 'object') {
-            return []
-          }
-          return Object.values(textures).map((ref) => (typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''))
-        }),
+        ...wallAssetIds,
+        ...registryAssetIds,
+        ...cornerAssetIds,
+        ...textureAssetIds,
       ]
-        .map((value) => (typeof value === 'string' ? value.trim() : ''))
-        .filter((value) => value.length > 0),
+        .map((assetId) => normalizeWallPresetDependencyAssetId(assetId, aliases))
+        .filter((assetId): assetId is string => Boolean(assetId)),
     ),
   )
+  return normalizedAssetIds
 }
 
 function deduplicateNodeMaterialsById(materials: SceneNodeMaterial[]): SceneNodeMaterial[] {

@@ -149,6 +149,18 @@ function normalizeAssetIdCandidate(value: unknown): string | null {
   return candidate
 }
 
+function normalizeTraversalAssetId(
+  value: unknown,
+  normalizeAssetId?: (assetId: string) => string | null,
+): string | null {
+  const normalized = normalizeAssetIdCandidate(value)
+  if (!normalized) {
+    return null
+  }
+  const canonical = normalizeAssetId ? normalizeAssetId(normalized) : normalized
+  return normalizeAssetIdCandidate(canonical)
+}
+
 function resolveTraversableConfigAssetKind(asset: ProjectAsset | null): 'prefab' | 'config' | null {
   return resolveProjectAssetConfigKind(asset)
 }
@@ -176,8 +188,9 @@ function queueDependencyAssetId(
   queuedAssetIds: Set<string>,
   catalog: Record<string, ProjectAsset[]>,
   rawAssetId: string,
+  normalizeAssetId?: (assetId: string) => string | null,
 ): void {
-  const normalized = normalizeAssetIdCandidate(rawAssetId)
+  const normalized = normalizeTraversalAssetId(rawAssetId, normalizeAssetId)
   if (!normalized) {
     return
   }
@@ -196,6 +209,7 @@ export async function collectTransitiveConfigDependencyAssetIds(
   options: {
     loadPrefab: (assetId: string) => Promise<NodePrefabData>
     loadConfigAssetText: (assetId: string, asset: ProjectAsset) => Promise<string | null>
+    normalizeAssetId?: (assetId: string) => string | null
   },
 ): Promise<Set<string>> {
   const dependencyAssetIds = new Set<string>()
@@ -204,7 +218,7 @@ export async function collectTransitiveConfigDependencyAssetIds(
   const pendingAssetIds: string[] = []
 
   Array.from(rootAssetIds).forEach((assetId) => {
-    const normalized = normalizeAssetIdCandidate(assetId)
+    const normalized = normalizeTraversalAssetId(assetId, options.normalizeAssetId)
     if (!normalized || queuedAssetIds.has(normalized)) {
       return
     }
@@ -229,7 +243,14 @@ export async function collectTransitiveConfigDependencyAssetIds(
       if (traversalKind === 'prefab') {
         const prefabData = await options.loadPrefab(assetId)
         collectPrefabDependencyAssetIds(prefabData).forEach((dependencyAssetId) => {
-          queueDependencyAssetId(dependencyAssetIds, pendingAssetIds, queuedAssetIds, catalog, dependencyAssetId)
+          queueDependencyAssetId(
+            dependencyAssetIds,
+            pendingAssetIds,
+            queuedAssetIds,
+            catalog,
+            dependencyAssetId,
+            options.normalizeAssetId,
+          )
         })
         continue
       }
@@ -240,7 +261,14 @@ export async function collectTransitiveConfigDependencyAssetIds(
       }
       const parsed = JSON.parse(fileText) as unknown
       collectConfigAssetDependencyIds(parsed).forEach((dependencyAssetId) => {
-        queueDependencyAssetId(dependencyAssetIds, pendingAssetIds, queuedAssetIds, catalog, dependencyAssetId)
+        queueDependencyAssetId(
+          dependencyAssetIds,
+          pendingAssetIds,
+          queuedAssetIds,
+          catalog,
+          dependencyAssetId,
+          options.normalizeAssetId,
+        )
       })
     } catch (error) {
       console.warn('Failed to collect config asset dependencies during cleanup/export', assetId, error)

@@ -11,6 +11,7 @@ import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 import { shouldHideDependantAssetInEditor } from '@/utils/assetDependencySubset'
+import { isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
 
 const props = withDefaults(
   defineProps<{
@@ -166,6 +167,9 @@ const filteredAssets = computed(() => {
   return allAssets.value.filter((asset) => {
     const sourceKind = getAssetSourcePresentation(asset).kind
     const isRemoteSource = sourceKind === 'remote'
+    if (asset.internal === true && !isBuiltinWaterNormalAsset(asset.id)) {
+      return false
+    }
     if (shouldHideDependantAssetInEditor(asset)) {
       return false
     }

@@ -22,6 +22,11 @@ import {
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { buildRoadNodeMaterialsFromPreset } from '@/utils/roadPresetNodeMaterials'
 import { renderRoadPresetThumbnailDataUrl } from '@/utils/roadPresetThumbnail'
+import {
+  normalizeAssetIdWithRegistry,
+  normalizeAssetIdsWithRegistry,
+  normalizeMaterialLikeTextureAssetIds,
+} from '@/utils/assetRegistryIdNormalization'
 
 type SharedMaterial = { id: string; name: string; type: string } & Record<string, unknown>
 
@@ -93,25 +98,23 @@ export function collectRoadPresetDependencyAssetIds(
     return []
   }
 
-  return Array.from(
-    new Set(
-      [
-        ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
-          const patchTextureAssetIds = collectTextureAssetIdsFromMaterialLike((patch as any)?.props)
-          const sharedMaterialId = typeof patch?.materialId === 'string' ? patch.materialId.trim() : ''
-          if (!sharedMaterialId) {
-            return patchTextureAssetIds
-          }
-          const sharedMaterial = sharedMaterials.find((entry) => entry.id === sharedMaterialId)
-          const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
-          return [...patchTextureAssetIds, ...sharedTextureAssetIds]
-        }),
-        ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
-        typeof preset.roadProps?.bodyAssetId === 'string' ? preset.roadProps.bodyAssetId : '',
-      ]
-        .map((value) => (typeof value === 'string' ? value.trim() : ''))
-        .filter((value) => value.length > 0),
-    ),
+  return normalizeAssetIdsWithRegistry(
+    [
+      ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
+        const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds((patch as any)?.props, preset.assetRegistry)
+        const patchTextureAssetIds = collectTextureAssetIdsFromMaterialLike(normalizedPatchProps)
+        const sharedMaterialId = typeof patch?.materialId === 'string' ? patch.materialId.trim() : ''
+        if (!sharedMaterialId) {
+          return patchTextureAssetIds
+        }
+        const sharedMaterial = sharedMaterials.find((entry) => entry.id === sharedMaterialId)
+        const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
+        return [...patchTextureAssetIds, ...sharedTextureAssetIds]
+      }),
+      ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+      typeof preset.roadProps?.bodyAssetId === 'string' ? preset.roadProps.bodyAssetId : '',
+    ],
+    preset.assetRegistry,
   )
 }
 
@@ -567,7 +570,11 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
       }
 
       const current = clampRoadProps(roadComponent.props)
-      const patch = buildRoadComponentPatchFromPreset(preset.roadProps)
+      const normalizedRoadProps = {
+        ...preset.roadProps,
+        bodyAssetId: normalizeAssetIdWithRegistry(preset.roadProps.bodyAssetId, presetAssetRegistry),
+      }
+      const patch = buildRoadComponentPatchFromPreset(normalizedRoadProps)
       const merged = clampRoadProps({
         ...current,
         ...patch,
@@ -584,7 +591,22 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
 
       const target = deps.findNodeById(store.nodes, nodeId)
       if (target && deps.nodeSupportsMaterials(target)) {
-        const nextFromPreset = buildRoadNodeMaterialsFromPreset(preset, store.materials as any)
+        const normalizedPresetForMaterials: RoadPresetData = {
+          ...preset,
+          roadProps: normalizedRoadProps,
+          materialPatches: Object.fromEntries(
+            Object.entries(preset.materialPatches ?? {}).map(([slotId, patch]) => [
+              slotId,
+              {
+                ...patch,
+                props: patch?.props
+                  ? normalizeMaterialLikeTextureAssetIds(patch.props as any, presetAssetRegistry ?? null)
+                  : patch?.props,
+              },
+            ]),
+          ),
+        }
+        const nextFromPreset = buildRoadNodeMaterialsFromPreset(normalizedPresetForMaterials, store.materials as any)
         if (nextFromPreset.length) {
           const presetIds = new Set(nextFromPreset.map((entry) => entry.id))
           const existing = Array.isArray(target.materials) ? (target.materials as SceneNodeMaterial[]) : []

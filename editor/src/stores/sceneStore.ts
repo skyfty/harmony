@@ -128,6 +128,10 @@ import {
   shouldHideDependantAssetInEditor,
   shouldExcludeAssetFromRuntimeExport,
 } from '@/utils/assetDependencySubset'
+import {
+  normalizeAssetIdWithRegistry,
+  normalizeAssetIdsWithRegistry,
+} from '@/utils/assetRegistryIdNormalization'
 import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import { createLandformNodeMaterials } from '@/utils/landformNodeMaterials'
@@ -496,6 +500,19 @@ function inferPackageSourceFromAssetId(assetId: string): AssetSourceMetadata | u
     providerId,
     originalAssetId,
   }
+}
+
+function inferPackageSourceFromRegistryEntry(
+  entry: SceneAssetRegistryEntry | null | undefined,
+): AssetSourceMetadata | undefined {
+  if (!entry || entry.sourceType !== 'package') {
+    return undefined
+  }
+  const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : ''
+  if (!zipPath || zipPath.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+    return undefined
+  }
+  return inferPackageSourceFromAssetId(zipPath)
 }
 
 function inferPackageSourceFromSceneProvider(
@@ -4828,11 +4845,19 @@ function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: s
   return null
 }
 
+function normalizeAssetIdForExportLookup(
+  assetId: unknown,
+  assetRegistry: Record<string, SceneAssetRegistryEntry>,
+): string | null {
+  return normalizeAssetIdWithRegistry(assetId, assetRegistry)
+}
+
 async function loadConfigAssetTextForDependencyTraversal(
   assetId: string,
   assetCatalog: Record<string, ProjectAsset[]>,
+  assetRegistry: Record<string, SceneAssetRegistryEntry> = {},
 ): Promise<string | null> {
-  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  const normalizedAssetId = normalizeAssetIdForExportLookup(assetId, assetRegistry)
   if (!normalizedAssetId) {
     return null
   }
@@ -4918,7 +4943,10 @@ function buildSceneAssetRegistryEntry(
   const summaryBytes = typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined
   const assetType = asset?.type ?? summaryEntry?.type
   const name = asset?.name ?? summaryEntry?.name
-  const resolvedSourceMeta = sourceMeta ?? inferPackageSourceFromAssetId(assetId)
+  const resolvedSourceMeta =
+    sourceMeta
+    ?? inferPackageSourceFromAssetId(assetId)
+    ?? inferPackageSourceFromRegistryEntry(existingEntry)
 
   if (resolvedSourceMeta?.type === 'server' || (resolvedSourceMeta?.type === 'package' && isServerBackedProviderId(resolvedSourceMeta.providerId))) {
     return buildServerRegistryEntry(assetId, asset, resolvedSourceMeta, { bytes: summaryBytes, assetType, name })
@@ -5009,22 +5037,39 @@ export async function buildAssetRegistryForExport(
   scene: StoredSceneDocument,
 ): Promise<Record<string, SceneAssetRegistryEntry>> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
-  const usedAssetIds = collectSceneAssetReferences(runtimeAwareScene)
-  const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(runtimeAwareScene)
-  const retainedConfigAssetIds = collectRuntimeRequiredConfigAssetIds(runtimeAwareScene)
+  const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
+  const normalizeExportAssetId = (assetId: string): string | null => normalizeAssetIdForExportLookup(assetId, existingRegistry)
+  const usedAssetIds = normalizeAssetIdsWithRegistry(collectSceneAssetReferences(runtimeAwareScene), existingRegistry)
+  const directReferenceAssetIds = normalizeAssetIdsWithRegistry(
+    collectDirectSceneAssetReferenceIds(runtimeAwareScene),
+    existingRegistry,
+  )
+  const retainedConfigAssetIds = new Set(
+    normalizeAssetIdsWithRegistry(collectRuntimeRequiredConfigAssetIds(runtimeAwareScene), existingRegistry),
+  )
   const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
     directReferenceAssetIds,
     runtimeAwareScene.assetCatalog ?? {},
     {
-      loadPrefab: async (assetId) => prefabActions.loadNodePrefab({
-        getAsset: (queryAssetId: string) => getAssetFromCatalog(runtimeAwareScene.assetCatalog ?? {}, queryAssetId),
-        registerAsset: () => { throw new Error('registerAsset should not be called during export dependency collection') },
-      } as unknown as PrefabStoreLike, assetId),
-      loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(assetId, runtimeAwareScene.assetCatalog ?? {}),
+      loadPrefab: async (assetId) => {
+        const canonicalAssetId = normalizeExportAssetId(assetId) ?? assetId
+        return prefabActions.loadNodePrefab({
+          getAsset: (queryAssetId: string) => {
+            const canonicalQueryAssetId = normalizeExportAssetId(queryAssetId) ?? queryAssetId
+            return getAssetFromCatalog(runtimeAwareScene.assetCatalog ?? {}, canonicalQueryAssetId)
+          },
+          registerAsset: () => { throw new Error('registerAsset should not be called during export dependency collection') },
+        } as unknown as PrefabStoreLike, canonicalAssetId)
+      },
+      loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(
+        assetId,
+        runtimeAwareScene.assetCatalog ?? {},
+        existingRegistry,
+      ),
+      normalizeAssetId: normalizeExportAssetId,
     },
   )
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
-  const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
   const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
   const exportAssetIds = new Set<string>()
 
@@ -5043,8 +5088,9 @@ export async function buildAssetRegistryForExport(
 
   ;(runtimeAwareScene.resourceSummary?.assets ?? []).forEach((entry) => {
     const summaryAssetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''
-    if (summaryAssetId) {
-      summaryEntries.set(summaryAssetId, entry)
+    const canonicalSummaryAssetId = normalizeExportAssetId(summaryAssetId)
+    if (canonicalSummaryAssetId) {
+      summaryEntries.set(canonicalSummaryAssetId, entry)
     }
   })
 
@@ -5103,15 +5149,30 @@ export async function calculateSceneResourceSummary(
   options: SceneBundleExportOptions,
 ): Promise<SceneResourceSummary> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
-  const retainedConfigAssetIds = collectRuntimeRequiredConfigAssetIds(runtimeAwareScene)
+  const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
+  const normalizeExportAssetId = (assetId: string): string | null => normalizeAssetIdForExportLookup(assetId, existingRegistry)
+  const retainedConfigAssetIds = new Set(
+    normalizeAssetIdsWithRegistry(collectRuntimeRequiredConfigAssetIds(runtimeAwareScene), existingRegistry),
+  )
   const transitiveConfigDependencyIds = await collectTransitiveConfigDependencyAssetIds(
-    collectDirectSceneAssetReferenceIds(runtimeAwareScene),
+    normalizeAssetIdsWithRegistry(collectDirectSceneAssetReferenceIds(runtimeAwareScene), existingRegistry),
     runtimeAwareScene.assetCatalog ?? {},
     {
-      loadPrefab: async (assetId) => prefabActions.loadNodePrefab({
-        getAsset: (queryAssetId: string) => getAssetFromCatalog(runtimeAwareScene.assetCatalog ?? {}, queryAssetId),
-      } as unknown as PrefabStoreLike, assetId),
-      loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(assetId, runtimeAwareScene.assetCatalog ?? {}),
+      loadPrefab: async (assetId) => {
+        const canonicalAssetId = normalizeExportAssetId(assetId) ?? assetId
+        return prefabActions.loadNodePrefab({
+          getAsset: (queryAssetId: string) => {
+            const canonicalQueryAssetId = normalizeExportAssetId(queryAssetId) ?? queryAssetId
+            return getAssetFromCatalog(runtimeAwareScene.assetCatalog ?? {}, canonicalQueryAssetId)
+          },
+        } as unknown as PrefabStoreLike, canonicalAssetId)
+      },
+      loadConfigAssetText: (assetId) => loadConfigAssetTextForDependencyTraversal(
+        assetId,
+        runtimeAwareScene.assetCatalog ?? {},
+        existingRegistry,
+      ),
+      normalizeAssetId: normalizeExportAssetId,
     },
   )
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
@@ -11632,7 +11693,31 @@ export const useSceneStore = defineStore('scene', {
       })
     },
     getRegisteredAsset(assetId: string): ProjectAsset | null {
-      return this.findAssetInCatalog(assetId)
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      const direct = this.findAssetInCatalog(normalizedAssetId)
+      if (direct) {
+        return direct
+      }
+
+      for (const [registryKey, entry] of Object.entries(this.assetRegistry ?? {})) {
+        if (!entry || entry.sourceType !== 'server') {
+          continue
+        }
+        const serverAssetId = typeof entry.serverAssetId === 'string' ? entry.serverAssetId.trim() : ''
+        if (!serverAssetId || serverAssetId !== normalizedAssetId) {
+          continue
+        }
+        const mapped = this.findAssetInCatalog(registryKey)
+        if (mapped) {
+          return mapped
+        }
+      }
+
+      return null
     },
 
     getAsset(assetId: string): ProjectAsset | null {
@@ -12291,7 +12376,7 @@ export const useSceneStore = defineStore('scene', {
     copyPackageAssetToAssets(
       providerId: string,
       asset: ProjectAsset,
-      options: { packagePathSegments?: string[] } = {},
+      options: { packagePathSegments?: string[]; internal?: boolean } = {},
     ): ProjectAsset {
       return this.copyPackageAssetsToAssets(providerId, [asset], options)[0] ?? asset
     },
@@ -12299,7 +12384,7 @@ export const useSceneStore = defineStore('scene', {
     copyPackageAssetsToAssets(
       providerId: string,
       assets: ProjectAsset[],
-      options: { packagePathSegments?: string[]; packagePathByAssetId?: Record<string, string[]> } = {},
+      options: { packagePathSegments?: string[]; packagePathByAssetId?: Record<string, string[]>; internal?: boolean } = {},
     ): ProjectAsset[] {
       const normalized = Array.isArray(assets)
         ? assets
@@ -12396,6 +12481,7 @@ export const useSceneStore = defineStore('scene', {
               packagePathSegments: packagePathByAssetId[asset.id] ?? [],
             }
           },
+          internal: options.internal,
           commitOptions: { updateNodes: false },
         })
         resolved.push(...registered)

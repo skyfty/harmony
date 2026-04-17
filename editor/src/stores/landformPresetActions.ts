@@ -19,6 +19,7 @@ import {
 } from '@/utils/landformPreset'
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { renderLandformPresetThumbnailDataUrl } from '@/utils/landformPresetThumbnail'
+import { normalizeAssetIdsWithRegistry, normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'
 
 export type LandformPresetStoreLike = {
   nodes: SceneNode[]
@@ -84,21 +85,20 @@ export function collectLandformPresetDependencyAssetIds(
     return []
   }
 
-  const patchTextureAssetIds = collectTextureAssetIdsFromMaterialLike(preset.materialPatch?.props)
   const sharedMaterialId = typeof preset.materialPatch?.materialId === 'string' ? preset.materialPatch.materialId.trim() : ''
   const sharedMaterial = sharedMaterialId ? sharedMaterials.find((entry) => entry.id === sharedMaterialId) : null
   const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
 
-  return Array.from(
-    new Set(
-      [
-        ...patchTextureAssetIds,
-        ...sharedTextureAssetIds,
-        ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
-      ]
-        .map((value) => (typeof value === 'string' ? value.trim() : ''))
-        .filter((value) => value.length > 0),
-    ),
+  const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(preset.materialPatch?.props ?? null, preset.assetRegistry)
+  const normalizedPatchTextureAssetIds = collectTextureAssetIdsFromMaterialLike(normalizedPatchProps)
+
+  return normalizeAssetIdsWithRegistry(
+    [
+      ...normalizedPatchTextureAssetIds,
+      ...sharedTextureAssetIds,
+      ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+    ],
+    preset.assetRegistry,
   )
 }
 
@@ -522,7 +522,10 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
           })
         } else {
           const baseProps = deps.extractMaterialProps(existingSlot)
-          const overrides = patch.props ? deps.materialUpdateToProps(patch.props as any) : {}
+          const normalizedPatchProps = patch.props
+            ? normalizeMaterialLikeTextureAssetIds(patch.props as any, presetAssetRegistry ?? null)
+            : null
+          const overrides = normalizedPatchProps ? deps.materialUpdateToProps(normalizedPatchProps as any) : {}
           const mergedProps = patch.props ? deps.mergeMaterialProps(baseProps as any, overrides) : baseProps
           updated = deps.createNodeMaterial(null, mergedProps, {
             id: existingSlot.id,

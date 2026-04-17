@@ -58,6 +58,12 @@ function sanitizeUrlCandidate(url: string | null | undefined): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function resolveEffectiveAssetId(assetId: string, asset?: ProjectAsset | null): string {
+  const normalizedRequestedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  const normalizedAssetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
+  return normalizedAssetId || normalizedRequestedAssetId
+}
+
 function isLikelyImageAssetUrl(url: string | null | undefined): boolean {
   const normalized = sanitizeUrlCandidate(url)
   if (!normalized) {
@@ -697,12 +703,12 @@ export const useAssetCacheStore = defineStore('assetCache', {
       return entry
     },
     async ensureAssetEntry(assetId: string, options: AssetAccessOptions = {}): Promise<AssetCacheEntry | null> {
-      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      const asset = options.asset ?? null
+      const normalizedAssetId = resolveEffectiveAssetId(assetId, asset)
       if (!normalizedAssetId) {
         return null
       }
 
-      const asset = options.asset ?? null
       const contentHash = asset?.contentHash ?? options.contentHash ?? null
       const contentHashAlgorithm = asset?.contentHashAlgorithm ?? options.contentHashAlgorithm ?? null
       let entry = this.getEntry(normalizedAssetId)
@@ -746,7 +752,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
       })
     },
     async ensureAssetFile(assetId: string, options: AssetAccessOptions = {}): Promise<File | null> {
-      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      const normalizedAssetId = resolveEffectiveAssetId(assetId, options.asset ?? null)
       if (!normalizedAssetId) {
         return null
       }

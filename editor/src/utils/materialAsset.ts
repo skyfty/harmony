@@ -12,6 +12,7 @@ import type {
 } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { disposeThumbnailObject, renderObjectThumbnailDataUrl } from '@/utils/objectThumbnailRenderer'
 
 const MATERIAL_ASSET_FORMAT = 'harmony-material'
@@ -161,6 +162,7 @@ export function parseMaterialAssetDocument(data: unknown): ParsedMaterialAsset |
     return null
   }
   const sourceRecord = data as Record<string, unknown>
+  const assetRegistry = sanitizeSceneAssetRegistry(sourceRecord.assetRegistry)
   const payload = sourceRecord.props
   const source = payload && typeof payload === 'object'
     ? (payload as Record<string, unknown>)
@@ -181,8 +183,9 @@ export function parseMaterialAssetDocument(data: unknown): ParsedMaterialAsset |
       const settings = typeof ref.settings === 'object' && ref.settings
         ? createTextureSettings(ref.settings as Partial<SceneMaterialTextureSettings>)
         : undefined
+      const canonicalAssetId = normalizeAssetIdWithRegistry(ref.assetId, assetRegistry)
       textures[slot] = {
-        assetId: ref.assetId.trim(),
+        assetId: canonicalAssetId ?? ref.assetId.trim(),
         name: typeof ref.name === 'string' ? ref.name : undefined,
         settings,
       }
@@ -211,7 +214,6 @@ export function parseMaterialAssetDocument(data: unknown): ParsedMaterialAsset |
   const name = typeof sourceRecord.name === 'string' ? sourceRecord.name : undefined
   const description = typeof sourceRecord.description === 'string' ? sourceRecord.description : undefined
   const type = sanitizeMaterialType(sourceRecord.type ?? source.type)
-  const assetRegistry = sanitizeSceneAssetRegistry(sourceRecord.assetRegistry)
 
   return { props, name, description, type, assetRegistry }
 }

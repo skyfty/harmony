@@ -17,6 +17,7 @@ import {
   type StrictFloorPresetMaterialConfig,
 } from '@/utils/floorPreset'
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import { normalizeAssetIdsWithRegistry, normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'
 
 export type FloorPresetStoreLike = {
   nodes: SceneNode[]
@@ -89,24 +90,22 @@ export function collectFloorPresetDependencyAssetIds(
     return []
   }
 
-  return Array.from(
-    new Set(
-      [
-        ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
-          const patchTextureAssetIds = collectTextureAssetIdsFromMaterialLike((patch as any)?.props)
-          const sharedMaterialId = typeof patch?.materialId === 'string' ? patch.materialId.trim() : ''
-          if (!sharedMaterialId) {
-            return patchTextureAssetIds
-          }
-          const sharedMaterial = sharedMaterials.find((entry) => entry.id === sharedMaterialId)
-          const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
-          return [...patchTextureAssetIds, ...sharedTextureAssetIds]
-        }),
-        ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
-      ]
-        .map((value) => (typeof value === 'string' ? value.trim() : ''))
-        .filter((value) => value.length > 0),
-    ),
+  return normalizeAssetIdsWithRegistry(
+    [
+      ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
+        const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds((patch as any)?.props, preset.assetRegistry)
+        const patchTextureAssetIds = collectTextureAssetIdsFromMaterialLike(normalizedPatchProps)
+        const sharedMaterialId = typeof patch?.materialId === 'string' ? patch.materialId.trim() : ''
+        if (!sharedMaterialId) {
+          return patchTextureAssetIds
+        }
+        const sharedMaterial = sharedMaterials.find((entry) => entry.id === sharedMaterialId)
+        const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
+        return [...patchTextureAssetIds, ...sharedTextureAssetIds]
+      }),
+      ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+    ],
+    preset.assetRegistry,
   )
 }
 
@@ -663,7 +662,10 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
           }
 
           const baseProps = deps.extractMaterialProps(slot)
-          const overrides = patch.props ? deps.materialUpdateToProps(patch.props as any) : {}
+          const normalizedPatchProps = patch.props
+            ? normalizeMaterialLikeTextureAssetIds(patch.props as any, presetAssetRegistry ?? null)
+            : null
+          const overrides = normalizedPatchProps ? deps.materialUpdateToProps(normalizedPatchProps as any) : {}
           const mergedProps = patch.props ? deps.mergeMaterialProps(baseProps as any, overrides) : baseProps
 
           return deps.createNodeMaterial(null, mergedProps, {

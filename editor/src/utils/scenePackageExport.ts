@@ -33,6 +33,7 @@ import type { SceneExportEventReporter } from '@/types/scene-export'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
+import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import {
   GROUND_HEIGHTMAP_SIDECAR_FILENAME,
   createGroundRuntimeMeshFromSidecar,
@@ -99,6 +100,8 @@ async function collectRuntimeRetainedEmbedAssetIds(
   }
 
   const assetCatalog = document.assetCatalog ?? {}
+  const effectiveAssetRegistry = buildEffectiveAssetRegistry(document)
+  const normalizeExportAssetId = (assetId: string): string | null => normalizeAssetIdWithRegistry(assetId, effectiveAssetRegistry)
   const assetCache = useAssetCacheStore()
   const transitiveDependencyIds = await collectTransitiveConfigDependencyAssetIds(
     retainedConfigAssetIds,
@@ -108,7 +111,7 @@ async function collectRuntimeRetainedEmbedAssetIds(
         throw new Error(`Unexpected prefab traversal while collecting retained embed assets (${assetId})`)
       },
       loadConfigAssetText: async (assetId) => {
-        const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+        const normalizedAssetId = normalizeExportAssetId(assetId)
         if (!normalizedAssetId) {
           return null
         }
@@ -128,6 +131,7 @@ async function collectRuntimeRetainedEmbedAssetIds(
         }
         return null
       },
+      normalizeAssetId: normalizeExportAssetId,
     },
   )
 

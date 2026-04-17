@@ -37,6 +37,7 @@ import {
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import { shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
+import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 
 export type SceneAssetDiagnosticSeverity = 'error' | 'warning'
 
@@ -509,20 +510,43 @@ function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: s
   return null
 }
 
+function normalizeDiagnosticAssetId(
+  assetId: unknown,
+  assetRegistry: Record<string, SceneAssetRegistryEntry>,
+): string | null {
+  return normalizeAssetIdWithRegistry(assetId, assetRegistry)
+}
+
+function getCanonicalAssetFromCatalog(
+  scene: AssetLookupScene,
+  assetRegistry: Record<string, SceneAssetRegistryEntry>,
+  assetId: string,
+): { canonicalAssetId: string | null; asset: ProjectAsset | null } {
+  const canonicalAssetId = normalizeDiagnosticAssetId(assetId, assetRegistry)
+  if (!canonicalAssetId) {
+    return { canonicalAssetId: null, asset: null }
+  }
+  return {
+    canonicalAssetId,
+    asset: getAssetFromCatalog(scene.assetCatalog ?? {}, canonicalAssetId),
+  }
+}
+
 function resolveEffectiveRegistryEntry(
   scene: AssetLookupScene,
   assetRegistry: Record<string, SceneAssetRegistryEntry>,
   assetId: string,
 ): SceneAssetRegistryEntry | null {
-  const sceneOverride = scene.sceneOverrideAssets?.[assetId]
+  const canonicalAssetId = normalizeDiagnosticAssetId(assetId, assetRegistry) ?? assetId
+  const sceneOverride = scene.sceneOverrideAssets?.[canonicalAssetId] ?? scene.sceneOverrideAssets?.[assetId]
   if (sceneOverride) {
     return sceneOverride
   }
-  const projectOverride = scene.projectOverrideAssets?.[assetId]
+  const projectOverride = scene.projectOverrideAssets?.[canonicalAssetId] ?? scene.projectOverrideAssets?.[assetId]
   if (projectOverride) {
     return projectOverride
   }
-  return assetRegistry[assetId] ?? scene.assetRegistry?.[assetId] ?? null
+  return assetRegistry[canonicalAssetId] ?? assetRegistry[assetId] ?? scene.assetRegistry?.[canonicalAssetId] ?? scene.assetRegistry?.[assetId] ?? null
 }
 
 function isValidRegistryEntry(entry: SceneAssetRegistryEntry | SceneAssetOverrideEntry | null): boolean {
@@ -546,14 +570,18 @@ function isValidRegistryEntry(entry: SceneAssetRegistryEntry | SceneAssetOverrid
   return Boolean(resolvedUrl)
 }
 
-function collectReferenceMap(references: SceneAssetReferenceRecord[]): Map<string, SceneAssetReferenceRecord[]> {
+function collectCanonicalReferenceMap(
+  references: SceneAssetReferenceRecord[],
+  assetRegistry: Record<string, SceneAssetRegistryEntry>,
+): Map<string, SceneAssetReferenceRecord[]> {
   const map = new Map<string, SceneAssetReferenceRecord[]>()
   references.forEach((reference) => {
-    const existing = map.get(reference.assetId)
+    const canonicalAssetId = normalizeDiagnosticAssetId(reference.assetId, assetRegistry) ?? reference.assetId
+    const existing = map.get(canonicalAssetId)
     if (existing) {
       existing.push(reference)
     } else {
-      map.set(reference.assetId, [reference])
+      map.set(canonicalAssetId, [reference])
     }
   })
   return map
@@ -561,14 +589,20 @@ function collectReferenceMap(references: SceneAssetReferenceRecord[]): Map<strin
 
 function getResourceSummaryEntry(
   scene: AssetLookupScene,
+  assetRegistry: Record<string, SceneAssetRegistryEntry>,
   assetId: string,
 ): SceneResourceSummaryEntry | null {
   const entries = Array.isArray(scene.resourceSummary?.assets) ? scene.resourceSummary.assets : []
   const normalized = assetId.trim()
-  if (!normalized) {
+  const canonicalAssetId = normalizeDiagnosticAssetId(assetId, assetRegistry)
+  const candidateIds = Array.from(new Set([canonicalAssetId, normalized].filter((value): value is string => Boolean(value))))
+  if (!candidateIds.length) {
     return null
   }
-  return entries.find((entry) => entry?.assetId === normalized) ?? null
+  return entries.find((entry) => {
+    const summaryAssetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''
+    return summaryAssetId.length > 0 && candidateIds.includes(summaryAssetId)
+  }) ?? null
 }
 
 function resolveReferenceSummaryAssetType(
@@ -670,21 +704,21 @@ export function buildSceneAssetReferenceSummaryMap(
   assetRegistry: Record<string, SceneAssetRegistryEntry> = scene.assetRegistry ?? {},
 ): Map<string, SceneAssetReferenceSummary> {
   const references = collectSceneAssetReferenceRecords(scene)
-  const referenceMap = collectReferenceMap(references)
+  const referenceMap = collectCanonicalReferenceMap(references, assetRegistry)
   const summaryMap = new Map<string, SceneAssetReferenceSummary>()
 
   referenceMap.forEach((assetReferences, assetId) => {
-    const catalogAsset = getAssetFromCatalog(scene.assetCatalog ?? {}, assetId)
+    const { canonicalAssetId, asset: catalogAsset } = getCanonicalAssetFromCatalog(scene, assetRegistry, assetId)
     if (shouldExcludeAssetFromRuntimeExport(catalogAsset)) {
       return
     }
     const registryEntry = resolveEffectiveRegistryEntry(scene, assetRegistry, assetId)
-    const summaryEntry = getResourceSummaryEntry(scene, assetId)
+    const summaryEntry = getResourceSummaryEntry(scene, assetRegistry, assetId)
     const { sourceType, sourceLabel, resolvedUrl } = resolveReferenceSummarySourceLabel(catalogAsset, registryEntry)
-    summaryMap.set(assetId, {
-      assetId,
+    summaryMap.set(canonicalAssetId ?? assetId, {
+      assetId: canonicalAssetId ?? assetId,
       assetName: catalogAsset?.name ?? summaryEntry?.name ?? registryEntry?.name ?? null,
-      assetType: resolveReferenceSummaryAssetType(assetId, catalogAsset, summaryEntry, registryEntry),
+      assetType: resolveReferenceSummaryAssetType(canonicalAssetId ?? assetId, catalogAsset, summaryEntry, registryEntry),
       sourceType,
       sourceLabel,
       resolvedUrl,
@@ -825,33 +859,35 @@ export function validateSceneAssetReferences(
   assetRegistry: Record<string, SceneAssetRegistryEntry>,
 ): SceneAssetValidationReport {
   const references = collectSceneAssetReferenceRecords(scene)
-  const referenceMap = collectReferenceMap(references)
+  const referenceMap = collectCanonicalReferenceMap(references, assetRegistry)
   const issues: SceneAssetDiagnosticIssue[] = [...buildStructuralIssues(scene)]
 
   referenceMap.forEach((assetReferences, assetId) => {
-    const catalogAsset = getAssetFromCatalog(scene.assetCatalog ?? {}, assetId)
+    const { canonicalAssetId, asset: catalogAsset } = getCanonicalAssetFromCatalog(scene, assetRegistry, assetId)
     if (shouldExcludeAssetFromRuntimeExport(catalogAsset)) {
       return
     }
     const entry = resolveEffectiveRegistryEntry(scene, assetRegistry, assetId)
     if (!entry) {
+      const issueAssetId = canonicalAssetId ?? assetId
       issues.push(createIssue(
         'error',
         catalogAsset ? 'missing-registry-entry' : 'missing-catalog-entry',
         catalogAsset
-          ? `资产 ${assetId} 被场景引用，但导出 registry 中没有对应条目。`
-          : `资产 ${assetId} 被场景引用，但既不在资产目录中，也没有可用的导出 registry 条目。`,
-        assetId,
+          ? `资产 ${issueAssetId} 被场景引用，但导出 registry 中没有对应条目。`
+          : `资产 ${issueAssetId} 被场景引用，但既不在资产目录中，也没有可用的导出 registry 条目。`,
+        issueAssetId,
         assetReferences,
       ))
       return
     }
     if (!isValidRegistryEntry(entry)) {
+      const issueAssetId = canonicalAssetId ?? assetId
       issues.push(createIssue(
         'error',
         'invalid-registry-entry',
-        `资产 ${assetId} 的导出 registry 条目不完整，运行时无法解析资源地址。`,
-        assetId,
+        `资产 ${issueAssetId} 的导出 registry 条目不完整，运行时无法解析资源地址。`,
+        issueAssetId,
         assetReferences,
         `sourceType=${entry.sourceType}`,
       ))

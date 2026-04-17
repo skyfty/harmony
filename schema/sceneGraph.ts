@@ -3,6 +3,7 @@ import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
 import ResourceCache from './ResourceCache';
 import type {
   SceneAssetRegistryEntry,
@@ -189,16 +190,18 @@ class SceneGraphBuilder {
     const entriesByAssetId = new Map<string, SceneResourceSummaryEntry>();
 
     const registry = this.document.assetRegistry ?? {};
-    Object.keys(registry).forEach((assetId) => {
-      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : '';
-      if (!normalizedAssetId) {
+    Object.entries(registry).forEach(([assetId, entry]) => {
+      const registryAssetIds = collectAssetRegistryEntryIds(assetId, entry);
+      if (!registryAssetIds.length) {
         return;
       }
-      const descriptor = this.resolveEffectiveAssetRegistryEntry(normalizedAssetId);
+      const descriptor = this.resolveEffectiveAssetRegistryEntry(assetId);
       if (!descriptor) {
         return;
       }
-      entriesByAssetId.set(normalizedAssetId, this.registryEntryToResourceSummaryEntry(normalizedAssetId, descriptor));
+      registryAssetIds.forEach((registryAssetId) => {
+        entriesByAssetId.set(registryAssetId, this.registryEntryToResourceSummaryEntry(registryAssetId, descriptor));
+      });
     });
 
     const summaryAssets = this.document.resourceSummary?.assets;
@@ -281,17 +284,29 @@ class SceneGraphBuilder {
     if (!assetId) {
       return null;
     }
-    const sceneOverride = this.document.sceneOverrideAssets?.[assetId];
-    if (sceneOverride && typeof sceneOverride === 'object' && typeof sceneOverride.sourceType === 'string') {
-      return sceneOverride;
+    const candidateIds = collectAssetRegistryLookupIds(
+      assetId,
+      this.document.sceneOverrideAssets,
+      this.document.projectOverrideAssets,
+      this.document.assetRegistry,
+    );
+    for (const candidateId of candidateIds) {
+      const sceneOverride = this.document.sceneOverrideAssets?.[candidateId];
+      if (sceneOverride && typeof sceneOverride === 'object' && typeof sceneOverride.sourceType === 'string') {
+        return sceneOverride;
+      }
     }
-    const projectOverride = this.document.projectOverrideAssets?.[assetId];
-    if (projectOverride && typeof projectOverride === 'object' && typeof projectOverride.sourceType === 'string') {
-      return projectOverride;
+    for (const candidateId of candidateIds) {
+      const projectOverride = this.document.projectOverrideAssets?.[candidateId];
+      if (projectOverride && typeof projectOverride === 'object' && typeof projectOverride.sourceType === 'string') {
+        return projectOverride;
+      }
     }
-    const registry = this.document.assetRegistry?.[assetId];
-    if (registry && typeof registry === 'object' && typeof registry.sourceType === 'string') {
-      return registry;
+    for (const candidateId of candidateIds) {
+      const registry = this.document.assetRegistry?.[candidateId];
+      if (registry && typeof registry === 'object' && typeof registry.sourceType === 'string') {
+        return registry;
+      }
     }
     return null;
   }

@@ -1,5 +1,6 @@
 import { AssetLoader, type AssetCacheEntry, type AssetLoadPersistenceOptions, type AssetSource } from './assetCache';
 import { inferMimeTypeFromAssetId } from './assetTypeConversion';
+import { collectAssetRegistryLookupIds, getAssetRegistryCanonicalId } from './assetRegistryLookup';
 import { collectBuiltinAssetLookupIds } from './builtinAssetMapping';
 import type { SceneGraphBuildOptions } from './sceneGraph';
 import { resolveServerAssetDownloadUrl } from './serverAssetUrl';
@@ -275,17 +276,53 @@ export default class ResourceCache {
   }
 
   private resolveEffectiveAssetDescriptor(assetId: string): SceneAssetRegistryEntry | null {
-    const sceneOverride = this.resolveOverrideEntry(this.document.sceneOverrideAssets?.[assetId]);
-    if (sceneOverride) {
-      return sceneOverride;
+    const candidateIds = collectAssetRegistryLookupIds(
+      assetId,
+      this.document.sceneOverrideAssets,
+      this.document.projectOverrideAssets,
+      this.document.assetRegistry,
+    );
+
+    for (const candidateId of candidateIds) {
+      const sceneOverride = this.resolveOverrideEntry(this.document.sceneOverrideAssets?.[candidateId]);
+      if (sceneOverride) {
+        return sceneOverride;
+      }
     }
 
-    const projectOverride = this.resolveOverrideEntry(this.document.projectOverrideAssets?.[assetId]);
-    if (projectOverride) {
-      return projectOverride;
+    for (const candidateId of candidateIds) {
+      const projectOverride = this.resolveOverrideEntry(this.document.projectOverrideAssets?.[candidateId]);
+      if (projectOverride) {
+        return projectOverride;
+      }
     }
 
-    return this.resolveRegistryEntry(this.document.assetRegistry?.[assetId]);
+    for (const candidateId of candidateIds) {
+      const registryEntry = this.resolveRegistryEntry(this.document.assetRegistry?.[candidateId]);
+      if (registryEntry) {
+        return registryEntry;
+      }
+    }
+
+    const canonicalAssetId = getAssetRegistryCanonicalId(
+      assetId,
+      this.document.sceneOverrideAssets,
+      this.document.projectOverrideAssets,
+      this.document.assetRegistry,
+    );
+    if (canonicalAssetId && canonicalAssetId !== assetId) {
+      const sceneOverride = this.resolveOverrideEntry(this.document.sceneOverrideAssets?.[canonicalAssetId]);
+      if (sceneOverride) {
+        return sceneOverride;
+      }
+      const projectOverride = this.resolveOverrideEntry(this.document.projectOverrideAssets?.[canonicalAssetId]);
+      if (projectOverride) {
+        return projectOverride;
+      }
+      return this.resolveRegistryEntry(this.document.assetRegistry?.[canonicalAssetId]);
+    }
+
+    return null;
   }
 
   private resolveOverrideEntry(entry: SceneAssetOverrideEntry | undefined): SceneAssetRegistryEntry | null {
@@ -312,6 +349,12 @@ export default class ResourceCache {
     if (primary.length) {
       ids.add(primary);
     }
+    collectAssetRegistryLookupIds(
+      primary,
+      this.document.sceneOverrideAssets,
+      this.document.projectOverrideAssets,
+      this.document.assetRegistry,
+    ).forEach((candidateId) => ids.add(candidateId));
     const builtinLookups = collectBuiltinAssetLookupIds(primary);
     for (const item of builtinLookups) {
       const normalized = typeof item === 'string' ? item.trim() : '';
