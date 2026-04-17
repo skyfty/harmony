@@ -41,6 +41,8 @@ import {
   FolderOutlined,
   PlusOutlined,
   ArrowRightOutlined,
+  DownOutlined,
+  RightOutlined,
 } from '@ant-design/icons-vue';
 import { Checkbox } from 'ant-design-vue';
 
@@ -121,6 +123,7 @@ const directoryModalMode = ref<'create' | 'edit'>('create');
 const directoryName = ref('');
 const dragPayload = ref<null | { id: string; kind: 'asset' | 'directory' }>(null);
 const directoryKeyword = ref('');
+const collapsedDirectoryIds = reactive(new Set<string>());
 const showDeletedOnly = ref(false);
 const assetSortField = ref<'categoryPathString' | 'name' | 'size' | 'type' | 'updatedAt'>('name');
 const assetSortOrder = ref<'ascend' | 'descend'>('ascend');
@@ -283,12 +286,28 @@ const currentChildDirectories = computed(() =>
 const filteredDirectoryRows = computed(() => {
   const search = directoryKeyword.value.trim().toLowerCase();
   if (!search) {
-    return directoryRows.value;
+    return directoryRows.value.filter((item) => !item.ancestorIds.some((ancestorId) => collapsedDirectoryIds.has(ancestorId)));
   }
   return directoryRows.value.filter((item) => {
     return item.name.toLowerCase().includes(search) || item.pathLabel.toLowerCase().includes(search);
   });
 });
+
+function expandDirectoryAncestors(directoryId: string) {
+  const row = directoryRowMap.value.get(directoryId);
+  if (!row) {
+    return;
+  }
+  row.ancestorIds.forEach((ancestorId) => collapsedDirectoryIds.delete(ancestorId));
+}
+
+function toggleDirectoryExpanded(directoryId: string) {
+  if (collapsedDirectoryIds.has(directoryId)) {
+    collapsedDirectoryIds.delete(directoryId);
+    return;
+  }
+  collapsedDirectoryIds.add(directoryId);
+}
 
 const filteredItems = computed(() => {
   const search = keyword.value.trim().toLowerCase();
@@ -430,6 +449,7 @@ async function loadCurrentDirectoryEntries() {
     });
     currentDirectoryId.value = result.currentDirectory.id;
     currentDirectoryPath.value = result.currentDirectory.path || [];
+    expandDirectoryAncestors(currentDirectoryId.value);
     mixedItems.value = result.items || [];
     selectedAssetIds.value = [];
   } finally {
@@ -515,6 +535,7 @@ async function openEditModal(row: ResourceAssetItem) {
 
 function selectDirectory(directoryId: string) {
   currentDirectoryId.value = directoryId;
+  expandDirectoryAncestors(directoryId);
   loadCurrentDirectoryEntries();
 }
 
@@ -1042,6 +1063,16 @@ onMounted(async () => {
             @dragover.prevent="() => undefined"
             @drop="() => canDropOnDirectory(item.id) && handleDirectoryTreeDrop(item.id)"
           >
+            <Button
+              v-if="item.hasChildren"
+              type="text"
+              size="small"
+              style="width: 20px; min-width: 20px; height: 20px; padding: 0; flex: 0 0 20px"
+              @click.stop="() => toggleDirectoryExpanded(item.id)"
+            >
+              <component :is="collapsedDirectoryIds.has(item.id) ? RightOutlined : DownOutlined" style="font-size: 12px; color: #999" />
+            </Button>
+            <span v-else style="width: 20px; min-width: 20px; flex: 0 0 20px"></span>
             <component :is="currentDirectoryId === item.id ? FolderOpenOutlined : FolderOutlined" style="color: #1677ff" />
             <span style="flex: 1">{{ item.name }}</span>
             <span v-if="item.hasChildren" style="font-size: 12px; color: #999">子级</span>
