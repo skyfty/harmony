@@ -10,6 +10,7 @@ import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
+import { shouldHideDependantAssetInEditor } from '@/utils/assetDependencySubset'
 
 const props = withDefaults(
   defineProps<{
@@ -58,7 +59,6 @@ const errorMessage = ref<string | null>(null)
 const searchTerm = ref('')
 const showLocalSources = ref(true)
 const showRemoteSources = ref(true)
-const showDependantAssets = ref(false)
 const gridRef = ref<HTMLDivElement | null>(null)
 
 function isAssetDownloading(asset: ProjectAsset): boolean {
@@ -166,7 +166,7 @@ const filteredAssets = computed(() => {
   return allAssets.value.filter((asset) => {
     const sourceKind = getAssetSourcePresentation(asset).kind
     const isRemoteSource = sourceKind === 'remote'
-    if (!showDependantAssets.value && asset.assetRole === 'dependant' && isRemoteSource) {
+    if (shouldHideDependantAssetInEditor(asset)) {
       return false
     }
     if (isRemoteSource && !showRemoteSources.value) {
@@ -395,10 +395,6 @@ function toggleRemoteSourceFilter(): void {
   showRemoteSources.value = !showRemoteSources.value
 }
 
-function toggleDependantSourceFilter(): void {
-  showDependantAssets.value = !showDependantAssets.value
-}
-
 watch(
   () => props.assetId,
   (next) => {
@@ -495,19 +491,6 @@ onBeforeUnmount(() => {
               aria-label="Toggle remote assets"
               :aria-pressed="showRemoteSources"
               @click="toggleRemoteSourceFilter"
-            />
-            <v-btn
-              class="asset-picker-list__search-action"
-              :class="{ 'asset-picker-list__search-action--active': showDependantAssets }"
-              :color="showDependantAssets ? 'primary' : undefined"
-              variant="plain"
-              icon="mdi-toy-brick-search-outline"
-              density="compact"
-              size="x-small"
-              title="依赖"
-              aria-label="Toggle dependant assets"
-              :aria-pressed="showDependantAssets"
-              @click="toggleDependantSourceFilter"
             />
           </div>
         </template>

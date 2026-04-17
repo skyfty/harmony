@@ -156,22 +156,6 @@ export function useInstancedMeshes(
     const baseInvertible = isMatrixInvertible(baseMatrix)
     const cachedBaseInvertible = cached ? isMatrixInvertible(cached.base) : false
 
-    if (DEBUG_MULTI_BINDING && (needsRebuild || !baseInvertible)) {
-      const baseDet = baseMatrix.determinant()
-      const cachedDet = cached ? cached.base.determinant() : undefined
-      // Avoid spamming huge keys; log only sizes.
-      console.debug('[InstancedMeshes] syncMultiBindingTransform', {
-        nodeId,
-        bindingCount: bindings.length,
-        needsRebuild,
-        baseDet,
-        baseInvertible,
-        cachedDet,
-        cachedBaseInvertible,
-        cachedLocals: cached ? cached.locals.size : 0,
-      })
-    }
-
     if (needsRebuild) {
       // Best-effort: derive locals from the currently committed instance matrices.
       // At steady state, those matrices were authored as: instance = base * local.
@@ -208,15 +192,6 @@ export function useInstancedMeshes(
           local.multiplyMatrices(entry.baseInverse, instancedMatrixHelper)
           entry.locals.set(binding.bindingId, local)
         }
-      } else {
-        // Base is not invertible (typically culled/hidden scale=0), and we have no cached invertible base.
-        // Do NOT clear or rebuild locals, and do NOT update the bindingKey so we can rebuild later.
-        if (DEBUG_MULTI_BINDING) {
-          console.debug('[InstancedMeshes] skip local rebuild (non-invertible base, no cached base)', {
-            nodeId,
-            bindingCount: bindings.length,
-          })
-        }
       }
     }
 
@@ -250,13 +225,6 @@ export function useInstancedMeshes(
     }
 
     if (!isMatrixInvertible(baseMatrix)) {
-      if (DEBUG_MULTI_BINDING) {
-        console.debug('[InstancedMeshes] skip prime (non-invertible base)', {
-          nodeId,
-          bindingCount: bindings.length,
-          baseDet: baseMatrix.determinant(),
-        })
-      }
       return
     }
 

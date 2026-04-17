@@ -1074,11 +1074,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
 
         const stillUnresolvedIds = unresolvedIds.filter((assetId) => !store.findAssetInCatalog(assetId))
         if (stillUnresolvedIds.length) {
-          console.debug('[PrefabDependencies] unresolved dependency ids', {
-            requestAssetIds: normalizedIds,
-            unresolvedIds: stillUnresolvedIds,
-            providerId,
-          })
           const fetchedRemoteAssets: Array<{ asset: ProjectAsset; source: AssetSourceMetadata; targetAssetId: string }> = []
           await Promise.all(
             stillUnresolvedIds.map(async (assetId) => {
@@ -1089,11 +1084,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
                 }
                 const existingRemoteAsset = store.getAsset(remoteLookupAssetId)
                 if (existingRemoteAsset) {
-                  console.debug('[PrefabDependencies] reusing catalog asset for dependency', {
-                    requestedAssetId: assetId,
-                    remoteLookupAssetId,
-                    providerId,
-                  })
                   fetchedRemoteAssets.push({
                     asset: {
                       ...existingRemoteAsset,
@@ -1105,11 +1095,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
                   })
                   return
                 }
-                console.debug('[PrefabDependencies] fetching remote asset', {
-                  requestedAssetId: assetId,
-                  remoteLookupAssetId,
-                  providerId,
-                })
                 const serverAsset = await fetchResourceAsset(remoteLookupAssetId)
                 const fallbackRegistryEntry = resolveRegistryEntry(assetId) ?? resolveRegistryEntryByServerAssetId(assetId)
                 const fallbackAsset = typeof serverAsset.sourceLocalAssetId === 'string'

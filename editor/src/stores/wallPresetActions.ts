@@ -574,27 +574,16 @@ async function generateWallPresetThumbnailDataUrl(
   store: WallPresetStoreLike,
   presetData: WallPresetData,
 ): Promise<string | null> {
-  const logWallPresetThumbnail = (message: string, payload?: Record<string, unknown>): void => {
-    if (payload) {
-      console.info('[WallPresetThumbnail]', message, payload)
-      return
-    }
-    console.info('[WallPresetThumbnail]', message)
-  }
-
   const loadModelObjectFromFile = async (file: File): Promise<Object3D | null> => {
     const loader = new Loader()
-    logWallPresetThumbnail('model load start', { fileName: file.name, size: file.size })
     return await new Promise<Object3D | null>(
       (resolve: (value: Object3D | null) => void, reject: (reason?: unknown) => void) => {
         const handleLoaded = (object: Object3D | null) => {
           loader.removeEventListener('loaded', handleLoaded)
           if (!object) {
-            logWallPresetThumbnail('model load failed: empty object', { fileName: file.name })
             reject(new Error('Model load failed'))
             return
           }
-          logWallPresetThumbnail('model load success', { fileName: file.name })
           resolve(prepareWallPreviewImportedObject(object))
         }
         loader.addEventListener('loaded', handleLoaded)
@@ -619,14 +608,11 @@ async function generateWallPresetThumbnailDataUrl(
     const asset = store.getAsset(normalizedId)
     const file = await assetCache.ensureAssetFile(normalizedId, { asset })
     if (file) {
-      logWallPresetThumbnail('asset file resolved from memory cache', { assetId: normalizedId, fileName: file.name })
       return file
     }
     if (!asset) {
-      logWallPresetThumbnail('asset metadata missing', { assetId: normalizedId })
       return null
     }
-    logWallPresetThumbnail('asset file unavailable after ensure', { assetId: normalizedId })
     return null
   }
   const resolveTexture = async (ref: SceneMaterialTextureRef) => {
@@ -650,13 +636,6 @@ async function generateWallPresetThumbnailDataUrl(
       URL.revokeObjectURL(blobUrl)
     }
   }
-  logWallPresetThumbnail('thumbnail render start', {
-    name: presetData.name,
-    bodyAssetId: presetData.wallProps.bodyAssetId ?? null,
-    headAssetId: presetData.wallProps.headAssetId ?? null,
-    footAssetId: presetData.wallProps.footAssetId ?? null,
-    cornerModelCount: Array.isArray(presetData.wallProps.cornerModels) ? presetData.wallProps.cornerModels.length : 0,
-  })
   return await renderWallPresetThumbnailDataUrl({
     preset: presetData,
     sharedMaterials: store.materials as any,
@@ -971,11 +950,6 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         : undefined
 
       if (dependencyAssetIds.length) {
-        console.debug('[WallPreset] ensuring dependencies', {
-          presetAssetId: assetId,
-          dependencyAssetIds,
-          registryKeys: presetAssetRegistry ? Object.keys(presetAssetRegistry) : [],
-        })
         await store.ensurePrefabDependencies(dependencyAssetIds, {
           prefabAssetIdForDownloadProgress: assetId,
           prefabAssetRegistry: presetAssetRegistry ?? null,

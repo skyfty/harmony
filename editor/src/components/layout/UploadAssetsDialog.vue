@@ -27,7 +27,12 @@ import {
 } from '@/utils/assetThumbnail'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { detectAssetPreviewPresetKind } from '@/utils/assetPreviewPreset'
-import { getAssetTypeLabel as getSharedAssetTypeLabel, getAssetTypePresentation } from '@/utils/assetTypePresentation'
+import {
+  getAssetTypeLabel as getSharedAssetTypeLabel,
+  getAssetTypePresentation,
+  resolvePresetAssetKind,
+  type PresetAssetKind,
+} from '@/utils/assetTypePresentation'
 import {
   collectConfigAssetDependencyIds,
   isConfigAssetExtension,
@@ -41,46 +46,41 @@ const scatterPresetOptions = Object.entries(terrainScatterPresets).map(([value, 
   icon: preset.icon,
 }))
 
-type PresetAssetKind = 'wall' | 'floor' | 'road' | 'landform' | 'lod'
-
 const DEFAULT_CATEGORY_PATHS: Record<PresetAssetKind, string[][]> = {
   wall: [
+    ['预置', '墙'],
     ['预制', '墙'],
     ['Prefabs', 'Wall'],
     ['Prefab', 'Wall'],
     ['Wall Presets', 'Wall'],
   ],
   floor: [
+    ['预置', '平台'],
     ['预制', '平台'],
     ['Prefabs', 'Floor'],
     ['Prefab', 'Floor'],
     ['Floor Presets', 'Floor'],
   ],
   road: [
+    ['预置', '道路'],
     ['预制', '道路'],
     ['Prefabs', 'Road'],
     ['Prefab', 'Road'],
     ['Road Presets', 'Road'],
   ],
   landform: [
+    ['预置', '地形'],
     ['预制', '地形'],
     ['Prefabs', 'Landform'],
     ['Prefab', 'Landform'],
   ],
   lod: [
+    ['预置', '撒件'],
     ['预制', '撒件'],
     ['Prefabs', 'LOD'],
     ['Prefab', 'LOD'],
     ['LOD Presets', 'LOD'],
   ],
-}
-
-const PRESET_KIND_LABELS: Record<string, PresetAssetKind> = {
-  wall: 'wall',
-  floor: 'floor',
-  road: 'road',
-  landform: 'landform',
-  lod: 'lod',
 }
 
 const props = defineProps<{
@@ -290,8 +290,7 @@ function normalizeHexColor(value: string | null | undefined): string | null {
 }
 
 function getPresetAssetKind(asset: ProjectAsset): PresetAssetKind | null {
-  const label = getAssetTypePresentation(asset).label.trim().toLowerCase()
-  return PRESET_KIND_LABELS[label] ?? null
+  return resolvePresetAssetKind(asset)
 }
 
 function isScatterPresetEditable(asset: ProjectAsset): boolean {

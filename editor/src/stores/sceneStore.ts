@@ -125,6 +125,7 @@ import {
   buildAssetDependencySubset,
   sanitizeSceneAssetRegistry,
   shouldAssetDefaultToEditorOnly,
+  shouldHideDependantAssetInEditor,
   shouldExcludeAssetFromRuntimeExport,
 } from '@/utils/assetDependencySubset'
 import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
@@ -783,7 +784,11 @@ function buildVisibleAssetCatalog(
   Object.entries(catalog).forEach(([categoryId, list]) => {
     next[categoryId] = (list ?? []).filter((asset) => {
       const hiddenInternal = asset.internal === true
-      return !hiddenInternal || isBuiltinWaterNormalAsset(asset.id)
+      const hiddenDependant = shouldHideDependantAssetInEditor(asset)
+      if (hiddenInternal && !isBuiltinWaterNormalAsset(asset.id)) {
+        return false
+      }
+      return !hiddenDependant
     })
   })
   return next
@@ -5927,12 +5932,13 @@ function buildSceneProjectTree(
   assetCatalog: Record<string, ProjectAsset[]>,
   packageDirectoryCache: Record<string, ProjectDirectory[]>,
 ): ProjectDirectory[] {
-  const fallbackTree = createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog), packageDirectoryCache)
+  const visibleAssetCatalog = buildVisibleAssetCatalog(assetCatalog)
+  const fallbackTree = createProjectTreeFromCache(visibleAssetCatalog, packageDirectoryCache)
   const packagesBranch = fallbackTree.find((directory) => directory.id === PACKAGES_ROOT_DIRECTORY_ID) ?? fallbackTree[1]
   if (!assetManifest) {
     return packagesBranch ? [fallbackTree[0]!, packagesBranch] : fallbackTree
   }
-  const localBranch = buildLocalAssetTreeFromManifest(assetManifest, assetCatalog, assetManifest.rootDirectoryId)
+  const localBranch = buildLocalAssetTreeFromManifest(assetManifest, visibleAssetCatalog, assetManifest.rootDirectoryId)
   if (!localBranch) {
     return packagesBranch ? [fallbackTree[0]!, packagesBranch] : fallbackTree
   }

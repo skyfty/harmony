@@ -48,23 +48,6 @@ type OutgoingMessage = ProgressMessage | ResultMessage | ErrorMessage | ReadyMes
 
 const inFlight = new Map<number, AbortController>()
 
-function debugEnabled(): boolean {
-  return (globalThis as unknown as { __HARMONY_ASSET_DOWNLOAD_DEBUG__?: boolean }).__HARMONY_ASSET_DOWNLOAD_DEBUG__ === true
-}
-
-function debugLog(message: string, extra?: unknown): void {
-  if (!debugEnabled()) {
-    return
-  }
-  if (extra !== undefined) {
-    // eslint-disable-next-line no-console
-    console.debug(`[asset-download-worker] ${message}`, extra)
-    return
-  }
-  // eslint-disable-next-line no-console
-  console.debug(`[asset-download-worker] ${message}`)
-}
-
 function post(message: OutgoingMessage, transfer?: Transferable[]) {
   ;(self as unknown as Worker).postMessage(message, transfer ?? [])
 }
@@ -180,8 +163,6 @@ async function downloadViaFetch(
     return
   }
 
-  debugLog('received message', message)
-
   if (message.type === 'ping') {
     post({ type: 'pong' })
     return
@@ -190,7 +171,6 @@ async function downloadViaFetch(
   if (message.type === 'abort') {
     const controller = inFlight.get(message.requestId)
     if (controller) {
-      debugLog('abort', { requestId: message.requestId })
       controller.abort()
       inFlight.delete(message.requestId)
     }
@@ -212,14 +192,11 @@ async function downloadViaFetch(
   inFlight.set(requestId, controller)
 
   try {
-    debugLog('start download', { requestId, urlCandidates })
     const result = await downloadViaFetch(urlCandidates, controller, (value) => {
       post({ type: 'progress', requestId, value })
     })
 
     inFlight.delete(requestId)
-
-    debugLog('download done', { requestId, url: result.url, bytes: result.buffer.byteLength })
 
     post(
       {
@@ -236,8 +213,6 @@ async function downloadViaFetch(
     inFlight.delete(requestId)
 
     const messageText = controller.signal.aborted ? 'Aborted' : error instanceof Error ? error.message : String(error)
-
-    debugLog('download error', { requestId, message: messageText })
 
     post({ type: 'error', requestId, message: messageText })
   }

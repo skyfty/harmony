@@ -216,44 +216,24 @@ class WorkerSlot {
   private activeReject: ((error: unknown) => void) | null = null
   private activeOnProgress: ((value: number) => void) | null = null
   private activeTimeoutHandle: number | null = null
-  private readonly slotId: number
   private alive = true
   private handshakeOk = false
   private handshakeWaiters: Array<() => void> = []
 
   private static nextSlotId = 1
 
-  private debugEnabled(): boolean {
-    return (globalThis as unknown as { __HARMONY_ASSET_DOWNLOAD_DEBUG__?: boolean }).__HARMONY_ASSET_DOWNLOAD_DEBUG__ === true
-  }
-
-  private debugLog(message: string, extra?: unknown): void {
-    if (!this.debugEnabled()) {
-      return
-    }
-    if (extra !== undefined) {
-      // eslint-disable-next-line no-console
-      console.debug(`[asset-download][slot:${this.slotId}] ${message}`, extra)
-      return
-    }
-    // eslint-disable-next-line no-console
-    console.debug(`[asset-download][slot:${this.slotId}] ${message}`)
-  }
-
   constructor(worker: Worker) {
     this.worker = worker
-    this.slotId = WorkerSlot.nextSlotId++
+    WorkerSlot.nextSlotId++
 
-    this.worker.addEventListener('error', (event) => {
-      this.debugLog('worker error event', event)
+    this.worker.addEventListener('error', () => {
       this.alive = false
       if (this.activeRequestId !== null) {
         this.finishError(new AssetDownloadWorkerUnavailableError('资源下载 Worker 脚本加载失败'))
       }
     })
 
-    this.worker.addEventListener('messageerror', (event) => {
-      this.debugLog('worker messageerror event', event)
+    this.worker.addEventListener('messageerror', () => {
       this.alive = false
       if (this.activeRequestId !== null) {
         this.finishError(new AssetDownloadWorkerUnavailableError('资源下载 Worker 消息解析失败'))
@@ -277,15 +257,12 @@ class WorkerSlot {
             /* noop */
           }
         }
-        this.debugLog(`handshake: ${message.type}`)
         return
       }
 
       if (this.activeRequestId === null || message.requestId !== this.activeRequestId) {
         return
       }
-
-      this.debugLog('received message', message)
 
       if (message.type === 'progress') {
         const value = typeof message.value === 'number' && isFinite(message.value) ? message.value : 0
@@ -373,7 +350,6 @@ class WorkerSlot {
           const timeoutMs = 1200_000
           this.activeTimeoutHandle = setTimeout(() => {
             if (this.activeRequestId === task.requestId) {
-              this.debugLog(`watchdog timeout after ${timeoutMs}ms`)
               this.finishError(new Error('资源下载超时（Worker 无响应）'))
             }
           }, timeoutMs) as unknown as number
@@ -385,7 +361,6 @@ class WorkerSlot {
           }
 
           try {
-            this.debugLog('postMessage download', message)
             this.worker.postMessage(message satisfies AssetDownloadWorkerIncomingMessage)
           } catch (error) {
             this.finishError(error instanceof Error ? error : new Error(String(error)))
@@ -405,7 +380,6 @@ class WorkerSlot {
 
   abort(requestId: number): void {
     try {
-      this.debugLog('postMessage abort', { requestId })
       this.worker.postMessage({ type: 'abort', requestId } satisfies AssetDownloadWorkerIncomingMessage)
     } catch {
       /* noop */

@@ -71,9 +71,7 @@ const galleryHovered = ref(false)
 const {
   projectTree,
   activeDirectoryId,
-  currentAssets,
   selectedAssetId,
-  currentDirectory,
   projectPanelTreeSize,
   draggingAssetId,
   selectedNodeId,
@@ -108,7 +106,7 @@ const filteredProjectTree = computed(() => filterHiddenAssetDirectories(projectT
 
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
 watch(openedDirectories, (ids, previousIds) => {
-  const sanitized = sanitizeOpenedDirectories(ids, projectTree.value)
+  const sanitized = sanitizeOpenedDirectories(ids, filteredProjectTree.value)
   if (!arraysEqual(sanitized, ids)) {
     openedDirectories.value = sanitized
     return
@@ -116,8 +114,8 @@ watch(openedDirectories, (ids, previousIds) => {
   persistOpenedDirectories(sanitized)
   triggerProviderLoadForOpenedDirectories(sanitized, previousIds)
 })
-watch(projectTree, () => {
-  const sanitized = sanitizeOpenedDirectories(openedDirectories.value, projectTree.value)
+watch(filteredProjectTree, () => {
+  const sanitized = sanitizeOpenedDirectories(openedDirectories.value, filteredProjectTree.value)
   if (!arraysEqual(sanitized, openedDirectories.value)) {
     openedDirectories.value = sanitized
     return
@@ -217,7 +215,7 @@ function findProviderIdForDirectoryId(directoryId: string | null): string | null
   }
   const directProviderId = extractProviderIdFromPackageDirectoryId(directoryId)
   if (directProviderId) return directProviderId
-  const path = findDirectoryPath(projectTree.value ?? [], directoryId)
+  const path = findDirectoryPath(filteredProjectTree.value ?? [], directoryId)
   for (const entry of path) {
     const providerId = extractProviderIdFromPackageDirectoryId(entry.id)
     if (providerId) {
@@ -491,59 +489,6 @@ function pruneSelectableAssetSelections(assetIds: string[], assets: ProjectAsset
     return asset ? canDeleteAsset(asset) : false
   })
 }
-
-const showDependantAssets = ref(false)
-
-function describeAssetPanelEntry(asset: ProjectAsset): string {
-  const source = asset.source ?? null
-  const sourceType = source?.type ?? 'none'
-  const sourceDetail = source?.type === 'package'
-    ? `provider=${source.providerId}`
-    : source?.type === 'server'
-      ? `serverAssetId=${source.serverAssetId ?? ''}`
-      : null
-  const parts = [
-    `id=${asset.id}`,
-    `name=${asset.name}`,
-    `type=${asset.type}`,
-    `role=${asset.assetRole ?? 'master'}`,
-    `source=${sourceType}`,
-    sourceDetail,
-    asset.fileKey ? `fileKey=${asset.fileKey}` : null,
-  ]
-  return parts.filter((part): part is string => !!part).join(' ')
-}
-
-function logAssetPanelVisibility(asset: ProjectAsset, visible: boolean, reason: string): void {
-  console.info(`[AssetPanel] ${visible ? 'show' : 'hide'} ${reason}: ${describeAssetPanelEntry(asset)}`)
-}
-
-function toggleDependantAssetVisibility(): void {
-  showDependantAssets.value = !showDependantAssets.value
-}
-
-function isPanelVisibleAsset(asset: ProjectAsset | null | undefined): boolean {
-  if (!asset?.id) {
-    return false
-  }
-  if (!showDependantAssets.value && asset.assetRole === 'dependant') {
-    logAssetPanelVisibility(asset, false, 'dependant asset hidden by default')
-    return false
-  }
-  if (asset.source?.type === 'server' && (asset.assetRole === 'dependant' || asset.type === 'model')) {
-    logAssetPanelVisibility(asset, true, 'server asset passed visibility check')
-  }
-  return asset.internal !== true
-}
-
-function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
-  if (!directory) {
-    return 0
-  }
-  return (directory.assets ?? []).filter((asset) => isPanelVisibleAsset(asset)).length
-}
-
-void countDirectoryAssets
 
 const activeProviderId = computed(() => findProviderIdForDirectoryId(activeDirectoryId.value ?? null))
 const activeProviderError = computed(() => (activeProviderId.value ? getProviderError(activeProviderId.value) : null))
@@ -1280,10 +1225,15 @@ function findDirectoryPath(directories: ProjectDirectory[], targetId: string | n
   return visit(directories) ? [...path] : []
 }
 
-const activeDirectoryPath = computed(() => findDirectoryPath(projectTree.value ?? [], activeDirectoryId.value ?? null))
+const activeDirectoryPath = computed(() => findDirectoryPath(filteredProjectTree.value ?? [], activeDirectoryId.value ?? null))
+const visibleCurrentDirectory = computed(() => {
+  const targetId = activeDirectoryId.value
+  return targetId ? findDirectoryById(filteredProjectTree.value ?? [], targetId) : filteredProjectTree.value[0] ?? null
+})
+const visibleCurrentAssets = computed(() => visibleCurrentDirectory.value?.assets ?? [])
 
 const categoryBreadcrumbs = computed<CategoryBreadcrumbItem[]>(() => {
-  const roots = projectTree.value ?? []
+  const roots = filteredProjectTree.value ?? []
   const path = activeDirectoryPath.value
   const items: CategoryBreadcrumbItem[] = [
     {
@@ -1386,19 +1336,8 @@ const searchFieldRef = ref<unknown>(null)
 const normalizedSearchQuery = computed(() => (searchQuery.value ?? '').trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const baseDisplayedAssets = computed(() => {
-  const assets = isSearchActive.value ? searchResults.value : currentAssets.value
-  const visibleAssets = assets.filter((asset) => isPanelVisibleAsset(asset))
-  if (typeof window !== 'undefined' && currentDirectory.value) {
-    console.debug('[AssetPanel] baseDisplayedAssets', {
-      directoryId: currentDirectory.value.id,
-      directoryName: currentDirectory.value.name,
-      assetCount: assets.length,
-      visibleCount: visibleAssets.length,
-      assets: assets.map((asset) => describeAssetPanelEntry(asset)),
-      visibleAssets: visibleAssets.map((asset) => describeAssetPanelEntry(asset)),
-    })
-  }
-  return visibleAssets
+  const assets = isSearchActive.value ? searchResults.value : visibleCurrentAssets.value
+  return assets
 })
 const categoryFilteredAssets = computed(() => baseDisplayedAssets.value)
 
@@ -1804,8 +1743,7 @@ const galleryDirectories = computed(() => {
   if (isSearchActive.value) {
     return []
   }
-  const children = currentDirectory.value?.children ?? []
-  return children.filter((dir) => !isHiddenAssetDirectory(dir.id))
+  return visibleCurrentDirectory.value?.children ?? []
 })
 
 watch(
@@ -1889,7 +1827,7 @@ const directoryDialogTitle = computed(() => (directoryDialogMode.value === 'crea
 const directoryDialogConfirmLabel = computed(() => (directoryDialogMode.value === 'create' ? 'Create' : 'Rename'))
 const directoryDeleteTarget = computed(() => {
   const targetId = directoryDeleteTargetId.value
-  return targetId ? findDirectoryById(projectTree.value ?? [], targetId) : null
+  return targetId ? findDirectoryById(filteredProjectTree.value ?? [], targetId) : null
 })
 
 function openDirectoryDialog(mode: DirectoryDialogMode, targetDirectoryId: string, name: string): void {
@@ -1916,7 +1854,7 @@ function promptRenameDirectory(directoryId?: string | null) {
   if (!targetDirectoryId || !canMutateDirectoryId(targetDirectoryId)) {
     return
   }
-  const directory = projectTree.value.length ? findDirectoryById(projectTree.value, targetDirectoryId) : null
+  const directory = filteredProjectTree.value.length ? findDirectoryById(filteredProjectTree.value, targetDirectoryId) : null
   openDirectoryDialog('rename', targetDirectoryId, directory?.name ?? 'Folder')
 }
 
@@ -2074,7 +2012,7 @@ function clearAssetDropHover(assetId?: string) {
 }
 
 function getNextAutoFolderName(): string {
-  const siblings = currentDirectory.value?.children ?? []
+  const siblings = visibleCurrentDirectory.value?.children ?? []
   const usedNumbers = new Set<number>()
   for (const directory of siblings) {
     const match = /^new folder\s+(\d+)$/i.exec(directory.name.trim())
@@ -2309,17 +2247,6 @@ function clearDropFeedbackTimer() {
   }
 }
 
-function showDropFeedback(kind: 'success' | 'error', message: string) {
-  console.log(`[Asset Gallery] ${kind.toUpperCase()}: ${message}`)
-  if (typeof window === 'undefined') {
-    return
-  }
-  clearDropFeedbackTimer()
-  dropFeedbackTimer = window.setTimeout(() => {
-    dropFeedbackTimer = null
-  }, 4000)
-}
-
 function openUploadDialog() {
   if (!canEditSelectedAssetMetadata.value) {
     return
@@ -2334,10 +2261,9 @@ watch(uploadDialogOpen, (open) => {
   }
 })
 
-function handleUploadCompleted(payload: { successCount: number; replacementMap: Record<string, string> }) {
+function handleUploadCompleted(_payload: { successCount: number; replacementMap: Record<string, string> }) {
   clearSelectedAssets()
   sceneStore.selectAsset(null)
-  showDropFeedback('success', `Switched ${payload.successCount} assets to server references`)
 }
 
 function isInternalAssetDrag(event: DragEvent): boolean {
@@ -2969,13 +2895,7 @@ async function handleGalleryDrop(event: DragEvent) {
       showAssetImportResultOverlay(result)
     }
     const successCount = result.newCount + result.reusedCount
-    if (successCount > 0 && result.failedItems.length > 0) {
-      showDropFeedback('error', `Imported ${successCount} assets, but ${result.failedItems.length} failed`)
-    } else if (successCount > 0) {
-      showDropFeedback('success', `Imported ${successCount} assets`)
-    } else if (result.failedItems.length > 0) {
-      showDropFeedback('error', result.failedItems[0]?.reason ?? 'Failed to import assets')
-    } else {
+    if (!(successCount > 0 || result.failedItems.length > 0)) {
       uiStore.updateLoadingOverlay({
         title: '导入资产',
         message: '未检测到可导入的资源',
@@ -2987,7 +2907,6 @@ async function handleGalleryDrop(event: DragEvent) {
         details: [],
         detailsExpanded: false,
       })
-      showDropFeedback('error', 'No importable assets detected')
     }
   } catch (error) {
     if ((error as Error).name === 'AbortError') {
@@ -3006,7 +2925,6 @@ async function handleGalleryDrop(event: DragEvent) {
       details: buildImportFailureDetails([buildDropImportFailure('导入任务', error)]),
       detailsExpanded: true,
     })
-    showDropFeedback('error', (error as Error).message ?? 'Failed to process drop payload')
   } finally {
     dropProcessing.value = false
     dropImportProgress.value = null
@@ -3141,8 +3059,6 @@ async function handleSceneNodeDrop(nodeId: string): Promise<void> {
     throw new Error('该节点无法保存为预制件')
   }
   await sceneStore.saveNodePrefab(nodeId, { select: false })
-  const label = node.name?.trim().length ? node.name.trim() : 'Prefab'
-  showDropFeedback('success', `Prefab "${label}" saved to assets`)
 }
 
 const selectedAssets = computed(() =>
@@ -3417,10 +3333,9 @@ function searchAsset() {
   try {
     const matches: ProjectAsset[] = []
     const seen = new Set<string>()
-    collectAssets(projectTree.value ?? [], matches, query, seen)
-    const visibleMatches = matches.filter((asset) => isPanelVisibleAsset(asset))
-    visibleMatches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-    searchResults.value = visibleMatches
+    collectAssets(filteredProjectTree.value ?? [], matches, query, seen)
+    matches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    searchResults.value = matches
     searchLoaded.value = true
   } finally {
     searchLoading.value = false
@@ -3779,14 +3694,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 density="compact"
                 :title="isSearchVisible ? 'Close search' : 'Search assets'"
                 @click="handleSearchIconClick"
-              />
-              <v-btn
-                :icon="showDependantAssets ? 'mdi-eye-off-outline' : 'mdi-eye-outline'"
-                variant="text"
-                density="compact"
-                :color="showDependantAssets ? 'primary' : undefined"
-                :title="showDependantAssets ? 'Hide dependant assets' : 'Show dependant assets'"
-                @click="toggleDependantAssetVisibility"
               />
               <AssetFilterControl
                 v-model="tagFilterPanelOpen"

@@ -11,6 +11,7 @@ export type AssetDependencySubset = {
 }
 
 type ProjectAssetLike = Pick<ProjectAsset, 'id' | 'type' | 'extension' | 'description' | 'isEditorOnly'>
+type DependantVisibilityAssetLike = Pick<ProjectAsset, 'assetRole' | 'bundleRole' | 'bundlePrimaryAssetId'>
 
 type RuntimeExportFilterOptions = {
   assetId?: string | null | undefined
@@ -213,6 +214,21 @@ export function isEditorConfigAsset(asset: ProjectAssetLike | null | undefined):
 
 export function shouldAssetDefaultToEditorOnly(asset: ProjectAssetLike | null | undefined): boolean {
   return isEditorConfigAsset(asset)
+}
+
+export function shouldHideDependantAssetInEditor(
+  asset: DependantVisibilityAssetLike | null | undefined,
+): boolean {
+  if (!asset) {
+    return false
+  }
+  if (asset.assetRole === 'dependant') {
+    return true
+  }
+  if (asset.bundleRole === 'dependency') {
+    return true
+  }
+  return typeof asset.bundlePrimaryAssetId === 'string' && asset.bundlePrimaryAssetId.trim().length > 0
 }
 
 function shouldRetainConfigAssetForRuntimeExport(

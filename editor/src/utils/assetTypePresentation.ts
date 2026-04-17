@@ -16,7 +16,7 @@ export interface AssetTypePresentation {
 type AssetTypePresentationSource = Pick<ProjectAsset, 'type'>
   & Partial<Pick<ProjectAsset, 'name' | 'downloadUrl' | 'id' | 'extension'>>
 
-type PresetAssetKind = 'wall' | 'floor' | 'road' | 'landform' | 'lod'
+export type PresetAssetKind = 'wall' | 'floor' | 'road' | 'landform' | 'lod'
 
 const ASSET_TYPE_PRESENTATIONS: Record<ProjectAsset['type'], AssetTypePresentation> = {
   model: {
@@ -149,27 +149,32 @@ function normalizeAssetExtension(asset: AssetTypePresentationSource): string {
   return getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id || '') ?? ''
 }
 
-function resolvePresetPresentation(asset: AssetTypePresentationSource): AssetTypePresentation | null {
+export function resolvePresetAssetKind(asset: AssetTypePresentationSource): PresetAssetKind | null {
   const extension = normalizeAssetExtension(asset)
   const filename = asset.name || asset.downloadUrl || asset.id || ''
 
   if (extension === 'wall' || isWallPresetFilename(filename)) {
-    return PRESET_TYPE_PRESENTATIONS.wall
+    return 'wall'
   }
   if (extension === 'floor' || isFloorPresetFilename(filename)) {
-    return PRESET_TYPE_PRESENTATIONS.floor
+    return 'floor'
   }
   if (extension === 'road' || isRoadPresetFilename(filename)) {
-    return PRESET_TYPE_PRESENTATIONS.road
+    return 'road'
   }
   if (extension === 'landform' || isLandformPresetFilename(filename)) {
-    return PRESET_TYPE_PRESENTATIONS.landform
+    return 'landform'
   }
   if (extension === 'lod' || isLodPresetFilename(filename)) {
-    return PRESET_TYPE_PRESENTATIONS.lod
+    return 'lod'
   }
 
   return null
+}
+
+function resolvePresetPresentation(asset: AssetTypePresentationSource): AssetTypePresentation | null {
+  const presetKind = resolvePresetAssetKind(asset)
+  return presetKind ? PRESET_TYPE_PRESENTATIONS[presetKind] : null
 }
 
 export function getAssetTypePresentation(asset: AssetTypePresentationSource): AssetTypePresentation {
