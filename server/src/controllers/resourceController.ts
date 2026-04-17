@@ -1212,7 +1212,8 @@ function mapAssetDocument(
   const originalFilename = sanitizeString(asset.originalFilename)
   const mimeType = sanitizeString(asset.mimeType)
   const contentHash = sanitizeString((asset as AssetDocument).contentHash)
-  const contentHashAlgorithm = sanitizeString((asset as AssetDocument).contentHashAlgorithm)
+  const rawContentHashAlgorithm = sanitizeString((asset as AssetDocument).contentHashAlgorithm)
+  const contentHashAlgorithm = rawContentHashAlgorithm === ASSET_BUNDLE_HASH_ALGORITHM ? rawContentHashAlgorithm : null
   const sourceLocalAssetId = sanitizeString((asset as AssetDocument).sourceLocalAssetId)
   const assetRole = (asset as AssetDocument).assetRole ?? 'master'
   const bundleRole = (asset as AssetDocument).bundleRole ?? null
