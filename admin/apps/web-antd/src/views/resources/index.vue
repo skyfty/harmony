@@ -20,6 +20,7 @@ import {
   listResourceSeriesApi,
   listResourceTagsApi,
   moveResourceCategoryTreeItemApi,
+  refreshAssetManifestApi,
   restoreResourceAssetApi,
   updateResourceAssetApi,
   updateResourceCategoryTreeItemApi,
@@ -42,6 +43,7 @@ import {
   PlusOutlined,
   ArrowRightOutlined,
   DownOutlined,
+  ReloadOutlined,
   RightOutlined,
 } from '@ant-design/icons-vue';
 import { Checkbox } from 'ant-design-vue';
@@ -125,6 +127,7 @@ const dragPayload = ref<null | { id: string; kind: 'asset' | 'directory' }>(null
 const directoryKeyword = ref('');
 const collapsedDirectoryIds = reactive(new Set<string>());
 const showDeletedOnly = ref(false);
+const refreshingManifest = ref(false);
 const assetSortField = ref<'categoryPathString' | 'name' | 'size' | 'type' | 'updatedAt'>('name');
 const assetSortOrder = ref<'ascend' | 'descend'>('ascend');
 
@@ -307,6 +310,19 @@ function toggleDirectoryExpanded(directoryId: string) {
     return;
   }
   collapsedDirectoryIds.add(directoryId);
+}
+
+async function handleRefreshManifest() {
+  if (refreshingManifest.value) {
+    return;
+  }
+  refreshingManifest.value = true;
+  try {
+    await refreshAssetManifestApi();
+    message.success('manifest 已重新生成');
+  } finally {
+    refreshingManifest.value = false;
+  }
 }
 
 const filteredItems = computed(() => {
@@ -1086,6 +1102,10 @@ onMounted(async () => {
             <Button v-access:code="'resource:write'" type="primary" @click="openCreateModal" :disabled="showDeletedOnly">
               <PlusOutlined />
               新增资产
+            </Button>
+            <Button v-access:code="'resource:write'" :loading="refreshingManifest" @click="handleRefreshManifest">
+              <ReloadOutlined />
+              刷新缓存
             </Button>
             <Button v-access:code="'resource:write'" @click="openBatchEditModal" :disabled="selectedAssetsCount === 0 || showDeletedOnly">
               批量编辑

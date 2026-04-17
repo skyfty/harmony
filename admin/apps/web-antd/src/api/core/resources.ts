@@ -332,3 +332,7 @@ export async function deleteResourceSeriesApi(id: string) {
 export function buildResourceDownloadUrl(id: string) {
   return `/api/admin/resources/assets/${id}/download`;
 }
+
+export async function refreshAssetManifestApi() {
+  return requestClient.post('/admin/resources/assets/manifest/refresh');
+}
