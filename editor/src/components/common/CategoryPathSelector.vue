@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ResourceCategory } from '@/types/resource-category'
 import { createResourceCategory } from '@/api/resourceAssets'
 import { buildCategoryPathString, isAssetTypeName, isRootCategoryName, stripAssetTypeSegments } from '@/utils/categoryPath'
@@ -33,10 +33,36 @@ const initialOptions = ref<CategoryOption[]>([])
 const selectedId = ref<string | null>(props.modelValue ?? null)
 const menuOpen = ref(false)
 const navigationStack = ref<ResourceCategory[]>([])
+const activatorRef = ref<HTMLElement | null>(null)
+const menuWidth = ref<number | null>(null)
+
+let resizeObserver: ResizeObserver | null = null
+
+function syncMenuWidth(): void {
+  const width = activatorRef.value?.getBoundingClientRect().width ?? 0
+  menuWidth.value = width > 0 ? Math.round(width) : null
+}
+
+onMounted(() => {
+  syncMenuWidth()
+  if (typeof ResizeObserver === 'undefined' || !activatorRef.value) {
+    return
+  }
+  resizeObserver = new ResizeObserver(() => {
+    syncMenuWidth()
+  })
+  resizeObserver.observe(activatorRef.value)
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 
 function openMenu(): void {
   if (menuOpen.value) return
   menuOpen.value = true
+  syncMenuWidth()
   resetNavigationToSelected()
 }
 
@@ -308,11 +334,7 @@ function selectCategoryById(id: string | null, options?: { keepOpen?: boolean })
 }
 
 function handleTreeItemClick(category: ResourceCategory): void {
-  const canExpand = Array.isArray(category.children) && category.children.length > 0
-  selectCategoryById(category.id, { keepOpen: canExpand })
-  if (canExpand) {
-    enterNode(category)
-  }
+  selectCategoryById(category.id)
 }
 
 function handleSearchSelect(option: CategoryOption): void {
@@ -376,32 +398,33 @@ function handleClear(): void {
       transition="scale-transition"
       location="bottom start"
       content-class="category-menu__overlay"
-      max-width="420"
-      :offset="[-4, 4]"
+      :width="menuWidth ?? undefined"
+      :offset="[0, 0]"
       @update:model-value="handleMenuChange"
       @click:outside="handleMenuOutsideClick"
     >
       <template #activator="{ props: menuProps }">
-        <v-text-field
-          v-bind="menuProps"
-          :model-value="selectedLabel"
-          :label="label ?? '资源分类'"
-          :placeholder="placeholder ?? '选择分类'"
-          :hint="hint"
-                variant="underlined"
-          :persistent-hint="Boolean(hint)"
-          density="compact"
-          :disabled="disabled"
-          :loading="loading"
-          readonly
-          clearable
-          class="category-selector__field"
-          @click:clear="handleClear"
-        >
-          <template #append-inner>
-            <v-icon size="18">mdi-menu-down</v-icon>
-          </template>
-        </v-text-field>
+        <div ref="activatorRef" class="category-selector__activator" v-bind="menuProps">
+          <v-text-field
+            :model-value="selectedLabel"
+            :label="label ?? '资源分类'"
+            :placeholder="placeholder ?? '选择分类'"
+            :hint="hint"
+            variant="underlined"
+            :persistent-hint="Boolean(hint)"
+            density="compact"
+            :disabled="disabled"
+            :loading="loading"
+            readonly
+            clearable
+            class="category-selector__field"
+            @click:clear="handleClear"
+          >
+            <template #append-inner>
+              <v-icon size="18">mdi-menu-down</v-icon>
+            </template>
+          </v-text-field>
+        </div>
       </template>
       <v-sheet class="category-menu" elevation="6" rounded="lg">
         <v-progress-linear v-if="loading" indeterminate color="primary" height="2" />
@@ -479,7 +502,12 @@ function handleClear(): void {
 
 <style scoped>
 .category-selector {
+  width: 100%;
   min-width: 220px;
+}
+
+.category-selector__activator {
+  width: 100%;
 }
 
 .category-selector__field :deep(.v-field) {
@@ -492,7 +520,9 @@ function handleClear(): void {
 }
 
 .category-menu {
-  width: 340px;
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
   max-height: 420px;
   display: flex;
   flex-direction: column;
@@ -536,11 +566,16 @@ function handleClear(): void {
 }
 
 .category-menu__append {
-  color: rgba(0, 0, 0, 0.54);
+  color: rgba(255, 255, 255, 0.9);
+  background-color: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 2px;
+  transition: color 0.15s ease, background-color 0.15s ease;
 }
 
 .category-menu__append:hover {
-  color: rgba(0, 0, 0, 0.87);
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.3);
 }
 
 .category-menu__empty {

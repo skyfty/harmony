@@ -41,6 +41,48 @@ const scatterPresetOptions = Object.entries(terrainScatterPresets).map(([value, 
   icon: preset.icon,
 }))
 
+type PresetAssetKind = 'wall' | 'floor' | 'road' | 'landform' | 'lod'
+
+const DEFAULT_CATEGORY_PATHS: Record<PresetAssetKind, string[][]> = {
+  wall: [
+    ['预制', '墙'],
+    ['Prefabs', 'Wall'],
+    ['Prefab', 'Wall'],
+    ['Wall Presets', 'Wall'],
+  ],
+  floor: [
+    ['预制', '平台'],
+    ['Prefabs', 'Floor'],
+    ['Prefab', 'Floor'],
+    ['Floor Presets', 'Floor'],
+  ],
+  road: [
+    ['预制', '道路'],
+    ['Prefabs', 'Road'],
+    ['Prefab', 'Road'],
+    ['Road Presets', 'Road'],
+  ],
+  landform: [
+    ['预制', '地形'],
+    ['Prefabs', 'Landform'],
+    ['Prefab', 'Landform'],
+  ],
+  lod: [
+    ['预制', '撒件'],
+    ['Prefabs', 'LOD'],
+    ['Prefab', 'LOD'],
+    ['LOD Presets', 'LOD'],
+  ],
+}
+
+const PRESET_KIND_LABELS: Record<string, PresetAssetKind> = {
+  wall: 'wall',
+  floor: 'floor',
+  road: 'road',
+  landform: 'landform',
+  lod: 'lod',
+}
+
 const props = defineProps<{
   modelValue: boolean
   assets: ProjectAsset[]
@@ -73,6 +115,7 @@ export type TagOption = {
 type UploadAssetEntry = {
   assetId: string
   asset: ProjectAsset
+  initialCategoryId: string | null
   name: string
   description: string
   categoryId: string | null
@@ -194,21 +237,6 @@ const tagAccessHint = computed(() => {
   }
   return '当前账号缺少 resource:read。标签仍可本地编辑，但不会加载服务器标签列表。'
 })
-const categoryAccessHint = computed(() => {
-  if (canUseRemoteCategorySelector.value) {
-    return '上传到服务器时必须选择后台已维护的资源目录。上传弹窗中不再创建新目录。'
-  }
-  if (!authStore.isAuthenticated) {
-    return 'Category selector is unavailable while logged out. You can still edit Category Path manually for local metadata.'
-  }
-  if (!canReadResource.value) {
-    return '当前账号缺少 resource:read。可继续使用 Category Path 手动输入并保存到本地元数据。'
-  }
-  if (resourceCategoriesError.value) {
-    return `Category list unavailable: ${resourceCategoriesError.value}`
-  }
-  return ''
-})
 const canUploadCurrent = computed(() => {
   if (!authStore.canResourceWrite) return false
   const entry = activeEntry.value
@@ -261,6 +289,107 @@ function normalizeHexColor(value: string | null | undefined): string | null {
   return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
 }
 
+function getPresetAssetKind(asset: ProjectAsset): PresetAssetKind | null {
+  const label = getAssetTypePresentation(asset).label.trim().toLowerCase()
+  return PRESET_KIND_LABELS[label] ?? null
+}
+
+function isScatterPresetEditable(asset: ProjectAsset): boolean {
+  return getPresetAssetKind(asset) === 'lod'
+}
+
+function normalizeCategorySegments(segments: string[]): string[] {
+  return segments
+    .map((segment) => (typeof segment === 'string' ? segment.trim().toLowerCase().replace(/[\s_-]+/g, '') : ''))
+    .filter((segment) => segment.length > 0)
+}
+
+function pathMatchesCandidate(pathSegments: string[], candidateSegments: string[]): boolean {
+  const normalizedPath = normalizeCategorySegments(pathSegments)
+  const normalizedCandidate = normalizeCategorySegments(candidateSegments)
+  if (!normalizedPath.length || !normalizedCandidate.length) {
+    return false
+  }
+  if (normalizedPath.length < normalizedCandidate.length) {
+    return false
+  }
+  const offset = normalizedPath.length - normalizedCandidate.length
+  for (let index = 0; index < normalizedCandidate.length; index += 1) {
+    if (normalizedPath[offset + index] !== normalizedCandidate[index]) {
+      return false
+    }
+  }
+  return true
+}
+
+function findCategoryByPathSegments(targetSegments: string[]): ResourceCategory | null {
+  const normalizedTarget = normalizeCategorySegments(targetSegments)
+  if (!normalizedTarget.length) {
+    return null
+  }
+
+  const traverse = (categories: ResourceCategory[]): ResourceCategory | null => {
+    for (const category of categories) {
+      if (!category) {
+        continue
+      }
+      const rawSegments = Array.isArray(category.path) && category.path.length
+        ? category.path.map((item) => item?.name ?? '')
+        : [category.name]
+      if (pathMatchesCandidate(rawSegments, normalizedTarget)) {
+        return category
+      }
+      if (Array.isArray(category.children) && category.children.length) {
+        const matched = traverse(category.children)
+        if (matched) {
+          return matched
+        }
+      }
+    }
+    return null
+  }
+
+  return traverse(resourceCategories.value ?? [])
+}
+
+function resolveDefaultCategoryIdForAsset(asset: ProjectAsset): string | null {
+  const kind = getPresetAssetKind(asset)
+  if (!kind) {
+    return null
+  }
+  for (const candidateSegments of DEFAULT_CATEGORY_PATHS[kind]) {
+    const matched = findCategoryByPathSegments(candidateSegments)
+    if (matched) {
+      return matched.id
+    }
+  }
+  return null
+}
+
+function applyDefaultCategoryToEntry(entry: UploadAssetEntry): void {
+  const defaultCategoryId = resolveDefaultCategoryIdForAsset(entry.asset)
+  if (!defaultCategoryId) {
+    return
+  }
+  if (entry.categoryId !== entry.initialCategoryId && entry.categoryId !== defaultCategoryId) {
+    return
+  }
+  if (entry.categoryId === defaultCategoryId) {
+    updateEntryCategoryLabel(entry)
+    return
+  }
+  entry.categoryId = defaultCategoryId
+  updateEntryCategoryLabel(entry)
+}
+
+function applyDefaultCategoriesToEntries(): void {
+  uploadEntries.value.forEach((entry) => {
+    if (entry) {
+      applyDefaultCategoryToEntry(entry)
+    }
+  })
+}
+
 function formatHexInputDisplay(value: string | null | undefined): string {
   const normalized = normalizeHexColor(value)
   return normalized ? normalized.toUpperCase() : ''
@@ -270,6 +399,10 @@ function handleEntryScatterPresetChange(
   entry: UploadAssetEntry,
   value: TerrainScatterCategory | string | null,
 ): void {
+  if (!isScatterPresetEditable(entry.asset)) {
+    entry.terrainScatterPreset = null
+    return
+  }
   const normalized = typeof value === 'string' && value.trim().length ? (value as TerrainScatterCategory) : null
   entry.terrainScatterPreset = normalized
   markEntryDirty(entry)
@@ -284,9 +417,6 @@ function handleEntryDescriptionChange(entry: UploadAssetEntry, value: string | n
   entry.description = (value ?? '').toString()
   markEntryDirty(entry)
 }
-
-
-
 function handleEntryTagsChange(entry: UploadAssetEntry, value: string[] | string | null): void {
   if (Array.isArray(value)) {
     entry.tagValues = value.map((item) => (typeof item === 'string' ? item.trim() : '')).filter((item) => item.length > 0)
@@ -294,16 +424,6 @@ function handleEntryTagsChange(entry: UploadAssetEntry, value: string[] | string
     entry.tagValues = value.trim().length ? [value] : []
   } else {
     entry.tagValues = []
-  }
-  markEntryDirty(entry)
-}
-
-function handleEntryCategoryPathLabelChange(entry: UploadAssetEntry, value: string | null): void {
-  entry.categoryPathLabel = (value ?? '').toString()
-  const matchedCategory = findCategoryById(entry.categoryId)
-  const matchedLabel = buildCategoryLabel(matchedCategory)
-  if (!matchedLabel || matchedLabel !== entry.categoryPathLabel) {
-    entry.categoryId = null
   }
   markEntryDirty(entry)
 }
@@ -449,6 +569,7 @@ function markEntryDirty(entry: UploadAssetEntry | null): void {
 function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
   const normalizedColor = normalizeHexColor(asset.color ?? null)
   const initialCategoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
+  const defaultCategoryId = resolveDefaultCategoryIdForAsset(asset)
   const initialSegments = Array.isArray(asset.categoryPath)
     ? asset.categoryPath
         .map((item) => (item?.name ?? '').trim())
@@ -476,10 +597,11 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
   return {
     assetId: asset.id,
     asset,
+    initialCategoryId,
     name: asset.name,
     description: asset.description ?? '',
-    categoryId: initialCategoryId,
-    categoryPathLabel: initialCategoryLabel ?? '',
+    categoryId: defaultCategoryId ?? initialCategoryId,
+    categoryPathLabel: defaultCategoryId ? buildCategoryLabel(findCategoryById(defaultCategoryId)) : (initialCategoryLabel ?? ''),
     color: normalizedColor ?? '',
     colorHexInput: formatHexInputDisplay(normalizedColor),
     dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
@@ -499,7 +621,7 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
     aiError: null,
     aiLoading: false,
     hasPendingChanges: false,
-    terrainScatterPreset: asset.terrainScatterPreset ?? null,
+    terrainScatterPreset: isScatterPresetEditable(asset) ? asset.terrainScatterPreset ?? null : null,
     localSaveStatus: 'idle',
     localSaveError: null,
     uploadedServerAsset: null,
@@ -866,12 +988,13 @@ async function buildPreparedEntryMetadata(
     sizeCategory,
     tags,
     tagIds,
-    terrainScatterPreset: entry.terrainScatterPreset ?? null,
+    terrainScatterPreset: isScatterPresetEditable(asset) ? entry.terrainScatterPreset ?? null : null,
   }
 }
 
 function syncEntryFromAsset(entry: UploadAssetEntry, asset: ProjectAsset): void {
   entry.asset = asset
+  entry.initialCategoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
   entry.name = asset.name
   entry.description = asset.description ?? ''
   entry.categoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
@@ -883,7 +1006,7 @@ function syncEntryFromAsset(entry: UploadAssetEntry, asset: ProjectAsset): void 
   entry.dimensionHeight = typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null
   entry.imageWidth = typeof asset.imageWidth === 'number' ? asset.imageWidth : null
   entry.imageHeight = typeof asset.imageHeight === 'number' ? asset.imageHeight : null
-  entry.terrainScatterPreset = asset.terrainScatterPreset ?? null
+  entry.terrainScatterPreset = isScatterPresetEditable(asset) ? asset.terrainScatterPreset ?? null : null
 }
 
 async function saveEntryLocally(entry: UploadAssetEntry): Promise<void> {
@@ -1088,6 +1211,7 @@ async function loadResourceCategories(options: { force?: boolean } = {}) {
     const categories = await fetchResourceCategories()
     resourceCategories.value = Array.isArray(categories) ? categories : []
     resourceCategoriesLoaded.value = true
+    applyDefaultCategoriesToEntries()
   } catch (error) {
     resourceCategoriesError.value = (error as Error).message ?? 'Failed to load categories'
   } finally {
@@ -1639,7 +1763,7 @@ function keepLocalReferencesAfterUpload(): void {
                       />
                     </div>
 
-                    <div class="upload-entry__scatter-row">
+                    <div v-if="isScatterPresetEditable(entry.asset)" class="upload-entry__scatter-row">
                       <v-select
                         :model-value="entry.terrainScatterPreset"
                         :items="scatterPresetOptions"
