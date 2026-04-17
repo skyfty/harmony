@@ -2,16 +2,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { ProjectDirectory } from '@/types/project-directory'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
-import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
+import { getAssetTypePresentation, resolvePresetAssetKind } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 import { shouldHideDependantAssetInEditor } from '@/utils/assetDependencySubset'
 import { isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
+
+const CONFIG_PRESET_EXTENSIONS = new Set(['wall', 'floor', 'road', 'landform', 'lod'])
 
 const props = withDefaults(
   defineProps<{
@@ -52,11 +52,7 @@ const {
 } = useAudioAssetPreview()
 
 const selectedAssetId = ref(props.assetId ?? '')
-const remoteAssets = ref<ProjectAsset[]>([])
-const remoteLoaded = ref(false)
-const loading = ref(false)
 const selectingAssetId = ref<string | null>(null)
-const errorMessage = ref<string | null>(null)
 const searchTerm = ref('')
 const showLocalSources = ref(true)
 const showRemoteSources = ref(true)
@@ -83,16 +79,6 @@ function assetDownloadError(asset: ProjectAsset): string | null {
   return assetCacheStore.getError(asset.id)
 }
 
-function isServerProviderAsset(asset: ProjectAsset): boolean {
-  if (!asset?.id) {
-    return false
-  }
-  if (typeof asset.fileKey === 'string' && asset.fileKey.trim().length > 0) {
-    return true
-  }
-  return remoteAssets.value.some((candidate) => candidate.id === asset.id)
-}
-
 function flattenCatalog(catalog: Record<string, ProjectAsset[]> | undefined): ProjectAsset[] {
   if (!catalog) {
     return []
@@ -111,27 +97,83 @@ function assetThumbnailPlaceholderStyle(asset: ProjectAsset): { backgroundColor?
   return { backgroundColor: asset.previewColor || '#455A64' }
 }
 
-function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
-  const bucket: ProjectAsset[] = []
-  const visit = (list: ProjectDirectory[]) => {
-    list.forEach((dir) => {
-      if (dir.assets?.length) {
-        bucket.push(...dir.assets)
-      }
-      if (dir.children?.length) {
-        visit(dir.children)
-      }
-    })
+const sceneAssets = computed(() => flattenCatalog(assetCatalog.value))
+
+const extensionFilters = computed(() => {
+  const allowedExtensions = props.extensions ?? []
+  return new Set(
+    allowedExtensions
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0),
+  )
+})
+
+const requestedPresetKinds = computed(() => {
+  if (!extensionFilters.value.size) {
+    return new Set<string>()
   }
-  visit(directories)
-  return bucket
+
+  return new Set(Array.from(extensionFilters.value).filter((extension) => CONFIG_PRESET_EXTENSIONS.has(extension)))
+})
+
+function resolveRequestedPresetKind(asset: ProjectAsset): string | null {
+  const presetKind = resolvePresetAssetKind(asset)
+  if (!presetKind || !requestedPresetKinds.value.size) {
+    return null
+  }
+  return requestedPresetKinds.value.has(presetKind) ? presetKind : null
 }
 
-const sceneAssets = computed(() => flattenCatalog(assetCatalog.value))
+function matchesRequestedType(asset: ProjectAsset): boolean {
+  const typeFilterRaw = props.assetType?.trim() ?? ''
+  const typeFilters = typeFilterRaw.length
+    ? typeFilterRaw
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+    : []
+
+  if (!typeFilters.length) {
+    return true
+  }
+
+  if (typeFilters.includes(asset.type)) {
+    return true
+  }
+
+  const requestedPresetKind = resolveRequestedPresetKind(asset)
+  return Boolean(requestedPresetKind && typeFilters.includes('prefab'))
+}
+
+function matchesRequestedExtension(asset: ProjectAsset): boolean {
+  if (!extensionFilters.value.size) {
+    return true
+  }
+
+  const assetExtension = asset.extension?.trim().toLowerCase() ?? ''
+  if (assetExtension && extensionFilters.value.has(assetExtension)) {
+    return true
+  }
+
+  return Boolean(resolveRequestedPresetKind(asset))
+}
+
+function isPackageBackedConfigPreset(asset: ProjectAsset): boolean {
+  if (!resolveRequestedPresetKind(asset)) {
+    return false
+  }
+  if (asset.source?.type === 'package') {
+    return true
+  }
+  if (typeof asset.fileKey === 'string' && asset.fileKey.trim().length > 0) {
+    return true
+  }
+  return false
+}
 
 const allAssets = computed(() => {
   const provided = props.assets?.length ? props.assets : []
-  const combined = [...provided, ...sceneAssets.value, ...remoteAssets.value]
+  const combined = [...provided, ...sceneAssets.value]
   const unique = new Map<string, ProjectAsset>()
   combined.forEach((asset) => {
     if (!asset || !asset.id) {
@@ -144,23 +186,7 @@ const allAssets = computed(() => {
   return Array.from(unique.values())
 })
 
-const extensionFilters = computed(() => {
-  const allowedExtensions = props.extensions ?? []
-  return new Set(
-    allowedExtensions
-      .map((entry) => entry.trim().toLowerCase())
-      .filter((entry) => entry.length > 0),
-  )
-})
-
 const filteredAssets = computed(() => {
-  const typeFilterRaw = props.assetType?.trim() ?? ''
-  const typeFilters = typeFilterRaw.length
-    ? typeFilterRaw
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0)
-    : []
   const seriesFilter = props.seriesId?.trim() ?? ''
 
   const term = searchTerm.value.trim().toLowerCase()
@@ -179,14 +205,11 @@ const filteredAssets = computed(() => {
     if (!isRemoteSource && !showLocalSources.value) {
       return false
     }
-    if (typeFilters.length && !typeFilters.includes(asset.type)) {
+    if (!matchesRequestedType(asset)) {
       return false
     }
-    if (extensionFilters.value.size) {
-      const assetExtension = asset.extension?.trim().toLowerCase() ?? ''
-      if (!assetExtension || !extensionFilters.value.has(assetExtension)) {
-        return false
-      }
+    if (!matchesRequestedExtension(asset)) {
+      return false
     }
     if (seriesFilter) {
       const assetSeries = asset.seriesId?.trim() ?? ''
@@ -246,32 +269,6 @@ async function scheduleScrollToSelected() {
   emit('layout')
 }
 
-async function loadRemoteAssets() {
-  if (remoteLoaded.value || loading.value) {
-    return
-  }
-  loading.value = true
-  errorMessage.value = null
-  try {
-    const directories = await sceneStore.ensurePackageDirectoriesLoaded(SERVER_ASSET_PROVIDER_ID)
-    if (directories.length) {
-      remoteAssets.value = flattenDirectories(directories)
-    } else {
-      remoteAssets.value = []
-    }
-    remoteLoaded.value = true
-    await scheduleScrollToSelected()
-  } catch (error) {
-    console.warn('Failed to load asset provider manifest', error)
-    errorMessage.value = (error as Error).message ?? 'Unable to load asset list'
-  } finally {
-    loading.value = false
-    if (props.active) {
-      emit('layout')
-    }
-  }
-}
-
 function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
   if (!asset || !asset.id) {
     return asset
@@ -283,7 +280,6 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
       gleaned: asset.gleaned ?? true,
     }
     return sceneStore.ensureSceneAssetRegistered(normalizedAsset, {
-      providerId: isServerProviderAsset(normalizedAsset) ? SERVER_ASSET_PROVIDER_ID : undefined,
       source: normalizedAsset.source ?? { type: 'url' },
       commitOptions: { updateNodes: false },
     })
@@ -295,6 +291,11 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
 
 async function handleAssetClick(asset: ProjectAsset) {
   selectedAssetId.value = asset.id
+
+  if (isPackageBackedConfigPreset(asset)) {
+    emit('update:asset', asset)
+    return
+  }
 
   const mapped = ensureSceneAssetMapping(asset)
   if (!mapped || !mapped.id) {
@@ -433,9 +434,6 @@ watch(
       return
     }
     void scheduleScrollToSelected()
-    if (!props.assets?.length) {
-      void loadRemoteAssets()
-    }
   },
   { immediate: true },
 )
@@ -445,9 +443,6 @@ onMounted(() => {
     return
   }
   void scheduleScrollToSelected()
-  if (!props.assets?.length) {
-    void loadRemoteAssets()
-  }
 })
 
 onBeforeUnmount(() => {
@@ -502,11 +497,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="asset-picker-list__body">
-      <div v-if="loading" class="asset-picker-list__loading">
-        <v-progress-circular indeterminate color="primary" />
-      </div>
-
-      <div v-else ref="gridRef" class="asset-picker-list__grid" :style="gridStyle">
+      <div ref="gridRef" class="asset-picker-list__grid" :style="gridStyle">
         <v-tooltip open-delay="150" location="top">
           <template #activator="{ props }">
               <div

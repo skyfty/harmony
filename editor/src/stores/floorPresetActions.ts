@@ -57,6 +57,17 @@ export type FloorPresetActionsDeps = {
   DEFAULT_SCENE_MATERIAL_TYPE: string
 }
 
+function isFloorPresetAsset(asset: ProjectAsset | null | undefined): asset is ProjectAsset {
+  if (!asset) {
+    return false
+  }
+  const extension = typeof asset.extension === 'string' ? asset.extension.trim().toLowerCase() : ''
+  if (extension === 'floor') {
+    return true
+  }
+  return isFloorPresetFilename(asset.description ?? asset.name ?? asset.downloadUrl ?? asset.id ?? null)
+}
+
 function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   return raw.length ? raw : null
@@ -535,10 +546,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       if (!asset) {
         throw new Error('地板预设资源不存在')
       }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非地板预设')
-      }
-      if (!isFloorPresetFilename(asset.description ?? null)) {
+      if (!isFloorPresetAsset(asset)) {
         throw new Error('指定资源并非 .floor 地板预设')
       }
 

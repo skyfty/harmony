@@ -65,6 +65,17 @@ export type RoadPresetActionsDeps = {
   extractMaterialProps: (material: SceneNodeMaterial | null | undefined) => any
 }
 
+function isRoadPresetAsset(asset: ProjectAsset | null | undefined): asset is ProjectAsset {
+  if (!asset) {
+    return false
+  }
+  const extension = typeof asset.extension === 'string' ? asset.extension.trim().toLowerCase() : ''
+  if (extension === 'road') {
+    return true
+  }
+  return isRoadPresetFilename(asset.description ?? asset.name ?? asset.downloadUrl ?? asset.id ?? null)
+}
+
 function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   return raw.length ? raw : null
@@ -507,10 +518,7 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
       if (!asset) {
         throw new Error('道路预设资源不存在')
       }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非道路预设')
-      }
-      if (!isRoadPresetFilename(asset.description ?? null)) {
+      if (!isRoadPresetAsset(asset)) {
         throw new Error('指定资源并非 .road 道路预设')
       }
 

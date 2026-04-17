@@ -112,6 +112,17 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
   materialPatches: {},
 }
 
+function isWallPresetAsset(asset: ProjectAsset | null | undefined): asset is ProjectAsset {
+  if (!asset) {
+    return false
+  }
+  const extension = typeof asset.extension === 'string' ? asset.extension.trim().toLowerCase() : ''
+  if (extension === 'wall') {
+    return true
+  }
+  return isWallPresetFilename(asset.description ?? asset.name ?? asset.downloadUrl ?? asset.id ?? null)
+}
+
 export const BUILTIN_WALL_PRESET_ASSETS: ProjectAsset[] = [
   {
     id: BUILTIN_AIR_WALL_PRESET_ASSET_ID,
@@ -933,10 +944,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       if (!asset) {
         throw new Error('墙体预设资源不存在')
       }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非墙体预设')
-      }
-      if (!isWallPresetFilename(asset.description ?? null)) {
+      if (!isWallPresetAsset(asset)) {
         throw new Error('指定资源并非 .wall 墙体预设')
       }
 

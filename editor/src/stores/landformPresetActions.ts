@@ -52,6 +52,17 @@ export type LandformPresetActionsDeps = {
   DEFAULT_SCENE_MATERIAL_TYPE: string
 }
 
+function isLandformPresetAsset(asset: ProjectAsset | null | undefined): asset is ProjectAsset {
+  if (!asset) {
+    return false
+  }
+  const extension = typeof asset.extension === 'string' ? asset.extension.trim().toLowerCase() : ''
+  if (extension === 'landform') {
+    return true
+  }
+  return isLandformPresetFilename(asset.description ?? asset.name ?? asset.downloadUrl ?? asset.id ?? null)
+}
+
 function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   return raw.length ? raw : null
@@ -434,10 +445,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
       if (!asset) {
         throw new Error('地貌预设资源不存在')
       }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非地貌预设')
-      }
-      if (!isLandformPresetFilename(asset.description ?? null)) {
+      if (!isLandformPresetAsset(asset)) {
         throw new Error('指定资源并非 .landform 地貌预设')
       }
 

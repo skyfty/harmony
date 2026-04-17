@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { type TerrainPaintBlendMode } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
+import type { ProjectDirectory } from '@/types/project-directory'
 import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
+import { useSceneStore } from '@/stores/sceneStore'
+import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 
 const BRUSH_RADIUS_MIN = 0.1
@@ -50,6 +53,10 @@ const emit = defineEmits<{
   (event: 'update:settings', value: TerrainPaintBrushSettings): void
 }>()
 
+const sceneStore = useSceneStore()
+const terrainPickerRemoteAssets = ref<ProjectAsset[]>([])
+const terrainPickerRemoteLoaded = ref(false)
+
 const brushRadiusModel = computed({
   get: () => props.brushRadius,
   set: (value: number) => emit('update:brushRadius', value),
@@ -75,6 +82,31 @@ const rotationInput = ref(formatNumericValue(props.settings.rotationDeg, ROTATIO
 const featherInput = ref(formatNumericValue(props.settings.feather, FEATHER_PRECISION))
 
 const selectedAssetId = computed(() => props.asset?.id ?? '')
+
+function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
+  const bucket: ProjectAsset[] = []
+  const visit = (list: ProjectDirectory[]) => {
+    list.forEach((dir) => {
+      if (dir.assets?.length) {
+        bucket.push(...dir.assets)
+      }
+      if (dir.children?.length) {
+        visit(dir.children)
+      }
+    })
+  }
+  visit(directories)
+  return bucket
+}
+
+async function loadRemoteAssets(): Promise<void> {
+  if (terrainPickerRemoteLoaded.value) {
+    return
+  }
+  const directories = await sceneStore.ensurePackageDirectoriesLoaded(SERVER_ASSET_PROVIDER_ID)
+  terrainPickerRemoteAssets.value = flattenDirectories(directories)
+  terrainPickerRemoteLoaded.value = true
+}
 
 watch(
   () => props.brushRadius,
@@ -117,6 +149,10 @@ watch(
     featherInput.value = formatNumericValue(value, FEATHER_PRECISION)
   },
 )
+
+onMounted(() => {
+  void loadRemoteAssets()
+})
 
 function clampValue(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -366,6 +402,7 @@ function commitFeatherInput() {
         :active="true"
         :asset-id="selectedAssetId"
         asset-type="image,texture"
+        :assets="terrainPickerRemoteAssets"
         :show-search="true"
         :thumbnail-size="52"
         :disabled="!props.hasGround"
