@@ -32,6 +32,7 @@ import {
   type ResourceSeriesItem,
   type ResourceTagItem,
 } from '#/api';
+import { formatFileSize } from '#/utils/format';
 
 import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Table, Upload, Tooltip, Tag } from 'ant-design-vue';
 import {
@@ -1199,7 +1200,7 @@ onMounted(async () => {
         </template>
 
         <template v-else-if="column.key === 'size'">
-          {{ record.size }}
+          {{ formatFileSize(record.size) }}
         </template>
 
         <template v-else-if="column.key === 'updatedAt'">
