@@ -1,5 +1,5 @@
 import { DEFAULT_ASSET_TYPE, isAssetType } from '@schema'
-import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole } from '@schema'
+import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole, AssetPersistedRole } from '@schema'
 import { resolveServerAssetDownloadUrl } from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
@@ -37,6 +37,7 @@ export interface ServerAssetDto {
   contentHash?: string | null
   contentHashAlgorithm?: AssetBundleHashAlgorithm | null
   sourceLocalAssetId?: string | null
+  assetRole?: AssetPersistedRole | null
   bundleRole?: AssetBundlePersistedRole | null
   bundlePrimaryAssetId?: string | null
   metadata?: ProjectAssetMetadata | null
@@ -144,6 +145,7 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto, fallbackAsse
     contentHash: typeof asset.contentHash === 'string' ? asset.contentHash : undefined,
     contentHashAlgorithm: typeof asset.contentHashAlgorithm === 'string' ? asset.contentHashAlgorithm : undefined,
     sourceLocalAssetId: sourceLocalAssetId || undefined,
+    assetRole: asset.assetRole === 'master' || asset.assetRole === 'dependant' ? asset.assetRole : 'master',
     bundleRole: typeof asset.bundleRole === 'string' ? asset.bundleRole : undefined,
     bundlePrimaryAssetId: typeof asset.bundlePrimaryAssetId === 'string' ? asset.bundlePrimaryAssetId : undefined,
     metadata: asset.metadata && typeof asset.metadata === 'object' ? { ...asset.metadata } : undefined,

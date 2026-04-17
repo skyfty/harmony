@@ -32,6 +32,7 @@ const assetSchema = new Schema<AssetDocument>(
     contentHash: { type: String, default: null },
     contentHashAlgorithm: { type: String, default: null },
     sourceLocalAssetId: { type: String, default: null },
+    assetRole: { type: String, enum: ['master', 'dependant'], default: 'master' },
     bundleRole: { type: String, enum: ['primary', 'dependency', null], default: null },
     bundlePrimaryAssetId: { type: Schema.Types.ObjectId, ref: 'Asset', default: null },
     description: { type: String },
@@ -55,6 +56,7 @@ assetSchema.index({ tags: 1 })
 assetSchema.index({ seriesId: 1 })
 assetSchema.index({ terrainScatterPreset: 1 })
 assetSchema.index({ contentHash: 1, contentHashAlgorithm: 1 })
+assetSchema.index({ assetRole: 1, createdAt: -1 })
 assetSchema.index({ bundlePrimaryAssetId: 1, bundleRole: 1 })
 
 export const AssetModel = model<AssetDocument>('Asset', assetSchema)

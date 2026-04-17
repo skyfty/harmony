@@ -81,11 +81,15 @@ export {
 export type { TerrainScatterCategory } from './terrain-scatter'
 export type {
   AssetCategory,
+  AssetHashLookupEntry,
+  AssetHashLookupMatch,
+  AssetHashLookupResponse,
   AssetBundleFileEntry,
   AssetBundleFileRole,
   AssetBundleHashAlgorithm,
   AssetBundleManifest,
   AssetBundlePersistedRole,
+  AssetPersistedRole,
   AssetBundlePrimaryAsset,
   AssetBundleUploadResponse,
   AssetCategoryPathItem,

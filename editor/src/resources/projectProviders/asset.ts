@@ -94,6 +94,7 @@ function mapManifestEntry(entry: AssetManifestAsset): ProjectAsset {
     id: entry.id,
     name: entry.name,
     type: entry.type,
+    assetRole: entry.assetRole ?? 'master',
     categoryId: entry.categoryId ?? null,
     categoryPath: entry.categoryPath ?? null,
     categoryPathString: entry.categoryPathString ?? null,

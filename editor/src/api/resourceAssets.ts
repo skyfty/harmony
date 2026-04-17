@@ -1,5 +1,5 @@
 import { buildServerApiUrl } from './serverApiConfig'
-import type { AssetBundleUploadResponse } from '@schema'
+import type { AssetBundleHashAlgorithm, AssetBundleUploadResponse, AssetHashLookupResponse } from '@schema'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
@@ -606,6 +606,11 @@ export interface UploadAssetBundleOptions {
   bundleFile: File
 }
 
+export interface ResourceAssetHashLookupEntry {
+  contentHash: string
+  contentHashAlgorithm?: AssetBundleHashAlgorithm | null
+}
+
 export async function uploadAssetBundleToServer(options: UploadAssetBundleOptions): Promise<AssetBundleUploadResponse> {
   const url = buildServerApiUrl('/resources/asset-bundles')
   const formData = new FormData()
@@ -750,6 +755,45 @@ export async function fetchResourceAsset(assetId: string): Promise<ServerAssetDt
   return payload
 }
 
+export async function lookupResourceAssetsByHash(entries: ResourceAssetHashLookupEntry[]): Promise<AssetHashLookupResponse> {
+  const normalizedEntries = entries
+    .map((entry) => ({
+      contentHash: typeof entry.contentHash === 'string' ? entry.contentHash.trim() : '',
+      contentHashAlgorithm: typeof entry.contentHashAlgorithm === 'string' ? entry.contentHashAlgorithm : null,
+    }))
+    .filter((entry) => entry.contentHash.length > 0)
+
+  if (!normalizedEntries.length) {
+    return { matches: [] }
+  }
+
+  const url = buildServerApiUrl('/resources/assets/hash-lookup')
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ entries: normalizedEntries }),
+  })
+  if (!response.ok) {
+    throw buildError('按哈希查询资源失败', response)
+  }
+  const payload = await parseJsonResponse<AssetHashLookupResponse>(response)
+  if (!payload || !Array.isArray(payload.matches)) {
+    throw new Error('服务器返回的哈希查询结果无效')
+  }
+  return payload
+}
+
 export async function deleteResourceAsset(assetId: string): Promise<void> {
   const trimmed = assetId.trim()
   if (!trimmed.length) {
@@ -780,6 +824,7 @@ export interface UpdateAssetFileOptions {
   file?: File | null
   thumbnailFile?: File | null
   name?: string
+  assetRole?: 'master' | 'dependant'
   description?: string | null
   type?: ProjectAsset['type']
   tagIds?: string[]
@@ -811,6 +856,9 @@ export async function updateAssetOnServer(options: UpdateAssetFileOptions): Prom
   }
   if (typeof options.name === 'string') {
     formData.append('name', options.name)
+  }
+  if (options.assetRole === 'master' || options.assetRole === 'dependant') {
+    formData.append('assetRole', options.assetRole)
   }
   if (options.type) {
     formData.append('type', options.type)

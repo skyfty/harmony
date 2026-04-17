@@ -26,10 +26,12 @@ import {
   createResourceCategory,
   deleteResourceAsset,
   deleteResourceCategory,
+  lookupResourceAssetsByHash,
   updateResourceCategory,
   updateAssetOnServer,
   moveResourceCategory,
 } from '@/api/resourceAssets'
+import { mapServerAssetToProjectAsset, type ServerAssetDto } from '@/api/serverAssetTypes'
 import { deleteProviderCatalog, loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { computeBlobHash, dataUrlToBlob, extractExtension } from '@/utils/blob'
@@ -43,6 +45,7 @@ import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
+import { createServerAssetSource, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -401,8 +404,17 @@ function arraysEqual(a: string[], b: string[]): boolean {
   return true
 }
 
+const showDependantAssets = ref(false)
+
+function toggleDependantAssetVisibility(): void {
+  showDependantAssets.value = !showDependantAssets.value
+}
+
 function isPanelVisibleAsset(asset: ProjectAsset | null | undefined): boolean {
   if (!asset?.id) {
+    return false
+  }
+  if (!showDependantAssets.value && asset.assetRole === 'dependant' && typeof asset.fileKey === 'string' && asset.fileKey.trim().length > 0) {
     return false
   }
   return asset.internal !== true
@@ -2508,6 +2520,42 @@ async function importLocalFile(
     options.onPhase?.('finalize')
     return { asset: existing, isNew: false }
   }
+
+  try {
+    const lookup = await lookupResourceAssetsByHash([{ contentHash: assetId }])
+    const matched = lookup.matches[0]?.asset
+    if (matched) {
+      let serverAssetDto = matched as unknown as ServerAssetDto
+      if (matched.assetRole === 'dependant') {
+        try {
+          serverAssetDto = await updateAssetOnServer({
+            assetId: matched.id,
+            assetRole: 'master',
+            name: fallbackName,
+            type,
+            description: fallbackName,
+          })
+        } catch {
+          serverAssetDto = null as unknown as ServerAssetDto
+        }
+      }
+
+      if (serverAssetDto) {
+        options.onPhase?.('reuse-existing')
+        const remoteAsset = mapServerAssetToProjectAsset(serverAssetDto)
+        const registered = sceneStore.ensureSceneAssetRegistered(remoteAsset, {
+          providerId: SERVER_ASSET_PROVIDER_ID,
+          source: createServerAssetSource(remoteAsset.id),
+          commitOptions: { updateNodes: false },
+        })
+        options.onPhase?.('finalize')
+        return { asset: registered, isNew: false }
+      }
+    }
+  } catch {
+    // Fall back to local import when hash lookup is unavailable.
+  }
+
   const draftAsset: ProjectAsset = {
     id: assetId,
     name: fallbackName,
@@ -3721,6 +3769,14 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 density="compact"
                 :title="isSearchVisible ? 'Close search' : 'Search assets'"
                 @click="handleSearchIconClick"
+              />
+              <v-btn
+                :icon="showDependantAssets ? 'mdi-eye-off-outline' : 'mdi-eye-outline'"
+                variant="text"
+                density="compact"
+                :color="showDependantAssets ? 'primary' : undefined"
+                :title="showDependantAssets ? 'Hide dependant assets' : 'Show dependant assets'"
+                @click="toggleDependantAssetVisibility"
               />
               <AssetFilterControl
                 v-model="tagFilterPanelOpen"

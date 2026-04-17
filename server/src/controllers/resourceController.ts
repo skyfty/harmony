@@ -153,6 +153,7 @@ type AssetManifestAssetDto = {
   id: string
   name: string
   type: AssetType
+  assetRole?: 'master' | 'dependant' | null
   categoryId?: string
   categoryPath?: CategoryPathItemDto[]
   categoryPathString?: string
@@ -213,9 +214,15 @@ type AssetListQuery = {
   includeDescendants?: boolean
 }
 
+type AssetHashLookupQuery = {
+  contentHash: string
+  contentHashAlgorithm: typeof ASSET_BUNDLE_HASH_ALGORITHM
+}
+
 type AssetMutationPayload = {
   name?: string
   type?: string
+  assetRole?: 'master' | 'dependant' | null
   description?: string | null
   tagIds?: string[]
   categoryId?: string | null
@@ -499,6 +506,38 @@ function sanitizeTerrainScatterPreset(value: unknown): TerrainScatterCategory | 
   return TERRAIN_SCATTER_PRESET_SET.has(normalized as TerrainScatterCategory)
     ? (normalized as TerrainScatterCategory)
     : null
+}
+
+function computeFnv1a64CompatHash(bytes: Uint8Array): string {
+  let hash = 14695981039346656037n
+  const prime = 1099511628211n
+  const mask = (1n << 64n) - 1n
+  for (const value of bytes) {
+    hash = hash ^ BigInt(value)
+    hash = (hash * prime) & mask
+  }
+  return `sha256-${hash.toString(16).padStart(16, '0')}`
+}
+
+async function computeUploadedFileContentHash(file: UploadedFile): Promise<string> {
+  const sourcePath = file.filepath
+  if (!sourcePath) {
+    throw new Error('Invalid upload payload')
+  }
+  const bytes = await fs.readFile(sourcePath)
+  return computeFnv1a64CompatHash(new Uint8Array(bytes))
+}
+
+async function discardUploadedTempFile(file: UploadedFile | null | undefined): Promise<void> {
+  const sourcePath = file?.filepath
+  if (!sourcePath) {
+    return
+  }
+  await fs.remove(sourcePath).catch(() => undefined)
+}
+
+function resolvePersistedAssetRole(value: unknown): 'master' | 'dependant' {
+  return value === 'dependant' ? 'dependant' : 'master'
 }
 
 function determineSizeCategory(
@@ -1106,6 +1145,8 @@ function mapAssetDocument(
   const contentHashAlgorithm =
     rawContentHashAlgorithm === ASSET_BUNDLE_HASH_ALGORITHM ? rawContentHashAlgorithm : null
   const sourceLocalAssetId = sanitizeString((asset as AssetDocument).sourceLocalAssetId)
+  const assetRoleRaw = sanitizeString((asset as AssetDocument).assetRole)
+  const assetRole = assetRoleRaw === 'master' || assetRoleRaw === 'dependant' ? assetRoleRaw : 'master'
   const bundleRoleRaw = sanitizeString((asset as AssetDocument).bundleRole)
   const bundleRole = bundleRoleRaw === 'primary' || bundleRoleRaw === 'dependency' ? bundleRoleRaw : null
   const rawBundlePrimaryId = (asset as AssetDocument).bundlePrimaryAssetId as Types.ObjectId | string | null | undefined
@@ -1122,6 +1163,7 @@ function mapAssetDocument(
     categoryId: categoryObjectId,
     categoryPath,
     categoryPathString,
+    assetRole,
     directoryId: directoryObjectId,
     directoryPath: assetDirectoryPath,
     directoryPathString: assetDirectoryPathString,
@@ -1188,6 +1230,7 @@ function mapManifestAsset(
     id: response.id,
     name: response.name,
     type: response.type,
+    assetRole: response.assetRole ?? 'master',
     categoryId: response.categoryId,
     categoryPath: response.categoryPath,
     categoryPathString: response.categoryPathString,
@@ -1463,6 +1506,11 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     directoryId: sanitizeString(rawBody.directoryId),
   }
 
+  if (hasOwn('assetRole')) {
+    const rawAssetRole = sanitizeString(rawBody.assetRole)
+    payload.assetRole = rawAssetRole === 'master' || rawAssetRole === 'dependant' ? rawAssetRole : null
+  }
+
   const rawSeriesInput = hasOwn('seriesId') ? rawBody.seriesId : hasOwn('series') ? rawBody.series : undefined
   if (hasOwn('seriesId') || hasOwn('series')) {
     if (rawSeriesInput === null) {
@@ -1601,6 +1649,33 @@ function parsePagination(query: Record<string, string | string[] | undefined>): 
     includeDeleted: includeDeletedRaw === undefined ? false : includeDeletedRaw !== 'false',
     deletedOnly: deletedOnlyRaw === 'true',
   }
+}
+
+function parseAssetHashLookupQueries(body: unknown): AssetHashLookupQuery[] {
+  const source = Array.isArray(body)
+    ? body
+    : isObjectRecord(body) && Array.isArray(body.entries)
+      ? body.entries
+      : isObjectRecord(body) && Array.isArray(body.hashes)
+        ? body.hashes
+        : []
+
+  const deduped = new Map<string, AssetHashLookupQuery>()
+  source.forEach((entry) => {
+    if (!isObjectRecord(entry)) {
+      return
+    }
+    const contentHash = sanitizeString(entry.contentHash)
+    if (!contentHash) {
+      return
+    }
+    const algorithm = sanitizeString(entry.contentHashAlgorithm)
+    const contentHashAlgorithm = algorithm === ASSET_BUNDLE_HASH_ALGORITHM ? algorithm : ASSET_BUNDLE_HASH_ALGORITHM
+    const key = `${contentHashAlgorithm}:${contentHash}`
+    deduped.set(key, { contentHash, contentHashAlgorithm })
+  })
+
+  return Array.from(deduped.values())
 }
 
 function mapDirectory(categories: AssetCategoryData[], assets: AssetData[]): ProjectDirectory[] {
@@ -2202,6 +2277,55 @@ export async function listAssets(ctx: Context): Promise<void> {
   }
 }
 
+export async function lookupAssetsByHash(ctx: Context): Promise<void> {
+  const queries = parseAssetHashLookupQueries(ctx.request.body)
+  if (!queries.length) {
+    ctx.body = { matches: [] }
+    return
+  }
+
+  const matchedAssets = await AssetModel.find({
+    deletedAt: null,
+    $or: queries.map((query) => ({
+      contentHash: query.contentHash,
+      contentHashAlgorithm: query.contentHashAlgorithm,
+    })),
+  })
+    .populate('tags')
+    .populate('seriesId')
+    .lean()
+    .exec() as LeanAsset[]
+
+  const categoryLookup = await loadCategoryInfoMap(matchedAssets.map((asset) => asset.categoryId as Types.ObjectId))
+  const matchedAssetByKey = new Map<string, AssetSummaryWithLocation>()
+  matchedAssets.forEach((asset) => {
+    const contentHash = sanitizeString(asset.contentHash)
+    const algorithm = sanitizeString(asset.contentHashAlgorithm)
+    if (!contentHash || algorithm !== ASSET_BUNDLE_HASH_ALGORITHM) {
+      return
+    }
+    const key = `${algorithm}:${contentHash}`
+    if (!matchedAssetByKey.has(key)) {
+      matchedAssetByKey.set(key, mapAssetDocument(asset, categoryLookup))
+    }
+  })
+
+  ctx.body = {
+    matches: queries.flatMap((query) => {
+      const key = `${query.contentHashAlgorithm}:${query.contentHash}`
+      const asset = matchedAssetByKey.get(key)
+      if (!asset) {
+        return []
+      }
+      return [{
+        contentHash: query.contentHash,
+        contentHashAlgorithm: query.contentHashAlgorithm,
+        asset,
+      }]
+    }),
+  }
+}
+
 export async function getAsset(ctx: Context): Promise<void> {
   const { id } = ctx.params
   if (!Types.ObjectId.isValid(id)) {
@@ -2221,6 +2345,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   if (!file) {
     ctx.throw(400, 'Asset file is required')
   }
+  const uploadedFile = file!
 
   const payload = extractMutationPayload(ctx)
   enforceManagedCategorySelection(ctx, payload)
@@ -2241,8 +2366,106 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     }
   }
 
-  const fileInfo = await storeUploadedFile(file)
+  const contentHash = await computeUploadedFileContentHash(uploadedFile)
   const thumbnailFile = extractUploadedFile(files, 'thumbnail')
+
+  const existingAsset = await AssetModel.findOne({
+    contentHash,
+    contentHashAlgorithm: ASSET_BUNDLE_HASH_ALGORITHM,
+  })
+    .populate('tags')
+    .populate('seriesId')
+    .exec()
+
+  if (existingAsset) {
+    await discardUploadedTempFile(uploadedFile)
+
+    if (resolvePersistedAssetRole(existingAsset.assetRole) === 'dependant') {
+      let categoryDoc: AssetCategoryDocument
+      try {
+        categoryDoc = await resolveCategoryForPayload(type, payload)
+      } catch (error) {
+        await discardUploadedTempFile(thumbnailFile)
+        const code = (error as { code?: string } | null)?.code
+        if (code === 'INVALID_CATEGORY_ID') {
+          ctx.throw(400, 'Invalid category identifier')
+        }
+        if (code === 'CATEGORY_NOT_FOUND') {
+          ctx.throw(404, 'Category not found')
+        }
+        throw error
+      }
+
+      let seriesObjectId: Types.ObjectId | null = null
+      try {
+        seriesObjectId = await resolveSeriesObjectId(payload.seriesId)
+      } catch (error) {
+        await discardUploadedTempFile(thumbnailFile)
+        const code = (error as { code?: string } | null)?.code
+        if (code === 'INVALID_SERIES_ID') {
+          ctx.throw(400, 'Invalid series identifier')
+        }
+        if (code === 'SERIES_NOT_FOUND') {
+          ctx.throw(404, 'Series not found')
+        }
+        throw error
+      }
+
+      let thumbnailInfo: Awaited<ReturnType<typeof storeUploadedFile>> | null = null
+      if (thumbnailFile) {
+        thumbnailInfo = await storeUploadedFile(thumbnailFile, { prefix: THUMBNAIL_PREFIX })
+      }
+
+      const previousThumbnailKey = resolveThumbnailFileKey(existingAsset)
+      const primaryFileKey = resolveAssetFileKey(existingAsset)
+      const originalName = sanitizeString(uploadedFile.originalFilename ?? uploadedFile.newFilename)
+      const dimensionLength = payload.dimensionLength ?? null
+      const dimensionWidth = payload.dimensionWidth ?? null
+      const dimensionHeight = payload.dimensionHeight ?? null
+
+      existingAsset.name = payload.name ?? originalName ?? existingAsset.name
+      existingAsset.categoryId = categoryDoc._id as Types.ObjectId
+      existingAsset.tags = tagObjectIds
+      existingAsset.seriesId = seriesObjectId
+      existingAsset.color = payload.color ?? null
+      existingAsset.dimensionLength = dimensionLength
+      existingAsset.dimensionWidth = dimensionWidth
+      existingAsset.dimensionHeight = dimensionHeight
+      existingAsset.sizeCategory = determineSizeCategory(dimensionLength, dimensionWidth, dimensionHeight)
+      existingAsset.imageWidth = payload.imageWidth ?? null
+      existingAsset.imageHeight = payload.imageHeight ?? null
+      existingAsset.description = payload.description ?? null
+      existingAsset.metadata = payload.metadata ?? undefined
+      existingAsset.terrainScatterPreset = payload.terrainScatterPreset ?? null
+      existingAsset.originalFilename = originalName ?? existingAsset.originalFilename
+      existingAsset.mimeType = sanitizeString(uploadedFile.mimetype) ?? existingAsset.mimeType
+      existingAsset.assetRole = 'master'
+
+      if (thumbnailInfo) {
+        existingAsset.previewUrl = thumbnailInfo.url
+        existingAsset.thumbnailUrl = thumbnailInfo.url
+      }
+
+      await existingAsset.save()
+      if (thumbnailInfo && previousThumbnailKey && previousThumbnailKey !== thumbnailInfo.fileKey && previousThumbnailKey !== primaryFileKey) {
+        await deleteStoredFile(previousThumbnailKey)
+      }
+    } else {
+      await discardUploadedTempFile(thumbnailFile)
+    }
+
+    const populated = (await AssetModel.findById(existingAsset._id).populate('tags').populate('seriesId').lean().exec()) as LeanAsset | null
+    if (!populated) {
+      ctx.throw(500, 'Failed to resolve existing asset')
+    }
+    const resolvedPopulated = populated!
+    await refreshManifest()
+    const categoryLookup = await loadCategoryInfoMap([resolvedPopulated.categoryId as Types.ObjectId])
+    ctx.body = { asset: mapAssetDocument(resolvedPopulated, categoryLookup) }
+    return
+  }
+
+  const fileInfo = await storeUploadedFile(uploadedFile)
   let thumbnailInfo: Awaited<ReturnType<typeof storeUploadedFile>> | null = null
   if (thumbnailFile) {
     thumbnailInfo = await storeUploadedFile(thumbnailFile, { prefix: THUMBNAIL_PREFIX })
@@ -2305,11 +2528,14 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     fileKey: fileInfo.fileKey,
     previewUrl: thumbnailInfo?.url ?? (type === 'image' ? fileInfo.url : null),
     thumbnailUrl: thumbnailInfo?.url ?? (type === 'image' ? fileInfo.url : null),
+    contentHash,
+    contentHashAlgorithm: ASSET_BUNDLE_HASH_ALGORITHM,
     description: payload.description ?? null,
     metadata: payload.metadata ?? undefined,
     originalFilename: fileInfo.originalFilename,
     mimeType: fileInfo.mimeType,
     terrainScatterPreset,
+    assetRole: 'master',
   })
 
   const populated = (await asset.populate([
@@ -2328,15 +2554,17 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   if (!bundleFile) {
     ctx.throw(400, 'Asset bundle is required')
   }
+  const uploadedBundleFile = bundleFile!
 
-  const { manifest, archiveEntries } = await readUploadedAssetBundle(bundleFile)
+  const { manifest, archiveEntries } = await readUploadedAssetBundle(uploadedBundleFile)
   const primaryBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.logicalId)
   if (!primaryBundleFile) {
     ctx.throw(400, 'Primary asset file is missing from bundle')
   }
+  const resolvedPrimaryBundleFile = primaryBundleFile!
 
   const payload: AssetMutationPayload = {
-    name: sanitizeString(manifest.primaryAsset.name) ?? primaryBundleFile.entry.filename,
+    name: sanitizeString(manifest.primaryAsset.name) ?? resolvedPrimaryBundleFile.entry.filename,
     type: manifest.primaryAsset.type,
     description: sanitizeString(manifest.primaryAsset.description) ?? null,
     tagIds: Array.isArray(manifest.primaryAsset.tagIds) ? manifest.primaryAsset.tagIds : [],
@@ -2412,6 +2640,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       name: path.parse(dependency.entry.filename).name || dependency.entry.filename,
       categoryId,
       type: dependency.dependencyType,
+      assetRole: 'dependant',
       tags: [],
       size: storedDependency.size,
       color: null,
@@ -2531,17 +2760,17 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   const thumbnailBundleFile = resolveBundleFileBytes(manifest, archiveEntries, manifest.primaryAsset.thumbnailLogicalId)
 
   let primaryAsset = await AssetModel.findOne({
-    contentHash: primaryBundleFile.entry.hash,
-    contentHashAlgorithm: primaryBundleFile.entry.hashAlgorithm,
+    contentHash: resolvedPrimaryBundleFile.entry.hash,
+    contentHashAlgorithm: resolvedPrimaryBundleFile.entry.hashAlgorithm,
   }).exec()
 
   if (!primaryAsset) {
     const rewrittenPrimaryBytes = manifest.primaryAsset.rewriteReferences
-      ? maybeRewriteJsonBundleAsset(primaryBundleFile.entry, primaryBundleFile.bytes, assetIdMap, persistedBundleAssets)
-      : primaryBundleFile.bytes
+      ? maybeRewriteJsonBundleAsset(resolvedPrimaryBundleFile.entry, resolvedPrimaryBundleFile.bytes, assetIdMap, persistedBundleAssets)
+      : resolvedPrimaryBundleFile.bytes
     const storedPrimary = await storeBufferAsFile(rewrittenPrimaryBytes, {
-      filename: primaryBundleFile.entry.filename,
-      mimeType: primaryBundleFile.entry.mimeType ?? null,
+      filename: resolvedPrimaryBundleFile.entry.filename,
+      mimeType: resolvedPrimaryBundleFile.entry.mimeType ?? null,
     })
 
     const thumbnailInfo = thumbnailBundleFile
@@ -2552,7 +2781,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
         })
       : null
 
-    const primaryType = normalizeAssetType(payload.type, normalizeAssetType(primaryBundleFile.entry.assetType ?? 'file', 'file'))
+    const primaryType = normalizeAssetType(payload.type, normalizeAssetType(resolvedPrimaryBundleFile.entry.assetType ?? 'file', 'file'))
     const dimensionLength = payload.dimensionLength ?? null
     const dimensionWidth = payload.dimensionWidth ?? null
     const dimensionHeight = payload.dimensionHeight ?? null
@@ -2560,6 +2789,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       name: payload.name ?? storedPrimary.originalFilename ?? storedPrimary.fileKey,
       categoryId,
       type: primaryType,
+      assetRole: 'master',
       tags: tagObjectIds,
       seriesId: null,
       size: storedPrimary.size,
@@ -2579,12 +2809,50 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       mimeType: storedPrimary.mimeType,
       metadata: primaryMetadata,
       terrainScatterPreset: payload.terrainScatterPreset ?? null,
-      contentHash: primaryBundleFile.entry.hash,
-      contentHashAlgorithm: primaryBundleFile.entry.hashAlgorithm,
-      sourceLocalAssetId: sanitizeString(manifest.primaryAsset.sourceLocalAssetId) ?? sanitizeString(primaryBundleFile.entry.sourceLocalAssetId) ?? null,
+      contentHash: resolvedPrimaryBundleFile.entry.hash,
+      contentHashAlgorithm: resolvedPrimaryBundleFile.entry.hashAlgorithm,
+      sourceLocalAssetId: sanitizeString(manifest.primaryAsset.sourceLocalAssetId) ?? sanitizeString(resolvedPrimaryBundleFile.entry.sourceLocalAssetId) ?? null,
       bundleRole: 'primary',
       bundlePrimaryAssetId: null,
     })
+  } else if (resolvePersistedAssetRole(primaryAsset.assetRole) === 'dependant') {
+    const thumbnailInfo = thumbnailBundleFile
+      ? await storeBufferAsFile(thumbnailBundleFile.bytes, {
+          filename: thumbnailBundleFile.entry.filename,
+          mimeType: thumbnailBundleFile.entry.mimeType ?? null,
+          prefix: THUMBNAIL_PREFIX,
+        })
+      : null
+    const previousThumbnailKey = resolveThumbnailFileKey(primaryAsset)
+    const primaryFileKey = resolveAssetFileKey(primaryAsset)
+    const dimensionLength = payload.dimensionLength ?? null
+    const dimensionWidth = payload.dimensionWidth ?? null
+    const dimensionHeight = payload.dimensionHeight ?? null
+
+    primaryAsset.name = payload.name ?? primaryAsset.name
+    primaryAsset.categoryId = categoryId
+    primaryAsset.type = normalizeAssetType(payload.type, primaryAsset.type)
+    primaryAsset.assetRole = 'master'
+    primaryAsset.tags = tagObjectIds
+    primaryAsset.seriesId = null
+    primaryAsset.color = payload.color ?? null
+    primaryAsset.dimensionLength = dimensionLength
+    primaryAsset.dimensionWidth = dimensionWidth
+    primaryAsset.dimensionHeight = dimensionHeight
+    primaryAsset.sizeCategory = determineSizeCategory(dimensionLength, dimensionWidth, dimensionHeight)
+    primaryAsset.imageWidth = payload.imageWidth ?? null
+    primaryAsset.imageHeight = payload.imageHeight ?? null
+    primaryAsset.description = payload.description ?? null
+    primaryAsset.metadata = primaryMetadata
+    primaryAsset.terrainScatterPreset = payload.terrainScatterPreset ?? null
+    if (thumbnailInfo) {
+      primaryAsset.previewUrl = thumbnailInfo.url
+      primaryAsset.thumbnailUrl = thumbnailInfo.url
+    }
+    await primaryAsset.save()
+    if (thumbnailInfo && previousThumbnailKey && previousThumbnailKey !== thumbnailInfo.fileKey && previousThumbnailKey !== primaryFileKey) {
+      await deleteStoredFile(previousThumbnailKey)
+    }
   } else if (thumbnailBundleFile) {
     const thumbnailInfo = await storeBufferAsFile(thumbnailBundleFile.bytes, {
       filename: thumbnailBundleFile.entry.filename,
@@ -2602,7 +2870,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   }
 
   persistedAssetIds.add(primaryAsset._id.toString())
-  const primarySourceLocalAssetId = sanitizeString(manifest.primaryAsset.sourceLocalAssetId) ?? sanitizeString(primaryBundleFile.entry.sourceLocalAssetId)
+  const primarySourceLocalAssetId = sanitizeString(manifest.primaryAsset.sourceLocalAssetId) ?? sanitizeString(resolvedPrimaryBundleFile.entry.sourceLocalAssetId)
   if (primarySourceLocalAssetId) {
     assetIdMap.set(primarySourceLocalAssetId, primaryAsset._id.toString())
   }
@@ -2692,6 +2960,9 @@ export async function updateAsset(ctx: Context): Promise<void> {
       updates.type = normalizedType
       nextType = normalizedType
     }
+  }
+  if (payload.assetRole) {
+    updates.assetRole = payload.assetRole
   }
 
   if (payload.seriesId !== undefined) {

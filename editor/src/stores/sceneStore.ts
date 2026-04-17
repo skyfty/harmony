@@ -9741,6 +9741,18 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
+      const materialDependencyAssetIds = collectMaterialAssetDependencyIds(parsed.props)
+      if (materialDependencyAssetIds.length) {
+        try {
+          await this.ensurePrefabDependencies(materialDependencyAssetIds, {
+            prefabAssetIdForDownloadProgress: normalizedAssetId,
+            prefabAssetRegistry: parsed.assetRegistry ?? null,
+          })
+        } catch (error) {
+          console.warn('Failed to hydrate material asset dependencies', normalizedAssetId, error)
+        }
+      }
+
       const now = new Date().toISOString()
       const material: SceneMaterial = {
         id: normalizedAssetId,

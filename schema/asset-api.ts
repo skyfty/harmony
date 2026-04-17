@@ -46,6 +46,7 @@ export interface AssetSummary {
   categoryPath: AssetCategoryPathItem[]
   categoryPathString: string
   type: AssetType
+  assetRole?: AssetPersistedRole | null
   tags: AssetTagSummary[]
   tagIds: string[]
   seriesId?: string | null
@@ -94,6 +95,7 @@ export interface AssetManifestAsset {
   id: string
   name: string
   type: AssetType
+  assetRole?: AssetPersistedRole | null
   categoryId?: string
   categoryPath?: AssetCategoryPathItem[]
   categoryPathString?: string
@@ -168,11 +170,27 @@ export interface AssetUploadResponse {
   asset: AssetSummary
 }
 
+export interface AssetHashLookupEntry {
+  contentHash: string
+  contentHashAlgorithm?: AssetBundleHashAlgorithm | null
+}
+
+export interface AssetHashLookupMatch {
+  contentHash: string
+  contentHashAlgorithm: AssetBundleHashAlgorithm
+  asset: AssetSummary
+}
+
+export interface AssetHashLookupResponse {
+  matches: AssetHashLookupMatch[]
+}
+
 export const ASSET_BUNDLE_FORMAT = 'harmony-asset-bundle' as const
 export const ASSET_BUNDLE_VERSION = 1 as const
 export const ASSET_BUNDLE_MANIFEST_FILENAME = 'asset-bundle.json' as const
 export const ASSET_BUNDLE_HASH_ALGORITHM = 'fnv1a-64-compat' as const
 
+export type AssetPersistedRole = 'master' | 'dependant'
 export type AssetBundleHashAlgorithm = typeof ASSET_BUNDLE_HASH_ALGORITHM
 export type AssetBundlePersistedRole = 'primary' | 'dependency'
 export type AssetBundleFileRole = AssetBundlePersistedRole | 'thumbnail' | 'metadata'

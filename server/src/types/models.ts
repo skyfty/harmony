@@ -829,6 +829,8 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   contentHashAlgorithm?: AssetBundleHashAlgorithm | null
   /** 中文：导入时的本地资产 ID（可选） */
   sourceLocalAssetId?: string | null
+  /** 中文：资产长期角色（主资产/依赖资产） */
+  assetRole?: 'master' | 'dependant' | null
   /** 中文：bundle 持久化角色 */
   bundleRole?: AssetBundlePersistedRole | null
   /** 中文：所属主资源 ID（依赖资源可选） */

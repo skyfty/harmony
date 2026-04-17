@@ -18,6 +18,7 @@ import {
   getAssetCategoryPath,
   getAssetManifest,
   getProjectDirectories,
+  lookupAssetsByHash,
   listCategoryAssets,
   listAssetTags,
   listAssets,
@@ -61,6 +62,7 @@ resourceRouter.get('/series/:id/assets', requireAnyPermission(['resource:read'])
 resourceRouter.delete('/series/:id', requireAnyPermission(['resource:write']), deleteAssetSeries)
 resourceRouter.get('/directories', requireAnyPermission(['resource:read']), getProjectDirectories)
 resourceRouter.get('/assets', requireAnyPermission(['resource:read']), listAssets)
+resourceRouter.post('/assets/hash-lookup', requireAnyPermission(['resource:read']), koaBody({ json: true }), lookupAssetsByHash)
 resourceRouter.get('/assets/:id', requireAnyPermission(['resource:read']), getAsset)
 resourceRouter.post(
   '/asset-bundles',
