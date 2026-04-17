@@ -429,6 +429,7 @@
                   :active="true"
                   assetType="prefab"
                   :extensions="['floor']"
+                  :assets="buildPresetRemoteAssets"
                   :asset-id="floorBrushPresetAssetId"
                   :thumbnailSize="30"
                   :showSearch="true"
@@ -583,6 +584,7 @@
                 :active="true"
                 assetType="prefab"
                 :extensions="['road']"
+                :assets="buildPresetRemoteAssets"
                 :asset-id="roadBrushPresetAssetId"
                 :thumbnailSize="30"
                 :showSearch="true"
@@ -681,6 +683,7 @@
                   :active="true"
                   assetType="prefab"
                   :extensions="['landform']"
+                  :assets="buildPresetRemoteAssets"
                   :asset-id="landformBrushPresetAssetId"
                   :thumbnailSize="30"
                   :showSearch="true"
@@ -1236,10 +1239,9 @@ import { WATER_BUILD_SHAPE_LABELS } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { WALL_BUILD_SHAPE_LABELS } from '@/types/wall-build-shape'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { ProjectDirectory } from '@/types/project-directory'
 import { SCATTER_BRUSH_RADIUS_MAX, type GroundPanelTab } from '@/stores/terrainStore'
 import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
-import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
+import { usePackageDirectoryAssets } from '@/utils/packageDirectoryAssets'
 import {
   TERRAIN_SCATTER_BRUSH_SHAPE_LABELS,
   type TerrainScatterBrushShape,
@@ -1436,39 +1438,16 @@ const {
   groundScatterProviderAssetId,
 } = toRefs(props)
 const sceneStore = useSceneStore()
-const wallPresetRemoteAssets = ref<ProjectAsset[]>([])
-const wallPresetRemoteLoaded = ref(false)
+const {
+  assets: buildPresetRemoteAssets,
+  load: ensureBuildPresetRemoteAssetsLoaded,
+} = usePackageDirectoryAssets()
 const wallPresetPickerAssets = computed<ProjectAsset[]>(() => {
   const builtinAirWallPreset = sceneStore.getAsset(BUILTIN_AIR_WALL_PRESET_ASSET_ID)
   return builtinAirWallPreset
-    ? [builtinAirWallPreset, ...wallPresetRemoteAssets.value]
-    : wallPresetRemoteAssets.value
+    ? [builtinAirWallPreset, ...buildPresetRemoteAssets.value]
+    : buildPresetRemoteAssets.value
 })
-
-function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
-  const bucket: ProjectAsset[] = []
-  const visit = (list: ProjectDirectory[]) => {
-    list.forEach((dir) => {
-      if (dir.assets?.length) {
-        bucket.push(...dir.assets)
-      }
-      if (dir.children?.length) {
-        visit(dir.children)
-      }
-    })
-  }
-  visit(directories)
-  return bucket
-}
-
-async function ensureWallPresetRemoteAssetsLoaded(): Promise<void> {
-  if (wallPresetRemoteLoaded.value) {
-    return
-  }
-  const directories = await sceneStore.ensurePackageDirectoriesLoaded(SERVER_ASSET_PROVIDER_ID)
-  wallPresetRemoteAssets.value = flattenDirectories(directories)
-  wallPresetRemoteLoaded.value = true
-}
 
 const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const activeNode = computed(() => sceneStore.selectedNode)
@@ -2476,7 +2455,28 @@ watch(wallShapeMenuOpen, (open) => {
   if (!open) {
     return
   }
-  void ensureWallPresetRemoteAssetsLoaded()
+  void ensureBuildPresetRemoteAssetsLoaded()
+}, { flush: 'post' })
+
+watch(floorShapeMenuOpen, (open) => {
+  if (!open) {
+    return
+  }
+  void ensureBuildPresetRemoteAssetsLoaded()
+}, { flush: 'post' })
+
+watch(roadShapeMenuOpen, (open) => {
+  if (!open) {
+    return
+  }
+  void ensureBuildPresetRemoteAssetsLoaded()
+}, { flush: 'post' })
+
+watch(landformShapeMenuOpen, (open) => {
+  if (!open) {
+    return
+  }
+  void ensureBuildPresetRemoteAssetsLoaded()
 }, { flush: 'post' })
 
 function handleWallPresetSelect(asset: any) {

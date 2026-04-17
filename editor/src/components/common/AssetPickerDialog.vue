@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { ProjectDirectory } from '@/types/project-directory'
-import { useSceneStore } from '@/stores/sceneStore'
-import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
+import { usePackageDirectoryAssets } from '@/utils/packageDirectoryAssets'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 
 const props = withDefaults(
@@ -42,39 +40,15 @@ const dialogOpen = computed({
   set: (value) => emit('update:modelValue', value),
 })
 
-const sceneStore = useSceneStore()
-const dialogRemoteAssets = ref<ProjectAsset[]>([])
-const dialogRemoteAssetsLoaded = ref(false)
+const {
+  assets: dialogRemoteAssets,
+  load: loadRemoteAssets,
+} = usePackageDirectoryAssets()
 
 const panelRef = ref<HTMLDivElement | null>(null)
 const panelStyle = ref<Record<string, string>>({ top: '0px', left: '0px' })
 let resizeRaf: number | null = null
 let listenersAttached = false
-
-function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
-  const bucket: ProjectAsset[] = []
-  const visit = (list: ProjectDirectory[]) => {
-    list.forEach((dir) => {
-      if (dir.assets?.length) {
-        bucket.push(...dir.assets)
-      }
-      if (dir.children?.length) {
-        visit(dir.children)
-      }
-    })
-  }
-  visit(directories)
-  return bucket
-}
-
-async function loadRemoteAssets(): Promise<void> {
-  if (dialogRemoteAssetsLoaded.value) {
-    return
-  }
-  const directories = await sceneStore.ensurePackageDirectoriesLoaded(SERVER_ASSET_PROVIDER_ID)
-  dialogRemoteAssets.value = flattenDirectories(directories)
-  dialogRemoteAssetsLoaded.value = true
-}
 
 function getAnchorPoint(): { x: number; y: number } {
   if (typeof window === 'undefined') {
