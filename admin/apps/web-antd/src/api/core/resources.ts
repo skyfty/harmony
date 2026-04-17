@@ -334,5 +334,5 @@ export function buildResourceDownloadUrl(id: string) {
 }
 
 export async function refreshAssetManifestApi() {
-  return requestClient.post('/admin/resources/assets/manifest/refresh');
+  return requestClient.post('/resources/assets/manifest/refresh');
 }
