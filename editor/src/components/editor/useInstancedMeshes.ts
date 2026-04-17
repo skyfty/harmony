@@ -32,9 +32,6 @@ export function useInstancedMeshes(
   const instancedPositionHelper = new THREE.Vector3()
   const instancedQuaternionHelper = new THREE.Quaternion()
 
-  const DEBUG_MULTI_BINDING =
-    (globalThis as any).__HARMONY_DEBUG_MULTI_BINDING__ === true ||
-    (typeof localStorage !== 'undefined' && localStorage.getItem('__HARMONY_DEBUG_MULTI_BINDING__') === '1')
   const INVERT_DETERMINANT_EPSILON = 1e-12
 
   type InstancedMatrixCacheEntry = {
