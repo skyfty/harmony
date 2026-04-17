@@ -725,16 +725,16 @@ onBeforeUnmount(() => {
 
 .asset-picker-list__meta-overlay {
   position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: 4px;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
   z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 4px 6px;
-  border-radius: 8px;
+  padding: 1px 2px;
+  border-radius: 9px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--asset-source-accent) 24%, rgba(6, 10, 16, 0.76)), rgba(6, 10, 16, 0.7));
   border: 1px solid color-mix(in srgb, var(--asset-source-accent) 38%, transparent);
   backdrop-filter: blur(8px);

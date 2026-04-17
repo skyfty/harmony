@@ -927,7 +927,7 @@ function cancelOverwriteMaterialAsset(): void {
   overwriteTargetFilename.value = null
 }
 
-function applyImportedMaterialPayload(payload: {
+async function applyImportedMaterialPayload(payload: {
   props: SceneMaterialProps
   name?: string
   description?: string
@@ -949,6 +949,18 @@ function applyImportedMaterialPayload(payload: {
       name: payload.name,
     })
   }
+  const updatedNode = selectedNode.value ?? null
+  if (updatedNode) {
+    try {
+      await sceneStore.ensureSceneAssetsReady({
+        nodes: [updatedNode],
+        showOverlay: false,
+        refreshViewport: true,
+      })
+    } catch (error) {
+      console.warn('Failed to prepare material asset dependencies for imported material payload', error)
+    }
+  }
   markMaterialDirty()
 }
 
@@ -966,7 +978,7 @@ async function handleImportFileChange(event: Event) {
     if (!sanitized) {
       throw new Error('Invalid material file')
     }
-    applyImportedMaterialPayload(sanitized)
+    await applyImportedMaterialPayload(sanitized)
   } catch (error) {
     console.warn('Failed to import material', error)
   }
