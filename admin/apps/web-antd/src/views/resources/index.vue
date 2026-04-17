@@ -126,6 +126,7 @@ const directoryName = ref('');
 const dragPayload = ref<null | { id: string; kind: 'asset' | 'directory' }>(null);
 const directoryKeyword = ref('');
 const collapsedDirectoryIds = reactive(new Set<string>());
+const directoryCollapseInitialized = ref(false);
 const showDeletedOnly = ref(false);
 const refreshingManifest = ref(false);
 const assetSortField = ref<'categoryPathString' | 'name' | 'size' | 'type' | 'updatedAt'>('name');
@@ -312,6 +313,19 @@ function toggleDirectoryExpanded(directoryId: string) {
   collapsedDirectoryIds.add(directoryId);
 }
 
+function initializeDirectoryCollapsedState() {
+  if (directoryCollapseInitialized.value) {
+    return;
+  }
+  collapsedDirectoryIds.clear();
+  directoryRows.value.forEach((item) => {
+    if (item.hasChildren && item.depth >= 1) {
+      collapsedDirectoryIds.add(item.id);
+    }
+  });
+  directoryCollapseInitialized.value = true;
+}
+
 async function handleRefreshManifest() {
   if (refreshingManifest.value) {
     return;
@@ -454,6 +468,7 @@ async function loadLookups() {
   tags.value = tagList || [];
   series.value = seriesList || [];
   directoryItems.value = normalizeDirectoryTree(dirTree || []);
+  initializeDirectoryCollapsedState();
 }
 
 async function loadCurrentDirectoryEntries() {
