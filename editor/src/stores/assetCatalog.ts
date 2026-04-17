@@ -227,11 +227,32 @@ export function buildPackageDirectoryId(providerId: string): string {
   return `${PACKAGE_DIRECTORY_PREFIX}${providerId}`
 }
 
+export function isPackageProviderDirectoryId(directoryId: string | null | undefined): boolean {
+  return Boolean(extractProviderIdFromPackageDirectoryId(directoryId ?? ''))
+}
+
 export function extractProviderIdFromPackageDirectoryId(directoryId: string): string | null {
   if (!directoryId.startsWith(PACKAGE_DIRECTORY_PREFIX)) {
     return null
   }
   return directoryId.slice(PACKAGE_DIRECTORY_PREFIX.length) || null
+}
+
+export function resolvePackageProviderIdFromDirectoryPath(path: ProjectDirectory[] = []): string | null {
+  for (const entry of path) {
+    const providerId = extractProviderIdFromPackageDirectoryId(entry.id)
+    if (providerId) {
+      return providerId
+    }
+  }
+  if (path.some((entry) => entry.id === PACKAGES_ROOT_DIRECTORY_ID)) {
+    return getSingleVisiblePackageProviderId()
+  }
+  return null
+}
+
+export function isPackageDirectoryPath(path: ProjectDirectory[] = []): boolean {
+  return resolvePackageProviderIdFromDirectoryPath(path) !== null
 }
 
 function createAssetsBranch(catalog: Record<string, ProjectAsset[]>): ProjectDirectory {
@@ -262,16 +283,15 @@ function createPackagesBranch(cache: Record<string, ProjectDirectory[]> = {}): P
   return {
     id: PACKAGES_ROOT_DIRECTORY_ID,
     name: 'Packages',
-    children: visibleProviders
-      .map((provider) => {
-        const normalized = normalizePackageProviderDirectories(cache[provider.id] ?? [])
-        return {
-          id: buildPackageDirectoryId(provider.id),
-          name: provider.name,
-          children: normalized.directories,
-          assets: normalized.assets,
-        }
-      }),
+    children: visibleProviders.map((provider) => {
+      const normalized = normalizePackageProviderDirectories(cache[provider.id] ?? [])
+      return {
+        id: buildPackageDirectoryId(provider.id),
+        name: provider.name,
+        children: normalized.directories,
+        assets: normalized.assets,
+      }
+    }),
   }
 }
 

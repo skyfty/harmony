@@ -1638,19 +1638,6 @@ function keepLocalReferencesAfterUpload(): void {
                         @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
                       />
                     </div>
-                    <div v-if="categoryAccessHint" class="upload-entry__field-hint upload-entry__field-hint--warning">{{ categoryAccessHint }}</div>
-                    <div class="upload-entry__category-row">
-                      <v-text-field
-                        :model-value="entry.categoryPathLabel"
-                        label="Category Path"
-                        density="compact"
-                        variant="underlined"
-                        hint="仅用于本地元数据展示；服务器上传以所选后台目录为准。"
-                        persistent-hint
-                        :disabled="canUseRemoteCategorySelector || uploadSubmitting || localSaveSubmitting || entry.status === 'uploading' || entry.replacedWithServerAsset"
-                        @update:model-value="(value) => handleEntryCategoryPathLabelChange(entry, value)"
-                      />
-                    </div>
 
                     <div class="upload-entry__scatter-row">
                       <v-select

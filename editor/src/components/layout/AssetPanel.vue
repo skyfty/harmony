@@ -14,7 +14,12 @@ import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { detectBuildPresetAssetKind, type BuildPresetAssetKind, isBuildPresetAsset } from '@/utils/buildPresetAsset'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
-import { ASSETS_ROOT_DIRECTORY_ID, PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
+import {
+  ASSETS_ROOT_DIRECTORY_ID,
+  PACKAGES_ROOT_DIRECTORY_ID,
+  determineAssetCategoryId,
+  isPackageProviderDirectoryId,
+} from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -74,15 +79,23 @@ const {
   selectedNodeId,
 } = storeToRefs(sceneStore)
 
-const WALL_PRESETS_CATEGORY_ID = `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`
+const HIDDEN_ASSET_DIRECTORY_IDS = new Set<string>([
+  `${ASSETS_ROOT_DIRECTORY_ID}-lods`,
+  `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`,
+  `${ASSETS_ROOT_DIRECTORY_ID}-floor-presets`,
+])
 
-function filterOutWallPresets(nodes: ProjectDirectory[] | undefined): ProjectDirectory[] {
+function isHiddenAssetDirectory(directoryId: string | null | undefined): boolean {
+  return !!directoryId && HIDDEN_ASSET_DIRECTORY_IDS.has(directoryId)
+}
+
+function filterHiddenAssetDirectories(nodes: ProjectDirectory[] | undefined): ProjectDirectory[] {
   if (!nodes || !nodes.length) return []
   return nodes
     .map((node): ProjectDirectory | null => {
       if (!node) return null
-      if (node.id === WALL_PRESETS_CATEGORY_ID) return null
-      const children = node.children ? filterOutWallPresets(node.children) : undefined
+      if (isHiddenAssetDirectory(node.id)) return null
+      const children = node.children ? filterHiddenAssetDirectories(node.children) : undefined
       return {
         ...node,
         ...(children && children.length ? { children } : {}),
@@ -91,7 +104,7 @@ function filterOutWallPresets(nodes: ProjectDirectory[] | undefined): ProjectDir
     .filter((n): n is ProjectDirectory => !!n)
 }
 
-const filteredProjectTree = computed(() => filterOutWallPresets(projectTree.value))
+const filteredProjectTree = computed(() => filterHiddenAssetDirectories(projectTree.value))
 
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
 watch(openedDirectories, (ids, previousIds) => {
@@ -203,9 +216,7 @@ function findProviderIdForDirectoryId(directoryId: string | null): string | null
     return null
   }
   const directProviderId = extractProviderIdFromPackageDirectoryId(directoryId)
-  if (directProviderId) {
-    return directProviderId
-  }
+  if (directProviderId) return directProviderId
   const path = findDirectoryPath(projectTree.value ?? [], directoryId)
   for (const entry of path) {
     const providerId = extractProviderIdFromPackageDirectoryId(entry.id)
@@ -387,7 +398,8 @@ function sanitizeOpenedDirectories(
   }
   const available = new Set<string>()
   collectDirectoryIds(tree, available)
-  return ids.filter((id, index) => available.has(id) && ids.indexOf(id) === index)
+  const filtered = ids.filter((id, index) => available.has(id) && ids.indexOf(id) === index)
+  return filtered.length ? filtered : [PACKAGES_ROOT_DIRECTORY_ID]
 }
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -407,7 +419,7 @@ function arraysEqual(a: string[], b: string[]): boolean {
 
 function canMutateDirectoryId(directoryId: string | null | undefined): boolean {
   return !!directoryId
-    && isLocalDirectoryId(directoryId)
+    && isWritableLocalDirectoryId(directoryId)
     && directoryId !== ASSETS_ROOT_DIRECTORY_ID
 }
 
@@ -1793,8 +1805,7 @@ const galleryDirectories = computed(() => {
     return []
   }
   const children = currentDirectory.value?.children ?? []
-  const WALL_PRESETS_CATEGORY_ID = `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`
-  return children.filter((dir) => dir.id !== WALL_PRESETS_CATEGORY_ID)
+  return children.filter((dir) => !isHiddenAssetDirectory(dir.id))
 })
 
 watch(
@@ -1823,6 +1834,17 @@ function isLocalDirectoryId(directoryId: string | null | undefined): boolean {
   return !!sceneStore.assetManifest?.directoriesById?.[directoryId]
 }
 
+function isWritableLocalDirectoryId(directoryId: string | null | undefined): boolean {
+  if (!isLocalDirectoryId(directoryId)) {
+    return false
+  }
+  if (directoryId === ASSETS_ROOT_DIRECTORY_ID) {
+    return true
+  }
+  const directoryPath = findDirectoryPath(projectTree.value ?? [], directoryId ?? null) ?? []
+  return !directoryPath.some((entry) => isPackageProviderDirectoryId(entry.id))
+}
+
 function isPresetDirectoryMutable(_directoryId: string | null | undefined): boolean {
   return false
 }
@@ -1842,7 +1864,7 @@ function getAssetMutationScope(asset: ProjectAsset | null | undefined): 'local' 
 }
 
 function getDirectoryMutationScope(directoryId: string | null | undefined): 'local' | null {
-  if (isLocalDirectoryId(directoryId)) {
+  if (isWritableLocalDirectoryId(directoryId)) {
     return 'local'
   }
   return null
@@ -1850,7 +1872,7 @@ function getDirectoryMutationScope(directoryId: string | null | undefined): 'loc
 
 const canCreateDirectory = computed(() => {
   const directoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
-  return isLocalDirectoryId(directoryId)
+  return isWritableLocalDirectoryId(directoryId)
 })
 const canRenameDirectory = computed(() => canMutateDirectoryId(activeDirectoryId.value))
 const canDeleteDirectory = canRenameDirectory
@@ -1919,7 +1941,7 @@ function cancelDirectoryDeleteDialog() {
 }
 
 async function createDirectoryAtTarget(parentId: string, name: string): Promise<void> {
-  if (isLocalDirectoryId(parentId)) {
+  if (isWritableLocalDirectoryId(parentId)) {
     const directoryId = sceneStore.createAssetDirectory(name, parentId)
     if (directoryId) {
       ensureDirectoryOpened(directoryId)
@@ -1928,13 +1950,13 @@ async function createDirectoryAtTarget(parentId: string, name: string): Promise<
 }
 
 async function renameDirectoryById(directoryId: string, name: string): Promise<void> {
-  if (isLocalDirectoryId(directoryId)) {
+  if (isWritableLocalDirectoryId(directoryId)) {
     sceneStore.renameAssetDirectory(directoryId, name)
   }
 }
 
 async function deleteDirectoryById(directoryId: string): Promise<void> {
-  if (isLocalDirectoryId(directoryId)) {
+  if (isWritableLocalDirectoryId(directoryId)) {
     const result = sceneStore.deleteAssetDirectory(directoryId)
     if (result.removedAssetIds.length) {
       selectedAssetIds.value = selectedAssetIds.value.filter((id) => !result.removedAssetIds.includes(id))
@@ -2073,7 +2095,7 @@ function getNextAutoFolderName(): string {
 
 function canAutoGroupAssetsInCurrentDirectory(_scope: 'local'): boolean {
   const directoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
-  return isLocalDirectoryId(directoryId)
+  return isWritableLocalDirectoryId(directoryId)
 }
 
 function allowAssetToAssetDrop(event: DragEvent, targetAssetId: string): boolean {
@@ -2147,7 +2169,7 @@ async function handleAssetCardDrop(event: DragEvent, targetAssetId: string) {
   const folderName = getNextAutoFolderName()
 
   try {
-    if (scope === 'local' && isLocalDirectoryId(parentDirectoryId)) {
+    if (scope === 'local' && isWritableLocalDirectoryId(parentDirectoryId)) {
       const createdDirectoryId = sceneStore.createAssetDirectory(folderName, parentDirectoryId)
       if (!createdDirectoryId) {
         return
@@ -2230,7 +2252,7 @@ async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
   const draggedDirectoryId = parseDraggedDirectoryId(event.dataTransfer)
   if (draggedDirectoryId) {
     try {
-      if (isLocalDirectoryId(draggedDirectoryId) && isLocalDirectoryId(directoryId)) {
+      if (isWritableLocalDirectoryId(draggedDirectoryId) && isWritableLocalDirectoryId(directoryId)) {
         const moved = sceneStore.moveAssetDirectory(draggedDirectoryId, directoryId)
         if (moved && preservedActiveDirectoryId) {
           sceneStore.setActiveDirectory(preservedActiveDirectoryId)
@@ -2253,7 +2275,7 @@ async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
   try {
     const asset = sceneStore.getAsset(assetId)
     const scope = getAssetMutationScope(asset)
-    if (scope === 'local' && isLocalDirectoryId(directoryId)) {
+    if (scope === 'local' && isWritableLocalDirectoryId(directoryId)) {
       sceneStore.moveProjectAssetToDirectory(assetId, directoryId)
     }
   } catch (error) {
@@ -3624,7 +3646,7 @@ function isProviderDirectory(id: string | undefined | null): boolean {
   if (!id) return false
   return id === PACKAGES_ROOT_DIRECTORY_ID
     ? !!getSingleVisiblePackageProviderId()
-    : !!extractProviderIdFromPackageDirectoryId(id)
+    : isPackageProviderDirectoryId(id)
 }
 function isDirectoryLoading(id: string | undefined | null): boolean {
   if (!id) return false
@@ -3886,7 +3908,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                   </div>
                   <div class="directory-card-actions">
                     <v-btn
-                      v-if="(isLocalDirectoryId(directory.id) && directory.id !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directory.id)"
+                      v-if="(isWritableLocalDirectoryId(directory.id) && directory.id !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directory.id)"
                       icon="mdi-pencil-outline"
                       variant="text"
                       density="compact"
@@ -3894,7 +3916,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       @click.stop="promptRenameDirectory(directory.id)"
                     />
                     <v-btn
-                      v-if="(isLocalDirectoryId(directory.id) && directory.id !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directory.id)"
+                      v-if="(isWritableLocalDirectoryId(directory.id) && directory.id !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directory.id)"
                       icon="mdi-delete-outline"
                       variant="text"
                       density="compact"

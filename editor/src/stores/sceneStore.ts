@@ -249,6 +249,7 @@ import {
   createProjectTreeFromCache,
   defaultDirectoryId,
   determineAssetCategoryId,
+  isPackageDirectoryPath,
   normalizePackageProviderDirectories,
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
@@ -5607,8 +5608,20 @@ function cloneAssetCatalog(catalog: Record<string, ProjectAsset[]>): Record<stri
 }
 
 const SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID = 'scene-assets-root'
-const SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID = 'scene-assets-local-packages'
-const SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME = 'Packages'
+const SCENE_ASSET_PACKAGE_PROVIDER_DIRECTORY_PREFIX = 'scene-assets-package-provider-'
+
+function normalizePackageProviderDirectoryKey(value: string | null | undefined): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed.length) {
+    return 'provider'
+  }
+  const normalized = trimmed.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '')
+  return normalized.length ? normalized.toLowerCase() : 'provider'
+}
+
+export function buildLocalPackageProviderManifestDirectoryId(providerId: string): string {
+  return `${SCENE_ASSET_PACKAGE_PROVIDER_DIRECTORY_PREFIX}${normalizePackageProviderDirectoryKey(providerId)}`
+}
 
 const sceneAssetCategoryLabelLookup = ASSET_CATEGORY_CONFIG.reduce<Record<string, string>>((acc, category) => {
   acc[category.id] = category.label
@@ -5724,21 +5737,6 @@ function buildSceneAssetManifest(assetCatalog: Record<string, ProjectAsset[]>): 
       assetsById[asset.id] = mapProjectAssetToManifestAsset(asset, categoryId, categoryName, generatedAt)
     })
   })
-
-  if (!directoriesById[SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID]) {
-    directoriesById[SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID] = {
-      id: SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
-      name: SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
-      parentId: SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID,
-      directoryIds: [],
-      assetIds: [],
-      createdAt: generatedAt,
-      updatedAt: generatedAt,
-    }
-  }
-  if (!directoriesById[SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID]!.directoryIds.includes(SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID)) {
-    directoriesById[SCENE_ASSET_MANIFEST_ROOT_DIRECTORY_ID]!.directoryIds.push(SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID)
-  }
 
   return {
     format: 'harmony-asset-manifest',
@@ -5929,10 +5927,7 @@ function buildSceneProjectTree(
   assetCatalog: Record<string, ProjectAsset[]>,
   packageDirectoryCache: Record<string, ProjectDirectory[]>,
 ): ProjectDirectory[] {
-  const fallbackTree = createProjectTreeFromCache(
-    buildVisibleAssetCatalog(assetCatalog),
-    packageDirectoryCache,
-  )
+  const fallbackTree = createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog), packageDirectoryCache)
   const packagesBranch = fallbackTree.find((directory) => directory.id === PACKAGES_ROOT_DIRECTORY_ID) ?? fallbackTree[1]
   if (!assetManifest) {
     return packagesBranch ? [fallbackTree[0]!, packagesBranch] : fallbackTree
@@ -6189,14 +6184,6 @@ function synchronizeManifestWithCatalog(
     }
 
   })
-
-  ensureManifestDirectory(
-    nextManifest,
-    nextManifest.rootDirectoryId,
-    SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
-    SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
-  )
-
   return cleanupManifestDirectoryReferences(nextManifest)
 }
 
@@ -6276,19 +6263,20 @@ function ensureManifestDirectory(
   return { directoryId, created: true }
 }
 
-function getLocalPackagesManifestDirectoryId(manifest: AssetManifest | null | undefined): string | null {
-  if (!manifest) {
-    return null
+function ensureLocalPackageProviderManifestDirectory(
+  manifest: AssetManifest,
+  providerId: string,
+): { directoryId: string; created: boolean } {
+  const preferredId = buildLocalPackageProviderManifestDirectoryId(providerId)
+  if (preferredId in manifest.directoriesById) {
+    return { directoryId: preferredId, created: false }
   }
-  if (SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID in manifest.directoriesById) {
-    return SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID
-  }
-  const existingByName = findManifestChildDirectoryByName(
+  return ensureManifestDirectory(
     manifest,
     manifest.rootDirectoryId,
-    SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
+    normalizeDirectorySegmentForManifest(providerId),
+    preferredId,
   )
-  return existingByName?.id ?? null
 }
 
 function normalizeDirectorySegmentForManifest(value: string | null | undefined): string {
@@ -7809,9 +7797,6 @@ export const useSceneStore = defineStore('scene', {
         ? findDirectory(state.projectTree, state.activeDirectoryId)
         : state.projectTree[0] ?? null
       if (!state.activeDirectoryId) {
-        return directory?.assets ?? []
-      }
-      if (state.activeDirectoryId === PACKAGES_ROOT_DIRECTORY_ID) {
         return directory?.assets ?? []
       }
       if (!directory) {
@@ -11181,23 +11166,14 @@ export const useSceneStore = defineStore('scene', {
     },
     ensureLocalPackagesDirectoryInAssets(): string {
       const currentManifest = cloneAssetManifest(this.assetManifest) ?? buildSceneAssetManifest(this.assetCatalog)
-      const existingLocalPackagesDirectoryId = getLocalPackagesManifestDirectoryId(currentManifest)
-      if (existingLocalPackagesDirectoryId) {
-        return existingLocalPackagesDirectoryId
+      if (!this.assetManifest) {
+        this.applyCatalogUpdate(this.assetCatalog, {
+          nextManifest: currentManifest,
+          commitSnapshot: false,
+          updateNodes: false,
+        })
       }
-
-      const created = ensureManifestDirectory(
-        currentManifest,
-        currentManifest.rootDirectoryId,
-        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
-        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
-      )
-      this.applyCatalogUpdate(this.assetCatalog, {
-        nextManifest: currentManifest,
-        commitSnapshot: false,
-        updateNodes: false,
-      })
-      return created.directoryId
+      return currentManifest.rootDirectoryId
     },
     resolveConfigAssetSaveDirectoryId(): string {
       const manifest = this.assetManifest
@@ -11212,7 +11188,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const activeDirectoryPath = findDirectoryPathInTree(this.projectTree, activeProjectDirectoryId) ?? []
-      const isReadonlyPackagesDirectory = activeDirectoryPath.some((entry) => entry.id === PACKAGES_ROOT_DIRECTORY_ID)
+      const isReadonlyPackagesDirectory = isPackageDirectoryPath(activeDirectoryPath)
       if (isReadonlyPackagesDirectory) {
         return fallbackDirectoryId
       }
@@ -11222,30 +11198,13 @@ export const useSceneStore = defineStore('scene', {
         return fallbackDirectoryId
       }
 
-      const localPackagesDirectoryId = getLocalPackagesManifestDirectoryId(manifest)
-      if (localPackagesDirectoryId && isManifestDirectoryDescendant(manifest, localPackagesDirectoryId, activeManifestDirectoryId)) {
-        return fallbackDirectoryId
-      }
-
       return activeManifestDirectoryId
     },
     resolvePackageMirrorDirectoryId(providerId: string, packagePathSegments: string[] = []): string {
       const manifest = cloneAssetManifest(this.assetManifest) ?? buildSceneAssetManifest(this.assetCatalog)
       let changed = false
 
-      const localPackagesDirectory = ensureManifestDirectory(
-        manifest,
-        manifest.rootDirectoryId,
-        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_NAME,
-        SCENE_ASSET_LOCAL_PACKAGES_DIRECTORY_ID,
-      )
-      changed = changed || localPackagesDirectory.created
-
-      const providerDirectory = ensureManifestDirectory(
-        manifest,
-        localPackagesDirectory.directoryId,
-        normalizeDirectorySegmentForManifest(providerId),
-      )
+      const providerDirectory = ensureLocalPackageProviderManifestDirectory(manifest, providerId)
       changed = changed || providerDirectory.created
 
       let currentDirectoryId = providerDirectory.directoryId
