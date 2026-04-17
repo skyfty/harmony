@@ -52,6 +52,7 @@ export interface ResourceAssetItem {
   categoryPath: ResourceCategoryPathItem[];
   categoryPathString: string;
   color: null | string;
+  assetRole: 'dependant' | 'master' | null;
   createdAt: string;
   description: null | string;
   dimensionHeight: null | number;

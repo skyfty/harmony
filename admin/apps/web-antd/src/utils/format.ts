@@ -14,3 +14,14 @@ export function formatFileSize(value: number | null | undefined): string {
   const displaySize = normalizedSize >= 10 || unitIndex === 0 ? normalizedSize.toFixed(0) : normalizedSize.toFixed(1);
   return `${displaySize} ${SIZE_UNITS[unitIndex]}`;
 }
+
+export function formatAssetRole(value: 'dependant' | 'master' | null | undefined): string {
+  switch (value) {
+    case 'master':
+      return '主资源';
+    case 'dependant':
+      return '依赖资源';
+    default:
+      return '-';
+  }
+}
