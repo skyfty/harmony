@@ -6,13 +6,11 @@ import 'splitpanes/dist/splitpanes.css'
 import {
   useSceneStore,
   extractProviderIdFromPackageDirectoryId,
-  buildPackageDirectoryId,
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
-import { useAuthStore } from '@/stores/authStore'
 import { detectBuildPresetAssetKind, type BuildPresetAssetKind, isBuildPresetAsset } from '@/utils/buildPresetAsset'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 import { ASSETS_ROOT_DIRECTORY_ID, PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
@@ -22,14 +20,8 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
 import { assetProvider, invalidateAssetManifestCache } from '@/resources/projectProviders/asset'
 import {
-  bulkMoveResourceAssets,
-  createResourceCategory,
-  deleteResourceAsset,
-  deleteResourceCategory,
   lookupResourceAssetsByHash,
-  updateResourceCategory,
   updateAssetOnServer,
-  moveResourceCategory,
 } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset, type ServerAssetDto } from '@/api/serverAssetTypes'
 import { deleteProviderCatalog, loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
@@ -57,7 +49,6 @@ import type {
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const authStore = useAuthStore()
 const uiStore = useUiStore()
 const buildToolsStore = useBuildToolsStore()
 const {
@@ -68,7 +59,6 @@ const {
 } = useAudioAssetPreview()
 
 const PRESET_PROVIDER_ID = assetProvider.id
-const PRESET_PROVIDER_ROOT_DIRECTORY_ID = buildPackageDirectoryId(PRESET_PROVIDER_ID)
 const galleryRoot = ref<HTMLElement | null>(null)
 const galleryHovered = ref(false)
 
@@ -406,10 +396,8 @@ function arraysEqual(a: string[], b: string[]): boolean {
 
 function canMutateDirectoryId(directoryId: string | null | undefined): boolean {
   return !!directoryId
-    && (
-      (isLocalDirectoryId(directoryId) && directoryId !== ASSETS_ROOT_DIRECTORY_ID)
-      || isPresetDirectoryMutable(directoryId)
-    )
+    && isLocalDirectoryId(directoryId)
+    && directoryId !== ASSETS_ROOT_DIRECTORY_ID
 }
 
 function pruneTrackedElementMap<T extends HTMLElement>(
@@ -643,7 +631,7 @@ function canDeleteAsset(asset: ProjectAsset) {
     return false
   }
   if (providerIdForAsset(asset) === PRESET_PROVIDER_ID) {
-    return authStore.canResourceWrite
+    return false
   }
   if (asset.type === 'material') {
     return asset.gleaned !== false
@@ -1192,17 +1180,12 @@ async function performDeleteAssets() {
     return
   }
   try {
-    const { localAssetIds, presetAssetIds } = partitionDeleteTargets(assets)
+    const { localAssetIds } = partitionDeleteTargets(assets)
 
     let removedIds: string[] = []
     if (localAssetIds.length) {
       const removedLocalIds = await sceneStore.deleteProjectAssets(localAssetIds)
       removedIds = removedIds.concat(removedLocalIds)
-    }
-    if (presetAssetIds.length) {
-      await Promise.all(presetAssetIds.map((assetId) => deleteResourceAsset(assetId)))
-      await refreshPresetProviderAssets()
-      removedIds = removedIds.concat(presetAssetIds)
     }
 
     removeDeletedAssetIds(removedIds)
@@ -1790,34 +1773,17 @@ function isLocalDirectoryId(directoryId: string | null | undefined): boolean {
   return !!sceneStore.assetManifest?.directoriesById?.[directoryId]
 }
 
-function isPresetDirectoryId(directoryId: string | null | undefined): boolean {
-  if (!directoryId) {
-    return false
-  }
-  return findProviderIdForDirectoryId(directoryId) === PRESET_PROVIDER_ID
-}
-
-function resolveServerCategoryId(directoryId: string | null | undefined): string | null {
-  if (!directoryId || !isPresetDirectoryId(directoryId)) {
-    return null
-  }
-  return directoryId === PRESET_PROVIDER_ROOT_DIRECTORY_ID ? null : directoryId
-}
-
-function isPresetDirectoryMutable(directoryId: string | null | undefined): boolean {
-  return authStore.canResourceWrite && isPresetDirectoryId(directoryId) && directoryId !== PRESET_PROVIDER_ROOT_DIRECTORY_ID
+function isPresetDirectoryMutable(_directoryId: string | null | undefined): boolean {
+  return false
 }
 
 function isDraggableDirectoryId(directoryId: string | null | undefined): boolean {
   return canMutateDirectoryId(directoryId)
 }
 
-function getAssetMutationScope(asset: ProjectAsset | null | undefined): 'local' | 'preset' | null {
+function getAssetMutationScope(asset: ProjectAsset | null | undefined): 'local' | null {
   if (!asset) {
     return null
-  }
-  if (providerIdForAsset(asset) === PRESET_PROVIDER_ID) {
-    return 'preset'
   }
   if (sceneStore.assetManifest?.assetsById?.[asset.id]) {
     return 'local'
@@ -1825,19 +1791,16 @@ function getAssetMutationScope(asset: ProjectAsset | null | undefined): 'local' 
   return null
 }
 
-function getDirectoryMutationScope(directoryId: string | null | undefined): 'local' | 'preset' | null {
+function getDirectoryMutationScope(directoryId: string | null | undefined): 'local' | null {
   if (isLocalDirectoryId(directoryId)) {
     return 'local'
-  }
-  if (isPresetDirectoryId(directoryId)) {
-    return 'preset'
   }
   return null
 }
 
 const canCreateDirectory = computed(() => {
   const directoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
-  return isLocalDirectoryId(directoryId) || (authStore.canResourceWrite && isPresetDirectoryId(directoryId))
+  return isLocalDirectoryId(directoryId)
 })
 const canRenameDirectory = computed(() => canMutateDirectoryId(activeDirectoryId.value))
 const canDeleteDirectory = canRenameDirectory
@@ -1849,22 +1812,12 @@ const directoryDialogName = ref('')
 const directoryDialogTargetId = ref<string | null>(null)
 const directoryDeleteDialogOpen = ref(false)
 const directoryDeleteTargetId = ref<string | null>(null)
-const assetRenameDialogOpen = ref(false)
-const assetRenameTargetId = ref<string | null>(null)
-const assetRenameValue = ref('')
 
 const directoryDialogTitle = computed(() => (directoryDialogMode.value === 'create' ? 'Create Folder' : 'Rename Folder'))
 const directoryDialogConfirmLabel = computed(() => (directoryDialogMode.value === 'create' ? 'Create' : 'Rename'))
 const directoryDeleteTarget = computed(() => {
   const targetId = directoryDeleteTargetId.value
   return targetId ? findDirectoryById(projectTree.value ?? [], targetId) : null
-})
-const assetRenameTarget = computed(() => {
-  const targetId = assetRenameTargetId.value
-  if (!targetId) {
-    return null
-  }
-  return resolveAssetById(targetId)
 })
 
 function openDirectoryDialog(mode: DirectoryDialogMode, targetDirectoryId: string, name: string): void {
@@ -1874,34 +1827,9 @@ function openDirectoryDialog(mode: DirectoryDialogMode, targetDirectoryId: strin
   directoryDialogOpen.value = true
 }
 
-function openAssetRenameDialog(assetId: string, name: string): void {
-  assetRenameTargetId.value = assetId
-  assetRenameValue.value = name
-  assetRenameDialogOpen.value = true
-}
-
 function openUploadDialogForAsset(assetId: string): void {
   uploadDialogTargetAssetId.value = assetId
   uploadDialogOpen.value = true
-}
-
-function closeAssetRenameDialog(): void {
-  assetRenameDialogOpen.value = false
-  assetRenameTargetId.value = null
-  assetRenameValue.value = ''
-}
-
-async function renameAssetById(assetId: string, name: string): Promise<void> {
-  const targetAsset = resolveAssetById(assetId)
-  const scope = getAssetMutationScope(targetAsset)
-  if (scope === 'local') {
-    sceneStore.renameProjectAsset(assetId, name)
-    return
-  }
-  if (scope === 'preset' && authStore.canResourceWrite) {
-    await updateAssetOnServer({ assetId, name })
-    await refreshPresetProviderAssets()
-  }
 }
 
 function promptCreateDirectory() {
@@ -1946,28 +1874,12 @@ async function createDirectoryAtTarget(parentId: string, name: string): Promise<
     if (directoryId) {
       ensureDirectoryOpened(directoryId)
     }
-    return
-  }
-  if (authStore.canResourceWrite && isPresetDirectoryId(parentId)) {
-    const created = await createResourceCategory({
-      name,
-      parentId: resolveServerCategoryId(parentId),
-    })
-    await refreshPresetProviderAssets()
-    ensureDirectoryOpened(parentId)
-    ensureDirectoryOpened(created.id)
-    sceneStore.setActiveDirectory(created.id)
   }
 }
 
 async function renameDirectoryById(directoryId: string, name: string): Promise<void> {
   if (isLocalDirectoryId(directoryId)) {
     sceneStore.renameAssetDirectory(directoryId, name)
-    return
-  }
-  if (isPresetDirectoryMutable(directoryId)) {
-    await updateResourceCategory(directoryId, { name })
-    await refreshPresetProviderAssets()
   }
 }
 
@@ -1977,14 +1889,6 @@ async function deleteDirectoryById(directoryId: string): Promise<void> {
     if (result.removedAssetIds.length) {
       selectedAssetIds.value = selectedAssetIds.value.filter((id) => !result.removedAssetIds.includes(id))
     }
-    return
-  }
-  if (isPresetDirectoryMutable(directoryId)) {
-    await deleteResourceCategory(directoryId)
-    if (activeDirectoryId.value === directoryId) {
-      sceneStore.setActiveDirectory(PRESET_PROVIDER_ROOT_DIRECTORY_ID)
-    }
-    await refreshPresetProviderAssets()
   }
 }
 
@@ -2032,31 +1936,11 @@ function promptRenameAsset(assetId?: string) {
   }
   if (getAssetMutationScope(asset) === 'local') {
     openUploadDialogForAsset(asset.id)
-    return
   }
-  openAssetRenameDialog(assetId, asset.name ?? '')
 }
 
 function promptDeleteAsset(asset: ProjectAsset) {
   openDeleteDialog([asset], false)
-}
-
-function cancelAssetRenameDialog() {
-  closeAssetRenameDialog()
-}
-
-async function submitAssetRenameDialog() {
-  const targetId = assetRenameTargetId.value
-  const name = assetRenameValue.value.trim()
-  if (!targetId || !name.length) {
-    return
-  }
-  try {
-    await renameAssetById(targetId, name)
-    closeAssetRenameDialog()
-  } catch (error) {
-    console.error('Failed to rename asset', error)
-  }
 }
 
 function findDirectoryById(directories: ProjectDirectory[], id: string): ProjectDirectory | null {
@@ -2137,12 +2021,9 @@ function getNextAutoFolderName(): string {
   return `${AUTO_FOLDER_PREFIX} ${index}`
 }
 
-function canAutoGroupAssetsInCurrentDirectory(scope: 'local' | 'preset'): boolean {
+function canAutoGroupAssetsInCurrentDirectory(_scope: 'local'): boolean {
   const directoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
-  if (scope === 'local') {
-    return isLocalDirectoryId(directoryId)
-  }
-  return authStore.canResourceWrite && isPresetDirectoryId(directoryId)
+  return isLocalDirectoryId(directoryId)
 }
 
 function allowAssetToAssetDrop(event: DragEvent, targetAssetId: string): boolean {
@@ -2230,18 +2111,6 @@ async function handleAssetCardDrop(event: DragEvent, targetAssetId: string) {
       if (preservedActiveDirectoryId) {
         sceneStore.setActiveDirectory(preservedActiveDirectoryId)
       }
-    } else if (scope === 'preset' && authStore.canResourceWrite && isPresetDirectoryId(parentDirectoryId)) {
-      const created = await createResourceCategory({
-        name: folderName,
-        parentId: resolveServerCategoryId(parentDirectoryId),
-      })
-      await bulkMoveResourceAssets({
-        assetIds: Array.from(new Set([draggedAssetId, targetAssetId])),
-        targetCategoryId: created.id,
-      })
-      await refreshPresetProviderAssets()
-      ensureDirectoryOpened(parentDirectoryId)
-      ensureDirectoryOpened(created.id)
     }
   } catch (error) {
     console.error('Failed to auto group assets into folder', error)
@@ -2279,7 +2148,6 @@ function allowDirectoryDrop(event: DragEvent, directoryId: string) {
   const acceptsAsset = types.includes(ASSET_DRAG_MIME)
     && !!draggedAssetId
     && draggedAssetScope === targetScope
-    && !(targetScope === 'preset' && directoryId === PRESET_PROVIDER_ROOT_DIRECTORY_ID)
   const acceptsDirectory = types.includes(DIRECTORY_DRAG_MIME) && draggedDirectoryScope === targetScope
   if (!acceptsAsset && !acceptsDirectory) {
     clearDirectoryDropHover(directoryId)
@@ -2317,9 +2185,6 @@ async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
         if (moved && preservedActiveDirectoryId) {
           sceneStore.setActiveDirectory(preservedActiveDirectoryId)
         }
-      } else if (isPresetDirectoryMutable(draggedDirectoryId) && isPresetDirectoryId(directoryId)) {
-        await moveResourceCategory(draggedDirectoryId, resolveServerCategoryId(directoryId))
-        await refreshPresetProviderAssets()
       }
       ensureDirectoryOpened(directoryId)
     } catch (error) {
@@ -2340,13 +2205,6 @@ async function handleDirectoryDrop(event: DragEvent, directoryId: string) {
     const scope = getAssetMutationScope(asset)
     if (scope === 'local' && isLocalDirectoryId(directoryId)) {
       sceneStore.moveProjectAssetToDirectory(assetId, directoryId)
-    } else if (scope === 'preset' && isPresetDirectoryId(directoryId)) {
-      const targetCategoryId = resolveServerCategoryId(directoryId)
-      if (!targetCategoryId) {
-        return
-      }
-      await bulkMoveResourceAssets({ assetIds: [assetId], targetCategoryId })
-      await refreshPresetProviderAssets()
     }
   } catch (error) {
     console.error('Failed to move asset to directory', error)
@@ -4036,7 +3894,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       @click="handleAssetPreviewClick($event, asset)"
                     />
                     <v-btn
-                      v-if="getAssetMutationScope(asset) === 'local' || (providerIdForAsset(asset) === PRESET_PROVIDER_ID && authStore.canResourceWrite)"
+                      v-if="getAssetMutationScope(asset) === 'local'"
                       icon="mdi-pencil-outline"
                       variant="text"
                       density="compact"
@@ -4172,30 +4030,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
           <v-spacer />
           <v-btn variant="text" @click="cancelDeleteDirectory">Cancel</v-btn>
           <v-btn color="error" variant="flat" @click="confirmDeleteDirectory">Delete Folder</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
-    <v-dialog v-model="assetRenameDialogOpen" max-width="420">
-      <v-card>
-        <v-card-title>Rename Asset</v-card-title>
-        <v-card-text>
-          <v-text-field
-            v-model="assetRenameValue"
-            label="Asset name"
-            variant="outlined"
-            density="comfortable"
-            hide-details
-            autofocus
-            :hint="assetRenameTarget?.id ?? ''"
-            persistent-hint
-            @keydown.enter.prevent="submitAssetRenameDialog"
-          />
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="cancelAssetRenameDialog">Cancel</v-btn>
-          <v-btn color="primary" variant="flat" @click="submitAssetRenameDialog">Rename</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
