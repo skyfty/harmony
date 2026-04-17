@@ -155,6 +155,7 @@ export interface ListResourceCategoryEntriesParams {
   categoryId?: string;
   deletedOnly?: boolean;
   includeDeleted?: boolean;
+  recursive?: boolean;
 }
 
 export interface MergeCategoryPayload {

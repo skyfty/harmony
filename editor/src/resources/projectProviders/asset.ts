@@ -302,37 +302,67 @@ export interface ScatterAssetOption {
 
 export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatterPreset> = {
   flora: {
-    label: 'Flora',
+    label: '花草',
     icon: 'mdi-flower',
     minScale: 0.85,
     maxScale: 1.2,
   },
-  rocks: {
-    label: 'Rocks',
-    icon: 'mdi-terrain',
-    minScale: 0.9,
-    maxScale: 1.15,
-  },
   trees: {
-    label: 'Trees',
+    label: '树木',
     icon: 'mdi-pine-tree',
     minScale: 0.8,
     maxScale: 1.35,
   },
+  rocks: {
+    label: '岩石',
+    icon: 'mdi-terrain',
+    minScale: 0.9,
+    maxScale: 1.15,
+  },
   lamps: {
-    label: 'Lamps',
+    label: '灯具',
     icon: 'mdi-lamp',
     minScale: 0.8,
     maxScale: 1.35,
   },
   chairs: {
-    label: 'Chairs',
+    label: '座椅',
     icon: 'mdi-chair-rolling',
     minScale: 0.8,
     maxScale: 1.35,
   },
+  walls: {
+    label: '围墙',
+    icon: 'mdi-fence',
+    minScale: 0.8,
+    maxScale: 1.35,
+  },
+  screens: {
+    label: '影壁屏风',
+    icon: 'mdi-image-frame',
+    minScale: 0.8,
+    maxScale: 1.35,
+  },
+  curbs: {
+    label: '路肩',
+    icon: 'mdi-road-variant',
+    minScale: 0.8,
+    maxScale: 1.2,
+  },
+  signs: {
+    label: '标识',
+    icon: 'mdi-sign-direction',
+    minScale: 0.8,
+    maxScale: 1.2,
+  },
+  bins: {
+    label: '垃圾桶',
+    icon: 'mdi-trash-can-outline',
+    minScale: 0.8,
+    maxScale: 1.15,
+  },
   others: {
-    label: 'Others',
+    label: '其他',
     icon: 'mdi-dots-horizontal',
     minScale: 0.8,
     maxScale: 1.35,

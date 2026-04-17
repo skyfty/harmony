@@ -479,6 +479,7 @@ async function loadCurrentDirectoryEntries() {
     const result = await listResourceCategoryEntriesApi({
       categoryId: currentDirectoryId.value || undefined,
       deletedOnly: showDeletedOnly.value,
+      recursive: true,
     });
     currentDirectoryId.value = result.currentDirectory.id;
     currentDirectoryPath.value = result.currentDirectory.path || [];
@@ -1187,13 +1188,13 @@ onMounted(async () => {
               <Button v-access:code="'resource:write'" @click="clearAssetFilters">
                 清除筛选
               </Button>
-              <Input v-model:value="keyword" allow-clear style="width: 320px" placeholder="搜索当前目录资产" />
+              <Input v-model:value="keyword" allow-clear style="width: 320px" placeholder="搜索当前目录及子目录资产" />
             </Space>
           </div>
         </Space>
 
         <Space style="margin-bottom: 12px" wrap>
-          <Tag color="blue">当前目录</Tag>
+          <Tag color="blue">当前目录及子目录</Tag>
           <template v-for="(crumb, index) in currentDirectoryPath" :key="crumb.id">
             <Button type="link" size="small" @click="() => selectDirectory(crumb.id)">{{ crumb.name }}</Button>
             <ArrowRightOutlined v-if="index < currentDirectoryPath.length - 1" />

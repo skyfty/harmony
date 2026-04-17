@@ -1800,10 +1800,12 @@ export async function listResourceCategoryEntries(ctx: Context): Promise<void> {
   const rawCategoryId = sanitizeString(
     Array.isArray(ctx.query.categoryId) ? ctx.query.categoryId[0] : ctx.query.categoryId,
   )
+  const recursiveRaw = Array.isArray(ctx.query.recursive) ? ctx.query.recursive[0] : ctx.query.recursive
   const includeDeletedRaw = Array.isArray(ctx.query.includeDeleted)
     ? ctx.query.includeDeleted[0]
     : ctx.query.includeDeleted
   const deletedOnlyRaw = Array.isArray(ctx.query.deletedOnly) ? ctx.query.deletedOnly[0] : ctx.query.deletedOnly
+  const recursive = recursiveRaw === 'true'
   const root = (await getRootCategory()) ?? (await ensureRootCategory())
   const rootId = (root._id as Types.ObjectId).toString()
   const requestedCategoryId = rawCategoryId
@@ -1817,15 +1819,19 @@ export async function listResourceCategoryEntries(ctx: Context): Promise<void> {
     ctx.throw(404, 'Category not found')
   }
 
+  const assetCategoryIds = recursive
+    ? [currentCategoryId, ...(await listDescendantCategoryIds(currentCategoryId))]
+    : [currentCategoryId]
+
+  const assetQuery = deletedOnlyRaw === 'true'
+    ? { categoryId: { $in: assetCategoryIds }, deletedAt: { $ne: null } }
+    : includeDeletedRaw === 'true'
+      ? { categoryId: { $in: assetCategoryIds } }
+      : { categoryId: { $in: assetCategoryIds }, deletedAt: null }
+
   const [childDirectories, assets] = await Promise.all([
     listCategoryChildrenService(currentCategoryId),
-    AssetModel.find(
-      deletedOnlyRaw === 'true'
-        ? { categoryId: currentCategory._id, deletedAt: { $ne: null } }
-        : includeDeletedRaw === 'true'
-          ? { categoryId: currentCategory._id }
-          : { categoryId: currentCategory._id, deletedAt: null },
-    )
+    AssetModel.find(assetQuery)
       .populate('tags')
       .populate('seriesId')
       .sort({ updatedAt: -1 })
