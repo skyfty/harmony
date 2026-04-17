@@ -20,6 +20,7 @@ import {
   listResourceSeriesApi,
   listResourceTagsApi,
   moveResourceCategoryTreeItemApi,
+  refreshAssetManifestApi,
   restoreResourceAssetApi,
   updateResourceAssetApi,
   updateResourceCategoryTreeItemApi,
@@ -31,6 +32,7 @@ import {
   type ResourceSeriesItem,
   type ResourceTagItem,
 } from '#/api';
+import { formatAssetRole, formatFileSize } from '#/utils/format';
 
 import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Table, Upload, Tooltip, Tag } from 'ant-design-vue';
 import {
@@ -41,6 +43,9 @@ import {
   FolderOutlined,
   PlusOutlined,
   ArrowRightOutlined,
+  DownOutlined,
+  ReloadOutlined,
+  RightOutlined,
 } from '@ant-design/icons-vue';
 import { Checkbox } from 'ant-design-vue';
 
@@ -121,7 +126,11 @@ const directoryModalMode = ref<'create' | 'edit'>('create');
 const directoryName = ref('');
 const dragPayload = ref<null | { id: string; kind: 'asset' | 'directory' }>(null);
 const directoryKeyword = ref('');
+const collapsedDirectoryIds = reactive(new Set<string>());
+const directoryCollapseInitialized = ref(false);
 const showDeletedOnly = ref(false);
+const refreshingManifest = ref(false);
+const batchDeleteSubmitting = ref(false);
 const assetSortField = ref<'categoryPathString' | 'name' | 'size' | 'type' | 'updatedAt'>('name');
 const assetSortOrder = ref<'ascend' | 'descend'>('ascend');
 
@@ -283,12 +292,54 @@ const currentChildDirectories = computed(() =>
 const filteredDirectoryRows = computed(() => {
   const search = directoryKeyword.value.trim().toLowerCase();
   if (!search) {
-    return directoryRows.value;
+    return directoryRows.value.filter((item) => !item.ancestorIds.some((ancestorId) => collapsedDirectoryIds.has(ancestorId)));
   }
   return directoryRows.value.filter((item) => {
     return item.name.toLowerCase().includes(search) || item.pathLabel.toLowerCase().includes(search);
   });
 });
+
+function expandDirectoryAncestors(directoryId: string) {
+  const row = directoryRowMap.value.get(directoryId);
+  if (!row) {
+    return;
+  }
+  row.ancestorIds.forEach((ancestorId) => collapsedDirectoryIds.delete(ancestorId));
+}
+
+function toggleDirectoryExpanded(directoryId: string) {
+  if (collapsedDirectoryIds.has(directoryId)) {
+    collapsedDirectoryIds.delete(directoryId);
+    return;
+  }
+  collapsedDirectoryIds.add(directoryId);
+}
+
+function initializeDirectoryCollapsedState() {
+  if (directoryCollapseInitialized.value) {
+    return;
+  }
+  collapsedDirectoryIds.clear();
+  directoryRows.value.forEach((item) => {
+    if (item.hasChildren && item.depth >= 0) {
+      collapsedDirectoryIds.add(item.id);
+    }
+  });
+  directoryCollapseInitialized.value = true;
+}
+
+async function handleRefreshManifest() {
+  if (refreshingManifest.value) {
+    return;
+  }
+  refreshingManifest.value = true;
+  try {
+    await refreshAssetManifestApi();
+    message.success('manifest 已重新生成');
+  } finally {
+    refreshingManifest.value = false;
+  }
+}
 
 const filteredItems = computed(() => {
   const search = keyword.value.trim().toLowerCase();
@@ -419,6 +470,7 @@ async function loadLookups() {
   tags.value = tagList || [];
   series.value = seriesList || [];
   directoryItems.value = normalizeDirectoryTree(dirTree || []);
+  initializeDirectoryCollapsedState();
 }
 
 async function loadCurrentDirectoryEntries() {
@@ -430,6 +482,7 @@ async function loadCurrentDirectoryEntries() {
     });
     currentDirectoryId.value = result.currentDirectory.id;
     currentDirectoryPath.value = result.currentDirectory.path || [];
+    expandDirectoryAncestors(currentDirectoryId.value);
     mixedItems.value = result.items || [];
     selectedAssetIds.value = [];
   } finally {
@@ -515,6 +568,7 @@ async function openEditModal(row: ResourceAssetItem) {
 
 function selectDirectory(directoryId: string) {
   currentDirectoryId.value = directoryId;
+  expandDirectoryAncestors(directoryId);
   loadCurrentDirectoryEntries();
 }
 
@@ -791,6 +845,27 @@ async function handleBatchPermanentDelete() {
   });
 }
 
+async function handleBatchDelete() {
+  if (showDeletedOnly.value || !selectedAssets.value.length) {
+    return;
+  }
+  Modal.confirm({
+    title: `确认删除选中的 ${selectedAssets.value.length} 个资产吗？`,
+    content: '该操作会把资产移入回收站。',
+    okType: 'danger',
+    onOk: async () => {
+      batchDeleteSubmitting.value = true;
+      try {
+        await Promise.all(selectedAssets.value.map((item) => deleteResourceAssetApi(item.id)));
+        message.success('已删除选中的资产');
+        await refreshDirectoryContext();
+      } finally {
+        batchDeleteSubmitting.value = false;
+      }
+    },
+  });
+}
+
 async function submitBatchEdit() {
   if (!selectedAssetsCount.value) {
     message.warning('请先选择要批量编辑的资产');
@@ -880,6 +955,12 @@ const columns = computed(() => [
     sorter: true,
     sortOrder: assetSortField.value === 'type' ? assetSortOrder.value : undefined,
     title: '类型',
+    width: 120,
+  },
+  {
+    dataIndex: 'assetRole',
+    key: 'assetRole',
+    title: '角色类型',
     width: 120,
   },
   {
@@ -1042,6 +1123,16 @@ onMounted(async () => {
             @dragover.prevent="() => undefined"
             @drop="() => canDropOnDirectory(item.id) && handleDirectoryTreeDrop(item.id)"
           >
+            <Button
+              v-if="item.hasChildren"
+              type="text"
+              size="small"
+              style="width: 20px; min-width: 20px; height: 20px; padding: 0; flex: 0 0 20px"
+              @click.stop="() => toggleDirectoryExpanded(item.id)"
+            >
+              <component :is="collapsedDirectoryIds.has(item.id) ? RightOutlined : DownOutlined" style="font-size: 12px; color: #999" />
+            </Button>
+            <span v-else style="width: 20px; min-width: 20px; flex: 0 0 20px"></span>
             <component :is="currentDirectoryId === item.id ? FolderOpenOutlined : FolderOutlined" style="color: #1677ff" />
             <span style="flex: 1">{{ item.name }}</span>
             <span v-if="item.hasChildren" style="font-size: 12px; color: #999">子级</span>
@@ -1056,12 +1147,22 @@ onMounted(async () => {
               <PlusOutlined />
               新增资产
             </Button>
+            <Button v-access:code="'resource:write'" :loading="refreshingManifest" @click="handleRefreshManifest">
+              <ReloadOutlined />
+              刷新缓存
+            </Button>
             <Button v-access:code="'resource:write'" @click="openBatchEditModal" :disabled="selectedAssetsCount === 0 || showDeletedOnly">
               批量编辑
             </Button>
-              <Button v-access:code="'resource:write'" @click="clearAssetFilters">
-                清除筛选
-              </Button>
+            <Button
+              v-access:code="'resource:write'"
+              danger
+              :loading="batchDeleteSubmitting"
+              :disabled="selectedAssetsCount === 0 || showDeletedOnly"
+              @click="handleBatchDelete"
+            >
+              批量删除
+            </Button>
             <Button v-access:code="'resource:write'" @click="() => openMoveAssetModal()" :disabled="selectedAssetsCount === 0 || showDeletedOnly">
               移动选中资产
             </Button>
@@ -1075,13 +1176,20 @@ onMounted(async () => {
               批量彻底删除
             </Button>
           </Space>
-          <Input v-model:value="keyword" allow-clear style="width: 320px" placeholder="搜索当前目录资产" />
         </Space>
 
         <Space style="margin-bottom: 12px; width: 100%" wrap>
           <Select v-model:value="assetTypeFilter" :options="assetTypeOptions" style="width: 140px" />
           <Select v-model:value="assetSeriesFilter" :options="assetSeriesFilterOptions" style="width: 180px" show-search option-filter-prop="label" />
           <Select v-model:value="assetTagFilter" :options="assetTagFilterOptions" style="width: 180px" show-search option-filter-prop="label" />
+          <div style="margin-left: auto; min-width: 320px; flex: 1; display: flex; justify-content: flex-end">
+            <Space>
+              <Button v-access:code="'resource:write'" @click="clearAssetFilters">
+                清除筛选
+              </Button>
+              <Input v-model:value="keyword" allow-clear style="width: 320px" placeholder="搜索当前目录资产" />
+            </Space>
+          </div>
         </Space>
 
         <Space style="margin-bottom: 12px" wrap>
@@ -1128,12 +1236,16 @@ onMounted(async () => {
           {{ record.type }}
         </template>
 
+        <template v-else-if="column.key === 'assetRole'">
+          {{ formatAssetRole(asAssetRecord(record).assetRole) }}
+        </template>
+
         <template v-else-if="column.key === 'categoryPathString'">
           {{ record.categoryPathString || '-' }}
         </template>
 
         <template v-else-if="column.key === 'size'">
-          {{ record.size }}
+          {{ formatFileSize(record.size) }}
         </template>
 
         <template v-else-if="column.key === 'updatedAt'">

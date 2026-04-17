@@ -52,6 +52,7 @@ export interface ResourceAssetItem {
   categoryPath: ResourceCategoryPathItem[];
   categoryPathString: string;
   color: null | string;
+  assetRole: 'dependant' | 'master' | null;
   createdAt: string;
   description: null | string;
   dimensionHeight: null | number;
@@ -331,4 +332,8 @@ export async function deleteResourceSeriesApi(id: string) {
 
 export function buildResourceDownloadUrl(id: string) {
   return `/api/admin/resources/assets/${id}/download`;
+}
+
+export async function refreshAssetManifestApi() {
+  return requestClient.post('/resources/assets/manifest/refresh');
 }
