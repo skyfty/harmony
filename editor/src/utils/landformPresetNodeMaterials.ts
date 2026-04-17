@@ -109,5 +109,6 @@ export function buildLandformNodeMaterialsFromPreset(
     return []
   }
 
-  return [createNodeMaterialFromPatch(slotId, preset.materialPatch, sharedMaterials)]
+  const nodeMaterial = createNodeMaterialFromPatch(slotId, preset.materialPatch, sharedMaterials)
+  return nodeMaterial ? [nodeMaterial] : []
 }
