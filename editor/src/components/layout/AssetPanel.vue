@@ -404,6 +404,83 @@ function arraysEqual(a: string[], b: string[]): boolean {
   return true
 }
 
+function canMutateDirectoryId(directoryId: string | null | undefined): boolean {
+  return !!directoryId
+    && (
+      (isLocalDirectoryId(directoryId) && directoryId !== ASSETS_ROOT_DIRECTORY_ID)
+      || isPresetDirectoryMutable(directoryId)
+    )
+}
+
+function pruneTrackedElementMap<T extends HTMLElement>(
+  elements: Record<string, T>,
+  visibleIds: Set<string>,
+): Record<string, T> {
+  const nextElements: Record<string, T> = {}
+  for (const [id, element] of Object.entries(elements)) {
+    if (visibleIds.has(id)) {
+      nextElements[id] = element
+    }
+  }
+  return nextElements
+}
+
+function pruneTrackedIdSet(ids: Set<string>, visibleIds: Set<string>): Set<string> {
+  const next = new Set<string>()
+  for (const id of ids) {
+    if (visibleIds.has(id)) {
+      next.add(id)
+    }
+  }
+  return next
+}
+
+function normalizeTextValue(value: string | null | undefined): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function toggleSelectionValue(values: string[], value: string): string[] {
+  const next = new Set(values)
+  if (next.has(value)) {
+    next.delete(value)
+  } else {
+    next.add(value)
+  }
+  return Array.from(next)
+}
+
+function filterAvailableSelectionValues<T extends { value: string }>(values: string[], options: T[]): string[] {
+  const available = new Set(options.map((option) => option.value))
+  return values.filter((value) => available.has(value))
+}
+
+function mergeUniqueValues(values: string[], extraValues: string[]): string[] {
+  return Array.from(new Set([...values, ...extraValues]))
+}
+
+function removeValuesFromSelection(values: string[], removedValues: string[]): string[] {
+  if (!removedValues.length) {
+    return values
+  }
+  const removedSet = new Set(removedValues)
+  return values.filter((value) => !removedSet.has(value))
+}
+
+function clearSelectedAssets(): void {
+  selectedAssetIds.value = []
+}
+
+function pruneSelectableAssetSelections(assetIds: string[], assets: ProjectAsset[]): string[] {
+  const availableIds = new Set(assets.map((asset) => asset.id))
+  return assetIds.filter((id) => {
+    if (!availableIds.has(id)) {
+      return false
+    }
+    const asset = assets.find((item) => item.id === id)
+    return asset ? canDeleteAsset(asset) : false
+  })
+}
+
 const showDependantAssets = ref(false)
 
 function toggleDependantAssetVisibility(): void {
@@ -1040,11 +1117,7 @@ function toggleAssetSelection(asset: ProjectAsset) {
   if (!canDeleteAsset(asset)) {
     return
   }
-  if (isAssetSelected(assetId)) {
-    selectedAssetIds.value = selectedAssetIds.value.filter((id) => id !== assetId)
-  } else {
-    selectedAssetIds.value = [...selectedAssetIds.value, assetId]
-  }
+  selectedAssetIds.value = toggleSelectionValue(selectedAssetIds.value, assetId)
 }
 
 function setSelectableAssetSelection(select: boolean) {
@@ -1053,11 +1126,9 @@ function setSelectableAssetSelection(select: boolean) {
     return
   }
   if (select) {
-    const merged = new Set([...selectedAssetIds.value, ...selectableIds])
-    selectedAssetIds.value = Array.from(merged)
+    selectedAssetIds.value = mergeUniqueValues(selectedAssetIds.value, selectableIds)
   } else {
-    const deselectSet = new Set(selectableIds)
-    selectedAssetIds.value = selectedAssetIds.value.filter((id) => !deselectSet.has(id))
+    selectedAssetIds.value = removeValuesFromSelection(selectedAssetIds.value, selectableIds)
   }
 }
 
@@ -1078,14 +1149,40 @@ function openDeleteDialog(assets: ProjectAsset[], batch: boolean) {
   deleteDialogOpen.value = true
 }
 
+function closeDeleteAssetsDialog(): void {
+  deleteDialogOpen.value = false
+  pendingDeleteAssets.value = []
+  isBatchDeletion.value = false
+}
+
+function partitionDeleteTargets(assets: ProjectAsset[]): { localAssetIds: string[]; presetAssetIds: string[] } {
+  const localAssetIds: string[] = []
+  const presetAssetIds: string[] = []
+  assets.forEach((asset) => {
+    if (providerIdForAsset(asset) === PRESET_PROVIDER_ID) {
+      presetAssetIds.push(asset.id)
+    } else {
+      localAssetIds.push(asset.id)
+    }
+  })
+  return { localAssetIds, presetAssetIds }
+}
+
+function removeDeletedAssetIds(removedIds: string[]): void {
+  if (!removedIds.length) {
+    return
+  }
+  sceneStore.selectAsset(null)
+  searchResults.value = searchResults.value.filter((item) => !removedIds.includes(item.id))
+  selectedAssetIds.value = removeValuesFromSelection(selectedAssetIds.value, removedIds)
+}
+
 function requestDeleteSelection() {
   openDeleteDialog(selectedAssets.value, true)
 }
 
 function cancelDeleteAssets() {
-  deleteDialogOpen.value = false
-  pendingDeleteAssets.value = []
-  isBatchDeletion.value = false
+  closeDeleteAssetsDialog()
 }
 
 async function performDeleteAssets() {
@@ -1095,12 +1192,7 @@ async function performDeleteAssets() {
     return
   }
   try {
-    const localAssetIds = assets
-      .filter((asset) => providerIdForAsset(asset) !== PRESET_PROVIDER_ID)
-      .map((asset) => asset.id)
-    const presetAssetIds = assets
-      .filter((asset) => providerIdForAsset(asset) === PRESET_PROVIDER_ID)
-      .map((asset) => asset.id)
+    const { localAssetIds, presetAssetIds } = partitionDeleteTargets(assets)
 
     let removedIds: string[] = []
     if (localAssetIds.length) {
@@ -1113,11 +1205,7 @@ async function performDeleteAssets() {
       removedIds = removedIds.concat(presetAssetIds)
     }
 
-    if (removedIds.length) {
-      sceneStore.selectAsset(null)
-      searchResults.value = searchResults.value.filter((item) => !removedIds.includes(item.id))
-      selectedAssetIds.value = selectedAssetIds.value.filter((id) => !removedIds.includes(id))
-    }
+    removeDeletedAssetIds(removedIds)
   } catch (error) {
     console.error('Failed to delete assets', error)
   } finally {
@@ -1290,8 +1378,8 @@ const hasActiveAssetFilters = computed(
 const seriesOptions = computed<SeriesFilterOption[]>(() => {
   const map = new Map<string, SeriesFilterOption>()
   categoryFilteredAssets.value.forEach((asset) => {
-    const seriesId = typeof asset.seriesId === 'string' ? asset.seriesId.trim() : ''
-    const seriesName = typeof asset.seriesName === 'string' ? asset.seriesName.trim() : ''
+    const seriesId = normalizeTextValue(asset.seriesId)
+    const seriesName = normalizeTextValue(asset.seriesName)
     if (seriesId.length) {
       const value = `${SERIES_ID_PREFIX}${seriesId}`
       if (!map.has(value)) {
@@ -1342,18 +1430,18 @@ function assetMatchesSelectedSeries(asset: ProjectAsset, selectedValue: string |
   if (!selectedValue) {
     return true
   }
+  const seriesId = normalizeTextValue(asset.seriesId)
+  const seriesName = normalizeTextValue(asset.seriesName)
   if (selectedValue === SERIES_UNASSIGNED_VALUE) {
-    const hasSeriesId = typeof asset.seriesId === 'string' && asset.seriesId.trim().length > 0
-    const hasSeriesName = typeof asset.seriesName === 'string' && asset.seriesName.trim().length > 0
-    return !hasSeriesId && !hasSeriesName
+    return !seriesId.length && !seriesName.length
   }
   if (selectedValue.startsWith(SERIES_ID_PREFIX)) {
     const id = selectedValue.slice(SERIES_ID_PREFIX.length)
-    return (asset.seriesId ?? '').trim() === id
+    return seriesId === id
   }
   if (selectedValue.startsWith(SERIES_NAME_PREFIX)) {
     const name = selectedValue.slice(SERIES_NAME_PREFIX.length)
-    return (asset.seriesName ?? '').trim() === name
+    return seriesName === name
   }
   return false
 }
@@ -1366,8 +1454,7 @@ watch(seriesOptions, (options) => {
   if (!selectedSeriesValue.value) {
     return
   }
-  const available = new Set(options.map((option) => option.value))
-  if (!available.has(selectedSeriesValue.value)) {
+  if (!filterAvailableSelectionValues([selectedSeriesValue.value], options).length) {
     selectedSeriesValue.value = null
   }
 })
@@ -1376,7 +1463,7 @@ const sizeCategoryOptions = computed<SizeCategoryFilterOption[]>(() => {
   const map = new Map<string, SizeCategoryFilterOption>()
   let hasUnassigned = false
   seriesFilteredAssets.value.forEach((asset) => {
-    const size = typeof asset.sizeCategory === 'string' ? asset.sizeCategory.trim() : ''
+    const size = normalizeTextValue(asset.sizeCategory)
     if (size.length) {
       if (!map.has(size)) {
         map.set(size, { value: size, label: size })
@@ -1400,13 +1487,7 @@ function toggleSizeCategory(value: string): void {
   if (!value) {
     return
   }
-  const next = new Set(selectedSizeCategories.value)
-  if (next.has(value)) {
-    next.delete(value)
-  } else {
-    next.add(value)
-  }
-  selectedSizeCategories.value = Array.from(next)
+  selectedSizeCategories.value = toggleSelectionValue(selectedSizeCategories.value, value)
 }
 
 function clearSizeCategoryFilters(): void {
@@ -1419,7 +1500,7 @@ function assetMatchesSelectedSizeCategories(asset: ProjectAsset, selectedValues:
   if (!selectedValues.length) {
     return true
   }
-  const size = typeof asset.sizeCategory === 'string' ? asset.sizeCategory.trim() : ''
+  const size = normalizeTextValue(asset.sizeCategory)
   if (!size.length) {
     return selectedValues.includes(SIZE_UNASSIGNED_VALUE)
   }
@@ -1434,8 +1515,7 @@ watch(sizeCategoryOptions, (options) => {
   if (!selectedSizeCategories.value.length) {
     return
   }
-  const available = new Set(options.map((option) => option.value))
-  const filtered = selectedSizeCategories.value.filter((value) => available.has(value))
+  const filtered = filterAvailableSelectionValues(selectedSizeCategories.value, options)
   if (filtered.length !== selectedSizeCategories.value.length) {
     selectedSizeCategories.value = filtered
   }
@@ -1445,13 +1525,7 @@ function toggleTagFilter(value: string): void {
   if (!value) {
     return
   }
-  const current = new Set(tagFilterValues.value)
-  if (current.has(value)) {
-    current.delete(value)
-  } else {
-    current.add(value)
-  }
-  tagFilterValues.value = Array.from(current)
+  tagFilterValues.value = toggleSelectionValue(tagFilterValues.value, value)
 }
 
 function clearTagFilters(): void {
@@ -1544,12 +1618,19 @@ const uploadableSelectedAssets = computed(() =>
   selectedAssets.value.filter((asset) => asset.source?.type === 'local'),
 )
 
+function resolveAssetById(assetId: string | null | undefined): ProjectAsset | null {
+  if (!assetId) {
+    return null
+  }
+  return displayedAssets.value.find((asset) => asset.id === assetId) ?? sceneStore.getAsset(assetId) ?? null
+}
+
 const uploadDialogAssets = computed(() => {
   const targetId = uploadDialogTargetAssetId.value
   if (!targetId) {
     return uploadableSelectedAssets.value
   }
-  const target = displayedAssets.value.find((asset) => asset.id === targetId) ?? sceneStore.getAsset(targetId)
+  const target = resolveAssetById(targetId)
   if (!target) {
     return []
   }
@@ -1563,7 +1644,7 @@ function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[])
     return true
   }
   const assetIds = new Set((asset.tagIds ?? []).filter((id) => typeof id === 'string'))
-  const assetNames = new Set((asset.tags ?? []).map((name) => name.toLowerCase()))
+  const assetNames = new Set((asset.tags ?? []).map((name) => normalizeTextValue(name).toLowerCase()).filter(Boolean))
   return selectedValues.every((value) => {
     const option = tagOptionMap.value.get(value)
     if (option?.id && assetIds.has(option.id)) {
@@ -1650,21 +1731,8 @@ watch(
   (assets) => {
     const visibleIds = new Set(assets.map((asset) => asset.id))
 
-    const nextElements: Record<string, HTMLElement> = {}
-    for (const [assetId, element] of Object.entries(assetTitleElements.value)) {
-      if (visibleIds.has(assetId)) {
-        nextElements[assetId] = element
-      }
-    }
-    assetTitleElements.value = nextElements
-
-    const nextTruncated = new Set<string>()
-    for (const assetId of truncatedAssetNameIds.value) {
-      if (visibleIds.has(assetId)) {
-        nextTruncated.add(assetId)
-      }
-    }
-    truncatedAssetNameIds.value = nextTruncated
+    assetTitleElements.value = pruneTrackedElementMap(assetTitleElements.value, visibleIds)
+    truncatedAssetNameIds.value = pruneTrackedIdSet(truncatedAssetNameIds.value, visibleIds)
 
     refreshAssetNameTruncation()
   },
@@ -1675,8 +1743,7 @@ watch(tagOptions, (options) => {
   if (!tagFilterValues.value.length) {
     return
   }
-  const available = new Set(options.map((option) => option.value))
-  const filtered = tagFilterValues.value.filter((value) => available.has(value))
+  const filtered = filterAvailableSelectionValues(tagFilterValues.value, options)
   if (filtered.length !== tagFilterValues.value.length) {
     tagFilterValues.value = filtered
   }
@@ -1702,21 +1769,8 @@ watch(
   (directories) => {
     const visibleIds = new Set(directories.map((directory) => directory.id))
 
-    const nextElements: Record<string, HTMLElement> = {}
-    for (const [directoryId, element] of Object.entries(directoryTitleElements.value)) {
-      if (visibleIds.has(directoryId)) {
-        nextElements[directoryId] = element
-      }
-    }
-    directoryTitleElements.value = nextElements
-
-    const nextTruncated = new Set<string>()
-    for (const directoryId of truncatedDirectoryNameIds.value) {
-      if (visibleIds.has(directoryId)) {
-        nextTruncated.add(directoryId)
-      }
-    }
-    truncatedDirectoryNameIds.value = nextTruncated
+    directoryTitleElements.value = pruneTrackedElementMap(directoryTitleElements.value, visibleIds)
+    truncatedDirectoryNameIds.value = pruneTrackedIdSet(truncatedDirectoryNameIds.value, visibleIds)
 
     refreshDirectoryNameTruncation()
   },
@@ -1755,7 +1809,7 @@ function isPresetDirectoryMutable(directoryId: string | null | undefined): boole
 }
 
 function isDraggableDirectoryId(directoryId: string | null | undefined): boolean {
-  return (isLocalDirectoryId(directoryId) && directoryId !== ASSETS_ROOT_DIRECTORY_ID) || isPresetDirectoryMutable(directoryId)
+  return canMutateDirectoryId(directoryId)
 }
 
 function getAssetMutationScope(asset: ProjectAsset | null | undefined): 'local' | 'preset' | null {
@@ -1785,22 +1839,12 @@ const canCreateDirectory = computed(() => {
   const directoryId = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
   return isLocalDirectoryId(directoryId) || (authStore.canResourceWrite && isPresetDirectoryId(directoryId))
 })
-const canRenameDirectory = computed(() =>
-  !!activeDirectoryId.value
-  && (
-    (isLocalDirectoryId(activeDirectoryId.value) && activeDirectoryId.value !== ASSETS_ROOT_DIRECTORY_ID)
-    || isPresetDirectoryMutable(activeDirectoryId.value)
-  ),
-)
-const canDeleteDirectory = computed(() =>
-  !!activeDirectoryId.value
-  && (
-    (isLocalDirectoryId(activeDirectoryId.value) && activeDirectoryId.value !== ASSETS_ROOT_DIRECTORY_ID)
-    || isPresetDirectoryMutable(activeDirectoryId.value)
-  ),
-)
+const canRenameDirectory = computed(() => canMutateDirectoryId(activeDirectoryId.value))
+const canDeleteDirectory = canRenameDirectory
+type DirectoryDialogMode = 'create' | 'rename'
+
 const directoryDialogOpen = ref(false)
-const directoryDialogMode = ref<'create' | 'rename'>('create')
+const directoryDialogMode = ref<DirectoryDialogMode>('create')
 const directoryDialogName = ref('')
 const directoryDialogTargetId = ref<string | null>(null)
 const directoryDeleteDialogOpen = ref(false)
@@ -1820,44 +1864,65 @@ const assetRenameTarget = computed(() => {
   if (!targetId) {
     return null
   }
-  return displayedAssets.value.find((asset) => asset.id === targetId) ?? sceneStore.getAsset(targetId)
+  return resolveAssetById(targetId)
 })
+
+function openDirectoryDialog(mode: DirectoryDialogMode, targetDirectoryId: string, name: string): void {
+  directoryDialogMode.value = mode
+  directoryDialogTargetId.value = targetDirectoryId
+  directoryDialogName.value = name
+  directoryDialogOpen.value = true
+}
+
+function openAssetRenameDialog(assetId: string, name: string): void {
+  assetRenameTargetId.value = assetId
+  assetRenameValue.value = name
+  assetRenameDialogOpen.value = true
+}
+
+function openUploadDialogForAsset(assetId: string): void {
+  uploadDialogTargetAssetId.value = assetId
+  uploadDialogOpen.value = true
+}
+
+function closeAssetRenameDialog(): void {
+  assetRenameDialogOpen.value = false
+  assetRenameTargetId.value = null
+  assetRenameValue.value = ''
+}
+
+async function renameAssetById(assetId: string, name: string): Promise<void> {
+  const targetAsset = resolveAssetById(assetId)
+  const scope = getAssetMutationScope(targetAsset)
+  if (scope === 'local') {
+    sceneStore.renameProjectAsset(assetId, name)
+    return
+  }
+  if (scope === 'preset' && authStore.canResourceWrite) {
+    await updateAssetOnServer({ assetId, name })
+    await refreshPresetProviderAssets()
+  }
+}
 
 function promptCreateDirectory() {
   if (!canCreateDirectory.value) {
     return
   }
-  directoryDialogMode.value = 'create'
-  directoryDialogTargetId.value = activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
-  directoryDialogName.value = 'New Folder'
-  directoryDialogOpen.value = true
+  openDirectoryDialog('create', activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID, 'New Folder')
 }
 
 function promptRenameDirectory(directoryId?: string | null) {
   const targetDirectoryId = directoryId ?? activeDirectoryId.value
-  const canRenameTarget = targetDirectoryId
-    && (
-      (isLocalDirectoryId(targetDirectoryId) && targetDirectoryId !== ASSETS_ROOT_DIRECTORY_ID)
-      || isPresetDirectoryMutable(targetDirectoryId)
-    )
-  if (!canRenameTarget) {
+  if (!targetDirectoryId || !canMutateDirectoryId(targetDirectoryId)) {
     return
   }
   const directory = projectTree.value.length ? findDirectoryById(projectTree.value, targetDirectoryId) : null
-  directoryDialogMode.value = 'rename'
-  directoryDialogTargetId.value = targetDirectoryId
-  directoryDialogName.value = directory?.name ?? 'Folder'
-  directoryDialogOpen.value = true
+  openDirectoryDialog('rename', targetDirectoryId, directory?.name ?? 'Folder')
 }
 
 function promptDeleteDirectory(directoryId?: string | null) {
   const targetDirectoryId = directoryId ?? activeDirectoryId.value
-  const canDeleteTarget = targetDirectoryId
-    && (
-      (isLocalDirectoryId(targetDirectoryId) && targetDirectoryId !== ASSETS_ROOT_DIRECTORY_ID)
-      || isPresetDirectoryMutable(targetDirectoryId)
-    )
-  if (!canDeleteTarget) {
+  if (!canMutateDirectoryId(targetDirectoryId)) {
     return
   }
   directoryDeleteTargetId.value = targetDirectoryId
@@ -1870,6 +1935,59 @@ function cancelDirectoryDialog() {
   directoryDialogName.value = ''
 }
 
+function cancelDirectoryDeleteDialog() {
+  directoryDeleteDialogOpen.value = false
+  directoryDeleteTargetId.value = null
+}
+
+async function createDirectoryAtTarget(parentId: string, name: string): Promise<void> {
+  if (isLocalDirectoryId(parentId)) {
+    const directoryId = sceneStore.createAssetDirectory(name, parentId)
+    if (directoryId) {
+      ensureDirectoryOpened(directoryId)
+    }
+    return
+  }
+  if (authStore.canResourceWrite && isPresetDirectoryId(parentId)) {
+    const created = await createResourceCategory({
+      name,
+      parentId: resolveServerCategoryId(parentId),
+    })
+    await refreshPresetProviderAssets()
+    ensureDirectoryOpened(parentId)
+    ensureDirectoryOpened(created.id)
+    sceneStore.setActiveDirectory(created.id)
+  }
+}
+
+async function renameDirectoryById(directoryId: string, name: string): Promise<void> {
+  if (isLocalDirectoryId(directoryId)) {
+    sceneStore.renameAssetDirectory(directoryId, name)
+    return
+  }
+  if (isPresetDirectoryMutable(directoryId)) {
+    await updateResourceCategory(directoryId, { name })
+    await refreshPresetProviderAssets()
+  }
+}
+
+async function deleteDirectoryById(directoryId: string): Promise<void> {
+  if (isLocalDirectoryId(directoryId)) {
+    const result = sceneStore.deleteAssetDirectory(directoryId)
+    if (result.removedAssetIds.length) {
+      selectedAssetIds.value = selectedAssetIds.value.filter((id) => !result.removedAssetIds.includes(id))
+    }
+    return
+  }
+  if (isPresetDirectoryMutable(directoryId)) {
+    await deleteResourceCategory(directoryId)
+    if (activeDirectoryId.value === directoryId) {
+      sceneStore.setActiveDirectory(PRESET_PROVIDER_ROOT_DIRECTORY_ID)
+    }
+    await refreshPresetProviderAssets()
+  }
+}
+
 async function submitDirectoryDialog() {
   const name = directoryDialogName.value.trim()
   if (!name.length) {
@@ -1878,28 +1996,9 @@ async function submitDirectoryDialog() {
   try {
     if (directoryDialogMode.value === 'create') {
       const parentId = directoryDialogTargetId.value ?? activeDirectoryId.value ?? ASSETS_ROOT_DIRECTORY_ID
-      if (isLocalDirectoryId(parentId)) {
-        const directoryId = sceneStore.createAssetDirectory(name, parentId)
-        if (directoryId) {
-          ensureDirectoryOpened(directoryId)
-        }
-      } else if (authStore.canResourceWrite && isPresetDirectoryId(parentId)) {
-        const created = await createResourceCategory({
-          name,
-          parentId: resolveServerCategoryId(parentId),
-        })
-        await refreshPresetProviderAssets()
-        ensureDirectoryOpened(parentId)
-        ensureDirectoryOpened(created.id)
-        sceneStore.setActiveDirectory(created.id)
-      }
+      await createDirectoryAtTarget(parentId, name)
     } else if (directoryDialogTargetId.value) {
-      if (isLocalDirectoryId(directoryDialogTargetId.value)) {
-        sceneStore.renameAssetDirectory(directoryDialogTargetId.value, name)
-      } else if (isPresetDirectoryMutable(directoryDialogTargetId.value)) {
-        await updateResourceCategory(directoryDialogTargetId.value, { name })
-        await refreshPresetProviderAssets()
-      }
+      await renameDirectoryById(directoryDialogTargetId.value, name)
     }
     cancelDirectoryDialog()
   } catch (error) {
@@ -1908,49 +2007,34 @@ async function submitDirectoryDialog() {
 }
 
 function cancelDeleteDirectory() {
-  directoryDeleteDialogOpen.value = false
-  directoryDeleteTargetId.value = null
+  cancelDirectoryDeleteDialog()
 }
 
 async function confirmDeleteDirectory() {
   const targetDirectoryId = directoryDeleteTargetId.value
   if (!targetDirectoryId) {
-    cancelDeleteDirectory()
+    cancelDirectoryDeleteDialog()
     return
   }
   try {
-    if (isLocalDirectoryId(targetDirectoryId)) {
-      const result = sceneStore.deleteAssetDirectory(targetDirectoryId)
-      if (result.removedAssetIds.length) {
-        selectedAssetIds.value = selectedAssetIds.value.filter((id) => !result.removedAssetIds.includes(id))
-      }
-    } else if (isPresetDirectoryMutable(targetDirectoryId)) {
-      await deleteResourceCategory(targetDirectoryId)
-      if (activeDirectoryId.value === targetDirectoryId) {
-        sceneStore.setActiveDirectory(PRESET_PROVIDER_ROOT_DIRECTORY_ID)
-      }
-      await refreshPresetProviderAssets()
-    }
+    await deleteDirectoryById(targetDirectoryId)
   } catch (error) {
     console.error('Failed to delete directory', error)
   }
-  cancelDeleteDirectory()
+  cancelDirectoryDeleteDialog()
 }
 
 function promptRenameAsset(assetId?: string) {
   if (!assetId) return
-  const asset = displayedAssets.value.find((a) => a.id === assetId) ?? sceneStore.getAsset(assetId)
+  const asset = resolveAssetById(assetId)
   if (!asset) {
     return
   }
   if (getAssetMutationScope(asset) === 'local') {
-    uploadDialogTargetAssetId.value = asset.id
-    uploadDialogOpen.value = true
+    openUploadDialogForAsset(asset.id)
     return
   }
-  assetRenameTargetId.value = assetId
-  assetRenameValue.value = asset?.name ?? ''
-  assetRenameDialogOpen.value = true
+  openAssetRenameDialog(assetId, asset.name ?? '')
 }
 
 function promptDeleteAsset(asset: ProjectAsset) {
@@ -1958,9 +2042,7 @@ function promptDeleteAsset(asset: ProjectAsset) {
 }
 
 function cancelAssetRenameDialog() {
-  assetRenameDialogOpen.value = false
-  assetRenameTargetId.value = null
-  assetRenameValue.value = ''
+  closeAssetRenameDialog()
 }
 
 async function submitAssetRenameDialog() {
@@ -1970,15 +2052,8 @@ async function submitAssetRenameDialog() {
     return
   }
   try {
-    const targetAsset = assetRenameTarget.value
-    const scope = getAssetMutationScope(targetAsset)
-    if (scope === 'local') {
-      sceneStore.renameProjectAsset(targetId, name)
-    } else if (scope === 'preset' && authStore.canResourceWrite) {
-      await updateAssetOnServer({ assetId: targetId, name })
-      await refreshPresetProviderAssets()
-    }
-    cancelAssetRenameDialog()
+    await renameAssetById(targetId, name)
+    closeAssetRenameDialog()
   } catch (error) {
     console.error('Failed to rename asset', error)
   }
@@ -2330,7 +2405,7 @@ watch(uploadDialogOpen, (open) => {
 })
 
 function handleUploadCompleted(payload: { successCount: number; replacementMap: Record<string, string> }) {
-  selectedAssetIds.value = []
+  clearSelectedAssets()
   sceneStore.selectAsset(null)
   showDropFeedback('success', `Switched ${payload.successCount} assets to server references`)
 }
@@ -2954,7 +3029,7 @@ async function handleGalleryDrop(event: DragEvent) {
       })
       // Do not change active directory on import; keep previousActive
       sceneStore.selectAsset(null)
-      selectedAssetIds.value = []
+      clearSelectedAssets()
       if (previousActive) {
         // restore previous active directory to be explicit (no-op if unchanged)
         sceneStore.setActiveDirectory(previousActive)
@@ -3341,13 +3416,7 @@ watchEffect(() => {
 
 watch(displayedAssets, () => {
   const availableIds = new Set(displayedAssets.value.map((asset) => asset.id))
-  selectedAssetIds.value = selectedAssetIds.value.filter((id) => {
-    if (!availableIds.has(id)) {
-      return false
-    }
-    const asset = displayedAssets.value.find((item) => item.id === id)
-    return asset ? canDeleteAsset(asset) : false
-  })
+  selectedAssetIds.value = pruneSelectableAssetSelections(selectedAssetIds.value, displayedAssets.value)
   if (previewPlayingAssetId.value && !availableIds.has(previewPlayingAssetId.value)) {
     stopAudioPreview()
   }

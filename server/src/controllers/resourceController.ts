@@ -536,10 +536,6 @@ async function discardUploadedTempFile(file: UploadedFile | null | undefined): P
   await fs.remove(sourcePath).catch(() => undefined)
 }
 
-function resolvePersistedAssetRole(value: unknown): 'master' | 'dependant' {
-  return value === 'dependant' ? 'dependant' : 'master'
-}
-
 function determineSizeCategory(
   length: number | null | undefined,
   width: number | null | undefined,
@@ -1053,6 +1049,81 @@ async function resolveSeriesObjectId(input: string | null | undefined): Promise<
   return series._id as Types.ObjectId
 }
 
+async function resolveCategoryIdForPayloadOrThrow(
+  ctx: Context,
+  type: AssetDocument['type'],
+  payload: AssetMutationPayload,
+): Promise<Types.ObjectId> {
+  try {
+    const categoryDoc = await resolveCategoryForPayload(type, payload)
+    return (categoryDoc as AssetCategoryDocument & { _id: Types.ObjectId })._id
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code
+    if (code === 'INVALID_CATEGORY_ID') {
+      ctx.throw(400, 'Invalid category identifier')
+    }
+    if (code === 'CATEGORY_NOT_FOUND') {
+      ctx.throw(404, 'Category not found')
+    }
+    throw error
+  }
+}
+
+async function resolveSeriesObjectIdOrThrow(
+  ctx: Context,
+  input: string | null | undefined,
+): Promise<Types.ObjectId | null> {
+  try {
+    return await resolveSeriesObjectId(input)
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code
+    if (code === 'INVALID_SERIES_ID') {
+      ctx.throw(400, 'Invalid series identifier')
+    }
+    if (code === 'SERIES_NOT_FOUND') {
+      ctx.throw(404, 'Series not found')
+    }
+    throw error
+  }
+}
+
+async function resolveTagObjectIdsOrThrow(ctx: Context, tagIds: string[]): Promise<Types.ObjectId[]> {
+  const objectIds = tagIds
+    .filter((tagId) => Types.ObjectId.isValid(tagId))
+    .map((tagId) => new Types.ObjectId(tagId))
+  if (objectIds.length !== tagIds.length) {
+    ctx.throw(400, 'Invalid tag ids provided')
+  }
+
+  if (objectIds.length) {
+    const count = await AssetTagModel.countDocuments({ _id: { $in: objectIds } })
+    if (count !== objectIds.length) {
+      ctx.throw(400, 'One or more tag ids do not exist')
+    }
+  }
+
+  return objectIds
+}
+
+async function deleteReplacedThumbnail(
+  previousThumbnailKey: string | null | undefined,
+  nextThumbnailKey: string,
+  primaryFileKey: string | null | undefined,
+): Promise<void> {
+  if (!previousThumbnailKey || previousThumbnailKey === nextThumbnailKey || previousThumbnailKey === primaryFileKey) {
+    return
+  }
+  await deleteStoredFile(previousThumbnailKey)
+}
+
+function assignThumbnailUrls(
+  target: { previewUrl?: string | null; thumbnailUrl?: string | null },
+  thumbnailUrl: string,
+): void {
+  target.previewUrl = thumbnailUrl
+  target.thumbnailUrl = thumbnailUrl
+}
+
 function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): AssetTagSummary | null {
   if (tag instanceof Types.ObjectId) {
     return { id: tag.toString(), name: tag.toString() }
@@ -1141,14 +1212,10 @@ function mapAssetDocument(
   const originalFilename = sanitizeString(asset.originalFilename)
   const mimeType = sanitizeString(asset.mimeType)
   const contentHash = sanitizeString((asset as AssetDocument).contentHash)
-  const rawContentHashAlgorithm = sanitizeString((asset as AssetDocument).contentHashAlgorithm)
-  const contentHashAlgorithm =
-    rawContentHashAlgorithm === ASSET_BUNDLE_HASH_ALGORITHM ? rawContentHashAlgorithm : null
+  const contentHashAlgorithm = sanitizeString((asset as AssetDocument).contentHashAlgorithm)
   const sourceLocalAssetId = sanitizeString((asset as AssetDocument).sourceLocalAssetId)
-  const assetRoleRaw = sanitizeString((asset as AssetDocument).assetRole)
-  const assetRole = assetRoleRaw === 'master' || assetRoleRaw === 'dependant' ? assetRoleRaw : 'master'
-  const bundleRoleRaw = sanitizeString((asset as AssetDocument).bundleRole)
-  const bundleRole = bundleRoleRaw === 'primary' || bundleRoleRaw === 'dependency' ? bundleRoleRaw : null
+  const assetRole = (asset as AssetDocument).assetRole ?? 'master'
+  const bundleRole = (asset as AssetDocument).bundleRole ?? null
   const rawBundlePrimaryId = (asset as AssetDocument).bundlePrimaryAssetId as Types.ObjectId | string | null | undefined
   const bundlePrimaryAssetId = rawBundlePrimaryId ? rawBundlePrimaryId.toString() : null
 
@@ -1269,6 +1336,11 @@ function mapManifestAsset(
     updatedAt: response.updatedAt,
     size: response.size,
   }
+}
+
+async function mapAssetDocumentWithLookup(asset: AssetSource): Promise<AssetSummaryWithLocation> {
+  const categoryLookup = await loadCategoryInfoMap([asset.categoryId as Types.ObjectId])
+  return mapAssetDocument(asset, categoryLookup)
 }
 
 function buildManifestDirectories(
@@ -2335,8 +2407,7 @@ export async function getAsset(ctx: Context): Promise<void> {
   if (!asset) {
     ctx.throw(404, 'Asset not found')
   }
-  const categoryLookup = await loadCategoryInfoMap([asset.categoryId as Types.ObjectId])
-  ctx.body = mapAssetDocument(asset, categoryLookup)
+  ctx.body = await mapAssetDocumentWithLookup(asset)
 }
 
 export async function uploadAsset(ctx: Context): Promise<void> {
@@ -2350,21 +2421,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   const payload = extractMutationPayload(ctx)
   enforceManagedCategorySelection(ctx, payload)
   const type = normalizeAssetType(payload.type ?? 'file')
-  const tagsRaw = payload.tagIds ?? []
-  const tagObjectIds = tagsRaw
-    .filter((id) => Types.ObjectId.isValid(id))
-    .map((id) => new Types.ObjectId(id))
-
-  if (tagObjectIds.length !== tagsRaw.length) {
-    ctx.throw(400, 'Invalid tag ids provided')
-  }
-
-  if (tagObjectIds.length) {
-    const count = await AssetTagModel.countDocuments({ _id: { $in: tagObjectIds } })
-    if (count !== tagObjectIds.length) {
-      ctx.throw(400, 'One or more tag ids do not exist')
-    }
-  }
+  const tagObjectIds = await resolveTagObjectIdsOrThrow(ctx, payload.tagIds ?? [])
 
   const contentHash = await computeUploadedFileContentHash(uploadedFile)
   const thumbnailFile = extractUploadedFile(files, 'thumbnail')
@@ -2380,75 +2437,49 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   if (existingAsset) {
     await discardUploadedTempFile(uploadedFile)
 
-    if (resolvePersistedAssetRole(existingAsset.assetRole) === 'dependant') {
-      let categoryDoc: AssetCategoryDocument
+    if (existingAsset.assetRole === 'dependant') {
       try {
-        categoryDoc = await resolveCategoryForPayload(type, payload)
+        const categoryId = await resolveCategoryIdForPayloadOrThrow(ctx, type, payload)
+        const seriesObjectId = await resolveSeriesObjectIdOrThrow(ctx, payload.seriesId)
+        const thumbnailInfo = thumbnailFile
+          ? await storeUploadedFile(thumbnailFile, { prefix: THUMBNAIL_PREFIX })
+          : null
+        const previousThumbnailKey = resolveThumbnailFileKey(existingAsset)
+        const primaryFileKey = resolveAssetFileKey(existingAsset)
+        const originalName = sanitizeString(uploadedFile.originalFilename ?? uploadedFile.newFilename)
+        const dimensionLength = payload.dimensionLength ?? null
+        const dimensionWidth = payload.dimensionWidth ?? null
+        const dimensionHeight = payload.dimensionHeight ?? null
+
+        existingAsset.name = payload.name ?? originalName ?? existingAsset.name
+        existingAsset.categoryId = categoryId
+        existingAsset.tags = tagObjectIds
+        existingAsset.seriesId = seriesObjectId
+        existingAsset.color = payload.color ?? null
+        existingAsset.dimensionLength = dimensionLength
+        existingAsset.dimensionWidth = dimensionWidth
+        existingAsset.dimensionHeight = dimensionHeight
+        existingAsset.sizeCategory = determineSizeCategory(dimensionLength, dimensionWidth, dimensionHeight)
+        existingAsset.imageWidth = payload.imageWidth ?? null
+        existingAsset.imageHeight = payload.imageHeight ?? null
+        existingAsset.description = payload.description ?? null
+        existingAsset.metadata = payload.metadata ?? undefined
+        existingAsset.terrainScatterPreset = payload.terrainScatterPreset ?? null
+        existingAsset.originalFilename = originalName ?? existingAsset.originalFilename
+        existingAsset.mimeType = sanitizeString(uploadedFile.mimetype) ?? existingAsset.mimeType
+        existingAsset.assetRole = 'master'
+
+        if (thumbnailInfo) {
+          assignThumbnailUrls(existingAsset, thumbnailInfo.url)
+        }
+
+        await existingAsset.save()
+        if (thumbnailInfo) {
+          await deleteReplacedThumbnail(previousThumbnailKey, thumbnailInfo.fileKey, primaryFileKey)
+        }
       } catch (error) {
         await discardUploadedTempFile(thumbnailFile)
-        const code = (error as { code?: string } | null)?.code
-        if (code === 'INVALID_CATEGORY_ID') {
-          ctx.throw(400, 'Invalid category identifier')
-        }
-        if (code === 'CATEGORY_NOT_FOUND') {
-          ctx.throw(404, 'Category not found')
-        }
         throw error
-      }
-
-      let seriesObjectId: Types.ObjectId | null = null
-      try {
-        seriesObjectId = await resolveSeriesObjectId(payload.seriesId)
-      } catch (error) {
-        await discardUploadedTempFile(thumbnailFile)
-        const code = (error as { code?: string } | null)?.code
-        if (code === 'INVALID_SERIES_ID') {
-          ctx.throw(400, 'Invalid series identifier')
-        }
-        if (code === 'SERIES_NOT_FOUND') {
-          ctx.throw(404, 'Series not found')
-        }
-        throw error
-      }
-
-      let thumbnailInfo: Awaited<ReturnType<typeof storeUploadedFile>> | null = null
-      if (thumbnailFile) {
-        thumbnailInfo = await storeUploadedFile(thumbnailFile, { prefix: THUMBNAIL_PREFIX })
-      }
-
-      const previousThumbnailKey = resolveThumbnailFileKey(existingAsset)
-      const primaryFileKey = resolveAssetFileKey(existingAsset)
-      const originalName = sanitizeString(uploadedFile.originalFilename ?? uploadedFile.newFilename)
-      const dimensionLength = payload.dimensionLength ?? null
-      const dimensionWidth = payload.dimensionWidth ?? null
-      const dimensionHeight = payload.dimensionHeight ?? null
-
-      existingAsset.name = payload.name ?? originalName ?? existingAsset.name
-      existingAsset.categoryId = categoryDoc._id as Types.ObjectId
-      existingAsset.tags = tagObjectIds
-      existingAsset.seriesId = seriesObjectId
-      existingAsset.color = payload.color ?? null
-      existingAsset.dimensionLength = dimensionLength
-      existingAsset.dimensionWidth = dimensionWidth
-      existingAsset.dimensionHeight = dimensionHeight
-      existingAsset.sizeCategory = determineSizeCategory(dimensionLength, dimensionWidth, dimensionHeight)
-      existingAsset.imageWidth = payload.imageWidth ?? null
-      existingAsset.imageHeight = payload.imageHeight ?? null
-      existingAsset.description = payload.description ?? null
-      existingAsset.metadata = payload.metadata ?? undefined
-      existingAsset.terrainScatterPreset = payload.terrainScatterPreset ?? null
-      existingAsset.originalFilename = originalName ?? existingAsset.originalFilename
-      existingAsset.mimeType = sanitizeString(uploadedFile.mimetype) ?? existingAsset.mimeType
-      existingAsset.assetRole = 'master'
-
-      if (thumbnailInfo) {
-        existingAsset.previewUrl = thumbnailInfo.url
-        existingAsset.thumbnailUrl = thumbnailInfo.url
-      }
-
-      await existingAsset.save()
-      if (thumbnailInfo && previousThumbnailKey && previousThumbnailKey !== thumbnailInfo.fileKey && previousThumbnailKey !== primaryFileKey) {
-        await deleteStoredFile(previousThumbnailKey)
       }
     } else {
       await discardUploadedTempFile(thumbnailFile)
@@ -2458,10 +2489,8 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     if (!populated) {
       ctx.throw(500, 'Failed to resolve existing asset')
     }
-    const resolvedPopulated = populated!
     await refreshManifest()
-    const categoryLookup = await loadCategoryInfoMap([resolvedPopulated.categoryId as Types.ObjectId])
-    ctx.body = { asset: mapAssetDocument(resolvedPopulated, categoryLookup) }
+    ctx.body = { asset: await mapAssetDocumentWithLookup(populated) }
     return
   }
 
@@ -2471,35 +2500,8 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     thumbnailInfo = await storeUploadedFile(thumbnailFile, { prefix: THUMBNAIL_PREFIX })
   }
 
-  let categoryDoc: AssetCategoryDocument
-  try {
-    categoryDoc = await resolveCategoryForPayload(type, payload)
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code
-    if (code === 'INVALID_CATEGORY_ID') {
-      ctx.throw(400, 'Invalid category identifier')
-    }
-    if (code === 'CATEGORY_NOT_FOUND') {
-      ctx.throw(404, 'Category not found')
-    }
-    throw error
-  }
-
-  const categoryId = categoryDoc._id as Types.ObjectId
-
-  let seriesObjectId: Types.ObjectId | null = null
-  try {
-    seriesObjectId = await resolveSeriesObjectId(payload.seriesId)
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code
-    if (code === 'INVALID_SERIES_ID') {
-      ctx.throw(400, 'Invalid series identifier')
-    }
-    if (code === 'SERIES_NOT_FOUND') {
-      ctx.throw(404, 'Series not found')
-    }
-    throw error
-  }
+  const categoryId = await resolveCategoryIdForPayloadOrThrow(ctx, type, payload)
+  const seriesObjectId = await resolveSeriesObjectIdOrThrow(ctx, payload.seriesId)
 
   const dimensionLength = payload.dimensionLength ?? null
   const dimensionWidth = payload.dimensionWidth ?? null
@@ -2542,10 +2544,8 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     { path: 'tags' },
     { path: 'seriesId' },
   ])) as AssetDocument & { tags: AssetTagDocument[]; seriesId?: AssetSeriesDocument | null }
-  const categoryLookup = await loadCategoryInfoMap([categoryId])
-  const response = mapAssetDocument(populated, categoryLookup)
   await refreshManifest()
-  ctx.body = { asset: response }
+  ctx.body = { asset: await mapAssetDocumentWithLookup(populated) }
 }
 
 export async function uploadAssetBundle(ctx: Context): Promise<void> {
@@ -2583,34 +2583,9 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   }
   enforceManagedCategorySelection(ctx, payload)
 
-  const tagObjectIds = (payload.tagIds ?? [])
-    .filter((id) => Types.ObjectId.isValid(id))
-    .map((id) => new Types.ObjectId(id))
-  if ((payload.tagIds ?? []).length !== tagObjectIds.length) {
-    ctx.throw(400, 'Invalid tag ids provided')
-  }
-  if (tagObjectIds.length) {
-    const count = await AssetTagModel.countDocuments({ _id: { $in: tagObjectIds } })
-    if (count !== tagObjectIds.length) {
-      ctx.throw(400, 'One or more tag ids do not exist')
-    }
-  }
+  const tagObjectIds = await resolveTagObjectIdsOrThrow(ctx, payload.tagIds ?? [])
 
-  let categoryDoc: AssetCategoryDocument
-  try {
-    categoryDoc = await resolveCategoryForPayload(normalizeAssetType(payload.type), payload)
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code
-    if (code === 'INVALID_CATEGORY_ID') {
-      ctx.throw(400, 'Invalid category identifier')
-    }
-    if (code === 'CATEGORY_NOT_FOUND') {
-      ctx.throw(404, 'Category not found')
-    }
-    throw error
-  }
-
-  const categoryId = categoryDoc._id as Types.ObjectId
+  const categoryId = await resolveCategoryIdForPayloadOrThrow(ctx, normalizeAssetType(payload.type), payload)
   const assetIdMap = new Map<string, string>()
   const persistedBundleAssets = new Map<string, PersistedBundleAssetReference>()
   const persistedAssetIds = new Set<string>()
@@ -2815,7 +2790,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
       bundleRole: 'primary',
       bundlePrimaryAssetId: null,
     })
-  } else if (resolvePersistedAssetRole(primaryAsset.assetRole) === 'dependant') {
+  } else if (primaryAsset.assetRole === 'dependant') {
     const thumbnailInfo = thumbnailBundleFile
       ? await storeBufferAsFile(thumbnailBundleFile.bytes, {
           filename: thumbnailBundleFile.entry.filename,
@@ -2846,12 +2821,11 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     primaryAsset.metadata = primaryMetadata
     primaryAsset.terrainScatterPreset = payload.terrainScatterPreset ?? null
     if (thumbnailInfo) {
-      primaryAsset.previewUrl = thumbnailInfo.url
-      primaryAsset.thumbnailUrl = thumbnailInfo.url
+      assignThumbnailUrls(primaryAsset, thumbnailInfo.url)
     }
     await primaryAsset.save()
-    if (thumbnailInfo && previousThumbnailKey && previousThumbnailKey !== thumbnailInfo.fileKey && previousThumbnailKey !== primaryFileKey) {
-      await deleteStoredFile(previousThumbnailKey)
+    if (thumbnailInfo) {
+      await deleteReplacedThumbnail(previousThumbnailKey, thumbnailInfo.fileKey, primaryFileKey)
     }
   } else if (thumbnailBundleFile) {
     const thumbnailInfo = await storeBufferAsFile(thumbnailBundleFile.bytes, {
@@ -2861,12 +2835,9 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
     })
     const previousThumbnailKey = resolveThumbnailFileKey(primaryAsset)
     const primaryFileKey = resolveAssetFileKey(primaryAsset)
-    primaryAsset.previewUrl = thumbnailInfo.url
-    primaryAsset.thumbnailUrl = thumbnailInfo.url
+    assignThumbnailUrls(primaryAsset, thumbnailInfo.url)
     await primaryAsset.save()
-    if (previousThumbnailKey && previousThumbnailKey !== thumbnailInfo.fileKey && previousThumbnailKey !== primaryFileKey) {
-      await deleteStoredFile(previousThumbnailKey)
-    }
+    await deleteReplacedThumbnail(previousThumbnailKey, thumbnailInfo.fileKey, primaryFileKey)
   }
 
   persistedAssetIds.add(primaryAsset._id.toString())
@@ -2944,15 +2915,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
     updates.terrainScatterPreset = payload.terrainScatterPreset ?? null
   }
   if (payload.tagIds !== undefined) {
-    const tagIds = payload.tagIds.filter((tagId) => Types.ObjectId.isValid(tagId))
-    if (tagIds.length !== payload.tagIds.length) {
-      ctx.throw(400, 'Invalid tag ids provided')
-    }
-    const count = await AssetTagModel.countDocuments({ _id: { $in: tagIds } })
-    if (count !== tagIds.length) {
-      ctx.throw(400, 'One or more tag ids do not exist')
-    }
-    updates.tags = tagIds.map((tagId) => new Types.ObjectId(tagId))
+    updates.tags = await resolveTagObjectIdsOrThrow(ctx, payload.tagIds)
   }
   if (payload.type) {
     const normalizedType = normalizeAssetType(payload.type, asset.type)
@@ -2966,18 +2929,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
   }
 
   if (payload.seriesId !== undefined) {
-    try {
-      updates.seriesId = await resolveSeriesObjectId(payload.seriesId)
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code
-      if (code === 'INVALID_SERIES_ID') {
-        ctx.throw(400, 'Invalid series identifier')
-      }
-      if (code === 'SERIES_NOT_FOUND') {
-        ctx.throw(404, 'Series not found')
-      }
-      throw error
-    }
+    updates.seriesId = await resolveSeriesObjectIdOrThrow(ctx, payload.seriesId)
   }
 
   const shouldResolveCategory =
@@ -2986,19 +2938,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
     Boolean(payload.categoryPathSegments && payload.categoryPathSegments.length)
 
   if (shouldResolveCategory) {
-    try {
-      const resolvedCategoryDoc = await resolveCategoryForPayload(nextType, payload)
-      updates.categoryId = resolvedCategoryDoc._id as Types.ObjectId
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code
-      if (code === 'INVALID_CATEGORY_ID') {
-        ctx.throw(400, 'Invalid category identifier')
-      }
-      if (code === 'CATEGORY_NOT_FOUND') {
-        ctx.throw(404, 'Category not found')
-      }
-      throw error
-    }
+    updates.categoryId = await resolveCategoryIdForPayloadOrThrow(ctx, nextType, payload)
   }
 
   if (file) {
@@ -3019,9 +2959,9 @@ export async function updateAsset(ctx: Context): Promise<void> {
   if (thumbnailFile) {
     const thumbnailInfo = await storeUploadedFile(thumbnailFile, { prefix: THUMBNAIL_PREFIX })
     const previousThumbnailKey = resolveThumbnailFileKey(asset)
-    updates.previewUrl = thumbnailInfo.url
-    updates.thumbnailUrl = thumbnailInfo.url
-    await deleteStoredFile(previousThumbnailKey)
+    const primaryFileKey = resolveAssetFileKey(asset)
+    assignThumbnailUrls(updates, thumbnailInfo.url)
+    await deleteReplacedThumbnail(previousThumbnailKey, thumbnailInfo.fileKey, primaryFileKey)
   }
 
   let nextDimensionLength = asset.dimensionLength ?? null
@@ -3065,8 +3005,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
       { path: 'tags' },
       { path: 'seriesId' },
     ])) as AssetDocument & { tags: AssetTagDocument[]; seriesId?: AssetSeriesDocument | null }
-    const categoryLookup = await loadCategoryInfoMap([populated.categoryId as Types.ObjectId])
-    ctx.body = mapAssetDocument(populated, categoryLookup)
+    ctx.body = await mapAssetDocumentWithLookup(populated)
     return
   }
 
@@ -3076,8 +3015,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
     ctx.throw(500, 'Failed to update asset')
   }
   await refreshManifest()
-  const categoryLookup = await loadCategoryInfoMap([updated.categoryId as Types.ObjectId])
-  ctx.body = mapAssetDocument(updated, categoryLookup)
+  ctx.body = await mapAssetDocumentWithLookup(updated)
 }
 
 export async function deleteAsset(ctx: Context): Promise<void> {
