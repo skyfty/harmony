@@ -249,6 +249,7 @@ import {
   createProjectTreeFromCache,
   defaultDirectoryId,
   determineAssetCategoryId,
+  normalizePackageProviderDirectories,
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
@@ -352,7 +353,12 @@ import {
   type LodComponentProps,
 } from '@schema/components'
 
-export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
+export {
+  ASSETS_ROOT_DIRECTORY_ID,
+  buildPackageDirectoryId,
+  extractProviderIdFromPackageDirectoryId,
+  getSingleVisiblePackageProviderId,
+} from './assetCatalog'
 
 export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
 
@@ -7806,7 +7812,7 @@ export const useSceneStore = defineStore('scene', {
         return directory?.assets ?? []
       }
       if (state.activeDirectoryId === PACKAGES_ROOT_DIRECTORY_ID) {
-        return []
+        return directory?.assets ?? []
       }
       if (!directory) {
         return []
@@ -11266,7 +11272,11 @@ export const useSceneStore = defineStore('scene', {
       if (!providerDirectories?.length) {
         return []
       }
-      const foundPath = findAssetPathSegmentsInDirectories(providerDirectories, assetId)
+      const normalized = normalizePackageProviderDirectories(providerDirectories)
+      if (normalized.assets?.some((asset) => asset.id === assetId)) {
+        return []
+      }
+      const foundPath = findAssetPathSegmentsInDirectories(normalized.directories, assetId)
       if (!foundPath?.length) {
         return []
       }

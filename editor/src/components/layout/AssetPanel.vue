@@ -6,6 +6,7 @@ import 'splitpanes/dist/splitpanes.css'
 import {
   useSceneStore,
   extractProviderIdFromPackageDirectoryId,
+  getSingleVisiblePackageProviderId,
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
@@ -212,7 +213,17 @@ function findProviderIdForDirectoryId(directoryId: string | null): string | null
       return providerId
     }
   }
+  if (path.some((entry) => entry.id === PACKAGES_ROOT_DIRECTORY_ID)) {
+    return getSingleVisiblePackageProviderId()
+  }
   return null
+}
+
+function resolveProviderIdForOpenedDirectory(directoryId: string): string | null {
+  if (directoryId === PACKAGES_ROOT_DIRECTORY_ID) {
+    return getSingleVisiblePackageProviderId()
+  }
+  return findProviderIdForDirectoryId(directoryId)
 }
 
 async function loadPackageDirectory(providerId: string, options: { force?: boolean } = {}) {
@@ -345,7 +356,7 @@ function triggerProviderLoadForOpenedDirectories(ids: string[], previousIds?: st
   }
   const previousSet = new Set(previousIds ?? [])
   ids.forEach((id) => {
-    const providerId = extractProviderIdFromPackageDirectoryId(id)
+    const providerId = resolveProviderIdForOpenedDirectory(id)
     if (!providerId) {
       return
     }
@@ -471,6 +482,30 @@ function pruneSelectableAssetSelections(assetIds: string[], assets: ProjectAsset
 
 const showDependantAssets = ref(false)
 
+function describeAssetPanelEntry(asset: ProjectAsset): string {
+  const source = asset.source ?? null
+  const sourceType = source?.type ?? 'none'
+  const sourceDetail = source?.type === 'package'
+    ? `provider=${source.providerId}`
+    : source?.type === 'server'
+      ? `serverAssetId=${source.serverAssetId ?? ''}`
+      : null
+  const parts = [
+    `id=${asset.id}`,
+    `name=${asset.name}`,
+    `type=${asset.type}`,
+    `role=${asset.assetRole ?? 'master'}`,
+    `source=${sourceType}`,
+    sourceDetail,
+    asset.fileKey ? `fileKey=${asset.fileKey}` : null,
+  ]
+  return parts.filter((part): part is string => !!part).join(' ')
+}
+
+function logAssetPanelVisibility(asset: ProjectAsset, visible: boolean, reason: string): void {
+  console.info(`[AssetPanel] ${visible ? 'show' : 'hide'} ${reason}: ${describeAssetPanelEntry(asset)}`)
+}
+
 function toggleDependantAssetVisibility(): void {
   showDependantAssets.value = !showDependantAssets.value
 }
@@ -479,8 +514,12 @@ function isPanelVisibleAsset(asset: ProjectAsset | null | undefined): boolean {
   if (!asset?.id) {
     return false
   }
-  if (!showDependantAssets.value && asset.assetRole === 'dependant' && typeof asset.fileKey === 'string' && asset.fileKey.trim().length > 0) {
+  if (!showDependantAssets.value && asset.assetRole === 'dependant') {
+    logAssetPanelVisibility(asset, false, 'dependant asset hidden by default')
     return false
+  }
+  if (asset.source?.type === 'server' && (asset.assetRole === 'dependant' || asset.type === 'model')) {
+    logAssetPanelVisibility(asset, true, 'server asset passed visibility check')
   }
   return asset.internal !== true
 }
@@ -1336,7 +1375,18 @@ const normalizedSearchQuery = computed(() => (searchQuery.value ?? '').trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const baseDisplayedAssets = computed(() => {
   const assets = isSearchActive.value ? searchResults.value : currentAssets.value
-  return assets.filter((asset) => isPanelVisibleAsset(asset))
+  const visibleAssets = assets.filter((asset) => isPanelVisibleAsset(asset))
+  if (typeof window !== 'undefined' && currentDirectory.value) {
+    console.debug('[AssetPanel] baseDisplayedAssets', {
+      directoryId: currentDirectory.value.id,
+      directoryName: currentDirectory.value.name,
+      assetCount: assets.length,
+      visibleCount: visibleAssets.length,
+      assets: assets.map((asset) => describeAssetPanelEntry(asset)),
+      visibleAssets: visibleAssets.map((asset) => describeAssetPanelEntry(asset)),
+    })
+  }
+  return visibleAssets
 })
 const categoryFilteredAssets = computed(() => baseDisplayedAssets.value)
 
@@ -3132,7 +3182,10 @@ const assetProviderMap = computed(() => {
       return
     }
     directories.forEach((directory) => {
-      const directoryProviderId = extractProviderIdFromPackageDirectoryId(directory.id) ?? inheritedProviderId
+      const directoryProviderId = extractProviderIdFromPackageDirectoryId(directory.id)
+        ?? (directory.id === PACKAGES_ROOT_DIRECTORY_ID && !inheritedProviderId
+          ? getSingleVisiblePackageProviderId()
+          : inheritedProviderId)
       if (directory.assets?.length && directoryProviderId) {
         directory.assets.forEach((asset) => {
           map.set(asset.id, directoryProviderId)
@@ -3158,8 +3211,12 @@ const assetPackagePathMap = computed(() => {
       return
     }
     directories.forEach((directory) => {
-      const directoryProviderId = extractProviderIdFromPackageDirectoryId(directory.id) ?? inheritedProviderId
-      const isProviderRoot = Boolean(extractProviderIdFromPackageDirectoryId(directory.id))
+      const directProviderId = extractProviderIdFromPackageDirectoryId(directory.id)
+      const flattenedProviderId = directory.id === PACKAGES_ROOT_DIRECTORY_ID && !inheritedProviderId
+        ? getSingleVisiblePackageProviderId()
+        : null
+      const directoryProviderId = directProviderId ?? flattenedProviderId ?? inheritedProviderId
+      const isProviderRoot = Boolean(directProviderId || flattenedProviderId)
       const nextPath = directoryProviderId
         ? (isProviderRoot ? [] : [...inheritedPath, directory.name])
         : inheritedPath
@@ -3565,11 +3622,15 @@ const selectedDirectory = computed<string[] | undefined>({
 
 function isProviderDirectory(id: string | undefined | null): boolean {
   if (!id) return false
-  return !!extractProviderIdFromPackageDirectoryId(id)
+  return id === PACKAGES_ROOT_DIRECTORY_ID
+    ? !!getSingleVisiblePackageProviderId()
+    : !!extractProviderIdFromPackageDirectoryId(id)
 }
 function isDirectoryLoading(id: string | undefined | null): boolean {
   if (!id) return false
-  const providerId = extractProviderIdFromPackageDirectoryId(id)
+  const providerId = id === PACKAGES_ROOT_DIRECTORY_ID
+    ? getSingleVisiblePackageProviderId()
+    : extractProviderIdFromPackageDirectoryId(id)
   return providerId ? isProviderLoading(providerId) : false
 }
 </script>

@@ -1,4 +1,4 @@
-import { resourceProviders } from '@/resources/projectProviders'
+import { resourceProviders, type ResourceProvider } from '@/resources/projectProviders'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@schema'
@@ -189,6 +189,40 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
   return FALLBACK_ASSET_CATEGORY_ID
 }
 
+function isVisiblePackageProvider(provider: ResourceProvider): boolean {
+  return provider.includeInPackages !== false && Boolean(provider.url || provider.load)
+}
+
+export function getVisiblePackageProviders(): ResourceProvider[] {
+  return resourceProviders.filter((provider) => isVisiblePackageProvider(provider))
+}
+
+export function getSingleVisiblePackageProviderId(): string | null {
+  const visibleProviders = getVisiblePackageProviders()
+  return visibleProviders.length === 1 ? visibleProviders[0]!.id : null
+}
+
+export function normalizePackageProviderDirectories(
+  directories: ProjectDirectory[] = [],
+): {
+  assets?: ProjectAsset[]
+  directories: ProjectDirectory[]
+} {
+  if (!directories.length) {
+    return { directories: [] }
+  }
+
+  if (directories.length !== 1) {
+    return { directories: cloneProjectTree(directories) }
+  }
+
+  const [rootDirectory] = directories
+  return {
+    assets: rootDirectory?.assets ? cloneAssetList(rootDirectory.assets) : undefined,
+    directories: rootDirectory?.children ? cloneProjectTree(rootDirectory.children) : [],
+  }
+}
+
 export function buildPackageDirectoryId(providerId: string): string {
   return `${PACKAGE_DIRECTORY_PREFIX}${providerId}`
 }
@@ -213,16 +247,31 @@ function createAssetsBranch(catalog: Record<string, ProjectAsset[]>): ProjectDir
 }
 
 function createPackagesBranch(cache: Record<string, ProjectDirectory[]> = {}): ProjectDirectory {
+  const visibleProviders = getVisiblePackageProviders()
+  if (visibleProviders.length === 1) {
+    const provider = visibleProviders[0]!
+    const normalized = normalizePackageProviderDirectories(cache[provider.id] ?? [])
+    return {
+      id: PACKAGES_ROOT_DIRECTORY_ID,
+      name: 'Packages',
+      children: normalized.directories,
+      assets: normalized.assets,
+    }
+  }
+
   return {
     id: PACKAGES_ROOT_DIRECTORY_ID,
     name: 'Packages',
-    children: resourceProviders
-      .filter((provider) => provider.includeInPackages !== false && (provider.url || provider.load))
-      .map((provider) => ({
-        id: buildPackageDirectoryId(provider.id),
-        name: provider.name,
-        children: cache[provider.id] ? cloneProjectTree(cache[provider.id]!) : [],
-      })),
+    children: visibleProviders
+      .map((provider) => {
+        const normalized = normalizePackageProviderDirectories(cache[provider.id] ?? [])
+        return {
+          id: buildPackageDirectoryId(provider.id),
+          name: provider.name,
+          children: normalized.directories,
+          assets: normalized.assets,
+        }
+      }),
   }
 }
 

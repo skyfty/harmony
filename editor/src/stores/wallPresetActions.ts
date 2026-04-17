@@ -971,6 +971,11 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         : undefined
 
       if (dependencyAssetIds.length) {
+        console.debug('[WallPreset] ensuring dependencies', {
+          presetAssetId: assetId,
+          dependencyAssetIds,
+          registryKeys: presetAssetRegistry ? Object.keys(presetAssetRegistry) : [],
+        })
         await store.ensurePrefabDependencies(dependencyAssetIds, {
           prefabAssetIdForDownloadProgress: assetId,
           prefabAssetRegistry: presetAssetRegistry ?? null,
