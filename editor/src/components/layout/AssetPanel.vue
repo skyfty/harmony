@@ -43,7 +43,7 @@ import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
-import { createServerAssetSource, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
+import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -622,7 +622,28 @@ function isAssetDownloading(asset: ProjectAsset) {
   return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
 }
 
+function isServerManagedAsset(asset: ProjectAsset | null | undefined): boolean {
+  if (!asset) {
+    return false
+  }
+  if (asset.source?.type === 'server') {
+    return true
+  }
+  if (asset.source?.type === 'package' && isServerBackedProviderId(asset.source.providerId)) {
+    return true
+  }
+  const providerId = providerIdForAsset(asset)
+  return providerId === PRESET_PROVIDER_ID || providerId === SERVER_ASSET_PROVIDER_ID
+}
+
+function canEditAssetMetadata(asset: ProjectAsset | null | undefined): boolean {
+  return !!asset && asset.source?.type === 'local' && !isServerManagedAsset(asset)
+}
+
 function canDeleteAsset(asset: ProjectAsset) {
+  if (isServerManagedAsset(asset)) {
+    return false
+  }
   if (asset.internal === true) {
     return false
   }
@@ -1163,7 +1184,11 @@ function removeDeletedAssetIds(removedIds: string[]): void {
 }
 
 function requestDeleteSelection() {
-  openDeleteDialog(selectedAssets.value, true)
+  const assets = selectedAssets.value.filter((asset) => canDeleteAsset(asset))
+  if (!assets.length) {
+    return
+  }
+  openDeleteDialog(assets, true)
 }
 
 function cancelDeleteAssets() {
@@ -1171,7 +1196,7 @@ function cancelDeleteAssets() {
 }
 
 async function performDeleteAssets() {
-  const assets = pendingDeleteAssets.value
+  const assets = pendingDeleteAssets.value.filter((asset) => canDeleteAsset(asset))
   if (!assets.length) {
     cancelDeleteAssets()
     return
@@ -1600,7 +1625,7 @@ const filteredTagOptions = computed(() => {
 })
 
 const uploadableSelectedAssets = computed(() =>
-  selectedAssets.value.filter((asset) => asset.source?.type === 'local'),
+  selectedAssets.value.filter((asset) => canEditAssetMetadata(asset)),
 )
 
 function resolveAssetById(assetId: string | null | undefined): ProjectAsset | null {
@@ -1793,10 +1818,7 @@ function isDraggableDirectoryId(directoryId: string | null | undefined): boolean
 }
 
 function getAssetMutationScope(asset: ProjectAsset | null | undefined): 'local' | null {
-  if (!asset) {
-    return null
-  }
-  if (sceneStore.assetManifest?.assetsById?.[asset.id]) {
+  if (canEditAssetMetadata(asset)) {
     return 'local'
   }
   return null
@@ -1839,6 +1861,10 @@ function openDirectoryDialog(mode: DirectoryDialogMode, targetDirectoryId: strin
 }
 
 function openUploadDialogForAsset(assetId: string): void {
+  const asset = resolveAssetById(assetId)
+  if (!canEditAssetMetadata(asset)) {
+    return
+  }
   uploadDialogTargetAssetId.value = assetId
   uploadDialogOpen.value = true
 }
@@ -1942,15 +1968,15 @@ async function confirmDeleteDirectory() {
 function promptRenameAsset(assetId?: string) {
   if (!assetId) return
   const asset = resolveAssetById(assetId)
-  if (!asset) {
-    return
-  }
-  if (getAssetMutationScope(asset) === 'local') {
+  if (canEditAssetMetadata(asset)) {
     openUploadDialogForAsset(asset.id)
   }
 }
 
 function promptDeleteAsset(asset: ProjectAsset) {
+  if (!canDeleteAsset(asset)) {
+    return
+  }
   openDeleteDialog([asset], false)
 }
 

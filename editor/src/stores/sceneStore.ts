@@ -218,6 +218,7 @@ import { createLandformPresetActions } from './landformPresetActions'
 import { createRoadPresetActions } from './roadPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
 import { createSceneStoreLandformHelpers } from './sceneStoreLandform'
+import { visitExplicitComponentAssetReferences } from '../utils/sceneExplicitAssetReferences'
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import type { WaterBuildShape } from '@/types/water-build-shape'
@@ -4843,23 +4844,107 @@ function replaceAssetIdInMaterials(materials: SceneMaterial[], previousId: strin
   })
 }
 
-function replaceAssetIdInNodes(nodes: SceneNode[], previousId: string, nextId: string) {
+function parseExplicitReferencePath(path: string): Array<string | number> {
+  const segments: Array<string | number> = []
+  const pattern = /([^.[\]]+)|\[(\d+)\]/g
+  let match: RegExpExecArray | null = null
+  while ((match = pattern.exec(path)) !== null) {
+    if (typeof match[1] === 'string' && match[1].length) {
+      segments.push(match[1])
+      continue
+    }
+    if (typeof match[2] === 'string' && match[2].length) {
+      segments.push(Number.parseInt(match[2], 10))
+    }
+  }
+  return segments
+}
+
+function replaceAssetIdAtReferencePath(root: unknown, path: string, previousId: string, nextId: string): boolean {
+  const segments = parseExplicitReferencePath(path)
+  if (!segments.length || !root || typeof root !== 'object') {
+    return false
+  }
+
+  let current: unknown = root
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (!current || typeof current !== 'object') {
+      return false
+    }
+    current = (current as Record<string | number, unknown>)[segments[index] as string | number]
+  }
+
+  if (!current || typeof current !== 'object') {
+    return false
+  }
+
+  const lastSegment = segments[segments.length - 1] as string | number
+  const container = current as Record<string | number, unknown>
+  if (container[lastSegment] !== previousId) {
+    return false
+  }
+  container[lastSegment] = nextId
+  return true
+}
+
+function replaceAssetIdInComponentReferences(node: SceneNode, previousId: string, nextId: string): boolean {
+  if (!node.components) {
+    return false
+  }
+
+  let changed = false
+  Object.entries(node.components).forEach(([componentType, componentState]) => {
+    const props = componentState?.props as Record<string, unknown> | null | undefined
+    if (!props) {
+      return
+    }
+
+    visitExplicitComponentAssetReferences(componentType, props, (reference) => {
+      if (reference.assetId !== previousId) {
+        return
+      }
+      changed = replaceAssetIdAtReferencePath(props, reference.path, previousId, nextId) || changed
+    })
+  })
+
+  return changed
+}
+
+function replaceAssetIdInNodes(
+  nodes: SceneNode[],
+  previousId: string,
+  nextId: string,
+): { changed: boolean; componentReferencesChanged: boolean } {
+  let changed = false
+  let componentReferencesChanged = false
+
   nodes.forEach((node) => {
     if (node.sourceAssetId === previousId) {
       node.sourceAssetId = nextId
+      changed = true
     }
     if (node.importMetadata?.assetId === previousId) {
       node.importMetadata.assetId = nextId
+      changed = true
     }
     if (node.materials?.length) {
       node.materials.forEach((material) => {
         replaceMaterialTextureReferences(material.textures, previousId, nextId)
       })
+      changed = true
+    }
+    if (replaceAssetIdInComponentReferences(node, previousId, nextId)) {
+      changed = true
+      componentReferencesChanged = true
     }
     if (node.children?.length) {
-      replaceAssetIdInNodes(node.children, previousId, nextId)
+      const childResult = replaceAssetIdInNodes(node.children, previousId, nextId)
+      changed = childResult.changed || changed
+      componentReferencesChanged = childResult.componentReferencesChanged || componentReferencesChanged
     }
   })
+
+  return { changed, componentReferencesChanged }
 }
 
 function buildSceneAssetRegistryEntry(
@@ -12498,6 +12583,9 @@ export const useSceneStore = defineStore('scene', {
         ...remoteAsset,
         gleaned: false,
       }
+      if (!storedAsset.fileKey && !storedAsset.downloadUrl.trim().length) {
+        throw new Error(`Uploaded asset \"${storedAsset.name}\" is missing a downloadable server URL`)
+      }
       const nextCategoryId = determineAssetCategoryId(storedAsset)
       const previousCategoryId =
         (typeof localAsset.categoryId === 'string' && localAsset.categoryId.trim().length
@@ -12526,8 +12614,11 @@ export const useSceneStore = defineStore('scene', {
       this.applyCatalogUpdate(nextCatalog, { nextAssetRegistry })
 
       replaceAssetIdInMaterials(this.materials, localAssetId, storedAsset.id)
-      replaceAssetIdInNodes(this.nodes, localAssetId, storedAsset.id)
+      const nodeReplacement = replaceAssetIdInNodes(this.nodes, localAssetId, storedAsset.id)
       this.materials = [...this.materials]
+      if (nodeReplacement.componentReferencesChanged) {
+        componentManager.syncScene(this.nodes)
+      }
       this.queueSceneStructurePatch('replaceAssetIdInNodes')
 
       if (storedAsset.type === 'material') {

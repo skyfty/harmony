@@ -1586,6 +1586,9 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
 
         const uploaded = await uploadAssetBundleToServer({ bundleFile: bundle.file })
         const mapped = mapServerAssetToProjectAsset(uploaded.asset)
+        if (!mapped.fileKey && !mapped.downloadUrl.trim().length) {
+          throw new Error('Uploaded server asset is missing a download URL')
+        }
         entry.status = 'success'
         entry.uploadedAssetId = mapped.id
         entry.uploadedServerAsset = mapped
@@ -1727,7 +1730,6 @@ function keepLocalReferencesAfterUpload(): void {
                 <div class="upload-entry__status-row">
                   <v-chip v-if="entry.localSaveStatus === 'success'" size="small" color="success" variant="tonal">Local metadata saved</v-chip>
                   <v-chip v-if="entry.status === 'success' && !entry.replacedWithServerAsset" size="small" color="info" variant="tonal">Uploaded to server</v-chip>
-                  <v-chip v-if="entry.replacedWithServerAsset" size="small" color="warning" variant="tonal">Using server asset reference</v-chip>
                 </div>
                 <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
                 <div v-if="entry.localSaveStatus === 'error' && entry.localSaveError" class="urload-entry__error">{{ entry.localSaveError }}</div>

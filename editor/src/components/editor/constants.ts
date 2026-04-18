@@ -57,7 +57,7 @@ export const CAMERA_DISTANCE_EPSILON = 1e-3
 export const ORTHO_FRUSTUM_SIZE = 20
 export const DROP_TO_GROUND_EPSILON = 1e-4
 export const ALIGN_DELTA_EPSILON = 1e-6
-export const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(15)
+export const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(5)
 export const GROUND_HEIGHT_STEP = 0.5
 
 export interface SelectionRotationOptions {
