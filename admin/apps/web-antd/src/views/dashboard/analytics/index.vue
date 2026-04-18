@@ -1,51 +1,65 @@
 <script lang="ts" setup>
-import type { AnalysisOverviewItem } from '@vben/common-ui';
-import type { TabOption } from '@vben/types';
+import type { AnalysisOverviewItem } from '@vben/common-ui'
+import type { TabOption } from '@vben/types'
 
-import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
-import {
-  AnalysisChartCard,
-  AnalysisChartsTabs,
-  AnalysisOverview,
-} from '@vben/common-ui';
-import {
-  SvgBellIcon,
-  SvgCakeIcon,
-  SvgCardIcon,
-  SvgDownloadIcon,
-} from '@vben/icons';
-import { message } from 'ant-design-vue';
+import { AnalysisChartCard, AnalysisChartsTabs, AnalysisOverview } from '@vben/common-ui'
+import { SvgBellIcon, SvgCakeIcon, SvgCardIcon, SvgDownloadIcon } from '@vben/icons'
+import { message } from 'ant-design-vue'
 
 import {
-  getAnalyticsOverviewApi,
+  getAnalyticsDashboardApi,
   listSceneSpotsApi,
+  type AnalyticsDashboardResponse,
   type AnalyticsMetricItem,
-  type AnalyticsOverviewResponse,
-} from '#/api';
+} from '#/api'
 
-import AnalyticsTrends from './analytics-trends.vue';
-import AnalyticsVisitsData from './analytics-visits-data.vue';
-import AnalyticsVisitsSales from './analytics-visits-sales.vue';
-import AnalyticsVisitsSource from './analytics-visits-source.vue';
-import AnalyticsVisits from './analytics-visits.vue';
+import AnalyticsTrends from './analytics-trends.vue'
+import AnalyticsVisitsData from './analytics-visits-data.vue'
+import AnalyticsVisitsSales from './analytics-visits-sales.vue'
+import AnalyticsVisitsSource from './analytics-visits-source.vue'
+import AnalyticsVisits from './analytics-visits.vue'
 
-const loading = ref(false);
-const selectedSpotId = ref<string>('');
-const overviewData = ref<AnalyticsOverviewResponse | null>(null);
-const spotOptions = ref<Array<{ label: string; value: string }>>([]);
-const route = useRoute();
-const router = useRouter();
+const loading = ref(false)
+const selectedSpotId = ref<string>('')
+const overviewData = ref<AnalyticsDashboardResponse | null>(null)
+const spotOptions = ref<Array<{ label: string; value: string }>>([])
+const route = useRoute()
+const router = useRouter()
 
-const routeSpotId = computed(() => {
-  return typeof route.params.spotId === 'string' ? route.params.spotId : '';
-});
+const routeSpotId = computed(() => (typeof route.params.spotId === 'string' ? route.params.spotId : ''))
+const isSpotDetail = computed(() => Boolean(routeSpotId.value))
 
-const isSpotDetail = computed(() => Boolean(routeSpotId.value));
+const domainRoutes: Record<string, string> = {
+  orders: '/analytics/orders',
+  punch: '/analytics/punch',
+  travel: '/analytics/travel',
+  users: '/analytics/users',
+  vehicles: '/analytics/vehicles',
+}
+
+const domainCards = computed(() => {
+  const domains = overviewData.value?.domains
+  if (!domains) {
+    return []
+  }
+  return Object.values(domains).map((item) => ({
+    accent: {
+      orders: '#b45309',
+      punch: '#0f766e',
+      travel: '#7c3aed',
+      users: '#dc2626',
+      vehicles: '#1d4ed8',
+    }[item.key],
+    item,
+    route: domainRoutes[item.key],
+  }))
+})
 
 const overviewItems = computed<AnalysisOverviewItem[]>(() => {
-  const summary = overviewData.value?.overview;
+  const summary = overviewData.value?.overview
   return [
     {
       icon: SvgCardIcon,
@@ -75,97 +89,111 @@ const overviewItems = computed<AnalysisOverviewItem[]>(() => {
       totalValue: summary?.loginFail ?? 0,
       value: summary?.loginFail ?? 0,
     },
-  ];
-});
+  ]
+})
 
 const profileOrBehaviorData = computed<AnalyticsMetricItem[]>(() => {
-  const profile = overviewData.value?.profile;
+  const profile = overviewData.value?.profile
   if (!profile) {
-    return [];
+    return []
   }
   if (profile.interests.length) {
-    return profile.interests;
+    return profile.interests
   }
   if (profile.age.length) {
-    return profile.age;
+    return profile.age
   }
-  return overviewData.value?.behaviorPaths ?? [];
-});
+  return overviewData.value?.behaviorPaths ?? []
+})
 
-const topSpots = computed(() => overviewData.value?.topSpots ?? []);
+const topSpots = computed(() => overviewData.value?.topSpots ?? [])
+
+const trendChartData = computed(() => {
+  return (overviewData.value?.trend ?? []).map((item) => ({
+    date: item.date,
+    pv: item.pv,
+    uv: item.uv,
+  }))
+})
+
+const loginTrendChartData = computed(() => {
+  return (overviewData.value?.loginTrend ?? []).map((item) => ({
+    date: item.date,
+    fail: item.fail ?? 0,
+    success: item.success ?? 0,
+  }))
+})
 
 const chartTabs: TabOption[] = [
-  {
-    label: '流量趋势',
-    value: 'trends',
-  },
-  {
-    label: '月访问量',
-    value: 'visits',
-  },
-];
+  { label: '流量趋势', value: 'trends' },
+  { label: '月访问量', value: 'visits' },
+]
 
 async function loadSpotOptions() {
-  const result = await listSceneSpotsApi({ page: 1, pageSize: 2000 });
+  const result = await listSceneSpotsApi({ page: 1, pageSize: 2000 })
   spotOptions.value = result.items.map((item) => ({
     label: item.title,
     value: item.id,
-  }));
+  }))
 }
 
 async function loadAnalytics() {
-  loading.value = true;
+  loading.value = true
   try {
-    overviewData.value = await getAnalyticsOverviewApi({
+    overviewData.value = await getAnalyticsDashboardApi({
       granularity: 'day',
       spotId: selectedSpotId.value || undefined,
-    });
+    })
   } catch (error) {
-    message.error((error as Error)?.message || '加载分析数据失败');
+    message.error((error as Error)?.message || '加载分析数据失败')
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 
 async function handleReload() {
-  await loadAnalytics();
+  await loadAnalytics()
 }
 
 async function handleSpotChange(value?: string) {
-  const nextSpotId = value || '';
-  selectedSpotId.value = nextSpotId;
+  const nextSpotId = value || ''
+  selectedSpotId.value = nextSpotId
   if (nextSpotId) {
-    await router.replace(`/analytics/spot/${nextSpotId}`);
+    await router.replace(`/analytics/spot/${nextSpotId}`)
   } else {
-    await router.replace('/analytics');
+    await router.replace('/analytics')
   }
 }
 
 async function backToGlobal() {
-  selectedSpotId.value = '';
-  await router.replace('/analytics');
+  selectedSpotId.value = ''
+  await router.replace('/analytics')
 }
 
 async function navigateToSpot(spotId: string) {
   if (!spotId) {
-    return;
+    return
   }
-  await router.push(`/analytics/spot/${spotId}`);
+  await router.push(`/analytics/spot/${spotId}`)
+}
+
+async function navigateToDomain(path: string) {
+  await router.push(path)
 }
 
 watch(routeSpotId, async (spotId) => {
-  const normalized = spotId || '';
+  const normalized = spotId || ''
   if (selectedSpotId.value !== normalized) {
-    selectedSpotId.value = normalized;
+    selectedSpotId.value = normalized
   }
-  await loadAnalytics();
-});
+  await loadAnalytics()
+})
 
 onMounted(async () => {
-  await loadSpotOptions();
-  selectedSpotId.value = routeSpotId.value;
-  await loadAnalytics();
-});
+  await loadSpotOptions()
+  selectedSpotId.value = routeSpotId.value
+  await loadAnalytics()
+})
 </script>
 
 <template>
@@ -188,13 +216,40 @@ onMounted(async () => {
       </div>
     </div>
 
+    <a-row :gutter="16">
+      <a-col v-for="card in domainCards" :key="card.item.key" :span="24" :md="12" :xl="8">
+        <a-card
+          class="mb-4 cursor-pointer overflow-hidden border-0 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
+          :body-style="{ padding: '18px' }"
+          :bordered="false"
+          @click="navigateToDomain(card.route || '/analytics')"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="text-sm font-medium text-slate-500">{{ card.item.title }}</div>
+              <div class="mt-2 text-3xl font-semibold text-slate-900">
+                {{ card.item.summary?.[0]?.value ?? 0 }}
+              </div>
+              <div class="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                <span v-for="metric in card.item.summary.slice(1, 4)" :key="metric.name" class="rounded-full bg-slate-100 px-2 py-1">
+                  {{ metric.name }}：{{ metric.value }}
+                </span>
+              </div>
+            </div>
+            <a-tag :color="card.accent">详情页</a-tag>
+          </div>
+        </a-card>
+      </a-col>
+    </a-row>
+
     <AnalysisOverview :items="overviewItems" />
+
     <AnalysisChartsTabs :tabs="chartTabs" class="mt-5">
       <template #trends>
-        <AnalyticsTrends :data="overviewData?.trend || []" />
+        <AnalyticsTrends :data="trendChartData" />
       </template>
       <template #visits>
-        <AnalyticsVisits :data="overviewData?.loginTrend || []" />
+        <AnalyticsVisits :data="loginTrendChartData" />
       </template>
     </AnalysisChartsTabs>
 
