@@ -5,16 +5,6 @@ import { createFloorRenderGroup } from '../../floorMesh';
 import { createAutoTiledMaterialVariant, MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from '../../material';
 import { buildMaterialConfigMap } from '../materialAssignment';
 
-const FLOOR_RUNTIME_DEBUG_LOG_PREFIX = '[FloorDynamicMesh]';
-
-function logFloorRuntimeDebug(message: string, payload?: Record<string, unknown>): void {
-  if (payload) {
-    console.info(FLOOR_RUNTIME_DEBUG_LOG_PREFIX, message, payload);
-    return;
-  }
-  console.info(FLOOR_RUNTIME_DEBUG_LOG_PREFIX, message);
-}
-
 function isUnlitDefaultMaterial(material: THREE.Material | THREE.Material[]): boolean {
   const materials = Array.isArray(material) ? material : [material];
   return materials.length > 0 && materials.every((entry) => Boolean((entry as any)?.isMeshBasicMaterial));
@@ -65,14 +55,6 @@ function applyFloorMaterialConfigAssignment(
       return;
     }
 
-    if (selectorId && !options.materialByConfigId.has(selectorId)) {
-      logFloorRuntimeDebug('applyFloorMaterialConfigAssignment missing selector match', {
-        meshName: mesh.name || null,
-        selectorId,
-        availableSelectorIds: Array.from(options.materialByConfigId.keys()),
-      });
-    }
-
     // Preserve the floor's built-in lit materials when:
     // - no selector id is set (common default floors), or
     // - selector id is invalid and the provided default is unlit (e.g. MeshBasicMaterial).
@@ -103,16 +85,6 @@ export async function buildFloorMesh(
 
   if (defaultMaterialAssignment) {
     const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
-    logFloorRuntimeDebug('buildFloorMesh resolved material assignments', {
-      nodeId: node.id ?? null,
-      nodeName: node.name ?? null,
-      meshMaterialConfig: {
-        topBottomMaterialConfigId: meshInfo.topBottomMaterialConfigId ?? null,
-        sideMaterialConfigId: meshInfo.sideMaterialConfigId ?? null,
-      },
-      nodeMaterialIds: nodeMaterialConfigs.map((entry) => entry?.id ?? null),
-      materialByConfigIdKeys: Array.from(materialByConfigId.keys()),
-    });
     applyFloorMaterialConfigAssignment(group, {
       defaultMaterial: defaultMaterialAssignment,
       materialByConfigId,

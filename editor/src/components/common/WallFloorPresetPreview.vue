@@ -79,21 +79,8 @@ let animationHandle = 0
 let currentRoot: THREE.Object3D | null = null
 let loadToken = 0
 const previewInstanceId = THREE.MathUtils.generateUUID()
-const WALL_PRESET_COMPONENT_LOG_PREFIX = '[WallFloorPresetPreview]'
 
-function logWallPresetComponent(message: string, payload?: Record<string, unknown>): void {
-  if (payload) {
-    console.info(WALL_PRESET_COMPONENT_LOG_PREFIX, message, payload)
-    return
-  }
-  console.info(WALL_PRESET_COMPONENT_LOG_PREFIX, message)
-}
-
-const materialOverrideOptions = createPreviewMaterialOverrideOptions(ensureAssetFile, (message) => {
-  if (message) {
-    console.warn('[preset-preview]', message)
-  }
-})
+const materialOverrideOptions = createPreviewMaterialOverrideOptions(ensureAssetFile)
 
 function fitCamera(object: THREE.Object3D): void {
   if (!camera || !controls) {
@@ -171,14 +158,11 @@ async function ensureAssetFile(assetId: string): Promise<File | null> {
   const asset = sceneStore.getAsset(assetId)
   let file = await assetCacheStore.ensureAssetFile(assetId, { asset })
   if (file) {
-    logWallPresetComponent('asset file resolved from memory cache', { assetId, fileName: file.name })
     return file
   }
   if (!asset) {
-    logWallPresetComponent('asset metadata missing', { assetId })
     return null
   }
-  logWallPresetComponent('asset file unavailable after ensure', { assetId })
   return null
 }
 
@@ -274,13 +258,6 @@ async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Obj
 }
 
 async function buildFloorPreviewObject(preset: FloorPresetData): Promise<THREE.Object3D> {
-  logWallPresetComponent('building floor preset preview', {
-    presetName: preset.name,
-    materialConfig: preset.materialConfig,
-    materialOrder: preset.materialOrder,
-    assetRegistryKeys: Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
-  })
-
   const object = await buildFloorPreviewObjectFromNode({
     node: buildFloorPreviewNode(preset),
     materialOverrideOptions,
@@ -370,7 +347,6 @@ async function loadPresetScene(): Promise<void> {
     emitDimensions(object)
   } catch (loadError) {
     if (token === loadToken) {
-      console.warn(WALL_PRESET_COMPONENT_LOG_PREFIX, 'loadPresetScene failed', loadError)
       error.value = (loadError as Error).message ?? '预览生成失败'
     }
   }
