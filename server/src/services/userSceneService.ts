@@ -13,6 +13,11 @@ export type { UploadedFilePayload } from '@/services/sceneService'
 
 const USER_SCENE_BUNDLE_STORAGE_PREFIX = 'user-scenes'
 
+export interface UserSceneQueryOptions {
+  includeDeleted?: boolean
+  deletedOnly?: boolean
+}
+
 function sanitizeString(value: unknown): string {
   if (typeof value !== 'string') return ''
   return value.trim()
@@ -31,6 +36,16 @@ function toIsoString(value: unknown): string {
 
 function buildBundleApiUrl(sceneId: string): string {
   return `/api/user-scenes/${encodeURIComponent(sceneId)}/bundle`
+}
+
+function buildDeletionFilter(options?: UserSceneQueryOptions): Record<string, unknown> {
+  if (options?.deletedOnly) {
+    return { deletedAt: { $ne: null } }
+  }
+  if (options?.includeDeleted) {
+    return {}
+  }
+  return { deletedAt: null }
 }
 
 function resolveAbsolutePath(fileKey: string): string {
@@ -70,7 +85,7 @@ async function storeBundleFile(file: UploadedFilePayload): Promise<{
   const targetPath = resolveAbsolutePath(relativeKey)
   await fs.copy(sourcePath, targetPath)
   await fs.remove(sourcePath).catch(() => undefined)
-  const fileSize = typeof file.size === 'number' ? file.size : await fs.stat(targetPath).then((stats) => stats.size)
+  const fileSize = typeof file.size === 'number' ? file.size : await fs.stat(targetPath).then((stats: { size: number }) => stats.size)
   return {
     fileKey: relativeKey,
     fileSize,
@@ -166,8 +181,8 @@ async function loadSceneCheckpointTotalMap(sceneIds: string[]): Promise<Map<stri
   return out
 }
 
-export async function listUserScenes(userId: string): Promise<UserSceneSummary[]> {
-  const records = await UserSceneModel.find({ userId }).sort({ sceneUpdatedAt: -1 }).lean()
+export async function listUserScenes(userId: string, options?: UserSceneQueryOptions): Promise<UserSceneSummary[]> {
+  const records = await UserSceneModel.find({ userId, ...buildDeletionFilter(options) }).sort({ sceneUpdatedAt: -1 }).lean()
   const sceneIds = (records as any[]).map((entry) => String(entry.sceneId ?? '')).filter(Boolean)
   const checkpointMap = await loadSceneCheckpointTotalMap(sceneIds)
   return (records as any[]).map((entry) => {
@@ -190,8 +205,8 @@ export async function listUserScenes(userId: string): Promise<UserSceneSummary[]
   })
 }
 
-export async function getUserSceneBundle(userId: string, sceneId: string): Promise<UserSceneBundleRecord | null> {
-  const record = await UserSceneModel.findOne({ userId, sceneId }).lean()
+export async function getUserSceneBundle(userId: string, sceneId: string, options?: UserSceneQueryOptions): Promise<UserSceneBundleRecord | null> {
+  const record = await UserSceneModel.findOne({ userId, sceneId, ...buildDeletionFilter(options) }).lean()
   if (!record) {
     return null
   }
@@ -286,13 +301,54 @@ export async function deleteUserScenesBulk(
     return { deletedIds: [], notFoundIds: [], failedIds: [] }
   }
   const existing = await UserSceneModel.find({ userId, sceneId: { $in: ids } }).lean()
-  const existingIds = new Set(existing.map((entry) => String((entry as any).sceneId)))
+  const existingIds = new Set(existing.map((entry: unknown) => String((entry as any).sceneId)))
   const notFoundIds = ids.filter((id) => !existingIds.has(id))
   try {
     await UserSceneModel.deleteMany({ userId, sceneId: { $in: ids } })
-    await Promise.all(existing.map((entry) => deleteBundleFile(String((entry as any).bundleFileKey ?? ''))))
+    await Promise.all(existing.map((entry: unknown) => deleteBundleFile(String((entry as any).bundleFileKey ?? ''))))
     return { deletedIds: ids.filter((id) => existingIds.has(id)), notFoundIds, failedIds: [] }
   } catch {
     return { deletedIds: [], notFoundIds, failedIds: ids }
   }
+}
+
+export async function trashUserScenesBulk(
+  userId: string,
+  sceneIds: string[],
+  deletedAt = new Date(),
+): Promise<{ trashedIds: string[]; notFoundIds: string[] }> {
+  const ids = Array.from(new Set(sceneIds.map((id) => id.trim()).filter(Boolean)))
+  if (!ids.length) {
+    return { trashedIds: [], notFoundIds: [] }
+  }
+  const existing = await UserSceneModel.find({ userId, sceneId: { $in: ids }, deletedAt: null }, { sceneId: 1 }).lean()
+  const existingIds = new Set(existing.map((entry: unknown) => String((entry as any).sceneId ?? '')))
+  const notFoundIds = ids.filter((id) => !existingIds.has(id))
+  if (existingIds.size) {
+    await UserSceneModel.updateMany(
+      { userId, sceneId: { $in: Array.from(existingIds) }, deletedAt: null },
+      { $set: { isDeleted: true, deletedAt } },
+    ).exec()
+  }
+  return { trashedIds: ids.filter((id) => existingIds.has(id)), notFoundIds }
+}
+
+export async function restoreUserScenesBulk(
+  userId: string,
+  sceneIds: string[],
+): Promise<{ restoredIds: string[]; notFoundIds: string[] }> {
+  const ids = Array.from(new Set(sceneIds.map((id) => id.trim()).filter(Boolean)))
+  if (!ids.length) {
+    return { restoredIds: [], notFoundIds: [] }
+  }
+  const existing = await UserSceneModel.find({ userId, sceneId: { $in: ids }, deletedAt: { $ne: null } }, { sceneId: 1 }).lean()
+  const existingIds = new Set(existing.map((entry: unknown) => String((entry as any).sceneId ?? '')))
+  const notFoundIds = ids.filter((id) => !existingIds.has(id))
+  if (existingIds.size) {
+    await UserSceneModel.updateMany(
+      { userId, sceneId: { $in: Array.from(existingIds) }, deletedAt: { $ne: null } },
+      { $set: { isDeleted: false, deletedAt: null } },
+    ).exec()
+  }
+  return { restoredIds: ids.filter((id) => existingIds.has(id)), notFoundIds }
 }

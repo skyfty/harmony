@@ -955,12 +955,15 @@
       "message": {
         "updateSuccess": "Project updated successfully",
         "createSuccess": "Project created successfully",
-        "deleteSuccess": "Project deleted"
+        "deleteSuccess": "Project moved to trash",
+        "restoreSuccess": "Project restored",
+        "permanentDeleteSuccess": "Project permanently deleted"
       },
       "confirm": {
         "delete": {
           "title": "Confirm delete project \"{name}\"?",
-          "content": "This action cannot be undone."
+          "trashContent": "This will move the project to the recycle bin and can be restored later.",
+          "permanentContent": "This action cannot be undone."
         }
       },
       "form": {
@@ -989,12 +992,19 @@
       },
       "toolbar": {
         "create": "New Project",
-        "refreshCategories": "Refresh Categories"
+        "refreshCategories": "Refresh Categories",
+        "trash": "Recycle Bin",
+        "exitTrash": "Exit Recycle Bin"
       },
       "actions": {
         "detail": "Detail",
         "edit": "Edit",
-        "delete": "Delete"
+        "delete": "Delete",
+        "restore": "Restore",
+        "permanentDelete": "Permanent Delete"
+      },
+      "status": {
+        "trashed": "Trashed"
       },
       "formFields": {
         "userId": {

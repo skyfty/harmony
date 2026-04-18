@@ -30,6 +30,7 @@ export interface UserProjectDocument {
 export interface UserProjectListItem {
   categoryId: null | string;
   createdAt: string;
+  deletedAt: null | string;
   id: string;
   lastEditedSceneId: null | string;
   name: string;
@@ -50,6 +51,8 @@ export interface UserProjectCategoryItem {
 
 export interface ListProjectsParams {
   categoryId?: string;
+  deletedOnly?: boolean;
+  includeDeleted?: boolean;
   keyword?: string;
   page?: number;
   pageSize?: number;
@@ -112,6 +115,12 @@ export async function updateProjectApi(
 export async function deleteProjectApi(userId: string, projectId: string) {
   return requestClient.delete(
     `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
+  );
+}
+
+export async function restoreProjectApi(userId: string, projectId: string) {
+  return requestClient.post(
+    `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}/restore`,
   );
 }
 

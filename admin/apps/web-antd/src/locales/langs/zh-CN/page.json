@@ -760,12 +760,15 @@
       "message": {
         "updateSuccess": "项目更新成功",
         "createSuccess": "项目创建成功",
-        "deleteSuccess": "项目删除成功"
+        "deleteSuccess": "项目已移入回收站",
+        "restoreSuccess": "项目已恢复",
+        "permanentDeleteSuccess": "项目已彻底删除"
       },
       "confirm": {
         "delete": {
           "title": "确认删除项目\"{name}\"吗？",
-          "content": "删除后不可恢复。"
+          "trashContent": "该操作会把项目移入回收站，可稍后恢复。",
+          "permanentContent": "彻底删除后不可恢复。"
         }
       },
       "form": {
@@ -785,12 +788,19 @@
       },
       "toolbar": {
         "create": "新建项目",
-        "refreshCategories": "刷新分类"
+        "refreshCategories": "刷新分类",
+        "trash": "回收站",
+        "exitTrash": "退出回收站"
       },
       "actions": {
         "detail": "详情",
         "edit": "编辑",
-        "delete": "删除"
+        "delete": "删除",
+        "restore": "恢复",
+        "permanentDelete": "彻底删除"
+      },
+      "status": {
+        "trashed": "回收站"
       },
       "formFields": {
         "userId": { "label": "用户ID", "required": "请输入用户ID" },

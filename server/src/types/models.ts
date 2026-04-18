@@ -690,6 +690,10 @@ export interface UserSceneDocument extends Document<Types.ObjectId> {
   sceneCreatedAt: Date
   /** 中文：场景更新时间 */
   sceneUpdatedAt: Date
+  /** 中文：是否已删除 */
+  isDeleted: boolean
+  /** 中文：删除时间（可选） */
+  deletedAt?: Date | null
 
   /** 中文：bundle 文件存储 key */
   bundleFileKey: string
@@ -716,6 +720,10 @@ export interface UserProjectDocument extends Document<Types.ObjectId> {
   categoryId?: string | null
   /** 中文：项目包含的场景 ID 列表 */
   sceneIds: string[]
+  /** 中文：是否已删除 */
+  isDeleted: boolean
+  /** 中文：删除时间（可选） */
+  deletedAt?: Date | null
   /** 中文：项目文档数据（任意结构） */
   document: Record<string, unknown>
   /** 中文：创建时间 */

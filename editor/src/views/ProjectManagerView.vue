@@ -296,7 +296,7 @@ async function handleExportProject(projectId: string): Promise<void> {
                 :disabled="deletingId !== null || exportingId !== null || importingProject"
                 @click="requestDeleteProject(p.id, p.name)"
               >
-                Delete (cascade)
+                Move to Trash
               </v-btn>
             </v-card-actions>
           </v-card>
@@ -315,10 +315,10 @@ async function handleExportProject(projectId: string): Promise<void> {
     <NewProjectDialog v-model="newProjectOpen" @confirm="handleCreateProject" />
     <v-dialog v-model="confirmDeleteOpen" max-width="420" :persistent="deletingId !== null">
       <v-card>
-        <v-card-title>Delete project?</v-card-title>
+        <v-card-title>Move project to trash?</v-card-title>
         <v-card-text>
-          Are you sure you want to delete "{{ pendingDeleteProjectName }}"?
-          This action cannot be undone.
+          Are you sure you want to move "{{ pendingDeleteProjectName }}" to trash?
+          You can restore it later from the admin recycle bin.
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -330,7 +330,7 @@ async function handleExportProject(projectId: string): Promise<void> {
             :disabled="!pendingDeleteProjectId || deletingId !== null"
             @click="confirmDeleteProject"
           >
-            Delete
+            Move to Trash
           </v-btn>
         </v-card-actions>
       </v-card>

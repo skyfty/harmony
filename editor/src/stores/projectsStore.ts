@@ -386,8 +386,11 @@ async function removeProjectFromServer(projectId: string, authStore: ReturnType<
       ? (payloadRaw as { data?: unknown }).data
       : payloadRaw
   const result = payload && typeof payload === 'object' ? (payload as any).result : null
+  const deletedSceneIds = Array.isArray(result?.deletedSceneIds)
+    ? (result.deletedSceneIds as string[])
+    : (Array.isArray(result?.trashedSceneIds) ? (result.trashedSceneIds as string[]) : [])
   return {
-    deletedSceneIds: Array.isArray(result?.deletedSceneIds) ? (result.deletedSceneIds as string[]) : [],
+    deletedSceneIds,
     failedSceneIds: Array.isArray(result?.failedSceneIds) ? (result.failedSceneIds as string[]) : [],
   }
 }

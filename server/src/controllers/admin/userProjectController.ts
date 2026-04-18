@@ -10,7 +10,7 @@ import {
   listUserProjectCategories,
   updateUserProjectCategory,
 } from '@/services/userProjectCategoryService'
-import { getUserProject, saveUserProject } from '@/services/userProjectService'
+import { deleteUserProjectCascade, getUserProject, restoreUserProjectCascade, saveUserProject, trashUserProjectCascade } from '@/services/userProjectService'
 
 function ensureCurrentUserId(ctx: Context): string {
   const userId = ctx.state.adminAuthUser?.id
@@ -55,6 +55,7 @@ function mapProjectSummary(row: any) {
     categoryId: typeof (row.categoryId ?? (document as any).categoryId) === 'string' ? (row.categoryId ?? (document as any).categoryId) : null,
     sceneCount: scenes.length,
     lastEditedSceneId: typeof (document as any).lastEditedSceneId === 'string' ? (document as any).lastEditedSceneId : null,
+    deletedAt: row.deletedAt instanceof Date ? row.deletedAt.toISOString() : (row.deletedAt ? new Date(row.deletedAt).toISOString() : null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date(row.createdAt).toISOString(),
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : new Date(row.updatedAt).toISOString(),
   }
@@ -65,7 +66,7 @@ function readRequestFiles(ctx: Context): Record<string, unknown> | undefined {
 }
 
 export async function listProjects(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '20', keyword, categoryId, userId } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '20', keyword, categoryId, userId, deletedOnly, includeDeleted } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 100)
   const skip = (pageNumber - 1) * limit
@@ -82,6 +83,11 @@ export async function listProjects(ctx: Context): Promise<void> {
   }
   if (keyword && keyword.trim()) {
     filter['document.name'] = new RegExp(keyword.trim(), 'i')
+  }
+  if (deletedOnly === 'true') {
+    filter.deletedAt = { $ne: null }
+  } else if (includeDeleted !== 'true') {
+    filter.deletedAt = null
   }
 
   const [rows, total] = await Promise.all([
@@ -103,7 +109,7 @@ export async function getProject(ctx: Context): Promise<void> {
   if (!projectId) {
     ctx.throw(400, 'Project id is required')
   }
-  const project = await getUserProject(userId, projectId)
+  const project = await getUserProject(userId, projectId, { includeDeleted: true })
   if (!project) {
     ctx.throw(404, 'Project not found')
   }
@@ -160,10 +166,25 @@ export async function removeProject(ctx: Context): Promise<void> {
   if (!projectId) {
     ctx.throw(400, 'Project id is required')
   }
-  await UserProjectModel.findOneAndDelete({ userId, projectId }).lean().exec()
-  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  const existing = await UserProjectModel.findOne({ userId, projectId }, { deletedAt: 1 }).lean().exec()
+  if (!existing) {
+    ctx.throw(404, 'Project not found')
+  }
+  const result = (existing as { deletedAt?: Date | null }).deletedAt
+    ? await deleteUserProjectCascade(userId, projectId)
+    : await trashUserProjectCascade(userId, projectId)
   ctx.status = 200
-  ctx.body = {}
+  ctx.body = { result }
+}
+
+export async function restoreProject(ctx: Context): Promise<void> {
+  const userId = resolveScopedUserId(ctx, ctx.params?.userId)
+  const projectId = typeof ctx.params?.projectId === 'string' ? ctx.params.projectId.trim() : ''
+  if (!projectId) {
+    ctx.throw(400, 'Project id is required')
+  }
+  const result = await restoreUserProjectCascade(userId, projectId)
+  ctx.body = { result }
 }
 
 export async function uploadProjectSceneBundle(ctx: Context): Promise<void> {
@@ -178,6 +199,7 @@ export async function uploadProjectSceneBundle(ctx: Context): Promise<void> {
   if (!project) {
     ctx.throw(404, 'Project not found')
   }
+  const ensuredProject = project!
 
   const file = extractUploadedFile(readRequestFiles(ctx), 'file')
   if (!file) {
@@ -190,7 +212,7 @@ export async function uploadProjectSceneBundle(ctx: Context): Promise<void> {
     ctx.throw(409, 'Scene bundle projectId mismatch')
   }
 
-  const existingMeta = project.scenes.find((entry) => entry.id === sceneId)
+  const existingMeta = ensuredProject.scenes.find((entry) => entry.id === sceneId)
   const sceneMeta = {
     id: sceneId,
     name: stored.name,
@@ -198,12 +220,12 @@ export async function uploadProjectSceneBundle(ctx: Context): Promise<void> {
     projectId,
   }
   const nextScenes = existingMeta
-    ? project.scenes.map((entry) => (entry.id === sceneId ? sceneMeta : entry))
-    : [...project.scenes, sceneMeta]
+    ? ensuredProject.scenes.map((entry) => (entry.id === sceneId ? sceneMeta : entry))
+    : [...ensuredProject.scenes, sceneMeta]
   const nextProject = {
-    ...project,
+    ...ensuredProject,
     scenes: nextScenes,
-    lastEditedSceneId: project.lastEditedSceneId ?? sceneId,
+    lastEditedSceneId: ensuredProject.lastEditedSceneId ?? sceneId,
   }
   const saved = await saveUserProject(userId, projectId, nextProject)
 
@@ -226,14 +248,15 @@ export async function removeProjectScene(ctx: Context): Promise<void> {
   if (!project) {
     ctx.throw(404, 'Project not found')
   }
+  const ensuredProject = project!
 
   await deleteUserScene(userId, sceneId)
 
-  const nextScenes = project.scenes.filter((entry) => entry.id !== sceneId)
+  const nextScenes = ensuredProject.scenes.filter((entry) => entry.id !== sceneId)
   const nextProject = {
-    ...project,
+    ...ensuredProject,
     scenes: nextScenes,
-    lastEditedSceneId: project.lastEditedSceneId === sceneId ? (nextScenes[0]?.id ?? null) : project.lastEditedSceneId,
+    lastEditedSceneId: ensuredProject.lastEditedSceneId === sceneId ? (nextScenes[0]?.id ?? null) : ensuredProject.lastEditedSceneId,
   }
   const saved = await saveUserProject(userId, projectId, nextProject)
   ctx.body = { userId, project: saved }

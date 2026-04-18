@@ -1,7 +1,12 @@
 import { UserProjectModel } from '@/models/UserProject'
 import { UserSceneModel } from '@/models/UserScene'
-import { deleteUserScenesBulk } from '@/services/userSceneService'
+import { deleteUserScenesBulk, restoreUserScenesBulk, trashUserScenesBulk } from '@/services/userSceneService'
 import type { StoredProjectPayload } from '@/types/userProject'
+
+export interface UserProjectQueryOptions {
+  includeDeleted?: boolean
+  deletedOnly?: boolean
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -80,13 +85,23 @@ function cloneDocument<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-export async function listUserProjects(userId: string): Promise<StoredProjectPayload[]> {
-  const records: Array<{ userId: string; projectId: string; document: unknown }> = await UserProjectModel.find({ userId }).lean()
+function buildDeletionFilter(options?: UserProjectQueryOptions): Record<string, unknown> {
+  if (options?.deletedOnly) {
+    return { deletedAt: { $ne: null } }
+  }
+  if (options?.includeDeleted) {
+    return {}
+  }
+  return { deletedAt: null }
+}
+
+export async function listUserProjects(userId: string, options?: UserProjectQueryOptions): Promise<StoredProjectPayload[]> {
+  const records: Array<{ userId: string; projectId: string; document: unknown }> = await UserProjectModel.find({ userId, ...buildDeletionFilter(options) }).lean()
   return records.map((entry) => normalizeProjectDocument(entry.document, entry.projectId))
 }
 
-export async function getUserProject(userId: string, projectId: string): Promise<StoredProjectPayload | null> {
-  const record: { userId: string; projectId: string; document: unknown } | null = await UserProjectModel.findOne({ userId, projectId }).lean()
+export async function getUserProject(userId: string, projectId: string, options?: UserProjectQueryOptions): Promise<StoredProjectPayload | null> {
+  const record: { userId: string; projectId: string; document: unknown } | null = await UserProjectModel.findOne({ userId, projectId, ...buildDeletionFilter(options) }).lean()
   if (!record) {
     return null
   }
@@ -128,7 +143,7 @@ export async function saveUserProject(userId: string, projectId: string, payload
 }
 
 export async function deleteUserProjectCascade(userId: string, projectId: string): Promise<{ deletedSceneIds: string[]; notFoundSceneIds: string[]; failedSceneIds: string[] }> {
-  const record: { userId: string; projectId: string; sceneIds?: unknown; document: unknown } | null = await UserProjectModel.findOne({ userId, projectId }).lean()
+  const record: { userId: string; projectId: string; sceneIds?: unknown; document: unknown } | null = await UserProjectModel.findOne({ userId, projectId }, { projectId: 1, document: 1 }).lean()
   if (!record) {
     return { deletedSceneIds: [], notFoundSceneIds: [], failedSceneIds: [] }
   }
@@ -142,5 +157,42 @@ export async function deleteUserProjectCascade(userId: string, projectId: string
     deletedSceneIds: bulk.deletedIds,
     notFoundSceneIds: bulk.notFoundIds,
     failedSceneIds: bulk.failedIds,
+  }
+}
+
+export async function trashUserProjectCascade(userId: string, projectId: string): Promise<{ trashedSceneIds: string[]; notFoundSceneIds: string[] }> {
+  const record: { userId: string; projectId: string; document: unknown } | null = await UserProjectModel.findOne({ userId, projectId, deletedAt: null }).lean()
+  if (!record) {
+    return { trashedSceneIds: [], notFoundSceneIds: [] }
+  }
+  const normalized = normalizeProjectDocument(record.document, record.projectId)
+  const sceneIds = normalized.scenes.map((scene) => scene.id)
+  const deletedAt = new Date()
+  await UserProjectModel.updateOne(
+    { userId, projectId, deletedAt: null },
+    { $set: { isDeleted: true, deletedAt } },
+  ).exec()
+  const bulk = await trashUserScenesBulk(userId, sceneIds, deletedAt)
+  return {
+    trashedSceneIds: bulk.trashedIds,
+    notFoundSceneIds: bulk.notFoundIds,
+  }
+}
+
+export async function restoreUserProjectCascade(userId: string, projectId: string): Promise<{ restoredSceneIds: string[]; notFoundSceneIds: string[] }> {
+  const record: { userId: string; projectId: string; document: unknown } | null = await UserProjectModel.findOne({ userId, projectId, deletedAt: { $ne: null } }).lean()
+  if (!record) {
+    return { restoredSceneIds: [], notFoundSceneIds: [] }
+  }
+  const normalized = normalizeProjectDocument(record.document, record.projectId)
+  const sceneIds = normalized.scenes.map((scene) => scene.id)
+  await UserProjectModel.updateOne(
+    { userId, projectId, deletedAt: { $ne: null } },
+    { $set: { isDeleted: false, deletedAt: null } },
+  ).exec()
+  const bulk = await restoreUserScenesBulk(userId, sceneIds)
+  return {
+    restoredSceneIds: bulk.restoredIds,
+    notFoundSceneIds: bulk.notFoundIds,
   }
 }

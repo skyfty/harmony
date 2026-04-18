@@ -10,6 +10,8 @@ const userSceneSchema = new Schema<UserSceneDocument>(
     thumbnail: { type: String, default: null },
     sceneCreatedAt: { type: Date, required: true },
     sceneUpdatedAt: { type: Date, required: true, index: true },
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date, default: null },
 
     bundleFileKey: { type: String, required: true },
     bundleFileSize: { type: Number, required: true },

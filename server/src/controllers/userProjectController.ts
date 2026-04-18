@@ -1,5 +1,5 @@
 import type { Context } from 'koa'
-import { deleteUserProjectCascade, getUserProject, listUserProjects, saveUserProject } from '@/services/userProjectService'
+import { getUserProject, listUserProjects, saveUserProject, trashUserProjectCascade } from '@/services/userProjectService'
 
 function ensureUserId(ctx: Context): string {
   const userId = ctx.state.user?.id
@@ -58,6 +58,6 @@ export async function saveProject(ctx: Context): Promise<void> {
 export async function removeProject(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const projectId = ensureProjectId(ctx)
-  const result = await deleteUserProjectCascade(userId, projectId)
+  const result = await trashUserProjectCascade(userId, projectId)
   ctx.body = { result }
 }

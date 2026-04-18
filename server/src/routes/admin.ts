@@ -162,6 +162,7 @@ import {
   removeProject,
   removeProjectCategory,
   removeProjectScene,
+  restoreProject,
   updateProject,
   updateProjectCategory,
   uploadProjectSceneBundle,
@@ -405,6 +406,7 @@ adminRouter.get('/projects', requireAnyPermission(['project:read']), listProject
 adminRouter.post('/projects', requireAnyPermission(['project:write']), createProject)
 adminRouter.get('/projects/:userId/:projectId', requireAnyPermission(['project:read']), getProject)
 adminRouter.put('/projects/:userId/:projectId', requireAnyPermission(['project:write']), updateProject)
+adminRouter.post('/projects/:userId/:projectId/restore', requireAnyPermission(['project:write']), restoreProject)
 adminRouter.delete('/projects/:userId/:projectId', requireAnyPermission(['project:write']), removeProject)
 adminRouter.put(
   '/projects/:userId/:projectId/scenes/:sceneId/bundle',

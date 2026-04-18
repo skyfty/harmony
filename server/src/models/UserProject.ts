@@ -7,6 +7,8 @@ const userProjectSchema = new Schema<UserProjectDocument>(
     projectId: { type: String, required: true },
     categoryId: { type: String, required: false, default: null, index: true },
     sceneIds: { type: [String], required: true, default: [] },
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date, default: null },
     document: { type: Schema.Types.Mixed, required: true },
   },
   {

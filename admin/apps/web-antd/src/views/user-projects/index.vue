@@ -13,12 +13,13 @@ import {
   getProjectApi,
   listProjectCategoriesApi,
   listProjectsApi,
+  restoreProjectApi,
   updateProjectApi,
 } from '#/api';
 import { getUserApi } from '#/api/core/rbac';
 
 import { Button, Form, Input, message, Modal, Select, Space, Tag, Tooltip } from 'ant-design-vue';
-import { EyeOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { EyeOutlined, EditOutlined, DeleteOutlined, RollbackOutlined } from '@ant-design/icons-vue';
 
 interface ProjectFormModel {
   categoryId?: string;
@@ -33,6 +34,7 @@ const projectModalOpen = ref(false);
 const projectSubmitting = ref(false);
 const editingProjectKey = ref<null | string>(null);
 const projectFormRef = ref<FormInstance>();
+const showDeletedOnly = ref(false);
 
 const projectFormModel = reactive<ProjectFormModel>({
   userId: '',
@@ -67,12 +69,18 @@ async function loadCategories() {
 }
 
 function openCreateProjectModal() {
+  if (showDeletedOnly.value) {
+    return;
+  }
   editingProjectKey.value = null;
   resetProjectForm();
   projectModalOpen.value = true;
 }
 
 async function openEditProjectModal(row: UserProjectListItem) {
+  if (showDeletedOnly.value || row.deletedAt) {
+    return;
+  }
   editingProjectKey.value = `${row.userId}::${row.id}`;
   projectFormModel.userId = row.userId;
   projectFormModel.id = row.id;
@@ -136,16 +144,33 @@ async function submitProject() {
 }
 
 function handleDeleteProject(row: UserProjectListItem) {
-    Modal.confirm({
+  Modal.confirm({
     title: t('page.userProjects.index.confirm.delete.title', { name: row.name }),
-    content: t('page.userProjects.index.confirm.delete.content'),
+    content: row.deletedAt
+      ? t('page.userProjects.index.confirm.delete.permanentContent')
+      : t('page.userProjects.index.confirm.delete.trashContent'),
     okType: 'danger',
     onOk: async () => {
       await deleteProjectApi(row.userId, row.id);
-      message.success(t('page.userProjects.index.message.deleteSuccess'));
-      projectGridApi.reload();
+      message.success(
+        row.deletedAt
+          ? t('page.userProjects.index.message.permanentDeleteSuccess')
+          : t('page.userProjects.index.message.deleteSuccess'),
+      );
+      await projectGridApi.reload();
     },
   });
+}
+
+async function handleRestoreProject(row: UserProjectListItem) {
+  await restoreProjectApi(row.userId, row.id);
+  message.success(t('page.userProjects.index.message.restoreSuccess'));
+  await projectGridApi.reload();
+}
+
+async function toggleTrashView() {
+  showDeletedOnly.value = !showDeletedOnly.value;
+  await projectGridApi.reload();
 }
 
 const router = useRouter();
@@ -189,7 +214,7 @@ const [ProjectGrid, projectGridApi] = useVbenVxeGrid<UserProjectListItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 180, title: t('page.userProjects.index.table.name') },
+      { field: 'name', minWidth: 220, title: t('page.userProjects.index.table.name'), slots: { default: 'name' } },
       { field: 'id', minWidth: 220, title: t('page.userProjects.index.table.id') },
       { field: 'userId', minWidth: 200, title: t('page.userProjects.index.table.user'), slots: { default: 'user' } },
       {
@@ -225,6 +250,7 @@ const [ProjectGrid, projectGridApi] = useVbenVxeGrid<UserProjectListItem>({
           formValues: Record<string, any>,
         ) => {
           const result = await listProjectsApi({
+            deletedOnly: showDeletedOnly.value,
             keyword: formValues.keyword || undefined,
             userId: formValues.userId || undefined,
             categoryId: formValues.categoryId || undefined,
@@ -274,10 +300,18 @@ onMounted(async () => {
     <ProjectGrid>
       <template #toolbar-actions>
         <Space>
-          <Button v-access:code="'project:write'" type="primary" @click="openCreateProjectModal">
+          <Button v-access:code="'project:write'" type="primary" :disabled="showDeletedOnly" @click="openCreateProjectModal">
             {{ t('page.userProjects.index.toolbar.create') }}
           </Button>
           <Button @click="loadCategories">{{ t('page.userProjects.index.toolbar.refreshCategories') }}</Button>
+          <Button @click="toggleTrashView">{{ showDeletedOnly ? t('page.userProjects.index.toolbar.exitTrash') : t('page.userProjects.index.toolbar.trash') }}</Button>
+        </Space>
+      </template>
+
+      <template #name="{ row }">
+        <Space>
+          <span>{{ row.name }}</span>
+          <Tag v-if="row.deletedAt" color="orange">{{ t('page.userProjects.index.status.trashed') }}</Tag>
         </Space>
       </template>
 
@@ -299,12 +333,17 @@ onMounted(async () => {
               <EyeOutlined />
             </Button>
           </Tooltip>
-          <Tooltip :title="t('page.userProjects.index.actions.edit')">
+          <Tooltip v-if="!row.deletedAt" :title="t('page.userProjects.index.actions.edit')">
             <Button v-access:code="'project:write'" size="small" type="text" @click="openEditProjectModal(row)">
               <EditOutlined />
             </Button>
           </Tooltip>
-          <Tooltip :title="t('page.userProjects.index.actions.delete')">
+          <Tooltip v-if="row.deletedAt" :title="t('page.userProjects.index.actions.restore')">
+            <Button v-access:code="'project:write'" size="small" type="text" @click="handleRestoreProject(row)">
+              <RollbackOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="row.deletedAt ? t('page.userProjects.index.actions.permanentDelete') : t('page.userProjects.index.actions.delete')">
             <Button v-access:code="'project:write'" danger size="small" type="text" @click="handleDeleteProject(row)">
               <DeleteOutlined />
             </Button>
