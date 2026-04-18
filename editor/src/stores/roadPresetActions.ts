@@ -79,6 +79,14 @@ function normalizeOptionalAssetId(value: unknown): string | null {
   return raw.length ? raw : null
 }
 
+function resolveRoadPresetMaterialPatchId(key: string, patch: Record<string, unknown>): string {
+  const normalizedPatchId = normalizeOptionalAssetId(patch.id)
+  if (normalizedPatchId) {
+    return normalizedPatchId
+  }
+  return typeof key === 'string' ? key.trim() : ''
+}
+
 function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
   if (!value || typeof value !== 'object') {
     return []
@@ -203,14 +211,18 @@ export function parseRoadPresetData(text: string): RoadPresetData {
 
   const materialPatches: Record<string, RoadPresetMaterialPatch> = {}
   for (const [key, value] of Object.entries(materialPatchesRaw as Record<string, unknown>)) {
-    const id = typeof key === 'string' ? key.trim() : ''
-    if (!id) {
-      continue
-    }
     if (!value || typeof value !== 'object') {
+      const id = typeof key === 'string' ? key.trim() : ''
       throw new Error(`道路预设 materialPatches[${id}] 格式无效`)
     }
     const patch = value as Record<string, unknown>
+    const id = resolveRoadPresetMaterialPatchId(key, patch)
+    if (!id) {
+      continue
+    }
+    if (materialPatches[id]) {
+      throw new Error(`道路预设 materialPatches[${id}] 重复`)
+    }
     const next: RoadPresetMaterialPatch = {
       id,
     }

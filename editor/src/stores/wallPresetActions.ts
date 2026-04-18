@@ -324,7 +324,7 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
 
 function normalizeWallPresetWallPropsAssetIds(
   wallProps: StrictWallPresetWallProps,
-  presetAssetRegistry: WallPresetData['assetRegistry'] | null | undefined,
+  presetAssetRegistry: Record<string, unknown> | null | undefined,
 ): StrictWallPresetWallProps {
   return {
     ...wallProps,
@@ -1017,7 +1017,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
 
       const dependencyAssetIds = collectWallPresetDependencyAssetIds(preset)
 
-      const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry)
+      const presetAssetRegistry: Record<string, unknown> | null | undefined = isSceneAssetRegistry(preset.assetRegistry)
         ? preset.assetRegistry
         : undefined
       const normalizedWallProps = normalizeWallPresetWallPropsAssetIds(wallProps, presetAssetRegistry)
