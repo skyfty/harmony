@@ -2370,8 +2370,6 @@ export async function lookupAssetsByHash(ctx: Context): Promise<void> {
       contentHashAlgorithm: query.contentHashAlgorithm,
     })),
   })
-    .populate('tags')
-    .populate('seriesId')
     .lean()
     .exec() as LeanAsset[]
 
