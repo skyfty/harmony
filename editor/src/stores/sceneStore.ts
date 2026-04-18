@@ -1363,6 +1363,41 @@ function cloneNodeMaterials(materials?: SceneNodeMaterial[] | null): SceneNodeMa
   return (materials ?? []).map((material) => cloneNodeMaterial(material))
 }
 
+const SCENE_STORE_DEBUG_LOG_PREFIX = '[SceneStore]'
+
+function logSceneStoreDebug(message: string, payload?: Record<string, unknown>): void {
+  if (payload) {
+    console.info(SCENE_STORE_DEBUG_LOG_PREFIX, message, payload)
+    return
+  }
+  console.info(SCENE_STORE_DEBUG_LOG_PREFIX, message)
+}
+
+function collectTextureAssetIdsForDebug(material: { textures?: Record<string, SceneMaterialTextureRef | null | undefined> } | null | undefined): string[] {
+  if (!material?.textures) {
+    return []
+  }
+  return Array.from(
+    new Set(
+      Object.values(material.textures)
+        .map((entry) => (typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''))
+        .filter((assetId) => assetId.length > 0),
+    ),
+  )
+}
+
+function summarizeNodeMaterialForDebug(material: SceneNodeMaterial | null | undefined): Record<string, unknown> | null {
+  if (!material) {
+    return null
+  }
+  return {
+    id: material.id,
+    name: material.name ?? null,
+    type: material.type ?? null,
+    textureAssetIds: collectTextureAssetIdsForDebug(material),
+  }
+}
+
 const LEGACY_NODE_TYPE_MAP: Record<string, SceneNodeType> = {
   mesh: 'Mesh',
   light: 'Light',
@@ -9762,6 +9797,15 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
+      logSceneStoreDebug('applyMaterialAssetToNodeMaterialSlot resolved material asset', {
+        nodeId,
+        nodeMaterialId,
+        materialAssetId: normalizedAssetId,
+        materialName: material.name ?? null,
+        materialType: material.type ?? null,
+        textureAssetIds: collectTextureAssetIdsForDebug(material),
+      })
+
       let updated = false
       let requiresDynamicMeshPatch = false
       let appliedEntry: SceneNodeMaterial | null = null
@@ -9797,6 +9841,13 @@ export const useSceneStore = defineStore('scene', {
       if (!updated || !appliedEntry) {
         return null
       }
+
+      logSceneStoreDebug('applyMaterialAssetToNodeMaterialSlot wrote node material', {
+        nodeId,
+        nodeMaterialId,
+        materialAssetId: normalizedAssetId,
+        appliedEntry: summarizeNodeMaterialForDebug(appliedEntry),
+      })
 
       this.queueSceneNodePatch(nodeId, ['materials'])
       if (requiresDynamicMeshPatch) {
@@ -14627,6 +14678,18 @@ export const useSceneStore = defineStore('scene', {
         sideUvScale: presetMeshPatch?.sideUvScale ?? build.definition.sideUvScale,
         topBottomMaterialConfigId: defaultTopId,
         sideMaterialConfigId: defaultSideId,
+      }
+
+      if (payload.floorPresetData) {
+        logSceneStoreDebug('createFloorNode resolved floor preset materials', {
+          presetName: payload.floorPresetData.name,
+          materialConfig: payload.floorPresetData.materialConfig,
+          presetMaterialSummaries: defaultMaterials.map((entry) => summarizeNodeMaterialForDebug(entry)),
+          defaultMeshMaterialConfig: {
+            topBottomMaterialConfigId: defaultMesh.topBottomMaterialConfigId,
+            sideMaterialConfigId: defaultMesh.sideMaterialConfigId,
+          },
+        })
       }
 
       const floorGroup = createFloorGroup(defaultMesh)

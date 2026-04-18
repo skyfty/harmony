@@ -19,6 +19,16 @@ import {
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { normalizeAssetIdsWithRegistry, normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'
 
+const FLOOR_PRESET_DEBUG_LOG_PREFIX = '[FloorPresetActions]'
+
+function logFloorPresetDebug(message: string, payload?: Record<string, unknown>): void {
+  if (payload) {
+    console.info(FLOOR_PRESET_DEBUG_LOG_PREFIX, message, payload)
+    return
+  }
+  console.info(FLOOR_PRESET_DEBUG_LOG_PREFIX, message)
+}
+
 export type FloorPresetStoreLike = {
   nodes: SceneNode[]
   selectedNodeId: string | null
@@ -95,7 +105,7 @@ export function collectFloorPresetDependencyAssetIds(
     return []
   }
 
-  return normalizeAssetIdsWithRegistry(
+  const dependencyAssetIds = normalizeAssetIdsWithRegistry(
     [
       ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
         const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(
@@ -109,6 +119,15 @@ export function collectFloorPresetDependencyAssetIds(
     ],
     (preset.assetRegistry ?? null) as Record<string, unknown> | null,
   )
+
+  logFloorPresetDebug('collectFloorPresetDependencyAssetIds resolved', {
+    presetName: preset.name,
+    materialOrder: preset.materialOrder,
+    assetRegistryKeys: Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+    dependencyAssetIds,
+  })
+
+  return dependencyAssetIds
 }
 
 function assertStrictFloorPresetFloorProps(value: unknown): StrictFloorPresetFloorProps {
@@ -221,8 +240,9 @@ export function parseFloorPresetData(text: string): FloorPresetData {
       throw new Error(`地板预设 materialPatches[${id}] 格式无效`)
     }
     const patch = value as Record<string, unknown>
+    const canonicalId = typeof patch.id === 'string' && patch.id.trim().length ? patch.id.trim() : id
     const next: FloorPresetMaterialPatch = {
-      id,
+      id: canonicalId,
     }
     if (typeof patch.name === 'string' && patch.name.trim().length) {
       next.name = patch.name.trim()
@@ -236,7 +256,13 @@ export function parseFloorPresetData(text: string): FloorPresetData {
       }
       next.props = patch.props as Record<string, unknown>
     }
-    materialPatches[id] = next
+    if (canonicalId !== id) {
+      logFloorPresetDebug('parseFloorPresetData remapped material patch id', {
+        sourceId: id,
+        canonicalId,
+      })
+    }
+    materialPatches[canonicalId] = next
   }
 
   for (const id of materialOrder) {
@@ -247,7 +273,7 @@ export function parseFloorPresetData(text: string): FloorPresetData {
 
   const materialConfig = assertStrictFloorPresetMaterialConfig(record.materialConfig, materialOrder)
 
-  return {
+  const preset: FloorPresetData = {
     kind: 'floor-preset',
     formatVersion: FLOOR_PRESET_FORMAT_VERSION,
     name,
@@ -257,6 +283,21 @@ export function parseFloorPresetData(text: string): FloorPresetData {
     materialPatches,
     assetRegistry: record.assetRegistry,
   }
+
+  logFloorPresetDebug('parseFloorPresetData parsed', {
+    presetName: preset.name,
+    materialOrder: preset.materialOrder,
+    materialConfig: preset.materialConfig,
+    assetRegistryKeys: Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+    patchTextureAssetIds: Object.fromEntries(
+      Object.entries(preset.materialPatches ?? {}).map(([patchId, patch]) => [
+        patchId,
+        collectTextureAssetIdsFromMaterialLike(patch.props ?? null),
+      ]),
+    ),
+  })
+
+  return preset
 }
 
 async function generateFloorPresetThumbnailDataUrl(
@@ -439,6 +480,18 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
         }
       }
 
+      logFloorPresetDebug('saveFloorPreset serialized floor preset', {
+        nodeId,
+        presetName: sanitizedName,
+        materialOrder,
+        materialConfig: presetData.materialConfig,
+        dependencyAssetIds,
+        assetRegistryKeys: Object.keys((presetData.assetRegistry ?? {}) as Record<string, unknown>),
+        patchTextureAssetIds: Object.fromEntries(
+          Object.entries(materialPatches).map(([patchId, patch]) => [patchId, collectTextureAssetIdsFromMaterialLike(patch.props ?? null)]),
+        ),
+      })
+
       const serialized = JSON.stringify(presetData, null, 2)
       const fileName = buildFloorPresetFilename(sanitizedName)
       const assetId = typeof payload.assetId === 'string' && payload.assetId.trim().length ? payload.assetId.trim() : deps.generateUuid()
@@ -528,6 +581,14 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       assetCache.touch(assetId)
       const text = await entry.blob.text()
       const preset = parseFloorPresetData(text)
+
+      logFloorPresetDebug('loadFloorPreset loaded asset', {
+        assetId,
+        presetName: preset.name,
+        materialOrder: preset.materialOrder,
+        materialConfig: preset.materialConfig,
+        assetRegistryKeys: Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+      })
 
       if (preset.assetRegistry !== undefined && preset.assetRegistry !== null && !isSceneAssetRegistry(preset.assetRegistry)) {
         throw new Error('地板预设 assetRegistry 格式无效')

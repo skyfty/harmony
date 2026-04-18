@@ -14,13 +14,9 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type {
   FloorDynamicMesh,
-  SceneMaterialProps,
-  SceneMaterialTextureRef,
-  SceneMaterialType,
   SceneNode,
   SceneNodeMaterial,
 } from '@schema'
-import { DEFAULT_SCENE_MATERIAL_TYPE } from '@schema/material'
 import { FLOOR_COMPONENT_TYPE } from '@schema/components/definitions/floorComponent'
 import { createLandformGroup } from '@schema/landformMesh'
 import { applyMaterialOverrides } from '@schema/material'
@@ -42,13 +38,14 @@ import {
   buildWallPresetPreviewDynamicMesh,
   WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY,
 } from '@/utils/wallPresetSceneGraphPreview'
+import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
 import {
   buildFloorPreviewObjectFromNode,
   buildWallPreviewObjectFromNode,
   createPreviewMaterialOverrideOptions,
 } from '@/utils/wallFloorPreviewBuilder'
 import { buildWallNodeMaterialsFromPreset } from '@/utils/wallPresetNodeMaterials'
-import type { FloorPresetData, FloorPresetMaterialPatch } from '@/utils/floorPreset'
+import type { FloorPresetData } from '@/utils/floorPreset'
 import type { WallPresetData } from '@/utils/wallPreset'
 
 const props = defineProps<{
@@ -81,6 +78,7 @@ let controls: OrbitControls | null = null
 let animationHandle = 0
 let currentRoot: THREE.Object3D | null = null
 let loadToken = 0
+const previewInstanceId = THREE.MathUtils.generateUUID()
 const WALL_PRESET_COMPONENT_LOG_PREFIX = '[WallFloorPresetPreview]'
 
 function logWallPresetComponent(message: string, payload?: Record<string, unknown>): void {
@@ -96,116 +94,6 @@ const materialOverrideOptions = createPreviewMaterialOverrideOptions(ensureAsset
     console.warn('[preset-preview]', message)
   }
 })
-
-function cloneTextureRef(ref: SceneMaterialTextureRef | null | undefined): SceneMaterialTextureRef | null {
-  if (!ref) {
-    return null
-  }
-  return {
-    assetId: ref.assetId,
-    name: ref.name,
-    settings: ref.settings
-      ? {
-          wrapS: ref.settings.wrapS,
-          wrapT: ref.settings.wrapT,
-          wrapR: ref.settings.wrapR,
-          offset: { x: ref.settings.offset.x, y: ref.settings.offset.y },
-          repeat: { x: ref.settings.repeat.x, y: ref.settings.repeat.y },
-          tileSizeMeters: { x: ref.settings.tileSizeMeters.x, y: ref.settings.tileSizeMeters.y },
-          rotation: ref.settings.rotation,
-          center: { x: ref.settings.center.x, y: ref.settings.center.y },
-          matrixAutoUpdate: ref.settings.matrixAutoUpdate,
-          generateMipmaps: ref.settings.generateMipmaps,
-          premultiplyAlpha: ref.settings.premultiplyAlpha,
-          flipY: ref.settings.flipY,
-        }
-      : undefined,
-  }
-}
-
-function createDefaultMaterialProps(): SceneMaterialProps {
-  return {
-    color: '#ffffff',
-    transparent: false,
-    opacity: 1,
-    side: 'front',
-    wireframe: false,
-    metalness: 0.1,
-    roughness: 1,
-    emissive: '#000000',
-    emissiveIntensity: 0,
-    aoStrength: 1,
-    envMapIntensity: 1,
-    textures: {
-      albedo: null,
-      normal: null,
-      metalness: null,
-      roughness: null,
-      ao: null,
-      emissive: null,
-      displacement: null,
-    },
-  }
-}
-
-function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneMaterialProps> | null): SceneMaterialProps {
-  if (!overrides) {
-    return {
-      ...base,
-      textures: {
-        ...base.textures,
-      },
-    }
-  }
-
-  const next: SceneMaterialProps = {
-    ...base,
-    ...overrides,
-    textures: {
-      ...base.textures,
-    },
-  }
-
-  if (overrides.textures) {
-    const sourceTextures = overrides.textures as Record<string, SceneMaterialTextureRef | null | undefined>
-    Object.keys(sourceTextures).forEach((key) => {
-      next.textures[key as keyof SceneMaterialProps['textures']] = cloneTextureRef(sourceTextures[key] ?? null)
-    })
-  }
-
-  return next
-}
-
-function createNodeMaterialFromPatch(
-  slotId: string,
-  patch: FloorPresetMaterialPatch,
-): SceneNodeMaterial {
-  const baseProps = createDefaultMaterialProps()
-  const mergedProps = mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
-
-  return {
-    id: slotId,
-    name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : undefined,
-    type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
-    ...mergedProps,
-  }
-}
-
-function buildFloorNodeMaterials(preset: FloorPresetData): SceneNodeMaterial[] {
-  return (preset.materialOrder ?? [])
-    .map((slotId) => {
-      const normalizedId = typeof slotId === 'string' ? slotId.trim() : ''
-      if (!normalizedId) {
-        return null
-      }
-      const patch = preset.materialPatches?.[normalizedId]
-      if (!patch) {
-        return null
-      }
-      return createNodeMaterialFromPatch(normalizedId, patch)
-    })
-    .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
-}
 
 function fitCamera(object: THREE.Object3D): void {
   if (!camera || !controls) {
@@ -330,7 +218,7 @@ function buildDefaultFloorDefinition(preset: FloorPresetData): FloorDynamicMesh 
 
 function createPreviewBaseNode(name: string): SceneNode {
   return {
-    id: `${props.kind}-preset-preview`,
+    id: `${props.kind}-preset-preview-${previewInstanceId}`,
     name,
     nodeType: 'Mesh',
     position: { x: 0, y: 0, z: 0 },
@@ -348,7 +236,7 @@ function buildWallPreviewNode(preset: WallPresetData): SceneNode {
     materials: buildWallNodeMaterialsFromPreset(preset),
     components: {
       [WALL_COMPONENT_TYPE]: {
-        id: `${WALL_COMPONENT_TYPE}-preset-preview`,
+        id: `${WALL_COMPONENT_TYPE}-preset-preview-${previewInstanceId}`,
         type: WALL_COMPONENT_TYPE,
         enabled: true,
         props: preset.wallProps,
@@ -361,10 +249,10 @@ function buildFloorPreviewNode(preset: FloorPresetData): SceneNode {
   return {
     ...createPreviewBaseNode(preset.name || 'Floor Preset Preview'),
     dynamicMesh: buildDefaultFloorDefinition(preset),
-    materials: buildFloorNodeMaterials(preset),
+    materials: buildFloorNodeMaterialsFromPreset(preset),
     components: {
       [FLOOR_COMPONENT_TYPE]: {
-        id: `${FLOOR_COMPONENT_TYPE}-preset-preview`,
+        id: `${FLOOR_COMPONENT_TYPE}-preset-preview-${previewInstanceId}`,
         type: FLOOR_COMPONENT_TYPE,
         enabled: true,
         props: preset.floorProps,
@@ -386,6 +274,13 @@ async function buildWallPreviewObject(preset: WallPresetData): Promise<THREE.Obj
 }
 
 async function buildFloorPreviewObject(preset: FloorPresetData): Promise<THREE.Object3D> {
+  logWallPresetComponent('building floor preset preview', {
+    presetName: preset.name,
+    materialConfig: preset.materialConfig,
+    materialOrder: preset.materialOrder,
+    assetRegistryKeys: Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
+  })
+
   const object = await buildFloorPreviewObjectFromNode({
     node: buildFloorPreviewNode(preset),
     materialOverrideOptions,
