@@ -13,6 +13,35 @@ import type { WallPresetData } from '@/utils/wallPreset'
 
 export const WALL_PRESET_PREVIEW_SHARED_ASSET_USERDATA_KEY = '__harmonyWallPresetPreviewSharedAsset'
 
+function buildTextureRefKey(ref: SceneMaterialTextureRef): string {
+  const assetId = typeof ref.assetId === 'string' ? ref.assetId.trim() : ''
+  const name = typeof ref.name === 'string' ? ref.name.trim() : ''
+  return JSON.stringify({
+    assetId,
+    name,
+    settings: ref.settings ?? null,
+  })
+}
+
+async function preloadWallPresetTextures(
+  refs: readonly SceneMaterialTextureRef[],
+  resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>,
+): Promise<Map<string, THREE.Texture | null>> {
+  const resolved = new Map<string, THREE.Texture | null>()
+
+  await Promise.all(refs.map(async (ref) => {
+    const key = buildTextureRefKey(ref)
+    try {
+      const texture = await resolveTexture(ref)
+      resolved.set(key, texture)
+    } catch {
+      resolved.set(key, null)
+    }
+  }))
+
+  return resolved
+}
+
 
 function collectWallPresetAssetIds(preset: WallPresetData): string[] {
   return Array.from(
@@ -201,11 +230,17 @@ export async function renderWallPresetThumbnailDataUrl(options: {
       resolveTexture: options.resolveTexture,
     }
     if (nodeMaterials.length > 0) {
+      const textureRefs = nodeMaterials.flatMap((material) => Object.values(material.textures ?? {}).filter((ref): ref is SceneMaterialTextureRef => Boolean(ref)))
+      const resolvedTextures = await preloadWallPresetTextures(textureRefs, options.resolveTexture)
+      materialOverrideOptions.resolveTexture = async (ref) => {
+        return resolvedTextures.get(buildTextureRefKey(ref)) ?? null
+      }
       applyMaterialOverrides(
         wallObject,
         nodeMaterials,
         materialOverrideOptions,
       )
+      await Promise.resolve()
     }
   }
 

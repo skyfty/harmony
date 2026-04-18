@@ -275,6 +275,14 @@ function normalizeWallRenderMode(value: unknown, fallback: WallRenderMode = 'str
   return value === 'repeatInstances' ? 'repeatInstances' : fallback
 }
 
+function resolveWallPresetMaterialPatchId(key: string, patch: Record<string, unknown>): string {
+  const normalizedPatchId = normalizeOptionalAssetId(patch.id)
+  if (normalizedPatchId) {
+    return normalizedPatchId
+  }
+  return typeof key === 'string' ? key.trim() : ''
+}
+
 function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallProps): Partial<WallComponentProps> {
   return {
     height: wallProps.height,
@@ -576,14 +584,18 @@ export function parseWallPresetData(text: string): WallPresetData {
   }
   const materialPatches: Record<string, WallPresetMaterialPatch> = {}
   for (const [key, value] of Object.entries(materialPatchesRaw as Record<string, unknown>)) {
-    const id = typeof key === 'string' ? key.trim() : ''
-    if (!id) {
-      continue
-    }
     if (!value || typeof value !== 'object') {
+      const id = typeof key === 'string' ? key.trim() : ''
       throw new Error(`墙体预设 materialPatches[${id}] 格式无效`)
     }
     const patch = value as Record<string, unknown>
+    const id = resolveWallPresetMaterialPatchId(key, patch)
+    if (!id) {
+      continue
+    }
+    if (materialPatches[id]) {
+      throw new Error(`墙体预设 materialPatches[${id}] 重复`)
+    }
     const next: WallPresetMaterialPatch = {
       id,
     }
