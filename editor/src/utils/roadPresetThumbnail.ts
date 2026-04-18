@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh, SceneMaterial, SceneMaterialTextureRef } from '@schema'
+import type { RoadDynamicMesh, SceneMaterialTextureRef } from '@schema'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { createRoadGroup } from '@schema/roadMesh'
 import type { RoadPresetData } from '@/utils/roadPreset'
@@ -8,7 +8,6 @@ import { disposeThumbnailObject, renderObjectThumbnailDataUrl } from '@/utils/ob
 
 type RenderRoadPresetThumbnailOptions = {
   preset: RoadPresetData
-  sharedMaterials: readonly SceneMaterial[]
   resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
   width: number
   height: number
@@ -75,7 +74,7 @@ export async function renderRoadPresetThumbnailDataUrl(options: RenderRoadPreset
     shoulderWidth: options.preset.roadProps.shoulderWidth,
   })
 
-  const nodeMaterials = buildRoadNodeMaterialsFromPreset(options.preset, options.sharedMaterials)
+  const nodeMaterials = buildRoadNodeMaterialsFromPreset(options.preset)
   const materialOverrideOptions: MaterialTextureAssignmentOptions = {
     resolveTexture: options.resolveTexture,
   }

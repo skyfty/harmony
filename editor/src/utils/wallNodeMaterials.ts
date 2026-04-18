@@ -34,7 +34,6 @@ function buildMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneMater
 function createNodeMaterial(name: string, type: SceneMaterialType, overrides?: Partial<SceneMaterialProps>): SceneNodeMaterial {
   return {
     id: generateUuid(),
-    materialId: null,
     name,
     type,
     ...buildMaterialProps(overrides),

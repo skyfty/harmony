@@ -3,7 +3,6 @@ import type { SceneNode, SceneMaterialProps, SceneNodeMaterial } from '@schema'
 export type SceneStoreWallHelpersDeps = {
   createWallNodeMaterials: (options: { bodyName: string }) => SceneNodeMaterial[]
   createNodeMaterial: (
-    materialId: string | null,
     props: SceneMaterialProps,
     options: { id?: string; name?: string; type?: any },
   ) => SceneNodeMaterial

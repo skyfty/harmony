@@ -3,7 +3,6 @@ import type { Object3D } from 'three'
 import type { SceneNode } from '@schema'
 import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { SceneMaterial } from '@/types/material'
 import type { ModelInstanceGroup } from '@schema/modelObjectCache'
 import {
   collectRuntimeModelNodesByAssetId,
@@ -75,7 +74,6 @@ type PrefabProgressCallbacks = {
 export async function updateSceneAssets(args: {
   options: EnsureSceneAssetsOptions
   defaultNodes: SceneNode[]
-  defaultMaterials: SceneMaterial[]
 
   assetCache: AssetCacheLike
   ui: OverlayController
@@ -105,7 +103,6 @@ export async function updateSceneAssets(args: {
   const {
     options,
     defaultNodes,
-    defaultMaterials,
     assetCache,
     ui,
     watch,
@@ -136,7 +133,6 @@ export async function updateSceneAssets(args: {
   }
 
   const targetNodes = Array.isArray(options.nodes) ? options.nodes : defaultNodes
-  const targetMaterials = defaultMaterials
   if (!targetNodes.length) {
     if (options.showOverlay) {
       ui.hideLoadingOverlay(true)
@@ -145,7 +141,7 @@ export async function updateSceneAssets(args: {
   }
 
   const runtimeAssetNodeMap = collectRuntimeModelNodesByAssetId(targetNodes)
-  const dependencyAssetIds = collectSceneNodeDependencyAssetIds(targetNodes, targetMaterials)
+  const dependencyAssetIds = collectSceneNodeDependencyAssetIds(targetNodes)
   const allAssetIds = Array.from(new Set<string>([
     ...runtimeAssetNodeMap.keys(),
     ...dependencyAssetIds,

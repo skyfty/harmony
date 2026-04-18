@@ -5,7 +5,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const FLOOR_PRESET_FORMAT_VERSION = 1
+export const FLOOR_PRESET_FORMAT_VERSION = 2
 
 export type StrictFloorPresetFloorProps = {
   smooth: number
@@ -21,13 +21,10 @@ export type StrictFloorPresetMaterialConfig = {
 export type FloorPresetMaterialPatch = {
   /** Node material slot id (SceneNodeMaterial.id). Provided as record key; repeated here for clarity in devtools. */
   id?: string
-  /** Shared material id if this slot references a shared material definition. */
-  materialId: string | null
   /** Optional local display name override. */
   name?: string
   /** Material type override. */
   type?: string
-  /** Only used for local materials (materialId === null). */
   props?: Record<string, unknown>
 }
 

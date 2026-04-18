@@ -1,5 +1,4 @@
 import type {
-  SceneMaterial,
   SceneMaterialProps,
   SceneMaterialTextureRef,
   SceneMaterialType,
@@ -69,27 +68,14 @@ function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneM
 function createNodeMaterialFromPatch(
   slotId: string,
   patch: RoadPresetMaterialPatch,
-  sharedMaterials: readonly SceneMaterial[],
 ): SceneNodeMaterial | null {
-  const sharedMaterialId = patch.materialId === null ? null : typeof patch.materialId === 'string' ? patch.materialId.trim() : null
-  const sharedMaterial = sharedMaterialId
-    ? (sharedMaterials.find((entry) => entry.id === sharedMaterialId) ?? null)
-    : null
-
-  if (sharedMaterialId && !sharedMaterial) {
-    return null
-  }
-
-  const baseProps = sharedMaterial ? mergeMaterialProps(createDefaultPreviewMaterialProps(), sharedMaterial) : createDefaultPreviewMaterialProps()
-  const mergedProps = sharedMaterial && patch.props && Object.keys(patch.props).length
-    ? baseProps
-    : mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
+  const baseProps = createDefaultPreviewMaterialProps()
+  const mergedProps = mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
 
   const nextMaterial: SceneNodeMaterial = {
     id: slotId,
-    materialId: sharedMaterial?.id ?? null,
-    name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : sharedMaterial?.name,
-    type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : sharedMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
+    name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : undefined,
+    type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
     ...mergedProps,
   }
 
@@ -98,7 +84,6 @@ function createNodeMaterialFromPatch(
 
 export function buildRoadNodeMaterialsFromPreset(
   preset: RoadPresetData | null | undefined,
-  sharedMaterials: readonly SceneMaterial[],
 ): SceneNodeMaterial[] {
   if (!preset) {
     return []
@@ -114,7 +99,7 @@ export function buildRoadNodeMaterialsFromPreset(
       if (!patch) {
         return null
       }
-      return createNodeMaterialFromPatch(normalizedId, patch, sharedMaterials)
+      return createNodeMaterialFromPatch(normalizedId, patch)
     })
     .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
 }

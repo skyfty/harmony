@@ -1373,7 +1373,7 @@ function refreshFloorRuntimeMaterials(nodeId: string, targetObject: THREE.Object
 }
 
 function applyFloorPreviewMaterials(targetObject: THREE.Object3D, presetData: import('@/utils/floorPreset').FloorPresetData | null): void {
-  const materials = buildFloorNodeMaterialsFromPreset(presetData, sceneStore.materials)
+  const materials = buildFloorNodeMaterialsFromPreset(presetData)
   if (materials.length) {
     applyMaterialOverrides(targetObject, materials, materialOverrideOptions)
   } else {
@@ -1385,7 +1385,7 @@ function applyLandformPreviewMaterials(
   targetObject: THREE.Object3D,
   presetData: import('@/utils/landformPreset').LandformPresetData | null,
 ): void {
-  const materials = buildLandformNodeMaterialsFromPreset(presetData, sceneStore.materials)
+  const materials = buildLandformNodeMaterialsFromPreset(presetData)
   if (materials.length) {
     applyMaterialOverrides(targetObject, materials, materialOverrideOptions)
   } else {
@@ -1394,7 +1394,7 @@ function applyLandformPreviewMaterials(
 }
 
 function applyWallPreviewMaterials(targetObject: THREE.Object3D, presetData: import('@/utils/wallPreset').WallPresetData | null): void {
-  const materials = buildWallNodeMaterialsFromPreset(presetData, sceneStore.materials)
+  const materials = buildWallNodeMaterialsFromPreset(presetData)
   if (materials.length) {
     applyMaterialOverrides(targetObject, materials, materialOverrideOptions)
   } else {
@@ -7200,7 +7200,7 @@ watch(floorBrushPresetAssetId, (assetId) => {
         return
       }
       const presetData = data as FloorPresetData
-      const dependencyAssetIds = collectFloorPresetDependencyAssetIds(presetData, sceneStore.materials)
+      const dependencyAssetIds = collectFloorPresetDependencyAssetIds(presetData)
 
       if (dependencyAssetIds.length) {
         const presetAssetRegistry = isSceneAssetRegistry(presetData.assetRegistry)
@@ -7248,7 +7248,7 @@ watch(landformBrushPresetAssetId, (assetId) => {
         return
       }
       const presetData = data as LandformPresetData
-      const dependencyAssetIds = collectLandformPresetDependencyAssetIds(presetData, sceneStore.materials)
+      const dependencyAssetIds = collectLandformPresetDependencyAssetIds(presetData)
 
       if (dependencyAssetIds.length) {
         const presetAssetRegistry = isSceneAssetRegistry(presetData.assetRegistry)
@@ -7295,7 +7295,7 @@ watch(roadBrushPresetAssetId, (assetId) => {
         return
       }
       const presetData = data as RoadPresetData
-      const dependencyAssetIds = collectRoadPresetDependencyAssetIds(presetData, sceneStore.materials)
+      const dependencyAssetIds = collectRoadPresetDependencyAssetIds(presetData)
 
       if (dependencyAssetIds.length) {
         const presetAssetRegistry = isSceneAssetRegistry(presetData.assetRegistry)
@@ -18577,9 +18577,13 @@ async function applyMaterialAssetToNode(nodeId: string, materialAssetId: string)
     if (!editableId) {
       return false
     }
-    return sceneStore.assignNodeMaterial(nodeId, editableId, materialAssetId)
+    return Boolean(await sceneStore.applyMaterialAssetToNodeMaterialSlot(nodeId, editableId, materialAssetId))
   }
-  return Boolean(sceneStore.addNodeMaterial(nodeId, { materialId: materialAssetId }))
+  const created = sceneStore.addNodeMaterial(nodeId) as import('@schema').SceneNodeMaterial | null
+  if (!created) {
+    return false
+  }
+  return Boolean(await sceneStore.applyMaterialAssetToNodeMaterialSlot(nodeId, created.id, materialAssetId))
 }
 
 function ensurePrimaryMaterialId(nodeId: string): string | null {

@@ -7,7 +7,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const ROAD_PRESET_FORMAT_VERSION = 1
+export const ROAD_PRESET_FORMAT_VERSION = 2
 
 export type StrictRoadPresetRoadProps = {
   junctionSmoothing: number
@@ -24,7 +24,6 @@ export type StrictRoadPresetRoadProps = {
 
 export type RoadPresetMaterialPatch = {
   id?: string
-  materialId: string | null
   name?: string
   type?: string
   props?: Record<string, unknown>

@@ -13,7 +13,6 @@ import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
 export type SceneStoreLandformHelpersDeps = {
   createLandformNodeMaterials: (options: { surfaceName: string }) => SceneNodeMaterial[]
   createNodeMaterial: (
-    materialId: string | null,
     props: SceneMaterialProps,
     options: { id?: string; name?: string; type?: any },
   ) => SceneNodeMaterial

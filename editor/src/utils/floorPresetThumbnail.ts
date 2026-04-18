@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, SceneMaterial, SceneMaterialTextureRef } from '@schema'
+import type { FloorDynamicMesh, SceneMaterialTextureRef } from '@schema'
 import { createFloorGroup } from '@schema/floorMesh'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'
@@ -9,7 +9,6 @@ const FLOOR_PRESET_RECT_SIZE_METERS = 10
 
 type RenderFloorPresetThumbnailOptions = {
   preset: FloorPresetData
-  sharedMaterials: readonly SceneMaterial[]
   resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
   width: number
   height: number
@@ -149,7 +148,7 @@ export async function renderFloorPresetThumbnailDataUrl(options: RenderFloorPres
   const definition = buildFloorPresetThumbnailDefinition(options.preset)
   const group = createFloorGroup(definition)
 
-  const nodeMaterials = buildFloorNodeMaterialsFromPreset(options.preset, options.sharedMaterials)
+  const nodeMaterials = buildFloorNodeMaterialsFromPreset(options.preset)
   const materialOverrideOptions: MaterialTextureAssignmentOptions = {
     resolveTexture: options.resolveTexture,
   }

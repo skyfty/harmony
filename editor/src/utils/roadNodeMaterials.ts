@@ -42,7 +42,6 @@ function buildRoadMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneM
 function createRoadNodeMaterial(name: string, type: SceneMaterialType, overrides?: Partial<SceneMaterialProps>): SceneNodeMaterial {
   return {
     id: generateUuid(),
-    materialId: null,
     name,
     type,
     ...buildRoadMaterialProps(overrides),

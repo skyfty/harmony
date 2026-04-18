@@ -14,7 +14,6 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type {
   FloorDynamicMesh,
-  SceneMaterial,
   SceneMaterialProps,
   SceneMaterialTextureRef,
   SceneMaterialType,
@@ -181,21 +180,13 @@ function createNodeMaterialFromPatch(
   slotId: string,
   patch: FloorPresetMaterialPatch,
 ): SceneNodeMaterial {
-  const sharedMaterialId = patch.materialId === null ? null : typeof patch.materialId === 'string' ? patch.materialId.trim() : null
-  const sharedMaterial = sharedMaterialId
-    ? (sceneStore.materials.find((entry) => entry.id === sharedMaterialId) ?? null) as SceneMaterial | null
-    : null
-
-  const baseProps = sharedMaterial ? mergeMaterialProps(createDefaultMaterialProps(), sharedMaterial) : createDefaultMaterialProps()
-  const mergedProps = sharedMaterial && patch.props && Object.keys(patch.props).length
-    ? baseProps
-    : mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
+  const baseProps = createDefaultMaterialProps()
+  const mergedProps = mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
 
   return {
     id: slotId,
-    materialId: sharedMaterial?.id ?? null,
-    name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : sharedMaterial?.name,
-    type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : sharedMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
+    name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : undefined,
+    type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
     ...mergedProps,
   }
 }
@@ -354,7 +345,7 @@ function buildWallPreviewNode(preset: WallPresetData): SceneNode {
   return {
     ...createPreviewBaseNode(preset.name || 'Wall Preset Preview'),
     dynamicMesh: buildWallPresetPreviewDynamicMesh(preset, { rectSizeMeters: 10 }),
-    materials: buildWallNodeMaterialsFromPreset(preset, sceneStore.materials),
+    materials: buildWallNodeMaterialsFromPreset(preset),
     components: {
       [WALL_COMPONENT_TYPE]: {
         id: `${WALL_COMPONENT_TYPE}-preset-preview`,
@@ -419,7 +410,7 @@ async function buildRoadPreviewObject(preset: RoadPresetData): Promise<THREE.Obj
   })
   object.name = preset.name || 'Road Preset Preview'
 
-  const nodeMaterials = buildRoadNodeMaterialsFromPreset(preset, sceneStore.materials)
+  const nodeMaterials = buildRoadNodeMaterialsFromPreset(preset)
   if (nodeMaterials.length > 0) {
     applyMaterialOverrides(object, nodeMaterials, materialOverrideOptions)
   }
@@ -432,7 +423,7 @@ async function buildLandformPreviewObject(preset: LandformPresetData): Promise<T
   object.name = preset.name || 'Landform Preset Preview'
   object.rotation.x = -0.08
 
-  const nodeMaterials = buildLandformNodeMaterialsFromPreset(preset, sceneStore.materials).filter(
+  const nodeMaterials = buildLandformNodeMaterialsFromPreset(preset).filter(
     (entry): entry is SceneNodeMaterial => Boolean(entry),
   )
   if (nodeMaterials.length > 0) {

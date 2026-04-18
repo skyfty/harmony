@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { LandformDynamicMesh, SceneMaterial, SceneMaterialTextureRef } from '@schema'
+import type { LandformDynamicMesh, SceneMaterialTextureRef } from '@schema'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { createLandformGroup } from '@schema/landformMesh'
 import type { LandformPresetData } from '@/utils/landformPreset'
@@ -20,7 +20,6 @@ const LANDFORM_PRESET_RING_POINTS: Array<{ x: number; z: number; y: number }> = 
 
 type RenderLandformPresetThumbnailOptions = {
   preset: LandformPresetData
-  sharedMaterials: readonly SceneMaterial[]
   resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
   width: number
   height: number
@@ -97,7 +96,7 @@ export async function renderLandformPresetThumbnailDataUrl(options: RenderLandfo
   const definition = buildLandformPresetPreviewDefinition(options.preset)
   const group = createLandformGroup(definition)
 
-  const nodeMaterials = buildLandformNodeMaterialsFromPreset(options.preset, options.sharedMaterials)
+  const nodeMaterials = buildLandformNodeMaterialsFromPreset(options.preset)
   const materialOverrideOptions: MaterialTextureAssignmentOptions = {
     resolveTexture: options.resolveTexture,
   }

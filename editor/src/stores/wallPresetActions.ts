@@ -62,7 +62,7 @@ export type WallPresetActionsDeps = {
   materialUpdateToProps: (update: any) => any
   mergeMaterialProps: (base: any, overrides?: any) => any
   createMaterialProps: (overrides?: any) => any
-  createNodeMaterial: (materialId: string | null, props: any, options: { id?: string; name?: string; type?: any }) => SceneNodeMaterial
+  createNodeMaterial: (props: any, options: { id?: string; name?: string; type?: any }) => SceneNodeMaterial
   DEFAULT_SCENE_MATERIAL_TYPE: string
 }
 
@@ -584,13 +584,8 @@ export function parseWallPresetData(text: string): WallPresetData {
       throw new Error(`墙体预设 materialPatches[${id}] 格式无效`)
     }
     const patch = value as Record<string, unknown>
-    const materialId = patch.materialId === null ? null : normalizeOptionalAssetId(patch.materialId)
-    if (patch.materialId !== null && materialId === null) {
-      throw new Error(`墙体预设 materialPatches[${id}] 缺少或无效字段: materialId`)
-    }
     const next: WallPresetMaterialPatch = {
       id,
-      materialId: materialId,
     }
     if (typeof patch.name === 'string' && patch.name.trim().length) {
       next.name = patch.name.trim()
@@ -692,7 +687,6 @@ async function generateWallPresetThumbnailDataUrl(
   }
   return await renderWallPresetThumbnailDataUrl({
     preset: presetData,
-    sharedMaterials: store.materials as any,
     resolveTexture,
     width: ASSET_THUMBNAIL_WIDTH,
     height: ASSET_THUMBNAIL_HEIGHT,
@@ -779,18 +773,8 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           continue
         }
 
-        // Shared material assignment: persist only the shared material id.
-        if (typeof (entry as any).materialId === 'string' && (entry as any).materialId.trim().length) {
-          materialPatches[id] = {
-            id,
-            materialId: (entry as any).materialId.trim(),
-          }
-          continue
-        }
-
         materialPatches[id] = {
           id,
-          materialId: null,
           name:
             typeof (entry as any).name === 'string' && (entry as any).name.trim().length
               ? (entry as any).name.trim()
@@ -1033,31 +1017,10 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           }
 
           const base = existingById.get(slotId) ?? null
-          const sharedMaterialId = patch.materialId === null ? null : normalizeOptionalAssetId(patch.materialId)
-
-          if (sharedMaterialId) {
-            const shared = store.materials.find((entry) => entry.id === sharedMaterialId) ?? null
-            if (!shared) {
-              throw new Error(`墙体预设引用的共享材质不存在: ${sharedMaterialId}`)
-            }
-            if (patch.props && Object.keys(patch.props).length) {
-              throw new Error(`墙体预设试图修改共享材质 props: ${slotId}`)
-            }
-            nextMaterials.push(
-              deps.createNodeMaterial(shared.id, shared, {
-                id: slotId,
-                name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : shared.name,
-                type: (shared as any).type,
-              }),
-            )
-            continue
-          }
 
           const baseEntry = base
-            ? base.materialId
-              ? deps.createNodeMaterial(null, deps.extractMaterialProps(base), { id: base.id, name: base.name, type: (base as any).type })
-              : base
-            : deps.createNodeMaterial(null, deps.createMaterialProps(), {
+            ? deps.createNodeMaterial(deps.extractMaterialProps(base), { id: base.id, name: base.name, type: (base as any).type })
+            : deps.createNodeMaterial(deps.createMaterialProps(), {
                 id: slotId,
                 name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : `Material ${nextMaterials.length + 1}`,
                 type: typeof patch.type === 'string' && patch.type.trim().length ? (patch.type as any) : deps.DEFAULT_SCENE_MATERIAL_TYPE,
@@ -1066,7 +1029,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           const overrides = patch.props ? deps.materialUpdateToProps(patch.props as any) : {}
           const mergedProps = patch.props ? deps.mergeMaterialProps(baseEntry as any, overrides) : deps.extractMaterialProps(baseEntry as any)
           nextMaterials.push(
-            deps.createNodeMaterial(null, mergedProps, {
+            deps.createNodeMaterial(mergedProps, {
               id: slotId,
               name:
                 typeof patch.name === 'string' && patch.name.trim().length

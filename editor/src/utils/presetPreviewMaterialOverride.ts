@@ -101,9 +101,6 @@ export function hasMeaningfulPreviewMaterialOverride(material: SceneNodeMaterial
   if (!material) {
     return false
   }
-  if (normalizeOptionalString(material.materialId)) {
-    return true
-  }
   if (normalizeOptionalString(material.type) && material.type !== DEFAULT_SCENE_MATERIAL_TYPE) {
     return true
   }

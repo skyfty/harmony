@@ -1,6 +1,5 @@
 import type { SceneNode } from '@schema'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from '@schema/instanceLayout'
-import type { SceneMaterial } from '@/types/material'
 
 const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 const ASSET_REFERENCE_SKIP_KEYS = new Set<string>([PREFAB_SOURCE_METADATA_KEY])
@@ -126,7 +125,6 @@ export function collectRuntimeModelNodesByAssetId(
 
 export function collectSceneNodeDependencyAssetIds(
   nodes: SceneNode[] | null | undefined,
-  sharedMaterials: ReadonlyArray<SceneMaterial | ({ id: string } & Record<string, unknown>)> = [],
 ): Set<string> {
   const bucket = new Set<string>()
   if (!Array.isArray(nodes) || !nodes.length) {
@@ -176,8 +174,6 @@ export function collectSceneNodeDependencyAssetIds(
       stack.push(...node.children)
     }
   }
-
-  void sharedMaterials
 
   return bucket
 }

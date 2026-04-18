@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneMaterial, SceneMaterialTextureRef, WallDynamicMesh } from '@schema'
+import type { SceneMaterialTextureRef, WallDynamicMesh } from '@schema'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import {
   createWallRenderGroup,
@@ -182,7 +182,6 @@ export async function buildWallPresetPreviewObject(options: {
 export async function renderWallPresetThumbnailDataUrl(options: {
   preset: WallPresetData
   loadAssetMesh: (assetId: string) => Promise<THREE.Object3D | null>
-  sharedMaterials?: readonly SceneMaterial[]
   resolveTexture?: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
   width: number
   height: number
@@ -196,8 +195,8 @@ export async function renderWallPresetThumbnailDataUrl(options: {
     return null
   }
 
-  if (options.sharedMaterials && options.resolveTexture) {
-    const nodeMaterials = buildWallNodeMaterialsFromPreset(options.preset, options.sharedMaterials)
+  if (options.resolveTexture) {
+    const nodeMaterials = buildWallNodeMaterialsFromPreset(options.preset)
     const materialOverrideOptions: MaterialTextureAssignmentOptions = {
       resolveTexture: options.resolveTexture,
     }

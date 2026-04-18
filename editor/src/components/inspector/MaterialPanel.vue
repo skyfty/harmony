@@ -131,11 +131,6 @@ function setActiveSlot(id: string) {
   emit('update:active-node-material-id', id)
 }
 
-function resolveNodeMaterialAssetId(entry: SceneNodeMaterial): string | null {
-  const raw = (entry as SceneNodeMaterial & { materialId?: unknown }).materialId
-  return typeof raw === 'string' && raw.trim().length ? raw.trim() : null
-}
-
 function resolveMaterialAssetThumbnail(assetId: string | null | undefined): string | null {
   const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
   if (!normalizedId) {
@@ -151,7 +146,7 @@ function getMaterialPreviewThumbnail(entry: SceneNodeMaterial): string | null {
   if (typeof localThumbnail === 'string' && localThumbnail.trim().length) {
     return localThumbnail.trim()
   }
-  return resolveMaterialAssetThumbnail(resolveNodeMaterialAssetId(entry))
+  return null
 }
 
 function setMaterialPreviewThumbnail(slotId: string, thumbnail: string | null | undefined) {
@@ -308,8 +303,7 @@ function handleOpenMaterialAssetPicker(slotId: string, event?: MouseEvent) {
   }
   setActiveSlot(slotId)
   materialPickerSlotId.value = slotId
-  const currentEntry = nodeMaterials.value.find((item: SceneNodeMaterial) => item.id === slotId) ?? null
-  materialPickerSelectedId.value = currentEntry ? resolveNodeMaterialAssetId(currentEntry) ?? '' : ''
+  materialPickerSelectedId.value = ''
   materialPickerAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   materialPickerVisible.value = true
 }
@@ -466,7 +460,7 @@ async function handleListDrop(event: DragEvent) {
   if (!newSlot) {
     return
   }
-  const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, newSlot.id, asset.id)
+  const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, newSlot.id, asset.id)
   if (assigned) {
     setMaterialPreviewThumbnail(newSlot.id, resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
     setActiveSlot(newSlot.id)

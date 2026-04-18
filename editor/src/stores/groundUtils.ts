@@ -30,7 +30,7 @@ export type GroundRegionBounds = {
 
 export type GroundDeps = {
   createVector: (x: number, y: number, z: number) => Vector3
-  createNodeMaterial: (materialId: string | null, props: SceneMaterialProps, options?: { id?: string; name?: string; type?: SceneMaterialType }) => SceneNodeMaterial
+  createNodeMaterial: (props: SceneMaterialProps, options?: { id?: string; name?: string; type?: SceneMaterialType }) => SceneNodeMaterial
   createMaterialProps: (overrides?: Partial<SceneMaterialProps> | null) => SceneMaterialProps
   generateUuid: () => string
   clampRigidbodyComponentProps: (p: any) => any
@@ -375,7 +375,7 @@ export function createGroundSceneNodeWithDeps(deps: GroundDeps, overrides: { dyn
     canPrefab: false,
     allowChildNodes: false,
     materials: [
-      createNodeMaterial(null, buildPrimaryGroundMaterialProps(createMaterialProps, null), { name: 'Ground Material' })
+      createNodeMaterial(buildPrimaryGroundMaterialProps(createMaterialProps, null), { name: 'Ground Material' })
     ],
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
@@ -435,7 +435,6 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
       // preserve primary material identity when possible
       materials: [
         createNodeMaterial(
-          primaryMaterial?.materialId ?? null,
           primaryMaterialProps,
           { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type },
         )

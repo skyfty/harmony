@@ -1,5 +1,4 @@
 import type {
-  SceneMaterial,
   SceneMaterialProps,
   SceneMaterialTextureRef,
   SceneMaterialType,
@@ -134,9 +133,6 @@ export function hasMeaningfulWallPreviewMaterialOverride(material: SceneNodeMate
   if (!material) {
     return false
   }
-  if (normalizeOptionalString(material.materialId)) {
-    return true
-  }
   if (normalizeOptionalString(material.type) && material.type !== DEFAULT_SCENE_MATERIAL_TYPE) {
     return true
   }
@@ -156,12 +152,7 @@ export function filterWallPreviewMaterialOverrides(options: {
       return false
     }
     const entryId = normalizeOptionalString(entry?.id)
-    if (
-      bodyAssetId
-      && bodyMaterialConfigId
-      && entryId === bodyMaterialConfigId
-      && !normalizeOptionalString(entry.materialId)
-    ) {
+    if (bodyAssetId && bodyMaterialConfigId && entryId === bodyMaterialConfigId) {
       return false
     }
     return true
@@ -199,27 +190,14 @@ function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneM
 function createNodeMaterialFromPatch(
   slotId: string,
   patch: WallPresetMaterialPatch,
-  sharedMaterials: readonly SceneMaterial[],
 ) : SceneNodeMaterial | null {
-  const sharedMaterialId = patch.materialId === null ? null : typeof patch.materialId === 'string' ? patch.materialId.trim() : null
-  const sharedMaterial = sharedMaterialId
-    ? (sharedMaterials.find((entry) => entry.id === sharedMaterialId) ?? null)
-    : null
-
-  if (sharedMaterialId && !sharedMaterial) {
-    return null
-  }
-
-  const baseProps = sharedMaterial ? mergeMaterialProps(createDefaultMaterialProps(), sharedMaterial) : createDefaultMaterialProps()
-  const mergedProps = sharedMaterial && patch.props && Object.keys(patch.props).length
-    ? baseProps
-    : mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
+  const baseProps = createDefaultMaterialProps()
+  const mergedProps = mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
 
   const nextMaterial: SceneNodeMaterial = {
     id: slotId,
-    materialId: sharedMaterial?.id ?? null,
-    name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : sharedMaterial?.name,
-    type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : sharedMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
+    name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : undefined,
+    type: (typeof patch.type === 'string' && patch.type.trim().length ? patch.type.trim() : DEFAULT_SCENE_MATERIAL_TYPE) as SceneMaterialType,
     ...mergedProps,
   }
 
@@ -228,7 +206,6 @@ function createNodeMaterialFromPatch(
 
 export function buildWallNodeMaterialsFromPreset(
   preset: WallPresetData | null | undefined,
-  sharedMaterials: readonly SceneMaterial[],
 ): SceneNodeMaterial[] {
   if (!preset) {
     return []
@@ -244,7 +221,7 @@ export function buildWallNodeMaterialsFromPreset(
       if (!patch) {
         return null
       }
-      return createNodeMaterialFromPatch(normalizedId, patch, sharedMaterials)
+      return createNodeMaterialFromPatch(normalizedId, patch)
     })
     .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
 

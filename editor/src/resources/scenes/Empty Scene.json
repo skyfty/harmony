@@ -10,7 +10,6 @@
       "materials": [
         {
           "id": "40a7a966-a9e0-4b97-ab4d-a5e52bd7e3f3",
-          "materialId": null,
           "name": "Ground Material",
           "type": "MeshStandardMaterial",
           "color": "#707070",

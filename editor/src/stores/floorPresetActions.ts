@@ -53,7 +53,7 @@ export type FloorPresetActionsDeps = {
   materialUpdateToProps: (update: any) => any
   mergeMaterialProps: (base: any, overrides?: any) => any
   createMaterialProps: (overrides?: any) => any
-  createNodeMaterial: (materialId: string | null, props: any, options: { id?: string; name?: string; type?: any }) => SceneNodeMaterial
+  createNodeMaterial: (props: any, options: { id?: string; name?: string; type?: any }) => SceneNodeMaterial
   DEFAULT_SCENE_MATERIAL_TYPE: string
 }
 
@@ -66,11 +66,6 @@ function isFloorPresetAsset(asset: ProjectAsset | null | undefined): asset is Pr
     return true
   }
   return isFloorPresetFilename(asset.description ?? asset.name ?? asset.downloadUrl ?? asset.id ?? null)
-}
-
-function normalizeOptionalAssetId(value: unknown): string | null {
-  const raw = typeof value === 'string' ? value.trim() : ''
-  return raw.length ? raw : null
 }
 
 function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
@@ -95,7 +90,6 @@ function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
 
 export function collectFloorPresetDependencyAssetIds(
   preset: FloorPresetData | null | undefined,
-  sharedMaterials: ReadonlyArray<{ id: string } & Record<string, unknown>> = [],
 ): string[] {
   if (!preset) {
     return []
@@ -104,19 +98,16 @@ export function collectFloorPresetDependencyAssetIds(
   return normalizeAssetIdsWithRegistry(
     [
       ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
-        const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds((patch as any)?.props, preset.assetRegistry)
+        const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(
+          ((patch as any)?.props ?? null) as Record<string, unknown> | null,
+          (preset.assetRegistry ?? null) as Record<string, unknown> | null,
+        )
         const patchTextureAssetIds = collectTextureAssetIdsFromMaterialLike(normalizedPatchProps)
-        const sharedMaterialId = typeof patch?.materialId === 'string' ? patch.materialId.trim() : ''
-        if (!sharedMaterialId) {
-          return patchTextureAssetIds
-        }
-        const sharedMaterial = sharedMaterials.find((entry) => entry.id === sharedMaterialId)
-        const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
-        return [...patchTextureAssetIds, ...sharedTextureAssetIds]
+        return patchTextureAssetIds
       }),
       ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
     ],
-    preset.assetRegistry,
+    (preset.assetRegistry ?? null) as Record<string, unknown> | null,
   )
 }
 
@@ -230,13 +221,8 @@ export function parseFloorPresetData(text: string): FloorPresetData {
       throw new Error(`地板预设 materialPatches[${id}] 格式无效`)
     }
     const patch = value as Record<string, unknown>
-    const materialId = patch.materialId === null ? null : normalizeOptionalAssetId(patch.materialId)
-    if (patch.materialId !== null && materialId === null) {
-      throw new Error(`地板预设 materialPatches[${id}] 缺少或无效字段: materialId`)
-    }
     const next: FloorPresetMaterialPatch = {
       id,
-      materialId,
     }
     if (typeof patch.name === 'string' && patch.name.trim().length) {
       next.name = patch.name.trim()
@@ -255,7 +241,7 @@ export function parseFloorPresetData(text: string): FloorPresetData {
 
   for (const id of materialOrder) {
     if (!materialPatches[id]) {
-      throw new Error(`地板预设缺少 materialPatches[${id}]`)
+      materialPatches[id] = { id }
     }
   }
 
@@ -315,7 +301,6 @@ async function generateFloorPresetThumbnailDataUrl(
 
   return await renderFloorPresetThumbnailDataUrl({
     preset: presetData,
-    sharedMaterials: store.materials as any,
     resolveTexture,
     width: ASSET_THUMBNAIL_WIDTH,
     height: ASSET_THUMBNAIL_HEIGHT,
@@ -389,18 +374,8 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
           continue
         }
 
-        // Shared material assignment: persist only the shared material id.
-        if (typeof (entry as any).materialId === 'string' && (entry as any).materialId.trim().length) {
-          materialPatches[id] = {
-            id,
-            materialId: (entry as any).materialId.trim(),
-          }
-          continue
-        }
-
         materialPatches[id] = {
           id,
-          materialId: null,
           name:
             typeof (entry as any).name === 'string' && (entry as any).name.trim().length
               ? (entry as any).name.trim()
@@ -435,16 +410,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       const dependencyAssetIds = Array.from(
         new Set(
           nodeMaterials
-            .flatMap((material) => {
-              const localTextureAssetIds = collectTextureAssetIdsFromMaterialLike(material)
-              const sharedMaterialId = typeof (material as any)?.materialId === 'string' ? (material as any).materialId.trim() : ''
-              if (!sharedMaterialId) {
-                return localTextureAssetIds
-              }
-              const sharedMaterial = store.materials.find((entry) => entry.id === sharedMaterialId)
-              const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
-              return [...localTextureAssetIds, ...sharedTextureAssetIds]
-            })
+            .flatMap((material) => collectTextureAssetIdsFromMaterialLike(material))
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
             .filter((value) => value.length > 0),
         ),
@@ -587,7 +553,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
 
       const preset = presetData ?? (await this.loadFloorPreset(store, assetId))
 
-      const dependencyAssetIds = collectFloorPresetDependencyAssetIds(preset, store.materials)
+      const dependencyAssetIds = collectFloorPresetDependencyAssetIds(preset)
 
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry)
         ? preset.assetRegistry
@@ -637,7 +603,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
             return byIndex
           }
 
-          const created = deps.createNodeMaterial(null, deps.createMaterialProps(), {
+          const created = deps.createNodeMaterial(deps.createMaterialProps(), {
             id: deps.generateUuid(),
             name: desiredName,
             type: deps.DEFAULT_SCENE_MATERIAL_TYPE,
@@ -651,23 +617,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
           desiredName: string,
           patch: FloorPresetMaterialPatch,
         ): SceneNodeMaterial => {
-          const sharedMaterialId = patch.materialId === null ? null : normalizeOptionalAssetId(patch.materialId)
           const patchName = typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : desiredName
-
-          if (sharedMaterialId) {
-            const shared = store.materials.find((entry) => entry.id === sharedMaterialId) ?? null
-            if (!shared) {
-              throw new Error(`地板预设引用的共享材质不存在: ${sharedMaterialId}`)
-            }
-            if (patch.props && Object.keys(patch.props).length) {
-              throw new Error(`地板预设试图修改共享材质 props: ${slot.id}`)
-            }
-            return deps.createNodeMaterial(shared.id, shared, {
-              id: slot.id,
-              name: patchName,
-              type: (shared as any).type,
-            })
-          }
 
           const baseProps = deps.extractMaterialProps(slot)
           const normalizedPatchProps = patch.props
@@ -676,7 +626,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
           const overrides = normalizedPatchProps ? deps.materialUpdateToProps(normalizedPatchProps as any) : {}
           const mergedProps = patch.props ? deps.mergeMaterialProps(baseProps as any, overrides) : baseProps
 
-          return deps.createNodeMaterial(null, mergedProps, {
+          return deps.createNodeMaterial(mergedProps, {
             id: slot.id,
             name: patchName,
             type:

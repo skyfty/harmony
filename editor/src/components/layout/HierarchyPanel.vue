@@ -1115,9 +1115,13 @@ async function applyMaterialAssetToNode(nodeId: string, asset: MaterialAsset): P
     if (!primary) {
       return false
     }
-    return sceneStore.assignNodeMaterial(nodeId, primary.id, asset.id)
+    return Boolean(await sceneStore.applyMaterialAssetToNodeMaterialSlot(nodeId, primary.id, asset.id))
   }
-  return Boolean(sceneStore.addNodeMaterial(nodeId, { materialId: asset.id }))
+  const created = sceneStore.addNodeMaterial(nodeId) as { id: string } | null
+  if (!created) {
+    return false
+  }
+  return Boolean(await sceneStore.applyMaterialAssetToNodeMaterialSlot(nodeId, created.id, asset.id))
 }
 
 function isItemSelected(id: string) {

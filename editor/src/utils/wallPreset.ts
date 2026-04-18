@@ -5,7 +5,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const WALL_PRESET_FORMAT_VERSION = 8
+export const WALL_PRESET_FORMAT_VERSION = 9
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 export type WallUvAxis = 'auto' | 'u' | 'v'
@@ -79,13 +79,10 @@ export type StrictWallPresetWallProps = {
 export type WallPresetMaterialPatch = {
   /** Node material slot id (SceneNodeMaterial.id). Provided as record key; repeated here for clarity in devtools. */
   id?: string
-  /** Shared material id if this slot references a shared material definition. */
-  materialId: string | null
   /** Optional local display name override. */
   name?: string
   /** Material type override. */
   type?: string
-  /** Only used for local materials (materialId === null). */
   props?: Record<string, unknown>
 }
 

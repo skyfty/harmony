@@ -493,7 +493,6 @@ export interface SceneMaterial extends SceneMaterialProps {
 
 export interface SceneNodeMaterial extends SceneMaterialProps {
   id: string;
-  materialId?: string | null;
   type: SceneMaterialType;
   name?: string;
 }

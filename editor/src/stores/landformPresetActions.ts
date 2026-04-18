@@ -48,7 +48,7 @@ export type LandformPresetActionsDeps = {
   extractMaterialProps: (material: SceneNodeMaterial | null | undefined) => any
   materialUpdateToProps: (update: any) => any
   mergeMaterialProps: (base: any, overrides?: any) => any
-  createNodeMaterial: (materialId: string | null, props: any, options: { id?: string; name?: string; type?: any }) => SceneNodeMaterial
+  createNodeMaterial: (props: any, options: { id?: string; name?: string; type?: any }) => SceneNodeMaterial
   DEFAULT_SCENE_MATERIAL_TYPE: string
 }
 
@@ -61,11 +61,6 @@ function isLandformPresetAsset(asset: ProjectAsset | null | undefined): asset is
     return true
   }
   return isLandformPresetFilename(asset.description ?? asset.name ?? asset.downloadUrl ?? asset.id ?? null)
-}
-
-function normalizeOptionalAssetId(value: unknown): string | null {
-  const raw = typeof value === 'string' ? value.trim() : ''
-  return raw.length ? raw : null
 }
 
 function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
@@ -90,26 +85,23 @@ function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
 
 export function collectLandformPresetDependencyAssetIds(
   preset: LandformPresetData | null | undefined,
-  sharedMaterials: ReadonlyArray<{ id: string } & Record<string, unknown>> = [],
 ): string[] {
   if (!preset) {
     return []
   }
 
-  const sharedMaterialId = typeof preset.materialPatch?.materialId === 'string' ? preset.materialPatch.materialId.trim() : ''
-  const sharedMaterial = sharedMaterialId ? sharedMaterials.find((entry) => entry.id === sharedMaterialId) : null
-  const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
-
-  const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(preset.materialPatch?.props ?? null, preset.assetRegistry)
+  const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(
+    (preset.materialPatch?.props ?? null) as Record<string, unknown> | null,
+    (preset.assetRegistry ?? null) as Record<string, unknown> | null,
+  )
   const normalizedPatchTextureAssetIds = collectTextureAssetIdsFromMaterialLike(normalizedPatchProps)
 
   return normalizeAssetIdsWithRegistry(
     [
       ...normalizedPatchTextureAssetIds,
-      ...sharedTextureAssetIds,
       ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
     ],
-    preset.assetRegistry,
+    (preset.assetRegistry ?? null) as Record<string, unknown> | null,
   )
 }
 
@@ -154,8 +146,8 @@ export function parseLandformPresetData(text: string): LandformPresetData {
     throw new Error('地貌预设格式不受支持')
   }
   const formatVersion = Number(record.formatVersion)
-  if (formatVersion !== 1 && formatVersion !== LANDFORM_PRESET_FORMAT_VERSION) {
-    throw new Error(`地貌预设版本不匹配 (expected 1 or ${LANDFORM_PRESET_FORMAT_VERSION})`)
+  if (formatVersion !== LANDFORM_PRESET_FORMAT_VERSION) {
+    throw new Error(`地貌预设版本不匹配 (expected ${LANDFORM_PRESET_FORMAT_VERSION})`)
   }
 
   const name = typeof record.name === 'string' && record.name.trim().length ? record.name.trim() : ''
@@ -174,14 +166,9 @@ export function parseLandformPresetData(text: string): LandformPresetData {
   }
 
   const patchRecord = patchRaw as Record<string, unknown>
-  const materialId = patchRecord.materialId === null ? null : normalizeOptionalAssetId(patchRecord.materialId)
-  if (patchRecord.materialId !== null && materialId === null) {
-    throw new Error('地貌预设材质 patch 缺少 materialId')
-  }
 
   const materialPatch: LandformPresetMaterialPatch = {
     id: materialSlotId,
-    materialId,
   }
   if (typeof patchRecord.name === 'string' && patchRecord.name.trim().length) {
     materialPatch.name = patchRecord.name.trim()
@@ -250,7 +237,6 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
 
     return await renderLandformPresetThumbnailDataUrl({
       preset: presetData,
-      sharedMaterials: store.materials as any,
       resolveTexture,
       width: ASSET_THUMBNAIL_WIDTH,
       height: ASSET_THUMBNAIL_HEIGHT,
@@ -317,33 +303,17 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         throw new Error('地貌节点材质槽位 id 无效')
       }
 
-      const surfaceMaterialId = typeof (surfaceSlot as any).materialId === 'string' ? (surfaceSlot as any).materialId.trim() : ''
-      const materialPatch: LandformPresetMaterialPatch = surfaceMaterialId
-        ? {
-            id: materialSlotId,
-            materialId: surfaceMaterialId,
-          }
-        : {
-            id: materialSlotId,
-            materialId: null,
-            name: typeof surfaceSlot.name === 'string' && surfaceSlot.name.trim().length ? surfaceSlot.name.trim() : undefined,
-            type: typeof surfaceSlot.type === 'string' && surfaceSlot.type.trim().length ? surfaceSlot.type.trim() : undefined,
-            props: deps.extractMaterialProps(surfaceSlot) as Record<string, unknown>,
-          }
+      const materialPatch: LandformPresetMaterialPatch = {
+        id: materialSlotId,
+        name: typeof surfaceSlot.name === 'string' && surfaceSlot.name.trim().length ? surfaceSlot.name.trim() : undefined,
+        type: typeof surfaceSlot.type === 'string' && surfaceSlot.type.trim().length ? surfaceSlot.type.trim() : undefined,
+        props: deps.extractMaterialProps(surfaceSlot) as Record<string, unknown>,
+      }
 
       const dependencyAssetIds = Array.from(
         new Set(
           nodeMaterials
-            .flatMap((material) => {
-              const localTextureAssetIds = collectTextureAssetIdsFromMaterialLike(material)
-              const sharedMaterialId = typeof (material as any)?.materialId === 'string' ? (material as any).materialId.trim() : ''
-              if (!sharedMaterialId) {
-                return localTextureAssetIds
-              }
-              const sharedMaterial = store.materials.find((entry) => entry.id === sharedMaterialId)
-              const sharedTextureAssetIds = collectTextureAssetIdsFromMaterialLike(sharedMaterial)
-              return [...localTextureAssetIds, ...sharedTextureAssetIds]
-            })
+            .flatMap((material) => collectTextureAssetIdsFromMaterialLike(material))
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
             .filter((value) => value.length > 0),
         ),
@@ -485,7 +455,7 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
       }
 
       const preset = presetData ?? (await this.loadLandformPreset(store, assetId))
-      const dependencyAssetIds = collectLandformPresetDependencyAssetIds(preset, store.materials)
+      const dependencyAssetIds = collectLandformPresetDependencyAssetIds(preset)
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry) ? preset.assetRegistry : undefined
 
       if (dependencyAssetIds.length) {
@@ -514,35 +484,22 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
         }
 
         const patch = preset.materialPatch
-        const sharedMaterialId = patch.materialId === null ? null : normalizeOptionalAssetId(patch.materialId)
         const patchName = typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : (existingSlot.name || 'Surface')
 
         let updated = existingSlot
-        if (sharedMaterialId) {
-          const shared = store.materials.find((entry) => entry.id === sharedMaterialId) ?? null
-          if (!shared) {
-            throw new Error(`地貌预设引用的共享材质不存在: ${sharedMaterialId}`)
-          }
-          updated = deps.createNodeMaterial(shared.id, shared, {
-            id: existingSlot.id,
-            name: patchName,
-            type: (shared as any).type,
-          })
-        } else {
-          const baseProps = deps.extractMaterialProps(existingSlot)
-          const normalizedPatchProps = patch.props
-            ? normalizeMaterialLikeTextureAssetIds(patch.props as any, presetAssetRegistry ?? null)
-            : null
-          const overrides = normalizedPatchProps ? deps.materialUpdateToProps(normalizedPatchProps as any) : {}
-          const mergedProps = patch.props ? deps.mergeMaterialProps(baseProps as any, overrides) : baseProps
-          updated = deps.createNodeMaterial(null, mergedProps, {
-            id: existingSlot.id,
-            name: patchName,
-            type: typeof patch.type === 'string' && patch.type.trim().length
-              ? (patch.type as any)
-              : (existingSlot as any).type ?? deps.DEFAULT_SCENE_MATERIAL_TYPE,
-          })
-        }
+        const baseProps = deps.extractMaterialProps(existingSlot)
+        const normalizedPatchProps = patch.props
+          ? normalizeMaterialLikeTextureAssetIds(patch.props as any, presetAssetRegistry ?? null)
+          : null
+        const overrides = normalizedPatchProps ? deps.materialUpdateToProps(normalizedPatchProps as any) : {}
+        const mergedProps = patch.props ? deps.mergeMaterialProps(baseProps as any, overrides) : baseProps
+        updated = deps.createNodeMaterial(mergedProps, {
+          id: existingSlot.id,
+          name: patchName,
+          type: typeof patch.type === 'string' && patch.type.trim().length
+            ? (patch.type as any)
+            : (existingSlot as any).type ?? deps.DEFAULT_SCENE_MATERIAL_TYPE,
+        })
 
         const nextMaterials = existing.map((entry) => (entry.id === existingSlot.id ? updated : entry))
         store.setNodeMaterials(nodeId, nextMaterials)

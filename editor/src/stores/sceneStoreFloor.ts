@@ -13,7 +13,6 @@ import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
 export type SceneStoreFloorHelpersDeps = {
   createFloorNodeMaterials: (options: { topBottomName: string; sideName: string }) => SceneNodeMaterial[]
   createNodeMaterial: (
-    materialId: string | null,
     props: SceneMaterialProps,
     options: { id?: string; name?: string; type?: any },
   ) => SceneNodeMaterial
@@ -88,7 +87,7 @@ export function createSceneStoreFloorHelpers(deps: SceneStoreFloorHelpersDeps) {
         nextMaterials = deps.createFloorNodeMaterials({ topBottomName: 'TopBottom', sideName: 'Side' })
       } else if (currentMaterials.length === 1) {
         const first = currentMaterials[0]!
-        const sideMaterial = deps.createNodeMaterial(first.materialId ?? null, first as any, {
+        const sideMaterial = deps.createNodeMaterial(first as any, {
           name: 'Side',
           type: (first as any).type,
         })

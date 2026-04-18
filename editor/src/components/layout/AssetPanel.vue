@@ -854,9 +854,10 @@ async function handleAddAsset(asset: ProjectAsset) {
         throw new Error('Failed to load material asset definition')
       }
       const primary = currentNode.materials?.[0] ?? null
-      const applied = primary
-        ? sceneStore.assignNodeMaterial(currentNode.id, primary.id, preparedAsset.id)
-        : Boolean(sceneStore.addNodeMaterial(currentNode.id, { materialId: preparedAsset.id }))
+      const slot = primary ?? sceneStore.addNodeMaterial(currentNode.id)
+      const applied = slot
+        ? Boolean(await sceneStore.applyMaterialAssetToNodeMaterialSlot(currentNode.id, slot.id, preparedAsset.id))
+        : false
       if (!applied) {
         throw new Error('Failed to apply material to the selected node')
       }

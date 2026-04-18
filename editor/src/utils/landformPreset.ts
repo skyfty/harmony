@@ -5,7 +5,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const LANDFORM_PRESET_FORMAT_VERSION = 2
+export const LANDFORM_PRESET_FORMAT_VERSION = 3
 
 export type StrictLandformPresetProps = {
   enableFeather: boolean
@@ -15,7 +15,6 @@ export type StrictLandformPresetProps = {
 
 export type LandformPresetMaterialPatch = {
   id?: string
-  materialId: string | null
   name?: string
   type?: string
   props?: Record<string, unknown>
