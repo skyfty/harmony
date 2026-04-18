@@ -343,11 +343,13 @@ export async function loginWithPassword(username: string, password: string): Pro
   sessionUser.roles = roles
 
   const isEditorAccount = roles.some((role) => role.code === 'editor')
-  const editorSessionId = isEditorAccount ? nanoid() : null
+  let editorSessionId: string | undefined
   if (isEditorAccount) {
-    user.editorSessionId = editorSessionId
+    const activeEditorSessionId = nanoid()
+    editorSessionId = activeEditorSessionId
+    user.editorSessionId = activeEditorSessionId
     await user.save()
-    await editorSessionService.revokeEditorSessions(sessionUser.id, editorSessionId)
+    await editorSessionService.revokeEditorSessions(sessionUser.id, activeEditorSessionId)
   }
 
   const token = signAuthToken({
@@ -356,7 +358,7 @@ export async function loginWithPassword(username: string, password: string): Pro
     roles: roles.map((role) => role.code),
     permissions,
     accountType: 'user',
-    editorSessionId: editorSessionId ?? undefined,
+    editorSessionId,
   })
 
   return {

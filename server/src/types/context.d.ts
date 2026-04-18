@@ -8,6 +8,7 @@ declare module 'koa' {
       roles: string[]
       permissions: string[]
       accountType?: 'admin' | 'super' | 'user'
+      editorSessionId?: string | null
     }
     adminAuthUser?: {
       id: string

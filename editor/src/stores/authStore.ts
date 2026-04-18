@@ -421,6 +421,5 @@ export const useAuthStore = defineStore('auth', () => {
     showLoginDialog,
     hideLoginDialog,
     setLoginDialogVisible,
-    clearSessionNotice,
   }
 })

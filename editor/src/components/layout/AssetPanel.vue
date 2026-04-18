@@ -1968,7 +1968,7 @@ async function confirmDeleteDirectory() {
 function promptRenameAsset(assetId?: string) {
   if (!assetId) return
   const asset = resolveAssetById(assetId)
-  if (canEditAssetMetadata(asset)) {
+  if (asset && canEditAssetMetadata(asset)) {
     openUploadDialogForAsset(asset.id)
   }
 }
