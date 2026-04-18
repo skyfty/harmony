@@ -27,6 +27,10 @@ import {
   type WallPresetMaterialPatch,
 } from '@/utils/wallPreset'
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
+import {
+  normalizeAssetIdWithRegistry,
+  normalizeMaterialLikeTextureAssetIds,
+} from '@/utils/assetRegistryIdNormalization'
 
 export type WallPresetStoreLike = {
   nodes: SceneNode[]
@@ -315,6 +319,27 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
     footEndCapOffsetLocal: wallProps.footEndCapOffsetLocal,
     footEndCapOrientation: wallProps.footEndCapOrientation,
     cornerModels: wallProps.cornerModels ?? [],
+  }
+}
+
+function normalizeWallPresetWallPropsAssetIds(
+  wallProps: StrictWallPresetWallProps,
+  presetAssetRegistry: WallPresetData['assetRegistry'] | null | undefined,
+): StrictWallPresetWallProps {
+  return {
+    ...wallProps,
+    bodyAssetId: normalizeAssetIdWithRegistry(wallProps.bodyAssetId, presetAssetRegistry),
+    headAssetId: normalizeAssetIdWithRegistry(wallProps.headAssetId, presetAssetRegistry),
+    footAssetId: normalizeAssetIdWithRegistry(wallProps.footAssetId, presetAssetRegistry),
+    bodyEndCapAssetId: normalizeAssetIdWithRegistry(wallProps.bodyEndCapAssetId, presetAssetRegistry),
+    headEndCapAssetId: normalizeAssetIdWithRegistry(wallProps.headEndCapAssetId, presetAssetRegistry),
+    footEndCapAssetId: normalizeAssetIdWithRegistry(wallProps.footEndCapAssetId, presetAssetRegistry),
+    cornerModels: (wallProps.cornerModels ?? []).map((entry) => ({
+      ...entry,
+      bodyAssetId: normalizeAssetIdWithRegistry(entry.bodyAssetId, presetAssetRegistry),
+      headAssetId: normalizeAssetIdWithRegistry(entry.headAssetId, presetAssetRegistry),
+      footAssetId: normalizeAssetIdWithRegistry(entry.footAssetId, presetAssetRegistry),
+    })),
   }
 }
 
@@ -995,6 +1020,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry)
         ? preset.assetRegistry
         : undefined
+      const normalizedWallProps = normalizeWallPresetWallPropsAssetIds(wallProps, presetAssetRegistry)
 
       if (dependencyAssetIds.length) {
         await store.ensurePrefabDependencies(dependencyAssetIds, {
@@ -1006,7 +1032,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
       store.updateNodeComponentProps(
         nodeId,
         wallComponent.id,
-        buildWallComponentPropsPatchFromPreset(wallProps) as unknown as Partial<Record<string, unknown>>,
+        buildWallComponentPropsPatchFromPreset(normalizedWallProps) as unknown as Partial<Record<string, unknown>>,
       )
 
       // Apply node material patches (match by SceneNodeMaterial.id; preserve existing tail slots).
@@ -1038,8 +1064,13 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
                 type: typeof patch.type === 'string' && patch.type.trim().length ? (patch.type as any) : deps.DEFAULT_SCENE_MATERIAL_TYPE,
               })
 
-          const overrides = patch.props ? deps.materialUpdateToProps(patch.props as any) : {}
-          const mergedProps = patch.props ? deps.mergeMaterialProps(baseEntry as any, overrides) : deps.extractMaterialProps(baseEntry as any)
+          const normalizedPatchProps = patch.props
+            ? normalizeMaterialLikeTextureAssetIds(patch.props as any, presetAssetRegistry ?? null)
+            : null
+          const overrides = normalizedPatchProps ? deps.materialUpdateToProps(normalizedPatchProps as any) : {}
+          const mergedProps = normalizedPatchProps
+            ? deps.mergeMaterialProps(baseEntry as any, overrides)
+            : deps.extractMaterialProps(baseEntry as any)
           nextMaterials.push(
             deps.createNodeMaterial(mergedProps, {
               id: slotId,
