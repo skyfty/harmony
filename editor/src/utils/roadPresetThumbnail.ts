@@ -8,7 +8,7 @@ import { disposeThumbnailObject, renderObjectThumbnailDataUrl } from '@/utils/ob
 
 type RenderRoadPresetThumbnailOptions = {
   preset: RoadPresetData
-  resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
+  resolveTexture: (ref: SceneMaterialTextureRef) => THREE.Texture | null | Promise<THREE.Texture | null>
   width: number
   height: number
 }
@@ -43,7 +43,7 @@ function buildTextureRefKey(ref: SceneMaterialTextureRef): string {
 
 async function preloadRoadPresetTextures(
   refs: readonly SceneMaterialTextureRef[],
-  resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>,
+  resolveTexture: (ref: SceneMaterialTextureRef) => THREE.Texture | null | Promise<THREE.Texture | null>,
 ): Promise<Map<string, THREE.Texture | null>> {
   const resolved = new Map<string, THREE.Texture | null>()
 
@@ -81,9 +81,7 @@ export async function renderRoadPresetThumbnailDataUrl(options: RenderRoadPreset
   if (nodeMaterials.length > 0) {
     const textureRefs = nodeMaterials.flatMap((material) => Object.values(material.textures ?? {}).filter((ref): ref is SceneMaterialTextureRef => Boolean(ref)))
     const resolvedTextures = await preloadRoadPresetTextures(textureRefs, options.resolveTexture)
-    materialOverrideOptions.resolveTexture = async (ref) => {
-      return resolvedTextures.get(buildTextureRefKey(ref)) ?? null
-    }
+    materialOverrideOptions.resolveTexture = (ref) => resolvedTextures.get(buildTextureRefKey(ref)) ?? null
     applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
     await Promise.resolve()
   }

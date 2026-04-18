@@ -197,7 +197,7 @@ export type MaterialBaselineState = {
 } & Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>
 
 export interface MaterialTextureAssignmentOptions {
-  resolveTexture?: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
+  resolveTexture?: (ref: SceneMaterialTextureRef) => THREE.Texture | null | Promise<THREE.Texture | null>
   warn?: (message: string) => void
   defaultTextureSettingsSignature?: string
 }
@@ -1153,15 +1153,24 @@ function assignTextureToMaterial(
     return;
   }
 
-  void options
-    .resolveTexture(ref)
-    .then((texture) => {
-      applyResolvedTexture(texture);
-    })
-    .catch((error) => {
-      console.warn('Failed to resolve material texture', ref, error);
-      options.warn?.(`纹理 ${ref.assetId} 加载失败`);
-    });
+  try {
+    const resolved = options.resolveTexture(ref)
+    if (resolved && typeof (resolved as Promise<THREE.Texture | null>).then === 'function') {
+      void (resolved as Promise<THREE.Texture | null>)
+        .then((texture) => {
+          applyResolvedTexture(texture)
+        })
+        .catch((error) => {
+          console.warn('Failed to resolve material texture', ref, error)
+          options.warn?.(`纹理 ${ref.assetId} 加载失败`)
+        })
+      return
+    }
+    applyResolvedTexture(resolved as THREE.Texture | null)
+  } catch (error) {
+    console.warn('Failed to resolve material texture', ref, error)
+    options.warn?.(`纹理 ${ref.assetId} 加载失败`)
+  }
 }
 
 export function applyMaterialConfigToMaterial(

@@ -1282,7 +1282,7 @@ function disposeCachedTextures() {
   pendingTextureRequests.clear()
 }
 
-async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THREE.Texture | null> {
+function resolveMaterialTexture(ref: SceneMaterialTextureRef): THREE.Texture | Promise<THREE.Texture | null> | null {
   const cacheKey = ref.assetId
   if (!cacheKey) {
     return null
@@ -1294,7 +1294,7 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
     return pendingTextureRequests.get(cacheKey) ?? null
   }
 
-  const loader = async (): Promise<THREE.Texture | null> => {
+  const pending = (async (): Promise<THREE.Texture | null> => {
     const asset = sceneStore.getAsset(cacheKey)
     let file: File | null = null
     try {
@@ -1326,20 +1326,12 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
     } finally {
       URL.revokeObjectURL(blobUrl)
     }
-  }
-
-  const pending = loader()
+  })()
   pendingTextureRequests.set(cacheKey, pending)
-  try {
-    const texture = await pending
-    if (!texture) {
-      textureCache.delete(cacheKey)
-      return null
-    }
-    return texture
-  } finally {
+  void pending.finally(() => {
     pendingTextureRequests.delete(cacheKey)
-  }
+  })
+  return pending
 }
 
 const materialOverrideOptions: MaterialTextureAssignmentOptions = {

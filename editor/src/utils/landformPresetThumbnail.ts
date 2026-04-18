@@ -20,7 +20,7 @@ const LANDFORM_PRESET_RING_POINTS: Array<{ x: number; z: number; y: number }> = 
 
 type RenderLandformPresetThumbnailOptions = {
   preset: LandformPresetData
-  resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
+  resolveTexture: (ref: SceneMaterialTextureRef) => THREE.Texture | null | Promise<THREE.Texture | null>
   width: number
   height: number
 }
@@ -75,7 +75,7 @@ function buildTextureRefKey(ref: SceneMaterialTextureRef): string {
 
 async function preloadLandformPresetTextures(
   refs: readonly SceneMaterialTextureRef[],
-  resolveTexture: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>,
+  resolveTexture: (ref: SceneMaterialTextureRef) => THREE.Texture | null | Promise<THREE.Texture | null>,
 ): Promise<Map<string, THREE.Texture | null>> {
   const resolved = new Map<string, THREE.Texture | null>()
 
@@ -103,9 +103,7 @@ export async function renderLandformPresetThumbnailDataUrl(options: RenderLandfo
   if (nodeMaterials.length > 0) {
     const textureRefs = nodeMaterials.flatMap((material) => Object.values(material.textures ?? {}).filter((ref): ref is SceneMaterialTextureRef => Boolean(ref)))
     const resolvedTextures = await preloadLandformPresetTextures(textureRefs, options.resolveTexture)
-    materialOverrideOptions.resolveTexture = async (ref) => {
-      return resolvedTextures.get(buildTextureRefKey(ref)) ?? null
-    }
+    materialOverrideOptions.resolveTexture = (ref) => resolvedTextures.get(buildTextureRefKey(ref)) ?? null
     applyMaterialOverrides(group, nodeMaterials, materialOverrideOptions)
     await Promise.resolve()
   }
