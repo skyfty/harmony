@@ -41,6 +41,8 @@ export interface UserDocument extends Document<Types.ObjectId> {
   username: string
   /** 中文：哈希后的密码 */
   password: string
+  /** 中文：editor 最近一次有效登录的会话标识 */
+  editorSessionId?: string | null
   /** 中文：显示名称（可选） */
   displayName?: string
   /** 中文：电子邮件地址（可选） */

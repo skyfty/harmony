@@ -2,6 +2,8 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { SessionUser } from '@/types/auth'
 import { fetchProfile, loginWithPassword, logoutSession } from '@/api/auth'
+import { openEditorSessionStream, type EditorSessionStreamHandle } from '@/api/editorSession'
+import router from '@/router'
 
 type StoredSession = {
   user: SessionUser
@@ -103,6 +105,9 @@ export const useAuthStore = defineStore('auth', () => {
   const initialized = ref(false)
   const keepLoggedInPreference = ref(false)
   const rememberedCredentials = ref<{ username: string; password: string } | null>(null)
+  const sessionNotice = ref<string | null>(null)
+  const sessionNoticeVisible = ref(false)
+  const editorSessionStream = ref<EditorSessionStreamHandle | null>(null)
 
   const authorizationHeader = computed(() => (token.value ? `Bearer ${token.value}` : null))
   const isAuthenticated = computed(() => !!token.value && !!user.value)
@@ -110,6 +115,43 @@ export const useAuthStore = defineStore('auth', () => {
   const username = computed(() => user.value?.username ?? '')
   const avatarUrl = computed(() => user.value?.avatarUrl ?? null)
   const canResourceWrite = computed(() => permissions.value.includes('resource:write'))
+  const isEditorAccount = computed(() => user.value?.roles.some((role) => role.code === 'editor') ?? false)
+
+  function clearSessionNotice() {
+    sessionNotice.value = null
+    sessionNoticeVisible.value = false
+  }
+
+  function disconnectEditorSessionStream() {
+    editorSessionStream.value?.close()
+    editorSessionStream.value = null
+  }
+
+  function connectEditorSessionStream() {
+    disconnectEditorSessionStream()
+    if (!token.value || !isEditorAccount.value) {
+      return
+    }
+    editorSessionStream.value = openEditorSessionStream(token.value, {
+      onForcedLogout: () => {
+        handleForcedLogout('账号已在另一台设备登录，当前会话已下线。')
+      },
+    })
+  }
+
+  function handleForcedLogout(message: string) {
+    disconnectEditorSessionStream()
+    clearPersistedState()
+    token.value = null
+    user.value = null
+    permissions.value = []
+    loginLoading.value = false
+    loginError.value = null
+    loginDialogVisible.value = false
+    sessionNotice.value = message
+    sessionNoticeVisible.value = true
+    void router.replace('/')
+  }
 
   function loadPreferences() {
     if (typeof window === 'undefined') {
@@ -260,14 +302,13 @@ export const useAuthStore = defineStore('auth', () => {
         user.value = session.user
         permissions.value = session.permissions ?? []
         persistSession({ user: session.user, permissions: session.permissions ?? [] }, persistent)
+        connectEditorSessionStream()
       } catch (error) {
         console.warn('[auth] restore session failed', error)
-        token.value = null
-        user.value = null
-        permissions.value = []
-        clearPersistedState()
+        handleForcedLogout((error as Error)?.message === 'SESSION_REPLACED' ? '账号已在另一台设备登录，当前会话已下线。' : '认证已过期，请重新登录')
       }
     } else {
+      disconnectEditorSessionStream()
       token.value = null
       user.value = null
       permissions.value = []
@@ -295,6 +336,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearSessionState() {
+    disconnectEditorSessionStream()
     token.value = null
     user.value = null
     permissions.value = []
@@ -321,6 +363,8 @@ export const useAuthStore = defineStore('auth', () => {
       } else {
         clearRememberedCredentials()
       }
+      clearSessionNotice()
+      connectEditorSessionStream()
       hideLoginDialog()
     } catch (error) {
       const message = (error as Error)?.message ?? '登录失败'
@@ -334,10 +378,12 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout(): Promise<void> {
     if (!token.value) {
       clearSessionState()
+      clearSessionNotice()
       return
     }
     const currentToken = token.value
     clearSessionState()
+    clearSessionNotice()
     try {
       await logoutSession(currentToken)
     } catch (error) {
@@ -364,6 +410,9 @@ export const useAuthStore = defineStore('auth', () => {
     canResourceWrite,
     keepLoggedInPreference,
     initialized,
+    sessionNotice,
+    sessionNoticeVisible,
+    clearSessionNotice,
     hasPermission,
     getLoginDefaults,
     initialize,
@@ -372,5 +421,6 @@ export const useAuthStore = defineStore('auth', () => {
     showLoginDialog,
     hideLoginDialog,
     setLoginDialogVisible,
+    clearSessionNotice,
   }
 })

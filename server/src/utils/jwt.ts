@@ -7,6 +7,7 @@ export interface AuthTokenPayload {
   roles: string[]
   permissions: string[]
   accountType?: 'admin' | 'super' | 'user'
+  editorSessionId?: string
 }
 
 const TOKEN_EXPIRES_IN = '12h'

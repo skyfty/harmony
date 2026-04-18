@@ -47,6 +47,14 @@ function buildError(message: string, response: Response): Error {
   return new Error(`${message}（${response.status}）`)
 }
 
+async function readErrorMessage(response: Response): Promise<string | null> {
+  const body = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+  if (typeof body === 'string') {
+    return body
+  }
+  return body?.message ?? null
+}
+
 export async function loginWithPassword(payload: LoginRequestPayload): Promise<AuthSessionResponse> {
   const url = buildServerApiUrl('/auth/login')
   const response = await fetch(url, {
@@ -59,8 +67,7 @@ export async function loginWithPassword(payload: LoginRequestPayload): Promise<A
   })
 
   if (!response.ok) {
-    const body = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
-    const message = typeof body === 'string' ? body : body?.message
+    const message = await readErrorMessage(response)
     throw new Error(message || '登录失败')
   }
 
@@ -82,6 +89,10 @@ export async function fetchProfile(token: string): Promise<AuthSessionResponse> 
   })
 
   if (response.status === 401) {
+    const message = await readErrorMessage(response)
+    if (message === 'SESSION_REPLACED') {
+      throw new Error('SESSION_REPLACED')
+    }
     throw new Error('认证已过期，请重新登录')
   }
 

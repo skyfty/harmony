@@ -1,8 +1,10 @@
 import { Types } from 'mongoose'
+import { nanoid } from 'nanoid'
 import { appConfig } from '@/config/env'
 import { PermissionModel } from '@/models/Permission'
 import { RoleModel } from '@/models/Role'
 import { UserModel } from '@/models/User'
+import { editorSessionService } from '@/services/editorSessionService'
 import { signAuthToken } from '@/utils/jwt'
 import { hashPassword, verifyPassword } from '@/utils/password'
 
@@ -26,6 +28,7 @@ type UserLean = {
   _id: Types.ObjectId
   username: string
   password: string
+  editorSessionId?: string | null
   displayName?: string
   email?: string
   avatarUrl?: string
@@ -263,6 +266,7 @@ async function ensureNamedUser(input: {
       displayName: input.displayName || username,
       status: 'active',
       roles: roleIds,
+      editorSessionId: null,
     })
     return
   }
@@ -319,7 +323,7 @@ export async function ensureEditorAuthBootstrap(): Promise<void> {
 
 export async function loginWithPassword(username: string, password: string): Promise<AuthSessionResponse> {
   const safeUsername = username.trim()
-  const user = await UserModel.findOne({ username: safeUsername }).lean<UserLean>().exec()
+  const user = await UserModel.findOne({ username: safeUsername }).exec()
   if (!user) {
     throw new Error('Invalid credentials')
   }
@@ -335,8 +339,16 @@ export async function loginWithPassword(username: string, password: string): Pro
   const roleIds = user.roles as Types.ObjectId[]
   const [roles, permissions] = await Promise.all([resolveRoleDetails(roleIds), resolvePermissionCodes(roleIds)])
 
-  const sessionUser = mapSessionUser(user)
+  const sessionUser = mapSessionUser(user.toObject() as UserLean)
   sessionUser.roles = roles
+
+  const isEditorAccount = roles.some((role) => role.code === 'editor')
+  const editorSessionId = isEditorAccount ? nanoid() : null
+  if (isEditorAccount) {
+    user.editorSessionId = editorSessionId
+    await user.save()
+    await editorSessionService.revokeEditorSessions(sessionUser.id, editorSessionId)
+  }
 
   const token = signAuthToken({
     sub: sessionUser.id,
@@ -344,6 +356,7 @@ export async function loginWithPassword(username: string, password: string): Pro
     roles: roles.map((role) => role.code),
     permissions,
     accountType: 'user',
+    editorSessionId: editorSessionId ?? undefined,
   })
 
   return {
