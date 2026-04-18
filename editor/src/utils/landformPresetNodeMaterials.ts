@@ -6,6 +6,7 @@ import type {
 } from '@schema'
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 import type { LandformPresetData, LandformPresetMaterialPatch } from '@/utils/landformPreset'
+import { normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'
 import {
   createDefaultPreviewMaterialProps,
   hasMeaningfulPreviewMaterialOverride,
@@ -68,9 +69,14 @@ function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneM
 function createNodeMaterialFromPatch(
   slotId: string,
   patch: LandformPresetMaterialPatch,
+  presetAssetRegistry: LandformPresetData['assetRegistry'] | null | undefined,
 ): SceneNodeMaterial | null {
   const baseProps = createDefaultPreviewMaterialProps()
-  const mergedProps = mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
+  const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(
+    ((patch.props ?? null) as Partial<SceneMaterialProps> | null),
+    (presetAssetRegistry ?? null) as Record<string, unknown> | null,
+  )
+  const mergedProps = mergeMaterialProps(baseProps, normalizedPatchProps)
 
   const nextMaterial: SceneNodeMaterial = {
     id: slotId,
@@ -94,6 +100,6 @@ export function buildLandformNodeMaterialsFromPreset(
     return []
   }
 
-  const nodeMaterial = createNodeMaterialFromPatch(slotId, preset.materialPatch)
+  const nodeMaterial = createNodeMaterialFromPatch(slotId, preset.materialPatch, preset.assetRegistry)
   return nodeMaterial ? [nodeMaterial] : []
 }

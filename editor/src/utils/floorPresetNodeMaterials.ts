@@ -7,6 +7,7 @@ import type {
 } from '@schema'
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 import type { FloorPresetData, FloorPresetMaterialPatch } from '@/utils/floorPreset'
+import { normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'
 import {
   createDefaultPreviewMaterialProps,
   hasMeaningfulPreviewMaterialOverride,
@@ -69,9 +70,14 @@ function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneM
 function createNodeMaterialFromPatch(
   slotId: string,
   patch: FloorPresetMaterialPatch,
+  presetAssetRegistry: FloorPresetData['assetRegistry'] | null | undefined,
 ): SceneNodeMaterial | null {
   const baseProps = createDefaultPreviewMaterialProps()
-  const mergedProps = mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
+  const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(
+    ((patch.props ?? null) as Partial<SceneMaterialProps> | null),
+    (presetAssetRegistry ?? null) as Record<string, unknown> | null,
+  )
+  const mergedProps = mergeMaterialProps(baseProps, normalizedPatchProps)
 
   const nextMaterial: SceneNodeMaterial = {
     id: slotId,
@@ -100,7 +106,7 @@ export function buildFloorNodeMaterialsFromPreset(
       if (!patch) {
         return null
       }
-      return createNodeMaterialFromPatch(normalizedId, patch)
+      return createNodeMaterialFromPatch(normalizedId, patch, preset.assetRegistry)
     })
     .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
 }

@@ -6,6 +6,7 @@ import type {
 } from '@schema'
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 import type { WallPresetData, WallPresetMaterialPatch } from '@/utils/wallPreset'
+import { normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'
 
 function normalizeOptionalString(value: unknown): string | null {
   const normalized = typeof value === 'string' ? value.trim() : ''
@@ -190,9 +191,14 @@ function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneM
 function createNodeMaterialFromPatch(
   slotId: string,
   patch: WallPresetMaterialPatch,
+  presetAssetRegistry: WallPresetData['assetRegistry'] | null | undefined,
 ) : SceneNodeMaterial | null {
   const baseProps = createDefaultMaterialProps()
-  const mergedProps = mergeMaterialProps(baseProps, (patch.props ?? null) as Partial<SceneMaterialProps> | null)
+  const normalizedPatchProps = normalizeMaterialLikeTextureAssetIds(
+    ((patch.props ?? null) as Partial<SceneMaterialProps> | null),
+    (presetAssetRegistry ?? null) as Record<string, unknown> | null,
+  )
+  const mergedProps = mergeMaterialProps(baseProps, normalizedPatchProps)
 
   const nextMaterial: SceneNodeMaterial = {
     id: slotId,
@@ -221,7 +227,7 @@ export function buildWallNodeMaterialsFromPreset(
       if (!patch) {
         return null
       }
-      return createNodeMaterialFromPatch(normalizedId, patch)
+      return createNodeMaterialFromPatch(normalizedId, patch, preset.assetRegistry)
     })
     .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
 
