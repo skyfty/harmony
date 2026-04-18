@@ -352,9 +352,6 @@ function handleAvatarBeforeUpload(file: UploadFile) {
 
       <template #status="{ row }">
         <Space>
-          <Tag :color="row.status === 'active' ? 'success' : 'default'">
-            {{ row.status === 'active' ? t('page.systemUsers.index.form.status.options.active') : t('page.systemUsers.index.form.status.options.disabled') }}
-          </Tag>
           <Switch
             v-access:code="'user:write'"
             :checked="row.status === 'active'"
