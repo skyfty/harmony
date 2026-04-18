@@ -142,18 +142,9 @@ export function hasMeaningfulWallPreviewMaterialOverride(material: SceneNodeMate
 
 export function filterWallPreviewMaterialOverrides(options: {
   materials: readonly SceneNodeMaterial[] | null | undefined
-  bodyAssetId?: string | null
-  bodyMaterialConfigId?: string | null
 }): SceneNodeMaterial[] {
-  const bodyAssetId = normalizeOptionalString(options.bodyAssetId)
-  const bodyMaterialConfigId = normalizeOptionalString(options.bodyMaterialConfigId)
-
   return (options.materials ?? []).filter((entry): entry is SceneNodeMaterial => {
     if (!hasMeaningfulWallPreviewMaterialOverride(entry)) {
-      return false
-    }
-    const entryId = normalizeOptionalString(entry?.id)
-    if (bodyAssetId && bodyMaterialConfigId && entryId === bodyMaterialConfigId) {
       return false
     }
     return true
@@ -231,9 +222,5 @@ export function buildWallNodeMaterialsFromPreset(
     })
     .filter((entry): entry is SceneNodeMaterial => Boolean(entry))
 
-  return filterWallPreviewMaterialOverrides({
-    materials,
-    bodyAssetId: preset.wallProps.bodyAssetId,
-    bodyMaterialConfigId: preset.wallProps.bodyMaterialConfigId,
-  })
+  return filterWallPreviewMaterialOverrides({ materials })
 }

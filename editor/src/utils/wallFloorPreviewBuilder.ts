@@ -229,8 +229,6 @@ export async function buildWallPreviewObjectFromNode(options: {
     materials: Array.isArray(options.node.materials)
       ? options.node.materials.filter((entry): entry is SceneNodeMaterial => Boolean(entry))
       : [],
-    bodyAssetId: wallProps.bodyAssetId,
-    bodyMaterialConfigId: renderOptions.bodyMaterialConfigId ?? null,
   })
   if (nodeMaterials.length > 0 && options.materialOverrideOptions) {
     applyMaterialOverrides(wallObject, nodeMaterials, options.materialOverrideOptions)
