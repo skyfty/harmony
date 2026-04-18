@@ -17,15 +17,12 @@ authRouter.get('/editor-session/stream', async (ctx) => {
 		ctx.throw(401, 'Unauthorized')
 	}
 
-	let payload: ReturnType<typeof verifyAuthToken> | undefined
+	let payload: ReturnType<typeof verifyAuthToken>
 	try {
 		payload = verifyAuthToken(token)
 	} catch (error) {
 		ctx.throw(401, 'Invalid token')
-	}
-
-	if (!payload) {
-		ctx.throw(401, 'Invalid token')
+		throw error instanceof Error ? error : new Error('Invalid token')
 	}
 
 	if (!payload.roles.includes('editor')) {
