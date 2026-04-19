@@ -1858,12 +1858,16 @@ const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
 type AutoOverlayTargetTool = 'floor' | 'wall' | 'water'
+type AutoOverlayDialogMode = 'build' | 'scatter'
+type AutoOverlayMarginTool = AutoOverlayTargetTool | 'scatter'
+const autoOverlayDialogMode = ref<AutoOverlayDialogMode>('build')
 const autoOverlayHorizMargin = ref('0')
 const autoOverlayVertMargin = ref('0')
-const autoOverlayMarginHistory = reactive<Record<AutoOverlayTargetTool, { horiz: string; vert: string }>>({
+const autoOverlayMarginHistory = reactive<Record<AutoOverlayMarginTool, { horiz: string; vert: string }>>({
   floor: { horiz: '0', vert: '0' },
   wall: { horiz: '0', vert: '0' },
   water: { horiz: '0', vert: '0' },
+  scatter: { horiz: '0', vert: '0' },
 })
 const autoOverlayHoverNodeId = ref<string | null>(null)
 const autoOverlayHoverIndicator = reactive({
@@ -1882,8 +1886,9 @@ const viewportPlacementActive = computed(() => Boolean(pendingViewportPlacement.
 const cameraResetMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const autoOverlayDialogTitle = computed(() => {
-  return '自动铺设？'
+  return autoOverlayDialogMode.value === 'scatter' ? '自动散布？' : '自动铺设？'
 })
+const autoOverlayConfirmLabel = computed(() => (autoOverlayDialogMode.value === 'scatter' ? '自动散布' : '自动铺设'))
 const autoOverlayConfirmDisabled = computed(() => {
   const plan = autoOverlayPlan.value
   return !plan?.supported || autoOverlaySubmitting.value
@@ -3532,6 +3537,7 @@ const {
   handleActiveBuildToolChange: handleGroundEditorBuildToolChange,
   cancelScatterErase: cancelGroundEditorScatterErase,
   cancelScatterPlacement: cancelGroundEditorScatterPlacement,
+  applyScatterAutoOverlayPlan,
   dispose: disposeGroundEditor,
   clearScatterInstances,
   flushTerrainPaintChanges,
@@ -8311,6 +8317,7 @@ function clearAutoOverlayDialog(): void {
   autoOverlayDialogOpen.value = false
   autoOverlayPlan.value = null
   autoOverlaySubmitting.value = false
+  autoOverlayDialogMode.value = 'build'
 }
 
 function setAutoOverlayHoverNodeId(nodeId: string | null): void {
@@ -8326,13 +8333,13 @@ function clearAutoOverlayHoverIndicator(): void {
   setAutoOverlayHoverNodeId(null)
 }
 
-function restoreAutoOverlayMarginInputs(targetTool: AutoOverlayTargetTool): void {
+function restoreAutoOverlayMarginInputs(targetTool: AutoOverlayMarginTool): void {
   const previous = autoOverlayMarginHistory[targetTool]
   autoOverlayHorizMargin.value = previous?.horiz ?? '0'
   autoOverlayVertMargin.value = previous?.vert ?? '0'
 }
 
-function persistAutoOverlayMarginInputs(targetTool: AutoOverlayTargetTool, horiz: number, vert: number): void {
+function persistAutoOverlayMarginInputs(targetTool: AutoOverlayMarginTool, horiz: number, vert: number): void {
   autoOverlayMarginHistory[targetTool] = {
     horiz: formatAutoOverlayMarginInput(horiz),
     vert: formatAutoOverlayMarginInput(vert),
@@ -8561,13 +8568,15 @@ function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
   if (event.button !== 0 || isTemporaryNavigationOverrideActive() || !(event.ctrlKey || event.metaKey)) {
     return false
   }
-  const plan = resolveAutoOverlayPlanForEvent(event)
+  const scatterPlan = scatterAutoOverlayEnabled() ? resolveScatterAutoOverlayPlanForEvent(event) : null
+  const plan = scatterPlan ?? resolveAutoOverlayPlanForEvent(event)
   if (!plan) {
     return false
   }
 
   clearAutoOverlayHoverIndicator()
-  restoreAutoOverlayMarginInputs(plan.targetTool)
+  autoOverlayDialogMode.value = scatterPlan ? 'scatter' : 'build'
+  restoreAutoOverlayMarginInputs(scatterPlan ? 'scatter' : plan.targetTool)
   autoOverlayPlan.value = plan
   autoOverlayDialogOpen.value = true
   event.preventDefault()
@@ -8612,8 +8621,14 @@ async function handleConfirmAutoOverlay(): Promise<void> {
   try {
     const horiz = parseAutoOverlayMarginInput(autoOverlayHorizMargin.value)
     const vert = parseAutoOverlayMarginInput(autoOverlayVertMargin.value)
-    persistAutoOverlayMarginInputs(plan.targetTool, horiz, vert)
+    const dialogMode = autoOverlayDialogMode.value
+    persistAutoOverlayMarginInputs(dialogMode === 'scatter' ? 'scatter' : plan.targetTool, horiz, vert)
     const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert, { closed: plan.closedPath })
+
+    if (dialogMode === 'scatter') {
+      applyScatterAutoOverlayPlan(plan, { worldPoints: adjustedPoints, pointerId: -1 })
+      return
+    }
 
     if (plan.targetTool === 'wall') {
       const brush = resolveAutoOverlayWallBrush()
@@ -15534,6 +15549,10 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+  if (tryOpenAutoOverlayDialog(event)) {
+    return
+  }
+
   const scatter = handlePointerDownScatter(event, {
     scatterEraseModeActive: scatterEraseModeActive.value,
     hasInstancedMeshes: hasInstancedMeshes.value,
@@ -15578,10 +15597,6 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (event.button === 0 && activeBuildTool.value === 'water' && waterShapeMenuOpen.value) {
     waterShapeMenuOpen.value = false
-  }
-
-  if (tryOpenAutoOverlayDialog(event)) {
-    return
   }
 
   const wallEditModeLocked = activeBuildTool.value === 'wall' && isSelectedWallEditMode()
@@ -22677,7 +22692,12 @@ defineExpose<SceneViewportHandle>({
         <v-card-text>
           <div v-if="autoOverlayPlan">
             <div v-if="autoOverlayPlan.supported">
-              沿“{{ autoOverlayPlan.referenceNodeName || autoOverlayPlan.referenceNodeId }}”轮廓创建新的 {{ autoOverlayPlan.targetTool }}。
+              <template v-if="autoOverlayDialogMode === 'scatter'">
+                沿“{{ autoOverlayPlan.referenceNodeName || autoOverlayPlan.referenceNodeId }}”轮廓进行自动散布。
+              </template>
+              <template v-else>
+                沿“{{ autoOverlayPlan.referenceNodeName || autoOverlayPlan.referenceNodeId }}”轮廓创建新的 {{ autoOverlayPlan.targetTool }}。
+              </template>
             </div>
             <div v-if="autoOverlayPlan.supported" class="auto-overlay-inputs" style="margin-top:12px;">
               <v-row>
@@ -22701,7 +22721,7 @@ defineExpose<SceneViewportHandle>({
                 </v-col>
               </v-row>
               <div class="text-caption text-medium-emphasis" style="margin-top:4px;">
-                水平 margin 正数外扩、负数缩进；垂直 margin 正数沿轮廓方向前移、负数后移。可用于同一参考轮廓重复自动铺设时错开位置，避免覆盖。
+                水平 margin 正数外扩、负数缩进；垂直 margin 正数沿轮廓方向前移、负数后移。{{ autoOverlayDialogMode === 'scatter' ? '散布区域会先按这里的参数偏移，再作为最终散布范围。' : '可用于同一参考轮廓重复自动铺设时错开位置，避免覆盖。' }}
               </div>
             </div>
             <div v-else class="text-error">{{ autoOverlayPlan.reason }}</div>
@@ -22716,7 +22736,7 @@ defineExpose<SceneViewportHandle>({
             :loading="autoOverlaySubmitting"
             @click="handleConfirmAutoOverlay"
           >
-            自动铺设
+            {{ autoOverlayConfirmLabel }}
           </v-btn>
         </v-card-actions>
       </v-card>

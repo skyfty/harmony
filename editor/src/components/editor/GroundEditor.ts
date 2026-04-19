@@ -5514,6 +5514,133 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		paintScatterStamp(targetPoint)
 	}
 
+	function applyScatterAutoOverlayPlan(
+		plan: AutoOverlayBuildPlan,
+		optionsOverride?: {
+			worldPoints?: Vector3Like[]
+			pointerId?: number
+		},
+	): boolean {
+		if (!scatterModeEnabled()) {
+			return false
+		}
+		if (!plan.supported) {
+			return false
+		}
+		const worldPoints = Array.isArray(optionsOverride?.worldPoints) ? optionsOverride.worldPoints : plan.worldPoints
+		if (!Array.isArray(worldPoints) || worldPoints.length < 3) {
+			return false
+		}
+
+		const asset = options.scatterAsset.value
+		if (!asset) {
+			return false
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		const groundMesh = getGroundObject()
+		if (!definition || !groundMesh) {
+			return false
+		}
+		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
+
+		const category = options.scatterCategory.value
+		const preset = getScatterPreset(category)
+		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
+		if (!scatterModelGroup) {
+			console.warn('散布资源仍在加载，请稍后重试')
+			return false
+		}
+		const bindingAssetId = scatterResolvedBindingAssetId ?? scatterModelGroup.assetId
+		if (!bindingAssetId) {
+			console.warn('无法解析散布资源（可能为无效的 LOD 预设）')
+			return false
+		}
+
+		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
+		scatterModelGroup.boundingBox.getSize(scatterBboxSizeHelper)
+		const sizeX = Math.max(0.01, Math.abs(scatterBboxSizeHelper.x))
+		const sizeZ = Math.max(0.01, Math.abs(scatterBboxSizeHelper.z))
+		const footprintAreaM2 = Math.max(1e-6, sizeX * sizeZ)
+		const footprintMaxSizeM = Math.sqrt(sizeX * sizeX + sizeZ * sizeZ)
+		const presetMinScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 1
+		const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
+		const densityPercent = Number(options.scatterDensityPercent.value)
+		const spacingStats = computeOccupancyMinDistance({
+			footprintMaxSizeM,
+			minScale: presetMinScale,
+			maxScale: presetMaxScale,
+			minFloor: 0.01,
+		})
+		const regularPolygonSides = plan.targetBuildShape === 'circle' ? resolveScatterRegularPolygonSides() : 0
+		const brushAreaM2 = regularPolygonSides >= 3
+			? (regularPolygonSides * effectiveRadius * effectiveRadius * Math.sin((Math.PI * 2) / regularPolygonSides) * 0.5)
+			: (Math.PI * effectiveRadius * effectiveRadius)
+		let { targetCount: targetCountPerStamp } = computeOccupancyTargetCount({
+			areaM2: brushAreaM2,
+			footprintAreaM2,
+			densityPercent,
+			minScale: presetMinScale,
+			maxScale: presetMaxScale,
+			maxCap: SCATTER_MAX_INSTANCES_PER_STAMP,
+		})
+		if (targetCountPerStamp <= 0) {
+			const clampedDensity = Number.isFinite(densityPercent) ? densityPercent : 0
+			if (clampedDensity <= 0) {
+				return false
+			}
+			targetCountPerStamp = 1
+		}
+
+		const effectiveSpacing = plan.targetBuildShape === 'circle'
+			? spacingStats.minDistance
+			: resolveScatterSpacing()
+		const chunkCells = resolveChunkCellsForDefinition(definition)
+		const polygonPoints = worldPoints.map((point) => new THREE.Vector3(point.x, point.y, point.z))
+		const tempSession: ScatterSessionState = {
+			pointerId: optionsOverride?.pointerId ?? -1,
+			asset,
+			bindingAssetId,
+			lodPresetAssetId: scatterResolvedLodPresetAssetId,
+			category,
+			brushShape: plan.targetBuildShape === 'rectangle' ? 'rectangle' : 'polygon',
+			definition,
+			groundMesh,
+			spacing: effectiveSpacing,
+			radius: effectiveRadius,
+			targetCountPerStamp,
+			minScale: presetMinScale,
+			maxScale: presetMaxScale,
+			store: ensureScatterStoreRef(),
+			layer,
+			modelGroup: scatterModelGroup,
+			chunkCells,
+			neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
+			lastPoint: null,
+			anchorPoint: null,
+			currentPoint: null,
+			rectangleDirection: null,
+			polygonPoints,
+			polygonPreviewEnd: null,
+			previewLayerId: `scatter-preview:${layer.id}:${optionsOverride?.pointerId ?? 'dialog'}:autooverlay`,
+			previewInstances: [],
+		}
+
+		const previousSession = scatterSession
+		scatterSession = tempSession
+		try {
+			const sampledPoints = sampleScatterPointsInPolygonArea(scatterSession.polygonPoints)
+			for (const pt of sampledPoints) {
+				applyScatterPlacement(pt, { yaw: 0 })
+			}
+			queueScatterSidecarSave()
+			options.onScatterPlacementStart?.()
+		} finally {
+			scatterSession = previousSession
+		}
+		refreshScatterAreaPreview(scatterSession)
+		return true
+	}
+
 	function beginScatterPlacement(event: PointerEvent): boolean {
 		if (!scatterModeEnabled()) {
 			return false
@@ -5624,60 +5751,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					}
 				}
 				if (plan && plan.supported && Array.isArray(plan.worldPoints) && plan.worldPoints.length >= 3) {
-							// Ensure model group / layer are ready
-							if (!scatterModelGroup) {
-								console.warn('散布资源仍在加载，请稍后重试')
-								return false
-							}
-							// Build a minimal temporary session context so existing sampling helpers work.
-							const tempSession: ScatterSessionState = {
-								pointerId: event.pointerId,
-								asset,
-								bindingAssetId,
-								lodPresetAssetId: scatterResolvedLodPresetAssetId,
-								category,
-								brushShape: plan.targetBuildShape === 'rectangle' ? 'rectangle' : 'polygon',
-								definition,
-								groundMesh,
-								spacing: effectiveSpacing,
-								radius: effectiveRadius,
-								targetCountPerStamp,
-								minScale: presetMinScale,
-								maxScale: presetMaxScale,
-								store: ensureScatterStoreRef(),
-								layer,
-								modelGroup: scatterModelGroup,
-								chunkCells,
-								neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
-								lastPoint: null,
-								anchorPoint: null,
-								currentPoint: null,
-								rectangleDirection: null,
-								polygonPoints: plan.worldPoints.map((p) => new THREE.Vector3(p.x, p.y, p.z)),
-								polygonPreviewEnd: null,
-								previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}:autooverlay`,
-								previewInstances: [],
-							}
-
-							// Temporarily install the session so existing helpers operate; restore after.
-							const previousSession = scatterSession
-							scatterSession = tempSession
-							try {
-								const sampledPoints = sampleScatterPointsInPolygonArea(scatterSession.polygonPoints)
-								for (const pt of sampledPoints) {
-									applyScatterPlacement(pt, { yaw: 0 })
-								}
-								queueScatterSidecarSave()
-								options.onScatterPlacementStart?.()
-							} finally {
-								scatterSession = previousSession
-							}
-							// Provide immediate feedback and consume the click.
-							refreshScatterAreaPreview(scatterSession)
+						if (applyScatterAutoOverlayPlan(plan, { pointerId: event.pointerId })) {
 							event.preventDefault()
 							event.stopPropagation()
 							event.stopImmediatePropagation()
 							return true
+						}
 				}
 			} catch (err) {
 				console.warn('Auto-overlay scatter failed', err)
@@ -7460,6 +7539,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		cancelScatterPlacement,
 		cancelScatterErase,
 		clearScatterInstances,
+		applyScatterAutoOverlayPlan,
 		handlePointerDown,
 		handlePointerMove,
 		handlePointerUp,
