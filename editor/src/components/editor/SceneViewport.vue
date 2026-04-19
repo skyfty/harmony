@@ -258,6 +258,7 @@ import {
 } from './wallDoorSelectionController'
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
+import { resolveActiveToolUsageHints } from './toolUsageHints'
 import { createLandformBuildTool } from './LandformBuildTool'
 import { createBoundaryWallBuildTool } from './BoundaryWallBuildTool'
 import { createRegionBuildTool } from './RegionBuildTool'
@@ -12923,6 +12924,21 @@ function toggleCameraHints() {
   showCameraHintsOpen.value = !showCameraHintsOpen.value
 }
 
+const activeToolUsageHints = computed(() => resolveActiveToolUsageHints({
+  activeBuildTool: activeBuildTool.value,
+  brushOperation: brushOperation.value,
+  groundPanelTab: groundPanelTab.value,
+  scatterEraseModeActive: scatterEraseModeActive.value,
+  scatterRestoreModifierActive: scatterEraseRestoreModifierActive.value,
+  wallDoorSelectModeActive: wallDoorSelectModeActive.value,
+  floorBuildShape: floorBuildShape.value,
+  landformBuildShape: landformBuildShape.value,
+  wallBuildShape: wallBuildShape.value,
+  scatterBrushShape: scatterBrushShape.value,
+  scatterAssetSelected: Boolean(scatterSelectedAsset.value),
+  paintAssetSelected: Boolean(paintSelectedAsset.value),
+}))
+
 function clearShiftOrbitPivotSession(pointerId?: number) {
   if (!shiftOrbitPivotSessionState) {
     return
@@ -22609,6 +22625,46 @@ defineExpose<SceneViewportHandle>({
         />
       </div>
       <div class="camera-status-hud">
+        <Transition name="camera-hints-slide">
+          <div v-if="activeToolUsageHints" class="camera-status-hud__hints camera-status-hud__hints--tool-usage">
+            <div class="camera-status-hud__hint-row camera-status-hud__hint-row--title">
+              <span class="camera-status-hud__hint-label">当前</span>
+              <span class="camera-status-hud__hint-text camera-status-hud__hint-text--title">{{ activeToolUsageHints.title }}</span>
+            </div>
+            <div
+              v-for="row in activeToolUsageHints.rows"
+              :key="`${activeToolUsageHints.tool}-${row.label}-${row.text}`"
+              class="camera-status-hud__hint-row"
+            >
+              <span class="camera-status-hud__hint-label">{{ row.label }}</span>
+              <span class="camera-status-hud__hint-text">{{ row.text }}</span>
+            </div>
+          </div>
+        </Transition>
+        <Transition name="camera-hints-slide">
+          <div v-if="showCameraHintsOpen" class="camera-status-hud__hints">
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">鼠标</span>
+              <span class="camera-status-hud__hint-text">{{ cameraPointerHintText }}</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">工具</span>
+              <span class="camera-status-hud__hint-text">Q 选择 · W 移动 · E 旋转 · R 缩放</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">视角</span>
+              <span class="camera-status-hud__hint-text">方向键 平移 · F 聚焦选中 · Shift+F 聚焦可见 · Alt+3 顶视图 · Alt+1/2/4/5/6 方向视角</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">导航</span>
+              <span class="camera-status-hud__hint-text">按住 Alt / Space 临时导航模式 · 按住 Shift 顶点吸附并加速</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">操作</span>
+              <span class="camera-status-hud__hint-text">Escape 取消选择/操作 · Delete 删除选中 · M 切换相机模式</span>
+            </div>
+          </div>
+        </Transition>
         <div class="camera-status-hud__toolbar">
           <div class="camera-status-hud__controls">
           <v-btn
@@ -22715,30 +22771,6 @@ defineExpose<SceneViewportHandle>({
             @click="toggleCameraHints"
           >?</button>
         </div>
-        <Transition name="camera-hints-slide">
-          <div v-if="showCameraHintsOpen" class="camera-status-hud__hints">
-            <div class="camera-status-hud__hint-row">
-              <span class="camera-status-hud__hint-label">鼠标</span>
-              <span class="camera-status-hud__hint-text">{{ cameraPointerHintText }}</span>
-            </div>
-            <div class="camera-status-hud__hint-row">
-              <span class="camera-status-hud__hint-label">工具</span>
-              <span class="camera-status-hud__hint-text">Q 选择 · W 移动 · E 旋转 · R 缩放</span>
-            </div>
-            <div class="camera-status-hud__hint-row">
-              <span class="camera-status-hud__hint-label">视角</span>
-              <span class="camera-status-hud__hint-text">方向键 平移 · F 聚焦选中 · Shift+F 聚焦可见 · Alt+3 顶视图 · Alt+1/2/4/5/6 方向视角</span>
-            </div>
-            <div class="camera-status-hud__hint-row">
-              <span class="camera-status-hud__hint-label">导航</span>
-              <span class="camera-status-hud__hint-text">按住 Alt / Space 临时导航模式 · 按住 Shift 顶点吸附并加速</span>
-            </div>
-            <div class="camera-status-hud__hint-row">
-              <span class="camera-status-hud__hint-label">操作</span>
-              <span class="camera-status-hud__hint-text">Escape 取消选择/操作 · Delete 删除选中 · M 切换相机模式</span>
-            </div>
-          </div>
-        </Transition>
       </div>
       <div class="csm-hud">
         <v-menu
@@ -23150,7 +23182,7 @@ defineExpose<SceneViewportHandle>({
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0;
+  gap: 8px;
   min-width: 0;
   max-width: min(420px, calc(100vw - 32px));
   z-index: 9;
@@ -23158,15 +23190,12 @@ defineExpose<SceneViewportHandle>({
 }
 
 .camera-status-hud__hints {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
   min-width: 320px;
   max-width: min(480px, calc(100vw - 32px));
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(12, 15, 21, 0.85);
+  background: rgba(12, 15, 21, 0.62);
   color: rgba(236, 241, 248, 0.95);
   font-size: 11px;
   line-height: 1.4;
@@ -23176,6 +23205,11 @@ defineExpose<SceneViewportHandle>({
   flex-direction: column;
   gap: 6px;
   pointer-events: none;
+}
+
+.camera-status-hud__hints--tool-usage {
+  border-color: rgba(134, 218, 255, 0.22);
+  background: rgba(10, 18, 25, 0.52);
 }
 
 .camera-hints-slide-enter-active,
@@ -23278,6 +23312,10 @@ defineExpose<SceneViewportHandle>({
   align-items: start;
 }
 
+.camera-status-hud__hint-row--title {
+  margin-bottom: 2px;
+}
+
 .camera-status-hud__hint-label {
   color: rgba(160, 171, 189, 0.92);
   white-space: nowrap;
@@ -23287,6 +23325,12 @@ defineExpose<SceneViewportHandle>({
 .camera-status-hud__hint-text {
   color: rgba(236, 241, 248, 0.95);
   opacity: 0.92;
+}
+
+.camera-status-hud__hint-text--title {
+  color: rgba(174, 232, 255, 0.98);
+  font-weight: 600;
+  opacity: 1;
 }
 
 .camera-status-hud__ratio {
