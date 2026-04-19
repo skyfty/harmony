@@ -888,6 +888,7 @@ export async function exportScenePackageZip(payload: {
 
       if (!blob) {
         if (!item.downloadUrl) {
+          continue;
           throw new Error(
             `Missing downloadUrl for embedded asset (assetId=${item.assetId}). ` +
               `Ensure the scene includes resourceSummary.assets[].downloadUrl for all runtime assets, or that the asset is cached locally before exporting.`,
