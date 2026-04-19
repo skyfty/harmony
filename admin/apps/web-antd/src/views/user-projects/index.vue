@@ -9,7 +9,9 @@ import { useRouter } from 'vue-router';
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
   createProjectApi,
+  bulkDeleteProjectsApi,
   deleteProjectApi,
+  emptyProjectTrashApi,
   getProjectApi,
   listProjectCategoriesApi,
   listProjectsApi,
@@ -56,6 +58,15 @@ const categoryNameMap = computed<Record<string, string>>(() =>
 
 const { t } = useI18n();
 const projectModalTitle = computed(() => (editingProjectKey.value ? t('page.userProjects.index.modal.edit') : t('page.userProjects.index.modal.create')));
+
+function getSelectedProjectRows() {
+  return (projectGridApi.grid?.getCheckboxRecords?.() ?? []) as UserProjectListItem[];
+}
+
+function clearProjectSelection() {
+  projectGridApi.grid?.clearCheckboxRow?.();
+  projectGridApi.grid?.clearCheckboxReserve?.();
+}
 
 function resetProjectForm() {
   projectFormModel.userId = '';
@@ -138,6 +149,7 @@ async function submitProject() {
 
     projectModalOpen.value = false;
     await Promise.all([loadCategories(), projectGridApi.reload()]);
+    clearProjectSelection();
   } finally {
     projectSubmitting.value = false;
   }
@@ -157,6 +169,57 @@ function handleDeleteProject(row: UserProjectListItem) {
           ? t('page.userProjects.index.message.permanentDeleteSuccess')
           : t('page.userProjects.index.message.deleteSuccess'),
       );
+      clearProjectSelection();
+      await projectGridApi.reload();
+    },
+  });
+}
+
+async function handleBulkDeleteProjects() {
+  const selectedRows = getSelectedProjectRows();
+  if (!selectedRows.length) {
+    message.warning('请选择要删除的项目');
+    return;
+  }
+
+  const permanentDelete = selectedRows.some((row) => row.deletedAt);
+  Modal.confirm({
+    title: permanentDelete
+      ? `确认彻底删除选中的 ${selectedRows.length} 个项目？`
+      : `确认删除选中的 ${selectedRows.length} 个项目？`,
+    content: permanentDelete
+      ? '彻底删除后不可恢复。'
+      : '该操作会把项目移入回收站。',
+    okType: 'danger',
+    onOk: async () => {
+      await bulkDeleteProjectsApi(
+        selectedRows.map((row) => ({
+          id: row.id,
+          projectId: row.id,
+          userId: row.userId,
+        })),
+      );
+      message.success(permanentDelete ? '已彻底删除选中的项目' : '已删除选中的项目');
+      clearProjectSelection();
+      await projectGridApi.reload();
+    },
+  });
+}
+
+async function handleEmptyProjectTrash() {
+  const formValues = (projectGridApi.formApi?.getValues?.() ?? {}) as Record<string, any>;
+  Modal.confirm({
+    title: '确认清空回收站？',
+    content: '彻底删除后不可恢复。',
+    okType: 'danger',
+    onOk: async () => {
+      await emptyProjectTrashApi({
+        categoryId: formValues.categoryId || undefined,
+        keyword: formValues.keyword || undefined,
+        userId: formValues.userId || undefined,
+      });
+      message.success('回收站已清空');
+      clearProjectSelection();
       await projectGridApi.reload();
     },
   });
@@ -165,11 +228,13 @@ function handleDeleteProject(row: UserProjectListItem) {
 async function handleRestoreProject(row: UserProjectListItem) {
   await restoreProjectApi(row.userId, row.id);
   message.success(t('page.userProjects.index.message.restoreSuccess'));
+  clearProjectSelection();
   await projectGridApi.reload();
 }
 
 async function toggleTrashView() {
   showDeletedOnly.value = !showDeletedOnly.value;
+  clearProjectSelection();
   await projectGridApi.reload();
 }
 
@@ -214,6 +279,7 @@ const [ProjectGrid, projectGridApi] = useVbenVxeGrid<UserProjectListItem>({
   gridOptions: {
     border: true,
     columns: [
+      { fixed: 'left', type: 'checkbox', width: 48 },
       { field: 'name', minWidth: 220, title: t('page.userProjects.index.table.name'), slots: { default: 'name' } },
       { field: 'id', minWidth: 220, title: t('page.userProjects.index.table.id') },
       { field: 'userId', minWidth: 200, title: t('page.userProjects.index.table.user'), slots: { default: 'user' } },
@@ -304,6 +370,12 @@ onMounted(async () => {
             {{ t('page.userProjects.index.toolbar.create') }}
           </Button>
           <Button @click="loadCategories">{{ t('page.userProjects.index.toolbar.refreshCategories') }}</Button>
+          <Button v-access:code="'project:write'" danger @click="handleBulkDeleteProjects">
+            {{ showDeletedOnly ? '彻底删除选中项' : '删除选中项' }}
+          </Button>
+          <Button v-if="showDeletedOnly" v-access:code="'project:write'" danger @click="handleEmptyProjectTrash">
+            清空回收站
+          </Button>
           <Button @click="toggleTrashView">{{ showDeletedOnly ? t('page.userProjects.index.toolbar.exitTrash') : t('page.userProjects.index.toolbar.trash') }}</Button>
         </Space>
       </template>

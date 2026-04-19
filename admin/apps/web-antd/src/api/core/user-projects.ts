@@ -39,6 +39,12 @@ export interface UserProjectListItem {
   userId: string;
 }
 
+export interface UserProjectBulkDeleteItem {
+  id?: string;
+  projectId?: string;
+  userId: string;
+}
+
 export interface UserProjectCategoryItem {
   createdAt: string;
   description: null | string;
@@ -116,6 +122,20 @@ export async function deleteProjectApi(userId: string, projectId: string) {
   return requestClient.delete(
     `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
   );
+}
+
+export async function bulkDeleteProjectsApi(items: UserProjectBulkDeleteItem[]) {
+  return requestClient.post('/admin/projects/bulk-delete', {
+    items,
+  });
+}
+
+export async function emptyProjectTrashApi(params: {
+  categoryId?: string;
+  keyword?: string;
+  userId?: string;
+}) {
+  return requestClient.post('/admin/projects/empty-trash', params);
 }
 
 export async function restoreProjectApi(userId: string, projectId: string) {
