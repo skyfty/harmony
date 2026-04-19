@@ -8,7 +8,7 @@
     "build": "pnpm --dir ../schema run build && vue-tsc -b && vite build",
     "preview": "vite preview"
   },
-  "engines": {
+  "enginewwws": {
     "pnpm": ">=10.0.0"
   },
   "packageManager": "pnpm@10.28.2",

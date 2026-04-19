@@ -13,8 +13,13 @@ import {
   getAnalyticsDashboardApi,
   listSceneSpotsApi,
   type AnalyticsDashboardResponse,
+  type AnalyticsDomainSummary,
   type AnalyticsMetricItem,
+  type AnalyticsSpotItem,
+  type AnalyticsTrendItem,
+  type LoginTrendItem,
 } from '#/api'
+import type { SceneSpotItem } from '#/api/core/scene-spots'
 
 import AnalyticsTrends from './analytics-trends.vue'
 import AnalyticsVisitsData from './analytics-visits-data.vue'
@@ -41,11 +46,11 @@ const domainRoutes: Record<string, string> = {
 }
 
 const domainCards = computed(() => {
-  const domains = overviewData.value?.domains
+  const domains: AnalyticsDashboardResponse['domains'] | undefined = overviewData.value?.domains
   if (!domains) {
     return []
   }
-  return Object.values(domains).map((item) => ({
+  return Object.values(domains).map((item: AnalyticsDomainSummary) => ({
     accent: {
       orders: '#b45309',
       punch: '#0f766e',
@@ -54,7 +59,9 @@ const domainCards = computed(() => {
       vehicles: '#1d4ed8',
     }[item.key],
     item,
+    primaryMetric: item.summary?.[0] ?? null,
     route: domainRoutes[item.key],
+    secondaryMetrics: item.summary.slice(1, 4),
   }))
 })
 
@@ -108,8 +115,54 @@ const profileOrBehaviorData = computed<AnalyticsMetricItem[]>(() => {
 
 const topSpots = computed(() => overviewData.value?.topSpots ?? [])
 
+const selectedSpotLabel = computed(() => {
+  if (!selectedSpotId.value) {
+    return '全局分析视角'
+  }
+  return spotOptions.value.find((item: { label: string; value: string }) => item.value === selectedSpotId.value)?.label ?? '当前景点'
+})
+
+const dwellSeconds = computed(() => {
+  return Math.round((overviewData.value?.overview.avgDwellMs ?? 0) / 1000)
+})
+
+const heroMetrics = computed(() => {
+  return [
+    {
+      label: '当前视角',
+      value: selectedSpotLabel.value,
+    },
+    {
+      label: '业务域数量',
+      value: `${domainCards.value.length}`,
+    },
+    {
+      label: '平均停留',
+      value: `${dwellSeconds.value} 秒`,
+    },
+  ]
+})
+
+const sourceHeadline = computed(() => overviewData.value?.sourceDistribution?.[0]?.name ?? '暂无来源数据')
+const deviceHeadline = computed(() => overviewData.value?.deviceDistribution?.[0]?.name ?? '暂无设备数据')
+const profileHeadline = computed(() => profileOrBehaviorData.value[0]?.name ?? '暂无画像数据')
+
+const rankingColumns = [
+  { title: '排名', dataIndex: 'rank', key: 'rank', width: 72 },
+  { title: '景点', dataIndex: 'name', key: 'name' },
+  { title: 'PV', dataIndex: 'pv', key: 'pv', width: 88 },
+  { title: 'UV', dataIndex: 'uv', key: 'uv', width: 88 },
+]
+
+const rankedTopSpots = computed(() => {
+  return topSpots.value.map((item: AnalyticsSpotItem, index: number) => ({
+    ...item,
+    rank: index + 1,
+  }))
+})
+
 const trendChartData = computed(() => {
-  return (overviewData.value?.trend ?? []).map((item) => ({
+  return (overviewData.value?.trend ?? []).map((item: AnalyticsTrendItem) => ({
     date: item.date,
     pv: item.pv,
     uv: item.uv,
@@ -117,7 +170,7 @@ const trendChartData = computed(() => {
 })
 
 const loginTrendChartData = computed(() => {
-  return (overviewData.value?.loginTrend ?? []).map((item) => ({
+  return (overviewData.value?.loginTrend ?? []).map((item: LoginTrendItem) => ({
     date: item.date,
     fail: item.fail ?? 0,
     success: item.success ?? 0,
@@ -131,7 +184,8 @@ const chartTabs: TabOption[] = [
 
 async function loadSpotOptions() {
   const result = await listSceneSpotsApi({ page: 1, pageSize: 2000 })
-  spotOptions.value = result.items.map((item) => ({
+  const items = result.items as SceneSpotItem[]
+  spotOptions.value = items.map((item) => ({
     label: item.title,
     value: item.id,
   }))
@@ -181,7 +235,7 @@ async function navigateToDomain(path: string) {
   await router.push(path)
 }
 
-watch(routeSpotId, async (spotId) => {
+watch(routeSpotId, async (spotId: string) => {
   const normalized = spotId || ''
   if (selectedSpotId.value !== normalized) {
     selectedSpotId.value = normalized
@@ -198,91 +252,256 @@ onMounted(async () => {
 
 <template>
   <div class="p-5">
-    <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <div class="flex items-center gap-3">
-        <a-select
-          v-model:value="selectedSpotId"
-          :options="spotOptions"
-          allow-clear
-          placeholder="选择景点（为空则全局）"
-          style="width: 260px"
-          @change="handleSpotChange"
-        />
-        <a-button :loading="loading" type="primary" @click="handleReload">刷新</a-button>
-        <a-button v-if="isSpotDetail" @click="backToGlobal">返回全局分析</a-button>
-      </div>
-      <div class="text-sm text-gray-500">
-        平均停留时长：{{ Math.round((overviewData?.overview.avgDwellMs || 0) / 1000) }} 秒
-      </div>
-    </div>
-
-    <a-row :gutter="16">
-      <a-col v-for="card in domainCards" :key="card.item.key" :span="24" :md="12" :xl="8">
-        <a-card
-          class="mb-4 cursor-pointer overflow-hidden border-0 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
-          :body-style="{ padding: '18px' }"
-          :bordered="false"
-          @click="navigateToDomain(card.route || '/analytics')"
-        >
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <div class="text-sm font-medium text-slate-500">{{ card.item.title }}</div>
-              <div class="mt-2 text-3xl font-semibold text-slate-900">
-                {{ card.item.summary?.[0]?.value ?? 0 }}
+    <a-card
+      :bordered="false"
+      class="overflow-hidden border-0 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 shadow-sm"
+      :body-style="{ padding: '0' }"
+    >
+      <div class="relative overflow-hidden px-6 py-6 text-white lg:px-8 lg:py-7">
+        <div class="pointer-events-none absolute inset-y-0 right-0 hidden w-1/2 bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.3),transparent_58%)] lg:block" />
+        <div class="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+          <div class="max-w-3xl">
+            <div class="inline-flex items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs tracking-[0.24em] text-white/70">
+              ANALYTICS OVERVIEW
+            </div>
+            <h1 class="mt-4 text-3xl font-semibold tracking-tight text-white lg:text-4xl">
+              {{ isSpotDetail ? `${selectedSpotLabel} 经营洞察` : '全站运营分析总览' }}
+            </h1>
+            <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-300 lg:text-base">
+              聚合访问、登录、来源与景点热度，让首页先回答“现在发生了什么”，再指向需要继续追踪的业务域。
+            </p>
+            <div class="mt-6 grid gap-3 sm:grid-cols-3">
+              <div
+                v-for="metric in heroMetrics"
+                :key="metric.label"
+                class="rounded-2xl border border-white/10 bg-white/10 px-4 py-4 backdrop-blur"
+              >
+                <div class="text-xs uppercase tracking-[0.2em] text-slate-400">{{ metric.label }}</div>
+                <div class="mt-3 text-lg font-semibold text-white">{{ metric.value }}</div>
               </div>
-              <div class="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                <span v-for="metric in card.item.summary.slice(1, 4)" :key="metric.name" class="rounded-full bg-slate-100 px-2 py-1">
-                  {{ metric.name }}：{{ metric.value }}
+            </div>
+          </div>
+
+          <div class="w-full max-w-xl rounded-3xl border border-white/10 bg-white/10 p-4 backdrop-blur">
+            <div class="flex flex-col gap-4">
+              <div>
+                <div class="text-sm font-medium text-white">分析范围</div>
+                <div class="mt-1 text-xs text-slate-300">切换全局或单景点视角，面板内容会同步刷新。</div>
+              </div>
+              <div class="flex flex-col gap-3 lg:flex-row">
+                <a-select
+                  v-model:value="selectedSpotId"
+                  :options="spotOptions"
+                  allow-clear
+                  placeholder="选择景点（为空则全局）"
+                  style="width: 100%"
+                  @change="handleSpotChange"
+                />
+                <div class="flex gap-3">
+                  <a-button :loading="loading" type="primary" @click="handleReload">刷新数据</a-button>
+                  <a-button v-if="isSpotDetail" @click="backToGlobal">回到全局</a-button>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2 text-xs text-slate-300">
+                <span class="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                  PV {{ overviewData?.overview.pv ?? 0 }}
+                </span>
+                <span class="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                  UV {{ overviewData?.overview.uv ?? 0 }}
+                </span>
+                <span class="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                  登录成功 {{ overviewData?.overview.loginSuccess ?? 0 }}
+                </span>
+                <span class="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                  登录失败 {{ overviewData?.overview.loginFail ?? 0 }}
                 </span>
               </div>
             </div>
-            <a-tag :color="card.accent">详情页</a-tag>
+          </div>
+        </div>
+      </div>
+    </a-card>
+
+    <div class="mt-6">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div class="text-xs font-medium uppercase tracking-[0.24em] text-slate-400">Core Metrics</div>
+          <h2 class="mt-1 text-xl font-semibold text-slate-900">核心指标快照</h2>
+        </div>
+        <div class="text-sm text-slate-500">统一观察访问量、登录表现与停留质量。</div>
+      </div>
+      <AnalysisOverview :items="overviewItems" />
+    </div>
+
+    <div class="mt-6">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div class="text-xs font-medium uppercase tracking-[0.24em] text-slate-400">Domain Entrances</div>
+          <h2 class="mt-1 text-xl font-semibold text-slate-900">业务入口与重点摘要</h2>
+        </div>
+        <div class="text-sm text-slate-500">把高频业务域前置成可点击的观察入口。</div>
+      </div>
+
+      <a-row :gutter="[16, 16]">
+        <a-col v-for="card in domainCards" :key="card.item.key" :span="24" :lg="12">
+          <a-card
+            :bordered="false"
+            class="h-full cursor-pointer overflow-hidden border-0 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-lg"
+            :body-style="{ padding: '24px' }"
+            @click="navigateToDomain(card.route || '/analytics')"
+          >
+            <div class="flex h-full flex-col justify-between gap-6">
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <div class="text-xs font-medium uppercase tracking-[0.24em] text-slate-400">{{ card.item.title }}</div>
+                  <div class="mt-3 flex flex-wrap items-end gap-3">
+                    <div class="text-4xl font-semibold text-slate-900">
+                      {{ card.primaryMetric?.value ?? 0 }}
+                    </div>
+                    <div class="pb-1 text-sm text-slate-500">{{ card.primaryMetric?.name ?? '核心指标' }}</div>
+                  </div>
+                </div>
+                <div
+                  class="rounded-full px-3 py-1 text-xs font-medium"
+                  :style="{
+                    backgroundColor: `${card.accent}14`,
+                    color: card.accent,
+                  }"
+                >
+                  查看详情
+                </div>
+              </div>
+
+              <div class="grid gap-3 sm:grid-cols-3">
+                <div
+                  v-for="metric in card.secondaryMetrics"
+                  :key="metric.name"
+                  class="rounded-2xl bg-slate-50 px-4 py-3"
+                >
+                  <div class="text-xs text-slate-400">{{ metric.name }}</div>
+                  <div class="mt-2 text-lg font-semibold text-slate-900">{{ metric.value }}</div>
+                </div>
+              </div>
+            </div>
+          </a-card>
+        </a-col>
+      </a-row>
+    </div>
+
+    <a-row :gutter="[16, 16]" class="mt-6">
+      <a-col :span="24" :xl="16">
+        <div class="rounded-3xl bg-white p-5 shadow-sm lg:p-6">
+          <div class="mb-5 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div class="text-xs font-medium uppercase tracking-[0.24em] text-slate-400">Primary Insight</div>
+              <h2 class="mt-1 text-xl font-semibold text-slate-900">趋势与登录表现</h2>
+              <p class="mt-2 text-sm text-slate-500">优先查看趋势变化，再决定是否进入更细的业务详情页。</p>
+            </div>
+            <div class="rounded-full bg-slate-100 px-3 py-2 text-sm text-slate-600">
+              平均停留时长 {{ dwellSeconds }} 秒
+            </div>
+          </div>
+
+          <AnalysisChartsTabs :tabs="chartTabs">
+            <template #trends>
+              <AnalyticsTrends :data="trendChartData" />
+            </template>
+            <template #visits>
+              <AnalyticsVisits :data="loginTrendChartData" />
+            </template>
+          </AnalysisChartsTabs>
+        </div>
+      </a-col>
+
+      <a-col :span="24" :xl="8">
+        <a-card :bordered="false" class="h-full border-0 shadow-sm" :body-style="{ padding: '24px' }">
+          <div class="flex h-full flex-col">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-xs font-medium uppercase tracking-[0.24em] text-slate-400">Hot Spots</div>
+                <h2 class="mt-1 text-xl font-semibold text-slate-900">景点访问排行</h2>
+              </div>
+              <div class="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                TOP {{ rankedTopSpots.length }}
+              </div>
+            </div>
+
+            <div class="mt-5 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <div class="rounded-2xl bg-slate-50 px-4 py-3">
+                <div class="text-xs text-slate-400">最热视频景点</div>
+                <div class="mt-2 text-base font-semibold text-slate-900">
+                  {{ rankedTopSpots[0]?.name ?? '暂无数据' }}
+                </div>
+              </div>
+              <div class="rounded-2xl bg-slate-50 px-4 py-3">
+                <div class="text-xs text-slate-400">最高 PV</div>
+                <div class="mt-2 text-base font-semibold text-slate-900">
+                  {{ rankedTopSpots[0]?.pv ?? 0 }}
+                </div>
+              </div>
+              <div class="rounded-2xl bg-slate-50 px-4 py-3">
+                <div class="text-xs text-slate-400">最高 UV</div>
+                <div class="mt-2 text-base font-semibold text-slate-900">
+                  {{ rankedTopSpots[0]?.uv ?? 0 }}
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-5 flex-1">
+              <a-empty v-if="!rankedTopSpots.length" description="暂无景点访问数据" />
+              <a-table
+                v-else
+                :columns="rankingColumns"
+                :data-source="rankedTopSpots"
+                :custom-row="(record: any) => ({
+                  onClick: () => navigateToSpot(record.spotId),
+                  style: { cursor: 'pointer' },
+                })"
+                :pagination="false"
+                :row-key="(record: any) => record.spotId"
+                size="small"
+              />
+            </div>
           </div>
         </a-card>
       </a-col>
     </a-row>
 
-    <AnalysisOverview :items="overviewItems" />
+    <div class="mt-6">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div class="text-xs font-medium uppercase tracking-[0.24em] text-slate-400">Secondary Insight</div>
+          <h2 class="mt-1 text-xl font-semibold text-slate-900">结构分布与用户特征</h2>
+        </div>
+        <div class="text-sm text-slate-500">用次级视图解释“趋势为什么发生”。</div>
+      </div>
 
-    <AnalysisChartsTabs :tabs="chartTabs" class="mt-5">
-      <template #trends>
-        <AnalyticsTrends :data="trendChartData" />
-      </template>
-      <template #visits>
-        <AnalyticsVisits :data="loginTrendChartData" />
-      </template>
-    </AnalysisChartsTabs>
-
-    <div class="mt-5 w-full md:flex">
-      <AnalysisChartCard class="mt-5 md:mr-4 md:mt-0 md:w-1/3" title="访问设备分布">
-        <AnalyticsVisitsData :data="overviewData?.deviceDistribution || []" />
-      </AnalysisChartCard>
-      <AnalysisChartCard class="mt-5 md:mr-4 md:mt-0 md:w-1/3" title="访问来源">
-        <AnalyticsVisitsSource :data="overviewData?.sourceDistribution || []" />
-      </AnalysisChartCard>
-      <AnalysisChartCard class="mt-5 md:mt-0 md:w-1/3" title="用户画像 / 行为路径">
-        <AnalyticsVisitsSales :data="profileOrBehaviorData" />
-      </AnalysisChartCard>
+      <a-row :gutter="[16, 16]">
+        <a-col :span="24" :md="12" :xl="8">
+          <AnalysisChartCard class="h-full" title="访问设备分布">
+            <div class="mb-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              当前最活跃设备类型：<span class="font-semibold text-slate-900">{{ deviceHeadline }}</span>
+            </div>
+            <AnalyticsVisitsData :data="overviewData?.deviceDistribution || []" />
+          </AnalysisChartCard>
+        </a-col>
+        <a-col :span="24" :md="12" :xl="8">
+          <AnalysisChartCard class="h-full" title="访问来源">
+            <div class="mb-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              当前主导来源：<span class="font-semibold text-slate-900">{{ sourceHeadline }}</span>
+            </div>
+            <AnalyticsVisitsSource :data="overviewData?.sourceDistribution || []" />
+          </AnalysisChartCard>
+        </a-col>
+        <a-col :span="24" :md="24" :xl="8">
+          <AnalysisChartCard class="h-full" title="用户画像 / 行为路径">
+            <div class="mb-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              当前首要特征：<span class="font-semibold text-slate-900">{{ profileHeadline }}</span>
+            </div>
+            <AnalyticsVisitsSales :data="profileOrBehaviorData" />
+          </AnalysisChartCard>
+        </a-col>
+      </a-row>
     </div>
-
-    <a-card class="mt-5" title="景点访问排行 (PV/UV)">
-      <a-empty v-if="!topSpots.length" description="暂无景点访问数据" />
-      <a-table
-        v-else
-        :columns="[
-          { title: '景点', dataIndex: 'name', key: 'name' },
-          { title: 'PV', dataIndex: 'pv', key: 'pv' },
-          { title: 'UV', dataIndex: 'uv', key: 'uv' },
-        ]"
-        :data-source="topSpots"
-        :custom-row="(record: any) => ({
-          onClick: () => navigateToSpot(record.spotId),
-          style: { cursor: 'pointer' },
-        })"
-        :pagination="false"
-        :row-key="(record: any) => record.spotId"
-        size="small"
-      />
-    </a-card>
   </div>
 </template>
