@@ -15636,7 +15636,7 @@ export const useSceneStore = defineStore('scene', {
           if (!(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')) {
             return
           }
-          updateWallGroup(group, build.definition, {
+          updateWallGroup(group, nextDefinition, {
             wallRenderMode: resolveWallRenderMode(node),
             repeatInstanceStep: resolveWallRepeatInstanceStep(node),
           } as any)
