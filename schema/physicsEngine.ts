@@ -16,6 +16,7 @@ import type {
 } from './components'
 import {
 	BOUNDARY_WALL_COMPONENT_TYPE,
+	WATER_COMPONENT_TYPE,
 	clampBoundaryWallComponentProps,
 	WALL_COMPONENT_TYPE,
 	clampWallProps,
@@ -1240,8 +1241,9 @@ export function createRigidbodyBody(
 	const boundaryWallComponent = node.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as
 		| SceneNodeComponentState<BoundaryWallComponentProps>
 		| undefined
+	let boundaryWallProps: BoundaryWallComponentProps | null = null
 	if (boundaryWallComponent?.enabled !== false) {
-		const boundaryWallProps = clampBoundaryWallComponentProps(
+		boundaryWallProps = clampBoundaryWallComponentProps(
 			boundaryWallComponent?.props as Partial<BoundaryWallComponentProps> | null | undefined,
 		)
 		const builtSegments = buildBoundaryWallSegments({

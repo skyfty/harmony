@@ -3,6 +3,7 @@ import * as CANNON from 'cannon-es'
 import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from './index'
 
 import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './components'
+import { BOUNDARY_WALL_COMPONENT_TYPE, clampBoundaryWallComponentProps, type BoundaryWallComponentProps } from './components'
 import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './components/definitions/roadComponent'
 import { resolveRoadLocalHeightSampler } from './roadMesh'
 import { buildGroundHeightfieldData } from './groundHeightfield'
@@ -72,6 +73,21 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 	if (!graph) {
 		return null
 	}
+	const boundaryWallComponent = roadNode.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as
+		| SceneNodeComponentState<BoundaryWallComponentProps>
+		| undefined
+	const boundaryWallEnabled = boundaryWallComponent?.enabled !== false && Boolean(boundaryWallComponent)
+	const boundaryWallProps = boundaryWallEnabled
+		? clampBoundaryWallComponentProps(boundaryWallComponent?.props as Partial<BoundaryWallComponentProps> | null | undefined)
+		: null
+	const surfaceNode = boundaryWallEnabled
+		? {
+			...roadNode,
+			components: Object.fromEntries(
+				Object.entries(roadNode.components ?? {}).filter(([type]) => type !== BOUNDARY_WALL_COMPONENT_TYPE),
+			),
+		}
+		: roadNode
 	const curves = buildRoadCurvesFromGraph(junctionSmoothing, graph)
 	if (!curves.length) {
 		return null
@@ -185,13 +201,20 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 			}
 			roadObject.add(tileObject)
 			tileObject.updateMatrixWorld(true)
-			const bodyResult = createBody(roadNode, rigidbodyComponent, shape, tileObject)
+			const bodyResult = createBody(surfaceNode, rigidbodyComponent, shape, tileObject)
 			roadObject.remove(tileObject)
 			if (bodyResult?.body) {
 				bodies.push(bodyResult.body)
 				totalBodies += 1
 			}
 			startIndex = endIndex
+		}
+	}
+
+	if (boundaryWallEnabled) {
+		const boundaryBodyResult = createBody(roadNode, rigidbodyComponent, null, roadObject)
+		if (boundaryBodyResult?.body) {
+			bodies.push(boundaryBodyResult.body)
 		}
 	}
 
@@ -217,6 +240,8 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		desiredTileLength,
 		bodyCount: bodies.length,
 		heightHash: signatureHash,
+		boundaryWallEnabled,
+		boundaryWallProps,
 	})
 
 	return { signature, bodies }
@@ -564,6 +589,8 @@ function buildRoadHeightfieldSignature(params: {
 	desiredTileLength: number
 	bodyCount: number
 	heightHash: number
+	boundaryWallEnabled: boolean
+	boundaryWallProps: BoundaryWallComponentProps | null
 }): string {
 	const roadPosition = (params.roadNode.position as any) ?? {}
 	const roadRotation = (params.roadNode.rotation as any) ?? {}
@@ -591,6 +618,10 @@ function buildRoadHeightfieldSignature(params: {
 		`es:${Math.round(params.elementSize * 1000)}`,
 		`b:${params.bodyCount}`,
 		`rh:${params.heightHash.toString(16)}`,
+		`bw:${params.boundaryWallEnabled ? 1 : 0}`,
+		`bwh:${Math.round((params.boundaryWallProps?.height ?? 0) * 1000)}`,
+		`bwt:${Math.round((params.boundaryWallProps?.thickness ?? 0) * 1000)}`,
+		`bwo:${Math.round((params.boundaryWallProps?.offset ?? 0) * 1000)}`,
 		`rp:${Math.round(rx * 1000)},${Math.round(ry * 1000)},${Math.round(rz * 1000)}`,
 		`ry:${Math.round(yaw * 1000)}`,
 		`gp:${Math.round(gx * 1000)},${Math.round(gy * 1000)},${Math.round(gz * 1000)}`,

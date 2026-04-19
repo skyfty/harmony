@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
-import type { FloorDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from './index'
+import type { FloorDynamicMesh, LandformDynamicMesh, RegionDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from './index'
 import { extractWaterSurfaceMeshMetadataFromUserData } from './index'
+import { WATER_COMPONENT_TYPE } from './components'
 import { extractFloorPerimeterChains } from './floorMesh'
 import { extractRoadBoundaryChains } from './roadMesh'
 import { compileWallSegmentsFromDefinition } from './wallLayout'
@@ -42,6 +43,57 @@ const aabbCorners = [
   new THREE.Vector3(),
   new THREE.Vector3(),
 ]
+
+function computeChainAreaXY(points: Array<{ x: number; y: number }>): number {
+  if (points.length < 3) {
+    return 0
+  }
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    area += current.x * next.y - next.x * current.y
+  }
+  return area * 0.5
+}
+
+function sanitizeWaterContourPoints(points: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  const sanitized: Array<{ x: number; y: number }> = []
+  for (const point of points) {
+    const x = Number(point.x)
+    const y = Number(point.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      continue
+    }
+    const previous = sanitized[sanitized.length - 1]
+    if (previous) {
+      const dx = x - previous.x
+      const dy = y - previous.y
+      if (dx * dx + dy * dy <= BOUNDARY_EPSILON * BOUNDARY_EPSILON) {
+        continue
+      }
+    }
+    sanitized.push({ x, y })
+  }
+  if (sanitized.length >= 3) {
+    const first = sanitized[0]!
+    const last = sanitized[sanitized.length - 1]!
+    const dx = first.x - last.x
+    const dy = first.y - last.y
+    if (dx * dx + dy * dy <= BOUNDARY_EPSILON * BOUNDARY_EPSILON) {
+      sanitized.pop()
+    }
+  }
+  return sanitized
+}
+
+function isWaterBoundaryWallNode(node: SceneNode, object: THREE.Object3D | null | undefined): boolean {
+  return Boolean(
+    node.components?.[WATER_COMPONENT_TYPE]
+    || extractWaterSurfaceMeshMetadataFromUserData(node.userData)
+    || findWaterSurfaceMetadataFromObject(object),
+  )
+}
 
 function sanitizeChainPoints(points: Vector3Like[], closed: boolean): Vector3Like[] {
   const sanitized: Vector3Like[] = []
@@ -158,25 +210,124 @@ function extractLandformChains(definition: LandformDynamicMesh): BoundaryChain[]
   return sanitized.length >= 3 ? [{ points: sanitized, closed: true }] : []
 }
 
-function extractWaterChains(node: SceneNode): BoundaryChain[] {
+function findWaterSurfaceMetadataFromObject(root: THREE.Object3D | null | undefined) {
+  if (!root) {
+    return null
+  }
+  const fromRoot = extractWaterSurfaceMeshMetadataFromUserData((root as { userData?: unknown }).userData)
+  if (fromRoot) {
+    return fromRoot
+  }
+  let found: ReturnType<typeof extractWaterSurfaceMeshMetadataFromUserData> = null
+  root.traverse((child) => {
+    if (found) {
+      return
+    }
+    const metadata = extractWaterSurfaceMeshMetadataFromUserData((child as { userData?: unknown }).userData)
+    if (metadata) {
+      found = metadata
+    }
+  })
+  return found
+}
+
+function extractWaterChains(node: SceneNode, object: THREE.Object3D | null | undefined): BoundaryChain[] {
   const metadata = extractWaterSurfaceMeshMetadataFromUserData(node.userData)
+    ?? findWaterSurfaceMetadataFromObject(object)
   if (!metadata) {
     return []
   }
   const points: Vector3Like[] = []
   for (let index = 0; index < metadata.contour.length; index += 2) {
     const x = Number(metadata.contour[index])
-    const z = Number(metadata.contour[index + 1])
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    const localContourY = Number(metadata.contour[index + 1])
+    if (!Number.isFinite(x) || !Number.isFinite(localContourY)) {
       continue
     }
-    points.push({ x, y: 0, z })
+    points.push({ x, y: localContourY, z: 0 })
   }
   const sanitized = sanitizeChainPoints(points, true)
   return sanitized.length >= 3 ? [{ points: sanitized, closed: true }] : []
 }
 
-function extractBoundaryChains(node: SceneNode): BoundaryChain[] {
+function buildWaterBoundaryWallSegments(
+  node: SceneNode,
+  object: THREE.Object3D | null | undefined,
+  props: BoundaryWallComponentProps,
+): BoundaryWallShapeSegment[] {
+  const metadata = extractWaterSurfaceMeshMetadataFromUserData(node.userData)
+    ?? findWaterSurfaceMetadataFromObject(object)
+  if (!metadata) {
+    return []
+  }
+  const contourPoints = sanitizeWaterContourPoints(
+    Array.from({ length: Math.floor(metadata.contour.length / 2) }, (_unused, index) => ({
+      x: Number(metadata.contour[index * 2]),
+      y: Number(metadata.contour[index * 2 + 1]),
+    })),
+  )
+  if (contourPoints.length < 3) {
+    return []
+  }
+  const bounds = computeRootLocalBounds(object)
+  const baseZ = bounds?.min.z ?? 0
+  const halfHeight = Math.max(BOUNDARY_EPSILON, props.height * 0.5)
+  const halfThickness = Math.max(BOUNDARY_EPSILON, props.thickness * 0.5)
+  const area = computeChainAreaXY(contourPoints)
+  const segments: BoundaryWallShapeSegment[] = []
+  for (let index = 0; index < contourPoints.length; index += 1) {
+    const start = contourPoints[index]!
+    const end = contourPoints[(index + 1) % contourPoints.length]!
+    startHelper.set(start.x, start.y, baseZ)
+    endHelper.set(end.x, end.y, baseZ)
+    directionHelper.subVectors(endHelper, startHelper)
+    directionHelper.z = 0
+    const length = directionHelper.length()
+    if (!Number.isFinite(length) || length <= BOUNDARY_EPSILON) {
+      continue
+    }
+    unitDirectionHelper.copy(directionHelper).multiplyScalar(1 / length)
+    if (area >= 0) {
+      outwardHelper.set(unitDirectionHelper.y, -unitDirectionHelper.x, 0)
+    } else {
+      outwardHelper.set(-unitDirectionHelper.y, unitDirectionHelper.x, 0)
+    }
+    const shiftX = outwardHelper.x * props.offset
+    const shiftY = outwardHelper.y * props.offset
+    const centerX = (startHelper.x + endHelper.x) * 0.5 + shiftX
+    const centerY = (startHelper.y + endHelper.y) * 0.5 + shiftY
+    const centerZ = baseZ + halfHeight
+    quaternionHelper.setFromUnitVectors(axisXHelper, unitDirectionHelper)
+    segments.push({
+      shape: new CANNON.Box(new CANNON.Vec3(Math.max(BOUNDARY_EPSILON, length * 0.5), halfThickness, halfHeight)),
+      offset: [centerX, centerY, centerZ],
+      orientation: [quaternionHelper.x, quaternionHelper.y, quaternionHelper.z, quaternionHelper.w],
+    })
+  }
+  return segments
+}
+
+function extractRegionChains(definition: RegionDynamicMesh): BoundaryChain[] {
+  const points = Array.isArray(definition.vertices)
+    ? definition.vertices
+      .map((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) {
+          return null
+        }
+        const x = Number(entry[0])
+        const z = Number(entry[1])
+        if (!Number.isFinite(x) || !Number.isFinite(z)) {
+          return null
+        }
+        return { x, y: 0, z }
+      })
+      .filter((point): point is Vector3Like => Boolean(point))
+    : []
+  const sanitized = sanitizeChainPoints(points, true)
+  return sanitized.length >= 3 ? [{ points: sanitized, closed: true }] : []
+}
+
+function extractBoundaryChains(node: SceneNode, object: THREE.Object3D | null | undefined): BoundaryChain[] {
   const dynamicMesh = node.dynamicMesh
   if (dynamicMesh?.type === 'Wall') {
     const segments = compileWallSegmentsFromDefinition(dynamicMesh as WallDynamicMesh)
@@ -203,7 +354,10 @@ function extractBoundaryChains(node: SceneNode): BoundaryChain[] {
       closed: chain.closed,
     }))
   }
-  return extractWaterChains(node)
+  if (dynamicMesh?.type === 'Region') {
+    return extractRegionChains(dynamicMesh as RegionDynamicMesh)
+  }
+  return extractWaterChains(node, object)
 }
 
 export function buildBoundaryWallSegments(params: {
@@ -212,7 +366,10 @@ export function buildBoundaryWallSegments(params: {
   props: BoundaryWallComponentProps
 }): BoundaryWallShapeSegment[] {
   const { node, object, props } = params
-  const chains = extractBoundaryChains(node)
+  if (isWaterBoundaryWallNode(node, object)) {
+    return buildWaterBoundaryWallSegments(node, object, props)
+  }
+  const chains = extractBoundaryChains(node, object)
     .map((chain) => ({
       points: sanitizeChainPoints(chain.points, chain.closed),
       closed: chain.closed,

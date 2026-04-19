@@ -2,6 +2,7 @@ import type { Object3D } from 'three'
 import { extractWaterSurfaceMeshMetadataFromUserData, type SceneNode, type SceneNodeComponentState } from '../../index'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
+import { WATER_COMPONENT_TYPE } from './waterComponent'
 
 export const BOUNDARY_WALL_COMPONENT_TYPE = 'boundaryWall'
 export const BOUNDARY_WALL_DEFAULT_HEIGHT = 8
@@ -53,7 +54,11 @@ export function canAttachBoundaryWallComponent(node: SceneNode): boolean {
     || dynamicType === 'Floor'
     || dynamicType === 'Landform'
     || dynamicType === 'Road'
+    || dynamicType === 'Region'
   ) {
+    return true
+  }
+  if (node.components?.[WATER_COMPONENT_TYPE]) {
     return true
   }
   return extractWaterSurfaceMeshMetadataFromUserData(node.userData) !== null

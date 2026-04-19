@@ -604,6 +604,9 @@ import {
   WALL_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/wallComponent';
 import {
+  boundaryWallComponentDefinition,
+} from '@harmony/schema/components/definitions/boundaryWallComponent';
+import {
   roadComponentDefinition,
 } from '@harmony/schema/components/definitions/roadComponent';
 import {
@@ -1529,6 +1532,7 @@ function disposeMaterialTextureCache(): void {
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(floorComponentDefinition);
 previewComponentManager.registerDefinition(wallComponentDefinition);
+previewComponentManager.registerDefinition(boundaryWallComponentDefinition);
 previewComponentManager.registerDefinition(roadComponentDefinition);
 previewComponentManager.registerDefinition(landformComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);

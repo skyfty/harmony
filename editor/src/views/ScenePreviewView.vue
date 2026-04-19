@@ -189,6 +189,7 @@ import {
 	VEHICLE_COMPONENT_TYPE,
 	AUTO_TOUR_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
+	BOUNDARY_WALL_COMPONENT_TYPE,
 	boundaryWallComponentDefinition,
 	LOD_COMPONENT_TYPE,
 	LOD_FACE_CAMERA_FORWARD_AXIS_X,
@@ -196,8 +197,10 @@ import {
 	LOD_FACE_CAMERA_FORWARD_AXIS_Z,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
+	clampRigidbodyComponentProps,
 	clampVehicleComponentProps,
 	clampLodComponentProps,
+	forEachWaterRuntimeHandle,
 	resolveLodRenderTarget,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
@@ -2915,6 +2918,33 @@ function resolveRigidbodyComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<RigidbodyComponentProps> | null {
 	return resolveEnabledComponentState<RigidbodyComponentProps>(node, RIGIDBODY_COMPONENT_TYPE)
+}
+
+function resolveBoundaryWallComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<Record<string, unknown>> | null {
+	return resolveEnabledComponentState<Record<string, unknown>>(node, BOUNDARY_WALL_COMPONENT_TYPE)
+}
+
+function resolvePhysicsRigidbodyComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<RigidbodyComponentProps> | null {
+	const rigidbodyComponent = resolveRigidbodyComponent(node)
+	if (rigidbodyComponent) {
+		return rigidbodyComponent
+	}
+	if (!resolveBoundaryWallComponent(node) || !node) {
+		return null
+	}
+	return {
+		id: `__boundaryWallRigidbody:${node.id}`,
+		type: RIGIDBODY_COMPONENT_TYPE,
+		enabled: true,
+		props: clampRigidbodyComponentProps({
+			bodyType: 'STATIC',
+			targetNodeId: node.id ?? null,
+		}),
+	}
 }
 
 function resolveVehicleComponent(
@@ -10030,31 +10060,6 @@ function buildTrimeshDebugLines(trimesh: CANNON.Trimesh): THREE.LineSegments | n
 	return lines
 }
 
-function computeTrimeshSignature(trimesh: CANNON.Trimesh): string {
-	type TrimeshRaw = { vertices?: ArrayLike<number>; indices?: ArrayLike<number> }
-	const raw = trimesh as unknown as TrimeshRaw
-	const vertices = raw.vertices
-	const indices = raw.indices
-	if (!vertices || !indices) {
-		return 'trimesh:0:0:0'
-	}
-	const quantize = 1000
-	let hash = 2166136261
-	const fnv = (value: number) => {
-		hash ^= value
-		hash = Math.imul(hash, 16777619) >>> 0
-	}
-	for (let i = 0; i < vertices.length; i += 1) {
-		const v = Number(vertices[i] ?? 0)
-		const q = Number.isFinite(v) ? Math.round(v * quantize) : 0
-		fnv(q | 0)
-	}
-	for (let i = 0; i < indices.length; i += 1) {
-		fnv((Number(indices[i] ?? 0) | 0) >>> 0)
-	}
-	return `trimesh:${vertices.length}:${indices.length}:${hash.toString(16)}`
-}
-
 function buildRigidbodyDebugLineSegments(shape: RigidbodyPhysicsShape): THREE.LineSegments | null {
 	if (shape.kind === 'box') {
 		return buildBoxDebugLines(shape)
@@ -10163,6 +10168,9 @@ function buildBodyShapeDebugLines(shape: CANNON.Shape): THREE.LineSegments | nul
 			applyScale: false,
 		})
 	}
+	if (shape instanceof CANNON.Trimesh) {
+		return buildTrimeshDebugLines(shape)
+	}
 	return null
 }
 
@@ -10200,30 +10208,50 @@ function computeBodyShapeDebugSignature(shape: CANNON.Shape, offset: CANNON.Vec3
 	return `${base}@${Math.round(ox * 1000)},${Math.round(oy * 1000)},${Math.round(oz * 1000)}:${Math.round(qx * 1000)},${Math.round(qy * 1000)},${Math.round(qz * 1000)},${Math.round((Number.isFinite(qw) ? qw : 1) * 1000)}`
 }
 
+function findWaterRuntimeRenderObject(nodeId: string): THREE.Object3D | null {
+	let found: THREE.Object3D | null = null
+	forEachWaterRuntimeHandle((handle) => {
+		if (found || handle.nodeId !== nodeId) {
+			return
+		}
+		found = handle.getRenderObject()
+	})
+	return found
+}
+
+function resolveRigidbodyDebugVisibilityObject(nodeId: string, fallback: THREE.Object3D | null | undefined): THREE.Object3D | null {
+	const waterObject = findWaterRuntimeRenderObject(nodeId)
+	if (waterObject) {
+		return waterObject
+	}
+	return fallback ?? null
+}
+
 function ensureRigidbodyDebugHelperForBodyShapes(
 	nodeId: string,
 	body: CANNON.Body,
 	category: RigidbodyDebugHelperCategory,
-): void {
+): boolean {
 	const shapes = Array.isArray(body.shapes) ? body.shapes : []
 	if (!shapes.length) {
 		removeRigidbodyDebugHelper(nodeId)
-		return
+		return false
 	}
 	const signature = `body-shapes:${shapes.map((shape, index) => computeBodyShapeDebugSignature(shape, body.shapeOffsets[index], body.shapeOrientations[index])).join('|')}`
 	const existing = rigidbodyDebugHelpers.get(nodeId)
 	if (existing?.signature === signature) {
-		return
+		return true
 	}
 	removeRigidbodyDebugHelper(nodeId)
 	const container = ensureRigidbodyDebugGroup()
 	if (!container) {
-		return
+		return false
 	}
 	const helperGroup = new THREE.Group()
 	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
 	helperGroup.visible = false
 	helperGroup.scale.set(1, 1, 1)
+	let addedLineCount = 0
 	shapes.forEach((shape, index) => {
 		const lines = buildBodyShapeDebugLines(shape)
 		if (!lines) {
@@ -10244,7 +10272,12 @@ function ensureRigidbodyDebugHelperForBodyShapes(
 		)
 		segmentGroup.add(lines)
 		helperGroup.add(segmentGroup)
+		addedLineCount += 1
 	})
+	if (!addedLineCount) {
+		helperGroup.clear()
+		return false
+	}
 	container.add(helperGroup)
 	rigidbodyDebugHelpers.set(nodeId, {
 		group: helperGroup,
@@ -10252,6 +10285,7 @@ function ensureRigidbodyDebugHelperForBodyShapes(
 		category,
 		scale: new THREE.Vector3(1, 1, 1),
 	})
+	return true
 }
 
 function clearRigidbodyDebugHelpers(): void {
@@ -10301,38 +10335,6 @@ function ensureRigidbodyDebugHelperForShape(
 	helperGroup.scale.copy(shape.applyScale ? worldScale : new THREE.Vector3(1, 1, 1))
 	container.add(helperGroup)
 	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: helperGroup.scale.clone() })
-}
-
-function ensureRigidbodyDebugHelperForTrimesh(
-	nodeId: string,
-	trimesh: CANNON.Trimesh,
-	category: RigidbodyDebugHelperCategory,
-): void {
-	const signature = computeTrimeshSignature(trimesh)
-	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
-		return
-	}
-	removeRigidbodyDebugHelper(nodeId)
-	const container = ensureRigidbodyDebugGroup()
-	if (!container) {
-		return
-	}
-	const lineSegments = buildTrimeshDebugLines(trimesh)
-	if (!lineSegments) {
-		return
-	}
-	const helperGroup = new THREE.Group()
-	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
-	lineSegments.name = `RigidbodyDebugLines:${nodeId}`
-	lineSegments.renderOrder = 9999
-	// Trimesh vertices are already in body-local coordinates; scale is baked.
-	lineSegments.position.set(0, 0, 0)
-	helperGroup.add(lineSegments)
-	helperGroup.visible = false
-	helperGroup.scale.set(1, 1, 1)
-	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: new THREE.Vector3(1, 1, 1) })
 }
 
 function ensureRoadHeightfieldDebugHelper(
@@ -10442,27 +10444,11 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
 	const instance = rigidbodyInstances.get(nodeId) ?? null
-	type DynamicMeshWithType = { type?: unknown }
-	const isWallNode = Boolean(node && (node.dynamicMesh as unknown as DynamicMeshWithType | null)?.type === 'Wall')
 	const roadEntry =
 		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
 			? { signature: instance.signature, bodies: instance.bodies }
 			: null
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
-	if (isWallNode && instance) {
-		const category: RigidbodyDebugHelperCategory = 'rigidbody'
-		if (!isRigidbodyDebugCategoryVisible(category)) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		const trimesh = instance.body.shapes.find((shape) => shape instanceof CANNON.Trimesh) as CANNON.Trimesh | undefined
-		if (trimesh) {
-			ensureRigidbodyDebugHelperForTrimesh(nodeId, trimesh, category)
-			updateRigidbodyDebugHelperTransform(nodeId)
-			return
-		}
-		// Fall through to component-defined shape if wall body wasn't a trimesh.
-	}
 	if (roadEntry) {
 		const category: RigidbodyDebugHelperCategory = 'rigidbody'
 		if (!isRigidbodyDebugCategoryVisible(category)) {
@@ -10488,15 +10474,16 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		updateRigidbodyDebugHelperTransform(nodeId)
 		return
 	}
-	if (instance && Array.isArray(instance.body.shapes) && instance.body.shapes.length > 1) {
+	if (instance && Array.isArray(instance.body.shapes) && instance.body.shapes.length > 0) {
 		const category: RigidbodyDebugHelperCategory = 'rigidbody'
 		if (!isRigidbodyDebugCategoryVisible(category)) {
 			removeRigidbodyDebugHelper(nodeId)
 			return
 		}
-		ensureRigidbodyDebugHelperForBodyShapes(nodeId, instance.body, category)
-		updateRigidbodyDebugHelperTransform(nodeId)
-		return
+		if (ensureRigidbodyDebugHelperForBodyShapes(nodeId, instance.body, category)) {
+			updateRigidbodyDebugHelperTransform(nodeId)
+			return
+		}
 	}
 	let shapeDefinition = extractRigidbodyShape(component)
 	if (!shapeDefinition) {
@@ -10535,8 +10522,8 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 			: null
 	if (multiBodyEntry) {
 		const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
-		const object = nodeObjectMap.get(nodeId) ?? null
-		const visible = object ? object.visible !== false : true
+		const object = resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
+		const visible = object ? isRuntimeObjectEffectivelyVisible(object) : true
 		helper.group.visible = visible && categoryEnabled
 		if (!helper.group.visible) {
 			return
@@ -10582,9 +10569,9 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 			rigidbodyDebugQuaternionHelper.multiply(rigidbody.orientationAdjustment.threeInverse)
 		}
 		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
-		visible = rigidbody.object?.visible !== false
+		visible = isRuntimeObjectEffectivelyVisible(resolveRigidbodyDebugVisibilityObject(nodeId, rigidbody.object))
 	} else {
-		const object = nodeObjectMap.get(nodeId)
+		const object = resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
 		if (!object) {
 			helper.group.visible = false
 			return
@@ -10593,7 +10580,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		object.matrixWorld.decompose(rigidbodyDebugPositionHelper, rigidbodyDebugQuaternionHelper, rigidbodyDebugScaleHelper)
 		helper.group.position.copy(rigidbodyDebugPositionHelper)
 		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
-		visible = object.visible !== false
+		visible = isRuntimeObjectEffectivelyVisible(object)
 	}
 	helper.group.scale.copy(helper.scale)
 	helper.group.visible = visible && categoryEnabled
@@ -10791,9 +10778,10 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		return
 	}
 	const node = resolveNodeById(nodeId)
-	const component = resolveRigidbodyComponent(node)
+	const component = resolvePhysicsRigidbodyComponent(node)
 	const shapeDefinition = extractRigidbodyShape(component)
 	const requiresMetadata = !hasAutoGeneratedDynamicShape(node?.dynamicMesh)
+	const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
 	if (!node || !component || !object) {
 		return
 	}
@@ -10802,7 +10790,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
-	if (!shapeDefinition && requiresMetadata) {
+	if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
 		return
 	}
 	const existing = rigidbodyInstances.get(nodeId)
@@ -10852,7 +10840,7 @@ function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode
 		if (!node) {
 			continue
 		}
-		if (resolveRigidbodyComponent(node)) {
+		if (resolvePhysicsRigidbodyComponent(node)) {
 			collected.push(node)
 		}
 		if (Array.isArray(node.children) && node.children.length) {
@@ -10918,10 +10906,11 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 	const desiredIds = new Set<string>()
 	rigidbodyNodes.forEach((node) => {
 		desiredIds.add(node.id)
-		const component = resolveRigidbodyComponent(node)
+		const component = resolvePhysicsRigidbodyComponent(node)
 		const shapeDefinition = extractRigidbodyShape(component)
 		const object = nodeObjectMap.get(node.id) ?? null
 		const requiresMetadata = !hasAutoGeneratedDynamicShape(node.dynamicMesh)
+		const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
 		if (!component || !object) {
 			return
 		}
@@ -10930,7 +10919,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 			refreshRigidbodyDebugHelper(node.id)
 			return
 		}
-		if (!shapeDefinition && requiresMetadata) {
+		if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
 			return
 		}
 		const existing = rigidbodyInstances.get(node.id)
