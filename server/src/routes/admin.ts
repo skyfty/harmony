@@ -155,8 +155,10 @@ import {
 } from '@/controllers/resourceController'
 import {
   createProject,
+  bulkDeleteProjects,
   createProjectCategory,
   getProject,
+  emptyProjectTrash,
   listProjectCategories,
   listProjects,
   removeProject,
@@ -408,6 +410,8 @@ adminRouter.post('/categories/merge', requireAnyPermission(['category:write']), 
 
 adminRouter.get('/projects', requireAnyPermission(['project:read']), listProjects)
 adminRouter.post('/projects', requireAnyPermission(['project:write']), createProject)
+adminRouter.post('/projects/bulk-delete', requireAnyPermission(['project:write']), bulkDeleteProjects)
+adminRouter.post('/projects/empty-trash', requireAnyPermission(['project:write']), emptyProjectTrash)
 adminRouter.get('/projects/:userId/:projectId', requireAnyPermission(['project:read']), getProject)
 adminRouter.put('/projects/:userId/:projectId', requireAnyPermission(['project:write']), updateProject)
 adminRouter.post('/projects/:userId/:projectId/restore', requireAnyPermission(['project:write']), restoreProject)

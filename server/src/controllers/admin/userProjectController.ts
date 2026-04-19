@@ -65,6 +65,33 @@ function readRequestFiles(ctx: Context): Record<string, unknown> | undefined {
   return (ctx.request as unknown as { files?: Record<string, unknown> }).files
 }
 
+function resolveProjectId(rawItem: Record<string, unknown>): string {
+  const projectId = typeof rawItem.projectId === 'string' ? rawItem.projectId.trim() : ''
+  if (projectId) {
+    return projectId
+  }
+  return typeof rawItem.id === 'string' ? rawItem.id.trim() : ''
+}
+
+function buildTrashFilter(ctx: Context, payload: Record<string, unknown>): Record<string, unknown> {
+  const filter: Record<string, unknown> = { deletedAt: { $ne: null } }
+  const requestedUserId = typeof payload.userId === 'string' ? payload.userId.trim() : ''
+  if (requestedUserId) {
+    filter.userId = resolveScopedUserId(ctx, requestedUserId)
+  } else if (!canManageAllUsers(ctx)) {
+    filter.userId = ensureCurrentUserId(ctx)
+  }
+  const categoryId = typeof payload.categoryId === 'string' ? payload.categoryId.trim() : ''
+  if (categoryId) {
+    filter.categoryId = categoryId
+  }
+  const keyword = typeof payload.keyword === 'string' ? payload.keyword.trim() : ''
+  if (keyword) {
+    filter['document.name'] = new RegExp(keyword, 'i')
+  }
+  return filter
+}
+
 export async function listProjects(ctx: Context): Promise<void> {
   const { page = '1', pageSize = '20', keyword, categoryId, userId, deletedOnly, includeDeleted } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
@@ -175,6 +202,72 @@ export async function removeProject(ctx: Context): Promise<void> {
     : await trashUserProjectCascade(userId, projectId)
   ctx.status = 200
   ctx.body = { result }
+}
+
+export async function bulkDeleteProjects(ctx: Context): Promise<void> {
+  const body = (ctx.request.body ?? {}) as Record<string, unknown>
+  const items = Array.isArray(body.items) ? body.items : []
+  if (!items.length) {
+    ctx.throw(400, 'At least one project is required')
+  }
+
+  let trashedCount = 0
+  let deletedCount = 0
+  let notFoundCount = 0
+
+  for (const item of items) {
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+    const rawItem = item as Record<string, unknown>
+    const userId = resolveScopedUserId(ctx, rawItem.userId)
+    const projectId = resolveProjectId(rawItem)
+    if (!projectId) {
+      continue
+    }
+
+    const existing = await UserProjectModel.findOne({ userId, projectId }, { deletedAt: 1 }).lean().exec()
+    if (!existing) {
+      notFoundCount += 1
+      continue
+    }
+
+    const isDeleted = Boolean((existing as { deletedAt?: Date | null }).deletedAt)
+    if (isDeleted) {
+      await deleteUserProjectCascade(userId, projectId)
+      deletedCount += 1
+    } else {
+      await trashUserProjectCascade(userId, projectId)
+      trashedCount += 1
+    }
+  }
+
+  ctx.body = {
+    deletedCount,
+    notFoundCount,
+    trashedCount,
+  }
+}
+
+export async function emptyProjectTrash(ctx: Context): Promise<void> {
+  const body = (ctx.request.body ?? {}) as Record<string, unknown>
+  const filter = buildTrashFilter(ctx, body)
+  const rows = await UserProjectModel.find(filter, { userId: 1, projectId: 1 }).lean().exec()
+
+  let deletedCount = 0
+  for (const row of rows as Array<{ projectId?: string; userId?: string }>) {
+    const userId = typeof row.userId === 'string' ? row.userId : ''
+    const projectId = typeof row.projectId === 'string' ? row.projectId : ''
+    if (!userId || !projectId) {
+      continue
+    }
+    await deleteUserProjectCascade(userId, projectId)
+    deletedCount += 1
+  }
+
+  ctx.body = {
+    deletedCount,
+  }
 }
 
 export async function restoreProject(ctx: Context): Promise<void> {
