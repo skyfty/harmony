@@ -8,6 +8,7 @@ export function handlePointerUpTools(
     handleGroundEditorPointerUp: (event: PointerEvent) => boolean
     displayBoardBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     billboardBuildToolHandlePointerUp: (event: PointerEvent) => boolean
+    boundaryWallBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     landformBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     regionBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     guideRouteBuildToolHandlePointerUp: (event: PointerEvent) => boolean
@@ -48,6 +49,23 @@ export function handlePointerUpTools(
       stopPropagation: true,
       stopImmediatePropagation: true,
     }
+  }
+
+  if (ctx.activeBuildTool === 'boundaryWall') {
+    const handled = ctx.boundaryWallBuildToolHandlePointerUp(event)
+    if (handled) {
+      return {
+        handled: true,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    if (event.button === 0) {
+      return { handled: true }
+    }
+    return null
   }
 
   if (ctx.activeBuildTool === 'landform') {

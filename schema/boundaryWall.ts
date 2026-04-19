@@ -6,7 +6,7 @@ import { WATER_COMPONENT_TYPE } from './components'
 import { extractFloorPerimeterChains } from './floorMesh'
 import { extractRoadBoundaryChains } from './roadMesh'
 import { compileWallSegmentsFromDefinition } from './wallLayout'
-import type { BoundaryWallComponentProps } from './components'
+import type { BoundaryWallComponentProps, BoundaryWallCustomLoop } from './components'
 
 export type BoundaryWallShapeSegment = {
   shape: CANNON.Box
@@ -190,6 +190,69 @@ function computeFallbackBaseY(chains: BoundaryChain[]): number {
   return Number.isFinite(minY) ? minY : 0
 }
 
+function buildPlanarBoundaryWallSegments(params: {
+  chains: BoundaryChain[]
+  props: BoundaryWallComponentProps
+  baseY: number
+}): BoundaryWallShapeSegment[] {
+  const { chains, props, baseY } = params
+  const halfHeight = Math.max(BOUNDARY_EPSILON, props.height * 0.5)
+  const halfThickness = Math.max(BOUNDARY_EPSILON, props.thickness * 0.5)
+  const segments: BoundaryWallShapeSegment[] = []
+
+  chains.forEach((chain) => {
+    const area = chain.closed ? computeChainAreaXZ(chain.points) : 0
+    const count = chain.closed ? chain.points.length : chain.points.length - 1
+    for (let index = 0; index < count; index += 1) {
+      const start = chain.points[index]!
+      const end = chain.points[(index + 1) % chain.points.length]!
+      startHelper.set(start.x, baseY, start.z)
+      endHelper.set(end.x, baseY, end.z)
+      directionHelper.subVectors(endHelper, startHelper)
+      directionHelper.y = 0
+      const length = directionHelper.length()
+      if (!Number.isFinite(length) || length <= BOUNDARY_EPSILON) {
+        continue
+      }
+      unitDirectionHelper.copy(directionHelper).multiplyScalar(1 / length)
+      if (chain.closed) {
+        if (area >= 0) {
+          outwardHelper.set(unitDirectionHelper.z, 0, -unitDirectionHelper.x)
+        } else {
+          outwardHelper.set(-unitDirectionHelper.z, 0, unitDirectionHelper.x)
+        }
+      } else {
+        outwardHelper.set(unitDirectionHelper.z, 0, -unitDirectionHelper.x)
+      }
+      const shiftX = outwardHelper.x * props.offset
+      const shiftZ = outwardHelper.z * props.offset
+      const centerX = (startHelper.x + endHelper.x) * 0.5 + shiftX
+      const centerZ = (startHelper.z + endHelper.z) * 0.5 + shiftZ
+      const centerY = baseY + halfHeight
+      quaternionHelper.setFromUnitVectors(axisXHelper, unitDirectionHelper)
+      segments.push({
+        shape: new CANNON.Box(new CANNON.Vec3(Math.max(BOUNDARY_EPSILON, length * 0.5), halfHeight, halfThickness)),
+        offset: [centerX, centerY, centerZ],
+        orientation: [quaternionHelper.x, quaternionHelper.y, quaternionHelper.z, quaternionHelper.w],
+      })
+    }
+  })
+
+  return segments
+}
+
+function extractCustomBoundaryChains(loops: BoundaryWallCustomLoop[]): BoundaryChain[] {
+  return loops
+    .map((loop) => ({
+      points: sanitizeChainPoints(
+        loop.points.map((point) => ({ x: point.x, y: 0, z: point.z })),
+        loop.closed,
+      ),
+      closed: loop.closed,
+    }))
+    .filter((chain) => chain.points.length >= (chain.closed ? 3 : 2))
+}
+
 function extractLandformChains(definition: LandformDynamicMesh): BoundaryChain[] {
   const points = Array.isArray(definition.footprint)
     ? definition.footprint
@@ -366,6 +429,15 @@ export function buildBoundaryWallSegments(params: {
   props: BoundaryWallComponentProps
 }): BoundaryWallShapeSegment[] {
   const { node, object, props } = params
+  if (props.mode === 'custom') {
+    const chains = extractCustomBoundaryChains(props.customLoops)
+    if (!chains.length) {
+      return []
+    }
+    const bounds = computeRootLocalBounds(object)
+    const baseY = bounds?.min.y ?? 0
+    return buildPlanarBoundaryWallSegments({ chains, props, baseY })
+  }
   if (isWaterBoundaryWallNode(node, object)) {
     return buildWaterBoundaryWallSegments(node, object, props)
   }
@@ -381,47 +453,5 @@ export function buildBoundaryWallSegments(params: {
 
   const bounds = computeRootLocalBounds(object)
   const baseY = bounds?.min.y ?? computeFallbackBaseY(chains)
-  const halfHeight = Math.max(BOUNDARY_EPSILON, props.height * 0.5)
-  const halfThickness = Math.max(BOUNDARY_EPSILON, props.thickness * 0.5)
-  const segments: BoundaryWallShapeSegment[] = []
-
-  chains.forEach((chain) => {
-    const area = chain.closed ? computeChainAreaXZ(chain.points) : 0
-    const count = chain.closed ? chain.points.length : chain.points.length - 1
-    for (let index = 0; index < count; index += 1) {
-      const start = chain.points[index]!
-      const end = chain.points[(index + 1) % chain.points.length]!
-      startHelper.set(start.x, baseY, start.z)
-      endHelper.set(end.x, baseY, end.z)
-      directionHelper.subVectors(endHelper, startHelper)
-      directionHelper.y = 0
-      const length = directionHelper.length()
-      if (!Number.isFinite(length) || length <= BOUNDARY_EPSILON) {
-        continue
-      }
-      unitDirectionHelper.copy(directionHelper).multiplyScalar(1 / length)
-      if (chain.closed) {
-        if (area >= 0) {
-          outwardHelper.set(unitDirectionHelper.z, 0, -unitDirectionHelper.x)
-        } else {
-          outwardHelper.set(-unitDirectionHelper.z, 0, unitDirectionHelper.x)
-        }
-      } else {
-        outwardHelper.set(unitDirectionHelper.z, 0, -unitDirectionHelper.x)
-      }
-      const shiftX = outwardHelper.x * props.offset
-      const shiftZ = outwardHelper.z * props.offset
-      const centerX = (startHelper.x + endHelper.x) * 0.5 + shiftX
-      const centerZ = (startHelper.z + endHelper.z) * 0.5 + shiftZ
-      const centerY = baseY + halfHeight
-      quaternionHelper.setFromUnitVectors(axisXHelper, unitDirectionHelper)
-      segments.push({
-        shape: new CANNON.Box(new CANNON.Vec3(Math.max(BOUNDARY_EPSILON, length * 0.5), halfHeight, halfThickness)),
-        offset: [centerX, centerY, centerZ],
-        orientation: [quaternionHelper.x, quaternionHelper.y, quaternionHelper.z, quaternionHelper.w],
-      })
-    }
-  })
-
-  return segments
+  return buildPlanarBoundaryWallSegments({ chains, props, baseY })
 }

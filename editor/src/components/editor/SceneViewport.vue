@@ -259,6 +259,7 @@ import {
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
 import { createLandformBuildTool } from './LandformBuildTool'
+import { createBoundaryWallBuildTool } from './BoundaryWallBuildTool'
 import { createRegionBuildTool } from './RegionBuildTool'
 import { createGuideRouteBuildTool } from './GuideRouteBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
@@ -288,6 +289,7 @@ import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX
 import { createLandformVertexRenderer, type LandformVertexHandlePickResult } from './LandformVertexRenderer'
 import { createRegionVertexRenderer, type RegionVertexHandlePickResult } from './RegionVertexRenderer'
 import { createGuideRouteVertexRenderer, type GuideRouteVertexHandlePickResult } from './GuideRouteVertexRenderer'
+import { createBoundaryWallLoopRenderer } from './BoundaryWallLoopRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
 import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './WaterVertexRenderer'
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
@@ -317,6 +319,7 @@ import {
   GUIDEBOARD_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
+  BOUNDARY_WALL_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
@@ -343,6 +346,7 @@ import {
   PROTAGONIST_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
+  clampBoundaryWallComponentProps,
   clampWallProps,
 } from '@schema/components'
 
@@ -351,6 +355,7 @@ import type {
   DisplayBoardComponentProps,
   GuideboardComponentProps,
   GuideRouteComponentProps,
+  BoundaryWallComponentProps,
   WarpGateComponentProps,
   WallComponentProps,
   RoadComponentProps,
@@ -2035,6 +2040,33 @@ function resolveEditableRegionNode(nodeId: string | null | undefined): SceneNode
   return node
 }
 
+function resolveEditableBoundaryWallNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node) {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  const component = node.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<BoundaryWallComponentProps> | undefined
+  if (!component || component.enabled === false) {
+    return null
+  }
+  const props = clampBoundaryWallComponentProps(component.props as BoundaryWallComponentProps)
+  if (props.mode !== 'custom') {
+    return null
+  }
+  const firstLoop = Array.isArray(props.customLoops) ? props.customLoops[0] : null
+  const points = Array.isArray(firstLoop?.points) ? firstLoop.points : []
+  if (points.length < 3) {
+    return null
+  }
+  return objectMap.has(nodeId) ? node : null
+}
+
 function resolveEditableGuideRouteNode(nodeId: string | null | undefined): SceneNode | null {
   if (!nodeId) {
     return null
@@ -2280,6 +2312,25 @@ function isSelectedRegionEditMode(): boolean {
     return false
   }
   return Boolean(resolveEditableRegionNode(selectedId))
+}
+
+function getActiveBoundaryWallEditNodeId(): string | null {
+  if (activeBuildTool.value !== 'boundaryWall') {
+    return null
+  }
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId) {
+    return null
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return null
+  }
+  return resolveEditableBoundaryWallNode(selectedId)?.id ?? null
+}
+
+function isSelectedBoundaryWallEditMode(): boolean {
+  return Boolean(getActiveBoundaryWallEditNodeId())
 }
 
 function getActiveGuideRouteEditNodeId(): string | null {
@@ -5005,6 +5056,23 @@ type RegionContourVertexDragState = {
   workingPoints: Array<[number, number]>
 }
 
+type BoundaryWallContourVertexDragState = {
+  pointerId: number
+  nodeId: string
+  vertexIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  dragMode: 'free' | 'axis'
+  axisWorld: THREE.Vector3 | null
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+  runtimeObject: THREE.Object3D
+  basePoints: Array<[number, number]>
+  workingPoints: Array<[number, number]>
+}
+
 type GuideRouteVertexDragState = {
   pointerId: number
   nodeId: string
@@ -5107,6 +5175,7 @@ type WaterRectangleEdgeConstraint = WaterRectangleFrame & {
 let waterContourVertexDragState: WaterContourVertexDragState | null = null
 let landformContourVertexDragState: LandformContourVertexDragState | null = null
 let regionContourVertexDragState: RegionContourVertexDragState | null = null
+let boundaryWallContourVertexDragState: BoundaryWallContourVertexDragState | null = null
 let guideRouteVertexDragState: GuideRouteVertexDragState | null = null
 let waterCircleCenterDragState: WaterCircleCenterDragState | null = null
 let waterCircleRadiusDragState: WaterCircleRadiusDragState | null = null
@@ -5117,6 +5186,8 @@ const wallEndpointRenderer = createWallEndpointRenderer()
 const floorVertexRenderer = createFloorVertexRenderer()
 const landformVertexRenderer = createLandformVertexRenderer()
 const regionVertexRenderer = createRegionVertexRenderer()
+const boundaryWallVertexRenderer = createRegionVertexRenderer()
+const boundaryWallLoopRenderer = createBoundaryWallLoopRenderer()
 const guideRouteVertexRenderer = createGuideRouteVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
 const displayBoardCornerHandleRenderer = createDisplayBoardCornerHandleRenderer()
@@ -6004,6 +6075,78 @@ function ensureRegionVertexHandlesForSelectedNode(options?: { force?: boolean; p
   }
 }
 
+function cloneBoundaryWallLocalPoints(node: SceneNode | null | undefined): Array<[number, number]> {
+  if (!node) {
+    return []
+  }
+  const component = node.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<BoundaryWallComponentProps> | undefined
+  if (!component || component.enabled === false) {
+    return []
+  }
+  const props = clampBoundaryWallComponentProps(component.props as BoundaryWallComponentProps)
+  if (props.mode !== 'custom') {
+    return []
+  }
+  const firstLoop = Array.isArray(props.customLoops) ? props.customLoops[0] : null
+  const points = Array.isArray(firstLoop?.points) ? firstLoop.points : []
+  return points
+    .map((entry) => [Number(entry?.x), Number(entry?.z)] as [number, number])
+    .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+}
+
+function ensureBoundaryWallLoopForSelectedNode(options?: {
+  force?: boolean
+  previewPoints?: Array<[number, number]>
+  nodeId?: string | null
+}) {
+  const selectedId = options?.nodeId ?? getActiveBoundaryWallEditNodeId()
+  const active = activeBuildTool.value === 'boundaryWall' && !!selectedId && !boundaryWallBuildTool.getSession()
+  const points = options?.previewPoints ?? cloneBoundaryWallLocalPoints(selectedId ? resolveSceneNodeById(selectedId) : null)
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+    previewPoints: points,
+  }
+  if (options?.force) {
+    boundaryWallLoopRenderer.forceRebuild(common)
+  } else {
+    boundaryWallLoopRenderer.ensure(common)
+  }
+}
+
+function ensureBoundaryWallVertexHandlesForSelectedNode(options?: {
+  force?: boolean
+  previewPoints?: Array<[number, number]>
+  nodeId?: string | null
+}) {
+  const selectedId = options?.nodeId ?? getActiveBoundaryWallEditNodeId()
+  const active = activeBuildTool.value === 'boundaryWall' && !!selectedId && !boundaryWallBuildTool.getSession()
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveRegionDefinition: (nodeId: string) => {
+      const points = cloneBoundaryWallLocalPoints(resolveSceneNodeById(nodeId))
+      if (points.length < 3) {
+        return null
+      }
+      return {
+        type: 'Region',
+        vertices: points,
+      } as RegionDynamicMesh
+    },
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+    previewPoints: options?.previewPoints,
+  }
+  if (options?.force) {
+    boundaryWallVertexRenderer.forceRebuild(common)
+  } else {
+    boundaryWallVertexRenderer.ensure(common)
+  }
+}
+
 function ensureGuideRouteVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Vector3Like[] }) {
   const selectedId = getActiveGuideRouteEditNodeId()
   const active = activeBuildTool.value === 'guideRoute' && !!selectedId && !guideRouteBuildTool.getSession()
@@ -6036,8 +6179,22 @@ function pickRegionVertexHandleAtPointer(event: PointerEvent): RegionVertexHandl
   })
 }
 
+function pickBoundaryWallVertexHandleAtPointer(event: PointerEvent): RegionVertexHandlePickResult | null {
+  return boundaryWallVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
 function setActiveRegionVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
   regionVertexRenderer.setActiveHandle(active as any)
+}
+
+function setActiveBoundaryWallVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
+  boundaryWallVertexRenderer.setActiveHandle(active as any)
 }
 
 function pickGuideRouteVertexHandleAtPointer(event: PointerEvent): GuideRouteVertexHandlePickResult | null {
@@ -6099,6 +6256,15 @@ function cloneRegionLocalPoints(node: SceneNode | null | undefined): Array<[numb
   return vertices
     .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
     .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+}
+
+function buildBoundaryWallPreviewFromLocalPoints(nodeId: string, points: Array<[number, number]>): boolean {
+  if (points.length < 3) {
+    ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId, previewPoints: [] })
+    return false
+  }
+  ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId, previewPoints: points })
+  return true
 }
 
 function cloneGuideRouteLocalPoints(node: SceneNode | null | undefined): Vector3Like[] {
@@ -6534,6 +6700,72 @@ function tryBeginRegionVertexDrag(event: PointerEvent): boolean {
   return true
 }
 
+function tryBeginBoundaryWallVertexDrag(event: PointerEvent): boolean {
+  if (boundaryWallContourVertexDragState) {
+    return false
+  }
+  if (!isSelectedBoundaryWallEditMode() || boundaryWallBuildTool.getSession()) {
+    return false
+  }
+  const selectedId = getActiveBoundaryWallEditNodeId()
+  if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
+    return false
+  }
+  const node = resolveSceneNodeById(selectedId)
+  const runtime = objectMap.get(selectedId) ?? null
+  if (!node || !runtime) {
+    return false
+  }
+
+  ensureBoundaryWallVertexHandlesForSelectedNode()
+  const hit = pickBoundaryWallVertexHandleAtPointer(event)
+  if (!hit || hit.nodeId !== selectedId) {
+    return false
+  }
+
+  const basePoints = cloneBoundaryWallLocalPoints(node)
+  const startPoint = basePoints[hit.vertexIndex]
+  if (!startPoint) {
+    return false
+  }
+
+  const startPointWorld = runtime.localToWorld(new THREE.Vector3(startPoint[0], 0, startPoint[1]))
+  const worldQuaternion = runtime.getWorldQuaternion(new THREE.Quaternion())
+  const rawAxisWorld = hit.gizmoKind === 'axis' && hit.gizmoAxis
+    ? hit.gizmoAxis.clone().applyQuaternion(worldQuaternion)
+    : null
+  const axisWorld = rawAxisWorld
+    ? new THREE.Vector3(rawAxisWorld.x, 0, rawAxisWorld.z).normalize()
+    : null
+  const dragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? 'axis' : 'free'
+
+  boundaryWallContourVertexDragState = {
+    pointerId: event.pointerId,
+    nodeId: selectedId,
+    vertexIndex: hit.vertexIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    dragMode,
+    axisWorld: dragMode === 'axis' ? axisWorld : null,
+    dragPlane: createEndpointDragPlane({
+      mode: dragMode,
+      axisWorld: dragMode === 'axis' ? axisWorld : null,
+      startPointWorld,
+      freePlaneNormal: new THREE.Vector3(0, 1, 0),
+    }),
+    startPointWorld: startPointWorld.clone(),
+    startHitWorld: null,
+    runtimeObject: runtime,
+    basePoints,
+    workingPoints: basePoints.map(([x, z]) => [x, z] as [number, number]),
+  }
+
+  setActiveBoundaryWallVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
+  pointerInteraction.capture(event.pointerId)
+  return true
+}
+
 const FLOOR_EDGE_PICK_DISTANCE = 0.3
 
 type FloorEdgeHit = {
@@ -6904,6 +7136,9 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
       break
     case 'landform':
       handled = landformBuildTool.cancel()
+      break
+    case 'boundaryWall':
+      handled = boundaryWallBuildTool.cancel()
       break
     case 'region':
       handled = regionBuildTool.cancel()
@@ -7425,6 +7660,25 @@ const regionBuildTool = createRegionBuildTool({
   hideStartIndicator: hideBuildStartIndicator,
   holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+})
+
+const boundaryWallBuildTool = createBoundaryWallBuildTool({
+  activeBuildTool,
+  rootGroup,
+  raycastGroundPoint,
+  resolveBuildPlacementPoint,
+  snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
+  clearVertexSnap: clearBuildToolVertexSnap,
+  isAltOverrideActive: () => isAltOverrideActive,
+  showStartIndicator: showBuildStartIndicator,
+  hideStartIndicator: hideBuildStartIndicator,
+  clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+  resolveTargetNodeId: () => resolveBoundaryWallBuildTargetNodeId(),
+  commitLoop: (targetNodeId, points) => commitBoundaryWallLoop(targetNodeId, points),
+  onCommitted: () => {
+    handleBuildToolChange(null)
+  },
 })
 
 const guideRouteBuildTool = createGuideRouteBuildTool({
@@ -13692,9 +13946,12 @@ function animate() {
   floorBuildTool.flushPreviewIfNeeded(scene)
   landformBuildTool.flushPreviewIfNeeded(scene)
   regionBuildTool.flushPreviewIfNeeded(scene)
+  boundaryWallBuildTool.flushPreviewIfNeeded(scene)
   guideRouteBuildTool.flushPreviewIfNeeded(scene)
   waterBuildTool.flushPreviewIfNeeded(scene)
   updatePendingBuildStartIndicator()
+  ensureBoundaryWallLoopForSelectedNode()
+  ensureBoundaryWallVertexHandlesForSelectedNode()
   ensureDisplayBoardCornerHandlesForSelectedNode()
   // Endpoint gizmos: enlarge hit area to make dragging easier in edit modes.
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 46 })
@@ -13707,6 +13964,7 @@ function animate() {
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   landformVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   regionVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
+  boundaryWallVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   guideRouteVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   floorCircleHandleRenderer.updateScreenSize({
     camera,
@@ -13945,6 +14203,7 @@ function disposeScene() {
   floorBuildTool.dispose()
   landformBuildTool.dispose()
   regionBuildTool.dispose()
+  boundaryWallBuildTool.dispose()
   guideRouteBuildTool.dispose()
   buildStartIndicatorRenderer?.dispose()
   buildStartIndicatorRenderer = null
@@ -14963,6 +15222,10 @@ function cancelBuildSessionForTool(tool: BuildTool): void {
     landformBuildTool.cancel()
     return
   }
+  if (tool === 'boundaryWall' && boundaryWallBuildTool.getSession()) {
+    boundaryWallBuildTool.cancel()
+    return
+  }
   if (tool === 'region' && regionBuildTool.getSession()) {
     regionBuildTool.cancel()
     return
@@ -14974,6 +15237,75 @@ function cancelBuildSessionForTool(tool: BuildTool): void {
   if (tool === 'water' && waterBuildTool.getSession()) {
     waterBuildTool.cancel()
   }
+}
+
+function resolveBoundaryWallBuildTargetNodeId(): string | null {
+  const nodeId = getPrimarySelectedNodeId()
+  if (!nodeId) {
+    return null
+  }
+  return resolveEditableBoundaryWallNode(nodeId)?.id ?? null
+}
+
+function updateBoundaryWallCustomLoopPoints(targetNodeId: string, points: Array<[number, number]>): boolean {
+  const node = resolveSceneNodeById(targetNodeId)
+  if (!node) {
+    return false
+  }
+
+  const component = node.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<BoundaryWallComponentProps> | undefined
+  if (!component || component.enabled === false) {
+    return false
+  }
+
+  const props = clampBoundaryWallComponentProps(component.props as BoundaryWallComponentProps)
+  if (props.mode !== 'custom') {
+    return false
+  }
+
+  const remainingLoops = Array.isArray(props.customLoops)
+    ? props.customLoops.slice(1).map((loop) => ({
+      closed: loop.closed !== false,
+      points: Array.isArray(loop.points)
+        ? loop.points.map((entry) => ({ x: entry.x, z: entry.z }))
+        : [],
+    }))
+    : []
+
+  return sceneStore.updateNodeComponentProps(targetNodeId, component.id, {
+    customLoops: [{
+      closed: true,
+      points: points.map(([x, z]) => ({ x, z })),
+    }, ...remainingLoops],
+  })
+}
+
+function commitBoundaryWallLoop(targetNodeId: string, points: THREE.Vector3[]): boolean {
+  const node = resolveSceneNodeById(targetNodeId)
+  const runtimeObject = objectMap.get(targetNodeId) ?? null
+  if (!node || !runtimeObject) {
+    return false
+  }
+
+  const component = node.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<BoundaryWallComponentProps> | undefined
+  if (!component || component.enabled === false) {
+    return false
+  }
+
+  const props = clampBoundaryWallComponentProps(component.props as BoundaryWallComponentProps)
+  if (props.mode !== 'custom') {
+    return false
+  }
+
+  runtimeObject.updateMatrixWorld(true)
+  const localPoint = new THREE.Vector3()
+  const localPoints = points.map((point) => {
+      localPoint.copy(point)
+      runtimeObject.worldToLocal(localPoint)
+      return [localPoint.x, localPoint.z] as [number, number]
+    })
+
+  return updateBoundaryWallCustomLoopPoints(targetNodeId, localPoints)
 }
 
 function resolveBuildToolForNode(node: any): BuildTool | null {
@@ -15426,10 +15758,40 @@ async function handlePointerDown(event: PointerEvent) {
   const floorEditModeLocked = activeBuildTool.value === 'floor' && isSelectedFloorEditMode()
   const landformEditModeLocked = activeBuildTool.value === 'landform' && isSelectedLandformEditMode()
   const regionEditModeLocked = activeBuildTool.value === 'region' && isSelectedRegionEditMode()
+  const boundaryWallEditModeLocked = activeBuildTool.value === 'boundaryWall' && isSelectedBoundaryWallEditMode()
   const guideRouteEditModeLocked = activeBuildTool.value === 'guideRoute' && !!getActiveGuideRouteEditNodeId()
   const roadEditModeLocked = activeBuildTool.value === 'road' && isSelectedRoadEditMode()
   const waterEditModeLocked = activeBuildTool.value === 'water' && isSelectedWaterEditMode()
   const displayBoardEditModeLocked = activeBuildTool.value === 'displayBoard' && isSelectedDisplayBoardEditMode()
+
+  if (activeBuildTool.value === 'boundaryWall') {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
+      if (boundaryWallEditModeLocked) {
+        ensureBoundaryWallVertexHandlesForSelectedNode()
+      }
+      if (tryBeginBoundaryWallVertexDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+      if (!boundaryWallEditModeLocked) {
+        boundaryWallBuildTool.handlePointerDown(event)
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    if (event.button === 2) {
+      if (!boundaryWallEditModeLocked) {
+        boundaryWallBuildTool.handlePointerDown(event)
+      }
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
+  }
 
   if (activeBuildTool.value === 'region') {
     if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
@@ -15839,6 +16201,7 @@ function handlePointerMove(event: PointerEvent) {
     !roadVertexDragState &&
     !floorVertexDragState &&
     !regionContourVertexDragState &&
+    !boundaryWallContourVertexDragState &&
     !guideRouteVertexDragState &&
     !landformContourVertexDragState &&
     !displayBoardCornerDragState &&
@@ -15862,6 +16225,7 @@ function handlePointerMove(event: PointerEvent) {
     ensureFloorVertexHandlesForSelectedNode()
     ensureLandformVertexHandlesForSelectedNode()
     ensureRegionVertexHandlesForSelectedNode()
+    ensureBoundaryWallVertexHandlesForSelectedNode()
     ensureGuideRouteVertexHandlesForSelectedNode()
     ensureFloorCircleHandlesForSelectedNode()
     ensureDisplayBoardCornerHandlesForSelectedNode()
@@ -15873,6 +16237,7 @@ function handlePointerMove(event: PointerEvent) {
     floorVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     landformVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     regionVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    boundaryWallVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     guideRouteVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     displayBoardCornerHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
@@ -15884,6 +16249,7 @@ function handlePointerMove(event: PointerEvent) {
     floorVertexRenderer.clearHover()
     landformVertexRenderer.clearHover()
     regionVertexRenderer.clearHover()
+    boundaryWallVertexRenderer.clearHover()
     guideRouteVertexRenderer.clearHover()
     floorCircleHandleRenderer.clearHover()
     displayBoardCornerHandleRenderer.clearHover()
@@ -16042,6 +16408,50 @@ function handlePointerMove(event: PointerEvent) {
     state.workingPoints = nextPoints
     if (buildRegionPreviewFromLocalPoints(state.nodeId, nextPoints)) {
       ensureRegionVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    }
+    return
+  }
+
+  if (boundaryWallContourVertexDragState && event.pointerId === boundaryWallContourVertexDragState.pointerId) {
+    const state = boundaryWallContourVertexDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      return
+    }
+    state.moved = true
+
+    if ((event.buttons & 1) === 0) {
+      return
+    }
+
+    if (!state.startHitWorld) {
+      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+        return
+      }
+      state.startHitWorld = waterDragIntersectionHelper.clone()
+    }
+    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      return
+    }
+
+    let world = waterDragIntersectionHelper.clone()
+    if (state.dragMode === 'axis' && state.axisWorld) {
+      const axis = state.axisWorld.clone().normalize()
+      const delta = world.clone().sub(state.startHitWorld)
+      const t = axis.dot(delta)
+      world = state.startHitWorld.clone().add(axis.multiplyScalar(t))
+    }
+
+    const local = state.runtimeObject.worldToLocal(world)
+    const nextPoints = state.workingPoints.map(([x, z]) => [x, z] as [number, number])
+    if (!nextPoints[state.vertexIndex]) {
+      return
+    }
+    nextPoints[state.vertexIndex] = [local.x, local.z]
+    state.workingPoints = nextPoints
+    if (buildBoundaryWallPreviewFromLocalPoints(state.nodeId, nextPoints)) {
+      ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: nextPoints })
     }
     return
   }
@@ -16342,6 +16752,7 @@ function handlePointerMove(event: PointerEvent) {
   const buildTools = handlePointerMoveBuildTools(event, {
     displayBoardBuildToolHandlePointerMove: (e) => displayBoardBuildTool.handlePointerMove(e),
     billboardBuildToolHandlePointerMove: (e) => billboardBuildTool.handlePointerMove(e),
+    boundaryWallBuildToolHandlePointerMove: (e) => boundaryWallBuildTool.handlePointerMove(e),
     landformBuildToolHandlePointerMove: (e) => landformBuildTool.handlePointerMove(e),
     regionBuildToolHandlePointerMove: (e) => regionBuildTool.handlePointerMove(e),
     guideRouteBuildToolHandlePointerMove: (e) => guideRouteBuildTool.handlePointerMove(e),
@@ -16865,6 +17276,7 @@ async function handlePointerUp(event: PointerEvent) {
         handleGroundEditorPointerUp,
         displayBoardBuildToolHandlePointerUp: (e) => displayBoardBuildTool.handlePointerUp(e),
         billboardBuildToolHandlePointerUp: (e) => billboardBuildTool.handlePointerUp(e),
+        boundaryWallBuildToolHandlePointerUp: (e) => boundaryWallBuildTool.handlePointerUp(e),
         landformBuildToolHandlePointerUp: (e) => landformBuildTool.handlePointerUp(e),
         regionBuildToolHandlePointerUp: (e) => regionBuildTool.handlePointerUp(e),
         guideRouteBuildToolHandlePointerUp: (e) => guideRouteBuildTool.handlePointerUp(e),
@@ -17690,6 +18102,15 @@ function handlePointerCancel(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'boundaryWall') {
+    if (boundaryWallBuildTool.handlePointerCancel(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
   if (activeBuildTool.value === 'guideRoute') {
     if (guideRouteBuildTool.handlePointerCancel(event)) {
       event.preventDefault()
@@ -17940,6 +18361,11 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'boundaryWall':
+      boundaryWallBuildTool.cancel()
+      handleBuildToolChange(null)
+      handled = true
+      break
     case 'region':
       regionBuildTool.cancel()
       handleBuildToolChange(null)
@@ -18003,6 +18429,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'region' && tool !== 'region') {
     regionBuildTool.cancel()
+  }
+  if (activeBuildTool.value === 'boundaryWall' && tool !== 'boundaryWall') {
+    boundaryWallBuildTool.cancel()
   }
   if (activeBuildTool.value === 'guideRoute' && tool !== 'guideRoute') {
     guideRouteBuildTool.cancel()

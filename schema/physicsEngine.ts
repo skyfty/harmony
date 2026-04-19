@@ -16,7 +16,6 @@ import type {
 } from './components'
 import {
 	BOUNDARY_WALL_COMPONENT_TYPE,
-	WATER_COMPONENT_TYPE,
 	clampBoundaryWallComponentProps,
 	WALL_COMPONENT_TYPE,
 	clampWallProps,

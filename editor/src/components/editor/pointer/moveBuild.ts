@@ -5,6 +5,7 @@ export function handlePointerMoveBuildTools(
   ctx: {
     displayBoardBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     billboardBuildToolHandlePointerMove: (event: PointerEvent) => boolean
+    boundaryWallBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     landformBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     regionBuildToolHandlePointerMove: (event: PointerEvent) => boolean
     guideRouteBuildToolHandlePointerMove: (event: PointerEvent) => boolean
@@ -19,6 +20,10 @@ export function handlePointerMoveBuildTools(
   }
 
   if (ctx.billboardBuildToolHandlePointerMove(event)) {
+    return { handled: true }
+  }
+
+  if (ctx.boundaryWallBuildToolHandlePointerMove(event)) {
     return { handled: true }
   }
 

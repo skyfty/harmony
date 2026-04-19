@@ -37,7 +37,7 @@ const depth = computed({
     id="new-scene-name"
     v-model="name"
     label="Scene Name"
-    variant="outlined"
+    variant="underlined"
     density="comfortable"
     autofocus
   />
@@ -47,7 +47,7 @@ const depth = computed({
       <v-text-field
         v-model.number="width"
         label="Ground Width (m)"
-        variant="outlined"
+        variant="underlined"
         density="comfortable"
         type="number"
         min="1"
@@ -59,7 +59,7 @@ const depth = computed({
       <v-text-field
         v-model.number="depth"
         label="Ground Depth (m)"
-        variant="outlined"
+        variant="underlined"
         density="comfortable"
         type="number"
         min="1"

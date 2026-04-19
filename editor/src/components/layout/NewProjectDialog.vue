@@ -52,7 +52,8 @@ function handleConfirm() {
     <v-card>
       <v-card-title class="text-h6">New Project</v-card-title>
       <v-card-text>
-        <v-text-field v-model="name" label="Project Name" variant="outlined" density="comfortable" clearable />
+        <v-text-field v-model="name" label="Project Name"                          variant="underlined"
+ density="comfortable" clearable />
  
         <SceneCreatorPane
           v-model:sceneName="defaultSceneName"
