@@ -690,6 +690,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
     previewKey: string
   }): void {
+    params.container.updateMatrixWorld(true)
     const previewNodeId = buildPreviewNodeId(params.previewKey)
     const userData = params.container.userData ?? (params.container.userData = {})
     const previousPreviewNodeId = typeof userData.wallPreviewNodeId === 'string'
@@ -708,8 +709,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       name: 'WallPreview',
       nodeType: 'Mesh',
       position: { x: params.container.position.x, y: params.container.position.y, z: params.container.position.z },
-      rotation: { x: 0, y: 0, z: 0 },
-      scale: { x: 1, y: 1, z: 1 },
+      rotation: { x: params.container.rotation.x, y: params.container.rotation.y, z: params.container.rotation.z },
+      scale: { x: params.container.scale.x, y: params.container.scale.y, z: params.container.scale.z },
       dynamicMesh: params.definition,
       components: normalizedProps
         ? {

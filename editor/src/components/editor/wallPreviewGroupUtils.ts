@@ -109,6 +109,7 @@ export function buildWallPreviewDynamicMeshFromWorldSegments(
   segments: WallWorldSegment[],
   dimensions: { height: number; width: number; thickness: number },
   centerOverride?: THREE.Vector3 | null,
+  containerObject?: THREE.Object3D | null,
 ): { center: THREE.Vector3; definition: WallDynamicMesh } | null {
   if (!segments.length) {
     return null
@@ -132,6 +133,21 @@ export function buildWallPreviewDynamicMeshFromWorldSegments(
     ? centerOverride.clone()
     : new THREE.Vector3((min.x + max.x) * 0.5, min.y + dimensions.height * 0.5, (min.z + max.z) * 0.5)
 
+  if (containerObject) {
+    containerObject.updateMatrixWorld(true)
+  }
+
+  const inverseMatrixWorld = containerObject
+    ? containerObject.matrixWorld.clone().invert()
+    : null
+
+  const toPreviewLocal = (pointWorld: THREE.Vector3): THREE.Vector3 => {
+    if (inverseMatrixWorld) {
+      return pointWorld.clone().applyMatrix4(inverseMatrixWorld)
+    }
+    return pointWorld.clone().sub(center)
+  }
+
   // Convert world segments to local-space WallChain polylines.
   // Split at discontinuities (gap between seg[i].end and seg[i+1].start).
   const EPS_SQ = 1e-8
@@ -141,16 +157,18 @@ export function buildWallPreviewDynamicMeshFromWorldSegments(
   for (let i = 0; i < segments.length; i += 1) {
     const seg = segments[i]!
     if (currentPoints.length === 0) {
+      const localStart = toPreviewLocal(seg.start)
       currentPoints.push({
-        x: seg.start.x - center.x,
-        y: seg.start.y - center.y,
-        z: seg.start.z - center.z,
+        x: localStart.x,
+        y: localStart.y,
+        z: localStart.z,
       })
     }
+    const localEnd = toPreviewLocal(seg.end)
     currentPoints.push({
-      x: seg.end.x - center.x,
-      y: seg.end.y - center.y,
-      z: seg.end.z - center.z,
+      x: localEnd.x,
+      y: localEnd.y,
+      z: localEnd.z,
     })
 
     const next = segments[i + 1]

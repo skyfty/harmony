@@ -901,6 +901,7 @@ export function handlePointerMoveDrag(
         mergedForPreview,
         state.dimensions,
         resolveWallPreviewAnchorWorld(state),
+        state.containerObject,
       )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
@@ -1091,6 +1092,7 @@ export function handlePointerMoveDrag(
         mergedForPreview,
         state.dimensions,
         resolveWallPreviewAnchorWorld(state),
+        state.containerObject,
       )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
@@ -1207,6 +1209,7 @@ export function handlePointerMoveDrag(
         mergedForPreview,
         state.dimensions,
         resolveWallPreviewAnchorWorld(state),
+        state.containerObject,
       )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
@@ -1305,6 +1308,7 @@ export function handlePointerMoveDrag(
         mergedForPreview,
         state.dimensions,
         resolveWallPreviewAnchorWorld(state),
+        state.containerObject,
       )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({
@@ -1485,6 +1489,7 @@ export function handlePointerMoveDrag(
         mergedForPreview,
         state.dimensions,
         resolveWallPreviewAnchorWorld(state),
+        state.containerObject,
       )
       if (build) {
         state.previewGroup = ctx.syncWallPreviewGroup({

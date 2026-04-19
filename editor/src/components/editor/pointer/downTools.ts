@@ -399,16 +399,12 @@ export function handlePointerDownTools(
         const runtime = ctx.objectMap.get(handleHit.nodeId) ?? null
 
         if (node?.dynamicMesh?.type === 'Wall' && runtime) {
-          const origin = new THREE.Vector3(
-            Number(node.position?.x) || 0,
-            Number(node.position?.y) || 0,
-            Number(node.position?.z) || 0,
-          )
           const segments = compileWallSegmentsFromDefinition(node.dynamicMesh as WallDynamicMesh)
+          runtime.updateMatrixWorld(true)
 
           const baseSegmentsWorld = segments.map((seg) => ({
-            start: new THREE.Vector3(seg.start.x + origin.x, seg.start.y + origin.y, seg.start.z + origin.z),
-            end: new THREE.Vector3(seg.end.x + origin.x, seg.end.y + origin.y, seg.end.z + origin.z),
+            start: runtime.localToWorld(new THREE.Vector3(seg.start.x, seg.start.y, seg.start.z)),
+            end: runtime.localToWorld(new THREE.Vector3(seg.end.x, seg.end.y, seg.end.z)),
           }))
 
           const workingSegmentsWorld = baseSegmentsWorld.map((s) => ({ start: s.start.clone(), end: s.end.clone() }))

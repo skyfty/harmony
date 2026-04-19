@@ -1852,7 +1852,11 @@ function cloneGroundSettings(settings: Partial<GroundSettings> | null | undefine
   return groundUtils.cloneGroundSettings(settings as any) as GroundSettings
 }
 
-import { buildWallDynamicMeshFromWorldSegments, applyWallComponentPropsToNode as applyWallComponentPropsToNodeImported } from './wallUtils'
+import {
+  buildWallDynamicMeshFromWorldSegments,
+  buildWallDynamicMeshForExistingNodeTransform,
+  applyWallComponentPropsToNode as applyWallComponentPropsToNodeImported,
+} from './wallUtils'
 
 // Local wrapper to inject runtime helpers into the moved wall helper.
 function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProps): boolean {
@@ -15541,23 +15545,32 @@ export const useSceneStore = defineStore('scene', {
         },
       }))
 
-      const build = buildWallDynamicMeshFromWorldSegments(normalizedSegments, payload.dimensions)
-      if (!build) {
+      const nodeWorldMatrix = computeWorldMatrixForNode(this.nodes, nodeId)
+      if (!nodeWorldMatrix) {
+        return false
+      }
+      const inverseNodeWorldMatrix = nodeWorldMatrix.clone().invert()
+
+      const nextDefinition = buildWallDynamicMeshForExistingNodeTransform(
+        normalizedSegments,
+        inverseNodeWorldMatrix,
+        payload.dimensions,
+      )
+      if (!nextDefinition) {
         return false
       }
 
+      const summarize = (value: number): number => Math.round((Number(value) || 0) * 1000) / 1000
+
       if (Math.abs(baseOffsetX) > 1e-6 || Math.abs(baseOffsetY) > 1e-6 || Math.abs(baseOffsetZ) > 1e-6) {
-        build.definition = {
-          ...build.definition,
-          chains: (build.definition.chains ?? []).map((chain) => ({
+        nextDefinition.chains = (nextDefinition.chains ?? []).map((chain) => ({
             ...chain,
             points: (chain.points ?? []).map((point) => ({
               x: Number(point?.x ?? 0) - baseOffsetX,
               y: Number(point?.y ?? 0) - baseOffsetY,
               z: Number(point?.z ?? 0) - baseOffsetZ,
             })),
-          })),
-        }
+          }))
       }
 
       const currentBodyMaterialConfigId = typeof (node.dynamicMesh as any)?.bodyMaterialConfigId === 'string'
@@ -15565,19 +15578,18 @@ export const useSceneStore = defineStore('scene', {
         ? (node.dynamicMesh as any).bodyMaterialConfigId.trim()
         : null
       if (currentBodyMaterialConfigId) {
-        build.definition.bodyMaterialConfigId = currentBodyMaterialConfigId
+        nextDefinition.bodyMaterialConfigId = currentBodyMaterialConfigId
       }
 
       const parentMap = buildParentMap(this.nodes)
       const parentId = parentMap.get(nodeId) ?? null
 
       this.captureHistorySnapshot()
-      node.position = createVector(build.center.x, build.center.y, build.center.z)
-      node.dynamicMesh = build.definition
+  node.dynamicMesh = nextDefinition
 
       // Keep wall component dimensions in sync with the wall mesh so inspector UI and runtime component state
       // always reflect geometry edits (e.g. gizmo height drag).
-      const meshProps = resolveWallComponentPropsFromMesh(build.definition)
+      const meshProps = resolveWallComponentPropsFromMesh(nextDefinition)
       const previousWallComponent = wallComponent
       const previousProps = previousWallComponent?.props as WallComponentProps | undefined
       const nextProps = clampWallProps({

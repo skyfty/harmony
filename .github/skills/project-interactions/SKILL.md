@@ -25,6 +25,12 @@ Use this skill when adding or changing interaction-driven behavior in the Harmon
 4. Update related previews, drag and drop behavior, permissions, and error handling together.
 5. Verify with the smallest relevant build or test command.
 
+## Transform Preservation Notes
+- When an edit interaction is committed for an existing scene node, preserve the node's current `position`, `rotation`, and `scale` unless the product requirement explicitly says to recenter or reorient it.
+- Convert edited geometry between world space and the node's true local space using the runtime object's matrix, not by reapplying only `node.position`.
+- If one editable node type exposes a drag/commit bug, check the other node editors that share the same interaction pattern (for example wall, floor, landform, road, region, and guide-route editing) before finalizing the fix.
+- During debugging, verify both the drag preview and the commit path; a preview that looks correct can still commit with a different transform if the store rebuild path uses a different coordinate conversion.
+
 ## Common Commands
 - `cd editor && pnpm run build`
 - `cd admin && pnpm run build`

@@ -1823,8 +1823,8 @@ const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraContr
 const viewportSelectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const cameraPointerHintText = computed(() => (
   cameraControlMode.value === 'map'
-    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Shift+右拖 指定轨道中心 · Shift+左键 快速对焦'
-    : '中键旋转 · 右键平移 · 滚轮缩放 · Shift+中拖 指定轨道中心 · Shift+左键 快速对焦'
+    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Shift+右拖 指定轨道中心 · Alt+左键 快速对焦'
+    : '中键旋转 · 右键平移 · 滚轮缩放 · Shift+中拖 指定轨道中心 · Alt+左键 快速对焦'
 ))
 const cameraStatusZoomRatioText = computed(() => {
   const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
@@ -2708,13 +2708,22 @@ function syncWallPreviewGroupForEditor(options: {
     | SceneNodeComponentState<WallComponentProps>
     | undefined
   const wallProps = options.wallProps ?? wallComponent?.props ?? null
+  const sourceObject = nodeId ? objectMap.get(nodeId) ?? null : null
 
   const group = options.previewGroup ?? new THREE.Group()
-  group.position.copy(options.centerWorld)
+  if (sourceObject) {
+    sourceObject.updateMatrixWorld(true)
+    sourceObject.matrixWorld.decompose(group.position, group.quaternion, group.scale)
+  } else {
+    group.position.copy(options.centerWorld)
+    group.quaternion.identity()
+    group.scale.set(1, 1, 1)
+  }
   if (!options.previewGroup) {
     group.name = 'WallPreview'
     group.userData.isWallPreview = true
   }
+  group.updateMatrixWorld(true)
 
   wallRenderer.syncWallPreviewContainer({
     container: group,
@@ -12919,7 +12928,7 @@ function toggleViewportCameraControlMode() {
   sceneStore.setCameraControlMode(nextMode)
 }
 
-const showCameraHintsOpen = ref(false)
+const showCameraHintsOpen = ref(true)
 function toggleCameraHints() {
   showCameraHintsOpen.value = !showCameraHintsOpen.value
 }
@@ -13065,11 +13074,11 @@ function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
   mapControls.update()
 }
 
-function maybeApplyShiftLeftClickFocus(event: PointerEvent): boolean {
+function maybeApplyAltLeftClickFocus(event: PointerEvent): boolean {
   if (!camera || !mapControls || !mapControls.enabled) {
     return false
   }
-  if (!event.shiftKey || event.button !== 0 || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
+  if (!event.altKey || event.button !== 0 || isApplyingCameraState) {
     return false
   }
   const mode = sceneStore.viewportSettings.cameraControlMode
@@ -15563,6 +15572,13 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+    if (maybeApplyAltLeftClickFocus(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
   const guard = handlePointerDownGuards(event, {
     hasCanvas: !!canvasRef.value,
     hasCamera: !!camera,
@@ -15571,13 +15587,6 @@ async function handlePointerDown(event: PointerEvent) {
   })
   if (guard) {
     applyPointerDownResult(guard)
-    return
-  }
-
-  if (maybeApplyShiftLeftClickFocus(event)) {
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
     return
   }
   maybeBeginShiftOrbitPivotSession(event)
@@ -22649,19 +22658,19 @@ defineExpose<SceneViewportHandle>({
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">工具</span>
-              <span class="camera-status-hud__hint-text">Q 选择 · W 移动 · E 旋转 · R 缩放</span>
+              <span class="camera-status-hud__hint-text">Q 选中 · W 移动 · E 旋转 · R 缩放</span>
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">视角</span>
-              <span class="camera-status-hud__hint-text">方向键 平移 · F 聚焦选中 · Shift+F 聚焦可见 · Alt+3 顶视图 · Alt+1/2/4/5/6 方向视角</span>
+              <span class="camera-status-hud__hint-text">方向键平移 · F 聚焦 · Shift+F 聚焦可见 · Alt+1..6 视角 · Alt+3 顶视图</span>
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">导航</span>
-              <span class="camera-status-hud__hint-text">按住 Alt / Space 临时导航模式 · 按住 Shift 顶点吸附并加速</span>
+              <span class="camera-status-hud__hint-text">Space 临时导航 · Alt+左键 对焦 · Shift 吸附/加速</span>
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">操作</span>
-              <span class="camera-status-hud__hint-text">Escape 取消选择/操作 · Delete 删除选中 · M 切换相机模式</span>
+              <span class="camera-status-hud__hint-text">Escape 取消 · Delete 删除 · M 切换相机模式</span>
             </div>
           </div>
         </Transition>

@@ -160,6 +160,57 @@ function worldSegmentsToWallChains(
   })
 }
 
+function transformedSegmentsToWallChains(
+  segments: WallWorldSegment[],
+  transform: (point: THREE.Vector3) => THREE.Vector3,
+  options: { forceClosedSingleChain?: boolean } = {},
+): WallChain[] {
+  if (!segments.length) return []
+
+  const eps = 1e-6
+  const same = (a: THREE.Vector3, b: THREE.Vector3) => a.distanceToSquared(b) <= eps
+
+  const groups: WallWorldSegment[][] = []
+  let current: WallWorldSegment[] = [segments[0]!]
+  for (let i = 1; i < segments.length; i += 1) {
+    const prev = current[current.length - 1]!
+    const seg = segments[i]!
+    if (same(prev.end, seg.start)) {
+      current.push(seg)
+    } else {
+      groups.push(current)
+      current = [seg]
+    }
+  }
+  groups.push(current)
+
+  const shouldForceClosedSingleChain = Boolean(options.forceClosedSingleChain && groups.length === 1)
+
+  return groups.map((grp) => {
+    const first = grp[0]!
+    const last = grp[grp.length - 1]!
+    const closed = same(last.end, first.start) || shouldForceClosedSingleChain
+
+    const points: Vector3Like[] = grp.map((seg) => {
+      const local = transform(seg.start)
+      return {
+        x: local.x,
+        y: local.y,
+        z: local.z,
+      }
+    })
+    if (!closed) {
+      const local = transform(last.end)
+      points.push({
+        x: local.x,
+        y: local.y,
+        z: local.z,
+      })
+    }
+    return { points, closed } satisfies WallChain
+  })
+}
+
 function computeWallSegmentBounds(segments: WallWorldSegment[]): { min: THREE.Vector3; max: THREE.Vector3 } | null {
   const min = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
   const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
@@ -241,6 +292,33 @@ export function buildWallDynamicMeshFromWorldSegments(
   }
 
   return { center, definition }
+}
+
+export function buildWallDynamicMeshForExistingNodeTransform(
+  segments: Array<{ start: Vector3Like; end: Vector3Like }>,
+  inverseWorldMatrix: THREE.Matrix4,
+  dimensions: { height?: number; width?: number; thickness?: number } = {},
+  options: { forceClosedSingleChain?: boolean } = {},
+): WallDynamicMesh | null {
+  const worldSegments = mergeWallWorldSegmentChainsByEndpoint(buildWallWorldSegments(segments))
+  if (!worldSegments.length) {
+    return null
+  }
+
+  const normalizedDims = normalizeWallDimensions(dimensions)
+  const chains = transformedSegmentsToWallChains(
+    worldSegments,
+    (point) => point.clone().applyMatrix4(inverseWorldMatrix),
+    options,
+  )
+
+  return {
+    type: 'Wall',
+    chains,
+    openings: [],
+    bodyMaterialConfigId: null,
+    dimensions: normalizedDims,
+  }
 }
 
 export function applyWallComponentPropsToNode(
