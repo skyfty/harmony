@@ -10,6 +10,11 @@ import type {
 } from '@schema'
 
 import {
+  BOUNDARY_WALL_COMPONENT_TYPE,
+  canAttachBoundaryWallComponent,
+  clampBoundaryWallComponentProps,
+  cloneBoundaryWallComponentProps,
+  createBoundaryWallComponentState,
   WALL_COMPONENT_TYPE,
   resolveWallComponentPropsFromMesh,
   cloneWallComponentProps,
@@ -192,6 +197,25 @@ export function normalizeNodeComponents(
       props: nextProps,
       metadata: clonedMetadata,
     }
+
+    const existingBoundaryWall = normalized[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
+    const shouldMigrateLegacyForbidden = !existingBoundaryWall && Boolean((existingProps as { forbidden?: boolean }).forbidden)
+    if (existingBoundaryWall) {
+      const nextBoundaryProps = cloneBoundaryWallComponentProps(
+        clampBoundaryWallComponentProps(existingBoundaryWall.props as any),
+      )
+      normalized[BOUNDARY_WALL_COMPONENT_TYPE] = {
+        id: existingBoundaryWall.id && existingBoundaryWall.id.trim().length ? existingBoundaryWall.id : generateUuid(),
+        type: BOUNDARY_WALL_COMPONENT_TYPE,
+        enabled: existingBoundaryWall.enabled ?? true,
+        props: nextBoundaryProps,
+        metadata: existingBoundaryWall.metadata,
+      }
+    } else if (shouldMigrateLegacyForbidden) {
+      normalized[BOUNDARY_WALL_COMPONENT_TYPE] = {
+        ...createBoundaryWallComponentState(node, undefined, { id: generateUuid(), enabled: true }),
+      }
+    }
   }
 
   if (node.dynamicMesh?.type === 'Floor') {
@@ -355,6 +379,20 @@ export function normalizeNodeComponents(
       enabled: existingPlanningImages.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
+    }
+  }
+
+  const existingBoundaryWall = normalized[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
+  if (existingBoundaryWall && canAttachBoundaryWallComponent(node)) {
+    const nextProps = cloneBoundaryWallComponentProps(
+      clampBoundaryWallComponentProps(existingBoundaryWall.props as any),
+    )
+    normalized[BOUNDARY_WALL_COMPONENT_TYPE] = {
+      id: existingBoundaryWall.id && existingBoundaryWall.id.trim().length ? existingBoundaryWall.id : generateUuid(),
+      type: BOUNDARY_WALL_COMPONENT_TYPE,
+      enabled: existingBoundaryWall.enabled ?? true,
+      props: nextProps,
+      metadata: existingBoundaryWall.metadata,
     }
   }
 

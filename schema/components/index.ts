@@ -24,6 +24,7 @@ import './definitions/planningImagesComponent'
 import './definitions/nominateComponent'
 import './definitions/steerComponent'
 import './definitions/signboardComponent'
+import './definitions/boundaryWallComponent'
 
 export {
 	componentManager,
@@ -59,3 +60,4 @@ export * from './definitions/planningImagesComponent'
 export * from './definitions/nominateComponent'
 export * from './definitions/steerComponent'
 export * from './definitions/signboardComponent'
+export * from './definitions/boundaryWallComponent'

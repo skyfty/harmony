@@ -189,6 +189,7 @@ import {
 	VEHICLE_COMPONENT_TYPE,
 	AUTO_TOUR_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
+	boundaryWallComponentDefinition,
 	LOD_COMPONENT_TYPE,
 	LOD_FACE_CAMERA_FORWARD_AXIS_X,
 	LOD_FACE_CAMERA_FORWARD_AXIS_Y,
@@ -999,6 +1000,7 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(floorComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)
+previewComponentManager.registerDefinition(boundaryWallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)
 previewComponentManager.registerDefinition(landformComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
@@ -10114,6 +10116,144 @@ function removeRigidbodyDebugHelper(nodeId: string): void {
 	rigidbodyDebugHelpers.delete(nodeId)
 }
 
+function buildBodyShapeDebugLines(shape: CANNON.Shape): THREE.LineSegments | null {
+	if (shape instanceof CANNON.Box) {
+		const halfExtents = (shape as any).halfExtents as { x?: unknown; y?: unknown; z?: unknown } | undefined
+		const hx = Number(halfExtents?.x)
+		const hy = Number(halfExtents?.y)
+		const hz = Number(halfExtents?.z)
+		if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
+			return null
+		}
+		return buildBoxDebugLines({ kind: 'box', halfExtents: [hx, hy, hz], offset: [0, 0, 0], applyScale: false })
+	}
+	if (shape instanceof CANNON.Sphere) {
+		const radius = Number((shape as any).radius)
+		if (!Number.isFinite(radius) || radius <= 0) {
+			return null
+		}
+		return buildSphereDebugLines({ kind: 'sphere', radius, offset: [0, 0, 0], applyScale: false })
+	}
+	if (shape instanceof CANNON.ConvexPolyhedron) {
+		const rawShape = shape as unknown as {
+			vertices?: Array<{ x?: unknown; y?: unknown; z?: unknown }>
+			faces?: number[][]
+		}
+		const vertices = Array.isArray(rawShape.vertices)
+			? rawShape.vertices
+				.map((vertex) => {
+					const x = Number(vertex?.x)
+					const y = Number(vertex?.y)
+					const z = Number(vertex?.z)
+					return Number.isFinite(x + y + z) ? ([x, y, z] as [number, number, number]) : null
+				})
+				.filter((vertex): vertex is [number, number, number] => Boolean(vertex))
+			: []
+		const faces = Array.isArray(rawShape.faces)
+			? rawShape.faces.map((face) => (Array.isArray(face) ? face.map((value) => Math.trunc(Number(value))) : []))
+			: []
+		if (!vertices.length || !faces.length) {
+			return null
+		}
+		return buildConvexDebugLines({
+			kind: 'convex',
+			vertices,
+			faces,
+			offset: [0, 0, 0],
+			applyScale: false,
+		})
+	}
+	return null
+}
+
+function computeBodyShapeDebugSignature(shape: CANNON.Shape, offset: CANNON.Vec3 | undefined, orientation: CANNON.Quaternion | undefined): string {
+	let base = shape.type.toString()
+	if (shape instanceof CANNON.Box) {
+		const halfExtents = (shape as any).halfExtents as { x?: unknown; y?: unknown; z?: unknown } | undefined
+		base = `box:${Number(halfExtents?.x) ?? 0}:${Number(halfExtents?.y) ?? 0}:${Number(halfExtents?.z) ?? 0}`
+	} else if (shape instanceof CANNON.Sphere) {
+		base = `sphere:${Number((shape as any).radius) ?? 0}`
+	} else if (shape instanceof CANNON.ConvexPolyhedron) {
+		const rawShape = shape as unknown as { vertices?: ArrayLike<{ x?: unknown; y?: unknown; z?: unknown }>; faces?: ArrayLike<ArrayLike<number>> }
+		const vertexCount = rawShape.vertices?.length ?? 0
+		const faceCount = rawShape.faces?.length ?? 0
+		let hash = 2166136261
+		const fnv = (value: number) => {
+			hash ^= value
+			hash = Math.imul(hash, 16777619) >>> 0
+		}
+		for (let index = 0; index < vertexCount; index += 1) {
+			const vertex = rawShape.vertices?.[index]
+			fnv(Math.round((Number(vertex?.x) || 0) * 1000) | 0)
+			fnv(Math.round((Number(vertex?.y) || 0) * 1000) | 0)
+			fnv(Math.round((Number(vertex?.z) || 0) * 1000) | 0)
+		}
+		base = `convex:${vertexCount}:${faceCount}:${hash.toString(16)}`
+	}
+	const ox = Number(offset?.x) || 0
+	const oy = Number(offset?.y) || 0
+	const oz = Number(offset?.z) || 0
+	const qx = Number(orientation?.x) || 0
+	const qy = Number(orientation?.y) || 0
+	const qz = Number(orientation?.z) || 0
+	const qw = Number(orientation?.w)
+	return `${base}@${Math.round(ox * 1000)},${Math.round(oy * 1000)},${Math.round(oz * 1000)}:${Math.round(qx * 1000)},${Math.round(qy * 1000)},${Math.round(qz * 1000)},${Math.round((Number.isFinite(qw) ? qw : 1) * 1000)}`
+}
+
+function ensureRigidbodyDebugHelperForBodyShapes(
+	nodeId: string,
+	body: CANNON.Body,
+	category: RigidbodyDebugHelperCategory,
+): void {
+	const shapes = Array.isArray(body.shapes) ? body.shapes : []
+	if (!shapes.length) {
+		removeRigidbodyDebugHelper(nodeId)
+		return
+	}
+	const signature = `body-shapes:${shapes.map((shape, index) => computeBodyShapeDebugSignature(shape, body.shapeOffsets[index], body.shapeOrientations[index])).join('|')}`
+	const existing = rigidbodyDebugHelpers.get(nodeId)
+	if (existing?.signature === signature) {
+		return
+	}
+	removeRigidbodyDebugHelper(nodeId)
+	const container = ensureRigidbodyDebugGroup()
+	if (!container) {
+		return
+	}
+	const helperGroup = new THREE.Group()
+	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
+	helperGroup.visible = false
+	helperGroup.scale.set(1, 1, 1)
+	shapes.forEach((shape, index) => {
+		const lines = buildBodyShapeDebugLines(shape)
+		if (!lines) {
+			return
+		}
+		lines.name = `RigidbodyBodyShapeDebugLines:${nodeId}:${index}`
+		lines.renderOrder = 9999
+		const segmentGroup = new THREE.Group()
+		segmentGroup.name = `RigidbodyBodyShapeDebugSegment:${nodeId}:${index}`
+		const offset = body.shapeOffsets[index]
+		const orientation = body.shapeOrientations[index]
+		segmentGroup.position.set(Number(offset?.x) || 0, Number(offset?.y) || 0, Number(offset?.z) || 0)
+		segmentGroup.quaternion.set(
+			Number(orientation?.x) || 0,
+			Number(orientation?.y) || 0,
+			Number(orientation?.z) || 0,
+			Number.isFinite(Number(orientation?.w)) ? Number(orientation?.w) : 1,
+		)
+		segmentGroup.add(lines)
+		helperGroup.add(segmentGroup)
+	})
+	container.add(helperGroup)
+	rigidbodyDebugHelpers.set(nodeId, {
+		group: helperGroup,
+		signature,
+		category,
+		scale: new THREE.Vector3(1, 1, 1),
+	})
+}
+
 function clearRigidbodyDebugHelpers(): void {
 	rigidbodyDebugHelpers.forEach((_helper, nodeId) => removeRigidbodyDebugHelper(nodeId))
 }
@@ -10345,6 +10485,16 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 			return
 		}
 		ensureGroundHeightfieldDebugHelper(nodeId, shapes, category)
+		updateRigidbodyDebugHelperTransform(nodeId)
+		return
+	}
+	if (instance && Array.isArray(instance.body.shapes) && instance.body.shapes.length > 1) {
+		const category: RigidbodyDebugHelperCategory = 'rigidbody'
+		if (!isRigidbodyDebugCategoryVisible(category)) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
+		ensureRigidbodyDebugHelperForBodyShapes(nodeId, instance.body, category)
 		updateRigidbodyDebugHelperTransform(nodeId)
 		return
 	}

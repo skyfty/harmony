@@ -578,23 +578,6 @@ function updateWallAssetHeight(
   sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: nextValue } as any)
 }
 
-function updateWallBooleanProp(
-  key: 'forbidden',
-  value: unknown,
-): void {
-  const nodeId = selectedNodeId.value
-  const component = wallComponent.value
-  if (!nodeId || !component) {
-    return
-  }
-  const nextValue = value === true
-  const currentValue = Boolean((component.props as any)?.[key])
-  if (currentValue === nextValue) {
-    return
-  }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: nextValue } as any)
-}
-
 async function applyWallHeadOrFootAsset(target: 'head' | 'foot', assetId: string | null): Promise<void> {
   const nodeId = selectedNodeId.value
   const component = wallComponent.value
@@ -1442,15 +1425,6 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 @click="handleAutoFitBodyDimensions"
               />
             </div>
-            <v-switch
-              density="compact"
-              hide-details
-              color="warning"
-              label="Forbidden Collider"
-              :disabled="!wallComponent"
-              :model-value="Boolean((wallComponent?.props as any)?.forbidden)"
-              @update:modelValue="(value) => updateWallBooleanProp('forbidden', value)"
-            />
           </div>
           <div v-if="!isAirWallNode" class="wall-render-mode-row">
             <v-select
@@ -2434,10 +2408,6 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
   display: flex;
   gap: 8px;
   align-items: center;
-}
-.wall-asset-orientation-grid .v-select,
-.wall-asset-orientation-grid .v-text-field {
-
 }
 .wall-field-grid {
   display: grid;

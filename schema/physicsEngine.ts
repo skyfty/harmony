@@ -12,8 +12,11 @@ import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
 	RigidbodyVector3Tuple,
+	BoundaryWallComponentProps,
 } from './components'
 import {
+	BOUNDARY_WALL_COMPONENT_TYPE,
+	clampBoundaryWallComponentProps,
 	WALL_COMPONENT_TYPE,
 	clampWallProps,
 	DEFAULT_LINEAR_DAMPING,
@@ -21,6 +24,7 @@ import {
 	DEFAULT_RIGIDBODY_FRICTION,
 	DEFAULT_RIGIDBODY_RESTITUTION,
 } from './components'
+import { buildBoundaryWallSegments } from './boundaryWall'
 import {
 	buildAdaptiveGroundCollisionData,
 } from './groundHeightfield'
@@ -1207,6 +1211,7 @@ export function createRigidbodyBody(
 	let groundSegments: GroundHeightfieldCacheEntry['segments'] | null = null
 	let wallSegments: WallTrimeshCacheEntry['segments'] | null = null
 	let floorSegments: FloorShapeCacheEntry['segments'] | null = null
+	let boundaryWallSegments: ReturnType<typeof buildBoundaryWallSegments> | null = null
 	let needsHeightfieldOrientation = false
 	if (isGroundDynamicMesh(node.dynamicMesh)) {
 		const groundEntry = resolveGroundHeightfieldShape(node, node.dynamicMesh, groundHeightfieldCache)
@@ -1232,6 +1237,22 @@ export function createRigidbodyBody(
 			offsetTuple = null
 		}
 	}
+	const boundaryWallComponent = node.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as
+		| SceneNodeComponentState<BoundaryWallComponentProps>
+		| undefined
+	if (boundaryWallComponent?.enabled !== false) {
+		const boundaryWallProps = clampBoundaryWallComponentProps(
+			boundaryWallComponent?.props as Partial<BoundaryWallComponentProps> | null | undefined,
+		)
+		const builtSegments = buildBoundaryWallSegments({
+			node,
+			object,
+			props: boundaryWallProps,
+		})
+		if (builtSegments.length) {
+			boundaryWallSegments = builtSegments
+		}
+	}
 	if (!resolvedShape && shapeDefinition) {
 		resolvedShape = createCannonShape(shapeDefinition, loggerTag, shapeScale)
 		offsetTuple = shapeDefinition.offset ?? null
@@ -1239,7 +1260,7 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
-	if (!resolvedShape && !groundSegments && !wallSegments && !floorSegments) {
+	if (!resolvedShape && !groundSegments && !wallSegments && !floorSegments && !boundaryWallSegments?.length) {
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
@@ -1279,7 +1300,8 @@ export function createRigidbodyBody(
 			)
 			addedShapeCount += 1
 		}
-	} else if (wallSegments && wallSegments.length) {
+	}
+	if (wallSegments && wallSegments.length) {
 		for (const segment of wallSegments) {
 			const [ox, oy, oz] = segment.offset
 			wallOffsetVec3Helper.set(ox, oy, oz)
@@ -1289,7 +1311,8 @@ export function createRigidbodyBody(
 			body.addShape(segment.shape, wallOffsetVec3Helper.clone(), wallOrientationQuatHelper.clone())
 			addedShapeCount += 1
 		}
-	} else if (floorSegments && floorSegments.length) {
+	}
+	if (floorSegments && floorSegments.length) {
 		for (const segment of floorSegments) {
 			const shape = createCannonShape(segment.shape, loggerTag, shapeScale)
 			if (!shape) {
@@ -1306,7 +1329,18 @@ export function createRigidbodyBody(
 			)
 			addedShapeCount += 1
 		}
-	} else if (resolvedShape) {
+	}
+	if (boundaryWallSegments && boundaryWallSegments.length) {
+		for (const segment of boundaryWallSegments) {
+			const [ox, oy, oz] = segment.offset
+			wallOffsetVec3Helper.set(ox, oy, oz)
+			const [qx, qy, qz, qw] = segment.orientation
+			wallOrientationQuatHelper.set(qx, qy, qz, qw)
+			body.addShape(segment.shape, wallOffsetVec3Helper.clone(), wallOrientationQuatHelper.clone())
+			addedShapeCount += 1
+		}
+	}
+	if (resolvedShape) {
 		body.addShape(resolvedShape, shapeOffset)
 		addedShapeCount += 1
 	}

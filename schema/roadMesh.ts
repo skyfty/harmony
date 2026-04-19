@@ -584,6 +584,7 @@ type RoadBuildData = {
 
 type RoadCurveDescriptor = {
   curve: THREE.Curve<THREE.Vector3>
+  closed: boolean
 }
 
 function buildAdjacencyMap(
@@ -746,9 +747,133 @@ function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurve
       continue
     }
     const curve = createRoadCurve(points, path.closed && points.length >= 3, smoothing)
-    curves.push({ curve })
+    curves.push({ curve, closed: path.closed && points.length >= 3 })
   }
   return curves
+}
+
+export type RoadBoundaryChain = {
+  points: Array<{ x: number; y: number; z: number }>
+  closed: boolean
+}
+
+function sanitizeRoadBoundaryPoints(
+  points: THREE.Vector3[],
+  closed: boolean,
+): Array<{ x: number; y: number; z: number }> {
+  const sanitized: Array<{ x: number; y: number; z: number }> = []
+  points.forEach((point) => {
+    const x = Number(point.x)
+    const y = Number(point.y)
+    const z = Number(point.z)
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      return
+    }
+    const previous = sanitized[sanitized.length - 1]
+    if (previous) {
+      const dx = x - previous.x
+      const dz = z - previous.z
+      if (dx * dx + dz * dz <= ROAD_EPSILON * ROAD_EPSILON) {
+        return
+      }
+    }
+    sanitized.push({ x, y, z })
+  })
+  if (closed && sanitized.length >= 3) {
+    const first = sanitized[0]!
+    const last = sanitized[sanitized.length - 1]!
+    const dx = first.x - last.x
+    const dz = first.z - last.z
+    if (dx * dx + dz * dz <= ROAD_EPSILON * ROAD_EPSILON) {
+      sanitized.pop()
+    }
+  }
+  return sanitized
+}
+
+export function extractRoadBoundaryChains(
+  definition: RoadDynamicMesh,
+  options: { samplingDensityFactor?: number; junctionSmoothing?: number } = {},
+): RoadBoundaryChain[] {
+  const width = Math.max(ROAD_MIN_WIDTH, Number.isFinite(definition.width) ? definition.width : ROAD_DEFAULT_WIDTH)
+  const buildData = collectRoadBuildData(definition)
+  if (!buildData) {
+    return []
+  }
+  const smoothing = normalizeJunctionSmoothing(options.junctionSmoothing)
+  const curves = buildRoadCurves(smoothing, buildData)
+  const chains: RoadBoundaryChain[] = []
+
+  curves.forEach((descriptor) => {
+    const length = descriptor.curve.getLength()
+    if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
+      return
+    }
+    const divisions = computeRoadDivisionsForCurve(
+      descriptor.curve,
+      length,
+      options.samplingDensityFactor,
+      options.junctionSmoothing,
+    )
+    const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
+    const centers: THREE.Vector3[] = []
+    const leftPoints: THREE.Vector3[] = []
+    const rightPoints: THREE.Vector3[] = []
+    for (let index = 0; index <= divisions; index += 1) {
+      const t = index / divisions
+      centers.push(descriptor.curve.getPoint(t))
+    }
+    for (let index = 0; index <= divisions; index += 1) {
+      const previous = index > 0 ? centers[index - 1]! : null
+      const current = centers[index]!
+      const next = index < divisions ? centers[index + 1]! : null
+      const leftPoint = new THREE.Vector3()
+      const rightPoint = new THREE.Vector3()
+      computeOffsetPointMiterLimited(previous, current, next, halfWidth, leftPoint)
+      computeOffsetPointMiterLimited(previous, current, next, -halfWidth, rightPoint)
+      leftPoints.push(leftPoint)
+      rightPoints.push(rightPoint)
+    }
+    const leftChain = sanitizeRoadBoundaryPoints(leftPoints, descriptor.closed)
+    if (leftChain.length >= (descriptor.closed ? 3 : 2)) {
+      chains.push({ points: leftChain, closed: descriptor.closed })
+    }
+    const rightChain = sanitizeRoadBoundaryPoints(rightPoints, descriptor.closed)
+    if (rightChain.length >= (descriptor.closed ? 3 : 2)) {
+      chains.push({ points: rightChain, closed: descriptor.closed })
+    }
+  })
+
+  const graph = buildRoadGraph(definition)
+  if (graph && graph.junctionVertices.length) {
+    const roundSegments = 8 + Math.round(24 * smoothing)
+    const radius = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
+    for (const junctionVertex of graph.junctionVertices) {
+      const center = graph.vertices[junctionVertex]
+      if (!center) {
+        continue
+      }
+      const dirs = getJunctionIncidentDirectionsXZ(graph, junctionVertex)
+      if (dirs.length < 3) {
+        continue
+      }
+      const loop = sanitizeVector2Loop(buildJunctionLoopXZ({
+        center,
+        incidentDirsXZ: dirs,
+        radius,
+        roundSegments,
+      }))
+      if (loop.length < 3) {
+        continue
+      }
+      chains.push({
+        points: loop.map((point) => ({ x: point.x, y: 0, z: point.y })),
+        closed: true,
+      })
+    }
+  }
+
+  return chains
 }
 
 function buildOffsetStripGeometry(

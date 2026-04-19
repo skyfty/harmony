@@ -2,6 +2,11 @@ import * as THREE from 'three'
 import type { FloorDynamicMesh } from './index'
 import { MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from './material'
 
+export type FloorPerimeterChain = {
+  points: Array<{ x: number; y: number; z: number }>
+  closed: boolean
+}
+
 export type FloorRenderAssetObjects = {
   bodyObject?: THREE.Object3D | null
 }
@@ -222,6 +227,42 @@ function buildFloorShape(definition: FloorDynamicMesh): { shape: THREE.Shape; po
 
   const shape = createFloorShapeFromPolygon(points, clampFloorSmooth(definition.smooth))
   return { shape, points }
+}
+
+export function extractFloorPerimeterChains(definition: FloorDynamicMesh): FloorPerimeterChain[] {
+  const shapeInfo = buildFloorShape(definition)
+  if (!shapeInfo) {
+    return []
+  }
+  const extracted = shapeInfo.shape.extractPoints(96)
+  const contour = Array.isArray(extracted.shape) ? extracted.shape : []
+  const points: Array<{ x: number; y: number; z: number }> = []
+  contour.forEach((entry) => {
+    const x = Number(entry.x)
+    const y = Number(entry.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return
+    }
+    const previous = points[points.length - 1]
+    if (previous) {
+      const dx = x - previous.x
+      const dz = -y - previous.z
+      if (dx * dx + dz * dz <= FLOOR_EPSILON) {
+        return
+      }
+    }
+    points.push({ x, y: 0, z: -y })
+  })
+  if (points.length >= 3) {
+    const first = points[0]!
+    const last = points[points.length - 1]!
+    const dx = first.x - last.x
+    const dz = first.z - last.z
+    if (dx * dx + dz * dz <= FLOOR_EPSILON) {
+      points.pop()
+    }
+  }
+  return points.length >= 3 ? [{ points, closed: true }] : []
 }
 
 function buildWorldUnitPlanarUvAttribute(geometry: THREE.BufferGeometry): void {
