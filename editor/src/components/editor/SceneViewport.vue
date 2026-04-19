@@ -1857,8 +1857,14 @@ const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
+type AutoOverlayTargetTool = 'floor' | 'wall' | 'water'
 const autoOverlayHorizMargin = ref('0')
 const autoOverlayVertMargin = ref('0')
+const autoOverlayMarginHistory = reactive<Record<AutoOverlayTargetTool, { horiz: string; vert: string }>>({
+  floor: { horiz: '0', vert: '0' },
+  wall: { horiz: '0', vert: '0' },
+  water: { horiz: '0', vert: '0' },
+})
 const autoOverlayHoverNodeId = ref<string | null>(null)
 const autoOverlayHoverIndicator = reactive({
   visible: false,
@@ -8320,6 +8326,21 @@ function clearAutoOverlayHoverIndicator(): void {
   setAutoOverlayHoverNodeId(null)
 }
 
+function restoreAutoOverlayMarginInputs(targetTool: AutoOverlayTargetTool): void {
+  const previous = autoOverlayMarginHistory[targetTool]
+  autoOverlayHorizMargin.value = previous?.horiz ?? '0'
+  autoOverlayVertMargin.value = previous?.vert ?? '0'
+}
+
+function persistAutoOverlayMarginInputs(targetTool: AutoOverlayTargetTool, horiz: number, vert: number): void {
+  autoOverlayMarginHistory[targetTool] = {
+    horiz: formatAutoOverlayMarginInput(horiz),
+    vert: formatAutoOverlayMarginInput(vert),
+  }
+  autoOverlayHorizMargin.value = autoOverlayMarginHistory[targetTool].horiz
+  autoOverlayVertMargin.value = autoOverlayMarginHistory[targetTool].vert
+}
+
 function isAutoOverlayBlockedBySelectionContext(targetTool: BuildTool | null): boolean {
   const context = uiStore.activeSelectionContext
   if (!context) {
@@ -8519,182 +8540,6 @@ function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
     : `自动铺设 ${plan.targetTool}`
 }
 
-type AutoOverlayContourMetrics = {
-  points: Array<{ x: number; z: number }>
-  minX: number
-  maxX: number
-  minZ: number
-  maxZ: number
-  centroidX: number
-  centroidZ: number
-  avgEdgeLength: number
-}
-
-function collectSceneNodesRecursive(nodes: SceneNode[] | undefined, out: SceneNode[]): void {
-  if (!Array.isArray(nodes) || nodes.length === 0) {
-    return
-  }
-  for (const node of nodes) {
-    out.push(node)
-    const children = (node as SceneNode & { children?: SceneNode[] }).children
-    if (Array.isArray(children) && children.length) {
-      collectSceneNodesRecursive(children, out)
-    }
-  }
-}
-
-function buildAutoOverlayContourMetrics(worldPoints: Array<{ x: number; z: number }>): AutoOverlayContourMetrics | null {
-  if (!Array.isArray(worldPoints) || worldPoints.length < 3) {
-    return null
-  }
-  const points = worldPoints
-    .map((point) => ({ x: Number(point?.x), z: Number(point?.z) }))
-    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
-  if (points.length < 3) {
-    return null
-  }
-
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-  let perimeter = 0
-  let signedArea = 0
-  let centroidNumeratorX = 0
-  let centroidNumeratorZ = 0
-
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index]!
-    const next = points[(index + 1) % points.length]!
-    minX = Math.min(minX, current.x)
-    maxX = Math.max(maxX, current.x)
-    minZ = Math.min(minZ, current.z)
-    maxZ = Math.max(maxZ, current.z)
-
-    const dx = next.x - current.x
-    const dz = next.z - current.z
-    perimeter += Math.sqrt((dx * dx) + (dz * dz))
-
-    const cross = current.x * next.z - next.x * current.z
-    signedArea += cross
-    centroidNumeratorX += (current.x + next.x) * cross
-    centroidNumeratorZ += (current.z + next.z) * cross
-  }
-
-  const area = signedArea * 0.5
-  const absArea = Math.abs(area)
-  let centroidX = (minX + maxX) * 0.5
-  let centroidZ = (minZ + maxZ) * 0.5
-  if (absArea > 1e-8) {
-    centroidX = centroidNumeratorX / (6 * area)
-    centroidZ = centroidNumeratorZ / (6 * area)
-  }
-
-  return {
-    points,
-    minX,
-    maxX,
-    minZ,
-    maxZ,
-    centroidX,
-    centroidZ,
-    avgEdgeLength: perimeter / points.length,
-  }
-}
-
-function autoOverlayBoundsIntersect(a: AutoOverlayContourMetrics, b: AutoOverlayContourMetrics): boolean {
-  return !(a.maxX < b.minX || b.maxX < a.minX || a.maxZ < b.minZ || b.maxZ < a.minZ)
-}
-
-function distancePointToSegmentSq2D(
-  point: { x: number; z: number },
-  start: { x: number; z: number },
-  end: { x: number; z: number },
-): number {
-  const sx = start.x
-  const sz = start.z
-  const ex = end.x
-  const ez = end.z
-  const vx = ex - sx
-  const vz = ez - sz
-  const wx = point.x - sx
-  const wz = point.z - sz
-  const lenSq = (vx * vx) + (vz * vz)
-  if (lenSq <= 1e-8) {
-    const dx = point.x - sx
-    const dz = point.z - sz
-    return (dx * dx) + (dz * dz)
-  }
-  const t = Math.max(0, Math.min(1, ((wx * vx) + (wz * vz)) / lenSq))
-  const cx = sx + (vx * t)
-  const cz = sz + (vz * t)
-  const dx = point.x - cx
-  const dz = point.z - cz
-  return (dx * dx) + (dz * dz)
-}
-
-function meanPointToContourDistance(points: Array<{ x: number; z: number }>, contour: Array<{ x: number; z: number }>): number {
-  if (!points.length || contour.length < 2) {
-    return Number.POSITIVE_INFINITY
-  }
-  let sum = 0
-  for (const point of points) {
-    let bestSq = Number.POSITIVE_INFINITY
-    for (let index = 0; index < contour.length; index += 1) {
-      const start = contour[index]!
-      const end = contour[(index + 1) % contour.length]!
-      const distSq = distancePointToSegmentSq2D(point, start, end)
-      if (distSq < bestSq) {
-        bestSq = distSq
-      }
-    }
-    sum += Math.sqrt(bestSq)
-  }
-  return sum / points.length
-}
-
-function contoursLikelyOverlap(a: AutoOverlayContourMetrics, b: AutoOverlayContourMetrics): boolean {
-  if (!autoOverlayBoundsIntersect(a, b)) {
-    return false
-  }
-
-  const centroidDx = a.centroidX - b.centroidX
-  const centroidDz = a.centroidZ - b.centroidZ
-  const centroidDistance = Math.sqrt((centroidDx * centroidDx) + (centroidDz * centroidDz))
-  const aDiag = Math.sqrt(((a.maxX - a.minX) ** 2) + ((a.maxZ - a.minZ) ** 2))
-  const bDiag = Math.sqrt(((b.maxX - b.minX) ** 2) + ((b.maxZ - b.minZ) ** 2))
-  const maxComparableCentroidDistance = Math.max(0.35, Math.min(aDiag, bDiag) * 0.5)
-  if (centroidDistance > maxComparableCentroidDistance) {
-    return false
-  }
-
-  const forward = meanPointToContourDistance(a.points, b.points)
-  const backward = meanPointToContourDistance(b.points, a.points)
-  const distanceThreshold = Math.max(0.12, Math.min(a.avgEdgeLength, b.avgEdgeLength) * 0.35)
-  return forward <= distanceThreshold && backward <= distanceThreshold
-}
-
-function isNodeMatchingAutoOverlayTarget(node: SceneNode, targetTool: 'floor' | 'wall' | 'water'): boolean {
-  if (targetTool === 'floor') {
-    return node.dynamicMesh?.type === 'Floor'
-  }
-  if (targetTool === 'wall') {
-    return node.dynamicMesh?.type === 'Wall'
-  }
-  return isWaterSurfaceNode(node)
-}
-
-function detectAutoOverlayOverlap(
-  worldPoints: Array<{ x: number; y: number; z: number }>,
-  existingContours: AutoOverlayContourMetrics[],
-): boolean {
-  const metrics = buildAutoOverlayContourMetrics(worldPoints)
-  if (!metrics) {
-    return false
-  }
-  return existingContours.some((existing) => contoursLikelyOverlap(metrics, existing))
-}
-
 function roundAutoOverlayMargin(value: number): number {
   return Math.round(value * 100) / 100
 }
@@ -8712,70 +8557,6 @@ function parseAutoOverlayMarginInput(value: string): number {
   return Number.isFinite(numeric) ? numeric : 0
 }
 
-function resolveAutoOverlaySuggestedMargins(plan: AutoOverlayBuildPlan): { horiz: number; vert: number } {
-  if (!plan.supported || !Array.isArray(plan.worldPoints) || plan.worldPoints.length < 3) {
-    return { horiz: 0, vert: 0 }
-  }
-
-  const allNodes: SceneNode[] = []
-  collectSceneNodesRecursive(sceneStore.nodes, allNodes)
-
-  const existingContours: AutoOverlayContourMetrics[] = []
-  for (const node of allNodes) {
-    if (node.id === plan.referenceNodeId || !isNodeMatchingAutoOverlayTarget(node, plan.targetTool)) {
-      continue
-    }
-    if (node.locked || sceneStore.isNodeSelectionLocked(node.id)) {
-      continue
-    }
-    const existingPlan = resolveAutoOverlayBuildPlan({
-      referenceNode: node,
-      runtimeObject: objectMap.get(node.id) ?? null,
-      targetTool: plan.targetTool,
-    })
-    if (!existingPlan?.supported || existingPlan.worldPoints.length < 3) {
-      continue
-    }
-    const metrics = buildAutoOverlayContourMetrics(existingPlan.worldPoints)
-    if (metrics) {
-      existingContours.push(metrics)
-    }
-  }
-
-  if (!existingContours.length) {
-    return { horiz: 0, vert: 0 }
-  }
-  if (!detectAutoOverlayOverlap(plan.worldPoints, existingContours)) {
-    return { horiz: 0, vert: 0 }
-  }
-
-  const step = 0.25
-  const maxSteps = 24
-
-  for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex += 1) {
-    const magnitude = roundAutoOverlayMargin(step * stepIndex)
-    // Default auto-detection should prefer inward inset and avoid outward spread.
-    const horiz = roundAutoOverlayMargin(-magnitude)
-    const candidate = offsetPolyline(plan.worldPoints, horiz, 0, { closed: plan.closedPath })
-    if (!detectAutoOverlayOverlap(candidate, existingContours)) {
-      return { horiz, vert: 0 }
-    }
-  }
-
-  for (let stepIndex = 1; stepIndex <= Math.min(12, maxSteps); stepIndex += 1) {
-    const magnitude = roundAutoOverlayMargin(step * stepIndex)
-    for (const sign of [1, -1]) {
-      const vert = roundAutoOverlayMargin(sign * magnitude)
-      const candidate = offsetPolyline(plan.worldPoints, 0, vert, { closed: plan.closedPath })
-      if (!detectAutoOverlayOverlap(candidate, existingContours)) {
-        return { horiz: 0, vert }
-      }
-    }
-  }
-
-  return { horiz: 0, vert: 0 }
-}
-
 function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
   if (event.button !== 0 || isTemporaryNavigationOverrideActive() || !(event.ctrlKey || event.metaKey)) {
     return false
@@ -8786,9 +8567,7 @@ function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
   }
 
   clearAutoOverlayHoverIndicator()
-  const suggestedMargins = resolveAutoOverlaySuggestedMargins(plan)
-  autoOverlayHorizMargin.value = formatAutoOverlayMarginInput(suggestedMargins.horiz)
-  autoOverlayVertMargin.value = formatAutoOverlayMarginInput(suggestedMargins.vert)
+  restoreAutoOverlayMarginInputs(plan.targetTool)
   autoOverlayPlan.value = plan
   autoOverlayDialogOpen.value = true
   event.preventDefault()
@@ -8833,6 +8612,7 @@ async function handleConfirmAutoOverlay(): Promise<void> {
   try {
     const horiz = parseAutoOverlayMarginInput(autoOverlayHorizMargin.value)
     const vert = parseAutoOverlayMarginInput(autoOverlayVertMargin.value)
+    persistAutoOverlayMarginInputs(plan.targetTool, horiz, vert)
     const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert, { closed: plan.closedPath })
 
     if (plan.targetTool === 'wall') {
