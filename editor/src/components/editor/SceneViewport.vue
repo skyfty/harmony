@@ -22626,7 +22626,7 @@ defineExpose<SceneViewportHandle>({
       </div>
       <div class="camera-status-hud">
         <Transition name="camera-hints-slide">
-          <div v-if="activeToolUsageHints" class="camera-status-hud__hints camera-status-hud__hints--tool-usage">
+          <div v-if="showCameraHintsOpen && activeToolUsageHints" class="camera-status-hud__hints camera-status-hud__hints--tool-usage">
             <div class="camera-status-hud__hint-row camera-status-hud__hint-row--title">
               <span class="camera-status-hud__hint-label">当前</span>
               <span class="camera-status-hud__hint-text camera-status-hud__hint-text--title">{{ activeToolUsageHints.title }}</span>
@@ -23195,7 +23195,7 @@ defineExpose<SceneViewportHandle>({
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(12, 15, 21, 0.62);
+  background: rgba(12, 15, 21, 0.46);
   color: rgba(236, 241, 248, 0.95);
   font-size: 11px;
   line-height: 1.4;
@@ -23209,7 +23209,7 @@ defineExpose<SceneViewportHandle>({
 
 .camera-status-hud__hints--tool-usage {
   border-color: rgba(134, 218, 255, 0.22);
-  background: rgba(10, 18, 25, 0.52);
+  background: rgba(10, 18, 25, 0.34);
 }
 
 .camera-hints-slide-enter-active,

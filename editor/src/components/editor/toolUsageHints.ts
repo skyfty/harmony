@@ -111,6 +111,7 @@ function resolveFloorRows(shape: FloorBuildShape): ToolUsageHintRow[] {
       { label: '模式', text: `${shapeLabel}绘制` },
       { label: '鼠标', text: '左键逐点添加顶点' },
       { label: '完成', text: '双击左键完成地面' },
+      { label: '快捷', text: '自动平铺通过 Floor Brush 面板选择形状与多边形边数，没有独立键盘快捷键' },
       { label: '修饰', text: 'Shift 顶点吸附 · C 相对角度吸附' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
@@ -120,6 +121,7 @@ function resolveFloorRows(shape: FloorBuildShape): ToolUsageHintRow[] {
       { label: '入口', text: '视口工具栏 -> Floor Brush' },
       { label: '模式', text: `${shapeLabel}绘制` },
       { label: '鼠标', text: '左键拖拽生成矩形地面' },
+      { label: '快捷', text: '自动平铺通过 Floor Brush 面板切换形状，没有独立键盘快捷键' },
       { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
@@ -128,6 +130,7 @@ function resolveFloorRows(shape: FloorBuildShape): ToolUsageHintRow[] {
     { label: '入口', text: '视口工具栏 -> Floor Brush' },
     { label: '模式', text: `${shapeLabel}绘制` },
     { label: '鼠标', text: '左键拖拽生成圆形或正多边形地面' },
+    { label: '快捷', text: '自动平铺通过 Floor Brush 面板切换形状与边数，没有独立键盘快捷键' },
     { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
     { label: '取消', text: '右键或 Escape 取消当前草图' },
   ])
@@ -181,6 +184,7 @@ function resolveWallRows(shape: WallBuildShape): ToolUsageHintRow[] {
       { label: '模式', text: `${shapeLabel}闭合墙体` },
       { label: '鼠标', text: '左键逐点定义闭合轮廓' },
       { label: '完成', text: '双击左键完成闭合墙体' },
+      { label: '快捷', text: 'Shift+G 仅线段墙体可用；当前闭合墙体依赖双击完成' },
       { label: '修饰', text: 'C 相对角度吸附' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
@@ -189,6 +193,7 @@ function resolveWallRows(shape: WallBuildShape): ToolUsageHintRow[] {
     { label: '入口', text: '视口工具栏 -> Wall Brush' },
     { label: '模式', text: `${shapeLabel}墙体` },
     { label: '鼠标', text: '左键拖拽生成当前形状的墙体' },
+    { label: '快捷', text: 'Shift+G 仅线段墙体可用；当前形状通过工具栏切换' },
     { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
     { label: '取消', text: '右键或 Escape 取消当前草图' },
   ])
@@ -249,6 +254,7 @@ function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
         { label: '入口', text: '视口工具栏 -> Water Tool' },
         { label: '模式', text: '矩形 / 圆形模式左键拖拽创建，Polygon 模式左键逐点添加顶点' },
         { label: '完成', text: '拖拽模式在松开左键时完成，Polygon 模式双击左键完成' },
+        { label: '快捷', text: '通过 Water Brush 面板切换形状，没有独立键盘快捷键' },
         { label: '修饰', text: '顶点吸附会优先对齐已有顶点' },
         { label: '取消', text: '右键或 Escape 取消当前水面草图' },
       ])
