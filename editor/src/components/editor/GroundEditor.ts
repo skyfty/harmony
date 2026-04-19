@@ -7,6 +7,7 @@ import type {
 	GroundRuntimeDynamicMesh,
 	GroundSculptOperation,
 	SceneNode,
+	Vector3Like,
 } from '@schema'
 import {
 	deleteTerrainScatterStore,
