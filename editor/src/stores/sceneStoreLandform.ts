@@ -1,6 +1,6 @@
 import { Object3D, Shape, ShapeGeometry, ShapeUtils, Vector2, Vector3 } from 'three'
 import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema'
-import { sampleGroundHeight } from '@schema/groundMesh'
+import { buildSmoothedSculptPolygonContour, sampleGroundHeight } from '@schema/groundMesh'
 import {
   clampLandformComponentProps,
   LANDFORM_DEFAULT_ENABLE_FEATHER,
@@ -32,8 +32,10 @@ const LANDFORM_COMPACT_EDGE_LENGTH_SCALE = 1.8
 const LANDFORM_COMPACT_INTERIOR_EDGE_LENGTH_SCALE = 1.35
 const LANDFORM_COMPACT_HEIGHT_ERROR_TOLERANCE_SCALE = 1.75
 const LANDFORM_COMPACT_MAX_SAMPLE_DIVISIONS = 3
-const LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE = 0.45
-const LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE = 0.65
+const LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE = 0.03
+const LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE = 0.16
+const LANDFORM_COMPACT_BOUNDARY_AVG_EDGE_SIMPLIFY_SCALE = 0.06
+const LANDFORM_COMPACT_BOUNDARY_AVG_EDGE_MIN_LENGTH_SCALE = 0.3
 const LANDFORM_SUPPORT_RING_MIN_WIDTH = 0.2
 const LANDFORM_SUPPORT_RING_MAX_WIDTH = 1.5
 const LANDFORM_SUPPORT_RING_WIDTH_SCALE = 0.35
@@ -191,6 +193,40 @@ function normalizePolygonWinding(points: Vector3[]): Vector3[] {
   return points
 }
 
+function buildLandformRoundedOutline(points: Vector3[], groundDefinition: GroundDynamicMesh | null): Vector3[] {
+  if (points.length < 3) {
+    return points.map((point) => point.clone())
+  }
+
+  const cellSize = groundDefinition
+    ? Math.max(groundDefinition.cellSize, LANDFORM_TARGET_TRI_EDGE_LENGTH)
+    : LANDFORM_TARGET_TRI_EDGE_LENGTH
+  const rounded = buildSmoothedSculptPolygonContour(points, { cellSize })
+  const nextPoints = rounded.length >= 3 ? rounded : points
+  return normalizePolygonWinding(nextPoints.map((point) => point.clone()))
+}
+
+function computeAverageClosedPolygonEdgeLengthXZ(points: Vector3[]): number {
+  if (points.length < 2) {
+    return 0
+  }
+
+  let total = 0
+  let count = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    const length = Math.hypot(next.x - current.x, next.z - current.z)
+    if (!Number.isFinite(length) || length <= 1e-6) {
+      continue
+    }
+    total += length
+    count += 1
+  }
+
+  return count > 0 ? total / count : 0
+}
+
 function pointToSegmentDistanceXZ(point: Vector3, start: Vector3, end: Vector3): number {
   return pointToSegmentDistance2D(point.x, point.z, start.x, start.z, end.x, end.z)
 }
@@ -244,8 +280,19 @@ function simplifyLandformOutlineForCompactMode(points: Vector3[], groundDefiniti
   const baseEdgeLength = groundDefinition
     ? Math.max(groundDefinition.cellSize, LANDFORM_TARGET_TRI_EDGE_LENGTH)
     : LANDFORM_TARGET_TRI_EDGE_LENGTH
-  const tolerance = baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE
-  const minEdgeLength = baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE
+  const averageEdgeLength = computeAverageClosedPolygonEdgeLengthXZ(points)
+  const tolerance = Math.min(
+    baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE,
+    averageEdgeLength > 1e-6
+      ? averageEdgeLength * LANDFORM_COMPACT_BOUNDARY_AVG_EDGE_SIMPLIFY_SCALE
+      : baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE,
+  )
+  const minEdgeLength = Math.min(
+    baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE,
+    averageEdgeLength > 1e-6
+      ? averageEdgeLength * LANDFORM_COMPACT_BOUNDARY_AVG_EDGE_MIN_LENGTH_SCALE
+      : baseEdgeLength * LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE,
+  )
   return normalizePolygonWinding(simplifyClosedPolygonXZ(points, tolerance, minEdgeLength))
 }
 
@@ -1347,9 +1394,10 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       const normalizedProps = clampLandformComponentProps(options)
+      const roundedPoints = buildLandformRoundedOutline(worldPoints, groundDefinition)
       const buildPoints = normalizedProps.enableFeather
-        ? worldPoints
-        : simplifyLandformOutlineForCompactMode(worldPoints, groundDefinition)
+        ? roundedPoints
+        : simplifyLandformOutlineForCompactMode(roundedPoints, groundDefinition)
       if (buildPoints.length < 3) {
         return null
       }
@@ -1474,9 +1522,10 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       const normalizedProps = clampLandformComponentProps(options)
+      const roundedPoints = buildLandformRoundedOutline(worldPoints, groundDefinition)
       const buildPoints = normalizedProps.enableFeather
-        ? worldPoints
-        : simplifyLandformOutlineForCompactMode(worldPoints, groundDefinition)
+        ? roundedPoints
+        : simplifyLandformOutlineForCompactMode(roundedPoints, groundDefinition)
       if (buildPoints.length < 3) {
         return null
       }
