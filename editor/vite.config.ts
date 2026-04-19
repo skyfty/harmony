@@ -1,3 +1,5 @@
+import os from 'node:os'
+import path from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -17,6 +19,7 @@ const pollingInterval = Number.isFinite(parsedPollingInterval) && parsedPollingI
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue(), vuetify({ autoImport: true })],
+  cacheDir: path.join(os.tmpdir(), 'harmony-editor-vite'),
   resolve: {
     alias: [
       {
