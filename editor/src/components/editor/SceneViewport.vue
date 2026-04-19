@@ -1857,8 +1857,8 @@ const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
-const autoOverlayHorizMargin = ref(0)
-const autoOverlayVertMargin = ref(0)
+const autoOverlayHorizMargin = ref('0')
+const autoOverlayVertMargin = ref('0')
 const autoOverlayHoverNodeId = ref<string | null>(null)
 const autoOverlayHoverIndicator = reactive({
   visible: false,
@@ -8699,6 +8699,19 @@ function roundAutoOverlayMargin(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+function formatAutoOverlayMarginInput(value: number): string {
+  return Number.isFinite(value) ? String(roundAutoOverlayMargin(value)) : '0'
+}
+
+function parseAutoOverlayMarginInput(value: string): number {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed) {
+    return 0
+  }
+  const numeric = Number(trimmed)
+  return Number.isFinite(numeric) ? numeric : 0
+}
+
 function resolveAutoOverlaySuggestedMargins(plan: AutoOverlayBuildPlan): { horiz: number; vert: number } {
   if (!plan.supported || !Array.isArray(plan.worldPoints) || plan.worldPoints.length < 3) {
     return { horiz: 0, vert: 0 }
@@ -8774,8 +8787,8 @@ function tryOpenAutoOverlayDialog(event: PointerEvent): boolean {
 
   clearAutoOverlayHoverIndicator()
   const suggestedMargins = resolveAutoOverlaySuggestedMargins(plan)
-  autoOverlayHorizMargin.value = suggestedMargins.horiz
-  autoOverlayVertMargin.value = suggestedMargins.vert
+  autoOverlayHorizMargin.value = formatAutoOverlayMarginInput(suggestedMargins.horiz)
+  autoOverlayVertMargin.value = formatAutoOverlayMarginInput(suggestedMargins.vert)
   autoOverlayPlan.value = plan
   autoOverlayDialogOpen.value = true
   event.preventDefault()
@@ -8818,8 +8831,8 @@ async function handleConfirmAutoOverlay(): Promise<void> {
 
   autoOverlaySubmitting.value = true
   try {
-    const horiz = Number(autoOverlayHorizMargin.value || 0)
-    const vert = Number(autoOverlayVertMargin.value || 0)
+    const horiz = parseAutoOverlayMarginInput(autoOverlayHorizMargin.value)
+    const vert = parseAutoOverlayMarginInput(autoOverlayVertMargin.value)
     const adjustedPoints = offsetPolyline(plan.worldPoints, horiz, vert, { closed: plan.closedPath })
 
     if (plan.targetTool === 'wall') {
@@ -22891,16 +22904,18 @@ defineExpose<SceneViewportHandle>({
                 <v-col cols="6">
                   <v-text-field
                     label="水平 margin (m)"
-                    type="number"
-                    v-model.number="autoOverlayHorizMargin"
+                    v-model="autoOverlayHorizMargin"
+                    type="text"
+                    inputmode="decimal"
                     :step="0.01"
                   />
                 </v-col>
                 <v-col cols="6">
                   <v-text-field
                     label="垂直 margin (m)"
-                    type="number"
-                    v-model.number="autoOverlayVertMargin"
+                    v-model="autoOverlayVertMargin"
+                    type="text"
+                    inputmode="decimal"
                     :step="0.01"
                   />
                 </v-col>
