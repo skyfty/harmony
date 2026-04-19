@@ -15244,7 +15244,19 @@ function resolveBoundaryWallBuildTargetNodeId(): string | null {
   if (!nodeId) {
     return null
   }
-  return resolveEditableBoundaryWallNode(nodeId)?.id ?? null
+  const node = resolveSceneNodeById(nodeId)
+  if (!node || node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  const component = node.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<BoundaryWallComponentProps> | undefined
+  if (!component || component.enabled === false) {
+    return null
+  }
+  const props = clampBoundaryWallComponentProps(component.props as BoundaryWallComponentProps)
+  if (props.mode !== 'custom') {
+    return null
+  }
+  return objectMap.has(nodeId) ? nodeId : null
 }
 
 function updateBoundaryWallCustomLoopPoints(targetNodeId: string, points: Array<[number, number]>): boolean {
@@ -17151,6 +17163,34 @@ async function handlePointerUp(event: PointerEvent) {
         return
       }
 
+      if (boundaryWallContourVertexDragState && event.pointerId === boundaryWallContourVertexDragState.pointerId && event.button === 0) {
+        const state = boundaryWallContourVertexDragState
+        boundaryWallContourVertexDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveBoundaryWallVertexHandle(null)
+
+        if (state.moved) {
+          if (!updateBoundaryWallCustomLoopPoints(state.nodeId, state.workingPoints)) {
+            buildBoundaryWallPreviewFromLocalPoints(state.nodeId, state.basePoints)
+          }
+          ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId: state.nodeId })
+          ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId })
+          void nextTick(() => {
+            ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId: state.nodeId })
+            ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId })
+          })
+        } else {
+          buildBoundaryWallPreviewFromLocalPoints(state.nodeId, state.basePoints)
+          ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
+          ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
       if (guideRouteVertexDragState && event.pointerId === guideRouteVertexDragState.pointerId && event.button === 0) {
         const state = guideRouteVertexDragState
         guideRouteVertexDragState = null
@@ -18109,6 +18149,26 @@ function handlePointerCancel(event: PointerEvent) {
       event.stopImmediatePropagation()
       return
     }
+  }
+
+  if (boundaryWallContourVertexDragState && event.pointerId === boundaryWallContourVertexDragState.pointerId) {
+    const state = boundaryWallContourVertexDragState
+    boundaryWallContourVertexDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveBoundaryWallVertexHandle(null)
+
+    try {
+      buildBoundaryWallPreviewFromLocalPoints(state.nodeId, state.basePoints)
+      ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
+      ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
   }
 
   if (activeBuildTool.value === 'guideRoute') {
