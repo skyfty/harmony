@@ -20,16 +20,17 @@
         <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
       <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
-        <OverlayPinnedItem
+        <view
           v-for="entry in signboardOverlayEntries"
           :key="entry.id"
-          base-class="viewer-signboard"
-          vehicle-class="viewer-signboard--vehicle"
-          :reference-kind="entry.referenceKind"
-          :x-percent="entry.xPercent"
-          :y-percent="entry.yPercent"
-          :scale="entry.scale"
-          :opacity="entry.opacity"
+          class="viewer-signboard"
+          :class="{ 'viewer-signboard--vehicle': entry.referenceKind === 'vehicle' }"
+          :style="{
+            left: `${entry.xPercent}%`,
+            top: `${entry.yPercent}%`,
+            transform: `translate(-50%, -100%) scale(${entry.scale})`,
+            opacity: String(entry.opacity),
+          }"
         >
           <view class="viewer-signboard__pill">
             <text class="viewer-signboard__name">{{ entry.label }}</text>
@@ -38,22 +39,23 @@
               <text class="viewer-signboard__punch-badge-icon">✓</text>
             </view>
           </view>
-        </OverlayPinnedItem>
+        </view>
       </view>
       <view v-if="punchBadgeOverlayEntries.length" class="viewer-punch-badge-layer" aria-hidden="true">
-        <OverlayPinnedItem
+        <view
           v-for="entry in punchBadgeOverlayEntries"
           :key="entry.id"
-          base-class="viewer-punch-badge"
-          vehicle-class="viewer-punch-badge--vehicle"
-          :reference-kind="entry.referenceKind"
-          :x-percent="entry.xPercent"
-          :y-percent="entry.yPercent"
-          :scale="entry.scale"
-          :opacity="entry.opacity"
+          class="viewer-punch-badge"
+          :class="{ 'viewer-punch-badge--vehicle': entry.referenceKind === 'vehicle' }"
+          :style="{
+            left: `${entry.xPercent}%`,
+            top: `${entry.yPercent}%`,
+            transform: `translate(-50%, -100%) scale(${entry.scale})`,
+            opacity: String(entry.opacity),
+          }"
         >
           <text class="viewer-punch-badge__icon">✓</text>
-        </OverlayPinnedItem>
+        </view>
       </view>
       <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
         <view
@@ -410,7 +412,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
-import OverlayPinnedItem from './OverlayPinnedItem.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
 import DriveJoystick from './DriveJoystick.vue';
 import DriveCompass from './DriveCompass.vue';
