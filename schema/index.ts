@@ -183,7 +183,12 @@ export { createGradientBackgroundDome, disposeGradientBackgroundDome } from './g
 export type { GradientBackgroundDome, GradientBackgroundSettingsInput } from './gradientBackground'
 
 export { createAutoTourRuntime } from './autoTourRuntime'
-export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike } from './autoTourRuntime'
+export type {
+  AutoTourRouteSnapResult,
+  AutoTourRuntime,
+  AutoTourRuntimeDeps,
+  AutoTourVehicleInstanceLike,
+} from './autoTourRuntime'
 
 export { createWaterRuntime } from './waterRuntime'
 export type { WaterRuntime, WaterRuntimeFrame } from './waterRuntime'
