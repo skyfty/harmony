@@ -21,22 +21,8 @@
         :style="punchSummaryStyle"
         aria-hidden="true"
       >
-        <view class="viewer-punch-summary__mark" aria-hidden="true">
-          <text class="viewer-punch-summary__mark-icon">✓</text>
-        </view>
-        <view class="viewer-punch-summary__body">
-          <view class="viewer-punch-summary__header">
-            <text class="viewer-punch-summary__label">景观打卡</text>
-            <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
-          </view>
-          <view class="viewer-punch-summary__bar" aria-hidden="true">
-            <view
-              class="viewer-punch-summary__bar-fill"
-              :style="{ width: `${punchSummaryProgress}%` }"
-            ></view>
-          </view>
-        </view>
-        <text class="viewer-punch-summary__percent">{{ punchSummaryProgress }}%</text>
+        <text class="viewer-punch-summary__label">景观打卡</text>
+        <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
       <button
         v-if="floatingAutoTourButton.visible"
@@ -54,6 +40,25 @@
       >
         <view class="viewer-auto-tour-trigger__content">
           <text class="viewer-auto-tour-trigger__label">{{ floatingAutoTourButton.label }}</text>
+        </view>
+      </button>
+      <button
+        v-if="floatingAutoTourPauseButton.visible"
+        class="viewer-auto-tour-trigger viewer-auto-tour-trigger--secondary"
+        :class="{
+          'is-active': floatingAutoTourPauseButton.pressed,
+          'is-busy': floatingAutoTourPauseButton.busy,
+        }"
+        :style="floatingAutoTourPauseButtonStyle"
+        :disabled="floatingAutoTourPauseButton.disabled"
+        type="button"
+        hover-class="none"
+        :aria-label="floatingAutoTourPauseButton.label"
+        :aria-pressed="floatingAutoTourPauseButton.pressed"
+        @tap="handleFloatingAutoTourPauseToggleTap"
+      >
+        <view class="viewer-auto-tour-trigger__content">
+          <text class="viewer-auto-tour-trigger__label">{{ floatingAutoTourPauseButton.label }}</text>
         </view>
       </button>
       <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
@@ -292,76 +297,6 @@
             </view>
           </view>
         </button>
-      </view>
-      <view
-        v-if="vehicleDrivePrompt.visible"
-        class="viewer-drive-start"
-      >
-        <view class="viewer-drive-start__panel">
-          <view class="viewer-drive-start__group">
-            <button
-              v-if="vehicleDrivePrompt.showDrive"
-              class="viewer-drive-start__btn viewer-drive-start__btn--primary"
-              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-              :disabled="vehicleDrivePrompt.busy"
-              type="button"
-              hover-class="none"
-              aria-label="进入驾驶模式"
-              @tap="handleVehicleDrivePromptTap"
-            >
-              <text class="viewer-drive-start__btn__label">驾驶</text>
-            </button>
-            <button
-              v-if="vehicleDrivePrompt.showAutoTour"
-              class="viewer-drive-start__btn"
-              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-              :disabled="vehicleDrivePrompt.busy"
-              type="button"
-              hover-class="none"
-              aria-label="自动巡游"
-              @tap="handleVehicleAutoTourStartTap"
-            >
-              <text class="viewer-drive-start__btn__label">巡游</text>
-            </button>
-
-            <template v-if="vehicleDrivePrompt.showStopTour">
-              <button
-                class="viewer-drive-start__btn viewer-drive-start__btn--pause"
-                :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-                :disabled="vehicleDrivePrompt.busy"
-                type="button"
-                hover-class="none"
-                aria-label="暂停巡游"
-                @tap="handleVehicleAutoTourPauseToggleTap"
-                :aria-pressed="autoTourPaused"
-              >
-                  <text class="viewer-drive-start__btn__label">{{ autoTourPaused ? '继续' : '暂停' }}</text>
-              </button>
-              <button
-                class="viewer-drive-start__btn viewer-drive-start__btn--stop"
-                :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-                :disabled="vehicleDrivePrompt.busy"
-                type="button"
-                hover-class="none"
-                aria-label="停止巡游"
-                @tap="handleVehicleAutoTourStopTap"
-              >
-                  <text class="viewer-drive-start__btn__label">停止</text>
-              </button>
-            </template>
-
-            <button
-              v-if="!vehicleDrivePrompt.showStopTour"
-              class="viewer-drive-start__btn viewer-drive-start__btn--close"
-              type="button"
-              hover-class="none"
-              aria-label="关闭"
-              @tap="handleVehicleDrivePromptClose"
-            >
-              <text class="viewer-drive-start__btn__label">关闭</text>
-            </button>
-          </view>
-        </view>
       </view>
       <view
         v-if="vehicleDriveUi.visible"
@@ -765,7 +700,7 @@ import {
   getApproxDimensions,
   resetCameraFollowState,
 } from '@harmony/schema/followCameraController';
-import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
+import { stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
 import {
@@ -1783,13 +1718,6 @@ const punchCheckedCount = computed(() => {
   return count;
 });
 
-const punchSummaryProgress = computed(() => {
-  if (!punchTotalCount.value) {
-    return 0;
-  }
-  return Math.round((punchCheckedCount.value / punchTotalCount.value) * 100);
-});
-
 watch(
   () => props.initialPunchedNodeIds ?? [],
   (nodeIds: string[]) => {
@@ -1938,6 +1866,7 @@ const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4;
 const VEHICLE_TRAVEL_EPSILON = 1e-5;
 const VEHICLE_BRAKE_FORCE = 1e6;
 const autoTourSnapLocalPosition = new THREE.Vector3();
+const autoTourSnapWorldPosition = new THREE.Vector3();
 const autoTourSnapWorldQuaternion = new THREE.Quaternion();
 const autoTourSnapParentWorldQuaternion = new THREE.Quaternion();
 const autoTourSnapEuler = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -2142,6 +2071,11 @@ const punchSummaryStyle = computed(() => ({
 
 const floatingAutoTourButtonStyle = computed(() => ({
   top: `${punchSummaryTopOffset.value}px`,
+}));
+
+const floatingAutoTourPauseButtonStyle = computed(() => ({
+  top: 'auto',
+  bottom: 'calc(22px + var(--viewer-safe-area-bottom, 0px))',
 }));
 
 const lanternViewerOptions: Record<string, any> = {};
@@ -2602,35 +2536,6 @@ const vehicleDriveController = new VehicleDriveController(
     steeringKeyboardValue,
   },
 );
-
-const vehicleDrivePrompt = computed(() => {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event) {
-    return {
-      visible: false,
-      label: '',
-      busy: false,
-    } as const;
-  }
-  const targetNodeId = event.targetNodeId ?? event.nodeId;
-  const node = targetNodeId ? resolveNodeById(targetNodeId) : null;
-  const label = node?.name?.trim() || targetNodeId || 'Vehicle';
-  const canDrive = Boolean(resolveVehicleComponent(node));
-  const canAutoTour = Boolean(resolveAutoTourComponent(node));
-  const isTouring = Boolean(targetNodeId && activeAutoTourNodeIds.has(targetNodeId));
-  const hasAnyAction = isTouring || canDrive || canAutoTour;
-  const pauseTourLabel = autoTourPaused.value ? '继续巡游' : '暂停巡游';
-  return {
-    visible: hasAnyAction,
-    label,
-    busy: vehicleDrivePromptBusy.value,
-    showDrive: canDrive && !isTouring,
-    showAutoTour: canAutoTour && !isTouring,
-    showStopTour: isTouring,
-    showPauseTour: isTouring,
-    pauseTourLabel,
-  } as const;
-});
 
 watch(
   () => vehicleDriveUi.value.visible,
@@ -4697,6 +4602,16 @@ function resolveFloatingAutoTourContext(): {
   nodeId: string | null;
   event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null;
 } {
+  const activeFollowNodeId = autoTourFollowNodeId.value;
+  if (activeFollowNodeId && activeAutoTourNodeIds.has(activeFollowNodeId)) {
+    return { nodeId: activeFollowNodeId, event: activeVehicleDriveEvent.value };
+  }
+
+  const firstActiveNodeId = activeAutoTourNodeIds.values().next().value ?? null;
+  if (firstActiveNodeId) {
+    return { nodeId: firstActiveNodeId, event: activeVehicleDriveEvent.value };
+  }
+
   const candidates = [pendingVehicleDriveEvent.value, activeVehicleDriveEvent.value];
   for (const event of candidates) {
     const nodeId = event?.targetNodeId ?? event?.nodeId ?? null;
@@ -4733,8 +4648,22 @@ const floatingAutoTourButton = computed(() => {
     event: context.event,
     active,
     busy,
-    disabled: busy || active,
-    label: active ? '导览中' : '自动导览',
+    disabled: busy,
+    label: active ? '结束导览' : '自动导览',
+  } as const;
+});
+
+const floatingAutoTourPauseButton = computed(() => {
+  const context = resolveFloatingAutoTourContext();
+  const active = context.nodeId ? activeAutoTourNodeIds.has(context.nodeId) : false;
+  const busy = vehicleDrivePromptBusy.value;
+  return {
+    visible: active,
+    nodeId: context.nodeId,
+    busy,
+    disabled: busy,
+    pressed: autoTourPaused.value,
+    label: autoTourPaused.value ? '继续导览' : '暂停导览',
   } as const;
 });
 
@@ -8597,58 +8526,6 @@ function restoreVehicleDriveCameraState(): void {
   vehicleDriveController.restoreCamera(ctx);
 }
 
-async function handleVehicleDrivePromptTap(): Promise<void> {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
-    return;
-  }
-  vehicleDrivePromptBusy.value = true;
-  try {
-    // If an auto-tour is active for this node, stop it first.
-    const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-    if (targetNodeId && activeAutoTourNodeIds.has(targetNodeId)) {
-      stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
-        activeAutoTourNodeIds.delete(n);
-        if (autoTourFollowNodeId.value === n) {
-          autoTourFollowNodeId.value = null;
-          resetAutoTourCameraFollowState();
-        }
-      });
-    }
-    const result = startVehicleDriveMode(event);
-    if (!result.success) {
-      const message = result.message ?? '无法进入驾驶模式';
-      uni.showToast({ title: message, icon: 'none' });
-      resolveBehaviorToken(event.token, { type: 'fail', message });
-      pendingVehicleDriveEvent.value = null;
-      return;
-    }
-    pendingVehicleDriveEvent.value = null;
-    handleShowVehicleCockpitEvent();
-  } finally {
-    vehicleDrivePromptBusy.value = false;
-  }
-}
-
-function handleVehicleDrivePromptClose(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event) {
-    return;
-  }
-  // Resolve the behavior token to indicate the request was aborted by user.
-  try {
-    resolveBehaviorToken(event.token, {
-      type: 'abort',
-      message: '用户取消驾驶请求',
-    });
-  } catch (e) {
-    // ignore
-  }
-  pendingVehicleDriveEvent.value = null;
-  vehicleDrivePromptBusy.value = false;
-  setVehicleDriveUiOverride('hide');
-}
-
 function resolveAutoTourVehicleBrakeForce(nodeId: string): number {
   const node = resolveNodeById(nodeId);
   const vehicle = resolveEnabledComponentState<any>(node, VEHICLE_COMPONENT_TYPE);
@@ -8713,7 +8590,13 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
   }
 
   autoTourSnapWorldQuaternion.setFromAxisAngle(autoTourSnapWorldUp, snap.yaw);
-  applyObjectWorldPose(object, snap.worldPosition, autoTourSnapWorldQuaternion);
+  autoTourSnapWorldPosition.copy(snap.worldPosition);
+  const chassisBody = vehicleInstance.vehicle.chassisBody;
+  const currentChassisY = Number.isFinite(chassisBody.position.y) ? chassisBody.position.y : object.getWorldPosition(autoTourSnapLocalPosition).y;
+  if (Number.isFinite(currentChassisY)) {
+    autoTourSnapWorldPosition.y = currentChassisY;
+  }
+  applyObjectWorldPose(object, autoTourSnapWorldPosition, autoTourSnapWorldQuaternion);
   syncSceneNodeLocalTransformFromObject(node, object);
   syncInstancedTransform(object, true);
 
@@ -8725,7 +8608,6 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
     trySleepBody(rigidbodyEntry.body);
   }
 
-  const chassisBody = vehicleInstance.vehicle.chassisBody;
   const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId);
   const wheelCount = Math.max(0, vehicleInstance.wheelCount || vehicleInstance.vehicle.wheelInfos.length || 0);
   for (let index = 0; index < wheelCount; index += 1) {
@@ -8742,6 +8624,62 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
   return object;
 }
 
+function buildFloatingAutoTourDriveEvent(
+  nodeId: string,
+  sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
+): Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> {
+  if (sourceEvent) {
+    return {
+      ...sourceEvent,
+      targetNodeId: sourceEvent.targetNodeId ?? nodeId,
+      nodeId: sourceEvent.nodeId ?? nodeId,
+    };
+  }
+  return {
+    type: 'vehicle-drive',
+    nodeId,
+    action: 'click',
+    sequenceId: '__floating-auto-tour__',
+    behaviorSequenceId: '__floating-auto-tour__',
+    behaviorId: '__floating-auto-tour__',
+    targetNodeId: nodeId,
+    seatNodeId: null,
+    token: `floating-auto-tour:${nodeId}`,
+  };
+}
+
+function stopFloatingAutoTourAndResumeManualDrive(
+  nodeId: string,
+  sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
+): boolean {
+  autoTourPaused.value = false;
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  autoTourRotationOnlyHold.value = false;
+  stopTourAndUnfollow(autoTourRuntime, nodeId, (activeNodeId) => {
+    activeAutoTourNodeIds.delete(activeNodeId);
+    if (autoTourFollowNodeId.value === activeNodeId) {
+      autoTourFollowNodeId.value = null;
+    }
+    resetAutoTourCameraFollowState();
+  });
+
+  const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
+  const result = startVehicleDriveMode(driveEvent);
+  if (!result.success) {
+    const message = result.message ?? '无法返回手动驾驶模式';
+    uni.showToast({ title: message, icon: 'none' });
+    applyAutoTourCameraInputPolicy();
+    return false;
+  }
+
+  activeVehicleDriveEvent.value = driveEvent;
+  vehicleDrivePromptBusy.value = false;
+  handleShowVehicleCockpitEvent();
+  applyAutoTourCameraInputPolicy();
+  return true;
+}
+
 function handleFloatingAutoTourTap(): void {
   const button = floatingAutoTourButton.value;
   if (!button.visible || button.disabled || !button.nodeId) {
@@ -8749,6 +8687,16 @@ function handleFloatingAutoTourTap(): void {
   }
 
   const targetNodeId = button.nodeId;
+  if (button.active) {
+    vehicleDrivePromptBusy.value = true;
+    try {
+      stopFloatingAutoTourAndResumeManualDrive(targetNodeId, button.event);
+    } finally {
+      vehicleDrivePromptBusy.value = false;
+    }
+    return;
+  }
+
   const node = resolveNodeById(targetNodeId);
   if (!node || !resolveAutoTourComponent(node)) {
     uni.showToast({ title: '目标未启用自动巡游组件', icon: 'none' });
@@ -8813,128 +8761,74 @@ function handleFloatingAutoTourTap(): void {
   }
 }
 
-function handleVehicleAutoTourStartTap(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
+function handleFloatingAutoTourPauseToggleTap(): void {
+  const button = floatingAutoTourPauseButton.value;
+  if (!button.visible || button.disabled || !button.nodeId) {
     return;
   }
-  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-  if (!targetNodeId) {
-    return;
-  }
-  const node = resolveNodeById(targetNodeId);
-  if (!resolveAutoTourComponent(node)) {
-    uni.showToast({ title: '目标未启用自动巡游组件', icon: 'none' });
-    return;
-  }
-  vehicleDrivePromptBusy.value = true;
-  try {
-    autoTourPaused.value = false;
-    autoTourPausedIsTerminal.value = false;
-    autoTourPausedNodeId.value = null;
-    // Ensure manual drive is stopped.
-    if (vehicleDriveActive.value) {
-      handleHideVehicleCockpitEvent();
-      vehicleDriveController.stopDrive(
-        { resolution: { type: 'continue' }, preserveCamera: false },
-        renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
-      );
-    }
-    resetVehicleDriveInputs();
-    setVehicleDriveUiOverride('hide');
-    startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
-      activeAutoTourNodeIds.add(n);
-      autoTourFollowNodeId.value = n;
-      resetAutoTourCameraFollowState();
-      setCameraViewState('watching', n);
-      autoTourRotationOnlyHold.value = false;
-      setCameraCaging(true);
-      applyAutoTourCameraInputPolicy();
-      updateAutoTourFollowCamera(0, { immediate: true });
-    });
 
-    // Resolve behavior token so scripts continue.
-    if (event.token) {
-      resolveBehaviorToken(event.token, { type: 'continue' });
-      pendingVehicleDriveEvent.value = { ...event, token: '' };
-    }
-  } finally {
-    vehicleDrivePromptBusy.value = false;
-  }
-}
-
-function handleVehicleAutoTourResumeTap(options: { rotateOnly?: boolean } = {}): void {
-    const context = renderContext;
-    if (context) {
-      const { camera, controls } = context;
-      activeCameraWatchTween = null;
-  autoTourRotationOnlyHold.value = Boolean(options.rotateOnly);
-  applyAutoTourCameraInputPolicy();
-      setCameraViewState('level', null);
-
-      runWithProgrammaticCameraMutationAndAnchor(() => {
-        controls.update();
-      });
-
-      lockControlsPitchToCurrent(controls, camera);
-    }
-}
-
-function handleVehicleAutoTourStopTap(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
-    return;
-  }
-  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-  if (!targetNodeId) {
-    return;
-  }
-  vehicleDrivePromptBusy.value = true;
-  try {
-    autoTourPaused.value = false;
-    autoTourPausedIsTerminal.value = false;
-    autoTourPausedNodeId.value = null;
-    autoTourRotationOnlyHold.value = true;
-    stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
-      activeAutoTourNodeIds.delete(n);
-      if (autoTourFollowNodeId.value === n) {
-        autoTourFollowNodeId.value = null;
-      }
-      handleVehicleAutoTourResumeTap({ rotateOnly: true });
-    });
-    applyAutoTourCameraInputPolicy();
-  } finally {
-    vehicleDrivePromptBusy.value = false;
-  }
-}
-
-function handleVehicleAutoTourPauseToggleTap(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
-    return;
-  }
-  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-  if (!targetNodeId) {
-    return;
-  }
+  const targetNodeId = button.nodeId;
   if (!activeAutoTourNodeIds.has(targetNodeId)) {
     return;
   }
+
   const nextPaused = !autoTourPaused.value;
   if (!nextPaused) {
+    prepareAutoTourResumeFromCurrentCamera(targetNodeId);
     if (autoTourPausedIsTerminal.value && autoTourPausedNodeId.value === targetNodeId) {
       autoTourRuntime.continueFromEnd(targetNodeId);
     }
     autoTourPausedIsTerminal.value = false;
     autoTourPausedNodeId.value = null;
     autoTourPaused.value = false;
-  } else {
-    autoTourPausedIsTerminal.value = false;
-    autoTourPausedNodeId.value = null;
-    autoTourPaused.value = true;
-    applyAutoTourPauseForActiveNodes();
+    applyAutoTourCameraInputPolicy();
+    return;
   }
-  // Do not mutate camera when pausing; only stop vehicle motion.
+
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  autoTourPaused.value = true;
+  applyAutoTourPauseForActiveNodes();
+  applyAutoTourCameraInputPolicy();
+}
+
+function pauseAutoTourForInspection(targetNodeId: string): void {
+  if (!activeAutoTourNodeIds.has(targetNodeId)) {
+    return;
+  }
+  autoTourFollowNodeId.value = targetNodeId;
+  setCameraViewState('watching', targetNodeId);
+  autoTourRotationOnlyHold.value = false;
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  autoTourPaused.value = true;
+  applyAutoTourPauseForActiveNodes();
+  applyAutoTourCameraInputPolicy();
+}
+
+function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
+  const object = nodeObjectMap.get(targetNodeId) ?? null;
+  if (!object) {
+    return;
+  }
+
+  autoTourCameraFollowForwardScratch.set(0, 0, 0);
+  const chassisBody = vehicleInstances.get(targetNodeId)?.vehicle?.chassisBody ?? null;
+  const velocity = chassisBody?.velocity ?? null;
+  if (velocity) {
+    autoTourCameraFollowForwardScratch.set(velocity.x, 0, velocity.z);
+  }
+  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+    object.getWorldDirection(autoTourCameraFollowForwardScratch);
+    autoTourCameraFollowForwardScratch.y = 0;
+  }
+  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+    autoTourCameraFollowForwardScratch.set(0, 0, 1);
+  } else {
+    autoTourCameraFollowForwardScratch.normalize();
+  }
+
+  primeAutoTourCameraFollowTransition(object, autoTourCameraFollowForwardScratch);
 }
 
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
@@ -8957,11 +8851,44 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
       message: '已有驾驶请求已取消。',
     });
   }
-  pendingVehicleDriveEvent.value = event;
-  vehicleDrivePromptBusy.value = false;
+  if (activeAutoTourNodeIds.has(targetNodeId)) {
+    pendingVehicleDriveEvent.value = null;
+    vehicleDrivePromptBusy.value = false;
+    setVehicleDriveUiOverride('hide');
+    resetVehicleDriveInputs();
+    vehicleDriveExitBusy.value = false;
+    pauseAutoTourForInspection(targetNodeId);
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'continue' });
+    }
+    return;
+  }
+  pendingVehicleDriveEvent.value = null;
+  vehicleDrivePromptBusy.value = true;
   setVehicleDriveUiOverride('hide');
   resetVehicleDriveInputs();
   vehicleDriveExitBusy.value = false;
+  try {
+    if (activeAutoTourNodeIds.has(targetNodeId)) {
+      stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
+        activeAutoTourNodeIds.delete(n);
+        if (autoTourFollowNodeId.value === n) {
+          autoTourFollowNodeId.value = null;
+          resetAutoTourCameraFollowState();
+        }
+      });
+    }
+    const result = startVehicleDriveMode(event);
+    if (!result.success) {
+      const message = result.message ?? '无法进入驾驶模式';
+      uni.showToast({ title: message, icon: 'none' });
+      resolveBehaviorToken(event.token, { type: 'fail', message });
+      return;
+    }
+    handleShowVehicleCockpitEvent();
+  } finally {
+    vehicleDrivePromptBusy.value = false;
+  }
 }
 
 function handleVehicleDebusEvent(): void {
@@ -11583,7 +11510,6 @@ onUnmounted(() => {
 }
 .viewer-drive-start__btn__label { display: inline-block; vertical-align: middle; font-size: 15px; color: inherit; transition: opacity .12s ease; }
 .viewer-drive-start__btn--primary { background: linear-gradient(90deg,#28c3ff,#57a6ff); color: #012; border: none; }
-.viewer-drive-start__btn--stop { background: linear-gradient(90deg,#ff6b6b,#ff3b6b); color: #fff; border: none; }
 .viewer-drive-start__btn--pause { background: linear-gradient(90deg,#ffd34d,#ff9a4d); color: #111; border: none; }
 .viewer-drive-start__btn--close { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.08); }
 .viewer-drive-start__btn.is-busy .viewer-drive-start__btn__label { opacity: 0.6; }
@@ -11717,23 +11643,31 @@ onUnmounted(() => {
   position: absolute;
   left: 12px;
   z-index: 1460;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 12rpx;
+  gap: 14rpx;
   max-width: calc(100% - 24px);
-  padding: 14rpx 16rpx 14rpx 12rpx;
-  border-radius: 28rpx;
-  border: 1px solid rgba(122, 198, 255, 0.24);
-  background:
-    radial-gradient(circle at left top, rgba(98, 190, 255, 0.26), transparent 56%),
-    linear-gradient(135deg, rgba(8, 16, 30, 0.9), rgba(13, 34, 54, 0.82));
+  padding: 12rpx 14rpx 12rpx 18rpx;
+  border-radius: 999rpx;
+  border: 1px solid rgba(149, 223, 255, 0.24);
+  background: linear-gradient(135deg, rgba(8, 20, 34, 0.84), rgba(18, 44, 62, 0.78));
   box-shadow:
-    0 18rpx 42rpx rgba(0, 0, 0, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(16px);
+    0 16rpx 36rpx rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
   pointer-events: none;
   color: #edf5ff;
   overflow: hidden;
+}
+
+.viewer-punch-summary::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at left center, rgba(111, 214, 255, 0.16), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 45%);
+  pointer-events: none;
 }
 
 .viewer-auto-tour-trigger {
@@ -11743,30 +11677,44 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 164rpx;
-  min-height: 74rpx;
-  padding: 0 22rpx;
-  border: 1px solid rgba(128, 224, 255, 0.24);
-  border-radius: 28rpx;
+  min-width: 172rpx;
+  min-height: 72rpx;
+  padding: 0 24rpx;
+  border: 1px solid rgba(149, 223, 255, 0.26);
+  border-radius: 18px;
   background:
-    radial-gradient(circle at right top, rgba(93, 214, 255, 0.24), transparent 54%),
-    linear-gradient(135deg, rgba(7, 18, 32, 0.9), rgba(14, 40, 58, 0.84));
+    radial-gradient(circle at 18% 22%, rgba(111, 214, 255, 0.18), transparent 36%),
+    linear-gradient(135deg, rgba(8, 20, 34, 0.88), rgba(18, 44, 62, 0.82));
   box-shadow:
-    0 18rpx 42rpx rgba(0, 0, 0, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(16px);
+    0 16rpx 34rpx rgba(4, 6, 18, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
   color: #eef9ff;
+  overflow: hidden;
+  transition:
+    transform 0.18s cubic-bezier(0.2, 0.9, 0.2, 1),
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease;
 }
 
 .viewer-auto-tour-trigger::before {
   content: '';
   position: absolute;
   top: 0;
-  right: 0;
+  left: 0;
   bottom: 0;
-  width: 8rpx;
-  border-radius: 0 28rpx 28rpx 0;
-  background: linear-gradient(180deg, #6fd6ff, #7ea8ff);
+  width: 10rpx;
+  border-radius: 18px 0 0 18px;
+  background: linear-gradient(180deg, rgba(111, 214, 255, 0.94), rgba(126, 168, 255, 0.92));
+}
+
+.viewer-auto-tour-trigger::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 48%);
+  pointer-events: none;
 }
 
 .viewer-auto-tour-trigger__content {
@@ -11776,21 +11724,69 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   min-width: 0;
+  padding-left: 6rpx;
 }
 
 .viewer-auto-tour-trigger__label {
   font-size: 24rpx;
-  font-weight: 800;
-  letter-spacing: 0.8rpx;
+  font-weight: 700;
+  letter-spacing: 0.6rpx;
   white-space: nowrap;
   color: inherit;
 }
 
 .viewer-auto-tour-trigger.is-active {
-  border-color: rgba(126, 232, 180, 0.28);
+  border-color: rgba(255, 143, 167, 0.38);
   background:
-    radial-gradient(circle at right top, rgba(112, 236, 196, 0.24), transparent 54%),
-    linear-gradient(135deg, rgba(10, 24, 28, 0.92), rgba(16, 52, 48, 0.84));
+    radial-gradient(circle at 18% 22%, rgba(255, 120, 170, 0.18), transparent 36%),
+    linear-gradient(135deg, rgba(42, 10, 22, 0.92), rgba(76, 22, 40, 0.86));
+  color: #fff4f7;
+}
+
+.viewer-auto-tour-trigger.is-active::before {
+  background: linear-gradient(180deg, rgba(255, 136, 166, 0.96), rgba(255, 86, 128, 0.92));
+}
+
+.viewer-auto-tour-trigger--secondary {
+  left: 50%;
+  right: auto;
+  top: auto;
+  transform: translateX(-50%);
+  min-width: 156rpx;
+  min-height: 64rpx;
+  padding: 0 22rpx;
+  border-color: rgba(141, 236, 217, 0.26);
+  background:
+    radial-gradient(circle at 18% 22%, rgba(90, 224, 205, 0.16), transparent 36%),
+    linear-gradient(135deg, rgba(10, 24, 34, 0.82), rgba(16, 52, 56, 0.8));
+  box-shadow:
+    0 14rpx 28rpx rgba(4, 6, 18, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.viewer-auto-tour-trigger--secondary::before {
+  background: linear-gradient(180deg, rgba(104, 232, 219, 0.92), rgba(51, 195, 182, 0.9));
+}
+
+.viewer-auto-tour-trigger--secondary .viewer-auto-tour-trigger__label {
+  font-size: 22rpx;
+  letter-spacing: 0.4rpx;
+}
+
+.viewer-auto-tour-trigger--secondary.is-active {
+  border-color: rgba(255, 214, 120, 0.34);
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 204, 102, 0.18), transparent 36%),
+    linear-gradient(135deg, rgba(52, 28, 12, 0.9), rgba(86, 50, 18, 0.84));
+  color: #fff7ea;
+}
+
+.viewer-auto-tour-trigger--secondary.is-active::before {
+  background: linear-gradient(180deg, rgba(255, 216, 121, 0.96), rgba(255, 170, 72, 0.92));
+}
+
+.viewer-auto-tour-trigger--secondary:active {
+  transform: translateX(-50%) translateY(1px) scale(0.985);
 }
 
 .viewer-auto-tour-trigger.is-busy,
@@ -11798,98 +11794,35 @@ onUnmounted(() => {
   opacity: 0.72;
 }
 
-.viewer-punch-summary::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 8rpx;
-  border-radius: 28rpx 0 0 28rpx;
-  background: linear-gradient(180deg, #6fd6ff, #78e6b0);
+.viewer-auto-tour-trigger:active {
+  transform: translateY(1px) scale(0.985);
+  box-shadow: 0 12rpx 24rpx rgba(4, 6, 18, 0.28);
 }
 
-.viewer-punch-summary__mark {
+.viewer-punch-summary__label {
+  position: relative;
+  z-index: 1;
+  font-size: 20rpx;
+  font-weight: 700;
+  letter-spacing: 0.5rpx;
+  color: rgba(228, 242, 255, 0.78);
+}
+
+.viewer-punch-summary__value {
   position: relative;
   z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  width: 44rpx;
-  height: 44rpx;
-  border-radius: 18rpx;
-  border: 1px solid rgba(172, 232, 255, 0.24);
-  background: linear-gradient(180deg, rgba(118, 214, 255, 0.32), rgba(20, 52, 82, 0.9));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.viewer-punch-summary__mark-icon {
-  font-size: 24rpx;
-  font-weight: 800;
-  line-height: 1;
-  color: #f8fdff;
-}
-
-.viewer-punch-summary__body {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  flex-direction: column;
-  gap: 8rpx;
-}
-
-.viewer-punch-summary__header {
-  display: flex;
-  align-items: baseline;
-  gap: 10rpx;
-  min-width: 0;
-}
-
-.viewer-punch-summary__label {
-  font-size: 20rpx;
-  font-weight: 700;
-  letter-spacing: 0.6rpx;
-  color: rgba(228, 242, 255, 0.78);
-}
-
-.viewer-punch-summary__value {
-  font-size: 24rpx;
-  font-weight: 800;
-  letter-spacing: 0.3rpx;
-  color: #ffffff;
-  white-space: nowrap;
-}
-
-.viewer-punch-summary__bar {
-  position: relative;
-  overflow: hidden;
-  height: 10rpx;
+  min-width: 74rpx;
+  padding: 6rpx 14rpx;
   border-radius: 999rpx;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-}
-
-.viewer-punch-summary__bar-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #6fd6ff, #78e6b0);
-  box-shadow: 0 0 14rpx rgba(118, 223, 255, 0.42);
-  transition: width 0.24s ease;
-}
-
-.viewer-punch-summary__percent {
-  position: relative;
-  z-index: 1;
-  flex-shrink: 0;
-  padding: 10rpx 12rpx;
-  border-radius: 16rpx;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.06);
   font-size: 22rpx;
   font-weight: 700;
-  color: rgba(233, 244, 255, 0.86);
+  letter-spacing: 0.3rpx;
+  color: #ffffff;
   white-space: nowrap;
 }
 
@@ -11897,28 +11830,21 @@ onUnmounted(() => {
   .viewer-punch-summary {
     left: 10px;
     max-width: calc(100% - 20px);
-    padding: 12rpx 14rpx 12rpx 10rpx;
+    gap: 10rpx;
+    padding: 10rpx 12rpx 10rpx 14rpx;
   }
 
   .viewer-auto-tour-trigger {
     right: 10px;
-    min-width: 148rpx;
+    min-width: 152rpx;
     min-height: 68rpx;
-    padding: 0 18rpx;
-  }
-
-  .viewer-punch-summary__mark {
-    width: 40rpx;
-    height: 40rpx;
-    border-radius: 16rpx;
+    padding: 0 20rpx;
   }
 
   .viewer-punch-summary__value {
-    font-size: 22rpx;
-  }
-
-  .viewer-punch-summary__percent {
-    padding: 8rpx 10rpx;
+    min-width: 66rpx;
+    padding: 5rpx 12rpx;
+    font-size: 20rpx;
   }
 }
 
@@ -13971,10 +13897,6 @@ onUnmounted(() => {
 }
 .viewer-drive-start__btn--primary {
   background: linear-gradient(90deg, #2b6ef6, #18c6ff);
-  color: #fff;
-}
-.viewer-drive-start__btn--stop {
-  background: rgba(220, 38, 38, 0.92);
   color: #fff;
 }
 .viewer-drive-start__btn--close {
