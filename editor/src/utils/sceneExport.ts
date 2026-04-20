@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type GroundRuntimeDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
+import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type GroundRuntimeDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneAssetRegistryEntry, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
 import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'

@@ -1,4 +1,10 @@
 import * as THREE from 'three'
+import polygonClipping from 'polygon-clipping'
+import type {
+  Pair as PolygonClippingPair,
+  Ring as PolygonClippingRing,
+  MultiPolygon as PolygonClippingMultiPolygon,
+} from 'polygon-clipping'
 import {
   createGroundHeightMap,
   ensureGroundHeightMap,
@@ -24,6 +30,8 @@ const textureLoader = new THREE.TextureLoader()
 
 const DEFAULT_GROUND_CHUNK_CELLS = 100
 const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 200
+const GROUND_TRIANGLE_SLICE_EPSILON = 1e-6
+const GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE = 0.004
 
 type GroundChunkKey = string
 
@@ -40,6 +48,26 @@ type GroundChunkRuntime = {
   chunkColumn: number
   spec: GroundChunkSpec
   mesh: THREE.Mesh
+}
+
+type GroundCellTriangleDefinition = {
+  vertices: [THREE.Vector2, THREE.Vector2, THREE.Vector2]
+  heights: [number, number, number]
+}
+
+type GroundPlanarSliceRegion = {
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  h00: number
+  slopeX: number
+  slopeZ: number
+}
+
+export type GroundTriangleSliceMesh = {
+  vertices: Array<{ x: number; y: number; z: number }>
+  indices: number[]
 }
 
 type GroundRuntimeState = {
@@ -636,6 +664,498 @@ function sampleNeighborAverage(
     }
   }
   return count > 0 ? sum / count : 0
+}
+
+function sanitizeGroundClippingLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
+  const cleaned: THREE.Vector2[] = []
+  for (const point of loop) {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      continue
+    }
+    const next = new THREE.Vector2(point.x, point.y)
+    const previous = cleaned[cleaned.length - 1]
+    if (previous && previous.distanceToSquared(next) <= GROUND_TRIANGLE_SLICE_EPSILON * GROUND_TRIANGLE_SLICE_EPSILON) {
+      continue
+    }
+    cleaned.push(next)
+  }
+
+  if (
+    cleaned.length >= 3
+    && cleaned[0]!.distanceToSquared(cleaned[cleaned.length - 1]!) <= GROUND_TRIANGLE_SLICE_EPSILON * GROUND_TRIANGLE_SLICE_EPSILON
+  ) {
+    cleaned.pop()
+  }
+
+  return cleaned
+}
+
+function computeGroundLoopArea(points: THREE.Vector2[]): number {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    area += current.x * next.y - next.x * current.y
+  }
+  return area * 0.5
+}
+
+function ensureGroundLoopWinding(points: THREE.Vector2[], ccw: boolean): THREE.Vector2[] {
+  if (points.length < 3) {
+    return points
+  }
+  const area = computeGroundLoopArea(points)
+  const isCcw = area > 0
+  if (isCcw === ccw) {
+    return points
+  }
+  return [...points].reverse()
+}
+
+function vector2LoopToGroundClippingRing(loop: THREE.Vector2[]): PolygonClippingRing {
+  const sanitized = sanitizeGroundClippingLoop(loop)
+  const ring: PolygonClippingRing = []
+  sanitized.forEach((point) => {
+    ring.push([point.x, point.y] as PolygonClippingPair)
+  })
+  return ring
+}
+
+function groundClippingRingToVector2Loop(ring: PolygonClippingRing): THREE.Vector2[] {
+  const loop: THREE.Vector2[] = []
+  ring.forEach((pair) => {
+    if (!Array.isArray(pair) || pair.length < 2) {
+      return
+    }
+    const x = Number(pair[0])
+    const y = Number(pair[1])
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return
+    }
+    loop.push(new THREE.Vector2(x, y))
+  })
+  return sanitizeGroundClippingLoop(loop)
+}
+
+function resolveGroundCellTriangleDefinitions(
+  definition: GroundDynamicMesh,
+  row: number,
+  column: number,
+): [GroundCellTriangleDefinition, GroundCellTriangleDefinition] {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+  const halfWidth = runtimeDefinition.width * 0.5
+  const halfDepth = runtimeDefinition.depth * 0.5
+
+  const x0 = -halfWidth + column * cellSize
+  const x1 = x0 + cellSize
+  const z0 = -halfDepth + row * cellSize
+  const z1 = z0 + cellSize
+
+  const a = new THREE.Vector2(x0, z0)
+  const b = new THREE.Vector2(x1, z0)
+  const c = new THREE.Vector2(x0, z1)
+  const d = new THREE.Vector2(x1, z1)
+
+  const hA = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column)
+  const hB = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column + 1)
+  const hC = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row + 1, column)
+  const hD = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row + 1, column + 1)
+
+  return [
+    { vertices: [a, c, b], heights: [hA, hC, hB] },
+    { vertices: [b, c, d], heights: [hB, hC, hD] },
+  ]
+}
+
+function interpolateGroundTrianglePlaneHeight(
+  triangle: GroundCellTriangleDefinition,
+  x: number,
+  z: number,
+): number | null {
+  const [a, b, c] = triangle.vertices
+  const [hA, hB, hC] = triangle.heights
+  const denominator = ((b.y - c.y) * (a.x - c.x)) + ((c.x - b.x) * (a.y - c.y))
+  if (Math.abs(denominator) <= GROUND_TRIANGLE_SLICE_EPSILON) {
+    return null
+  }
+  const weightA = (((b.y - c.y) * (x - c.x)) + ((c.x - b.x) * (z - c.y))) / denominator
+  const weightB = (((c.y - a.y) * (x - c.x)) + ((a.x - c.x) * (z - c.y))) / denominator
+  const weightC = 1 - weightA - weightB
+  return hA * weightA + hB * weightB + hC * weightC
+}
+
+function resolveGroundRegionPlane(
+  definition: GroundDynamicMesh,
+  startRow: number,
+  endRow: number,
+  startColumn: number,
+  endColumn: number,
+): GroundPlanarSliceRegion {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const rowSpan = Math.max(1, endRow - startRow)
+  const columnSpan = Math.max(1, endColumn - startColumn)
+  const h00 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, startRow, startColumn)
+  const h10 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, startRow, endColumn)
+  const h01 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, endRow, startColumn)
+  return {
+    startRow,
+    endRow,
+    startColumn,
+    endColumn,
+    h00,
+    slopeX: (h10 - h00) / columnSpan,
+    slopeZ: (h01 - h00) / rowSpan,
+  }
+}
+
+function sampleGroundRegionPlaneHeight(region: GroundPlanarSliceRegion, row: number, column: number): number {
+  return region.h00 + region.slopeX * (column - region.startColumn) + region.slopeZ * (row - region.startRow)
+}
+
+function regionMatchesGroundPlane(
+  definition: GroundDynamicMesh,
+  startRow: number,
+  endRow: number,
+  startColumn: number,
+  endColumn: number,
+  tolerance: number,
+): boolean {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const region = resolveGroundRegionPlane(runtimeDefinition, startRow, endRow, startColumn, endColumn)
+  const cornerHeight = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, endRow, endColumn)
+  const cornerPlane = sampleGroundRegionPlaneHeight(region, endRow, endColumn)
+  if (Math.abs(cornerHeight - cornerPlane) > tolerance) {
+    return false
+  }
+
+  for (let row = startRow; row <= endRow; row += 1) {
+    for (let column = startColumn; column <= endColumn; column += 1) {
+      const actual = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column)
+      const expected = sampleGroundRegionPlaneHeight(region, row, column)
+      if (Math.abs(actual - expected) > tolerance) {
+        return false
+      }
+    }
+  }
+
+  return true
+}
+
+function buildGroundPlanarSliceRegionPolygon(
+  definition: GroundDynamicMesh,
+  region: GroundPlanarSliceRegion,
+): THREE.Vector2[] {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+  const halfWidth = runtimeDefinition.width * 0.5
+  const halfDepth = runtimeDefinition.depth * 0.5
+  const x0 = -halfWidth + region.startColumn * cellSize
+  const x1 = -halfWidth + region.endColumn * cellSize
+  const z0 = -halfDepth + region.startRow * cellSize
+  const z1 = -halfDepth + region.endRow * cellSize
+  return [
+    new THREE.Vector2(x0, z0),
+    new THREE.Vector2(x1, z0),
+    new THREE.Vector2(x1, z1),
+    new THREE.Vector2(x0, z1),
+  ]
+}
+
+function resolveGroundPlanarSliceRegions(
+  definition: GroundDynamicMesh,
+  startRow: number,
+  endRow: number,
+  startColumn: number,
+  endColumn: number,
+  tolerance: number,
+): { planarRegions: GroundPlanarSliceRegion[]; triangleCells: Array<{ row: number; column: number }> } {
+  const visited = new Set<string>()
+  const planarRegions: GroundPlanarSliceRegion[] = []
+  const triangleCells: Array<{ row: number; column: number }> = []
+
+  const isVisited = (row: number, column: number) => visited.has(`${row}:${column}`)
+  const markVisited = (row0: number, row1: number, column0: number, column1: number) => {
+    for (let row = row0; row < row1; row += 1) {
+      for (let column = column0; column < column1; column += 1) {
+        visited.add(`${row}:${column}`)
+      }
+    }
+  }
+  const canUseRegion = (row0: number, row1: number, column0: number, column1: number): boolean => {
+    for (let row = row0; row < row1; row += 1) {
+      for (let column = column0; column < column1; column += 1) {
+        if (isVisited(row, column)) {
+          return false
+        }
+      }
+    }
+    return regionMatchesGroundPlane(definition, row0, row1, column0, column1, tolerance)
+  }
+
+  for (let row = startRow; row <= endRow; row += 1) {
+    for (let column = startColumn; column <= endColumn; column += 1) {
+      if (isVisited(row, column)) {
+        continue
+      }
+
+      if (!regionMatchesGroundPlane(definition, row, row + 1, column, column + 1, tolerance)) {
+        visited.add(`${row}:${column}`)
+        triangleCells.push({ row, column })
+        continue
+      }
+
+      let regionEndColumn = column + 1
+      while (regionEndColumn < endColumn + 1 && canUseRegion(row, row + 1, column, regionEndColumn + 1)) {
+        regionEndColumn += 1
+      }
+
+      let regionEndRow = row + 1
+      while (regionEndRow < endRow + 1 && canUseRegion(row, regionEndRow + 1, column, regionEndColumn)) {
+        regionEndRow += 1
+      }
+
+      const region = resolveGroundRegionPlane(definition, row, regionEndRow, column, regionEndColumn)
+      planarRegions.push(region)
+      markVisited(row, regionEndRow, column, regionEndColumn)
+    }
+  }
+
+  return { planarRegions, triangleCells }
+}
+
+function appendGroundSliceClip(
+  clip: PolygonClippingMultiPolygon,
+  resolveHeight: (x: number, z: number) => number,
+  vertices: Array<{ x: number; y: number; z: number }>,
+  indices: number[],
+  vertexIndexByKey: Map<string, number>,
+): void {
+  const resolveVertexIndex = (point: THREE.Vector2): number => {
+    const key = `${point.x.toFixed(6)},${point.y.toFixed(6)}`
+    const cached = vertexIndexByKey.get(key)
+    if (cached !== undefined) {
+      return cached
+    }
+    const nextIndex = vertices.length
+    vertices.push({
+      x: point.x,
+      y: resolveHeight(point.x, point.y),
+      z: point.y,
+    })
+    vertexIndexByKey.set(key, nextIndex)
+    return nextIndex
+  }
+
+  if (!Array.isArray(clip) || !clip.length) {
+    return
+  }
+
+  for (const polygonEntry of clip) {
+    if (!Array.isArray(polygonEntry) || !polygonEntry.length) {
+      continue
+    }
+    const contour = ensureGroundLoopWinding(
+      groundClippingRingToVector2Loop(polygonEntry[0] as PolygonClippingRing),
+      true,
+    )
+    if (contour.length < 3) {
+      continue
+    }
+    const holes = polygonEntry
+      .slice(1)
+      .map((ring) => ensureGroundLoopWinding(groundClippingRingToVector2Loop(ring as PolygonClippingRing), false))
+      .filter((ring) => ring.length >= 3)
+
+    const faces = THREE.ShapeUtils.triangulateShape(contour, holes)
+    if (!Array.isArray(faces) || !faces.length) {
+      continue
+    }
+
+    const triangulationPoints: THREE.Vector2[] = [...contour]
+    holes.forEach((hole) => {
+      triangulationPoints.push(...hole)
+    })
+
+    faces.forEach((face) => {
+      if (!Array.isArray(face) || face.length !== 3) {
+        return
+      }
+      const p0 = triangulationPoints[face[0]!]
+      const p1 = triangulationPoints[face[1]!]
+      const p2 = triangulationPoints[face[2]!]
+      if (!p0 || !p1 || !p2) {
+        return
+      }
+      const i0 = resolveVertexIndex(p0)
+      const i1 = resolveVertexIndex(p1)
+      const i2 = resolveVertexIndex(p2)
+      if (i0 === i1 || i1 === i2 || i0 === i2) {
+        return
+      }
+      const area = new THREE.Vector3(
+        vertices[i1]!.x - vertices[i0]!.x,
+        0,
+        vertices[i1]!.z - vertices[i0]!.z,
+      ).cross(
+        new THREE.Vector3(
+          vertices[i2]!.x - vertices[i0]!.x,
+          0,
+          vertices[i2]!.z - vertices[i0]!.z,
+        ),
+      ).y
+      if (Math.abs(area) <= GROUND_TRIANGLE_SLICE_EPSILON) {
+        return
+      }
+      indices.push(i0, i1, i2)
+    })
+  }
+}
+
+export function sampleGroundTriangleHeight(definition: GroundDynamicMesh, x: number, z: number): number {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const columns = Math.max(1, runtimeDefinition.columns)
+  const rows = Math.max(1, runtimeDefinition.rows)
+  const halfWidth = runtimeDefinition.width * 0.5
+  const halfDepth = runtimeDefinition.depth * 0.5
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+
+  const localColumnFloat = clampInclusive((x + halfWidth) / cellSize, 0, columns)
+  const localRowFloat = clampInclusive((z + halfDepth) / cellSize, 0, rows)
+  const cellColumn = clampInclusive(
+    Math.floor(Math.min(localColumnFloat, columns - GROUND_TRIANGLE_SLICE_EPSILON)),
+    0,
+    Math.max(0, columns - 1),
+  )
+  const cellRow = clampInclusive(
+    Math.floor(Math.min(localRowFloat, rows - GROUND_TRIANGLE_SLICE_EPSILON)),
+    0,
+    Math.max(0, rows - 1),
+  )
+  const tx = clampInclusive(localColumnFloat - cellColumn, 0, 1)
+  const tz = clampInclusive(localRowFloat - cellRow, 0, 1)
+  const triangles = resolveGroundCellTriangleDefinitions(runtimeDefinition, cellRow, cellColumn)
+  const triangle = tx + tz <= 1 + GROUND_TRIANGLE_SLICE_EPSILON ? triangles[0] : triangles[1]
+  const sampled = interpolateGroundTrianglePlaneHeight(triangle, x, z)
+  return Number.isFinite(sampled) ? (sampled as number) : sampleGroundHeight(runtimeDefinition, x, z)
+}
+
+export function sliceGroundTrianglesByPolygon(
+  definition: GroundDynamicMesh,
+  polygon: Array<THREE.Vector2 | { x: number; y: number } | [number, number]>,
+  options: { mergePlanarRegions?: boolean } = {},
+): GroundTriangleSliceMesh {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const footprint = sanitizeGroundClippingLoop(
+    polygon.map((entry) => {
+      if (entry instanceof THREE.Vector2) {
+        return entry.clone()
+      }
+      if (Array.isArray(entry)) {
+        return new THREE.Vector2(Number(entry[0]), Number(entry[1]))
+      }
+      return new THREE.Vector2(Number(entry.x), Number(entry.y))
+    }),
+  )
+  if (footprint.length < 3) {
+    return { vertices: [], indices: [] }
+  }
+
+  const columns = Math.max(1, runtimeDefinition.columns)
+  const rows = Math.max(1, runtimeDefinition.rows)
+  const halfWidth = runtimeDefinition.width * 0.5
+  const halfDepth = runtimeDefinition.depth * 0.5
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  footprint.forEach((point) => {
+    minX = Math.min(minX, point.x)
+    maxX = Math.max(maxX, point.x)
+    minZ = Math.min(minZ, point.y)
+    maxZ = Math.max(maxZ, point.y)
+  })
+
+  const startColumn = clampInclusive(Math.floor((minX + halfWidth) / cellSize), 0, Math.max(0, columns - 1))
+  const endColumn = clampInclusive(Math.floor((maxX + halfWidth) / cellSize), 0, Math.max(0, columns - 1))
+  const startRow = clampInclusive(Math.floor((minZ + halfDepth) / cellSize), 0, Math.max(0, rows - 1))
+  const endRow = clampInclusive(Math.floor((maxZ + halfDepth) / cellSize), 0, Math.max(0, rows - 1))
+
+  const footprintPolygon: PolygonClippingMultiPolygon = [[vector2LoopToGroundClippingRing(footprint)]]
+  const vertices: Array<{ x: number; y: number; z: number }> = []
+  const indices: number[] = []
+  const vertexIndexByKey = new Map<string, number>()
+
+  const mergePlanarRegions = options.mergePlanarRegions !== false
+  const { planarRegions, triangleCells } = mergePlanarRegions
+    ? resolveGroundPlanarSliceRegions(
+      runtimeDefinition,
+      startRow,
+      endRow,
+      startColumn,
+      endColumn,
+      GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE,
+    )
+    : {
+      planarRegions: [] as GroundPlanarSliceRegion[],
+      triangleCells: Array.from({ length: endRow - startRow + 1 }, (_, rowOffset) => rowOffset + startRow)
+        .flatMap((row) => Array.from({ length: endColumn - startColumn + 1 }, (_, columnOffset) => ({
+          row,
+          column: columnOffset + startColumn,
+        }))),
+    }
+
+  planarRegions.forEach((region) => {
+    const clip = polygonClipping.intersection(
+      footprintPolygon as any,
+      [[vector2LoopToGroundClippingRing(buildGroundPlanarSliceRegionPolygon(runtimeDefinition, region))]] as any,
+    ) as PolygonClippingMultiPolygon
+    appendGroundSliceClip(
+      clip,
+      (x, z) => {
+        const localColumn = (x + halfWidth) / cellSize
+        const localRow = (z + halfDepth) / cellSize
+        return region.h00
+          + region.slopeX * (localColumn - region.startColumn)
+          + region.slopeZ * (localRow - region.startRow)
+      },
+      vertices,
+      indices,
+      vertexIndexByKey,
+    )
+  })
+
+  triangleCells.forEach(({ row, column }) => {
+    const triangles = resolveGroundCellTriangleDefinitions(runtimeDefinition, row, column)
+    triangles.forEach((triangle) => {
+      const clip = polygonClipping.intersection(
+        footprintPolygon as any,
+        [[vector2LoopToGroundClippingRing(triangle.vertices)]] as any,
+      ) as PolygonClippingMultiPolygon
+      appendGroundSliceClip(
+        clip,
+        (x, z) => {
+          const sampled = interpolateGroundTrianglePlaneHeight(triangle, x, z)
+          return Number.isFinite(sampled) ? (sampled as number) : sampleGroundTriangleHeight(runtimeDefinition, x, z)
+        },
+        vertices,
+        indices,
+        vertexIndexByKey,
+      )
+    })
+  })
+
+  return { vertices, indices }
 }
 
 export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
