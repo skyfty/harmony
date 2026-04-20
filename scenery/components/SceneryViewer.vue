@@ -15,21 +15,64 @@
         class="viewer-canvas"
         @useCanvas="handleUseCanvas"
       />
-      <view v-if="punchTotalCount > 0" class="viewer-punch-summary" aria-hidden="true">
-        <text class="viewer-punch-summary__label">打卡</text>
+      <view
+        v-if="punchTotalCount > 0"
+        class="viewer-punch-summary"
+        :style="punchSummaryStyle"
+        aria-hidden="true"
+      >
+        <text class="viewer-punch-summary__label">景观打卡</text>
         <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
+      <button
+        v-if="floatingAutoTourButton.visible"
+        class="viewer-auto-tour-trigger"
+        :class="{
+          'is-active': floatingAutoTourButton.active,
+          'is-busy': floatingAutoTourButton.busy,
+        }"
+        :style="floatingAutoTourButtonStyle"
+        :disabled="floatingAutoTourButton.disabled"
+        type="button"
+        hover-class="none"
+        aria-label="自动导览"
+        @tap="handleFloatingAutoTourTap"
+      >
+        <view class="viewer-auto-tour-trigger__content">
+          <text class="viewer-auto-tour-trigger__label">{{ floatingAutoTourButton.label }}</text>
+        </view>
+      </button>
+      <button
+        v-if="floatingAutoTourPauseButton.visible"
+        class="viewer-auto-tour-trigger viewer-auto-tour-trigger--secondary"
+        :class="{
+          'is-active': floatingAutoTourPauseButton.pressed,
+          'is-busy': floatingAutoTourPauseButton.busy,
+        }"
+        :style="floatingAutoTourPauseButtonStyle"
+        :disabled="floatingAutoTourPauseButton.disabled"
+        type="button"
+        hover-class="none"
+        :aria-label="floatingAutoTourPauseButton.label"
+        :aria-pressed="floatingAutoTourPauseButton.pressed"
+        @tap="handleFloatingAutoTourPauseToggleTap"
+      >
+        <view class="viewer-auto-tour-trigger__content">
+          <text class="viewer-auto-tour-trigger__label">{{ floatingAutoTourPauseButton.label }}</text>
+        </view>
+      </button>
       <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
-        <OverlayPinnedItem
+        <view
           v-for="entry in signboardOverlayEntries"
           :key="entry.id"
-          base-class="viewer-signboard"
-          vehicle-class="viewer-signboard--vehicle"
-          :reference-kind="entry.referenceKind"
-          :x-percent="entry.xPercent"
-          :y-percent="entry.yPercent"
-          :scale="entry.scale"
-          :opacity="entry.opacity"
+          class="viewer-signboard"
+          :class="{ 'viewer-signboard--vehicle': entry.referenceKind === 'vehicle' }"
+          :style="{
+            left: `${entry.xPercent}%`,
+            top: `${entry.yPercent}%`,
+            transform: `translate(-50%, -100%) scale(${entry.scale})`,
+            opacity: String(entry.opacity),
+          }"
         >
           <view class="viewer-signboard__pill">
             <text class="viewer-signboard__name">{{ entry.label }}</text>
@@ -38,22 +81,23 @@
               <text class="viewer-signboard__punch-badge-icon">✓</text>
             </view>
           </view>
-        </OverlayPinnedItem>
+        </view>
       </view>
       <view v-if="punchBadgeOverlayEntries.length" class="viewer-punch-badge-layer" aria-hidden="true">
-        <OverlayPinnedItem
+        <view
           v-for="entry in punchBadgeOverlayEntries"
           :key="entry.id"
-          base-class="viewer-punch-badge"
-          vehicle-class="viewer-punch-badge--vehicle"
-          :reference-kind="entry.referenceKind"
-          :x-percent="entry.xPercent"
-          :y-percent="entry.yPercent"
-          :scale="entry.scale"
-          :opacity="entry.opacity"
+          class="viewer-punch-badge"
+          :class="{ 'viewer-punch-badge--vehicle': entry.referenceKind === 'vehicle' }"
+          :style="{
+            left: `${entry.xPercent}%`,
+            top: `${entry.yPercent}%`,
+            transform: `translate(-50%, -100%) scale(${entry.scale})`,
+            opacity: String(entry.opacity),
+          }"
         >
           <text class="viewer-punch-badge__icon">✓</text>
-        </OverlayPinnedItem>
+        </view>
       </view>
       <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
         <view
@@ -255,76 +299,6 @@
         </button>
       </view>
       <view
-        v-if="vehicleDrivePrompt.visible"
-        class="viewer-drive-start"
-      >
-        <view class="viewer-drive-start__panel">
-          <view class="viewer-drive-start__group">
-            <button
-              v-if="vehicleDrivePrompt.showDrive"
-              class="viewer-drive-start__btn viewer-drive-start__btn--primary"
-              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-              :disabled="vehicleDrivePrompt.busy"
-              type="button"
-              hover-class="none"
-              aria-label="进入驾驶模式"
-              @tap="handleVehicleDrivePromptTap"
-            >
-              <text class="viewer-drive-start__btn__label">驾驶</text>
-            </button>
-            <button
-              v-if="vehicleDrivePrompt.showAutoTour"
-              class="viewer-drive-start__btn"
-              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-              :disabled="vehicleDrivePrompt.busy"
-              type="button"
-              hover-class="none"
-              aria-label="自动巡游"
-              @tap="handleVehicleAutoTourStartTap"
-            >
-              <text class="viewer-drive-start__btn__label">巡游</text>
-            </button>
-
-            <template v-if="vehicleDrivePrompt.showStopTour">
-              <button
-                class="viewer-drive-start__btn viewer-drive-start__btn--pause"
-                :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-                :disabled="vehicleDrivePrompt.busy"
-                type="button"
-                hover-class="none"
-                aria-label="暂停巡游"
-                @tap="handleVehicleAutoTourPauseToggleTap"
-                :aria-pressed="autoTourPaused"
-              >
-                  <text class="viewer-drive-start__btn__label">{{ autoTourPaused ? '继续' : '暂停' }}</text>
-              </button>
-              <button
-                class="viewer-drive-start__btn viewer-drive-start__btn--stop"
-                :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-                :disabled="vehicleDrivePrompt.busy"
-                type="button"
-                hover-class="none"
-                aria-label="停止巡游"
-                @tap="handleVehicleAutoTourStopTap"
-              >
-                  <text class="viewer-drive-start__btn__label">停止</text>
-              </button>
-            </template>
-
-            <button
-              v-if="!vehicleDrivePrompt.showStopTour"
-              class="viewer-drive-start__btn viewer-drive-start__btn--close"
-              type="button"
-              hover-class="none"
-              aria-label="关闭"
-              @tap="handleVehicleDrivePromptClose"
-            >
-              <text class="viewer-drive-start__btn__label">关闭</text>
-            </button>
-          </view>
-        </view>
-      </view>
-      <view
         v-if="vehicleDriveUi.visible"
         class="viewer-drive-console viewer-drive-console--mobile"
       >
@@ -410,7 +384,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
-import OverlayPinnedItem from './OverlayPinnedItem.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
 import DriveJoystick from './DriveJoystick.vue';
 import DriveCompass from './DriveCompass.vue';
@@ -566,6 +539,7 @@ import {
   type ScenePackageUnzipped,
 } from '@harmony/schema/scenePackageZip';
 import type {
+  AutoTourRouteSnapResult,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -720,13 +694,14 @@ import {
 } from '@harmony/schema/VehicleDriveController';
 import {
   FollowCameraController,
+  type CameraFollowState,
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
   getApproxDimensions,
   resetCameraFollowState,
 } from '@harmony/schema/followCameraController';
-import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
+import { stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
 import {
@@ -1826,6 +1801,48 @@ function trySleepBody(body: CANNON.Body | null | undefined): void {
   (body as CANNON.Body & CannonSleepExtensions).sleep?.();
 }
 
+function resetPhysicsInterpolationState(body: CANNON.Body | null | undefined): void {
+  if (!body) {
+    return;
+  }
+  const state = getPhysicsInterpolationState(body);
+  state.prevPos.set(body.position.x, body.position.y, body.position.z);
+  state.currPos.copy(state.prevPos);
+  state.prevQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+  state.currQuat.copy(state.prevQuat);
+  state.hasSample = true;
+}
+
+function syncSceneNodeLocalTransformFromObject(node: SceneNode, object: THREE.Object3D): void {
+  if (node.position) {
+    node.position.x = object.position.x;
+    node.position.y = object.position.y;
+    node.position.z = object.position.z;
+  }
+  autoTourSnapEuler.setFromQuaternion(object.quaternion);
+  if (node.rotation) {
+    node.rotation.x = autoTourSnapEuler.x;
+    node.rotation.y = autoTourSnapEuler.y;
+    node.rotation.z = autoTourSnapEuler.z;
+  }
+}
+
+function applyObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vector3, worldQuaternion: THREE.Quaternion): void {
+  if (object.parent) {
+    object.parent.updateMatrixWorld(true);
+    autoTourSnapLocalPosition.copy(worldPosition);
+    object.parent.worldToLocal(autoTourSnapLocalPosition);
+    object.position.copy(autoTourSnapLocalPosition);
+    object.parent.getWorldQuaternion(autoTourSnapParentWorldQuaternion);
+    autoTourSnapParentWorldQuaternion.invert();
+    object.quaternion.copy(autoTourSnapParentWorldQuaternion.multiply(worldQuaternion));
+  } else {
+    object.position.copy(worldPosition);
+    object.quaternion.copy(worldQuaternion);
+  }
+  object.updateMatrixWorld(true);
+}
+
 function getBodySleepState(body: CANNON.Body | null | undefined): number | undefined {
   if (!body) {
     return undefined;
@@ -1849,6 +1866,14 @@ const VEHICLE_WHEEL_MIN_RADIUS = 0.01;
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4;
 const VEHICLE_TRAVEL_EPSILON = 1e-5;
 const VEHICLE_BRAKE_FORCE = 1e6;
+const autoTourSnapLocalPosition = new THREE.Vector3();
+const autoTourSnapWorldPosition = new THREE.Vector3();
+const autoTourSnapWorldQuaternion = new THREE.Quaternion();
+const autoTourSnapParentWorldQuaternion = new THREE.Quaternion();
+const autoTourSnapEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const autoTourSnapCameraRight = new THREE.Vector3();
+const autoTourSnapCameraOffset = new THREE.Vector3();
+const autoTourSnapWorldUp = new THREE.Vector3(0, 1, 0);
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
@@ -2020,6 +2045,40 @@ const lanternViewportSize = reactive({
 const lanternImageNaturalSize = reactive({ width: 0, height: 0 });
 const lanternViewerRoot = ref<HTMLElement | ComponentPublicInstance | null>(null);
 let lanternViewerInstance: any = null;
+const punchSummaryTopOffset = computed(() => {
+  const safeAreaTop = Math.max(
+    initialSystemInfo?.safeAreaInsets?.top ?? 0,
+    initialSystemInfo?.statusBarHeight ?? 0,
+  );
+  let topOffset = safeAreaTop + 42;
+
+  if (isWeChatMiniProgram) {
+    try {
+      const menuButtonRect = uni.getMenuButtonBoundingClientRect?.();
+      if (menuButtonRect && Number.isFinite(menuButtonRect.bottom)) {
+        topOffset = Math.max(topOffset, Math.ceil(menuButtonRect.bottom + 12));
+      }
+    } catch (_error) {
+      // Keep the fallback offset when the capsule rect is unavailable.
+    }
+  }
+
+  return topOffset;
+});
+
+const punchSummaryStyle = computed(() => ({
+  top: `${punchSummaryTopOffset.value}px`,
+}));
+
+const floatingAutoTourButtonStyle = computed(() => ({
+  top: `${punchSummaryTopOffset.value}px`,
+}));
+
+const floatingAutoTourPauseButtonStyle = computed(() => ({
+  top: 'auto',
+  bottom: 'calc(22px + var(--viewer-safe-area-bottom, 0px))',
+}));
+
 const lanternViewerOptions: Record<string, any> = {};
 // #ifdef H5
 Object.assign(lanternViewerOptions, {
@@ -2305,6 +2364,25 @@ const autoTourCameraFollowVelocityScratch = new THREE.Vector3();
 const autoTourCameraFollowAnchorScratch = new THREE.Vector3();
 const autoTourCameraFollowForwardScratch = new THREE.Vector3();
 const autoTourCameraFollowBox = new THREE.Box3();
+const AUTO_TOUR_RESUME_BLEND_SECONDS = 0.28;
+const autoTourPausedCameraPosition = new THREE.Vector3();
+const autoTourPausedCameraTarget = new THREE.Vector3();
+let autoTourPausedCameraSnapshotValid = false;
+const autoTourPausedCameraNodeId = ref<string | null>(null);
+const autoTourResumeBlendState = createCameraFollowState();
+const autoTourResumeBlendController = new FollowCameraController();
+const autoTourResumeBlendStartPosition = new THREE.Vector3();
+const autoTourResumeBlendStartTarget = new THREE.Vector3();
+const autoTourResumeBlendTempCamera = new THREE.PerspectiveCamera();
+const autoTourResumeBlendTempControlsTarget = new THREE.Vector3();
+const autoTourResumeBlendTempControls = {
+  target: autoTourResumeBlendTempControlsTarget,
+  update: () => undefined,
+  enabled: false,
+};
+let autoTourResumeBlendActive = false;
+let autoTourResumeBlendElapsedSeconds = 0;
+let autoTourResumeBlendNodeId: string | null = null;
 let autoTourCameraFollowHasSample = false;
 let autoTourActiveSyncAccumSeconds = 0;
 const autoTourRotationOnlyHold = ref(false);
@@ -2326,19 +2404,129 @@ function applyAutoTourCameraInputPolicy(): void {
   setCameraCaging(false);
   const controls = renderContext?.controls;
   if (controls) {
-      controls.enabled = true;
-      controls.enableRotate = true;
-      controls.enablePan = shouldRotateOnly ? false : true;
-      controls.update();
-
+    controls.enabled = true;
+    controls.enableRotate = true;
+    controls.enablePan = shouldRotateOnly ? false : true;
   }
+}
+
+function clearAutoTourPausedCameraSnapshot(): void {
+  autoTourPausedCameraSnapshotValid = false;
+  autoTourPausedCameraNodeId.value = null;
+}
+
+function captureAutoTourPausedCameraSnapshot(nodeId: string): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  autoTourPausedCameraPosition.copy(context.camera.position);
+  autoTourPausedCameraTarget.copy(context.controls.target);
+  autoTourPausedCameraSnapshotValid = true;
+  autoTourPausedCameraNodeId.value = nodeId;
+}
+
+function reapplyAutoTourPausedCameraSnapshot(nodeId: string): void {
+  const context = renderContext;
+  if (!context || !autoTourPausedCameraSnapshotValid || autoTourPausedCameraNodeId.value !== nodeId) {
+    return;
+  }
+  runWithProgrammaticCameraMutationAndAnchor(() => {
+    context.camera.position.copy(autoTourPausedCameraPosition);
+    context.controls.target.copy(autoTourPausedCameraTarget);
+    context.camera.lookAt(context.controls.target);
+  });
+}
+
+function clearAutoTourResumeBlendState(): void {
+  autoTourResumeBlendActive = false;
+  autoTourResumeBlendElapsedSeconds = 0;
+  autoTourResumeBlendNodeId = null;
+}
+
+function resolveAutoTourCameraFollowAnchor(object: THREE.Object3D): THREE.Vector3 {
+  autoTourCameraFollowBox.makeEmpty();
+  autoTourCameraFollowBox.setFromObject(object);
+  if (!autoTourCameraFollowBox.isEmpty() && Number.isFinite(autoTourCameraFollowBox.min.x)) {
+    autoTourCameraFollowBox.getCenter(autoTourCameraFollowAnchorScratch);
+  } else {
+    object.getWorldPosition(autoTourCameraFollowAnchorScratch);
+  }
+  return autoTourCameraFollowAnchorScratch;
+}
+
+function seedAutoTourCameraFollowStateFromView(
+  followState: CameraFollowState,
+  cameraPosition: THREE.Vector3,
+  cameraTarget: THREE.Vector3,
+  anchorWorld: THREE.Vector3,
+  forwardWorld: THREE.Vector3,
+): void {
+  resetCameraFollowState(followState);
+
+  autoTourCameraFollowForwardScratch.copy(forwardWorld);
+  autoTourCameraFollowForwardScratch.y = 0;
+  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+    autoTourCameraFollowForwardScratch.set(0, 0, 1);
+  } else {
+    autoTourCameraFollowForwardScratch.normalize();
+  }
+
+  followState.currentPosition.copy(cameraPosition);
+  followState.desiredPosition.copy(cameraPosition);
+  followState.currentTarget.copy(cameraTarget);
+  followState.desiredTarget.copy(cameraTarget);
+  followState.currentAnchor.copy(anchorWorld);
+  followState.desiredAnchor.copy(anchorWorld);
+  followState.heading.copy(autoTourCameraFollowForwardScratch);
+  followState.lastVelocityDirection.set(0, 0, 0);
+  followState.lookaheadOffset.set(0, 0, 0);
+  followState.motionDistanceBlend = 0;
+  followState.shouldHoldAnchorForReverse = false;
+
+  autoTourSnapCameraRight.crossVectors(autoTourSnapWorldUp, autoTourCameraFollowForwardScratch);
+  if (autoTourSnapCameraRight.lengthSq() < 1e-8) {
+    autoTourSnapCameraRight.set(1, 0, 0);
+  } else {
+    autoTourSnapCameraRight.normalize();
+  }
+
+  autoTourSnapCameraOffset.copy(cameraPosition).sub(anchorWorld);
+  followState.localOffset.set(
+    autoTourSnapCameraOffset.dot(autoTourSnapCameraRight),
+    autoTourSnapCameraOffset.dot(autoTourSnapWorldUp),
+    autoTourSnapCameraOffset.dot(autoTourCameraFollowForwardScratch),
+  );
+  followState.hasLocalOffset = true;
+  followState.initialized = true;
 }
 
 function resetAutoTourCameraFollowState(): void {
   resetCameraFollowState(autoTourCameraFollowState);
+  clearAutoTourPausedCameraSnapshot();
+  clearAutoTourResumeBlendState();
   autoTourCameraFollowHasSample = false;
   autoTourCameraFollowLastAnchor.set(0, 0, 0);
   autoTourCameraFollowVelocity.set(0, 0, 0);
+}
+
+function primeAutoTourCameraFollowTransition(object: THREE.Object3D, forwardWorld: THREE.Vector3): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+
+  const anchorWorld = resolveAutoTourCameraFollowAnchor(object);
+  seedAutoTourCameraFollowStateFromView(
+    autoTourCameraFollowState,
+    context.camera.position,
+    context.controls.target,
+    anchorWorld,
+    forwardWorld,
+  );
+  autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
+  autoTourCameraFollowVelocity.set(0, 0, 0);
+  autoTourCameraFollowHasSample = true;
 }
 
 const vehicleDriveController = new VehicleDriveController(
@@ -2419,35 +2607,6 @@ const vehicleDriveController = new VehicleDriveController(
     steeringKeyboardValue,
   },
 );
-
-const vehicleDrivePrompt = computed(() => {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event) {
-    return {
-      visible: false,
-      label: '',
-      busy: false,
-    } as const;
-  }
-  const targetNodeId = event.targetNodeId ?? event.nodeId;
-  const node = targetNodeId ? resolveNodeById(targetNodeId) : null;
-  const label = node?.name?.trim() || targetNodeId || 'Vehicle';
-  const canDrive = Boolean(resolveVehicleComponent(node));
-  const canAutoTour = Boolean(resolveAutoTourComponent(node));
-  const isTouring = Boolean(targetNodeId && activeAutoTourNodeIds.has(targetNodeId));
-  const hasAnyAction = isTouring || canDrive || canAutoTour;
-  const pauseTourLabel = autoTourPaused.value ? '继续巡游' : '暂停巡游';
-  return {
-    visible: hasAnyAction,
-    label,
-    busy: vehicleDrivePromptBusy.value,
-    showDrive: canDrive && !isTouring,
-    showAutoTour: canAutoTour && !isTouring,
-    showStopTour: isTouring,
-    showPauseTour: isTouring,
-    pauseTourLabel,
-  } as const;
-});
 
 watch(
   () => vehicleDriveUi.value.visible,
@@ -3410,14 +3569,24 @@ const presentBehaviorAlert = behaviorAlert.present;
 const confirmBehaviorAlert = behaviorAlert.confirm;
 const cancelBehaviorAlert = behaviorAlert.cancel;
 
-function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
+function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined) {
   assetNodeIdMap.clear();
-  rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
+  rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap);
   signboardNodeIds.clear();
   punchNodeIds.clear();
   punchTotalCount.value = 0;
   resetSignboardOverlaySmoothing();
   resetPunchOverlaySmoothing();
+
+  if (Array.isArray(document?.punchPoints)) {
+    document.punchPoints.forEach((point) => {
+      const nodeId = typeof point?.nodeId === 'string' ? point.nodeId.trim() : '';
+      if (nodeId) {
+        punchNodeIds.add(nodeId);
+      }
+    });
+  }
+
   for (const [nodeId, node] of previewNodeMap.entries()) {
     const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
     if (signboardState?.enabled) {
@@ -4500,6 +4669,75 @@ function resolveAutoTourComponent(
   return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
 }
 
+function resolveFloatingAutoTourContext(): {
+  nodeId: string | null;
+  event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null;
+} {
+  const activeFollowNodeId = autoTourFollowNodeId.value;
+  if (activeFollowNodeId && activeAutoTourNodeIds.has(activeFollowNodeId)) {
+    return { nodeId: activeFollowNodeId, event: activeVehicleDriveEvent.value };
+  }
+
+  const firstActiveNodeId = activeAutoTourNodeIds.values().next().value ?? null;
+  if (firstActiveNodeId) {
+    return { nodeId: firstActiveNodeId, event: activeVehicleDriveEvent.value };
+  }
+
+  const candidates = [pendingVehicleDriveEvent.value, activeVehicleDriveEvent.value];
+  for (const event of candidates) {
+    const nodeId = event?.targetNodeId ?? event?.nodeId ?? null;
+    if (!nodeId) {
+      continue;
+    }
+    const node = resolveNodeById(nodeId);
+    const autoTour = resolveAutoTourComponent(node);
+    if (!autoTour?.props?.routeNodeId || !vehicleInstances.has(nodeId)) {
+      continue;
+    }
+    return { nodeId, event };
+  }
+
+  const nodeId = vehicleDriveNodeId.value;
+  if (nodeId) {
+    const node = resolveNodeById(nodeId);
+    const autoTour = resolveAutoTourComponent(node);
+    if (autoTour?.props?.routeNodeId && vehicleInstances.has(nodeId)) {
+      return { nodeId, event: activeVehicleDriveEvent.value };
+    }
+  }
+
+  return { nodeId: null, event: null };
+}
+
+const floatingAutoTourButton = computed(() => {
+  const context = resolveFloatingAutoTourContext();
+  const active = context.nodeId ? activeAutoTourNodeIds.has(context.nodeId) : false;
+  const busy = vehicleDrivePromptBusy.value;
+  return {
+    visible: Boolean(context.nodeId),
+    nodeId: context.nodeId,
+    event: context.event,
+    active,
+    busy,
+    disabled: busy,
+    label: active ? '结束导览' : '自动导览',
+  } as const;
+});
+
+const floatingAutoTourPauseButton = computed(() => {
+  const context = resolveFloatingAutoTourContext();
+  const active = context.nodeId ? activeAutoTourNodeIds.has(context.nodeId) : false;
+  const busy = vehicleDrivePromptBusy.value;
+  return {
+    visible: active,
+    nodeId: context.nodeId,
+    busy,
+    disabled: busy,
+    pressed: autoTourPaused.value,
+    label: autoTourPaused.value ? '继续导览' : '暂停导览',
+  } as const;
+});
+
 const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
@@ -4513,8 +4751,16 @@ const autoTourRuntime = createAutoTourRuntime({
   onTerminalStop: (nodeId) => {
     autoTourPausedIsTerminal.value = true;
     autoTourPausedNodeId.value = nodeId ?? null;
+    if (nodeId) {
+      captureAutoTourPausedCameraSnapshot(nodeId);
+    }
     autoTourPaused.value = true;
+    clearAutoTourResumeBlendState();
     applyAutoTourPauseForActiveNodes();
+    applyAutoTourCameraInputPolicy();
+    if (nodeId) {
+      reapplyAutoTourPausedCameraSnapshot(nodeId);
+    }
   },
   onDockRequestedPause: (nodeId, payload) => {
     autoTourPausedIsTerminal.value = payload.terminal === true;
@@ -4522,8 +4768,16 @@ const autoTourRuntime = createAutoTourRuntime({
     if (autoTourPaused.value) {
       return
     }
+    if (nodeId) {
+      captureAutoTourPausedCameraSnapshot(nodeId);
+    }
     autoTourPaused.value = true
+    clearAutoTourResumeBlendState()
     applyAutoTourPauseForActiveNodes()
+    applyAutoTourCameraInputPolicy()
+    if (nodeId) {
+      reapplyAutoTourPausedCameraSnapshot(nodeId)
+    }
   },
   stopNodeMotion: (nodeId) => {
     const entry = rigidbodyInstances.get(nodeId) ?? null;
@@ -8287,17 +8541,13 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     return false;
   }
 
-  // Anchor: bounding-box center (fallback to world position).
-  autoTourCameraFollowBox.makeEmpty();
-  autoTourCameraFollowBox.setFromObject(object);
-  if (!autoTourCameraFollowBox.isEmpty() && Number.isFinite(autoTourCameraFollowBox.min.x)) {
-    autoTourCameraFollowBox.getCenter(autoTourCameraFollowAnchorScratch);
-  } else {
-    object.getWorldPosition(autoTourCameraFollowAnchorScratch);
-  }
+  resolveAutoTourCameraFollowAnchor(object);
 
   // If auto-tour is paused, freeze camera follow placement (do not update placement/velocity).
   if (autoTourPaused.value) {
+    autoTourCameraFollowVelocity.set(0, 0, 0);
+    autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
+    autoTourCameraFollowHasSample = true;
     return false;
   }
 
@@ -8329,6 +8579,70 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
 
   const placement = computeFollowPlacement(getApproxDimensions(object));
 
+  if (autoTourResumeBlendActive && autoTourResumeBlendNodeId === nodeId && !options.immediate) {
+    seedAutoTourCameraFollowStateFromView(
+      autoTourResumeBlendState,
+      autoTourResumeBlendStartPosition,
+      autoTourResumeBlendStartTarget,
+      autoTourCameraFollowAnchorScratch,
+      autoTourCameraFollowForwardScratch,
+    );
+    autoTourResumeBlendTempCamera.position.copy(autoTourResumeBlendStartPosition);
+    autoTourResumeBlendTempCamera.up.copy(context.camera.up);
+    autoTourResumeBlendTempControlsTarget.copy(autoTourResumeBlendStartTarget);
+    autoTourResumeBlendController.update({
+      follow: autoTourResumeBlendState,
+      placement,
+      anchorWorld: autoTourCameraFollowAnchorScratch,
+      desiredForwardWorld: autoTourCameraFollowForwardScratch,
+      velocityWorld: autoTourCameraFollowVelocity,
+      deltaSeconds: 1 / 60,
+      ctx: { camera: autoTourResumeBlendTempCamera, mapControls: autoTourResumeBlendTempControls },
+      immediate: true,
+    });
+
+    autoTourResumeBlendElapsedSeconds += Math.max(0, deltaSeconds);
+    const rawAlpha = AUTO_TOUR_RESUME_BLEND_SECONDS <= 1e-6
+      ? 1
+      : Math.min(1, autoTourResumeBlendElapsedSeconds / AUTO_TOUR_RESUME_BLEND_SECONDS);
+    const alpha = 1 - Math.pow(1 - rawAlpha, 3);
+
+    autoTourCameraFollowState.currentPosition.lerpVectors(
+      autoTourResumeBlendStartPosition,
+      autoTourResumeBlendState.currentPosition,
+      alpha,
+    );
+    autoTourCameraFollowState.currentTarget.lerpVectors(
+      autoTourResumeBlendStartTarget,
+      autoTourResumeBlendState.currentTarget,
+      alpha,
+    );
+    autoTourCameraFollowState.desiredPosition.copy(autoTourResumeBlendState.currentPosition);
+    autoTourCameraFollowState.desiredTarget.copy(autoTourResumeBlendState.currentTarget);
+    autoTourCameraFollowState.currentAnchor.copy(autoTourCameraFollowAnchorScratch);
+    autoTourCameraFollowState.desiredAnchor.copy(autoTourCameraFollowAnchorScratch);
+    autoTourCameraFollowState.heading.copy(autoTourResumeBlendState.heading);
+    autoTourCameraFollowState.localOffset.copy(autoTourResumeBlendState.localOffset);
+    autoTourCameraFollowState.hasLocalOffset = autoTourResumeBlendState.hasLocalOffset;
+    autoTourCameraFollowState.initialized = true;
+    autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
+    autoTourCameraFollowHasSample = true;
+
+    const updated = runWithProgrammaticCameraMutationAndAnchor(() => {
+      context.camera.position.copy(autoTourCameraFollowState.currentPosition);
+      context.controls.target.copy(autoTourCameraFollowState.currentTarget);
+      context.controls.update();
+      context.camera.lookAt(context.controls.target);
+      return true;
+    });
+
+    if (rawAlpha >= 1) {
+      clearAutoTourResumeBlendState();
+    }
+
+    return updated;
+  }
+
   const updated = runWithProgrammaticCameraMutationAndAnchor(() =>
     autoTourCameraFollowController.update({
       follow: autoTourCameraFollowState,
@@ -8357,58 +8671,6 @@ function restoreVehicleDriveCameraState(): void {
   vehicleDriveCameraRestoreState.isCameraCaged = isCameraCaged.value;
   vehicleDriveCameraRestoreState.purposeMode = purposeActiveMode.value;
   vehicleDriveController.restoreCamera(ctx);
-}
-
-async function handleVehicleDrivePromptTap(): Promise<void> {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
-    return;
-  }
-  vehicleDrivePromptBusy.value = true;
-  try {
-    // If an auto-tour is active for this node, stop it first.
-    const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-    if (targetNodeId && activeAutoTourNodeIds.has(targetNodeId)) {
-      stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
-        activeAutoTourNodeIds.delete(n);
-        if (autoTourFollowNodeId.value === n) {
-          autoTourFollowNodeId.value = null;
-          resetAutoTourCameraFollowState();
-        }
-      });
-    }
-    const result = startVehicleDriveMode(event);
-    if (!result.success) {
-      const message = result.message ?? '无法进入驾驶模式';
-      uni.showToast({ title: message, icon: 'none' });
-      resolveBehaviorToken(event.token, { type: 'fail', message });
-      pendingVehicleDriveEvent.value = null;
-      return;
-    }
-    pendingVehicleDriveEvent.value = null;
-    handleShowVehicleCockpitEvent();
-  } finally {
-    vehicleDrivePromptBusy.value = false;
-  }
-}
-
-function handleVehicleDrivePromptClose(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event) {
-    return;
-  }
-  // Resolve the behavior token to indicate the request was aborted by user.
-  try {
-    resolveBehaviorToken(event.token, {
-      type: 'abort',
-      message: '用户取消驾驶请求',
-    });
-  } catch (e) {
-    // ignore
-  }
-  pendingVehicleDriveEvent.value = null;
-  vehicleDrivePromptBusy.value = false;
-  setVehicleDriveUiOverride('hide');
 }
 
 function resolveAutoTourVehicleBrakeForce(nodeId: string): number {
@@ -8465,128 +8727,304 @@ function applyAutoTourPauseForActiveNodes(): void {
   });
 }
 
-function handleVehicleAutoTourStartTap(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
+function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResult): THREE.Object3D | null {
+  const node = resolveNodeById(nodeId);
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null;
+  const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
+  if (!node || !object || !vehicleInstance) {
+    return null;
+  }
+
+  autoTourSnapWorldQuaternion.setFromAxisAngle(autoTourSnapWorldUp, snap.yaw);
+  autoTourSnapWorldPosition.copy(snap.worldPosition);
+  const chassisBody = vehicleInstance.vehicle.chassisBody;
+  const currentChassisY = Number.isFinite(chassisBody.position.y) ? chassisBody.position.y : object.getWorldPosition(autoTourSnapLocalPosition).y;
+  if (Number.isFinite(currentChassisY)) {
+    autoTourSnapWorldPosition.y = currentChassisY;
+  }
+  applyObjectWorldPose(object, autoTourSnapWorldPosition, autoTourSnapWorldQuaternion);
+  syncSceneNodeLocalTransformFromObject(node, object);
+  syncInstancedTransform(object, true);
+
+  if (rigidbodyEntry) {
+    syncSharedBodyFromObject(rigidbodyEntry.body, object, rigidbodyEntry.orientationAdjustment);
+    rigidbodyEntry.body.velocity.set(0, 0, 0);
+    rigidbodyEntry.body.angularVelocity.set(0, 0, 0);
+    resetPhysicsInterpolationState(rigidbodyEntry.body);
+    trySleepBody(rigidbodyEntry.body);
+  }
+
+  const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId);
+  const wheelCount = Math.max(0, vehicleInstance.wheelCount || vehicleInstance.vehicle.wheelInfos.length || 0);
+  for (let index = 0; index < wheelCount; index += 1) {
+    vehicleInstance.vehicle.applyEngineForce(0, index);
+    vehicleInstance.vehicle.setSteeringValue(0, index);
+    vehicleInstance.vehicle.setBrake(brakeForce, index);
+  }
+  chassisBody.velocity.set(0, 0, 0);
+  chassisBody.angularVelocity.set(0, 0, 0);
+  resetPhysicsInterpolationState(chassisBody);
+  holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
+  trySleepBody(chassisBody);
+
+  return object;
+}
+
+function buildFloatingAutoTourDriveEvent(
+  nodeId: string,
+  sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
+): Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> {
+  if (sourceEvent) {
+    return {
+      ...sourceEvent,
+      targetNodeId: sourceEvent.targetNodeId ?? nodeId,
+      nodeId: sourceEvent.nodeId ?? nodeId,
+    };
+  }
+  return {
+    type: 'vehicle-drive',
+    nodeId,
+    action: 'click',
+    sequenceId: '__floating-auto-tour__',
+    behaviorSequenceId: '__floating-auto-tour__',
+    behaviorId: '__floating-auto-tour__',
+    targetNodeId: nodeId,
+    seatNodeId: null,
+    token: `floating-auto-tour:${nodeId}`,
+  };
+}
+
+function stopFloatingAutoTourAndResumeManualDrive(
+  nodeId: string,
+  sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
+): boolean {
+  autoTourPaused.value = false;
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  autoTourRotationOnlyHold.value = false;
+  clearAutoTourPausedCameraSnapshot();
+  clearAutoTourResumeBlendState();
+  stopTourAndUnfollow(autoTourRuntime, nodeId, (activeNodeId) => {
+    activeAutoTourNodeIds.delete(activeNodeId);
+    if (autoTourFollowNodeId.value === activeNodeId) {
+      autoTourFollowNodeId.value = null;
+    }
+    resetAutoTourCameraFollowState();
+  });
+
+  const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
+  const result = startVehicleDriveMode(driveEvent);
+  if (!result.success) {
+    const message = result.message ?? '无法返回手动驾驶模式';
+    uni.showToast({ title: message, icon: 'none' });
+    applyAutoTourCameraInputPolicy();
+    return false;
+  }
+
+  activeVehicleDriveEvent.value = driveEvent;
+  vehicleDrivePromptBusy.value = false;
+  handleShowVehicleCockpitEvent();
+  applyAutoTourCameraInputPolicy();
+  return true;
+}
+
+function handleFloatingAutoTourTap(): void {
+  const button = floatingAutoTourButton.value;
+  if (!button.visible || button.disabled || !button.nodeId) {
     return;
   }
-  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-  if (!targetNodeId) {
+
+  const targetNodeId = button.nodeId;
+  if (button.active) {
+    vehicleDrivePromptBusy.value = true;
+    try {
+      stopFloatingAutoTourAndResumeManualDrive(targetNodeId, button.event);
+    } finally {
+      vehicleDrivePromptBusy.value = false;
+    }
     return;
   }
+
   const node = resolveNodeById(targetNodeId);
-  if (!resolveAutoTourComponent(node)) {
+  if (!node || !resolveAutoTourComponent(node)) {
     uni.showToast({ title: '目标未启用自动巡游组件', icon: 'none' });
     return;
   }
+
+  if (!vehicleInstances.has(targetNodeId)) {
+    uni.showToast({ title: '未找到绑定车辆', icon: 'none' });
+    return;
+  }
+
+  const snap = autoTourRuntime.resolveRouteSnap(targetNodeId);
+  if (!snap) {
+    uni.showToast({ title: '未找到绑定 Guide Route', icon: 'none' });
+    return;
+  }
+
   vehicleDrivePromptBusy.value = true;
   try {
+    activeCameraWatchTween = null;
     autoTourPaused.value = false;
     autoTourPausedIsTerminal.value = false;
     autoTourPausedNodeId.value = null;
-    // Ensure manual drive is stopped.
+    clearAutoTourPausedCameraSnapshot();
+    clearAutoTourResumeBlendState();
+
     if (vehicleDriveActive.value) {
       handleHideVehicleCockpitEvent();
       vehicleDriveController.stopDrive(
-        { resolution: { type: 'continue' }, preserveCamera: false },
+        { resolution: { type: 'continue' }, preserveCamera: true },
         renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
       );
     }
+
     resetVehicleDriveInputs();
     setVehicleDriveUiOverride('hide');
-    startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
-      activeAutoTourNodeIds.add(n);
-      autoTourFollowNodeId.value = n;
-      resetAutoTourCameraFollowState();
-      setCameraViewState('watching', n);
-      autoTourRotationOnlyHold.value = false;
-      setCameraCaging(true);
-      applyAutoTourCameraInputPolicy();
-      updateAutoTourFollowCamera(0, { immediate: true });
-    });
 
-    // Resolve behavior token so scripts continue.
-    if (event.token) {
-      resolveBehaviorToken(event.token, { type: 'continue' });
-      pendingVehicleDriveEvent.value = { ...event, token: '' };
+    const snappedObject = applyAutoTourSnapToVehicle(targetNodeId, snap);
+    if (!snappedObject) {
+      uni.showToast({ title: '无法同步车辆位置', icon: 'none' });
+      return;
     }
-  } finally {
-    vehicleDrivePromptBusy.value = false;
-  }
-}
 
-function handleVehicleAutoTourResumeTap(options: { rotateOnly?: boolean } = {}): void {
-    const context = renderContext;
-    if (context) {
-      const { camera, controls } = context;
-      activeCameraWatchTween = null;
-  autoTourRotationOnlyHold.value = Boolean(options.rotateOnly);
-  applyAutoTourCameraInputPolicy();
-      setCameraViewState('level', null);
-
-      runWithProgrammaticCameraMutationAndAnchor(() => {
-        controls.update();
-      });
-
-      lockControlsPitchToCurrent(controls, camera);
-    }
-}
-
-function handleVehicleAutoTourStopTap(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
-    return;
-  }
-  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-  if (!targetNodeId) {
-    return;
-  }
-  vehicleDrivePromptBusy.value = true;
-  try {
-    autoTourPaused.value = false;
-    autoTourPausedIsTerminal.value = false;
-    autoTourPausedNodeId.value = null;
-    autoTourRotationOnlyHold.value = true;
-    stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
-      activeAutoTourNodeIds.delete(n);
-      if (autoTourFollowNodeId.value === n) {
-        autoTourFollowNodeId.value = null;
-      }
-      handleVehicleAutoTourResumeTap({ rotateOnly: true });
-    });
+    autoTourRuntime.startTour(targetNodeId);
+    autoTourRuntime.seedTourPlaybackState(targetNodeId, snap);
+    activeAutoTourNodeIds.add(targetNodeId);
+    autoTourFollowNodeId.value = targetNodeId;
+    primeAutoTourCameraFollowTransition(snappedObject, snap.forwardWorld);
+    setCameraViewState('watching', targetNodeId);
+    autoTourRotationOnlyHold.value = false;
+    setCameraCaging(true);
     applyAutoTourCameraInputPolicy();
+    updateAutoTourFollowCamera(1 / 60);
+
+    const pendingEvent = pendingVehicleDriveEvent.value;
+    if (pendingEvent && (pendingEvent.targetNodeId ?? pendingEvent.nodeId ?? null) === targetNodeId) {
+      if (pendingEvent.token) {
+        resolveBehaviorToken(pendingEvent.token, { type: 'continue' });
+      }
+      pendingVehicleDriveEvent.value = null;
+    }
   } finally {
     vehicleDrivePromptBusy.value = false;
   }
 }
 
-function handleVehicleAutoTourPauseToggleTap(): void {
-  const event = pendingVehicleDriveEvent.value;
-  if (!event || vehicleDrivePromptBusy.value) {
+function handleFloatingAutoTourPauseToggleTap(): void {
+  const button = floatingAutoTourPauseButton.value;
+  if (!button.visible || button.disabled || !button.nodeId) {
     return;
   }
-  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-  if (!targetNodeId) {
-    return;
-  }
+
+  const targetNodeId = button.nodeId;
   if (!activeAutoTourNodeIds.has(targetNodeId)) {
     return;
   }
+
   const nextPaused = !autoTourPaused.value;
   if (!nextPaused) {
+    prepareAutoTourResumeFromCurrentCamera(targetNodeId);
     if (autoTourPausedIsTerminal.value && autoTourPausedNodeId.value === targetNodeId) {
       autoTourRuntime.continueFromEnd(targetNodeId);
     }
     autoTourPausedIsTerminal.value = false;
     autoTourPausedNodeId.value = null;
     autoTourPaused.value = false;
-  } else {
-    autoTourPausedIsTerminal.value = false;
-    autoTourPausedNodeId.value = null;
-    autoTourPaused.value = true;
-    applyAutoTourPauseForActiveNodes();
+    clearAutoTourPausedCameraSnapshot();
+    applyAutoTourCameraInputPolicy();
+    return;
   }
-  // Do not mutate camera when pausing; only stop vehicle motion.
+
+  captureAutoTourPausedCameraSnapshot(targetNodeId);
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  autoTourPaused.value = true;
+  clearAutoTourResumeBlendState();
+  applyAutoTourPauseForActiveNodes();
+  applyAutoTourCameraInputPolicy();
+  reapplyAutoTourPausedCameraSnapshot(targetNodeId);
+}
+
+function pauseAutoTourForInspection(targetNodeId: string): void {
+  if (!activeAutoTourNodeIds.has(targetNodeId)) {
+    return;
+  }
+  captureAutoTourPausedCameraSnapshot(targetNodeId);
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  autoTourPaused.value = true;
+  clearAutoTourResumeBlendState();
+  applyAutoTourPauseForActiveNodes();
+  applyAutoTourCameraInputPolicy();
+  reapplyAutoTourPausedCameraSnapshot(targetNodeId);
+}
+
+function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
+  const context = renderContext;
+  const object = nodeObjectMap.get(targetNodeId) ?? null;
+  if (!context || !object) {
+    return;
+  }
+
+  autoTourCameraFollowForwardScratch.set(0, 0, 0);
+  const chassisBody = vehicleInstances.get(targetNodeId)?.vehicle?.chassisBody ?? null;
+  const velocity = chassisBody?.velocity ?? null;
+  if (velocity) {
+    autoTourCameraFollowForwardScratch.set(velocity.x, 0, velocity.z);
+  }
+  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+    object.getWorldDirection(autoTourCameraFollowForwardScratch);
+    autoTourCameraFollowForwardScratch.y = 0;
+  }
+  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+    autoTourCameraFollowForwardScratch.set(0, 0, 1);
+  } else {
+    autoTourCameraFollowForwardScratch.normalize();
+  }
+
+  resolveAutoTourCameraFollowAnchor(object);
+  autoTourResumeBlendStartPosition.copy(context.camera.position);
+  autoTourResumeBlendStartTarget.copy(context.controls.target);
+  seedAutoTourCameraFollowStateFromView(
+    autoTourResumeBlendState,
+    autoTourResumeBlendStartPosition,
+    autoTourResumeBlendStartTarget,
+    autoTourCameraFollowAnchorScratch,
+    autoTourCameraFollowForwardScratch,
+  );
+  autoTourResumeBlendTempCamera.position.copy(autoTourResumeBlendStartPosition);
+  autoTourResumeBlendTempCamera.up.copy(context.camera.up);
+  autoTourResumeBlendTempControlsTarget.copy(autoTourResumeBlendStartTarget);
+  const placement = computeFollowPlacement(getApproxDimensions(object));
+  autoTourResumeBlendController.update({
+    follow: autoTourResumeBlendState,
+    placement,
+    anchorWorld: autoTourCameraFollowAnchorScratch,
+    desiredForwardWorld: autoTourCameraFollowForwardScratch,
+    velocityWorld: autoTourCameraFollowVelocity,
+    deltaSeconds: 1 / 60,
+    ctx: { camera: autoTourResumeBlendTempCamera, mapControls: autoTourResumeBlendTempControls },
+    immediate: true,
+  });
+
+  autoTourCameraFollowState.currentPosition.copy(autoTourResumeBlendStartPosition);
+  autoTourCameraFollowState.currentTarget.copy(autoTourResumeBlendStartTarget);
+  autoTourCameraFollowState.desiredPosition.copy(autoTourResumeBlendState.currentPosition);
+  autoTourCameraFollowState.desiredTarget.copy(autoTourResumeBlendState.currentTarget);
+  autoTourCameraFollowState.currentAnchor.copy(autoTourCameraFollowAnchorScratch);
+  autoTourCameraFollowState.desiredAnchor.copy(autoTourCameraFollowAnchorScratch);
+  autoTourCameraFollowState.heading.copy(autoTourResumeBlendState.heading);
+  autoTourCameraFollowState.localOffset.copy(autoTourResumeBlendState.localOffset);
+  autoTourCameraFollowState.hasLocalOffset = autoTourResumeBlendState.hasLocalOffset;
+  autoTourCameraFollowState.initialized = true;
+  autoTourCameraFollowVelocity.set(0, 0, 0);
+  autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
+  autoTourCameraFollowHasSample = true;
+  autoTourResumeBlendActive = true;
+  autoTourResumeBlendElapsedSeconds = 0;
+  autoTourResumeBlendNodeId = targetNodeId;
 }
 
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
@@ -8609,11 +9047,44 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
       message: '已有驾驶请求已取消。',
     });
   }
-  pendingVehicleDriveEvent.value = event;
-  vehicleDrivePromptBusy.value = false;
+  if (activeAutoTourNodeIds.has(targetNodeId)) {
+    pendingVehicleDriveEvent.value = null;
+    vehicleDrivePromptBusy.value = false;
+    setVehicleDriveUiOverride('hide');
+    resetVehicleDriveInputs();
+    vehicleDriveExitBusy.value = false;
+    pauseAutoTourForInspection(targetNodeId);
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'continue' });
+    }
+    return;
+  }
+  pendingVehicleDriveEvent.value = null;
+  vehicleDrivePromptBusy.value = true;
   setVehicleDriveUiOverride('hide');
   resetVehicleDriveInputs();
   vehicleDriveExitBusy.value = false;
+  try {
+    if (activeAutoTourNodeIds.has(targetNodeId)) {
+      stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
+        activeAutoTourNodeIds.delete(n);
+        if (autoTourFollowNodeId.value === n) {
+          autoTourFollowNodeId.value = null;
+          resetAutoTourCameraFollowState();
+        }
+      });
+    }
+    const result = startVehicleDriveMode(event);
+    if (!result.success) {
+      const message = result.message ?? '无法进入驾驶模式';
+      uni.showToast({ title: message, icon: 'none' });
+      resolveBehaviorToken(event.token, { type: 'fail', message });
+      return;
+    }
+    handleShowVehicleCockpitEvent();
+  } finally {
+    vehicleDrivePromptBusy.value = false;
+  }
 }
 
 function handleVehicleDebusEvent(): void {
@@ -10413,6 +10884,15 @@ async function ensureRendererContext(result: UseCanvasResult) {
       return;
     }
     const { camera: contextCamera, controls: contextControls } = renderContext;
+    if (
+      autoTourPaused.value
+      && autoTourPausedCameraSnapshotValid
+      && autoTourPausedCameraNodeId.value
+      && contextCamera.position.distanceToSquared(autoTourPausedCameraPosition) <= 1e-8
+      && contextControls.target.distanceToSquared(autoTourPausedCameraTarget) <= 1e-8
+    ) {
+      return;
+    }
     tempYawForwardVec.copy(contextControls.target).sub(contextCamera.position);
     if (tempYawForwardVec.lengthSq() < 1e-8) {
       return;
@@ -10648,7 +11128,7 @@ async function mountGraphAndSyncSubsystems(
   sceneGraphRoot = root;
   renderContext?.scene?.add(root);
 
-  rebuildPreviewNodeMap(payload.document.nodes);
+  rebuildPreviewNodeMap(payload.document);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(root);
   applyWeChatShadowPolicy(root);
@@ -11235,7 +11715,6 @@ onUnmounted(() => {
 }
 .viewer-drive-start__btn__label { display: inline-block; vertical-align: middle; font-size: 15px; color: inherit; transition: opacity .12s ease; }
 .viewer-drive-start__btn--primary { background: linear-gradient(90deg,#28c3ff,#57a6ff); color: #012; border: none; }
-.viewer-drive-start__btn--stop { background: linear-gradient(90deg,#ff6b6b,#ff3b6b); color: #fff; border: none; }
 .viewer-drive-start__btn--pause { background: linear-gradient(90deg,#ffd34d,#ff9a4d); color: #111; border: none; }
 .viewer-drive-start__btn--close { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.08); }
 .viewer-drive-start__btn.is-busy .viewer-drive-start__btn__label { opacity: 0.6; }
@@ -11367,33 +11846,211 @@ onUnmounted(() => {
 
 .viewer-punch-summary {
   position: absolute;
-  top: calc(12px + var(--viewer-safe-area-top, 0px));
+  left: 12px;
+  z-index: 1460;
+  display: inline-flex;
+  align-items: center;
+  gap: 14rpx;
+  max-width: calc(100% - 24px);
+  padding: 12rpx 14rpx 12rpx 18rpx;
+  border-radius: 999rpx;
+  border: 1px solid rgba(149, 223, 255, 0.24);
+  background: linear-gradient(135deg, rgba(8, 20, 34, 0.84), rgba(18, 44, 62, 0.78));
+  box-shadow:
+    0 16rpx 36rpx rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+  color: #edf5ff;
+  overflow: hidden;
+}
+
+.viewer-punch-summary::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at left center, rgba(111, 214, 255, 0.16), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 45%);
+  pointer-events: none;
+}
+
+.viewer-auto-tour-trigger {
+  position: absolute;
   right: 12px;
   z-index: 1460;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-radius: 999rpx;
-  border: 1px solid rgba(122, 198, 255, 0.22);
-  background: rgba(10, 18, 30, 0.72);
-  box-shadow: 0 12rpx 26rpx rgba(0, 0, 0, 0.16);
-  backdrop-filter: blur(8px);
+  justify-content: center;
+  min-width: 172rpx;
+  min-height: 72rpx;
+  padding: 0 24rpx;
+  border: 1px solid rgba(149, 223, 255, 0.26);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(111, 214, 255, 0.18), transparent 36%),
+    linear-gradient(135deg, rgba(8, 20, 34, 0.88), rgba(18, 44, 62, 0.82));
+  box-shadow:
+    0 16rpx 34rpx rgba(4, 6, 18, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  color: #eef9ff;
+  overflow: hidden;
+  transition:
+    transform 0.18s cubic-bezier(0.2, 0.9, 0.2, 1),
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.viewer-auto-tour-trigger::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 10rpx;
+  border-radius: 18px 0 0 18px;
+  background: linear-gradient(180deg, rgba(111, 214, 255, 0.94), rgba(126, 168, 255, 0.92));
+}
+
+.viewer-auto-tour-trigger::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 48%);
   pointer-events: none;
-  color: #edf5ff;
+}
+
+.viewer-auto-tour-trigger__content {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding-left: 6rpx;
+}
+
+.viewer-auto-tour-trigger__label {
+  font-size: 24rpx;
+  font-weight: 700;
+  letter-spacing: 0.6rpx;
+  white-space: nowrap;
+  color: inherit;
+}
+
+.viewer-auto-tour-trigger.is-active {
+  border-color: rgba(255, 143, 167, 0.38);
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 120, 170, 0.18), transparent 36%),
+    linear-gradient(135deg, rgba(42, 10, 22, 0.92), rgba(76, 22, 40, 0.86));
+  color: #fff4f7;
+}
+
+.viewer-auto-tour-trigger.is-active::before {
+  background: linear-gradient(180deg, rgba(255, 136, 166, 0.96), rgba(255, 86, 128, 0.92));
+}
+
+.viewer-auto-tour-trigger--secondary {
+  left: 50%;
+  right: auto;
+  top: auto;
+  transform: translateX(-50%);
+  min-width: 156rpx;
+  min-height: 64rpx;
+  padding: 0 22rpx;
+  border-color: rgba(141, 236, 217, 0.26);
+  background:
+    radial-gradient(circle at 18% 22%, rgba(90, 224, 205, 0.16), transparent 36%),
+    linear-gradient(135deg, rgba(10, 24, 34, 0.82), rgba(16, 52, 56, 0.8));
+  box-shadow:
+    0 14rpx 28rpx rgba(4, 6, 18, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.viewer-auto-tour-trigger--secondary::before {
+  background: linear-gradient(180deg, rgba(104, 232, 219, 0.92), rgba(51, 195, 182, 0.9));
+}
+
+.viewer-auto-tour-trigger--secondary .viewer-auto-tour-trigger__label {
+  font-size: 22rpx;
+  letter-spacing: 0.4rpx;
+}
+
+.viewer-auto-tour-trigger--secondary.is-active {
+  border-color: rgba(255, 214, 120, 0.34);
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 204, 102, 0.18), transparent 36%),
+    linear-gradient(135deg, rgba(52, 28, 12, 0.9), rgba(86, 50, 18, 0.84));
+  color: #fff7ea;
+}
+
+.viewer-auto-tour-trigger--secondary.is-active::before {
+  background: linear-gradient(180deg, rgba(255, 216, 121, 0.96), rgba(255, 170, 72, 0.92));
+}
+
+.viewer-auto-tour-trigger--secondary:active {
+  transform: translateX(-50%) translateY(1px) scale(0.985);
+}
+
+.viewer-auto-tour-trigger.is-busy,
+.viewer-auto-tour-trigger[disabled] {
+  opacity: 0.72;
+}
+
+.viewer-auto-tour-trigger:active {
+  transform: translateY(1px) scale(0.985);
+  box-shadow: 0 12rpx 24rpx rgba(4, 6, 18, 0.28);
 }
 
 .viewer-punch-summary__label {
+  position: relative;
+  z-index: 1;
   font-size: 20rpx;
-  font-weight: 600;
-  letter-spacing: 0.4rpx;
-  color: rgba(234, 244, 255, 0.8);
+  font-weight: 700;
+  letter-spacing: 0.5rpx;
+  color: rgba(228, 242, 255, 0.78);
 }
 
 .viewer-punch-summary__value {
-  font-size: 24rpx;
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 74rpx;
+  padding: 6rpx 14rpx;
+  border-radius: 999rpx;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 22rpx;
   font-weight: 700;
-  letter-spacing: 0.4rpx;
+  letter-spacing: 0.3rpx;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+@media (max-width: 360px) {
+  .viewer-punch-summary {
+    left: 10px;
+    max-width: calc(100% - 20px);
+    gap: 10rpx;
+    padding: 10rpx 12rpx 10rpx 14rpx;
+  }
+
+  .viewer-auto-tour-trigger {
+    right: 10px;
+    min-width: 152rpx;
+    min-height: 68rpx;
+    padding: 0 20rpx;
+  }
+
+  .viewer-punch-summary__value {
+    min-width: 66rpx;
+    padding: 5rpx 12rpx;
+    font-size: 20rpx;
+  }
 }
 
 .viewer-signboard__name {
@@ -13445,10 +14102,6 @@ onUnmounted(() => {
 }
 .viewer-drive-start__btn--primary {
   background: linear-gradient(90deg, #2b6ef6, #18c6ff);
-  color: #fff;
-}
-.viewer-drive-start__btn--stop {
-  background: rgba(220, 38, 38, 0.92);
   color: #fff;
 }
 .viewer-drive-start__btn--close {

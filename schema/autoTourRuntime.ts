@@ -61,6 +61,10 @@ export type AutoTourRuntimeDeps = {
 export type AutoTourRuntime = {
   update: (deltaSeconds: number) => void
   reset: () => void
+  /** Computes the nearest guide-route snap point and forward heading for a touring node. */
+  resolveRouteSnap: (nodeId: string) => AutoTourRouteSnapResult | null
+  /** Seeds playback state so the next update starts from the provided snap pose instead of reinitializing from the old position. */
+  seedTourPlaybackState: (nodeId: string, snap: AutoTourRouteSnapResult) => void
   /** Enables auto-tour playback for the given nodeId (if it has an enabled AutoTour component). */
   startTour: (nodeId: string) => void
   /**
@@ -73,6 +77,20 @@ export type AutoTourRuntime = {
   stopTour: (nodeId: string) => void
   /** Returns whether the given nodeId is currently marked as touring. */
   isTourActive: (nodeId: string) => boolean
+}
+
+export type AutoTourRouteSnapResult = {
+  nodeId: string
+  routeNodeId: string
+  worldPosition: THREE.Vector3
+  forwardWorld: THREE.Vector3
+  yaw: number
+  projectedS: number
+  segmentIndex: number
+  targetIndex: number
+  routeWaypointCount: number
+  polylineData3d: PolylineMetricData
+  waypointArcLengths3d: number[]
 }
 
 type AutoTourPlaybackMode = 'seek-waypoint' | 'path' | 'loop-to-start' | 'return-to-start' | 'stopped' | 'stopping' | 'dock-hold'
@@ -171,6 +189,24 @@ function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vecto
   return bestIndex
 }
 
+function findTargetWaypointIndexByProjectedS(
+  waypointArcLengths3d: readonly number[],
+  projectedS: number,
+  loop: boolean,
+): number {
+  if (!waypointArcLengths3d.length) {
+    return 0
+  }
+  const epsilon = 1e-4
+  for (let i = 0; i < waypointArcLengths3d.length; i += 1) {
+    const s = waypointArcLengths3d[i] ?? 0
+    if (s > projectedS + epsilon) {
+      return i
+    }
+  }
+  return loop ? 0 : waypointArcLengths3d.length - 1
+}
+
 // helper `findNextWaypointIndexByS` removed — unused
 
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
@@ -203,6 +239,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const autoTourNextWorldPosition = new THREE.Vector3()
   const autoTourLocalPosition = new THREE.Vector3()
   const autoTourPlanarTarget = new THREE.Vector3()
+  const autoTourSnapForward = new THREE.Vector3()
+  const autoTourSnapPoint = new THREE.Vector3()
 
   const returnToStartPointA = new THREE.Vector3()
   const returnToStartPointB = new THREE.Vector3()
@@ -375,6 +413,134 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       dock.push(wp.dock === true)
     })
     return points.length >= 2 ? { points, dock } : null
+  }
+
+  function resolvePlaybackNodeWorldPosition(nodeId: string): THREE.Vector3 | null {
+    const vehicleInstance = deps.vehicleInstances.get(nodeId) ?? null
+    const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null
+    if (chassisBody) {
+      autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+      return autoTourCurrentPosition
+    }
+    const nodeObject = deps.nodeObjectMap.get(nodeId) ?? null
+    if (!nodeObject) {
+      return null
+    }
+    nodeObject.getWorldPosition(autoTourCurrentPosition)
+    return autoTourCurrentPosition
+  }
+
+  function resolveRouteSnap(nodeId: string): AutoTourRouteSnapResult | null {
+    if (!nodeId) {
+      return null
+    }
+    const node = deps.resolveNodeById(nodeId)
+    if (!node) {
+      return null
+    }
+    const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+    if (!autoTour) {
+      return null
+    }
+    const tourProps = clampAutoTourComponentProps(autoTour.props)
+    const routeNodeId = tourProps.routeNodeId
+    if (!routeNodeId) {
+      return null
+    }
+    const routeData = getGuideRouteWorldWaypoints(routeNodeId)
+    if (!routeData) {
+      return null
+    }
+
+    const worldPosition = resolvePlaybackNodeWorldPosition(nodeId)
+    if (!worldPosition) {
+      return null
+    }
+
+    const polylineData3d = buildPolylineMetricData(routeData.points, {
+      closed: Boolean(tourProps.loop),
+      mode: '3d',
+    })
+    if (!polylineData3d) {
+      return null
+    }
+
+    const waypointArcLengths3d = buildPolylineVertexArcLengths(routeData.points, polylineData3d)
+    const projection = projectPointToPolyline(routeData.points, polylineData3d, worldPosition, autoTourSnapPoint)
+
+    const pointA = routeData.points[projection.segmentIndex] ?? routeData.points[0]
+    const pointB = routeData.points[(projection.segmentIndex + 1) % routeData.points.length] ?? pointA
+    autoTourSnapForward.copy(pointB).sub(pointA)
+    autoTourSnapForward.y = 0
+    if (autoTourSnapForward.lengthSq() < 1e-8) {
+      autoTourSnapForward.set(1, 0, 0)
+    } else {
+      autoTourSnapForward.normalize()
+    }
+
+    return {
+      nodeId,
+      routeNodeId,
+      worldPosition: autoTourSnapPoint.clone(),
+      forwardWorld: autoTourSnapForward.clone(),
+      yaw: Math.atan2(-autoTourSnapForward.z, autoTourSnapForward.x),
+      projectedS: projection.s,
+      segmentIndex: projection.segmentIndex,
+      targetIndex: findTargetWaypointIndexByProjectedS(waypointArcLengths3d, projection.s, Boolean(tourProps.loop)),
+      routeWaypointCount: routeData.points.length,
+      polylineData3d,
+      waypointArcLengths3d,
+    }
+  }
+
+  function seedTourPlaybackState(nodeId: string, snap: AutoTourRouteSnapResult): void {
+    if (!nodeId || !snap || snap.nodeId !== nodeId) {
+      return
+    }
+    const node = deps.resolveNodeById(nodeId)
+    if (!node) {
+      return
+    }
+    const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+    if (!autoTour) {
+      return
+    }
+    const tourProps = clampAutoTourComponentProps(autoTour.props)
+    const key = `${node.id}:${autoTour.id}`
+    autoTourPlaybackState.set(key, {
+      mode: 'path',
+      targetIndex: Math.max(0, Math.min(snap.routeWaypointCount - 1, Math.floor(snap.targetIndex))),
+      routeNodeId: snap.routeNodeId,
+      routeWaypointCount: snap.routeWaypointCount,
+      hasSmoothedState: true,
+      smoothedWorldPosition: snap.worldPosition.clone(),
+      smoothedYaw: snap.yaw,
+      dockStopIndex: undefined,
+      dockHoldIndex: undefined,
+      dockLatchIndex: undefined,
+      polylineData3d: snap.polylineData3d,
+      waypointArcLengths3d: snap.waypointArcLengths3d.slice(),
+      lastProjectedS: snap.projectedS,
+      speedIntegral: undefined,
+      lastSteerRad: undefined,
+      reverseActive: undefined,
+    })
+
+    terminalBrakeHoldNodes.delete(nodeId)
+    terminalStoppedNodes.delete(nodeId)
+    disabledTourNodes.delete(nodeId)
+    pendingReturnToStartNodes.delete(nodeId)
+    if (requiresExplicitStart) {
+      activeTourNodes.add(nodeId)
+    }
+
+    if (!tourProps.loop && snap.targetIndex >= snap.routeWaypointCount - 1) {
+      const seeded = autoTourPlaybackState.get(key)
+      if (seeded) {
+        seeded.mode = 'stopping'
+        seeded.dockStopIndex = snap.routeWaypointCount - 1
+      }
+    }
   }
 
   /**
@@ -1295,6 +1461,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       terminalStoppedNodes.clear()
       pendingReturnToStartNodes.clear()
     },
+    resolveRouteSnap,
+    seedTourPlaybackState,
     startTour: (nodeId: string) => {
       if (!nodeId) {
         return

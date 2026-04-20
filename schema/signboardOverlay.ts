@@ -219,6 +219,7 @@ export function computeSignboardPlacement(params: {
   const minScale = params.minScale ?? SIGNBOARD_MIN_SCALE
   const maxScale = params.maxScale ?? SIGNBOARD_MAX_SCALE
   const screenMargin = params.screenMargin ?? SIGNBOARD_SCREEN_MARGIN
+  const screenLift = 0.03
 
   copyVector3(placementWorld, params.anchorWorld)
   copyVector3(placementReference, params.referenceWorld)
@@ -249,7 +250,9 @@ export function computeSignboardPlacement(params: {
   }
 
   const minScreenYNorm = minScreenYPercent / 100
-  const yNorm = minScreenYNorm > 0 ? Math.max(rawYNorm, minScreenYNorm) : rawYNorm
+  const yNorm = minScreenYNorm > 0
+    ? Math.max(rawYNorm - screenLift, minScreenYNorm)
+    : Math.max(rawYNorm - screenLift, 0)
 
   const scaleRange = Math.max(fadeStartDistance - fullScaleDistance, 1e-6)
   const scaleAmount = clamp01((distanceMeters - fullScaleDistance) / scaleRange)
