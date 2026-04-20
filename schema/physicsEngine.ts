@@ -44,6 +44,22 @@ export {
 	type RoadHeightfieldBuildParams,
 } from './roadHeightfield'
 
+/**
+ * Collision filter groups for cannon-es.
+ * Prevents the broadphase from generating static-vs-static pairs, which
+ * are the vast majority of pairs in a typical scene but can never produce
+ * useful contacts.
+ */
+export const COLLISION_GROUP_STATIC_ENV = 1
+export const COLLISION_GROUP_DYNAMIC_OBJ = 2
+export const COLLISION_GROUP_KINEMATIC_OBJ = 4
+/** Mask for static environment bodies — only collide with dynamic / kinematic. */
+export const COLLISION_MASK_STATIC_ENV = COLLISION_GROUP_DYNAMIC_OBJ | COLLISION_GROUP_KINEMATIC_OBJ
+/** Mask for dynamic bodies — collide with everything. */
+export const COLLISION_MASK_DYNAMIC_OBJ = COLLISION_GROUP_STATIC_ENV | COLLISION_GROUP_DYNAMIC_OBJ | COLLISION_GROUP_KINEMATIC_OBJ
+/** Mask for kinematic bodies — collide with dynamic. */
+export const COLLISION_MASK_KINEMATIC_OBJ = COLLISION_GROUP_DYNAMIC_OBJ
+
 export type RoadHeightfieldDebugSegment = {
 	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' | 'box' }>
 }
@@ -312,6 +328,10 @@ export type EnsurePhysicsWorldParams = {
 	contactSettings: PhysicsContactSettings
 	rigidbodyMaterialCache: Map<string, RigidbodyMaterialEntry>
 	rigidbodyContactMaterialKeys: Set<string>
+	/** Use fast approximate quaternion normalization (default false). */
+	quatNormalizeFast?: boolean
+	/** Normalize quaternions every N steps; 0 = every step (default 0). */
+	quatNormalizeSkip?: number
 }
 
 export function removeRigidbodyInstanceBodies(world: CANNON.World | null | undefined, instance: RigidbodyInstance | null | undefined): void {
@@ -1269,6 +1289,17 @@ export function createRigidbodyBody(
 	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
 	const body = new CANNON.Body({ mass })
 	body.type = mapBodyType(props.bodyType)
+	// Assign collision filter groups so that static-vs-static pairs are skipped in broadphase.
+	if (body.type === CANNON.Body.STATIC) {
+		body.collisionFilterGroup = COLLISION_GROUP_STATIC_ENV
+		body.collisionFilterMask = COLLISION_MASK_STATIC_ENV
+	} else if (body.type === CANNON.Body.KINEMATIC) {
+		body.collisionFilterGroup = COLLISION_GROUP_KINEMATIC_OBJ
+		body.collisionFilterMask = COLLISION_MASK_KINEMATIC_OBJ
+	} else {
+		body.collisionFilterGroup = COLLISION_GROUP_DYNAMIC_OBJ
+		body.collisionFilterMask = COLLISION_MASK_DYNAMIC_OBJ
+	}
 	body.material = ensureRigidbodyMaterial({
 		world,
 		rigidbodyMaterialCache,
@@ -1409,8 +1440,8 @@ export function ensurePhysicsWorld(params: EnsurePhysicsWorldParams): CANNON.Wor
 	world.solver = solver
 	world.broadphase = new CANNON.SAPBroadphase(world)
 	world.allowSleep = true
-	world.quatNormalizeFast = false
-	world.quatNormalizeSkip = 0
+	world.quatNormalizeFast = params.quatNormalizeFast ?? false
+	world.quatNormalizeSkip = params.quatNormalizeSkip ?? 0
 	world.defaultContactMaterial.friction = params.contactFriction
 	world.defaultContactMaterial.restitution = params.contactRestitution
 	world.defaultContactMaterial.contactEquationStiffness = params.contactSettings.contactEquationStiffness

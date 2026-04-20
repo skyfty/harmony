@@ -220,7 +220,7 @@ export default class Loader {
       }
 
       default:
-        this.emit('error', new Error(`不支持的文件格式 (${ext})`));
+        // this.emit('error', new Error(`不支持的文件格式 (${ext})`));
         break;
     }
   }

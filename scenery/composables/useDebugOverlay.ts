@@ -18,9 +18,26 @@ export interface CanvasInfo {
   clientHeight?: number;
 }
 
+export interface PhysicsSourceDebugCounts {
+  explicitBodies: number;
+  explicitShapes: number;
+  groundBodies: number;
+  groundShapes: number;
+  roadBodies: number;
+  roadShapes: number;
+  wallBodies: number;
+  wallShapes: number;
+  floorBodies: number;
+  floorShapes: number;
+  boundaryBodies: number;
+  boundaryShapes: number;
+  airWallBodies: number;
+  airWallShapes: number;
+}
+
 export function useDebugOverlay() {
   const debugEnabled = ref(true);
-  const debugMode = ref<'off' | 'fps' | 'full'>('fps');
+  const debugMode = ref<'off' | 'fps' | 'full'>('full');
   const debugOverlayVisible = computed(() => debugEnabled.value);
   const debugFps = ref(0);
 
@@ -54,13 +71,43 @@ export function useDebugOverlay() {
     unloaded: 0,
   });
 
+  const physicsDebug = reactive({
+    bodies: 0,
+    shapes: 0,
+    dynamicAwake: 0,
+    dynamicSleeping: 0,
+    dynamicTotal: 0,
+    staticTotal: 0,
+    kinematicTotal: 0,
+    raycastVehicles: 0,
+    substepsLastFrame: 0,
+    substepsPerSecond: 0,
+    sourceExplicitBodies: 0,
+    sourceGroundBodies: 0,
+    sourceRoadBodies: 0,
+    sourceWallBodies: 0,
+    sourceFloorBodies: 0,
+    sourceBoundaryBodies: 0,
+    sourceAirWallBodies: 0,
+    sourceExplicitShapes: 0,
+    sourceGroundShapes: 0,
+    sourceRoadShapes: 0,
+    sourceWallShapes: 0,
+    sourceFloorShapes: 0,
+    sourceBoundaryShapes: 0,
+    sourceAirWallShapes: 0,
+  });
+
   let debugFpsFrames = 0;
   let debugFpsAccumSeconds = 0;
   let debugFpsLastSyncAt = 0;
   let debugInstancingLastSyncAt = 0;
   let debugGroundChunksLastSyncAt = 0;
+  let debugPhysicsLastSyncAt = 0;
   let debugGroundUnloadedTotal = 0;
   let debugLastGroundChunkKeys: Set<string> | null = null;
+  let debugPhysicsSubstepsAccum = 0;
+  let debugPhysicsSubstepsAccumSeconds = 0;
 
   function updateDebugFps(deltaSeconds: number): void {
     if (!debugEnabled.value) {
@@ -292,6 +339,66 @@ export function useDebugOverlay() {
     groundChunkDebug.unloaded = debugGroundUnloadedTotal;
   }
 
+  function syncPhysicsDebugCounters(params: {
+    deltaSeconds: number;
+    substepsLastFrame: number;
+    totalBodies: number;
+    totalShapes: number;
+    dynamicAwake: number;
+    dynamicSleeping: number;
+    dynamicTotal: number;
+    staticTotal: number;
+    kinematicTotal: number;
+    raycastVehicles: number;
+    sources: PhysicsSourceDebugCounts;
+  }): void {
+    if (!debugEnabled.value) {
+      return;
+    }
+    const { deltaSeconds, substepsLastFrame, sources } = params;
+    if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) {
+      debugPhysicsSubstepsAccum += Math.max(0, Math.trunc(substepsLastFrame));
+      debugPhysicsSubstepsAccumSeconds += deltaSeconds;
+    }
+
+    const now = Date.now();
+    if (now - debugPhysicsLastSyncAt < 250) {
+      return;
+    }
+    debugPhysicsLastSyncAt = now;
+
+    physicsDebug.bodies = Math.max(0, Math.trunc(params.totalBodies));
+    physicsDebug.shapes = Math.max(0, Math.trunc(params.totalShapes));
+    physicsDebug.dynamicAwake = Math.max(0, Math.trunc(params.dynamicAwake));
+    physicsDebug.dynamicSleeping = Math.max(0, Math.trunc(params.dynamicSleeping));
+    physicsDebug.dynamicTotal = Math.max(0, Math.trunc(params.dynamicTotal));
+    physicsDebug.staticTotal = Math.max(0, Math.trunc(params.staticTotal));
+    physicsDebug.kinematicTotal = Math.max(0, Math.trunc(params.kinematicTotal));
+    physicsDebug.raycastVehicles = Math.max(0, Math.trunc(params.raycastVehicles));
+    physicsDebug.substepsLastFrame = Math.max(0, Math.trunc(substepsLastFrame));
+    physicsDebug.substepsPerSecond = debugPhysicsSubstepsAccumSeconds > 1e-6
+      ? Math.max(0, Math.round(debugPhysicsSubstepsAccum / debugPhysicsSubstepsAccumSeconds))
+      : 0;
+
+    physicsDebug.sourceExplicitBodies = Math.max(0, Math.trunc(sources.explicitBodies));
+    physicsDebug.sourceGroundBodies = Math.max(0, Math.trunc(sources.groundBodies));
+    physicsDebug.sourceRoadBodies = Math.max(0, Math.trunc(sources.roadBodies));
+    physicsDebug.sourceWallBodies = Math.max(0, Math.trunc(sources.wallBodies));
+    physicsDebug.sourceFloorBodies = Math.max(0, Math.trunc(sources.floorBodies));
+    physicsDebug.sourceBoundaryBodies = Math.max(0, Math.trunc(sources.boundaryBodies));
+    physicsDebug.sourceAirWallBodies = Math.max(0, Math.trunc(sources.airWallBodies));
+    physicsDebug.sourceExplicitShapes = Math.max(0, Math.trunc(sources.explicitShapes));
+    physicsDebug.sourceGroundShapes = Math.max(0, Math.trunc(sources.groundShapes));
+    physicsDebug.sourceRoadShapes = Math.max(0, Math.trunc(sources.roadShapes));
+    physicsDebug.sourceWallShapes = Math.max(0, Math.trunc(sources.wallShapes));
+    physicsDebug.sourceFloorShapes = Math.max(0, Math.trunc(sources.floorShapes));
+    physicsDebug.sourceBoundaryShapes = Math.max(0, Math.trunc(sources.boundaryShapes));
+    physicsDebug.sourceAirWallShapes = Math.max(0, Math.trunc(sources.airWallShapes));
+
+    debugPhysicsSubstepsAccum = 0;
+    debugPhysicsSubstepsAccumSeconds = 0;
+  }
+
   return {
     debugEnabled,
     debugMode,
@@ -300,10 +407,12 @@ export function useDebugOverlay() {
     instancingDebug,
     rendererDebug,
     groundChunkDebug,
+    physicsDebug,
     updateDebugFps,
     syncInstancingDebugCounters,
     syncRendererDebug,
     syncGroundChunkDebugCounters,
+    syncPhysicsDebugCounters,
     estimateSceneTriangleCount,
   };
 }

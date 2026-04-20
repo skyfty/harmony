@@ -360,7 +360,10 @@
           <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}</text>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
           <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
-
+          <text class="viewer-debug-line">Physics: bodies {{ physicsDebug.bodies }}, shapes {{ physicsDebug.shapes }}, dyn {{ physicsDebug.dynamicAwake }}/{{ physicsDebug.dynamicSleeping }}/{{ physicsDebug.dynamicTotal }}, static {{ physicsDebug.staticTotal }}, kin {{ physicsDebug.kinematicTotal }}, rv {{ physicsDebug.raycastVehicles }}</text>
+          <text class="viewer-debug-line">Physics Step: last {{ physicsDebug.substepsLastFrame }}, per s {{ physicsDebug.substepsPerSecond }}</text>
+          <text class="viewer-debug-line">Physics Src: exp {{ physicsDebug.sourceExplicitBodies }}/{{ physicsDebug.sourceExplicitShapes }}, ground {{ physicsDebug.sourceGroundBodies }}/{{ physicsDebug.sourceGroundShapes }}, road {{ physicsDebug.sourceRoadBodies }}/{{ physicsDebug.sourceRoadShapes }}, wall {{ physicsDebug.sourceWallBodies }}/{{ physicsDebug.sourceWallShapes }}</text>
+          <text class="viewer-debug-line">Physics Src: floor {{ physicsDebug.sourceFloorBodies }}/{{ physicsDebug.sourceFloorShapes }}, boundary {{ physicsDebug.sourceBoundaryBodies }}/{{ physicsDebug.sourceBoundaryShapes }}, air {{ physicsDebug.sourceAirWallBodies }}/{{ physicsDebug.sourceAirWallShapes }}</text>
         </template>
       </view>
     </view>
@@ -390,6 +393,7 @@ import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
+import type { PhysicsSourceDebugCounts } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
@@ -459,6 +463,8 @@ import {
   removeRigidbodyInstanceBodies,
   ensureRoadHeightfieldRigidbodyInstance,
   isRoadDynamicMesh,
+  COLLISION_GROUP_STATIC_ENV,
+  COLLISION_MASK_STATIC_ENV,
   type GroundHeightfieldCacheEntry,
   type FloorShapeCacheEntry,
   type WallTrimeshCacheEntry,
@@ -959,10 +965,12 @@ const {
   instancingDebug,
   rendererDebug,
   groundChunkDebug,
+  physicsDebug,
   updateDebugFps,
   syncInstancingDebugCounters,
   syncRendererDebug,
   syncGroundChunkDebugCounters,
+  syncPhysicsDebugCounters,
 } = useDebugOverlay();
 
 type InstancedTransformCacheEntry = {
@@ -1761,15 +1769,18 @@ const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
-const PHYSICS_FIXED_TIMESTEP = 1 / 60;
-// WeChat mini-program frames can have bigger dt spikes; allow more fixed substeps to avoid dropping sim time.
-const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 8 : 5;
-const PHYSICS_SOLVER_ITERATIONS = 18
+// On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
+const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
+// Fewer substeps needed at 30 Hz; each covers more sim time.
+const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 4 : 5;
+// 8 solver iterations is enough for simple ground-contact on mobile; 18 for desktop accuracy.
+const PHYSICS_SOLVER_ITERATIONS = isWeChatMiniProgram ? 8 : 18;
 const PHYSICS_SOLVER_TOLERANCE = 5e-4
 const vehicleIdleFreezeLastLogMs = new Map<string, number>();
-const PHYSICS_CONTACT_STIFFNESS = 1e9
+// Lower stiffness on WeChat converges faster in GSSolver with fewer iterations.
+const PHYSICS_CONTACT_STIFFNESS = isWeChatMiniProgram ? 1e7 : 1e9;
 const PHYSICS_CONTACT_RELAXATION = 4
-const PHYSICS_FRICTION_STIFFNESS = 1e9
+const PHYSICS_FRICTION_STIFFNESS = isWeChatMiniProgram ? 1e7 : 1e9;
 const PHYSICS_FRICTION_RELAXATION = 4
 const PHYSICS_MAX_ACCUMULATOR = PHYSICS_FIXED_TIMESTEP * PHYSICS_MAX_SUB_STEPS;
 
@@ -4915,6 +4926,9 @@ function ensurePhysicsWorld(): CANNON.World {
     contactSettings: physicsContactSettings,
     rigidbodyMaterialCache,
     rigidbodyContactMaterialKeys,
+    // Fast approximate quaternion normalization on WeChat to save per-body CPU cost.
+    quatNormalizeFast: isWeChatMiniProgram,
+    quatNormalizeSkip: isWeChatMiniProgram ? 4 : 0,
   });
 }
 
@@ -4961,6 +4975,8 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
     const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz));
     const body = new CANNON.Body({ mass: 0 });
     body.type = CANNON.Body.STATIC;
+    body.collisionFilterGroup = COLLISION_GROUP_STATIC_ENV;
+    body.collisionFilterMask = COLLISION_MASK_STATIC_ENV;
     if (world.defaultMaterial) {
       body.material = world.defaultMaterial;
     }
@@ -5119,6 +5135,152 @@ function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeCompon
     return;
   }
   rigidbodyInstances.set(node.id, result.instance);
+}
+
+function countShapesForBodies(bodies: CANNON.Body[] | null | undefined): number {
+  if (!Array.isArray(bodies) || !bodies.length) {
+    return 0;
+  }
+  let total = 0;
+  for (let index = 0; index < bodies.length; index += 1) {
+    total += bodies[index]?.shapes?.length ?? 0;
+  }
+  return total;
+}
+
+function classifyPhysicsSourceCounts(): PhysicsSourceDebugCounts {
+  const counts: PhysicsSourceDebugCounts = {
+    explicitBodies: 0,
+    explicitShapes: 0,
+    groundBodies: 0,
+    groundShapes: 0,
+    roadBodies: 0,
+    roadShapes: 0,
+    wallBodies: 0,
+    wallShapes: 0,
+    floorBodies: 0,
+    floorShapes: 0,
+    boundaryBodies: 0,
+    boundaryShapes: 0,
+    airWallBodies: airWallBodies.size,
+    airWallShapes: countShapesForBodies(Array.from(airWallBodies.values())),
+  };
+
+  rigidbodyInstances.forEach((entry, nodeId) => {
+    const node = resolveNodeById(nodeId);
+    const bodies = Array.isArray(entry.bodies) && entry.bodies.length ? entry.bodies : [entry.body];
+    const bodyCount = bodies.length;
+    const shapeCount = countShapesForBodies(bodies);
+    const dynamicMesh = node?.dynamicMesh as { type?: unknown } | null | undefined;
+    const boundaryOnly = Boolean(node && resolveBoundaryWallComponent(node) && !resolveRigidbodyComponent(node));
+
+    if (isRoadDynamicMesh(node?.dynamicMesh)) {
+      counts.roadBodies += bodyCount;
+      counts.roadShapes += shapeCount;
+      return;
+    }
+    if (isGroundDynamicMesh(node?.dynamicMesh)) {
+      counts.groundBodies += bodyCount;
+      counts.groundShapes += shapeCount;
+      return;
+    }
+    if (isFloorDynamicMeshForPhysics(node?.dynamicMesh)) {
+      counts.floorBodies += bodyCount;
+      counts.floorShapes += shapeCount;
+      return;
+    }
+    if (dynamicMesh?.type === 'Wall') {
+      counts.wallBodies += bodyCount;
+      counts.wallShapes += shapeCount;
+      return;
+    }
+    if (boundaryOnly) {
+      counts.boundaryBodies += bodyCount;
+      counts.boundaryShapes += shapeCount;
+      return;
+    }
+    counts.explicitBodies += bodyCount;
+    counts.explicitShapes += shapeCount;
+  });
+
+  return counts;
+}
+
+function syncPhysicsDebugOverlay(deltaSeconds: number, substepsLastFrame: number): void {
+  const world = physicsWorld;
+  if (!world) {
+    syncPhysicsDebugCounters({
+      deltaSeconds,
+      substepsLastFrame,
+      totalBodies: 0,
+      totalShapes: 0,
+      dynamicAwake: 0,
+      dynamicSleeping: 0,
+      dynamicTotal: 0,
+      staticTotal: 0,
+      kinematicTotal: 0,
+      raycastVehicles: vehicleRaycastInWorld.size,
+      sources: {
+        explicitBodies: 0,
+        explicitShapes: 0,
+        groundBodies: 0,
+        groundShapes: 0,
+        roadBodies: 0,
+        roadShapes: 0,
+        wallBodies: 0,
+        wallShapes: 0,
+        floorBodies: 0,
+        floorShapes: 0,
+        boundaryBodies: 0,
+        boundaryShapes: 0,
+        airWallBodies: 0,
+        airWallShapes: 0,
+      },
+    });
+    return;
+  }
+
+  let totalShapes = 0;
+  let dynamicAwake = 0;
+  let dynamicSleeping = 0;
+  let dynamicTotal = 0;
+  let staticTotal = 0;
+  let kinematicTotal = 0;
+  const bodies = world.bodies;
+  for (let index = 0, bodyCount = bodies.length; index < bodyCount; index += 1) {
+    const body = bodies[index];
+    totalShapes += body.shapes?.length ?? 0;
+    if (body.type === CANNON.Body.DYNAMIC) {
+      dynamicTotal += 1;
+      if ((body as CANNON.Body & CannonSleepExtensions).sleepState === 0) {
+        dynamicAwake += 1;
+      } else {
+        dynamicSleeping += 1;
+      }
+      continue;
+    }
+    if (body.type === CANNON.Body.STATIC) {
+      staticTotal += 1;
+      continue;
+    }
+    if (body.type === CANNON.Body.KINEMATIC) {
+      kinematicTotal += 1;
+    }
+  }
+
+  syncPhysicsDebugCounters({
+    deltaSeconds,
+    substepsLastFrame,
+    totalBodies: bodies.length,
+    totalShapes,
+    dynamicAwake,
+    dynamicSleeping,
+    dynamicTotal,
+    staticTotal,
+    kinematicTotal,
+    raycastVehicles: vehicleRaycastInWorld.size,
+    sources: classifyPhysicsSourceCounts(),
+  });
 }
 
 function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
@@ -5570,9 +5732,9 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
   syncAirWallsForDocument(document);
 }
 
-function stepPhysicsWorld(delta: number): void {
+function stepPhysicsWorld(delta: number): number {
   if (!physicsWorld || !rigidbodyInstances.size) {
-    return;
+    return 0;
   }
 
   // RaycastVehicle registers postStep callbacks that can introduce micro-jitter even when idle.
@@ -5620,40 +5782,59 @@ function stepPhysicsWorld(delta: number): void {
     }
   });
   let subSteps = 0;
+  // Skip world.step() entirely when no dynamic body is awake and no vehicle/tour is active.
+  // This eliminates all broadphase + solver cost while the scene is at rest.
+  const hasActiveController = vehicleDriveActive.value || activeAutoTourNodeIds.size > 0;
+  let anyDynamicAwake = hasActiveController;
+  if (!anyDynamicAwake) {
+    const bodies = physicsWorld.bodies;
+    for (let bi = 0, bLen = bodies.length; bi < bLen; bi += 1) {
+      const b = bodies[bi];
+      if (b.type === CANNON.Body.DYNAMIC && (b as any).sleepState === 0) {
+        anyDynamicAwake = true;
+        break;
+      }
+    }
+  }
   if (physicsInterpolationEnabled) {
     const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
     physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
     const world = physicsWorld;
-    // Prepare previous state before stepping.
-    rigidbodyInstances.forEach((entry) => {
-      const body = entry.body;
-      const state = getPhysicsInterpolationState(body);
-      if (!state.hasSample) {
-        state.prevPos.set(body.position.x, body.position.y, body.position.z);
-        state.currPos.copy(state.prevPos);
-        state.prevQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
-        state.currQuat.copy(state.prevQuat);
-        state.hasSample = true;
-      } else {
-        state.prevPos.copy(state.currPos);
-        state.prevQuat.copy(state.currQuat);
-      }
-    });
-    try {
-      while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-        if (vehicleDriveActive.value) {
-          // Keep vehicle control smoothing stable by advancing it at the same fixed timestep as physics.
-          applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
+    if (!anyDynamicAwake) {
+      // All dynamics sleeping – drain accumulator without stepping.
+      physicsAccumulator = 0;
+    } else {
+      // Prepare previous state before stepping.
+      rigidbodyInstances.forEach((entry) => {
+        const body = entry.body;
+        const state = getPhysicsInterpolationState(body);
+        if (!state.hasSample) {
+          state.prevPos.set(body.position.x, body.position.y, body.position.z);
+          state.currPos.copy(state.prevPos);
+          state.prevQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+          state.currQuat.copy(state.prevQuat);
+          state.hasSample = true;
+        } else {
+          state.prevPos.copy(state.currPos);
+          state.prevQuat.copy(state.currQuat);
         }
-        world.step(PHYSICS_FIXED_TIMESTEP);
-        physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
-        subSteps += 1;
+      });
+      try {
+        while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+          if (vehicleDriveActive.value) {
+            // Keep vehicle control smoothing stable by advancing it at the same fixed timestep as physics.
+            applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
+          }
+          world.step(PHYSICS_FIXED_TIMESTEP);
+          physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
+          subSteps += 1;
+        }
+      } catch (error) {
+        console.warn('[SceneViewer] Physics step failed', error);
       }
-    } catch (error) {
-      console.warn('[SceneViewer] Physics step failed', error);
-    }
-    if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-      physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
+      if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
+        physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
+      }
     }
     physicsInterpolationAlpha = PHYSICS_FIXED_TIMESTEP > 0
       ? Math.min(1, Math.max(0, physicsAccumulator / PHYSICS_FIXED_TIMESTEP))
@@ -5669,20 +5850,25 @@ function stepPhysicsWorld(delta: number): void {
   } else {
     const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
     physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
-    try {
-      while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-        if (vehicleDriveActive.value) {
-          applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
+    if (!anyDynamicAwake) {
+      // All dynamics sleeping – drain accumulator without stepping.
+      physicsAccumulator = 0;
+    } else {
+      try {
+        while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+          if (vehicleDriveActive.value) {
+            applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
+          }
+          physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
+          physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
+          subSteps += 1;
         }
-        physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
-        physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
-        subSteps += 1;
+      } catch (error) {
+        console.warn('[SceneViewer] Physics step failed', error);
       }
-    } catch (error) {
-      console.warn('[SceneViewer] Physics step failed', error);
-    }
-    if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-      physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
+      if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
+        physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
+      }
     }
   }
   // Ensure vehicles are truly static after exiting drive/auto-tour.
@@ -5771,7 +5957,7 @@ function stepPhysicsWorld(delta: number): void {
     syncSharedObjectFromBody(entry, syncInstancedTransform);
   });
 
-  
+  return subSteps;
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -11189,9 +11375,9 @@ function startRenderLoop(
           : Date.now();
         const deltaSecondsRaw = normalizeFrameDelta(delta);
         accumulatedDelta += deltaSecondsRaw;
-        if (now - lastFrameTime < minFrameInterval) {
-          return; // 跳过本帧，限制最大FPS
-        }
+        // if (now - lastFrameTime < minFrameInterval) {
+        //   return; // 跳过本帧，限制最大FPS
+        // }
         lastFrameTime = now;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
@@ -11257,7 +11443,10 @@ function startRenderLoop(
           } else {
             autoTourRuntime.update(deltaSeconds);
           }
-          stepPhysicsWorld(deltaSeconds);
+          const physicsSubsteps = stepPhysicsWorld(deltaSeconds);
+          if (debugEnabled.value) {
+            syncPhysicsDebugOverlay(deltaSeconds, physicsSubsteps);
+          }
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
         }
