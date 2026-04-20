@@ -898,7 +898,12 @@ export class SceneMaterialFactory {
 
   private async loadTextureFromEntry(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
     try {
-      const downloadUrl = asset.blobUrl ||  (!asset.downloadUrl || asset.downloadUrl?.startsWith("builtin"))  ? asset.blobUrl : asset.downloadUrl;
+      const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
+        && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function');
+      const preferredUrl = isWeChatMiniProgram
+        ? (asset.downloadUrl && !asset.downloadUrl.startsWith('builtin') ? asset.downloadUrl : asset.blobUrl)
+        : (asset.blobUrl || asset.downloadUrl);
+      const downloadUrl = preferredUrl ?? '';
       if (!downloadUrl) {
         console.warn('纹理资源下载链接缺失', asset.assetId);
         return null;

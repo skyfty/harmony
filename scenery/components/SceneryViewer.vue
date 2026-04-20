@@ -125,15 +125,25 @@
             <view
               class="viewer-drive-cluster viewer-drive-cluster--joystick">
               <view class="viewer-drive-joystick-layout">
-                <DriveJoystick
+                <view
                   ref="lanternJoystickRef"
-                  :is-active="vehicleDriveUi.joystickActive"
-                  :throttle="vehicleDriveInput.throttle"
-                  :knob-style="joystickKnobStyle"
-                  @joystick-touch-start="handleJoystickTouchStart"
-                  @joystick-touch-move="handleJoystickTouchMove"
-                  @joystick-touch-end="handleJoystickTouchEnd"
-                />
+                  class="viewer-drive-joystick"
+                  :class="{ 'is-active': vehicleDriveUi.joystickActive }"
+                  role="slider"
+                  aria-label="驾驶摇杆"
+                  aria-valuemin="-100"
+                  aria-valuemax="100"
+                  :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
+                  @touchstart.stop.prevent="handleJoystickTouchStart"
+                  @touchmove.stop.prevent="handleJoystickTouchMove"
+                  @touchend.stop.prevent="handleJoystickTouchEnd"
+                  @touchcancel.stop.prevent="handleJoystickTouchEnd"
+                >
+                  <DriveJoystick
+                    :is-active="vehicleDriveUi.joystickActive"
+                    :knob-style="joystickKnobStyle"
+                  />
+                </view>
                 <view class="viewer-drive-hud" aria-hidden="true">
                   <SpeedReadout :speed="vehicleSpeedKmh" />
                   <DriveCompass
@@ -324,15 +334,25 @@
           :class="{ 'is-fading': drivePadState.fading }"
           :style="drivePadStyle"
         >
-          <DriveJoystick
+          <view
             ref="floatingJoystickRef"
-            :is-active="vehicleDriveUi.joystickActive"
-            :throttle="vehicleDriveInput.throttle"
-            :knob-style="joystickKnobStyle"
-            @joystick-touch-start="handleJoystickTouchStart"
-            @joystick-touch-move="handleJoystickTouchMove"
-            @joystick-touch-end="handleJoystickTouchEnd"
-          />
+            class="viewer-drive-joystick"
+            :class="{ 'is-active': vehicleDriveUi.joystickActive }"
+            role="slider"
+            aria-label="驾驶摇杆"
+            aria-valuemin="-100"
+            aria-valuemax="100"
+            :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
+            @touchstart.stop.prevent="handleJoystickTouchStart"
+            @touchmove.stop.prevent="handleJoystickTouchMove"
+            @touchend.stop.prevent="handleJoystickTouchEnd"
+            @touchcancel.stop.prevent="handleJoystickTouchEnd"
+          >
+            <DriveJoystick
+              :is-active="vehicleDriveUi.joystickActive"
+              :knob-style="joystickKnobStyle"
+            />
+          </view>
         </view>
       </view>
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
@@ -605,6 +625,7 @@ import {
 } from '@harmony/schema/components/definitions/wallComponent';
 import {
   boundaryWallComponentDefinition,
+  BOUNDARY_WALL_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/boundaryWallComponent';
 import {
   roadComponentDefinition,
@@ -625,6 +646,7 @@ import {
 } from '@harmony/schema/components/definitions/effectComponent';
 import {
   rigidbodyComponentDefinition,
+  clampRigidbodyComponentProps,
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
 } from '@harmony/schema/components/definitions/rigidbodyComponent';
@@ -2683,10 +2705,11 @@ function getLanternViewerElement(): HTMLElement | null {
   }
   const exposedRootRef = (target as { rootRef?: unknown }).rootRef;
   if (exposedRootRef) {
-    if (typeof (exposedRootRef as HTMLElement).getBoundingClientRect === 'function') {
-      return exposedRootRef as HTMLElement;
+    const exposedRootValue = (exposedRootRef as { value?: unknown }).value ?? exposedRootRef;
+    if (typeof (exposedRootValue as HTMLElement).getBoundingClientRect === 'function') {
+      return exposedRootValue as HTMLElement;
     }
-    const exposedElement = (exposedRootRef as unknown as { $el?: unknown }).$el;
+    const exposedElement = (exposedRootValue as { $el?: unknown }).$el;
     if (exposedElement && typeof (exposedElement as HTMLElement).getBoundingClientRect === 'function') {
       return exposedElement as HTMLElement;
     }
@@ -4404,44 +4427,9 @@ async function syncTerrainScatterInstances(
   terrainScatterRuntime.dispose();
   markTerrainScatterUpdateDirty();
   if (!resourceCache) {
-    console.warn('[SceneryViewer] Skipping terrain scatter sync because resource cache is unavailable');
     return;
   }
-  const groundDefinition = findFirstGroundDynamicMesh(document) as (GroundRuntimeDynamicMesh & {
-    terrainScatter?: {
-      layers?: Array<{
-        id?: string;
-        assetId?: string;
-        profileId?: string;
-        params?: { payload?: { lodPresetAssetId?: string } };
-        instances?: unknown[];
-      }> | null;
-    };
-  }) | null;
-  const scatterLayers = Array.isArray(groundDefinition?.terrainScatter?.layers) ? groundDefinition.terrainScatter.layers : [];
-  const lodPresetAssetIds = Array.from(new Set(
-    scatterLayers
-      .map((layer) => {
-        const payload = layer?.params?.payload;
-        return typeof payload?.lodPresetAssetId === 'string' ? payload.lodPresetAssetId.trim() : '';
-      })
-      .filter((assetId) => assetId.length > 0),
-  ));
-  const totalScatterInstances = scatterLayers.reduce((sum, layer) => {
-    return sum + (Array.isArray(layer?.instances) ? layer.instances.length : 0);
-  }, 0);
-  console.info('[SceneryViewer] Starting terrain scatter sync', {
-    scatterLayerCount: scatterLayers.length,
-    totalScatterInstances,
-    lodPresetAssetIds,
-    assetRegistryCount: Object.keys(document.assetRegistry ?? {}).length,
-    registryHasLodPresetIds: lodPresetAssetIds.map((assetId) => ({
-      assetId,
-      hasRegistryEntry: Boolean(document.assetRegistry?.[assetId]),
-    })),
-  });
   await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject);
-  console.info('[SceneryViewer] Terrain scatter sync finished', terrainScatterRuntime.getInstanceStats());
   markTerrainScatterUpdateDirty();
 }
 
@@ -4471,6 +4459,33 @@ function resolveRigidbodyComponent(
   node: SceneNode | null | undefined,
 ): SceneNodeComponentState<RigidbodyComponentProps> | null {
   return resolveEnabledComponentState<RigidbodyComponentProps>(node, RIGIDBODY_COMPONENT_TYPE);
+}
+
+function resolveBoundaryWallComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<Record<string, unknown>> | null {
+  return resolveEnabledComponentState<Record<string, unknown>>(node, BOUNDARY_WALL_COMPONENT_TYPE);
+}
+
+function resolvePhysicsRigidbodyComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<RigidbodyComponentProps> | null {
+  const rigidbodyComponent = resolveRigidbodyComponent(node);
+  if (rigidbodyComponent) {
+    return rigidbodyComponent;
+  }
+  if (!resolveBoundaryWallComponent(node) || !node) {
+    return null;
+  }
+  return {
+    id: `__boundaryWallRigidbody:${node.id}`,
+    type: RIGIDBODY_COMPONENT_TYPE,
+    enabled: true,
+    props: clampRigidbodyComponentProps({
+      bodyType: 'STATIC',
+      targetNodeId: node.id ?? null,
+    }),
+  };
 }
 
 function resolveVehicleComponent(
@@ -5121,9 +5136,10 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
     return;
   }
   const node = resolveNodeById(nodeId);
-  const component = resolveRigidbodyComponent(node);
+  const component = resolvePhysicsRigidbodyComponent(node);
   const shapeDefinition = extractRigidbodyShape(component);
   const requiresMetadata = !hasAutoGeneratedDynamicShape(node?.dynamicMesh);
+  const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node));
   if (!node || !component || !object) {
     return;
   }
@@ -5131,7 +5147,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
     ensureRoadRigidbodyInstance(node, component, object);
     return;
   }
-  if (!shapeDefinition && requiresMetadata) {
+  if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
     return;
   }
   const existing = rigidbodyInstances.get(nodeId);
@@ -5183,7 +5199,7 @@ function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode
     if (!node) {
       continue;
     }
-    if (resolveRigidbodyComponent(node)) {
+    if (resolvePhysicsRigidbodyComponent(node)) {
       collected.push(node);
     }
     if (Array.isArray(node.children) && node.children.length) {
@@ -5242,10 +5258,11 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
   const desiredIds = new Set<string>();
   rigidbodyNodes.forEach((node) => {
     desiredIds.add(node.id);
-    const component = resolveRigidbodyComponent(node);
+    const component = resolvePhysicsRigidbodyComponent(node);
     const shapeDefinition = extractRigidbodyShape(component);
     const object = nodeObjectMap.get(node.id) ?? null;
     const requiresMetadata = !hasAutoGeneratedDynamicShape(node.dynamicMesh);
+    const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node));
     if (!component || !object) {
       return;
     }
@@ -5253,7 +5270,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
       ensureRoadRigidbodyInstance(node, component, object);
       return;
     }
-    if (!shapeDefinition && requiresMetadata) {
+    if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
       return;
     }
     const existing = rigidbodyInstances.get(node.id);
@@ -7621,15 +7638,19 @@ function clampAxisScalar(value: number): number {
 function refreshJoystickMetrics(): void {
   nextTick(() => {
     const resolveElement = (
-      value: ComponentPublicInstance | HTMLElement | null,
+      value: ComponentPublicInstance | HTMLElement | { rootRef?: unknown } | null,
     ): HTMLElement | null => {
       if (!value) {
         return null;
       }
-      if (typeof (value as HTMLElement).getBoundingClientRect === 'function') {
-        return value as HTMLElement;
+      const exposedRootRef = (value as { rootRef?: unknown }).rootRef;
+      const resolvedValue = (exposedRootRef as { value?: unknown } | undefined)?.value
+        ?? exposedRootRef
+        ?? value;
+      if (typeof (resolvedValue as HTMLElement).getBoundingClientRect === 'function') {
+        return resolvedValue as HTMLElement;
       }
-      const maybeEl = (value as unknown as { $el?: unknown }).$el;
+      const maybeEl = (resolvedValue as { $el?: unknown }).$el;
       if (maybeEl && typeof (maybeEl as HTMLElement).getBoundingClientRect === 'function') {
         return maybeEl as HTMLElement;
       }
@@ -7936,7 +7957,10 @@ function handleDrivePadTouchStart(event: TouchEvent): void {
   updateDrivePadViewportRect(event.currentTarget);
   const touch = event.changedTouches?.[0] ?? null;
   const coords = getTouchCoordinates(touch);
-  if (!coords || !shouldActivateDrivePad(coords.y)) {
+  if (!coords) {
+    return;
+  }
+  if (!shouldActivateDrivePad(coords.y)) {
     return;
   }
   event.stopPropagation();
@@ -7955,8 +7979,6 @@ function handleDrivePadTouchMove(event: TouchEvent): void {
   if (!touch) {
     return;
   }
-  event.stopPropagation();
-  event.preventDefault();
   handleJoystickTouchMove(event);
 }
 
@@ -7968,8 +7990,6 @@ function handleDrivePadTouchEnd(event: TouchEvent): void {
   if (!touch) {
     return;
   }
-  event.stopPropagation();
-  event.preventDefault();
   handleJoystickTouchEnd(event);
   scheduleDrivePadFade();
 }
@@ -9561,9 +9581,6 @@ function hydrateGroundSidecarFromPackage(
   const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
   if (!scatterSidecarPath) {
     definition.terrainScatter = null;
-    console.info('[SceneryViewer] Scene package has no ground scatter sidecar path', {
-      sceneId: sceneEntry.sceneId,
-    });
   } else {
     const scatterSidecarBytes = pkg.files[scatterSidecarPath];
     if (!scatterSidecarBytes) {
@@ -9575,25 +9592,6 @@ function hydrateGroundSidecarFromPackage(
     );
     const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
     definition.terrainScatter = scatterPayload.terrainScatter;
-    const scatterLayers = Array.isArray(scatterPayload.terrainScatter?.layers) ? scatterPayload.terrainScatter.layers : [];
-    const lodPresetAssetIds = Array.from(new Set(
-      scatterLayers
-        .map((layer) => {
-          const payload = layer?.params?.payload as { lodPresetAssetId?: unknown } | undefined;
-          return typeof payload?.lodPresetAssetId === 'string' ? payload.lodPresetAssetId.trim() : '';
-        })
-        .filter((assetId) => assetId.length > 0),
-    ));
-    const totalScatterInstances = scatterLayers.reduce((sum, layer) => {
-      return sum + (Array.isArray(layer?.instances) ? layer.instances.length : 0);
-    }, 0);
-    console.info('[SceneryViewer] Hydrated ground scatter sidecar from package', {
-      sceneId: sceneEntry.sceneId,
-      sidecarPath: scatterSidecarPath,
-      scatterLayerCount: scatterLayers.length,
-      totalScatterInstances,
-      lodPresetAssetIds,
-    });
   }
 
   const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';
@@ -9773,10 +9771,11 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
           await loadProjectFromScenePackageBytes(cachedBuffer);
           return;
         } catch (parseError) {
-          console.warn('[SceneryViewer] Cached scene package failed to parse, removing cache entry', parseError);
+          console.warn('Cached scene package failed to parse, removing cache entry', parseError);
           await removeScenePackageZip(cachePointer);
         }
       } catch (cacheError) {
+        void cacheError;
       }
     }
 
@@ -9788,11 +9787,11 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     await loadProjectFromScenePackageBytes(buffer);
     if (cacheKeyParam) {
       void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
-        console.warn('[SceneryViewer] Failed to persist scene package cache', saveError);
+        console.warn('Failed to persist scene package cache', saveError);
       });
     }
   } catch (loadError) {
-    console.error('[SceneryViewer] Failed loading scene package from url', loadError);
+    console.error('Failed loading scene package from url', loadError);
     throw loadError;
   } finally {
     sceneDownload.active = false;
@@ -10156,7 +10155,7 @@ async function startRenderIfReady() {
       emit('loaded');
     }
   } catch (initializationError) {
-    console.error('[SceneryViewer] Renderer initialization failed', initializationError);
+    console.error('Renderer initialization failed', initializationError);
     console.error(initializationError);
     if (token === initializeToken) {
       error.value = '初始化渲染器失败';
@@ -11111,7 +11110,7 @@ function applyInput(params: {
       void loadProjectFromScenePackagePointer(entry.scenePackage);
     }
   } else {
-    console.error('[SceneryViewer] Input missing projectId and packageUrl');
+    console.error('Input missing projectId and packageUrl');
     requestedMode.value = null;
     error.value = '缺少工程数据';
     loading.value = false;
@@ -12664,6 +12663,19 @@ onUnmounted(() => {
   opacity: 0;
 }
 
+.viewer-drive-joystick {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  position: relative;
+  pointer-events: auto;
+  transition: transform 0.18s ease;
+}
+
+.viewer-drive-joystick.is-active {
+  transform: scale(0.97);
+}
+
 .viewer-drive-cluster--throttle {
   right: 16px;
   bottom: 16px;
@@ -12853,42 +12865,6 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.viewer-drive-speed-readout {
-  min-width: 72px;
-  padding: 10px 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: linear-gradient(145deg, rgba(10, 16, 34, 0.5), rgba(7, 12, 28, 0.24));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 14px 28px rgba(3, 6, 18, 0.28);
-  backdrop-filter: blur(12px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  color: #f7fbff;
-  font-weight: 700;
-  text-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
-}
-
-.viewer-drive-speed-readout__value {
-  font-size: 1.5rem;
-  line-height: 1;
-  width: 100%;
-  text-align: center;
-}
-
-.viewer-drive-speed-readout__unit {
-  font-size: 0.65rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  opacity: 0.78;
-  width: 100%;
-  text-align: center;
-  align-self: center;
-}
-
 .viewer-drive-compass {
   width: 108px;
   height: 108px;
@@ -13076,66 +13052,6 @@ onUnmounted(() => {
 .viewer-drive-pedal-button--brake.is-active {
   background-color: rgba(255, 112, 130, 0.4);
   border-color: rgba(255, 168, 178, 0.6);
-}
-
-.viewer-drive-joystick {
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  position: relative;
-  pointer-events: auto;
-  transition: transform 0.18s ease;
-}
-
-.viewer-drive-joystick::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.12), transparent 62%),
-    rgba(18, 28, 64, 0.45);
-  border: 2px solid rgba(124, 156, 255, 0.3);
-  box-shadow:
-    inset 0 0 22px rgba(10, 18, 48, 0.85),
-    0 0 28px rgba(32, 80, 220, 0.32);
-  backdrop-filter: blur(6px);
-}
-
-.viewer-drive-joystick__base {
-  position: absolute;
-  inset: 16px;
-  border-radius: 50%;
-  background: rgba(50, 72, 148, 0.18);
-  box-shadow: inset 0 0 18px rgba(12, 18, 42, 0.8);
-}
-
-.viewer-drive-joystick__stick {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.2), transparent 58%),
-    rgba(78, 118, 230, 0.75);
-  border: 2px solid rgba(150, 188, 255, 0.4);
-  box-shadow:
-    inset 0 0 14px rgba(18, 26, 58, 0.8),
-    0 8px 18px rgba(10, 12, 28, 0.45);
-  transform: translate(-50%, -50%);
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
-}
-
-.viewer-drive-joystick.is-active {
-  transform: scale(0.97);
-}
-
-.viewer-drive-joystick.is-active .viewer-drive-joystick__stick {
-  box-shadow:
-    inset 0 0 18px rgba(18, 26, 58, 0.95),
-    0 10px 22px rgba(18, 22, 44, 0.6);
 }
 
 .viewer-drive-pedal-icon {
