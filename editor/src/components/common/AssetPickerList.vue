@@ -65,6 +65,27 @@ function isAssetDownloading(asset: ProjectAsset): boolean {
   return assetCacheStore.isDownloading(asset.id) || selectingAssetId.value === asset.id
 }
 
+function isPrefabSelectionInProgress(asset: ProjectAsset): boolean {
+  if (asset.type !== 'prefab') {
+    return false
+  }
+  const progress = sceneStore.prefabAssetDownloadProgress?.[asset.id] ?? null
+  return !!progress?.active
+}
+
+function isAssetReadyForPickerSelection(asset: ProjectAsset): boolean {
+  if (!asset?.id) {
+    return false
+  }
+  if (asset.type === 'prefab') {
+    return assetCacheStore.hasCache(asset.id) && !isPrefabSelectionInProgress(asset) && !assetCacheStore.isDownloading(asset.id)
+  }
+  if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod') {
+    return assetCacheStore.hasCache(asset.id) && !assetCacheStore.isDownloading(asset.id)
+  }
+  return true
+}
+
 function assetDownloadProgress(asset: ProjectAsset): number {
   if (!asset?.id) {
     return 0
@@ -290,9 +311,8 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
 }
 
 async function handleAssetClick(asset: ProjectAsset) {
-  selectedAssetId.value = asset.id
-
   if (isPackageBackedConfigPreset(asset)) {
+    selectedAssetId.value = asset.id
     emit('update:asset', asset)
     return
   }
@@ -303,14 +323,45 @@ async function handleAssetClick(asset: ProjectAsset) {
     return
   }
 
+  if (selectingAssetId.value === mapped.id) {
+    return
+  }
+
+  if (!isAssetReadyForPickerSelection(mapped) && (assetCacheStore.isDownloading(mapped.id) || isPrefabSelectionInProgress(mapped))) {
+    return
+  }
+
+  if (mapped.type === 'prefab' && !isAssetReadyForPickerSelection(mapped)) {
+    selectingAssetId.value = mapped.id
+    try {
+      await sceneStore.preparePrefabAsset(mapped.id, {
+        prefabAssetIdForDownloadProgress: mapped.id,
+      })
+    } catch (error) {
+      console.warn('Failed to prepare selected prefab asset', mapped.id, error)
+    } finally {
+      selectingAssetId.value = null
+    }
+    return
+  }
+
   if (mapped.type === 'lod') {
-    if (selectingAssetId.value) {
+    if (!isAssetReadyForPickerSelection(mapped)) {
+      selectingAssetId.value = mapped.id
+      try {
+        await sceneStore.prepareLodAsset(mapped)
+      } catch (error) {
+        console.warn('Failed to prepare selected LOD asset', mapped.id, error)
+      } finally {
+        selectingAssetId.value = null
+      }
       return
     }
 
     selectingAssetId.value = mapped.id
     try {
       const prepared = await sceneStore.prepareLodAsset(mapped)
+      selectedAssetId.value = prepared.requestedAsset.id
       emit('update:asset', prepared.requestedAsset)
     } catch (error) {
       console.warn('Failed to prepare selected LOD asset', mapped.id, error)
@@ -322,26 +373,20 @@ async function handleAssetClick(asset: ProjectAsset) {
 
   const requiresCache = mapped.type === 'model' || mapped.type === 'mesh'
   if (!requiresCache) {
+    selectedAssetId.value = mapped.id
     emit('update:asset', mapped)
     return
   }
 
-  if (assetCacheStore.hasCache(mapped.id)) {
+  if (isAssetReadyForPickerSelection(mapped)) {
+    selectedAssetId.value = mapped.id
     emit('update:asset', mapped)
-    return
-  }
-
-  if (selectingAssetId.value) {
     return
   }
 
   selectingAssetId.value = mapped.id
   try {
     await assetCacheStore.downloadProjectAsset(mapped)
-    if (!assetCacheStore.hasCache(mapped.id)) {
-      return
-    }
-    emit('update:asset', mapped)
   } catch (error) {
     console.warn('Failed to download selected model asset', mapped.id, error)
   } finally {

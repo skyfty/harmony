@@ -16,6 +16,33 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
   const assetCacheStore = useAssetCacheStore()
   const selectingAssetId = ref<string | null>(null)
 
+  function isSelectionReady(asset: ProjectAsset): boolean {
+    if (!asset?.id) {
+      return false
+    }
+    if (asset.type === 'lod') {
+      return assetCacheStore.hasCache(asset.id)
+    }
+    if (asset.type === 'model' || asset.type === 'mesh') {
+      return assetCacheStore.hasCache(asset.id)
+    }
+    return true
+  }
+
+  function isSelectionBusy(asset: ProjectAsset): boolean {
+    if (!asset?.id) {
+      return false
+    }
+    if (selectingAssetId.value === asset.id) {
+      return true
+    }
+    if (assetCacheStore.isDownloading(asset.id)) {
+      return true
+    }
+    const progress = sceneStore.prefabAssetDownloadProgress?.[asset.id] ?? null
+    return !!progress?.active
+  }
+
   async function ensureAssetCached(asset: ProjectAsset) {
     if (asset.type === 'lod') {
       await sceneStore.prepareLodAsset(asset)
@@ -81,34 +108,44 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
     if (selectingAssetId.value) {
       return null
     }
+
+    const workingAsset = source.source === 'scene'
+      ? source.asset
+      : sceneStore.ensureSceneAssetRegistered(source.asset, {
+          providerId: assetProvider.id,
+        })
+
+    if (!workingAsset?.id) {
+      return null
+    }
+
+    if (isSelectionBusy(workingAsset)) {
+      return null
+    }
+
+    const readyBeforeClick = isSelectionReady(workingAsset)
     selectingAssetId.value = source.providerAssetId
     try {
+      if (!readyBeforeClick) {
+        if (workingAsset.type === 'lod') {
+          await sceneStore.prepareLodAsset(workingAsset)
+        } else {
+          await ensureAssetCached(workingAsset)
+        }
+        return null
+      }
+
       let selectedAsset: ProjectAsset
       let spacingAsset: ProjectAsset
 
-      if (source.source === 'scene') {
-        if (source.asset.type === 'lod') {
-          const prepared = await sceneStore.prepareLodAsset(source.asset)
-          selectedAsset = prepared.requestedAsset
-          spacingAsset = prepared.modelAsset
-        } else {
-          await ensureAssetCached(source.asset)
-          selectedAsset = source.asset
-          spacingAsset = source.asset
-        }
+      if (workingAsset.type === 'lod') {
+        const prepared = await sceneStore.prepareLodAsset(workingAsset)
+        selectedAsset = prepared.requestedAsset
+        spacingAsset = prepared.modelAsset
       } else {
-        const registered = sceneStore.ensureSceneAssetRegistered(source.asset, {
-          providerId: assetProvider.id,
-        })
-        if (registered.type === 'lod') {
-          const prepared = await sceneStore.prepareLodAsset(registered)
-          selectedAsset = prepared.requestedAsset
-          spacingAsset = prepared.modelAsset
-        } else {
-          await ensureAssetCached(registered)
-          selectedAsset = registered
-          spacingAsset = registered
-        }
+        await ensureAssetCached(workingAsset)
+        selectedAsset = workingAsset
+        spacingAsset = workingAsset
       }
 
       if (options?.updateTerrainSelection !== false) {
@@ -126,5 +163,5 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
     }
   }
 
-  return { selectingAssetId, selectScatterAsset }
+  return { selectingAssetId, isSelectionBusy, selectScatterAsset }
 }

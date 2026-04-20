@@ -109,12 +109,6 @@ type PreparePrefabAssetOptions = {
 
 const pendingPrefabPreparationTasks = new Map<string, Promise<NodePrefabData>>()
 
-const PREFAB_DEPENDENCY_DEBUG_FLAG = '__HARMONY_DEBUG_PREFAB_DEPENDENCIES__'
-
-function isPrefabDependencyDebugEnabled(): boolean {
-  return Boolean((globalThis as Record<string, unknown>)[PREFAB_DEPENDENCY_DEBUG_FLAG])
-}
-
 function normalizeDependencyAssetId(value: unknown): string | null {
   const normalized = typeof value === 'string' ? value.trim() : ''
   return normalized.length > 0 ? normalized : null
@@ -1007,14 +1001,6 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         new Set(normalizedIds.map((assetId) => dependencyAliasMap.get(assetId) ?? assetId)),
       )
 
-      if (isPrefabDependencyDebugEnabled()) {
-        console.debug('[PrefabDependencies] normalized ids', {
-          requestedAssetIds: normalizedIds,
-          canonicalIds,
-          aliases: Array.from(dependencyAliasMap.entries()).map(([from, to]) => ({ from, to })),
-        })
-      }
-
       const parseProviderKey = (key: string): { providerId: string; originalAssetId: string } | null => {
         const normalized = typeof key === 'string' ? key.trim() : ''
         const separator = normalized.indexOf('::')
@@ -1201,6 +1187,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       const unresolvedIds = canonicalIds.filter(
         (assetId) => !findExistingDependencyAsset(store, assetId, prefabAssetRegistry),
       )
+
       if (unresolvedIds.length) {
         const placeholderAssets: ProjectAsset[] = []
         unresolvedIds.forEach((assetId) => {

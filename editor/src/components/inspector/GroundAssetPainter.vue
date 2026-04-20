@@ -50,7 +50,7 @@ const errorMap = reactive<Record<TerrainScatterCategory, string | null>>(
   }, {} as Record<TerrainScatterCategory, string | null>),
 )
 
-const { selectingAssetId, selectScatterAsset } = useScatterAssetSelection({
+const { selectingAssetId, isSelectionBusy, selectScatterAsset } = useScatterAssetSelection({
   updateTerrainSelection: props.updateTerrainSelection !== false,
   onSelected(asset, providerAssetId) {
     emit('asset-select', { asset, providerAssetId })
@@ -134,7 +134,13 @@ async function ensureAssetsLoaded(category: TerrainScatterCategory, options: { f
 }
 
 async function handleAssetClick(entry: ScatterAssetOption): Promise<void> {
-  await selectScatterAsset(entry)
+  if (isSelectionBusy(entry.asset)) {
+    return
+  }
+  const selected = await selectScatterAsset(entry)
+  if (!selected) {
+    return
+  }
   const uiStore = useUiStore()
   uiStore.setActiveSelectionContext('scatter')
 }
@@ -214,6 +220,7 @@ watch(
           :title="entry.asset.name || 'Untitled'"
           :aria-label="entry.asset.name || 'Untitled'"
           :class="{ 'is-selected': isAssetActive(entry) }"
+          :disabled="isSelectionBusy(entry.asset)"
           @click="handleAssetClick(entry)"
         >
           <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(entry.asset) ? `url(${assetThumbnail(entry.asset)})` : undefined }">
@@ -282,6 +289,12 @@ watch(
   cursor: pointer;
   transition: transform 0.15s ease;
   overflow: visible;
+}
+
+.thumbnail-item:disabled {
+  cursor: progress;
+  opacity: 0.72;
+  transform: none;
 }
 
 .thumbnail-item:hover {

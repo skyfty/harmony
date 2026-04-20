@@ -141,6 +141,7 @@ const deleteDialogOpen = ref(false)
 const pendingDeleteAssets = ref<ProjectAsset[]>([])
 const isBatchDeletion = ref(false)
 const selectedAssetIds = ref<string[]>([])
+const assetActivationPendingId = ref<string | null>(null)
 const draggingDirectoryId = ref<string | null>(null)
 const directoryDropHoverId = ref<string | null>(null)
 const assetDropHoverId = ref<string | null>(null)
@@ -538,9 +539,25 @@ function activateBuildPresetAsset(asset: ProjectAsset, kind: BuildPresetAssetKin
 }
 
 async function selectAsset(asset: ProjectAsset) {
+  const cacheId = resolveAssetCacheId(asset)
+  if (assetActivationPendingId.value === cacheId) {
+    return
+  }
+
   // For model-like assets, ensure the asset is downloaded/cached before selecting.
   if (asset.type === 'model' || asset.type === 'mesh') {
     const prepared = prepareAssetForOperations(asset)
+    const preparedCacheId = resolveAssetCacheId(prepared)
+    if (assetCacheStore.hasCache(preparedCacheId) && !isAssetDownloading(prepared)) {
+      sceneStore.selectAsset(prepared.id)
+      uiStore.setActiveSelectionContext('asset-panel')
+      return
+    }
+    if (assetActivationPendingId.value === preparedCacheId || isAssetDownloading(prepared)) {
+      return
+    }
+
+    assetActivationPendingId.value = preparedCacheId
     try {
       assetCacheStore.setError(prepared.id, null)
       await ensureAssetCached(prepared)
@@ -549,9 +566,9 @@ async function selectAsset(asset: ProjectAsset) {
       assetCacheStore.setError(prepared.id, message)
       console.error('Failed to cache asset before select', error)
       return
+    } finally {
+      assetActivationPendingId.value = null
     }
-    sceneStore.selectAsset(prepared.id)
-    uiStore.setActiveSelectionContext('asset-panel')
     return
   }
 
@@ -566,6 +583,17 @@ async function selectAsset(asset: ProjectAsset) {
     }
 
     const prepared = prepareAssetForOperations(asset)
+    const preparedCacheId = resolveAssetCacheId(prepared)
+    if (assetCacheStore.hasCache(preparedCacheId) && !isAssetDownloading(prepared)) {
+      sceneStore.selectAsset(prepared.id)
+      uiStore.setActiveSelectionContext('asset-panel')
+      return
+    }
+    if (assetActivationPendingId.value === preparedCacheId || isAssetDownloading(prepared)) {
+      return
+    }
+
+    assetActivationPendingId.value = preparedCacheId
     try {
       assetCacheStore.setError(prepared.id, null)
       await sceneStore.preparePrefabAsset(prepared.id, {
@@ -576,15 +604,25 @@ async function selectAsset(asset: ProjectAsset) {
       assetCacheStore.setError(prepared.id, message)
       console.error('Failed to prepare prefab before select', error)
       return
+    } finally {
+      assetActivationPendingId.value = null
     }
-
-    sceneStore.selectAsset(prepared.id)
-    uiStore.setActiveSelectionContext('asset-panel')
     return
   }
 
   if (asset.type === 'lod') {
     const prepared = prepareAssetForOperations(asset)
+    const preparedCacheId = resolveAssetCacheId(prepared)
+    if (assetCacheStore.hasCache(preparedCacheId) && !isAssetDownloading(prepared)) {
+      sceneStore.selectAsset(prepared.id)
+      uiStore.setActiveSelectionContext('asset-panel')
+      return
+    }
+    if (assetActivationPendingId.value === preparedCacheId || isAssetDownloading(prepared)) {
+      return
+    }
+
+    assetActivationPendingId.value = preparedCacheId
     try {
       assetCacheStore.setError(prepared.id, null)
       await sceneStore.prepareLodAsset(prepared.id)
@@ -593,10 +631,9 @@ async function selectAsset(asset: ProjectAsset) {
       assetCacheStore.setError(prepared.id, message)
       console.error('Failed to prepare LOD before select', error)
       return
+    } finally {
+      assetActivationPendingId.value = null
     }
-
-    sceneStore.selectAsset(prepared.id)
-    uiStore.setActiveSelectionContext('asset-panel')
     return
   }
 
@@ -620,6 +657,16 @@ function isAssetDownloading(asset: ProjectAsset) {
     return true
   }
   return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
+}
+
+function isAssetReadyForMouseAction(asset: ProjectAsset): boolean {
+  if (isAssetDownloading(asset)) {
+    return false
+  }
+  if (asset.type === 'prefab' || MODEL_ASSET_TYPES.has(asset.type)) {
+    return assetCacheStore.hasCache(resolveAssetCacheId(asset))
+  }
+  return true
 }
 
 function isServerManagedAsset(asset: ProjectAsset | null | undefined): boolean {
@@ -814,7 +861,7 @@ function canAddAsset(asset: ProjectAsset): boolean {
   }
 
   if (asset.type === 'prefab' || MODEL_ASSET_TYPES.has(asset.type)) {
-    return true
+    return isAssetReadyForMouseAction(asset)
   }
 
   if (MATERIAL_ASSET_TYPES.has(asset.type) || TEXTURE_ASSET_TYPES.has(asset.type)) {
@@ -935,6 +982,10 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   const preparedAsset = prepareAssetForOperations(asset)
   if (preparedAsset.type === 'prefab') {
     primePrefabAsset(preparedAsset)
+  }
+  if (!isAssetReadyForMouseAction(preparedAsset) || assetActivationPendingId.value === resolveAssetCacheId(preparedAsset)) {
+    event.preventDefault()
+    return
   }
   sceneStore.setDraggingAssetId(asset.id)
   assetCacheStore.touch(preparedAsset.id)

@@ -27,6 +27,61 @@ type Options = {
   preparePrefabAsset?: (assetId: string) => Promise<unknown>
 }
 
+type PreparedPrefabLike = {
+  root?: unknown
+  assetRegistry?: Record<string, unknown> | null
+}
+
+function isPreparedPrefabLike(value: unknown): value is PreparedPrefabLike {
+  return typeof value === 'object' && value !== null
+}
+
+function collectPreparedPrefabDependencyAssetIds(prefabData: unknown): string[] {
+  if (!isPreparedPrefabLike(prefabData)) {
+    return []
+  }
+
+  const dependencyAssetIds = new Set<string>()
+  const stack: unknown[] = prefabData.root ? [prefabData.root] : []
+
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object') {
+      continue
+    }
+
+    const candidate = node as {
+      id?: unknown
+      children?: unknown
+      sourceAssetId?: unknown
+      userData?: { __prefabAssetId?: unknown } | null
+    }
+
+    if (typeof candidate.sourceAssetId === 'string' && candidate.sourceAssetId.trim()) {
+      dependencyAssetIds.add(candidate.sourceAssetId.trim())
+    }
+    if (typeof candidate.userData?.__prefabAssetId === 'string' && candidate.userData.__prefabAssetId.trim()) {
+      dependencyAssetIds.add(candidate.userData.__prefabAssetId.trim())
+    }
+    if (typeof candidate.id === 'string' && candidate.id.trim()) {
+      dependencyAssetIds.add(candidate.id.trim())
+    }
+
+    if (Array.isArray(candidate.children) && candidate.children.length) {
+      stack.push(...candidate.children)
+    }
+  }
+
+  Object.keys(prefabData.assetRegistry ?? {}).forEach((assetId) => {
+    const normalized = assetId.trim()
+    if (normalized) {
+      dependencyAssetIds.add(normalized)
+    }
+  })
+
+  return Array.from(dependencyAssetIds)
+}
+
 function findAssetMetadata(assetId: string, projectTree: ProjectDirectory[] | undefined): ProjectAsset | null {
   const search = (directories: ProjectDirectory[] | undefined): ProjectAsset | null => {
     if (!directories) {
@@ -198,46 +253,70 @@ export function useDragPreview(options: Options): DragPreviewController {
     const token = ++dragPreviewLoadToken
 
     try {
-      await options.preparePrefabAsset?.(asset.id)
+      const preparedPrefab = await options.preparePrefabAsset?.(asset.id)
 
-      const file = await options.assetCacheStore.ensureAssetFile(asset.id, { asset })
-      if (!file) {
+      const dependencyAssetIds = collectPreparedPrefabDependencyAssetIds(preparedPrefab)
+      const prewarmedDependencyAssetIds: string[] = []
+      if (dependencyAssetIds.length) {
+        const projectTree = options.getProjectTree()
+        await Promise.all(
+          dependencyAssetIds.map(async (dependencyAssetId) => {
+            const dependencyAsset = findAssetMetadata(dependencyAssetId, projectTree)
+            if (!dependencyAsset) {
+              return
+            }
+            const file = await options.assetCacheStore.ensureAssetFile(dependencyAsset.id, { asset: dependencyAsset })
+            if (file) {
+              prewarmedDependencyAssetIds.push(dependencyAsset.id)
+            }
+          }),
+        )
+      }
+
+      try {
+        const file = await options.assetCacheStore.ensureAssetFile(asset.id, { asset })
+        if (!file) {
+          pendingPreviewAssetId = null
+          return false
+        }
+
+        // Build (or reuse) a fully post-processed prefab preview root.
+        const handle = await acquirePrefabPreviewRoot({
+          assetId: asset.id,
+          file,
+          assetCacheStore: options.assetCacheStore,
+          cacheOnly: true,
+        })
+
+        if (token !== dragPreviewLoadToken) {
+          handle.release()
+          return false
+        }
+
+        const root = handle.root
+
+        root.position.set(0, 0, 0)
+        applyPreviewVisualTweaks(root)
+        dragPreviewObject = root
+        dragPreviewAssetId = asset.id
+        activePrefabHandle = handle
+        group.add(root)
+        setDragPreviewReady(asset.id, true)
+
+        if (lastDragPoint) {
+          group.position.copy(lastDragPoint)
+          group.visible = true
+        } else {
+          group.visible = false
+        }
+
         pendingPreviewAssetId = null
-        return false
+        return true
+      } finally {
+        prewarmedDependencyAssetIds.forEach((dependencyAssetId) => {
+          options.assetCacheStore.releaseInMemoryBlob(dependencyAssetId)
+        })
       }
-
-      // Build (or reuse) a fully post-processed prefab preview root.
-      const handle = await acquirePrefabPreviewRoot({
-        assetId: asset.id,
-        file,
-        assetCacheStore: options.assetCacheStore,
-        cacheOnly: true,
-      })
-
-      if (token !== dragPreviewLoadToken) {
-        handle.release()
-        return false
-      }
-
-      const root = handle.root
-
-      root.position.set(0, 0, 0)
-      applyPreviewVisualTweaks(root)
-      dragPreviewObject = root
-      dragPreviewAssetId = asset.id
-      activePrefabHandle = handle
-      group.add(root)
-      setDragPreviewReady(asset.id, true)
-
-      if (lastDragPoint) {
-        group.position.copy(lastDragPoint)
-        group.visible = true
-      } else {
-        group.visible = false
-      }
-
-      pendingPreviewAssetId = null
-      return true
     } catch (error) {
       if (token === dragPreviewLoadToken) {
         clearObject(true)
