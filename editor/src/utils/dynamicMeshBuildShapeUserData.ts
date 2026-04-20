@@ -1,6 +1,7 @@
 import type { SceneNode, WallDynamicMesh } from '@schema'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 
@@ -62,6 +63,11 @@ function isClosedWallBuild(node: SceneNode | null | undefined): boolean {
 export function readFloorBuildShapeFromNode(node: SceneNode | null | undefined): FloorBuildShape | null {
   const raw = readDynamicMeshBuildShapeFromUserData(node?.userData)
   return isFloorBuildShape(raw) ? raw : null
+}
+
+export function readLandformBuildShapeFromNode(node: SceneNode | null | undefined): LandformBuildShape | null {
+  const raw = readDynamicMeshBuildShapeFromUserData(node?.userData)
+  return raw === 'polygon' || raw === 'rectangle' || raw === 'circle' ? raw : null
 }
 
 export function readWallBuildShapeFromNode(node: SceneNode | null | undefined): WallBuildShape | null {
