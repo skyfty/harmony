@@ -97,12 +97,6 @@ type ScatterRenderTarget = LodRenderTarget & {
 
 type ScatterRenderTargetKey = string
 
-type GroundScatterSnapshotStats = {
-  layerCount: number
-  instanceCount: number
-  lodPresetAssetIds: string[]
-}
-
 const scatterLocalPositionHelper = new THREE.Vector3()
 const scatterLocalRotationHelper = new THREE.Euler()
 const scatterLocalScaleHelper = new THREE.Vector3()
@@ -243,35 +237,6 @@ function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): Gro
   }
   return entries
 }
-
-function summarizeGroundScatterSnapshot(snapshot: TerrainScatterStoreSnapshot | null | undefined): GroundScatterSnapshotStats {
-  if (!snapshot || !Array.isArray(snapshot.layers) || snapshot.layers.length === 0) {
-    return {
-      layerCount: 0,
-      instanceCount: 0,
-      lodPresetAssetIds: [],
-    }
-  }
-
-  const lodPresetAssetIds = new Set<string>()
-  let instanceCount = 0
-  snapshot.layers.forEach((layer) => {
-    const presetAssetId = getScatterLayerLodPresetId(layer)
-    if (presetAssetId) {
-      lodPresetAssetIds.add(presetAssetId)
-    }
-    if (Array.isArray(layer?.instances)) {
-      instanceCount += layer.instances.length
-    }
-  })
-
-  return {
-    layerCount: snapshot.layers.length,
-    instanceCount,
-    lodPresetAssetIds: Array.from(lodPresetAssetIds.values()),
-  }
-}
-
 function clampFinite(value: unknown, fallback: number): number {
   const num = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(num) ? num : fallback
@@ -544,7 +509,6 @@ async function ensureModelInstanceGroup(assetId: string, resourceCache: Resource
     })
     return group
   } catch (error) {
-    console.warn('[TerrainScatterLOD] Failed to prepare instanced model', assetId, error)
     return null
   }
 }
@@ -778,25 +742,17 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     const task = (async () => {
       try {
         if (!resourceCache) {
-          console.warn('[TerrainScatterLOD] Skipping LOD preset cache because resource cache is unavailable', normalized)
           lodPresetCache.set(normalized, null)
           return
         }
         const preset = await loadLodPreset(resourceCache, normalized)
         if (!preset) {
-          console.warn('[TerrainScatterLOD] Failed to load or parse LOD preset', normalized)
           markLodPresetInvalid(normalized)
           lodPresetCache.set(normalized, null)
           return
         }
-        console.info('[TerrainScatterLOD] Loaded LOD preset', {
-          presetAssetId: normalized,
-          levelCount: Array.isArray(preset.props?.levels) ? preset.props.levels.length : 0,
-          presetName: preset.name,
-        })
         lodPresetCache.set(normalized, preset)
       } catch (error) {
-        console.warn('[TerrainScatterLOD] Unexpected error while loading LOD preset', normalized, error)
         markLodPresetInvalid(normalized)
         lodPresetCache.set(normalized, null)
       }
@@ -818,17 +774,8 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
 
     const entries = collectGroundScatterEntries(document.nodes)
     if (!entries.length) {
-      console.info('[TerrainScatterLOD] No ground scatter entries found in scene document')
       return
     }
-
-    console.info('[TerrainScatterLOD] Starting sync', {
-      groundCount: entries.length,
-      summaries: entries.map((entry) => ({
-        groundNodeId: entry.nodeId,
-        ...summarizeGroundScatterSnapshot(entry.snapshot),
-      })),
-    })
 
     let lastYieldAt = nowMs()
     for (const entry of entries) {
@@ -838,10 +785,6 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
 
       const groundMesh = resolveGroundMeshObject(entry.nodeId)
       if (!groundMesh) {
-        console.warn('[TerrainScatterLOD] Ground mesh runtime object not found, skipping scatter entry', {
-          groundNodeId: entry.nodeId,
-          summary: summarizeGroundScatterSnapshot(entry.snapshot),
-        })
         continue
       }
       groundMesh.updateMatrixWorld(true)
@@ -851,32 +794,16 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         const profileAssetId = normalizeText(layer?.profileId)
         const selectionId = layerAssetId || profileAssetId
         if (!selectionId) {
-          console.warn('[TerrainScatterLOD] Scatter layer skipped because no selection asset could be resolved', {
-            groundNodeId: entry.nodeId,
-            layerId: layer?.id ?? null,
-            assetId: layerAssetId,
-            profileId: profileAssetId,
-          })
           continue
         }
 
         const presetAssetId = getScatterLayerLodPresetId(layer)
         if (presetAssetId) {
           if (isLodPresetInvalid(presetAssetId)) {
-            console.warn('[TerrainScatterLOD] Scatter layer skipped because LOD preset is already marked invalid', {
-              groundNodeId: entry.nodeId,
-              layerId: layer?.id ?? null,
-              presetAssetId,
-            })
             continue
           }
           await ensureLodPresetCached(presetAssetId)
           if (isLodPresetInvalid(presetAssetId)) {
-            console.warn('[TerrainScatterLOD] Scatter layer skipped because LOD preset failed to cache', {
-              groundNodeId: entry.nodeId,
-              layerId: layer?.id ?? null,
-              presetAssetId,
-            })
             continue
           }
           lastYieldAt = await maybeYieldSync(lastYieldAt)
@@ -886,26 +813,11 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         const sourceModelAssetId = resolveFirstLodModelAssetId(preset) || selectionId
         const bindingTarget = resolveBaseScatterRenderTarget(preset, selectionId)
         if (!bindingTarget || isScatterRenderTargetInvalid(bindingTarget)) {
-          console.warn('[TerrainScatterLOD] Scatter layer skipped because base render target is unavailable', {
-            groundNodeId: entry.nodeId,
-            layerId: layer?.id ?? null,
-            selectionId,
-            presetAssetId,
-            bindingTarget,
-            sourceModelAssetId,
-          })
           continue
         }
 
         const ready = await ensureScatterRenderTargetReady(bindingTarget, nextResourceCache)
         if (!ready) {
-          console.warn('[TerrainScatterLOD] Scatter layer skipped because base render target failed to prepare', {
-            groundNodeId: entry.nodeId,
-            layerId: layer?.id ?? null,
-            selectionId,
-            presetAssetId,
-            bindingTarget,
-          })
           continue
         }
         lastYieldAt = await maybeYieldSync(lastYieldAt)
@@ -930,14 +842,6 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         const sourceModelHeight = getSourceModelHeight(sourceModelAssetId)
 
         const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
-        if (!instances.length) {
-          console.warn('[TerrainScatterLOD] Scatter layer contains no instances after sync preparation', {
-            groundNodeId: entry.nodeId,
-            layerId: layer?.id ?? null,
-            selectionId,
-            presetAssetId,
-          })
-        }
         for (let instanceIndex = 0; instanceIndex < instances.length; instanceIndex += 1) {
           const instance = instances[instanceIndex]!
           const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
@@ -991,28 +895,11 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
           }
         }
 
-        console.info('[TerrainScatterLOD] Scatter layer synchronized', {
-          groundNodeId: entry.nodeId,
-          layerId: layer?.id ?? null,
-          selectionId,
-          presetAssetId,
-          instanceCount: instances.length,
-          bindingTarget,
-          sourceModelAssetId,
-        })
-
         lastYieldAt = await maybeYieldSync(lastYieldAt)
       }
 
       lastYieldAt = await maybeYieldSync(lastYieldAt)
     }
-
-    console.info('[TerrainScatterLOD] Sync completed', {
-      totalRuntimeInstances: runtimeInstances.size,
-      visibleRuntimeInstances: visibleNodeIds.size,
-      activeChunkCount: chunkKeysActive.size,
-      chunkStreamingEnabled,
-    })
   }
 
   function updateChunkStreamingActiveWindow(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): void {
@@ -1431,8 +1318,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     }
     lastLodUpdateAt = now
     pendingLodUpdate = updateInternalLod(camera, resolveGroundMeshObject)
-      .catch((error) => {
-        console.warn('[TerrainScatterLOD] Failed to update scatter LOD', error)
+      .catch(() => {
       })
       .finally(() => {
         pendingLodUpdate = null
