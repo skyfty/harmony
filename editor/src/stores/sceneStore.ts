@@ -482,6 +482,44 @@ const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
+function isExportablePackageProviderId(providerId: string | null | undefined): boolean {
+  const normalizedProviderId = typeof providerId === 'string' ? providerId.trim() : ''
+  if (!normalizedProviderId) {
+    return false
+  }
+  if (normalizedProviderId === 'builtin') {
+    return false
+  }
+  return true
+}
+
+function isExportablePackageZipPath(zipPath: string | null | undefined): boolean {
+  const normalizedZipPath = typeof zipPath === 'string' ? zipPath.trim() : ''
+  if (!normalizedZipPath) {
+    return false
+  }
+  if (normalizedZipPath.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+    return true
+  }
+  const inferred = inferPackageSourceFromAssetId(normalizedZipPath)
+  if (!inferred || inferred.type !== 'package') {
+    return false
+  }
+  return isExportablePackageProviderId(inferred.providerId)
+}
+
+function shouldReuseExistingRegistryEntryForExport(
+  entry: SceneAssetRegistryEntry | null | undefined,
+): entry is SceneAssetRegistryEntry {
+  if (!entry || typeof entry !== 'object') {
+    return false
+  }
+  if (entry.sourceType !== 'package') {
+    return true
+  }
+  return isExportablePackageZipPath(entry.zipPath)
+}
+
 function inferPackageSourceFromAssetId(assetId: string): AssetSourceMetadata | undefined {
   const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
   if (!normalizedAssetId || normalizedAssetId.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
@@ -494,6 +532,9 @@ function inferPackageSourceFromAssetId(assetId: string): AssetSourceMetadata | u
   const providerId = normalizedAssetId.slice(0, delimiterIndex).trim()
   const originalAssetId = normalizedAssetId.slice(delimiterIndex + 2).trim()
   if (!providerId || !originalAssetId) {
+    return undefined
+  }
+  if (!isExportablePackageProviderId(providerId)) {
     return undefined
   }
   return {
@@ -523,6 +564,9 @@ function inferPackageSourceFromSceneProvider(
   const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
   const normalizedProviderId = typeof providerId === 'string' ? providerId.trim() : ''
   if (!normalizedAssetId || !normalizedProviderId) {
+    return undefined
+  }
+  if (!isExportablePackageProviderId(normalizedProviderId)) {
     return undefined
   }
   if (normalizedAssetId.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
@@ -4961,17 +5005,18 @@ function buildSceneAssetRegistryEntry(
   const summaryBytes = typeof summaryEntry?.bytes === 'number' ? summaryEntry.bytes : undefined
   const assetType = asset?.type ?? summaryEntry?.type
   const name = asset?.name ?? summaryEntry?.name
+  const reusableExistingEntry = shouldReuseExistingRegistryEntryForExport(existingEntry) ? existingEntry : undefined
   const resolvedSourceMeta =
     sourceMeta
     ?? inferPackageSourceFromAssetId(assetId)
-    ?? inferPackageSourceFromRegistryEntry(existingEntry)
+    ?? inferPackageSourceFromRegistryEntry(reusableExistingEntry)
 
   if (resolvedSourceMeta?.type === 'server' || (resolvedSourceMeta?.type === 'package' && isServerBackedProviderId(resolvedSourceMeta.providerId))) {
     return buildServerRegistryEntry(assetId, asset, resolvedSourceMeta, { bytes: summaryBytes, assetType, name })
   }
 
-  if (existingEntry) {
-    const nextEntry: SceneAssetRegistryEntry = { ...existingEntry }
+  if (reusableExistingEntry) {
+    const nextEntry: SceneAssetRegistryEntry = { ...reusableExistingEntry }
     if (typeof nextEntry.bytes !== 'number' && typeof summaryBytes === 'number') {
       nextEntry.bytes = summaryBytes
     }

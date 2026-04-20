@@ -12,6 +12,8 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { buildAssetRegistryForExport } from '@/stores/sceneStore'
 import { calculateSceneResourceSummary, cloneSceneDocumentForExport } from '@/stores/sceneStore'
 import { validateSceneAssetReferences } from '@/utils/sceneAssetDiagnostics'
+import { fetchResourceAsset } from '@/api/resourceAssets'
+import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
@@ -96,6 +98,47 @@ export function collectPunchPointsFromNodes(nodes: SceneNode[]): ScenePunchPoint
 export interface PreparedSceneExportBundle {
   document: SceneJsonExportDocument
   diagnostics: SceneAssetValidationReport
+}
+
+async function patchUnknownExportRegistryEntries(
+  snapshot: StoredSceneDocument,
+  assetRegistry: Record<string, SceneAssetRegistryEntry>,
+): Promise<Record<string, SceneAssetRegistryEntry>> {
+  const unknownAssetIds = Array.isArray(snapshot.resourceSummary?.unknownAssetIds)
+    ? snapshot.resourceSummary.unknownAssetIds
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0)
+    : []
+
+  if (!unknownAssetIds.length) {
+    return assetRegistry
+  }
+
+  let nextAssetRegistry = assetRegistry
+  await Promise.all(
+    unknownAssetIds.map(async (assetId) => {
+      try {
+        const serverAsset = await fetchResourceAsset(assetId)
+        const mappedAsset = mapServerAssetToProjectAsset(serverAsset)
+        const downloadUrl = typeof mappedAsset.downloadUrl === 'string' ? mappedAsset.downloadUrl.trim() : ''
+        if (!downloadUrl) {
+          return
+        }
+        if (nextAssetRegistry === assetRegistry) {
+          nextAssetRegistry = { ...assetRegistry }
+        }
+        nextAssetRegistry[assetId] = {
+          ...(nextAssetRegistry[assetId] ?? {}),
+          sourceType: 'url',
+          url: downloadUrl,
+        }
+      } catch {
+        // Keep unresolved ids so diagnostics can surface the real export blocker.
+      }
+    }),
+  )
+
+  return nextAssetRegistry
 }
 
 type NodeExportProgressTracker = {
@@ -223,7 +266,8 @@ export async function prepareJsonSceneExportBundle(
   options: SceneExportOptions,
   reportEvent?: SceneExportEventReporter,
 ): Promise<PreparedSceneExportBundle> {
-  const assetRegistry = await buildAssetRegistryForExport(snapshot)
+  const baseAssetRegistry = await buildAssetRegistryForExport(snapshot)
+  const assetRegistry = await patchUnknownExportRegistryEntries(snapshot, baseAssetRegistry)
 
   const environment: EnvironmentSettings | undefined = snapshot.environment ? { ...snapshot.environment } : undefined
 
