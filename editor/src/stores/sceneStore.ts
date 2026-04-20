@@ -15605,8 +15605,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const summarize = (value: number): number => Math.round((Number(value) || 0) * 1000) / 1000
-
       if (Math.abs(baseOffsetX) > 1e-6 || Math.abs(baseOffsetY) > 1e-6 || Math.abs(baseOffsetZ) > 1e-6) {
         nextDefinition.chains = (nextDefinition.chains ?? []).map((chain) => ({
             ...chain,

@@ -774,7 +774,7 @@ function isSkyCubeZipAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   if (asset.type !== 'file') {
     return false
   }
-  return asset.extension.toLowerCase() === 'skycube'
+  return (asset.extension ?? '').toLowerCase() === 'skycube'
 }
 
 const skyCubeFormat = computed<SkyCubeBackgroundFormat>(() => environmentSettings.value.background.skycubeFormat ?? 'zip')
