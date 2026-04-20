@@ -61,7 +61,7 @@ export type LandformVertexRenderer = {
 export const LANDFORM_VERTEX_HANDLE_GROUP_NAME = '__LandformVertexHandles'
 const LANDFORM_VERTEX_HANDLE_RENDER_ORDER = 1001
 const LANDFORM_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 48
-const LANDFORM_VERTEX_HANDLE_Y_OFFSET = 0.04
+const LANDFORM_VERTEX_HANDLE_Y_OFFSET = 0.02
 const LANDFORM_VERTEX_HANDLE_COLOR = 0xff4081
 
 function computeLandformVertexHandleSignature(points: Array<[number, number]>, buildShape: LandformBuildShape | null | undefined): string {

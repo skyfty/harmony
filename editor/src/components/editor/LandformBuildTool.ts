@@ -50,7 +50,7 @@ type VertexSnapResolverOptions = {
 }
 
 const PREVIEW_SIGNATURE_PRECISION = 1000
-const LANDFORM_LINE_PREVIEW_Y_OFFSET = 0.03
+const LANDFORM_LINE_PREVIEW_Y_OFFSET = 0.012
 const LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS = 1000 / 30
 
 function getNowMs(): number {

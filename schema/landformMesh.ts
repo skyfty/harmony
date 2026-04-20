@@ -14,7 +14,7 @@ const LANDFORM_RENDER_ORDER = LAND_TERRAIN_SURFACE_RENDER_ORDER
 const LANDFORM_CONTENT_GROUP = '__LandformContent'
 const LANDFORM_MESH_NAME = '__LandformSurface'
 const LANDFORM_FEATHER_PATCHED_FLAG = '__landformFeatherPatched'
-const LANDFORM_EDGE_ALPHA_FLOOR = 0.12
+const LANDFORM_EDGE_ALPHA_FLOOR = 0.2
 const LANDFORM_FEATHER_SHADER_HOOK_INSTALLED = '__landformFeatherShaderHookInstalled'
 const LANDFORM_FEATHER_ORIGINAL_ON_BEFORE_COMPILE = '__landformFeatherOriginalOnBeforeCompile'
 const LANDFORM_FEATHER_ORIGINAL_PROGRAM_CACHE_KEY = '__landformFeatherOriginalProgramCacheKey'
@@ -112,7 +112,11 @@ function normalizeMaterialConfigId(value: unknown): string | null {
 function ensureLandformContentGroup(root: THREE.Group): THREE.Group {
   const existing = root.getObjectByName(LANDFORM_CONTENT_GROUP)
   if (existing && (existing as THREE.Group).isGroup) {
-    return existing as THREE.Group
+    const group = existing as THREE.Group
+    if (group.position.y !== LANDFORM_SURFACE_Y_OFFSET) {
+      group.position.y = LANDFORM_SURFACE_Y_OFFSET
+    }
+    return group
   }
   const content = new THREE.Group()
   content.name = LANDFORM_CONTENT_GROUP
