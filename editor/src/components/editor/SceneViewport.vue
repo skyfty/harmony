@@ -9,6 +9,7 @@ import { SceneViewportCameraControls } from '@/utils/SceneViewportCameraControls
 import {
   isNodeExcludedFromSelectionBoundingBoxFallback,
   mergeUserDataWithDynamicMeshBuildShape,
+  readLandformBuildShapeFromNode,
   readFloorBuildShapeFromNode,
   readWallBuildShapeFromNode,
 } from '@/utils/dynamicMeshBuildShapeUserData'
@@ -312,7 +313,7 @@ import {
   getWaterContourLocalPoints,
   updateWaterSurfaceRuntimeMesh,
 } from './waterSurfaceEditUtils'
-import { pickNearestPlanarEdge } from './planarEditMath'
+import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -2518,6 +2519,14 @@ watch(
       const canApplyRectangle = restored !== 'rectangle' || (floorMesh?.vertices?.length ?? 0) === 4
       if (restored && canApplyRectangle && restored !== floorBuildShape.value) {
         buildToolsStore.setFloorBuildShape(restored)
+      }
+      return
+    }
+
+    if (activeBuildTool.value === 'landform' && isSelectedLandformEditMode() && selectedNodeIsLandform.value) {
+      const restored = readLandformBuildShapeFromNode(node)
+      if (restored && restored !== landformBuildShape.value) {
+        buildToolsStore.setLandformBuildShape(restored)
       }
       return
     }
@@ -5061,6 +5070,24 @@ type LandformContourVertexDragState = {
   workingPoints: Array<[number, number]>
 }
 
+type LandformCircleRadiusDragState = {
+  pointerId: number
+  nodeId: string
+  startX: number
+  startY: number
+  moved: boolean
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+  runtimeObject: THREE.Object3D
+  centerLocal: { x: number; z: number }
+  startRadius: number
+  radiusGrabOffset: number | null
+  segments: number
+  basePoints: Array<[number, number]>
+  workingPoints: Array<[number, number]>
+}
+
 type RegionContourVertexDragState = {
   pointerId: number
   nodeId: string
@@ -5196,6 +5223,7 @@ type WaterRectangleEdgeConstraint = WaterRectangleFrame & {
 
 let waterContourVertexDragState: WaterContourVertexDragState | null = null
 let landformContourVertexDragState: LandformContourVertexDragState | null = null
+let landformCircleRadiusDragState: LandformCircleRadiusDragState | null = null
 let regionContourVertexDragState: RegionContourVertexDragState | null = null
 let boundaryWallContourVertexDragState: BoundaryWallContourVertexDragState | null = null
 let guideRouteVertexDragState: GuideRouteVertexDragState | null = null
@@ -5231,6 +5259,21 @@ function isSelectedFloorCircleEditMode(): boolean {
     return false
   }
   return readFloorBuildShapeFromNode(node) === 'circle'
+}
+
+function isSelectedLandformCircleEditMode(): boolean {
+  if (!isSelectedLandformEditMode()) {
+    return false
+  }
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  if (!node || node.dynamicMesh?.type !== 'Landform') {
+    return false
+  }
+  return readLandformBuildShapeFromNode(node) === 'circle'
 }
 
 function isSelectedWaterCircleEditMode(): boolean {
@@ -6058,6 +6101,9 @@ function setActiveFloorCircleHandle(active: { nodeId: string; circleKind: 'cente
 function ensureLandformVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Array<[number, number]> }) {
   const selectedId = isSelectedLandformEditMode() ? getPrimarySelectedNodeId() : null
   const active = activeBuildTool.value === 'landform' && isSelectedLandformEditMode() && !landformBuildTool.getSession()
+  const buildShape = selectedId && isSelectedLandformCircleEditMode()
+    ? 'circle'
+    : (selectedId ? readLandformBuildShapeFromNode(findSceneNode(sceneStore.nodes, selectedId)) : null)
   const common = {
     active,
     selectedNodeId: selectedId,
@@ -6067,6 +6113,7 @@ function ensureLandformVertexHandlesForSelectedNode(options?: { force?: boolean;
       return node?.dynamicMesh?.type === 'Landform' ? (node.dynamicMesh as LandformDynamicMesh) : null
     },
     resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+    buildShape,
     previewPoints: options?.previewPoints,
   }
   if (options?.force) {
@@ -6550,6 +6597,33 @@ function buildLandformPreviewFromLocalPoints(
   })
 }
 
+function computeLandformCircleFromLocalPoints(points: Array<[number, number]>): { centerX: number; centerZ: number; radius: number; segments: number } | null {
+  const circle = computeApproxCircleFromPlanarPoints(sanitizePlanarPoints(points))
+  if (!circle) {
+    return null
+  }
+  return {
+    centerX: circle.centerX,
+    centerZ: circle.centerY,
+    radius: circle.radius,
+    segments: Math.max(3, Math.trunc(points.length)),
+  }
+}
+
+function buildLandformCircleLocalPoints(options: {
+  centerX: number
+  centerZ: number
+  radius: number
+  segments: number
+}): Array<[number, number]> {
+  return buildCirclePlanarPoints({
+    centerX: options.centerX,
+    centerY: options.centerZ,
+    radius: options.radius,
+    segments: options.segments,
+  })
+}
+
 function previewLandformNodeDuringTranslate(nodeId: string): void {
   const node = sceneStore.getNodeById(nodeId)
   if (!node || node.dynamicMesh?.type !== 'Landform') {
@@ -6591,7 +6665,7 @@ function commitLandformContourNode(nodeId: string, points: Array<[number, number
 }
 
 function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
-  if (landformContourVertexDragState) {
+  if (landformContourVertexDragState || landformCircleRadiusDragState) {
     return false
   }
   if (!isSelectedLandformEditMode() || landformBuildTool.getSession()) {
@@ -6607,6 +6681,7 @@ function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
     return false
   }
 
+  const buildShape = readLandformBuildShapeFromNode(node) ?? 'polygon'
   ensureLandformVertexHandlesForSelectedNode()
   const hit = pickLandformVertexHandleAtPointer(event)
   if (!hit || hit.nodeId !== selectedId) {
@@ -6617,6 +6692,41 @@ function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
   const startPoint = basePoints[hit.vertexIndex]
   if (!startPoint) {
     return false
+  }
+
+  if (buildShape === 'circle') {
+    const circle = computeLandformCircleFromLocalPoints(basePoints)
+    if (!circle) {
+      return false
+    }
+
+    const startPointWorld = runtime.localToWorld(new THREE.Vector3(circle.centerX + circle.radius, 0, circle.centerZ))
+    landformCircleRadiusDragState = {
+      pointerId: event.pointerId,
+      nodeId: selectedId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      dragPlane: createEndpointDragPlane({
+        mode: 'free',
+        axisWorld: null,
+        startPointWorld,
+        freePlaneNormal: new THREE.Vector3(0, 1, 0),
+      }),
+      startPointWorld: startPointWorld.clone(),
+      startHitWorld: null,
+      runtimeObject: runtime,
+      centerLocal: { x: circle.centerX, z: circle.centerZ },
+      startRadius: circle.radius,
+      radiusGrabOffset: null,
+      segments: circle.segments,
+      basePoints,
+      workingPoints: basePoints.map(([x, z]) => [x, z] as [number, number]),
+    }
+
+    setActiveLandformVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
+    pointerInteraction.capture(event.pointerId)
+    return true
   }
 
   const startPointWorld = runtime.localToWorld(new THREE.Vector3(startPoint[0], 0, startPoint[1]))
@@ -8504,6 +8614,7 @@ function updateAutoOverlayHoverIndicator(event: PointerEvent): void {
     || floorVertexDragState
     || regionContourVertexDragState
     || landformContourVertexDragState
+    || landformCircleRadiusDragState
     || displayBoardCornerDragState
     || waterContourVertexDragState
     || waterCircleCenterDragState
@@ -16049,6 +16160,7 @@ function handlePointerMove(event: PointerEvent) {
     !boundaryWallContourVertexDragState &&
     !guideRouteVertexDragState &&
     !landformContourVertexDragState &&
+    !landformCircleRadiusDragState &&
     !displayBoardCornerDragState &&
     !waterContourVertexDragState &&
     !waterCircleCenterDragState &&
@@ -16478,6 +16590,57 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (landformCircleRadiusDragState && event.pointerId === landformCircleRadiusDragState.pointerId) {
+    const state = landformCircleRadiusDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      return
+    }
+    state.moved = true
+
+    if ((event.buttons & 1) === 0) {
+      return
+    }
+
+    if (!state.startHitWorld) {
+      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+        return
+      }
+      state.startHitWorld = waterDragIntersectionHelper.clone()
+    }
+    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      return
+    }
+
+    if (state.radiusGrabOffset == null) {
+      const startHitLocal = state.runtimeObject.worldToLocal(state.startHitWorld.clone())
+      const startDistance = Math.hypot(
+        startHitLocal.x - state.centerLocal.x,
+        startHitLocal.z - state.centerLocal.z,
+      )
+      state.radiusGrabOffset = startDistance - state.startRadius
+    }
+
+    const hitLocal = state.runtimeObject.worldToLocal(waterDragIntersectionHelper.clone())
+    const currentDistance = Math.hypot(
+      hitLocal.x - state.centerLocal.x,
+      hitLocal.z - state.centerLocal.z,
+    )
+    const radius = Math.max(1e-4, currentDistance - (state.radiusGrabOffset ?? 0))
+    const nextPoints = buildLandformCircleLocalPoints({
+      centerX: state.centerLocal.x,
+      centerZ: state.centerLocal.z,
+      radius,
+      segments: state.segments,
+    })
+    state.workingPoints = nextPoints
+    if (buildLandformPreviewFromLocalPoints(state.nodeId, nextPoints)) {
+      ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    }
+    return
+  }
+
   if (displayBoardCornerDragState && event.pointerId === displayBoardCornerDragState.pointerId) {
     const state = displayBoardCornerDragState
     const dx = event.clientX - state.startX
@@ -16727,6 +16890,7 @@ async function handlePointerUp(event: PointerEvent) {
       wallEndpointDragState?.pointerId === event.pointerId ||
       wallJointDragState?.pointerId === event.pointerId ||
       wallHeightDragState?.pointerId === event.pointerId ||
+      landformCircleRadiusDragState?.pointerId === event.pointerId ||
       floorEdgeDragState?.pointerId === event.pointerId ||
       instancedEraseDragState?.pointerId === event.pointerId ||
       pointerInteraction.get()?.pointerId === event.pointerId ||
@@ -16817,6 +16981,7 @@ async function handlePointerUp(event: PointerEvent) {
     //
     // We intentionally do NOT rely on `event.target === canvas` because pointer-capture can
     // retarget the event to the captured element even if the pointer is released elsewhere.
+
     if (isPointerEventFromOverlayUi && !hasViewportSession) {
       return
     }
@@ -16834,6 +16999,31 @@ async function handlePointerUp(event: PointerEvent) {
     // which may use middle-button can handle the event first. If no handler
     // processed the pointerup, we'll cancel active tools below.
     if (isPointerUpOnCanvas) {
+      if (landformCircleRadiusDragState && event.pointerId === landformCircleRadiusDragState.pointerId && event.button === 0) {
+        const state = landformCircleRadiusDragState
+        landformCircleRadiusDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveLandformVertexHandle(null)
+
+        if (state.moved) {
+          if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
+            sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
+          }
+          ensureLandformVertexHandlesForSelectedNode({ force: true })
+          void nextTick(() => {
+            ensureLandformVertexHandlesForSelectedNode({ force: true })
+          })
+        } else {
+          sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
+          ensureLandformVertexHandlesForSelectedNode({ force: true })
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
       if (wallDoorRectangleSelectionState && event.pointerId === wallDoorRectangleSelectionState.pointerId && event.button === 0) {
         const state = wallDoorRectangleSelectionState
         const bounds = wallDoorSelectionController.computeWallDoorRectangleBounds(state)
@@ -16938,6 +17128,31 @@ async function handlePointerUp(event: PointerEvent) {
         } else {
           buildWaterPreviewFromLocalPoints(state.runtimeObject, state.startPoints)
           ensureWaterVertexHandlesForSelectedNode({ force: true })
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      if (landformCircleRadiusDragState && event.pointerId === landformCircleRadiusDragState.pointerId && event.button === 0) {
+        const state = landformCircleRadiusDragState
+        landformCircleRadiusDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveLandformVertexHandle(null)
+
+        if (state.moved) {
+          if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
+            sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
+          }
+          ensureLandformVertexHandlesForSelectedNode({ force: true })
+          void nextTick(() => {
+            ensureLandformVertexHandlesForSelectedNode({ force: true })
+          })
+        } else {
+          sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
+          ensureLandformVertexHandlesForSelectedNode({ force: true })
         }
 
         event.preventDefault()
@@ -17829,6 +18044,25 @@ function handlePointerCancel(event: PointerEvent) {
   if (landformContourVertexDragState && event.pointerId === landformContourVertexDragState.pointerId) {
     const state = landformContourVertexDragState
     landformContourVertexDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveLandformVertexHandle(null)
+
+    try {
+      sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
+      ensureLandformVertexHandlesForSelectedNode({ force: true })
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (landformCircleRadiusDragState && event.pointerId === landformCircleRadiusDragState.pointerId) {
+    const state = landformCircleRadiusDragState
+    landformCircleRadiusDragState = null
     pointerInteraction.releaseIfCaptured(event.pointerId)
     setActiveLandformVertexHandle(null)
 

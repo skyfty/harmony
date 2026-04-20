@@ -3,6 +3,8 @@ import type { LandformDynamicMesh } from '@schema'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
+import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from './planarEditMath'
+import type { LandformBuildShape } from '@/types/landform-build-shape'
 
 export type LandformVertexHandlePickResult = {
   nodeId: string
@@ -30,6 +32,7 @@ export type LandformVertexRenderer = {
     isSelectionLocked: (nodeId: string) => boolean
     resolveLandformDefinition: (nodeId: string) => LandformDynamicMesh | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
+    buildShape?: LandformBuildShape | null
     previewPoints?: Array<[number, number]>
   }): void
   forceRebuild(options: {
@@ -38,6 +41,7 @@ export type LandformVertexRenderer = {
     isSelectionLocked: (nodeId: string) => boolean
     resolveLandformDefinition: (nodeId: string) => LandformDynamicMesh | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
+    buildShape?: LandformBuildShape | null
     previewPoints?: Array<[number, number]>
   }): void
   pick(options: {
@@ -60,8 +64,8 @@ const LANDFORM_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 48
 const LANDFORM_VERTEX_HANDLE_Y_OFFSET = 0.04
 const LANDFORM_VERTEX_HANDLE_COLOR = 0xff4081
 
-function computeLandformVertexHandleSignature(points: Array<[number, number]>): string {
-  return hashString(stableSerialize(points))
+function computeLandformVertexHandleSignature(points: Array<[number, number]>, buildShape: LandformBuildShape | null | undefined): string {
+  return hashString(stableSerialize([buildShape ?? null, points]))
 }
 
 function disposeGroup(group: THREE.Group) {
@@ -78,6 +82,18 @@ function sanitizePreviewPoints(points: Array<[number, number]> | undefined | nul
   return points
     .map(([x, z]) => [Number(x), Number(z)] as [number, number])
     .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+}
+
+function computeCircleFromPoints(points: Array<[number, number]>): { centerX: number; centerZ: number; radius: number } | null {
+  const circle = computeApproxCircleFromPlanarPoints(sanitizePlanarPoints(points))
+  if (!circle) {
+    return null
+  }
+  return {
+    centerX: circle.centerX,
+    centerZ: circle.centerY,
+    radius: circle.radius,
+  }
 }
 
 export function createLandformVertexRenderer(): LandformVertexRenderer {
@@ -153,6 +169,7 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
     isSelectionLocked: (nodeId: string) => boolean
     resolveLandformDefinition: (nodeId: string) => LandformDynamicMesh | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
+    buildShape?: LandformBuildShape | null
     previewPoints?: Array<[number, number]>
     force?: boolean
   }) {
@@ -172,6 +189,7 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
       return
     }
 
+    const buildShape = options.buildShape ?? null
     const previewPoints = sanitizePreviewPoints(options.previewPoints)
     const usePreviewPoints = previewPoints.length >= 3
 
@@ -194,7 +212,7 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
       return
     }
 
-    const signature = computeLandformVertexHandleSignature(sourcePoints)
+    const signature = computeLandformVertexHandleSignature(sourcePoints, buildShape)
     if (!options.force && state && state.nodeId === selectedNodeId && state.signature === signature) {
       if (!runtimeObject.children.includes(state.group)) {
         runtimeObject.add(state.group)
@@ -208,10 +226,20 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
     group.name = LANDFORM_VERTEX_HANDLE_GROUP_NAME
     group.userData.isLandformVertexHandles = true
 
-    sourcePoints.forEach(([x, z], index) => {
+    const handlePoints = buildShape === 'circle'
+      ? (() => {
+          const circle = computeCircleFromPoints(sourcePoints)
+          if (!circle) {
+            return [] as Array<{ x: number; z: number; index: number }>
+          }
+          return [{ x: circle.centerX + circle.radius, z: circle.centerZ, index: 0 }]
+        })()
+      : sourcePoints.map(([x, z], index) => ({ x, z, index }))
+
+    handlePoints.forEach(({ x, z, index }) => {
       const gizmo = createEndpointGizmoObject({
-        axes: { x: true, y: false, z: true },
-        showNegativeAxes: true,
+        axes: buildShape === 'circle' ? { x: false, y: false, z: false } : { x: true, y: false, z: true },
+        showNegativeAxes: buildShape === 'circle' ? false : true,
         renderOrder: LANDFORM_VERTEX_HANDLE_RENDER_ORDER,
         depthTest: false,
         depthWrite: false,
@@ -220,12 +248,13 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
       })
 
       const handle = gizmo.root
-      handle.name = `LandformVertexHandle_${index + 1}`
+      handle.name = buildShape === 'circle' ? 'LandformCircleRadiusHandle' : `LandformVertexHandle_${index + 1}`
       handle.position.set(x, LANDFORM_VERTEX_HANDLE_Y_OFFSET, z)
       handle.layers.enableAll()
       handle.userData.isLandformVertexHandle = true
       handle.userData.nodeId = selectedNodeId
       handle.userData.landformVertexIndex = index
+      handle.userData.landformVertexKind = buildShape === 'circle' ? 'radius' : 'vertex'
       handle.userData.baseDiameter = gizmo.baseDiameter
       handle.userData.endpointGizmo = gizmo
       handle.userData.handleKey = `${selectedNodeId}:${index}`
@@ -239,6 +268,7 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
         mesh.userData.isLandformVertexHandle = true
         mesh.userData.nodeId = selectedNodeId
         mesh.userData.landformVertexIndex = index
+        mesh.userData.landformVertexKind = buildShape === 'circle' ? 'radius' : 'vertex'
       })
 
       group.add(handle)
