@@ -16,7 +16,7 @@
         @useCanvas="handleUseCanvas"
       />
       <view v-if="punchTotalCount > 0" class="viewer-punch-summary" aria-hidden="true">
-        <text class="viewer-punch-summary__label">打卡</text>
+        <text class="viewer-punch-summary__label">景观打卡</text>
         <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
       <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
@@ -3411,14 +3411,24 @@ const presentBehaviorAlert = behaviorAlert.present;
 const confirmBehaviorAlert = behaviorAlert.confirm;
 const cancelBehaviorAlert = behaviorAlert.cancel;
 
-function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
+function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined) {
   assetNodeIdMap.clear();
-  rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
+  rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap);
   signboardNodeIds.clear();
   punchNodeIds.clear();
   punchTotalCount.value = 0;
   resetSignboardOverlaySmoothing();
   resetPunchOverlaySmoothing();
+
+  if (Array.isArray(document?.punchPoints)) {
+    document.punchPoints.forEach((point) => {
+      const nodeId = typeof point?.nodeId === 'string' ? point.nodeId.trim() : '';
+      if (nodeId) {
+        punchNodeIds.add(nodeId);
+      }
+    });
+  }
+
   for (const [nodeId, node] of previewNodeMap.entries()) {
     const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
     if (signboardState?.enabled) {
@@ -10649,7 +10659,7 @@ async function mountGraphAndSyncSubsystems(
   sceneGraphRoot = root;
   renderContext?.scene?.add(root);
 
-  rebuildPreviewNodeMap(payload.document.nodes);
+  rebuildPreviewNodeMap(payload.document);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(root);
   applyWeChatShadowPolicy(root);
