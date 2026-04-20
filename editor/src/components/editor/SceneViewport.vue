@@ -13004,10 +13004,11 @@ function maybeApplyAltLeftClickFocus(event: PointerEvent): boolean {
   if (mode !== 'orbit' && mode !== 'map') {
     return false
   }
-  if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
-    return false
-  }
-  if (scatterEraseModeActive.value || hasPlacementPreviewActive()) {
+  if (
+    activeBuildTool.value ||
+    (uiStore.activeSelectionContext && uiStore.activeSelectionContext !== 'viewport-add-node') ||
+    nodePickerStore.isActive
+  ) {
     return false
   }
   if (Boolean(transformControls?.dragging)) {
