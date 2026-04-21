@@ -752,6 +752,11 @@ import {
   PROXIMITY_RADIUS_SCALE,
 } from '@harmony/schema/behaviors/runtime';
 import {
+  loadStoredPunchedNodeIds,
+  mergeStoredPunchedNodeId,
+  pruneStoredPunchedNodeIds,
+} from '@harmony/schema/browserPunchProgress';
+import {
   applyMaterialOverrides,
   disposeMaterialTextures,
   type MaterialTextureAssignmentOptions,
@@ -1720,6 +1725,50 @@ const SIGNBOARD_REFERENCE_SMOOTH_SPEED = DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEE
 const SIGNBOARD_PLACEMENT_SMOOTH_SPEED = DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED;
 const SIGNBOARD_NEAR_FADE_DISTANCE = SIGNBOARD_CLOSE_FADE_DISTANCE;
 const SIGNBOARD_MIN_VISIBLE_Y_PERCENT = SIGNBOARD_MIN_SCREEN_Y_PERCENT;
+const browserStoredPunchedNodeIds = ref<string[]>([]);
+
+const normalizedInitialPunchedNodeIds = computed(() => {
+  const next = new Set<string>();
+  (props.initialPunchedNodeIds ?? []).forEach((nodeId: string) => {
+    if (typeof nodeId !== 'string') {
+      return;
+    }
+    const normalized = nodeId.trim();
+    if (normalized) {
+      next.add(normalized);
+    }
+  });
+  return Array.from(next);
+});
+
+function resolveActivePunchSceneId(preferredSceneId?: string | null): string {
+  if (typeof preferredSceneId === 'string' && preferredSceneId.trim()) {
+    return preferredSceneId.trim();
+  }
+  return (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+}
+
+function applyMergedPunchedNodeIds(): void {
+  punchedNodeIds.value = new Set<string>([
+    ...normalizedInitialPunchedNodeIds.value,
+    ...browserStoredPunchedNodeIds.value,
+  ]);
+}
+
+function syncStoredPunchedNodeIdsForScene(preferredSceneId?: string | null): void {
+  const sceneId = resolveActivePunchSceneId(preferredSceneId);
+  if (!sceneId) {
+    browserStoredPunchedNodeIds.value = [];
+    applyMergedPunchedNodeIds();
+    return;
+  }
+
+  browserStoredPunchedNodeIds.value = punchNodeIds.size
+    ? pruneStoredPunchedNodeIds(sceneId, punchNodeIds)
+    : loadStoredPunchedNodeIds(sceneId);
+  applyMergedPunchedNodeIds();
+}
+
 const punchCheckedCount = computed(() => {
   punchSceneRevision.value;
   if (!punchTotalCount.value || !punchedNodeIds.value.size) {
@@ -1735,22 +1784,9 @@ const punchCheckedCount = computed(() => {
   return count;
 });
 
-watch(
-  () => props.initialPunchedNodeIds ?? [],
-  (nodeIds: string[]) => {
-    const next = new Set<string>();
-    nodeIds.forEach((nodeId: string) => {
-      if (typeof nodeId === 'string') {
-        const normalized = nodeId.trim();
-        if (normalized) {
-          next.add(normalized);
-        }
-      }
-    });
-    punchedNodeIds.value = next;
-  },
-  { immediate: true },
-);
+watch(normalizedInitialPunchedNodeIds, () => {
+  applyMergedPunchedNodeIds();
+}, { immediate: true });
 
 function resetPunchOverlaySmoothing(): void {
   punchBadgePlacementSmoothingStates.clear();
@@ -3655,6 +3691,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
   }
   punchTotalCount.value = punchNodeIds.size;
   punchSceneRevision.value += 1;
+  syncStoredPunchedNodeIdsForScene(currentSceneId.value ?? document?.id ?? null);
 }
 
 function resolveParentNodeId(nodeId: string): string | null {
@@ -9623,6 +9660,10 @@ async function handleExitSceneEvent(): Promise<void> {
 
 function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }>): void {
   if (punchNodeIds.has(event.nodeId)) {
+    const sceneId = resolveActivePunchSceneId();
+    browserStoredPunchedNodeIds.value = sceneId
+      ? mergeStoredPunchedNodeId(sceneId, event.nodeId)
+      : Array.from(new Set([...browserStoredPunchedNodeIds.value, event.nodeId.trim()]));
     const next = new Set(punchedNodeIds.value);
     next.add(event.nodeId);
     punchedNodeIds.value = next;

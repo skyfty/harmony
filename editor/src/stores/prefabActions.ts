@@ -1255,9 +1255,38 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
                 const normalizedProjectAsset = registryFallbackAsset
                   ? { ...projectAsset, name: registryFallbackAsset.name }
                   : projectAsset
+                const resolvedSource = resolveDependencySourceMeta(assetId) ?? createServerAssetSource(remoteLookupAssetId)
+                if (resolvedSource.type === 'server' && !normalizedProjectAsset.fileKey && !normalizedProjectAsset.downloadUrl) {
+                  console.warn('[PrefabDependencies] Registered server dependency asset without resolved url', {
+                    assetId,
+                    remoteLookupAssetId,
+                    serverAsset: {
+                      id: serverAsset.id,
+                      type: serverAsset.type,
+                      fileKey: serverAsset.fileKey ?? null,
+                      downloadUrl: serverAsset.downloadUrl ?? null,
+                      url: serverAsset.url ?? null,
+                    },
+                    mappedAsset: {
+                      id: mappedAsset.id,
+                      type: mappedAsset.type,
+                      fileKey: mappedAsset.fileKey ?? null,
+                      downloadUrl: mappedAsset.downloadUrl ?? null,
+                    },
+                    fallbackRegistryEntry: fallbackRegistryEntry
+                      ? {
+                        sourceType: fallbackRegistryEntry.sourceType,
+                        serverAssetId: fallbackRegistryEntry.sourceType === 'server' ? fallbackRegistryEntry.serverAssetId ?? null : null,
+                        fileKey: 'fileKey' in fallbackRegistryEntry ? (fallbackRegistryEntry as SceneAssetRegistryEntry & { fileKey?: string | null }).fileKey ?? null : null,
+                        resolvedUrl: 'resolvedUrl' in fallbackRegistryEntry ? (fallbackRegistryEntry as SceneAssetRegistryEntry & { resolvedUrl?: string | null }).resolvedUrl ?? null : null,
+                      }
+                      : null,
+                    resolvedSource,
+                  })
+                }
                 fetchedRemoteAssets.push({
                   asset: normalizedProjectAsset,
-                  source: resolveDependencySourceMeta(assetId) ?? createServerAssetSource(remoteLookupAssetId),
+                  source: resolvedSource,
                   targetAssetId: assetId,
                 })
               } catch {

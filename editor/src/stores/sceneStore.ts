@@ -673,7 +673,7 @@ function buildServerRegistryEntry(
     name?: string
   } = {},
 ): SceneAssetRegistryEntry {
-  return {
+  const entry: SceneAssetRegistryEntry = {
     sourceType: 'server',
     serverAssetId: resolveServerAssetIdFromSource(assetId, source),
     fileKey: asset?.fileKey ?? null,
@@ -682,6 +682,23 @@ function buildServerRegistryEntry(
     assetType: options.assetType,
     name: options.name,
   }
+  if (!entry.fileKey && !entry.resolvedUrl) {
+    console.warn('[SceneStore] Built incomplete server registry entry', {
+      assetId,
+      source: source ?? null,
+      asset: asset
+        ? {
+          id: asset.id,
+          type: asset.type,
+          source: asset.source ?? null,
+          downloadUrl: asset.downloadUrl ?? null,
+          fileKey: asset.fileKey ?? null,
+        }
+        : null,
+      entry,
+    })
+  }
+  return entry
 }
 
 function buildRegistryEntryFromSource(
