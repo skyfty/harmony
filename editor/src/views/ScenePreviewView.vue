@@ -572,7 +572,7 @@ let lastRendererDebugSignature = ''
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
 const isRigidbodyDebugVisible = computed(
-	() => isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value,
+	() => physicsEnvironmentEnabled.value && (isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value),
 )
 
 function appendWarningMessage(message: string): void {
@@ -1947,6 +1947,7 @@ function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamer
 }
 
 let physicsWorld: CANNON.World | null = null
+const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
 type AirWallDebugEntry = {
@@ -2730,6 +2731,7 @@ const vehicleDriveController = new VehicleDriveController(
 		resolveRigidbodyComponent,
 		resolveVehicleComponent,
 		ensurePhysicsWorld,
+		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
 		ensureVehicleBindingForNode,
 		normalizeNodeId,
 		setCameraViewState: (mode, targetId) => {
@@ -4538,6 +4540,12 @@ watch(volumePercent, (value) => {
 })
 
 watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnabled, otherEnabled]) => {
+	if (!physicsEnvironmentEnabled.value) {
+		disposeRigidbodyDebugHelpers()
+		roadHeightfieldDebugCache.clear()
+		setAirWallDebugVisibility(false)
+		return
+	}
 	const enabled = groundEnabled || otherEnabled
 	if (enabled) {
 		ensureRigidbodyDebugGroup()
@@ -4549,6 +4557,21 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnab
 	disposeRigidbodyDebugHelpers()
 	roadHeightfieldDebugCache.clear()
 	setAirWallDebugVisibility(false)
+})
+
+watch(physicsEnvironmentEnabled, (enabled) => {
+	if (!enabled) {
+		disposeRigidbodyDebugHelpers()
+		roadHeightfieldDebugCache.clear()
+		setAirWallDebugVisibility(false)
+		return
+	}
+	if (isRigidbodyDebugVisible.value) {
+		ensureRigidbodyDebugGroup()
+		syncRigidbodyDebugHelpers()
+		updateRigidbodyDebugTransforms()
+		setAirWallDebugVisibility(isGroundWireframeVisible.value)
+	}
 })
 
 watch(isRendererDebugVisible, (visible) => {
@@ -8244,6 +8267,9 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 	} else {
 		autoTourRuntime.update(delta)
 	}
+	if (vehicleDriveState.active) {
+		applyVehicleDriveForces(delta)
+	}
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
 	updateVehicleWheelVisuals(delta)
@@ -8498,6 +8524,9 @@ function startAnimationLoop() {
 		if (isPlaying.value) {
 			updatePlaybackSystemsForFrame(delta)
 		}
+		if (!isPlaying.value && vehicleDriveState.active && !physicsEnvironmentEnabled.value) {
+			applyVehicleDriveForces(delta)
+		}
 		waterRuntime.update(delta, {
 			renderer: currentRenderer,
 			scene: currentScene,
@@ -8714,6 +8743,7 @@ function applyFogSettings(settings: EnvironmentSettings) {
 
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
 	const gravity = clampNumber(settings.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY)
+	physicsEnvironmentEnabled.value = settings.physicsEnabled !== false
 	physicsGravity.set(0, -gravity, 0)
 	physicsContactRestitution = clampNumber(
 		settings.collisionRestitution,
@@ -11028,7 +11058,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 }
 
 function stepPhysicsWorld(delta: number): void {
-	if (!physicsWorld || !rigidbodyInstances.size) {
+	if (!physicsEnvironmentEnabled.value || !physicsWorld || !rigidbodyInstances.size) {
 		physicsAccumulator = 0
 		return
 	}
@@ -11081,9 +11111,6 @@ function stepPhysicsWorld(delta: number): void {
 	let subSteps = 0
 	try {
 		while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-			if (vehicleDriveState.active) {
-				applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP)
-			}
 			physicsWorld.step(PHYSICS_FIXED_TIMESTEP)
 			physicsAccumulator -= PHYSICS_FIXED_TIMESTEP
 			subSteps += 1
@@ -12396,6 +12423,7 @@ watch(
 						</v-list-item>
 						<v-list-item>
 							<v-checkbox
+								v-if="physicsEnvironmentEnabled"
 								class="scene-preview__debug-checkbox"
 								label="Ground rigidbody wireframe"
 								:model-value="isGroundWireframeVisible"
@@ -12418,6 +12446,7 @@ watch(
 						</v-list-item>
 						<v-list-item>
 							<v-checkbox
+								v-if="physicsEnvironmentEnabled"
 								class="scene-preview__debug-checkbox"
 								label="Other rigidbody wireframe"
 								:model-value="isOtherRigidbodyWireframeVisible"

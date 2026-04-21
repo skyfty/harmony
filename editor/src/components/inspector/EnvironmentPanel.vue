@@ -89,6 +89,7 @@ const isSkyCubeZipDropActive = ref(false)
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
 const isLinearFogAutoFitToGround = computed(() => Boolean(environmentSettings.value.fogAutoFitToGround))
+const isPhysicsEnabled = computed(() => environmentSettings.value.physicsEnabled !== false)
 
 const orientationPreset = computed<EnvironmentOrientationPreset>(() => environmentSettings.value.environmentOrientationPreset ?? 'yUp')
 const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
@@ -558,6 +559,16 @@ function handleFogAutoFitToGroundToggle(enabled: boolean | null) {
     return
   }
   sceneStore.patchEnvironmentSettings({ fogAutoFitToGround: enabled })
+}
+
+function handlePhysicsEnabledToggle(enabled: boolean | null) {
+  if (typeof enabled !== 'boolean') {
+    return
+  }
+  if (enabled === (environmentSettings.value.physicsEnabled !== false)) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ physicsEnabled: enabled })
 }
 
 function applyExpFogPreset(preset: unknown) {
@@ -1721,6 +1732,17 @@ function handleBackgroundDrop(event: DragEvent) {
 
         <section class="environment-section">
           <div class="section-title">Physics</div>
+          <div class="toggle-row">
+            <span class="toggle-label">Enable Physics</span>
+            <v-switch
+              :model-value="isPhysicsEnabled"
+              density="compact"
+              hide-details
+              color="primary"
+              size="small"
+              @update:model-value="handlePhysicsEnabledToggle"
+            />
+          </div>
           <div class="slider-row">
             <v-text-field
               class="slider-input"

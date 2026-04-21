@@ -130,6 +130,7 @@ export type VehicleDriveControllerDeps = {
   resolveRigidbodyComponent: (node: SceneNode | null | undefined) => SceneNodeComponentState<RigidbodyComponentProps> | null | undefined
   resolveVehicleComponent: (node: SceneNode | null | undefined) => SceneNodeComponentState<VehicleComponentProps> | null | undefined
   ensurePhysicsWorld: () => void
+  isPhysicsEnabled?: () => boolean
   ensureVehicleBindingForNode: (nodeId: string) => void
   normalizeNodeId: (id: string | null | undefined) => string | null
   setCameraViewState?: (mode: string, targetId?: string | null) => void
@@ -629,6 +630,7 @@ export class VehicleDriveController {
     }
     const vehicleComponent = this.deps.resolveVehicleComponent(nodeState)
     const rigidbodyComponent = this.deps.resolveRigidbodyComponent(nodeState)
+    const physicsEnabled = this.deps.isPhysicsEnabled?.() !== false
     if (!vehicleComponent) {
       return { success: false, message: '车辆需要启用 Vehicle 组件。' }
     }
@@ -636,7 +638,7 @@ export class VehicleDriveController {
     if (!vehicleObject) {
       return { success: false, message: '车辆尚未准备就绪，请稍后再试。' }
     }
-    if (!rigidbodyComponent) {
+    if (!rigidbodyComponent || !physicsEnabled) {
       return { success: true, mode: 'transform', vehicleObject }
     }
     this.deps.ensurePhysicsWorld()
@@ -838,7 +840,16 @@ export class VehicleDriveController {
     if (!state.active || !state.nodeId) {
       return
     }
-    if (!state.vehicle) {
+    if (!state.vehicle || this.deps.isPhysicsEnabled?.() === false) {
+      if (state.vehicle && this.deps.isPhysicsEnabled?.() === false) {
+        const vehicleObject = this.deps.nodeObjectMap.get(state.nodeId) ?? null
+        if (vehicleObject) {
+          this.initializeTransformDrive(vehicleObject)
+          state.vehicle = null
+          state.wheelCount = 0
+          state.steerableWheelIndices = []
+        }
+      }
       this.applyTransformDrive(state.nodeId, deltaSeconds)
       return
     }

@@ -360,10 +360,12 @@
           <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}</text>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
           <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
-          <text class="viewer-debug-line">Physics: bodies {{ physicsDebug.bodies }}, shapes {{ physicsDebug.shapes }}, dyn {{ physicsDebug.dynamicAwake }}/{{ physicsDebug.dynamicSleeping }}/{{ physicsDebug.dynamicTotal }}, static {{ physicsDebug.staticTotal }}, kin {{ physicsDebug.kinematicTotal }}, rv {{ physicsDebug.raycastVehicles }}</text>
-          <text class="viewer-debug-line">Physics Step: last {{ physicsDebug.substepsLastFrame }}, per s {{ physicsDebug.substepsPerSecond }}</text>
-          <text class="viewer-debug-line">Physics Src: exp {{ physicsDebug.sourceExplicitBodies }}/{{ physicsDebug.sourceExplicitShapes }}, ground {{ physicsDebug.sourceGroundBodies }}/{{ physicsDebug.sourceGroundShapes }}, road {{ physicsDebug.sourceRoadBodies }}/{{ physicsDebug.sourceRoadShapes }}, wall {{ physicsDebug.sourceWallBodies }}/{{ physicsDebug.sourceWallShapes }}</text>
-          <text class="viewer-debug-line">Physics Src: floor {{ physicsDebug.sourceFloorBodies }}/{{ physicsDebug.sourceFloorShapes }}, boundary {{ physicsDebug.sourceBoundaryBodies }}/{{ physicsDebug.sourceBoundaryShapes }}, air {{ physicsDebug.sourceAirWallBodies }}/{{ physicsDebug.sourceAirWallShapes }}</text>
+          <template v-if="physicsEnvironmentEnabled">
+            <text class="viewer-debug-line">Physics: bodies {{ physicsDebug.bodies }}, shapes {{ physicsDebug.shapes }}, dyn {{ physicsDebug.dynamicAwake }}/{{ physicsDebug.dynamicSleeping }}/{{ physicsDebug.dynamicTotal }}, static {{ physicsDebug.staticTotal }}, kin {{ physicsDebug.kinematicTotal }}, rv {{ physicsDebug.raycastVehicles }}</text>
+            <text class="viewer-debug-line">Physics Step: last {{ physicsDebug.substepsLastFrame }}, per s {{ physicsDebug.substepsPerSecond }}</text>
+            <text class="viewer-debug-line">Physics Src: exp {{ physicsDebug.sourceExplicitBodies }}/{{ physicsDebug.sourceExplicitShapes }}, ground {{ physicsDebug.sourceGroundBodies }}/{{ physicsDebug.sourceGroundShapes }}, road {{ physicsDebug.sourceRoadBodies }}/{{ physicsDebug.sourceRoadShapes }}, wall {{ physicsDebug.sourceWallBodies }}/{{ physicsDebug.sourceWallShapes }}</text>
+            <text class="viewer-debug-line">Physics Src: floor {{ physicsDebug.sourceFloorBodies }}/{{ physicsDebug.sourceFloorShapes }}, boundary {{ physicsDebug.sourceBoundaryBodies }}/{{ physicsDebug.sourceBoundaryShapes }}, air {{ physicsDebug.sourceAirWallBodies }}/{{ physicsDebug.sourceAirWallShapes }}</text>
+          </template>
         </template>
       </view>
     </view>
@@ -1757,6 +1759,7 @@ function resetSignboardOverlaySmoothing(): void {
 }
 
 let physicsWorld: CANNON.World | null = null;
+const physicsEnvironmentEnabled = ref(true);
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 let protagonistNodeId: string | null = null;
 
@@ -2551,6 +2554,7 @@ const vehicleDriveController = new VehicleDriveController(
     resolveRigidbodyComponent,
     resolveVehicleComponent,
     ensurePhysicsWorld,
+    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
     ensureVehicleBindingForNode,
     normalizeNodeId,
     setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
@@ -5256,6 +5260,37 @@ function classifyPhysicsSourceCounts(): PhysicsSourceDebugCounts {
 }
 
 function syncPhysicsDebugOverlay(deltaSeconds: number, substepsLastFrame: number): void {
+  if (!physicsEnvironmentEnabled.value) {
+    syncPhysicsDebugCounters({
+      deltaSeconds,
+      substepsLastFrame: 0,
+      totalBodies: 0,
+      totalShapes: 0,
+      dynamicAwake: 0,
+      dynamicSleeping: 0,
+      dynamicTotal: 0,
+      staticTotal: 0,
+      kinematicTotal: 0,
+      raycastVehicles: 0,
+      sources: {
+        explicitBodies: 0,
+        explicitShapes: 0,
+        groundBodies: 0,
+        groundShapes: 0,
+        roadBodies: 0,
+        roadShapes: 0,
+        wallBodies: 0,
+        wallShapes: 0,
+        floorBodies: 0,
+        floorShapes: 0,
+        boundaryBodies: 0,
+        boundaryShapes: 0,
+        airWallBodies: 0,
+        airWallShapes: 0,
+      },
+    });
+    return;
+  }
   const world = physicsWorld;
   if (!world) {
     syncPhysicsDebugCounters({
@@ -5782,6 +5817,11 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 }
 
 function stepPhysicsWorld(delta: number): number {
+  if (!physicsEnvironmentEnabled.value) {
+    physicsAccumulator = 0;
+    physicsInterpolationAlpha = 0;
+    return 0;
+  }
   if (!physicsWorld || !rigidbodyInstances.size) {
     return 0;
   }
@@ -9914,6 +9954,7 @@ function applyFogSettings(settings: EnvironmentSettings) {
 
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
   const gravity = clampNumber(settings.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY);
+  physicsEnvironmentEnabled.value = settings.physicsEnabled !== false;
   physicsGravity.set(0, -gravity, 0);
   physicsContactRestitution = clampNumber(
     settings.collisionRestitution,
@@ -11552,6 +11593,12 @@ function startRenderLoop(
           } else {
             autoTourRuntime.update(deltaSeconds);
           }
+          if (vehicleDriveActive.value) {
+            applyVehicleDriveForces(deltaSeconds);
+            if (!physicsEnvironmentEnabled.value) {
+              updateVehicleDriveCamera(deltaSeconds);
+            }
+          }
           const physicsSubsteps = stepPhysicsWorld(deltaSeconds);
           if (debugEnabled.value) {
             syncPhysicsDebugOverlay(deltaSeconds, physicsSubsteps);
@@ -11566,7 +11613,7 @@ function startRenderLoop(
 
         updateBillboardInstanceCameraWorldPosition(camera.position);
 
-        if (vehicleDriveActive.value) {
+        if (vehicleDriveActive.value && physicsEnvironmentEnabled.value) {
           updateVehicleDriveCamera(deltaSeconds);
         }
 

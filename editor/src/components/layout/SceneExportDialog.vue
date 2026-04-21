@@ -255,11 +255,11 @@ function sanitizeInputName(input: string): string {
 function validate(): boolean {
   const trimmed = form.fileName.trim()
   if (!trimmed) {
-    fileNameError.value = 'Please enter a file name'
+    fileNameError.value = '请输入文件名'
     return false
   }
-  if (!/^[\w\-\. ]+$/.test(trimmed)) {
-    fileNameError.value = 'File name may only contain letters, numbers, spaces, underscores, and hyphens'
+  if (!/^[\p{L}\p{N} _.-]+$/u.test(trimmed)) {
+    fileNameError.value = '文件名只能包含中文、字母、数字、空格、下划线和连字符'
     return false
   }
   fileNameError.value = null
