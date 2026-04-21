@@ -45,6 +45,7 @@ export interface EnvironmentSettings {
   fogDensity: number
   fogNear: number
   fogFar: number
+  fogAutoFitToGround?: boolean
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number

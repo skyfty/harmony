@@ -21,6 +21,7 @@ export const DEFAULT_ENVIRONMENT_FOG_COLOR = '#ffffff'
 export const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
 export const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
 export const DEFAULT_ENVIRONMENT_FOG_FAR = 50
+export const DEFAULT_ENVIRONMENT_FOG_AUTO_FIT_TO_GROUND = true
 export const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 export const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 export const DEFAULT_ENVIRONMENT_FRICTION = 0.3
@@ -73,11 +74,20 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
   fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
   fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
+  fogAutoFitToGround: DEFAULT_ENVIRONMENT_FOG_AUTO_FIT_TO_GROUND,
   viewportPerformanceMode: DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE,
   gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
   collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
   collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
   csm: { ...DEFAULT_ENVIRONMENT_CSM_SETTINGS },
+}
+
+export type AdaptiveLinearFogRange = {
+  groundWidth: number
+  groundDepth: number
+  cameraFar: number
+  fogNear: number
+  fogFar: number
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {
@@ -116,6 +126,57 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
     return max
   }
   return numeric
+}
+
+function normalizePositiveNumber(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null
+  }
+  return numeric
+}
+
+export function resolveAdaptiveLinearFogRange(options: {
+  settings: Pick<EnvironmentSettings, 'fogMode' | 'fogNear' | 'fogFar' | 'fogAutoFitToGround'>
+  groundWidth?: number | null
+  groundDepth?: number | null
+  referenceFar?: number
+  minFar?: number
+  coveragePaddingRatio?: number
+}): AdaptiveLinearFogRange | null {
+  const { settings } = options
+  if (settings.fogMode !== 'linear') {
+    return null
+  }
+  if (settings.fogAutoFitToGround === false) {
+    return null
+  }
+
+  const groundWidth = normalizePositiveNumber(options.groundWidth)
+  const groundDepth = normalizePositiveNumber(options.groundDepth)
+  if (!groundWidth || !groundDepth) {
+    return null
+  }
+
+  const referenceFar = Math.max(1, normalizePositiveNumber(options.referenceFar) ?? 2000)
+  const minFar = Math.max(1, normalizePositiveNumber(options.minFar) ?? 25)
+  const coveragePaddingRatio = clampNumber(options.coveragePaddingRatio, 0, 2, 0.18)
+  const coverageFar = Math.max(minFar, Math.hypot(groundWidth, groundDepth) * (1 + coveragePaddingRatio))
+
+  const sourceFar = Math.max(0.001, normalizePositiveNumber(settings.fogFar) ?? DEFAULT_ENVIRONMENT_FOG_FAR)
+  const sourceNear = clampNumber(settings.fogNear, 0, sourceFar - 0.001, 0)
+  const farScale = clampNumber(sourceFar / referenceFar, 0.05, 1, 1)
+  const fogFar = Math.max(minFar, coverageFar * farScale)
+  const nearRatio = clampNumber(sourceNear / sourceFar, 0, 0.98, 0)
+  const fogNear = Math.min(fogFar - 0.001, Math.max(0, fogFar * nearRatio))
+
+  return {
+    groundWidth,
+    groundDepth,
+    cameraFar: fogFar,
+    fogNear,
+    fogFar,
+  }
 }
 
 function normalizeAssetId(value: unknown): string | null {
@@ -326,6 +387,10 @@ export function cloneEnvironmentSettings(
     fogDensity: clampNumber(normalizedSource.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
     fogNear,
     fogFar: normalizedFogFar,
+    fogAutoFitToGround:
+      typeof (normalizedSource as any)?.fogAutoFitToGround === 'boolean'
+        ? (normalizedSource as any).fogAutoFitToGround
+        : DEFAULT_ENVIRONMENT_FOG_AUTO_FIT_TO_GROUND,
     viewportPerformanceMode:
       typeof (normalizedSource as any)?.viewportPerformanceMode === 'boolean'
         ? (normalizedSource as any).viewportPerformanceMode

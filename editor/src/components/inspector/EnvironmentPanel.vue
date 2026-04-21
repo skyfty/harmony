@@ -88,6 +88,7 @@ const isSkyCubeZipDropActive = ref(false)
 
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
+const isLinearFogAutoFitToGround = computed(() => Boolean(environmentSettings.value.fogAutoFitToGround))
 
 const orientationPreset = computed<EnvironmentOrientationPreset>(() => environmentSettings.value.environmentOrientationPreset ?? 'yUp')
 const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
@@ -547,6 +548,16 @@ function applyLinearFogPreset(preset: unknown) {
     fogNear: nextNear,
     fogFar: nextFar,
   })
+}
+
+function handleFogAutoFitToGroundToggle(enabled: boolean | null) {
+  if (typeof enabled !== 'boolean') {
+    return
+  }
+  if (enabled === Boolean(environmentSettings.value.fogAutoFitToGround)) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ fogAutoFitToGround: enabled })
 }
 
 function applyExpFogPreset(preset: unknown) {
@@ -1602,6 +1613,18 @@ function handleBackgroundDrop(event: DragEvent) {
             @update:model-value="applyExpFogPreset"
           />
 
+          <div v-if="isLinearFog" class="toggle-row">
+            <span class="toggle-label">Auto Fit To Ground</span>
+            <v-switch
+              :model-value="isLinearFogAutoFitToGround"
+              density="compact"
+              hide-details
+              color="primary"
+              size="small"
+              @update:model-value="handleFogAutoFitToGroundToggle"
+            />
+          </div>
+
           <div v-if="environmentSettings.fogMode !== 'none'" class="material-color">
             <div class="color-input">
               <v-text-field
@@ -1672,6 +1695,7 @@ function handleBackgroundDrop(event: DragEvent) {
               :min="0"
               :max="100000"
               :step="0.1"
+              :disabled="isLinearFogAutoFitToGround"
               :model-value="formatFogNear()"
               @update:model-value="handleFogNearInput"
             />
@@ -1688,6 +1712,7 @@ function handleBackgroundDrop(event: DragEvent) {
               :min="0"
               :max="100000"
               :step="0.1"
+              :disabled="isLinearFogAutoFitToGround"
               :model-value="formatFogFar()"
               @update:model-value="handleFogFarInput"
             />

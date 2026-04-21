@@ -49,6 +49,7 @@ export {
   DEFAULT_ENVIRONMENT_FOG_DENSITY,
   DEFAULT_ENVIRONMENT_FOG_NEAR,
   DEFAULT_ENVIRONMENT_FOG_FAR,
+  DEFAULT_ENVIRONMENT_FOG_AUTO_FIT_TO_GROUND,
   DEFAULT_ENVIRONMENT_GRAVITY,
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
@@ -59,8 +60,10 @@ export {
   DEFAULT_ENVIRONMENT_SETTINGS,
   cloneEnvironmentSettings,
   extractEnvironmentSettingsFromNodes,
+  resolveAdaptiveLinearFogRange,
   resolveDocumentEnvironment,
 } from './environmentSettingsUtils'
+export type { AdaptiveLinearFogRange } from './environmentSettingsUtils'
 export type {
   SkyCubeFaceKey,
   SkyCubeTextureLoadOptions,
@@ -1228,6 +1231,8 @@ export interface EnvironmentSettings {
   fogDensity: number
   fogNear: number
   fogFar: number
+  /** When true, linear fog and camera far can be adapted from the current ground footprint at runtime. */
+  fogAutoFitToGround?: boolean
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number

@@ -511,6 +511,7 @@ import {
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
   cloneEnvironmentSettings,
+  resolveAdaptiveLinearFogRange,
   resolveDocumentEnvironment,
   type EnvironmentNorthDirection,
   type EnvironmentSettings,
@@ -2764,6 +2765,7 @@ const cameraViewFrustum = new THREE.Frustum();
 
 const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
+const groundFogScaleHelper = new THREE.Vector3();
 const tempVector = new THREE.Vector3();
 const tempObserverVector = new THREE.Vector3();
 const tempRegionObserverVector = new THREE.Vector3();
@@ -4039,6 +4041,45 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   } else {
     dynamicGroundCache = null;
   }
+  if (currentDocument?.id === document?.id) {
+    void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document));
+  }
+}
+
+function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
+  const document = currentDocument;
+  if (!document) {
+    return null;
+  }
+  const groundNode = dynamicGroundCache?.node ?? findGroundNode(document.nodes);
+  const dynamicMesh = groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)
+    ? groundNode.dynamicMesh
+    : null;
+  const baseWidth = Number.isFinite(dynamicMesh?.width)
+    ? Math.max(0, Number(dynamicMesh?.width))
+    : Math.max(0, Number(document.groundSettings?.width ?? 0));
+  const baseDepth = Number.isFinite(dynamicMesh?.depth)
+    ? Math.max(0, Number(dynamicMesh?.depth))
+    : Math.max(0, Number(document.groundSettings?.depth ?? 0));
+  if (baseWidth <= 0 || baseDepth <= 0) {
+    return null;
+  }
+  let scaleX = 1;
+  let scaleZ = 1;
+  const groundObject = groundNode ? nodeObjectMap.get(groundNode.id) ?? null : null;
+  if (groundObject) {
+    groundObject.updateMatrixWorld(true);
+    groundObject.getWorldScale(groundFogScaleHelper);
+    scaleX = Math.abs(groundFogScaleHelper.x) || 1;
+    scaleZ = Math.abs(groundFogScaleHelper.z) || 1;
+  } else if (groundNode?.scale) {
+    scaleX = Math.abs(Number(groundNode.scale.x) || 1);
+    scaleZ = Math.abs(Number(groundNode.scale.z) || 1);
+  }
+  return {
+    width: baseWidth * scaleX,
+    depth: baseDepth * scaleZ,
+  };
 }
 
 
@@ -5833,7 +5874,7 @@ function stepPhysicsWorld(delta: number): number {
             // Keep vehicle control smoothing stable by advancing it at the same fixed timestep as physics.
             applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
           }
-          // world.step(PHYSICS_FIXED_TIMESTEP);
+          world.step(PHYSICS_FIXED_TIMESTEP);
           physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
           subSteps += 1;
         }
@@ -5867,7 +5908,7 @@ function stepPhysicsWorld(delta: number): number {
           if (vehicleDriveActive.value) {
             applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
           }
-          // physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
+          physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
           physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
           subSteps += 1;
         }
@@ -9842,8 +9883,15 @@ function applyFogSettings(settings: EnvironmentSettings) {
   }
   const fogColor = new THREE.Color(settings.fogColor);
   if (settings.fogMode === 'linear') {
-    const near = Math.max(0, settings.fogNear);
-    const far = Math.max(near + 0.001, settings.fogFar);
+    const groundSize = resolveGroundViewportWorldSize();
+    const adaptiveRange = resolveAdaptiveLinearFogRange({
+      settings,
+      groundWidth: groundSize?.width,
+      groundDepth: groundSize?.depth,
+      referenceFar: DEFAULT_SCENE_CAMERA_FAR,
+    });
+    const near = adaptiveRange ? adaptiveRange.fogNear : Math.max(0, settings.fogNear);
+    const far = adaptiveRange ? adaptiveRange.fogFar : Math.max(near + 0.001, settings.fogFar);
     syncCameraFar(far);
     if (scene.fog instanceof THREE.Fog) {
       scene.fog.color.copy(fogColor);
