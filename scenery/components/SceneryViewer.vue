@@ -2586,6 +2586,9 @@ const vehicleDriveController = new VehicleDriveController(
 
     // Provide interpolated chassis position for camera anchor (when physics interpolation is enabled).
     resolveChassisWorldPosition: (nodeId, chassisBody, target) => {
+      if (!physicsEnvironmentEnabled.value) {
+        return false;
+      }
       if (!physicsInterpolationEnabled) {
         return false;
       }

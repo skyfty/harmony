@@ -2468,7 +2468,9 @@ function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' 
 		return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: vehicleDriveState.nodeId }
 	}
 	if (autoTourFollowNodeId.value) {
-		const autoTourVehicle = vehicleInstances.get(autoTourFollowNodeId.value)?.vehicle ?? null
+		const autoTourVehicle = physicsEnvironmentEnabled.value
+			? vehicleInstances.get(autoTourFollowNodeId.value)?.vehicle ?? null
+			: null
 		const bodyPosition = autoTourVehicle?.chassisBody?.position
 		if (bodyPosition) {
 			signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
@@ -3006,11 +3008,26 @@ function resolveAutoTourComponent(
 	return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
 }
 
+const autoTourVehicleInstances = new Proxy(vehicleInstances, {
+	get(target, property, receiver) {
+		if (property === 'get') {
+			return (nodeId: string) => {
+				if (!physicsEnvironmentEnabled.value) {
+					return undefined
+				}
+				return target.get(nodeId)
+			}
+		}
+		const value = Reflect.get(target, property, receiver)
+		return typeof value === 'function' ? value.bind(target) : value
+	},
+}) as typeof vehicleInstances
+
 const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),
 	resolveNodeById,
 	nodeObjectMap,
-	vehicleInstances,
+	vehicleInstances: autoTourVehicleInstances,
 	isManualDriveActive: () => vehicleDriveState.active,
 	requiresExplicitStart: true,
 	onDockRequestedPause: (nodeId, payload) => {
@@ -8236,10 +8253,11 @@ function updateCameraControlsForFrame(
  * - Vehicle forces and physics step
  * - Derived state (speed)
  */
-function updatePlaybackSystemsForFrame(delta: number): void {
+function updatePlaybackSystemsForFrame(delta: number): boolean {
 	if (!camera) {
-		return
+		return false
 	}
+	let transformDriveUpdated = false
 	previewComponentManager.setFrameState({
 		cameraWorldPosition: {
 			x: camera.position.x,
@@ -8269,10 +8287,12 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 	}
 	if (vehicleDriveState.active) {
 		applyVehicleDriveForces(delta)
+		transformDriveUpdated = !physicsEnvironmentEnabled.value
 	}
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
 	updateVehicleWheelVisuals(delta)
+	return transformDriveUpdated
 }
 
 function updateAutoTourCameraForFrame(
@@ -8383,8 +8403,16 @@ function updateAutoTourCameraForFrame(
 /**
  * Updates the vehicle drive camera and keeps orbit-state cache in sync.
  */
-function updateVehicleCameraForFrame(delta: number, followCameraActive: boolean, activeCamera: THREE.PerspectiveCamera): void {
-	const cameraUpdated = updateVehicleDriveCamera(delta, { applyOrbitTween: followCameraActive })
+function updateVehicleCameraForFrame(
+	delta: number,
+	followCameraActive: boolean,
+	activeCamera: THREE.PerspectiveCamera,
+	immediate = false,
+): void {
+	const cameraUpdated = updateVehicleDriveCamera(delta, {
+		immediate,
+		applyOrbitTween: followCameraActive,
+	})
 	if (followCameraActive && cameraUpdated && mapControls) {
 		lastOrbitState.position.copy(activeCamera.position)
 		lastOrbitState.target.copy(mapControls.target)
@@ -8518,14 +8546,16 @@ function startAnimationLoop() {
 		const vehicleFollowCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
 		const autoTourFollowCameraActive = Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
 		const followCameraActive = vehicleFollowCameraActive || autoTourFollowCameraActive
+		let vehicleTransformDriveUpdated = false
 		updateCameraControlsForFrame(delta, activeCamera, followCameraActive)
 
 		// 2) Simulation (only when playing)
 		if (isPlaying.value) {
-			updatePlaybackSystemsForFrame(delta)
+			vehicleTransformDriveUpdated = updatePlaybackSystemsForFrame(delta)
 		}
 		if (!isPlaying.value && vehicleDriveState.active && !physicsEnvironmentEnabled.value) {
 			applyVehicleDriveForces(delta)
+			vehicleTransformDriveUpdated = true
 		}
 		waterRuntime.update(delta, {
 			renderer: currentRenderer,
@@ -8535,7 +8565,7 @@ function startAnimationLoop() {
 
 		// 3) Vehicle camera and camera-dependent systems
 		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
-		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera)
+		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera, vehicleTransformDriveUpdated)
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
 		updateSignboardOverlayEntries(activeCamera, delta)

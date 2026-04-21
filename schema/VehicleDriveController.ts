@@ -1427,13 +1427,14 @@ export class VehicleDriveController {
     fallbackPosition: THREE.Vector3,
     target: THREE.Vector3,
   ): void {
+    const physicsEnabled = this.deps.isPhysicsEnabled?.() !== false
     const chassisBody = instance?.vehicle?.chassisBody ?? null
     const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
-    const resolvePosition = nodeId && chassisBody ? this.deps.resolveChassisWorldPosition : undefined
+    const resolvePosition = physicsEnabled && nodeId && chassisBody ? this.deps.resolveChassisWorldPosition : undefined
     if (nodeId && chassisBody && resolvePosition && resolvePosition(nodeId, chassisBody, target)) {
       return
     }
-    const bodyPosition = chassisBody?.position
+    const bodyPosition = physicsEnabled ? chassisBody?.position : null
     if (bodyPosition) {
       target.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
       return
