@@ -362,7 +362,7 @@
       >
         <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
         <template v-if="debugMode === 'full'">
-          <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}</text>
+          <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}, r-tris {{ rendererDebug.renderTriangles }}</text>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
           <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
         </template>
@@ -1222,7 +1222,7 @@ const overlayCaption = computed(() => {
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
-const DEFAULT_SCENE_CAMERA_FAR = 2000;
+const DEFAULT_SCENE_CAMERA_FAR = 1000;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SCENE_EXPOSURE = 0.7;
