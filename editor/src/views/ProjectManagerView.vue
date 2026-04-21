@@ -20,15 +20,6 @@ import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 const router = useRouter()
 const projectsStore = useProjectsStore()
 const uiStore = useUiStore()
-
-  async function handleSignOut() {
-    try {
-      await authStore.logout()
-    } finally {
-      // Ensure page state is fully refreshed after logout
-      window.location.reload()
-    }
-  }
 const scenesStore = useScenesStore()
 const authStore = useAuthStore()
 const route = useRoute()
@@ -97,6 +88,10 @@ async function handleCreateProject(payload: ProjectCreateParams) {
   const { project, scene } = await createProjectWithDefaultScene(payload)
   await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
   overlayClose?.()
+}
+
+async function handleSignOut() {
+  await authStore.logout()
 }
 
 async function handleOpenProject(payload: { projectId: string; sceneId?: string | null }) {

@@ -366,6 +366,7 @@ export const useAuthStore = defineStore('auth', () => {
       clearSessionNotice()
       connectEditorSessionStream()
       hideLoginDialog()
+      await router.replace('/')
     } catch (error) {
       const message = (error as Error)?.message ?? '登录失败'
       loginError.value = message
@@ -379,6 +380,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (!token.value) {
       clearSessionState()
       clearSessionNotice()
+      await router.replace('/')
       return
     }
     const currentToken = token.value
@@ -389,6 +391,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch (error) {
       console.warn('[auth] logout failed', error)
     }
+    await router.replace('/')
   }
 
   function hasPermission(permission: string): boolean {
