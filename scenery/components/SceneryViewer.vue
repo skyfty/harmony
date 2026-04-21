@@ -354,18 +354,17 @@
         />
       </view>
 
-      <view v-if="debugOverlayVisible && debugMode !== 'off'" class="viewer-debug-overlay">
+      <view
+        v-if="debugOverlayVisible && debugMode !== 'off'"
+        class="viewer-debug-overlay viewer-debug-overlay--interactive"
+        :aria-label="debugOverlayAriaLabel"
+        @tap.stop="handleDebugOverlayTap"
+      >
         <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
         <template v-if="debugMode === 'full'">
           <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}</text>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
           <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
-          <template v-if="physicsEnvironmentEnabled">
-            <text class="viewer-debug-line">Physics: bodies {{ physicsDebug.bodies }}, shapes {{ physicsDebug.shapes }}, dyn {{ physicsDebug.dynamicAwake }}/{{ physicsDebug.dynamicSleeping }}/{{ physicsDebug.dynamicTotal }}, static {{ physicsDebug.staticTotal }}, kin {{ physicsDebug.kinematicTotal }}, rv {{ physicsDebug.raycastVehicles }}</text>
-            <text class="viewer-debug-line">Physics Step: last {{ physicsDebug.substepsLastFrame }}, per s {{ physicsDebug.substepsPerSecond }}</text>
-            <text class="viewer-debug-line">Physics Src: exp {{ physicsDebug.sourceExplicitBodies }}/{{ physicsDebug.sourceExplicitShapes }}, ground {{ physicsDebug.sourceGroundBodies }}/{{ physicsDebug.sourceGroundShapes }}, road {{ physicsDebug.sourceRoadBodies }}/{{ physicsDebug.sourceRoadShapes }}, wall {{ physicsDebug.sourceWallBodies }}/{{ physicsDebug.sourceWallShapes }}</text>
-            <text class="viewer-debug-line">Physics Src: floor {{ physicsDebug.sourceFloorBodies }}/{{ physicsDebug.sourceFloorShapes }}, boundary {{ physicsDebug.sourceBoundaryBodies }}/{{ physicsDebug.sourceBoundaryShapes }}, air {{ physicsDebug.sourceAirWallBodies }}/{{ physicsDebug.sourceAirWallShapes }}</text>
-          </template>
         </template>
       </view>
     </view>
@@ -395,7 +394,6 @@ import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
-import type { PhysicsSourceDebugCounts } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
@@ -977,13 +975,13 @@ const {
   instancingDebug,
   rendererDebug,
   groundChunkDebug,
-  physicsDebug,
   updateDebugFps,
   syncInstancingDebugCounters,
   syncRendererDebug,
   syncGroundChunkDebugCounters,
-  syncPhysicsDebugCounters,
 } = useDebugOverlay();
+
+const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
 
 type InstancedTransformCacheEntry = {
   assetId: string | null;
@@ -1012,6 +1010,10 @@ function matricesAlmostEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon
     }
   }
   return true;
+}
+
+function handleDebugOverlayTap(): void {
+  debugMode.value = debugMode.value === 'full' ? 'fps' : 'full';
 }
 
 const textureLoader = new THREE.TextureLoader();
@@ -4555,7 +4557,9 @@ function updateInstancedCullingAndLod(): void {
     }
   });
 
-  syncInstancingDebugCounters(lodNodeIds.length, lodVisibleCount, instancedMeshes, terrainScatterRuntime);
+  if (debugEnabled.value && debugMode.value === 'full') {
+    syncInstancingDebugCounters(lodNodeIds.length, lodVisibleCount, instancedMeshes, terrainScatterRuntime);
+  }
 }
 
 async function prepareInstancedNodesForGraph(
@@ -5235,183 +5239,6 @@ function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeCompon
     return;
   }
   rigidbodyInstances.set(node.id, result.instance);
-}
-
-function countShapesForBodies(bodies: CANNON.Body[] | null | undefined): number {
-  if (!Array.isArray(bodies) || !bodies.length) {
-    return 0;
-  }
-  let total = 0;
-  for (let index = 0; index < bodies.length; index += 1) {
-    total += bodies[index]?.shapes?.length ?? 0;
-  }
-  return total;
-}
-
-function classifyPhysicsSourceCounts(): PhysicsSourceDebugCounts {
-  const counts: PhysicsSourceDebugCounts = {
-    explicitBodies: 0,
-    explicitShapes: 0,
-    groundBodies: 0,
-    groundShapes: 0,
-    roadBodies: 0,
-    roadShapes: 0,
-    wallBodies: 0,
-    wallShapes: 0,
-    floorBodies: 0,
-    floorShapes: 0,
-    boundaryBodies: 0,
-    boundaryShapes: 0,
-    airWallBodies: airWallBodies.size,
-    airWallShapes: countShapesForBodies(Array.from(airWallBodies.values())),
-  };
-
-  rigidbodyInstances.forEach((entry, nodeId) => {
-    const node = resolveNodeById(nodeId);
-    const bodies = Array.isArray(entry.bodies) && entry.bodies.length ? entry.bodies : [entry.body];
-    const bodyCount = bodies.length;
-    const shapeCount = countShapesForBodies(bodies);
-    const dynamicMesh = node?.dynamicMesh as { type?: unknown } | null | undefined;
-    const boundaryOnly = Boolean(node && resolveBoundaryWallComponent(node) && !resolveRigidbodyComponent(node));
-
-    if (isRoadDynamicMesh(node?.dynamicMesh)) {
-      counts.roadBodies += bodyCount;
-      counts.roadShapes += shapeCount;
-      return;
-    }
-    if (isGroundDynamicMesh(node?.dynamicMesh)) {
-      counts.groundBodies += bodyCount;
-      counts.groundShapes += shapeCount;
-      return;
-    }
-    if (isFloorDynamicMeshForPhysics(node?.dynamicMesh)) {
-      counts.floorBodies += bodyCount;
-      counts.floorShapes += shapeCount;
-      return;
-    }
-    if (dynamicMesh?.type === 'Wall') {
-      counts.wallBodies += bodyCount;
-      counts.wallShapes += shapeCount;
-      return;
-    }
-    if (boundaryOnly) {
-      counts.boundaryBodies += bodyCount;
-      counts.boundaryShapes += shapeCount;
-      return;
-    }
-    counts.explicitBodies += bodyCount;
-    counts.explicitShapes += shapeCount;
-  });
-
-  return counts;
-}
-
-function syncPhysicsDebugOverlay(deltaSeconds: number, substepsLastFrame: number): void {
-  if (!physicsEnvironmentEnabled.value) {
-    syncPhysicsDebugCounters({
-      deltaSeconds,
-      substepsLastFrame: 0,
-      totalBodies: 0,
-      totalShapes: 0,
-      dynamicAwake: 0,
-      dynamicSleeping: 0,
-      dynamicTotal: 0,
-      staticTotal: 0,
-      kinematicTotal: 0,
-      raycastVehicles: 0,
-      sources: {
-        explicitBodies: 0,
-        explicitShapes: 0,
-        groundBodies: 0,
-        groundShapes: 0,
-        roadBodies: 0,
-        roadShapes: 0,
-        wallBodies: 0,
-        wallShapes: 0,
-        floorBodies: 0,
-        floorShapes: 0,
-        boundaryBodies: 0,
-        boundaryShapes: 0,
-        airWallBodies: 0,
-        airWallShapes: 0,
-      },
-    });
-    return;
-  }
-  const world = physicsWorld;
-  if (!world) {
-    syncPhysicsDebugCounters({
-      deltaSeconds,
-      substepsLastFrame,
-      totalBodies: 0,
-      totalShapes: 0,
-      dynamicAwake: 0,
-      dynamicSleeping: 0,
-      dynamicTotal: 0,
-      staticTotal: 0,
-      kinematicTotal: 0,
-      raycastVehicles: vehicleRaycastInWorld.size,
-      sources: {
-        explicitBodies: 0,
-        explicitShapes: 0,
-        groundBodies: 0,
-        groundShapes: 0,
-        roadBodies: 0,
-        roadShapes: 0,
-        wallBodies: 0,
-        wallShapes: 0,
-        floorBodies: 0,
-        floorShapes: 0,
-        boundaryBodies: 0,
-        boundaryShapes: 0,
-        airWallBodies: 0,
-        airWallShapes: 0,
-      },
-    });
-    return;
-  }
-
-  let totalShapes = 0;
-  let dynamicAwake = 0;
-  let dynamicSleeping = 0;
-  let dynamicTotal = 0;
-  let staticTotal = 0;
-  let kinematicTotal = 0;
-  const bodies = world.bodies;
-  for (let index = 0, bodyCount = bodies.length; index < bodyCount; index += 1) {
-    const body = bodies[index];
-    totalShapes += body.shapes?.length ?? 0;
-    if (body.type === CANNON.Body.DYNAMIC) {
-      dynamicTotal += 1;
-      if ((body as CANNON.Body & CannonSleepExtensions).sleepState === 0) {
-        dynamicAwake += 1;
-      } else {
-        dynamicSleeping += 1;
-      }
-      continue;
-    }
-    if (body.type === CANNON.Body.STATIC) {
-      staticTotal += 1;
-      continue;
-    }
-    if (body.type === CANNON.Body.KINEMATIC) {
-      kinematicTotal += 1;
-    }
-  }
-
-  syncPhysicsDebugCounters({
-    deltaSeconds,
-    substepsLastFrame,
-    totalBodies: bodies.length,
-    totalShapes,
-    dynamicAwake,
-    dynamicSleeping,
-    dynamicTotal,
-    staticTotal,
-    kinematicTotal,
-    raycastVehicles: vehicleRaycastInWorld.size,
-    sources: classifyPhysicsSourceCounts(),
-  });
 }
 
 function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
@@ -11636,10 +11463,7 @@ function startRenderLoop(
               updateVehicleDriveCamera(deltaSeconds);
             }
           }
-          const physicsSubsteps = stepPhysicsWorld(deltaSeconds);
-          if (debugEnabled.value) {
-            syncPhysicsDebugOverlay(deltaSeconds, physicsSubsteps);
-          }
+          stepPhysicsWorld(deltaSeconds);
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
         }
@@ -11667,7 +11491,7 @@ function startRenderLoop(
             } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
               ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
             }
-            if (debugEnabled.value) {
+            if (debugEnabled.value && debugMode.value === 'full') {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }
           }
@@ -11691,7 +11515,7 @@ function startRenderLoop(
         sceneCsmShadowRuntime?.update();
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
-        if (debugEnabled.value) {
+        if (debugEnabled.value && debugMode.value === 'full') {
           syncRendererDebug(renderer, scene, canvasResult?.canvas ?? null);
         }
       });
@@ -12695,7 +12519,7 @@ onUnmounted(() => {
 .viewer-debug-overlay {
   position: absolute;
   left: 12px;
-  top: calc(12px + var(--viewer-safe-area-top, 0px));
+  top: calc(94px + var(--viewer-safe-area-top, 0px));
   z-index: 1900;
   padding: 10px 12px;
   border-radius: 12px;
@@ -12705,6 +12529,13 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.45;
   pointer-events: auto;
+}
+
+.viewer-debug-overlay--interactive {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
 }
 
 .viewer-debug-line {
