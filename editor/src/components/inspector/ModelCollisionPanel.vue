@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { ModelCollisionDynamicMesh, SceneNodeComponentState } from '@schema'
-import { useSceneStore } from '@/stores/sceneStore'
-import { useBuildToolsStore } from '@/stores/buildToolsStore'
+import type { SceneNodeComponentState } from '@schema'
 import {
+  MODEL_COLLISION_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   clampRigidbodyComponentProps,
+  resolveModelCollisionComponentPropsFromNode,
+  type ModelCollisionComponentProps,
   type RigidbodyComponentProps,
 } from '@schema/components'
+import { useSceneStore } from '@/stores/sceneStore'
+import { useBuildToolsStore } from '@/stores/buildToolsStore'
 
 const DEFAULT_THICKNESS = 0.05
 
@@ -19,40 +22,28 @@ const { activeBuildTool } = storeToRefs(buildToolsStore)
 
 const localDefaultThickness = ref(DEFAULT_THICKNESS)
 
-const modelCollisionMesh = computed<ModelCollisionDynamicMesh | null>(() => readModelCollisionFromNode())
+const modelCollisionComponent = computed(
+  () => selectedNode.value?.components?.[MODEL_COLLISION_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ModelCollisionComponentProps>
+    | undefined,
+)
 
 const rigidbodyComponent = computed(
   () => selectedNode.value?.components?.[RIGIDBODY_COMPONENT_TYPE] as SceneNodeComponentState<RigidbodyComponentProps> | undefined,
 )
 
+const modelCollisionProps = computed<ModelCollisionComponentProps | null>(() => {
+  return resolveModelCollisionComponentPropsFromNode(selectedNode.value) ?? null
+})
+
 const isDrawActive = computed(() => activeBuildTool.value === 'modelCollision')
-const faceCount = computed(() => Array.isArray(modelCollisionMesh.value?.faces) ? modelCollisionMesh.value!.faces.length : 0)
-
-function readModelCollisionFromNode(): ModelCollisionDynamicMesh | null {
-  const node = selectedNode.value
-  if (!node) {
-    return null
-  }
-
-  const userDataMesh = node.userData && typeof node.userData === 'object'
-    ? (node.userData as Record<string, unknown>).modelCollision
-    : null
-  if (userDataMesh && typeof userDataMesh === 'object' && (userDataMesh as { type?: unknown }).type === 'ModelCollision') {
-    return userDataMesh as ModelCollisionDynamicMesh
-  }
-
-  if (node.dynamicMesh?.type === 'ModelCollision') {
-    return node.dynamicMesh as ModelCollisionDynamicMesh
-  }
-
-  return null
-}
+const faceCount = computed(() => Array.isArray(modelCollisionProps.value?.faces) ? modelCollisionProps.value!.faces.length : 0)
 
 watch(
-  modelCollisionMesh,
-  (mesh) => {
-    localDefaultThickness.value = typeof mesh?.defaultThickness === 'number' && Number.isFinite(mesh.defaultThickness)
-      ? mesh.defaultThickness
+  modelCollisionProps,
+  (props) => {
+    localDefaultThickness.value = typeof props?.defaultThickness === 'number' && Number.isFinite(props.defaultThickness)
+      ? props.defaultThickness
       : DEFAULT_THICKNESS
   },
   { immediate: true },
@@ -79,56 +70,65 @@ function ensureStaticRigidbody(): void {
   sceneStore.updateNodeComponentProps(nodeId, result.component.id, patch as unknown as Partial<Record<string, unknown>>)
 }
 
-function ensureMesh(): ModelCollisionDynamicMesh | null {
+function ensureModelCollisionComponent(): SceneNodeComponentState<ModelCollisionComponentProps> | null {
+  const node = selectedNode.value
   const nodeId = selectedNodeId.value
-  if (!nodeId) {
+  if (!node || !nodeId) {
     return null
   }
-  const current = readModelCollisionFromNode()
-  if (current) {
-    if (selectedNode.value?.dynamicMesh?.type === 'ModelCollision') {
-      sceneStore.updateNodeDynamicMesh(nodeId, null)
-    }
-    return current
+  const existing = modelCollisionComponent.value
+  if (existing) {
+    return existing
   }
-  const nextMesh: ModelCollisionDynamicMesh = {
-    type: 'ModelCollision',
-    faces: [],
-    defaultThickness: localDefaultThickness.value,
+  const result = sceneStore.addNodeComponent<typeof MODEL_COLLISION_COMPONENT_TYPE>(nodeId, MODEL_COLLISION_COMPONENT_TYPE)
+  if (!result) {
+    return null
   }
-  const nextUserData = {
-    ...(selectedNode.value?.userData ?? {}),
-    modelCollision: nextMesh,
-  }
-  sceneStore.updateNodeUserData(nodeId, nextUserData)
-  return nextMesh
+  return result.component as unknown as SceneNodeComponentState<ModelCollisionComponentProps>
 }
 
-function applyDefaultThickness(): void {
+function syncLegacyRuntimeData(props: ModelCollisionComponentProps): void {
+  const node = selectedNode.value
   const nodeId = selectedNodeId.value
-  if (!nodeId) {
+  if (!node || !nodeId) {
     return
-  }
-  const mesh = ensureMesh()
-  if (!mesh) {
-    return
-  }
-  const thickness = Number.isFinite(localDefaultThickness.value)
-    ? Math.max(0.01, localDefaultThickness.value)
-    : DEFAULT_THICKNESS
-  localDefaultThickness.value = thickness
-  const nextMesh = {
-    ...mesh,
-    defaultThickness: thickness,
   }
   sceneStore.updateNodeUserData(nodeId, {
-    ...(selectedNode.value?.userData ?? {}),
-    modelCollision: nextMesh,
+    ...(node.userData ?? {}),
+    modelCollision: {
+      type: 'ModelCollision',
+      defaultThickness: typeof props.defaultThickness === 'number' && Number.isFinite(props.defaultThickness)
+        ? props.defaultThickness
+        : DEFAULT_THICKNESS,
+      faces: props.faces.map((face) => ({
+        id: face.id,
+        thickness: face.thickness,
+        vertices: face.vertices.map((vertex) => ({ x: vertex.x, y: vertex.y, z: vertex.z })),
+      })),
+    },
   })
 }
 
+function updateComponent(patch: Partial<ModelCollisionComponentProps>): void {
+  const component = ensureModelCollisionComponent()
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  const nextProps = {
+    ...component.props,
+    ...patch,
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, nextProps)
+  syncLegacyRuntimeData(nextProps)
+}
+
 function handleStartEdit(): void {
-  ensureMesh()
+  const component = ensureModelCollisionComponent()
+  if (!component) {
+    return
+  }
+  syncLegacyRuntimeData(component.props)
   ensureStaticRigidbody()
   buildToolsStore.setActiveBuildTool('modelCollision')
 }
@@ -139,19 +139,18 @@ function handleStopEdit(): void {
   }
 }
 
+function applyDefaultThickness(): void {
+  const thickness = Number.isFinite(localDefaultThickness.value)
+    ? Math.max(0.01, localDefaultThickness.value)
+    : DEFAULT_THICKNESS
+  localDefaultThickness.value = thickness
+  updateComponent({ defaultThickness: thickness })
+}
+
 function handleClearFaces(): void {
-  const nodeId = selectedNodeId.value
-  if (!nodeId) {
-    return
-  }
-  const nextMesh: ModelCollisionDynamicMesh = {
-    type: 'ModelCollision',
+  updateComponent({
     faces: [],
     defaultThickness: localDefaultThickness.value,
-  }
-  sceneStore.updateNodeUserData(nodeId, {
-    ...(selectedNode.value?.userData ?? {}),
-    modelCollision: nextMesh,
   })
   if (activeBuildTool.value === 'modelCollision') {
     buildToolsStore.setActiveBuildTool(null)
@@ -209,8 +208,8 @@ function handleClearFaces(): void {
             Clear Faces
           </v-btn>
         </div>
-            <p class="model-collision-hint">
-              左键按模型表面逐点描面，双击结束当前面。已保存的半透明面仅在编辑器中显示。
+        <p class="model-collision-hint">
+          左键按模型表面逐点描面，双击结束当前面。已保存的半透明面仅在编辑器中显示。
         </p>
       </div>
     </v-expansion-panel-text>

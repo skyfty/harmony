@@ -327,6 +327,7 @@ import {
   BEHAVIOR_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
   BOUNDARY_WALL_COMPONENT_TYPE,
+  MODEL_COLLISION_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
@@ -355,6 +356,7 @@ import {
   clampLodComponentProps,
   clampBoundaryWallComponentProps,
   clampWallProps,
+  resolveModelCollisionComponentPropsFromNode,
 } from '@schema/components'
 
 import type {
@@ -6387,55 +6389,26 @@ function cloneRegionLocalPoints(node: SceneNode | null | undefined): Array<[numb
 }
 
 function cloneModelCollisionDefinition(node: SceneNode | null | undefined): ModelCollisionDynamicMesh | null {
-  if (!node) {
-    return null
-  }
-  const userDataMesh = node.userData && typeof node.userData === 'object'
-    ? (node.userData as Record<string, unknown>).modelCollision
-    : null
-  if (userDataMesh && typeof userDataMesh === 'object' && (userDataMesh as { type?: unknown }).type === 'ModelCollision') {
-    const mesh = userDataMesh as ModelCollisionDynamicMesh
-    return {
-      type: 'ModelCollision',
-      defaultThickness: typeof mesh.defaultThickness === 'number' && Number.isFinite(mesh.defaultThickness)
-        ? mesh.defaultThickness
-        : 0.05,
-      faces: Array.isArray(mesh.faces)
-        ? mesh.faces
-          .map((face) => ({
-            id: typeof face?.id === 'string' ? face.id : generateUuid(),
-            thickness: typeof face?.thickness === 'number' && Number.isFinite(face.thickness) ? face.thickness : undefined,
-            vertices: Array.isArray(face?.vertices)
-              ? face.vertices
-                .map((vertex) => ({ x: Number(vertex?.x), y: Number(vertex?.y), z: Number(vertex?.z) }))
-                .filter((vertex) => Number.isFinite(vertex.x) && Number.isFinite(vertex.y) && Number.isFinite(vertex.z))
-              : [],
-          }))
-          .filter((face) => face.vertices.length >= 3)
-        : [],
-    }
-  }
-  if (node.dynamicMesh?.type !== 'ModelCollision') {
+  const mesh = resolveModelCollisionComponentPropsFromNode(node)
+  if (!mesh) {
     return null
   }
   return {
     type: 'ModelCollision',
-    defaultThickness: typeof node.dynamicMesh.defaultThickness === 'number' && Number.isFinite(node.dynamicMesh.defaultThickness)
-      ? node.dynamicMesh.defaultThickness
+    defaultThickness: typeof mesh.defaultThickness === 'number' && Number.isFinite(mesh.defaultThickness)
+      ? mesh.defaultThickness
       : 0.05,
-    faces: Array.isArray(node.dynamicMesh.faces)
-      ? node.dynamicMesh.faces
-        .map((face) => ({
-          id: typeof face?.id === 'string' ? face.id : generateUuid(),
-          thickness: typeof face?.thickness === 'number' && Number.isFinite(face.thickness) ? face.thickness : undefined,
-          vertices: Array.isArray(face?.vertices)
-            ? face.vertices
-              .map((vertex) => ({ x: Number(vertex?.x), y: Number(vertex?.y), z: Number(vertex?.z) }))
-              .filter((vertex) => Number.isFinite(vertex.x) && Number.isFinite(vertex.y) && Number.isFinite(vertex.z))
-            : [],
-        }))
-        .filter((face) => face.vertices.length >= 3)
-      : [],
+    faces: mesh.faces
+      .map((face) => ({
+        id: typeof face?.id === 'string' ? face.id : generateUuid(),
+        thickness: typeof face?.thickness === 'number' && Number.isFinite(face.thickness) ? face.thickness : undefined,
+        vertices: Array.isArray(face?.vertices)
+          ? face.vertices
+            .map((vertex) => ({ x: Number(vertex?.x), y: Number(vertex?.y), z: Number(vertex?.z) }))
+            .filter((vertex) => Number.isFinite(vertex.x) && Number.isFinite(vertex.y) && Number.isFinite(vertex.z))
+          : [],
+      }))
+      .filter((face) => face.vertices.length >= 3),
   }
 }
 
@@ -6453,6 +6426,17 @@ function updateModelCollisionMesh(
     defaultThickness: 0.05,
   }
   const next = updater(current)
+  let componentId = node.components?.[MODEL_COLLISION_COMPONENT_TYPE]?.id ?? null
+  if (!componentId) {
+    const created = sceneStore.addNodeComponent(nodeId, MODEL_COLLISION_COMPONENT_TYPE)
+    componentId = created?.component?.id ?? null
+  }
+  if (componentId) {
+    sceneStore.updateNodeComponentProps(nodeId, componentId, {
+      defaultThickness: next.defaultThickness,
+      faces: next.faces,
+    })
+  }
   sceneStore.updateNodeUserData(nodeId, {
     ...(node.userData ?? {}),
     modelCollision: next,

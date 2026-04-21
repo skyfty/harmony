@@ -24,6 +24,7 @@ import {
 	DEFAULT_ANGULAR_DAMPING,
 	DEFAULT_RIGIDBODY_FRICTION,
 	DEFAULT_RIGIDBODY_RESTITUTION,
+	resolveModelCollisionComponentPropsFromNode,
 } from './components'
 import { buildBoundaryWallSegments } from './boundaryWall'
 import {
@@ -408,6 +409,14 @@ function isModelCollisionDynamicMesh(mesh: unknown): mesh is ModelCollisionDynam
 }
 
 function resolveModelCollisionDynamicMesh(node: SceneNode): ModelCollisionDynamicMesh | null {
+	const componentProps = resolveModelCollisionComponentPropsFromNode(node)
+	if (componentProps) {
+		return {
+			type: 'ModelCollision',
+			defaultThickness: componentProps.defaultThickness,
+			faces: componentProps.faces,
+		}
+	}
 	const userDataMesh = node.userData && typeof node.userData === 'object'
 		? (node.userData as Record<string, unknown>).modelCollision
 		: null

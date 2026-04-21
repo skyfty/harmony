@@ -67,6 +67,8 @@ import {
   type RigidbodyColliderType,
   FLOOR_COMPONENT_TYPE,
   LANDFORM_COMPONENT_TYPE,
+  MODEL_COLLISION_COMPONENT_TYPE,
+  resolveModelCollisionComponentPropsFromNode,
   
   LOD_COMPONENT_TYPE,
 } from '@schema/components'
@@ -205,10 +207,6 @@ function computeDefaultExpandedPanels() {
 
   if (node?.dynamicMesh?.type === 'Road') {
     panels.push('road')
-  }
-
-  if (showAssetModelPanel.value) {
-    panels.push('modelCollision')
   }
 
   Object.values(node?.components ?? {}).forEach((component) => {
@@ -369,6 +367,23 @@ watch(selectedNodeId, () => {
   closeRigidbodyColliderEditor({ force: true })
   closeBehaviorDetails()
 })
+
+watch(
+  selectedNode,
+  (node) => {
+    if (!node) {
+      return
+    }
+    if (node.components?.[MODEL_COLLISION_COMPONENT_TYPE]) {
+      return
+    }
+    if (!resolveModelCollisionComponentPropsFromNode(node)) {
+      return
+    }
+    sceneStore.addNodeComponent(node.id, MODEL_COLLISION_COMPONENT_TYPE)
+  },
+  { immediate: true },
+)
 
 defineExpose({
   getPanelRect,
@@ -561,7 +576,6 @@ watch(
             class="inspector-panels"
           >
           <AssetModelPanel v-if="showAssetModelPanel" />
-          <ModelCollisionPanel v-if="showAssetModelPanel" />
           <InstanceLayoutPanel v-if="showAssetModelPanel" />
           <TransformPanel v-if="showTransformPanel"/>
           <LightPanel v-if="isLightNode"/>
@@ -602,6 +616,7 @@ watch(
               />
               <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
               <LandformPanel v-else-if="component.type === LANDFORM_COMPONENT_TYPE" />
+              <ModelCollisionPanel v-else-if="component.type === MODEL_COLLISION_COMPONENT_TYPE" />
               <LodPanel v-else-if="component.type === LOD_COMPONENT_TYPE" />
               <GuideRoutePanel v-else-if="component.type === GUIDE_ROUTE_COMPONENT_TYPE" />
               <AutoTourPanel v-else-if="component.type === AUTO_TOUR_COMPONENT_TYPE" />
