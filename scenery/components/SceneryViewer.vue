@@ -3322,7 +3322,9 @@ function buildObjectUrlsFromSkycubeZipFaces(
     }
     const mimeType = face.mimeType ?? 'application/octet-stream';
     const bytes = face.bytes as unknown as Uint8Array;
-    const blob = new Blob([bytes], { type: mimeType });
+    const blobBytes = new Uint8Array(bytes.byteLength);
+    blobBytes.set(bytes);
+    const blob = new Blob([blobBytes], { type: mimeType });
     const url = URL.createObjectURL(blob);
     created.push(url);
     urls.push(url);
@@ -10324,7 +10326,7 @@ function isValidSceneDocument(document: unknown): document is SceneJsonExportDoc
   if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') {
     return false;
   }
-  if (!Array.isArray(candidate.nodes) || !Array.isArray(candidate.materials)) {
+  if (!Array.isArray(candidate.nodes)) {
     return false;
   }
   return true;
@@ -10442,10 +10444,8 @@ function hydrateGroundSidecarFromPackage(
     if (!scatterSidecarBytes) {
       throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
     }
-    const scatterSidecarBuffer = scatterSidecarBytes.buffer.slice(
-      scatterSidecarBytes.byteOffset,
-      scatterSidecarBytes.byteOffset + scatterSidecarBytes.byteLength,
-    );
+    const scatterSidecarBuffer = new ArrayBuffer(scatterSidecarBytes.byteLength);
+    new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
     const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
     definition.terrainScatter = scatterPayload.terrainScatter;
   }
@@ -10459,10 +10459,8 @@ function hydrateGroundSidecarFromPackage(
     if (!paintSidecarBytes) {
       throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
     }
-    const paintSidecarBuffer = paintSidecarBytes.buffer.slice(
-      paintSidecarBytes.byteOffset,
-      paintSidecarBytes.byteOffset + paintSidecarBytes.byteLength,
-    );
+    const paintSidecarBuffer = new ArrayBuffer(paintSidecarBytes.byteLength);
+    new Uint8Array(paintSidecarBuffer).set(paintSidecarBytes);
     const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
     definition.terrainPaint = null;
     definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
@@ -11562,22 +11560,12 @@ function startRenderLoop(
     renderScope = effectScope();
   }
 
-  // 限制FPS为30帧，累加delta，只有渲染帧时才统计
-  let lastFrameTime = 0;
-  const minFrameInterval = 1000 / 30; // 约33.33ms
   let accumulatedDelta = 0;
   renderScope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta: number) => {
-        const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
-          ? performance.now()
-          : Date.now();
         const deltaSecondsRaw = normalizeFrameDelta(delta);
         accumulatedDelta += deltaSecondsRaw;
-        // if (now - lastFrameTime < minFrameInterval) {
-        //   return; // 跳过本帧，限制最大FPS
-        // }
-        lastFrameTime = now;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
         accumulatedDelta = 0;

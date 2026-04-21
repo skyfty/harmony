@@ -479,6 +479,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
     const pointA = routeData.points[projection.segmentIndex] ?? routeData.points[0]
     const pointB = routeData.points[(projection.segmentIndex + 1) % routeData.points.length] ?? pointA
+    if (!pointA || !pointB) {
+      return null
+    }
     autoTourSnapForward.copy(pointB).sub(pointA)
     autoTourSnapForward.y = 0
     if (autoTourSnapForward.lengthSq() < 1e-8) {
