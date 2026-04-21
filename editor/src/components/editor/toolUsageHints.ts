@@ -267,6 +267,15 @@ function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
         { label: '修饰', text: '顶点吸附会优先对齐已有顶点' },
         { label: '取消', text: '右键或 Escape 取消当前轮廓编辑' },
       ])
+    case 'modelCollision':
+      return createRows([
+        { label: '入口', text: '模型阻挡面面板 -> 编辑阻挡面' },
+        { label: '准备', text: '先选中模型节点，再进入局部阻挡面编辑' },
+        { label: '鼠标', text: '左键按模型真实网格顶点逐点描面' },
+        { label: '完成', text: '双击左键结束当前闭合面，并可继续描绘下一个面' },
+        { label: '编辑', text: '双击已建半透明面选中，拖动手柄修改顶点' },
+        { label: '删除', text: 'Delete / Backspace 删除当前选中的阻挡面' },
+      ])
     case 'displayBoard':
       return createRows([
         { label: '入口', text: '视口工具栏 -> Display Surface Tools' },
@@ -406,6 +415,8 @@ function resolveToolTitle(tool: BuildTool): string {
       return '水面工具'
     case 'boundaryWall':
       return '边界墙工具'
+    case 'modelCollision':
+      return '模型阻挡面工具'
     case 'displayBoard':
       return '广告牌工具'
     case 'billboard':

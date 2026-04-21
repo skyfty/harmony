@@ -77,6 +77,7 @@ import type {
   LandformDynamicMesh,
   GuideRouteDynamicMesh,
   RegionDynamicMesh,
+  ModelCollisionDynamicMesh,
   Vector3Like,
   WallDynamicMesh,
 } from '@schema/index'
@@ -262,6 +263,8 @@ import { createFloorBuildTool } from './FloorBuildTool'
 import { resolveActiveToolUsageHints } from './toolUsageHints'
 import { createLandformBuildTool } from './LandformBuildTool'
 import { createBoundaryWallBuildTool } from './BoundaryWallBuildTool'
+import { createModelCollisionFaceBuildTool } from './ModelCollisionFaceBuildTool'
+import { createModelCollisionFaceVertexRenderer, type ModelCollisionFaceVertexHandlePickResult } from './ModelCollisionFaceVertexRenderer'
 import { createRegionBuildTool } from './RegionBuildTool'
 import { createGuideRouteBuildTool } from './GuideRouteBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
@@ -292,6 +295,7 @@ import { createLandformVertexRenderer, type LandformVertexHandlePickResult } fro
 import { createRegionVertexRenderer, type RegionVertexHandlePickResult } from './RegionVertexRenderer'
 import { createGuideRouteVertexRenderer, type GuideRouteVertexHandlePickResult } from './GuideRouteVertexRenderer'
 import { createBoundaryWallLoopRenderer } from './BoundaryWallLoopRenderer'
+import { createModelCollisionFaceOverlayRenderer } from './ModelCollisionFaceOverlayRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
 import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './WaterVertexRenderer'
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
@@ -314,6 +318,7 @@ import {
   updateWaterSurfaceRuntimeMesh,
 } from './waterSurfaceEditUtils'
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
+import { generateUuid } from '@/utils/uuid'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -1941,6 +1946,7 @@ const landformEditNodeId = ref<string | null>(null)
 const regionEditNodeId = ref<string | null>(null)
 const guideRouteEditNodeId = ref<string | null>(null)
 const waterEditNodeId = ref<string | null>(null)
+const selectedModelCollisionFaceId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
 const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
@@ -2051,6 +2057,23 @@ function resolveEditableRegionNode(nodeId: string | null | undefined): SceneNode
     return null
   }
   return node
+}
+
+function resolveEditableModelCollisionNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node) {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  if (!node.sourceAssetId) {
+    return null
+  }
+  return objectMap.has(nodeId) ? node : null
 }
 
 function resolveEditableBoundaryWallNode(nodeId: string | null | undefined): SceneNode | null {
@@ -2346,6 +2369,21 @@ function isSelectedBoundaryWallEditMode(): boolean {
   return Boolean(getActiveBoundaryWallEditNodeId())
 }
 
+function getActiveModelCollisionEditNodeId(): string | null {
+  if (activeBuildTool.value !== 'modelCollision') {
+    return null
+  }
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId) {
+    return null
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || !selectedIds.includes(selectedId)) {
+    return null
+  }
+  return resolveEditableModelCollisionNode(selectedId)?.id ?? null
+}
+
 function getActiveGuideRouteEditNodeId(): string | null {
   const editNodeId = guideRouteEditNodeId.value
   if (!editNodeId || !resolveEditableGuideRouteNode(editNodeId)) {
@@ -2503,6 +2541,11 @@ function updatePendingBuildStartIndicator() {
 watch(
   () => [activeBuildTool.value, sceneStore.selectedNodeId] as const,
   () => {
+    if (activeBuildTool.value !== 'modelCollision') {
+      selectedModelCollisionFaceId.value = null
+    } else if (!getActiveModelCollisionEditNodeId()) {
+      selectedModelCollisionFaceId.value = null
+    }
     hideBuildStartIndicator({ preservePending: activeBuildTool.value === pendingBuildStartIndicator?.tool })
     const node = sceneStore.selectedNode ?? null
     if (!node) {
@@ -4995,6 +5038,20 @@ let wallHeightDragState: WallHeightDragState | null = null
 let wallCircleCenterDragState: WallCircleCenterDragState | null = null
 let wallCircleRadiusDragState: WallCircleRadiusDragState | null = null
 
+type ModelCollisionFaceVertexDragState = {
+  pointerId: number
+  nodeId: string
+  faceId: string
+  vertexIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  runtimeObject: THREE.Object3D
+  baseDefinition: ModelCollisionDynamicMesh
+}
+
+let modelCollisionFaceVertexDragState: ModelCollisionFaceVertexDragState | null = null
+
 type FloorEdgeDragState = {
   pointerId: number
   nodeId: string
@@ -5238,6 +5295,8 @@ const landformVertexRenderer = createLandformVertexRenderer()
 const regionVertexRenderer = createRegionVertexRenderer()
 const boundaryWallVertexRenderer = createRegionVertexRenderer()
 const boundaryWallLoopRenderer = createBoundaryWallLoopRenderer()
+const modelCollisionFaceOverlayRenderer = createModelCollisionFaceOverlayRenderer()
+const modelCollisionFaceVertexRenderer = createModelCollisionFaceVertexRenderer()
 const guideRouteVertexRenderer = createGuideRouteVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
 const displayBoardCornerHandleRenderer = createDisplayBoardCornerHandleRenderer()
@@ -6325,6 +6384,306 @@ function cloneRegionLocalPoints(node: SceneNode | null | undefined): Array<[numb
   return vertices
     .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
     .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+}
+
+function cloneModelCollisionDefinition(node: SceneNode | null | undefined): ModelCollisionDynamicMesh | null {
+  if (!node) {
+    return null
+  }
+  const userDataMesh = node.userData && typeof node.userData === 'object'
+    ? (node.userData as Record<string, unknown>).modelCollision
+    : null
+  if (userDataMesh && typeof userDataMesh === 'object' && (userDataMesh as { type?: unknown }).type === 'ModelCollision') {
+    const mesh = userDataMesh as ModelCollisionDynamicMesh
+    return {
+      type: 'ModelCollision',
+      defaultThickness: typeof mesh.defaultThickness === 'number' && Number.isFinite(mesh.defaultThickness)
+        ? mesh.defaultThickness
+        : 0.05,
+      faces: Array.isArray(mesh.faces)
+        ? mesh.faces
+          .map((face) => ({
+            id: typeof face?.id === 'string' ? face.id : generateUuid(),
+            thickness: typeof face?.thickness === 'number' && Number.isFinite(face.thickness) ? face.thickness : undefined,
+            vertices: Array.isArray(face?.vertices)
+              ? face.vertices
+                .map((vertex) => ({ x: Number(vertex?.x), y: Number(vertex?.y), z: Number(vertex?.z) }))
+                .filter((vertex) => Number.isFinite(vertex.x) && Number.isFinite(vertex.y) && Number.isFinite(vertex.z))
+              : [],
+          }))
+          .filter((face) => face.vertices.length >= 3)
+        : [],
+    }
+  }
+  if (node.dynamicMesh?.type !== 'ModelCollision') {
+    return null
+  }
+  return {
+    type: 'ModelCollision',
+    defaultThickness: typeof node.dynamicMesh.defaultThickness === 'number' && Number.isFinite(node.dynamicMesh.defaultThickness)
+      ? node.dynamicMesh.defaultThickness
+      : 0.05,
+    faces: Array.isArray(node.dynamicMesh.faces)
+      ? node.dynamicMesh.faces
+        .map((face) => ({
+          id: typeof face?.id === 'string' ? face.id : generateUuid(),
+          thickness: typeof face?.thickness === 'number' && Number.isFinite(face.thickness) ? face.thickness : undefined,
+          vertices: Array.isArray(face?.vertices)
+            ? face.vertices
+              .map((vertex) => ({ x: Number(vertex?.x), y: Number(vertex?.y), z: Number(vertex?.z) }))
+              .filter((vertex) => Number.isFinite(vertex.x) && Number.isFinite(vertex.y) && Number.isFinite(vertex.z))
+            : [],
+        }))
+        .filter((face) => face.vertices.length >= 3)
+      : [],
+  }
+}
+
+function updateModelCollisionMesh(
+  nodeId: string,
+  updater: (current: ModelCollisionDynamicMesh) => ModelCollisionDynamicMesh,
+): boolean {
+  const node = resolveSceneNodeById(nodeId)
+  if (!node) {
+    return false
+  }
+  const current = cloneModelCollisionDefinition(node) ?? {
+    type: 'ModelCollision' as const,
+    faces: [],
+    defaultThickness: 0.05,
+  }
+  const next = updater(current)
+  sceneStore.updateNodeUserData(nodeId, {
+    ...(node.userData ?? {}),
+    modelCollision: next,
+  })
+  if (node.dynamicMesh?.type === 'ModelCollision') {
+    sceneStore.updateNodeDynamicMesh(nodeId, null)
+  }
+  return true
+}
+
+function updateModelCollisionFaceVertex(nodeId: string, faceId: string, vertexIndex: number, vertex: THREE.Vector3): boolean {
+  return updateModelCollisionMesh(nodeId, (current) => ({
+    ...current,
+    faces: current.faces.map((face) => {
+      if (face.id !== faceId) {
+        return face
+      }
+      if (!Array.isArray(face.vertices) || vertexIndex < 0 || vertexIndex >= face.vertices.length) {
+        return face
+      }
+      const nextVertices = face.vertices.map((entry, index) => {
+        if (index !== vertexIndex) {
+          return entry
+        }
+        return {
+          x: Number(vertex.x),
+          y: Number(vertex.y),
+          z: Number(vertex.z),
+        }
+      })
+      return {
+        ...face,
+        vertices: nextVertices,
+      }
+    }),
+  }))
+}
+
+function commitModelCollisionFace(nodeId: string, points: THREE.Vector3[]): boolean {
+  const sanitized = points
+    .map((point) => ({ x: Number(point.x), y: Number(point.y), z: Number(point.z) }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z))
+  if (sanitized.length < 3) {
+    return false
+  }
+  const faceId = generateUuid()
+  selectedModelCollisionFaceId.value = faceId
+  return updateModelCollisionMesh(nodeId, (current) => ({
+    ...current,
+    faces: [
+      ...current.faces,
+      {
+        id: faceId,
+        vertices: sanitized,
+        thickness: current.defaultThickness,
+      },
+    ],
+  }))
+}
+
+function removeSelectedModelCollisionFace(): boolean {
+  const nodeId = getActiveModelCollisionEditNodeId()
+  const faceId = selectedModelCollisionFaceId.value
+  if (!nodeId || !faceId) {
+    return false
+  }
+  const removed = updateModelCollisionMesh(nodeId, (current) => ({
+    ...current,
+    faces: current.faces.filter((face) => face.id !== faceId),
+  }))
+  if (removed) {
+    selectedModelCollisionFaceId.value = null
+  }
+  return removed
+}
+
+function ensureModelCollisionFaceVertexHandlesForSelectedNode(options?: { force?: boolean }): void {
+  const selectedId = getActiveModelCollisionEditNodeId()
+  modelCollisionFaceVertexRenderer.ensure({
+    active: activeBuildTool.value === 'modelCollision' && !!selectedId && !!selectedModelCollisionFaceId.value,
+    selectedNodeId: selectedId,
+    selectedFaceId: selectedModelCollisionFaceId.value,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveDefinition: (nodeId: string) => cloneModelCollisionDefinition(resolveSceneNodeById(nodeId)),
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+    force: options?.force ?? false,
+  })
+}
+
+function pickModelCollisionFaceVertexHandleAtPointer(event: PointerEvent): ModelCollisionFaceVertexHandlePickResult | null {
+  return modelCollisionFaceVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function setActiveModelCollisionFaceVertexHandle(active: { nodeId: string; faceId: string; vertexIndex: number; gizmoPart: any } | null): void {
+  modelCollisionFaceVertexRenderer.setActiveHandle(active as any)
+}
+
+function ensureModelCollisionFaceOverlayForSelectedNode(): void {
+  const selectedId = getActiveModelCollisionEditNodeId()
+  modelCollisionFaceOverlayRenderer.ensure({
+    active: activeBuildTool.value === 'modelCollision' && !!selectedId,
+    selectedNodeId: selectedId,
+    selectedFaceId: selectedModelCollisionFaceId.value,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveDefinition: (nodeId: string) => cloneModelCollisionDefinition(resolveSceneNodeById(nodeId)),
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  })
+}
+
+function pickModelCollisionFaceAtPointer(event: MouseEvent | PointerEvent): string | null {
+  const hit = modelCollisionFaceOverlayRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+  return hit?.faceId ?? null
+}
+
+function resolveModelCollisionPlacementVertex(event: PointerEvent, targetObject: THREE.Object3D | null = null): { point: THREE.Vector3; surfaceObject: THREE.Object3D } | null {
+  const nodeId = getActiveModelCollisionEditNodeId()
+  const runtimeObject = nodeId ? objectMap.get(nodeId) ?? null : null
+  if (!runtimeObject || !canvasRef.value || !camera) {
+    return null
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  runtimeObject.updateMatrixWorld(true)
+  const raycastRoot = targetObject ?? runtimeObject
+  raycastRoot.updateMatrixWorld(true)
+  const intersections = raycaster.intersectObject(raycastRoot, true)
+    .filter((intersection) => !isEditorOnlyObject(intersection.object as THREE.Object3D))
+  const hit = intersections[0]
+  if (!hit) {
+    return null
+  }
+  runtimeObject.updateMatrixWorld(true)
+  return {
+    point: runtimeObject.worldToLocal(hit.point.clone()),
+    surfaceObject: hit.object,
+  }
+}
+
+function tryBeginModelCollisionFaceVertexDrag(event: PointerEvent): boolean {
+  if (modelCollisionFaceVertexDragState) {
+    return false
+  }
+  if (activeBuildTool.value !== 'modelCollision' || modelCollisionFaceBuildTool.getSession()) {
+    return false
+  }
+  const selectedId = getActiveModelCollisionEditNodeId()
+  const selectedFaceId = selectedModelCollisionFaceId.value
+  if (!selectedId || !selectedFaceId || sceneStore.isNodeSelectionLocked(selectedId)) {
+    return false
+  }
+  const node = resolveSceneNodeById(selectedId)
+  const runtime = objectMap.get(selectedId) ?? null
+  if (!node || !runtime) {
+    return false
+  }
+
+  ensureModelCollisionFaceVertexHandlesForSelectedNode({ force: true })
+  const hit = pickModelCollisionFaceVertexHandleAtPointer(event)
+  if (!hit || hit.nodeId !== selectedId || hit.faceId !== selectedFaceId) {
+    return false
+  }
+
+  const baseDefinition = cloneModelCollisionDefinition(node)
+  if (!baseDefinition) {
+    return false
+  }
+
+  modelCollisionFaceVertexDragState = {
+    pointerId: event.pointerId,
+    nodeId: selectedId,
+    faceId: selectedFaceId,
+    vertexIndex: hit.vertexIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    runtimeObject: runtime,
+    baseDefinition,
+  }
+
+  setActiveModelCollisionFaceVertexHandle({
+    nodeId: selectedId,
+    faceId: selectedFaceId,
+    vertexIndex: hit.vertexIndex,
+    gizmoPart: hit.gizmoPart,
+  })
+  pointerInteraction.capture(event.pointerId)
+  return true
+}
+
+function applyModelCollisionFaceVertexDrag(event: PointerEvent): boolean {
+  const state = modelCollisionFaceVertexDragState
+  if (!state || event.pointerId !== state.pointerId) {
+    return false
+  }
+  const dx = event.clientX - state.startX
+  const dy = event.clientY - state.startY
+  if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+    return true
+  }
+  state.moved = true
+  if ((event.buttons & 1) === 0) {
+    return true
+  }
+
+  const nextHit = resolveModelCollisionPlacementVertex(event, state.runtimeObject)
+  if (!nextHit) {
+    return true
+  }
+  if (!updateModelCollisionFaceVertex(state.nodeId, state.faceId, state.vertexIndex, nextHit.point)) {
+    return true
+  }
+  ensureModelCollisionFaceOverlayForSelectedNode()
+  ensureModelCollisionFaceVertexHandlesForSelectedNode({ force: true })
+  return true
 }
 
 function buildBoundaryWallPreviewFromLocalPoints(nodeId: string, points: Array<[number, number]>): boolean {
@@ -7810,6 +8169,18 @@ const boundaryWallBuildTool = createBoundaryWallBuildTool({
   commitLoop: (targetNodeId, points) => commitBoundaryWallLoop(targetNodeId, points),
   onCommitted: () => {
     handleBuildToolChange(null)
+  },
+})
+
+const modelCollisionFaceBuildTool = createModelCollisionFaceBuildTool({
+  activeBuildTool,
+  resolveTargetNodeId: () => getActiveModelCollisionEditNodeId(),
+  resolveTargetRuntimeObject: (nodeId) => objectMap.get(nodeId) ?? null,
+  resolvePlacementVertex: resolveModelCollisionPlacementVertex,
+  commitFace: (targetNodeId, points) => commitModelCollisionFace(targetNodeId, points),
+  onCommitted: () => {
+    ensureModelCollisionFaceOverlayForSelectedNode()
+    ensureModelCollisionFaceVertexHandlesForSelectedNode({ force: true })
   },
 })
 
@@ -13893,9 +14264,12 @@ function animate() {
   landformBuildTool.flushPreviewIfNeeded(scene)
   regionBuildTool.flushPreviewIfNeeded(scene)
   boundaryWallBuildTool.flushPreviewIfNeeded(scene)
+  modelCollisionFaceBuildTool.flushPreviewIfNeeded()
   guideRouteBuildTool.flushPreviewIfNeeded(scene)
   waterBuildTool.flushPreviewIfNeeded(scene)
   updatePendingBuildStartIndicator()
+  ensureModelCollisionFaceOverlayForSelectedNode()
+  ensureModelCollisionFaceVertexHandlesForSelectedNode()
   ensureBoundaryWallLoopForSelectedNode()
   ensureBoundaryWallVertexHandlesForSelectedNode()
   ensureDisplayBoardCornerHandlesForSelectedNode()
@@ -13910,6 +14284,7 @@ function animate() {
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   landformVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   regionVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
+  modelCollisionFaceVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 34 })
   boundaryWallVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   guideRouteVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   floorCircleHandleRenderer.updateScreenSize({
@@ -15280,6 +15655,8 @@ function resolveBuildToolForNode(node: any): BuildTool | null {
     ? 'landform'
     : dynamicMeshType === 'Region'
     ? 'region'
+    : dynamicMeshType === 'ModelCollision'
+    ? 'modelCollision'
     : dynamicMeshType === 'GuideRoute'
     ? 'guideRoute'
     : dynamicMeshType === 'Road'
@@ -15313,6 +15690,8 @@ function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | 
     enterLandformEditMode(nodeId)
   } else if (toolForNode === 'region') {
     enterRegionEditMode(nodeId)
+  } else if (toolForNode === 'modelCollision') {
+    selectedModelCollisionFaceId.value = null
   } else if (toolForNode === 'guideRoute') {
     enterGuideRouteEditMode(nodeId)
   } else if (toolForNode === 'water') {
@@ -15751,6 +16130,28 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'modelCollision') {
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
+      if (tryBeginModelCollisionFaceVertexDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+      modelCollisionFaceBuildTool.handlePointerDown(event)
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    if (event.button === 2) {
+      modelCollisionFaceBuildTool.cancel()
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
+  }
+
   if (activeBuildTool.value === 'region') {
     if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (regionEditModeLocked && selectedNodeIsRegion.value) {
@@ -16176,6 +16577,7 @@ function handlePointerMove(event: PointerEvent) {
     !wallEndpointDragState &&
     !wallJointDragState &&
     !wallHeightDragState &&
+    !modelCollisionFaceVertexDragState &&
     isStrictPointOnCanvas(event.clientX, event.clientY)
 
   if (canHoverGizmos) {
@@ -16190,6 +16592,7 @@ function handlePointerMove(event: PointerEvent) {
     ensureDisplayBoardCornerHandlesForSelectedNode()
     ensureWaterVertexHandlesForSelectedNode()
     ensureWaterCircleHandlesForSelectedNode()
+    ensureModelCollisionFaceVertexHandlesForSelectedNode()
 
     roadVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     wallEndpointRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
@@ -16202,6 +16605,7 @@ function handlePointerMove(event: PointerEvent) {
     displayBoardCornerHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    modelCollisionFaceVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
   } else {
     roadVertexRenderer.clearHover()
     wallEndpointRenderer.clearHover()
@@ -16214,6 +16618,7 @@ function handlePointerMove(event: PointerEvent) {
     displayBoardCornerHandleRenderer.clearHover()
     waterVertexRenderer.clearHover()
     waterCircleHandleRenderer.clearHover()
+    modelCollisionFaceVertexRenderer.clearHover()
   }
 
   const _moveDragCtx: any = {
@@ -16280,6 +16685,17 @@ function handlePointerMove(event: PointerEvent) {
     updateWallLengthHudFromWallDrag()
     updateFloorSizeHudFromFloorDrag()
     applyPointerMoveResult(dragResult)
+    return
+  }
+
+  if (applyModelCollisionFaceVertexDrag(event)) {
+    updateOutlineSelectionTargets()
+    applyPointerMoveResult({
+      handled: true,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    })
     return
   }
 
@@ -16763,6 +17179,7 @@ function handlePointerMove(event: PointerEvent) {
     displayBoardBuildToolHandlePointerMove: (e) => displayBoardBuildTool.handlePointerMove(e),
     billboardBuildToolHandlePointerMove: (e) => billboardBuildTool.handlePointerMove(e),
     boundaryWallBuildToolHandlePointerMove: (e) => boundaryWallBuildTool.handlePointerMove(e),
+    modelCollisionBuildToolHandlePointerMove: (e) => modelCollisionFaceBuildTool.handlePointerMove(e),
     landformBuildToolHandlePointerMove: (e) => landformBuildTool.handlePointerMove(e),
     regionBuildToolHandlePointerMove: (e) => regionBuildTool.handlePointerMove(e),
     guideRouteBuildToolHandlePointerMove: (e) => guideRouteBuildTool.handlePointerMove(e),
@@ -16893,6 +17310,7 @@ async function handlePointerUp(event: PointerEvent) {
       wallJointDragState?.pointerId === event.pointerId ||
       wallHeightDragState?.pointerId === event.pointerId ||
       landformCircleRadiusDragState?.pointerId === event.pointerId ||
+      modelCollisionFaceVertexDragState?.pointerId === event.pointerId ||
       floorEdgeDragState?.pointerId === event.pointerId ||
       instancedEraseDragState?.pointerId === event.pointerId ||
       pointerInteraction.get()?.pointerId === event.pointerId ||
@@ -17001,6 +17419,28 @@ async function handlePointerUp(event: PointerEvent) {
     // which may use middle-button can handle the event first. If no handler
     // processed the pointerup, we'll cancel active tools below.
     if (isPointerUpOnCanvas) {
+      if (modelCollisionFaceVertexDragState && event.pointerId === modelCollisionFaceVertexDragState.pointerId && event.button === 0) {
+        const state = modelCollisionFaceVertexDragState
+        modelCollisionFaceVertexDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveModelCollisionFaceVertexHandle(null)
+
+        try {
+          if (!state.moved) {
+            sceneStore.updateNodeDynamicMesh(state.nodeId, state.baseDefinition)
+          }
+          ensureModelCollisionFaceOverlayForSelectedNode()
+          ensureModelCollisionFaceVertexHandlesForSelectedNode({ force: true })
+        } catch {
+          /* noop */
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
       if (landformCircleRadiusDragState && event.pointerId === landformCircleRadiusDragState.pointerId && event.button === 0) {
         const state = landformCircleRadiusDragState
         landformCircleRadiusDragState = null
@@ -17367,6 +17807,7 @@ async function handlePointerUp(event: PointerEvent) {
         displayBoardBuildToolHandlePointerUp: (e) => displayBoardBuildTool.handlePointerUp(e),
         billboardBuildToolHandlePointerUp: (e) => billboardBuildTool.handlePointerUp(e),
         boundaryWallBuildToolHandlePointerUp: (e) => boundaryWallBuildTool.handlePointerUp(e),
+        modelCollisionBuildToolHandlePointerUp: (e) => modelCollisionFaceBuildTool.handlePointerUp(e),
         landformBuildToolHandlePointerUp: (e) => landformBuildTool.handlePointerUp(e),
         regionBuildToolHandlePointerUp: (e) => regionBuildTool.handlePointerUp(e),
         guideRouteBuildToolHandlePointerUp: (e) => guideRouteBuildTool.handlePointerUp(e),
@@ -18220,6 +18661,15 @@ function handlePointerCancel(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'modelCollision') {
+    if (modelCollisionFaceBuildTool.handlePointerCancel(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
   if (boundaryWallContourVertexDragState && event.pointerId === boundaryWallContourVertexDragState.pointerId) {
     const state = boundaryWallContourVertexDragState
     boundaryWallContourVertexDragState = null
@@ -18230,6 +18680,26 @@ function handlePointerCancel(event: PointerEvent) {
       buildBoundaryWallPreviewFromLocalPoints(state.nodeId, state.basePoints)
       ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
       ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (modelCollisionFaceVertexDragState && event.pointerId === modelCollisionFaceVertexDragState.pointerId) {
+    const state = modelCollisionFaceVertexDragState
+    modelCollisionFaceVertexDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveModelCollisionFaceVertexHandle(null)
+
+    try {
+      sceneStore.updateNodeDynamicMesh(state.nodeId, state.baseDefinition)
+      ensureModelCollisionFaceOverlayForSelectedNode()
+      ensureModelCollisionFaceVertexHandlesForSelectedNode({ force: true })
     } catch {
       /* noop */
     }
@@ -18366,6 +18836,18 @@ function handleCanvasDoubleClick(event: MouseEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'modelCollision') {
+    const selectedFaceId = pickModelCollisionFaceAtPointer(event)
+    if (selectedFaceId) {
+      selectedModelCollisionFaceId.value = selectedFaceId
+      ensureModelCollisionFaceOverlayForSelectedNode()
+      ensureModelCollisionFaceVertexHandlesForSelectedNode({ force: true })
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+  }
+
   if (activeBuildTool.value) {
     if (tryExitActiveNodeBuildToolEditMode(event)) {
       event.preventDefault()
@@ -18495,6 +18977,11 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'modelCollision':
+      modelCollisionFaceBuildTool.cancel()
+      handleBuildToolChange(null)
+      handled = true
+      break
     case 'region':
       regionBuildTool.cancel()
       handleBuildToolChange(null)
@@ -18561,6 +19048,12 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'boundaryWall' && tool !== 'boundaryWall') {
     boundaryWallBuildTool.cancel()
+  }
+  if (activeBuildTool.value === 'modelCollision' && tool !== 'modelCollision') {
+    modelCollisionFaceBuildTool.cancel()
+    modelCollisionFaceVertexDragState = null
+    modelCollisionFaceVertexRenderer.clear()
+    selectedModelCollisionFaceId.value = null
   }
   if (activeBuildTool.value === 'guideRoute' && tool !== 'guideRoute') {
     guideRouteBuildTool.cancel()
@@ -21923,6 +22416,9 @@ function handleViewportShortcut(event: KeyboardEvent) {
           if (handled) {
             clearWallDoorSelectionPayload()
           }
+        }
+        if (!handled && activeBuildTool.value === 'modelCollision' && selectedModelCollisionFaceId.value) {
+          handled = removeSelectedModelCollisionFace()
         }
         break
       }

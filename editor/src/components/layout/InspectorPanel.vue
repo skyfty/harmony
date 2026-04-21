@@ -5,6 +5,7 @@ import MaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import LightPanel from '@/components/inspector/LightPanel.vue'
 import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import AssetModelPanel from '@/components/inspector/AssetModelPanel.vue'
+import ModelCollisionPanel from '@/components/inspector/ModelCollisionPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import RoadPanel from '@/components/inspector/RoadPanel.vue'
 import FloorPanel from '@/components/inspector/FloorPanel.vue'
@@ -204,6 +205,10 @@ function computeDefaultExpandedPanels() {
 
   if (node?.dynamicMesh?.type === 'Road') {
     panels.push('road')
+  }
+
+  if (showAssetModelPanel.value) {
+    panels.push('modelCollision')
   }
 
   Object.values(node?.components ?? {}).forEach((component) => {
@@ -556,6 +561,7 @@ watch(
             class="inspector-panels"
           >
           <AssetModelPanel v-if="showAssetModelPanel" />
+          <ModelCollisionPanel v-if="showAssetModelPanel" />
           <InstanceLayoutPanel v-if="showAssetModelPanel" />
           <TransformPanel v-if="showTransformPanel"/>
           <LightPanel v-if="isLightNode"/>

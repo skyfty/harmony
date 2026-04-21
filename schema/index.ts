@@ -1261,7 +1261,7 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
   csm?: Partial<EnvironmentCsmSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute' | 'Region'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute' | 'Region' | 'ModelCollision'
 
 export type GroundHeightMap = Float64Array
 
@@ -1677,7 +1677,24 @@ export interface RegionDynamicMesh {
   vertices: RegionVertex2D[]
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh | LandformDynamicMesh | GuideRouteDynamicMesh | RegionDynamicMesh
+export interface ModelCollisionFace {
+  /** Stable face id used by the editor overlay and edit selection. */
+  id: string
+  /** Closed polygon vertices in the target node's local space. */
+  vertices: Vector3Like[]
+  /** Optional per-face collision thickness override in meters. */
+  thickness?: number
+}
+
+export interface ModelCollisionDynamicMesh {
+  type: 'ModelCollision'
+  /** Closed collision faces attached to an arbitrary model node. */
+  faces: ModelCollisionFace[]
+  /** Default collision thickness used when faces omit a per-face override. */
+  defaultThickness?: number
+}
+
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh | LandformDynamicMesh | GuideRouteDynamicMesh | RegionDynamicMesh | ModelCollisionDynamicMesh
 
 export interface ClipboardEntry {
   sourceId: string
