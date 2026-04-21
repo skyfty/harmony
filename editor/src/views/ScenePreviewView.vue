@@ -48,7 +48,6 @@ import {
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
 } from '@schema/index'
-import { resolveModelCollisionComponentPropsFromNode } from '@schema/components'
  
 import {
 	applyMaterialOverrides,
@@ -204,6 +203,7 @@ import {
 	clampLodComponentProps,
 	forEachWaterRuntimeHandle,
 	resolveLodRenderTarget,
+	resolveModelCollisionComponentPropsFromNode,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
@@ -3125,12 +3125,34 @@ function resolveBoundaryWallComponent(
 	return resolveEnabledComponentState<Record<string, unknown>>(node, BOUNDARY_WALL_COMPONENT_TYPE)
 }
 
+function resolveModelCollisionStaticRigidbodyComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<RigidbodyComponentProps> | null {
+	const props = resolveModelCollisionComponentPropsFromNode(node)
+	if (!node || !props?.faces?.length) {
+		return null
+	}
+	return {
+		id: `__modelCollisionRigidbody:${node.id}`,
+		type: RIGIDBODY_COMPONENT_TYPE,
+		enabled: true,
+		props: clampRigidbodyComponentProps({
+			bodyType: 'STATIC',
+			targetNodeId: node.id ?? null,
+		}),
+	}
+}
+
 function resolvePhysicsRigidbodyComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<RigidbodyComponentProps> | null {
 	const rigidbodyComponent = resolveRigidbodyComponent(node)
 	if (rigidbodyComponent) {
 		return rigidbodyComponent
+	}
+	const modelCollisionComponent = resolveModelCollisionStaticRigidbodyComponent(node)
+	if (modelCollisionComponent) {
+		return modelCollisionComponent
 	}
 	if (!resolveBoundaryWallComponent(node) || !node) {
 		return null

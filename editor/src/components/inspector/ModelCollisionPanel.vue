@@ -4,11 +4,8 @@ import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema'
 import {
   MODEL_COLLISION_COMPONENT_TYPE,
-  RIGIDBODY_COMPONENT_TYPE,
-  clampRigidbodyComponentProps,
   resolveModelCollisionComponentPropsFromNode,
   type ModelCollisionComponentProps,
-  type RigidbodyComponentProps,
 } from '@schema/components'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
@@ -28,10 +25,6 @@ const modelCollisionComponent = computed(
     | undefined,
 )
 
-const rigidbodyComponent = computed(
-  () => selectedNode.value?.components?.[RIGIDBODY_COMPONENT_TYPE] as SceneNodeComponentState<RigidbodyComponentProps> | undefined,
-)
-
 const modelCollisionProps = computed<ModelCollisionComponentProps | null>(() => {
   return resolveModelCollisionComponentPropsFromNode(selectedNode.value) ?? null
 })
@@ -48,27 +41,6 @@ watch(
   },
   { immediate: true },
 )
-
-function ensureStaticRigidbody(): void {
-  const nodeId = selectedNodeId.value
-  if (!nodeId) {
-    return
-  }
-  const existing = rigidbodyComponent.value
-  if (existing) {
-    return
-  }
-  const result = sceneStore.addNodeComponent<typeof RIGIDBODY_COMPONENT_TYPE>(nodeId, RIGIDBODY_COMPONENT_TYPE)
-  if (!result) {
-    return
-  }
-  const patch = clampRigidbodyComponentProps({
-    ...result.component.props,
-    bodyType: 'STATIC',
-    targetNodeId: nodeId,
-  })
-  sceneStore.updateNodeComponentProps(nodeId, result.component.id, patch as unknown as Partial<Record<string, unknown>>)
-}
 
 function ensureModelCollisionComponent(): SceneNodeComponentState<ModelCollisionComponentProps> | null {
   const node = selectedNode.value
@@ -129,7 +101,6 @@ function handleStartEdit(): void {
     return
   }
   syncLegacyRuntimeData(component.props)
-  ensureStaticRigidbody()
   buildToolsStore.setActiveBuildTool('modelCollision')
 }
 
@@ -180,7 +151,6 @@ function handleClearFaces(): void {
         />
         <div class="model-collision-stats">
           <span>Faces: {{ faceCount }}</span>
-          <span>Rigidbody: {{ rigidbodyComponent ? 'enabled' : 'auto-add on edit' }}</span>
         </div>
         <div class="model-collision-actions">
           <v-btn
