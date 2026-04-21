@@ -992,7 +992,7 @@ export const useScenesStore = defineStore('scenes', {
         console.warn('[ScenesStore] Failed to initialize auth store', error)
       }
       const descriptor = resolveWorkspaceDescriptor(authStore.user)
-      await this.switchWorkspace(descriptor, { forceReload: true, syncFromServer: descriptor.type === 'user' })
+      await this.switchWorkspace(descriptor, { forceReload: true, syncFromServer: false })
       this.attachAuthWatcher(authStore)
       this.initialized = true
       this.error = null
@@ -1022,7 +1022,7 @@ export const useScenesStore = defineStore('scenes', {
       try {
         await this.switchWorkspace(nextDescriptor, {
           forceReload: true,
-          syncFromServer: nextDescriptor.type === 'user',
+          syncFromServer: false,
         })
       } catch (error) {
         console.error('[ScenesStore] handleAuthStateChange failed', error)
@@ -1082,6 +1082,35 @@ export const useScenesStore = defineStore('scenes', {
         console.error('[ScenesStore] refreshMetadata failed', error)
       }
     },
+    async refreshUserWorkspaceMetadataFromServer() {
+      if (this.workspaceType !== 'user') {
+        await this.refreshMetadata()
+        return
+      }
+
+      const authStore = useAuthStore()
+      try {
+        const remoteScenes = await fetchUserScenesFromServer(authStore)
+        if (!remoteScenes) {
+          return
+        }
+        this.metadata = remoteScenes.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          projectId: entry.projectId,
+          thumbnail: entry.thumbnail,
+          createdAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+          bundleEtag: entry.bundle.etag ?? null,
+        }))
+        this.workspaceRevision += 1
+        this.error = null
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to refresh scenes from server'
+        this.error = message
+        console.error('[ScenesStore] refreshUserWorkspaceMetadataFromServer failed', error)
+      }
+    },
     upsertMetadata(entry: SceneSummary) {
       const existingIndex = this.metadata.findIndex((item) => item.id === entry.id)
       if (existingIndex === -1) {
@@ -1109,6 +1138,56 @@ export const useScenesStore = defineStore('scenes', {
       } catch (error) {
         console.error('[ScenesStore] loadSceneDocument failed', error)
         return null
+      }
+    },
+    async ensureSceneBundleAvailable(sceneId: string): Promise<boolean> {
+      const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, sceneId)
+      if (this.workspaceType !== 'user') {
+        return !!localBundle
+      }
+
+      const authStore = useAuthStore()
+      try {
+        const remoteScenes = await fetchUserScenesFromServer(authStore)
+        const remoteEntry = remoteScenes?.find((entry) => entry.id === sceneId) ?? null
+        if (!remoteEntry) {
+          return !!localBundle
+        }
+
+        const localMetadata = this.metadata.find((entry) => entry.id === sceneId) ?? null
+        const localEtag = localMetadata?.bundleEtag ?? null
+        const remoteEtag = remoteEntry.bundle.etag ?? null
+
+        if (localBundle && remoteEtag && localEtag && localEtag === remoteEtag) {
+          return true
+        }
+
+        let bundle = await downloadSceneBundleZip(remoteEntry.bundle.url, authStore, { etag: localEtag })
+        if (!bundle) {
+          if (localBundle) {
+            return true
+          }
+          bundle = await downloadSceneBundleZip(remoteEntry.bundle.url, authStore)
+        }
+        if (!bundle) {
+          return false
+        }
+
+        const downloaded = await unpackSceneBundleIntoStores(bundle.bytes)
+        const bundleEtag = bundle.etag ?? remoteEtag ?? localEtag ?? null
+        await writeSceneDocuments(
+          this.workspaceId,
+          [downloaded.document],
+          { [downloaded.document.id]: downloaded.groundHeightSidecar ?? null },
+          { [downloaded.document.id]: downloaded.groundScatterSidecar ?? null },
+          { [downloaded.document.id]: downloaded.groundPaintSidecar ?? null },
+        )
+        await writeSceneBundleEtags(this.workspaceId, { [downloaded.document.id]: bundleEtag })
+        this.upsertMetadata(toMetadataWithBundleEtag(downloaded.document, bundleEtag))
+        return true
+      } catch (error) {
+        console.warn('[ScenesStore] ensureSceneBundleAvailable failed', error)
+        return !!(await readSceneBundleFromWorkspace(this.workspaceId, sceneId))
       }
     },
     async saveSceneDocument(document: StoredSceneDocument) {

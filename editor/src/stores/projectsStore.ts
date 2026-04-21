@@ -443,7 +443,7 @@ export const useProjectsStore = defineStore('projects', {
         console.warn('[ProjectsStore] Failed to initialize auth store', error)
       }
       const descriptor = resolveWorkspaceDescriptor(authStore.user)
-      await this.switchWorkspace(descriptor, { forceReload: true, syncFromServer: descriptor.type === 'user' })
+      await this.switchWorkspace(descriptor, { forceReload: true, syncFromServer: false })
       this.attachAuthWatcher(authStore)
       this.initialized = true
       this.error = null
@@ -473,7 +473,7 @@ export const useProjectsStore = defineStore('projects', {
       try {
         await this.switchWorkspace(nextDescriptor, {
           forceReload: true,
-          syncFromServer: nextDescriptor.type === 'user',
+          syncFromServer: false,
         })
       } catch (error) {
         console.error('[ProjectsStore] handleAuthStateChange failed', error)

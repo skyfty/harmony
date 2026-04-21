@@ -17719,6 +17719,11 @@ export const useSceneStore = defineStore('scene', {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
       const forceReload = options.forceReload === true
+      const scenesStore = useScenesStore()
+      const sceneReady = await scenesStore.ensureSceneBundleAvailable(sceneId)
+      if (!sceneReady) {
+        return false
+      }
       if (!forceReload && sceneId === this.currentSceneId) {
         this.isSceneReady = false
         try {
@@ -17728,7 +17733,6 @@ export const useSceneStore = defineStore('scene', {
         }
         return true
       }
-      const scenesStore = useScenesStore()
       const scene = await scenesStore.loadSceneDocument(sceneId, { hydrateGroundRuntime: true })
       if (!scene) {
         return false

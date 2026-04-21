@@ -146,8 +146,8 @@ async function confirmDeleteProject() {
 
 async function handleSync() {
   await Promise.all([
-    projectsStore.syncUserWorkspaceFromServer({ replace: true }),
-    scenesStore.syncUserWorkspaceFromServer({ replace: true }),
+    projectsStore.syncUserWorkspaceFromServer({ replace: false }),
+    scenesStore.refreshUserWorkspaceMetadataFromServer(),
   ])
 }
 
@@ -254,7 +254,7 @@ async function handleExportProject(projectId: string): Promise<void> {
       <div class="pm-actions">
         <v-btn v-if="!isLoggedIn" variant="text" @click="openLogin">Sign In</v-btn>
         <v-btn v-else variant="text" @click="handleSignOut">Sign Out</v-btn>
-        <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Sync</v-btn>
+        <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Refresh</v-btn>
         <v-btn variant="text" :disabled="importingProject || deletingId !== null || exportingId !== null" @click="requestProjectImport">Import</v-btn>
         <v-btn color="primary" variant="flat" @click="newProjectOpen = true">New Project</v-btn>
       </div>
