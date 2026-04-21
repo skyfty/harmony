@@ -42,14 +42,17 @@ function handleRemoveComponent() {
   sceneStore.removeNodeComponent(nodeId, component.id)
 }
 
-function handleLabelChange(value: string) {
+function handleLabelInput(value: string) {
+  localLabel.value = value
+}
+
+function handleLabelSubmit() {
   const component = signboardComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
     return
   }
-  localLabel.value = value
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { label: value })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { label: localLabel.value })
 }
 </script>
 
@@ -97,9 +100,11 @@ function handleLabelChange(value: string) {
           hint="Leave empty to use the node name"
           persistent-hint
           density="comfortable"
-          variant="outlined"
+          variant="underlined"
           :disabled="!signboardComponent?.enabled"
-          @update:modelValue="handleLabelChange"
+          @update:modelValue="handleLabelInput"
+          @blur="handleLabelSubmit"
+          @keydown.enter.prevent="handleLabelSubmit"
         />
       </div>
     </v-expansion-panel-text>

@@ -682,22 +682,6 @@ function buildServerRegistryEntry(
     assetType: options.assetType,
     name: options.name,
   }
-  if (!entry.fileKey && !entry.resolvedUrl) {
-    console.warn('[SceneStore] Built incomplete server registry entry', {
-      assetId,
-      source: source ?? null,
-      asset: asset
-        ? {
-          id: asset.id,
-          type: asset.type,
-          source: asset.source ?? null,
-          downloadUrl: asset.downloadUrl ?? null,
-          fileKey: asset.fileKey ?? null,
-        }
-        : null,
-      entry,
-    })
-  }
   return entry
 }
 
@@ -785,6 +769,28 @@ function filterAssetRegistryByCatalog(
     nextRegistry[assetId] = { ...entry }
   })
   return nextRegistry
+}
+
+function areSceneAssetRegistriesEqual(
+  left: Record<string, SceneAssetRegistryEntry>,
+  right: Record<string, SceneAssetRegistryEntry>,
+): boolean {
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) {
+    return false
+  }
+  for (const assetId of leftKeys) {
+    const leftEntry = left[assetId]
+    const rightEntry = right[assetId]
+    if (!leftEntry || !rightEntry) {
+      return false
+    }
+    if (JSON.stringify(leftEntry) !== JSON.stringify(rightEntry)) {
+      return false
+    }
+  }
+  return true
 }
 
 function upsertAssetsIntoCatalogAndIndex(
@@ -5027,9 +5033,20 @@ function buildSceneAssetRegistryEntry(
     sourceMeta
     ?? inferPackageSourceFromAssetId(assetId)
     ?? inferPackageSourceFromRegistryEntry(reusableExistingEntry)
+  const summaryDownloadUrl = normalizeHttpUrl(summaryEntry?.downloadUrl ?? null)
 
   if (resolvedSourceMeta?.type === 'server' || (resolvedSourceMeta?.type === 'package' && isServerBackedProviderId(resolvedSourceMeta.providerId))) {
     return buildServerRegistryEntry(assetId, asset, resolvedSourceMeta, { bytes: summaryBytes, assetType, name })
+  }
+
+  if (!resolvedSourceMeta && summaryEntry?.source === 'remote' && summaryDownloadUrl) {
+    return {
+      sourceType: 'url',
+      url: summaryDownloadUrl,
+      bytes: summaryBytes,
+      assetType,
+      name,
+    }
   }
 
   if (reusableExistingEntry) {
@@ -12068,14 +12085,16 @@ export const useSceneStore = defineStore('scene', {
         removedAssetIds,
         catalogChanged,
       } = pruneAssetCatalogByRetainedIds(this.assetCatalog, retainedAssetIds)
+      const nextAssetRegistry = filterAssetRegistryByCatalog(this.assetRegistry, nextCatalog)
+      const registryChanged = !areSceneAssetRegistriesEqual(this.assetRegistry, nextAssetRegistry)
 
       const shouldResetSelection = this.selectedAssetId ? !retainedAssetIds.has(this.selectedAssetId) : false
 
-      if (!catalogChanged) {
+      if (!catalogChanged && !registryChanged) {
         return { removedAssetIds: [] }
       }
 
-      this.applyCatalogUpdate(nextCatalog)
+      this.applyCatalogUpdate(nextCatalog, registryChanged ? { nextAssetRegistry } : undefined)
       if (shouldResetSelection) {
         this.selectedAssetId = null
       }
@@ -12141,7 +12160,20 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (!catalogChanged) {
-        return { removedAssetIds: [] }
+        const nextAssetRegistry = filterAssetRegistryByCatalog(this.assetRegistry, nextCatalog)
+        const registryChanged = !areSceneAssetRegistriesEqual(this.assetRegistry, nextAssetRegistry)
+        if (!registryChanged) {
+          return { removedAssetIds: [] }
+        }
+        this.applyCatalogUpdate(nextCatalog, { nextAssetRegistry })
+        if (this.selectedAssetId && removableCandidateIds.has(this.selectedAssetId)) {
+          this.selectedAssetId = null
+        }
+        this.ensureActiveDirectoryAndSelectionValid()
+
+        commitSceneSnapshot(this, { updateNodes: false })
+
+        return { removedAssetIds }
       }
 
       this.applyCatalogUpdate(nextCatalog)
