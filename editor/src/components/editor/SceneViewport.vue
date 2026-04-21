@@ -23226,8 +23226,12 @@ defineExpose<SceneViewportHandle>({
 }
 
 .csm-hud__btn {
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
-  background: transparent !important;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.72));
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.36),
+    0 0 0 1px rgba(255, 255, 255, 0.16);
+  background: rgba(10, 14, 20, 0.28) !important;
+  backdrop-filter: blur(8px) saturate(130%);
 }
 
 .csm-hud__btn :deep(.v-btn__overlay),
