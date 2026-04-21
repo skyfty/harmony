@@ -1359,6 +1359,7 @@ const tempOutlineSphere = new THREE.Sphere()
 const tempOutlineScale = new THREE.Vector3()
 
 const CAMERA_HEIGHT = 1.7
+const DEFAULT_SCENE_CAMERA_FAR = 2000
 const FIRST_PERSON_ROTATION_SPEED = 25
 const FIRST_PERSON_MOVE_SPEED = 5
 const FIRST_PERSON_LOOK_SPEED = 0.06
@@ -2697,6 +2698,9 @@ const vehicleDriveController = new VehicleDriveController(
 		setCameraCaging,
 		updateOrbitLookTween: updateOrbitCameraLookTween,
 		onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
+		onVehicleObjectTransformUpdated: (_nodeId, object) => {
+			syncInstancedTransform(object)
+		},
 	},
 	{
 		state: vehicleDriveState,
@@ -6811,9 +6815,6 @@ function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean)
 	if (!vehicleDriveState.active) {
 		return false
 	}
-	if (controlMode.value !== 'third-person' || vehicleDriveCameraMode.value === 'first-person') {
-		return false
-	}
 	const action = vehicleDriveKeyboardMap[event.code]
 	if (!action) {
 		return false
@@ -6972,7 +6973,7 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; p
 }
 
 function applyVehicleDriveForces(deltaSeconds: number): void {
-	if (!vehicleDriveState.active || !vehicleDriveState.vehicle) {
+	if (!vehicleDriveState.active) {
 		return
 	}
 	vehicleDriveController.applyForces(deltaSeconds)
@@ -6982,7 +6983,7 @@ function updateVehicleSpeedFromVehicle(): void {
 	const vehicle = vehicleDriveState.vehicle
 	const velocity = vehicle?.chassisBody?.velocity ?? null
 	if (!velocity) {
-		vehicleSpeed.value = 0
+		vehicleSpeed.value = vehicleDriveController.getCurrentSpeed()
 		return
 	}
 	const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
@@ -7971,7 +7972,7 @@ function initRenderer() {
 	scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
 	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
 
-	camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000)
+	camera = new THREE.PerspectiveCamera(60, 1, 0.1, DEFAULT_SCENE_CAMERA_FAR)
   	camera.position.set(0, CAMERA_HEIGHT, 0)
 	listener = new THREE.AudioListener()
 	camera.add(listener)
@@ -8625,14 +8626,25 @@ function applyFogSettings(settings: EnvironmentSettings) {
 	if (!scene) {
 		return
 	}
+	const syncCameraFar = (nextFar: number) => {
+		if (!camera || Math.abs(camera.far - nextFar) <= 1e-6) {
+			return
+		}
+		camera.far = nextFar
+		camera.updateProjectionMatrix()
+		sceneCsmShadowRuntime?.updateFrustums()
+		scenePreviewPerf.markInstancedCullingDirty()
+	}
 	if (settings.fogMode === 'none') {
 		scene.fog = null
+		syncCameraFar(DEFAULT_SCENE_CAMERA_FAR)
 		return
 	}
 	const fogColor = new THREE.Color(settings.fogColor)
 	if (settings.fogMode === 'linear') {
 		const near = Math.max(0, settings.fogNear)
 		const far = Math.max(near + 0.001, settings.fogFar)
+		syncCameraFar(far)
 		if (scene.fog instanceof THREE.Fog) {
 			scene.fog.color.copy(fogColor)
 			scene.fog.near = near
@@ -8642,6 +8654,7 @@ function applyFogSettings(settings: EnvironmentSettings) {
 		}
 		return
 	}
+	syncCameraFar(DEFAULT_SCENE_CAMERA_FAR)
 	const density = Math.max(0, settings.fogDensity)
 	if (scene.fog instanceof THREE.FogExp2) {
 		scene.fog.color.copy(fogColor)

@@ -50,6 +50,11 @@ export type VehicleDriveRuntimeState = {
   sourceEvent: unknown | null
 }
 
+type VehicleDriveTargetReadiness =
+  | { success: true; mode: 'physics'; instance: VehicleInstance; vehicleObject: THREE.Object3D }
+  | { success: true; mode: 'transform'; vehicleObject: THREE.Object3D }
+  | { success: false; message: string }
+
 export type VehicleDriveVehicle = {
   chassisBody: VehicleDriveChassisBody
   wheelInfos: unknown[]
@@ -144,6 +149,7 @@ export type VehicleDriveControllerDeps = {
   // Allow host to provide interpolated chassis data (e.g., fixed-step physics interpolation on WeChat).
   resolveChassisWorldPosition?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
   resolveChassisWorldVelocity?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
+  onVehicleObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
 }
 
 export type VehicleDriveControllerBindings = {
@@ -252,6 +258,21 @@ const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.82
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 3
 // 重置车辆时的抬升高度
 const VEHICLE_RESET_LIFT = 0.75
+const TRANSFORM_DRIVE_MAX_FORWARD_SPEED = 8.5
+const TRANSFORM_DRIVE_MAX_REVERSE_SPEED = 3.8
+const TRANSFORM_DRIVE_ACCELERATION = 6.5
+const TRANSFORM_DRIVE_REVERSE_ACCELERATION = 4.2
+const TRANSFORM_DRIVE_BRAKE_DECELERATION = 11
+const TRANSFORM_DRIVE_COAST_DECELERATION = 2.8
+const TRANSFORM_DRIVE_STEER_RATE = THREE.MathUtils.degToRad(96)
+const TRANSFORM_DRIVE_MIN_STEER_FACTOR = 0.32
+const TRANSFORM_DRIVE_MIN_SPEED_EPSILON = 1e-3
+const TRANSFORM_DRIVE_DIRECTION_CHANGE_DECELERATION = 9.5
+const TRANSFORM_DRIVE_STEER_TRACK_SPEED = 12
+const TRANSFORM_DRIVE_STEER_RELEASE_SPEED = 8
+const TRANSFORM_DRIVE_STEER_IDLE_FACTOR = 0.18
+const TRANSFORM_DRIVE_STEER_FULL_SPEED = 5.5
+const TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO = 0.45
 
 function clampAxisScalar(value: number): number {
   if (!Number.isFinite(value)) {
@@ -324,9 +345,20 @@ export class VehicleDriveController {
     cameraQuaternionInverse: new THREE.Quaternion(),
     resetQuaternion: new THREE.Quaternion(),
     cameraMatrix: new THREE.Matrix4(),
+    euler: new THREE.Euler(0, 0, 0, 'YXZ'),
     vehicleDimensions: new THREE.Vector3(),
     tempQuaternion: new THREE.Quaternion(),
     tempVector: new THREE.Vector3(),
+  }
+  private readonly transformDriveState = {
+    speed: 0,
+    yaw: 0,
+    steering: 0,
+    velocityWorld: new THREE.Vector3(),
+    worldPosition: new THREE.Vector3(),
+    worldQuaternion: new THREE.Quaternion(),
+    localPosition: new THREE.Vector3(),
+    parentWorldQuaternion: new THREE.Quaternion(),
   }
   private readonly smoothStopState = {
     active: false,
@@ -499,7 +531,94 @@ export class VehicleDriveController {
     input.brake = clampAxisScalar(brake)
   }
 
-  prepareTarget(nodeId: string | null | undefined): { success: true; instance: VehicleInstance } | { success: false; message: string } {
+  getCurrentSpeed(): number {
+    const state = this.state
+    if (!state.active) {
+      return 0
+    }
+    if (!state.vehicle) {
+      return Math.abs(this.transformDriveState.speed)
+    }
+    const velocity = state.vehicle.chassisBody?.velocity ?? null
+    if (!velocity) {
+      return 0
+    }
+    const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
+    return Number.isFinite(speed) ? speed : 0
+  }
+
+  private setObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vector3, worldQuaternion: THREE.Quaternion): void {
+    if (object.parent) {
+      object.parent.updateMatrixWorld(true)
+      this.transformDriveState.localPosition.copy(worldPosition)
+      object.parent.worldToLocal(this.transformDriveState.localPosition)
+      object.position.copy(this.transformDriveState.localPosition)
+      object.parent.getWorldQuaternion(this.transformDriveState.parentWorldQuaternion)
+      this.transformDriveState.parentWorldQuaternion.invert()
+      object.quaternion.copy(this.transformDriveState.parentWorldQuaternion.multiply(worldQuaternion))
+    } else {
+      object.position.copy(worldPosition)
+      object.quaternion.copy(worldQuaternion)
+    }
+    object.updateMatrixWorld(true)
+  }
+
+  private notifyVehicleObjectTransformUpdated(nodeId: string, object: THREE.Object3D): void {
+    this.deps.onVehicleObjectTransformUpdated?.(nodeId, object)
+  }
+
+  private getTransformVehicleObject(nodeId: string | null | undefined): THREE.Object3D | null {
+    const normalized = this.deps.normalizeNodeId(nodeId)
+    if (!normalized) {
+      return null
+    }
+    return this.deps.nodeObjectMap.get(normalized) ?? null
+  }
+
+  private extractWorldYawRadians(object: THREE.Object3D): number {
+    object.updateMatrixWorld(true)
+    object.getWorldQuaternion(this.temp.tempQuaternion)
+    this.temp.euler.setFromQuaternion(this.temp.tempQuaternion)
+    return Number.isFinite(this.temp.euler.y) ? this.temp.euler.y : 0
+  }
+
+  private initializeTransformDrive(object: THREE.Object3D): void {
+    this.transformDriveState.speed = 0
+    this.transformDriveState.steering = 0
+    this.transformDriveState.velocityWorld.set(0, 0, 0)
+    this.transformDriveState.yaw = this.extractWorldYawRadians(object)
+  }
+
+  private resolveTransformDriveSpeedCaps(nodeId: string): { forward: number; reverse: number } {
+    let forward = TRANSFORM_DRIVE_MAX_FORWARD_SPEED
+    try {
+      const node = this.deps.resolveNodeById(nodeId) ?? null
+      if (node) {
+        const pureComp = node.components?.[PURE_PURSUIT_COMPONENT_TYPE] as any
+        if (pureComp && pureComp.enabled) {
+          const pureProps = clampPurePursuitComponentProps(pureComp.props ?? null)
+          if (Number.isFinite(pureProps.maxSpeedMps) && pureProps.maxSpeedMps > 0) {
+            forward = Math.min(forward, pureProps.maxSpeedMps)
+          }
+        }
+        const autoComp = node.components?.[AUTO_TOUR_COMPONENT_TYPE] as any
+        if (autoComp && autoComp.enabled) {
+          const autoProps = clampAutoTourComponentProps(autoComp.props ?? null)
+          if (Number.isFinite(autoProps.maxSpeedMps) && autoProps.maxSpeedMps > 0) {
+            forward = Math.min(forward, autoProps.maxSpeedMps)
+          }
+        }
+      }
+    } catch {
+      forward = TRANSFORM_DRIVE_MAX_FORWARD_SPEED
+    }
+
+    forward = Math.max(2.5, forward)
+    const reverse = Math.max(1.5, Math.min(TRANSFORM_DRIVE_MAX_REVERSE_SPEED, forward * TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO))
+    return { forward, reverse }
+  }
+
+  prepareTarget(nodeId: string | null | undefined): VehicleDriveTargetReadiness {
     const normalized = this.deps.normalizeNodeId(nodeId)
     if (!normalized) {
       return { success: false, message: '缺少车辆节点' }
@@ -510,18 +629,24 @@ export class VehicleDriveController {
     }
     const vehicleComponent = this.deps.resolveVehicleComponent(nodeState)
     const rigidbodyComponent = this.deps.resolveRigidbodyComponent(nodeState)
-    if (!vehicleComponent || !rigidbodyComponent) {
-      return { success: false, message: '车辆需要同时启用 Rigidbody 与 Vehicle 组件。' }
+    if (!vehicleComponent) {
+      return { success: false, message: '车辆需要启用 Vehicle 组件。' }
+    }
+    const vehicleObject = this.deps.nodeObjectMap.get(normalized) ?? null
+    if (!vehicleObject) {
+      return { success: false, message: '车辆尚未准备就绪，请稍后再试。' }
+    }
+    if (!rigidbodyComponent) {
+      return { success: true, mode: 'transform', vehicleObject }
     }
     this.deps.ensurePhysicsWorld()
     this.deps.ensureVehicleBindingForNode(normalized)
     const instance = this.deps.vehicleInstances.get(normalized)
     const rigidbody = this.deps.rigidbodyInstances.get(normalized)
-    const vehicleObject = this.deps.nodeObjectMap.get(normalized) ?? null
-    if (!instance || !rigidbody || !vehicleObject) {
+    if (!instance || !rigidbody) {
       return { success: false, message: '车辆尚未准备就绪，请稍后再试。' }
     }
-    return { success: true, instance }
+    return { success: true, mode: 'physics', instance, vehicleObject }
   }
 
   snapshotCamera(ctx: VehicleDriveCameraContext): void {
@@ -587,9 +712,16 @@ export class VehicleDriveController {
     state.nodeId = targetNodeId
     state.seatNodeId = seatNodeId
     state.token = event.token ?? null
-    state.vehicle = readiness.instance.vehicle
-    state.wheelCount = readiness.instance.wheelCount
-    state.steerableWheelIndices = [...readiness.instance.steerableWheelIndices]
+    if (readiness.mode === 'physics') {
+      state.vehicle = readiness.instance.vehicle
+      state.wheelCount = readiness.instance.wheelCount
+      state.steerableWheelIndices = [...readiness.instance.steerableWheelIndices]
+    } else {
+      state.vehicle = null
+      state.wheelCount = 0
+      state.steerableWheelIndices = []
+      this.initializeTransformDrive(readiness.vehicleObject)
+    }
     state.sourceEvent = event as unknown
     this.bindings.exitBusy.value = false
     this.cameraMode = 'follow'
@@ -675,6 +807,10 @@ export class VehicleDriveController {
     state.steerableWheelIndices = []
     state.wheelCount = 0
     state.sourceEvent = null
+    this.transformDriveState.speed = 0
+    this.transformDriveState.yaw = 0
+    this.transformDriveState.steering = 0
+    this.transformDriveState.velocityWorld.set(0, 0, 0)
     this.bindings.cameraFollowState.initialized = false
     this.resetFollowCameraOffset()
     this.clearSmoothStop()
@@ -700,6 +836,10 @@ export class VehicleDriveController {
   applyForces(deltaSeconds?: number): void {
     const state = this.state
     if (!state.active || !state.nodeId) {
+      return
+    }
+    if (!state.vehicle) {
+      this.applyTransformDrive(state.nodeId, deltaSeconds)
       return
     }
     const instance = this.deps.vehicleInstances.get(state.nodeId)
@@ -881,10 +1021,110 @@ export class VehicleDriveController {
     }
   }
 
+  private applyTransformDrive(nodeId: string, deltaSeconds?: number): void {
+    const object = this.getTransformVehicleObject(nodeId)
+    if (!object) {
+      return
+    }
+    const dt = typeof deltaSeconds === 'number' && Number.isFinite(deltaSeconds)
+      ? Math.max(0, Math.min(0.25, deltaSeconds))
+      : 1 / 60
+    const throttle = this.input.throttle
+    const steeringInput = THREE.MathUtils.clamp(this.input.steering, -1, 1)
+    const brakeInput = THREE.MathUtils.clamp(this.input.brake, 0, 1)
+    const speedCaps = this.resolveTransformDriveSpeedCaps(nodeId)
+    let speed = this.transformDriveState.speed
+
+    const steeringTrackAlpha = 1 - Math.exp(-(Math.abs(steeringInput) > 0.001 ? TRANSFORM_DRIVE_STEER_TRACK_SPEED : TRANSFORM_DRIVE_STEER_RELEASE_SPEED) * dt)
+    this.transformDriveState.steering += (steeringInput - this.transformDriveState.steering) * steeringTrackAlpha
+    if (Math.abs(this.transformDriveState.steering) < 1e-4) {
+      this.transformDriveState.steering = 0
+    }
+
+    if (brakeInput > 0.001) {
+      speed = THREE.MathUtils.damp(speed, 0, TRANSFORM_DRIVE_BRAKE_DECELERATION * brakeInput, dt)
+    } else if (Math.abs(throttle) > 0.05) {
+      const acceleratingReverse = throttle < 0
+      const throttleSign = Math.sign(throttle)
+      const speedSign = Math.sign(speed)
+      const accel = acceleratingReverse ? TRANSFORM_DRIVE_REVERSE_ACCELERATION : TRANSFORM_DRIVE_ACCELERATION
+      if (speedSign !== 0 && throttleSign !== 0 && speedSign !== throttleSign) {
+        speed = THREE.MathUtils.damp(speed, 0, TRANSFORM_DRIVE_DIRECTION_CHANGE_DECELERATION, dt)
+      } else {
+        speed += throttle * accel * dt
+      }
+      speed = THREE.MathUtils.clamp(speed, -speedCaps.reverse, speedCaps.forward)
+    } else {
+      let decel = TRANSFORM_DRIVE_COAST_DECELERATION
+      if (this.smoothStopState.active) {
+        decel = Math.max(
+          decel,
+          Math.min(TRANSFORM_DRIVE_BRAKE_DECELERATION, this.smoothStopState.damping * TRANSFORM_DRIVE_BRAKE_DECELERATION),
+        )
+      }
+      speed = THREE.MathUtils.damp(speed, 0, decel, dt)
+    }
+
+    if (Math.abs(speed) < TRANSFORM_DRIVE_MIN_SPEED_EPSILON) {
+      speed = 0
+    }
+
+    const absSpeed = Math.abs(speed)
+  const speedRatio = Math.min(1, absSpeed / Math.max(1, speedCaps.forward))
+    const steerFactor = THREE.MathUtils.lerp(1, TRANSFORM_DRIVE_MIN_STEER_FACTOR, speedRatio)
+  const steerDirection = speed < -TRANSFORM_DRIVE_MIN_SPEED_EPSILON ? -1 : 1
+  const steerSpeedBlend = Math.min(1, absSpeed / TRANSFORM_DRIVE_STEER_FULL_SPEED)
+  const steerAuthority = THREE.MathUtils.lerp(TRANSFORM_DRIVE_STEER_IDLE_FACTOR, 1, steerSpeedBlend)
+  this.transformDriveState.yaw += this.transformDriveState.steering * steerDirection * TRANSFORM_DRIVE_STEER_RATE * steerFactor * steerAuthority * dt
+
+    object.updateMatrixWorld(true)
+    object.getWorldPosition(this.transformDriveState.worldPosition)
+    this.transformDriveState.worldQuaternion.setFromAxisAngle(VEHICLE_CAMERA_WORLD_UP, this.transformDriveState.yaw)
+    this.transformDriveState.velocityWorld.set(
+      Math.cos(this.transformDriveState.yaw),
+      0,
+      -Math.sin(this.transformDriveState.yaw),
+    )
+    if (this.transformDriveState.velocityWorld.lengthSq() > 1e-8) {
+      this.transformDriveState.velocityWorld.normalize().multiplyScalar(speed)
+      this.transformDriveState.worldPosition.addScaledVector(this.transformDriveState.velocityWorld, dt)
+    } else {
+      this.transformDriveState.velocityWorld.set(0, 0, 0)
+    }
+
+    this.setObjectWorldPose(object, this.transformDriveState.worldPosition, this.transformDriveState.worldQuaternion)
+    this.notifyVehicleObjectTransformUpdated(nodeId, object)
+    this.transformDriveState.speed = speed
+
+    if (this.smoothStopState.active && absSpeed <= VEHICLE_SMOOTH_STOP_FINAL_SPEED) {
+      this.transformDriveState.speed = 0
+      this.transformDriveState.velocityWorld.set(0, 0, 0)
+      this.clearSmoothStop()
+    }
+  }
+
   resetPose(): boolean {
     const state = this.state
     if (!state.nodeId) {
       return false
+    }
+    if (!state.vehicle) {
+      const object = this.getTransformVehicleObject(state.nodeId)
+      if (!object) {
+        return false
+      }
+      object.updateMatrixWorld(true)
+      object.getWorldPosition(this.transformDriveState.worldPosition)
+      this.transformDriveState.worldPosition.y += VEHICLE_RESET_LIFT
+      this.transformDriveState.yaw = this.extractWorldYawRadians(object)
+      this.transformDriveState.worldQuaternion.setFromAxisAngle(VEHICLE_CAMERA_WORLD_UP, this.transformDriveState.yaw)
+      this.transformDriveState.speed = 0
+      this.transformDriveState.velocityWorld.set(0, 0, 0)
+      this.setObjectWorldPose(object, this.transformDriveState.worldPosition, this.transformDriveState.worldQuaternion)
+      this.notifyVehicleObjectTransformUpdated(state.nodeId, object)
+      this.resetSpeedGovernor()
+      this.bindings.cameraFollowState.initialized = false
+      return true
     }
     const rigidbody = this.deps.rigidbodyInstances.get(state.nodeId)
     const instance = this.deps.vehicleInstances.get(state.nodeId)
@@ -970,7 +1210,7 @@ export class VehicleDriveController {
     } else {
       reference.updateMatrixWorld(true)
       reference.getWorldQuaternion(temp.tempQuaternion)
-      temp.seatForward.set(0, 0, -1).applyQuaternion(temp.tempQuaternion)
+      temp.seatForward.set(1, 0, 0).applyQuaternion(temp.tempQuaternion)
       temp.seatUp.set(0, 1, 0).applyQuaternion(temp.tempQuaternion)
     }
     if (temp.seatForward.lengthSq() < 1e-8) {

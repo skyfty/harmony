@@ -776,7 +776,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const vehicleInstance = deps.vehicleInstances.get(node.id) ?? null
       const hasVehicleInstance = Boolean(vehicleInstance?.vehicle?.chassisBody)
       const shouldDriveAsVehicle = hasVehicleComponent && hasPurePursuitComponent && hasVehicleInstance
-      const directMoveVehicle = hasVehicleComponent && !hasPurePursuitComponent
+      const directMoveVehicle = hasVehicleComponent && (!hasPurePursuitComponent || !hasVehicleInstance)
       const nodeObject = deps.nodeObjectMap.get(node.id) ?? null
 
       if (shouldDriveAsVehicle) {

@@ -1208,6 +1208,7 @@ const overlayCaption = computed(() => {
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
+const DEFAULT_SCENE_CAMERA_FAR = 2000;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SCENE_EXPOSURE = 0.7;
@@ -2602,6 +2603,13 @@ const vehicleDriveController = new VehicleDriveController(
       }
       target.set(Number(v.x) || 0, Number(v.y) || 0, Number(v.z) || 0);
       return true;
+    },
+    onVehicleObjectTransformUpdated: (nodeId, object) => {
+      const node = resolveNodeById(nodeId);
+      if (node) {
+        syncSceneNodeLocalTransformFromObject(node, object);
+      }
+      syncInstancedTransform(object);
     },
   },
   {
@@ -4702,7 +4710,7 @@ function resolveFloatingAutoTourContext(): {
     }
     const node = resolveNodeById(nodeId);
     const autoTour = resolveAutoTourComponent(node);
-    if (!autoTour?.props?.routeNodeId || !vehicleInstances.has(nodeId)) {
+    if (!autoTour?.props?.routeNodeId || !nodeObjectMap.has(nodeId)) {
       continue;
     }
     return { nodeId, event };
@@ -4712,7 +4720,7 @@ function resolveFloatingAutoTourContext(): {
   if (nodeId) {
     const node = resolveNodeById(nodeId);
     const autoTour = resolveAutoTourComponent(node);
-    if (autoTour?.props?.routeNodeId && vehicleInstances.has(nodeId)) {
+    if (autoTour?.props?.routeNodeId && nodeObjectMap.has(nodeId)) {
       return { nodeId, event: activeVehicleDriveEvent.value };
     }
   }
@@ -5825,7 +5833,7 @@ function stepPhysicsWorld(delta: number): number {
             // Keep vehicle control smoothing stable by advancing it at the same fixed timestep as physics.
             applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
           }
-          world.step(PHYSICS_FIXED_TIMESTEP);
+          // world.step(PHYSICS_FIXED_TIMESTEP);
           physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
           subSteps += 1;
         }
@@ -5859,7 +5867,7 @@ function stepPhysicsWorld(delta: number): number {
           if (vehicleDriveActive.value) {
             applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
           }
-          physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
+          // physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
           physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
           subSteps += 1;
         }
@@ -6729,7 +6737,7 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
-  const skipTransformSync = Boolean(autoTour) && !vehicleInstances.has(node.id);
+  const skipTransformSync = Boolean(autoTour) && vehicleInstances.has(node.id);
   if (node.position) {
     if (!skipTransformSync) {
       object.position.set(node.position.x, node.position.y, node.position.z);
@@ -8601,18 +8609,45 @@ function updateVehicleSpeedFromVehicle(): void {
   const vehicle = vehicleDriveVehicle;
   const chassisBody = vehicle?.chassisBody ?? null;
   const velocity = chassisBody?.velocity ?? null;
-  if (!chassisBody || !velocity) {
-    vehicleSpeed.value = 0;
+  if (chassisBody && velocity) {
+    vehicleCompassQuaternion.set(
+      chassisBody.quaternion.x,
+      chassisBody.quaternion.y,
+      chassisBody.quaternion.z,
+      chassisBody.quaternion.w,
+    );
+    vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
+    vehicleCompassForward.y = 0;
+
+    const horizontalLengthSq =
+      vehicleCompassForward.x * vehicleCompassForward.x
+      + vehicleCompassForward.z * vehicleCompassForward.z;
+    if (horizontalLengthSq > 1e-8) {
+      vehicleCompassForward.multiplyScalar(1 / Math.sqrt(horizontalLengthSq));
+      const worldHeadingDegrees = THREE.MathUtils.radToDeg(
+        Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
+      );
+      const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
+      vehicleHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360;
+    }
+
+    const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+    vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
+    return;
+  }
+
+  const transformSpeed = vehicleDriveController.getCurrentSpeed();
+  vehicleSpeed.value = Number.isFinite(transformSpeed) ? transformSpeed : 0;
+
+  const driveNodeId = vehicleDriveNodeId.value;
+  const driveObject = driveNodeId ? nodeObjectMap.get(driveNodeId) ?? null : null;
+  if (!driveObject) {
     vehicleHeadingDegrees.value = 0;
     return;
   }
 
-  vehicleCompassQuaternion.set(
-    chassisBody.quaternion.x,
-    chassisBody.quaternion.y,
-    chassisBody.quaternion.z,
-    chassisBody.quaternion.w,
-  );
+  driveObject.updateMatrixWorld(true);
+  driveObject.getWorldQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.y = 0;
   const horizontalLengthSq =
@@ -8626,9 +8661,6 @@ function updateVehicleSpeedFromVehicle(): void {
     const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
     vehicleHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360;
   }
-
-  const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-  vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
 }
 
 function handleVehicleDriveResetTap(): void {
@@ -8918,14 +8950,16 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
   const object = nodeObjectMap.get(nodeId) ?? null;
   const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null;
   const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
-  if (!node || !object || !vehicleInstance) {
+  if (!node || !object) {
     return null;
   }
 
   autoTourSnapWorldQuaternion.setFromAxisAngle(autoTourSnapWorldUp, snap.yaw);
   autoTourSnapWorldPosition.copy(snap.worldPosition);
-  const chassisBody = vehicleInstance.vehicle.chassisBody;
-  const currentChassisY = Number.isFinite(chassisBody.position.y) ? chassisBody.position.y : object.getWorldPosition(autoTourSnapLocalPosition).y;
+  const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null;
+  const currentChassisY = chassisBody && Number.isFinite(chassisBody.position.y)
+    ? chassisBody.position.y
+    : object.getWorldPosition(autoTourSnapLocalPosition).y;
   if (Number.isFinite(currentChassisY)) {
     autoTourSnapWorldPosition.y = currentChassisY;
   }
@@ -8941,18 +8975,20 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
     trySleepBody(rigidbodyEntry.body);
   }
 
-  const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId);
-  const wheelCount = Math.max(0, vehicleInstance.wheelCount || vehicleInstance.vehicle.wheelInfos.length || 0);
-  for (let index = 0; index < wheelCount; index += 1) {
-    vehicleInstance.vehicle.applyEngineForce(0, index);
-    vehicleInstance.vehicle.setSteeringValue(0, index);
-    vehicleInstance.vehicle.setBrake(brakeForce, index);
+  if (vehicleInstance && chassisBody) {
+    const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId);
+    const wheelCount = Math.max(0, vehicleInstance.wheelCount || vehicleInstance.vehicle.wheelInfos.length || 0);
+    for (let index = 0; index < wheelCount; index += 1) {
+      vehicleInstance.vehicle.applyEngineForce(0, index);
+      vehicleInstance.vehicle.setSteeringValue(0, index);
+      vehicleInstance.vehicle.setBrake(brakeForce, index);
+    }
+    chassisBody.velocity.set(0, 0, 0);
+    chassisBody.angularVelocity.set(0, 0, 0);
+    resetPhysicsInterpolationState(chassisBody);
+    holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
+    trySleepBody(chassisBody);
   }
-  chassisBody.velocity.set(0, 0, 0);
-  chassisBody.angularVelocity.set(0, 0, 0);
-  resetPhysicsInterpolationState(chassisBody);
-  holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
-  trySleepBody(chassisBody);
 
   return object;
 }
@@ -9038,8 +9074,8 @@ function handleFloatingAutoTourTap(): void {
     return;
   }
 
-  if (!vehicleInstances.has(targetNodeId)) {
-    uni.showToast({ title: '未找到绑定车辆', icon: 'none' });
+  if (!nodeObjectMap.has(targetNodeId)) {
+    uni.showToast({ title: '未找到车辆对象', icon: 'none' });
     return;
   }
 
@@ -9786,14 +9822,39 @@ async function loadEnvironmentTextureFromAsset(
 
 function applyFogSettings(settings: EnvironmentSettings) {
   const scene = renderContext?.scene ?? null;
+  const camera = renderContext?.camera ?? null;
   if (!scene) {
     return;
   }
+  const syncCameraFar = (nextFar: number) => {
+    if (!camera || Math.abs(camera.far - nextFar) <= 1e-6) {
+      return;
+    }
+    camera.far = nextFar;
+    camera.updateProjectionMatrix();
+    sceneCsmShadowRuntime?.updateFrustums();
+    markInstancedCullingDirty();
+  };
   if (settings.fogMode === 'none') {
     scene.fog = null;
+    syncCameraFar(DEFAULT_SCENE_CAMERA_FAR);
     return;
   }
   const fogColor = new THREE.Color(settings.fogColor);
+  if (settings.fogMode === 'linear') {
+    const near = Math.max(0, settings.fogNear);
+    const far = Math.max(near + 0.001, settings.fogFar);
+    syncCameraFar(far);
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.color.copy(fogColor);
+      scene.fog.near = near;
+      scene.fog.far = far;
+    } else {
+      scene.fog = new THREE.Fog(fogColor, near, far);
+    }
+    return;
+  }
+  syncCameraFar(DEFAULT_SCENE_CAMERA_FAR);
   const density = Math.max(0, settings.fogDensity);
   if (scene.fog instanceof THREE.FogExp2) {
     scene.fog.color.copy(fogColor);
@@ -11050,7 +11111,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
-  const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000);
+  const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, DEFAULT_SCENE_CAMERA_FAR);
   camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
   camera.lookAt(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
 
