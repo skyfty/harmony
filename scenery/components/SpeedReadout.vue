@@ -14,9 +14,9 @@ defineProps<{
 
 <style scoped>
 .viewer-drive-speed-readout {
-  min-width: 72px;
-  padding: 10px 14px;
-  border-radius: 18px;
+  min-width: 56px;
+  padding: 6px 10px;
+  border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: linear-gradient(145deg, rgba(10, 16, 34, 0.5), rgba(7, 12, 28, 0.24));
   box-shadow:
@@ -33,15 +33,15 @@ defineProps<{
 }
 
 .viewer-drive-speed-readout__value {
-  font-size: 1.5rem;
+  font-size: 1.1rem;
   line-height: 1;
   width: 100%;
   text-align: center;
 }
 
 .viewer-drive-speed-readout__unit {
-  font-size: 0.65rem;
-  letter-spacing: 0.12em;
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   opacity: 0.78;
   width: 100%;

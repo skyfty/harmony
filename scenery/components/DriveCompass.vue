@@ -44,8 +44,8 @@ defineProps<{
 
 <style scoped>
 .viewer-drive-compass {
-  width: 108px;
-  height: 108px;
+  width: 84px;
+  height: 84px;
   border-radius: 50%;
   position: relative;
   overflow: hidden;
@@ -62,7 +62,7 @@ defineProps<{
 .viewer-drive-compass::before {
   content: '';
   position: absolute;
-  inset: 8%;
+  inset: 9%;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: radial-gradient(circle at center, rgba(14, 22, 48, 0.24), rgba(4, 7, 18, 0.08));
@@ -75,18 +75,18 @@ defineProps<{
 
 .viewer-drive-compass__tick {
   position: absolute;
-  top: 10px;
+  top: 7px;
   left: 50%;
   width: 2px;
-  height: 8px;
+  height: 7px;
   border-radius: 999px;
   background: rgba(227, 242, 255, 0.34);
-  transform-origin: center 44px;
+  transform-origin: center 34px;
   z-index: 1;
 }
 
 .viewer-drive-compass__tick.is-major {
-  height: 14px;
+  height: 10px;
   background: rgba(133, 221, 255, 0.68);
 }
 
@@ -98,9 +98,9 @@ defineProps<{
 
 .viewer-drive-compass__label {
   position: absolute;
-  top: 10px;
+  top: 7px;
   left: 50%;
-  font-size: 0.74rem;
+  font-size: 0.64rem;
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.08em;
@@ -122,9 +122,9 @@ defineProps<{
   content: '';
   position: absolute;
   left: 50%;
-  top: 36px;
-  width: 8px;
-  height: 44px;
+  top: 28px;
+  width: 7px;
+  height: 32px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(130, 231, 255, 0.94), rgba(56, 181, 255, 0.88));
   box-shadow: 0 0 16px rgba(84, 221, 255, 0.4);
@@ -135,12 +135,12 @@ defineProps<{
   content: '';
   position: absolute;
   left: 50%;
-  top: 27px;
+  top: 21px;
   width: 0;
   height: 0;
-  border-left: 12px solid transparent;
-  border-right: 12px solid transparent;
-  border-bottom: 16px solid rgba(150, 237, 255, 0.96);
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-bottom: 13px solid rgba(150, 237, 255, 0.96);
   filter: drop-shadow(0 0 8px rgba(88, 225, 255, 0.32));
   transform: translateX(-50%);
 }

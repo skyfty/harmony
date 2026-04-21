@@ -710,7 +710,11 @@ import {
   getApproxDimensions,
   resetCameraFollowState,
 } from '@harmony/schema/followCameraController';
-import { stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
+import {
+  createPhysicsAwareAutoTourVehicleInstances,
+  resolveVehicleOrObjectWorldPosition,
+  stopTourAndUnfollow,
+} from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
 import {
@@ -747,6 +751,11 @@ import {
   PROXIMITY_MIN_DISTANCE,
   PROXIMITY_RADIUS_SCALE,
 } from '@harmony/schema/behaviors/runtime';
+import {
+  loadStoredPunchedNodeIds,
+  mergeStoredPunchedNodeId,
+  pruneStoredPunchedNodeIds,
+} from '@harmony/schema/browserPunchProgress';
 import {
   applyMaterialOverrides,
   disposeMaterialTextures,
@@ -1716,6 +1725,50 @@ const SIGNBOARD_REFERENCE_SMOOTH_SPEED = DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEE
 const SIGNBOARD_PLACEMENT_SMOOTH_SPEED = DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED;
 const SIGNBOARD_NEAR_FADE_DISTANCE = SIGNBOARD_CLOSE_FADE_DISTANCE;
 const SIGNBOARD_MIN_VISIBLE_Y_PERCENT = SIGNBOARD_MIN_SCREEN_Y_PERCENT;
+const browserStoredPunchedNodeIds = ref<string[]>([]);
+
+const normalizedInitialPunchedNodeIds = computed(() => {
+  const next = new Set<string>();
+  (props.initialPunchedNodeIds ?? []).forEach((nodeId: string) => {
+    if (typeof nodeId !== 'string') {
+      return;
+    }
+    const normalized = nodeId.trim();
+    if (normalized) {
+      next.add(normalized);
+    }
+  });
+  return Array.from(next);
+});
+
+function resolveActivePunchSceneId(preferredSceneId?: string | null): string {
+  if (typeof preferredSceneId === 'string' && preferredSceneId.trim()) {
+    return preferredSceneId.trim();
+  }
+  return (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+}
+
+function applyMergedPunchedNodeIds(): void {
+  punchedNodeIds.value = new Set<string>([
+    ...normalizedInitialPunchedNodeIds.value,
+    ...browserStoredPunchedNodeIds.value,
+  ]);
+}
+
+function syncStoredPunchedNodeIdsForScene(preferredSceneId?: string | null): void {
+  const sceneId = resolveActivePunchSceneId(preferredSceneId);
+  if (!sceneId) {
+    browserStoredPunchedNodeIds.value = [];
+    applyMergedPunchedNodeIds();
+    return;
+  }
+
+  browserStoredPunchedNodeIds.value = punchNodeIds.size
+    ? pruneStoredPunchedNodeIds(sceneId, punchNodeIds)
+    : loadStoredPunchedNodeIds(sceneId);
+  applyMergedPunchedNodeIds();
+}
+
 const punchCheckedCount = computed(() => {
   punchSceneRevision.value;
   if (!punchTotalCount.value || !punchedNodeIds.value.size) {
@@ -1731,22 +1784,9 @@ const punchCheckedCount = computed(() => {
   return count;
 });
 
-watch(
-  () => props.initialPunchedNodeIds ?? [],
-  (nodeIds: string[]) => {
-    const next = new Set<string>();
-    nodeIds.forEach((nodeId: string) => {
-      if (typeof nodeId === 'string') {
-        const normalized = nodeId.trim();
-        if (normalized) {
-          next.add(normalized);
-        }
-      }
-    });
-    punchedNodeIds.value = next;
-  },
-  { immediate: true },
-);
+watch(normalizedInitialPunchedNodeIds, () => {
+  applyMergedPunchedNodeIds();
+}, { immediate: true });
 
 function resetPunchOverlaySmoothing(): void {
   punchBadgePlacementSmoothingStates.clear();
@@ -3282,7 +3322,9 @@ function buildObjectUrlsFromSkycubeZipFaces(
     }
     const mimeType = face.mimeType ?? 'application/octet-stream';
     const bytes = face.bytes as unknown as Uint8Array;
-    const blob = new Blob([bytes], { type: mimeType });
+    const blobBytes = new Uint8Array(bytes.byteLength);
+    blobBytes.set(bytes);
+    const blob = new Blob([blobBytes], { type: mimeType });
     const url = URL.createObjectURL(blob);
     created.push(url);
     urls.push(url);
@@ -3651,6 +3693,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
   }
   punchTotalCount.value = punchNodeIds.size;
   punchSceneRevision.value += 1;
+  syncStoredPunchedNodeIdsForScene(currentSceneId.value ?? document?.id ?? null);
 }
 
 function resolveParentNodeId(nodeId: string): string | null {
@@ -3700,30 +3743,26 @@ function resolveOverlayDistanceReferenceWorld(
 function resolveSignboardReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } | null {
   const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (manualDriveNode) {
-    const manualVehicle = vehicleInstances.get(manualDriveNode)?.vehicle ?? null;
-    const bodyPosition = manualVehicle?.chassisBody?.position;
-    if (bodyPosition) {
-      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: manualDriveNode };
-    }
-    const manualObject = nodeObjectMap.get(manualDriveNode) ?? null;
-    if (manualObject) {
-      manualObject.getWorldPosition(signboardReferenceScratch);
+    if (resolveVehicleOrObjectWorldPosition({
+      nodeId: manualDriveNode,
+      vehicleInstances,
+      nodeObjectMap,
+      isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+      target: signboardReferenceScratch,
+    })) {
       return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: manualDriveNode };
     }
   }
 
   const followNodeId = autoTourFollowNodeId.value;
   if (followNodeId) {
-    const autoTourVehicle = vehicleInstances.get(followNodeId)?.vehicle ?? null;
-    const bodyPosition = autoTourVehicle?.chassisBody?.position;
-    if (bodyPosition) {
-      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: followNodeId };
-    }
-    const followObject = nodeObjectMap.get(followNodeId) ?? null;
-    if (followObject) {
-      followObject.getWorldPosition(signboardReferenceScratch);
+    if (resolveVehicleOrObjectWorldPosition({
+      nodeId: followNodeId,
+      vehicleInstances,
+      nodeObjectMap,
+      isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+      target: signboardReferenceScratch,
+    })) {
       return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: followNodeId };
     }
   }
@@ -4805,11 +4844,16 @@ const floatingAutoTourPauseButton = computed(() => {
   } as const;
 });
 
+const autoTourVehicleInstances = createPhysicsAwareAutoTourVehicleInstances(
+  vehicleInstances,
+  () => physicsEnvironmentEnabled.value,
+);
+
 const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
   nodeObjectMap,
-  vehicleInstances,
+  vehicleInstances: autoTourVehicleInstances,
   isManualDriveActive: () => vehicleDriveActive.value,
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);
@@ -9618,6 +9662,10 @@ async function handleExitSceneEvent(): Promise<void> {
 
 function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }>): void {
   if (punchNodeIds.has(event.nodeId)) {
+    const sceneId = resolveActivePunchSceneId();
+    browserStoredPunchedNodeIds.value = sceneId
+      ? mergeStoredPunchedNodeId(sceneId, event.nodeId)
+      : Array.from(new Set([...browserStoredPunchedNodeIds.value, event.nodeId.trim()]));
     const next = new Set(punchedNodeIds.value);
     next.add(event.nodeId);
     punchedNodeIds.value = next;
@@ -10278,7 +10326,7 @@ function isValidSceneDocument(document: unknown): document is SceneJsonExportDoc
   if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') {
     return false;
   }
-  if (!Array.isArray(candidate.nodes) || !Array.isArray(candidate.materials)) {
+  if (!Array.isArray(candidate.nodes)) {
     return false;
   }
   return true;
@@ -10396,10 +10444,8 @@ function hydrateGroundSidecarFromPackage(
     if (!scatterSidecarBytes) {
       throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
     }
-    const scatterSidecarBuffer = scatterSidecarBytes.buffer.slice(
-      scatterSidecarBytes.byteOffset,
-      scatterSidecarBytes.byteOffset + scatterSidecarBytes.byteLength,
-    );
+    const scatterSidecarBuffer = new ArrayBuffer(scatterSidecarBytes.byteLength);
+    new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
     const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
     definition.terrainScatter = scatterPayload.terrainScatter;
   }
@@ -10413,10 +10459,8 @@ function hydrateGroundSidecarFromPackage(
     if (!paintSidecarBytes) {
       throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
     }
-    const paintSidecarBuffer = paintSidecarBytes.buffer.slice(
-      paintSidecarBytes.byteOffset,
-      paintSidecarBytes.byteOffset + paintSidecarBytes.byteLength,
-    );
+    const paintSidecarBuffer = new ArrayBuffer(paintSidecarBytes.byteLength);
+    new Uint8Array(paintSidecarBuffer).set(paintSidecarBytes);
     const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
     definition.terrainPaint = null;
     definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
@@ -11516,22 +11560,12 @@ function startRenderLoop(
     renderScope = effectScope();
   }
 
-  // 限制FPS为30帧，累加delta，只有渲染帧时才统计
-  let lastFrameTime = 0;
-  const minFrameInterval = 1000 / 30; // 约33.33ms
   let accumulatedDelta = 0;
   renderScope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta: number) => {
-        const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
-          ? performance.now()
-          : Date.now();
         const deltaSecondsRaw = normalizeFrameDelta(delta);
         accumulatedDelta += deltaSecondsRaw;
-        // if (now - lastFrameTime < minFrameInterval) {
-        //   return; // 跳过本帧，限制最大FPS
-        // }
-        lastFrameTime = now;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
         accumulatedDelta = 0;
@@ -13867,12 +13901,12 @@ onUnmounted(() => {
 .viewer-drive-hud {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
 }
 
 .viewer-drive-compass {
-  width: 108px;
-  height: 108px;
+  width: 84px;
+  height: 84px;
   border-radius: 50%;
   position: relative;
   overflow: hidden;
@@ -13889,7 +13923,7 @@ onUnmounted(() => {
 .viewer-drive-compass::before {
   content: '';
   position: absolute;
-  inset: 8%;
+  inset: 9%;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: radial-gradient(circle at center, rgba(14, 22, 48, 0.24), rgba(4, 7, 18, 0.08));
@@ -13902,18 +13936,18 @@ onUnmounted(() => {
 
 .viewer-drive-compass__tick {
   position: absolute;
-  top: 10px;
+  top: 7px;
   left: 50%;
   width: 2px;
-  height: 8px;
+  height: 7px;
   border-radius: 999px;
   background: rgba(227, 242, 255, 0.34);
-  transform-origin: center 44px;
+  transform-origin: center 34px;
   z-index: 1;
 }
 
 .viewer-drive-compass__tick.is-major {
-  height: 14px;
+  height: 10px;
   background: rgba(133, 221, 255, 0.68);
 }
 
@@ -13925,9 +13959,9 @@ onUnmounted(() => {
 
 .viewer-drive-compass__label {
   position: absolute;
-  top: 10px;
+  top: 7px;
   left: 50%;
-  font-size: 0.74rem;
+  font-size: 0.64rem;
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.08em;
@@ -13950,9 +13984,9 @@ onUnmounted(() => {
   content: '';
   position: absolute;
   left: 50%;
-  top: 36px;
-  width: 8px;
-  height: 44px;
+  top: 28px;
+  width: 7px;
+  height: 32px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(130, 231, 255, 0.94), rgba(56, 181, 255, 0.88));
   box-shadow: 0 0 16px rgba(84, 221, 255, 0.4);
@@ -13964,12 +13998,12 @@ onUnmounted(() => {
   content: '';
   position: absolute;
   left: 50%;
-  top: 27px;
+  top: 21px;
   width: 0;
   height: 0;
-  border-left: 12px solid transparent;
-  border-right: 12px solid transparent;
-  border-bottom: 16px solid rgba(150, 237, 255, 0.96);
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-bottom: 13px solid rgba(150, 237, 255, 0.96);
   filter: drop-shadow(0 0 8px rgba(88, 225, 255, 0.32));
   transform: translateX(-50%);
 }

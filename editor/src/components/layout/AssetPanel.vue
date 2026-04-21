@@ -33,7 +33,7 @@ import { mapServerAssetToProjectAsset, type ServerAssetDto } from '@/api/serverA
 import { deleteProviderCatalog, loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { computeBlobHash, dataUrlToBlob, extractExtension } from '@/utils/blob'
-import { prepareLocalAssetImport, type LocalAssetImportPhase } from '@/utils/localAssetImport'
+import { prepareLocalAssetImport, type LocalAssetImportPhase, type PreparedLocalAssetImport } from '@/utils/localAssetImport'
 import type { SceneNode } from '@schema'
 import { getExtensionFromMimeType, inferAssetType } from '@schema'
 import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
@@ -43,7 +43,7 @@ import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
-import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
+import { isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -2551,14 +2551,39 @@ async function importLocalFile(
 
       if (serverAssetDto) {
         options.onPhase?.('reuse-existing')
-        const remoteAsset = mapServerAssetToProjectAsset(serverAssetDto)
-        const registered = sceneStore.ensureSceneAssetRegistered(remoteAsset, {
-          providerId: SERVER_ASSET_PROVIDER_ID,
-          source: createServerAssetSource(remoteAsset.id),
-          commitOptions: { updateNodes: false },
+        const draftAsset: ProjectAsset = {
+          id: assetId,
+          name: fallbackName,
+          type,
+          downloadUrl: file.name ?? fallbackName,
+          previewColor: resolvePreviewColor(type),
+          thumbnail: null,
+          description: fallbackName,
+          metadata: null,
+          gleaned: true,
+          extension: extractExtension(file.name) ?? getExtensionFromMimeType(file.type) ?? null,
+        }
+        const prepared = await prepareLocalAssetImport(draftAsset, file, {
+          signal: options.signal,
+          onPhase: (phase) => options.onPhase?.(phase),
         })
+        options.onPhase?.('store-asset')
+        const { asset: localAsset } = await sceneStore.ensureLocalAssetFromFile(file, {
+          type,
+          name: fallbackName,
+          description: fallbackName,
+          previewColor: resolvePreviewColor(type),
+          gleaned: true,
+        })
+        const updates = {
+          ...buildLocalAssetServerMatchUpdates(localAsset, serverAssetDto, assetId),
+          ...buildPreparedLocalAssetImportUpdates(localAsset, prepared, assetId),
+        }
+        const registered = Object.keys(updates).length
+          ? (sceneStore.updateProjectAssetMetadata(localAsset.id, updates) ?? localAsset)
+          : localAsset
         options.onPhase?.('finalize')
-        return { asset: registered, isNew: false }
+        return { asset: registered, isNew: true }
       }
     }
   } catch {
@@ -3023,6 +3048,132 @@ function mergeAssetMetadata(
     ...(base ?? {}),
     ...(next ?? {}),
   }
+}
+
+function buildLocalAssetServerMatchUpdates(
+  localAsset: ProjectAsset,
+  serverAssetDto: ServerAssetDto,
+  contentHash: string,
+): Partial<ProjectAsset> {
+  const mapped = mapServerAssetToProjectAsset(serverAssetDto, localAsset)
+  const nextMetadata = mergeAssetMetadata(localAsset.metadata ?? null, mapped.metadata ?? null)
+  const updates: Partial<ProjectAsset> = {}
+
+  if (mapped.name && mapped.name !== localAsset.name) {
+    updates.name = mapped.name
+  }
+  if (typeof mapped.description === 'string' && mapped.description.trim().length > 0) {
+    updates.description = mapped.description
+  }
+  if (typeof mapped.downloadUrl === 'string' && mapped.downloadUrl.trim().length > 0) {
+    updates.downloadUrl = mapped.downloadUrl
+  }
+  if (typeof mapped.fileKey === 'string' && mapped.fileKey.trim().length > 0) {
+    updates.fileKey = mapped.fileKey
+  }
+  if (typeof mapped.thumbnail === 'string' && mapped.thumbnail.trim().length > 0) {
+    updates.thumbnail = mapped.thumbnail
+  }
+  if (Array.isArray(mapped.tags) && mapped.tags.length > 0) {
+    updates.tags = [...mapped.tags]
+  }
+  if (Array.isArray(mapped.tagIds) && mapped.tagIds.length > 0) {
+    updates.tagIds = [...mapped.tagIds]
+  }
+  if (typeof mapped.color === 'string' && mapped.color.trim().length > 0) {
+    updates.color = mapped.color
+  }
+  if (typeof mapped.dimensionLength === 'number' && mapped.dimensionLength > 0) {
+    updates.dimensionLength = mapped.dimensionLength
+  }
+  if (typeof mapped.dimensionWidth === 'number' && mapped.dimensionWidth > 0) {
+    updates.dimensionWidth = mapped.dimensionWidth
+  }
+  if (typeof mapped.dimensionHeight === 'number' && mapped.dimensionHeight > 0) {
+    updates.dimensionHeight = mapped.dimensionHeight
+  }
+  if (typeof mapped.imageWidth === 'number' && mapped.imageWidth > 0) {
+    updates.imageWidth = mapped.imageWidth
+  }
+  if (typeof mapped.imageHeight === 'number' && mapped.imageHeight > 0) {
+    updates.imageHeight = mapped.imageHeight
+  }
+  if (typeof mapped.sizeCategory === 'string' && mapped.sizeCategory.trim().length > 0) {
+    updates.sizeCategory = mapped.sizeCategory
+  }
+  if (typeof mapped.contentHash === 'string' && mapped.contentHash.trim().length > 0) {
+    updates.contentHash = mapped.contentHash
+  } else {
+    updates.contentHash = contentHash
+  }
+  if (typeof mapped.contentHashAlgorithm === 'string' && mapped.contentHashAlgorithm.trim().length > 0) {
+    updates.contentHashAlgorithm = mapped.contentHashAlgorithm
+  }
+  if (typeof mapped.sourceLocalAssetId === 'string' && mapped.sourceLocalAssetId.trim().length > 0) {
+    updates.sourceLocalAssetId = mapped.sourceLocalAssetId
+  }
+  if (mapped.assetRole === 'master' || mapped.assetRole === 'dependant') {
+    updates.assetRole = mapped.assetRole
+  }
+  if (typeof mapped.bundleRole === 'string' && mapped.bundleRole.trim().length > 0) {
+    updates.bundleRole = mapped.bundleRole
+  }
+  if (typeof mapped.bundlePrimaryAssetId === 'string' && mapped.bundlePrimaryAssetId.trim().length > 0) {
+    updates.bundlePrimaryAssetId = mapped.bundlePrimaryAssetId
+  }
+  if (typeof mapped.seriesId === 'string' && mapped.seriesId.trim().length > 0) {
+    updates.seriesId = mapped.seriesId
+  }
+  if (typeof mapped.seriesName === 'string' && mapped.seriesName.trim().length > 0) {
+    updates.seriesName = mapped.seriesName
+  }
+  if (mapped.terrainScatterPreset) {
+    updates.terrainScatterPreset = mapped.terrainScatterPreset
+  }
+  if (typeof mapped.extension === 'string' && mapped.extension.trim().length > 0) {
+    updates.extension = mapped.extension
+  }
+  if (nextMetadata) {
+    updates.metadata = nextMetadata
+  }
+
+  return updates
+}
+
+function buildPreparedLocalAssetImportUpdates(
+  localAsset: ProjectAsset,
+  prepared: PreparedLocalAssetImport,
+  contentHash: string,
+): Partial<ProjectAsset> {
+  const nextMetadata = mergeAssetMetadata(localAsset.metadata ?? null, prepared.metadata ?? null)
+  const updates: Partial<ProjectAsset> = {}
+
+  if (typeof prepared.dimensionLength === 'number' && prepared.dimensionLength > 0) {
+    updates.dimensionLength = prepared.dimensionLength
+  }
+  if (typeof prepared.dimensionWidth === 'number' && prepared.dimensionWidth > 0) {
+    updates.dimensionWidth = prepared.dimensionWidth
+  }
+  if (typeof prepared.dimensionHeight === 'number' && prepared.dimensionHeight > 0) {
+    updates.dimensionHeight = prepared.dimensionHeight
+  }
+  if (typeof prepared.imageWidth === 'number' && prepared.imageWidth > 0) {
+    updates.imageWidth = Math.round(prepared.imageWidth)
+  }
+  if (typeof prepared.imageHeight === 'number' && prepared.imageHeight > 0) {
+    updates.imageHeight = Math.round(prepared.imageHeight)
+  }
+  if (prepared.thumbnailDataUrl) {
+    updates.thumbnail = prepared.thumbnailDataUrl
+  }
+  if (nextMetadata) {
+    updates.metadata = nextMetadata
+  }
+  if (!localAsset.contentHash) {
+    updates.contentHash = contentHash
+  }
+
+  return updates
 }
 
 function beginDropImportProgress(total: number): void {

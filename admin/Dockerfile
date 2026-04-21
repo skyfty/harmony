@@ -30,34 +30,23 @@ RUN rm -rf ./*
 COPY --from=build /app/admin/apps/web-antd/dist ./
 
 # 默认生产配置（可被 compose 挂载的 /usr/share/nginx/html/_app.config.js 覆盖）
-COPY <<'EOF' /usr/share/nginx/html/_app.config.js
-window._VBEN_ADMIN_PRO_APP_CONF_ = {
-  VITE_GLOB_API_URL: 'https://v.touchmagic.cn/api',
-  VITE_GLOB_AUTH_DINGDING_CORP_ID: '',
-  VITE_GLOB_AUTH_DINGDING_CLIENT_ID: ''
-};
-Object.freeze(window._VBEN_ADMIN_PRO_APP_CONF_);
-Object.defineProperty(window, '_VBEN_ADMIN_PRO_APP_CONF_', {
-  configurable: false,
-  writable: false,
-});
-EOF
+COPY --from=build /app/admin/admin-app-config.prod.js /usr/share/nginx/html/_app.config.js
 
-COPY <<'EOF' /etc/nginx/conf.d/default.conf
-server {
-  listen 80;
-  server_name _;
-  root /usr/share/nginx/html;
-  index index.html;
-
-  gzip on;
-  gzip_types text/plain text/css application/json application/javascript application/xml+rss application/xml text/javascript image/svg+xml;
-
-  location / {
-    try_files $uri $uri/ /index.html;
-  }
-}
-EOF
+RUN printf '%s\n' \
+  'server {' \
+  '  listen 80;' \
+  '  server_name _;' \
+  '  root /usr/share/nginx/html;' \
+  '  index index.html;' \
+  '' \
+  '  gzip on;' \
+  '  gzip_types text/plain text/css application/json application/javascript application/xml+rss application/xml text/javascript image/svg+xml;' \
+  '' \
+  '  location / {' \
+  '    try_files $uri $uri/ /index.html;' \
+  '  }' \
+  '}' \
+  > /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
