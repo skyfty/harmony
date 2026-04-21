@@ -941,29 +941,3 @@ export function formatSceneAssetDiagnosticsReport(report: SceneAssetValidationRe
   }
   return lines.join('\n')
 }
-
-export function logSceneAssetDiagnostics(report: SceneAssetValidationReport, loggerTag: string, sceneName?: string): void {
-  if (!report.issues.length) {
-    return
-  }
-  const prefix = sceneName ? `${loggerTag} ${sceneName}` : loggerTag
-  console.groupCollapsed(
-    `${prefix} asset diagnostics: ${report.blockingIssueCount} blocking, ${report.warningIssueCount} warning`,
-  )
-  report.issues.forEach((issue) => {
-    const payload = {
-      severity: issue.severity,
-      code: issue.code,
-      assetId: issue.assetId ?? null,
-      path: issue.path ?? null,
-      detail: issue.detail ?? null,
-      references: issue.references,
-    }
-    if (issue.severity === 'error') {
-      console.error(issue.message, payload)
-    } else {
-      console.warn(issue.message, payload)
-    }
-  })
-  console.groupEnd()
-}

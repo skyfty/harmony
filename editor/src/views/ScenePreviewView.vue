@@ -59,7 +59,7 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
-import { logSceneAssetDiagnostics, type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
+import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
@@ -6544,9 +6544,7 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
 	const bundle = await prepareStoredSceneJsonExportBundle(document, SCENE_PREVIEW_EXPORT_OPTIONS)
-	if (bundle.diagnostics.issues.length) {
-		logSceneAssetDiagnostics(bundle.diagnostics, '[ScenePreviewExport]', document.name)
-	}
+
 	return bundle.document
 }
 

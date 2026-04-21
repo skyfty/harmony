@@ -35,7 +35,6 @@ import type { PresetSceneDocument } from '@/types/preset-scene'
 import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import {
   formatSceneAssetDiagnosticsReport,
-  logSceneAssetDiagnostics,
   type SceneAssetValidationReport,
 } from '@/utils/sceneAssetDiagnostics'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
@@ -1313,7 +1312,6 @@ async function exportProjectPackageZip(
 
       const exportBundle = await prepareStoredSceneJsonExportBundle(document, { ...options, format: 'json' }, reportEvent)
       if (exportBundle.diagnostics.hasBlockingIssues) {
-        logSceneAssetDiagnostics(exportBundle.diagnostics, '[SceneExport]', document.name)
         openExportDiagnosticsDialog(exportBundle.diagnostics, document.name || document.id)
         reportEvent?.({
           phase: 'diagnostics',
@@ -1329,7 +1327,6 @@ async function exportProjectPackageZip(
         )
       }
       if (exportBundle.diagnostics.issues.length) {
-        logSceneAssetDiagnostics(exportBundle.diagnostics, '[SceneExport]', document.name)
         reportEvent?.({
           phase: 'diagnostics',
           level: 'warning',
@@ -1624,9 +1621,6 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     const exportBundle = await prepareStoredSceneJsonExportBundle(document, SCENE_PREVIEW_EXPORT_OPTIONS)
     if (isStale?.()) {
       return
-    }
-    if (exportBundle.diagnostics.issues.length) {
-      logSceneAssetDiagnostics(exportBundle.diagnostics, '[ScenePreviewExport]', document.name)
     }
     const exportDocument = exportBundle.document
     const groundNode = findGroundNode(exportDocument.nodes)
