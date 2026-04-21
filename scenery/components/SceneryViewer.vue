@@ -710,7 +710,11 @@ import {
   getApproxDimensions,
   resetCameraFollowState,
 } from '@harmony/schema/followCameraController';
-import { stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
+import {
+  createPhysicsAwareAutoTourVehicleInstances,
+  resolveVehicleOrObjectWorldPosition,
+  stopTourAndUnfollow,
+} from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
 import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
 import {
@@ -3700,30 +3704,26 @@ function resolveOverlayDistanceReferenceWorld(
 function resolveSignboardReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } | null {
   const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (manualDriveNode) {
-    const manualVehicle = vehicleInstances.get(manualDriveNode)?.vehicle ?? null;
-    const bodyPosition = manualVehicle?.chassisBody?.position;
-    if (bodyPosition) {
-      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: manualDriveNode };
-    }
-    const manualObject = nodeObjectMap.get(manualDriveNode) ?? null;
-    if (manualObject) {
-      manualObject.getWorldPosition(signboardReferenceScratch);
+    if (resolveVehicleOrObjectWorldPosition({
+      nodeId: manualDriveNode,
+      vehicleInstances,
+      nodeObjectMap,
+      isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+      target: signboardReferenceScratch,
+    })) {
       return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: manualDriveNode };
     }
   }
 
   const followNodeId = autoTourFollowNodeId.value;
   if (followNodeId) {
-    const autoTourVehicle = vehicleInstances.get(followNodeId)?.vehicle ?? null;
-    const bodyPosition = autoTourVehicle?.chassisBody?.position;
-    if (bodyPosition) {
-      signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z);
-      return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: followNodeId };
-    }
-    const followObject = nodeObjectMap.get(followNodeId) ?? null;
-    if (followObject) {
-      followObject.getWorldPosition(signboardReferenceScratch);
+    if (resolveVehicleOrObjectWorldPosition({
+      nodeId: followNodeId,
+      vehicleInstances,
+      nodeObjectMap,
+      isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+      target: signboardReferenceScratch,
+    })) {
       return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: followNodeId };
     }
   }
@@ -4805,11 +4805,16 @@ const floatingAutoTourPauseButton = computed(() => {
   } as const;
 });
 
+const autoTourVehicleInstances = createPhysicsAwareAutoTourVehicleInstances(
+  vehicleInstances,
+  () => physicsEnvironmentEnabled.value,
+);
+
 const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
   nodeObjectMap,
-  vehicleInstances,
+  vehicleInstances: autoTourVehicleInstances,
   isManualDriveActive: () => vehicleDriveActive.value,
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);

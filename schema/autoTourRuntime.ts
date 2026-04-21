@@ -5,7 +5,7 @@ import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, isAutoTourDebugEnabled, pushVehicleControlDebugEvent } from './purePursuitRuntime'
 import { syncBodyFromObject } from './physicsEngine'
 import type { PolylineMetricData } from './polylineProgress'
-import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline } from './polylineProgress'
+import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
 import {
   AUTO_TOUR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
@@ -127,6 +127,13 @@ type AutoTourPlaybackState = {
 const AUTO_TOUR_POSITION_SMOOTHING = 14
 const AUTO_TOUR_YAW_SMOOTHING = 12
 const AUTO_TOUR_STOP_POSITION_EPSILON = 0.03
+const AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_SECONDS = 0.9
+const AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_MIN = 1.5
+const AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_MAX = 6
+const AUTO_TOUR_DIRECT_MOVE_CORNER_FULL_SLOW_ANGLE = THREE.MathUtils.degToRad(80)
+const AUTO_TOUR_DIRECT_MOVE_YAW_FULL_SLOW_ANGLE = THREE.MathUtils.degToRad(65)
+const AUTO_TOUR_DIRECT_MOVE_MIN_SPEED_FACTOR = 0.42
+const AUTO_TOUR_DIRECT_MOVE_CORNER_BLEND_FACTOR = 0.75
 // When loop=false, treat near-identical start/end points as accidental duplicates and drop the last one.
 // Keep this small to avoid altering legitimately-close routes.
 const AUTO_TOUR_END_DUPLICATE_EPSILON_METERS = 0.05
@@ -231,6 +238,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const autoTourCurrentPosition = new THREE.Vector3()
   const autoTourDirection = new THREE.Vector3()
   const autoTourDesiredDir = new THREE.Vector3()
+  const autoTourNextSegmentDir = new THREE.Vector3()
+  const autoTourLookaheadPoint = new THREE.Vector3()
   const autoTourObjectWorldQuaternion = new THREE.Quaternion()
   const autoTourParentWorldQuaternion = new THREE.Quaternion()
   const autoTourWorldQuaternion = new THREE.Quaternion()
@@ -1143,7 +1152,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       if (arrivedNow) {
         // Snap to the waypoint visually for direct-move nodes to avoid leaving a visible gap.
-        if (!shouldDriveAsVehicle) {
+        if (!shouldDriveAsVehicle && !directMoveVehicle) {
           state.smoothedWorldPosition.copy(autoTourPlanarTarget)
           if (nodeObject!.parent) {
             nodeObject!.parent.updateMatrixWorld(true)
@@ -1342,18 +1351,91 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
 
+      let directMoveSpeedFactor = 1
+      let cornerTurnAssist = 0
+      let lookaheadDistance = Math.max(
+        AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_MIN,
+        Math.min(
+          AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_MAX,
+          Math.max(arrivalDistance * 2, speed * AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_SECONDS),
+        ),
+      )
+
       // Non-vehicle branch: move render object directly (runtime-only), with smoothing.
       autoTourDesiredDir.copy(autoTourDirection)
+
+      if (!state.polylineData3d || !state.waypointArcLengths3d) {
+        const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
+        if (polyline) {
+          state.polylineData3d = polyline
+          state.waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
+        }
+      }
+
+      if (state.mode !== 'stopping' && state.polylineData3d) {
+        const projection = projectPointToPolyline(points, state.polylineData3d, autoTourCurrentPosition, autoTourSnapPoint)
+        state.lastProjectedS = projection.s
+        samplePolylineAtS(points, state.polylineData3d, projection.s + lookaheadDistance, autoTourLookaheadPoint)
+        autoTourLookaheadPoint.y = autoTourCurrentPosition.y
+        autoTourDesiredDir.copy(autoTourLookaheadPoint).sub(autoTourCurrentPosition)
+        autoTourDesiredDir.y = 0
+      }
+
       if (autoTourDesiredDir.lengthSq() < 1e-10) {
         continue
       }
       autoTourDesiredDir.normalize()
 
+      if (state.mode !== 'stopping') {
+        const nextTargetIndex = state.targetIndex < endIndex
+          ? state.targetIndex + 1
+          : (tourProps.loop ? 0 : -1)
+
+        if (nextTargetIndex >= 0 && nextTargetIndex !== state.targetIndex) {
+          autoTourTargetPosition.copy(points[nextTargetIndex]!)
+          autoTourTargetPosition.y = autoTourCurrentPosition.y
+          autoTourNextSegmentDir.copy(autoTourTargetPosition).sub(autoTourPlanarTarget)
+          autoTourNextSegmentDir.y = 0
+
+          if (autoTourNextSegmentDir.lengthSq() > 1e-10) {
+            autoTourNextSegmentDir.normalize()
+
+            const blendByDistance = THREE.MathUtils.clamp(1 - distance / lookaheadDistance, 0, 1)
+            const cornerAngle = Math.acos(THREE.MathUtils.clamp(autoTourDesiredDir.dot(autoTourNextSegmentDir), -1, 1))
+            const cornerSharpness = THREE.MathUtils.clamp(
+              cornerAngle / AUTO_TOUR_DIRECT_MOVE_CORNER_FULL_SLOW_ANGLE,
+              0,
+              1,
+            )
+
+            cornerTurnAssist = blendByDistance * cornerSharpness
+            const cornerBlend = cornerTurnAssist * AUTO_TOUR_DIRECT_MOVE_CORNER_BLEND_FACTOR
+            if (cornerBlend > 1e-4) {
+              autoTourDesiredDir.lerp(autoTourNextSegmentDir, cornerBlend).normalize()
+            }
+            directMoveSpeedFactor = Math.min(
+              directMoveSpeedFactor,
+              1 - cornerTurnAssist * (1 - AUTO_TOUR_DIRECT_MOVE_MIN_SPEED_FACTOR),
+            )
+          }
+        }
+
+        if (tourProps.alignToPath) {
+          const desiredYaw = Math.atan2(-autoTourDesiredDir.z, autoTourDesiredDir.x)
+          const yawDelta = Math.abs(Math.atan2(Math.sin(desiredYaw - state.smoothedYaw), Math.cos(desiredYaw - state.smoothedYaw)))
+          const yawSharpness = THREE.MathUtils.clamp(yawDelta / AUTO_TOUR_DIRECT_MOVE_YAW_FULL_SLOW_ANGLE, 0, 1)
+          directMoveSpeedFactor = Math.min(
+            directMoveSpeedFactor,
+            1 - yawSharpness * (1 - AUTO_TOUR_DIRECT_MOVE_MIN_SPEED_FACTOR),
+          )
+        }
+      }
+
       if (state.mode === 'stopping') {
         // Ease into the final endpoint by smoothing toward the exact target.
         autoTourNextWorldPosition.copy(autoTourPlanarTarget)
       } else {
-        const stepDistance = speed * deltaSeconds
+        const stepDistance = speed * Math.max(AUTO_TOUR_DIRECT_MOVE_MIN_SPEED_FACTOR, directMoveSpeedFactor) * deltaSeconds
         const clampedStep = Number.isFinite(stepDistance) ? Math.max(0, stepDistance) : 0
         autoTourNextWorldPosition.copy(autoTourCurrentPosition)
         if (clampedStep > 0) {
@@ -1368,8 +1450,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.smoothedYaw = getWorldYawRadiansFromQuaternion(autoTourObjectWorldQuaternion)
       }
 
-      const positionAlpha = expSmoothingAlpha(AUTO_TOUR_POSITION_SMOOTHING, deltaSeconds)
-      state.smoothedWorldPosition.lerp(autoTourNextWorldPosition, positionAlpha)
+      if (state.mode === 'stopping') {
+        const positionAlpha = expSmoothingAlpha(AUTO_TOUR_POSITION_SMOOTHING, deltaSeconds)
+        state.smoothedWorldPosition.lerp(autoTourNextWorldPosition, positionAlpha)
+      } else {
+        state.smoothedWorldPosition.copy(autoTourNextWorldPosition)
+      }
 
       if (nodeObject!.parent) {
         nodeObject!.parent.updateMatrixWorld(true)
@@ -1383,7 +1469,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (tourProps.alignToPath) {
         // Align node local X+ (forward) to the path direction.
         const desiredYaw = Math.atan2(-autoTourDesiredDir.z, autoTourDesiredDir.x)
-        const yawAlpha = expSmoothingAlpha(AUTO_TOUR_YAW_SMOOTHING, deltaSeconds)
+        const yawAlpha = expSmoothingAlpha(AUTO_TOUR_YAW_SMOOTHING * (1 + cornerTurnAssist * 0.35), deltaSeconds)
         state.smoothedYaw = dampAngleRadians(state.smoothedYaw, desiredYaw, yawAlpha)
         autoTourWorldQuaternion.setFromAxisAngle(autoTourUp, state.smoothedYaw)
         if (nodeObject!.parent) {

@@ -217,7 +217,12 @@ import {
 	getApproxDimensions,
 	resetCameraFollowState,
 } from '@schema/followCameraController'
-import { startTourAndFollow, stopTourAndUnfollow } from '@schema/autoTourHelpers'
+import {
+	createPhysicsAwareAutoTourVehicleInstances,
+	resolveVehicleOrObjectWorldPosition,
+	startTourAndFollow,
+	stopTourAndUnfollow,
+} from '@schema/autoTourHelpers'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
 import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
 import {
@@ -2468,17 +2473,13 @@ function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' 
 		return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: vehicleDriveState.nodeId }
 	}
 	if (autoTourFollowNodeId.value) {
-		const autoTourVehicle = physicsEnvironmentEnabled.value
-			? vehicleInstances.get(autoTourFollowNodeId.value)?.vehicle ?? null
-			: null
-		const bodyPosition = autoTourVehicle?.chassisBody?.position
-		if (bodyPosition) {
-			signboardReferenceScratch.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
-			return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: autoTourFollowNodeId.value }
-		}
-		const followObject = nodeObjectMap.get(autoTourFollowNodeId.value) ?? null
-		if (followObject) {
-			followObject.getWorldPosition(signboardReferenceScratch)
+		if (resolveVehicleOrObjectWorldPosition({
+			nodeId: autoTourFollowNodeId.value,
+			vehicleInstances,
+			nodeObjectMap,
+			isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+			target: signboardReferenceScratch,
+		})) {
 			return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: autoTourFollowNodeId.value }
 		}
 	}
@@ -3008,20 +3009,10 @@ function resolveAutoTourComponent(
 	return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
 }
 
-const autoTourVehicleInstances = new Proxy(vehicleInstances, {
-	get(target, property, receiver) {
-		if (property === 'get') {
-			return (nodeId: string) => {
-				if (!physicsEnvironmentEnabled.value) {
-					return undefined
-				}
-				return target.get(nodeId)
-			}
-		}
-		const value = Reflect.get(target, property, receiver)
-		return typeof value === 'function' ? value.bind(target) : value
-	},
-}) as typeof vehicleInstances
+const autoTourVehicleInstances = createPhysicsAwareAutoTourVehicleInstances(
+	vehicleInstances,
+	() => physicsEnvironmentEnabled.value,
+)
 
 const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),

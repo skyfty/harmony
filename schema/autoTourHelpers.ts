@@ -1,6 +1,76 @@
+import * as THREE from 'three'
+
 export interface AutoTourRuntimeLike {
   startTour(nodeId: string): void
   stopTour(nodeId: string): void
+}
+
+type AutoTourVehicleInstanceLike = {
+  vehicle?: {
+    chassisBody?: {
+      position?: {
+        x: number
+        y: number
+        z: number
+      } | null
+    } | null
+  } | null
+}
+
+export function createPhysicsAwareAutoTourVehicleInstances<T>(
+  vehicleInstances: Map<string, T>,
+  isPhysicsEnabled: () => boolean,
+): Map<string, T> {
+  return new Proxy(vehicleInstances, {
+    get(target, property, receiver) {
+      if (property === 'get') {
+        return (nodeId: string) => {
+          if (!isPhysicsEnabled()) {
+            return undefined
+          }
+          return target.get(nodeId)
+        }
+      }
+      const value = Reflect.get(target, property, receiver)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as Map<string, T>
+}
+
+export function resolveAutoTourReferenceWorldPosition<T extends AutoTourVehicleInstanceLike>(options: {
+  nodeId: string | null | undefined
+  vehicleInstances: Map<string, T>
+  nodeObjectMap: Map<string, THREE.Object3D>
+  isPhysicsEnabled: () => boolean
+  target: THREE.Vector3
+}): boolean {
+  return resolveVehicleOrObjectWorldPosition(options)
+}
+
+export function resolveVehicleOrObjectWorldPosition<T extends AutoTourVehicleInstanceLike>(options: {
+  nodeId: string | null | undefined
+  vehicleInstances: Map<string, T>
+  nodeObjectMap: Map<string, THREE.Object3D>
+  isPhysicsEnabled: () => boolean
+  target: THREE.Vector3
+}): boolean {
+  const { nodeId, vehicleInstances, nodeObjectMap, isPhysicsEnabled, target } = options
+  if (!nodeId) {
+    return false
+  }
+  if (isPhysicsEnabled()) {
+    const bodyPosition = vehicleInstances.get(nodeId)?.vehicle?.chassisBody?.position ?? null
+    if (bodyPosition) {
+      target.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
+      return true
+    }
+  }
+  const followObject = nodeObjectMap.get(nodeId) ?? null
+  if (!followObject) {
+    return false
+  }
+  followObject.getWorldPosition(target)
+  return true
 }
 
 /**
