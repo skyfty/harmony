@@ -2,8 +2,10 @@
 import { onLaunch, onHide } from "@dcloudio/uni-app";
 import { initializeMiniAuth } from '@/api/mini/session';
 import { installMiniAuthRuntime } from '@/services/miniAuth/runtime'
+import { installMiniProgramUpdateRuntime } from '@/services/update/runtime'
 
 installMiniAuthRuntime()
+installMiniProgramUpdateRuntime()
 
 onLaunch(() => {
   initializeMiniAuth();

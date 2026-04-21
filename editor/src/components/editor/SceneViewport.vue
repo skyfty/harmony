@@ -1824,8 +1824,8 @@ const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraContr
 const viewportSelectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const cameraPointerHintText = computed(() => (
   cameraControlMode.value === 'map'
-    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Shift+右拖 指定轨道中心 · Alt+左键 快速对焦'
-    : '中键旋转 · 右键平移 · 滚轮缩放 · Shift+中拖 指定轨道中心 · Alt+左键 快速对焦'
+    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Alt+右拖 指定轨道中心 · Shift+右键 反向旋转选中节点 · Alt+左键 快速对焦'
+    : '中键旋转 · 右键平移 · 滚轮缩放 · Alt+中拖 指定轨道中心 · Shift+右键 反向旋转选中节点 · Alt+左键 快速对焦'
 ))
 const cameraStatusZoomRatioText = computed(() => {
   const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
@@ -9512,7 +9512,7 @@ function commitTransformControlUpdates(): TransformUpdatePayload[] {
   return updates
 }
 
-function rotateActiveSelection(nodeId: string) {
+function rotateActiveSelection(nodeId: string, reverse = false) {
   if (sceneStore.isNodeSelectionLocked(nodeId)) {
     return
   }
@@ -9536,7 +9536,7 @@ function rotateActiveSelection(nodeId: string) {
 
   const rotateDeltaQuaternion = new THREE.Quaternion().setFromAxisAngle(
     new THREE.Vector3(0, 1, 0),
-    RIGHT_CLICK_ROTATION_STEP,
+    reverse ? -RIGHT_CLICK_ROTATION_STEP : RIGHT_CLICK_ROTATION_STEP,
   )
 
   const centroidWorld = new THREE.Vector3()
@@ -12954,7 +12954,7 @@ function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
   if (!camera || !mapControls || !mapControls.enabled) {
     return
   }
-  if (!event.shiftKey || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
+  if (!event.altKey || isApplyingCameraState || isTemporaryNavigationOverrideActive()) {
     return
   }
   if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
@@ -16072,7 +16072,7 @@ function handlePointerMove(event: PointerEvent) {
 
   // (debug hover capture removed)
 
-  if (shiftOrbitPivotSessionState && shiftOrbitPivotSessionState.pointerId === event.pointerId && !event.shiftKey) {
+  if (shiftOrbitPivotSessionState && shiftOrbitPivotSessionState.pointerId === event.pointerId && !event.altKey) {
     clearShiftOrbitPivotSession(event.pointerId)
   }
 

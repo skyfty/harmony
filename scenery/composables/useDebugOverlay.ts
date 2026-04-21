@@ -37,7 +37,7 @@ export interface PhysicsSourceDebugCounts {
 
 export function useDebugOverlay() {
   const debugEnabled = ref(true);
-  const debugMode = ref<'off' | 'fps' | 'full'>('full');
+  const debugMode = ref<'off' | 'fps' | 'full'>('fps');
   const debugOverlayVisible = computed(() => debugEnabled.value);
   const debugFps = ref(0);
 

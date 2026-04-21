@@ -63,7 +63,7 @@ export function handlePointerUpSelection(
     onSelectionDragEnd?: (nodeId: string) => void
 
     activeTool: string
-    rotateActiveSelection: (primaryId: string) => void
+    rotateActiveSelection: (primaryId: string, reverse?: boolean) => void
 
     sceneSelectedNodeId: string | null
     selectedNodeIdProp: string | null
@@ -141,7 +141,7 @@ export function handlePointerUpSelection(
             : null
 
           if (anchorId) {
-            ctx.rotateActiveSelection(anchorId)
+            ctx.rotateActiveSelection(anchorId, trackingState.shiftKey)
             return {
               handled: true,
               preventDefault: true,
