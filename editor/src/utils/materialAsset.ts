@@ -100,6 +100,7 @@ function cloneMaterialProps(props: SceneMaterialProps): SceneMaterialProps {
     color: props.color,
     transparent: props.transparent,
     opacity: props.opacity,
+    alphaTest: props.alphaTest,
     side: props.side,
     wireframe: props.wireframe,
     metalness: props.metalness,
@@ -198,6 +199,7 @@ export function parseMaterialAssetDocument(data: unknown): ParsedMaterialAsset |
     color: normalizeHexColor(source.color, DEFAULT_PROPS.color),
     transparent: typeof source.transparent === 'boolean' ? source.transparent : DEFAULT_PROPS.transparent,
     opacity: clampNumber(Number(source.opacity ?? DEFAULT_PROPS.opacity), 0, 1, DEFAULT_PROPS.opacity),
+    alphaTest: typeof source.alphaTest === 'number' ? clampNumber(Number(source.alphaTest), 0, 1, 0.5) : undefined,
     side: (typeof source.side === 'string' && ['front', 'back', 'double'].includes(source.side)
       ? source.side
       : DEFAULT_PROPS.side) as SceneMaterialSide,

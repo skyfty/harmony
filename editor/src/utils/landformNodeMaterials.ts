@@ -11,9 +11,9 @@ const LANDFORM_DEFAULT_COLOR = '#ffffff'
 function buildMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneMaterialProps {
   const base: SceneMaterialProps = {
     color: '#ffffff',
-    transparent: true,
+    transparent: false,
     opacity: 1,
-    side: 'double',
+    side: 'front',
     wireframe: false,
     metalness: 0.00,
     roughness: 1.0,
@@ -47,9 +47,9 @@ export function createLandformNodeMaterials(options: { color?: string; surfaceNa
     color,
     metalness: 0.00,
     roughness: 1.0,
-    transparent: true,
+    transparent: false,
     opacity: 1,
-    side: 'double',
+    side: 'front',
   })
   return [surface]
 }

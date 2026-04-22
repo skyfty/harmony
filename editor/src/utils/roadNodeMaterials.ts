@@ -20,7 +20,7 @@ function buildRoadMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneM
     color: '#ffffff',
     transparent: false,
     opacity: 1,
-    side: 'double',
+    side: 'front',
     wireframe: false,
 
     metalness: 0.1,
@@ -53,20 +53,20 @@ export function createRoadNodeMaterials(surfaceColor = ROAD_SURFACE_DEFAULT_COLO
   return [
     createRoadNodeMaterial(prefix('Road Surface Material'), 'MeshStandardMaterial', {
       color: surfaceColor,
-      metalness: 0.05,
-      roughness: 0.85,
+      metalness: 0.00,
+      roughness: 1.00,
     }),
     createRoadNodeMaterial(prefix('Road Shoulder Material'), 'MeshStandardMaterial', {
       color: ROAD_SHOULDER_DEFAULT_COLOR,
-      transparent: true,
-      opacity: 0.85,
+      transparent: false,
+      opacity: 1,
       metalness: 0,
-      roughness: 0.9,
+      roughness: 1.0
     }),
     createRoadNodeMaterial(prefix('Road Lane Line Material'), 'MeshBasicMaterial', {
       color: ROAD_LANE_LINE_DEFAULT_COLOR,
-      transparent: true,
-      opacity: 0.9,
+      transparent: false,
+      opacity: 1,
     }),
   ]
 }

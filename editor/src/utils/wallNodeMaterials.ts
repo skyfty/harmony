@@ -16,7 +16,7 @@ function buildMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneMater
     side: 'front',
     wireframe: false,
     metalness: 0,
-    roughness: 0.92,
+    roughness: 1.0,
     emissive: '#000000',
     emissiveIntensity: 0,
     aoStrength: 1,
@@ -51,7 +51,7 @@ export function createWallNodeMaterials(options: {
     createNodeMaterial(bodyName, 'MeshStandardMaterial', {
       color,
       metalness: 0,
-      roughness: 0.92,
+      roughness: 1.0,
       side: 'front',
     }),
   ]

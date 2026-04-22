@@ -84,6 +84,8 @@ type LoaderFn = () => Promise<Object3D>
 
 type MeshMaterial = Material | Material[]
 
+const IMPORTED_MODEL_ALPHA_TEST = 0.5
+
 interface ParsedSubmesh {
   key: string
   geometry: BufferGeometry
@@ -131,7 +133,7 @@ const tempInstanceMatrix = new Matrix4()
 function syncInstancedMeshShadowPolicy(handle: InstancedMeshHandle): void {
   const receiverOnly = shouldUseReceiverOnlyForDenseInstancedMesh(handle.mesh.count, handle.radius)
   handle.mesh.castShadow = !receiverOnly
-  handle.mesh.receiveShadow = true
+  handle.mesh.receiveShadow = false
   handle.mesh.userData.shadowPolicy = receiverOnly ? 'receiver-only-dense-instanced' : 'default'
 }
 
@@ -146,6 +148,12 @@ function cloneObjectForRepeatVariant(root: Object3D, repeatScaleU: number): Obje
     mesh.material = variant.shared ? mesh.material : variant.material
   })
   return clonedRoot
+}
+
+function normalizeImportedModelMaterial(material: Material): void {
+  const typed = material as Material & { transparent?: boolean; alphaTest?: number }
+  typed.transparent = false
+  typed.alphaTest = IMPORTED_MODEL_ALPHA_TEST
 }
 
 export function getOrCreateModelObjectRepeatVariant(
@@ -667,6 +675,7 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
     const isMergeable = !Array.isArray(material)
     if (isMergeable) {
       const resolvedMaterial = material as Material
+      normalizeImportedModelMaterial(resolvedMaterial)
       const key = resolvedMaterial.uuid
       if (!mergeBuckets.has(key)) {
         mergeBuckets.set(key, [])
@@ -677,7 +686,14 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
     }
 
     const clonedMaterials = material
-      .map((entry) => (entry?.clone ? entry.clone() : entry))
+      .map((entry) => {
+        if (!entry) {
+          return null
+        }
+        const cloned = entry.clone ? entry.clone() : entry
+        normalizeImportedModelMaterial(cloned)
+        return cloned
+      })
       .filter((entry): entry is Material => Boolean(entry))
     if (!clonedMaterials.length) {
       return
@@ -698,6 +714,7 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
     if (!material) {
       return
     }
+    normalizeImportedModelMaterial(material)
     submeshes.push({
       key,
       geometry: merged,

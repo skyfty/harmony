@@ -480,6 +480,7 @@ export interface SceneMaterialProps {
   color: string;
   transparent: boolean;
   opacity: number;
+  alphaTest?: number;
   side: SceneMaterialSide;
   wireframe: boolean;
   metalness: number;

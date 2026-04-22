@@ -65,10 +65,12 @@ import type {
   GuideRouteDynamicMesh,
   RegionDynamicMesh,
 } from '@schema'
+import type { LandformBuildShape } from '@/types/landform-build-shape'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
 import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import lightUtils from './lightUtils'
+import { readLandformBuildShapeFromNode } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { NodePrefabData } from '@/types/node-prefab'
 import type { ClipboardEnvelope, ClipboardMeta, QuaternionJson } from '@/types/prefab'
 import type { DetachResult } from '@/types/detach-result'
@@ -1472,6 +1474,7 @@ function extractMaterialProps(material: SceneNodeMaterial | undefined | null): S
     color: material.color,
     transparent: material.transparent,
     opacity: material.opacity,
+    alphaTest: material.alphaTest,
     side: material.side,
     wireframe: material.wireframe,
     metalness: material.metalness,
@@ -2484,7 +2487,10 @@ function rebuildLandformNodeForTerrain(store: {
     worldPoints,
     groundDefinition,
     groundNode,
-    componentProps,
+    {
+      ...componentProps,
+      buildShape: readLandformBuildShapeFromNode(node),
+    },
   )
   if (!rebuilt) {
     return false
@@ -2887,7 +2893,8 @@ async function createNodeMaterialFromThree(material: Material | null | undefined
 
   const resolvedOpacity = typeof material.opacity === 'number' ? MathUtils.clamp(material.opacity, 0, 1) : 1
   overrides.opacity = resolvedOpacity
-  overrides.transparent = Boolean(material.transparent ?? resolvedOpacity < 0.999)
+  overrides.transparent = false
+  overrides.alphaTest = 0.5
 
   if (typeof typed.wireframe === 'boolean') {
     overrides.wireframe = typed.wireframe
@@ -14929,6 +14936,7 @@ export const useSceneStore = defineStore('scene', {
       name?: string
       editorFlags?: SceneNodeEditorFlags
       componentProps?: Partial<LandformComponentProps>
+      buildShape?: LandformBuildShape | null
     }): SceneNode | null {
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
@@ -14938,7 +14946,10 @@ export const useSceneStore = defineStore('scene', {
         payload.points,
         groundDefinition,
         groundNode,
-        payload.componentProps,
+        {
+          ...(payload.componentProps ?? {}),
+          buildShape: payload.buildShape ?? null,
+        },
       )
       if (!build) {
         return null
@@ -15047,6 +15058,7 @@ export const useSceneStore = defineStore('scene', {
       points: Vector3Like[]
       componentProps?: Partial<LandformComponentProps>
       reason?: string
+      buildShape?: LandformBuildShape | null
     }): { center: Vector3Like; definition: LandformDynamicMesh } | null {
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
@@ -15056,7 +15068,10 @@ export const useSceneStore = defineStore('scene', {
         payload.points,
         groundDefinition,
         groundNode,
-        payload.componentProps,
+        {
+          ...(payload.componentProps ?? {}),
+          buildShape: payload.buildShape ?? null,
+        },
       )
       if (!build) {
         return null
@@ -15290,7 +15305,10 @@ export const useSceneStore = defineStore('scene', {
         payload.localPoints,
         groundDefinition,
         groundNode,
-        componentProps,
+        {
+          ...componentProps,
+          buildShape: readLandformBuildShapeFromNode(target),
+        },
         runtime,
       )
       if (!build) {
@@ -15360,7 +15378,10 @@ export const useSceneStore = defineStore('scene', {
         payload.localPoints,
         groundDefinition,
         groundNode,
-        componentProps,
+        {
+          ...componentProps,
+          buildShape: readLandformBuildShapeFromNode(target),
+        },
         runtime,
       )
       if (!previewMesh) {

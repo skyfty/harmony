@@ -186,6 +186,7 @@ export type MaterialBaselineState = {
   opacity: number
   transparent: boolean
   depthWrite: boolean
+  alphaTest?: number
   wireframe?: boolean
   metalness?: number
   roughness?: number
@@ -628,6 +629,7 @@ export class SceneMaterialFactory {
       color: material.color ?? '#ffffff',
       transparent: material.transparent ?? false,
       opacity: material.opacity ?? 1,
+      alphaTest: material.alphaTest,
       side: material.side ?? 'front',
       wireframe: material.wireframe ?? false,
       metalness: material.metalness ?? 0.1,
@@ -647,6 +649,9 @@ export class SceneMaterialFactory {
     }
     if (typeof props.opacity === 'number') {
       materialAny.opacity = props.opacity;
+    }
+    if (typeof props.alphaTest === 'number') {
+      materialAny.alphaTest = props.alphaTest;
     }
     materialAny.side = resolveMaterialSide(props.side);
 
@@ -1013,6 +1018,7 @@ function getMaterialBaseline(material: THREE.Material): MaterialBaselineState {
     opacity: material.opacity,
     transparent: material.transparent,
     depthWrite: material.depthWrite,
+    alphaTest: material.alphaTest,
     wireframe: typeof typed.wireframe === 'boolean' ? typed.wireframe : undefined,
     metalness: 'metalness' in standard ? standard.metalness : undefined,
     roughness: 'roughness' in standard ? standard.roughness : undefined,
@@ -1314,6 +1320,9 @@ export function restoreMaterialFromBaseline(material: THREE.Material): void {
   typed.opacity = baseline.opacity;
   typed.transparent = baseline.transparent;
   typed.depthWrite = baseline.depthWrite;
+  if (typeof baseline.alphaTest === 'number') {
+    typed.alphaTest = baseline.alphaTest;
+  }
   if (typeof baseline.wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
     typed.wireframe = baseline.wireframe;
   }

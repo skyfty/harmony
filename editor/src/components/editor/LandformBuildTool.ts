@@ -261,6 +261,7 @@ export function createLandformBuildTool(options: {
 
     const build = options.sceneStore.buildLandformPreviewMesh({
       points: previewPoints.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
+      buildShape: targetSession.shape ?? 'polygon',
       reason: 'landform-preview',
     })
     if (!build) {
@@ -614,6 +615,7 @@ export function createLandformBuildTool(options: {
     }
     const created = options.sceneStore.createLandformNode({
       points: points.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
+      buildShape,
     })
     if (created) {
       options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))
@@ -638,6 +640,7 @@ export function createLandformBuildTool(options: {
     }
     const created = options.sceneStore.createLandformNode({
       points: points.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
+      buildShape,
     })
     if (created) {
       options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))

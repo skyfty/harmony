@@ -13,6 +13,7 @@ import {
   type LandformComponentProps,
 } from '@schema/components'
 import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
+import type { LandformBuildShape } from '@/types/landform-build-shape'
 
 export type SceneStoreLandformHelpersDeps = {
   createLandformNodeMaterials: (options: { surfaceName: string }) => SceneNodeMaterial[]
@@ -40,6 +41,7 @@ const LANDFORM_COMPACT_BOUNDARY_SIMPLIFY_SCALE = 0.03
 const LANDFORM_COMPACT_BOUNDARY_MIN_EDGE_SCALE = 0.16
 const LANDFORM_COMPACT_BOUNDARY_AVG_EDGE_SIMPLIFY_SCALE = 0.06
 const LANDFORM_COMPACT_BOUNDARY_AVG_EDGE_MIN_LENGTH_SCALE = 0.3
+const LANDFORM_CIRCLE_CORNER_SMOOTHING = 0.05
 const LANDFORM_SUPPORT_RING_MIN_WIDTH = 0.2
 const LANDFORM_SUPPORT_RING_MAX_WIDTH = 1.5
 const LANDFORM_SUPPORT_RING_WIDTH_SCALE = 0.35
@@ -204,15 +206,26 @@ function normalizePolygonWinding(points: Vector3[]): Vector3[] {
   return points
 }
 
-function buildLandformRoundedOutline(points: Vector3[], groundDefinition: GroundDynamicMesh | null): Vector3[] {
+function buildLandformRoundedOutline(
+  points: Vector3[],
+  groundDefinition: GroundDynamicMesh | null,
+  buildShape: LandformBuildShape | null | undefined,
+): Vector3[] {
   if (points.length < 3) {
     return points.map((point) => point.clone())
+  }
+
+  if (buildShape !== 'circle') {
+    return normalizePolygonWinding(points.map((point) => point.clone()))
   }
 
   const cellSize = groundDefinition
     ? Math.max(groundDefinition.cellSize, LANDFORM_TARGET_TRI_EDGE_LENGTH)
     : LANDFORM_TARGET_TRI_EDGE_LENGTH
-  const rounded = buildSmoothedSculptPolygonContour(points, { cellSize })
+  const rounded = buildSmoothedSculptPolygonContour(points, {
+    cellSize,
+    cornerSmoothing: LANDFORM_CIRCLE_CORNER_SMOOTHING,
+  })
   const nextPoints = rounded.length >= 3 ? rounded : points
   return normalizePolygonWinding(nextPoints.map((point) => point.clone()))
 }
@@ -1424,8 +1437,8 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       } else {
         const normalizedMaterials = currentMaterials.map((entry) => {
           const nextType = entry?.type === 'MeshStandardMaterial' ? entry.type : 'MeshStandardMaterial'
-          const nextSide = entry?.side === 'double' ? entry.side : 'double'
-          const nextTransparent = entry?.transparent === true ? entry.transparent : true
+          const nextSide = entry?.side === 'front' ? entry.side : 'front'
+          const nextTransparent = entry?.transparent === false ? entry.transparent : false
           if (nextType === entry?.type && nextSide === entry?.side && nextTransparent === entry?.transparent) {
             return entry
           }
@@ -1492,15 +1505,16 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       points: Vector3Like[],
       groundDefinition: GroundDynamicMesh | null,
       groundNode: SceneNode | null,
-      options: Partial<LandformComponentProps> = {},
+      options: Partial<LandformComponentProps> & { buildShape?: LandformBuildShape | null } = {},
     ): { center: Vector3; definition: LandformDynamicMesh } | null {
       const worldPoints = normalizePolygonWinding(buildWorldPoints(points))
       if (worldPoints.length < 3) {
         return null
       }
 
-      const normalizedProps = clampLandformComponentProps(options)
-      const roundedPoints = buildLandformRoundedOutline(worldPoints, groundDefinition)
+      const { buildShape, ...componentProps } = options
+      const normalizedProps = clampLandformComponentProps(componentProps)
+      const roundedPoints = buildLandformRoundedOutline(worldPoints, groundDefinition, buildShape)
       const buildPoints = normalizedProps.enableFeather
         ? roundedPoints
         : simplifyLandformOutlineForCompactMode(roundedPoints, groundDefinition)
@@ -1636,7 +1650,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       points: Array<[number, number]>,
       groundDefinition: GroundDynamicMesh | null,
       groundNode: SceneNode | null,
-      options: Partial<LandformComponentProps> = {},
+      options: Partial<LandformComponentProps> & { buildShape?: LandformBuildShape | null } = {},
       runtimeObject?: Object3D | null,
     ): LandformDynamicMesh | null {
       const frameObject = resolveLandformFrameObject(node, runtimeObject)
@@ -1647,8 +1661,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         return null
       }
 
-      const normalizedProps = clampLandformComponentProps(options)
-      const roundedPoints = buildLandformRoundedOutline(worldPoints, groundDefinition)
+      const { buildShape, ...componentProps } = options
+      const normalizedProps = clampLandformComponentProps(componentProps)
+      const roundedPoints = buildLandformRoundedOutline(worldPoints, groundDefinition, buildShape)
       const buildPoints = normalizedProps.enableFeather
         ? roundedPoints
         : simplifyLandformOutlineForCompactMode(roundedPoints, groundDefinition)

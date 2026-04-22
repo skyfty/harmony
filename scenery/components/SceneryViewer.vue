@@ -21,7 +21,7 @@
         :style="punchSummaryStyle"
         aria-hidden="true"
       >
-        <text class="viewer-punch-summary__label">景观打卡</text>
+        <text class="viewer-punch-summary__label">打卡</text>
         <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
       <button
@@ -1605,15 +1605,15 @@ const TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 320 : 200;
 const TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 120 : 33;
 const TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE = isWeChatMiniProgram ? 120 : 200;
 const terrainScatterRuntime = createTerrainScatterLodRuntime({
-  lodUpdateIntervalMs: TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS,
-  visibilityUpdateIntervalMs: TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS,
-  cullGraceMs: 300,
-  cullRadiusMultiplier: 1.2,
-  maxBindingChangesPerUpdate: TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE,
-  chunkStreaming: {
+    lodUpdateIntervalMs: TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS,
+    visibilityUpdateIntervalMs: TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS,
+    cullGraceMs: 300,
+    cullRadiusMultiplier: 1.2,
+    maxBindingChangesPerUpdate: TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE,
+    chunkStreaming: {
     enabled: true,
-  },
-});
+    },
+  });
 const instancedCullingLastVisibleAt = new Map<string, number>();
 
 const INSTANCED_CULL_GRACE_MS = 250;
@@ -11472,14 +11472,14 @@ function startRenderLoop(
           updateAutoTourFollowCamera(deltaSeconds);
         }
 
-        updateBillboardInstanceCameraWorldPosition(camera.position);
+          updateBillboardInstanceCameraWorldPosition(camera.position);
 
         if (vehicleDriveActive.value && physicsEnvironmentEnabled.value) {
           updateVehicleDriveCamera(deltaSeconds);
         }
 
-        updateBehaviorProximity();
-        updateSignboardOverlayEntries(camera, deltaSeconds);
+          updateBehaviorProximity();
+          updateSignboardOverlayEntries(camera, deltaSeconds);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
@@ -11500,7 +11500,7 @@ function startRenderLoop(
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
           ? performance.now()
           : Date.now();
-        updateLazyPlaceholders(deltaSeconds);
+          updateLazyPlaceholders(deltaSeconds);
         if (shouldRunTerrainScatterUpdate(camera, instancingNow)) {
           terrainScatterRuntime.update(camera, resolveGroundMeshObject);
         }
@@ -11508,11 +11508,11 @@ function startRenderLoop(
           updateInstancedCullingAndLod();
         }
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
-        tickInstancedBounds(deltaSeconds);
+          tickInstancedBounds(deltaSeconds);
         if (gradientBackgroundDome) {
           gradientBackgroundDome.mesh.position.copy(camera.position);
         }
-        sceneCsmShadowRuntime?.update();
+          sceneCsmShadowRuntime?.update();
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
@@ -12519,15 +12519,15 @@ onUnmounted(() => {
 .viewer-debug-overlay {
   position: absolute;
   left: 12px;
-  top: calc(94px + var(--viewer-safe-area-top, 0px));
+  top: calc(84px + var(--viewer-safe-area-top, 0px));
   z-index: 1900;
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
   background: rgba(8, 12, 26, 0.68);
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: rgba(245, 250, 255, 0.92);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.35;
   pointer-events: auto;
 }
 
