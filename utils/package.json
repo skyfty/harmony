@@ -32,6 +32,11 @@
       "default": "./dist/miniClient.js",
       "types": "./dist/miniClient.d.ts"
     },
+    "./query": {
+      "import": "./dist/query.js",
+      "default": "./dist/query.js",
+      "types": "./dist/query.d.ts"
+    },
     "./scene-package-storage": {
       "import": "./dist/scenePackageStorage.js",
       "default": "./dist/scenePackageStorage.js",

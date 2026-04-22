@@ -1,5 +1,5 @@
 import type { Coupon } from '@/types/coupon'
-import { MiniApiError, miniRequest } from '@harmony/utils'
+import { MiniApiError, buildQueryString, miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
 type CouponsResponse = {
@@ -16,15 +16,10 @@ function buildQuery(params?: CouponListParams): string {
   if (!params) {
     return ''
   }
-  const query = new URLSearchParams()
-  if (params.status) {
-    query.set('status', params.status)
-  }
-  if (params.keyword?.trim()) {
-    query.set('keyword', params.keyword.trim())
-  }
-  const text = query.toString()
-  return text ? `?${text}` : ''
+  return buildQueryString({
+    status: params.status,
+    keyword: params.keyword?.trim(),
+  })
 }
 
 export async function listMyCoupons(params?: CouponListParams): Promise<Coupon[]> {

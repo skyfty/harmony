@@ -37,6 +37,7 @@ import {
   getPunchProgress,
   trackAnalyticsEvent,
 } from '@harmony/utils/mini-client';
+import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 
@@ -54,7 +55,7 @@ const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
   if (!vehicleIdentifier) {
-    return null;
+    return undefined;
   }
   return {
     [vehicleIdentifier]: {
@@ -86,6 +87,7 @@ function handlePunch(payload: PunchEventPayload): void {
 
   void createPunchRecord({
     sceneId: payload.sceneId,
+    sceneName: scenicTitle.value || payload.sceneId,
     scenicId: sceneSpotId.value,
     vehicleIdentifier: selectedVehicleIdentifier.value || undefined,
     clientPunchTime: payload.clientPunchTime,
@@ -126,22 +128,34 @@ function handleBack(): void {
   });
 }
 
+function extractQueryFromQrLink(q: string): Record<string, string> {
+  return parseQueryString(q);
+}
+
 onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
 
   const record = (query ?? {}) as Record<string, unknown>;
-  projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
-  packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
-  packageCacheKey.value = typeof record.packageCacheKey === 'string' ? record.packageCacheKey : '';
-  scenicTitle.value = typeof record.scenicTitle === 'string'
-    ? decodeURIComponent(record.scenicTitle)
-    : typeof record.sceneName === 'string'
-      ? decodeURIComponent(record.sceneName)
+  const qrQuery = typeof record.q === 'string' ? extractQueryFromQrLink(record.q) : {};
+  const mergedRecord = {
+    ...qrQuery,
+    ...Object.fromEntries(
+      Object.entries(record).filter(([, value]) => typeof value === 'string' && value.length > 0)
+    ),
+  };
+
+  projectId.value = typeof mergedRecord.projectId === 'string' ? mergedRecord.projectId : '';
+  packageUrl.value = typeof mergedRecord.packageUrl === 'string' ? mergedRecord.packageUrl : '';
+  packageCacheKey.value = typeof mergedRecord.packageCacheKey === 'string' ? mergedRecord.packageCacheKey : '';
+  scenicTitle.value = typeof mergedRecord.scenicTitle === 'string'
+    ? decodeURIComponent(mergedRecord.scenicTitle)
+    : typeof mergedRecord.sceneName === 'string'
+      ? decodeURIComponent(mergedRecord.sceneName)
       : '';
-  sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
-  sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
-  selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string'
-    ? decodeURIComponent(record.vehicleIdentifier)
+  sceneSpotId.value = typeof mergedRecord.sceneSpotId === 'string' ? mergedRecord.sceneSpotId : '';
+  sceneId.value = typeof mergedRecord.sceneId === 'string' ? mergedRecord.sceneId : '';
+  selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
+    ? decodeURIComponent(mergedRecord.vehicleIdentifier)
     : getSelectedVehicleIdentifier();
 
   enterAt.value = Date.now();

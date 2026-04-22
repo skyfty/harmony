@@ -10871,19 +10871,12 @@ async function startRenderIfReady() {
     console.error('Renderer initialization failed', initializationError);
     console.error(initializationError);
     if (token === initializeToken) {
-      error.value = '初始化渲染器失败';
-    }
-  } finally {
-    if (token === initializeToken) {
       loading.value = false;
     }
     initializing = false;
     endSceneSwitchTransition(token);
 
     if (pendingRestartAfterCurrentInit) {
-      pendingRestartAfterCurrentInit = false;
-      void startRenderIfReady();
-    }
   }
 }
 

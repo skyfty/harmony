@@ -362,7 +362,7 @@ function openComments(row: SceneSpotItem) {
 }
 
 function buildWechatQRCodeLink(sceneFileUrl: string, row: SceneSpotItem) {
-  return `v.touchmagic.cn?packageUrl=${encodeURIComponent(sceneFileUrl)}&sceneSpotId=${encodeURIComponent(row.id)}&sceneId=${encodeURIComponent(row.sceneId)}&vehicleIdentifier=car1`;
+  return `v.touchmagic.cn?packageUrl=${encodeURIComponent(sceneFileUrl)}&sceneSpotId=${encodeURIComponent(row.id)}&sceneId=${encodeURIComponent(row.sceneId)}&scenicTitle=${encodeURIComponent(row.title)}&vehicleIdentifier=car1`;
 }
 
 function closeWechatQRCodeModal() {
