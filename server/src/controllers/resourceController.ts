@@ -1087,22 +1087,69 @@ async function resolveSeriesObjectIdOrThrow(
   }
 }
 
-async function resolveTagObjectIdsOrThrow(ctx: Context, tagIds: string[]): Promise<Types.ObjectId[]> {
-  const objectIds = tagIds
-    .filter((tagId) => Types.ObjectId.isValid(tagId))
-    .map((tagId) => new Types.ObjectId(tagId))
-  if (objectIds.length !== tagIds.length) {
-    ctx.throw(400, 'Invalid tag ids provided')
+function normalizeTagNameKey(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+async function findOrCreateAssetTagByName(name: string): Promise<AssetTagDocument> {
+  const existing = (await AssetTagModel.findOne({ name }).lean().exec()) as AssetTagDocument | null
+  if (existing) {
+    return existing
   }
 
-  if (objectIds.length) {
-    const count = await AssetTagModel.countDocuments({ _id: { $in: objectIds } })
-    if (count !== objectIds.length) {
-      ctx.throw(400, 'One or more tag ids do not exist')
+  try {
+    return (await AssetTagModel.create({ name })) as AssetTagDocument
+  } catch (error) {
+    if ((error as { code?: number }).code === 11000) {
+      const duplicated = (await AssetTagModel.findOne({ name }).lean().exec()) as AssetTagDocument | null
+      if (duplicated) {
+        return duplicated
+      }
+    }
+    throw error
+  }
+}
+
+async function resolveTagObjectIdsOrThrow(tagIds: string[]): Promise<Types.ObjectId[]> {
+  const resolvedIds: Types.ObjectId[] = []
+  const resolvedIdSet = new Set<string>()
+  const resolvedNameMap = new Map<string, Types.ObjectId>()
+
+  for (const tagId of tagIds) {
+    const normalizedValue = tagId.trim()
+    if (!normalizedValue.length) {
+      continue
+    }
+
+    if (Types.ObjectId.isValid(normalizedValue)) {
+      const existing = await AssetTagModel.findById(normalizedValue).select('_id').lean().exec()
+      if (existing) {
+        const objectId = new Types.ObjectId(existing._id)
+        const objectIdString = objectId.toString()
+        if (!resolvedIdSet.has(objectIdString)) {
+          resolvedIdSet.add(objectIdString)
+          resolvedIds.push(objectId)
+        }
+        continue
+      }
+    }
+
+    const normalizedKey = normalizeTagNameKey(normalizedValue)
+    let objectId = resolvedNameMap.get(normalizedKey)
+    if (!objectId) {
+      const tag = await findOrCreateAssetTagByName(normalizedValue)
+      objectId = tag._id as Types.ObjectId
+      resolvedNameMap.set(normalizedKey, objectId)
+    }
+
+    const objectIdString = objectId.toString()
+    if (!resolvedIdSet.has(objectIdString)) {
+      resolvedIdSet.add(objectIdString)
+      resolvedIds.push(objectId)
     }
   }
 
-  return objectIds
+  return resolvedIds
 }
 
 async function deleteReplacedThumbnail(
@@ -2426,7 +2473,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   const payload = extractMutationPayload(ctx)
   enforceManagedCategorySelection(ctx, payload)
   const type = normalizeAssetType(payload.type ?? 'file')
-  const tagObjectIds = await resolveTagObjectIdsOrThrow(ctx, payload.tagIds ?? [])
+  const tagObjectIds = await resolveTagObjectIdsOrThrow(payload.tagIds ?? [])
 
   const contentHash = await computeUploadedFileContentHash(uploadedFile)
   const thumbnailFile = extractUploadedFile(files, 'thumbnail')
@@ -2588,7 +2635,7 @@ export async function uploadAssetBundle(ctx: Context): Promise<void> {
   }
   enforceManagedCategorySelection(ctx, payload)
 
-  const tagObjectIds = await resolveTagObjectIdsOrThrow(ctx, payload.tagIds ?? [])
+  const tagObjectIds = await resolveTagObjectIdsOrThrow(payload.tagIds ?? [])
 
   const categoryId = await resolveCategoryIdForPayloadOrThrow(ctx, normalizeAssetType(payload.type), payload)
   const assetIdMap = new Map<string, string>()
@@ -2920,7 +2967,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
     updates.terrainScatterPreset = payload.terrainScatterPreset ?? null
   }
   if (payload.tagIds !== undefined) {
-    updates.tags = await resolveTagObjectIdsOrThrow(ctx, payload.tagIds)
+    updates.tags = await resolveTagObjectIdsOrThrow(payload.tagIds)
   }
   if (payload.type) {
     const normalizedType = normalizeAssetType(payload.type, asset.type)

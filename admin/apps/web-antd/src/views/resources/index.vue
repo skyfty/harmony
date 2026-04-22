@@ -1317,12 +1317,12 @@ onMounted(async () => {
         <Form.Item label="标签" name="tagIds">
           <Select
             v-model:value="assetFormModel.tagIds"
-            mode="multiple"
+            mode="tags"
             allow-clear
             show-search
             option-filter-prop="label"
             :options="tagOptions"
-            placeholder="选择标签"
+            placeholder="选择或输入标签"
           />
         </Form.Item>
         <Form.Item label="系列" name="seriesId">
