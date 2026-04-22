@@ -62,6 +62,13 @@ type GroundTransform = {
   scale: { x: number; y: number; z: number }
 }
 
+type LandformMeshBuildMode = 'interactive'
+
+type LandformMeshBuildOptions = Partial<LandformComponentProps> & {
+  buildShape?: LandformBuildShape | null
+  previewMode?: LandformMeshBuildMode
+}
+
 type LandformFeatherRefinementOptions = {
   footprint: Array<[number, number]>
   featherWidth: number
@@ -623,6 +630,35 @@ function buildLandformGroundSliceSurface(
       transform,
     )
   })
+}
+
+function buildLandformGroundPreviewSurface(
+  polygonLocalPoints: Vector3[],
+  groundDefinition: GroundDynamicMesh,
+  transform: GroundTransform,
+  sampleHeight: LandformHeightSampler,
+): { surfaceWorldVertices: Vector3[]; surfaceIndices: number[] } | null {
+  const triangulation = buildShapeTriangulation(polygonLocalPoints)
+  if (!triangulation) {
+    return null
+  }
+
+  const surfaceWorldVertices = triangulation.vertices.map((vertex) => {
+    const localHeight = sampleHeight(vertex.x, vertex.y)
+    const localClearance = resolveLandformAdaptiveGroundClearance(
+      sampleHeight,
+      vertex,
+      localHeight,
+      groundDefinition,
+      transform,
+    )
+    return groundLocalToWorld(new Vector3(vertex.x, localHeight + localClearance, vertex.y), transform)
+  })
+
+  return {
+    surfaceWorldVertices,
+    surfaceIndices: [...triangulation.indices],
+  }
 }
 
 function lerp(start: number, end: number, t: number): number {
@@ -1505,14 +1541,14 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       points: Vector3Like[],
       groundDefinition: GroundDynamicMesh | null,
       groundNode: SceneNode | null,
-      options: Partial<LandformComponentProps> & { buildShape?: LandformBuildShape | null } = {},
+      options: LandformMeshBuildOptions = {},
     ): { center: Vector3; definition: LandformDynamicMesh } | null {
       const worldPoints = normalizePolygonWinding(buildWorldPoints(points))
       if (worldPoints.length < 3) {
         return null
       }
 
-      const { buildShape, ...componentProps } = options
+      const { buildShape, previewMode, ...componentProps } = options
       const normalizedProps = clampLandformComponentProps(componentProps)
       const roundedPoints = buildLandformRoundedOutline(worldPoints, groundDefinition, buildShape)
       const buildPoints = normalizedProps.enableFeather
@@ -1569,16 +1605,30 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
       const polygonLocal = polygonLocalPoints.map((point) => new Vector2(point.x, point.z))
       const sampleHeight = createLandformHeightSampler(groundDefinition)
-      const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
-        mergePlanarRegions: !normalizedProps.enableFeather,
-      })
-      let surfaceIndices = [...sliced.indices]
-      let surfaceWorldVertices = buildLandformGroundSliceSurface(
-        sliced,
-        groundDefinition,
-        transform,
-        sampleHeight,
-      )
+      let surfaceIndices: number[] = []
+      let surfaceWorldVertices: Vector3[] = []
+
+      if (previewMode === 'interactive') {
+        const previewSurface = buildLandformGroundPreviewSurface(
+          polygonLocalPoints,
+          groundDefinition,
+          transform,
+          sampleHeight,
+        )
+        surfaceIndices = previewSurface?.surfaceIndices ?? []
+        surfaceWorldVertices = previewSurface?.surfaceWorldVertices ?? []
+      } else {
+        const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
+          mergePlanarRegions: !normalizedProps.enableFeather,
+        })
+        surfaceIndices = [...sliced.indices]
+        surfaceWorldVertices = buildLandformGroundSliceSurface(
+          sliced,
+          groundDefinition,
+          transform,
+          sampleHeight,
+        )
+      }
 
       if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
         const polygonTriangulation = buildShapeTriangulation(polygonLocalPoints)

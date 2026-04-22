@@ -51,7 +51,11 @@ type VertexSnapResolverOptions = {
 
 const PREVIEW_SIGNATURE_PRECISION = 1000
 const LANDFORM_LINE_PREVIEW_Y_OFFSET = 0.012
-const LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS = 1000 / 30
+const LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS = 1000 / 15
+const LANDFORM_PREVIEW_MESH_COMPLEX_POINT_THRESHOLD = 24
+const LANDFORM_PREVIEW_MESH_COMPLEX_FLUSH_INTERVAL_MS = 1000 / 10
+const LANDFORM_PREVIEW_MESH_VERY_COMPLEX_POINT_THRESHOLD = 64
+const LANDFORM_PREVIEW_MESH_VERY_COMPLEX_FLUSH_INTERVAL_MS = 140
 
 function getNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -116,6 +120,16 @@ function computePreviewSignature(points: THREE.Vector3[], presetSignature: strin
     .map((point) => [encodePreviewNumber(point.x), encodePreviewNumber(point.y), encodePreviewNumber(point.z)].join(','))
     .join(';')
   return `${geometrySignature}|${presetSignature}`
+}
+
+function resolveMeshPreviewFlushIntervalMs(pointCount: number): number {
+  if (pointCount >= LANDFORM_PREVIEW_MESH_VERY_COMPLEX_POINT_THRESHOLD) {
+    return LANDFORM_PREVIEW_MESH_VERY_COMPLEX_FLUSH_INTERVAL_MS
+  }
+  if (pointCount >= LANDFORM_PREVIEW_MESH_COMPLEX_POINT_THRESHOLD) {
+    return LANDFORM_PREVIEW_MESH_COMPLEX_FLUSH_INTERVAL_MS
+  }
+  return LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS
 }
 
 export function createLandformBuildTool(options: {
@@ -262,7 +276,7 @@ export function createLandformBuildTool(options: {
     const build = options.sceneStore.buildLandformPreviewMesh({
       points: previewPoints.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
       buildShape: targetSession.shape ?? 'polygon',
-      reason: 'landform-preview',
+      previewMode: 'interactive',
     })
     if (!build) {
       clearPreview(targetSession)
@@ -304,10 +318,11 @@ export function createLandformBuildTool(options: {
       const previewPointCount = targetSession ? buildPreviewVertices(targetSession).length : 0
       const previewIsMesh = previewPointCount >= 3
       const previewGroupMissing = !targetSession?.previewGroup || targetSession.previewGroup.userData?.isLandformLinePreview === true
+      const minFlushIntervalMs = resolveMeshPreviewFlushIntervalMs(previewPointCount)
       if (
         previewIsMesh
         && !previewGroupMissing
-        && now - lastMeshPreviewFlushAt < LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS
+        && now - lastMeshPreviewFlushAt < minFlushIntervalMs
       ) {
         return
       }

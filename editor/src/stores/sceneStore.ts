@@ -15059,6 +15059,7 @@ export const useSceneStore = defineStore('scene', {
       componentProps?: Partial<LandformComponentProps>
       reason?: string
       buildShape?: LandformBuildShape | null
+      previewMode?: 'interactive'
     }): { center: Vector3Like; definition: LandformDynamicMesh } | null {
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
@@ -15071,6 +15072,7 @@ export const useSceneStore = defineStore('scene', {
         {
           ...(payload.componentProps ?? {}),
           buildShape: payload.buildShape ?? null,
+          previewMode: payload.previewMode,
         },
       )
       if (!build) {
