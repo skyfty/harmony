@@ -5,6 +5,7 @@ import MaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import LightPanel from '@/components/inspector/LightPanel.vue'
 import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import AssetModelPanel from '@/components/inspector/AssetModelPanel.vue'
+import ModelCollisionPanel from '@/components/inspector/ModelCollisionPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import RoadPanel from '@/components/inspector/RoadPanel.vue'
 import FloorPanel from '@/components/inspector/FloorPanel.vue'
@@ -66,6 +67,8 @@ import {
   type RigidbodyColliderType,
   FLOOR_COMPONENT_TYPE,
   LANDFORM_COMPONENT_TYPE,
+  MODEL_COLLISION_COMPONENT_TYPE,
+  resolveModelCollisionComponentPropsFromNode,
   
   LOD_COMPONENT_TYPE,
 } from '@schema/components'
@@ -365,6 +368,23 @@ watch(selectedNodeId, () => {
   closeBehaviorDetails()
 })
 
+watch(
+  selectedNode,
+  (node) => {
+    if (!node) {
+      return
+    }
+    if (node.components?.[MODEL_COLLISION_COMPONENT_TYPE]) {
+      return
+    }
+    if (!resolveModelCollisionComponentPropsFromNode(node)) {
+      return
+    }
+    sceneStore.addNodeComponent(node.id, MODEL_COLLISION_COMPONENT_TYPE)
+  },
+  { immediate: true },
+)
+
 defineExpose({
   getPanelRect,
   closeMaterialDetails,
@@ -596,6 +616,7 @@ watch(
               />
               <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
               <LandformPanel v-else-if="component.type === LANDFORM_COMPONENT_TYPE" />
+              <ModelCollisionPanel v-else-if="component.type === MODEL_COLLISION_COMPONENT_TYPE" />
               <LodPanel v-else-if="component.type === LOD_COMPONENT_TYPE" />
               <GuideRoutePanel v-else-if="component.type === GUIDE_ROUTE_COMPONENT_TYPE" />
               <AutoTourPanel v-else-if="component.type === AUTO_TOUR_COMPONENT_TYPE" />

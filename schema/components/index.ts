@@ -25,6 +25,7 @@ import './definitions/nominateComponent'
 import './definitions/steerComponent'
 import './definitions/signboardComponent'
 import './definitions/boundaryWallComponent'
+import './definitions/modelCollisionComponent'
 
 export {
 	componentManager,
@@ -61,3 +62,4 @@ export * from './definitions/nominateComponent'
 export * from './definitions/steerComponent'
 export * from './definitions/signboardComponent'
 export * from './definitions/boundaryWallComponent'
+export * from './definitions/modelCollisionComponent'

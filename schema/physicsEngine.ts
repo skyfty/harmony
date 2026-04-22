@@ -6,6 +6,7 @@ import type {
 	GroundDynamicMesh,
 	FloorDynamicMesh,
 	WallDynamicMesh,
+	ModelCollisionDynamicMesh,
 } from './index'
 import { compileWallSegmentsFromDefinition } from './wallLayout'
 import type {
@@ -23,6 +24,7 @@ import {
 	DEFAULT_ANGULAR_DAMPING,
 	DEFAULT_RIGIDBODY_FRICTION,
 	DEFAULT_RIGIDBODY_RESTITUTION,
+	resolveModelCollisionComponentPropsFromNode,
 } from './components'
 import { buildBoundaryWallSegments } from './boundaryWall'
 import {
@@ -401,6 +403,32 @@ function isFloorDynamicMesh(mesh: unknown): mesh is FloorDynamicMesh {
 	return Boolean(typed && typed.type === 'Floor')
 }
 
+function isModelCollisionDynamicMesh(mesh: unknown): mesh is ModelCollisionDynamicMesh {
+	const typed = mesh as { type?: unknown } | null | undefined
+	return Boolean(typed && typed.type === 'ModelCollision')
+}
+
+function resolveModelCollisionDynamicMesh(node: SceneNode): ModelCollisionDynamicMesh | null {
+	const componentProps = resolveModelCollisionComponentPropsFromNode(node)
+	if (componentProps) {
+		return {
+			type: 'ModelCollision',
+			defaultThickness: componentProps.defaultThickness,
+			faces: componentProps.faces,
+		}
+	}
+	const userDataMesh = node.userData && typeof node.userData === 'object'
+		? (node.userData as Record<string, unknown>).modelCollision
+		: null
+	if (userDataMesh && isModelCollisionDynamicMesh(userDataMesh)) {
+		return userDataMesh
+	}
+	if (isModelCollisionDynamicMesh(node.dynamicMesh)) {
+		return node.dynamicMesh
+	}
+	return null
+}
+
 const FLOOR_EPSILON = 1e-6
 
 function clampFloorSmooth(value: unknown): number {
@@ -613,6 +641,174 @@ function buildTrianglePrismShape(a: THREE.Vector2, b: THREE.Vector2, c: THREE.Ve
 		offset: [0, 0, 0],
 		applyScale: false,
 	}
+}
+
+const MODEL_COLLISION_EPSILON = 1e-5
+const MODEL_COLLISION_DEFAULT_THICKNESS = 0.05
+const MODEL_COLLISION_MIN_THICKNESS = 0.01
+
+const modelCollisionNormalHelper = new THREE.Vector3()
+const modelCollisionEdgeHelperA = new THREE.Vector3()
+const modelCollisionEdgeHelperB = new THREE.Vector3()
+const modelCollisionProjectedHelper = new THREE.Vector3()
+const modelCollisionOriginHelper = new THREE.Vector3()
+
+function clampModelCollisionThickness(value: unknown, fallback: unknown): number {
+	const primary = Number(value)
+	const secondary = Number(fallback)
+	const raw = Number.isFinite(primary) ? primary : secondary
+	if (!Number.isFinite(raw)) {
+		return MODEL_COLLISION_DEFAULT_THICKNESS
+	}
+	return Math.max(MODEL_COLLISION_MIN_THICKNESS, raw)
+}
+
+function sanitizeModelCollisionVertices(vertices: ModelCollisionDynamicMesh['faces'][number]['vertices']): THREE.Vector3[] {
+	const sanitized: THREE.Vector3[] = []
+	for (const vertex of Array.isArray(vertices) ? vertices : []) {
+		const x = Number(vertex?.x)
+		const y = Number(vertex?.y)
+		const z = Number(vertex?.z)
+		if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+			continue
+		}
+		const next = new THREE.Vector3(x, y, z)
+		const previous = sanitized[sanitized.length - 1]
+		if (previous && previous.distanceToSquared(next) <= MODEL_COLLISION_EPSILON * MODEL_COLLISION_EPSILON) {
+			continue
+		}
+		sanitized.push(next)
+	}
+	if (sanitized.length >= 3) {
+		const first = sanitized[0]!
+		const last = sanitized[sanitized.length - 1]!
+		if (first.distanceToSquared(last) <= MODEL_COLLISION_EPSILON * MODEL_COLLISION_EPSILON) {
+			sanitized.pop()
+		}
+	}
+	return sanitized
+}
+
+function computeModelCollisionFaceNormal(vertices: THREE.Vector3[]): THREE.Vector3 | null {
+	if (vertices.length < 3) {
+		return null
+	}
+	modelCollisionNormalHelper.set(0, 0, 0)
+	for (let index = 0; index < vertices.length; index += 1) {
+		const current = vertices[index]!
+		const next = vertices[(index + 1) % vertices.length]!
+		modelCollisionNormalHelper.x += (current.y - next.y) * (current.z + next.z)
+		modelCollisionNormalHelper.y += (current.z - next.z) * (current.x + next.x)
+		modelCollisionNormalHelper.z += (current.x - next.x) * (current.y + next.y)
+	}
+	if (modelCollisionNormalHelper.lengthSq() <= MODEL_COLLISION_EPSILON * MODEL_COLLISION_EPSILON) {
+		for (let index = 2; index < vertices.length; index += 1) {
+			modelCollisionEdgeHelperA.subVectors(vertices[index - 1]!, vertices[0]!)
+			modelCollisionEdgeHelperB.subVectors(vertices[index]!, vertices[0]!)
+			modelCollisionNormalHelper.crossVectors(modelCollisionEdgeHelperA, modelCollisionEdgeHelperB)
+			if (modelCollisionNormalHelper.lengthSq() > MODEL_COLLISION_EPSILON * MODEL_COLLISION_EPSILON) {
+				break
+			}
+		}
+	}
+	if (modelCollisionNormalHelper.lengthSq() <= MODEL_COLLISION_EPSILON * MODEL_COLLISION_EPSILON) {
+		return null
+	}
+	return modelCollisionNormalHelper.clone().normalize()
+}
+
+function buildModelCollisionBasis(normal: THREE.Vector3): { tangent: THREE.Vector3; bitangent: THREE.Vector3 } {
+	const seed = Math.abs(normal.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)
+	const tangent = seed.cross(normal).normalize()
+	const bitangent = normal.clone().cross(tangent).normalize()
+	return { tangent, bitangent }
+}
+
+function buildModelCollisionTrianglePrismShape(
+	a: THREE.Vector3,
+	b: THREE.Vector3,
+	c: THREE.Vector3,
+	normal: THREE.Vector3,
+	thickness: number,
+): Extract<RigidbodyPhysicsShape, { kind: 'convex' }> | null {
+	modelCollisionEdgeHelperA.subVectors(b, a)
+	modelCollisionEdgeHelperB.subVectors(c, a)
+	modelCollisionNormalHelper.crossVectors(modelCollisionEdgeHelperA, modelCollisionEdgeHelperB)
+	if (modelCollisionNormalHelper.lengthSq() <= MODEL_COLLISION_EPSILON * MODEL_COLLISION_EPSILON) {
+		return null
+	}
+	const halfThickness = Math.max(MODEL_COLLISION_MIN_THICKNESS, thickness) * 0.5
+	const offset = normal.clone().multiplyScalar(halfThickness)
+	const vertices: RigidbodyVector3Tuple[] = [
+		[a.x - offset.x, a.y - offset.y, a.z - offset.z],
+		[b.x - offset.x, b.y - offset.y, b.z - offset.z],
+		[c.x - offset.x, c.y - offset.y, c.z - offset.z],
+		[a.x + offset.x, a.y + offset.y, a.z + offset.z],
+		[b.x + offset.x, b.y + offset.y, b.z + offset.z],
+		[c.x + offset.x, c.y + offset.y, c.z + offset.z],
+	]
+	return {
+		kind: 'convex',
+		vertices,
+		faces: [
+			[0, 2, 1],
+			[3, 4, 5],
+			[0, 1, 4, 3],
+			[1, 2, 5, 4],
+			[2, 0, 3, 5],
+		],
+		offset: [0, 0, 0],
+		applyScale: false,
+	}
+}
+
+function resolveModelCollisionFaceSegments(definition: ModelCollisionDynamicMesh): Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> {
+	const segments: Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> = []
+	for (const face of Array.isArray(definition.faces) ? definition.faces : []) {
+		const vertices = sanitizeModelCollisionVertices(face?.vertices ?? [])
+		if (vertices.length < 3) {
+			continue
+		}
+		const normal = computeModelCollisionFaceNormal(vertices)
+		if (!normal) {
+			continue
+		}
+		const { tangent, bitangent } = buildModelCollisionBasis(normal)
+		modelCollisionOriginHelper.set(0, 0, 0)
+		vertices.forEach((vertex) => modelCollisionOriginHelper.add(vertex))
+		modelCollisionOriginHelper.multiplyScalar(1 / vertices.length)
+		const outline2D: THREE.Vector2[] = []
+		const planarVertices: THREE.Vector3[] = []
+		for (const vertex of vertices) {
+			modelCollisionProjectedHelper.copy(vertex).sub(modelCollisionOriginHelper)
+			const u = modelCollisionProjectedHelper.dot(tangent)
+			const v = modelCollisionProjectedHelper.dot(bitangent)
+			outline2D.push(new THREE.Vector2(u, v))
+			planarVertices.push(
+				modelCollisionOriginHelper.clone()
+					.addScaledVector(tangent, u)
+					.addScaledVector(bitangent, v),
+			)
+		}
+		const triangles = THREE.ShapeUtils.triangulateShape(outline2D, [])
+		const thickness = clampModelCollisionThickness(face?.thickness, definition.defaultThickness)
+		for (const triangle of triangles) {
+			if (!Array.isArray(triangle) || triangle.length !== 3) {
+				continue
+			}
+			const a = planarVertices[triangle[0] ?? -1]
+			const b = planarVertices[triangle[1] ?? -1]
+			const c = planarVertices[triangle[2] ?? -1]
+			if (!a || !b || !c) {
+				continue
+			}
+			const shape = buildModelCollisionTrianglePrismShape(a, b, c, normal, thickness)
+			if (shape) {
+				segments.push({ shape })
+			}
+		}
+	}
+	return segments
 }
 
 export function resolveFloorShape(
@@ -1231,6 +1427,7 @@ export function createRigidbodyBody(
 	let groundSegments: GroundHeightfieldCacheEntry['segments'] | null = null
 	let wallSegments: WallTrimeshCacheEntry['segments'] | null = null
 	let floorSegments: FloorShapeCacheEntry['segments'] | null = null
+	let modelCollisionSegments: Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> | null = null
 	let boundaryWallSegments: ReturnType<typeof buildBoundaryWallSegments> | null = null
 	let needsHeightfieldOrientation = false
 	if (isGroundDynamicMesh(node.dynamicMesh)) {
@@ -1254,6 +1451,14 @@ export function createRigidbodyBody(
 		const entry = resolveFloorShape(node, node.dynamicMesh, floorShapeCache)
 		if (entry) {
 			floorSegments = entry.segments
+			offsetTuple = null
+		}
+	}
+	const modelCollisionDefinition = resolveModelCollisionDynamicMesh(node)
+	if (!resolvedShape && !wallSegments && !floorSegments && modelCollisionDefinition) {
+		const segments = resolveModelCollisionFaceSegments(modelCollisionDefinition)
+		if (segments.length) {
+			modelCollisionSegments = segments
 			offsetTuple = null
 		}
 	}
@@ -1281,7 +1486,7 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
-	if (!resolvedShape && !groundSegments && !wallSegments && !floorSegments && !boundaryWallSegments?.length) {
+	if (!resolvedShape && !groundSegments && !wallSegments && !floorSegments && !modelCollisionSegments?.length && !boundaryWallSegments?.length) {
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
@@ -1359,6 +1564,16 @@ export function createRigidbodyBody(
 					(oz ?? 0) * shapeScale.z,
 				),
 			)
+			addedShapeCount += 1
+		}
+	}
+	if (modelCollisionSegments && modelCollisionSegments.length) {
+		for (const segment of modelCollisionSegments) {
+			const shape = createCannonShape(segment.shape, loggerTag, shapeScale)
+			if (!shape) {
+				continue
+			}
+			body.addShape(shape)
 			addedShapeCount += 1
 		}
 	}

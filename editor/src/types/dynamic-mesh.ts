@@ -9,6 +9,7 @@ const LEGACY_DYNAMIC_MESH_TYPE_MAP: Record<string, DynamicMeshType> = {
   landform: 'Landform',
   guideRoute: 'GuideRoute',
   region: 'Region',
+  modelCollision: 'ModelCollision',
 }
 
 export function normalizeDynamicMeshType(input: DynamicMeshType | string | null | undefined): DynamicMeshType {
