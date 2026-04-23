@@ -185,6 +185,12 @@ export async function getResourceAssetApi(id: string) {
   return requestClient.get<ResourceAssetItem>(`/admin/resources/assets/${id}`);
 }
 
+export async function downloadResourceAssetApi(id: string) {
+  return requestClient.get<ArrayBuffer>(`/admin/resources/assets/${id}/download`, {
+    responseType: 'arraybuffer',
+  });
+}
+
 export async function createResourceAssetApi(payload: FormData) {
   return requestClient.post<{ asset: ResourceAssetItem }>('/admin/resources/assets', payload, {
     headers: {

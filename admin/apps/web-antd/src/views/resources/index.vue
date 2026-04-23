@@ -6,13 +6,13 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import {
-  buildResourceDownloadUrl,
   bulkMoveResourceAssetsCategoryApi,
   bulkUpdateResourceAssetsApi,
   createResourceAssetApi,
   createResourceCategoryTreeItemApi,
   deleteResourceAssetApi,
   deleteResourceCategoryTreeItemApi,
+  downloadResourceAssetApi,
   getResourceAssetApi,
   listResourceCategoriesApi,
   listResourceCategoriesTreeApi,
@@ -918,8 +918,16 @@ async function submitBatchEdit() {
   }
 }
 
-function handleDownload(id: string) {
-  window.open(buildResourceDownloadUrl(id), '_blank');
+async function handleDownload(row: ResourceAssetItem) {
+  const blob = await downloadResourceAssetApi(row.id);
+  const objectUrl = window.URL.createObjectURL(new Blob([blob]));
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = row.originalFilename || row.name || 'asset-file';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(objectUrl);
 }
 
 function getThumbnailUrl(row: ResourceAssetItem) {
@@ -1256,7 +1264,7 @@ onMounted(async () => {
         <template v-else-if="column.key === 'actions'">
           <Space>
             <Tooltip title="下载">
-              <Button type="text" size="small" @click="handleDownload(record.id)">
+              <Button type="text" size="small" @click="handleDownload(asAssetRecord(record))">
                 <DownloadOutlined />
               </Button>
             </Tooltip>
