@@ -411,6 +411,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     icon: 'mdi-clipboard-text-outline',
     createDefaultParams(): InfoBoardBehaviorParams {
       return {
+        title: '展示板',
         content: 'Information board content.',
         contentAssetId: null,
         audioAssetId: null,
@@ -1282,6 +1283,7 @@ export function ensureBehaviorParams(
         return {
           type: 'showInfoBoard',
           params: {
+            title: typeof params?.title === 'string' ? params.title.trim() : '展示板',
             content: typeof params?.content === 'string' ? params.content : 'Information board content.',
             contentAssetId: normalizeAssetId(params?.contentAssetId),
             audioAssetId: normalizeAssetId(params?.audioAssetId),

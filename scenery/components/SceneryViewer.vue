@@ -125,12 +125,12 @@
       >
         <view class="viewer-info-board" :style="infoBoardPanelStyle">
           <view class="viewer-info-board__header">
-            <text class="viewer-info-board__title">展示板</text>
+            <text class="viewer-info-board__title">{{ infoBoardOverlayTitle || '展示板' }}</text>
             <button class="viewer-info-board__close" type="button" hover-class="none" @tap="hideInfoBoard">
               <text class="viewer-info-board__close-icon">✕</text>
             </button>
           </view>
-          <scroll-view scroll-y class="viewer-info-board__body">
+          <scroll-view scroll-y scroll-with-animation class="viewer-info-board__body" :scroll-top="infoBoardScrollTop">
             <text v-if="infoBoardOverlayLoading" class="viewer-info-board__loading">正在加载内容…</text>
             <text v-else class="viewer-info-board__content">{{ infoBoardOverlayContent || '暂无内容' }}</text>
           </scroll-view>
@@ -2121,7 +2121,9 @@ type InfoBoardOverlayPlacement = {
 const infoBoardOverlayVisible = ref(false);
 const infoBoardOverlayLoading = ref(false);
 const infoBoardOverlayNodeId = ref<string | null>(null);
+const infoBoardOverlayTitle = ref('展示板');
 const infoBoardOverlayContent = ref('');
+const infoBoardScrollTop = ref(0);
 const infoBoardOverlayPlacement = reactive<InfoBoardOverlayPlacement>({
   xPercent: 78,
   yPercent: 18,
@@ -2129,6 +2131,7 @@ const infoBoardOverlayPlacement = reactive<InfoBoardOverlayPlacement>({
   opacity: 1,
 });
 let infoBoardOverlayGeneration = 0;
+let infoBoardScrollSequence = 0;
 let infoBoardAudioContext: ViewerInnerAudioContext | null = null;
 let infoBoardAudioResolved: ResolvedAssetUrl | null = null;
 
@@ -2237,10 +2240,28 @@ const infoBoardPanelStyle = computed(() => {
   const viewportWidth = lanternViewportSize.width || 375;
   const viewportHeight = lanternViewportSize.height || 667;
   return {
-    maxWidth: `${Math.round(Math.min(viewportWidth * 0.84, 560))}px`,
-    maxHeight: `${Math.round(Math.min(viewportHeight * 0.58, viewportHeight - 128))}px`,
+    maxWidth: `${Math.round(Math.min(viewportWidth * 0.86, 620))}px`,
+    maxHeight: `${Math.round(Math.min(viewportHeight * 0.6, viewportHeight - 116))}px`,
   };
 });
+
+async function scrollInfoBoardToBottom(): Promise<void> {
+  await nextTick();
+  infoBoardScrollSequence += 1;
+  infoBoardScrollTop.value = 100000 + infoBoardScrollSequence;
+}
+
+watch(
+  [infoBoardOverlayVisible, infoBoardOverlayLoading, infoBoardOverlayContent],
+  ([visible]) => {
+    if (!visible) {
+      infoBoardScrollTop.value = 0;
+      return;
+    }
+    void scrollInfoBoardToBottom();
+  },
+  { flush: 'post' },
+);
 
 const lanternAssets = useLanternAssets({
   loadTextAssetContent: (assetId) => loadTextAssetContent(assetId),
@@ -3491,6 +3512,7 @@ function resetInfoBoardOverlay(): void {
   infoBoardOverlayVisible.value = false;
   infoBoardOverlayLoading.value = false;
   infoBoardOverlayNodeId.value = null;
+  infoBoardOverlayTitle.value = '展示板';
   infoBoardOverlayContent.value = '';
   infoBoardOverlayPlacement.xPercent = 78;
   infoBoardOverlayPlacement.yPercent = 18;
@@ -3569,6 +3591,10 @@ async function presentInfoBoard(event: Extract<BehaviorRuntimeEvent, { type: 'sh
   infoBoardOverlayVisible.value = true;
   infoBoardOverlayLoading.value = false;
   infoBoardOverlayNodeId.value = event.nodeId;
+  {
+    const title = typeof event.params.title === 'string' ? event.params.title.trim() : '';
+    infoBoardOverlayTitle.value = title.length ? title : '展示板';
+  }
   infoBoardOverlayContent.value = typeof event.params.content === 'string' ? event.params.content : '';
   updateInfoBoardOverlayPlacement(renderContext?.camera ?? null);
 
@@ -12636,8 +12662,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: min(84vw, 560px);
-  padding: 16px 18px 18px;
+  width: min(86vw, 620px);
+  padding: 18px 20px 20px;
   border-radius: 18px;
   border: 1px solid rgba(160, 205, 255, 0.18);
   background: linear-gradient(180deg, rgba(10, 18, 30, 0.96), rgba(16, 24, 38, 0.95));
@@ -12661,8 +12687,8 @@ onUnmounted(() => {
 }
 
 .viewer-info-board__close {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background-color: rgba(255, 255, 255, 0.06);
@@ -12673,7 +12699,7 @@ onUnmounted(() => {
 }
 
 .viewer-info-board__close-icon {
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1;
   color: #fff;
 }
@@ -12687,8 +12713,8 @@ onUnmounted(() => {
 .viewer-info-board__loading,
 .viewer-info-board__content {
   display: block;
-  font-size: 28rpx;
-  line-height: 1.7;
+  font-size: 30rpx;
+  line-height: 1.72;
   white-space: pre-wrap;
   word-break: break-word;
 }

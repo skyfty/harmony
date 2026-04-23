@@ -1135,6 +1135,7 @@ type InfoBoardOverlayPlacement = {
 const infoBoardOverlayVisible = ref(false)
 const infoBoardOverlayLoading = ref(false)
 const infoBoardOverlayNodeId = ref<string | null>(null)
+const infoBoardOverlayTitle = ref('展示板')
 const infoBoardOverlayContent = ref('')
 const infoBoardOverlayPlacement = reactive<InfoBoardOverlayPlacement>({
 	xPercent: 78,
@@ -5046,6 +5047,7 @@ function resetInfoBoardOverlay(): void {
 	infoBoardOverlayVisible.value = false
 	infoBoardOverlayLoading.value = false
 	infoBoardOverlayNodeId.value = null
+	infoBoardOverlayTitle.value = '展示板'
 	infoBoardOverlayContent.value = ''
 	infoBoardOverlayPlacement.xPercent = 78
 	infoBoardOverlayPlacement.yPercent = 18
@@ -5123,6 +5125,10 @@ async function presentInfoBoard(event: Extract<BehaviorRuntimeEvent, { type: 'sh
 	infoBoardOverlayVisible.value = true
 	infoBoardOverlayLoading.value = false
 	infoBoardOverlayNodeId.value = event.nodeId
+	{
+		const title = typeof event.params.title === 'string' ? event.params.title.trim() : ''
+		infoBoardOverlayTitle.value = title.length ? title : '展示板'
+	}
 	infoBoardOverlayContent.value = typeof event.params.content === 'string' ? event.params.content : ''
 	updateInfoBoardOverlayPlacement(camera)
 
@@ -13414,6 +13420,7 @@ watch(
 			>
 				<div class="scene-preview__info-board-header">
 					<div>
+						<div class="scene-preview__info-board-title">{{ infoBoardOverlayTitle }}</div>
 					</div>
 					<v-btn
 						icon="mdi-close"
@@ -14588,13 +14595,13 @@ watch(
 	gap: 16px;
 	padding: 22px 24px;
 	border-radius: 22px;
-	background: rgba(10, 16, 26, 0.56);
-	box-shadow: 0 24px 72px rgba(0, 0, 0, 0.36);
+	background: rgba(10, 16, 26, 0.26);
+	box-shadow: 0 24px 72px rgba(0, 0, 0, 0.16);
 	backdrop-filter: blur(18px) saturate(140%);
 	-webkit-backdrop-filter: blur(18px) saturate(140%);
 	color: #eef3ff;
 	pointer-events: auto;
-	border: 1px solid rgba(255, 255, 255, 0.16);
+	border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .scene-preview__info-board-header {

@@ -635,6 +635,8 @@ export interface ShowAlertBehaviorParams {
 }
 
 export interface InfoBoardBehaviorParams {
+  /** Title shown in the info board header. */
+  title: string
   /** Primary content text displayed inside the info board. */
   content: string
   /** Optional asset identifier that overrides the inline content. */

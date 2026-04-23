@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { InfoBoardBehaviorParams } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -18,6 +18,11 @@ const emit = defineEmits<{
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 
+const titleDraft = ref('展示板')
+const contentDraft = ref('Information board content.')
+const contentAssetIdDraft = ref<string | null>(null)
+const audioAssetIdDraft = ref<string | null>(null)
+
 const contentDragActive = ref(false)
 const audioDragActive = ref(false)
 const assetDialogVisible = ref(false)
@@ -27,14 +32,29 @@ const assetPickerTarget = ref<'content' | 'audio'>('content')
 const textAssetExtensions = ['txt']
 const audioAssetExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus', 'webm']
 
-const params = computed<InfoBoardBehaviorParams>(() => ({
-  content: props.modelValue?.content ?? 'Information board content.',
-  contentAssetId: props.modelValue?.contentAssetId ?? null,
-  audioAssetId: props.modelValue?.audioAssetId ?? null,
-}))
+watch(
+  () => props.modelValue,
+  (value) => {
+    titleDraft.value = typeof value?.title === 'string' ? value.title : '展示板'
+    contentDraft.value = typeof value?.content === 'string' ? value.content : 'Information board content.'
+    contentAssetIdDraft.value = typeof value?.contentAssetId === 'string' && value.contentAssetId.trim().length ? value.contentAssetId : null
+    audioAssetIdDraft.value = typeof value?.audioAssetId === 'string' && value.audioAssetId.trim().length ? value.audioAssetId : null
+  },
+  { immediate: true },
+)
+
+function emitParamsUpdate(overrides: Partial<InfoBoardBehaviorParams> = {}) {
+  emit('update:modelValue', {
+    title: titleDraft.value,
+    content: contentDraft.value,
+    contentAssetId: contentAssetIdDraft.value,
+    audioAssetId: audioAssetIdDraft.value,
+    ...overrides,
+  })
+}
 
 const contentAsset = computed<ProjectAsset | null>(() => {
-  const assetId = params.value.contentAssetId?.trim()
+  const assetId = contentAssetIdDraft.value?.trim()
   if (!assetId) {
     return null
   }
@@ -42,7 +62,7 @@ const contentAsset = computed<ProjectAsset | null>(() => {
 })
 
 const audioAsset = computed<ProjectAsset | null>(() => {
-  const assetId = params.value.audioAssetId?.trim()
+  const assetId = audioAssetIdDraft.value?.trim()
   if (!assetId) {
     return null
   }
@@ -51,9 +71,9 @@ const audioAsset = computed<ProjectAsset | null>(() => {
 
 const dialogAssetId = computed(() => {
   if (assetPickerTarget.value === 'audio') {
-    return params.value.audioAssetId ?? ''
+    return audioAssetIdDraft.value ?? ''
   }
-  return params.value.contentAssetId ?? ''
+  return contentAssetIdDraft.value ?? ''
 })
 
 const dialogAssetType = computed(() => (assetPickerTarget.value === 'audio' ? 'audio' : 'file'))
@@ -61,26 +81,14 @@ const dialogExtensions = computed(() => (assetPickerTarget.value === 'audio' ? a
 const dialogTitle = computed(() => (assetPickerTarget.value === 'audio' ? 'Select Narration Audio' : 'Select Text Asset'))
 const dialogConfirmText = computed(() => (assetPickerTarget.value === 'audio' ? '选择' : '选择'))
 
-function updateField<Key extends keyof InfoBoardBehaviorParams>(key: Key, value: InfoBoardBehaviorParams[Key]) {
-  emit('update:modelValue', {
-    ...params.value,
-    [key]: value,
-  })
-}
-
-function setContent(value: string) {
-  updateField('content', value)
-  if (params.value.contentAssetId) {
-    updateField('contentAssetId', null)
-  }
-}
-
 function setAudioAsset(assetId: string | null) {
-  updateField('audioAssetId', assetId)
+  audioAssetIdDraft.value = assetId
+  emitParamsUpdate({ audioAssetId: assetId })
 }
 
 function setContentAsset(assetId: string | null) {
-  updateField('contentAssetId', assetId)
+  contentAssetIdDraft.value = assetId
+  emitParamsUpdate({ contentAssetId: assetId })
 }
 
 function parseDragPayload(event: DragEvent): { assetId: string } | null {
@@ -249,6 +257,30 @@ function clearAudioAsset() {
   setAudioAsset(null)
 }
 
+function setTitleDraft(value: string) {
+  titleDraft.value = value
+}
+
+function setContentDraft(value: string) {
+  contentDraft.value = value
+}
+
+function commitTitle() {
+  emitParamsUpdate({ title: titleDraft.value })
+}
+
+function commitContent() {
+  const currentContent = contentDraft.value
+  const currentParams = props.modelValue
+  if (contentAssetIdDraft.value && currentParams?.content !== currentContent) {
+    contentAssetIdDraft.value = null
+  }
+  emitParamsUpdate({
+    content: currentContent,
+    contentAssetId: contentAssetIdDraft.value,
+  })
+}
+
 function openAssetDialog(kind: 'content' | 'audio', event?: MouseEvent) {
   assetPickerTarget.value = kind
   if (event) {
@@ -280,11 +312,29 @@ function handleAssetDialogCancel() {
 
 <template>
   <div class="info-board-params">
+    <section class="info-board-params__section">
+      <div class="info-board-params__section-header">
+        <div>
+          <div class="info-board-params__section-title">Board Title</div>
+        </div>
+      </div>
+      <v-text-field
+        :model-value="titleDraft"
+        class="info-board-params__textfield"
+        label=""
+        density="compact"
+        variant="underlined"
+        placeholder="Board Title"
+        @update:model-value="setTitleDraft($event ?? '')"
+        @blur="commitTitle"
+      />
+    </section>
+
     <section
       class="info-board-params__section"
       :class="{
         'is-active-drop': contentDragActive,
-        'has-asset': !!params.contentAssetId,
+        'has-asset': !!contentAssetIdDraft,
       }"
       @dragenter="handleContentDragEnter"
       @dragover="handleContentDragOver"
@@ -294,27 +344,27 @@ function handleAssetDialogCancel() {
       <div class="info-board-params__section-header">
         <div>
           <div class="info-board-params__section-title">Display Content</div>
-          <div class="info-board-params__section-hint">Type text directly, drop a .txt asset, or pick one from the library.</div>
         </div>
         <v-btn variant="text" size="small" prepend-icon="mdi-folder-text" @click="openAssetDialog('content', $event)">
           Choose TXT
         </v-btn>
       </div>
       <v-textarea
-        :model-value="params.content"
+        :model-value="contentDraft"
         class="info-board-params__textarea"
         label="Board Content"
         rows="4"
         auto-grow
         density="compact"
         variant="underlined"
-        :placeholder="params.contentAssetId ? 'Text asset is linked, but you can still edit manually' : 'Type or drop board text here'"
-        @update:model-value="setContent($event ?? '')"
+        :placeholder="contentAssetIdDraft ? 'Text asset is linked, but you can still edit manually' : 'Type or drop board text here'"
+        @update:model-value="setContentDraft($event ?? '')"
+        @blur="commitContent"
       />
-      <div v-if="params.contentAssetId" class="info-board-params__asset-row">
+      <div v-if="contentAssetIdDraft" class="info-board-params__asset-row">
         <div class="info-board-params__asset-info">
           <v-icon icon="mdi-file-document-outline" size="18" />
-          <span class="info-board-params__asset-name">{{ contentAsset?.name ?? params.contentAssetId }}</span>
+          <span class="info-board-params__asset-name">{{ contentAsset?.name ?? contentAssetIdDraft }}</span>
         </div>
         <v-btn icon="mdi-close" size="x-small" variant="text" @click.stop="clearContentAsset" />
       </div>
@@ -324,7 +374,7 @@ function handleAssetDialogCancel() {
       class="info-board-params__section"
       :class="{
         'is-active-drop': audioDragActive,
-        'has-asset': !!params.audioAssetId,
+        'has-asset': !!audioAssetIdDraft,
       }"
       @dragenter="handleAudioDragEnter"
       @dragover="handleAudioDragOver"
@@ -340,10 +390,10 @@ function handleAssetDialogCancel() {
           Choose Audio
         </v-btn>
       </div>
-      <div v-if="params.audioAssetId" class="info-board-params__asset-row">
+      <div v-if="audioAssetIdDraft" class="info-board-params__asset-row">
         <div class="info-board-params__asset-info">
           <v-icon icon="mdi-volume-high" size="18" />
-          <span class="info-board-params__asset-name">{{ audioAsset?.name ?? params.audioAssetId }}</span>
+          <span class="info-board-params__asset-name">{{ audioAsset?.name ?? audioAssetIdDraft }}</span>
         </div>
         <v-btn icon="mdi-close" size="x-small" variant="text" @click.stop="clearAudioAsset" />
       </div>
