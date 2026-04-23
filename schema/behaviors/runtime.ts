@@ -5,6 +5,7 @@ import type {
   BubbleBehaviorParams,
   DelayBehaviorParams,
   HideBehaviorParams,
+  InfoBoardBehaviorParams,
   LanternBehaviorParams,
   LoadSceneBehaviorParams,
   MoveToBehaviorParams,
@@ -68,6 +69,23 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       params: ShowAlertBehaviorParams
       token: string
+    }
+  | {
+      type: 'show-info-board'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      params: InfoBoardBehaviorParams
+    }
+  | {
+      type: 'hide-info-board'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
     }
   | {
       type: 'show-bubble'
@@ -530,6 +548,30 @@ function createShowBubbleEvent(state: BehaviorSequenceState, behavior: SceneBeha
   }
 }
 
+function createShowInfoBoardEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  const params = behavior.script.params as InfoBoardBehaviorParams
+  return {
+    type: 'show-info-board',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    params,
+  }
+}
+
+function createHideInfoBoardEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  return {
+    type: 'hide-info-board',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+  }
+}
+
 function createLanternEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
   const token = createToken(state.id, state.index)
   pendingTokens.set(token, {
@@ -870,6 +912,10 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'showAlert':
         events.push(createShowAlertEvent(state, behavior))
         return events
+      case 'showInfoBoard':
+        events.push(createShowInfoBoardEvent(state, behavior))
+        state.index += 1
+        continue
       case 'bubble':
         events.push(createShowBubbleEvent(state, behavior))
         return events
@@ -885,6 +931,10 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'lantern':
         events.push(createLanternEvent(state, behavior))
         return events
+      case 'hideInfoBoard':
+        events.push(createHideInfoBoardEvent(state, behavior))
+        state.index += 1
+        continue
       case 'watch':
         events.push(createWatchEvent(state, behavior))
         return events

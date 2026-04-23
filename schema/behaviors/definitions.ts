@@ -13,6 +13,7 @@ import type {
   BubbleBehaviorAnchorMode,
   BubbleBehaviorParams,
   BubbleBehaviorVariant,
+  InfoBoardBehaviorParams,
   PlaySoundBehaviorParams,
   SoundDistanceResponseMode,
   SoundBehaviorCommand,
@@ -401,6 +402,28 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {
         targetNodeId: null,
       }
+    },
+  },
+  {
+    id: 'showInfoBoard',
+    label: 'Show Info Board',
+    description: 'Show an information board overlay with optional narration.',
+    icon: 'mdi-clipboard-text-outline',
+    createDefaultParams(): InfoBoardBehaviorParams {
+      return {
+        content: 'Information board content.',
+        contentAssetId: null,
+        audioAssetId: null,
+      }
+    },
+  },
+  {
+    id: 'hideInfoBoard',
+    label: 'Hide Info Board',
+    description: 'Hide the active information board overlay and stop narration.',
+    icon: 'mdi-clipboard-remove-outline',
+    createDefaultParams(): HidePurposeBehaviorParams {
+      return {}
     },
   },
   {
@@ -1254,6 +1277,22 @@ export function ensureBehaviorParams(
           },
         }
       }
+      case 'showInfoBoard': {
+        const params = script.params as Partial<InfoBoardBehaviorParams> | undefined
+        return {
+          type: 'showInfoBoard',
+          params: {
+            content: typeof params?.content === 'string' ? params.content : 'Information board content.',
+            contentAssetId: normalizeAssetId(params?.contentAssetId),
+            audioAssetId: normalizeAssetId(params?.audioAssetId),
+          },
+        }
+      }
+      case 'hideInfoBoard':
+        return {
+          type: 'hideInfoBoard',
+          params: {},
+        }
       case 'lantern': {
         const params = script.params as Partial<LanternBehaviorParams> | undefined
         return {

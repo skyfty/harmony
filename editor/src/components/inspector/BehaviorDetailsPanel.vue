@@ -21,6 +21,8 @@ import MoveToParams from '@/components/inspector/behavior/MoveToParams.vue'
 import ShowAlertParams from '@/components/inspector/behavior/ShowAlertParams.vue'
 import BubbleParams from '@/components/inspector/behavior/BubbleParams.vue'
 import PlaySoundParams from '@/components/inspector/behavior/PlaySoundParams.vue'
+import InfoBoardParams from '@/components/inspector/behavior/InfoBoardParams.vue'
+import InfoBoardHideParams from '@/components/inspector/behavior/InfoBoardHideParams.vue'
 import WatchParams from '@/components/inspector/behavior/WatchParams.vue'
 import ShowParams from '@/components/inspector/behavior/ShowParams.vue'
 import HideParams from '@/components/inspector/behavior/HideParams.vue'
@@ -91,6 +93,8 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   showAlert: ShowAlertParams,
   bubble: BubbleParams,
   playSound: PlaySoundParams,
+  showInfoBoard: InfoBoardParams,
+  hideInfoBoard: InfoBoardHideParams,
   watch: WatchParams,
   showPurpose: WatchParams,
   show: ShowParams,
