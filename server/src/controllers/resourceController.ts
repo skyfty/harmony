@@ -789,12 +789,9 @@ function collectBundleAssetReferenceIdsFromValue(value: unknown, bucket: Set<str
     if (!normalized) {
       return
     }
-    if (/assetid|asset_id|asset$/i.test(parentKey) || parentKey === 'id') {
+    if (/assetid|asset_id|asset$/i.test(parentKey)) {
       bucket.add(normalized)
       return
-    }
-    if (/^[a-z0-9_-]{8,}$/i.test(normalized)) {
-      bucket.add(normalized)
     }
     return
   }

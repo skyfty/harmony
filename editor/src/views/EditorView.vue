@@ -200,9 +200,6 @@ const filteredExportDiagnosticIssues = computed(() => {
       return true
     }
     const haystack = [
-      issue.message,
-      issue.assetId ?? '',
-      issue.path ?? '',
       issue.code,
       ...issue.references.map((reference) => `${reference.path} ${reference.nodeName ?? ''} ${reference.nodeId ?? ''}`),
     ]

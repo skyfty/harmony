@@ -431,7 +431,12 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
     await Promise.all(
       unknownAssetIds.map(async (assetId) => {
         try {
-          const serverAsset = await fetchResourceAsset(assetId)
+          const registryEntry = editable.assetRegistry?.[assetId]
+          const serverAssetId =
+            registryEntry?.sourceType === 'server' && typeof registryEntry.serverAssetId === 'string' && registryEntry.serverAssetId.trim().length
+              ? registryEntry.serverAssetId.trim()
+              : assetId
+          const serverAsset = await fetchResourceAsset(serverAssetId)
           const mapped = mapServerAssetToProjectAsset(serverAsset)
           const downloadUrl = typeof mapped.downloadUrl === 'string' ? mapped.downloadUrl.trim() : ''
           if (!downloadUrl) {
@@ -445,7 +450,15 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
             },
           }
           registryPatched = true
-        } catch {
+        } catch (error) {
+          console.warn('Failed to resolve export asset download URL', {
+            registryAssetId: assetId,
+            serverAssetId: editable.assetRegistry?.[assetId]?.sourceType === 'server' && typeof editable.assetRegistry?.[assetId]?.serverAssetId === 'string'
+              ? editable.assetRegistry[assetId].serverAssetId
+              : assetId,
+            sourceType: editable.assetRegistry?.[assetId]?.sourceType ?? null,
+            error,
+          })
           // Keep unresolved ids; downstream export will report explicit missing downloadUrl if still required.
         }
       }),

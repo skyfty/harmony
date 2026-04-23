@@ -55,7 +55,6 @@ function collectLodPresetDependencyAssetIds(preset: LodPresetData | null | undef
   return normalizeAssetIdsWithRegistry(
     [
       ...preset.props.levels.map((level) => getLodLevelAssetId(level) ?? ''),
-      ...Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>),
     ],
     preset.assetRegistry,
   )

@@ -18,6 +18,11 @@ Use this skill when adding or changing interaction-driven behavior in the Harmon
 - `editor/`, `admin/`, `uploader/`, `viewer/`, and `exhibition/` are app-specific frontends.
 - Frontend runtime config is loaded from `/config/app-config.json`.
 
+## Asset Reference Naming
+- Any field that stores an asset reference must be named with an `assetId` suffix, for example `modelAssetId`, `billboardAssetId`, `sourceAssetId`, or `serverAssetId`.
+- Do not introduce generic `id` fields for asset references in config payloads or schemas, because dependency collectors such as `editor/src/utils/assetDependencySubset.ts` rely on the `assetId` suffix to identify references precisely.
+- If a data shape needs a non-reference identifier, name it explicitly as something else, such as `id`, `nodeId`, or `assetType`, and keep it out of asset dependency traversal rules unless it is intentionally a reference field.
+
 ## Interaction Workflow
 1. Identify the user-facing action and the affected app or package.
 2. Trace the data path: UI -> store or composable -> schema -> server -> persistence.

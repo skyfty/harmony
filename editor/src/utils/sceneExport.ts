@@ -118,7 +118,12 @@ async function patchUnknownExportRegistryEntries(
   await Promise.all(
     unknownAssetIds.map(async (assetId) => {
       try {
-        const serverAsset = await fetchResourceAsset(assetId)
+        const registryEntry = assetRegistry[assetId]
+        const serverAssetId =
+          registryEntry?.sourceType === 'server' && typeof registryEntry.serverAssetId === 'string' && registryEntry.serverAssetId.trim().length
+            ? registryEntry.serverAssetId.trim()
+            : assetId
+        const serverAsset = await fetchResourceAsset(serverAssetId)
         const mappedAsset = mapServerAssetToProjectAsset(serverAsset)
         const downloadUrl = typeof mappedAsset.downloadUrl === 'string' ? mappedAsset.downloadUrl.trim() : ''
         if (!downloadUrl) {
@@ -132,7 +137,15 @@ async function patchUnknownExportRegistryEntries(
           sourceType: 'url',
           url: downloadUrl,
         }
-      } catch {
+      } catch (error) {
+        console.warn('Failed to resolve export asset download URL', {
+          registryAssetId: assetId,
+          serverAssetId: assetRegistry[assetId]?.sourceType === 'server' && typeof assetRegistry[assetId]?.serverAssetId === 'string'
+            ? assetRegistry[assetId].serverAssetId
+            : assetId,
+          sourceType: assetRegistry[assetId]?.sourceType ?? null,
+          error,
+        })
         // Keep unresolved ids so diagnostics can surface the real export blocker.
       }
     }),
