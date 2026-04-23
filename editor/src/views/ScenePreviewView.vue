@@ -5088,8 +5088,8 @@ function updateInfoBoardOverlayPlacement(activeCamera: THREE.Camera | null): voi
 	}
 	infoBoardOverlayPlacement.xPercent = placement.xPercent
 	infoBoardOverlayPlacement.yPercent = placement.yPercent
-	infoBoardOverlayPlacement.scale = placement.scale
-	infoBoardOverlayPlacement.opacity = placement.opacity
+	infoBoardOverlayPlacement.scale = 1
+	infoBoardOverlayPlacement.opacity = 1
 }
 
 async function playInfoBoardAudio(assetId: string, generation: number): Promise<void> {
@@ -7966,12 +7966,10 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'sequence-complete':
 			clearBehaviorAlert()
 			resetLanternOverlay()
-			resetInfoBoardOverlay()
 			break
 		case 'sequence-error':
 			clearBehaviorAlert()
 			resetLanternOverlay()
-			resetInfoBoardOverlay()
 			console.error('[ScenePreview] Behavior sequence error', event.message)
 			break
 		default:
@@ -8971,7 +8969,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	setCameraViewState('level', null)
 	dismissBehaviorAlert()
 	resetLanternOverlay()
-		resetInfoBoardOverlay()
 	resetAssetResolutionCaches()
 	lazyPlaceholderStates.clear()
 	activeLazyLoadCount = 0
@@ -13417,8 +13414,6 @@ watch(
 			>
 				<div class="scene-preview__info-board-header">
 					<div>
-						<p class="scene-preview__info-board-eyebrow">信息板</p>
-						<h3 class="scene-preview__info-board-title">节点介绍</h3>
 					</div>
 					<v-btn
 						icon="mdi-close"
@@ -14579,7 +14574,7 @@ watch(
 	align-items: center;
 	justify-content: center;
 	padding: clamp(18px, 4vw, 40px);
-	background: rgba(4, 8, 14, 0.22);
+	background: transparent;
 	z-index: 2250;
 	pointer-events: auto;
 }
@@ -14593,12 +14588,13 @@ watch(
 	gap: 16px;
 	padding: 22px 24px;
 	border-radius: 22px;
-	background: rgba(10, 16, 26, 0.94);
-	box-shadow: 0 24px 72px rgba(0, 0, 0, 0.48);
-	backdrop-filter: blur(14px);
+	background: rgba(10, 16, 26, 0.56);
+	box-shadow: 0 24px 72px rgba(0, 0, 0, 0.36);
+	backdrop-filter: blur(18px) saturate(140%);
+	-webkit-backdrop-filter: blur(18px) saturate(140%);
 	color: #eef3ff;
 	pointer-events: auto;
-	border: 1px solid rgba(255, 255, 255, 0.08);
+	border: 1px solid rgba(255, 255, 255, 0.16);
 }
 
 .scene-preview__info-board-header {

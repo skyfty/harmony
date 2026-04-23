@@ -174,6 +174,18 @@ const selectedExpFogPreset = computed<ExpFogPreset>(() => {
   return 'custom'
 })
 
+const fogNearInput = ref(formatFogFieldValue(environmentSettings.value.fogNear))
+const fogFarInput = ref(formatFogFieldValue(environmentSettings.value.fogFar))
+
+watch(
+  () => [environmentSettings.value.fogNear, environmentSettings.value.fogFar],
+  ([near, far]) => {
+    fogNearInput.value = formatFogFieldValue(typeof near === 'number' ? near : 0)
+    fogFarInput.value = formatFogFieldValue(typeof far === 'number' ? far : 0)
+  },
+  { immediate: true },
+)
+
 const backgroundAsset = computed(() => {
   const assetId = environmentSettings.value.background.hdriAssetId
   if (!assetId) {
@@ -597,44 +609,57 @@ function applyExpFogPreset(preset: unknown) {
   })
 }
 
-function handleFogNearInput(value: unknown) {
-  if (value === '' || value === null || value === undefined) {
-    return
+function formatFogFieldValue(value: number | undefined): string {
+  return (value ?? 0).toFixed(2)
+}
+
+function parseFogInput(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed.length) {
+    return null
   }
-  const numeric = typeof value === 'number' ? value : Number(value)
+  const numeric = Number(trimmed)
   if (!Number.isFinite(numeric)) {
+    return null
+  }
+  return numeric
+}
+
+function syncFogInputs() {
+  fogNearInput.value = formatFogFieldValue(environmentSettings.value.fogNear)
+  fogFarInput.value = formatFogFieldValue(environmentSettings.value.fogFar)
+}
+
+function commitFogNearInput() {
+  const numeric = parseFogInput(fogNearInput.value)
+  if (numeric === null) {
+    fogNearInput.value = formatFogFieldValue(environmentSettings.value.fogNear)
     return
   }
   const clamped = Math.max(0, Math.min(100000, numeric))
   const nextFar = Math.max(clamped + 0.001, environmentSettings.value.fogFar)
   if (Math.abs(clamped - environmentSettings.value.fogNear) < 1e-4 && Math.abs(nextFar - environmentSettings.value.fogFar) < 1e-4) {
+    fogNearInput.value = formatFogFieldValue(environmentSettings.value.fogNear)
     return
   }
   sceneStore.patchEnvironmentSettings({ fogNear: clamped, fogFar: nextFar })
+  syncFogInputs()
 }
 
-function handleFogFarInput(value: unknown) {
-  if (value === '' || value === null || value === undefined) {
-    return
-  }
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
+function commitFogFarInput() {
+  const numeric = parseFogInput(fogFarInput.value)
+  if (numeric === null) {
+    fogFarInput.value = formatFogFieldValue(environmentSettings.value.fogFar)
     return
   }
   const minFar = environmentSettings.value.fogNear + 0.001
   const clamped = Math.max(minFar, Math.min(100000, numeric))
   if (Math.abs(clamped - environmentSettings.value.fogFar) < 1e-4) {
+    fogFarInput.value = formatFogFieldValue(environmentSettings.value.fogFar)
     return
   }
   sceneStore.patchEnvironmentSettings({ fogFar: clamped })
-}
-
-function formatFogNear(): string {
-  return environmentSettings.value.fogNear.toFixed(2)
-}
-
-function formatFogFar(): string {
-  return environmentSettings.value.fogFar.toFixed(2)
+  syncFogInputs()
 }
 
 function handleFogDensityInput(value: unknown) {
@@ -1705,10 +1730,11 @@ function handleBackgroundDrop(event: DragEvent) {
               inputmode="decimal"
               :min="0"
               :max="100000"
-              :step="0.1"
+              :step="0.01"
               :disabled="isLinearFogAutoFitToGround"
-              :model-value="formatFogNear()"
-              @update:model-value="handleFogNearInput"
+              v-model="fogNearInput"
+              @blur="commitFogNearInput"
+              @keydown.enter.prevent="commitFogNearInput"
             />
           </div>
           <div v-if="isLinearFog" class="slider-row">
@@ -1722,10 +1748,11 @@ function handleBackgroundDrop(event: DragEvent) {
               inputmode="decimal"
               :min="0"
               :max="100000"
-              :step="0.1"
+              :step="0.01"
               :disabled="isLinearFogAutoFitToGround"
-              :model-value="formatFogFar()"
-              @update:model-value="handleFogFarInput"
+              v-model="fogFarInput"
+              @blur="commitFogFarInput"
+              @keydown.enter.prevent="commitFogFarInput"
             />
           </div>
         </section>
