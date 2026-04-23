@@ -32,6 +32,9 @@ importers:
       fflate:
         specifier: ^0.8.2
         version: 0.8.2
+      geotiff:
+        specifier: ^3.0.5
+        version: 3.0.5
       meshwalk:
         specifier: 0.0.1
         version: 0.0.1(three@0.172.0)
@@ -53,6 +56,9 @@ importers:
       three:
         specifier: ^0.172.0
         version: 0.172.0
+      three-geo:
+        specifier: ^1.4.5
+        version: 1.4.5
       three-mesh-bvh:
         specifier: ^0.9.1
         version: 0.9.8(three@0.172.0)
@@ -399,6 +405,9 @@ packages:
   '@parcel/watcher@2.5.6':
     resolution: {integrity: sha512-tmmZ3lQxAe/k/+rNnXQRawJ4NjxO2hqiOLTHvWchtGZULp4RyFeh6aU4XdOYBFe2KE1oShQTv4AblOs2iOrNnQ==}
     engines: {node: '>= 10.0.0'}
+
+  '@petamoriken/float16@3.9.3':
+    resolution: {integrity: sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g==}
 
   '@rolldown/pluginutils@1.0.0-rc.2':
     resolution: {integrity: sha512-izyXV/v+cHiRfozX62W9htOAvwMo4/bXKDrQ+vom1L1qRuexPock/7VZDAhnpHCLNejd3NJ6hiab+tO0D44Rgw==}
@@ -770,6 +779,10 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  geotiff@3.0.5:
+    resolution: {integrity: sha512-OWcL9S9+yDZ6iAlXMt32T1iwUApJM8UiD47xbm6ZP1h33d10fqkPs14EG/ttT5EnefpZSx3G15iDFC5FxUNUwA==}
+    engines: {node: '>=10.19'}
+
   glur@1.1.2:
     resolution: {integrity: sha512-l+8esYHTKOx2G/Aao4lEQ0bnHWg4fWtJbVoZZT9Knxi01pB8C80BR85nONLFwkkQoFRCmXY+BUcGZN3yZ2QsRA==}
 
@@ -783,6 +796,9 @@ packages:
   is-glob@4.0.3:
     resolution: {integrity: sha512-xelSayHH36ZgE7ZWhli7pW34hNbNl8Ojv5KVmkJD4hBdD3th8Tfk9vYasLM+mXWOZhFkgZfxhLSnrwRr4elSSg==}
     engines: {node: '>=0.10.0'}
+
+  lerc@3.0.0:
+    resolution: {integrity: sha512-Rm4J/WaHhRa93nCN2mwWDZFoRVF18G1f47C+kvQWyHGEZxFpTUi73p7lMVSAndyxGt6lJ2/CFbOcf9ra5p8aww==}
 
   lodash-es@4.17.23:
     resolution: {integrity: sha512-kVI48u3PZr38HdYz98UmfPnXl2DXrpdctLrFLCd3kOx1xUkOmpFPx7gCWWM5MPkL/fD8zb+Ph0QzjGFs4+hHWg==}
@@ -823,6 +839,9 @@ packages:
   pako@2.1.0:
     resolution: {integrity: sha512-w+eufiZ1WuJYgPXbV/PO3NCMEc3xqylkKHzp8bxp1uW4qaSNQUkwmLLEc3kKsfz8lpV1F8Ht3U1Cm+9Srog2ug==}
 
+  parse-headers@2.0.6:
+    resolution: {integrity: sha512-Tz11t3uKztEW5FEVZnj1ox8GKblWn+PvHY9TmJV5Mll2uHEwRdR/5Li1OlXoECjLYkApdhWy44ocONwXLiKO5A==}
+
   path-browserify@1.0.1:
     resolution: {integrity: sha512-b7uo2UCUOYZcnF/3ID0lulOJi/bafxa1xPe7ZPsammBSpjSWQkjNxlt635YGS2MiR9GjvuXCtz2emr3jbsz98g==}
 
@@ -856,6 +875,10 @@ packages:
     resolution: {integrity: sha512-tdN8qQGvNjw4CHbY+XXk0JgCXn9QiF21a55rBe5LJAU+kDyC4WQn4+awm2Xfk2lQMk5fKup9XgzTZtGkjBdP9Q==}
     engines: {node: '>=10.13.0'}
     hasBin: true
+
+  quick-lru@6.1.2:
+    resolution: {integrity: sha512-AAFUA5O1d83pIHEhJwWCq/RQcRukCkn/NSm2QsTEMle5f2hP0ChI2+3Xb051PZCkLryI/Ir1MVKviT2FIloaTQ==}
+    engines: {node: '>=12'}
 
   readdirp@4.1.2:
     resolution: {integrity: sha512-GDhwkLfywWL2s6vEjyhri+eXmfH6j1L7JE27WhqLeYzoh/A3DBaYGEj2H/HFZCn/kMfim73FXxEJTw06WtxQwg==}
@@ -899,6 +922,9 @@ packages:
 
   three-csm@4.2.1:
     resolution: {integrity: sha512-yHxKNPB2XMUBgWQTIWR0pESXzGYOdID49f2LdTbz+pNJRzBIMMVEJp5JuRSeCU6c75lmL5L4+FXRHQ1tQIgWEg==}
+
+  three-geo@1.4.5:
+    resolution: {integrity: sha512-HiGMP5gtb4U7hQ/AVng+oCk575k83Mb6B71oasb5qClTc5/EOOmddFoBfEUStJ5VTEn60R1IEhu3vpidZOcqtQ==}
 
   three-mesh-bvh@0.9.8:
     resolution: {integrity: sha512-YphYvdXEZSXdz6iNdWJo1RB6qvSCRyiXPEVSvNU6xVWbLDOdSrfEIsJOpgFOnefdmVEvZ6M+sY0cjh9gl7MvdA==}
@@ -1067,12 +1093,21 @@ packages:
   vuetify_densest@0.1.2:
     resolution: {integrity: sha512-cesjv4dyf8XkFHWOpqZzeT3f61GRHzwjl7HEUQKKCVtXkuaOo2/xf4wd62UPj2o+CaLqgrSAAZ+na2ocyOh3Cg==}
 
+  web-worker@1.5.0:
+    resolution: {integrity: sha512-RiMReJrTAiA+mBjGONMnjVDP2u3p9R1vkcGz6gDIrOMT3oGuYwX2WRMYI9ipkphSuE5XKEhydbhNEJh4NY9mlw==}
+
   webworkify@1.5.0:
     resolution: {integrity: sha512-AMcUeyXAhbACL8S2hqqdqOLqvJ8ylmIbNwUIqQujRSouf4+eUFaXbG6F1Rbu+srlJMmxQWsiU7mOJi0nMBfM1g==}
+
+  xml-utils@1.10.2:
+    resolution: {integrity: sha512-RqM+2o1RYs6T8+3DzDSoTRAUfrvaejbVHcp3+thnAtDKo8LskR+HomLajEy5UjTz24rpka7AxVBRR3g2wTUkJA==}
 
   yn@3.1.1:
     resolution: {integrity: sha512-Ux4ygGWsu2c7isFWe8Yu1YluJmqVhxqK2cLXNQA5AcC3QfbGNpM7fu0Y8b/z16pXLnFxZYvWhd3fhBY9DLmC6Q==}
     engines: {node: '>=6'}
+
+  zstddec@0.2.0:
+    resolution: {integrity: sha512-oyPnDa1X5c13+Y7mA/FDMNJrn4S8UNBe0KCqtDmor40Re7ALrPN6npFwyYVRRh+PqozZQdeg23QtbcamZnG5rA==}
 
 snapshots:
 
@@ -1258,6 +1293,8 @@ snapshots:
       '@parcel/watcher-win32-ia32': 2.5.6
       '@parcel/watcher-win32-x64': 2.5.6
     optional: true
+
+  '@petamoriken/float16@3.9.3': {}
 
   '@rolldown/pluginutils@1.0.0-rc.2': {}
 
@@ -1583,6 +1620,17 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
+  geotiff@3.0.5:
+    dependencies:
+      '@petamoriken/float16': 3.9.3
+      lerc: 3.0.0
+      pako: 2.1.0
+      parse-headers: 2.0.6
+      quick-lru: 6.1.2
+      web-worker: 1.5.0
+      xml-utils: 1.10.2
+      zstddec: 0.2.0
+
   glur@1.1.2: {}
 
   immutable@5.1.4: {}
@@ -1594,6 +1642,8 @@ snapshots:
     dependencies:
       is-extglob: 2.1.1
     optional: true
+
+  lerc@3.0.0: {}
 
   lodash-es@4.17.23: {}
 
@@ -1628,6 +1678,8 @@ snapshots:
   object-assign@4.1.1: {}
 
   pako@2.1.0: {}
+
+  parse-headers@2.0.6: {}
 
   path-browserify@1.0.1: {}
 
@@ -1665,6 +1717,8 @@ snapshots:
 
   prettier@2.8.8:
     optional: true
+
+  quick-lru@6.1.2: {}
 
   readdirp@4.1.2: {}
 
@@ -1724,6 +1778,8 @@ snapshots:
       vue: 3.5.28(typescript@5.9.3)
 
   three-csm@4.2.1: {}
+
+  three-geo@1.4.5: {}
 
   three-mesh-bvh@0.9.8(three@0.172.0):
     dependencies:
@@ -1851,6 +1907,12 @@ snapshots:
       vue: 2.7.16
       vuetify: 2.6.13(vue@2.7.16)
 
+  web-worker@1.5.0: {}
+
   webworkify@1.5.0: {}
 
+  xml-utils@1.10.2: {}
+
   yn@3.1.1: {}
+
+  zstddec@0.2.0: {}

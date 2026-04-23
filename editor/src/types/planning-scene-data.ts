@@ -156,6 +156,51 @@ export interface PlanningTerrainGridSettings {
   cellSize: number
 }
 
+export interface PlanningTerrainGeographicBounds {
+  west: number
+  south: number
+  east: number
+  north: number
+  crs?: string | null
+}
+
+export interface PlanningTerrainWorldBounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+export interface PlanningTerrainOrthophotoData {
+  version: 1
+  sourceFileHash?: string | null
+  filename?: string | null
+  mimeType?: string | null
+  width?: number
+  height?: number
+  previewHash?: string | null
+  previewSize?: { width: number; height: number } | null
+  opacity?: number
+  visible?: boolean
+}
+
+export interface PlanningTerrainDemData {
+  version: 1
+  sourceFileHash?: string | null
+  filename?: string | null
+  mimeType?: string | null
+  width?: number
+  height?: number
+  minElevation?: number | null
+  maxElevation?: number | null
+  sampleStepMeters?: number | null
+  geographicBounds?: PlanningTerrainGeographicBounds | null
+  worldBounds?: PlanningTerrainWorldBounds | null
+  previewHash?: string | null
+  previewSize?: { width: number; height: number } | null
+  orthophoto?: PlanningTerrainOrthophotoData | null
+}
+
 export interface PlanningTerrainData {
   version: 1
   mode?: PlanningTerrainMode
@@ -163,6 +208,7 @@ export interface PlanningTerrainData {
   noise?: PlanningTerrainNoiseSettings
   controlPoints?: PlanningTerrainControlPoint[]
   ridgeValleyLines?: PlanningTerrainRidgeValleyLine[]
+  dem?: PlanningTerrainDemData | null
   /** Reserved for future 2D brush edits; defaults to absolute overrides. */
   overrides?: PlanningTerrainAbsoluteOverrides
   budget?: PlanningTerrainBudget

@@ -1,3 +1,5 @@
+import type { PlanningSceneData } from '@/types/planning-scene-data'
+
 export interface ProjectSummary {
   id: string
   name: string
@@ -11,6 +13,7 @@ export interface ProjectCreateParams {
   defaultScene: { 
     name: string
     groundWidth: number
-    groundDepth: number 
+    groundDepth: number
+    planningData?: PlanningSceneData | null
   }
 }

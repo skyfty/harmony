@@ -17,12 +17,16 @@ import type {
   PlanningPolygonData,
   PlanningPolylineData,
   PlanningSceneData,
+  PlanningTerrainDemData,
   PlanningTerrainData,
   PlanningTerrainBudget,
   PlanningTerrainControlPoint,
   PlanningTerrainFalloff,
+  PlanningTerrainGeographicBounds,
+  PlanningTerrainOrthophotoData,
   PlanningTerrainNoiseMode,
   PlanningTerrainRidgeValleyLine,
+  PlanningTerrainWorldBounds,
 } from '@/types/planning-scene-data'
 import {
   createPlanningImageUrlFromHash,
@@ -31,6 +35,17 @@ import {
   persistPlanningImageLayersToIndexedDB,
   savePlanningImageToIndexedDB as savePlanningImageToStorage,
 } from '@/utils/planningImageStorage'
+import {
+  computeSha256Hex,
+  loadPlanningDemBlobByHash,
+  savePlanningDemToIndexedDB as savePlanningDemToStorage,
+  storePlanningDemBlobByHash,
+} from '@/utils/planningDemStorage'
+import {
+  demImportResultToTerrainData,
+  parsePlanningDemFile,
+  parsePlanningDemBlob,
+} from '@/utils/planningDemImport'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -280,13 +295,85 @@ function createDefaultPlanningTerrain(): PlanningTerrainData {
     noise: { enabled: false, seed: 1337, mode: 'perlin', noiseScale: 40, noiseAmplitude: 1, noiseStrength: 1, detailScale: 1, detailAmplitude: 0, edgeFalloff: 0 },
     controlPoints: [],
     ridgeValleyLines: [],
+    dem: null,
     overrides: { version: 1, cells: {} },
     budget: { vertexCount: 0, expectedKeys: 0, limited: false },
   }
 }
 
+function clonePlanningTerrainGeographicBounds(bounds: PlanningTerrainGeographicBounds | null | undefined): PlanningTerrainGeographicBounds | null {
+  if (!bounds) {
+    return null
+  }
+  return {
+    west: bounds.west,
+    south: bounds.south,
+    east: bounds.east,
+    north: bounds.north,
+    crs: bounds.crs ?? null,
+  }
+}
+
+function clonePlanningTerrainWorldBounds(bounds: PlanningTerrainWorldBounds | null | undefined): PlanningTerrainWorldBounds | null {
+  if (!bounds) {
+    return null
+  }
+  return {
+    minX: bounds.minX,
+    minY: bounds.minY,
+    maxX: bounds.maxX,
+    maxY: bounds.maxY,
+  }
+}
+
+function clonePlanningTerrainOrthophotoData(data: PlanningTerrainOrthophotoData | null | undefined): PlanningTerrainOrthophotoData | null {
+  if (!data) {
+    return null
+  }
+  return {
+    version: 1,
+    sourceFileHash: data.sourceFileHash ?? null,
+    filename: data.filename ?? null,
+    mimeType: data.mimeType ?? null,
+    width: data.width,
+    height: data.height,
+    previewHash: data.previewHash ?? null,
+    previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
+    opacity: data.opacity,
+    visible: data.visible,
+  }
+}
+
+function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undefined): PlanningTerrainDemData | null {
+  if (!data) {
+    return null
+  }
+  return {
+    version: 1,
+    sourceFileHash: data.sourceFileHash ?? null,
+    filename: data.filename ?? null,
+    mimeType: data.mimeType ?? null,
+    width: data.width,
+    height: data.height,
+    minElevation: data.minElevation ?? null,
+    maxElevation: data.maxElevation ?? null,
+    sampleStepMeters: data.sampleStepMeters ?? null,
+    geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
+    worldBounds: clonePlanningTerrainWorldBounds(data.worldBounds ?? null),
+    previewHash: data.previewHash ?? null,
+    previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
+    orthophoto: clonePlanningTerrainOrthophotoData(data.orthophoto ?? null),
+  }
+}
+
 function buildTerrainSnapshot(): PlanningTerrainData | null {
-  return planningTerrain.value ? { ...planningTerrain.value } : null
+  if (!planningTerrain.value) {
+    return null
+  }
+  return {
+    ...planningTerrain.value,
+    dem: clonePlanningTerrainDemData(planningTerrain.value.dem ?? null),
+  }
 }
 
 function isTerrainEmptyForSnapshot(snapshot: PlanningTerrainData | null | undefined): boolean {
@@ -294,6 +381,14 @@ function isTerrainEmptyForSnapshot(snapshot: PlanningTerrainData | null | undefi
   if ((snapshot.controlPoints && snapshot.controlPoints.length > 0) || (snapshot.ridgeValleyLines && snapshot.ridgeValleyLines.length > 0)) return false
   if (snapshot.overrides && snapshot.overrides.cells && Object.keys(snapshot.overrides.cells).length > 0) return false
   if (snapshot.noise && snapshot.noise.enabled) return false
+  if (snapshot.dem && (
+    typeof snapshot.dem.sourceFileHash === 'string'
+    || typeof snapshot.dem.previewHash === 'string'
+    || typeof snapshot.dem.filename === 'string'
+    || snapshot.dem.worldBounds
+    || snapshot.dem.geographicBounds
+    || snapshot.dem.orthophoto
+  )) return false
   return true
 }
 
@@ -330,11 +425,18 @@ const activeImageId = computed<string | null>({
     }
   },
 })
+const activeDemId = computed<string | null>(() => (activeListItem.value?.type === 'dem' ? activeListItem.value.id : null))
 const draggingImageId = ref<string | null>(null)
 const dragOverImageId = ref<string | null>(null)
 const alignModeActive = ref(false)
 const uploadError = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const demFileInputRef = ref<HTMLInputElement | null>(null)
+const orthophotoFileInputRef = ref<HTMLInputElement | null>(null)
+const demImportError = ref<string | null>(null)
+const planningDemPreviewUrl = ref<string | null>(null)
+const planningOrthophotoPreviewUrl = ref<string | null>(null)
+const demHydrationToken = ref(0)
 const editorRef = ref<HTMLDivElement | null>(null)
 const editorRect = ref<DOMRect | null>(null)
 const currentTool = ref<PlanningTool>('select')
@@ -954,6 +1056,9 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
   void persistLayersToIndexedDB()
 
   const snapshot = buildPlanningSnapshot()
+  void savePlanningDemToStorage(currentSceneId.value ?? null, snapshot.terrain?.dem ?? null).catch((error) => {
+    console.warn('Failed to persist planning DEM metadata to IndexedDB', error)
+  })
   const nextData = isPlanningSnapshotEmpty(snapshot) ? null : snapshot
   const currentData = sceneStore.planningData ?? null
 
@@ -1086,6 +1191,12 @@ function resetPlanningState() {
   planningGuides.value = []
   guideDraft.value = null
   planningTerrain.value = createDefaultPlanningTerrain()
+  demImportError.value = null
+  planningDemPreviewUrl.value = null
+  if (planningOrthophotoPreviewUrl.value) {
+    try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
+  }
+  planningOrthophotoPreviewUrl.value = null
   polygons.value = []
   polylines.value = []
   polygonDraftPoints.value = []
@@ -1217,6 +1328,73 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
       .filter((line): line is PlanningTerrainRidgeValleyLine => !!line)
   }
 
+  const dem = payload.dem && typeof payload.dem === 'object' ? payload.dem as Record<string, unknown> : null
+  if (dem) {
+    const geographicBounds = dem.geographicBounds && typeof dem.geographicBounds === 'object'
+      ? dem.geographicBounds as Record<string, unknown>
+      : null
+    const worldBounds = dem.worldBounds && typeof dem.worldBounds === 'object'
+      ? dem.worldBounds as Record<string, unknown>
+      : null
+    const orthophoto = dem.orthophoto && typeof dem.orthophoto === 'object'
+      ? dem.orthophoto as Record<string, unknown>
+      : null
+    next.dem = {
+      version: 1,
+      sourceFileHash: typeof dem.sourceFileHash === 'string' ? dem.sourceFileHash : undefined,
+      filename: typeof dem.filename === 'string' ? dem.filename : null,
+      mimeType: typeof dem.mimeType === 'string' ? dem.mimeType : null,
+      width: Number.isFinite(Number(dem.width)) ? Math.max(0, Math.trunc(Number(dem.width))) : undefined,
+      height: Number.isFinite(Number(dem.height)) ? Math.max(0, Math.trunc(Number(dem.height))) : undefined,
+      minElevation: Number.isFinite(Number(dem.minElevation)) ? Number(dem.minElevation) : undefined,
+      maxElevation: Number.isFinite(Number(dem.maxElevation)) ? Number(dem.maxElevation) : undefined,
+      sampleStepMeters: Number.isFinite(Number(dem.sampleStepMeters)) ? Number(dem.sampleStepMeters) : undefined,
+      geographicBounds: geographicBounds && Number.isFinite(Number(geographicBounds.west)) && Number.isFinite(Number(geographicBounds.south)) && Number.isFinite(Number(geographicBounds.east)) && Number.isFinite(Number(geographicBounds.north))
+        ? {
+            west: Number(geographicBounds.west),
+            south: Number(geographicBounds.south),
+            east: Number(geographicBounds.east),
+            north: Number(geographicBounds.north),
+            crs: typeof geographicBounds.crs === 'string' ? geographicBounds.crs : null,
+          }
+        : undefined,
+      worldBounds: worldBounds && Number.isFinite(Number(worldBounds.minX)) && Number.isFinite(Number(worldBounds.minY)) && Number.isFinite(Number(worldBounds.maxX)) && Number.isFinite(Number(worldBounds.maxY))
+        ? {
+            minX: Number(worldBounds.minX),
+            minY: Number(worldBounds.minY),
+            maxX: Number(worldBounds.maxX),
+            maxY: Number(worldBounds.maxY),
+          }
+        : undefined,
+      previewHash: typeof dem.previewHash === 'string' ? dem.previewHash : null,
+      previewSize: Number.isFinite(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.width)) && Number.isFinite(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.height))
+        ? {
+            width: Math.max(0, Math.trunc(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.width))),
+            height: Math.max(0, Math.trunc(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.height))),
+          }
+        : undefined,
+      orthophoto: orthophoto
+        ? {
+            version: 1,
+            sourceFileHash: typeof orthophoto.sourceFileHash === 'string' ? orthophoto.sourceFileHash : undefined,
+            filename: typeof orthophoto.filename === 'string' ? orthophoto.filename : null,
+            mimeType: typeof orthophoto.mimeType === 'string' ? orthophoto.mimeType : null,
+            width: Number.isFinite(Number(orthophoto.width)) ? Math.max(0, Math.trunc(Number(orthophoto.width))) : undefined,
+            height: Number.isFinite(Number(orthophoto.height)) ? Math.max(0, Math.trunc(Number(orthophoto.height))) : undefined,
+            previewHash: typeof orthophoto.previewHash === 'string' ? orthophoto.previewHash : null,
+            previewSize: Number.isFinite(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.width)) && Number.isFinite(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.height))
+              ? {
+                  width: Math.max(0, Math.trunc(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.width))),
+                  height: Math.max(0, Math.trunc(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.height))),
+                }
+              : undefined,
+            opacity: Number.isFinite(Number(orthophoto.opacity)) ? Number(orthophoto.opacity) : undefined,
+            visible: typeof orthophoto.visible === 'boolean' ? orthophoto.visible : undefined,
+          }
+        : undefined,
+    }
+  }
+
   // Overrides are reserved for future A brush. Keep, but do not attempt deep normalization.
   const overrides = payload.overrides && typeof payload.overrides === 'object' ? payload.overrides as PlanningTerrainOverridesInput : null
   if (overrides && overrides.version === 1 && overrides.cells && typeof overrides.cells === 'object') {
@@ -1287,6 +1465,7 @@ function loadPlanningFromScene() {
     void nextTick(() => fitViewToCanvas({ markDirty: false }))
   }
 
+  void hydratePlanningDemResources()
   polygons.value = Array.isArray(data.polygons)
     ? data.polygons.map((poly: PlanningPolygonData) => ({
       id: normalizePlanningFeatureId(poly.id, usedFeatureIds),
@@ -1624,6 +1803,33 @@ const selectedImage = computed<PlanningImage | null>(() => {
   return planningImages.value.find((img) => img.id === activeImageId.value) ?? null
 })
 
+const selectedDem = computed<PlanningTerrainDemData | null>(() => {
+  return activeDemId.value ? planningTerrain.value.dem : null
+})
+
+function formatOptionalNumber(value: number | null | undefined, fractionDigits = 2): string {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(fractionDigits) : '—'
+}
+
+function formatOptionalSize(size: { width: number; height: number } | null | undefined): string {
+  if (!size) return '—'
+  return `${size.width} × ${size.height}`
+}
+
+function formatBoundsLine(bounds: PlanningTerrainGeographicBounds | PlanningTerrainWorldBounds | null | undefined): string {
+  if (!bounds) return '—'
+  if ('west' in bounds) {
+    const crs = bounds.crs ? `, ${bounds.crs}` : ''
+    return `W ${bounds.west}, S ${bounds.south}, E ${bounds.east}, N ${bounds.north}${crs}`
+  }
+  return `X ${bounds.minX}, Y ${bounds.minY}, X ${bounds.maxX}, Y ${bounds.maxY}`
+}
+
+function formatShortHash(value: string | null | undefined): string {
+  if (!value) return '—'
+  return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-8)}` : value
+}
+
 const propertyPanelDisabledReason = computed(() => {
   const target = selectedScatterTarget.value
   // Allow editing shape properties from the property panel even when the layer is locked.
@@ -1633,6 +1839,9 @@ const propertyPanelDisabledReason = computed(() => {
   const img = selectedImage.value
   if (img) {
     if (img.locked) return 'Image is locked'
+    return null
+  }
+  if (selectedDem.value) {
     return null
   }
   return 'No shape selected'
@@ -2608,6 +2817,22 @@ function getImageLayerListItemStyle(imageId: string): CSSProperties {
     borderColor: hexToRgba(accent, isActive ? 0.85 : 0.12),
     boxShadow: isActive
       ? `0 0 0 2px ${hexToRgba(accent, 0.35)}, 0 0 18px ${hexToRgba(accent, 0.22)}`
+      : 'none',
+  }
+}
+
+function getDemLayerListItemStyle(): CSSProperties {
+  const accent = '#5E8CFF'
+  const isActive = activeDemId.value === 'terrain-dem'
+  const bgAlpha = isActive ? 0.28 : 0.06
+  const borderAlpha = isActive ? 1 : 0.9
+  const accentWidth = isActive ? 8 : 4
+  return {
+    backgroundColor: hexToRgba(accent, bgAlpha),
+    borderLeft: `${accentWidth}px solid ${hexToRgba(accent, borderAlpha)}`,
+    borderColor: hexToRgba(accent, isActive ? 0.85 : 0.12),
+    boxShadow: isActive
+      ? `0 0 0 2px ${hexToRgba(accent, 0.32)}, 0 0 18px ${hexToRgba(accent, 0.18)}`
       : 'none',
   }
 }
@@ -4327,6 +4552,155 @@ function loadPlanningImage(file: File) {
   image.src = url
 }
 
+function handleDemUploadClick() {
+  demFileInputRef.value?.click()
+}
+
+function handleOrthophotoUploadClick() {
+  orthophotoFileInputRef.value?.click()
+}
+
+function handleDemFileChange(event: Event) {
+  const input = event.target as HTMLInputElement | null
+  if (!input?.files?.length) {
+    return
+  }
+  void loadPlanningDemFile(input.files[0]!)
+  input.value = ''
+}
+
+function handleOrthophotoFileChange(event: Event) {
+  const input = event.target as HTMLInputElement | null
+  if (!input?.files?.length) {
+    return
+  }
+  void loadPlanningOrthophotoFile(input.files[0]!)
+  input.value = ''
+}
+
+function clearPlanningDemImport() {
+  if (activeDemId.value) {
+    activeListItem.value = null
+  }
+  planningTerrain.value = {
+    ...planningTerrain.value,
+    dem: null,
+  }
+  demImportError.value = null
+  planningDemPreviewUrl.value = null
+  if (planningOrthophotoPreviewUrl.value) {
+    try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
+  }
+  planningOrthophotoPreviewUrl.value = null
+  markPlanningDirty()
+}
+
+function isPlanningDemFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  return name.endsWith('.tif') || name.endsWith('.tiff') || file.type.includes('tiff') || file.type.includes('geotiff')
+}
+
+function isPlanningOrthophotoFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  return file.type.startsWith('image/') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')
+}
+
+async function loadPlanningDemFile(file: File) {
+  demImportError.value = null
+  try {
+    if (!isPlanningDemFile(file)) {
+      throw new Error('Only GeoTIFF .tif or .tiff files are supported for DEM import.')
+    }
+    const result = await parsePlanningDemFile(file)
+    await storePlanningDemBlobByHash(result.sourceFileHash, file)
+    const nextDem = demImportResultToTerrainData(result)
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      dem: nextDem,
+    }
+    activeListItem.value = { type: 'dem', id: 'terrain-dem' }
+    planningDemPreviewUrl.value = result.preview?.dataUrl ?? null
+    markPlanningDirty()
+  } catch (error) {
+    demImportError.value = error instanceof Error ? error.message : 'Failed to import DEM file.'
+  }
+}
+
+async function loadPlanningOrthophotoFile(file: File) {
+  demImportError.value = null
+  try {
+    if (!isPlanningOrthophotoFile(file)) {
+      throw new Error('Only image files are supported for orthophoto import.')
+    }
+    const buffer = await file.arrayBuffer()
+    const hash = await computeSha256Hex(buffer)
+    await storePlanningDemBlobByHash(hash, file)
+    const image = await loadImageFromFile(file)
+    const nextOrthophoto: PlanningTerrainOrthophotoData = {
+      version: 1,
+      sourceFileHash: hash,
+      filename: file.name,
+      mimeType: file.type || null,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      previewHash: hash,
+      previewSize: { width: image.naturalWidth, height: image.naturalHeight },
+      opacity: 1,
+      visible: true,
+    }
+    const currentDem = planningTerrain.value.dem ?? {
+      version: 1,
+      sourceFileHash: null,
+      filename: null,
+      mimeType: null,
+      width: undefined,
+      height: undefined,
+      minElevation: null,
+      maxElevation: null,
+      sampleStepMeters: null,
+      geographicBounds: null,
+      worldBounds: null,
+      previewHash: null,
+      previewSize: null,
+      orthophoto: null,
+    }
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      dem: {
+        ...currentDem,
+        orthophoto: nextOrthophoto,
+      },
+    }
+    if (planningOrthophotoPreviewUrl.value) {
+      try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
+    }
+    planningOrthophotoPreviewUrl.value = URL.createObjectURL(file)
+    markPlanningDirty()
+  } catch (error) {
+    demImportError.value = error instanceof Error ? error.message : 'Failed to import orthophoto file.'
+  }
+}
+
+function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {}
+      resolve(image)
+    }
+    image.onerror = () => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {}
+      reject(new Error('Unable to load image preview.'))
+    }
+    image.src = url
+  })
+}
+
 async function savePlanningImageToIndexedDB(image: PlanningImage, file: File) {
   await savePlanningImageToStorage(image, file, currentSceneId.value ?? null)
   image.filename = file.name || image.filename || null
@@ -4359,6 +4733,13 @@ function handleImageLayerLockToggle(imageId: string) {
 
 function handleImageLayerSelect(imageId: string) {
   activeImageId.value = imageId
+}
+
+function handleDemLayerSelect() {
+  if (!planningTerrain.value.dem) {
+    return
+  }
+  activeListItem.value = { type: 'dem', id: 'terrain-dem' }
 }
 
 // handleImageLayerOpacityChange removed (unused)
@@ -4868,6 +5249,43 @@ async function hydratePlanningImageUrls() {
   }))
 }
 
+async function hydratePlanningDemResources() {
+  const token = demHydrationToken.value + 1
+  demHydrationToken.value = token
+  planningDemPreviewUrl.value = null
+  const terrainDem = planningTerrain.value.dem
+  if (!terrainDem?.sourceFileHash) {
+    return
+  }
+
+  try {
+    const blob = await loadPlanningDemBlobByHash(terrainDem.sourceFileHash)
+    if (!blob || demHydrationToken.value !== token) {
+      return
+    }
+    const parsed = await parsePlanningDemBlob(blob, terrainDem.filename ?? 'DEM', (terrainDem.mimeType ?? blob.type) || null)
+    if (demHydrationToken.value !== token) {
+      return
+    }
+    if (parsed.preview?.dataUrl) {
+      planningDemPreviewUrl.value = parsed.preview.dataUrl
+    }
+
+    const orthophotoHash = terrainDem.orthophoto?.sourceFileHash
+    if (orthophotoHash) {
+      const orthophotoBlob = await loadPlanningDemBlobByHash(orthophotoHash)
+      if (orthophotoBlob && demHydrationToken.value === token) {
+        if (planningOrthophotoPreviewUrl.value) {
+          try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
+        }
+        planningOrthophotoPreviewUrl.value = URL.createObjectURL(orthophotoBlob)
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to hydrate planning DEM resources', error)
+  }
+}
+
 watch(
   () => dialogOpen.value,
   async (open) => {
@@ -4889,6 +5307,9 @@ onBeforeUnmount(() => {
       }
     }
   } catch {}
+  if (planningOrthophotoPreviewUrl.value) {
+    try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
+  }
   window.removeEventListener('pointermove', handlePointerMove)
   window.removeEventListener('pointerup', handlePointerUp)
   window.removeEventListener('pointercancel', handlePointerUp)
@@ -4917,6 +5338,81 @@ onBeforeUnmount(() => {
 
       <section class="planning-dialog__content">
         <aside class="left-panel">
+          <section class="dem-import-panel">
+            <header>
+              <div class="panel-header">
+                <h3>DEM Import</h3>
+                <div class="panel-actions">
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    title="Import DEM"
+                    @click.stop="handleDemUploadClick"
+                  >
+                    <v-icon>mdi-tray-arrow-up</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    title="Import orthophoto"
+                    @click.stop="handleOrthophotoUploadClick"
+                  >
+                    <v-icon>mdi-image-outline</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="error"
+                    title="Clear DEM import"
+                    :disabled="!planningTerrain.dem"
+                    @click.stop="clearPlanningDemImport"
+                  >
+                    <v-icon>mdi-delete-outline</v-icon>
+                  </v-btn>
+                </div>
+              </div>
+              <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
+              <input
+                ref="demFileInputRef"
+                type="file"
+                accept=".tif,.tiff"
+                class="sr-only"
+                @change="handleDemFileChange"
+              >
+              <input
+                ref="orthophotoFileInputRef"
+                type="file"
+                accept="image/*"
+                class="sr-only"
+                @change="handleOrthophotoFileChange"
+              >
+            </header>
+            <div v-if="planningTerrain.dem" class="dem-import-panel__body">
+              <v-list density="compact" class="dem-layer-list">
+                <v-list-item
+                  :class="['layer-item', { active: activeDemId === 'terrain-dem' }]"
+                  :style="getDemLayerListItemStyle()"
+                  @click="handleDemLayerSelect"
+                >
+                  <div class="layer-content">
+                    <div class="layer-name">DEM Layer</div>
+                    <div class="layer-meta">GeoTIFF elevation source</div>
+                  </div>
+                </v-list-item>
+              </v-list>
+              <div class="dem-import-panel__preview">
+                <img v-if="planningDemPreviewUrl" :src="planningDemPreviewUrl" alt="DEM preview">
+                <img v-else-if="planningOrthophotoPreviewUrl" :src="planningOrthophotoPreviewUrl" alt="Orthophoto preview">
+                <div v-else class="dem-import-panel__empty">Preview will appear here after import.</div>
+              </div>
+            </div>
+            <div v-else class="dem-import-panel__empty">Import a GeoTIFF DEM to generate terrain heightmap data.</div>
+          </section>
           <section class="image-layer-panel">
             <header>
               <div class="panel-header">
@@ -5231,6 +5727,10 @@ onBeforeUnmount(() => {
             />
             <div class="canvas-viewport">
               <div class="canvas-stage" :style="stageStyle">
+                <div v-if="planningDemPreviewUrl || planningOrthophotoPreviewUrl" class="dem-preview-stage">
+                  <img v-if="planningDemPreviewUrl" class="dem-preview-stage__image dem-preview-stage__image--dem" :src="planningDemPreviewUrl" alt="DEM stage preview">
+                  <img v-if="planningOrthophotoPreviewUrl" class="dem-preview-stage__image dem-preview-stage__image--orthophoto" :src="planningOrthophotoPreviewUrl" alt="Orthophoto stage preview">
+                </div>
 
                 <svg
                   class="vector-overlay"
@@ -5623,6 +6123,29 @@ onBeforeUnmount(() => {
             <span>{{ propertyPanelDisabledReason }}</span>
           </div>
           <template v-else>
+            <div v-if="selectedDem" class="property-panel__block">
+              <div class="property-panel__section-title">DEM Properties</div>
+              <div class="property-panel__meta-row"><span>Source hash</span><strong>{{ formatShortHash(selectedDem.sourceFileHash) }}</strong></div>
+              <div class="property-panel__meta-row"><span>File</span><strong>{{ selectedDem.filename || 'Unnamed DEM' }}</strong></div>
+              <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.mimeType || '—' }}</strong></div>
+              <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.width ?? '—' }} × {{ selectedDem.height ?? '—' }}</strong></div>
+              <div class="property-panel__meta-row"><span>Elevation</span><strong>{{ selectedDem.minElevation ?? '—' }} → {{ selectedDem.maxElevation ?? '—' }}</strong></div>
+              <div class="property-panel__meta-row"><span>Sample step</span><strong>{{ formatOptionalNumber(selectedDem.sampleStepMeters) }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
+              <div class="property-panel__meta-row"><span>World bounds</span><strong>{{ formatBoundsLine(selectedDem.worldBounds) }}</strong></div>
+              <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.previewSize) }}</strong></div>
+              <div v-if="selectedDem.orthophoto" class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Orthophoto</div>
+                <div class="property-panel__meta-row"><span>Source hash</span><strong>{{ formatShortHash(selectedDem.orthophoto.sourceFileHash) }}</strong></div>
+                <div class="property-panel__meta-row"><span>File</span><strong>{{ selectedDem.orthophoto.filename || 'Unnamed image' }}</strong></div>
+                <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.orthophoto.mimeType || '—' }}</strong></div>
+                <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.orthophoto.width ?? '—' }} × {{ selectedDem.orthophoto.height ?? '—' }}</strong></div>
+                <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.orthophoto.previewSize) }}</strong></div>
+                <div class="property-panel__meta-row"><span>Opacity</span><strong>{{ Math.round((selectedDem.orthophoto.opacity ?? 1) * 100) }}%</strong></div>
+                <div class="property-panel__meta-row"><span>Visible</span><strong>{{ selectedDem.orthophoto.visible === false ? 'No' : 'Yes' }}</strong></div>
+              </div>
+            </div>
+
             <div v-if="selectedImage">
               <div class="property-panel__block">
                 <div style="display:flex;gap:8px;align-items:center;">
@@ -5789,6 +6312,64 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
 }
 
+.dem-import-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dem-import-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dem-layer-list {
+  padding: 0;
+  background: transparent;
+}
+
+.dem-layer-list :deep(.v-list-item) {
+  min-height: 52px;
+}
+
+.dem-layer-list .layer-meta {
+  font-size: 0.72rem;
+}
+
+.dem-import-panel__preview,
+.dem-import-panel__empty {
+  width: 100%;
+  height: 96px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dem-import-panel__preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dem-import-panel__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.dem-import-panel__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  font-size: 0.8rem;
+  color: rgba(244, 246, 251, 0.58);
+  text-align: center;
+}
+
 .upload-error {
   margin-top: 8px;
   color: #ff8a65;
@@ -5852,6 +6433,42 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.property-panel__section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.property-panel__section-title--muted {
+  opacity: 0.78;
+}
+
+.property-panel__meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8rem;
+  color: rgba(244, 246, 251, 0.72);
+}
+
+.property-panel__meta-row strong {
+  color: rgba(244, 246, 251, 0.96);
+  font-weight: 600;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.property-panel__sub-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .property-panel__density-title {
@@ -6208,6 +6825,35 @@ onBeforeUnmount(() => {
   position: relative;
   transform-origin: top left;
   will-change: transform;
+}
+
+.dem-preview-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(10, 12, 16, 0.3);
+}
+
+.dem-preview-stage__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+}
+
+.dem-preview-stage__image--dem {
+  opacity: 0.9;
+}
+
+.dem-preview-stage__image--orthophoto {
+  opacity: 0.45;
+  mix-blend-mode: screen;
 }
 
 .canvas-empty {

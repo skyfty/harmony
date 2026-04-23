@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import type { PresetSceneDetail, PresetSceneDocument } from '@/types/preset-scene'
+import type { PlanningSceneData } from '@/types/planning-scene-data'
 import SceneCreatorPane from './SceneCreatorPane.vue'
 import { generateUuid } from '@/utils/uuid'
 
@@ -17,6 +18,7 @@ const emit = defineEmits<{
     name: string
     groundWidth: number
     groundDepth: number
+    planningData?: PlanningSceneData | null
     presetSceneId?: string | null
     presetSceneDocument?: PresetSceneDocument | null
   }): void
@@ -30,6 +32,7 @@ const dialogOpen = computed({
 const sceneName = ref('New Scene')
 const groundWidth = ref<number>(100)
 const groundDepth = ref<number>(100)
+const planningData = ref<PlanningSceneData | null>(null)
 
 interface PresetListEntry {
   id: string
@@ -202,6 +205,7 @@ watch(
         : 'New Scene'
       groundWidth.value = normalizeDimension(props.initialGroundWidth, 100)
       groundDepth.value = normalizeDimension(props.initialGroundDepth, 100)
+      planningData.value = null
       confirmError.value = null
       selectedPresetId.value = null
       await loadLocalPresetsOnce()
@@ -215,6 +219,7 @@ watch(
       sceneName.value = 'New Scene'
       groundWidth.value = 100
       groundDepth.value = 100
+      planningData.value = null
       resetPresetState()
       isConfirming.value = false
     }
@@ -252,6 +257,7 @@ async function confirm() {
       name,
       groundWidth: width,
       groundDepth: depth,
+      planningData: planningData.value,
       presetSceneId: presetId,
       presetSceneDocument: presetDocument,
     })
@@ -285,6 +291,7 @@ function cancel() {
           v-model:sceneName="sceneName"
           v-model:groundWidth="groundWidth"
           v-model:groundDepth="groundDepth"
+          v-model:planningData="planningData"
           :confirmError="confirmError"
         />
       </v-card-text>

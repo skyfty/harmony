@@ -7355,6 +7355,7 @@ function isPlanningDataEmpty(data: PlanningSceneData): boolean {
     const noiseEnabled = Boolean(terrain?.noise?.enabled)
     const controlPoints = Array.isArray(terrain?.controlPoints) ? terrain.controlPoints : []
     const ridgeValleyLines = Array.isArray(terrain?.ridgeValleyLines) ? terrain.ridgeValleyLines : []
+    const dem = terrain?.dem && typeof terrain.dem === 'object' ? terrain.dem : null
     const overrideCells = terrain?.overrides?.cells && typeof terrain.overrides.cells === 'object'
       ? Object.keys(terrain.overrides.cells).length
       : 0
@@ -7368,7 +7369,19 @@ function isPlanningDataEmpty(data: PlanningSceneData): boolean {
       && (Number.isFinite(noiseAmplitude) ? noiseAmplitude !== 0 : true)
       && (Number.isFinite(noiseStrength) ? noiseStrength !== 0 : true)
 
-    return noiseProducesAnyHeight || controlPoints.length > 0 || ridgeValleyLines.length > 0 || overrideCells > 0
+    const demHasContent = Boolean(
+      dem
+      && (
+        typeof dem.sourceFileHash === 'string'
+        || typeof dem.previewHash === 'string'
+        || typeof dem.filename === 'string'
+        || dem.worldBounds
+        || dem.geographicBounds
+        || dem.orthophoto
+      ),
+    )
+
+    return noiseProducesAnyHeight || controlPoints.length > 0 || ridgeValleyLines.length > 0 || overrideCells > 0 || demHasContent
   })()
 
   return (

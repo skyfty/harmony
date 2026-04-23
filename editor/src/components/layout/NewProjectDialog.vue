@@ -18,12 +18,17 @@ const name = ref('')
 const defaultSceneName = ref('New Scene')
 const defaultGroundWidth = ref<number>(100)
 const defaultGroundDepth = ref<number>(100)
+const defaultPlanningData = ref<import('@/types/planning-scene-data').PlanningSceneData | null>(null)
 
 watch(
   () => props.modelValue,
   (open) => {
     if (open) {
       name.value = props.initialName?.trim() || 'New Project'
+      defaultPlanningData.value = null
+    }
+    if (!open) {
+      defaultPlanningData.value = null
     }
   },
   { immediate: true },
@@ -41,6 +46,7 @@ function handleConfirm() {
       name: defaultSceneName.value,
       groundWidth: defaultGroundWidth.value,
       groundDepth: defaultGroundDepth.value,
+        planningData: defaultPlanningData.value,
     },
   })
   dialogOpen.value = false
@@ -59,6 +65,7 @@ function handleConfirm() {
           v-model:sceneName="defaultSceneName"
           v-model:groundWidth="defaultGroundWidth"
           v-model:groundDepth="defaultGroundDepth"
+          v-model:planningData="defaultPlanningData"
         />
       </v-card-text>
       <v-card-actions>

@@ -1897,6 +1897,7 @@ async function handleCreateScene(payload: {
   name: string
   groundWidth: number
   groundDepth: number
+  planningData?: import('@/types/planning-scene-data').PlanningSceneData | null
   presetSceneId?: string | null
   presetSceneDocument?: PresetSceneDocument | null
 }) {
@@ -1912,6 +1913,7 @@ async function handleCreateScene(payload: {
         width: payload.groundWidth,
         depth: payload.groundDepth,
       },
+      planningData: payload.planningData ?? null,
     })
     // If you need to apply a preset scene in future, reintroduce a dedicated migration or importer.
     

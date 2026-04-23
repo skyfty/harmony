@@ -25,6 +25,7 @@ export async function createProjectWithDefaultScene(
       width: Number.isFinite(widthCandidate) ? widthCandidate : undefined,
       depth: Number.isFinite(depthCandidate) ? depthCandidate : undefined,
     },
+    planningData: params.defaultScene?.planningData ?? null,
   })
 
   const [freshProject, freshScene] = await Promise.all([
