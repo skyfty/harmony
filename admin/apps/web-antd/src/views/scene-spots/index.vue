@@ -59,7 +59,10 @@ const previewImage = ref('');
 const previewTitle = ref('');
 const wechatQRCodeModalOpen = ref(false);
 const wechatQRCodeLoadingRowId = ref<null | string>(null);
+const wechatQRCodeActiveTab = ref('wechat-rule-link');
 const wechatQRCodeValue = ref('');
+const wechatUrlSchemeValue = ref('');
+const wechatDecodedQueryValue = ref('');
 
 const sceneOptions = ref<Array<{ label: string; value: string }>>([]);
 const sceneNameMap = ref<Record<string, string>>({});
@@ -100,6 +103,16 @@ const modalTitle = computed(() =>
 );
 
 const wechatQRCodeModalTitle = computed(() => t('page.sceneSpots.index.wechatQr.modal.title'));
+const currentWechatQRCodeValue = computed(() =>
+  wechatQRCodeActiveTab.value === 'plain-url-scheme'
+    ? wechatUrlSchemeValue.value
+    : wechatQRCodeValue.value,
+);
+
+const WECHAT_MINI_PROGRAM_APP_ID = 'wxbee5b017bdf26cc1';
+const WECHAT_MINI_PROGRAM_SCENERY_PATH = 'pages/scenery/index';
+const DEFAULT_VEHICLE_IDENTIFIER = 'car1';
+const WECHAT_QR_RULE_LINK_BASE = 'https://v.touchmagic.cn';
 
 const uploadProps: UploadProps = {
   accept: 'image/*',
@@ -361,17 +374,29 @@ function openComments(row: SceneSpotItem) {
   });
 }
 
+function buildWechatQRCodeQuery(sceneFileUrl: string, row: SceneSpotItem) {
+  return `packageUrl=${encodeURIComponent(sceneFileUrl)}&sceneSpotId=${encodeURIComponent(row.id)}&sceneId=${encodeURIComponent(row.sceneId)}&scenicTitle=${encodeURIComponent(row.title)}&vehicleIdentifier=${encodeURIComponent(DEFAULT_VEHICLE_IDENTIFIER)}`;
+}
+
 function buildWechatQRCodeLink(sceneFileUrl: string, row: SceneSpotItem) {
-  return `v.touchmagic.cn?packageUrl=${encodeURIComponent(sceneFileUrl)}&sceneSpotId=${encodeURIComponent(row.id)}&sceneId=${encodeURIComponent(row.sceneId)}&scenicTitle=${encodeURIComponent(row.title)}&vehicleIdentifier=car1`;
+  return `${WECHAT_QR_RULE_LINK_BASE}?${buildWechatQRCodeQuery(sceneFileUrl, row)}`;
+}
+
+function buildWechatUrlScheme(sceneFileUrl: string, row: SceneSpotItem) {
+  const query = buildWechatQRCodeQuery(sceneFileUrl, row);
+  return `weixin://dl/business/?appid=${WECHAT_MINI_PROGRAM_APP_ID}&path=${WECHAT_MINI_PROGRAM_SCENERY_PATH}&query=${encodeURIComponent(query)}&env_version=release`;
 }
 
 function closeWechatQRCodeModal() {
   wechatQRCodeModalOpen.value = false;
+  wechatQRCodeActiveTab.value = 'wechat-rule-link';
   wechatQRCodeValue.value = '';
+  wechatUrlSchemeValue.value = '';
+  wechatDecodedQueryValue.value = '';
 }
 
 async function copyWechatQRCodeLink() {
-  const value = wechatQRCodeValue.value.trim();
+  const value = currentWechatQRCodeValue.value.trim();
   if (!value) {
     message.warning(t('page.sceneSpots.index.wechatQr.message.empty'));
     return;
@@ -399,7 +424,11 @@ async function openWechatQRCode(row: SceneSpotItem) {
       return;
     }
 
+    const query = buildWechatQRCodeQuery(sceneFileUrl, row);
+    wechatDecodedQueryValue.value = query;
     wechatQRCodeValue.value = buildWechatQRCodeLink(sceneFileUrl, row);
+    wechatUrlSchemeValue.value = buildWechatUrlScheme(sceneFileUrl, row);
+    wechatQRCodeActiveTab.value = 'wechat-rule-link';
     wechatQRCodeModalOpen.value = true;
   } catch {
     message.error(t('page.sceneSpots.index.wechatQr.message.loadFailed'));
@@ -805,15 +834,42 @@ onMounted(async () => {
       @ok="copyWechatQRCodeLink"
     >
       <div class="wechat-qr-modal-body">
-        <div class="wechat-qr-modal-hint">
-          {{ t('page.sceneSpots.index.wechatQr.modal.hint') }}
-        </div>
-        <TextArea
-          v-model:value="wechatQRCodeValue"
-          :auto-size="{ minRows: 5, maxRows: 10 }"
-          allow-clear
-          :placeholder="t('page.sceneSpots.index.wechatQr.modal.placeholder')"
-        />
+        <Tabs v-model:activeKey="wechatQRCodeActiveTab">
+          <Tabs.TabPane key="wechat-rule-link" :tab="t('page.sceneSpots.index.wechatQr.modal.tabs.ruleLink')">
+            <div class="wechat-qr-modal-hint">
+              {{ t('page.sceneSpots.index.wechatQr.modal.hint') }}
+            </div>
+            <TextArea
+              v-model:value="wechatQRCodeValue"
+              :auto-size="{ minRows: 5, maxRows: 10 }"
+              allow-clear
+              :placeholder="t('page.sceneSpots.index.wechatQr.modal.placeholder')"
+            />
+          </Tabs.TabPane>
+          <Tabs.TabPane key="plain-url-scheme" :tab="t('page.sceneSpots.index.wechatQr.modal.tabs.plainUrlScheme')">
+            <div class="wechat-qr-modal-hint">
+              {{ t('page.sceneSpots.index.wechatQr.modal.urlSchemeHint') }}
+            </div>
+            <TextArea
+              v-model:value="wechatUrlSchemeValue"
+              :auto-size="{ minRows: 5, maxRows: 10 }"
+              allow-clear
+              :placeholder="t('page.sceneSpots.index.wechatQr.modal.urlSchemePlaceholder')"
+            />
+            <div class="wechat-qr-modal-query-title">
+              {{ t('page.sceneSpots.index.wechatQr.modal.decodedQueryTitle') }}
+            </div>
+            <div class="wechat-qr-modal-hint">
+              {{ t('page.sceneSpots.index.wechatQr.modal.decodedQueryHint') }}
+            </div>
+            <TextArea
+              :value="wechatDecodedQueryValue"
+              :auto-size="{ minRows: 4, maxRows: 8 }"
+              readonly
+              :placeholder="t('page.sceneSpots.index.wechatQr.modal.decodedQueryPlaceholder')"
+            />
+          </Tabs.TabPane>
+        </Tabs>
       </div>
     </Modal>
   </div>
@@ -841,6 +897,13 @@ onMounted(async () => {
   color: rgba(0, 0, 0, 0.65);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.wechat-qr-modal-query-title {
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 12px;
 }
 @keyframes featuredHighlight {
   0% { box-shadow: 0 0 0 rgba(255,77,79,0.0); }

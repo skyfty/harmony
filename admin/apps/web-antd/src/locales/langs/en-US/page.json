@@ -142,8 +142,17 @@
       "wechatQr": {
         "modal": {
           "title": "WeChat Mini Program QR Rule Link",
+          "tabs": {
+            "ruleLink": "WeChat Mini Program QR Rule Link",
+            "plainUrlScheme": "Plain URL Scheme"
+          },
           "hint": "The link below is generated from the scene package URL, scene spot ID, and scene ID. Copy it directly into the WeChat Mini Program QR rule configuration, or edit it as needed.",
           "placeholder": "WeChat Mini Program QR Rule Link",
+          "urlSchemeHint": "This link is generated as a WeChat URL Scheme. After sharing it, recipients can tap it to launch the mini program and open the scene spot page directly. The query stays aligned with the QR rule link so the scenery page can still recognize packageUrl, sceneSpotId, sceneId, and vehicleIdentifier.",
+          "urlSchemePlaceholder": "Plain URL Scheme",
+          "decodedQueryTitle": "Decoded Query",
+          "decodedQueryHint": "Use this read-only field to verify the raw parameter string passed from the URL Scheme into the mini program scenery page. It is not the value copied by the modal copy button when this tab is active.",
+          "decodedQueryPlaceholder": "Decoded Query",
           "copy": "Copy Link",
           "close": "Close"
         },

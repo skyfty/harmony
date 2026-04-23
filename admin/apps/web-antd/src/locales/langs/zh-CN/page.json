@@ -147,8 +147,17 @@
       "wechatQr": {
         "modal": {
           "title": "微信小程序二维码规则链接",
+          "tabs": {
+            "ruleLink": "微信小程序二维码规则链接",
+            "plainUrlScheme": "明文 URL Scheme"
+          },
           "hint": "默认链接已按场景包地址、景点ID和场景ID生成，可直接复制到微信小程序后台二维码规则配置中，或按需编辑后使用。",
           "placeholder": "微信小程序二维码规则链接",
+          "urlSchemeHint": "此链接按微信 URL Scheme 规则生成，分享给别人后可直接点击唤起小程序并打开景点场景页。query 与二维码规则链接保持一致，便于场景页继续识别 packageUrl、sceneSpotId、sceneId 和 vehicleIdentifier。",
+          "urlSchemePlaceholder": "明文 URL Scheme",
+          "decodedQueryTitle": "解码后 query",
+          "decodedQueryHint": "用于核对 URL Scheme 中传给小程序场景页的原始参数串。此区域为只读展示，不参与复制按钮当前标签页的复制内容。",
+          "decodedQueryPlaceholder": "解码后 query",
           "copy": "复制链接",
           "close": "关闭"
         },
