@@ -251,9 +251,9 @@ const layerPresets: PlanningLayer[] = [
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
 
 const layers = ref<PlanningLayer[]>(layerPresets.map((layer) => ({ ...layer })))
-// Single shared active list item for both layers and images.
-// Represented as { type: 'layer'|'image', id: string } or null.
-const activeListItem = ref<{ type: 'layer' | 'image'; id: string } | null>({ type: 'layer', id: layers.value[0]?.id ?? 'terrain-layer' })
+// Single shared active list item for layers, images, and the terrain DEM entry.
+// Represented as { type: 'layer'|'image'|'dem', id: string } or null.
+const activeListItem = ref<{ type: 'layer' | 'image' | 'dem'; id: string } | null>({ type: 'layer', id: layers.value[0]?.id ?? 'terrain-layer' })
 const activeLayerId = computed<string | null>({
   get: () => (activeListItem.value?.type === 'layer' ? activeListItem.value.id : null),
   set: (v: string | null) => {
@@ -1804,7 +1804,7 @@ const selectedImage = computed<PlanningImage | null>(() => {
 })
 
 const selectedDem = computed<PlanningTerrainDemData | null>(() => {
-  return activeDemId.value ? planningTerrain.value.dem : null
+  return activeDemId.value ? (planningTerrain.value.dem ?? null) : null
 })
 
 function formatOptionalNumber(value: number | null | undefined, fractionDigits = 2): string {

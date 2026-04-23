@@ -88,6 +88,10 @@ export function putPlanningDemSceneRecord(db: IDBDatabase, record: PlanningDemSc
 
 export function getPlanningDemSceneRecord(db: IDBDatabase, sceneId: string | null) {
   return new Promise<PlanningDemSceneRecord | undefined>((resolve, reject) => {
+    if (sceneId === null) {
+      resolve(undefined)
+      return
+    }
     const tx = db.transaction(SCENES_STORE, 'readonly')
     const req = tx.objectStore(SCENES_STORE).get(sceneId)
     req.onsuccess = () => resolve(req.result)
