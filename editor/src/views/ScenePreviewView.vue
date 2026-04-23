@@ -1125,11 +1125,41 @@ const behaviorBubbleOffsetY = ref(-12)
 let behaviorBubbleDelayTimer: number | null = null
 let behaviorBubbleDismissTimer: number | null = null
 
+type InfoBoardOverlayPlacement = {
+	xPercent: number
+	yPercent: number
+	scale: number
+	opacity: number
+}
+
+const infoBoardOverlayVisible = ref(false)
+const infoBoardOverlayLoading = ref(false)
+const infoBoardOverlayNodeId = ref<string | null>(null)
+const infoBoardOverlayContent = ref('')
+const infoBoardOverlayPlacement = reactive<InfoBoardOverlayPlacement>({
+	xPercent: 78,
+	yPercent: 18,
+	scale: 1,
+	opacity: 1,
+})
+let infoBoardOverlayGeneration = 0
+let infoBoardAudioElement: HTMLAudioElement | null = null
+let infoBoardAudioResolved: ResolvedAssetUrl | null = null
+
 const behaviorBubbleStyle = computed(() => ({
 	left: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorXPercent.value}%` : undefined,
 	top: behaviorBubbleAnchorMode.value === 'nodeAnchored' ? `${behaviorBubbleAnchorYPercent.value}%` : undefined,
 	'--behavior-bubble-offset-x': `${behaviorBubbleOffsetX.value}px`,
 	'--behavior-bubble-offset-y': `${behaviorBubbleOffsetY.value}px`,
+}))
+
+const infoBoardPanelStyle = computed(() => ({
+	left: `${infoBoardOverlayPlacement.xPercent}%`,
+	top: `${infoBoardOverlayPlacement.yPercent}%`,
+	transform: `translate(-50%, -50%) scale(${infoBoardOverlayPlacement.scale})`,
+	opacity: infoBoardOverlayPlacement.opacity,
+	maxWidth: `${Math.round(Math.min(lanternViewportSize.width * 0.84, 560))}px`,
+	maxHeight: `${Math.round(Math.min(lanternViewportSize.height * 0.58, lanternViewportSize.height - 128))}px`,
 }))
 
 const lanternOverlayVisible = ref(false)
@@ -4990,6 +5020,139 @@ function clearBehaviorAlert() {
 	behaviorAlertCancelText.value = 'Cancel'
 }
 
+function clearInfoBoardAudio(): void {
+	if (infoBoardAudioElement) {
+		try {
+			infoBoardAudioElement.pause()
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to pause info board audio', error)
+		}
+		try {
+			infoBoardAudioElement.src = ''
+			infoBoardAudioElement.load()
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to reset info board audio element', error)
+		}
+		infoBoardAudioElement = null
+	}
+	if (infoBoardAudioResolved) {
+		infoBoardAudioResolved.dispose?.()
+		infoBoardAudioResolved = null
+	}
+}
+
+function resetInfoBoardOverlay(): void {
+	infoBoardOverlayGeneration += 1
+	infoBoardOverlayVisible.value = false
+	infoBoardOverlayLoading.value = false
+	infoBoardOverlayNodeId.value = null
+	infoBoardOverlayContent.value = ''
+	infoBoardOverlayPlacement.xPercent = 78
+	infoBoardOverlayPlacement.yPercent = 18
+	infoBoardOverlayPlacement.scale = 1
+	infoBoardOverlayPlacement.opacity = 1
+	clearInfoBoardAudio()
+}
+
+function updateInfoBoardOverlayPlacement(activeCamera: THREE.Camera | null): void {
+	if (!infoBoardOverlayVisible.value) {
+		return
+	}
+	const nodeId = infoBoardOverlayNodeId.value
+	const object = nodeId ? nodeObjectMap.get(nodeId) ?? null : null
+	if (!activeCamera || !object) {
+		infoBoardOverlayPlacement.xPercent = 78
+		infoBoardOverlayPlacement.yPercent = 18
+		infoBoardOverlayPlacement.scale = 1
+		infoBoardOverlayPlacement.opacity = 1
+		return
+	}
+	resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch)
+	const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, {
+		position: activeCamera.position,
+		nodeId: resolveOverlayDistanceReferenceNodeId(),
+	})
+	const placement = computeSignboardPlacement({
+		anchorWorld: signboardAnchorScratch,
+		referenceWorld: distanceReferenceWorld,
+		camera: activeCamera,
+		closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+		minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+	})
+	if (!placement) {
+		infoBoardOverlayPlacement.xPercent = 78
+		infoBoardOverlayPlacement.yPercent = 18
+		infoBoardOverlayPlacement.scale = 1
+		infoBoardOverlayPlacement.opacity = 1
+		return
+	}
+	infoBoardOverlayPlacement.xPercent = placement.xPercent
+	infoBoardOverlayPlacement.yPercent = placement.yPercent
+	infoBoardOverlayPlacement.scale = placement.scale
+	infoBoardOverlayPlacement.opacity = placement.opacity
+}
+
+async function playInfoBoardAudio(assetId: string, generation: number): Promise<void> {
+	const resolved = await resolveAssetUrlReference(assetId)
+	if (!resolved?.url || generation !== infoBoardOverlayGeneration || !infoBoardOverlayVisible.value) {
+		resolved?.dispose?.()
+		return
+	}
+	clearInfoBoardAudio()
+	const audio = new Audio(resolved.url)
+	audio.preload = 'auto'
+	audio.loop = false
+	infoBoardAudioElement = audio
+	infoBoardAudioResolved = resolved
+	audio.onended = () => {
+		if (generation === infoBoardOverlayGeneration) {
+			clearInfoBoardAudio()
+		}
+	}
+	try {
+		await audio.play()
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to play info board audio', error)
+		clearInfoBoardAudio()
+	}
+}
+
+async function presentInfoBoard(event: Extract<BehaviorRuntimeEvent, { type: 'show-info-board' }>): Promise<void> {
+	const generation = ++infoBoardOverlayGeneration
+	clearInfoBoardAudio()
+	infoBoardOverlayVisible.value = true
+	infoBoardOverlayLoading.value = false
+	infoBoardOverlayNodeId.value = event.nodeId
+	infoBoardOverlayContent.value = typeof event.params.content === 'string' ? event.params.content : ''
+	updateInfoBoardOverlayPlacement(camera)
+
+	const contentAssetId = event.params.contentAssetId?.trim() ?? ''
+	if (contentAssetId.length) {
+		infoBoardOverlayLoading.value = true
+		try {
+			const text = await loadTextAssetContent(contentAssetId)
+			if (generation === infoBoardOverlayGeneration && infoBoardOverlayVisible.value && typeof text === 'string') {
+				infoBoardOverlayContent.value = text
+			}
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to load info board text asset', error)
+		} finally {
+			if (generation === infoBoardOverlayGeneration) {
+				infoBoardOverlayLoading.value = false
+			}
+		}
+	}
+
+	const audioAssetId = event.params.audioAssetId?.trim() ?? ''
+	if (audioAssetId.length) {
+		void playInfoBoardAudio(audioAssetId, generation)
+	}
+}
+
+function hideInfoBoard(): void {
+	resetInfoBoardOverlay()
+}
+
 function clearBehaviorBubbleTimers() {
 	if (behaviorBubbleDelayTimer != null) {
 		window.clearTimeout(behaviorBubbleDelayTimer)
@@ -7749,6 +7912,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'show-alert':
 			presentBehaviorAlert(event)
 			break
+		case 'show-info-board':
+			void presentInfoBoard(event)
+			break
+		case 'hide-info-board':
+			hideInfoBoard()
+			break
 		case 'lantern':
 			presentLanternSlides(event)
 			break
@@ -7797,10 +7966,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'sequence-complete':
 			clearBehaviorAlert()
 			resetLanternOverlay()
+			resetInfoBoardOverlay()
 			break
 		case 'sequence-error':
 			clearBehaviorAlert()
 			resetLanternOverlay()
+			resetInfoBoardOverlay()
 			console.error('[ScenePreview] Behavior sequence error', event.message)
 			break
 		default:
@@ -8732,6 +8903,7 @@ function startAnimationLoop() {
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
 		updateSignboardOverlayEntries(activeCamera, delta)
+		updateInfoBoardOverlayPlacement(activeCamera)
 		updatePerFrameDiagnostics(delta)
 		if (gradientBackgroundDome) {
 			gradientBackgroundDome.mesh.position.copy(activeCamera.position)
@@ -8799,6 +8971,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	setCameraViewState('level', null)
 	dismissBehaviorAlert()
 	resetLanternOverlay()
+		resetInfoBoardOverlay()
 	resetAssetResolutionCaches()
 	lazyPlaceholderStates.clear()
 	activeLazyLoadCount = 0
@@ -13233,6 +13406,43 @@ watch(
 				</div>
 			</div>
 		</div>
+		<div
+			v-if="infoBoardOverlayVisible"
+			class="scene-preview__info-board-overlay"
+			@click.self="hideInfoBoard"
+		>
+			<div
+				class="scene-preview__info-board-card"
+				:style="infoBoardPanelStyle"
+			>
+				<div class="scene-preview__info-board-header">
+					<div>
+						<p class="scene-preview__info-board-eyebrow">信息板</p>
+						<h3 class="scene-preview__info-board-title">节点介绍</h3>
+					</div>
+					<v-btn
+						icon="mdi-close"
+						size="small"
+						variant="text"
+						class="scene-preview__info-board-close"
+						@click="hideInfoBoard"
+					/>
+				</div>
+				<div class="scene-preview__info-board-body">
+					<div
+						v-if="infoBoardOverlayLoading"
+						class="scene-preview__info-board-loading"
+					>
+						内容加载中...
+					</div>
+					<div
+						v-else
+						class="scene-preview__info-board-content"
+						v-text="infoBoardOverlayContent"
+					/>
+				</div>
+			</div>
+		</div>
 	</div>
 </template>
 
@@ -14357,6 +14567,90 @@ watch(
 	backdrop-filter: blur(12px);
 	max-height: calc(100vh - clamp(48px, 10vw, 96px));
 	overflow: auto;
+}
+
+.scene-preview__info-board-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: clamp(18px, 4vw, 40px);
+	background: rgba(4, 8, 14, 0.22);
+	z-index: 2250;
+	pointer-events: auto;
+}
+
+.scene-preview__info-board-card {
+	position: absolute;
+	width: min(760px, 100%);
+	max-height: min(78vh, 820px);
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	padding: 22px 24px;
+	border-radius: 22px;
+	background: rgba(10, 16, 26, 0.94);
+	box-shadow: 0 24px 72px rgba(0, 0, 0, 0.48);
+	backdrop-filter: blur(14px);
+	color: #eef3ff;
+	pointer-events: auto;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.scene-preview__info-board-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+}
+
+.scene-preview__info-board-eyebrow {
+	margin: 0 0 4px;
+	font-size: 0.72rem;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: rgba(224, 230, 241, 0.72);
+	font-weight: 700;
+}
+
+.scene-preview__info-board-title {
+	margin: 0;
+	font-size: 1.05rem;
+	line-height: 1.35;
+	font-weight: 700;
+	color: #ffffff;
+}
+
+.scene-preview__info-board-close {
+	flex: 0 0 auto;
+	margin-top: -6px;
+	margin-right: -6px;
+}
+
+.scene-preview__info-board-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+	padding-right: 2px;
+	font-size: 0.95rem;
+	line-height: 1.75;
+	color: rgba(235, 240, 248, 0.95);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.scene-preview__info-board-loading {
+	color: rgba(235, 240, 248, 0.72);
+	font-size: 0.92rem;
+	padding: 2px 0;
+}
+
+.scene-preview__info-board-content {
+	min-height: 100%;
 }
 
 .scene-preview__lantern-header {
