@@ -113,6 +113,30 @@
         </view>
       </view>
       <view
+        v-if="infoBoardOverlayVisible"
+        class="viewer-info-board-overlay"
+        aria-live="polite"
+        :style="{
+          left: `${infoBoardOverlayPlacement.xPercent}%`,
+          top: `${infoBoardOverlayPlacement.yPercent}%`,
+          transform: `translate(-50%, -100%) scale(${infoBoardOverlayPlacement.scale})`,
+          opacity: String(infoBoardOverlayPlacement.opacity),
+        }"
+      >
+        <view class="viewer-info-board" :style="infoBoardPanelStyle">
+          <view class="viewer-info-board__header">
+            <text class="viewer-info-board__title">展示板</text>
+            <button class="viewer-info-board__close" type="button" hover-class="none" @tap="hideInfoBoard">
+              <text class="viewer-info-board__close-icon">✕</text>
+            </button>
+          </view>
+          <scroll-view scroll-y class="viewer-info-board__body">
+            <text v-if="infoBoardOverlayLoading" class="viewer-info-board__loading">正在加载内容…</text>
+            <text v-else class="viewer-info-board__content">{{ infoBoardOverlayContent || '暂无内容' }}</text>
+          </scroll-view>
+        </view>
+      </view>
+      <view
         v-if="behaviorAlertVisible"
         class="viewer-behavior-overlay"
         @tap.self="cancelBehaviorAlert"
@@ -2087,6 +2111,27 @@ const behaviorBubbleAnchorXPercent = behaviorBubble.anchorXPercent;
 const behaviorBubbleAnchorYPercent = behaviorBubble.anchorYPercent;
 const behaviorBubbleStyle = behaviorBubble.style;
 
+type InfoBoardOverlayPlacement = {
+  xPercent: number;
+  yPercent: number;
+  scale: number;
+  opacity: number;
+};
+
+const infoBoardOverlayVisible = ref(false);
+const infoBoardOverlayLoading = ref(false);
+const infoBoardOverlayNodeId = ref<string | null>(null);
+const infoBoardOverlayContent = ref('');
+const infoBoardOverlayPlacement = reactive<InfoBoardOverlayPlacement>({
+  xPercent: 78,
+  yPercent: 18,
+  scale: 1,
+  opacity: 1,
+});
+let infoBoardOverlayGeneration = 0;
+let infoBoardAudioContext: ViewerInnerAudioContext | null = null;
+let infoBoardAudioResolved: ResolvedAssetUrl | null = null;
+
 const lanternOverlayVisible = ref(false);
 const lanternSlides = ref<LanternSlideDefinition[]>([]);
 const lanternActiveSlideIndex = ref(0);
@@ -2186,6 +2231,15 @@ const lanternImageBoxStyle = computed(() => {
     style.minHeight = `${Math.round(Math.min(imageAvailableHeight, 220))}px`;
   }
   return style;
+});
+
+const infoBoardPanelStyle = computed(() => {
+  const viewportWidth = lanternViewportSize.width || 375;
+  const viewportHeight = lanternViewportSize.height || 667;
+  return {
+    maxWidth: `${Math.round(Math.min(viewportWidth * 0.84, 560))}px`,
+    maxHeight: `${Math.round(Math.min(viewportHeight * 0.58, viewportHeight - 128))}px`,
+  };
 });
 
 const lanternAssets = useLanternAssets({
@@ -3410,6 +3464,141 @@ async function loadTextAssetContent(assetId: string): Promise<string | null> {
     return await fetchTextFromUrl(entry.blobUrl);
   }
   return null;
+}
+
+function resetInfoBoardAudio(): void {
+  if (infoBoardAudioContext) {
+    try {
+      infoBoardAudioContext.stop();
+    } catch (error) {
+      console.warn('停止信息板音频失败', error);
+    }
+    try {
+      infoBoardAudioContext.destroy();
+    } catch (error) {
+      console.warn('销毁信息板音频失败', error);
+    }
+    infoBoardAudioContext = null;
+  }
+  if (infoBoardAudioResolved) {
+    infoBoardAudioResolved.dispose?.();
+    infoBoardAudioResolved = null;
+  }
+}
+
+function resetInfoBoardOverlay(): void {
+  infoBoardOverlayGeneration += 1;
+  infoBoardOverlayVisible.value = false;
+  infoBoardOverlayLoading.value = false;
+  infoBoardOverlayNodeId.value = null;
+  infoBoardOverlayContent.value = '';
+  infoBoardOverlayPlacement.xPercent = 78;
+  infoBoardOverlayPlacement.yPercent = 18;
+  infoBoardOverlayPlacement.scale = 1;
+  infoBoardOverlayPlacement.opacity = 1;
+  resetInfoBoardAudio();
+}
+
+function updateInfoBoardOverlayPlacement(activeCamera: THREE.Camera | null): void {
+  if (!infoBoardOverlayVisible.value) {
+    return;
+  }
+  const nodeId = infoBoardOverlayNodeId.value;
+  const object = nodeId ? nodeObjectMap.get(nodeId) ?? null : null;
+  if (!activeCamera || !object) {
+    infoBoardOverlayPlacement.xPercent = 78;
+    infoBoardOverlayPlacement.yPercent = 18;
+    infoBoardOverlayPlacement.scale = 1;
+    infoBoardOverlayPlacement.opacity = 1;
+    return;
+  }
+  const anchorWorld = resolveSignboardAnchorWorldPosition(object, behaviorBubbleAnchorScratch);
+  const referenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, anchorWorld, {
+    position: activeCamera.position,
+    nodeId: resolveOverlayDistanceReferenceNodeId(),
+  });
+  const placement = computeSignboardPlacement({
+    anchorWorld,
+    referenceWorld,
+    camera: activeCamera,
+    closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+    minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+  });
+  if (!placement) {
+    infoBoardOverlayPlacement.xPercent = 78;
+    infoBoardOverlayPlacement.yPercent = 18;
+    infoBoardOverlayPlacement.scale = 1;
+    infoBoardOverlayPlacement.opacity = 1;
+    return;
+  }
+  infoBoardOverlayPlacement.xPercent = placement.xPercent;
+  infoBoardOverlayPlacement.yPercent = placement.yPercent;
+  infoBoardOverlayPlacement.scale = placement.scale;
+  infoBoardOverlayPlacement.opacity = placement.opacity;
+}
+
+async function playInfoBoardAudio(assetId: string, generation: number): Promise<void> {
+  const resolved = await resolveAssetUrlReference(assetId);
+  if (!resolved?.url || generation !== infoBoardOverlayGeneration || !infoBoardOverlayVisible.value) {
+    resolved?.dispose?.();
+    return;
+  }
+  resetInfoBoardAudio();
+  const audio = uni.createInnerAudioContext();
+  audio.autoplay = false;
+  audio.loop = false;
+  audio.src = resolved.url;
+  infoBoardAudioContext = audio;
+  infoBoardAudioResolved = resolved;
+  audio.onEnded(() => {
+    if (generation === infoBoardOverlayGeneration) {
+      resetInfoBoardAudio();
+    }
+  });
+  try {
+    audio.play();
+  } catch (error) {
+    console.warn('播放信息板音频失败', error);
+    resetInfoBoardAudio();
+  }
+}
+
+async function presentInfoBoard(event: Extract<BehaviorRuntimeEvent, { type: 'show-info-board' }>): Promise<void> {
+  const generation = ++infoBoardOverlayGeneration;
+  resetInfoBoardAudio();
+  infoBoardOverlayVisible.value = true;
+  infoBoardOverlayLoading.value = false;
+  infoBoardOverlayNodeId.value = event.nodeId;
+  infoBoardOverlayContent.value = typeof event.params.content === 'string' ? event.params.content : '';
+  updateInfoBoardOverlayPlacement(renderContext?.camera ?? null);
+
+  const contentAssetId = event.params.contentAssetId?.trim() ?? '';
+  if (contentAssetId.length) {
+    infoBoardOverlayLoading.value = true;
+    try {
+      const loadedText = await loadTextAssetContent(contentAssetId);
+      if (generation === infoBoardOverlayGeneration && infoBoardOverlayVisible.value) {
+        if (typeof loadedText === 'string' && loadedText.length) {
+          infoBoardOverlayContent.value = loadedText;
+        }
+      }
+    } catch (error) {
+      console.warn('加载信息板文本失败', error);
+    } finally {
+      if (generation === infoBoardOverlayGeneration) {
+        infoBoardOverlayLoading.value = false;
+      }
+    }
+  }
+
+  const audioAssetId = event.params.audioAssetId?.trim() ?? '';
+  if (audioAssetId.length) {
+    void playInfoBoardAudio(audioAssetId, generation);
+  }
+}
+
+function hideInfoBoard(): void {
+  resetInfoBoardOverlay();
 }
 
 function resetLanternOverlay(): void {
@@ -9564,6 +9753,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'show-alert':
       presentBehaviorAlert(event);
       break;
+    case 'show-info-board':
+      void presentInfoBoard(event);
+      break;
+    case 'hide-info-board':
+      hideInfoBoard();
+      break;
     case 'lantern':
       presentLanternSlides(event);
       break;
@@ -11017,6 +11212,7 @@ function teardownRenderer() {
       message: '视图卸载',
     });
   }
+  resetInfoBoardOverlay();
   if (lanternEventToken.value) {
     closeLanternOverlay({ type: 'abort', message: '视图卸载' });
   } else {
@@ -11512,6 +11708,7 @@ function startRenderLoop(
 
           updateBehaviorProximity();
           updateSignboardOverlayEntries(camera, deltaSeconds);
+          updateInfoBoardOverlayPlacement(camera);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
@@ -11581,6 +11778,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   } else {
     resetLanternOverlay();
   }
+  resetInfoBoardOverlay();
 
   hidePurposeControls();
   setCameraCaging(false);
@@ -11913,6 +12111,7 @@ function cleanupRuntime(): void {
     sceneDownloadTask = null;
   }
   clearBehaviorSounds();
+  resetInfoBoardOverlay();
   resetSceneDownloadState();
   waterRuntime.reset();
   sharedResourceCache = null;
@@ -12423,6 +12622,79 @@ onUnmounted(() => {
 .viewer-bubble--variant-danger {
   border-color: rgba(255, 132, 132, 0.34);
   background: linear-gradient(180deg, rgba(42, 10, 14, 0.94), rgba(78, 18, 26, 0.88));
+}
+
+.viewer-info-board-overlay {
+  position: absolute;
+  z-index: 2050;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.viewer-info-board {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(84vw, 560px);
+  padding: 16px 18px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(160, 205, 255, 0.18);
+  background: linear-gradient(180deg, rgba(10, 18, 30, 0.96), rgba(16, 24, 38, 0.95));
+  box-shadow: 0 20rpx 52rpx rgba(0, 0, 0, 0.34);
+  color: #f7fbff;
+  transform-origin: center bottom;
+}
+
+.viewer-info-board__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.viewer-info-board__title {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 700;
+  letter-spacing: 0.3rpx;
+}
+
+.viewer-info-board__close {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background-color: rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.viewer-info-board__close-icon {
+  font-size: 16px;
+  line-height: 1;
+  color: #fff;
+}
+
+.viewer-info-board__body {
+  flex: 1 1 auto;
+  max-height: 100%;
+  min-height: 0;
+}
+
+.viewer-info-board__loading,
+.viewer-info-board__content {
+  display: block;
+  font-size: 28rpx;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.viewer-info-board__loading {
+  opacity: 0.72;
 }
 
 .viewer-bubble--anim-fade {

@@ -593,6 +593,8 @@ export type BehaviorScriptType =
   | 'hidePurpose'
   | 'show'
   | 'hide'
+  | 'showInfoBoard'
+  | 'hideInfoBoard'
   | 'lantern'
   | 'look'
   | 'loadScene'
@@ -630,6 +632,15 @@ export interface ShowAlertBehaviorParams {
   showCancel: boolean
   /** Custom label for the cancel button. */
   cancelText: string
+}
+
+export interface InfoBoardBehaviorParams {
+  /** Primary content text displayed inside the info board. */
+  content: string
+  /** Optional asset identifier that overrides the inline content. */
+  contentAssetId: string | null
+  /** Optional audio asset identifier for narration playback. */
+  audioAssetId: string | null
 }
 
 export type BubbleBehaviorVariant = 'info' | 'success' | 'warning' | 'danger'
@@ -867,6 +878,14 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'hide'
       params: HideBehaviorParams
+    }
+  | {
+      type: 'showInfoBoard'
+      params: InfoBoardBehaviorParams
+    }
+  | {
+      type: 'hideInfoBoard'
+      params: HidePurposeBehaviorParams
     }
   | {
       type: 'lantern'
