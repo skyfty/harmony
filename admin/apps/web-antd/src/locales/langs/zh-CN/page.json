@@ -149,7 +149,8 @@
           "title": "微信小程序二维码规则链接",
           "tabs": {
             "ruleLink": "微信小程序二维码规则链接",
-            "plainUrlScheme": "明文 URL Scheme"
+            "plainUrlScheme": "明文 URL Scheme",
+            "miniProgramPath": "小程序路径"
           },
           "hint": "默认链接已按场景包地址、景点ID和场景ID生成，可直接复制到微信小程序后台二维码规则配置中，或按需编辑后使用。",
           "placeholder": "微信小程序二维码规则链接",
@@ -158,6 +159,8 @@
           "decodedQueryTitle": "解码后 query",
           "decodedQueryHint": "用于核对 URL Scheme 中传给小程序场景页的原始参数串。此区域为只读展示，不参与复制按钮当前标签页的复制内容。",
           "decodedQueryPlaceholder": "解码后 query",
+          "miniProgramPathHint": "此路径可直接配置到公众号底部菜单，用于打开景点场景页。路径格式为 pages/scenery/index，并在后面追加与二维码规则链接一致的参数。",
+          "miniProgramPathPlaceholder": "小程序路径",
           "copy": "复制链接",
           "close": "关闭"
         },

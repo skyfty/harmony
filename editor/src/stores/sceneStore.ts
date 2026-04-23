@@ -17734,7 +17734,7 @@ export const useSceneStore = defineStore('scene', {
     },
     async createScene(
       name = 'Untitled Scene',
-      options?: GroundSettings | { groundSettings?: Partial<GroundSettings> } | null,
+      options?: GroundSettings | { groundSettings?: Partial<GroundSettings>; planningData?: PlanningSceneData | null } | null,
     ) {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
@@ -17772,6 +17772,7 @@ export const useSceneStore = defineStore('scene', {
         assetCatalog: baseAssetCatalog,
         panelVisibility: this.panelVisibility,
         panelPlacement: this.panelPlacement,
+        planningData: clonePlanningData((options as { planningData?: PlanningSceneData | null } | null | undefined)?.planningData),
       })
 
       await scenesStore.saveSceneDocument(sceneDocument)

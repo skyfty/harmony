@@ -62,6 +62,7 @@ const wechatQRCodeLoadingRowId = ref<null | string>(null);
 const wechatQRCodeActiveTab = ref('wechat-rule-link');
 const wechatQRCodeValue = ref('');
 const wechatUrlSchemeValue = ref('');
+const wechatMiniProgramPathValue = ref('');
 const wechatDecodedQueryValue = ref('');
 
 const sceneOptions = ref<Array<{ label: string; value: string }>>([]);
@@ -106,7 +107,9 @@ const wechatQRCodeModalTitle = computed(() => t('page.sceneSpots.index.wechatQr.
 const currentWechatQRCodeValue = computed(() =>
   wechatQRCodeActiveTab.value === 'plain-url-scheme'
     ? wechatUrlSchemeValue.value
-    : wechatQRCodeValue.value,
+    : wechatQRCodeActiveTab.value === 'mini-program-path'
+      ? wechatMiniProgramPathValue.value
+      : wechatQRCodeValue.value,
 );
 
 const WECHAT_MINI_PROGRAM_APP_ID = 'wxbee5b017bdf26cc1';
@@ -387,11 +390,16 @@ function buildWechatUrlScheme(sceneFileUrl: string, row: SceneSpotItem) {
   return `weixin://dl/business/?appid=${WECHAT_MINI_PROGRAM_APP_ID}&path=${WECHAT_MINI_PROGRAM_SCENERY_PATH}&query=${encodeURIComponent(query)}&env_version=release`;
 }
 
+function buildWechatMiniProgramPath(sceneFileUrl: string, row: SceneSpotItem) {
+  return `${WECHAT_MINI_PROGRAM_SCENERY_PATH}?${buildWechatQRCodeQuery(sceneFileUrl, row)}`;
+}
+
 function closeWechatQRCodeModal() {
   wechatQRCodeModalOpen.value = false;
   wechatQRCodeActiveTab.value = 'wechat-rule-link';
   wechatQRCodeValue.value = '';
   wechatUrlSchemeValue.value = '';
+  wechatMiniProgramPathValue.value = '';
   wechatDecodedQueryValue.value = '';
 }
 
@@ -428,6 +436,7 @@ async function openWechatQRCode(row: SceneSpotItem) {
     wechatDecodedQueryValue.value = query;
     wechatQRCodeValue.value = buildWechatQRCodeLink(sceneFileUrl, row);
     wechatUrlSchemeValue.value = buildWechatUrlScheme(sceneFileUrl, row);
+    wechatMiniProgramPathValue.value = buildWechatMiniProgramPath(sceneFileUrl, row);
     wechatQRCodeActiveTab.value = 'wechat-rule-link';
     wechatQRCodeModalOpen.value = true;
   } catch {
@@ -867,6 +876,17 @@ onMounted(async () => {
               :auto-size="{ minRows: 4, maxRows: 8 }"
               readonly
               :placeholder="t('page.sceneSpots.index.wechatQr.modal.decodedQueryPlaceholder')"
+            />
+          </Tabs.TabPane>
+          <Tabs.TabPane key="mini-program-path" :tab="t('page.sceneSpots.index.wechatQr.modal.tabs.miniProgramPath')">
+            <div class="wechat-qr-modal-hint">
+              {{ t('page.sceneSpots.index.wechatQr.modal.miniProgramPathHint') }}
+            </div>
+            <TextArea
+              v-model:value="wechatMiniProgramPathValue"
+              :auto-size="{ minRows: 5, maxRows: 10 }"
+              allow-clear
+              :placeholder="t('page.sceneSpots.index.wechatQr.modal.miniProgramPathPlaceholder')"
             />
           </Tabs.TabPane>
         </Tabs>
