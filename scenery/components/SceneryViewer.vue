@@ -119,7 +119,7 @@
         :style="{
           left: `${infoBoardOverlayPlacement.xPercent}%`,
           top: `${infoBoardOverlayPlacement.yPercent}%`,
-          transform: `translate(-50%, -100%) scale(${infoBoardOverlayPlacement.scale})`,
+          transform: 'translate(-50%, -100%)',
           opacity: String(infoBoardOverlayPlacement.opacity),
         }"
       >
@@ -130,7 +130,13 @@
               <text class="viewer-info-board__close-icon">✕</text>
             </button>
           </view>
-          <scroll-view scroll-y scroll-with-animation class="viewer-info-board__body" :scroll-top="infoBoardScrollTop">
+          <scroll-view
+            scroll-y
+            scroll-with-animation
+            class="viewer-info-board__body"
+            :style="infoBoardBodyStyle"
+            :scroll-top="infoBoardScrollTop"
+          >
             <text v-if="infoBoardOverlayLoading" class="viewer-info-board__loading">正在加载内容…</text>
             <text v-else class="viewer-info-board__content">{{ infoBoardOverlayContent || '暂无内容' }}</text>
           </scroll-view>
@@ -2126,12 +2132,18 @@ const infoBoardOverlayContent = ref('');
 const infoBoardScrollTop = ref(0);
 const infoBoardOverlayPlacement = reactive<InfoBoardOverlayPlacement>({
   xPercent: 78,
-  yPercent: 18,
+  yPercent: 34,
   scale: 1,
   opacity: 1,
 });
 let infoBoardOverlayGeneration = 0;
-let infoBoardScrollSequence = 0;
+let infoBoardScrollTimer: ReturnType<typeof setInterval> | null = null;
+let infoBoardScrollMeasureTimer: ReturnType<typeof setTimeout> | null = null;
+let infoBoardScrollTopValue = 0;
+let infoBoardScrollMaxTopValue = 0;
+let infoBoardScrollPageStepValue = 0;
+let infoBoardScrollNextPauseTopValue = 0;
+let infoBoardScrollHoldTicks = 0;
 let infoBoardAudioContext: ViewerInnerAudioContext | null = null;
 let infoBoardAudioResolved: ResolvedAssetUrl | null = null;
 
@@ -2239,26 +2251,165 @@ const lanternImageBoxStyle = computed(() => {
 const infoBoardPanelStyle = computed(() => {
   const viewportWidth = lanternViewportSize.width || 375;
   const viewportHeight = lanternViewportSize.height || 667;
+  const panelHeight = Math.round(Math.min(viewportHeight * 0.28, 190));
   return {
-    maxWidth: `${Math.round(Math.min(viewportWidth * 0.86, 620))}px`,
-    maxHeight: `${Math.round(Math.min(viewportHeight * 0.6, viewportHeight - 116))}px`,
+    width: `${Math.round(Math.min(viewportWidth * 0.62, 320))}px`,
+    height: `${panelHeight}px`,
+    maxWidth: `${Math.round(Math.min(viewportWidth * 0.62, 320))}px`,
+    maxHeight: `${panelHeight}px`,
   };
 });
 
-async function scrollInfoBoardToBottom(): Promise<void> {
+const infoBoardBodyStyle = computed(() => {
+  const viewportHeight = lanternViewportSize.height || 667;
+  const bodyHeight = Math.max(Math.round(Math.min(viewportHeight * 0.28, 210)) - 76, 76);
+  return {
+    height: `${bodyHeight}px`,
+    maxHeight: `${bodyHeight}px`,
+  };
+});
+
+function stopInfoBoardAutoScroll(): void {
+  if (infoBoardScrollTimer) {
+    clearInterval(infoBoardScrollTimer);
+    infoBoardScrollTimer = null;
+  }
+  if (infoBoardScrollMeasureTimer) {
+    clearTimeout(infoBoardScrollMeasureTimer);
+    infoBoardScrollMeasureTimer = null;
+  }
+  infoBoardScrollTopValue = 0;
+  infoBoardScrollMaxTopValue = 0;
+  infoBoardScrollPageStepValue = 0;
+  infoBoardScrollNextPauseTopValue = 0;
+  infoBoardScrollHoldTicks = 0;
+}
+
+function getInfoBoardPanelMetrics() {
+  const viewportWidth = lanternViewportSize.width || 375;
+  const viewportHeight = lanternViewportSize.height || 667;
+  const panelWidth = Math.round(Math.min(viewportWidth * 0.62, 320));
+  const panelHeight = Math.round(Math.min(viewportHeight * 0.28, 190));
+  return {
+    viewportWidth,
+    viewportHeight,
+    panelWidth,
+    panelHeight,
+  };
+}
+
+function startInfoBoardAutoScrollLoop(): void {
+  if (!infoBoardOverlayVisible.value) {
+    return;
+  }
+  if (infoBoardScrollTimer) {
+    return;
+  }
+  infoBoardScrollTimer = setInterval(() => {
+    if (!infoBoardOverlayVisible.value || infoBoardScrollMaxTopValue <= 0) {
+      stopInfoBoardAutoScroll();
+      if (infoBoardOverlayVisible.value) {
+        infoBoardScrollTop.value = 0;
+      }
+      return;
+    }
+
+    if (infoBoardScrollHoldTicks > 0) {
+      infoBoardScrollHoldTicks -= 1;
+      return;
+    }
+
+    infoBoardScrollTopValue += 1;
+
+    if (infoBoardScrollTopValue >= infoBoardScrollNextPauseTopValue) {
+      infoBoardScrollTopValue = infoBoardScrollNextPauseTopValue;
+      infoBoardScrollHoldTicks = 30;
+      if (infoBoardScrollTopValue >= infoBoardScrollMaxTopValue) {
+        infoBoardScrollHoldTicks = 42;
+      }
+      infoBoardScrollNextPauseTopValue = Math.min(
+        infoBoardScrollTopValue + Math.max(infoBoardScrollPageStepValue, 1),
+        infoBoardScrollMaxTopValue,
+      );
+      if (infoBoardScrollTopValue >= infoBoardScrollMaxTopValue) {
+        infoBoardScrollTopValue = 0;
+        infoBoardScrollNextPauseTopValue = Math.min(infoBoardScrollPageStepValue, infoBoardScrollMaxTopValue);
+      }
+    }
+
+    infoBoardScrollTop.value = infoBoardScrollTopValue;
+  }, 40);
+}
+
+async function measureInfoBoardAutoScroll(): Promise<void> {
   await nextTick();
-  infoBoardScrollSequence += 1;
-  infoBoardScrollTop.value = 100000 + infoBoardScrollSequence;
+  if (infoBoardScrollMeasureTimer) {
+    clearTimeout(infoBoardScrollMeasureTimer);
+  }
+  infoBoardScrollMeasureTimer = setTimeout(() => {
+    infoBoardScrollMeasureTimer = null;
+    if (!infoBoardOverlayVisible.value) {
+      stopInfoBoardAutoScroll();
+      return;
+    }
+
+    const query = uni.createSelectorQuery();
+    if (typeof query.in === 'function') {
+      query.in((pageInstance?.proxy as unknown) ?? null);
+    }
+
+    query
+      .select('.viewer-info-board__body')
+      .boundingClientRect()
+      .select('.viewer-info-board__content')
+      .boundingClientRect()
+      .exec((rects: unknown) => {
+        const items = (Array.isArray(rects) ? rects : []) as Array<UniApp.NodeInfo | null>;
+        const bodyRect = items[0];
+        const contentRect = items[1];
+        const bodyHeight = bodyRect?.height ?? 0;
+        const contentHeight = contentRect?.height ?? 0;
+        const nextMaxTop = Math.max(Math.ceil(contentHeight - bodyHeight), 0);
+
+        if (nextMaxTop <= 0) {
+          stopInfoBoardAutoScroll();
+          infoBoardScrollTop.value = 0;
+          return;
+        }
+
+        infoBoardScrollMaxTopValue = nextMaxTop;
+        infoBoardScrollPageStepValue = Math.max(Math.floor(bodyHeight), 1);
+        infoBoardScrollNextPauseTopValue = Math.min(infoBoardScrollPageStepValue, infoBoardScrollMaxTopValue);
+        infoBoardScrollTopValue = Math.min(infoBoardScrollTopValue, infoBoardScrollMaxTopValue);
+        infoBoardScrollTop.value = infoBoardScrollTopValue;
+        startInfoBoardAutoScrollLoop();
+      });
+  }, 0);
+}
+
+function clampInfoBoardOverlayPlacement(): void {
+  const { viewportWidth, viewportHeight, panelWidth, panelHeight } = getInfoBoardPanelMetrics();
+  const horizontalMargin = Math.max(Math.round(Math.min(viewportWidth * 0.05, 20)), 14);
+  const verticalMargin = Math.max(Math.round(Math.min(viewportHeight * 0.05, 26)), 14);
+  const minX = ((panelWidth / 2) + horizontalMargin) / viewportWidth * 100;
+  const maxX = ((viewportWidth - (panelWidth / 2) - horizontalMargin) / viewportWidth) * 100;
+  const minY = Math.max(((panelHeight + verticalMargin) / viewportHeight) * 100 + 4, 36);
+  const maxY = ((viewportHeight - verticalMargin) / viewportHeight) * 100;
+  infoBoardOverlayPlacement.xPercent = Math.min(Math.max(infoBoardOverlayPlacement.xPercent, minX), maxX);
+  infoBoardOverlayPlacement.yPercent = Math.min(Math.max(infoBoardOverlayPlacement.yPercent, minY), maxY);
+  infoBoardOverlayPlacement.scale = 1;
 }
 
 watch(
   [infoBoardOverlayVisible, infoBoardOverlayLoading, infoBoardOverlayContent],
   ([visible]) => {
     if (!visible) {
+      stopInfoBoardAutoScroll();
       infoBoardScrollTop.value = 0;
       return;
     }
-    void scrollInfoBoardToBottom();
+    clampInfoBoardOverlayPlacement();
+    void measureInfoBoardAutoScroll();
   },
   { flush: 'post' },
 );
@@ -3509,6 +3660,7 @@ function resetInfoBoardAudio(): void {
 
 function resetInfoBoardOverlay(): void {
   infoBoardOverlayGeneration += 1;
+  stopInfoBoardAutoScroll();
   infoBoardOverlayVisible.value = false;
   infoBoardOverlayLoading.value = false;
   infoBoardOverlayNodeId.value = null;
@@ -3528,10 +3680,11 @@ function updateInfoBoardOverlayPlacement(activeCamera: THREE.Camera | null): voi
   const nodeId = infoBoardOverlayNodeId.value;
   const object = nodeId ? nodeObjectMap.get(nodeId) ?? null : null;
   if (!activeCamera || !object) {
-    infoBoardOverlayPlacement.xPercent = 78;
-    infoBoardOverlayPlacement.yPercent = 18;
+    infoBoardOverlayPlacement.xPercent = 50;
+    infoBoardOverlayPlacement.yPercent = 40;
     infoBoardOverlayPlacement.scale = 1;
     infoBoardOverlayPlacement.opacity = 1;
+    clampInfoBoardOverlayPlacement();
     return;
   }
   const anchorWorld = resolveSignboardAnchorWorldPosition(object, behaviorBubbleAnchorScratch);
@@ -3547,16 +3700,18 @@ function updateInfoBoardOverlayPlacement(activeCamera: THREE.Camera | null): voi
     minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
   });
   if (!placement) {
-    infoBoardOverlayPlacement.xPercent = 78;
-    infoBoardOverlayPlacement.yPercent = 18;
+    infoBoardOverlayPlacement.xPercent = 50;
+    infoBoardOverlayPlacement.yPercent = 40;
     infoBoardOverlayPlacement.scale = 1;
     infoBoardOverlayPlacement.opacity = 1;
+    clampInfoBoardOverlayPlacement();
     return;
   }
   infoBoardOverlayPlacement.xPercent = placement.xPercent;
   infoBoardOverlayPlacement.yPercent = placement.yPercent;
-  infoBoardOverlayPlacement.scale = placement.scale;
+  infoBoardOverlayPlacement.scale = 1;
   infoBoardOverlayPlacement.opacity = placement.opacity;
+  clampInfoBoardOverlayPlacement();
 }
 
 async function playInfoBoardAudio(assetId: string, generation: number): Promise<void> {
@@ -12661,62 +12816,82 @@ onUnmounted(() => {
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  width: min(86vw, 620px);
-  padding: 18px 20px 20px;
+  gap: 6px;
+  width: min(80vw, 600px);
+  padding: 6px 12px 4px 12px;
   border-radius: 18px;
-  border: 1px solid rgba(160, 205, 255, 0.18);
-  background: linear-gradient(180deg, rgba(10, 18, 30, 0.96), rgba(16, 24, 38, 0.95));
-  box-shadow: 0 20rpx 52rpx rgba(0, 0, 0, 0.34);
+  overflow: hidden;
+  border: 1px solid rgba(190, 220, 255, 0.16);
+  background: linear-gradient(180deg, rgba(10, 18, 30, 0.62), rgba(16, 24, 38, 0.5));
+  box-shadow: 0 16rpx 40rpx rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   color: #f7fbff;
   transform-origin: center bottom;
+  animation: viewer-info-board-sway 6s ease-in-out infinite alternate;
 }
 
 .viewer-info-board__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 6px;
 }
 
 .viewer-info-board__title {
   display: block;
-  font-size: 32rpx;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 24rpx;
   font-weight: 700;
   letter-spacing: 0.3rpx;
 }
 
 .viewer-info-board__close {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background-color: rgba(255, 255, 255, 0.06);
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
 }
 
 .viewer-info-board__close-icon {
-  font-size: 17px;
+  font-size: 10px;
   line-height: 1;
   color: #fff;
 }
 
 .viewer-info-board__body {
   flex: 1 1 auto;
+  height: 100%;
   max-height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .viewer-info-board__loading,
 .viewer-info-board__content {
   display: block;
-  font-size: 30rpx;
-  line-height: 1.72;
+  font-size: 28rpx;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+@keyframes viewer-info-board-sway {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(-0.7deg);
+  }
+
+  100% {
+    transform: translate3d(0, -4px, 0) rotate(0.7deg);
+  }
 }
 
 .viewer-info-board__loading {
