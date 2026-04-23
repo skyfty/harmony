@@ -133,6 +133,7 @@
           <scroll-view
             scroll-y
             scroll-with-animation
+            show-scrollbar="false"
             class="viewer-info-board__body"
             :style="infoBoardBodyStyle"
             :scroll-top="infoBoardScrollTop"
@@ -2288,8 +2289,8 @@ function stopInfoBoardAutoScroll(): void {
 function getInfoBoardPanelMetrics() {
   const viewportWidth = lanternViewportSize.width || 375;
   const viewportHeight = lanternViewportSize.height || 667;
-  const panelWidth = Math.round(Math.min(viewportWidth * 0.62, 320));
-  const panelHeight = Math.round(Math.min(viewportHeight * 0.28, 190));
+  const panelWidth = Math.round(Math.min(viewportWidth * 0.7, 360));
+  const panelHeight = Math.round(Math.min(viewportHeight * 0.34, 230));
   return {
     viewportWidth,
     viewportHeight,
@@ -12816,55 +12817,81 @@ onUnmounted(() => {
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  width: min(80vw, 600px);
-  padding: 6px 12px 4px 12px;
-  border-radius: 18px;
+  gap: 10px;
+  width: min(84vw, 640px);
+  padding: 14rpx 16rpx 16rpx;
+  border-radius: 24rpx;
   overflow: hidden;
-  border: 1px solid rgba(190, 220, 255, 0.16);
-  background: linear-gradient(180deg, rgba(10, 18, 30, 0.62), rgba(16, 24, 38, 0.5));
-  box-shadow: 0 16rpx 40rpx rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  color: #f7fbff;
+  border: 1px solid rgba(153, 193, 255, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(244, 249, 255, 0.68)),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(210, 232, 255, 0.08));
+  box-shadow: 0 18rpx 42rpx rgba(52, 87, 128, 0.16), 0 6rpx 16rpx rgba(83, 126, 173, 0.08);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  color: #15324f;
   transform-origin: center bottom;
-  animation: viewer-info-board-sway 6s ease-in-out infinite alternate;
+  position: relative;
+  animation: viewer-info-board-float 8s ease-in-out infinite alternate;
+}
+
+.viewer-info-board::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 6rpx;
+  background: linear-gradient(90deg, #67d4ff 0%, #7cc6ff 42%, #9de58f 100%);
+}
+
+.viewer-info-board::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top right, rgba(120, 208, 255, 0.18), transparent 42%);
+  pointer-events: none;
 }
 
 .viewer-info-board__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 12rpx;
+  position: relative;
+  z-index: 1;
+  padding: 2rpx 2rpx 0;
 }
 
 .viewer-info-board__title {
   display: block;
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 24rpx;
-  font-weight: 700;
-  letter-spacing: 0.3rpx;
+  font-size: 26rpx;
+  font-weight: 800;
+  letter-spacing: 0.6rpx;
+  color: #12314d;
 }
 
 .viewer-info-board__close {
-  width: 18px;
-  height: 18px;
-  min-width: 18px;
-  min-height: 18px;
+  width: 42rpx;
+  height: 42rpx;
+  min-width: 42rpx;
+  min-height: 42rpx;
   padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
+  border: 1px solid rgba(107, 152, 198, 0.24);
+  border-radius: 999rpx;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(235, 244, 255, 0.88));
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 4rpx 12rpx rgba(72, 114, 158, 0.12);
 }
 
 .viewer-info-board__close-icon {
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1;
-  color: #fff;
+  color: #4a6d8f;
 }
 
 .viewer-info-board__body {
@@ -12873,29 +12900,35 @@ onUnmounted(() => {
   max-height: 100%;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+  z-index: 1;
+  padding: 10rpx 12rpx 4rpx;
+  border-radius: 18rpx;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(243, 249, 255, 0.32));
 }
 
 .viewer-info-board__loading,
 .viewer-info-board__content {
   display: block;
   font-size: 28rpx;
-  line-height: 1.6;
+  line-height: 1.7;
+  padding: 0;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-@keyframes viewer-info-board-sway {
+@keyframes viewer-info-board-float {
   0% {
-    transform: translate3d(0, 0, 0) rotate(-0.7deg);
+    transform: translate3d(0, 0, 0) rotate(-0.15deg);
   }
 
   100% {
-    transform: translate3d(0, -4px, 0) rotate(0.7deg);
+    transform: translate3d(0, -2px, 0) rotate(0.15deg);
   }
 }
 
 .viewer-info-board__loading {
-  opacity: 0.72;
+  color: rgba(21, 50, 79, 0.64);
 }
 
 .viewer-bubble--anim-fade {
