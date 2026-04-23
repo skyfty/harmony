@@ -132,6 +132,23 @@ function extractQueryFromQrLink(q: string): Record<string, string> {
   return parseQueryString(q);
 }
 
+function decodeQueryValue(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed.includes('%')) {
+    return trimmed;
+  }
+
+  try {
+    return decodeURIComponent(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
 onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
 
@@ -144,18 +161,18 @@ onLoad((query: Record<string, unknown> | undefined) => {
     ),
   };
 
-  projectId.value = typeof mergedRecord.projectId === 'string' ? mergedRecord.projectId : '';
-  packageUrl.value = typeof mergedRecord.packageUrl === 'string' ? mergedRecord.packageUrl : '';
-  packageCacheKey.value = typeof mergedRecord.packageCacheKey === 'string' ? mergedRecord.packageCacheKey : '';
+  projectId.value = decodeQueryValue(mergedRecord.projectId);
+  packageUrl.value = decodeQueryValue(mergedRecord.packageUrl);
+  packageCacheKey.value = decodeQueryValue(mergedRecord.packageCacheKey);
   scenicTitle.value = typeof mergedRecord.scenicTitle === 'string'
-    ? decodeURIComponent(mergedRecord.scenicTitle)
+    ? decodeQueryValue(mergedRecord.scenicTitle)
     : typeof mergedRecord.sceneName === 'string'
-      ? decodeURIComponent(mergedRecord.sceneName)
+      ? decodeQueryValue(mergedRecord.sceneName)
       : '';
-  sceneSpotId.value = typeof mergedRecord.sceneSpotId === 'string' ? mergedRecord.sceneSpotId : '';
-  sceneId.value = typeof mergedRecord.sceneId === 'string' ? mergedRecord.sceneId : '';
+  sceneSpotId.value = decodeQueryValue(mergedRecord.sceneSpotId);
+  sceneId.value = decodeQueryValue(mergedRecord.sceneId);
   selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
-    ? decodeURIComponent(mergedRecord.vehicleIdentifier)
+    ? decodeQueryValue(mergedRecord.vehicleIdentifier)
     : getSelectedVehicleIdentifier();
 
   enterAt.value = Date.now();
