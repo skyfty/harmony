@@ -35,6 +35,7 @@ import {
   normalizeWaterSurfaceMeshInput,
 } from '@schema'
 import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
+import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import type {
   AssetSourceMetadata,
   BehaviorComponentProps,
@@ -18004,6 +18005,10 @@ export const useSceneStore = defineStore('scene', {
             }
           }
         }
+
+        migrateLegacyGroundTerrainDocument(sceneDocument, {
+          hasLegacyHeightSidecar: Boolean(groundHeightSidecars[entry.id]),
+        })
 
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
         await persistPlanningImageLayersToIndexedDB(sceneDocument.id, sceneDocument.planningData?.images ?? [])
