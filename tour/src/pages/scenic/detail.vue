@@ -135,7 +135,6 @@ import type { ScenicDetail } from '@/types/scenic';
 import { getSelectedVehicleIdentifier, setSelectedVehicle } from '@/utils/vehicleSelection';
 import { listVehicles } from '@/api/mini/vehicles';
 import { getStatusBarHeight } from '@/utils/systemInfo';
-import usePageShare from '@/utils/usePageShare';
 
 type ScenicDetailWithFlags = ScenicDetail & {
   isFeatured?: boolean;
@@ -147,15 +146,7 @@ const scenicId = ref('');
 const favoriteLoading = ref(false);
 const currentSlide = ref(0);
 const scenicCheckinProgress = ref<ScenicCheckinProgressItem | null>(null);
-const { registerShare } = usePageShare({
-  title: '景区详情',
-  path: '/pages/scenic/detail',
-});
 
-registerShare(() => ({
-  title: scenic.value?.title || '景区详情',
-  path: `/pages/scenic/detail${buildQueryString({ id: scenicId.value || undefined })}`,
-}));
 
 
 /* Status bar height for floating back button positioning */
