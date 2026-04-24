@@ -18,6 +18,7 @@ import {
   type GroundRuntimeDynamicMesh,
   type GroundSculptOperation,
 } from './index'
+import { resolveGroundTerrainTileKeys } from './groundTerrainTiles'
 
 import {
   computeGroundBaseHeightAtVertex,
@@ -199,7 +200,11 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.trunc(definition.surfaceRevision as number) : 0
   const optimizedChunkState = runtimeDefinition.runtimeDisableOptimizedChunks === true ? 'disabled' : 'enabled'
   const hydratedHeightState = runtimeDefinition.runtimeHydratedHeightState ?? 'none'
-  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}`
+  const loadedTileCount = Array.isArray(runtimeDefinition.runtimeLoadedTileKeys)
+    ? runtimeDefinition.runtimeLoadedTileKeys.length
+    : 0
+  const tileResolution = Number.isFinite(definition.tileResolution) && definition.tileResolution ? Math.trunc(definition.tileResolution) : rows
+  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}|${tileResolution}|${loadedTileCount}`
 }
 
 function clampInclusive(value: number, min: number, max: number): number {
@@ -448,6 +453,13 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
     runtimeDefinition.rows,
     runtimeDefinition.columns,
   )
+  if (!Array.isArray(runtimeDefinition.runtimeLoadedTileKeys) || runtimeDefinition.runtimeLoadedTileKeys.length === 0) {
+    runtimeDefinition.runtimeLoadedTileKeys = resolveGroundTerrainTileKeys({
+      rows: runtimeDefinition.rows,
+      columns: runtimeDefinition.columns,
+      tileResolution: runtimeDefinition.tileResolution ?? runtimeDefinition.rows,
+    })
+  }
   return runtimeDefinition
 }
 
@@ -1726,7 +1738,7 @@ function computeSmoothedSculptPolygonCornerCutDistance(params: {
   }
 
   const cellSize = Math.max(0, params.cellSize)
-  const requested = Math.max(cellSize * 0.5, smoothing * minLength)
+  const requested = Math.max(Math.min(cellSize * 0.25, 0.75), smoothing * minLength)
   const maxAllowed = maxRatio * minLength
   const cut = Math.min(requested, maxAllowed)
   return cut > SCULPT_POLYGON_EPSILON ? cut : 0
@@ -1824,7 +1836,7 @@ export function buildSmoothedSculptPolygonContour(
     const enter = vertex.clone().lerp(previous, enterT)
     const exit = vertex.clone().lerp(next, exitT)
     const approxCurveLength = enter.distanceTo(vertex) + vertex.distanceTo(exit)
-    const segmentTarget = Math.max(cellSize * 0.5, 0.25)
+    const segmentTarget = Math.max(0.25, Math.min(cellSize * 0.25, 0.75))
     const curveSegments = Math.max(3, Math.min(12, Math.ceil(approxCurveLength / segmentTarget)))
 
     return {
@@ -2068,11 +2080,9 @@ function applyPolygonRaiseDepressSeamSmoothing(
   const rows = definition.rows
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
-  const innerBand = Math.max(
-    cellSize * 1.75,
-    Math.min(Math.max(cellSize * 4, depth * (0.75 + slope)), Math.max(cellSize * 1.75, maxBoundaryDistance * 0.65)),
-  )
-  const outerBand = Math.max(cellSize * 1.25, innerBand * 0.45)
+  const depthBand = Math.max(4, depth * (0.75 + slope))
+  const innerBand = Math.max(4, Math.min(depthBand, maxBoundaryDistance * 0.65))
+  const outerBand = Math.max(2, innerBand * 0.45)
   const totalBand = innerBand + outerBand
   const bandCells = Math.max(2, Math.ceil(totalBand / cellSize) + 1)
   const minCol = Math.max(0, Math.floor((polygonBounds.minX + halfWidth) / cellSize) - bandCells)

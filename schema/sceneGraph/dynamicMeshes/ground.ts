@@ -20,8 +20,23 @@ export async function buildGroundMesh(
   groundObject.name = node.name ?? (groundObject.name || 'Ground');
 
   const userData = { ...(groundObject.userData ?? {}) } as Record<string, unknown>;
+  const sourceUserData = node.userData && typeof node.userData === 'object'
+    ? (node.userData as Record<string, unknown>)
+    : {};
   userData.dynamicMeshType = 'Ground';
   userData.groundChunked = true;
+  if ('groundTerrainPackageManifest' in sourceUserData) {
+    userData.groundTerrainPackageManifest = sourceUserData.groundTerrainPackageManifest ?? null;
+  }
+  if ('groundTerrainManifestPath' in sourceUserData) {
+    userData.groundTerrainManifestPath = sourceUserData.groundTerrainManifestPath ?? null;
+  }
+  if ('groundTerrainTilesRootPath' in sourceUserData) {
+    userData.groundTerrainTilesRootPath = sourceUserData.groundTerrainTilesRootPath ?? null;
+  }
+  if ('groundCollisionPath' in sourceUserData) {
+    userData.groundCollisionPath = sourceUserData.groundCollisionPath ?? null;
+  }
   groundObject.userData = userData;
 
   updateGroundMesh(groundObject, meshInfo);

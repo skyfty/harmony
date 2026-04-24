@@ -169,7 +169,9 @@ export const useGroundPaintStore = defineStore('groundPaint', {
       chunkRef: GroundSurfaceChunkTextureRef | null,
     ): GroundPaintRuntimeState {
       const state = ensureRuntimeState(sceneId, nodeId)
-      const nextChunks = normalizeGroundSurfaceChunkTextureMap(state.groundSurfaceChunks)
+      const nextChunks = state.groundSurfaceChunks
+        ? { ...state.groundSurfaceChunks }
+        : ({} as GroundSurfaceChunkTextureMap)
       const normalizedChunkKey = chunkKey.trim()
       if (!normalizedChunkKey) {
         return state

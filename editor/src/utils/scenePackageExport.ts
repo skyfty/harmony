@@ -7,10 +7,15 @@ import type {
 } from '@schema'
 import {
   encodeScenePackageSceneDocument,
+  GROUND_TERRAIN_PACKAGE_FORMAT,
+  GROUND_TERRAIN_PACKAGE_VERSION,
   GROUND_SCATTER_SIDECAR_FILENAME,
   GROUND_PAINT_SIDECAR_FILENAME,
+  buildGroundTerrainTileEntries,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  type GroundTerrainPackageManifest,
+  type GroundTerrainPackageTileEntry,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
 } from '@schema'
@@ -186,6 +191,47 @@ function inferExtFromFilename(filename: string | null | undefined): string | nul
 
 function jsonBytes(value: unknown): Uint8Array {
   return strToU8(JSON.stringify(value, null, 2))
+}
+
+function buildGroundTerrainPackageManifest(
+  sceneId: string,
+  groundNode: SceneJsonExportDocument['nodes'][number],
+): GroundTerrainPackageManifest | null {
+  if (!groundNode?.dynamicMesh || groundNode.dynamicMesh.type !== 'Ground') {
+    return null
+  }
+  const definition = groundNode.dynamicMesh
+  const sceneRootPath = `scenes/${encodeURIComponent(sceneId)}`
+  const terrainTilesRootPath = `${sceneRootPath}/ground-tiles/`
+  const collisionRootPath = `${sceneRootPath}/ground-collision/`
+  const tileResolution = Math.max(1, Math.round(definition.tileResolution ?? 64))
+  const tiles = buildGroundTerrainTileEntries({
+    rows: definition.rows,
+    columns: definition.columns,
+    tileResolution,
+    terrainTilesRootPath,
+    collisionRootPath,
+  }) as GroundTerrainPackageTileEntry[]
+  return {
+    format: GROUND_TERRAIN_PACKAGE_FORMAT,
+    version: GROUND_TERRAIN_PACKAGE_VERSION,
+    scenePath: `${sceneRootPath}/scene.bin`,
+    storageMode: 'tiled',
+    width: definition.width,
+    depth: definition.depth,
+    rows: definition.rows,
+    columns: definition.columns,
+    cellSize: definition.cellSize,
+    tileSizeMeters: Math.max(128, Math.round(definition.tileSizeMeters ?? definition.cellSize)),
+    tileResolution,
+    globalLodCellSize: Math.max(1, Math.round(definition.globalLodCellSize ?? definition.cellSize)),
+    activeEditWindowRadius: Math.max(1, Math.round(definition.activeEditWindowRadius ?? definition.cellSize)),
+    collisionMode: definition.collisionMode ?? 'near-field-only',
+    coarseTerrainPath: null,
+    terrainTilesRootPath,
+    collisionManifestPath: `${sceneRootPath}/ground-collision.json`,
+    tiles,
+  }
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -975,6 +1021,9 @@ export async function exportScenePackageZip(payload: {
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
     let groundHeightsPath: string | undefined
+    let groundTerrainManifestPath: string | undefined
+    let groundTerrainTilesRootPath: string | undefined
+    let groundCollisionPath: string | undefined
     let groundScatterPath: string | undefined
     let groundPaintPath: string | undefined
 
@@ -983,17 +1032,20 @@ export async function exportScenePackageZip(payload: {
       ? structuredClone(preparedDocument)
       : JSON.parse(JSON.stringify(preparedDocument))
     const groundNode = findGroundNode(sidecarSource.nodes)
-    let groundHeightSidecar = scene.id === sceneStore.currentSceneId
-      ? groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
-      : await scenesStore.loadGroundHeightSidecar(scene.id)
+    const useLegacyGroundHeightSidecar = groundNode?.dynamicMesh?.type === 'Ground' && groundNode.dynamicMesh.storageMode !== 'tiled'
+    let groundHeightSidecar = useLegacyGroundHeightSidecar
+      ? (scene.id === sceneStore.currentSceneId
+          ? groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
+          : await scenesStore.loadGroundHeightSidecar(scene.id))
+      : null
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
     const groundPaintSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundPaintStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundPaintSidecar(scene.id)
-    // New scenes can contain Ground nodes before sidecar persistence runs; generate a fallback sidecar for upload consistency.
-    if (groundNode && !groundHeightSidecar) {
+    // Legacy scenes can still contain Ground nodes before sidecar persistence runs; generate a fallback sidecar for upload consistency.
+    if (useLegacyGroundHeightSidecar && groundNode && !groundHeightSidecar) {
       groundHeightSidecar = groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
     }
     if (groundNode?.dynamicMesh?.type === 'Ground') {
@@ -1002,6 +1054,33 @@ export async function exportScenePackageZip(payload: {
       }
       attachOptimizedGroundMeshToDocument(sidecarSource as SceneJsonExportDocument)
       emitGroundOptimizationDiagnostics(payload.reportEvent, scene.id, sceneName, groundNode)
+
+      const terrainManifest = buildGroundTerrainPackageManifest(scene.id, groundNode)
+      if (terrainManifest) {
+        groundTerrainManifestPath = `scenes/${encodeURIComponent(scene.id)}/ground-terrain.json`
+        groundTerrainTilesRootPath = terrainManifest.terrainTilesRootPath
+        groundCollisionPath = terrainManifest.collisionManifestPath ?? undefined
+        files[groundTerrainManifestPath] = jsonBytes(terrainManifest)
+        files[`${groundTerrainTilesRootPath}index.json`] = jsonBytes({
+          sceneId: scene.id,
+          format: terrainManifest.format,
+          version: terrainManifest.version,
+          tiles: terrainManifest.tiles,
+        })
+        if (groundCollisionPath) {
+          files[groundCollisionPath] = jsonBytes({
+            sceneId: scene.id,
+            collisionMode: terrainManifest.collisionMode,
+            tileCount: terrainManifest.tiles.length,
+            tiles: terrainManifest.tiles.map((tile) => ({
+              tileKey: tile.tileKey,
+              row: tile.row,
+              column: tile.column,
+              path: tile.collisionPath ?? tile.path,
+            })),
+          })
+        }
+      }
     }
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
@@ -1173,7 +1252,17 @@ export async function exportScenePackageZip(payload: {
         message: `已写入规划数据 sidecar`,
       })
     }
-    manifestScenes.push({ sceneId: scene.id, path: scenePath, planningPath, groundHeightsPath, groundScatterPath, groundPaintPath })
+    manifestScenes.push({
+      sceneId: scene.id,
+      path: scenePath,
+      planningPath,
+      groundTerrainManifestPath,
+      groundTerrainTilesRootPath,
+      groundCollisionPath,
+      groundHeightsPath,
+      groundScatterPath,
+      groundPaintPath,
+    })
   }
 
   const manifest: ScenePackageManifestV1 = {

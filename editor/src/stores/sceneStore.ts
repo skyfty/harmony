@@ -17934,7 +17934,7 @@ export const useSceneStore = defineStore('scene', {
       }
     },
     async importScenePackageZip(zipBytes: ArrayBuffer): Promise<SceneImportResult> {
-      const { scenes, groundHeightSidecars } = await loadStoredScenesFromScenePackage(zipBytes)
+      const { scenes, groundHeightSidecars, groundTerrainManifests } = await loadStoredScenesFromScenePackage(zipBytes)
       if (!Array.isArray(scenes) || !scenes.length) {
         throw new Error('Scene package does not contain any scene data')
       }
@@ -17987,6 +17987,23 @@ export const useSceneStore = defineStore('scene', {
             ? ((entry as { environment?: Partial<EnvironmentSettings> | null }).environment ?? undefined)
             : undefined,
         })
+
+        const groundTerrainManifest = groundTerrainManifests[entry.id] ?? null
+        if (groundTerrainManifest && Array.isArray(sceneDocument.nodes)) {
+          const groundNode = sceneDocument.nodes.find((node) => node?.dynamicMesh?.type === 'Ground') ?? null
+          if (groundNode) {
+            const userData = groundNode.userData && typeof groundNode.userData === 'object'
+              ? { ...(groundNode.userData as Record<string, unknown>) }
+              : {}
+            groundNode.userData = {
+              ...userData,
+              groundTerrainPackageManifest: groundTerrainManifest,
+              groundTerrainManifestPath: null,
+              groundTerrainTilesRootPath: groundTerrainManifest.terrainTilesRootPath,
+              groundCollisionPath: groundTerrainManifest.collisionManifestPath,
+            }
+          }
+        }
 
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
         await persistPlanningImageLayersToIndexedDB(sceneDocument.id, sceneDocument.planningData?.images ?? [])

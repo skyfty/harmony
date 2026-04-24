@@ -571,6 +571,7 @@ import {
 } from '@harmony/schema/scenePackageZip';
 import type {
   AutoTourRouteSnapResult,
+  GroundTerrainPackageManifest,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -582,6 +583,10 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
   Vector3Like,
+} from '@harmony/schema/index';
+import {
+  GROUND_TERRAIN_PACKAGE_FORMAT,
+  GROUND_TERRAIN_PACKAGE_VERSION,
 } from '@harmony/schema/index';
 import { isPointInsideRegionXZ } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
@@ -796,7 +801,13 @@ interface ScenePreviewPayload {
   createdAt?: string;
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
+  terrain?: SceneTerrainPackageBundle | null;
 }
+
+type SceneTerrainPackageBundle = {
+  manifestPath: string;
+  manifest: GroundTerrainPackageManifest;
+};
 
 type RequestedMode = 'project' | null;
 
@@ -880,6 +891,7 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       document: SceneJsonExportDocument;
+      terrain?: SceneTerrainPackageBundle | null;
     }
   | {
       kind: 'external';
@@ -888,6 +900,7 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       sceneJsonUrl: string;
+      terrain?: SceneTerrainPackageBundle | null;
     };
 
 type ScenePackageProjectData = {
@@ -3309,6 +3322,26 @@ function normalizeDisplayBoardAssetId(candidate: string): string {
   }
   const withoutScheme = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
   return withoutScheme.trim()
+}
+
+function readGroundTerrainManifestFromPackage(pkg: ScenePackageUnzipped, manifestPath: string | null | undefined): SceneTerrainPackageBundle | null {
+  const trimmedPath = typeof manifestPath === 'string' ? manifestPath.trim() : ''
+  if (!trimmedPath) {
+    return null
+  }
+  const manifestText = readTextFileFromScenePackage(pkg, trimmedPath)
+  const raw = JSON.parse(manifestText) as unknown
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`场景包内 ground terrain manifest 无效：${trimmedPath}`)
+  }
+  const candidate = raw as GroundTerrainPackageManifest
+  if (candidate.format !== GROUND_TERRAIN_PACKAGE_FORMAT || candidate.version !== GROUND_TERRAIN_PACKAGE_VERSION) {
+    throw new Error(`场景包内 ground terrain manifest 版本不匹配：${trimmedPath}`)
+  }
+  return {
+    manifestPath: trimmedPath,
+    manifest: candidate,
+  }
 }
 
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
@@ -10547,12 +10580,14 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
       }
 
       const sceneOverrides = activeScenePackageAssetOverrides ?? undefined;
+      const terrain = entry.terrain ?? null;
 
       previewPayload.value = {
         document: entry.document,
         title: entry.document.name || entry.name || '场景预览',
         origin: 'scene-package',
         assetOverrides: sceneOverrides,
+        terrain,
         createdAt: entry.document.createdAt,
         updatedAt: entry.document.updatedAt,
       };
@@ -10573,6 +10608,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
         title: document.name || entry.name || '场景预览',
         origin: entry.sceneJsonUrl,
         assetOverrides: undefined,
+        terrain: entry.terrain ?? null,
         createdAt: document.createdAt,
         updatedAt: document.updatedAt,
       };
@@ -10828,6 +10864,24 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
+    const terrain = readGroundTerrainManifestFromPackage(pkg, sceneEntry.groundTerrainManifestPath);
+    if (terrain) {
+      const groundNode = Array.isArray(document.nodes)
+        ? document.nodes.find((node) => node?.dynamicMesh?.type === 'Ground')
+        : null;
+      if (groundNode) {
+        const userData = groundNode.userData && typeof groundNode.userData === 'object'
+          ? (groundNode.userData as Record<string, unknown>)
+          : {};
+        groundNode.userData = {
+          ...userData,
+          groundTerrainPackageManifest: terrain.manifest,
+          groundTerrainManifestPath: terrain.manifestPath,
+          groundTerrainTilesRootPath: terrain.manifest.terrainTilesRootPath,
+          groundCollisionPath: terrain.manifest.collisionManifestPath,
+        };
+      }
+    }
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };
@@ -10867,6 +10921,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
       updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
       document,
+      terrain,
     });
   });
 
