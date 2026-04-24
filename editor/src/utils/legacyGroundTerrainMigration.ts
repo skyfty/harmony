@@ -24,6 +24,8 @@ function isLegacyGroundNode(dynamicMesh: { type?: unknown } | null | undefined):
       || candidate?.tileResolution === undefined
       || candidate?.globalLodCellSize === undefined
       || candidate?.activeEditWindowRadius === undefined
+      || candidate?.editTileSizeMeters === undefined
+      || candidate?.editTileResolution === undefined
       || candidate?.collisionMode === undefined
     ),
   )
@@ -92,6 +94,12 @@ function upgradeGroundNodeTerrainMetadata(
   }
   if (nextDynamicMesh.activeEditWindowRadius === undefined) {
     nextDynamicMesh.activeEditWindowRadius = creationProfile.activeEditWindowRadius
+  }
+  if (nextDynamicMesh.editTileSizeMeters === undefined) {
+    nextDynamicMesh.editTileSizeMeters = creationProfile.editTileSizeMeters
+  }
+  if (nextDynamicMesh.editTileResolution === undefined) {
+    nextDynamicMesh.editTileResolution = creationProfile.editTileResolution
   }
   if (nextDynamicMesh.collisionMode === undefined) {
     nextDynamicMesh.collisionMode = creationProfile.collisionMode

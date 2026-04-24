@@ -4,7 +4,7 @@ import type {
   GroundRuntimeDynamicMesh,
   SceneNode,
 } from '@schema'
-import { cloneGroundHeightMap, createGroundHeightMap, getGroundVertexIndex } from '@schema'
+import { GROUND_HEIGHT_UNSET_VALUE, getGroundVertexIndex } from '@schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -41,7 +41,7 @@ import {
 } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
-import { buildPlanningDemGroundData } from '@/utils/planningDemToGround'
+import { buildPlanningDemGroundRegionData, type PlanningDemHeightRegion } from '@/utils/planningDemToGround'
 
 
 export type PlanningConversionProgress = {
@@ -600,7 +600,7 @@ function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { de
     changed: true,
     definition: {
       ...definition,
-      planningHeightMap: createGroundHeightMap(definition.rows, definition.columns),
+      planningHeightMap: definition.planningHeightMap.fill(GROUND_HEIGHT_UNSET_VALUE),
       planningMetadata: {
         ...(definition.planningMetadata ?? {}),
         contourBounds: null,
@@ -699,6 +699,52 @@ function syncPlanningHeightState(
     definition.planningHeightMap,
     definition.planningMetadata ?? null,
   )
+}
+
+function syncPlanningHeightRegionState(
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
+  groundNode: SceneNode,
+  definition: GroundRuntimeDynamicMesh,
+  region: PlanningDemHeightRegion,
+): GroundRuntimeDynamicMesh {
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    throw new Error('Planning height runtime state cannot be synchronized before the scene is persisted')
+  }
+  const groundRuntimeDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+  const nextRevision = Number.isFinite(groundRuntimeDefinition.surfaceRevision)
+    ? Math.max(0, Math.trunc(groundRuntimeDefinition.surfaceRevision as number)) + 1
+    : 1
+  groundRuntimeDefinition.surfaceRevision = nextRevision
+  groundRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
+  groundRuntimeDefinition.runtimeDisableOptimizedChunks = true
+  definition.surfaceRevision = nextRevision
+  definition.runtimeHydratedHeightState = 'dirty'
+  definition.runtimeDisableOptimizedChunks = true
+  const groundHeightmapStore = useGroundHeightmapStore()
+  groundHeightmapStore.replacePlanningHeightRegion(
+    groundNode.id,
+    definition,
+    region,
+    definition.planningMetadata ?? null,
+  )
+  return groundHeightmapStore.resolveGroundRuntimeMesh(groundNode.id, definition)
+}
+
+function applyPlanningDemRegionToGround(
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
+  groundNode: SceneNode,
+  definition: GroundRuntimeDynamicMesh,
+  region: PlanningDemHeightRegion,
+  planningMetadata: GroundRuntimeDynamicMesh['planningMetadata'],
+): GroundRuntimeDynamicMesh {
+  const nextGroundSeed = {
+    ...definition,
+    planningMetadata,
+  } satisfies GroundRuntimeDynamicMesh
+  const nextGround = syncPlanningHeightRegionState(sceneStore, groundNode, nextGroundSeed, region)
+  sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
+  return nextGround
 }
 
 function resolvePlanningUnitsToMeters(planningData: PlanningSceneData, groundWidth: number, groundDepth: number): number {
@@ -1103,6 +1149,23 @@ function boundsFromPlanningPolygon(definition: GroundDynamicMesh, polyPoints: Pl
   }
 }
 
+function resolvePlanningContourPolygonBounds(options: {
+  definition: GroundRuntimeDynamicMesh
+  contourPolygons: PlanningPolygonData[]
+  defaultBlendMeters: number
+}): GroundContourBounds | null {
+  let nextBounds: GroundContourBounds | null = null
+  for (const poly of options.contourPolygons) {
+    const points = sanitizePlanningContourPoints(poly?.points ?? [])
+    if (points.length < 3) {
+      continue
+    }
+    const blendMeters = normalizeContourBlendMeters(poly.terrainBlendMeters, options.defaultBlendMeters)
+    nextBounds = unionBounds(nextBounds, boundsFromPlanningPolygon(options.definition, points, blendMeters))
+  }
+  return nextBounds
+}
+
 function setHeightOverrideValueForContours(
   definition: GroundRuntimeDynamicMesh,
   map: GroundRuntimeDynamicMesh['planningHeightMap'],
@@ -1265,8 +1328,9 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   const rewriteBounds = unionBounds(previousBounds, nextBounds)
   if (!rewriteBounds) {
+    const clearedPlanningHeightMap = definition.planningHeightMap.fill(GROUND_HEIGHT_UNSET_VALUE)
     const cleared = { ...definition }
-    cleared.planningHeightMap = createGroundHeightMap(definition.rows, definition.columns)
+    cleared.planningHeightMap = clearedPlanningHeightMap
     cleared.planningMetadata = {
       ...(cleared.planningMetadata ?? {}),
       contourBounds: null,
@@ -1396,7 +1460,7 @@ async function applyPlanningTerrainContoursToGround(options: {
   }
 
   // --- Phase 3: Write final heights into planningHeightMap ---
-  const nextHeightMap = cloneGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns)
+  const nextHeightMap = definition.planningHeightMap
   for (let row = minRow; row <= maxRow; row += 1) {
     if ((row & 63) === 0) {
       await options.yieldController.maybeYield()
@@ -1589,6 +1653,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
   if (groundNode && groundDefinition) {
+    const contourPolygons = polygons.filter((poly) => {
+      if (!poly?.points || poly.points.length < 3) return false
+      return resolveLayerKindFromPlanningData(planningData, poly.layerId) === 'terrain'
+    })
+
     const resetContours = resetGroundPlanningContours(groundDefinition as GroundRuntimeDynamicMesh)
     if (resetContours.changed) {
       const clearedPlanning = resetContours.definition
@@ -1601,32 +1670,35 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     const terrainDem = planningData.terrain?.dem ?? null
     let demApplied = false
     if (terrainDem?.sourceFileHash) {
+      const demImportBounds = resolvePlanningContourPolygonBounds({
+        definition: groundDefinition as GroundRuntimeDynamicMesh,
+        contourPolygons,
+        defaultBlendMeters: PLANNING_TERRAIN_CONTOUR_BLEND_METERS,
+      })
       emitProgress(options, 'Importing DEM…', 18)
       await yieldController.maybeYield(true)
-      const demResult = await buildPlanningDemGroundData({
+      const demResult = await buildPlanningDemGroundRegionData({
         definition: groundDefinition as GroundRuntimeDynamicMesh,
         terrainDem,
+        startRow: demImportBounds?.minRow ?? 0,
+        endRow: demImportBounds?.maxRow ?? Math.max(1, Math.trunc(groundDefinition.rows)),
+        startColumn: demImportBounds?.minColumn ?? 0,
+        endColumn: demImportBounds?.maxColumn ?? Math.max(1, Math.trunc(groundDefinition.columns)),
       })
-      const nextGround = {
-        ...(groundDefinition as GroundRuntimeDynamicMesh),
-        planningHeightMap: demResult.planningHeightMap,
-        planningMetadata: demResult.planningMetadata,
-      } satisfies GroundRuntimeDynamicMesh
-      groundDefinition = nextGround
+      groundDefinition = applyPlanningDemRegionToGround(
+        sceneStore,
+        groundNode,
+        groundDefinition as GroundRuntimeDynamicMesh,
+        demResult.region,
+        demResult.planningMetadata,
+      )
       demApplied = true
-      syncPlanningHeightState(sceneStore, groundNode, nextGround)
-      sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
       sceneStore.setGroundTexture({
         dataUrl: demResult.textureDataUrl,
         name: demResult.textureName,
       })
       await yieldController.maybeYield(true)
     }
-
-    const contourPolygons = polygons.filter((poly) => {
-      if (!poly?.points || poly.points.length < 3) return false
-      return resolveLayerKindFromPlanningData(planningData, poly.layerId) === 'terrain'
-    })
 
     if (contourPolygons.length) {
       emitProgress(options, 'Sculpting terrain…', 19)

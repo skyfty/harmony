@@ -1350,9 +1350,49 @@ export type GroundContourBounds = {
   maxColumn: number
 }
 
+export type GroundPlanningWorldBounds = {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+export interface GroundPlanningDemSourceMetadata {
+  sourceFileHash?: string | null
+  filename?: string | null
+  mimeType?: string | null
+  width: number
+  height: number
+  minElevation?: number | null
+  maxElevation?: number | null
+  sampleStepMeters?: number | null
+  sampleStepX?: number | null
+  sampleStepY?: number | null
+  worldBounds?: GroundPlanningWorldBounds | null
+  targetRows: number
+  targetColumns: number
+  targetCellSize: number
+  localEditCellSize?: number
+  localEditTileSizeMeters?: number
+  localEditTileResolution?: number
+  tileLayout?: {
+    tileRows: number
+    tileColumns: number
+    tileWorldWidth: number
+    tileWorldHeight: number
+    sourceSamplesPerTileX: number
+    sourceSamplesPerTileY: number
+    targetSamplesPerTileX: number
+    targetSamplesPerTileY: number
+  } | null
+  detailLimitedByGroundGrid?: boolean
+  detailLimitedByEditResolution?: boolean
+}
+
 export interface GroundPlanningMetadata {
   contourBounds?: GroundContourBounds | null
   generatedAt?: number
+  demSource?: GroundPlanningDemSourceMetadata | null
 }
 
 export type GroundGenerationMode = 'simple' | 'perlin' | 'ridge' | 'voronoi' | 'flat'
@@ -1501,6 +1541,10 @@ export interface GroundDynamicMesh {
   tileResolution?: number
   globalLodCellSize?: number
   activeEditWindowRadius?: number
+  /** Sparse authoring tile world size used to preserve local edit fidelity independently of far-field render resolution. */
+  editTileSizeMeters?: number
+  /** Authoring tile vertex resolution for local sculpt and imported terrain detail. */
+  editTileResolution?: number
   collisionMode?: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only'
   optimizedMesh?: GroundOptimizedMeshData | null
   /** When false, load all terrain chunks eagerly instead of streaming them around the camera. */
@@ -1523,6 +1567,40 @@ export interface GroundDynamicMesh {
   terrainPaint?: null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
   terrainPaintBakedTextureAssetId?: string | null
+}
+
+export function resolveGroundEditTileSizeMeters(definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'tileSizeMeters' | 'cellSize'>): number {
+  const fallbackCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const explicit = Number(definition.editTileSizeMeters)
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(fallbackCellSize, explicit)
+  }
+  const tileSize = Number(definition.tileSizeMeters)
+  if (Number.isFinite(tileSize) && tileSize > 0) {
+    return Math.max(fallbackCellSize, tileSize)
+  }
+  return fallbackCellSize
+}
+
+export function resolveGroundEditTileResolution(definition: Pick<GroundDynamicMesh, 'editTileResolution' | 'tileResolution'>): number {
+  const explicit = Number(definition.editTileResolution)
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(1, Math.round(explicit))
+  }
+  const fallback = Number(definition.tileResolution)
+  if (Number.isFinite(fallback) && fallback > 0) {
+    return Math.max(1, Math.round(fallback))
+  }
+  return 1
+}
+
+export function resolveGroundEditCellSize(
+  definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'tileSizeMeters' | 'editTileResolution' | 'tileResolution' | 'cellSize'>,
+): number {
+  const tileSizeMeters = resolveGroundEditTileSizeMeters(definition)
+  const resolution = resolveGroundEditTileResolution(definition)
+  const fallbackCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  return Math.max(Number.EPSILON, Math.min(fallbackCellSize, tileSizeMeters / resolution))
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
