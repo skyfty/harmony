@@ -59,6 +59,20 @@ type GroundSurfaceChunkDrawEntry = {
   bounds: TerrainPaintChunkBounds
 }
 
+type GroundSurfacePreviewStructureSignature = {
+  width: number
+  depth: number
+  textureDataUrl: string | null
+  maxResolution: number
+}
+
+type GroundSurfacePreviewRuntimeState = {
+  canvas: CanvasLike
+  texture: THREE.Texture | null
+  structureSignature: string
+  chunkSignatureByKey: Map<string, string>
+}
+
 type GroundSurfaceChunkPixelRect = {
   drawX: number
   drawY: number
@@ -89,10 +103,13 @@ export type GroundSurfacePreviewOptions = {
   applyToMaterialMap?: boolean
   reuseCanvas?: CanvasLike | null
   seedTexture?: THREE.Texture | null
+  chunkKeys?: Iterable<string> | null
+  preserveCanvas?: boolean
 }
 
 const GROUND_SURFACE_PREVIEW_LIVE_TEXTURE_KEY = '__groundSurfacePreviewLiveTexture'
 const groundSurfacePreviewShaderStateByMaterial = new WeakMap<THREE.MeshStandardMaterial, GroundSurfacePreviewShaderState>()
+const groundSurfacePreviewStateByGroundObject = new WeakMap<THREE.Object3D, GroundSurfacePreviewRuntimeState>()
 
 type GroundSurfacePreviewShaderState = {
   installed: boolean
@@ -142,6 +159,82 @@ function recordGroundSurfacePreviewPerf(stage: string, durationMs: number, detai
 function resolveTextureImageSource(texture: THREE.Texture | null | undefined): CanvasImageSource | null {
   const image = texture?.image as CanvasImageSource | undefined
   return image ?? null
+}
+
+function buildGroundSurfacePreviewStructureSignature(definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
+  return stableSerialize({
+    width: normalizeDimension(definition.width),
+    depth: normalizeDimension(definition.depth),
+    textureDataUrl: definition.textureDataUrl ?? null,
+    maxResolution: options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION,
+  } satisfies GroundSurfacePreviewStructureSignature)
+}
+
+function getGroundSurfaceChunkSignature(chunkRef: { textureAssetId?: string | null; revision?: number } | null | undefined): string {
+  const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
+  if (!textureAssetId) {
+    return ''
+  }
+  const revision = Number.isFinite(chunkRef?.revision) ? Math.max(0, Math.trunc(Number(chunkRef?.revision))) : 0
+  return `${textureAssetId}|${revision}`
+}
+
+function resolveGroundSurfaceChunkDrawEntries(
+  definition: GroundDynamicMesh,
+  chunkKeys?: Iterable<string> | null,
+): GroundSurfaceChunkDrawEntry[] {
+  const chunkMap = definition.groundSurfaceChunks ?? {}
+  const entries: GroundSurfaceChunkDrawEntry[] = []
+  const keys = chunkKeys ? Array.from(chunkKeys) : Object.keys(chunkMap)
+  for (const chunkKey of keys) {
+    const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+    if (!normalizedChunkKey) {
+      continue
+    }
+    const parts = parseTerrainPaintChunkKey(normalizedChunkKey)
+    if (!parts) {
+      continue
+    }
+    const bounds = resolveTerrainPaintChunkBounds(definition, parts.chunkRow, parts.chunkColumn)
+    if (!bounds) {
+      continue
+    }
+    const textureAssetId = typeof chunkMap[normalizedChunkKey]?.textureAssetId === 'string'
+      ? chunkMap[normalizedChunkKey].textureAssetId.trim()
+      : ''
+    entries.push({
+      chunkKey: normalizedChunkKey,
+      textureAssetId,
+      bounds,
+    })
+  }
+  return entries
+}
+
+function resolveGroundSurfacePreviewDirtyChunkKeys(
+  previousState: GroundSurfacePreviewRuntimeState | null,
+  definition: GroundDynamicMesh,
+): string[] {
+  if (!previousState) {
+    return []
+  }
+  const nextChunks = definition.groundSurfaceChunks ?? {}
+  const dirtyKeys = new Set<string>()
+  for (const [chunkKey, chunkRef] of Object.entries(nextChunks)) {
+    const nextSignature = getGroundSurfaceChunkSignature(chunkRef)
+    if (!nextSignature) {
+      continue
+    }
+    if (previousState.chunkSignatureByKey.get(chunkKey) !== nextSignature) {
+      dirtyKeys.add(chunkKey)
+    }
+  }
+  for (const previousKey of previousState.chunkSignatureByKey.keys()) {
+    if (!Object.prototype.hasOwnProperty.call(nextChunks, previousKey)) {
+      dirtyKeys.add(previousKey)
+    }
+  }
+  return Array.from(dirtyKeys)
 }
 
 function getGroundSurfacePreviewLiveTexture(root: THREE.Object3D | null | undefined): THREE.Texture | null {
@@ -634,6 +727,7 @@ export function restoreGroundSurfacePreviewMaterialMap(root: THREE.Object3D | nu
     return
   }
   clearGroundSurfacePreviewLiveTexture(root)
+  groundSurfacePreviewStateByGroundObject.delete(root)
   forEachGroundPreviewMaterial(root, (material) => {
     const state = groundSurfacePreviewShaderStateByMaterial.get(material)
     if (!state) {
@@ -651,11 +745,11 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
   definition: GroundDynamicMesh
   loaders: GroundSurfacePreviewLoaders
   shouldAbort: () => boolean
+  chunkKeys?: Iterable<string> | null
 }): Promise<boolean> {
-  const { context, width, height, definition, loaders, shouldAbort } = params
+  const { context, width, height, definition, loaders, shouldAbort, chunkKeys } = params
   const composeStartTime = nowMs()
-  const chunkEntries = Object.entries(definition.groundSurfaceChunks ?? {})
-    .filter(([, chunkRef]) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length)
+  const chunkEntries = resolveGroundSurfaceChunkDrawEntries(definition, chunkKeys)
   if (!chunkEntries.length) {
     return false
   }
@@ -664,49 +758,34 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
   const groundDepth = Math.max(1e-6, normalizeDimension(definition.depth))
   const halfWidth = groundWidth * 0.5
   const halfDepth = groundDepth * 0.5
-  const drawableChunks: GroundSurfaceChunkDrawEntry[] = []
-  for (const [chunkKey, chunkRef] of chunkEntries) {
-    const parts = parseTerrainPaintChunkKey(chunkKey)
-    if (!parts) {
-      continue
-    }
-    const bounds = resolveTerrainPaintChunkBounds(definition, parts.chunkRow, parts.chunkColumn)
-    if (!bounds) {
-      continue
-    }
-    const textureAssetId = chunkRef?.textureAssetId?.trim() ?? ''
-    if (!textureAssetId) {
-      continue
-    }
-    drawableChunks.push({
-      chunkKey,
-      textureAssetId,
-      bounds,
-    })
-  }
-  if (!drawableChunks.length) {
-    return false
-  }
+  const drawableChunks = chunkEntries.filter((entry) => typeof entry.textureAssetId === 'string' && entry.textureAssetId.trim().length)
 
   let drewAny = false
   let drawnChunkCount = 0
   let totalSourcePixels = 0
   let batchCount = 0
-  const batchSize = Math.max(1, Math.min(GROUND_SURFACE_PREVIEW_TERRAIN_CHUNK_LOAD_CONCURRENCY, drawableChunks.length))
+  const batchSize = Math.max(1, Math.min(GROUND_SURFACE_PREVIEW_TERRAIN_CHUNK_LOAD_CONCURRENCY, Math.max(1, drawableChunks.length)))
 
-  for (let batchStart = 0; batchStart < drawableChunks.length; batchStart += batchSize) {
+  for (let batchStart = 0; batchStart < chunkEntries.length; batchStart += batchSize) {
     if (shouldAbort()) {
       console.log('[groundSurfacePreview] Aborting chunk composition before batch', {
         batchStart,
-        drawableChunkCount: drawableChunks.length,
+        drawableChunkCount: chunkEntries.length,
       })
       return false
     }
-    const batch = drawableChunks.slice(batchStart, batchStart + batchSize)
+    const batch = chunkEntries.slice(batchStart, batchStart + batchSize)
     batchCount += 1
     const loadedBatch = await Promise.all(batch.map(async (entry) => {
+      const textureAssetId = entry.textureAssetId.trim()
+      if (!textureAssetId) {
+        return {
+          entry,
+          loaded: null,
+        }
+      }
       try {
-        const texture = await loaders.loadTerrainPaintTextureFromAssetId(entry.textureAssetId, { colorSpace: 'srgb' })
+        const texture = await loaders.loadTerrainPaintTextureFromAssetId(textureAssetId, { colorSpace: 'srgb' })
         return {
           entry,
           loaded: loadPreviewSourceFromTexture(texture),
@@ -725,14 +804,11 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
     if (shouldAbort()) {
       console.log('[groundSurfacePreview] Aborting chunk composition after batch load', {
         batchStart,
-        drawableChunkCount: drawableChunks.length,
+        drawableChunkCount: chunkEntries.length,
       })
       return false
     }
     for (const { entry, loaded } of loadedBatch) {
-      if (!loaded) {
-        continue
-      }
       const drawRect = resolveGroundChunkPixelRect(
         entry.bounds,
         groundWidth,
@@ -746,6 +822,11 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
         continue
       }
       const { drawX, drawY, drawWidth, drawHeight } = drawRect
+      if (!loaded) {
+        context.clearRect(drawX, drawY, drawWidth, drawHeight)
+        continue
+      }
+      context.clearRect(drawX, drawY, drawWidth, drawHeight)
       context.drawImage(loaded.source, drawX, drawY, drawWidth, drawHeight)
       drewAny = true
       drawnChunkCount += 1
@@ -819,8 +900,10 @@ export async function composeGroundSurfacePreviewCanvas(
   const { canvas, context } = composition
   const width = (canvas as HTMLCanvasElement).width ?? (canvas as OffscreenCanvas).width
   const height = (canvas as HTMLCanvasElement).height ?? (canvas as OffscreenCanvas).height
-  context.clearRect(0, 0, width, height)
-  if (seedImageSource) {
+  if (!options.preserveCanvas) {
+    context.clearRect(0, 0, width, height)
+  }
+  if (seedImageSource && !options.preserveCanvas) {
     context.drawImage(seedImageSource, 0, 0, width, height)
   }
 
@@ -832,6 +915,7 @@ export async function composeGroundSurfacePreviewCanvas(
     definition,
     loaders,
     shouldAbort,
+    chunkKeys: options.chunkKeys ?? null,
   })
   if (shouldAbort()) {
     return null
@@ -995,10 +1079,48 @@ export function syncGroundSurfacePreviewForGround(
     return false
   }
   const signature = buildGroundSurfacePreviewSignature(dynamicMesh, options)
+  const structureSignature = buildGroundSurfacePreviewStructureSignature(dynamicMesh, options)
+  const nextChunkSignatureByKey = new Map<string, string>()
+  for (const [chunkKey, chunkRef] of Object.entries(dynamicMesh.groundSurfaceChunks ?? {})) {
+    nextChunkSignatureByKey.set(chunkKey, getGroundSurfaceChunkSignature(chunkRef))
+  }
+  const previousState = groundSurfacePreviewStateByGroundObject.get(groundObject) ?? null
+  const dirtyChunkKeys = previousState && previousState.structureSignature === structureSignature
+    ? resolveGroundSurfacePreviewDirtyChunkKeys(previousState, dynamicMesh)
+    : []
   const token = getToken()
   let pending = groundSurfacePreviewRequests.get(signature)
   if (!pending) {
-    pending = composeGroundSurfacePreviewTexture(dynamicMesh, loaders, options, null, () => getToken() !== token)
+    if (
+      previousState
+      && previousState.structureSignature === structureSignature
+      && previousState.canvas
+      && dirtyChunkKeys.length > 0
+    ) {
+      pending = (async () => {
+        const result = await composeGroundSurfacePreviewCanvas(dynamicMesh, loaders, {
+          ...options,
+          reuseCanvas: previousState.canvas,
+          preserveCanvas: true,
+          chunkKeys: dirtyChunkKeys,
+        }, () => getToken() !== token)
+        if (!result) {
+          return null
+        }
+        const nextTexture = previousState.texture && previousState.texture.image === result.canvas
+          ? configureGroundSurfacePreviewTexture(previousState.texture, result.canvas)
+          : configureGroundSurfacePreviewTexture(new THREE.CanvasTexture(result.canvas as unknown as HTMLCanvasElement), result.canvas)
+        groundSurfacePreviewStateByGroundObject.set(groundObject, {
+          canvas: result.canvas,
+          texture: nextTexture,
+          structureSignature,
+          chunkSignatureByKey: nextChunkSignatureByKey,
+        })
+        return nextTexture
+      })()
+    } else {
+      pending = composeGroundSurfacePreviewTexture(dynamicMesh, loaders, options, null, () => getToken() !== token)
+    }
     groundSurfacePreviewRequests.set(signature, pending)
   }
   pending.then((texture) => {
@@ -1021,6 +1143,13 @@ export function syncGroundSurfacePreviewForGround(
       })
       return
     }
+    const canvas = texture.image as CanvasLike
+    groundSurfacePreviewStateByGroundObject.set(groundObject, {
+      canvas,
+      texture,
+      structureSignature,
+      chunkSignatureByKey: nextChunkSignatureByKey,
+    })
     if (options.applyToMaterialMap === true) {
       applyGroundSurfacePreviewToMaterialMap(groundObject, texture, dynamicMesh)
     }

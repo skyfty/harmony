@@ -1,5 +1,5 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 6 as const;
+export const SCENE_PACKAGE_VERSION = 7 as const;
 
 export type ScenePackageResourceType =
   | 'localAsset'
@@ -16,7 +16,13 @@ export interface ScenePackageSceneEntry {
   path: string;
   /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
   planningPath?: string;
-  /** Ground height sidecar path for scenes with Ground nodes, e.g. `scenes/<sceneId>/ground-heightmaps.bin` */
+  /** Ground terrain manifest path for tiled scenes, e.g. `scenes/<sceneId>/ground-terrain.json` */
+  groundTerrainManifestPath?: string;
+  /** Ground terrain tiles root path for tiled scenes, e.g. `scenes/<sceneId>/ground-tiles/` */
+  groundTerrainTilesRootPath?: string;
+  /** Ground collision metadata path for tiled scenes, e.g. `scenes/<sceneId>/ground-collision.json` */
+  groundCollisionPath?: string;
+  /** Legacy Ground height sidecar path kept only while exporters are being migrated away from the old format. */
   groundHeightsPath?: string;
   /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
   groundScatterPath?: string;

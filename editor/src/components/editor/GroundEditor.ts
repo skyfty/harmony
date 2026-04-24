@@ -25,7 +25,6 @@ import {
 	type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import {
-	buildSmoothedSculptPolygonContour,
 	sculptGround,
 	sampleGroundHeight,
 	resolveGroundEffectiveHeightAtVertex,
@@ -4209,15 +4208,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function resolveTerrainSculptDisplayPoints(points: THREE.Vector3[], definition: GroundDynamicMesh): THREE.Vector3[] {
-		if (points.length < 3) {
-			return points
-		}
-		const operation = options.brushOperation.value
-		if (operation !== 'raise' && operation !== 'depress') {
-			return points
-		}
-		const rounded = buildSmoothedSculptPolygonContour(points, { cellSize: definition.cellSize })
-		return rounded.length >= 3 ? rounded : points
+		void definition
+		return points
 	}
 
 	function applySculptPolygonSession(session: SculptPolygonSessionState): boolean {
@@ -4253,9 +4245,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!modified) {
 			return false
 		}
-		const regionPoints = (operation === 'raise' || operation === 'depress')
-			? buildSmoothedSculptPolygonContour(localPolygonPoints, { cellSize: session.definition.cellSize })
-			: localPolygonPoints
+		const regionPoints = localPolygonPoints
 		let minX = Number.POSITIVE_INFINITY
 		let maxX = Number.NEGATIVE_INFINITY
 		let minZ = Number.POSITIVE_INFINITY

@@ -11,6 +11,7 @@ import {
   ONLINE_COMPONENT_TYPE,
 } from '@schema/components'
 import { GROUND_NODE_ID, MULTIUSER_NODE_ID, type SceneNode, type Vector3Like } from '@schema'
+import { resolveGroundCreationProfile } from '@/stores/groundUtils'
 
 const sceneStore = useSceneStore()
 
@@ -313,11 +314,16 @@ const groundWidth = ref(groundPresets[0].width)
 const groundDepth = ref(groundPresets[0].depth)
 
 const MIN_GROUND_SIZE = 10
-const MAX_GROUND_SIZE = 2000
 
 const selectedGroundPreset = computed(() => {
   return groundPresets.find((preset) => preset.id === selectedGroundPresetId.value) ?? groundPresets[0]
 })
+
+const groundCreationProfile = computed(() => {
+  return resolveGroundCreationProfile(groundWidth.value, groundDepth.value)
+})
+
+const groundCreationWarning = computed(() => groundCreationProfile.value.warningMessage)
 
 watch(selectedGroundPresetId, (presetId) => {
   const preset = groundPresets.find((entry) => entry.id === presetId)
@@ -332,7 +338,7 @@ function clampGroundDimension(value: number, fallback: number): number {
     return fallback
   }
   const rounded = Math.round(Math.abs(value))
-  return Math.min(MAX_GROUND_SIZE, Math.max(MIN_GROUND_SIZE, rounded))
+  return Math.max(MIN_GROUND_SIZE, rounded)
 }
 
 function resetGroundDialogState() {
@@ -455,9 +461,10 @@ async function handleConfirmGround() {
   const preset = selectedGroundPreset.value
   const width = clampGroundDimension(groundWidth.value, preset?.width ?? 100)
   const depth = clampGroundDimension(groundDepth.value, preset?.depth ?? 100)
+  const creationProfile = resolveGroundCreationProfile(width, depth)
   const targetFriction = Math.min(1, Math.max(0, preset?.physics?.friction ?? DEFAULT_RIGIDBODY_FRICTION))
   const targetRestitution = Math.min(1, Math.max(0, preset?.physics?.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION))
-  const cellSize = 1
+  const cellSize = creationProfile.cellSize
   const rows = Math.max(1, Math.ceil(depth / cellSize))
   const columns = Math.max(1, Math.ceil(width / cellSize))
 
@@ -468,7 +475,7 @@ async function handleConfirmGround() {
     rows,
     columns,
     cellSize,
-    chunkStreamingEnabled: false,
+    chunkStreamingEnabled: creationProfile.storageMode === 'tiled',
     heightComposition: { mode: 'planning_plus_manual' },
     planningMetadata: null,
     terrainScatterInstancesUpdatedAt: Date.now(),
@@ -578,6 +585,18 @@ function handleAddLight(type: string) {
             </v-item>
           </v-item-group>
         </div>
+        <v-alert
+          v-if="groundCreationWarning"
+          :type="groundCreationProfile.warningLevel === 'severe' ? 'warning' : 'info'"
+          variant="tonal"
+          density="compact"
+          class="ground-dialog-hint"
+        >
+          {{ groundCreationWarning }}
+          <span v-if="groundCreationProfile.storageMode === 'tiled'">
+            推荐单元尺寸：{{ groundCreationProfile.cellSize }}m，预计瓦片数：{{ groundCreationProfile.estimatedTileCount }}。
+          </span>
+        </v-alert>
         <v-divider class="ground-dialog-divider" />
         <div class="ground-dialog-section">
           <div class="ground-dialog-label">尺寸（米）</div>

@@ -1,5 +1,11 @@
 import { defineStore } from 'pinia'
-import { createGroundHeightMap, type GroundDynamicMesh, type GroundPlanningMetadata, type SceneNode } from '@schema'
+import {
+  createGroundHeightMap,
+  resolveGroundTerrainTileKeys,
+  type GroundDynamicMesh,
+  type GroundPlanningMetadata,
+  type SceneNode,
+} from '@schema'
 import {
   createGroundRuntimeMeshFromSidecar,
   serializeGroundHeightSidecar,
@@ -16,6 +22,7 @@ export type GroundHeightRuntimeState = {
   planningMetadata: GroundPlanningMetadata | null
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   runtimeDisableOptimizedChunks?: boolean
+  runtimeLoadedTileKeys?: string[]
   surfaceRevision?: number
 }
 
@@ -24,6 +31,15 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   planningHeightMap: Float64Array
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   runtimeDisableOptimizedChunks?: boolean
+  runtimeLoadedTileKeys?: string[]
+}
+
+function resolveRuntimeLoadedTileKeys(definition: GroundDynamicMesh): string[] {
+  return resolveGroundTerrainTileKeys({
+    rows: definition.rows,
+    columns: definition.columns,
+    tileResolution: definition.tileResolution ?? definition.rows,
+  })
 }
 
 function asGroundDynamicMesh(node: SceneNode | null | undefined): GroundDynamicMesh | null {
@@ -62,6 +78,7 @@ function createRuntimeState(nodeId: string, definition: GroundDynamicMesh): Grou
     planningMetadata: clonePlanningMetadata(definition.planningMetadata ?? null),
     runtimeHydratedHeightState: (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState,
     runtimeDisableOptimizedChunks: (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks,
+    runtimeLoadedTileKeys: (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition),
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
   }
 }
@@ -96,12 +113,14 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   if (!sidecar) {
     delete runtimeGroundDefinition.runtimeHydratedHeightState
     delete runtimeGroundDefinition.runtimeDisableOptimizedChunks
+    delete runtimeGroundDefinition.runtimeLoadedTileKeys
     return
   }
   const runtimeDefinition = createGroundRuntimeMeshFromSidecar(definition, sidecar)
   runtimeGroundDefinition.runtimeHydratedHeightState = runtimeDefinition.runtimeHydratedHeightState
   runtimeGroundDefinition.runtimeDisableOptimizedChunks = runtimeDefinition.runtimeDisableOptimizedChunks
   runtimeGroundDefinition.surfaceRevision = runtimeDefinition.surfaceRevision
+  runtimeGroundDefinition.runtimeLoadedTileKeys = runtimeDefinition.runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
   runtimeGroundHeightmaps.set(groundNode.id, {
     nodeId: groundNode.id,
     rows: runtimeDefinition.rows,
@@ -111,6 +130,7 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
     planningMetadata: clonePlanningMetadata(runtimeDefinition.planningMetadata ?? null),
     runtimeHydratedHeightState: runtimeDefinition.runtimeHydratedHeightState,
     runtimeDisableOptimizedChunks: runtimeDefinition.runtimeDisableOptimizedChunks,
+    runtimeLoadedTileKeys: runtimeDefinition.runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition),
     surfaceRevision: Number.isFinite(runtimeDefinition.surfaceRevision) ? Math.max(0, Math.trunc(runtimeDefinition.surfaceRevision as number)) : 0,
   })
 }
@@ -166,6 +186,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
         planningMetadata: clonePlanningMetadata(state.planningMetadata ?? definition.planningMetadata ?? null),
         runtimeHydratedHeightState: state.runtimeHydratedHeightState,
         runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,
+        runtimeLoadedTileKeys: state.runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition),
         surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
       }
     },
@@ -180,6 +201,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.manualHeightMap = new Float64Array(manualHeightMap)
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
       state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
+      state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
       state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
       return state
     },
@@ -195,6 +217,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.planningHeightMap = new Float64Array(planningHeightMap)
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
       state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
+      state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
       state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
       if (planningMetadata !== undefined) {
         state.planningMetadata = clonePlanningMetadata(planningMetadata)
@@ -210,6 +233,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.planningMetadata = clonePlanningMetadata(planningMetadata)
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
       state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
+      state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
       state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
       return state
     },

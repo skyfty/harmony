@@ -9,6 +9,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { ensureOptimizedGroundMeshOnDocument } from '@/utils/groundOptimizedMeshExport'
+import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
@@ -691,6 +692,12 @@ async function readSceneDocument(
     }
     const hydrated = cloneForIndexedDb(document)
     ensureOptimizedGroundMeshOnDocument(hydrated)
+    const migration = migrateLegacyGroundTerrainDocument(hydrated, {
+      hasLegacyHeightSidecar: Boolean(await readSceneGroundHeightSidecar(workspaceId, hydrated.id)),
+    })
+    if (migration.converted) {
+      await writeSceneDocument(workspaceId, hydrated)
+    }
     if (options.hydrateGroundRuntime) {
       const sidecar = await readSceneGroundHeightSidecar(workspaceId, hydrated.id)
       await groundHeightmapStore.hydrateSceneDocument(findGroundNodeInDocument(hydrated), sidecar)
@@ -709,6 +716,12 @@ async function readSceneDocument(
     return null
   }
   ensureOptimizedGroundMeshOnDocument(result)
+  const migration = migrateLegacyGroundTerrainDocument(result, {
+    hasLegacyHeightSidecar: Boolean(await readSceneGroundHeightSidecar(workspaceId, result.id)),
+  })
+  if (migration.converted) {
+    await writeSceneDocument(workspaceId, result)
+  }
   if (options.hydrateGroundRuntime) {
     const sidecar = await readSceneGroundHeightSidecar(workspaceId, result.id)
     await groundHeightmapStore.hydrateSceneDocument(findGroundNodeInDocument(result), sidecar)

@@ -3,6 +3,7 @@ import {
   readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
   unzipScenePackage,
+  type GroundTerrainPackageManifest,
   type ScenePackageSceneEntry,
 } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -20,6 +21,7 @@ export type LoadedStoredScenePackage = {
   groundHeightSidecars: Record<string, ArrayBuffer | null>
   groundScatterSidecars: Record<string, ArrayBuffer | null>
   groundPaintSidecars: Record<string, ArrayBuffer | null>
+  groundTerrainManifests: Record<string, GroundTerrainPackageManifest | null>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -200,6 +202,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
   const groundScatterSidecars: Record<string, ArrayBuffer | null> = {}
   const groundPaintSidecars: Record<string, ArrayBuffer | null> = {}
+  const groundTerrainManifests: Record<string, GroundTerrainPackageManifest | null> = {}
 
   for (const sceneEntry of zip.manifest.scenes ?? []) {
     const rawScene = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(zip, sceneEntry.path)) as unknown
@@ -210,9 +213,12 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundPaintSidecars[sceneEntry.sceneId] = extractGroundPaintSidecarFromPackage(zip, sceneEntry, sceneDocument)
+    groundTerrainManifests[sceneEntry.sceneId] = sceneEntry.groundTerrainManifestPath
+      ? JSON.parse(readTextFileFromScenePackage(zip, sceneEntry.groundTerrainManifestPath)) as GroundTerrainPackageManifest
+      : null
     const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, sceneDocument)
     scenes.push(withPlanning)
   }
 
-  return { project, scenes, groundHeightSidecars, groundScatterSidecars, groundPaintSidecars }
+  return { project, scenes, groundHeightSidecars, groundScatterSidecars, groundPaintSidecars, groundTerrainManifests }
 }

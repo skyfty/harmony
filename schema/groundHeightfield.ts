@@ -443,6 +443,98 @@ function pushAdaptiveGroundCollisionSegments(
   segments.push(buildGroundCollisionSegment(sample, 1, metrics))
 }
 
+function resolveGroundCollisionTileSpan(mesh: GroundDynamicMesh): number {
+  const tileResolution = typeof mesh.tileResolution === 'number' && Number.isFinite(mesh.tileResolution)
+    ? Math.trunc(mesh.tileResolution)
+    : NaN
+  if (Number.isFinite(tileResolution) && tileResolution > 0) {
+    return Math.max(1, tileResolution)
+  }
+  return DEFAULT_CHUNK_CELLS
+}
+
+function buildTiledGroundCollisionData(
+  node: SceneNode,
+  mesh: GroundDynamicMesh,
+): GroundCollisionData | null {
+  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
+  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
+  const rows = Math.max(1, rawRows)
+  const columns = Math.max(1, rawColumns)
+  if (rows <= 0 || columns <= 0) {
+    return null
+  }
+
+  const metrics = resolveGroundHorizontalMetrics(node, mesh)
+  const rootSample = buildGroundRegionSampleGrid(node, mesh)
+  const tileSpan = resolveGroundCollisionTileSpan(mesh)
+  const segments: GroundCollisionSegment[] = []
+
+  for (let startRow = rootSample.startRow; startRow < rootSample.endRow; startRow += tileSpan) {
+    const endRow = Math.min(rootSample.endRow, startRow + tileSpan)
+    for (let startColumn = rootSample.startColumn; startColumn < rootSample.endColumn; startColumn += tileSpan) {
+      const endColumn = Math.min(rootSample.endColumn, startColumn + tileSpan)
+      const tileSample = createGroundRegionSample(rootSample, {
+        startRow,
+        endRow,
+        startColumn,
+        endColumn,
+        depth: 0,
+      })
+      pushAdaptiveGroundCollisionSegments(tileSample, 0, metrics, segments)
+    }
+  }
+
+  if (!segments.length) {
+    return null
+  }
+
+  const signature = `${tileSpan}|${segments.map((segment) => segment.signature).join('||')}`
+  return { signature, segments }
+}
+
+function buildNearFieldGroundCollisionData(
+  node: SceneNode,
+  mesh: GroundDynamicMesh,
+): GroundCollisionData | null {
+  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
+  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
+  const rows = Math.max(1, rawRows)
+  const columns = Math.max(1, rawColumns)
+  if (rows <= 0 || columns <= 0) {
+    return null
+  }
+
+  const metrics = resolveGroundHorizontalMetrics(node, mesh)
+  const rootSample = buildGroundRegionSampleGrid(node, mesh)
+  const tileSpan = resolveGroundCollisionTileSpan(mesh)
+  const activeWindowRadiusMeters = typeof mesh.activeEditWindowRadius === 'number' && Number.isFinite(mesh.activeEditWindowRadius)
+    ? Math.max(1, Math.trunc(mesh.activeEditWindowRadius / Math.max(metrics.baseElementSize, MIN_ELEMENT_SIZE)))
+    : tileSpan * 2
+  const halfWindow = Math.max(tileSpan, Math.min(Math.max(rows, columns), activeWindowRadiusMeters))
+  const centerRow = Math.floor((rootSample.startRow + rootSample.endRow) * 0.5)
+  const centerColumn = Math.floor((rootSample.startColumn + rootSample.endColumn) * 0.5)
+  const startRow = Math.max(rootSample.startRow, centerRow - Math.floor(halfWindow * 0.5))
+  const endRow = Math.min(rootSample.endRow, centerRow + Math.ceil(halfWindow * 0.5))
+  const startColumn = Math.max(rootSample.startColumn, centerColumn - Math.floor(halfWindow * 0.5))
+  const endColumn = Math.min(rootSample.endColumn, centerColumn + Math.ceil(halfWindow * 0.5))
+  const nearFieldSample = createGroundRegionSample(rootSample, {
+    startRow,
+    endRow,
+    startColumn,
+    endColumn,
+    depth: 0,
+  })
+
+  const segments: GroundCollisionSegment[] = []
+  pushAdaptiveGroundCollisionSegments(nearFieldSample, 0, metrics, segments)
+  if (!segments.length) {
+    return null
+  }
+  const signature = `near:${tileSpan}:${segments.map((segment) => segment.signature).join('||')}`
+  return { signature, segments }
+}
+
 export function buildAdaptiveGroundCollisionData(
   node: SceneNode,
   mesh: GroundDynamicMesh,
@@ -453,6 +545,14 @@ export function buildAdaptiveGroundCollisionData(
   const columns = Math.max(1, rawColumns)
   if (rows <= 0 || columns <= 0) {
     return null
+  }
+
+  if (mesh.collisionMode === 'near-field-only') {
+    return buildNearFieldGroundCollisionData(node, mesh)
+  }
+
+  if (mesh.collisionMode === 'tiled-heightfield') {
+    return buildTiledGroundCollisionData(node, mesh)
   }
 
   const metrics = resolveGroundHorizontalMetrics(node, mesh)

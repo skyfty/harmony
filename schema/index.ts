@@ -1496,6 +1496,12 @@ export interface GroundDynamicMesh {
   rows: number
   columns: number
   cellSize: number
+  storageMode?: 'full' | 'tiled'
+  tileSizeMeters?: number
+  tileResolution?: number
+  globalLodCellSize?: number
+  activeEditWindowRadius?: number
+  collisionMode?: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only'
   optimizedMesh?: GroundOptimizedMeshData | null
   /** When false, load all terrain chunks eagerly instead of streaming them around the camera. */
   chunkStreamingEnabled?: boolean
@@ -1526,6 +1532,7 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
   runtimeDisableOptimizedChunks?: boolean
+  runtimeLoadedTileKeys?: string[]
 }
 
 export type GroundOptimizedMeshData = {
@@ -1559,6 +1566,49 @@ export type GroundOptimizedMeshChunkData = {
   optimizedRowCount: number
   optimizedColumnCount: number
 }
+
+export const GROUND_TERRAIN_PACKAGE_FORMAT = 'harmony-ground-terrain-package' as const
+export const GROUND_TERRAIN_PACKAGE_VERSION = 1 as const
+
+export type GroundTerrainPackageTileEntry = {
+  tileKey: string
+  row: number
+  column: number
+  path: string
+  startRow: number
+  startColumn: number
+  rows: number
+  columns: number
+  collisionPath?: string | null
+}
+
+export type GroundTerrainPackageManifest = {
+  format: typeof GROUND_TERRAIN_PACKAGE_FORMAT
+  version: typeof GROUND_TERRAIN_PACKAGE_VERSION
+  scenePath: string
+  storageMode: 'tiled'
+  width: number
+  depth: number
+  rows: number
+  columns: number
+  cellSize: number
+  tileSizeMeters: number
+  tileResolution: number
+  globalLodCellSize: number
+  activeEditWindowRadius: number
+  collisionMode: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only'
+  coarseTerrainPath: string | null
+  terrainTilesRootPath: string
+  collisionManifestPath: string | null
+  tiles: GroundTerrainPackageTileEntry[]
+}
+
+export {
+  buildGroundTerrainTileEntries,
+  formatGroundTerrainTileKey,
+  parseGroundTerrainTileKey,
+  resolveGroundTerrainTileKeys,
+} from './groundTerrainTiles'
 
 /**
  * A single chain (polyline) of control points for a wall.

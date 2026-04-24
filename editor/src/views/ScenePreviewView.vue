@@ -6804,7 +6804,7 @@ async function buildPreviewRuntimeDocument(
 			scatterStore.replaceTerrainScatter(
 				document.id,
 				groundNode.id,
-				JSON.parse(JSON.stringify(embeddedScatter)),
+				embeddedScatter as any,
 				{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
 			)
 		} else {
@@ -6824,7 +6824,7 @@ async function buildPreviewRuntimeDocument(
 			paintStore.replaceGroundSurfaceChunks(
 				document.id,
 				groundNode.id,
-				JSON.parse(JSON.stringify(embeddedPaintChunks)) as GroundSurfaceChunkTextureMap,
+				embeddedPaintChunks as GroundSurfaceChunkTextureMap,
 				{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
 			)
 		} else {

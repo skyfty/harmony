@@ -18,6 +18,7 @@ import {
   type GroundRuntimeDynamicMesh,
   type GroundSculptOperation,
 } from './index'
+import { resolveGroundTerrainTileKeys } from './groundTerrainTiles'
 
 import {
   computeGroundBaseHeightAtVertex,
@@ -199,7 +200,11 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.trunc(definition.surfaceRevision as number) : 0
   const optimizedChunkState = runtimeDefinition.runtimeDisableOptimizedChunks === true ? 'disabled' : 'enabled'
   const hydratedHeightState = runtimeDefinition.runtimeHydratedHeightState ?? 'none'
-  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}`
+  const loadedTileCount = Array.isArray(runtimeDefinition.runtimeLoadedTileKeys)
+    ? runtimeDefinition.runtimeLoadedTileKeys.length
+    : 0
+  const tileResolution = Number.isFinite(definition.tileResolution) && definition.tileResolution ? Math.trunc(definition.tileResolution) : rows
+  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}|${tileResolution}|${loadedTileCount}`
 }
 
 function clampInclusive(value: number, min: number, max: number): number {
@@ -448,6 +453,13 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
     runtimeDefinition.rows,
     runtimeDefinition.columns,
   )
+  if (!Array.isArray(runtimeDefinition.runtimeLoadedTileKeys) || runtimeDefinition.runtimeLoadedTileKeys.length === 0) {
+    runtimeDefinition.runtimeLoadedTileKeys = resolveGroundTerrainTileKeys({
+      rows: runtimeDefinition.rows,
+      columns: runtimeDefinition.columns,
+      tileResolution: runtimeDefinition.tileResolution ?? runtimeDefinition.rows,
+    })
+  }
   return runtimeDefinition
 }
 
@@ -1726,7 +1738,7 @@ function computeSmoothedSculptPolygonCornerCutDistance(params: {
   }
 
   const cellSize = Math.max(0, params.cellSize)
-  const requested = Math.max(cellSize * 0.5, smoothing * minLength)
+  const requested = Math.max(Math.min(cellSize * 0.25, 0.75), smoothing * minLength)
   const maxAllowed = maxRatio * minLength
   const cut = Math.min(requested, maxAllowed)
   return cut > SCULPT_POLYGON_EPSILON ? cut : 0
@@ -1824,7 +1836,7 @@ export function buildSmoothedSculptPolygonContour(
     const enter = vertex.clone().lerp(previous, enterT)
     const exit = vertex.clone().lerp(next, exitT)
     const approxCurveLength = enter.distanceTo(vertex) + vertex.distanceTo(exit)
-    const segmentTarget = Math.max(cellSize * 0.5, 0.25)
+    const segmentTarget = Math.max(0.25, Math.min(cellSize * 0.25, 0.75))
     const curveSegments = Math.max(3, Math.min(12, Math.ceil(approxCurveLength / segmentTarget)))
 
     return {
@@ -1967,14 +1979,6 @@ function computeSculptPolygonBoundaryDistance(point: SculptPolygonPoint, polygon
   return Number.isFinite(minDistance) ? minDistance : 0
 }
 
-function computeSculptPolygonSignedDistance(point: SculptPolygonPoint, polygonPoints: SculptPolygonPoint[]): number {
-  const boundaryDistance = computeSculptPolygonBoundaryDistance(point, polygonPoints)
-  if (boundaryDistance <= 0) {
-    return 0
-  }
-  return isPointInsideSculptPolygonXZ(point, polygonPoints) ? boundaryDistance : -boundaryDistance
-}
-
 function computeSculptPolygonBounds(polygonPoints: SculptPolygonPoint[]): {
   minX: number
   maxX: number
@@ -2006,123 +2010,20 @@ function smoothstepScalar(edge0: number, edge1: number, value: number): number {
   return t * t * (3 - (2 * t))
 }
 
-function computePolygonRaiseDepressProfile(distanceToBoundary: number, maxInteriorDistance: number, slope: number): number {
-  if (maxInteriorDistance <= 1e-6) {
-    return 1
+function computePolygonRaiseDepressRampWidth(maxBoundaryDistance: number, depth: number, slope: number): number {
+  if (!(maxBoundaryDistance > 1e-6) || !(depth > 0)) {
+    return 0
   }
-  const normalizedDistance = Math.min(1, Math.max(0, distanceToBoundary / maxInteriorDistance))
-  const clampedSlope = Math.min(1, Math.max(0, slope))
-  const exponent = 0.35 + clampedSlope * 0.65
-  return Math.pow(normalizedDistance, exponent)
+  const clampedSlope = Math.max(0, Number.isFinite(slope) ? slope : 0.5)
+  const requestedBand = depth * (0.75 + clampedSlope)
+  return Math.max(1e-6, Math.min(maxBoundaryDistance, requestedBand))
 }
 
-function resolveGroundEffectiveHeightAtVertexFromManualMap(
-  definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  row: number,
-  column: number,
-): number {
-  const base = computeGroundBaseHeightAtVertex(definition, row, column)
-  const index = getGroundVertexIndex(definition.columns, row, column)
-  const manualRaw = map[index]
-  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
-  const planningRaw = definition.planningHeightMap[index]
-  const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-  return planning + (manual - base)
-}
-
-function sampleNeighborAverageFromManualMap(
-  definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  row: number,
-  column: number,
-  maxRow: number,
-  maxColumn: number,
-): number {
-  let sum = 0
-  let count = 0
-  for (let r = Math.max(0, row - 1); r <= Math.min(maxRow, row + 1); r += 1) {
-    for (let c = Math.max(0, column - 1); c <= Math.min(maxColumn, column + 1); c += 1) {
-      sum += resolveGroundEffectiveHeightAtVertexFromManualMap(definition, map, r, c)
-      count += 1
-    }
+function computePolygonRaiseDepressProfile(distanceToBoundary: number, rampWidth: number): number {
+  if (!(distanceToBoundary > 1e-6) || !(rampWidth > 1e-6)) {
+    return 0
   }
-  return count > 0 ? sum / count : 0
-}
-
-function applyPolygonRaiseDepressSeamSmoothing(
-  definition: GroundRuntimeDynamicMesh,
-  heightMap: GroundHeightMap,
-  polygonPoints: SculptPolygonPoint[],
-  polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
-  maxBoundaryDistance: number,
-  depth: number,
-  slope: number,
-): boolean {
-  if (polygonPoints.length < 3 || !(depth > 0)) {
-    return false
-  }
-
-  const cellSize = Math.max(1e-6, definition.cellSize)
-  const columns = definition.columns
-  const rows = definition.rows
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const innerBand = Math.max(
-    cellSize * 1.75,
-    Math.min(Math.max(cellSize * 4, depth * (0.75 + slope)), Math.max(cellSize * 1.75, maxBoundaryDistance * 0.65)),
-  )
-  const outerBand = Math.max(cellSize * 1.25, innerBand * 0.45)
-  const totalBand = innerBand + outerBand
-  const bandCells = Math.max(2, Math.ceil(totalBand / cellSize) + 1)
-  const minCol = Math.max(0, Math.floor((polygonBounds.minX + halfWidth) / cellSize) - bandCells)
-  const maxCol = Math.min(columns, Math.ceil((polygonBounds.maxX + halfWidth) / cellSize) + bandCells)
-  const minRow = Math.max(0, Math.floor((polygonBounds.minZ + halfDepth) / cellSize) - bandCells)
-  const maxRow = Math.min(rows, Math.ceil((polygonBounds.maxZ + halfDepth) / cellSize) + bandCells)
-
-  let changed = false
-  for (let pass = 0; pass < 2; pass += 1) {
-    const sourceMap = new Float64Array(heightMap)
-    const passScale = pass === 0 ? 1 : 0.7
-    for (let row = minRow; row <= maxRow; row += 1) {
-      const z = -halfDepth + row * cellSize
-      for (let column = minCol; column <= maxCol; column += 1) {
-        const x = -halfWidth + column * cellSize
-        const signedDistance = computeSculptPolygonSignedDistance({ x, z }, polygonPoints)
-        const currentHeight = resolveGroundEffectiveHeightAtVertexFromManualMap(definition, sourceMap, row, column)
-        let smoothingFactor = 0
-
-        if (signedDistance >= 0) {
-          if (signedDistance > innerBand) {
-            continue
-          }
-          const normalized = 1 - smoothstepScalar(0, innerBand, signedDistance)
-          smoothingFactor = (0.08 + normalized * 0.14) * passScale
-        } else {
-          const outsideDistance = -signedDistance
-          if (outsideDistance > outerBand) {
-            continue
-          }
-          const normalized = 1 - smoothstepScalar(0, outerBand, outsideDistance)
-          smoothingFactor = (0.03 + normalized * 0.08) * passScale
-        }
-
-        if (!(smoothingFactor > 1e-6)) {
-          continue
-        }
-
-        const average = sampleNeighborAverageFromManualMap(definition, sourceMap, row, column, rows, columns)
-        const nextHeight = currentHeight + (average - currentHeight) * smoothingFactor
-        if (Math.abs(nextHeight - currentHeight) <= 1e-4) {
-          continue
-        }
-        setManualHeightOverrideForEffectiveValue(definition, heightMap, row, column, nextHeight)
-        changed = true
-      }
-    }
-  }
-
-  return changed
+  return smoothstepScalar(0, rampWidth, distanceToBoundary)
 }
 
 export function sculptGround(definition: GroundRuntimeDynamicMesh, params: SculptParams): boolean {
@@ -2137,11 +2038,8 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
   const localX = point.x
   const localZ = point.z
 
-  const usesRoundedPolygonContour = shape === 'polygon' && (operation === 'raise' || operation === 'depress')
   const sculptPolygonContour = shape === 'polygon'
-    ? usesRoundedPolygonContour
-      ? buildSmoothedSculptPolygonContour(polygonPoints ?? [], { cellSize })
-      : (polygonPoints ?? []).map((polygonPoint) => polygonPoint.clone())
+    ? (polygonPoints ?? []).map((polygonPoint) => polygonPoint.clone())
     : []
   const normalizedPolygon = shape === 'polygon' ? normalizeSculptPolygonPointsXZ(sculptPolygonContour) : []
   if (shape === 'polygon' && normalizedPolygon.length < 3) {
@@ -2200,6 +2098,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
 
     const effectiveDepth = Number.isFinite(depth) ? Math.max(0, depth ?? 0) : 0
     const effectiveSlope = Number.isFinite(slope) ? slope ?? 0.5 : 0.5
+    const rampWidth = computePolygonRaiseDepressRampWidth(maxBoundaryDistance, effectiveDepth, effectiveSlope)
 
     for (const candidate of polygonCandidates) {
       const { row, col, boundaryDistance, currentHeight } = candidate
@@ -2220,7 +2119,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
       } else {
         const direction = operation === 'depress' ? -1 : 1
         if (effectiveDepth > 0) {
-          const profile = computePolygonRaiseDepressProfile(boundaryDistance, maxBoundaryDistance, effectiveSlope)
+          const profile = computePolygonRaiseDepressProfile(boundaryDistance, rampWidth)
           nextHeight = currentHeight + direction * effectiveDepth * profile
         } else {
           nextHeight = currentHeight + direction * strength * 0.3
@@ -2229,18 +2128,6 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
 
       setManualHeightOverrideForEffectiveValue(definition, heightMap, row, col, nextHeight)
       modified = true
-    }
-
-    if (modified && usesRoundedPolygonContour) {
-      applyPolygonRaiseDepressSeamSmoothing(
-        definition,
-        heightMap,
-        normalizedPolygon,
-        polygonBounds,
-        maxBoundaryDistance,
-        effectiveDepth,
-        effectiveSlope,
-      )
     }
 
     if (modified) {

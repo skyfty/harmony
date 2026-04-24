@@ -18,8 +18,35 @@ import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100
 const MIN_GROUND_EXTENT = 1
-const MAX_GROUND_EXTENT = 20000
 const HEIGHT_EPSILON = 1e-5
+const GROUND_CREATION_MAX_CELL_SIZE = 5
+
+const GROUND_CREATION_AXIS_TARGET = 1024
+const GROUND_CREATION_HIGH_VERTEX_BUDGET = 1_500_000
+const GROUND_CREATION_BALANCED_VERTEX_BUDGET = 4_000_000
+const GROUND_CREATION_SEVERE_VERTEX_BUDGET = 16_000_000
+
+export type GroundCreationQuality = 'high' | 'balanced' | 'constrained'
+
+export type GroundCreationWarningLevel = 'none' | 'info' | 'caution' | 'severe'
+
+export type GroundCreationProfile = {
+  quality: GroundCreationQuality
+  storageMode: 'full' | 'tiled'
+  cellSize: number
+  rows: number
+  columns: number
+  tileSizeMeters: number
+  tileResolution: number
+  globalLodCellSize: number
+  activeEditWindowRadius: number
+  collisionMode: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only'
+  estimatedVertexCount: number
+  estimatedHeightBytes: number
+  estimatedTileCount: number
+  warningLevel: GroundCreationWarningLevel
+  warningMessage: string | null
+}
 
 export type GroundRegionBounds = {
   minRow: number
@@ -107,6 +134,12 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     rows: definition.rows,
     columns: definition.columns,
     cellSize: definition.cellSize,
+    storageMode: definition.storageMode,
+    tileSizeMeters: definition.tileSizeMeters,
+    tileResolution: definition.tileResolution,
+    globalLodCellSize: definition.globalLodCellSize,
+    activeEditWindowRadius: definition.activeEditWindowRadius,
+    collisionMode: definition.collisionMode,
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
@@ -134,9 +167,6 @@ export function normalizeGroundDimension(value: unknown, fallback: number): numb
   if (!Number.isFinite(numeric)) {
     return fallback
   }
-  if (numeric >= MAX_GROUND_EXTENT) {
-    return MAX_GROUND_EXTENT
-  }
   if (numeric <= MIN_GROUND_EXTENT) {
     return MIN_GROUND_EXTENT
   }
@@ -157,16 +187,97 @@ export function cloneGroundSettings(settings: Partial<GroundSettings> | null | u
   return normalizeGroundSettings(settings ?? null)
 }
 
+export function resolveGroundCreationProfile(
+  width: number,
+  depth: number,
+  baseCellSize = DEFAULT_GROUND_CELL_SIZE,
+): GroundCreationProfile {
+  const safeWidth = Math.max(MIN_GROUND_EXTENT, Number.isFinite(width) ? Math.abs(width) : DEFAULT_GROUND_EXTENT)
+  const safeDepth = Math.max(MIN_GROUND_EXTENT, Number.isFinite(depth) ? Math.abs(depth) : DEFAULT_GROUND_EXTENT)
+  const normalizedBaseCellSize = Math.max(DEFAULT_GROUND_CELL_SIZE, Number.isFinite(baseCellSize) ? Math.abs(baseCellSize) : DEFAULT_GROUND_CELL_SIZE)
+
+  const denseColumns = Math.max(1, Math.ceil(safeWidth / normalizedBaseCellSize))
+  const denseRows = Math.max(1, Math.ceil(safeDepth / normalizedBaseCellSize))
+  const denseVertexCount = (denseColumns + 1) * (denseRows + 1)
+
+  let storageMode: 'full' | 'tiled' = 'full'
+  let quality: GroundCreationQuality = 'high'
+  let warningLevel: GroundCreationWarningLevel = 'none'
+  let warningMessage: string | null = null
+  let cellSize = normalizedBaseCellSize
+
+  if (denseVertexCount > GROUND_CREATION_HIGH_VERTEX_BUDGET) {
+    storageMode = 'tiled'
+    quality = 'balanced'
+    warningLevel = 'info'
+    cellSize = Math.min(
+      GROUND_CREATION_MAX_CELL_SIZE,
+      Math.max(normalizedBaseCellSize, Math.ceil(Math.max(safeWidth, safeDepth) / GROUND_CREATION_AXIS_TARGET)),
+    )
+    warningMessage = '地形已自动切换为分层/流式配置，并提高单元尺寸以控制工作集。'
+  }
+
+  const columns = Math.max(1, Math.ceil(safeWidth / cellSize))
+  const rows = Math.max(1, Math.ceil(safeDepth / cellSize))
+  const estimatedVertexCount = (columns + 1) * (rows + 1)
+  const estimatedHeightBytes = estimatedVertexCount * Float64Array.BYTES_PER_ELEMENT * 2
+  const estimatedTileCount = Math.max(1, Math.ceil(columns / GROUND_CREATION_AXIS_TARGET) * Math.ceil(rows / GROUND_CREATION_AXIS_TARGET))
+  const tileSizeMeters = Math.max(128, Math.min(512, Math.ceil(Math.max(safeWidth, safeDepth) / Math.max(1, Math.ceil(Math.sqrt(estimatedTileCount))))))
+  const tileResolution = Math.max(32, Math.min(128, Math.ceil(tileSizeMeters / cellSize)))
+  const globalLodCellSize = Math.max(cellSize * 2, Math.ceil(Math.max(safeWidth, safeDepth) / Math.max(1, GROUND_CREATION_AXIS_TARGET * 2)))
+  const activeEditWindowRadius = Math.max(tileSizeMeters, Math.min(tileSizeMeters * 2, Math.ceil(Math.max(safeWidth, safeDepth) / 8)))
+  const collisionMode: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only' = estimatedVertexCount <= GROUND_CREATION_HIGH_VERTEX_BUDGET
+    ? 'full-heightfield'
+    : estimatedVertexCount <= GROUND_CREATION_BALANCED_VERTEX_BUDGET
+      ? 'tiled-heightfield'
+      : 'near-field-only'
+
+  if (estimatedVertexCount > GROUND_CREATION_BALANCED_VERTEX_BUDGET) {
+    storageMode = 'tiled'
+    quality = 'constrained'
+    warningLevel = 'caution'
+    warningMessage = '地形工作集较大，系统将优先保留近场高精与远场粗地形。'
+  }
+
+  if (estimatedVertexCount > GROUND_CREATION_SEVERE_VERTEX_BUDGET) {
+    warningLevel = 'severe'
+    warningMessage = '地形规模极大，编辑与导出会更依赖流式工作集，建议优先使用局部工作区。'
+  }
+
+  return {
+    quality,
+    storageMode,
+    cellSize,
+    rows,
+    columns,
+    tileSizeMeters,
+    tileResolution,
+    globalLodCellSize,
+    activeEditWindowRadius,
+    collisionMode,
+    estimatedVertexCount,
+    estimatedHeightBytes,
+    estimatedTileCount,
+    warningLevel,
+    warningMessage,
+  }
+}
+
 export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynamicMesh> = {}, settings?: GroundSettings): GroundDynamicMesh {
   const baseSettings = normalizeGroundSettings(settings ?? null)
   const o = overrides as Partial<GroundDynamicMeshLike>
-  const cellSize = overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE
   const normalizedWidth = overrides.width !== undefined
     ? normalizeGroundDimension(overrides.width as unknown, baseSettings.width)
     : baseSettings.width
   const normalizedDepth = overrides.depth !== undefined
     ? normalizeGroundDimension(overrides.depth as unknown, baseSettings.depth)
     : baseSettings.depth
+  const creationProfile = resolveGroundCreationProfile(
+    normalizedWidth,
+    normalizedDepth,
+    overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE,
+  )
+  const cellSize = overrides.cellSize ?? creationProfile.cellSize
   const derivedColumns = overrides.columns ?? Math.max(1, Math.round(normalizedWidth / Math.max(cellSize, 1e-6)))
   const derivedRows = overrides.rows ?? Math.max(1, Math.round(normalizedDepth / Math.max(cellSize, 1e-6)))
   const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
@@ -179,6 +290,12 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     rows: derivedRows,
     columns: derivedColumns,
     cellSize,
+    storageMode: creationProfile.storageMode,
+    tileSizeMeters: creationProfile.tileSizeMeters,
+    tileResolution: creationProfile.tileResolution,
+    globalLodCellSize: creationProfile.globalLodCellSize,
+    activeEditWindowRadius: creationProfile.activeEditWindowRadius,
+    collisionMode: creationProfile.collisionMode,
     chunkStreamingEnabled: overrides.chunkStreamingEnabled === true,
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
