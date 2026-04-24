@@ -4,3 +4,4 @@ export * from './testAccount';
 export * from './http';
 export * from './miniClient';
 export * from './query';
+export * from './share';

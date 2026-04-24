@@ -37,6 +37,11 @@
       "default": "./dist/query.js",
       "types": "./dist/query.d.ts"
     },
+    "./share": {
+      "import": "./dist/share.js",
+      "default": "./dist/share.js",
+      "types": "./dist/share.d.ts"
+    },
     "./scene-package-storage": {
       "import": "./dist/scenePackageStorage.js",
       "default": "./dist/scenePackageStorage.js",
