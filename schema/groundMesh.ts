@@ -10,6 +10,7 @@ import {
   ensureGroundHeightMap,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
+  resolveGroundEditCellSize,
   type GroundDynamicMesh,
   type GroundGenerationSettings,
   type GroundHeightMap,
@@ -676,6 +677,350 @@ function sampleNeighborAverage(
     }
   }
   return count > 0 ? sum / count : 0
+}
+
+function sampleGroundSmoothAverageAtPoint(definition: GroundRuntimeDynamicMesh, x: number, z: number): number {
+  const sampleDelta = Math.max(Number.EPSILON, resolveGroundEditCellSize(definition))
+  let sum = 0
+  let count = 0
+  for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
+    for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
+      sum += sampleGroundHeight(definition, x + columnOffset * sampleDelta, z + rowOffset * sampleDelta)
+      count += 1
+    }
+  }
+  return count > 0 ? sum / count : 0
+}
+
+type GroundHeightDeltaAccumulatorEntry = {
+  delta: number
+  weight: number
+}
+
+function resolveGroundSculptSubdivisions(definition: GroundRuntimeDynamicMesh): number {
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const editCellSize = resolveGroundEditCellSize(definition)
+  if (!(editCellSize > 0) || editCellSize >= cellSize) {
+    return 1
+  }
+  return Math.max(1, Math.min(8, Math.ceil(cellSize / editCellSize)))
+}
+
+function accumulateGroundDeltaAtPoint(
+  definition: GroundRuntimeDynamicMesh,
+  accumulator: Map<number, GroundHeightDeltaAccumulatorEntry>,
+  x: number,
+  z: number,
+  delta: number,
+  sampleWeight: number,
+): void {
+  if (!Number.isFinite(delta) || !Number.isFinite(sampleWeight) || sampleWeight <= 0) {
+    return
+  }
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const columns = Math.max(1, definition.columns)
+  const rows = Math.max(1, definition.rows)
+  const localColumnFloat = Math.max(0, Math.min(columns, (x + halfWidth) / cellSize))
+  const localRowFloat = Math.max(0, Math.min(rows, (z + halfDepth) / cellSize))
+  const column0 = Math.max(0, Math.min(columns, Math.floor(localColumnFloat)))
+  const row0 = Math.max(0, Math.min(rows, Math.floor(localRowFloat)))
+  const column1 = Math.max(0, Math.min(columns, column0 + 1))
+  const row1 = Math.max(0, Math.min(rows, row0 + 1))
+  const tx = localColumnFloat - column0
+  const tz = localRowFloat - row0
+
+  const write = (row: number, column: number, weight: number) => {
+    if (weight <= 0) {
+      return
+    }
+    const index = getGroundVertexIndex(columns, row, column)
+    const entry = accumulator.get(index) ?? { delta: 0, weight: 0 }
+    entry.delta += delta * weight * sampleWeight
+    entry.weight += weight * sampleWeight
+    accumulator.set(index, entry)
+  }
+
+  write(row0, column0, (1 - tx) * (1 - tz))
+  write(row0, column1, tx * (1 - tz))
+  write(row1, column0, (1 - tx) * tz)
+  write(row1, column1, tx * tz)
+}
+
+function applyAccumulatedGroundDeltas(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  accumulator: Map<number, GroundHeightDeltaAccumulatorEntry>,
+): boolean {
+  let modified = false
+  const columns = Math.max(1, definition.columns)
+  accumulator.forEach((entry, index) => {
+    if (!(entry.weight > 0) || !Number.isFinite(entry.delta)) {
+      return
+    }
+    const row = Math.floor(index / (columns + 1))
+    const column = index % (columns + 1)
+    const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, column)
+    const nextHeight = currentHeight + entry.delta / entry.weight
+    setManualHeightOverrideForEffectiveValue(definition, map, row, column, nextHeight)
+    modified = true
+  })
+  return modified
+}
+
+function applyCircularRaiseDepressSubsampled(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  params: Pick<SculptParams, 'point' | 'radius' | 'strength' | 'operation'>,
+): boolean {
+  const { point, radius, strength, operation } = params
+  const subdivisions = resolveGroundSculptSubdivisions(definition)
+  if (subdivisions <= 1) {
+    return false
+  }
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const sampleStep = cellSize / subdivisions
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const localX = point.x
+  const localZ = point.z
+  const minColumn = Math.max(0, Math.floor((localX - radius + halfWidth) / sampleStep))
+  const maxColumn = Math.max(0, Math.ceil((localX + radius + halfWidth) / sampleStep))
+  const minRow = Math.max(0, Math.floor((localZ - radius + halfDepth) / sampleStep))
+  const maxRow = Math.max(0, Math.ceil((localZ + radius + halfDepth) / sampleStep))
+  const direction = operation === 'depress' ? -1 : 1
+  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const sampleWeight = 1 / (subdivisions * subdivisions)
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const z = -halfDepth + row * sampleStep
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const x = -halfWidth + column * sampleStep
+      const dx = x - localX
+      const dz = z - localZ
+      const distSq = dx * dx + dz * dz
+      if (distSq >= radius * radius) {
+        continue
+      }
+      const dist = Math.sqrt(distSq)
+      let influence = Math.cos((dist / radius) * (Math.PI / 2))
+      const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
+      influence *= 1.0 + noiseVal * 0.1
+      const delta = direction * strength * influence * 0.3
+      accumulateGroundDeltaAtPoint(definition, accumulator, x, z, delta, sampleWeight)
+    }
+  }
+
+  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+}
+
+function applyPolygonRaiseDepressSubsampled(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  normalizedPolygon: SculptPolygonPoint[],
+  params: Pick<SculptParams, 'operation' | 'strength' | 'depth' | 'slope'>,
+): boolean {
+  const subdivisions = resolveGroundSculptSubdivisions(definition)
+  if (subdivisions <= 1) {
+    return false
+  }
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const sampleStep = cellSize / subdivisions
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const minColumn = Math.max(0, Math.floor((polygonBounds.minX + halfWidth) / sampleStep))
+  const maxColumn = Math.max(0, Math.ceil((polygonBounds.maxX + halfWidth) / sampleStep))
+  const minRow = Math.max(0, Math.floor((polygonBounds.minZ + halfDepth) / sampleStep))
+  const maxRow = Math.max(0, Math.ceil((polygonBounds.maxZ + halfDepth) / sampleStep))
+  const direction = params.operation === 'depress' ? -1 : 1
+  const effectiveDepth = Number.isFinite(params.depth) ? Math.max(0, params.depth ?? 0) : 0
+  const effectiveSlope = Number.isFinite(params.slope) ? params.slope ?? 0.5 : 0.5
+  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const sampleWeight = 1 / (subdivisions * subdivisions)
+  const candidates: Array<{ x: number; z: number; boundaryDistance: number }> = []
+  let maxBoundaryDistance = 0
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const z = -halfDepth + row * sampleStep
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const x = -halfWidth + column * sampleStep
+      const samplePoint = { x, z }
+      if (!isPointInsideSculptPolygonXZ(samplePoint, normalizedPolygon)) {
+        continue
+      }
+      const boundaryDistance = computeSculptPolygonBoundaryDistance(samplePoint, normalizedPolygon)
+      maxBoundaryDistance = Math.max(maxBoundaryDistance, boundaryDistance)
+      candidates.push({ x, z, boundaryDistance })
+    }
+  }
+
+  if (!candidates.length) {
+    return false
+  }
+
+  const rampWidth = computePolygonRaiseDepressRampWidth(maxBoundaryDistance, effectiveDepth, effectiveSlope)
+  for (const candidate of candidates) {
+    let delta = direction * params.strength * 0.3
+    if (effectiveDepth > 0) {
+      const profile = computePolygonRaiseDepressProfile(candidate.boundaryDistance, rampWidth)
+      delta = direction * effectiveDepth * profile
+    }
+    accumulateGroundDeltaAtPoint(definition, accumulator, candidate.x, candidate.z, delta, sampleWeight)
+  }
+
+  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+}
+
+function applyCircularSurfaceSubsampled(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  params: Pick<SculptParams, 'point' | 'radius' | 'strength' | 'operation' | 'targetHeight'>,
+): boolean {
+  const { point, radius, strength, operation, targetHeight } = params
+  const subdivisions = resolveGroundSculptSubdivisions(definition)
+  if (subdivisions <= 1) {
+    return false
+  }
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const sampleStep = cellSize / subdivisions
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const localX = point.x
+  const localZ = point.z
+  const minColumn = Math.max(0, Math.floor((localX - radius + halfWidth) / sampleStep))
+  const maxColumn = Math.max(0, Math.ceil((localX + radius + halfWidth) / sampleStep))
+  const minRow = Math.max(0, Math.floor((localZ - radius + halfDepth) / sampleStep))
+  const maxRow = Math.max(0, Math.ceil((localZ + radius + halfDepth) / sampleStep))
+  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const sampleWeight = 1 / (subdivisions * subdivisions)
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const z = -halfDepth + row * sampleStep
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const x = -halfWidth + column * sampleStep
+      const dx = x - localX
+      const dz = z - localZ
+      const distSq = dx * dx + dz * dz
+      if (distSq >= radius * radius) {
+        continue
+      }
+
+      const dist = Math.sqrt(distSq)
+      let influence = Math.cos((dist / radius) * (Math.PI / 2))
+      const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
+      influence *= 1.0 + noiseVal * 0.1
+
+      const currentHeight = sampleGroundHeight(definition, x, z)
+      let nextHeight = currentHeight
+
+      if (operation === 'smooth') {
+        const average = sampleGroundSmoothAverageAtPoint(definition, x, z)
+        const smoothingFactor = Math.min(1, strength * 0.25)
+        nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
+      } else if (operation === 'flatten') {
+        const reference = targetHeight ?? currentHeight
+        const flattenFactor = Math.min(1, strength * 0.4)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+      } else {
+        const reference = targetHeight ?? 0
+        const flattenFactor = Math.min(1, 0.2 + strength * 0.3)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+      }
+
+      accumulateGroundDeltaAtPoint(definition, accumulator, x, z, nextHeight - currentHeight, sampleWeight)
+    }
+  }
+
+  if (operation === 'flatten-zero') {
+    const smoothingBand = Math.max(cellSize * 1.5, radius * 0.35)
+    if (smoothingBand > 0) {
+      const smoothingRadius = radius + smoothingBand
+      const minSmoothColumn = Math.max(0, Math.floor((localX - smoothingRadius + halfWidth) / sampleStep))
+      const maxSmoothColumn = Math.max(0, Math.ceil((localX + smoothingRadius + halfWidth) / sampleStep))
+      const minSmoothRow = Math.max(0, Math.floor((localZ - smoothingRadius + halfDepth) / sampleStep))
+      const maxSmoothRow = Math.max(0, Math.ceil((localZ + smoothingRadius + halfDepth) / sampleStep))
+      const smoothingStrengthBase = Math.min(1, 0.2 + strength * 0.15)
+      for (let row = minSmoothRow; row <= maxSmoothRow; row += 1) {
+        const z = -halfDepth + row * sampleStep
+        for (let column = minSmoothColumn; column <= maxSmoothColumn; column += 1) {
+          const x = -halfWidth + column * sampleStep
+          const dx = x - localX
+          const dz = z - localZ
+          const dist = Math.sqrt(dx * dx + dz * dz)
+          if (dist <= radius || dist > smoothingRadius) {
+            continue
+          }
+          const taper = 1 - (dist - radius) / smoothingBand
+          const smoothingFactor = smoothingStrengthBase * taper
+          if (smoothingFactor <= 0) {
+            continue
+          }
+          const currentHeight = sampleGroundHeight(definition, x, z)
+          const average = sampleGroundSmoothAverageAtPoint(definition, x, z)
+          const smoothedHeight = currentHeight + (average - currentHeight) * smoothingFactor
+          accumulateGroundDeltaAtPoint(definition, accumulator, x, z, smoothedHeight - currentHeight, sampleWeight)
+        }
+      }
+    }
+  }
+
+  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+}
+
+function applyPolygonSurfaceSubsampled(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  normalizedPolygon: SculptPolygonPoint[],
+  params: Pick<SculptParams, 'operation' | 'strength' | 'targetHeight'>,
+): boolean {
+  const subdivisions = resolveGroundSculptSubdivisions(definition)
+  if (subdivisions <= 1) {
+    return false
+  }
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const sampleStep = cellSize / subdivisions
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const minColumn = Math.max(0, Math.floor((polygonBounds.minX + halfWidth) / sampleStep))
+  const maxColumn = Math.max(0, Math.ceil((polygonBounds.maxX + halfWidth) / sampleStep))
+  const minRow = Math.max(0, Math.floor((polygonBounds.minZ + halfDepth) / sampleStep))
+  const maxRow = Math.max(0, Math.ceil((polygonBounds.maxZ + halfDepth) / sampleStep))
+  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const sampleWeight = 1 / (subdivisions * subdivisions)
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const z = -halfDepth + row * sampleStep
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const x = -halfWidth + column * sampleStep
+      const samplePoint = { x, z }
+      if (!isPointInsideSculptPolygonXZ(samplePoint, normalizedPolygon)) {
+        continue
+      }
+
+      const currentHeight = sampleGroundHeight(definition, x, z)
+      let nextHeight = currentHeight
+      if (params.operation === 'smooth') {
+        const average = sampleGroundSmoothAverageAtPoint(definition, x, z)
+        const smoothingFactor = Math.min(1, params.strength * 0.25)
+        nextHeight = currentHeight + (average - currentHeight) * smoothingFactor
+      } else if (params.operation === 'flatten') {
+        const reference = params.targetHeight ?? currentHeight
+        const flattenFactor = Math.min(1, params.strength * 0.4)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor
+      } else {
+        const reference = params.targetHeight ?? 0
+        const flattenFactor = Math.min(1, 0.2 + params.strength * 0.3)
+        nextHeight = currentHeight + (reference - currentHeight) * flattenFactor
+      }
+
+      accumulateGroundDeltaAtPoint(definition, accumulator, x, z, nextHeight - currentHeight, sampleWeight)
+    }
+  }
+
+  return applyAccumulatedGroundDeltas(definition, map, accumulator)
 }
 
 function sanitizeGroundClippingLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
@@ -2065,6 +2410,28 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
   let heightMap = definition.manualHeightMap
 
   if (shape === 'polygon') {
+    if (operation === 'raise' || operation === 'depress') {
+      const subsampled = applyPolygonRaiseDepressSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
+        operation,
+        strength,
+        depth,
+        slope,
+      })
+      if (subsampled) {
+        definition.manualHeightMap = heightMap
+        return true
+      }
+    }
+
+    if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyPolygonSurfaceSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
+      operation,
+      strength,
+      targetHeight,
+    })) {
+      definition.manualHeightMap = heightMap
+      return true
+    }
+
     const polygonCandidates: Array<{
       row: number
       col: number
@@ -2134,6 +2501,27 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
       definition.manualHeightMap = heightMap
     }
     return modified
+  }
+
+  if ((operation === 'raise' || operation === 'depress') && applyCircularRaiseDepressSubsampled(definition, heightMap, {
+    point,
+    radius,
+    strength,
+    operation,
+  })) {
+    definition.manualHeightMap = heightMap
+    return true
+  }
+
+  if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyCircularSurfaceSubsampled(definition, heightMap, {
+    point,
+    radius,
+    strength,
+    operation,
+    targetHeight,
+  })) {
+    definition.manualHeightMap = heightMap
+    return true
   }
 
   for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {

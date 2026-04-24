@@ -475,6 +475,14 @@ async function handleConfirmGround() {
     rows,
     columns,
     cellSize,
+    storageMode: creationProfile.storageMode,
+    tileSizeMeters: creationProfile.tileSizeMeters,
+    tileResolution: creationProfile.tileResolution,
+    globalLodCellSize: creationProfile.globalLodCellSize,
+    activeEditWindowRadius: creationProfile.activeEditWindowRadius,
+    editTileSizeMeters: creationProfile.editTileSizeMeters,
+    editTileResolution: creationProfile.editTileResolution,
+    collisionMode: creationProfile.collisionMode,
     chunkStreamingEnabled: creationProfile.storageMode === 'tiled',
     heightComposition: { mode: 'planning_plus_manual' },
     planningMetadata: null,
@@ -594,7 +602,7 @@ function handleAddLight(type: string) {
         >
           {{ groundCreationWarning }}
           <span v-if="groundCreationProfile.storageMode === 'tiled'">
-            推荐单元尺寸：{{ groundCreationProfile.cellSize }}m，预计瓦片数：{{ groundCreationProfile.estimatedTileCount }}。
+            推荐显示单元尺寸：{{ groundCreationProfile.cellSize }}m，局部编辑精度约 {{ groundCreationProfile.editCellSize.toFixed(2) }}m，预计瓦片数：{{ groundCreationProfile.estimatedTileCount }}。
           </span>
         </v-alert>
         <v-divider class="ground-dialog-divider" />

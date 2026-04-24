@@ -1791,13 +1791,14 @@ function commitGroundHeightMapRuntimeEdit(
   nodeId: string,
   definition: GroundDynamicMesh,
   manualHeightMap: Float64Array,
+  dirtyBounds: WorldBoundsXZ | null = null,
 ): boolean {
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
-  const dirtyBounds = computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.manualHeightMap, manualHeightMap)
+  const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.manualHeightMap, manualHeightMap)
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
   const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
@@ -1808,7 +1809,7 @@ function commitGroundHeightMapRuntimeEdit(
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
   useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
-  refreshLandformNodesForGroundChange(store, nodeId, dirtyBounds)
+  refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
@@ -2442,6 +2443,43 @@ function computeGroundDirtyBoundsXZ(
   const localMinZ = -halfDepth + expandedMinRow * cellSize
   const localMaxZ = -halfDepth + expandedMaxRow * cellSize
 
+  const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
+  const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
+  const worldX0 = position.x + localMinX * scale.x
+  const worldX1 = position.x + localMaxX * scale.x
+  const worldZ0 = position.z + localMinZ * scale.z
+  const worldZ1 = position.z + localMaxZ * scale.z
+  return {
+    minX: Math.min(worldX0, worldX1),
+    maxX: Math.max(worldX0, worldX1),
+    minZ: Math.min(worldZ0, worldZ1),
+    maxZ: Math.max(worldZ0, worldZ1),
+  }
+}
+
+function computeGroundDirtyBoundsFromRegionXZ(
+  groundNode: SceneNode,
+  definition: GroundRuntimeDynamicMesh,
+  bounds: GroundRegionBounds,
+): WorldBoundsXZ | null {
+  const rows = Math.max(1, Math.trunc(definition.rows))
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const normalizedMinRow = Math.max(0, Math.min(rows, Math.min(bounds.minRow, bounds.maxRow)))
+  const normalizedMaxRow = Math.max(0, Math.min(rows, Math.max(bounds.minRow, bounds.maxRow)))
+  const normalizedMinColumn = Math.max(0, Math.min(columns, Math.min(bounds.minColumn, bounds.maxColumn)))
+  const normalizedMaxColumn = Math.max(0, Math.min(columns, Math.max(bounds.minColumn, bounds.maxColumn)))
+  const expandedMinRow = Math.max(0, Math.floor(normalizedMinRow) - 1)
+  const expandedMaxRow = Math.min(rows, Math.ceil(normalizedMaxRow) + 1)
+  const expandedMinColumn = Math.max(0, Math.floor(normalizedMinColumn) - 1)
+  const expandedMaxColumn = Math.min(columns, Math.ceil(normalizedMaxColumn) + 1)
+
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const localMinX = -halfWidth + expandedMinColumn * cellSize
+  const localMaxX = -halfWidth + expandedMaxColumn * cellSize
+  const localMinZ = -halfDepth + expandedMinRow * cellSize
+  const localMaxZ = -halfDepth + expandedMaxRow * cellSize
   const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
   const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
   const worldX0 = position.x + localMinX * scale.x
@@ -8731,6 +8769,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      const dirtyBounds = computeGroundDirtyBoundsFromRegionXZ(groundNode, currentDefinition, bounds)
       const result = applyGroundRegionTransform(currentDefinition, bounds, transformer)
       if (!result.changed) {
         return false
@@ -8741,6 +8780,7 @@ export const useSceneStore = defineStore('scene', {
         groundNode.id,
         currentDefinition,
         result.definition.manualHeightMap,
+        dirtyBounds,
       )
     },
     raiseGroundRegion(bounds: GroundRegionBounds, amount = 1) {

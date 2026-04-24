@@ -3,7 +3,6 @@
 // to avoid runtime circular dependencies.
 
 import {
-  cloneGroundHeightMap,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
   type GroundDynamicMesh,
@@ -25,6 +24,9 @@ const GROUND_CREATION_AXIS_TARGET = 1024
 const GROUND_CREATION_HIGH_VERTEX_BUDGET = 1_500_000
 const GROUND_CREATION_BALANCED_VERTEX_BUDGET = 4_000_000
 const GROUND_CREATION_SEVERE_VERTEX_BUDGET = 16_000_000
+const GROUND_CREATION_EDIT_TILE_WORLD_TARGET = 128
+const GROUND_CREATION_EDIT_TILE_MIN_RESOLUTION = 64
+const GROUND_CREATION_EDIT_TILE_MAX_RESOLUTION = 256
 
 export type GroundCreationQuality = 'high' | 'balanced' | 'constrained'
 
@@ -40,6 +42,9 @@ export type GroundCreationProfile = {
   tileResolution: number
   globalLodCellSize: number
   activeEditWindowRadius: number
+  editTileSizeMeters: number
+  editTileResolution: number
+  editCellSize: number
   collisionMode: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only'
   estimatedVertexCount: number
   estimatedHeightBytes: number
@@ -139,6 +144,8 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     tileResolution: definition.tileResolution,
     globalLodCellSize: definition.globalLodCellSize,
     activeEditWindowRadius: definition.activeEditWindowRadius,
+    editTileSizeMeters: definition.editTileSizeMeters,
+    editTileResolution: definition.editTileResolution,
     collisionMode: definition.collisionMode,
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
@@ -226,6 +233,15 @@ export function resolveGroundCreationProfile(
   const tileResolution = Math.max(32, Math.min(128, Math.ceil(tileSizeMeters / cellSize)))
   const globalLodCellSize = Math.max(cellSize * 2, Math.ceil(Math.max(safeWidth, safeDepth) / Math.max(1, GROUND_CREATION_AXIS_TARGET * 2)))
   const activeEditWindowRadius = Math.max(tileSizeMeters, Math.min(tileSizeMeters * 2, Math.ceil(Math.max(safeWidth, safeDepth) / 8)))
+  const editTileSizeMeters = Math.max(cellSize, Math.min(tileSizeMeters, GROUND_CREATION_EDIT_TILE_WORLD_TARGET))
+  const editTileResolution = Math.max(
+    GROUND_CREATION_EDIT_TILE_MIN_RESOLUTION,
+    Math.min(
+      GROUND_CREATION_EDIT_TILE_MAX_RESOLUTION,
+      Math.ceil(editTileSizeMeters / normalizedBaseCellSize),
+    ),
+  )
+  const editCellSize = editTileSizeMeters / editTileResolution
   const collisionMode: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only' = estimatedVertexCount <= GROUND_CREATION_HIGH_VERTEX_BUDGET
     ? 'full-heightfield'
     : estimatedVertexCount <= GROUND_CREATION_BALANCED_VERTEX_BUDGET
@@ -236,12 +252,12 @@ export function resolveGroundCreationProfile(
     storageMode = 'tiled'
     quality = 'constrained'
     warningLevel = 'caution'
-    warningMessage = '地形工作集较大，系统将优先保留近场高精与远场粗地形。'
+    warningMessage = '地形工作集较大，系统将优先保留近场高精编辑 tile，并在远场使用更粗的显示分辨率。'
   }
 
   if (estimatedVertexCount > GROUND_CREATION_SEVERE_VERTEX_BUDGET) {
     warningLevel = 'severe'
-    warningMessage = '地形规模极大，编辑与导出会更依赖流式工作集，建议优先使用局部工作区。'
+    warningMessage = '地形规模极大，系统会强依赖局部高精编辑 tile 与远场流式显示，建议围绕工作区进行编辑。'
   }
 
   return {
@@ -254,6 +270,9 @@ export function resolveGroundCreationProfile(
     tileResolution,
     globalLodCellSize,
     activeEditWindowRadius,
+    editTileSizeMeters,
+    editTileResolution,
+    editCellSize,
     collisionMode,
     estimatedVertexCount,
     estimatedHeightBytes,
@@ -295,6 +314,8 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     tileResolution: creationProfile.tileResolution,
     globalLodCellSize: creationProfile.globalLodCellSize,
     activeEditWindowRadius: creationProfile.activeEditWindowRadius,
+    editTileSizeMeters: creationProfile.editTileSizeMeters,
+    editTileResolution: creationProfile.editTileResolution,
     collisionMode: creationProfile.collisionMode,
     chunkStreamingEnabled: overrides.chunkStreamingEnabled === true,
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
@@ -369,7 +390,7 @@ export function applyGroundRegionTransform(
   }
 
   const normalized = normalizeGroundBounds(definition, bounds)
-  const nextHeightMap = cloneGroundHeightMap(definition.manualHeightMap, definition.rows, definition.columns)
+  const nextHeightMap = definition.manualHeightMap
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
@@ -410,10 +431,7 @@ export function applyGroundRegionTransform(
     return { definition, changed: false }
   }
   return {
-    definition: {
-      ...definition,
-      manualHeightMap: nextHeightMap,
-    },
+    definition,
     changed: true,
   }
 }
