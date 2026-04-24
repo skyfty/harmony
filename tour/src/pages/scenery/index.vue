@@ -40,6 +40,7 @@ import {
 import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
+import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -52,6 +53,7 @@ const selectedVehicleIdentifier = ref<string>('');
 const backButtonTop = ref<number>(8);
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
+
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
   if (!vehicleIdentifier) {
@@ -174,6 +176,19 @@ onLoad((query: Record<string, unknown> | undefined) => {
   selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
     ? decodeQueryValue(mergedRecord.vehicleIdentifier)
     : getSelectedVehicleIdentifier();
+  setSceneryShareContext({
+    title: scenicTitle.value || '景区导览',
+    path: '/pages/scenery/index',
+    query: {
+      projectId: projectId.value,
+      packageUrl: packageUrl.value,
+      packageCacheKey: packageCacheKey.value,
+      scenicTitle: scenicTitle.value,
+      sceneSpotId: sceneSpotId.value,
+      sceneId: sceneId.value,
+      vehicleIdentifier: selectedVehicleIdentifier.value,
+    },
+  });
 
   enterAt.value = Date.now();
   void loadPunchProgress();
@@ -215,6 +230,7 @@ onShow(() => {
 
 onUnload(() => {
   const dwellMs = enterAt.value > 0 ? Math.max(Date.now() - enterAt.value, 0) : 0;
+  clearSceneryShareContext();
 
   if (sceneId.value && sceneSpotId.value) {
     void completeTravelLeaveRecord({

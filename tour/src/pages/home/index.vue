@@ -64,27 +64,19 @@ import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
 import type { ScenicSummary } from '@/types/scenic';
 
+type HomeScenicSummary = ScenicSummary & {
+  isFeatured?: boolean;
+  isHot?: boolean;
+};
+
 
 const keyword = ref('');
-const scenics = ref<ScenicSummary[]>([]);
-const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicSummary[]>;
-
-function composeFeaturedFirst(featuredScenics: ScenicSummary[], allScenics: ScenicSummary[]) {
-  if (!featuredScenics.length) {
-    return allScenics;
-  }
-
-  const merged = [...featuredScenics];
-  const idSet = new Set(featuredScenics.map((item) => item.id));
-
-  for (const scenic of allScenics) {
-    if (!idSet.has(scenic.id)) {
-      merged.push(scenic);
-    }
-  }
-
-  return merged;
-}
+const scenics = ref<HomeScenicSummary[]>([]);
+const listScenicsSafe = listScenics as (query?: {
+  featured?: boolean;
+  homepage?: boolean;
+  q?: string;
+}) => Promise<HomeScenicSummary[]>;
 
 async function reload() {
   // request homepage-ordered list: featured -> hot -> others, each ordered by their `order` field

@@ -116,7 +116,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onLoad, onShow } from '@dcloudio/uni-app';
+import { buildQueryString } from '@harmony/utils';
 import type { MedalItem } from '@/types/achievement';
 
 import BottomNav from '@/components/BottomNav.vue';
@@ -146,6 +147,12 @@ type AchievementTab = 'medals' | 'records';
 const activeTab = ref<AchievementTab>('medals');
 const medals = ref<MedalItem[]>([]);
 const scenicCheckinProgresses = ref<ScenicCardItem[]>([]);
+
+onLoad((query) => {
+  if (query?.tab === 'records') {
+    activeTab.value = 'records';
+  }
+});
 
 onShow(() => {
   void reload();

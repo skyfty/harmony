@@ -124,7 +124,7 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
-import { trackAnalyticsEvent } from '@harmony/utils';
+import { buildQueryString, trackAnalyticsEvent } from '@harmony/utils';
 import {
   getScenic,
   listAchievements,
@@ -136,10 +136,17 @@ import { getSelectedVehicleIdentifier, setSelectedVehicle } from '@/utils/vehicl
 import { listVehicles } from '@/api/mini/vehicles';
 import { getStatusBarHeight } from '@/utils/systemInfo';
 
-const scenic = ref<ScenicDetail | null>(null);
+type ScenicDetailWithFlags = ScenicDetail & {
+  isFeatured?: boolean;
+  isHot?: boolean;
+};
+
+const scenic = ref<ScenicDetailWithFlags | null>(null);
+const scenicId = ref('');
 const favoriteLoading = ref(false);
 const currentSlide = ref(0);
 const scenicCheckinProgress = ref<ScenicCheckinProgressItem | null>(null);
+
 
 
 /* Status bar height for floating back button positioning */
@@ -169,6 +176,7 @@ const scenicProgressDescription = computed(() => {
 
 onLoad((query) => {
   const id = typeof query?.id === 'string' ? query.id : '';
+  scenicId.value = id;
   if (!id) {
     scenic.value = null;
     scenicCheckinProgress.value = null;
