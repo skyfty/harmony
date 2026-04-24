@@ -49,14 +49,16 @@ defineProps<{
   border-radius: 50%;
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(153, 193, 255, 0.24);
   background:
-    radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.2), transparent 34%),
-    linear-gradient(145deg, rgba(13, 20, 42, 0.52), rgba(6, 10, 24, 0.22));
+    radial-gradient(circle at 28% 24%, rgba(120, 208, 255, 0.26), transparent 34%),
+    radial-gradient(circle at 68% 72%, rgba(255, 255, 255, 0.18), transparent 40%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.66), rgba(244, 249, 255, 0.42));
   box-shadow:
-    inset 0 0 18px rgba(0, 0, 0, 0.26),
-    0 16px 30px rgba(3, 6, 18, 0.3);
-  backdrop-filter: blur(14px);
+    inset 0 0 20px rgba(255, 255, 255, 0.34),
+    inset 0 -12px 24px rgba(194, 220, 247, 0.12),
+    0 14px 28px rgba(52, 87, 128, 0.14);
+  backdrop-filter: blur(22px) saturate(1.12);
 }
 
 .viewer-drive-compass::before {
@@ -64,8 +66,8 @@ defineProps<{
   position: absolute;
   inset: 9%;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: radial-gradient(circle at center, rgba(14, 22, 48, 0.24), rgba(4, 7, 18, 0.08));
+  border: 1px solid rgba(107, 152, 198, 0.14);
+  background: radial-gradient(circle at center, rgba(255, 255, 255, 0.42), rgba(243, 249, 255, 0.18));
 }
 
 .viewer-drive-compass__ticks {
@@ -80,14 +82,14 @@ defineProps<{
   width: 2px;
   height: 7px;
   border-radius: 999px;
-  background: rgba(227, 242, 255, 0.34);
+  background: rgba(82, 117, 151, 0.26);
   transform-origin: center 34px;
   z-index: 1;
 }
 
 .viewer-drive-compass__tick.is-major {
   height: 10px;
-  background: rgba(133, 221, 255, 0.68);
+  background: rgba(94, 161, 255, 0.7);
 }
 
 .viewer-drive-compass__label-slot {
@@ -104,8 +106,8 @@ defineProps<{
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.08em;
-  color: rgba(240, 248, 255, 0.92);
-  text-shadow: 0 0 8px rgba(0, 0, 0, 0.45);
+  color: rgba(21, 50, 79, 0.84);
+  text-shadow: none;
   transform-origin: center center;
   z-index: 3;
 }
@@ -126,8 +128,8 @@ defineProps<{
   width: 7px;
   height: 32px;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(130, 231, 255, 0.94), rgba(56, 181, 255, 0.88));
-  box-shadow: 0 0 16px rgba(84, 221, 255, 0.4);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(102, 178, 255, 0.94), rgba(71, 149, 255, 0.9));
+  box-shadow: 0 0 16px rgba(84, 170, 255, 0.24);
   transform: translateX(-50%);
 }
 
@@ -140,8 +142,8 @@ defineProps<{
   height: 0;
   border-left: 10px solid transparent;
   border-right: 10px solid transparent;
-  border-bottom: 13px solid rgba(150, 237, 255, 0.96);
-  filter: drop-shadow(0 0 8px rgba(88, 225, 255, 0.32));
+  border-bottom: 13px solid rgba(102, 178, 255, 0.96);
+  filter: drop-shadow(0 0 8px rgba(88, 170, 255, 0.22));
   transform: translateX(-50%);
 }
 </style>
