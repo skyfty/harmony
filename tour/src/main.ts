@@ -5,7 +5,7 @@ import '@minisheep/mini-program-polyfill-core/wechat-polyfill';
 import { createSSRApp } from "vue";
 import { createPinia } from 'pinia';
 import App from "./App.vue";
-import { installShareSupport } from '@harmony/utils/share';
+import { installShareSupport } from '@/services/share';
 
 export function createApp() {
   const app = createSSRApp(App);
