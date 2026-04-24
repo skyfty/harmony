@@ -2234,7 +2234,7 @@ const infoBoardPanelStyle = computed(() => {
   const viewportWidth = lanternViewportSize.width || 375;
   const viewportHeight = lanternViewportSize.height || 667;
   const panelWidth = Math.round(Math.min(viewportWidth - 24, infoBoardExpanded.value ? 420 : 220));
-  const panelHeight = Math.round(Math.min(viewportHeight * 0.42, infoBoardExpanded.value ? 320 : 92));
+  const panelHeight = Math.round(Math.min(viewportHeight * 0.36, infoBoardExpanded.value ? 220 : 72));
   return infoBoardExpanded.value
     ? {
         width: `${panelWidth}px`,
@@ -2244,14 +2244,21 @@ const infoBoardPanelStyle = computed(() => {
       }
     : {
         width: `${panelWidth}px`,
-        minHeight: '72px',
+        minHeight: '64px',
         maxWidth: `${panelWidth}px`,
       };
 });
 
 const infoBoardBodyStyle = computed(() => {
+  // When expanded, let CSS flexing make the body fill the panel space.
+  if (infoBoardExpanded.value) {
+    return {
+      height: '100%',
+      maxHeight: '100%',
+    };
+  }
   const viewportHeight = lanternViewportSize.height || 667;
-  const bodyHeight = Math.max(Math.round(Math.min(viewportHeight * 0.42, 220)) - 80, 132);
+  const bodyHeight = Math.max(Math.round(Math.min(viewportHeight * 0.32, 160)) - 60, 80);
   return {
     height: `${bodyHeight}px`,
     maxHeight: `${bodyHeight}px`,
@@ -12881,6 +12888,10 @@ onUnmounted(() => {
 
 .viewer-info-board.is-expanded {
   width: min(80vw, 340px);
+}
+
+.viewer-info-board.is-expanded .viewer-info-board__header {
+  display: none;
 }
 
 .viewer-info-board__loading,
