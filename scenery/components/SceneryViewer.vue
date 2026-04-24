@@ -116,21 +116,14 @@
         v-if="infoBoardOverlayVisible"
         class="viewer-info-board-overlay"
         aria-live="polite"
-        :style="{
-          left: `${infoBoardOverlayPlacement.xPercent}%`,
-          top: `${infoBoardOverlayPlacement.yPercent}%`,
-          transform: 'translate(-50%, -100%)',
-          opacity: String(infoBoardOverlayPlacement.opacity),
-        }"
+        :style="infoBoardOverlayStyle"
       >
-        <view class="viewer-info-board" :style="infoBoardPanelStyle">
-          <view class="viewer-info-board__header">
+        <view class="viewer-info-board" :class="{ 'is-expanded': infoBoardExpanded }" :style="infoBoardPanelStyle">
+          <view  v-if="!infoBoardExpanded"   class="viewer-info-board__header" @tap="toggleInfoBoardExpanded">
             <text class="viewer-info-board__title">{{ infoBoardOverlayTitle }}</text>
-            <button class="viewer-info-board__close" type="button" hover-class="none" @tap="hideInfoBoard">
-              <text class="viewer-info-board__close-icon">✕</text>
-            </button>
           </view>
           <scroll-view
+            v-if="infoBoardExpanded"
             scroll-y
             scroll-with-animation
             show-scrollbar="false"
@@ -2118,25 +2111,13 @@ const behaviorBubbleAnchorXPercent = behaviorBubble.anchorXPercent;
 const behaviorBubbleAnchorYPercent = behaviorBubble.anchorYPercent;
 const behaviorBubbleStyle = behaviorBubble.style;
 
-type InfoBoardOverlayPlacement = {
-  xPercent: number;
-  yPercent: number;
-  scale: number;
-  opacity: number;
-};
-
 const infoBoardOverlayVisible = ref(false);
 const infoBoardOverlayLoading = ref(false);
 const infoBoardOverlayNodeId = ref<string | null>(null);
 const infoBoardOverlayTitle = ref('展示板');
 const infoBoardOverlayContent = ref('');
+const infoBoardExpanded = ref(false);
 const infoBoardScrollTop = ref(0);
-const infoBoardOverlayPlacement = reactive<InfoBoardOverlayPlacement>({
-  xPercent: 78,
-  yPercent: 34,
-  scale: 1,
-  opacity: 1,
-});
 let infoBoardOverlayGeneration = 0;
 let infoBoardScrollTimer: ReturnType<typeof setInterval> | null = null;
 let infoBoardScrollMeasureTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2252,23 +2233,64 @@ const lanternImageBoxStyle = computed(() => {
 const infoBoardPanelStyle = computed(() => {
   const viewportWidth = lanternViewportSize.width || 375;
   const viewportHeight = lanternViewportSize.height || 667;
-  const panelHeight = Math.round(Math.min(viewportHeight * 0.28, 190));
-  return {
-    width: `${Math.round(Math.min(viewportWidth * 0.62, 320))}px`,
-    height: `${panelHeight}px`,
-    maxWidth: `${Math.round(Math.min(viewportWidth * 0.62, 320))}px`,
-    maxHeight: `${panelHeight}px`,
-  };
+  const panelWidth = Math.round(Math.min(viewportWidth - 24, infoBoardExpanded.value ? 420 : 220));
+  const panelHeight = Math.round(Math.min(viewportHeight * 0.42, infoBoardExpanded.value ? 320 : 92));
+  return infoBoardExpanded.value
+    ? {
+        width: `${panelWidth}px`,
+        height: `${panelHeight}px`,
+        maxWidth: `${panelWidth}px`,
+        maxHeight: `${panelHeight}px`,
+      }
+    : {
+        width: `${panelWidth}px`,
+        minHeight: '72px',
+        maxWidth: `${panelWidth}px`,
+      };
 });
 
 const infoBoardBodyStyle = computed(() => {
   const viewportHeight = lanternViewportSize.height || 667;
-  const bodyHeight = Math.max(Math.round(Math.min(viewportHeight * 0.28, 210)) - 76, 76);
+  const bodyHeight = Math.max(Math.round(Math.min(viewportHeight * 0.42, 220)) - 80, 132);
   return {
     height: `${bodyHeight}px`,
     maxHeight: `${bodyHeight}px`,
   };
 });
+
+const infoBoardOverlayStyle = computed(() => ({
+  left: '12px',
+  top: `${punchSummaryTopOffset.value + 58}px`,
+  opacity: '1',
+}));
+
+function expandInfoBoard(): void {
+  if (!infoBoardOverlayVisible.value) {
+    return;
+  }
+  if (infoBoardExpanded.value) {
+    return;
+  }
+  infoBoardExpanded.value = true;
+  infoBoardScrollTop.value = 0;
+  void measureInfoBoardAutoScroll();
+}
+
+function collapseInfoBoard(): void {
+  if (!infoBoardExpanded.value) {
+    return;
+  }
+  infoBoardExpanded.value = false;
+  stopInfoBoardAutoScroll();
+}
+
+function toggleInfoBoardExpanded(): void {
+  if (infoBoardExpanded.value) {
+    collapseInfoBoard();
+    return;
+  }
+  expandInfoBoard();
+}
 
 function stopInfoBoardAutoScroll(): void {
   if (infoBoardScrollTimer) {
@@ -2286,21 +2308,8 @@ function stopInfoBoardAutoScroll(): void {
   infoBoardScrollHoldTicks = 0;
 }
 
-function getInfoBoardPanelMetrics() {
-  const viewportWidth = lanternViewportSize.width || 375;
-  const viewportHeight = lanternViewportSize.height || 667;
-  const panelWidth = Math.round(Math.min(viewportWidth * 0.7, 360));
-  const panelHeight = Math.round(Math.min(viewportHeight * 0.34, 230));
-  return {
-    viewportWidth,
-    viewportHeight,
-    panelWidth,
-    panelHeight,
-  };
-}
-
 function startInfoBoardAutoScrollLoop(): void {
-  if (!infoBoardOverlayVisible.value) {
+  if (!infoBoardOverlayVisible.value || !infoBoardExpanded.value) {
     return;
   }
   if (infoBoardScrollTimer) {
@@ -2343,13 +2352,17 @@ function startInfoBoardAutoScrollLoop(): void {
 }
 
 async function measureInfoBoardAutoScroll(): Promise<void> {
+  if (!infoBoardExpanded.value) {
+    stopInfoBoardAutoScroll();
+    return;
+  }
   await nextTick();
   if (infoBoardScrollMeasureTimer) {
     clearTimeout(infoBoardScrollMeasureTimer);
   }
   infoBoardScrollMeasureTimer = setTimeout(() => {
     infoBoardScrollMeasureTimer = null;
-    if (!infoBoardOverlayVisible.value) {
+    if (!infoBoardOverlayVisible.value || !infoBoardExpanded.value) {
       stopInfoBoardAutoScroll();
       return;
     }
@@ -2388,28 +2401,19 @@ async function measureInfoBoardAutoScroll(): Promise<void> {
   }, 0);
 }
 
-function clampInfoBoardOverlayPlacement(): void {
-  const { viewportWidth, viewportHeight, panelWidth, panelHeight } = getInfoBoardPanelMetrics();
-  const horizontalMargin = Math.max(Math.round(Math.min(viewportWidth * 0.05, 20)), 14);
-  const verticalMargin = Math.max(Math.round(Math.min(viewportHeight * 0.05, 26)), 14);
-  const minX = ((panelWidth / 2) + horizontalMargin) / viewportWidth * 100;
-  const maxX = ((viewportWidth - (panelWidth / 2) - horizontalMargin) / viewportWidth) * 100;
-  const minY = Math.max(((panelHeight + verticalMargin) / viewportHeight) * 100 + 4, 36);
-  const maxY = ((viewportHeight - verticalMargin) / viewportHeight) * 100;
-  infoBoardOverlayPlacement.xPercent = Math.min(Math.max(infoBoardOverlayPlacement.xPercent, minX), maxX);
-  infoBoardOverlayPlacement.yPercent = Math.min(Math.max(infoBoardOverlayPlacement.yPercent, minY), maxY);
-  infoBoardOverlayPlacement.scale = 1;
-}
-
 watch(
-  [infoBoardOverlayVisible, infoBoardOverlayLoading, infoBoardOverlayContent],
-  ([visible]) => {
+  [infoBoardOverlayVisible, infoBoardOverlayLoading, infoBoardOverlayContent, infoBoardExpanded],
+  ([visible, _loading, _content, expanded]) => {
     if (!visible) {
       stopInfoBoardAutoScroll();
       infoBoardScrollTop.value = 0;
       return;
     }
-    clampInfoBoardOverlayPlacement();
+    if (!expanded) {
+      stopInfoBoardAutoScroll();
+      infoBoardScrollTop.value = 0;
+      return;
+    }
     void measureInfoBoardAutoScroll();
   },
   { flush: 'post' },
@@ -3667,52 +3671,9 @@ function resetInfoBoardOverlay(): void {
   infoBoardOverlayNodeId.value = null;
   infoBoardOverlayTitle.value = '展示板';
   infoBoardOverlayContent.value = '';
-  infoBoardOverlayPlacement.xPercent = 78;
-  infoBoardOverlayPlacement.yPercent = 18;
-  infoBoardOverlayPlacement.scale = 1;
-  infoBoardOverlayPlacement.opacity = 1;
+  infoBoardExpanded.value = false;
+  infoBoardScrollTop.value = 0;
   resetInfoBoardAudio();
-}
-
-function updateInfoBoardOverlayPlacement(activeCamera: THREE.Camera | null): void {
-  if (!infoBoardOverlayVisible.value) {
-    return;
-  }
-  const nodeId = infoBoardOverlayNodeId.value;
-  const object = nodeId ? nodeObjectMap.get(nodeId) ?? null : null;
-  if (!activeCamera || !object) {
-    infoBoardOverlayPlacement.xPercent = 50;
-    infoBoardOverlayPlacement.yPercent = 40;
-    infoBoardOverlayPlacement.scale = 1;
-    infoBoardOverlayPlacement.opacity = 1;
-    clampInfoBoardOverlayPlacement();
-    return;
-  }
-  const anchorWorld = resolveSignboardAnchorWorldPosition(object, behaviorBubbleAnchorScratch);
-  const referenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, anchorWorld, {
-    position: activeCamera.position,
-    nodeId: resolveOverlayDistanceReferenceNodeId(),
-  });
-  const placement = computeSignboardPlacement({
-    anchorWorld,
-    referenceWorld,
-    camera: activeCamera,
-    closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
-    minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
-  });
-  if (!placement) {
-    infoBoardOverlayPlacement.xPercent = 50;
-    infoBoardOverlayPlacement.yPercent = 40;
-    infoBoardOverlayPlacement.scale = 1;
-    infoBoardOverlayPlacement.opacity = 1;
-    clampInfoBoardOverlayPlacement();
-    return;
-  }
-  infoBoardOverlayPlacement.xPercent = placement.xPercent;
-  infoBoardOverlayPlacement.yPercent = placement.yPercent;
-  infoBoardOverlayPlacement.scale = 1;
-  infoBoardOverlayPlacement.opacity = placement.opacity;
-  clampInfoBoardOverlayPlacement();
 }
 
 async function playInfoBoardAudio(assetId: string, generation: number): Promise<void> {
@@ -3747,12 +3708,13 @@ async function presentInfoBoard(event: Extract<BehaviorRuntimeEvent, { type: 'sh
   infoBoardOverlayVisible.value = true;
   infoBoardOverlayLoading.value = false;
   infoBoardOverlayNodeId.value = event.nodeId;
+  infoBoardExpanded.value = false;
+  infoBoardScrollTop.value = 0;
   {
     const title = typeof event.params.title === 'string' ? event.params.title.trim() : '';
     infoBoardOverlayTitle.value = title.length ? title : '展示板';
   }
   infoBoardOverlayContent.value = typeof event.params.content === 'string' ? event.params.content : '';
-  updateInfoBoardOverlayPlacement(renderContext?.camera ?? null);
 
   const contentAssetId = event.params.contentAssetId?.trim() ?? '';
   if (contentAssetId.length) {
@@ -11890,7 +11852,6 @@ function startRenderLoop(
 
           updateBehaviorProximity();
           updateSignboardOverlayEntries(camera, deltaSeconds);
-          updateInfoBoardOverlayPlacement(camera);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
@@ -12384,6 +12345,7 @@ onUnmounted(() => {
   padding: 6px 12px;
   border-radius: 16px;
   border: none;
+}
 
 .viewer-overlay__content {
   display: flex;
@@ -12392,7 +12354,6 @@ onUnmounted(() => {
   gap: 12px;
   width: 80%;
   max-width: 320px;
-}
   font-size: 14px;
   line-height: 1.4;
   background-color: #1f7aec;
@@ -12829,16 +12790,16 @@ onUnmounted(() => {
   position: absolute;
   z-index: 2050;
   pointer-events: none;
-  will-change: transform, opacity;
+  will-change: opacity;
 }
 
 .viewer-info-board {
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: min(84vw, 640px);
-  padding: 14rpx 16rpx 16rpx;
+  gap: 8px;
+  width: min(80vw, 220px);
+  padding: 12rpx 14rpx 14rpx;
   border-radius: 24rpx;
   overflow: hidden;
   border: 1px solid rgba(153, 193, 255, 0.22);
@@ -12851,7 +12812,7 @@ onUnmounted(() => {
   color: #15324f;
   transform-origin: center bottom;
   position: relative;
-  animation: viewer-info-board-float 8s ease-in-out infinite alternate;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
 .viewer-info-board::before {
@@ -12876,7 +12837,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12rpx;
   position: relative;
   z-index: 1;
   padding: 2rpx 2rpx 0;
@@ -12888,29 +12848,9 @@ onUnmounted(() => {
   min-width: 0;
   font-size: 26rpx;
   font-weight: 800;
+  line-height: 1.3;
   letter-spacing: 0.6rpx;
   color: #12314d;
-}
-
-.viewer-info-board__close {
-  width: 42rpx;
-  height: 42rpx;
-  min-width: 42rpx;
-  min-height: 42rpx;
-  padding: 0;
-  border: 1px solid rgba(107, 152, 198, 0.24);
-  border-radius: 999rpx;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(235, 244, 255, 0.88));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4rpx 12rpx rgba(72, 114, 158, 0.12);
-}
-
-.viewer-info-board__close-icon {
-  font-size: 12px;
-  line-height: 1;
-  color: #4a6d8f;
 }
 
 .viewer-info-board__body {
@@ -12921,16 +12861,20 @@ onUnmounted(() => {
   overflow: hidden;
   position: relative;
   z-index: 1;
-  padding: 10rpx 12rpx 4rpx;
+  padding: 8rpx 10rpx 2rpx;
   border-radius: 18rpx;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(243, 249, 255, 0.32));
+}
+
+.viewer-info-board.is-expanded {
+  width: min(80vw, 340px);
 }
 
 .viewer-info-board__loading,
 .viewer-info-board__content {
   display: block;
   font-size: 28rpx;
-  line-height: 1.7;
+  line-height: 1.45;
   padding: 0;
   white-space: pre-wrap;
   word-break: break-word;

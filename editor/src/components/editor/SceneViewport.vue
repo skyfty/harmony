@@ -1831,8 +1831,8 @@ const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraContr
 const viewportSelectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const cameraPointerHintText = computed(() => (
   cameraControlMode.value === 'map'
-    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Alt+右拖 指定轨道中心 · Shift+右键 反向旋转选中节点 · Alt+左键 快速对焦'
-    : '中键旋转 · 右键平移 · 滚轮缩放 · Alt+中拖 指定轨道中心 · Shift+右键 反向旋转选中节点 · Alt+左键 快速对焦'
+    ? '右键旋转 · 左键拖拽平移 · 滚轮缩放 · Alt+右拖 指定轨道中心 · Shift+右键 反向旋转选中节点 · Alt+左键/中键 快速对焦'
+    : '中键旋转 · 右键平移 · 滚轮缩放 · Alt+中拖 指定轨道中心 · Shift+右键 反向旋转选中节点 · Alt+左键/中键 快速对焦'
 ))
 const cameraStatusZoomRatioText = computed(() => {
   const base = defaultCameraStatusDistance > 1e-6 ? defaultCameraStatusDistance : 1
@@ -13353,7 +13353,7 @@ function maybeApplyAltLeftClickFocus(event: PointerEvent): boolean {
   if (!camera || !mapControls || !mapControls.enabled) {
     return false
   }
-  if (!event.altKey || event.button !== 0 || isApplyingCameraState) {
+  if (!event.altKey || (event.button !== 0 && event.button !== 1) || isApplyingCameraState) {
     return false
   }
   const mode = sceneStore.viewportSettings.cameraControlMode
