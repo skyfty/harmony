@@ -118,9 +118,9 @@
         aria-live="polite"
         :style="infoBoardOverlayStyle"
       >
-        <view class="viewer-info-board" :class="{ 'is-expanded': infoBoardExpanded }" :style="infoBoardPanelStyle">
-          <view  v-if="!infoBoardExpanded"   class="viewer-info-board__header" @tap="toggleInfoBoardExpanded">
-            <text class="viewer-info-board__title">{{ infoBoardOverlayTitle }}</text>
+        <view class="viewer-info-board" :class="{ 'is-expanded': infoBoardExpanded }" :style="infoBoardPanelStyle" @tap="handleInfoBoardTap">
+          <view class="viewer-info-board__header" @tap.stop="toggleInfoBoardExpanded">
+            <text v-if="!infoBoardExpanded" class="viewer-info-board__title">{{ infoBoardOverlayTitle }}</text>
           </view>
           <scroll-view
             v-if="infoBoardExpanded"
@@ -2290,6 +2290,13 @@ function toggleInfoBoardExpanded(): void {
     return;
   }
   expandInfoBoard();
+}
+
+function handleInfoBoardTap(): void {
+  // When the info board is expanded, tapping the panel should collapse it
+  if (infoBoardExpanded.value) {
+    collapseInfoBoard();
+  }
 }
 
 function stopInfoBoardAutoScroll(): void {
@@ -12800,6 +12807,7 @@ onUnmounted(() => {
   gap: 8px;
   width: min(80vw, 220px);
   padding: 12rpx 14rpx 14rpx;
+  box-sizing: border-box;
   border-radius: 24rpx;
   overflow: hidden;
   border: 1px solid rgba(153, 193, 255, 0.22);
@@ -12840,6 +12848,7 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
   padding: 2rpx 2rpx 0;
+  flex: 0 0 auto;
 }
 
 .viewer-info-board__title {
@@ -12855,15 +12864,19 @@ onUnmounted(() => {
 
 .viewer-info-board__body {
   flex: 1 1 auto;
-  height: 100%;
-  max-height: 100%;
-  min-height: 0;
-  overflow: hidden;
+  min-height: 0; /* allow flex children to shrink properly */
+  overflow: auto; /* enable scrolling when content overflows */
   position: relative;
   z-index: 1;
-  padding: 8rpx 10rpx 2rpx;
+  padding: 8rpx 12rpx 10rpx;
   border-radius: 18rpx;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(243, 249, 255, 0.32));
+  box-sizing: border-box;
+}
+
+.viewer-info-board.is-expanded .viewer-info-board__body {
+  /* Let the scroll area fill the available panel space but keep a comfortable inner margin */
+  padding: 14rpx 16rpx 14rpx;
 }
 
 .viewer-info-board.is-expanded {
