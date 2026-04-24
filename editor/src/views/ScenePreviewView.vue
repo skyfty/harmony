@@ -27,6 +27,9 @@ import {
 	resolveSceneNodeById,
 	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
+	chooseCharacterControlClipName,
+	resolveCharacterControlMoveVector,
+	resolveCharacterControlSpeed,
 	type EnvironmentCsmSettings,
 	type EnvironmentSettings,
 	computePlaySoundDistanceGain,
@@ -85,6 +88,7 @@ import {
 	isGroundChunkStreamingEnabled,
 	resolveGroundChunkRadiusMeters,
 	resolveGroundRuntimeChunkCells,
+	sampleGroundHeight,
 	updateGroundChunks,
 } from '@schema/groundMesh'
 import {
@@ -192,6 +196,7 @@ import {
 	WALL_COMPONENT_TYPE,
 	BOUNDARY_WALL_COMPONENT_TYPE,
 	boundaryWallComponentDefinition,
+	characterControllerComponentDefinition,
 	LOD_COMPONENT_TYPE,
 	LOD_FACE_CAMERA_FORWARD_AXIS_X,
 	LOD_FACE_CAMERA_FORWARD_AXIS_Y,
@@ -200,6 +205,7 @@ import {
 	computeGuideboardEffectActive,
 	clampRigidbodyComponentProps,
 	clampVehicleComponentProps,
+	clampCharacterControllerComponentProps,
 	clampLodComponentProps,
 	forEachWaterRuntimeHandle,
 	resolveLodRenderTarget,
@@ -207,6 +213,8 @@ import {
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
+	CHARACTER_CONTROLLER_COMPONENT_TYPE,
+	type CharacterControllerComponentProps,
 	} from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
 import type { VehicleDriveRuntimeState } from '@schema/VehicleDriveController'
@@ -1027,6 +1035,7 @@ previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(vehicleComponentDefinition)
+previewComponentManager.registerDefinition(characterControllerComponentDefinition)
 previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 previewComponentManager.registerDefinition(protagonistComponentDefinition)
@@ -1214,6 +1223,9 @@ const autoTourCameraFollowController = new FollowCameraController()
 const autoTourCameraFollowLastAnchor = new THREE.Vector3()
 const autoTourCameraFollowVelocity = new THREE.Vector3()
 const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
+const characterControlMoveScratch = new THREE.Vector3()
+const characterControlRightScratch = new THREE.Vector3()
+const characterControlFacingScratch = new THREE.Vector3()
 let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -2844,6 +2856,9 @@ const vehicleDriveUi = computed(() => {
 })
 
 const steeringWheelRef = ref<HTMLDivElement | null>(null)
+const pendingCharacterControlEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'character-control' }> | null>(null)
+const activeCharacterControlNodeId = ref<string | null>(null)
+const characterControlAnimationClipState = new Map<string, string | null>()
 const steeringWheelValue = ref(0)
 const steeringKeyboardValue = ref(0)
 const steeringKeyboardTarget = ref(0)
@@ -7200,13 +7215,18 @@ function resetVehicleDriveInputs(): void {
 }
 
 function setVehicleDriveControlFlag(action: DriveControlAction, pressed: boolean): void {
-	if (!vehicleDriveState.active) {
+	if (!vehicleDriveState.active && !activeCharacterControlNodeId.value) {
 		return
 	}
 	if (vehicleDriveInputFlags[action] === pressed) {
 		return
 	}
-	vehicleDriveController.setControlFlag(action, pressed)
+	if (vehicleDriveState.active) {
+		vehicleDriveController.setControlFlag(action, pressed)
+	} else {
+		vehicleDriveInputFlags[action] = pressed
+		updateVehicleDriveInputFromFlags()
+	}
 	updateVehicleDriveInputFromFlags()
 }
 
@@ -7222,7 +7242,7 @@ function handleVehicleDriveControlPointer(
 }
 
 function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean): boolean {
-	if (!vehicleDriveState.active) {
+	if (!vehicleDriveState.active && !activeCharacterControlNodeId.value) {
 		return false
 	}
 	const action = vehicleDriveKeyboardMap[event.code]
@@ -7592,10 +7612,166 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
 			message: 'A new drive script was triggered; the previous request was cancelled.',
 		})
 	}
+	if (pendingCharacterControlEvent.value) {
+		resolveBehaviorToken(pendingCharacterControlEvent.value.token, {
+			type: 'abort',
+			message: 'Character control request was replaced by vehicle driving.',
+		})
+		pendingCharacterControlEvent.value = null
+	}
+	activeCharacterControlNodeId.value = null
 	pendingVehicleDriveEvent.value = event
 	vehicleDrivePromptBusy.value = false
 	setVehicleDriveUiOverride('hide')
 	resetVehicleDriveInputs()
+}
+
+function resolveCharacterControllerComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<CharacterControllerComponentProps> | null {
+	return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)
+}
+
+function playCharacterControlAnimation(nodeId: string, props: CharacterControllerComponentProps, movementMagnitude: number): void {
+	const controller = nodeAnimationControllers.get(nodeId)
+	if (!controller) {
+		return
+	}
+	const desiredClipName = chooseCharacterControlClipName(props, movementMagnitude)
+	const currentClipName = characterControlAnimationClipState.get(nodeId) ?? null
+	const effectiveClipName = desiredClipName && desiredClipName.trim().length ? desiredClipName.trim() : null
+	if (currentClipName === effectiveClipName) {
+		return
+	}
+	const clip = effectiveClipName
+		? controller.clips.find((entry) => entry.name === effectiveClipName)
+		: controller.defaultClip ?? pickDefaultAnimationClip(controller.clips)
+	if (!clip) {
+		return
+	}
+	controller.mixer.stopAllAction()
+	playAnimationClip(controller.mixer, clip, { loop: true })
+	characterControlAnimationClipState.set(nodeId, effectiveClipName)
+}
+
+function updateCharacterControlForFrame(delta: number): boolean {
+	const nodeId = activeCharacterControlNodeId.value
+	if (!nodeId || !camera) {
+		return false
+	}
+	const node = resolveSceneNodeById(previewNodeMap, nodeId)
+	const component = resolveCharacterControllerComponent(node)
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!node || !component || !object) {
+		return false
+	}
+	const props = clampCharacterControllerComponentProps(component.props)
+	const moveX = Number(vehicleDriveInputFlags.right) - Number(vehicleDriveInputFlags.left)
+	const moveZ = Number(vehicleDriveInputFlags.forward) - Number(vehicleDriveInputFlags.backward)
+	const movementMagnitude = resolveCharacterControlMoveVector({
+		camera,
+		moveX,
+		moveZ,
+		scratch: {
+			facingScratch: characterControlFacingScratch,
+			rightScratch: characterControlRightScratch,
+			moveScratch: characterControlMoveScratch,
+		},
+	})
+	if (movementMagnitude > 0.001) {
+		if (characterControlMoveScratch.lengthSq() > 1e-8) {
+			const speed = resolveCharacterControlSpeed(props, movementMagnitude)
+			object.position.addScaledVector(characterControlMoveScratch, Math.max(0, speed) * delta)
+			object.lookAt(object.position.clone().add(characterControlMoveScratch))
+		}
+	}
+	if (cachedGroundDynamicMesh) {
+		const groundHeight = sampleGroundHeight(cachedGroundDynamicMesh, object.position.x, object.position.z)
+		if (Number.isFinite(groundHeight)) {
+			object.position.y = groundHeight + Math.max(0.1, props.colliderHeight * 0.5)
+		}
+	}
+	playCharacterControlAnimation(nodeId, props, movementMagnitude)
+	syncProtagonistCameraPose({ force: true, object, applyToCamera: true })
+	return true
+}
+
+function handleCharacterControlEvent(event: Extract<BehaviorRuntimeEvent, { type: 'character-control' }>): void {
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		appendWarningMessage('No node provided for character control.')
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No node provided for character control.' })
+		return
+	}
+	const targetNode = resolveNodeById(targetNodeId)
+	const canControl = Boolean(targetNode?.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE])
+	if (!canControl) {
+		appendWarningMessage('Target node cannot be controlled as a character (missing character controller component).')
+		resolveBehaviorToken(event.token, {
+			type: 'fail',
+			message: 'Target node cannot be controlled as a character (missing character controller component).',
+		})
+		return
+	}
+	if (pendingVehicleDriveEvent.value) {
+		resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+			type: 'abort',
+			message: 'Vehicle drive request was replaced by character control.',
+		})
+		pendingVehicleDriveEvent.value = null
+	}
+	if (pendingCharacterControlEvent.value) {
+		resolveBehaviorToken(pendingCharacterControlEvent.value.token, {
+			type: 'abort',
+			message: 'Character control request was replaced by vehicle driving.',
+		})
+		pendingCharacterControlEvent.value = null
+	}
+	activeCharacterControlNodeId.value = null
+	pendingCharacterControlEvent.value = event
+	activeCharacterControlNodeId.value = targetNodeId
+	controlMode.value = 'first-person'
+	if (firstPersonControls) {
+		firstPersonControls.movementSpeed = 0
+	}
+}
+
+function prepareImportedObjectForPreview(object: THREE.Object3D): void {
+	object.traverse((child) => {
+		if (!(child instanceof THREE.Mesh)) {
+			return
+		}
+		const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] }
+		mesh.castShadow = true
+		mesh.receiveShadow = true
+		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+		materials.forEach((material) => {
+			if (!material) {
+				return
+			}
+			const typed = material as THREE.Material & { side?: number }
+			if (typeof typed.side !== 'undefined') {
+				typed.side = THREE.DoubleSide
+			}
+			typed.needsUpdate = true
+		})
+	})
+}
+
+function handleCharacterReleaseEvent(): void {
+	if (pendingCharacterControlEvent.value) {
+		resolveBehaviorToken(pendingCharacterControlEvent.value.token, {
+			type: 'continue',
+		})
+		pendingCharacterControlEvent.value = null
+	}
+	activeCharacterControlNodeId.value = null
+	if (controlMode.value !== 'third-person') {
+		controlMode.value = 'third-person'
+	}
+	if (firstPersonControls) {
+		firstPersonControls.movementSpeed = FIRST_PERSON_MOVE_SPEED
+	}
 }
 
 function handleVehicleDebusEvent(): void {
@@ -7950,6 +8126,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'vehicle-drive':
 			handleVehicleDriveEvent(event)
+			break
+		case 'character-control':
+			handleCharacterControlEvent(event)
+			break
+		case 'character-release':
+			handleCharacterReleaseEvent()
 			break
 		case 'vehicle-debus':
 			handleVehicleDebusEvent()
@@ -8604,6 +8786,9 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		},
 	})
 	previewComponentManager.update(delta)
+	if (updateCharacterControlForFrame(delta)) {
+		transformDriveUpdated = true
+	}
 	animationMixers.forEach((mixer) => mixer.update(delta))
 	activeBehaviorSounds.forEach((instance) => {
 		if (!instance.params.spatial || instance.stopped) {
@@ -11742,7 +11927,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
-	const skipTransformSync = activeAutoTourNodeIds.has(node.id) && !vehicleInstances.has(node.id)
+	const skipTransformSync = (activeAutoTourNodeIds.has(node.id) && !vehicleInstances.has(node.id)) || activeCharacterControlNodeId.value === node.id
 	if (node.position) {
 		if (!skipTransformSync) {
 			object.position.set(node.position.x, node.position.y, node.position.z)
@@ -12101,28 +12286,6 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
 	}
 	deferredInstancingNodeIds.delete(nodeId)
 	return true
-}
-
-function prepareImportedObjectForPreview(object: THREE.Object3D): void {
-	object.traverse((child) => {
-		if (!(child instanceof THREE.Mesh)) {
-			return
-		}
-		const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] }
-		mesh.castShadow = true
-		mesh.receiveShadow = true
-		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-		materials.forEach((material) => {
-			if (!material) {
-				return
-			}
-			const typed = material as THREE.Material & { side?: number }
-			if (typeof typed.side !== 'undefined') {
-				typed.side = THREE.DoubleSide
-			}
-			typed.needsUpdate = true
-		})
-	})
 }
 
 function structuralSignature(node: SceneNode | null | undefined): string {

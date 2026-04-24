@@ -18,6 +18,7 @@ import type {
   TriggerBehaviorParams,
   AnimationBehaviorParams,
   DriveBehaviorParams,
+  ControlCharacterBehaviorParams,
 } from '../index'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
@@ -216,6 +217,24 @@ export type BehaviorRuntimeEvent =
       targetNodeId: string
       seatNodeId: string | null
       token: string
+    }
+  | {
+      type: 'character-control'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      token: string
+    }
+  | {
+      type: 'character-release'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
     }
   | {
       type: 'vehicle-show-cockpit'
@@ -827,6 +846,47 @@ function createDriveVehicleEvent(
   }
 }
 
+function createControlCharacterEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'character-control' }> {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, {
+    token,
+    sequenceId: state.id,
+    stepIndex: state.index,
+  })
+  state.status = 'waiting'
+  const params = behavior.script.params as ControlCharacterBehaviorParams | undefined
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId.trim() : fallbackTarget
+  return {
+    type: 'character-control',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+    token,
+  }
+}
+
+function createReleaseCharacterEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'character-release' }> {
+  void behavior
+  return {
+    type: 'character-release',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+  }
+}
+
 function createDebusVehicleEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
@@ -993,6 +1053,13 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'drive':
         events.push(createDriveVehicleEvent(state, behavior))
         return events
+      case 'controlCharacter':
+        events.push(createControlCharacterEvent(state, behavior))
+        return events
+      case 'releaseCharacter':
+        events.push(createReleaseCharacterEvent(state, behavior))
+        state.index += 1
+        continue
       case 'debus':
         events.push(createDebusVehicleEvent(state, behavior))
         state.index += 1

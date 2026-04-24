@@ -194,6 +194,14 @@ export type {
   AutoTourVehicleInstanceLike,
 } from './autoTourRuntime'
 
+export {
+	chooseCharacterControlClipName,
+	resolveCharacterControlMoveVector,
+	resolveCharacterControlMovementMagnitude,
+	resolveCharacterControlSpeed,
+} from './characterControlRuntime'
+export type { CharacterControlMoveVectorScratch } from './characterControlRuntime'
+
 export { createWaterRuntime } from './waterRuntime'
 export type { WaterRuntime, WaterRuntimeFrame } from './waterRuntime'
 
@@ -604,6 +612,8 @@ export type BehaviorScriptType =
   | 'showCockpit'
   | 'hideCockpit'
   | 'drive'
+  | 'controlCharacter'
+  | 'releaseCharacter'
   | 'debus'
   | 'punch'
 
@@ -798,7 +808,16 @@ export interface DriveBehaviorParams {
   seatNodeId?: string | null
 }
 
+export interface ControlCharacterBehaviorParams {
+  /** Character node controlled by this behavior. Defaults to the behavior owner node. */
+  targetNodeId: string | null
+}
+
 export interface DebusBehaviorParams {
+  // no configuration required
+}
+
+export interface ReleaseCharacterBehaviorParams {
   // no configuration required
 }
 
@@ -924,6 +943,14 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'drive'
       params: DriveBehaviorParams
+    }
+  | {
+      type: 'controlCharacter'
+      params: ControlCharacterBehaviorParams
+    }
+  | {
+      type: 'releaseCharacter'
+      params: ReleaseCharacterBehaviorParams
     }
   | {
       type: 'debus'

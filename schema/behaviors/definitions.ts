@@ -31,6 +31,8 @@ import type {
   ShowCockpitBehaviorParams,
   HideCockpitBehaviorParams,
   DriveBehaviorParams,
+  ControlCharacterBehaviorParams,
+  ReleaseCharacterBehaviorParams,
   DebusBehaviorParams,
   LoadSceneBehaviorParams,
   ExitSceneBehaviorParams,
@@ -534,6 +536,26 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     },
   },
   {
+    id: 'controlCharacter',
+    label: 'Control Character',
+    description: 'Attach the controller to a character node and show character movement controls.',
+    icon: 'mdi-account-arrow-right-outline',
+    createDefaultParams(): ControlCharacterBehaviorParams {
+      return {
+        targetNodeId: null,
+      }
+    },
+  },
+  {
+    id: 'releaseCharacter',
+    label: 'Release Character',
+    description: 'Exit character control mode and restore default controls.',
+    icon: 'mdi-account-arrow-left-outline',
+    createDefaultParams(): ReleaseCharacterBehaviorParams {
+      return {}
+    },
+  },
+  {
     id: 'debus',
     label: 'Debus Vehicle',
     description: 'Exit vehicle driving mode and restore default controls.',
@@ -970,6 +992,20 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         },
       }
     }
+    case 'controlCharacter': {
+      const params = binding.params as ControlCharacterBehaviorParams | undefined
+      return {
+        type: 'controlCharacter',
+        params: {
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+        },
+      }
+    }
+    case 'releaseCharacter':
+      return {
+        type: 'releaseCharacter',
+        params: {},
+      }
     case 'debus':
       return {
         type: 'debus',
@@ -1344,6 +1380,20 @@ export function ensureBehaviorParams(
           },
         }
       }
+      case 'controlCharacter': {
+        const params = script.params as Partial<ControlCharacterBehaviorParams> | undefined
+        return {
+          type: 'controlCharacter',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          },
+        }
+      }
+      case 'releaseCharacter':
+        return {
+          type: 'releaseCharacter',
+          params: {},
+        }
       case 'debus':
         return {
           type: 'debus',
