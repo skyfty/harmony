@@ -37,9 +37,10 @@ import {
   getPunchProgress,
   trackAnalyticsEvent,
 } from '@harmony/utils/mini-client';
-import { parseQueryString } from '@harmony/utils';
+import { buildQueryString, parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
+import usePageShare from '@/utils/usePageShare';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -51,7 +52,18 @@ const enterAt = ref<number>(0);
 const selectedVehicleIdentifier = ref<string>('');
 const backButtonTop = ref<number>(8);
 const initialPunchedNodeIds = ref<string[]>([]);
+const shareQuery = ref<Record<string, string>>({});
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
+const { registerShare } = usePageShare({
+  title: '景区导览',
+  path: '/pages/scenery/index',
+});
+
+registerShare(() => ({
+  title: scenicTitle.value || '景区导览',
+  path: `/pages/scenery/index${buildQueryString(shareQuery.value)}`,
+}));
+
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
   if (!vehicleIdentifier) {
@@ -174,6 +186,15 @@ onLoad((query: Record<string, unknown> | undefined) => {
   selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
     ? decodeQueryValue(mergedRecord.vehicleIdentifier)
     : getSelectedVehicleIdentifier();
+  shareQuery.value = {
+    projectId: projectId.value,
+    packageUrl: packageUrl.value,
+    packageCacheKey: packageCacheKey.value,
+    scenicTitle: scenicTitle.value,
+    sceneSpotId: sceneSpotId.value,
+    sceneId: sceneId.value,
+    vehicleIdentifier: selectedVehicleIdentifier.value,
+  };
 
   enterAt.value = Date.now();
   void loadPunchProgress();

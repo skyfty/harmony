@@ -64,6 +64,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
+import { buildQueryString } from '@harmony/utils'
 import { guardedNavigateTo } from '@/utils/navigationGuard'
 
 import BottomNav from '@/components/BottomNav.vue'
@@ -72,12 +74,20 @@ import PageHeader from '@/components/PageHeader.vue'
 import ScenicCard from '@/components/ScenicCard.vue'
 import { listScenics } from '@/api/mini'
 import { redirectToNav, type NavKey } from '@/utils/navKey'
+import usePageShare from '@/utils/usePageShare'
 import type { ScenicSummary } from '@/types/scenic'
 
+type ScenicListItem = ScenicSummary & {
+  isFeatured?: boolean
+  isHot?: boolean
+}
+
 const keyword = ref('')
-const scenics = ref<ScenicSummary[]>([])
-const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicSummary[]>
-const activeFilter = ref<'all' | 'hot' | 'featured'>('all')
+const scenics = ref<ScenicListItem[]>([])
+const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicListItem[]>
+type ScenicFilter = 'all' | 'hot' | 'featured'
+
+const activeFilter = ref<ScenicFilter>('all')
 
 const headerTitle = computed(() => {
   if (activeFilter.value === 'hot') return '热门景区'
@@ -85,7 +95,28 @@ const headerTitle = computed(() => {
   return '全部景区'
 })
 
-function setFilter(f: 'all' | 'hot' | 'featured') {
+const { registerShare } = usePageShare({
+  title: '全部景区',
+  path: '/pages/scenic/index',
+})
+
+registerShare(() => ({
+  title: keyword.value.trim() ? `${headerTitle.value} - ${keyword.value.trim()}` : headerTitle.value,
+  path: `/pages/scenic/index${buildQueryString({
+    q: keyword.value.trim() || undefined,
+    filter: activeFilter.value !== 'all' ? activeFilter.value : undefined,
+  })}`,
+}))
+
+onLoad((query) => {
+  const nextKeyword = typeof query?.q === 'string' ? query.q.trim() : ''
+  const nextFilter = query?.filter === 'hot' || query?.filter === 'featured' ? query.filter : 'all'
+
+  keyword.value = nextKeyword
+  activeFilter.value = nextFilter
+})
+
+function setFilter(f: ScenicFilter) {
   activeFilter.value = f
 }
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -97,7 +128,7 @@ async function reload(searchKeyword?: string) {
 }
 
 onMounted(() => {
-  void reload().catch(() => {
+  void reload(keyword.value).catch(() => {
     void uni.showToast({ title: '加载失败', icon: 'none' })
   })
 })
