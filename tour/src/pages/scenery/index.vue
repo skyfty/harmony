@@ -38,9 +38,9 @@ import {
   trackAnalyticsEvent,
 } from '@harmony/utils/mini-client';
 import { parseQueryString } from '@harmony/utils';
+import { clearSceneryShareContext, setSceneryShareContext } from '@harmony/utils/share';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
-import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
