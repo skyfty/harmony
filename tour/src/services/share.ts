@@ -1,6 +1,5 @@
-type ShareApp = {
-  mixin: (mixinOptions: Record<string, unknown>) => void;
-};
+import type { App } from 'vue';
+import { buildQueryString } from '@harmony/utils';
 
 export type ShareMessage = {
   title: string;
@@ -29,35 +28,10 @@ const defaultHomeTimelineQuery = '__shareTarget=home';
 
 let sceneryShareContext: ShareContext | null = null;
 
-function getUniApi(): {
-  showShareMenu?: (options: { menus?: string[] }) => unknown;
-  reLaunch?: (options: { url: string }) => unknown;
-} {
-  return globalThis as typeof globalThis & {
-    showShareMenu?: (options: { menus?: string[] }) => unknown;
-    reLaunch?: (options: { url: string }) => unknown;
-  } as unknown as {
-    showShareMenu?: (options: { menus?: string[] }) => unknown;
-    reLaunch?: (options: { url: string }) => unknown;
-  };
-}
-
 function getCurrentRoute(): string {
   const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
   const currentPage = pages.length > 0 ? pages[pages.length - 1] : null;
   return typeof currentPage?.route === 'string' ? currentPage.route : '';
-}
-
-function buildQueryString(params: Record<string, string>): string {
-  const entries = Object.entries(params).filter(([, value]) => String(value).length > 0);
-  if (entries.length === 0) {
-    return '';
-  }
-
-  const query = entries
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join('&');
-  return `?${query}`;
 }
 
 function buildShareMessage(): ShareMessage {
@@ -100,7 +74,7 @@ function handleShareLaunch(query: Record<string, unknown> | undefined): void {
     return;
   }
 
-  getUniApi().reLaunch?.({ url: '/pages/home/index' });
+  uni.reLaunch({ url: '/pages/home/index' });
 }
 
 export function setSceneryShareContext(context: ShareContext): void {
@@ -111,15 +85,17 @@ export function clearSceneryShareContext(): void {
   sceneryShareContext = null;
 }
 
-export function installShareSupport(app: ShareApp): void {
+export function installShareSupport(app: App): void {
   app.mixin({
     onLoad(query?: Record<string, unknown>) {
       handleShareLaunch(query);
     },
     onShow() {
-      getUniApi().showShareMenu?.({
-        menus: ['shareAppMessage', 'shareTimeline'],
-      });
+      if (typeof uni.showShareMenu === 'function') {
+        void uni.showShareMenu({
+          menus: ['shareAppMessage', 'shareTimeline'],
+        });
+      }
     },
     onShareAppMessage() {
       return buildShareMessage();
