@@ -1,15 +1,17 @@
 // #ifndef H5
 import '@minisheep/mini-program-polyfill-core/wechat-polyfill';
-// import '@minisheep/mini-program-polyfill-core/xml-addon'; // Èç¹ûÏîÄ¿ÖÐÊ¹ÓÃÁËÐèÒª DOMParser Ö§³ÖµÄ²¿·Ö£¬Ò²¿ÉÒÔºóÐø°´Ðèµ¼Èë£¬±ÜÃâÓ°ÏìÖ÷°ü´óÐ¡
+// import '@minisheep/mini-program-polyfill-core/xml-addon'; // ï¿½ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Ê¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òª DOMParser Ö§ï¿½ÖµÄ²ï¿½ï¿½Ö£ï¿½Ò²ï¿½ï¿½ï¿½Ôºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½èµ¼ï¿½ë£¬ï¿½ï¿½ï¿½ï¿½Ó°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¡
 // #endif
 import { createSSRApp } from "vue";
 import { createPinia } from 'pinia';
 import App from "./App.vue";
+import { installShareSupport } from '@/services/share';
 
 export function createApp() {
   const app = createSSRApp(App);
   const pinia = createPinia();
   app.use(pinia);
+  installShareSupport(app);
   return {
     app,
     pinia,
