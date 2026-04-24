@@ -26,6 +26,8 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
+  GROUND_HEIGHT_UNSET_VALUE,
+  getGroundVertexIndex,
   createPrimitiveMesh,
   resolveServerAssetDownloadUrl,
   WATER_SURFACE_MESH_USERDATA_KEY,
@@ -163,7 +165,7 @@ import { createBehaviorSequenceId } from '@schema/behaviors/definitions'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 
 import { useAssetCacheStore } from './assetCacheStore'
-import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
+import { useGroundHeightmapStore, type GroundPlanningHeightRegion, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from './groundPaintStore'
 import { useUiStore } from './uiStore'
@@ -1791,6 +1793,7 @@ function commitGroundHeightMapRuntimeEdit(
   nodeId: string,
   definition: GroundDynamicMesh,
   manualHeightMap: Float64Array,
+  manualRegion: GroundPlanningHeightRegion | null = null,
   dirtyBounds: WorldBoundsXZ | null = null,
 ): boolean {
   const target = findNodeById(store.nodes, nodeId)
@@ -1808,7 +1811,11 @@ function commitGroundHeightMapRuntimeEdit(
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
-  useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
+  if (manualRegion) {
+    useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualRegion)
+  } else {
+    useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
+  }
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -1833,7 +1840,7 @@ function refreshGroundOptimizedMeshRuntime(
   const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(runtimeDefinition)
   markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
   markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
-  useGroundHeightmapStore().replaceManualHeightMap(nodeId, runtimeDefinition, runtimeDefinition.manualHeightMap)
+  useGroundHeightmapStore().syncRuntimeGroundState(nodeId, runtimeDefinition)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
@@ -2491,6 +2498,35 @@ function computeGroundDirtyBoundsFromRegionXZ(
     maxX: Math.max(worldX0, worldX1),
     minZ: Math.min(worldZ0, worldZ1),
     maxZ: Math.max(worldZ0, worldZ1),
+  }
+}
+
+function buildGroundManualRegionFromHeightMap(
+  definition: GroundRuntimeDynamicMesh,
+  bounds: GroundRegionBounds,
+): GroundPlanningHeightRegion | null {
+  const normalized = groundUtils.normalizeGroundBounds(definition, bounds)
+  const vertexRows = normalized.maxRow - normalized.minRow + 1
+  const vertexColumns = normalized.maxColumn - normalized.minColumn + 1
+  if (!(vertexRows > 0) || !(vertexColumns > 0)) {
+    return null
+  }
+  const values = new Float64Array(vertexRows * vertexColumns)
+  for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
+    const rowOffset = (row - normalized.minRow) * vertexColumns
+    for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
+      const source = Number(definition.manualHeightMap[getGroundVertexIndex(definition.columns, row, column)])
+      values[rowOffset + (column - normalized.minColumn)] = Number.isFinite(source) ? source : GROUND_HEIGHT_UNSET_VALUE
+    }
+  }
+  return {
+    startRow: normalized.minRow,
+    endRow: normalized.maxRow,
+    startColumn: normalized.minColumn,
+    endColumn: normalized.maxColumn,
+    vertexRows,
+    vertexColumns,
+    values,
   }
 }
 
@@ -8774,12 +8810,14 @@ export const useSceneStore = defineStore('scene', {
       if (!result.changed) {
         return false
       }
+      const manualRegion = buildGroundManualRegionFromHeightMap(currentDefinition, bounds)
 
       return commitGroundHeightMapRuntimeEdit(
         this,
         groundNode.id,
         currentDefinition,
         result.definition.manualHeightMap,
+        manualRegion,
         dirtyBounds,
       )
     },
