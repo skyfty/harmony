@@ -74,7 +74,6 @@ import PageHeader from '@/components/PageHeader.vue'
 import ScenicCard from '@/components/ScenicCard.vue'
 import { listScenics } from '@/api/mini'
 import { redirectToNav, type NavKey } from '@/utils/navKey'
-import usePageShare from '@/utils/usePageShare'
 import type { ScenicSummary } from '@/types/scenic'
 
 type ScenicListItem = ScenicSummary & {
@@ -94,19 +93,6 @@ const headerTitle = computed(() => {
   if (activeFilter.value === 'featured') return '精选景区'
   return '全部景区'
 })
-
-const { registerShare } = usePageShare({
-  title: '全部景区',
-  path: '/pages/scenic/index',
-})
-
-registerShare(() => ({
-  title: keyword.value.trim() ? `${headerTitle.value} - ${keyword.value.trim()}` : headerTitle.value,
-  path: `/pages/scenic/index${buildQueryString({
-    q: keyword.value.trim() || undefined,
-    filter: activeFilter.value !== 'all' ? activeFilter.value : undefined,
-  })}`,
-}))
 
 onLoad((query) => {
   const nextKeyword = typeof query?.q === 'string' ? query.q.trim() : ''

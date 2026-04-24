@@ -125,7 +125,6 @@ import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import { listAchievements } from '@/api/mini/achievements';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
-import usePageShare from '@/utils/usePageShare';
 
 defineOptions({
   name: 'AchievementsPage',
@@ -148,17 +147,6 @@ type AchievementTab = 'medals' | 'records';
 const activeTab = ref<AchievementTab>('medals');
 const medals = ref<MedalItem[]>([]);
 const scenicCheckinProgresses = ref<ScenicCardItem[]>([]);
-const { registerShare } = usePageShare({
-  title: '打卡成就',
-  path: '/pages/achievements/index',
-});
-
-registerShare(() => ({
-  title: activeTab.value === 'records' ? '打卡记录' : '打卡成就',
-  path: `/pages/achievements/index${buildQueryString({
-    tab: activeTab.value !== 'medals' ? activeTab.value : undefined,
-  })}`,
-}));
 
 onLoad((query) => {
   if (query?.tab === 'records') {

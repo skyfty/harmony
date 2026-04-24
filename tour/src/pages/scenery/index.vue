@@ -40,7 +40,6 @@ import {
 import { buildQueryString, parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
-import usePageShare from '@/utils/usePageShare';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -54,15 +53,6 @@ const backButtonTop = ref<number>(8);
 const initialPunchedNodeIds = ref<string[]>([]);
 const shareQuery = ref<Record<string, string>>({});
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
-const { registerShare } = usePageShare({
-  title: '景区导览',
-  path: '/pages/scenery/index',
-});
-
-registerShare(() => ({
-  title: scenicTitle.value || '景区导览',
-  path: `/pages/scenery/index${buildQueryString(shareQuery.value)}`,
-}));
 
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
