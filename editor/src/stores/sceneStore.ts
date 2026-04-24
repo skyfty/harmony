@@ -1816,6 +1816,12 @@ function commitGroundHeightMapRuntimeEdit(
   } else {
     useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
   }
+  useGroundHeightmapStore().markOptimizedMeshDirtyBounds(nodeId, definition, manualRegion ?? {
+    startRow: 0,
+    endRow: definition.rows,
+    startColumn: 0,
+    endColumn: definition.columns,
+  })
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -1836,11 +1842,21 @@ function refreshGroundOptimizedMeshRuntime(
     return false
   }
 
-  const runtimeDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
-  const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(runtimeDefinition)
+  const groundHeightmapStore = useGroundHeightmapStore()
+  const runtimeDefinition = groundHeightmapStore.resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
+  const runtimeState = groundHeightmapStore.getNodeGroundHeightmap(nodeId)
+  const heightSampler = groundHeightmapStore.resolveGroundRuntimeHeightSampler(nodeId, target.dynamicMesh)
+  const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(
+    runtimeDefinition,
+    target.dynamicMesh.optimizedMesh,
+    {},
+    runtimeState?.optimizedMeshDirtyBounds ?? null,
+    heightSampler,
+  )
   markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
   markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
-  useGroundHeightmapStore().syncRuntimeGroundState(nodeId, runtimeDefinition)
+  groundHeightmapStore.syncRuntimeGroundState(nodeId, runtimeDefinition)
+  groundHeightmapStore.clearOptimizedMeshDirtyBounds(nodeId, runtimeDefinition)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true

@@ -2,8 +2,10 @@ import { defineStore } from 'pinia'
 import {
   GROUND_HEIGHT_UNSET_VALUE,
   createGroundHeightMap,
+  getGroundVertexCount,
   getGroundVertexIndex,
   resolveGroundTerrainTileKeys,
+  type GroundContourBounds,
   type GroundDynamicMesh,
   type GroundPlanningMetadata,
   type SceneNode,
@@ -43,6 +45,7 @@ export type GroundHeightRuntimeState = {
   tileResolution: number
   tiles: Map<string, GroundHeightTileState>
   planningMetadata: GroundPlanningMetadata | null
+  optimizedMeshDirtyBounds: GroundContourBounds | null
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
@@ -185,6 +188,30 @@ function buildFlatHeightMapFromTiles(
   return target
 }
 
+function createHeightMapViewFromTiles(
+  state: GroundHeightRuntimeState,
+  kind: 'manual' | 'planning',
+): ArrayLike<number> {
+  const length = getGroundVertexCount(state.rows, state.columns)
+  const target = { length }
+  return new Proxy(target, {
+    get(object, property) {
+      if (property === 'length') {
+        return length
+      }
+      if (typeof property === 'string') {
+        const index = Number(property)
+        if (Number.isInteger(index) && index >= 0 && index < length) {
+          const row = Math.floor(index / (state.columns + 1))
+          const column = index % (state.columns + 1)
+          return getTileHeightMapValue(state, kind, row, column)
+        }
+      }
+      return Reflect.get(object, property)
+    },
+  }) as ArrayLike<number>
+}
+
 function syncFlatHeightMapIntoTiles(
   state: GroundHeightRuntimeState,
   source: Float64Array,
@@ -266,6 +293,59 @@ function clonePlanningMetadata(metadata: GroundPlanningMetadata | null | undefin
   }
 }
 
+function cloneGroundContourBounds(bounds: GroundContourBounds | null | undefined): GroundContourBounds | null {
+  if (!bounds) {
+    return null
+  }
+  return {
+    minRow: Math.max(0, Math.trunc(bounds.minRow)),
+    maxRow: Math.max(0, Math.trunc(bounds.maxRow)),
+    minColumn: Math.max(0, Math.trunc(bounds.minColumn)),
+    maxColumn: Math.max(0, Math.trunc(bounds.maxColumn)),
+  }
+}
+
+function mergeGroundContourBounds(
+  current: GroundContourBounds | null | undefined,
+  next: GroundContourBounds | null | undefined,
+): GroundContourBounds | null {
+  const normalizedCurrent = cloneGroundContourBounds(current)
+  const normalizedNext = cloneGroundContourBounds(next)
+  if (!normalizedCurrent) {
+    return normalizedNext
+  }
+  if (!normalizedNext) {
+    return normalizedCurrent
+  }
+  return {
+    minRow: Math.min(normalizedCurrent.minRow, normalizedNext.minRow),
+    maxRow: Math.max(normalizedCurrent.maxRow, normalizedNext.maxRow),
+    minColumn: Math.min(normalizedCurrent.minColumn, normalizedNext.minColumn),
+    maxColumn: Math.max(normalizedCurrent.maxColumn, normalizedNext.maxColumn),
+  }
+}
+
+function expandGroundContourBounds(
+  bounds: { startRow: number; endRow: number; startColumn: number; endColumn: number },
+  rows: number,
+  columns: number,
+  padding = 1,
+): GroundContourBounds | null {
+  const minRow = Math.max(0, Math.min(rows, Math.min(bounds.startRow, bounds.endRow)))
+  const maxRow = Math.max(0, Math.min(rows, Math.max(bounds.startRow, bounds.endRow)))
+  const minColumn = Math.max(0, Math.min(columns, Math.min(bounds.startColumn, bounds.endColumn)))
+  const maxColumn = Math.max(0, Math.min(columns, Math.max(bounds.startColumn, bounds.endColumn)))
+  if (maxRow < minRow || maxColumn < minColumn) {
+    return null
+  }
+  return {
+    minRow: Math.max(0, Math.floor(minRow) - padding),
+    maxRow: Math.min(rows, Math.ceil(maxRow) + padding),
+    minColumn: Math.max(0, Math.floor(minColumn) - padding),
+    maxColumn: Math.min(columns, Math.ceil(maxColumn) + padding),
+  }
+}
+
 function createRuntimeState(nodeId: string, definition: GroundDynamicMesh): GroundHeightRuntimeState {
   return {
     nodeId,
@@ -274,6 +354,7 @@ function createRuntimeState(nodeId: string, definition: GroundDynamicMesh): Grou
     tileResolution: resolveRuntimeTileResolution(definition),
     tiles: new Map<string, GroundHeightTileState>(),
     planningMetadata: clonePlanningMetadata(definition.planningMetadata ?? null),
+    optimizedMeshDirtyBounds: null,
     runtimeHydratedHeightState: (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState,
     runtimeDisableOptimizedChunks: (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks,
     runtimeLoadedTileKeys: (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition),
@@ -326,6 +407,7 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   syncFlatHeightMapIntoTiles(created, runtimeDefinition.manualHeightMap, 'manual')
   syncFlatHeightMapIntoTiles(created, runtimeDefinition.planningHeightMap, 'planning')
   created.planningMetadata = clonePlanningMetadata(runtimeDefinition.planningMetadata ?? null)
+  created.optimizedMeshDirtyBounds = null
   created.runtimeHydratedHeightState = runtimeDefinition.runtimeHydratedHeightState
   created.runtimeDisableOptimizedChunks = runtimeDefinition.runtimeDisableOptimizedChunks
   created.runtimeLoadedTileKeys = runtimeDefinition.runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
@@ -375,6 +457,35 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
     getNodeGroundHeightmap(nodeId: string): GroundHeightRuntimeState | null {
       return runtimeGroundHeightmaps.get(nodeId) ?? null
     },
+    resolveGroundRuntimeHeightSampler(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+    ): GroundHeightSidecarSampler {
+      const state = ensureNodeRuntimeState(nodeId, definition)
+      return {
+        rows: state.rows,
+        columns: state.columns,
+        getManualHeight: (row, column) => getTileHeightMapValue(state, 'manual', row, column),
+        getPlanningHeight: (row, column) => getTileHeightMapValue(state, 'planning', row, column),
+      }
+    },
+    markOptimizedMeshDirtyBounds(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+      bounds: { startRow: number; endRow: number; startColumn: number; endColumn: number } | null,
+    ): GroundHeightRuntimeState {
+      const state = ensureNodeRuntimeState(nodeId, definition)
+      state.optimizedMeshDirtyBounds = mergeGroundContourBounds(
+        state.optimizedMeshDirtyBounds,
+        bounds ? expandGroundContourBounds(bounds, definition.rows, definition.columns, 1) : null,
+      )
+      return state
+    },
+    clearOptimizedMeshDirtyBounds(nodeId: string, definition: GroundDynamicMesh): GroundHeightRuntimeState {
+      const state = ensureNodeRuntimeState(nodeId, definition)
+      state.optimizedMeshDirtyBounds = null
+      return state
+    },
     ensureNodeGroundHeightmap(nodeId: string, definition: GroundDynamicMesh): GroundHeightRuntimeState {
       return ensureNodeRuntimeState(nodeId, definition)
     },
@@ -387,6 +498,22 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
         ...definition,
         manualHeightMap: buildFlatHeightMapFromTiles(state, 'manual'),
         planningHeightMap: buildFlatHeightMapFromTiles(state, 'planning'),
+        planningMetadata: clonePlanningMetadata(state.planningMetadata ?? definition.planningMetadata ?? null),
+        runtimeHydratedHeightState: state.runtimeHydratedHeightState,
+        runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,
+        runtimeLoadedTileKeys: state.runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition),
+        surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
+      }
+    },
+    resolveGroundRuntimeMeshView(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+    ): GroundRuntimeDynamicMesh {
+      const state = ensureNodeRuntimeState(nodeId, definition)
+      return {
+        ...definition,
+        manualHeightMap: createHeightMapViewFromTiles(state, 'manual') as Float64Array,
+        planningHeightMap: createHeightMapViewFromTiles(state, 'planning') as Float64Array,
         planningMetadata: clonePlanningMetadata(state.planningMetadata ?? definition.planningMetadata ?? null),
         runtimeHydratedHeightState: state.runtimeHydratedHeightState,
         runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,

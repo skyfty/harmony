@@ -550,6 +550,13 @@ export type GroundEffectiveHeightRegion = GroundBaseHeightRegion & {
   heightMax: number
 }
 
+export type GroundHeightFieldSampler = {
+  rows: number
+  columns: number
+  getManualHeight: (row: number, column: number) => number
+  getPlanningHeight: (row: number, column: number) => number
+}
+
 export function sampleGroundEffectiveHeightRegion(
   definition: GroundDynamicMesh,
   minRowInput: number,
@@ -581,6 +588,69 @@ export function sampleGroundEffectiveHeightRegion(
       const planningRaw = planningHeightMap[heightIndex]
       const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
       const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+      const effective = planning + (manual - base)
+      values[offset] = effective
+      heightMin = Math.min(heightMin, effective)
+      heightMax = Math.max(heightMax, effective)
+    }
+  }
+
+  return {
+    minRow,
+    maxRow,
+    minColumn,
+    maxColumn,
+    stride,
+    values,
+    heightMin,
+    heightMax,
+  }
+}
+
+export function resolveGroundEffectiveHeightAtVertexFromSampler(
+  definition: GroundDynamicMesh,
+  sampler: GroundHeightFieldSampler,
+  row: number,
+  column: number,
+): number {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
+  const manualRaw = sampler.getManualHeight(row, column)
+  const manual = Number.isFinite(manualRaw) ? manualRaw : base
+  const planningRaw = sampler.getPlanningHeight(row, column)
+  const planning = Number.isFinite(planningRaw) ? planningRaw : base
+  return planning + (manual - base)
+}
+
+export function sampleGroundEffectiveHeightRegionFromSampler(
+  definition: GroundDynamicMesh,
+  sampler: GroundHeightFieldSampler,
+  minRowInput: number,
+  maxRowInput: number,
+  minColumnInput: number,
+  maxColumnInput: number,
+): GroundEffectiveHeightRegion {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const baseRegion = computeGroundBaseHeightRegion(runtimeDefinition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
+  const { minRow, maxRow, minColumn, maxColumn, stride, values: baseValues } = baseRegion
+  const total = baseValues.length
+  const values = new Float32Array(total)
+  let heightMin = 0
+  let heightMax = 0
+
+  if (stride <= 0 || maxRow < minRow || maxColumn < minColumn) {
+    return { ...baseRegion, values, heightMin, heightMax }
+  }
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const baseOffset = (row - minRow) * stride
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const offset = baseOffset + (column - minColumn)
+      const base = baseValues[offset] ?? 0
+      const manualRaw = sampler.getManualHeight(row, column)
+      const planningRaw = sampler.getPlanningHeight(row, column)
+      const manual = Number.isFinite(manualRaw) ? manualRaw : base
+      const planning = Number.isFinite(planningRaw) ? planningRaw : base
       const effective = planning + (manual - base)
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)

@@ -1,5 +1,6 @@
-import type { GroundDynamicMesh, SceneJsonExportDocument, SceneNode } from '@schema'
-import { buildGroundOptimizedMeshData, type GroundOptimizedMeshBuildOptions } from '@schema/groundOptimizedMesh'
+import type { GroundContourBounds, GroundDynamicMesh, SceneJsonExportDocument, SceneNode } from '@schema'
+import { buildGroundOptimizedMeshData, buildGroundOptimizedMeshDataFromSampler, rebuildGroundOptimizedMeshData, type GroundOptimizedMeshBuildOptions } from '@schema/groundOptimizedMesh'
+import type { GroundHeightFieldSampler } from '@schema/groundMesh'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
@@ -48,9 +49,14 @@ export function ensureOptimizedGroundMeshOnDocument(
 
 export function rebuildOptimizedGroundMeshForDefinition(
   definition: GroundDynamicMesh,
+  previousMesh: GroundDynamicMesh['optimizedMesh'] | null | undefined,
   options: GroundOptimizedMeshBuildOptions = {},
+  dirtyBounds: GroundContourBounds | null = null,
+  sampler: GroundHeightFieldSampler | null = null,
 ) {
-  const optimizedMesh = buildGroundOptimizedMeshData(definition, options)
+  const optimizedMesh = sampler
+    ? buildGroundOptimizedMeshDataFromSampler(definition, sampler, options)
+    : rebuildGroundOptimizedMeshData(definition, previousMesh ?? null, options, dirtyBounds)
   definition.optimizedMesh = optimizedMesh
   return optimizedMesh
 }

@@ -699,6 +699,12 @@ function syncPlanningHeightState(
     definition.planningHeightMap,
     definition.planningMetadata ?? null,
   )
+  useGroundHeightmapStore().markOptimizedMeshDirtyBounds(groundNode.id, groundNode.dynamicMesh as GroundDynamicMesh, {
+    startRow: 0,
+    endRow: definition.rows,
+    startColumn: 0,
+    endColumn: definition.columns,
+  })
 }
 
 function syncPlanningHeightRegionState(
@@ -728,6 +734,7 @@ function syncPlanningHeightRegionState(
     region,
     definition.planningMetadata ?? null,
   )
+  groundHeightmapStore.markOptimizedMeshDirtyBounds(groundNode.id, definition, region)
   return groundHeightmapStore.resolveGroundRuntimeMesh(groundNode.id, definition)
 }
 
