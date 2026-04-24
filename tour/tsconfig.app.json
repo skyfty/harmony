@@ -1,6 +1,6 @@
 {
   "extends": "@vue/tsconfig/tsconfig.json",
-  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue", "../schema/**/*.ts"],
+  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue", "src/services/**/*.ts", "../schema/**/*.ts"],
   "exclude": ["src/**/__tests__/*"],
   "compilerOptions": {
     "lib": [
