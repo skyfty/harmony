@@ -192,8 +192,16 @@ export default class Loader {
                     return;
                   }
                   scene.name = filename;
-                  if (Array.isArray(result?.animations) && Array.isArray((scene as any).animations)) {
-                    scene.animations.push(...result.animations);
+                  const animations = Array.isArray(result?.animations) ? result.animations : [];
+                  if (animations.length) {
+                    (scene as unknown as { animations?: THREE.AnimationClip[] }).animations = animations;
+                    scene.userData = scene.userData ?? {};
+                    scene.userData.__animations = animations.map((clip: THREE.AnimationClip) => clip.name);
+                    console.info('[Loader][GLTF] parsed animations', {
+                      filename,
+                      animationCount: animations.length,
+                      animationNames: animations.map((clip: THREE.AnimationClip) => clip.name),
+                    });
                   }
                   this.emit('loaded', scene);
                 } catch (error) {

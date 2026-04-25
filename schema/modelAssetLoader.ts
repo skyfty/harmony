@@ -76,5 +76,19 @@ export async function loadNodeObject(
   if (!target) {
     return null
   }
-  return cloneImportedObject(target)
+  const cloned = cloneImportedObject(target)
+  const sourceAnimations = (base as unknown as { animations?: THREE.AnimationClip[] })?.animations ?? []
+  if (sourceAnimations.length && !(cloned as unknown as { animations?: THREE.AnimationClip[] })?.animations?.length) {
+    const animations = sourceAnimations.map((clip) => clip.clone())
+    ;(cloned as unknown as { animations?: THREE.AnimationClip[] }).animations = animations
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = animations.map((clip) => clip.name)
+    console.info('[ModelAssetLoader] Applied asset animations to node object', {
+      assetId,
+      objectPath: metadata?.objectPath ?? null,
+      targetName: target.name ?? null,
+      animationNames: animations.map((clip) => clip.name),
+    })
+  }
+  return cloned
 }

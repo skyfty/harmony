@@ -30,7 +30,6 @@ export interface CharacterAnimationBinding {
 
 export interface CharacterControllerComponentProps {
   label: string
-  enabledByDefault: boolean
   walkSpeed: number
   runSpeed: number
   sprintSpeed: number
@@ -68,10 +67,6 @@ function sanitizeString(value: unknown): string {
     return ''
   }
   return value.trim()
-}
-
-function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === 'boolean' ? value : fallback
 }
 
 function sanitizeNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
@@ -116,7 +111,6 @@ export function clampCharacterControllerComponentProps(
   const animationBindings = DEFAULT_ANIMATION_SLOTS.map((slot) => bindings.get(slot) ?? normalizeAnimationBinding(null, slot))
   return {
     label: sanitizeString(props?.label) || 'Character Controller',
-    enabledByDefault: sanitizeBoolean(props?.enabledByDefault, true),
     walkSpeed: sanitizeNumber(props?.walkSpeed, 2.4, 0, 100),
     runSpeed: sanitizeNumber(props?.runSpeed, 4.8, 0, 100),
     sprintSpeed: sanitizeNumber(props?.sprintSpeed, 6.4, 0, 100),
@@ -136,7 +130,6 @@ export function cloneCharacterControllerComponentProps(
 ): CharacterControllerComponentProps {
   return {
     label: props.label,
-    enabledByDefault: props.enabledByDefault,
     walkSpeed: props.walkSpeed,
     runSpeed: props.runSpeed,
     sprintSpeed: props.sprintSpeed,
@@ -181,7 +174,6 @@ const characterControllerComponentDefinition: ComponentDefinition<CharacterContr
   createDefaultProps(node: SceneNode) {
     return clampCharacterControllerComponentProps({
       label: node.name?.trim().length ? node.name : 'Character Controller',
-      enabledByDefault: true,
     })
   },
   createInstance(context) {
