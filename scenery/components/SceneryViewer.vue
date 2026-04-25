@@ -510,8 +510,9 @@ import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
   setInfiniteGroundHiddenChunkKeys,
   syncGroundChunkLoadingMode,
+  sampleGroundHeight,
 } from '@harmony/schema/groundMesh';
-import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
+import { clearInfiniteGroundChunkMeshes, resolveVisibleInfiniteGroundChunkManifestRecords, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -625,7 +626,6 @@ import {
   deserializeGroundChunkData,
   GROUND_TERRAIN_PACKAGE_FORMAT,
   GROUND_TERRAIN_PACKAGE_VERSION,
-  resolveGroundChunkCoordFromWorldPosition,
 } from '@harmony/schema/index';
 import { isPointInsideRegionXZ } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
@@ -4811,6 +4811,7 @@ function ensureInfiniteGroundChunkCollisionBody(
 function syncViewerInfiniteGroundChunkCollisions(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
+  activeCamera: THREE.PerspectiveCamera,
 ): void {
   if (!physicsEnvironmentEnabled.value || groundDefinition.terrainMode !== 'infinite') {
     clearInfiniteGroundChunkCollisionBodies();
@@ -4831,35 +4832,8 @@ function syncViewerInfiniteGroundChunkCollisions(
     infiniteGroundChunkCollisionManifestRevision = state.manifestRevision;
   }
 
-  const radiusCandidate = groundDefinition.collisionRadiusChunks;
-  const collisionRadiusChunks = typeof radiusCandidate === 'number' && Number.isFinite(radiusCandidate)
-    ? Math.max(0, Math.trunc(radiusCandidate))
-    : 0;
-  const chunkSizeMeters = typeof groundDefinition.chunkSizeMeters === 'number' && Number.isFinite(groundDefinition.chunkSizeMeters) && groundDefinition.chunkSizeMeters > 0
-    ? groundDefinition.chunkSizeMeters
-    : 100;
-  const desiredKeys = new Set<string>();
-
-  vehicleInstances.forEach((instance) => {
-    const chassisBody = instance.vehicle?.chassisBody ?? null;
-    if (!chassisBody) {
-      return;
-    }
-    const localCenter = groundObject.worldToLocal(new THREE.Vector3(
-      chassisBody.position.x,
-      chassisBody.position.y,
-      chassisBody.position.z,
-    ));
-    const centerCoord = resolveGroundChunkCoordFromWorldPosition(localCenter.x, localCenter.z, chunkSizeMeters);
-    for (let chunkZ = centerCoord.chunkZ - collisionRadiusChunks; chunkZ <= centerCoord.chunkZ + collisionRadiusChunks; chunkZ += 1) {
-      for (let chunkX = centerCoord.chunkX - collisionRadiusChunks; chunkX <= centerCoord.chunkX + collisionRadiusChunks; chunkX += 1) {
-        const key = `${chunkX}:${chunkZ}`;
-        if (state.manifestRecords[key]) {
-          desiredKeys.add(key);
-        }
-      }
-    }
-  });
+  const visibleRecords = resolveVisibleInfiniteGroundChunkManifestRecords(groundObject, groundDefinition, activeCamera, state.manifestRecords);
+  const desiredKeys = new Set(visibleRecords.map((record) => record.key));
 
   infiniteGroundChunkCollisionDesiredKeys.clear();
   desiredKeys.forEach((chunkKey) => {
@@ -4882,11 +4856,7 @@ function syncViewerInfiniteGroundChunkCollisions(
     return;
   }
 
-  desiredKeys.forEach((chunkKey) => {
-    const record = state.manifestRecords[chunkKey] ?? null;
-    if (!record) {
-      return;
-    }
+  visibleRecords.forEach((record) => {
     ensureInfiniteGroundChunkCollisionBody(groundObject, groundDefinition, state, record);
   });
 }
@@ -12610,7 +12580,7 @@ function startRenderLoop(
           if (cachedGroundBeforePhysics) {
             const groundObject = nodeObjectMap.get(cachedGroundBeforePhysics.nodeId) ?? null;
             if (groundObject) {
-              syncViewerInfiniteGroundChunkCollisions(groundObject, cachedGroundBeforePhysics.dynamicMesh);
+              syncViewerInfiniteGroundChunkCollisions(groundObject, cachedGroundBeforePhysics.dynamicMesh, camera);
             }
           }
           stepPhysicsWorld(deltaSeconds);

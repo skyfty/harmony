@@ -183,7 +183,7 @@ function decodeInfiniteGroundChunkHeights(buffer: ArrayBuffer | null, resolution
   return new Float32Array(buffer)
 }
 
-function resolveVisibleManifestChunkRecords(
+export function resolveVisibleInfiniteGroundChunkManifestRecords(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
   camera: THREE.Camera,
@@ -230,7 +230,7 @@ export function syncInfiniteGroundChunkMeshes(params: SyncInfiniteGroundChunkMes
     runtime.revision = params.manifestRevision
   }
 
-  const visibleRecords = resolveVisibleManifestChunkRecords(
+  const visibleRecords = resolveVisibleInfiniteGroundChunkManifestRecords(
     params.groundObject,
     params.groundDefinition,
     params.camera,

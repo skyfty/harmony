@@ -41,7 +41,6 @@ import {
 	type GroundDynamicMesh,
 	type GroundChunkManifestRecord,
 	deserializeGroundChunkData,
-	resolveGroundChunkCoordFromWorldPosition,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
@@ -92,7 +91,7 @@ import {
 	syncGroundChunkLoadingMode,
 	sampleGroundHeight,
 } from '@schema/groundMesh'
-import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
+import { clearInfiniteGroundChunkMeshes, resolveVisibleInfiniteGroundChunkManifestRecords, syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -2196,7 +2195,11 @@ function ensurePreviewInfiniteGroundChunkCollisionBody(
 	previewGroundChunkCollisionPendingLoads.set(record.key, pending)
 }
 
-function syncPreviewInfiniteGroundChunkCollisions(groundObject: THREE.Object3D, groundDefinition: GroundRuntimeDynamicMesh): void {
+function syncPreviewInfiniteGroundChunkCollisions(
+	groundObject: THREE.Object3D,
+	groundDefinition: GroundRuntimeDynamicMesh,
+	activeCamera: THREE.PerspectiveCamera,
+): void {
 	if (!physicsEnvironmentEnabled.value || groundDefinition.terrainMode !== 'infinite') {
 		clearPreviewInfiniteGroundChunkCollisionBodies()
 		return
@@ -2216,35 +2219,8 @@ function syncPreviewInfiniteGroundChunkCollisions(groundObject: THREE.Object3D, 
 		previewGroundChunkCollisionManifestRevision = state.manifestRevision
 	}
 
-	const radiusCandidate = groundDefinition.collisionRadiusChunks
-	const collisionRadiusChunks = typeof radiusCandidate === 'number' && Number.isFinite(radiusCandidate)
-		? Math.max(0, Math.trunc(radiusCandidate))
-		: 0
-	const chunkSizeMeters = typeof groundDefinition.chunkSizeMeters === 'number' && Number.isFinite(groundDefinition.chunkSizeMeters) && groundDefinition.chunkSizeMeters > 0
-		? groundDefinition.chunkSizeMeters
-		: 100
-	const desiredKeys = new Set<string>()
-
-	vehicleInstances.forEach((instance) => {
-		const chassisBody = instance.vehicle?.chassisBody ?? null
-		if (!chassisBody) {
-			return
-		}
-		const localCenter = groundObject.worldToLocal(new THREE.Vector3(
-			chassisBody.position.x,
-			chassisBody.position.y,
-			chassisBody.position.z,
-		))
-		const centerCoord = resolveGroundChunkCoordFromWorldPosition(localCenter.x, localCenter.z, chunkSizeMeters)
-		for (let chunkZ = centerCoord.chunkZ - collisionRadiusChunks; chunkZ <= centerCoord.chunkZ + collisionRadiusChunks; chunkZ += 1) {
-			for (let chunkX = centerCoord.chunkX - collisionRadiusChunks; chunkX <= centerCoord.chunkX + collisionRadiusChunks; chunkX += 1) {
-				const key = `${chunkX}:${chunkZ}`
-				if (state.manifestRecords[key]) {
-					desiredKeys.add(key)
-				}
-			}
-		}
-	})
+	const visibleRecords = resolveVisibleInfiniteGroundChunkManifestRecords(groundObject, groundDefinition, activeCamera, state.manifestRecords)
+	const desiredKeys = new Set(visibleRecords.map((record) => record.key))
 
 	previewGroundChunkCollisionDesiredKeys.clear()
 	desiredKeys.forEach((chunkKey) => {
@@ -2267,11 +2243,7 @@ function syncPreviewInfiniteGroundChunkCollisions(groundObject: THREE.Object3D, 
 		return
 	}
 
-	desiredKeys.forEach((chunkKey) => {
-		const record = state.manifestRecords[chunkKey] ?? null
-		if (!record) {
-			return
-		}
+	visibleRecords.forEach((record) => {
 		ensurePreviewInfiniteGroundChunkCollisionBody(groundObject, groundDefinition, state, record)
 	})
 }
@@ -9370,7 +9342,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			syncPreviewInfiniteGroundChunkCollisions(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
+			syncPreviewInfiniteGroundChunkCollisions(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, camera)
 		}
 	}
 	stepPhysicsWorld(delta)
@@ -9523,7 +9495,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		if (groundObject) {
 			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			syncPreviewInfiniteGroundChunkManifest(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
-			syncPreviewInfiniteGroundChunkCollisions(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
+				syncPreviewInfiniteGroundChunkCollisions(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
