@@ -9,6 +9,7 @@ import type {
 	SceneNode,
 	Vector3Like,
 } from '@schema'
+import { resolveGroundEditCellSize } from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -3500,11 +3501,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const committedDefinition = sculptSessionState.definition
-		const committed = options.sceneStore.commitGroundHeightMapEdit(
-			targetNode.id,
-			committedDefinition,
-			sculptSessionState.heightMap,
-		)
+		const usesLocalEditTiles = resolveGroundEditCellSize(committedDefinition) < Math.max(committedDefinition.cellSize, Number.EPSILON)
+			&& !!committedDefinition.localEditTiles
+			&& Object.keys(committedDefinition.localEditTiles).length > 0
+		const committed = usesLocalEditTiles
+			? options.sceneStore.commitGroundLocalEditTilesEdit(
+				targetNode.id,
+				committedDefinition,
+				committedDefinition.localEditTiles ?? null,
+				sculptSessionState.affectedRegion,
+			)
+			: options.sceneStore.commitGroundHeightMapEdit(
+				targetNode.id,
+				committedDefinition,
+				sculptSessionState.heightMap,
+			)
 		const groundObject = getGroundObject()
 		if (groundObject) {
 			options.onSculptCommitApplied?.({ groundObject, definition: committedDefinition })

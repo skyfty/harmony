@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { PlanningSceneData, PlanningTerrainDemData } from '@/types/planning-scene-data'
+import { resolveGroundCreationProfile } from '@/stores/groundUtils'
 import { parsePlanningDemFile, demImportResultToTerrainData } from '@/utils/planningDemImport'
 import { buildPlanningDataFromDem, suggestPlanningDemGroundSize } from '@/utils/planningDemSceneSizing'
 import { storePlanningDemBlobByHash } from '@/utils/planningDemStorage'
@@ -46,6 +47,8 @@ const demImportName = ref<string | null>(null)
 const isImportingDem = ref(false)
 const importedDem = computed<PlanningTerrainDemData | null>(() => planningData.value?.terrain?.dem ?? null)
 const suggestedGroundSize = computed(() => (importedDem.value ? suggestPlanningDemGroundSize(importedDem.value) : null))
+const groundCreationProfile = computed(() => resolveGroundCreationProfile(width.value, depth.value))
+const groundCreationWarning = computed(() => groundCreationProfile.value.warningMessage)
 
 function isPlanningDemFile(file: File): boolean {
   const name = file.name.toLowerCase()
@@ -130,6 +133,19 @@ async function handleDemFileChange(event: Event) {
       />
     </v-col>
   </v-row>
+
+  <v-alert
+    v-if="groundCreationWarning"
+    :type="groundCreationProfile.warningLevel === 'severe' ? 'warning' : 'info'"
+    variant="tonal"
+    density="compact"
+    class="mt-3"
+  >
+    {{ groundCreationWarning }}
+    <span v-if="groundCreationProfile.storageMode === 'tiled'">
+      推荐显示单元尺寸：{{ groundCreationProfile.cellSize }}m，局部编辑精度约 {{ groundCreationProfile.editCellSize.toFixed(2) }}m，预计瓦片数：{{ groundCreationProfile.estimatedTileCount }}。
+    </span>
+  </v-alert>
 
   <div class="scene-creator-dem-import">
     <div class="scene-creator-dem-import__header">

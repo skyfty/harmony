@@ -472,10 +472,7 @@ import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetC
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
-  areAllGroundChunksLoaded,
-  ensureAllGroundChunks,
-  isGroundChunkStreamingEnabled,
-  updateGroundChunks,
+  syncGroundChunkLoadingMode,
 } from '@harmony/schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
@@ -11927,11 +11924,7 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            if (isGroundChunkStreamingEnabled(cachedGround.dynamicMesh)) {
-              updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
-            } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
-              ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
-            }
+            syncGroundChunkLoadingMode(groundObject, cachedGround.dynamicMesh, camera);
             if (debugEnabled.value && debugMode.value === 'full') {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }

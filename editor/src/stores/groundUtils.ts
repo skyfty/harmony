@@ -18,8 +18,6 @@ const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100
 const MIN_GROUND_EXTENT = 1
 const HEIGHT_EPSILON = 1e-5
-const GROUND_CREATION_MAX_CELL_SIZE = 5
-
 const GROUND_CREATION_AXIS_TARGET = 1024
 const GROUND_CREATION_HIGH_VERTEX_BUDGET = 1_500_000
 const GROUND_CREATION_BALANCED_VERTEX_BUDGET = 4_000_000
@@ -155,6 +153,7 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     textureDataUrl: definition.textureDataUrl ?? null,
     textureName: definition.textureName ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
+    localEditTiles: manualDeepCloneLocal(definition.localEditTiles ?? null) as GroundDynamicMesh['localEditTiles'],
   }
   if (definition.optimizedMesh !== undefined) {
     result.optimizedMesh = manualDeepCloneLocal(definition.optimizedMesh) as GroundDynamicMesh['optimizedMesh']
@@ -217,10 +216,7 @@ export function resolveGroundCreationProfile(
     storageMode = 'tiled'
     quality = 'balanced'
     warningLevel = 'info'
-    cellSize = Math.min(
-      GROUND_CREATION_MAX_CELL_SIZE,
-      Math.max(normalizedBaseCellSize, Math.ceil(Math.max(safeWidth, safeDepth) / GROUND_CREATION_AXIS_TARGET)),
-    )
+    cellSize = Math.max(normalizedBaseCellSize, Math.ceil(Math.max(safeWidth, safeDepth) / GROUND_CREATION_AXIS_TARGET))
     warningMessage = '地形已自动切换为分层/流式配置，并提高单元尺寸以控制工作集。'
   }
 
@@ -317,7 +313,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     editTileSizeMeters: creationProfile.editTileSizeMeters,
     editTileResolution: creationProfile.editTileResolution,
     collisionMode: creationProfile.collisionMode,
-    chunkStreamingEnabled: overrides.chunkStreamingEnabled === true,
+      chunkStreamingEnabled: overrides.chunkStreamingEnabled ?? (creationProfile.storageMode === 'tiled'),
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
       mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',

@@ -1285,7 +1285,10 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
 }
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute' | 'Region' | 'ModelCollision'
 
-export type GroundHeightMap = Float64Array
+export type GroundHeightMap = ArrayLike<number> & {
+  length: number
+  [index: number]: number
+}
 
 export const GROUND_HEIGHT_UNSET_VALUE = Number.NaN
 
@@ -1335,8 +1338,8 @@ export function ensureGroundHeightMap(
   fill = GROUND_HEIGHT_UNSET_VALUE,
 ): GroundHeightMap {
   const expectedLength = getGroundVertexCount(rows, columns)
-  if (source instanceof Float64Array && source.length === expectedLength) {
-    return source
+  if (source && typeof source === 'object' && source.length === expectedLength) {
+    return source as GroundHeightMap
   }
   return cloneGroundHeightMap(source, rows, columns, fill)
 }
@@ -1393,6 +1396,45 @@ export interface GroundPlanningMetadata {
   contourBounds?: GroundContourBounds | null
   generatedAt?: number
   demSource?: GroundPlanningDemSourceMetadata | null
+}
+
+export type GroundLocalEditTileSource = 'manual' | 'dem' | 'mixed'
+
+export interface GroundLocalEditTileData {
+  key: string
+  tileRow: number
+  tileColumn: number
+  tileSizeMeters: number
+  resolution: number
+  values: number[]
+  source?: GroundLocalEditTileSource | null
+  updatedAt?: number
+}
+
+export type GroundLocalEditTileMap = Record<string, GroundLocalEditTileData>
+
+export function formatGroundLocalEditTileKey(tileRow: number, tileColumn: number): string {
+  return `${Math.trunc(tileRow)}:${Math.trunc(tileColumn)}`
+}
+
+export function parseGroundLocalEditTileKey(key: string): { tileRow: number; tileColumn: number } | null {
+  const raw = typeof key === 'string' ? key.trim() : ''
+  if (!raw) {
+    return null
+  }
+  const parts = raw.split(':')
+  if (parts.length !== 2) {
+    return null
+  }
+  const tileRow = Number.parseInt(parts[0] ?? '', 10)
+  const tileColumn = Number.parseInt(parts[1] ?? '', 10)
+  if (!Number.isFinite(tileRow) || !Number.isFinite(tileColumn)) {
+    return null
+  }
+  return {
+    tileRow: Math.trunc(tileRow),
+    tileColumn: Math.trunc(tileColumn),
+  }
 }
 
 export type GroundGenerationMode = 'simple' | 'perlin' | 'ridge' | 'voronoi' | 'flat'
@@ -1562,6 +1604,8 @@ export interface GroundDynamicMesh {
   textureDataUrl?: string | null
   textureName?: string | null
   generation?: GroundGenerationSettings | null
+  /** Sparse local high-resolution authoring tiles for Terrain Tools and DEM-preserved detail. */
+  localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
   /** @deprecated Ground paint now persists via groundSurfaceChunks only. */
   terrainPaint?: null
@@ -1606,6 +1650,7 @@ export function resolveGroundEditCellSize(
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
+  localEditTiles?: GroundLocalEditTileMap | null
   /** Runtime-only hydration state used to distinguish untouched sidecar restore from in-session edits. */
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */

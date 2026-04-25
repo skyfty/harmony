@@ -80,12 +80,9 @@ import {
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
-	areAllGroundChunksLoaded,
-	ensureAllGroundChunks,
-	isGroundChunkStreamingEnabled,
 	resolveGroundChunkRadiusMeters,
 	resolveGroundRuntimeChunkCells,
-	updateGroundChunks,
+	syncGroundChunkLoadingMode,
 } from '@schema/groundMesh'
 import {
 	createSceneCsmShadowRuntime,
@@ -8775,11 +8772,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
-				updateGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
-			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
-				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
-			}
+			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {

@@ -216,10 +216,9 @@ import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
-  areAllGroundChunksLoaded,
-  ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
   setGroundRuntimeOptimizedChunksEnabled,
+  syncGroundChunkLoadingMode,
   updateGroundMesh,
   releaseGroundMeshCache,
   sampleGroundHeight,
@@ -21142,9 +21141,7 @@ function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D
 }
 
 function syncViewportGroundChunks(groundObject: THREE.Object3D, groundDefinition: GroundRuntimeDynamicMesh): void {
-  if (!areAllGroundChunksLoaded(groundObject, groundDefinition)) {
-    ensureAllGroundChunks(groundObject, groundDefinition)
-  }
+  syncGroundChunkLoadingMode(groundObject, groundDefinition, camera)
 }
 
 function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean } = {}): void {
