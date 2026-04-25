@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import * as THREE from 'three'
 import type { AnimationBehaviorParams, SceneNode } from '@schema'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
+import { collectRuntimeAnimationClipOptions } from '@/utils/runtimeAnimationClips'
 
 const props = defineProps<{
   modelValue: AnimationBehaviorParams | undefined
@@ -126,32 +126,7 @@ async function loadClipsForNode(nodeId: string | null) {
       await sceneStore.ensureSceneAssetsReady({ nodes: [node], showOverlay: false, refreshViewport: false })
       runtimeObject = getRuntimeObject(nodeId)
     }
-    const clipEntries: Array<{ label: string; value: string }> = []
-    const animations = (runtimeObject as unknown as { animations?: THREE.AnimationClip[] })?.animations
-    if (Array.isArray(animations) && animations.length) {
-      animations.forEach((clip, index) => {
-        if (!clip) {
-          return
-        }
-        const rawName = typeof clip.name === 'string' ? clip.name : ''
-        const trimmed = rawName.trim()
-        const label = trimmed.length ? trimmed : `Clip ${index + 1}`
-        clipEntries.push({ label, value: trimmed })
-      })
-    }
-    const userDataNames = Array.isArray((runtimeObject as any)?.userData?.__animations)
-      ? ((runtimeObject as any).userData.__animations as string[])
-      : []
-    userDataNames.forEach((name: string) => {
-      const trimmed = typeof name === 'string' ? name.trim() : ''
-      if (!trimmed.length) {
-        return
-      }
-      if (clipEntries.some((entry) => entry.value === trimmed)) {
-        return
-      }
-      clipEntries.push({ label: trimmed, value: trimmed })
-    })
+    const clipEntries = collectRuntimeAnimationClipOptions(runtimeObject)
     if (requestId === clipLoadRequestId) {
       clipOptions.value = clipEntries
     }

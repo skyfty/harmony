@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import * as THREE from 'three'
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   clampCharacterControllerComponentProps,
@@ -10,6 +9,7 @@ import {
 } from '@schema/components'
 import type { SceneNodeComponentState } from '@schema'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
+import { collectRuntimeAnimationClipOptions } from '@/utils/runtimeAnimationClips'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
@@ -73,13 +73,10 @@ function updateAnimationBinding(slot: CharacterAnimationSlot, clipName: string |
   updateComponent({ animationBindings: nextBindings })
 }
 
-async function loadClipsForNode(nodeId: string | null) {
+async function loadClipsForNode(nodeId: string) {
   const requestId = ++clipLoadRequestId
   clipOptions.value = []
   clipLoadError.value = null
-  if (!nodeId) {
-    return
-  }
   isLoadingClips.value = true
   try {
     const runtimeObject = getRuntimeObject(nodeId)
@@ -89,32 +86,7 @@ async function loadClipsForNode(nodeId: string | null) {
         await sceneStore.ensureSceneAssetsReady({ nodes: [node], showOverlay: false, refreshViewport: false })
       }
     }
-    const refreshedRuntimeObject = getRuntimeObject(nodeId)
-    const clipEntries: Array<{ label: string; value: string }> =
-      []
-    const animations = (refreshedRuntimeObject as unknown as { animations?: THREE.AnimationClip[] })?.animations
-    if (Array.isArray(animations) && animations.length) {
-      animations.forEach((clip, index) => {
-        if (!clip) {
-          return
-        }
-        const trimmed = typeof clip.name === 'string' ? clip.name.trim() : ''
-        clipEntries.push({
-          label: trimmed.length ? trimmed : `Clip ${index + 1}`,
-          value: trimmed,
-        })
-      })
-    }
-    const userDataNames = Array.isArray((refreshedRuntimeObject as any)?.userData?.__animations)
-      ? ((refreshedRuntimeObject as any).userData.__animations as string[])
-      : []
-    userDataNames.forEach((name: string) => {
-      const trimmed = typeof name === 'string' ? name.trim() : ''
-      if (!trimmed.length || clipEntries.some((entry) => entry.value === trimmed)) {
-        return
-      }
-      clipEntries.push({ label: trimmed, value: trimmed })
-    })
+    const clipEntries = collectRuntimeAnimationClipOptions(getRuntimeObject(nodeId))
     if (requestId === clipLoadRequestId) {
       clipOptions.value = clipEntries
     }
@@ -131,8 +103,15 @@ async function loadClipsForNode(nodeId: string | null) {
 }
 
 watch(
-  () => selectedNodeId.value,
-  (nodeId) => {
+  () => [selectedNodeId.value, component.value?.id ?? null] as const,
+  ([nodeId, componentId]) => {
+    if (!componentId || !nodeId) {
+      clipOptions.value = []
+      clipLoadError.value = null
+      isLoadingClips.value = false
+      return
+    }
+
     void loadClipsForNode(nodeId)
   },
   { immediate: true },
@@ -270,10 +249,13 @@ const clipItems = computed(() => clipOptions.value)
             <div class="character-controller-panel__binding-label">{{ slot.label }}</div>
             <v-select
               :items="clipItems"
+              item-title="label"
+              item-value="value"
               :model-value="normalizedProps.animationBindings.find((binding) => binding.slot === slot.value)?.clipName ?? null"
               clearable
               density="compact"
               hide-details
+              variant="underlined"
               placeholder="Select a clip"
               @update:model-value="(value) => updateAnimationBinding(slot.value, value ? String(value) : null)"
             />

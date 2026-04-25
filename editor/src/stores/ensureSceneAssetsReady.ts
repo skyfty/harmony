@@ -1,6 +1,7 @@
 import type { WatchStopHandle } from 'vue'
 import type { Object3D } from 'three'
 import type { SceneNode } from '@schema'
+import { cloneImportedObject } from '@schema/assetImport'
 import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ModelInstanceGroup } from '@schema/modelObjectCache'
@@ -409,13 +410,13 @@ export async function updateSceneAssets(args: {
 
       if (metadata && Array.isArray(metadata.objectPath)) {
         const target = findObjectByPath(baseObjectResolved, metadata.objectPath) ?? baseObjectResolved
-        runtimeObject = target.clone(true)
+        runtimeObject = cloneImportedObject(target)
         const descendantKey = metadata.objectPath.join('.')
         const descendantPaths = descendantCache.get(descendantKey) ?? []
         pruneCloneByRelativePaths(runtimeObject, descendantPaths)
       } else if (!runtimeObject) {
         const reuseOriginal = !shouldCacheModelObject && !baseObjectAssigned
-        runtimeObject = reuseOriginal ? baseObjectResolved : baseObjectResolved.clone(true)
+        runtimeObject = reuseOriginal ? baseObjectResolved : cloneImportedObject(baseObjectResolved)
         baseObjectAssigned = baseObjectAssigned || reuseOriginal
       }
 

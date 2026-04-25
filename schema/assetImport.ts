@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import Loader, { type LoaderErrorPayload, type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
 import { createUvDebugMaterial } from './debugTextures'
 import { MeshBVH } from 'three-mesh-bvh'
@@ -60,18 +61,6 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
   })
 }
 
-function describeObjectPath(object: THREE.Object3D): string {
-  const parts: string[] = []
-  let current: THREE.Object3D | null = object
-
-  while (current) {
-    parts.push(current.name || current.type || current.uuid)
-    current = current.parent
-  }
-
-  return parts.reverse().join(' / ')
-}
-
 export function prepareImportedObject(object: THREE.Object3D) {
   object.removeFromParent()
 
@@ -129,6 +118,29 @@ function buildObjectBvh(object: THREE.Object3D): void {
       // 忽略 BVH 构建失败，避免影响模型加载
     }
   })
+}
+
+export function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
+  const cloned = cloneSkinned(source)
+  const sourceAnimations = (source as unknown as { animations?: THREE.AnimationClip[] })?.animations ?? []
+
+  if (sourceAnimations.length) {
+    const animations = sourceAnimations.map((clip) => clip.clone())
+    ;(cloned as unknown as { animations?: THREE.AnimationClip[] }).animations = animations
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = animations.map((clip) => clip.name)
+    return cloned
+  }
+
+  const userDataAnimationNames = Array.isArray((source as any)?.userData?.__animations)
+    ? ((source as any).userData.__animations as string[]).filter((name) => typeof name === 'string' && name.trim().length)
+    : []
+  if (userDataAnimationNames.length) {
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = [...userDataAnimationNames]
+  }
+
+  return cloned
 }
 
 export async function loadObjectFromFile(
