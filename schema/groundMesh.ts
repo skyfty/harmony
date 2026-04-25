@@ -8,12 +8,18 @@ import type {
 import {
   createGroundHeightMap,
   ensureGroundHeightMap,
+  formatGroundChunkKey,
   formatGroundLocalEditTileKey,
+  GROUND_TERRAIN_CHUNK_SIZE_METERS,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
+  resolveGroundChunkCoordFromWorldPosition,
+  resolveGroundChunkOrigin,
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
   resolveGroundEditTileSizeMeters,
+  type GroundChunkData,
+  type GroundChunkManifestRecord,
   type GroundDynamicMesh,
   type GroundGenerationSettings,
   type GroundHeightMap,
@@ -55,6 +61,14 @@ type GroundChunkRuntime = {
   mesh: THREE.Mesh
 }
 
+type InfiniteGroundBaseChunkRuntime = {
+  mesh: THREE.InstancedMesh
+  capacity: number
+  visibleChunkKeys: Set<string>
+  orderedChunkKeys: string[]
+  hiddenChunkKeys: Set<string>
+}
+
 type GroundCellTriangleDefinition = {
   vertices: [THREE.Vector2, THREE.Vector2, THREE.Vector2]
   heights: [number, number, number]
@@ -80,6 +94,7 @@ type GroundRuntimeState = {
   chunkCells: number
   castShadow: boolean
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
+  baseChunkRuntime: InfiniteGroundBaseChunkRuntime | null
   lastChunkUpdateAt: number
 
   desiredSignature: string
@@ -218,6 +233,141 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
     }, 0)}`
     : 'none'
   return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}|${tileResolution}|${loadedTileCount}|${localEditSignature}`
+}
+
+function isInfiniteGroundDefinition(definition: GroundDynamicMesh | null | undefined): boolean {
+  return definition?.terrainMode === 'infinite'
+}
+
+function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
+  const explicit = Number(definition.chunkSizeMeters)
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return explicit
+  }
+  return GROUND_TERRAIN_CHUNK_SIZE_METERS
+}
+
+function resolveInfiniteRenderRadiusChunks(definition: GroundDynamicMesh): number {
+  const explicit = Number(definition.renderRadiusChunks)
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(1, Math.trunc(explicit))
+  }
+  return 4
+}
+
+function buildInfiniteGroundBaseChunkGeometry(chunkSizeMeters: number): THREE.BufferGeometry {
+  const halfSize = chunkSizeMeters * 0.5
+  const positions = new Float32Array([
+    -halfSize, 0, -halfSize,
+    halfSize, 0, -halfSize,
+    -halfSize, 0, halfSize,
+    halfSize, 0, halfSize,
+  ])
+  const normals = new Float32Array([
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+  ])
+  const uvs = new Float32Array([
+    0, 0,
+    1, 0,
+    0, 1,
+    1, 1,
+  ])
+  const indices = new Uint16Array([0, 2, 1, 2, 3, 1])
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1))
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function resolveGroundRuntimeMaterial(root: THREE.Group, state: GroundRuntimeState): THREE.Material {
+  const cachedMaterialValue = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
+  const cachedMaterial = Array.isArray(cachedMaterialValue)
+    ? (cachedMaterialValue[0] as THREE.Material | undefined)
+    : (cachedMaterialValue as THREE.Material | undefined)
+
+  if (cachedMaterial) {
+    return cachedMaterial
+  }
+
+  const firstExistingChunk = state.chunks.values().next().value as GroundChunkRuntime | undefined
+  const existingMaterial = firstExistingChunk?.mesh?.material
+  const resolvedExistingMaterial = Array.isArray(existingMaterial)
+    ? (existingMaterial[0] as THREE.Material | undefined)
+    : (existingMaterial as THREE.Material | undefined)
+  if (resolvedExistingMaterial) {
+    return resolvedExistingMaterial
+  }
+
+  if (cachedPrototypeMesh) {
+    const prototypeMaterial = cachedPrototypeMesh.material
+    const resolvedPrototypeMaterial = Array.isArray(prototypeMaterial)
+      ? (prototypeMaterial[0] as THREE.Material | undefined)
+      : (prototypeMaterial as THREE.Material | undefined)
+    if (resolvedPrototypeMaterial) {
+      return resolvedPrototypeMaterial
+    }
+  }
+
+  return new THREE.MeshStandardMaterial({
+    color: '#707070',
+    roughness: 1,
+    metalness: 0.1,
+  })
+}
+
+function ensureInfiniteBaseChunkRuntime(
+  root: THREE.Group,
+  state: GroundRuntimeState,
+  definition: GroundDynamicMesh,
+  desiredCapacity: number,
+): InfiniteGroundBaseChunkRuntime {
+  const nextCapacity = Math.max(1, Math.trunc(desiredCapacity))
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const existing = state.baseChunkRuntime
+  if (existing && existing.capacity >= nextCapacity) {
+    existing.mesh.castShadow = state.castShadow
+    existing.mesh.receiveShadow = true
+    return existing
+  }
+
+  if (existing) {
+    existing.mesh.removeFromParent()
+    existing.mesh.geometry?.dispose?.()
+    existing.visibleChunkKeys.clear()
+    existing.hiddenChunkKeys.clear()
+  }
+
+  const mesh = new THREE.InstancedMesh(
+    buildInfiniteGroundBaseChunkGeometry(chunkSizeMeters),
+    resolveGroundRuntimeMaterial(root, state),
+    nextCapacity,
+  )
+  mesh.name = 'GroundBaseChunks'
+  mesh.castShadow = state.castShadow
+  mesh.receiveShadow = true
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  mesh.frustumCulled = false
+  mesh.count = 0
+  mesh.userData.dynamicMeshType = 'Ground'
+  mesh.userData.groundInfiniteBaseChunks = true
+  root.add(mesh)
+
+  const runtime: InfiniteGroundBaseChunkRuntime = {
+    mesh,
+    capacity: nextCapacity,
+    visibleChunkKeys: new Set(),
+    orderedChunkKeys: [],
+    hiddenChunkKeys: new Set(),
+  }
+  state.baseChunkRuntime = runtime
+  return runtime
 }
 
 function clampInclusive(value: number, min: number, max: number): number {
@@ -1987,6 +2137,51 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   return hx0 + (hx1 - hx0) * tz
 }
 
+export function buildGroundChunkDataFromManifestRecord(
+  definition: GroundDynamicMesh,
+  record: GroundChunkManifestRecord,
+): GroundChunkData {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const resolution = Math.max(1, Math.trunc(record.resolution))
+  const cellSize = record.chunkSizeMeters / resolution
+  const heights = new Float32Array((resolution + 1) * (resolution + 1))
+  let heightMin = Number.POSITIVE_INFINITY
+  let heightMax = Number.NEGATIVE_INFINITY
+
+  let offset = 0
+  for (let row = 0; row <= resolution; row += 1) {
+    for (let column = 0; column <= resolution; column += 1) {
+      const sampleX = record.originX + column * cellSize
+      const sampleZ = record.originZ + row * cellSize
+      const height = sampleGroundHeight(runtimeDefinition, sampleX, sampleZ)
+      heights[offset] = height
+      heightMin = Math.min(heightMin, height)
+      heightMax = Math.max(heightMax, height)
+      offset += 1
+    }
+  }
+
+  return {
+    header: {
+      version: 1,
+      key: record.key,
+      chunkX: record.chunkX,
+      chunkZ: record.chunkZ,
+      originX: record.originX,
+      originZ: record.originZ,
+      chunkSizeMeters: record.chunkSizeMeters,
+      resolution,
+      cellSize,
+      revision: Math.max(0, Math.trunc(record.revision)),
+      heightMin: Number.isFinite(heightMin) ? heightMin : 0,
+      heightMax: Number.isFinite(heightMax) ? heightMax : 0,
+      updatedAt: Math.max(0, Math.trunc(record.updatedAt)),
+      source: record.source ?? null,
+    },
+    heights,
+  }
+}
+
 export function sampleGroundNormal(
   definition: GroundRuntimeDynamicMesh,
   x: number,
@@ -2235,6 +2430,9 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
       for (const runtime of existing.chunks.values()) {
         runtime.mesh.castShadow = desiredCastShadow
       }
+      if (existing.baseChunkRuntime) {
+        existing.baseChunkRuntime.mesh.castShadow = desiredCastShadow
+      }
     }
     return existing
   }
@@ -2245,6 +2443,13 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
       // Materials are managed externally (SceneGraph/editor), do not dispose here.
       entry.mesh.removeFromParent()
     })
+    if (existing.baseChunkRuntime) {
+      existing.baseChunkRuntime.mesh.removeFromParent()
+      existing.baseChunkRuntime.mesh.geometry?.dispose?.()
+      existing.baseChunkRuntime.visibleChunkKeys.clear()
+      existing.baseChunkRuntime.hiddenChunkKeys.clear()
+      existing.baseChunkRuntime = null
+    }
 
     existing.meshPool.forEach((entries) => {
       entries.forEach((mesh) => {
@@ -2265,6 +2470,7 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     chunkCells,
     castShadow: desiredCastShadow,
     chunks: new Map(),
+    baseChunkRuntime: null,
     lastChunkUpdateAt: 0,
 
     desiredSignature: '',
@@ -2384,6 +2590,74 @@ function ensureChunkMesh(
   const runtime: GroundChunkRuntime = { key, chunkRow, chunkColumn, spec, mesh }
   state.chunks.set(key, runtime)
   return runtime
+}
+
+const infiniteGroundMatrixHelper = new THREE.Matrix4()
+
+function updateInfiniteGroundBaseChunks(
+  target: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null,
+): void {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
+    return
+  }
+
+  const state = ensureGroundRuntimeState(root, definition)
+  if (state.chunks.size > 0) {
+    state.chunks.forEach((entry) => {
+      releaseChunkToPool(state, entry)
+    })
+    state.chunks.clear()
+    state.pendingCreates = []
+    state.pendingDestroys = []
+  }
+
+  const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
+  const desiredCapacity = (renderRadiusChunks * 2 + 1) * (renderRadiusChunks * 2 + 1)
+  const baseRuntime = ensureInfiniteBaseChunkRuntime(root, state, definition, desiredCapacity)
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+
+  let localX = 0
+  let localZ = 0
+  if (camera) {
+    root.updateMatrixWorld(true)
+    const cameraWorld = new THREE.Vector3()
+    camera.getWorldPosition(cameraWorld)
+    const cameraLocal = root.worldToLocal(cameraWorld)
+    localX = cameraLocal.x
+    localZ = cameraLocal.z
+  }
+
+  const centerCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
+  const nextVisibleChunkKeys = new Set<string>()
+  const nextOrderedChunkKeys: string[] = []
+  let instanceIndex = 0
+
+  for (let chunkZ = centerCoord.chunkZ - renderRadiusChunks; chunkZ <= centerCoord.chunkZ + renderRadiusChunks; chunkZ += 1) {
+    for (let chunkX = centerCoord.chunkX - renderRadiusChunks; chunkX <= centerCoord.chunkX + renderRadiusChunks; chunkX += 1) {
+      const key = formatGroundChunkKey(chunkX, chunkZ)
+      if (baseRuntime.hiddenChunkKeys.has(key)) {
+        continue
+      }
+      const origin = resolveGroundChunkOrigin({ chunkX, chunkZ }, chunkSizeMeters)
+      infiniteGroundMatrixHelper.makeTranslation(
+        origin.x + chunkSizeMeters * 0.5,
+        definition.baseHeight ?? 0,
+        origin.z + chunkSizeMeters * 0.5,
+      )
+      baseRuntime.mesh.setMatrixAt(instanceIndex, infiniteGroundMatrixHelper)
+      nextVisibleChunkKeys.add(key)
+      nextOrderedChunkKeys.push(key)
+      instanceIndex += 1
+    }
+  }
+
+  baseRuntime.mesh.count = instanceIndex
+  baseRuntime.mesh.instanceMatrix.needsUpdate = true
+  baseRuntime.visibleChunkKeys = nextVisibleChunkKeys
+  baseRuntime.orderedChunkKeys = nextOrderedChunkKeys
 }
 
 function disposeChunk(runtime: GroundChunkRuntime): void {
@@ -3297,6 +3571,11 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D 
   group.userData.dynamicMeshType = 'Ground'
   group.userData.groundChunked = true
   ensureGroundRuntimeState(group, runtimeDefinition)
+  if (isInfiniteGroundDefinition(runtimeDefinition)) {
+    updateInfiniteGroundBaseChunks(group, runtimeDefinition, null)
+    applyGroundTextureToObject(group, runtimeDefinition)
+    return group
+  }
   // Seed a small neighborhood around origin so it shows up immediately.
   // Avoid using the default chunk radius here; that can load too many chunks on creation.
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 0 ? runtimeDefinition.cellSize : 1
@@ -3631,6 +3910,10 @@ export function syncGroundChunkLoadingMode(
   options: Parameters<typeof updateGroundChunks>[3] = {},
 ): void {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  if (isInfiniteGroundDefinition(runtimeDefinition)) {
+    updateInfiniteGroundBaseChunks(target, runtimeDefinition, camera)
+    return
+  }
   if (isGroundChunkStreamingEnabled(runtimeDefinition)) {
     updateGroundChunks(target, runtimeDefinition, camera, options)
     return
@@ -3662,6 +3945,11 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynam
     return
   }
   ensureGroundRuntimeState(group, runtimeDefinition)
+  if (isInfiniteGroundDefinition(runtimeDefinition)) {
+    updateInfiniteGroundBaseChunks(group, runtimeDefinition, null)
+    applyGroundTextureToObject(group, runtimeDefinition)
+    return
+  }
   // Chunks are created on demand via updateGroundChunks(camera).
   // If we already have chunks, refresh their geometry.
   const state = groundRuntimeStateMap.get(group)
@@ -3765,6 +4053,76 @@ export function updateGroundMeshRegion(
     updated = updated || ok
   })
   return updated
+}
+
+export function resolveInfiniteGroundChunkKeyFromInstanceId(
+  target: THREE.Object3D,
+  instanceId: number | null | undefined,
+): string | null {
+  if (!Number.isInteger(instanceId) || (instanceId as number) < 0) {
+    return null
+  }
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
+    return null
+  }
+  const state = groundRuntimeStateMap.get(group)
+  const baseRuntime = state?.baseChunkRuntime
+  if (!baseRuntime) {
+    return null
+  }
+  return baseRuntime.orderedChunkKeys[instanceId as number] ?? null
+}
+
+export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): string[] {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
+    return []
+  }
+  const state = groundRuntimeStateMap.get(group)
+  const baseRuntime = state?.baseChunkRuntime
+  if (!baseRuntime) {
+    return []
+  }
+  return [...baseRuntime.orderedChunkKeys]
+}
+
+export function setInfiniteGroundHiddenChunkKeys(
+  target: THREE.Object3D,
+  chunkKeys: Iterable<string>,
+): boolean {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
+    return false
+  }
+  const state = groundRuntimeStateMap.get(group)
+  const baseRuntime = state?.baseChunkRuntime
+  if (!baseRuntime) {
+    return false
+  }
+
+  const nextHiddenChunkKeys = new Set<string>()
+  for (const key of chunkKeys) {
+    if (typeof key === 'string' && key.length > 0) {
+      nextHiddenChunkKeys.add(key)
+    }
+  }
+
+  let changed = nextHiddenChunkKeys.size !== baseRuntime.hiddenChunkKeys.size
+  if (!changed) {
+    for (const key of nextHiddenChunkKeys) {
+      if (!baseRuntime.hiddenChunkKeys.has(key)) {
+        changed = true
+        break
+      }
+    }
+  }
+  if (!changed) {
+    return false
+  }
+
+  baseRuntime.hiddenChunkKeys = nextHiddenChunkKeys
+  return true
 }
 
 function averageNormalsOnEdge(params: {

@@ -7395,7 +7395,15 @@ function createSceneDocument(
     : null
   const groundSettings = cloneGroundSettings(
     options.groundSettings
-      ?? (existingGroundMesh ? { width: existingGroundMesh.width, depth: existingGroundMesh.depth } : undefined),
+      ?? (existingGroundMesh
+        ? {
+            chunkSizeMeters: existingGroundMesh.chunkSizeMeters,
+            baseHeight: existingGroundMesh.baseHeight,
+            renderRadiusChunks: existingGroundMesh.renderRadiusChunks,
+            collisionRadiusChunks: existingGroundMesh.collisionRadiusChunks,
+            enableAirWall: existingGroundMesh.terrainMode === 'bounded' ? true : undefined,
+          }
+        : undefined),
   )
   const existingEnvironmentNode = clonedNodes.find((node) => isEnvironmentNode(node)) ?? null
   const environmentSettings = cloneEnvironmentSettings(
@@ -9020,6 +9028,63 @@ export const useSceneStore = defineStore('scene', {
         this.environment,
       )
       this.nodes = updatedNodes
+
+      commitSceneSnapshot(this)
+      return true
+    },
+    setGroundInfiniteSettings(payload: {
+      chunkSizeMeters?: number
+      baseHeight?: number
+      renderRadiusChunks?: number
+      collisionRadiusChunks?: number
+    }) {
+      const requested = {
+        ...this.groundSettings,
+        chunkSizeMeters: payload.chunkSizeMeters ?? this.groundSettings.chunkSizeMeters,
+        baseHeight: payload.baseHeight ?? this.groundSettings.baseHeight,
+        renderRadiusChunks: payload.renderRadiusChunks ?? this.groundSettings.renderRadiusChunks,
+        collisionRadiusChunks: payload.collisionRadiusChunks ?? this.groundSettings.collisionRadiusChunks,
+      }
+      const normalized = cloneGroundSettings(requested)
+      const changed =
+        Math.abs((normalized.chunkSizeMeters ?? 0) - (this.groundSettings.chunkSizeMeters ?? 0)) >= 1e-6
+        || Math.abs((normalized.baseHeight ?? 0) - (this.groundSettings.baseHeight ?? 0)) >= 1e-6
+        || Math.abs((normalized.renderRadiusChunks ?? 0) - (this.groundSettings.renderRadiusChunks ?? 0)) >= 1e-6
+        || Math.abs((normalized.collisionRadiusChunks ?? 0) - (this.groundSettings.collisionRadiusChunks ?? 0)) >= 1e-6
+      if (!changed) {
+        return false
+      }
+
+      this.appendUndoEntry({ kind: 'ground-settings', groundSettings: cloneGroundSettings(this.groundSettings) })
+      this.groundSettings = normalized
+
+      const clonedNodes = cloneSceneNodes(this.nodes)
+      const existingGround = findGroundNode(clonedNodes)
+      if (existingGround) {
+        existingGround.dynamicMesh = createGroundDynamicMeshDefinition(
+          existingGround.dynamicMesh?.type === 'Ground'
+            ? {
+                ...(existingGround.dynamicMesh as GroundDynamicMesh),
+                terrainMode: 'infinite',
+                chunkSizeMeters: normalized.chunkSizeMeters,
+                baseHeight: normalized.baseHeight,
+                renderRadiusChunks: normalized.renderRadiusChunks,
+                collisionRadiusChunks: normalized.collisionRadiusChunks,
+              }
+            : {
+                terrainMode: 'infinite',
+                chunkSizeMeters: normalized.chunkSizeMeters,
+                baseHeight: normalized.baseHeight,
+                renderRadiusChunks: normalized.renderRadiusChunks,
+                collisionRadiusChunks: normalized.collisionRadiusChunks,
+              },
+          normalized,
+        )
+      }
+      this.nodes = ensureEnvironmentNode(
+        ensureGroundNode(clonedNodes, normalized),
+        this.environment,
+      )
 
       commitSceneSnapshot(this)
       return true

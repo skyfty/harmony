@@ -16,8 +16,32 @@ const selectedGroundNode = computed(() => {
 
 const groundDefinition = computed(() => selectedGroundNode.value?.dynamicMesh as GroundDynamicMesh | undefined)
 
-const localWidth = computed(() => groundDefinition.value?.width ?? 0)
-const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
+const terrainModeLabel = computed(() => groundDefinition.value?.terrainMode === 'bounded' ? 'Bounded' : 'Infinite')
+const chunkSizeMeters = computed({
+  get: () => groundDefinition.value?.chunkSizeMeters ?? sceneStore.groundSettings.chunkSizeMeters ?? 100,
+  set: (value: number) => {
+    sceneStore.setGroundInfiniteSettings({ chunkSizeMeters: value })
+  },
+})
+const baseHeight = computed({
+  get: () => groundDefinition.value?.baseHeight ?? sceneStore.groundSettings.baseHeight ?? 0,
+  set: (value: number) => {
+    sceneStore.setGroundInfiniteSettings({ baseHeight: value })
+  },
+})
+const renderRadiusChunks = computed({
+  get: () => groundDefinition.value?.renderRadiusChunks ?? sceneStore.groundSettings.renderRadiusChunks ?? 0,
+  set: (value: number) => {
+    sceneStore.setGroundInfiniteSettings({ renderRadiusChunks: value })
+  },
+})
+const collisionRadiusChunks = computed({
+  get: () => groundDefinition.value?.collisionRadiusChunks ?? sceneStore.groundSettings.collisionRadiusChunks ?? 0,
+  set: (value: number) => {
+    sceneStore.setGroundInfiniteSettings({ collisionRadiusChunks: value })
+  },
+})
+const chunkManifestRevision = computed(() => groundDefinition.value?.chunkManifestRevision ?? 0)
 const enableAirWall = computed({
   get: () => sceneStore.groundSettings.enableAirWall === true,
   set: (value: boolean) => {
@@ -68,26 +92,68 @@ const editorScatterVisible = computed({
        Ground Tools
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="ground-dimensions">
+        <div class="ground-dimensions">
         <v-text-field
-          :model-value="localWidth"
-          label="Width (m)"
-          type="number"
+            :model-value="terrainModeLabel"
+            label="Terrain Mode"
           density="compact"
           variant="underlined"
           disabled
-          suffix="m"
         />
         <v-text-field
-          :model-value="localDepth"
-          label="Depth (m)"
+          v-model.number="chunkSizeMeters"
+            label="Chunk Size (m)"
           type="number"
           density="compact"
           variant="underlined"
-          disabled
+          min="1"
+          step="1"
           suffix="m"
         />
       </div>
+
+        <div class="ground-dimensions">
+          <v-text-field
+            v-model.number="baseHeight"
+            label="Base Height"
+            type="number"
+            density="compact"
+            variant="underlined"
+            step="0.1"
+            suffix="m"
+          />
+          <v-text-field
+            :model-value="chunkManifestRevision"
+            label="Chunk Revision"
+            type="number"
+            density="compact"
+            variant="underlined"
+            disabled
+          />
+        </div>
+
+        <div class="ground-dimensions">
+          <v-text-field
+            v-model.number="renderRadiusChunks"
+            label="Render Radius"
+            type="number"
+            density="compact"
+            variant="underlined"
+            min="1"
+            step="1"
+            suffix="chunks"
+          />
+          <v-text-field
+            v-model.number="collisionRadiusChunks"
+            label="Collision Radius"
+            type="number"
+            density="compact"
+            variant="underlined"
+            min="1"
+            step="1"
+            suffix="chunks"
+          />
+        </div>
 
       <v-switch
         v-model="enableAirWall"

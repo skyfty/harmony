@@ -7,13 +7,16 @@ import type {
 } from '@schema'
 import {
   encodeScenePackageSceneDocument,
+  formatGroundChunkDataPath,
   GROUND_TERRAIN_PACKAGE_FORMAT,
   GROUND_TERRAIN_PACKAGE_VERSION,
   GROUND_SCATTER_SIDECAR_FILENAME,
   GROUND_PAINT_SIDECAR_FILENAME,
   buildGroundTerrainTileEntries,
+  parseGroundChunkKey,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  type GroundChunkManifest,
   type GroundTerrainPackageManifest,
   type GroundTerrainPackageTileEntry,
   type ScenePackageManifestV1,
@@ -231,6 +234,51 @@ function buildGroundTerrainPackageManifest(
     terrainTilesRootPath,
     collisionManifestPath: `${sceneRootPath}/ground-collision.json`,
     tiles,
+  }
+}
+
+async function buildGroundChunkPackageManifest(
+  sceneId: string,
+  manifest: GroundChunkManifest | null,
+  loadChunkData: (chunkKey: string) => Promise<ArrayBuffer | null>,
+): Promise<{ manifestPath: string; manifest: GroundChunkManifest; files: Record<string, Uint8Array> } | null> {
+  if (!manifest || typeof manifest !== 'object') {
+    return null
+  }
+
+  const sceneRootPath = `scenes/${encodeURIComponent(sceneId)}`
+  const nextChunks: GroundChunkManifest['chunks'] = {}
+  const files: Record<string, Uint8Array> = {}
+
+  for (const [chunkKey, record] of Object.entries(manifest.chunks ?? {})) {
+    const coord = parseGroundChunkKey(chunkKey)
+    if (!coord || !record) {
+      continue
+    }
+    const chunkData = await loadChunkData(chunkKey)
+    if (!(chunkData instanceof ArrayBuffer)) {
+      continue
+    }
+    const dataPath = formatGroundChunkDataPath(coord, `${sceneRootPath}/ground/chunks`, 'ground.bin')
+    nextChunks[chunkKey] = {
+      ...record,
+      dataPath,
+    }
+    files[dataPath] = new Uint8Array(chunkData)
+  }
+
+  if (!Object.keys(nextChunks).length) {
+    return null
+  }
+
+  return {
+    manifestPath: `${sceneRootPath}/ground-chunk-manifest.json`,
+    manifest: {
+      ...manifest,
+      sceneId,
+      chunks: nextChunks,
+    },
+    files,
   }
 }
 
@@ -1024,6 +1072,7 @@ export async function exportScenePackageZip(payload: {
     let groundTerrainManifestPath: string | undefined
     let groundTerrainTilesRootPath: string | undefined
     let groundCollisionPath: string | undefined
+    let groundChunkManifestPath: string | undefined
     let groundScatterPath: string | undefined
     let groundPaintPath: string | undefined
 
@@ -1080,6 +1129,27 @@ export async function exportScenePackageZip(payload: {
             })),
           })
         }
+      }
+
+      const storedGroundChunkManifest = await scenesStore.loadGroundChunkManifest(scene.id)
+      const packagedGroundChunkManifest = await buildGroundChunkPackageManifest(
+        scene.id,
+        storedGroundChunkManifest,
+        (chunkKey) => scenesStore.loadGroundChunkData(scene.id, chunkKey),
+      )
+      if (packagedGroundChunkManifest) {
+        groundChunkManifestPath = packagedGroundChunkManifest.manifestPath
+        files[groundChunkManifestPath] = jsonBytes(packagedGroundChunkManifest.manifest)
+        Object.assign(files, packagedGroundChunkManifest.files)
+        emitSceneExportEvent(payload.reportEvent, {
+          phase: 'sidecar',
+          level: 'info',
+          status: 'completed',
+          sceneId: scene.id,
+          sceneName,
+          detail: groundChunkManifestPath,
+          message: `已写入无限地形 chunk manifest`,
+        })
       }
     }
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
@@ -1259,6 +1329,7 @@ export async function exportScenePackageZip(payload: {
       groundTerrainManifestPath,
       groundTerrainTilesRootPath,
       groundCollisionPath,
+      groundChunkManifestPath,
       groundHeightsPath,
       groundScatterPath,
       groundPaintPath,
