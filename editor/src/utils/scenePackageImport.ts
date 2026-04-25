@@ -1,5 +1,6 @@
 import {
   decodeScenePackageSceneDocument,
+  type GroundChunkManifest,
   readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
   unzipScenePackage,
@@ -21,6 +22,8 @@ export type LoadedStoredScenePackage = {
   groundHeightSidecars: Record<string, ArrayBuffer | null>
   groundScatterSidecars: Record<string, ArrayBuffer | null>
   groundPaintSidecars: Record<string, ArrayBuffer | null>
+  groundChunkManifests: Record<string, GroundChunkManifest | null>
+  groundChunkData: Record<string, Record<string, ArrayBuffer | null>>
   groundTerrainManifests: Record<string, GroundTerrainPackageManifest | null>
 }
 
@@ -192,6 +195,41 @@ function extractGroundPaintSidecarFromPackage(
   return new Uint8Array(bytes).buffer
 }
 
+function extractGroundChunkManifestFromPackage(
+  zip: ReturnType<typeof unzipScenePackage>,
+  sceneEntry: ScenePackageSceneEntry,
+): GroundChunkManifest | null {
+  const manifestPath = typeof sceneEntry.groundChunkManifestPath === 'string' ? sceneEntry.groundChunkManifestPath.trim() : ''
+  if (!manifestPath) {
+    return null
+  }
+  return JSON.parse(readTextFileFromScenePackage(zip, manifestPath)) as GroundChunkManifest
+}
+
+function extractGroundChunkDataFromPackage(
+  zip: ReturnType<typeof unzipScenePackage>,
+  manifest: GroundChunkManifest | null,
+): Record<string, ArrayBuffer | null> {
+  if (!manifest || !manifest.chunks || typeof manifest.chunks !== 'object') {
+    return {}
+  }
+
+  const out: Record<string, ArrayBuffer | null> = {}
+  for (const [chunkKey, record] of Object.entries(manifest.chunks)) {
+    const dataPath = typeof record?.dataPath === 'string' ? record.dataPath.trim() : ''
+    if (!dataPath) {
+      out[chunkKey] = null
+      continue
+    }
+    const bytes = zip.files[dataPath]
+    if (!bytes) {
+      throw new Error(`Missing ground chunk data in scene bundle: ${dataPath}`)
+    }
+    out[chunkKey] = new Uint8Array(bytes).buffer
+  }
+  return out
+}
+
 export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): Promise<LoadedStoredScenePackage> {
   const zip = unzipScenePackage(zipBytes)
   await restoreRuntimeResourcesFromPackage(zip)
@@ -202,6 +240,8 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
   const groundScatterSidecars: Record<string, ArrayBuffer | null> = {}
   const groundPaintSidecars: Record<string, ArrayBuffer | null> = {}
+  const groundChunkManifests: Record<string, GroundChunkManifest | null> = {}
+  const groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
   const groundTerrainManifests: Record<string, GroundTerrainPackageManifest | null> = {}
 
   for (const sceneEntry of zip.manifest.scenes ?? []) {
@@ -213,6 +253,8 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundPaintSidecars[sceneEntry.sceneId] = extractGroundPaintSidecarFromPackage(zip, sceneEntry, sceneDocument)
+    groundChunkManifests[sceneEntry.sceneId] = extractGroundChunkManifestFromPackage(zip, sceneEntry)
+    groundChunkData[sceneEntry.sceneId] = extractGroundChunkDataFromPackage(zip, groundChunkManifests[sceneEntry.sceneId] ?? null)
     groundTerrainManifests[sceneEntry.sceneId] = sceneEntry.groundTerrainManifestPath
       ? JSON.parse(readTextFileFromScenePackage(zip, sceneEntry.groundTerrainManifestPath)) as GroundTerrainPackageManifest
       : null
@@ -220,5 +262,14 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     scenes.push(withPlanning)
   }
 
-  return { project, scenes, groundHeightSidecars, groundScatterSidecars, groundPaintSidecars, groundTerrainManifests }
+  return {
+    project,
+    scenes,
+    groundHeightSidecars,
+    groundScatterSidecars,
+    groundPaintSidecars,
+    groundChunkManifests,
+    groundChunkData,
+    groundTerrainManifests,
+  }
 }

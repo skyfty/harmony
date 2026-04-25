@@ -43,6 +43,7 @@ import type {
   BehaviorComponentProps,
   BehaviorEventType,
   CameraNodeProperties,
+  GroundChunkManifest,
   GroundDynamicMesh,
   GroundHeightMap,
   GroundLocalEditTileMap,
@@ -18186,7 +18187,15 @@ export const useSceneStore = defineStore('scene', {
       }
     },
     async importScenePackageZip(zipBytes: ArrayBuffer): Promise<SceneImportResult> {
-      const { scenes, groundHeightSidecars, groundTerrainManifests } = await loadStoredScenesFromScenePackage(zipBytes)
+      const {
+        scenes,
+        groundHeightSidecars,
+        groundScatterSidecars,
+        groundPaintSidecars,
+        groundChunkManifests,
+        groundChunkData,
+        groundTerrainManifests,
+      } = await loadStoredScenesFromScenePackage(zipBytes)
       if (!Array.isArray(scenes) || !scenes.length) {
         throw new Error('Scene package does not contain any scene data')
       }
@@ -18200,7 +18209,11 @@ export const useSceneStore = defineStore('scene', {
 
       const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
       const imported: StoredSceneDocument[] = []
-  const importedGroundHeightSidecars = new Map<string, ArrayBuffer | null>()
+      const importedGroundHeightSidecars = new Map<string, ArrayBuffer | null>()
+      const importedGroundScatterSidecars = new Map<string, ArrayBuffer | null>()
+      const importedGroundPaintSidecars = new Map<string, ArrayBuffer | null>()
+      const importedGroundChunkManifests = new Map<string, GroundChunkManifest | null>()
+      const importedGroundChunkData = new Map<string, Record<string, ArrayBuffer | null>>()
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
 
       for (let index = 0; index < scenes.length; index += 1) {
@@ -18266,6 +18279,10 @@ export const useSceneStore = defineStore('scene', {
         await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
         imported.push(sceneDocument)
         importedGroundHeightSidecars.set(sceneDocument.id, groundHeightSidecars[entry.id] ?? null)
+        importedGroundScatterSidecars.set(sceneDocument.id, groundScatterSidecars[entry.id] ?? null)
+        importedGroundPaintSidecars.set(sceneDocument.id, groundPaintSidecars[entry.id] ?? null)
+        importedGroundChunkManifests.set(sceneDocument.id, groundChunkManifests[entry.id] ?? null)
+        importedGroundChunkData.set(sceneDocument.id, groundChunkData[entry.id] ?? {})
       }
 
       await scenesStore.saveSceneDocuments(
@@ -18273,6 +18290,18 @@ export const useSceneStore = defineStore('scene', {
         {
           groundHeightSidecars: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedGroundHeightSidecars.get(sceneDocument.id) ?? null]),
+          ),
+          groundScatterSidecars: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedGroundScatterSidecars.get(sceneDocument.id) ?? null]),
+          ),
+          groundPaintSidecars: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedGroundPaintSidecars.get(sceneDocument.id) ?? null]),
+          ),
+          groundChunkManifests: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedGroundChunkManifests.get(sceneDocument.id) ?? null]),
+          ),
+          groundChunkData: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedGroundChunkData.get(sceneDocument.id) ?? {}]),
           ),
         },
       )

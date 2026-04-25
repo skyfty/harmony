@@ -40,6 +40,8 @@ import {
 	type GradientBackgroundDome,
 	type GroundDynamicMesh,
 	type GroundChunkManifestRecord,
+	deserializeGroundChunkData,
+	resolveGroundChunkCoordFromWorldPosition,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
@@ -88,6 +90,7 @@ import {
 	resolveGroundRuntimeChunkCells,
 	setInfiniteGroundHiddenChunkKeys,
 	syncGroundChunkLoadingMode,
+	sampleGroundHeight,
 } from '@schema/groundMesh'
 import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
 import {
@@ -1631,6 +1634,11 @@ let previewGroundChunkManifestRevision = -1
 let previewGroundChunkManifestRecords: Record<string, GroundChunkManifestRecord> = {}
 let previewGroundChunkManifestLoadToken = 0
 let previewGroundChunkManifestLoadPromise: Promise<void> | null = null
+const previewGroundChunkCollisionInstances = new Map<string, RigidbodyInstance>()
+const previewGroundChunkCollisionPendingLoads = new Map<string, Promise<void>>()
+const previewGroundChunkCollisionDesiredKeys = new Set<string>()
+let previewGroundChunkCollisionSceneId: string | null = null
+let previewGroundChunkCollisionManifestRevision = -1
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
 let isApplyingSnapshot = false
@@ -1984,6 +1992,288 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	if (scene && currentDocument?.id === document.id) {
 		void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document))
 	}
+}
+
+async function loadPreviewGroundChunkCollisionDataBuffer(sceneId: string, record: GroundChunkManifestRecord): Promise<ArrayBuffer | null> {
+	return await useScenesStore().loadGroundChunkData(sceneId, record.key)
+}
+
+function resolvePreviewInfiniteGroundChunkCollisionState(groundDefinition: GroundRuntimeDynamicMesh): {
+	sceneId: string
+	manifestRevision: number
+	manifestRecords: Record<string, GroundChunkManifestRecord>
+} | null {
+	if (groundDefinition.terrainMode !== 'infinite') {
+		return null
+	}
+	const sceneId = typeof currentDocument?.id === 'string' ? currentDocument.id.trim() : ''
+	const manifestRevision = Number.isFinite(groundDefinition.chunkManifestRevision)
+		? Math.max(0, Math.trunc(groundDefinition.chunkManifestRevision as number))
+		: 0
+	if (!sceneId || manifestRevision <= 0) {
+		return null
+	}
+	if (previewGroundChunkManifestSceneId !== sceneId || previewGroundChunkManifestRevision !== manifestRevision) {
+		return null
+	}
+	if (!Object.keys(previewGroundChunkManifestRecords).length) {
+		return null
+	}
+	return {
+		sceneId,
+		manifestRevision,
+		manifestRecords: previewGroundChunkManifestRecords,
+	}
+}
+
+function clearPreviewInfiniteGroundChunkCollisionBodies(): void {
+	previewGroundChunkCollisionInstances.forEach((instance) => {
+		removeRigidbodyInstanceBodies(physicsWorld, instance)
+	})
+	previewGroundChunkCollisionInstances.clear()
+	previewGroundChunkCollisionDesiredKeys.clear()
+	previewGroundChunkCollisionPendingLoads.clear()
+	previewGroundChunkCollisionSceneId = null
+	previewGroundChunkCollisionManifestRevision = -1
+}
+
+function buildPreviewInfiniteGroundChunkCollisionShape(
+	record: GroundChunkManifestRecord,
+	buffer: ArrayBuffer | null,
+	fallbackHeight: number,
+): { shapeDefinition: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>; signature: string } | null {
+	const resolution = Math.max(1, Math.trunc(record.resolution))
+	const vertexColumns = resolution + 1
+	const vertexRows = resolution + 1
+	const expectedVertexCount = vertexColumns * vertexRows
+	const decoded = deserializeGroundChunkData(buffer)
+	const heights = decoded?.header?.resolution === resolution && decoded.heights.length === expectedVertexCount
+		? decoded.heights
+		: null
+	const matrix: number[][] = []
+	let heightHash = 0
+
+	for (let column = 0; column < vertexColumns; column += 1) {
+		const columnValues: number[] = []
+		for (let row = vertexRows - 1; row >= 0; row -= 1) {
+			const heightIndex = row * vertexColumns + column
+			const height = heights?.[heightIndex] ?? fallbackHeight
+			columnValues.push(height)
+			heightHash = (heightHash * 31 + Math.round(height * 1000)) >>> 0
+		}
+		matrix.push(columnValues)
+	}
+
+	return {
+		shapeDefinition: {
+			kind: 'heightfield',
+			matrix,
+			elementSize: record.chunkSizeMeters / resolution,
+			width: record.chunkSizeMeters,
+			depth: record.chunkSizeMeters,
+			offset: [-record.chunkSizeMeters * 0.5, -record.chunkSizeMeters * 0.5, 0],
+			applyScale: false,
+		},
+		signature: `${record.key}|${record.revision}|${resolution}|${heightHash.toString(16)}`,
+	}
+}
+
+function createPreviewInfiniteGroundChunkCollisionProxy(
+	groundObject: THREE.Object3D,
+	record: GroundChunkManifestRecord,
+): THREE.Object3D {
+	const proxy = new THREE.Object3D()
+	const center = new THREE.Vector3(
+		record.originX + record.chunkSizeMeters * 0.5,
+		0,
+		record.originZ + record.chunkSizeMeters * 0.5,
+	)
+	groundObject.localToWorld(center)
+	const worldPosition = new THREE.Vector3()
+	const worldQuaternion = new THREE.Quaternion()
+	const worldScale = new THREE.Vector3()
+	groundObject.matrixWorld.decompose(worldPosition, worldQuaternion, worldScale)
+	proxy.position.copy(center)
+	proxy.quaternion.copy(worldQuaternion)
+	proxy.scale.copy(worldScale)
+	proxy.updateMatrixWorld(true)
+	return proxy
+}
+
+function removePreviewInfiniteGroundChunkCollisionBody(chunkKey: string): void {
+	const instance = previewGroundChunkCollisionInstances.get(chunkKey) ?? null
+	if (!instance) {
+		return
+	}
+	removeRigidbodyInstanceBodies(physicsWorld, instance)
+	previewGroundChunkCollisionInstances.delete(chunkKey)
+}
+
+function ensurePreviewInfiniteGroundChunkCollisionBody(
+	groundObject: THREE.Object3D,
+	groundDefinition: GroundRuntimeDynamicMesh,
+	state: {
+		sceneId: string
+		manifestRevision: number
+		manifestRecords: Record<string, GroundChunkManifestRecord>
+	},
+	record: GroundChunkManifestRecord,
+): void {
+	if (previewGroundChunkCollisionInstances.has(record.key) || previewGroundChunkCollisionPendingLoads.has(record.key)) {
+		return
+	}
+	const fallbackHeight = typeof groundDefinition.baseHeight === 'number' && Number.isFinite(groundDefinition.baseHeight)
+		? groundDefinition.baseHeight
+		: 0
+	const pending = loadPreviewGroundChunkCollisionDataBuffer(state.sceneId, record)
+		.then((buffer) => {
+			if (
+				previewGroundChunkCollisionSceneId !== state.sceneId
+				|| previewGroundChunkCollisionManifestRevision !== state.manifestRevision
+				|| !previewGroundChunkCollisionDesiredKeys.has(record.key)
+			) {
+				return
+			}
+			const activeRecord = state.manifestRecords[record.key] ?? null
+			if (!activeRecord || activeRecord.revision !== record.revision || previewGroundChunkCollisionInstances.has(record.key)) {
+				return
+			}
+			const built = buildPreviewInfiniteGroundChunkCollisionShape(record, buffer, fallbackHeight)
+			if (!built) {
+				return
+			}
+			const bodyEntry = createSharedRigidbodyBody(
+				{
+					node: {
+						id: `__previewGroundChunkCollision:${record.key}`,
+						name: `Preview Ground Chunk Collision ${record.key}`,
+						nodeType: 'Mesh',
+						position: { x: 0, y: 0, z: 0 },
+						rotation: { x: 0, y: 0, z: 0 },
+						scale: { x: 1, y: 1, z: 1 },
+						visible: true,
+					} as SceneNode,
+					component: {
+						id: `__previewGroundChunkCollisionRigidbody:${record.key}`,
+						type: RIGIDBODY_COMPONENT_TYPE,
+						enabled: true,
+						props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
+					},
+					shapeDefinition: built.shapeDefinition,
+					object: createPreviewInfiniteGroundChunkCollisionProxy(groundObject, record),
+				},
+				{
+					world: ensurePhysicsWorld(),
+					groundHeightfieldCache,
+					floorShapeCache,
+					wallTrimeshCache,
+					rigidbodyMaterialCache,
+					rigidbodyContactMaterialKeys,
+					contactSettings: physicsContactSettings,
+					loggerTag: '[ScenePreview]',
+				},
+			)
+			if (!bodyEntry) {
+				return
+			}
+			physicsWorld?.addBody(bodyEntry.body)
+			previewGroundChunkCollisionInstances.set(record.key, {
+				nodeId: `__previewGroundChunkCollision:${record.key}`,
+				body: bodyEntry.body,
+				bodies: [bodyEntry.body],
+				object: null,
+				orientationAdjustment: bodyEntry.orientationAdjustment,
+				syncObjectFromBody: false,
+				signature: built.signature,
+			})
+		})
+		.catch((error) => {
+			console.warn('[ScenePreview] Failed to load ground chunk collision', record.key, error)
+		})
+		.finally(() => {
+			previewGroundChunkCollisionPendingLoads.delete(record.key)
+		})
+	previewGroundChunkCollisionPendingLoads.set(record.key, pending)
+}
+
+function syncPreviewInfiniteGroundChunkCollisions(groundObject: THREE.Object3D, groundDefinition: GroundRuntimeDynamicMesh): void {
+	if (!physicsEnvironmentEnabled.value || groundDefinition.terrainMode !== 'infinite') {
+		clearPreviewInfiniteGroundChunkCollisionBodies()
+		return
+	}
+	groundObject.updateMatrixWorld(true)
+	const state = resolvePreviewInfiniteGroundChunkCollisionState(groundDefinition)
+	if (!state) {
+		clearPreviewInfiniteGroundChunkCollisionBodies()
+		return
+	}
+	if (
+		previewGroundChunkCollisionSceneId !== state.sceneId
+		|| previewGroundChunkCollisionManifestRevision !== state.manifestRevision
+	) {
+		clearPreviewInfiniteGroundChunkCollisionBodies()
+		previewGroundChunkCollisionSceneId = state.sceneId
+		previewGroundChunkCollisionManifestRevision = state.manifestRevision
+	}
+
+	const radiusCandidate = groundDefinition.collisionRadiusChunks
+	const collisionRadiusChunks = typeof radiusCandidate === 'number' && Number.isFinite(radiusCandidate)
+		? Math.max(0, Math.trunc(radiusCandidate))
+		: 0
+	const chunkSizeMeters = typeof groundDefinition.chunkSizeMeters === 'number' && Number.isFinite(groundDefinition.chunkSizeMeters) && groundDefinition.chunkSizeMeters > 0
+		? groundDefinition.chunkSizeMeters
+		: 100
+	const desiredKeys = new Set<string>()
+
+	vehicleInstances.forEach((instance) => {
+		const chassisBody = instance.vehicle?.chassisBody ?? null
+		if (!chassisBody) {
+			return
+		}
+		const localCenter = groundObject.worldToLocal(new THREE.Vector3(
+			chassisBody.position.x,
+			chassisBody.position.y,
+			chassisBody.position.z,
+		))
+		const centerCoord = resolveGroundChunkCoordFromWorldPosition(localCenter.x, localCenter.z, chunkSizeMeters)
+		for (let chunkZ = centerCoord.chunkZ - collisionRadiusChunks; chunkZ <= centerCoord.chunkZ + collisionRadiusChunks; chunkZ += 1) {
+			for (let chunkX = centerCoord.chunkX - collisionRadiusChunks; chunkX <= centerCoord.chunkX + collisionRadiusChunks; chunkX += 1) {
+				const key = `${chunkX}:${chunkZ}`
+				if (state.manifestRecords[key]) {
+					desiredKeys.add(key)
+				}
+			}
+		}
+	})
+
+	previewGroundChunkCollisionDesiredKeys.clear()
+	desiredKeys.forEach((chunkKey) => {
+		previewGroundChunkCollisionDesiredKeys.add(chunkKey)
+	})
+
+	previewGroundChunkCollisionInstances.forEach((_instance, chunkKey) => {
+		if (!desiredKeys.has(chunkKey)) {
+			removePreviewInfiniteGroundChunkCollisionBody(chunkKey)
+		}
+	})
+
+	previewGroundChunkCollisionPendingLoads.forEach((_pending, chunkKey) => {
+		if (!desiredKeys.has(chunkKey)) {
+			previewGroundChunkCollisionPendingLoads.delete(chunkKey)
+		}
+	})
+
+	if (!desiredKeys.size) {
+		return
+	}
+
+	desiredKeys.forEach((chunkKey) => {
+		const record = state.manifestRecords[chunkKey] ?? null
+		if (!record) {
+			return
+		}
+		ensurePreviewInfiniteGroundChunkCollisionBody(groundObject, groundDefinition, state, record)
+	})
 }
 
 function syncPreviewInfiniteGroundChunkManifest(
@@ -9077,6 +9367,12 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		applyVehicleDriveForces(delta)
 		transformDriveUpdated = !physicsEnvironmentEnabled.value
 	}
+	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
+		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
+		if (groundObject) {
+			syncPreviewInfiniteGroundChunkCollisions(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
+		}
+	}
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
 	updateVehicleWheelVisuals(delta)
@@ -9227,6 +9523,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		if (groundObject) {
 			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			syncPreviewInfiniteGroundChunkManifest(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
+			syncPreviewInfiniteGroundChunkCollisions(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
@@ -10366,6 +10663,7 @@ function resetPhysicsWorld(): void {
 	vehicleInstances.clear()
 	vehicleRaycastInWorld.clear()
 	rigidbodyInstances.clear()
+	clearPreviewInfiniteGroundChunkCollisionBodies()
 	airWallBodies.clear()
 	clearAirWallDebugMeshes()
 	clearRigidbodyDebugHelpers()

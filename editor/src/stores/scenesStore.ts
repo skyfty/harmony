@@ -631,12 +631,14 @@ async function replaceWorkspaceDocuments(
   groundHeightSidecars: Record<string, ArrayBuffer | null> = {},
   groundScatterSidecars: Record<string, ArrayBuffer | null> = {},
   groundPaintSidecars: Record<string, ArrayBuffer | null> = {},
+        groundChunkManifests: Record<string, GroundChunkManifest | null> = {},
+        groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {},
 ): Promise<void> {
   await deleteWorkspaceStorage(workspaceId)
   if (!documents.length) {
     return
   }
-  await writeSceneDocuments(workspaceId, documents, groundHeightSidecars, groundScatterSidecars, groundPaintSidecars)
+  await writeSceneDocuments(workspaceId, documents, groundHeightSidecars, groundScatterSidecars, groundPaintSidecars, groundChunkManifests, groundChunkData)
 }
 
 async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthStore>): Promise<UserSceneBundleSummaryDto[] | null> {
@@ -703,7 +705,7 @@ async function downloadSceneBundleZip(
   return { bytes, etag }
 }
 
-async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; groundPaintSidecar: ArrayBuffer | null }> {
+async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; groundPaintSidecar: ArrayBuffer | null; groundChunkManifest: GroundChunkManifest | null; groundChunkData: Record<string, ArrayBuffer | null> }> {
   const pkg = await loadStoredScenesFromScenePackage(zipBytes)
   const scene = pkg.scenes[0]
   if (!scene) {
@@ -714,6 +716,8 @@ async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ doc
     groundHeightSidecar: pkg.groundHeightSidecars[scene.id] ?? null,
     groundScatterSidecar: pkg.groundScatterSidecars[scene.id] ?? null,
     groundPaintSidecar: pkg.groundPaintSidecars[scene.id] ?? null,
+    groundChunkManifest: pkg.groundChunkManifests[scene.id] ?? null,
+    groundChunkData: pkg.groundChunkData[scene.id] ?? {},
   }
 }
 
@@ -903,16 +907,32 @@ function toMetadataWithBundleEtag(document: StoredSceneDocument, bundleEtag: str
 async function readSceneBundleFromWorkspace(
   workspaceId: string,
   sceneId: string,
-): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; groundPaintSidecar: ArrayBuffer | null } | null> {
+): Promise<{
+  document: StoredSceneDocument
+  groundHeightSidecar: ArrayBuffer | null
+  groundScatterSidecar: ArrayBuffer | null
+  groundPaintSidecar: ArrayBuffer | null
+  groundChunkManifest: GroundChunkManifest | null
+  groundChunkData: Record<string, ArrayBuffer | null>
+} | null> {
   const document = await readSceneDocument(workspaceId, sceneId, { hydrateGroundRuntime: false })
   if (!document) {
     return null
+  }
+  const groundChunkManifest = await readSceneGroundChunkManifest(workspaceId, sceneId)
+  const groundChunkData: Record<string, ArrayBuffer | null> = {}
+  if (groundChunkManifest?.chunks && typeof groundChunkManifest.chunks === 'object') {
+    for (const chunkKey of Object.keys(groundChunkManifest.chunks)) {
+      groundChunkData[chunkKey] = await readSceneGroundChunkData(workspaceId, sceneId, chunkKey)
+    }
   }
   return {
     document,
     groundHeightSidecar: await readSceneGroundHeightSidecar(workspaceId, sceneId),
     groundScatterSidecar: await readSceneGroundScatterSidecar(workspaceId, sceneId),
     groundPaintSidecar: await readSceneGroundPaintSidecar(workspaceId, sceneId),
+    groundChunkManifest,
+    groundChunkData,
   }
 }
 
@@ -993,6 +1013,8 @@ async function writeSceneDocuments(
   groundHeightSidecars: Record<string, ArrayBuffer | null> = {},
   groundScatterSidecars: Record<string, ArrayBuffer | null> = {},
   groundPaintSidecars: Record<string, ArrayBuffer | null> = {},
+        groundChunkManifests: Record<string, GroundChunkManifest | null> = {},
+        groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {},
 ): Promise<void> {
   const preparedDocs = documents.map((doc) => ({ document: prepareSceneDocumentForPersistence(doc), source: doc }))
   if (!isIndexedDbAvailable()) {
@@ -1018,6 +1040,24 @@ async function writeSceneDocuments(
       } else {
         getMemoryGroundPaintSidecars(workspaceId).delete(prepared.id)
       }
+
+      const manifest = groundChunkManifests[prepared.id] ?? null
+      if (manifest) {
+        getMemoryGroundChunkManifests(workspaceId).set(prepared.id, structuredClone(manifest))
+      } else {
+        getMemoryGroundChunkManifests(workspaceId).delete(prepared.id)
+      }
+
+      const chunkDataBucket = getMemoryGroundChunkData(workspaceId)
+      Array.from(chunkDataBucket.keys())
+        .filter((key) => key.startsWith(`${prepared.id}:`))
+        .forEach((key) => chunkDataBucket.delete(key))
+      const chunkEntries = groundChunkData[prepared.id] ?? {}
+      Object.entries(chunkEntries).forEach(([chunkKey, chunkBuffer]) => {
+        if (chunkBuffer) {
+          chunkDataBucket.set(getGroundChunkDataStorageKey(prepared.id, chunkKey), cloneArrayBuffer(chunkBuffer))
+        }
+      })
     })
     return
   }
@@ -1055,6 +1095,45 @@ async function writeSceneDocuments(
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene documents'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene batch write aborted'))
   })
+
+  for (const { document: prepared } of preparedDocs) {
+    await writeSceneGroundChunkManifest(workspaceId, prepared.id, groundChunkManifests[prepared.id] ?? null)
+    const chunkEntries = groundChunkData[prepared.id] ?? {}
+    const existingKeys = isIndexedDbAvailable()
+      ? await (async () => {
+          const db = await openDatabase(workspaceId)
+          const tx = db.transaction(STORE_GROUND_CHUNK_DATA, 'readonly')
+          const store = tx.objectStore(STORE_GROUND_CHUNK_DATA)
+          const keys: string[] = []
+          await new Promise<void>((resolve, reject) => {
+            const request = store.openCursor()
+            request.onsuccess = () => {
+              const cursor = request.result
+              if (!cursor) {
+                resolve()
+                return
+              }
+              const entry = cursor.value as { sceneId?: string; chunkKey?: string } | undefined
+              if (entry?.sceneId === prepared.id && typeof entry.chunkKey === 'string') {
+                keys.push(entry.chunkKey)
+              }
+              cursor.continue()
+            }
+            request.onerror = () => reject(request.error ?? new Error('Failed to read scene ground chunk keys'))
+            tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk key scan aborted'))
+          })
+          return keys
+        })()
+      : []
+    for (const chunkKey of existingKeys) {
+      if (!(chunkKey in chunkEntries)) {
+        await writeSceneGroundChunkData(workspaceId, prepared.id, chunkKey, null)
+      }
+    }
+    for (const [chunkKey, chunkBuffer] of Object.entries(chunkEntries)) {
+      await writeSceneGroundChunkData(workspaceId, prepared.id, chunkKey, chunkBuffer ?? null)
+    }
+  }
 }
 
 async function removeSceneDocument(workspaceId: string, id: string): Promise<void> {
@@ -1339,6 +1418,8 @@ export const useScenesStore = defineStore('scenes', {
           { [downloaded.document.id]: downloaded.groundHeightSidecar ?? null },
           { [downloaded.document.id]: downloaded.groundScatterSidecar ?? null },
           { [downloaded.document.id]: downloaded.groundPaintSidecar ?? null },
+          { [downloaded.document.id]: downloaded.groundChunkManifest ?? null },
+          { [downloaded.document.id]: downloaded.groundChunkData ?? {} },
         )
         await writeSceneBundleEtags(this.workspaceId, { [downloaded.document.id]: bundleEtag })
         this.upsertMetadata(toMetadataWithBundleEtag(downloaded.document, bundleEtag))
@@ -1360,10 +1441,24 @@ export const useScenesStore = defineStore('scenes', {
     },
     async saveSceneDocuments(
       documents: StoredSceneDocument[],
-      options: { groundHeightSidecars?: Record<string, ArrayBuffer | null>; groundScatterSidecars?: Record<string, ArrayBuffer | null>; groundPaintSidecars?: Record<string, ArrayBuffer | null> } = {},
+      options: {
+        groundHeightSidecars?: Record<string, ArrayBuffer | null>
+        groundScatterSidecars?: Record<string, ArrayBuffer | null>
+        groundPaintSidecars?: Record<string, ArrayBuffer | null>
+        groundChunkManifests?: Record<string, GroundChunkManifest | null>
+        groundChunkData?: Record<string, Record<string, ArrayBuffer | null>>
+      } = {},
     ) {
       if (!documents.length) return
-      await writeSceneDocuments(this.workspaceId, documents, options.groundHeightSidecars ?? {}, options.groundScatterSidecars ?? {}, options.groundPaintSidecars ?? {})
+      await writeSceneDocuments(
+        this.workspaceId,
+        documents,
+        options.groundHeightSidecars ?? {},
+        options.groundScatterSidecars ?? {},
+        options.groundPaintSidecars ?? {},
+        options.groundChunkManifests ?? {},
+        options.groundChunkData ?? {},
+      )
       documents.forEach((doc) => this.upsertMetadata(toMetadata(doc)))
       if (this.workspaceType === 'user') {
         for (const doc of documents) {
@@ -1545,7 +1640,14 @@ export const useScenesStore = defineStore('scenes', {
           }
         })
 
-        const downloaded: Array<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; groundPaintSidecar: ArrayBuffer | null }> = []
+        const downloaded: Array<{
+          document: StoredSceneDocument
+          groundHeightSidecar: ArrayBuffer | null
+          groundScatterSidecar: ArrayBuffer | null
+          groundPaintSidecar: ArrayBuffer | null
+          groundChunkManifest: GroundChunkManifest | null
+          groundChunkData: Record<string, ArrayBuffer | null>
+        }> = []
         const syncedBundleEtags: Record<string, string | null> = {}
         for (const result of syncResults) {
           syncedBundleEtags[result.sceneId] = result.bundleEtag
@@ -1580,6 +1682,8 @@ export const useScenesStore = defineStore('scenes', {
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundHeightSidecar ?? null])),
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundScatterSidecar ?? null])),
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundPaintSidecar ?? null])),
+            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundChunkManifest ?? null])),
+            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundChunkData ?? {}])),
           )
         } else {
           await writeSceneDocuments(

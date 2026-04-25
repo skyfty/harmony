@@ -1,3 +1,4 @@
+import type { GroundChunkManifest } from '@schema'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -177,6 +178,8 @@ export async function runProjectImportWorkflow(options: {
     const preparedHeightSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedScatterSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedPaintSidecars: Record<string, ArrayBuffer | null> = {}
+    const preparedChunkManifests: Record<string, GroundChunkManifest | null> = {}
+    const preparedChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
 
     loaded.scenes.forEach((scene, index) => {
       const oldId = scene.id
@@ -201,12 +204,16 @@ export async function runProjectImportWorkflow(options: {
       preparedHeightSidecars[nextId] = loaded.groundHeightSidecars[oldId] ?? null
       preparedScatterSidecars[nextId] = loaded.groundScatterSidecars[oldId] ?? null
       preparedPaintSidecars[nextId] = loaded.groundPaintSidecars[oldId] ?? null
+      preparedChunkManifests[nextId] = loaded.groundChunkManifests[oldId] ?? null
+      preparedChunkData[nextId] = loaded.groundChunkData[oldId] ?? {}
     })
 
     await scenesStore.saveSceneDocuments(preparedScenes, {
       groundHeightSidecars: preparedHeightSidecars,
       groundScatterSidecars: preparedScatterSidecars,
       groundPaintSidecars: preparedPaintSidecars,
+      groundChunkManifests: preparedChunkManifests,
+      groundChunkData: preparedChunkData,
     })
 
     for (const scene of preparedScenes) {
