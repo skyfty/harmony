@@ -352,6 +352,42 @@
             />
           </view>
         </view>
+        <view v-if="activeCharacterControlNodeId" class="viewer-drive-action-row">
+          <button
+            class="viewer-drive-action-button"
+            :class="{ 'is-active': characterControlActionState.sprinting }"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlSprintTap"
+          >
+            <text class="viewer-drive-action-button__label">跑</text>
+          </button>
+          <button
+            class="viewer-drive-action-button"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlJumpTap"
+          >
+            <text class="viewer-drive-action-button__label">跳</text>
+          </button>
+          <button
+            class="viewer-drive-action-button"
+            :class="{ 'is-active': characterControlActionState.crouching }"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlCrouchTap"
+          >
+            <text class="viewer-drive-action-button__label">蹲</text>
+          </button>
+          <button
+            class="viewer-drive-action-button"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlInteractTap"
+          >
+            <text class="viewer-drive-action-button__label">交互</text>
+          </button>
+        </view>
       </view>
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
@@ -475,6 +511,7 @@ import {
   areAllGroundChunksLoaded,
   ensureAllGroundChunks,
   isGroundChunkStreamingEnabled,
+  sampleGroundHeight,
   updateGroundChunks,
 } from '@harmony/schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
@@ -678,6 +715,13 @@ import {
 import {
   protagonistComponentDefinition,
 } from '@harmony/schema/components/definitions/protagonistComponent';
+import {
+  characterControllerComponentDefinition,
+  CHARACTER_CONTROLLER_COMPONENT_TYPE,
+  clampCharacterControllerComponentProps,
+  type CharacterControllerComponentProps,
+} from '@harmony/schema/components/definitions/characterControllerComponent';
+import type { CharacterControlRuntimeState } from '@harmony/schema/characterControlRuntime';
 import {
   signboardComponentDefinition,
   SIGNBOARD_COMPONENT_TYPE,
@@ -962,6 +1006,9 @@ const resourcePreloadBytesLabel = computed(() => {
 import {
   computePlaySoundDistanceGain,
   resolvePlaySoundSourcePoint,
+  chooseCharacterControlClipName,
+  resolveCharacterControlMoveVector,
+  resolveCharacterControlSpeed,
   createIndexedDbPersistentAssetStorage,
   createNoopPersistentAssetStorage,
   createWeChatFileSystemPersistentAssetStorage,
@@ -1266,6 +1313,9 @@ const DEFAULT_SCENE_CAMERA_FAR = 1000;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SCENE_EXPOSURE = 0.7;
+const characterControlMoveScratch = new THREE.Vector3();
+const characterControlRightScratch = new THREE.Vector3();
+const characterControlFacingScratch = new THREE.Vector3();
 
 
 const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
@@ -1605,6 +1655,7 @@ previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
+previewComponentManager.registerDefinition(characterControllerComponentDefinition);
 previewComponentManager.registerDefinition(waterComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(lodComponentDefinition);
@@ -2466,9 +2517,22 @@ const vehicleDriveActive = ref(false);
 const vehicleDriveNodeId = ref<string | null>(null);
 const vehicleDriveToken = ref<string | null>(null);
 const activeVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
+const pendingCharacterControlEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'character-control' }> | null>(null);
+const activeCharacterControlNodeId = ref<string | null>(null);
 const vehicleDriveSeatNodeId = ref<string | null>(null);
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto');
 const vehicleDriveExitBusy = ref(false);
+const characterControlActionState = reactive<{
+  sprinting: boolean;
+  crouching: boolean;
+  jumpStartedAtMs: number;
+  interactUntilMs: number;
+}>({
+  sprinting: false,
+  crouching: false,
+  jumpStartedAtMs: 0,
+  interactUntilMs: 0,
+});
 let vehicleDriveSteerable: number[] = [];
 let vehicleDriveWheelCount = 0;
 let vehicleDriveVehicle: CANNON.RaycastVehicle | null = null;
@@ -2640,7 +2704,8 @@ const vehicleDriveStateBridge: import('@harmony/schema/VehicleDriveController').
 const vehicleDriveUi = computed(() => {
   const override = vehicleDriveUiOverride.value;
   const active = vehicleDriveActive.value;
-  const visible = override === 'show' ? true : override === 'hide' ? false : active;
+  const characterActive = Boolean(activeCharacterControlNodeId.value);
+  const visible = override === 'show' ? true : override === 'hide' ? false : active || characterActive;
   if (!visible) {
     return {
       visible: false,
@@ -2652,15 +2717,16 @@ const vehicleDriveUi = computed(() => {
     } as const;
   }
   const nodeId = vehicleDriveNodeId.value ?? '';
-  const node = nodeId ? resolveNodeById(nodeId) : null;
-  const label = node?.name?.trim() || nodeId || 'Vehicle';
+  const characterNodeId = activeCharacterControlNodeId.value ?? '';
+  const node = characterActive && characterNodeId ? resolveNodeById(characterNodeId) : nodeId ? resolveNodeById(nodeId) : null;
+  const label = node?.name?.trim() || (characterActive ? characterNodeId : nodeId) || 'Vehicle';
   return {
     visible: true,
     label,
-    cameraLocked: active,
-    joystickActive: active && joystickState.active,
-    accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
-    braking: active && vehicleDriveInputFlags.brake,
+    cameraLocked: active || characterActive,
+    joystickActive: (active || characterActive) && joystickState.active,
+    accelerating: (active || characterActive) && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
+    braking: (active || characterActive) && vehicleDriveInputFlags.brake,
   } as const;
 });
 
@@ -3004,6 +3070,7 @@ const nodeAnimationControllers = new Map<string, {
   clips: THREE.AnimationClip[];
   defaultClip: THREE.AnimationClip | null;
 }>();
+const characterControlAnimationClipState = new Map<string, string | null>();
 let animationMixers: THREE.AnimationMixer[] = [];
 let effectRuntimeTickers: Array<(delta: number) => void> = [];
 
@@ -7104,7 +7171,7 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
-  const skipTransformSync = Boolean(autoTour) && vehicleInstances.has(node.id);
+  const skipTransformSync = (Boolean(autoTour) && vehicleInstances.has(node.id)) || activeCharacterControlNodeId.value === node.id;
   if (node.position) {
     if (!skipTransformSync) {
       object.position.set(node.position.x, node.position.y, node.position.z);
@@ -9051,6 +9118,34 @@ function resetActiveVehiclePose(): boolean {
   return vehicleDriveController.resetPose();
 }
 
+function handleCharacterControlJumpTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  triggerCharacterControlJump(Date.now());
+}
+
+function handleCharacterControlInteractTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  triggerCharacterControlInteract(Date.now());
+}
+
+function handleCharacterControlSprintTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  characterControlActionState.sprinting = !characterControlActionState.sprinting;
+}
+
+function handleCharacterControlCrouchTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  characterControlActionState.crouching = !characterControlActionState.crouching;
+}
+
 
 type VehicleDriveCameraUpdateOptions = {
   immediate?: boolean;
@@ -9676,6 +9771,209 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
   }
 }
 
+function handleCharacterControlEvent(event: Extract<BehaviorRuntimeEvent, { type: 'character-control' }>): void {
+  const targetNodeId = event.targetNodeId || event.nodeId || null;
+  if (!targetNodeId) {
+    uni.showToast({ title: '缺少角色目标', icon: 'none' });
+    resolveBehaviorToken(event.token, { type: 'fail', message: '缺少角色目标' });
+    return;
+  }
+  const targetNode = resolveNodeById(targetNodeId);
+  const canControl = Boolean(targetNode?.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE]);
+  if (!canControl) {
+    uni.showToast({ title: '目标节点未挂载角色控制组件', icon: 'none' });
+    resolveBehaviorToken(event.token, {
+      type: 'fail',
+      message: '目标节点未挂载角色控制组件',
+    });
+    return;
+  }
+  if (pendingVehicleDriveEvent.value) {
+    resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+      type: 'abort',
+      message: '驾驶请求被角色控制替换。',
+    });
+    pendingVehicleDriveEvent.value = null;
+  }
+  if (pendingCharacterControlEvent.value) {
+    resolveBehaviorToken(pendingCharacterControlEvent.value.token, {
+      type: 'abort',
+      message: '角色控制请求被驾驶模式替换。',
+    });
+    pendingCharacterControlEvent.value = null;
+  }
+  activeCharacterControlNodeId.value = null;
+  characterControlActionState.sprinting = false;
+  characterControlActionState.crouching = false;
+  characterControlActionState.jumpStartedAtMs = 0;
+  characterControlActionState.interactUntilMs = 0;
+  characterControlAnimationClipState.clear();
+  pendingCharacterControlEvent.value = event;
+  activeCharacterControlNodeId.value = targetNodeId;
+}
+
+function handleCharacterReleaseEvent(): void {
+  if (pendingCharacterControlEvent.value) {
+    resolveBehaviorToken(pendingCharacterControlEvent.value.token, {
+      type: 'continue',
+    });
+    pendingCharacterControlEvent.value = null;
+  }
+  activeCharacterControlNodeId.value = null;
+  characterControlActionState.sprinting = false;
+  characterControlActionState.crouching = false;
+  characterControlActionState.jumpStartedAtMs = 0;
+  characterControlActionState.interactUntilMs = 0;
+  characterControlAnimationClipState.clear();
+  resetVehicleDriveInputs();
+  setVehicleDriveUiOverride('hide');
+}
+
+function resolveCharacterControllerComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<CharacterControllerComponentProps> | null {
+  return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE);
+}
+
+const CHARACTER_CONTROL_JUMP_START_MS = 120;
+const CHARACTER_CONTROL_JUMP_LOOP_MS = 220;
+const CHARACTER_CONTROL_JUMP_LAND_MS = 160;
+const CHARACTER_CONTROL_INTERACT_MS = 220;
+
+function resolveCharacterControlRuntimeState(nowMs: number): CharacterControlRuntimeState {
+  const jumpElapsedMs = characterControlActionState.jumpStartedAtMs > 0
+    ? nowMs - characterControlActionState.jumpStartedAtMs
+    : Number.POSITIVE_INFINITY;
+  let jumpPhase: CharacterControlRuntimeState['jumpPhase'] = null;
+  if (jumpElapsedMs >= 0 && Number.isFinite(jumpElapsedMs)) {
+    if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS) {
+      jumpPhase = 'start';
+    } else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS) {
+      jumpPhase = 'loop';
+    } else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS + CHARACTER_CONTROL_JUMP_LAND_MS) {
+      jumpPhase = 'land';
+    } else {
+      characterControlActionState.jumpStartedAtMs = 0;
+    }
+  }
+  const interacting = characterControlActionState.interactUntilMs > nowMs;
+  if (!interacting && characterControlActionState.interactUntilMs > 0) {
+    characterControlActionState.interactUntilMs = 0;
+  }
+  return {
+    sprinting: characterControlActionState.sprinting,
+    crouching: characterControlActionState.crouching,
+    jumpPhase,
+    interacting,
+  };
+}
+
+function triggerCharacterControlJump(nowMs: number): void {
+  if (characterControlActionState.jumpStartedAtMs > 0) {
+    return;
+  }
+  characterControlActionState.jumpStartedAtMs = nowMs;
+}
+
+function triggerCharacterControlInteract(nowMs: number): void {
+  characterControlActionState.interactUntilMs = nowMs + CHARACTER_CONTROL_INTERACT_MS;
+}
+
+function playCharacterControlAnimation(
+  nodeId: string,
+  props: CharacterControllerComponentProps,
+  movementMagnitude: number,
+  actionState: CharacterControlRuntimeState,
+): void {
+  const controller = nodeAnimationControllers.get(nodeId);
+  if (!controller) {
+    return;
+  }
+  const desiredClipName = chooseCharacterControlClipName(props, movementMagnitude, actionState);
+  const currentClipName = characterControlAnimationClipState.get(nodeId) ?? null;
+  const effectiveClipName = desiredClipName && desiredClipName.trim().length ? desiredClipName.trim() : null;
+  if (currentClipName === effectiveClipName) {
+    return;
+  }
+  const clip = effectiveClipName
+    ? controller.clips.find((entry) => entry.name === effectiveClipName)
+    : controller.defaultClip ?? pickDefaultAnimationClip(controller.clips);
+  if (!clip) {
+    return;
+  }
+  controller.mixer.stopAllAction();
+  const shouldLoop = actionState.jumpPhase === 'loop' || (actionState.jumpPhase === null && !actionState.interacting);
+  playAnimationClip(controller.mixer, clip, { loop: shouldLoop });
+  characterControlAnimationClipState.set(nodeId, effectiveClipName);
+}
+
+function updateCharacterControlForFrame(deltaSeconds: number): boolean {
+  const nodeId = activeCharacterControlNodeId.value;
+  if (!nodeId || !renderContext?.camera) {
+    return false;
+  }
+  const node = resolveSceneNodeById(previewNodeMap, nodeId);
+  const component = resolveCharacterControllerComponent(node);
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!node || !component || !object) {
+    return false;
+  }
+  const props = clampCharacterControllerComponentProps(component.props);
+  const moveX = Number(vehicleDriveInputFlags.right) - Number(vehicleDriveInputFlags.left);
+  const moveZ = Number(vehicleDriveInputFlags.forward) - Number(vehicleDriveInputFlags.backward);
+  const nowMs = Date.now();
+  const actionState = {
+    ...resolveCharacterControlRuntimeState(nowMs),
+    moveX,
+    moveZ,
+  };
+  const movementMagnitude = resolveCharacterControlMoveVector({
+    camera: renderContext.camera,
+    moveX,
+    moveZ,
+    scratch: {
+      facingScratch: characterControlFacingScratch,
+      rightScratch: characterControlRightScratch,
+      moveScratch: characterControlMoveScratch,
+    },
+  });
+  if (movementMagnitude > 0.001) {
+    if (characterControlMoveScratch.lengthSq() > 1e-8) {
+      const speed = resolveCharacterControlSpeed(props, movementMagnitude, actionState);
+      object.position.addScaledVector(characterControlMoveScratch, Math.max(0, speed) * deltaSeconds);
+      object.lookAt(object.position.clone().add(characterControlMoveScratch));
+    }
+  }
+  const groundMesh = dynamicGroundCache?.dynamicMesh ?? null;
+  if (groundMesh) {
+    const groundHeight = sampleGroundHeight(groundMesh, object.position.x, object.position.z);
+    if (Number.isFinite(groundHeight)) {
+      const baseHeight = groundHeight + Math.max(0.1, props.colliderHeight * 0.5);
+      if (actionState.jumpPhase) {
+        const elapsed = nowMs - characterControlActionState.jumpStartedAtMs;
+        const phaseElapsed = actionState.jumpPhase === 'start'
+          ? elapsed
+          : actionState.jumpPhase === 'loop'
+            ? elapsed - CHARACTER_CONTROL_JUMP_START_MS
+            : elapsed - CHARACTER_CONTROL_JUMP_START_MS - CHARACTER_CONTROL_JUMP_LOOP_MS;
+        const phaseDuration = actionState.jumpPhase === 'start'
+          ? CHARACTER_CONTROL_JUMP_START_MS
+          : actionState.jumpPhase === 'loop'
+            ? CHARACTER_CONTROL_JUMP_LOOP_MS
+            : CHARACTER_CONTROL_JUMP_LAND_MS;
+        const jumpProgress = Math.min(1, Math.max(0, phaseElapsed / phaseDuration));
+        const jumpHeight = Math.sin(jumpProgress * Math.PI) * Math.max(0.35, props.jumpImpulse * 0.18);
+        object.position.y = baseHeight + jumpHeight;
+      } else {
+        object.position.y = baseHeight;
+      }
+    }
+  }
+  playCharacterControlAnimation(nodeId, props, movementMagnitude, actionState);
+  syncProtagonistCameraPose({ force: true, object, applyToCamera: true });
+  return true;
+}
+
 function handleVehicleDebusEvent(): void {
   if (pendingVehicleDriveEvent.value) {
     resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
@@ -9982,6 +10280,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'vehicle-drive':
       handleVehicleDriveEvent(event);
+      break;
+    case 'character-control':
+      handleCharacterControlEvent(event);
+      break;
+    case 'character-release':
+      handleCharacterReleaseEvent();
       break;
     case 'vehicle-debus':
       handleVehicleDebusEvent();
@@ -11875,6 +12179,7 @@ function startRenderLoop(
             },
           });
           previewComponentManager.update(deltaSeconds);
+          updateCharacterControlForFrame(deltaSeconds);
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
           activeBehaviorSounds.forEach((instance) => {
@@ -14131,6 +14436,46 @@ onUnmounted(() => {
 
 .viewer-drive-cluster--floating.is-fading {
   opacity: 0;
+}
+
+.viewer-drive-action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 180px;
+}
+
+.viewer-drive-action-button {
+  min-width: 56px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(153, 193, 255, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 246, 255, 0.82));
+  color: #274c69;
+  box-shadow: 0 8px 18px rgba(52, 87, 128, 0.12);
+  backdrop-filter: blur(12px) saturate(1.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.18s cubic-bezier(.2,.9,.2,1), background-color 0.18s ease, opacity 0.18s ease;
+}
+
+.viewer-drive-action-button.is-active {
+  background: linear-gradient(180deg, rgba(172, 230, 255, 0.96), rgba(117, 195, 255, 0.84));
+  color: #06314a;
+}
+
+.viewer-drive-action-button:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.viewer-drive-action-button__label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .viewer-drive-joystick {

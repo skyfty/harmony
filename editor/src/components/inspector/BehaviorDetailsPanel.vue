@@ -30,6 +30,8 @@ import LanternParams from '@/components/inspector/behavior/LanternParams.vue'
 import TriggerParams from '@/components/inspector/behavior/TriggerParams.vue'
 import AnimationParams from '@/components/inspector/behavior/AnimationParams.vue'
 import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
+import ControlCharacterParams from '@/components/inspector/behavior/ControlCharacterParams.vue'
+import ReleaseCharacterParams from '@/components/inspector/behavior/ReleaseCharacterParams.vue'
 import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
 import ShowCockpitParams from '@/components/inspector/behavior/ShowCockpitParams.vue'
 import HideCockpitParams from '@/components/inspector/behavior/HideCockpitParams.vue'
@@ -107,6 +109,8 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   showCockpit: ShowCockpitParams,
   hideCockpit: HideCockpitParams,
   drive: DriveParams,
+  controlCharacter: ControlCharacterParams,
+  releaseCharacter: ReleaseCharacterParams,
   debus: DebusParams,
 }
 
@@ -216,7 +220,8 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'watch' &&
     scriptType !== 'animation' &&
     scriptType !== 'moveTo' &&
-    scriptType !== 'playSound'
+    scriptType !== 'playSound' &&
+    scriptType !== 'controlCharacter'
   ) {
     return
   }

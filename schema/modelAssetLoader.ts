@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type ResourceCache from './ResourceCache'
 import type { AssetCacheEntry } from './assetCache'
 import type { SceneNodeImportMetadata } from './index'
-import { loadObjectFromFile } from './assetImport'
+import { cloneImportedObject, loadObjectFromFile } from './assetImport'
 
 export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
   const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`
@@ -76,5 +76,5 @@ export async function loadNodeObject(
   if (!target) {
     return null
   }
-  return target.clone(true)
+  return cloneImportedObject(target)
 }

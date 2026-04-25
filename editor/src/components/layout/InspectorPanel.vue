@@ -13,6 +13,7 @@ import LandformPanel from '@/components/inspector/LandformPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
+import CharacterControllerPanel from '@/components/inspector/CharacterControllerPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import EffectPanel from '@/components/inspector/EffectPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
@@ -51,6 +52,7 @@ import {
   AUTO_TOUR_COMPONENT_TYPE,
   PURE_PURSUIT_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
+  CHARACTER_CONTROLLER_COMPONENT_TYPE,
   PRELOADABLE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   PLANNING_IMAGES_COMPONENT_TYPE,
@@ -599,6 +601,7 @@ watch(
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />
               <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
+              <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />
               <PlanningImagesPanel v-else-if="component.type === PLANNING_IMAGES_COMPONENT_TYPE" />
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />

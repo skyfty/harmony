@@ -9,6 +9,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "clean:generated": "node -e \"const fs=require('fs');const path=require('path');const root=path.join(process.cwd(),'src');const walk=(dir)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full);} else if(entry.isFile() && entry.name.endsWith('.js')){fs.rmSync(full,{force:true});}}};if(fs.existsSync(root)){walk(root);}\"",
     "clean": "rimraf dist",
     "prepare": "pnpm run build"
   },
